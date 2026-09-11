@@ -39,7 +39,8 @@ for a much larger deterministic radix/blob ownership corpus. It uses the
 pinned `public cpu` image, has no secrets, records exact seed/step budgets and
 source SHA, and uploads the reproducible failure log.
 `llama-upstream-canary.yml` runs only on its daily schedule or an explicit
-manual dispatch; it is not ordinary push or PR CI. It executes trusted
+manual dispatch; it is not ordinary push or PR CI. One fixed concurrency group
+lets a new canary supersede stale in-progress work. It executes trusted
 default-branch content only on the persistent self-hosted `family-certify`
 runner group (tools come from the runner image; no GitHub Actions model
 caching). Before native compilation,
@@ -54,11 +55,17 @@ from `hyper_connection.count * embedding_length`. It emits
 deterministic bounded GitHub matrix shards; the current one-runner topology consumes one
 selected-family shard while retaining the plan as evidence. Changed llama.cpp pins
 always run the complete `llama-bump` family cohort; non-bump runs retain their
-cadence-owned cohort. The runner's `.env` exports
-`HF_CACHE` pointing at a pre-warmed HF cache that lives on the lab NFS models
+cadence-owned cohort. The workflow requires `HF_CACHE` to be exactly
+`/Users/lab/models/huggingface`, requires its `hub` directory, and exports
+`HF_HOME` and `HF_HUB_CACHE` from that canonical root for every later step.
+The runner's `.env` exports `HF_CACHE` pointing at that pre-warmed cache on the lab NFS models
 volume and `HF_HUB_OFFLINE=1` (NFS offers no `flock`, so `hf` on the runner is
 read-only; the cache is populated by a two-stage prewarm that downloads on
-local disk and moves each repo to NFS). The workflow builds its four
+local disk and moves each repo to NFS). On Apple Silicon, the wrapper and
+generated-family rewriter re-exec as native arm64 before creating build state;
+the rewriter discards a CMake cache for any other architecture. Correctness
+lanes derive filtered-load resident tensor names from the native stage graph
+planner, including GGUFs with non-finite metadata values. The workflow builds its four
 certification binaries before the manifest lanes; the family battery builds
 them once itself unless `--skip-build` is selected, in which case it verifies
 that every binary already exists. A scheduled unchanged pin selects the four
@@ -92,7 +99,9 @@ supported-family certification. A failed phase is handed to a non-interactive
 `LLAMA_CANARY_AGENT_MODEL`). The agent may run focused diagnostics and edit the
 local tree, but the wrapper restarts at prepare, reruns the complete build, and
 remains the sole authority for certification. Each phase permits
-`CANARY_REPAIR_MAX_TURNS` (default 2). The wrapper has a 690-minute internal
+`CANARY_REPAIR_MAX_TURNS` (default 2), each agent turn has a 60-minute ceiling,
+and all agent turns share a 90-minute aggregate budget. The repair ceilings are
+independently overridable for a deliberate deep run. The wrapper has a 690-minute internal
 work deadline inside the 720-minute Actions step and reserves 30 minutes for
 terminal publication. It publishes once to the unique
 `llama-canary/repair-<run>-<attempt>-<upstream>` branch. A certified terminal
@@ -111,8 +120,11 @@ the first phase. The canary job itself remains `contents: read`; the dedicated
 repair PAT performs the bounded PR lookup. Changed-pin evidence uses its own
 `llama-canary-changed-pin-*` artifact namespace. Every
 changed-pin outcome keeps the canary run red until a certified PR is reviewed
-and merged. Unchanged scheduled and forced certifications stay read-only and
-never invoke the repair agent.
+and merged. A GitHub-hosted metadata-only job with Actions-read and Issues-write
+permissions opens or updates one alert after two consecutive non-successful
+scheduled runs, and closes that alert after a successful scheduled recovery.
+Unchanged scheduled and forced certifications stay read-only and never invoke
+the repair agent.
 
 For a non-canary manual dispatch, `release.yml` runs the checked-in
 `scripts/release-version.sh`, creates one linear release-source commit when the

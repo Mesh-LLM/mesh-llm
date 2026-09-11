@@ -22,6 +22,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: llama-upstream-canary
+  cancel-in-progress: true
+
 jobs:
   latest-upstream:
     runs-on: [self-hosted, family-certify]
@@ -44,7 +48,7 @@ jobs:
       # Models are never cached through GitHub Actions cache. The
       # family-certify runner ships a large pre-warmed HF cache exported as
       # HF_CACHE; scripts/skippy-family-battery.sh normalizes it into
-      # HF_HOME/HF_HUB_CACHE so `hf download` is only a cache-miss backstop.
+      # HF_HOME/HF_HUB_CACHE for read-only resolution.
       FORCE_CERTIFY: ${{ inputs.force_certify && 'true' || 'false' }}
     steps:
       # A manual dispatch can be issued from any ref, but the persistent runner
@@ -65,10 +69,24 @@ jobs:
               missing=1
             fi
           done
-          if [[ -z "${HF_CACHE:-}" ]]; then
-            echo "HF_CACHE is not exported on this runner" >&2
+          expected_hf_cache="/Users/lab/models/huggingface"
+          if [[ "${HF_CACHE:-}" != "$expected_hf_cache" ]]; then
+            echo "HF_CACHE must be $expected_hf_cache on this runner; got: ${HF_CACHE:-<unset>}" >&2
             missing=1
           fi
+          if [[ ! -d "$expected_hf_cache/hub" ]]; then
+            echo "pre-warmed Hugging Face hub cache is missing: $expected_hf_cache/hub" >&2
+            missing=1
+          fi
+          if [[ "${HF_HUB_OFFLINE:-}" != "1" ]]; then
+            echo "HF_HUB_OFFLINE must be 1 on the read-only family-certify runner" >&2
+            missing=1
+          fi
+          {
+            echo "HF_HOME=$expected_hf_cache"
+            echo "HF_HUB_CACHE=$expected_hf_cache/hub"
+            echo "HF_HUB_OFFLINE=1"
+          } >> "$GITHUB_ENV"
           # Match scripts/check-skippy-generated-family-patch.sh: prefer the
           # pinned llvm@22, but accept any Homebrew LLVM that provides Clang
           # LibTooling (bin/clang + ClangConfig.cmake) so a runner image whose
@@ -172,6 +190,8 @@ jobs:
           CANARY_REPAIR_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}
           CANARY_REPAIR_BUDGET_SECONDS: "41400"
           CANARY_PUBLISH_RESERVE_SECONDS: "1800"
+          CANARY_REPAIR_TURN_TIMEOUT_SECONDS: "3600"
+          CANARY_REPAIR_TOTAL_BUDGET_SECONDS: "5400"
           FAMILY_BATTERY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           UPSTREAM_SHA_INPUT: ${{ steps.sha.outputs.new_sha }}
         run: scripts/llama-canary-agent-repair.sh
@@ -399,3 +419,93 @@ jobs:
             echo "Inspect the uploaded family evidence. Agent repair is reserved for changed upstream pins; unchanged nightly and forced checks never modify or publish repository state."
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1
+
+  alert-consecutive-failures:
+    name: Alert after consecutive scheduled failures
+    if: ${{ !cancelled() && github.event_name == 'schedule' }}
+    needs: latest-upstream
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - name: Reconcile consecutive-failure alert
+        continue-on-error: true
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        env:
+          CURRENT_RESULT: ${{ needs.latest-upstream.result }}
+        with:
+          script: |
+            const marker = '<!-- llama-upstream-canary-consecutive-failure-alert -->';
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const currentResult = process.env.CURRENT_RESULT;
+            const currentUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: 'open',
+              labels: 'component: ci',
+              per_page: 100,
+            });
+            const alert = issues.find((issue) => (issue.body || '').includes(marker));
+
+            if (currentResult === 'success') {
+              if (alert) {
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: alert.number,
+                  body: `Recovered: scheduled canary ${currentUrl} completed successfully.`,
+                });
+                await github.rest.issues.update({
+                  owner,
+                  repo,
+                  issue_number: alert.number,
+                  state: 'closed',
+                });
+              }
+              return;
+            }
+
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner,
+              repo,
+              workflow_id: 'llama-upstream-canary.yml',
+              event: 'schedule',
+              status: 'completed',
+              per_page: 100,
+            });
+            const previous = runs.find((run) => run.id !== context.runId);
+            if (!previous || previous.conclusion === 'success') {
+              return;
+            }
+
+            const previousUrl = previous.html_url;
+            const body = [
+              marker,
+              'The llama.cpp upstream canary has produced two consecutive non-successful scheduled runs.',
+              '',
+              `- Current: ${currentUrl} (${currentResult})`,
+              `- Previous: ${previousUrl} (${previous.conclusion})`,
+              '',
+              'Inspect the persistent runner and the earliest phase without progress before dispatching another canary.',
+            ].join('\n');
+            if (alert) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: alert.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner,
+                repo,
+                title: '[CI] llama.cpp upstream canary failing repeatedly',
+                body,
+                labels: ['component: ci'],
+              });
+            }

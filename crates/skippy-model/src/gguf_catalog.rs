@@ -48,15 +48,29 @@ pub struct GgufTensor {
 }
 
 pub fn read_gguf_catalog(path: impl AsRef<Path>) -> Result<GgufCatalog> {
-    read_gguf_catalog_with_mode(path.as_ref(), true)
+    read_gguf_catalog_with_mode(path.as_ref(), true, true)
 }
 
 /// Read a descriptor-only GGUF whose tensor payloads intentionally start at EOF.
 pub fn read_gguf_metadata_catalog(path: impl AsRef<Path>) -> Result<GgufCatalog> {
-    read_gguf_catalog_with_mode(path.as_ref(), false)
+    read_gguf_catalog_with_mode(path.as_ref(), false, true)
 }
 
-fn read_gguf_catalog_with_mode(path: &Path, require_tensor_payloads: bool) -> Result<GgufCatalog> {
+/// Read the tensor directory while skipping unrelated metadata values.
+///
+/// Native GGUF metadata may contain non-finite floats that cannot be represented
+/// by `serde_json::Value`. Tensor planning only needs alignment and tensor
+/// descriptors, so this path accepts those files without weakening full catalog
+/// parsing for manifest callers.
+pub fn read_gguf_tensor_catalog(path: impl AsRef<Path>) -> Result<GgufCatalog> {
+    read_gguf_catalog_with_mode(path.as_ref(), true, false)
+}
+
+fn read_gguf_catalog_with_mode(
+    path: &Path,
+    require_tensor_payloads: bool,
+    collect_metadata: bool,
+) -> Result<GgufCatalog> {
     let file = File::open(path).with_context(|| format!("open GGUF catalog {}", path.display()))?;
     let artifact_bytes = file
         .metadata()
@@ -83,19 +97,27 @@ fn read_gguf_catalog_with_mode(path: &Path, require_tensor_payloads: bool) -> Re
     let metadata_count = reader.read_count("metadata", MAX_GGUF_METADATA_COUNT)?;
 
     let mut metadata = BTreeMap::new();
+    let mut metadata_keys = std::collections::BTreeSet::new();
     for index in 0..metadata_count {
         let key = reader
             .read_string()
             .with_context(|| format!("read GGUF metadata key {index}"))?;
         ensure!(!key.is_empty(), "GGUF metadata key {index} is empty");
-        let value_type = reader.read_u32()?;
-        let value = reader
-            .read_value(value_type)
-            .with_context(|| format!("read GGUF metadata value {key:?}"))?;
         ensure!(
-            metadata.insert(key.clone(), value).is_none(),
+            metadata_keys.insert(key.clone()),
             "duplicate GGUF metadata key {key:?}"
         );
+        let value_type = reader.read_u32()?;
+        if collect_metadata || key == GGUF_GENERAL_ALIGNMENT {
+            let value = reader
+                .read_value(value_type)
+                .with_context(|| format!("read GGUF metadata value {key:?}"))?;
+            metadata.insert(key, value);
+        } else {
+            reader
+                .skip_value(value_type)
+                .with_context(|| format!("skip GGUF metadata value {key:?}"))?;
+        }
     }
 
     let alignment = metadata
@@ -264,6 +286,43 @@ impl CatalogReader {
             values.push(self.read_value(element_type)?);
         }
         Ok(Value::Array(values))
+    }
+
+    fn skip_value(&mut self, value_type: u32) -> Result<()> {
+        match value_type {
+            GGUF_TYPE_UINT8 | GGUF_TYPE_INT8 => {
+                self.read_array::<1>()?;
+            }
+            GGUF_TYPE_BOOL => {
+                let value = self.read_u8()?;
+                ensure!(value <= 1, "invalid GGUF boolean value {value}");
+            }
+            GGUF_TYPE_UINT16 | GGUF_TYPE_INT16 => {
+                self.read_array::<2>()?;
+            }
+            GGUF_TYPE_UINT32 | GGUF_TYPE_INT32 | GGUF_TYPE_FLOAT32 => {
+                self.read_array::<4>()?;
+            }
+            GGUF_TYPE_UINT64 | GGUF_TYPE_INT64 | GGUF_TYPE_FLOAT64 => {
+                self.read_array::<8>()?;
+            }
+            GGUF_TYPE_STRING => {
+                self.read_string()?;
+            }
+            GGUF_TYPE_ARRAY => {
+                let element_type = self.read_u32()?;
+                ensure!(
+                    element_type != GGUF_TYPE_ARRAY,
+                    "nested GGUF metadata arrays are unsupported"
+                );
+                let count = self.read_count("array element", MAX_GGUF_ARRAY_ELEMENTS)?;
+                for _ in 0..count {
+                    self.skip_value(element_type)?;
+                }
+            }
+            _ => bail!("unsupported GGUF metadata type {value_type}"),
+        }
+        Ok(())
     }
 
     fn read_string(&mut self) -> Result<String> {
@@ -437,6 +496,38 @@ mod tests {
         // data_start is still the aligned offset a payload-bearing companion
         // shard would use; the file simply ends before it.
         assert!(catalog.data_start > catalog.artifact_bytes);
+    }
+
+    #[test]
+    fn tensor_catalog_skips_non_finite_metadata() {
+        let path = temp_path("tensor-catalog-non-finite");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(GGUF_MAGIC);
+        bytes.extend_from_slice(&3_u32.to_le_bytes());
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+        bytes.extend_from_slice(&2_u64.to_le_bytes());
+        write_string(&mut bytes, GGUF_GENERAL_ALIGNMENT);
+        bytes.extend_from_slice(&GGUF_TYPE_UINT32.to_le_bytes());
+        bytes.extend_from_slice(&32_u32.to_le_bytes());
+        write_string(&mut bytes, "model.gate_lower_bound");
+        bytes.extend_from_slice(&GGUF_TYPE_FLOAT32.to_le_bytes());
+        bytes.extend_from_slice(&f32::NEG_INFINITY.to_le_bytes());
+        write_string(&mut bytes, "weight");
+        bytes.extend_from_slice(&1_u32.to_le_bytes());
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u64.to_le_bytes());
+        while !bytes.len().is_multiple_of(32) {
+            bytes.push(0);
+        }
+        bytes.extend_from_slice(&0_f32.to_le_bytes());
+        fs::write(&path, bytes).unwrap();
+
+        let catalog = read_gguf_tensor_catalog(&path).unwrap();
+        assert_eq!(catalog.alignment, 32);
+        assert_eq!(catalog.tensors.len(), 1);
+        assert_eq!(catalog.tensors[0].name, "weight");
+        assert!(read_gguf_catalog(&path).is_err());
 
         fs::remove_file(path).unwrap();
     }

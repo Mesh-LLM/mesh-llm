@@ -7523,7 +7523,9 @@ name = "skippy-runtime"
 version = "0.76.0"
 dependencies = [
  "anyhow",
+ "hex",
  "libc",
+ "model-ref",
  "serde",
  "serde_json",
  "sha2 0.11.0",

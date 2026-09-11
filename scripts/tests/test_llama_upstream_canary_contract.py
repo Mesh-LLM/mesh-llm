@@ -20,6 +20,7 @@ BATTERY_PLANNER = ROOT / "scripts" / "plan-family-battery.py"
 FAMILY_CERTIFY = ROOT / "scripts" / "family-certify.sh"
 FAMILY_OUTCOME = ROOT / "scripts" / "lib" / "family-outcome.sh"
 TIMEOUT_RUNNER = ROOT / "scripts" / "run-command-with-timeout.py"
+REWRITER_CHECK = ROOT / "scripts" / "check-skippy-generated-family-patch.sh"
 
 
 def _step_block(workflow: str, name: str) -> str:
@@ -102,6 +103,13 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn('    - cron: "47 3 * * *"', workflow)
         self.assertIn("  workflow_dispatch:", workflow)
         self.assertNotIn("\n  push:", workflow)
+
+    def test_new_canary_supersedes_a_stale_run(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn(
+            "concurrency:\n  group: llama-upstream-canary\n  cancel-in-progress: true",
+            workflow,
+        )
 
     def test_workflow_builds_binaries_before_skipping_per_lane_builds(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -193,6 +201,24 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertNotIn("github.token", workflow)
         self.assertNotIn("contents: write", workflow)
 
+    def test_persistent_runner_requires_exact_read_only_hf_cache(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        preflight = _step_block(workflow, "Verify runner toolchain")
+        self.assertIn('expected_hf_cache="/Users/lab/models/huggingface"', preflight)
+        self.assertIn('"${HF_CACHE:-}" != "$expected_hf_cache"', preflight)
+        self.assertIn('[[ ! -d "$expected_hf_cache/hub" ]]', preflight)
+        self.assertIn('"${HF_HUB_OFFLINE:-}" != "1"', preflight)
+        self.assertIn('echo "HF_HOME=$expected_hf_cache"', preflight)
+        self.assertIn('echo "HF_HUB_CACHE=$expected_hf_cache/hub"', preflight)
+
+    def test_rewriter_check_reexecs_and_pins_native_architecture(self) -> None:
+        checker = REWRITER_CHECK.read_text(encoding="utf-8")
+        self.assertIn('exec arch -arm64 "${BASH_SOURCE[0]}" "$@"', checker)
+        self.assertIn("sysctl -n hw.optional.arm64", checker)
+        self.assertIn('cached_tool_arch="$(sed -n', checker)
+        self.assertIn('rm -rf "$TOOL_BUILD"', checker)
+        self.assertIn('-DCMAKE_OSX_ARCHITECTURES="$NATIVE_ARCH"', checker)
+
     def test_changed_pin_never_pushes_directly_to_main(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         changed = _step_block(workflow, "Changed-pin prepare, build, certify, and publish")
@@ -274,6 +300,8 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("continue-on-error: true", changed)
         self.assertIn("CANARY_REPAIR_BUDGET_SECONDS: \"41400\"", changed)
         self.assertIn("CANARY_PUBLISH_RESERVE_SECONDS: \"1800\"", changed)
+        self.assertIn("CANARY_REPAIR_TURN_TIMEOUT_SECONDS: \"3600\"", changed)
+        self.assertIn("CANARY_REPAIR_TOTAL_BUDGET_SECONDS: \"5400\"", changed)
         self.assertIn("CANARY_REPAIR_TOKEN:", changed)
         self.assertIn("UPSTREAM_SHA_INPUT:", changed)
         self.assertIn("scripts/llama-canary-agent-repair.sh", changed)
@@ -295,6 +323,23 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("llama-canary-changed-pin-${{ github.run_id }}-${{ github.run_attempt }}", upload)
         self.assertNotIn("name: llama-family-battery-", upload)
         self.assertIn("retention-days: 14", upload)
+
+    def test_two_scheduled_failures_raise_one_reconciled_issue(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        alert = workflow[workflow.index("  alert-consecutive-failures:") :]
+        self.assertIn("!cancelled() && github.event_name == 'schedule'", alert)
+        self.assertIn("needs: latest-upstream", alert)
+        self.assertIn("runs-on: ubuntu-24.04", alert)
+        self.assertIn("actions: read", alert)
+        self.assertIn("issues: write", alert)
+        self.assertNotIn("actions/checkout@", alert)
+        self.assertIn("continue-on-error: true", alert)
+        self.assertIn("actions.listWorkflowRuns", alert)
+        self.assertIn("previous.conclusion === 'success'", alert)
+        self.assertIn("issues.create", alert)
+        self.assertIn("issues.createComment", alert)
+        self.assertIn("state: 'closed'", alert)
+        self.assertIn("llama-upstream-canary-consecutive-failure-alert", alert)
 
     def test_post_green_modifying_review_is_removed(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
