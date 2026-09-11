@@ -19,14 +19,21 @@ def write_failing_nvcc(path: Path) -> None:
 
 
 class PackageNativeRuntimeTests(unittest.TestCase):
-    def test_macos_model_package_tool_uses_portable_linker_flags(self) -> None:
+    def test_macos_model_package_tool_only_uses_a_probed_linker(self) -> None:
+        """lld is used only when `resolve_usable_lld` returned one.
+
+        Being installed is not enough: lld has to be able to link against
+        the active SDK, and a protected reusable workflow may not have
+        installed it at all. Both cases must resolve to an explicitly empty
+        encoded flag set rather than a linker that will fail at link time.
+        """
         script = SCRIPT.read_text(encoding="utf-8")
         start = script.index("build_model_package_tool() {")
         end = script.index("collect_runtime_libraries() {", start)
         function = script[start:end]
-        self.assertIn('command -v ld64.lld', function)
+        self.assertIn('macos_lld="$(resolve_usable_lld)"', function)
         self.assertIn(
-            'CARGO_ENCODED_RUSTFLAGS=-Clink-arg=-fuse-ld=lld',
+            'CARGO_ENCODED_RUSTFLAGS=-Clink-arg=-fuse-ld=$macos_lld',
             function,
         )
         self.assertIn('cargo_env+=("CARGO_ENCODED_RUSTFLAGS=")', function)
@@ -34,6 +41,9 @@ class PackageNativeRuntimeTests(unittest.TestCase):
             "LLVM ld64.lld is required to build the macOS model package tool",
             function,
         )
+        # The probe must be reachable: an unsourced helper would expand to
+        # the empty string and silently take the fallback branch forever.
+        self.assertIn('source "$SCRIPT_DIR/lib/lld.sh"', script)
 
     def test_windows_package_skips_dynamic_model_package_tool(self) -> None:
         script = SCRIPT.read_text(encoding="utf-8")

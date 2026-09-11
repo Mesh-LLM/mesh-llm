@@ -9,6 +9,9 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 UI_DIR="$REPO_ROOT/crates/mesh-llm-ui"
 BUILD_PROFILE="${MESH_LLM_BUILD_PROFILE:-debug}"
 
+# shellcheck source=scripts/lib/lld.sh
+source "$SCRIPT_DIR/lib/lld.sh"
+
 usage() {
     echo "usage: scripts/build-host.sh [--profile debug|dev|release]" >&2
 }
@@ -48,33 +51,29 @@ append_rustflag() {
 
 configure_lld_linker() {
     case "$(uname -s)" in
-        Linux)
-            command -v ld.lld >/dev/null 2>&1 || {
-                echo "Error: LLVM ld.lld was not found; install lld and retry." >&2
-                exit 1
-            }
-            append_rustflag "-C link-arg=-fuse-ld=lld"
-            ;;
-        Darwin)
-            local lld=""
-            if command -v ld64.lld >/dev/null 2>&1; then
-                lld="$(command -v ld64.lld)"
-            elif command -v brew >/dev/null 2>&1; then
-                local prefix
-                prefix="$(brew --prefix lld 2>/dev/null || true)"
-                [[ -x "$prefix/bin/ld64.lld" ]] && lld="$prefix/bin/ld64.lld"
-            fi
-            [[ -n "$lld" ]] || {
-                echo "Error: LLVM ld64.lld was not found; run 'brew install lld'." >&2
-                exit 1
-            }
-            append_rustflag "-C link-arg=-fuse-ld=$lld"
-            ;;
+        Linux | Darwin) ;;
         *)
             echo "unsupported OS for a dynamic host build: $(uname -s)" >&2
             exit 1
             ;;
     esac
+    local lld
+    lld="$(find_lld)"
+    if [[ -z "$lld" ]]; then
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            echo "Error: LLVM ld64.lld was not found; run 'brew install lld'." >&2
+        else
+            echo "Error: LLVM ld.lld was not found; install lld and retry." >&2
+        fi
+        exit 1
+    fi
+    # Installed but unable to link is a speed regression, not a broken
+    # toolchain -- see scripts/lib/lld.sh.
+    if lld_is_usable "$lld"; then
+        append_rustflag "-C link-arg=-fuse-ld=$lld"
+    else
+        report_unusable_lld "$lld"
+    fi
 }
 
 configure_rust_cache() {
