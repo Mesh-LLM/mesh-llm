@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The family-certify service can be launched under Rosetta (x86_64 shell on an
+# Apple Silicon host). Every lane below must build and execute native arm64
+# artifacts: the Homebrew LLVM/Clang toolchain and the llama.cpp native
+# closure are arm64-only. Re-exec the whole state machine natively before any
+# gate runs.
+if [[ "$(uname -m)" == "x86_64" ]] \
+    && [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" == "1" ]]; then
+  exec arch -arm64 "$BASH_SOURCE" "$@"
+fi
+
 # Deterministic llama.cpp canary state machine for changed upstream pins.
 #
 # Usage: llama-canary-agent-repair.sh [upstream-sha]

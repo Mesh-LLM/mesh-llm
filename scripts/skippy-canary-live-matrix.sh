@@ -32,6 +32,17 @@ SPLIT_SMOKE_SCRIPT="${SKIPPY_CANARY_LIVE_MATRIX_SPLIT_SMOKE:-$ROOT/scripts/ci-tw
 HF_DOWNLOAD_BIN="${SKIPPY_CANARY_LIVE_MATRIX_HF_DOWNLOAD:-hf}"
 LIMIT="${SKIPPY_CANARY_LIVE_MATRIX_LIMIT:-}"
 
+# The family-certify self-hosted runner exports HF_CACHE pointing at its
+# pre-warmed Hugging Face cache. Normalize it exactly like
+# scripts/skippy-family-battery.sh so pinned-GGUF resolution is served from
+# that cache (and a miss fails read-only) instead of following a stale
+# ambient HF_HOME.
+if [[ -n "${HF_CACHE:-}" ]]; then
+  export HF_HOME="$HF_CACHE"
+  export HF_HUB_CACHE="$HF_CACHE/hub"
+  export HF_HUB_OFFLINE=1
+fi
+
 usage() {
   cat >&2 <<'EOF'
 usage: scripts/skippy-canary-live-matrix.sh [--dry-run] [--prepare] [--model NAME]

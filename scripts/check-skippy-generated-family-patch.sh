@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The family-certify service can be launched under Rosetta (x86_64 shell on an
+# Apple Silicon host). The rewriter must build and run as the native arm64
+# slice: it links the arm64-only Homebrew LLVM/Clang libraries and consumes
+# the arm64 llama.cpp closure built by scripts/build-llama.sh.
+NATIVE_ARCH="$(uname -m)"
+if [[ "$NATIVE_ARCH" == "x86_64" ]] \
+    && [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" == "1" ]]; then
+  exec arch -arm64 "$BASH_SOURCE" "$@"
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOURCE_ROOT="${SKIPPY_REWRITER_SOURCE_ROOT:-$ROOT/.deps/llama.cpp}"
 LLAMA_BUILD_DIR="${LLAMA_STAGE_BUILD_DIR:-${LLAMA_BUILD_DIR:-$ROOT/.deps/llama-build/build-stage-abi-static-metal}}"
@@ -74,7 +84,19 @@ if [[ -z "$LLVM_PREFIX" || ! -x "$LLVM_PREFIX/bin/clang" ]]; then
 fi
 
 mkdir -p "$ARTIFACT_ROOT"
+# Pin the tool to this host's native slice. A persistent CMake cache
+# configured without an explicit architecture follows the invoking process,
+# so a cache created under a Rosetta shell holds x86_64 objects that cannot
+# link the arm64-only Homebrew LLVM/Clang libraries. Discard such a cache and
+# pass the native slice explicitly so the configure is deterministic.
+cached_tool_arch="$(sed -n 's/^CMAKE_OSX_ARCHITECTURES:STRING=\(.*\)$/\1/p' \
+  "$TOOL_BUILD/CMakeCache.txt" 2>/dev/null || true)"
+if [[ -f "$TOOL_BUILD/CMakeCache.txt" && "$cached_tool_arch" != "$NATIVE_ARCH" ]]; then
+  echo "discarding rewriter tool build cached for architecture '${cached_tool_arch:-host-default}' (native: $NATIVE_ARCH)" >&2
+  rm -rf "$TOOL_BUILD"
+fi
 cmake -S "$ROOT/tools/skippy-stage-rewriter" -B "$TOOL_BUILD" -G Ninja \
+  -DCMAKE_OSX_ARCHITECTURES="$NATIVE_ARCH" \
   -DLLVM_DIR="$LLVM_PREFIX/lib/cmake/llvm" \
   -DClang_DIR="$LLVM_PREFIX/lib/cmake/clang"
 cmake --build "$TOOL_BUILD"

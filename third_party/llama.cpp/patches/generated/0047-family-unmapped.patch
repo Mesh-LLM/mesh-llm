@@ -367,10 +367,10 @@ index d375502ddc6c27796792691bb45c505aa19a9329..3a3f5cda0b8a36bb92d6a97a91410a4d
      ggml_tensor * cur = build_norm(inpL, model.output_norm, nullptr, LLM_NORM_RMS, -1);
      cb(cur, "h_nextn", -1);
 diff --git a/src/models/bert.cpp b/src/models/bert.cpp
-index ca0281d306b157d4d1e0f1d882ee6f986b4f1ec5..093984fa0f76d063d9f556d156290f671d5d28b6 100644
+index 9cc03dc56ad0924ad9be842320a0c9a7a06c88ac..6d582a88eb4ae9b93b3d7cd4a4b91a35f32c1e29 100644
 --- a/src/models/bert.cpp
 +++ b/src/models/bert.cpp
-@@ -91,27 +91,34 @@ llama_model_bert::graph::graph(const llama_model & model, const llm_graph_params
+@@ -79,27 +79,34 @@ llama_model_bert::graph::graph(const llama_model & model, const llm_graph_params
      }
  
      // construct input embeddings (token, type, position)
@@ -411,7 +411,7 @@ index ca0281d306b157d4d1e0f1d882ee6f986b4f1ec5..093984fa0f76d063d9f556d156290f67
          ggml_tensor * cur = inpL;
  
          {
-@@ -154,7 +161,7 @@ llama_model_bert::graph::graph(const llama_model & model, const llm_graph_params
+@@ -142,7 +149,7 @@ llama_model_bert::graph::graph(const llama_model & model, const llm_graph_params
              cb(cur, "kqv_out", il);
          }
  
@@ -420,7 +420,7 @@ index ca0281d306b157d4d1e0f1d882ee6f986b4f1ec5..093984fa0f76d063d9f556d156290f67
              cur  = ggml_get_rows(ctx0, cur, inp_out_ids);
              inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
          }
-@@ -222,7 +229,15 @@ llama_model_bert::graph::graph(const llama_model & model, const llm_graph_params
+@@ -210,7 +217,15 @@ llama_model_bert::graph::graph(const llama_model & model, const llm_graph_params
  
          // input for next layer
          inpL = cur;

@@ -1,5 +1,5 @@
 {
-  "full_patch_sha256": "404e84cefbadfd8cc9c67bfae700fa115d826e14bd0bcb8e0456e01659adf312",
+  "full_patch_sha256": "dd512938dd791b20d38d7b5a6bde266a708da2e634af9c6fe37ac0f28588b2db",
   "generator_version": "0.3.0",
   "schema_version": 1,
   "shards": [
@@ -161,7 +161,7 @@
         "granite-dense"
       ],
       "file": "0016-family-granite-dense.patch",
-      "sha256": "e2f7616db20dbdfb58455af8007d4d886ef0d499e76a20cc578b832aea3552aa",
+      "sha256": "69fa78577b259f74d628e18a0ab3c92d469dc960ef07488987ca0d981e35a332",
       "sources": [
         "src/models/granite.cpp"
       ]
@@ -171,7 +171,7 @@
         "granite-hybrid"
       ],
       "file": "0017-family-granite-hybrid.patch",
-      "sha256": "ab454f776bc365e60a317961d5cf46e05644b9aa4025c21ef9a2564652bd1f13",
+      "sha256": "6372ef120da2e907f181091b7005bde9d99c2f48ea4ead1ab640877a915ff795",
       "sources": [
         "src/models/granite-hybrid.cpp"
       ]
@@ -477,7 +477,7 @@
     {
       "families": [],
       "file": "0047-family-unmapped.patch",
-      "sha256": "16f139489cb7d26a5cf04578c1a83b4f0debd1a443b39dd024c9b5e12c67ecde",
+      "sha256": "f2aa636dc51cec2d47f8920338fd836f1489a2014192e4bec05c339f69d28871",
       "sources": [
         "src/models/afmoe.cpp",
         "src/models/arctic.cpp",
