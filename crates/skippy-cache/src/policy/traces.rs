@@ -64,7 +64,7 @@ pub fn turn_growth_trace(seed: u64, sessions: u64, turns: u64) -> Vec<TraceAcces
     for session in 0..sessions {
         for turn in 0..turns {
             for entry in 0..=turn {
-                out.push(access_for(session * 1000 + entry, &mut rng));
+                out.push(access_for(session * turns + entry, &mut rng));
             }
         }
     }
@@ -113,5 +113,25 @@ fn access_for(entry: u64, rng: &mut Rng) -> TraceAccess {
         cold_prefill_cost: cold,
         restore_cost: cold * 0.3,
         exclusive_bytes: (1 + rng.next_u64() % 8) << 20,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn turn_growth_keys_do_not_collide_across_long_sessions() {
+        let turns = 1_001;
+        let trace = turn_growth_trace(7, 2, turns);
+        let first_session_len = (turns * (turns + 1) / 2) as usize;
+        let first_second_session_key = trace[first_session_len].entry;
+
+        assert_eq!(first_second_session_key, turns);
+        assert!(
+            trace[..first_session_len]
+                .iter()
+                .all(|access| access.entry < first_second_session_key)
+        );
     }
 }

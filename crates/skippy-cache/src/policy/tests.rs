@@ -880,7 +880,7 @@ fn conflict_on_a_later_segment_leaves_state_untouched() {
     assert!(policy.segments.segment_record(2).is_none());
     // Segment 1 still has exactly one reference (the original entry).
     let record = policy.segments.segment_record(1).expect("segment 1 intact");
-    assert_eq!(record.references, vec![1u64]);
+    assert_eq!(record.references, std::collections::BTreeSet::from([1u64]));
     assert_eq!(record.size, 100);
     // Class charge unchanged: the original entry's shared 100 bytes only.
     assert_eq!(policy.probation_bytes(), 100);
@@ -962,7 +962,7 @@ fn already_resident_key_rejection_leaves_no_stale_references() {
             .contains(&"already-resident-key".to_string())
     );
     let record = policy.segments.segment_record(1).expect("segment 1 intact");
-    assert_eq!(record.references, vec![1u64]);
+    assert_eq!(record.references, std::collections::BTreeSet::from([1u64]));
     assert!(
         policy.segments.segment_record(2).is_none(),
         "segment 2 must not be registered"

@@ -1,7 +1,7 @@
 //! Shared-segment accounting: fractional credit so physical bytes are never
 //! double-counted across entries (#1650 first slice).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::policy::EntryKey;
 
@@ -21,7 +21,7 @@ pub struct SharedSegmentLedger {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SegmentRecord {
     pub size: u64,
-    pub references: Vec<EntryKey>,
+    pub references: BTreeSet<EntryKey>,
 }
 
 impl SharedSegmentLedger {
@@ -30,11 +30,9 @@ impl SharedSegmentLedger {
     pub fn add(&mut self, segment: SegmentId, size: u64, entry: EntryKey) {
         let record = self.segments.entry(segment).or_insert(SegmentRecord {
             size,
-            references: Vec::new(),
+            references: BTreeSet::new(),
         });
-        if !record.references.contains(&entry) {
-            record.references.push(entry);
-        }
+        record.references.insert(entry);
     }
 
     /// Release `entry`'s reference to `segment`; drop the segment when the
@@ -42,7 +40,7 @@ impl SharedSegmentLedger {
     pub fn release(&mut self, segments: &[SegmentId], entry: EntryKey) {
         for segment in segments {
             if let Some(record) = self.segments.get_mut(segment) {
-                record.references.retain(|&r| r != entry);
+                record.references.remove(&entry);
                 if record.references.is_empty() {
                     self.segments.remove(segment);
                 }
@@ -73,7 +71,7 @@ impl SharedSegmentLedger {
         segments
             .iter()
             .filter_map(|s| self.segments.get(s))
-            .filter(|r| r.references.len() == 1 && r.references[0] == entry)
+            .filter(|r| r.references.len() == 1 && r.references.contains(&entry))
             .map(|r| r.size)
             .sum()
     }
