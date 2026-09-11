@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "decision": "quality-floor-pass-local-promotion-stop",
+  "date": "2026-09-11",
+  "commit": "2e26d46ea87e1b8ee783460998e703f669513f91",
+  "reference": {
+    "implementation": "LMCache CacheGen",
+    "revision": "b5d109ea99a89b4d8a670ee4fc2e8cb76411ee5c",
+    "license": "Apache-2.0"
+  },
+  "hardware": {
+    "model": "Mac Studio",
+    "chip": "Apple M1 Ultra",
+    "memory_gib": 128,
+    "runtime_backend": "Metal",
+    "codec_backend": "native MSL direct-to-resident-KV"
+  },
+  "model": {
+    "id": "Qwen/Qwen3-0.6B-GGUF:Q8_0",
+    "sha256": "12fae8b8f78f0360b498d04c8db7d33aff29ab7d8080231f93a17c18119e6735",
+    "layer_end": 28
+  },
+  "workload": {
+    "prefix_tokens": 19000,
+    "continuation_steps": 64,
+    "ctx_size": 19200,
+    "chunk_rows": 256,
+    "continuation_sessions": "isolated"
+  },
+  "thresholds": {
+    "minimum_token_agreement": 0.95,
+    "maximum_p99_decode_regression": 0.05,
+    "encoded_payload_must_be_smaller_than_native": true,
+    "restore_to_first_token_must_beat_native": true
+  },
+  "cases": [
+    {
+      "cache_type_k": "q8_0",
+      "cache_type_v": "q8_0",
+      "passed": false,
+      "native_storage_bytes": 1157632000,
+      "cachegen_storage_bytes": 589803358,
+      "compression_ratio": 0.5094912355567227,
+      "native_import_ms": 129.030291,
+      "cachegen_import_ms": 571.4625410000001,
+      "native_ttft_ms": 333.361041,
+      "cachegen_ttft_ms": 650.6419990000002,
+      "p99_decode_regression": -0.6727379064515878,
+      "matching_tokens": 64,
+      "token_agreement": 1.0,
+      "first_token_mismatch_step": null,
+      "failure_reasons": [
+        "restore-to-first-token did not beat native (650.642 ms >= 333.361 ms)"
+      ]
+    },
+    {
+      "cache_type_k": "q4_0",
+      "cache_type_v": "q4_0",
+      "passed": false,
+      "native_storage_bytes": 612864000,
+      "cachegen_storage_bytes": 635037607,
+      "compression_ratio": 1.0361803059079993,
+      "native_import_ms": 80.699625,
+      "cachegen_import_ms": 619.267791,
+      "native_ttft_ms": 189.84379199999998,
+      "cachegen_ttft_ms": 699.35204,
+      "p99_decode_regression": -0.6919925490103622,
+      "matching_tokens": 61,
+      "token_agreement": 0.953125,
+      "first_token_mismatch_step": 15,
+      "failure_reasons": [
+        "encoded payload is not smaller than native",
+        "restore-to-first-token did not beat native (699.352 ms >= 189.844 ms)"
+      ]
+    },
+    {
+      "cache_type_k": "q8_0",
+      "cache_type_v": "f16",
+      "passed": false,
+      "native_storage_bytes": 1668352000,
+      "cachegen_storage_bytes": 565441003,
+      "compression_ratio": 0.3389218839909084,
+      "native_import_ms": 189.447709,
+      "cachegen_import_ms": 579.317334,
+      "native_ttft_ms": 558.277709,
+      "cachegen_ttft_ms": 792.0514169999999,
+      "p99_decode_regression": -0.16607278770613987,
+      "matching_tokens": 64,
+      "token_agreement": 1.0,
+      "first_token_mismatch_step": null,
+      "failure_reasons": [
+        "restore-to-first-token did not beat native (792.051 ms >= 558.278 ms)"
+      ]
+    },
+    {
+      "cache_type_k": "q4_0",
+      "cache_type_v": "f16",
+      "passed": false,
+      "native_storage_bytes": 1395968000,
+      "cachegen_storage_bytes": 610269862,
+      "compression_ratio": 0.43716608260361267,
+      "native_import_ms": 153.555959,
+      "cachegen_import_ms": 602.013291,
+      "native_ttft_ms": 483.978876,
+      "cachegen_ttft_ms": 807.0270820000001,
+      "p99_decode_regression": -0.17710234510665943,
+      "matching_tokens": 61,
+      "token_agreement": 0.953125,
+      "first_token_mismatch_step": 15,
+      "failure_reasons": [
+        "restore-to-first-token did not beat native (807.027 ms >= 483.979 ms)"
+      ]
+    }
+  ],
+  "notes": [
+    "The scalar CPU decoder ran as an independently timed oracle and is excluded from direct-device TTFT.",
+    "Q8_0 cases preserved all 64 greedy continuation tokens; Q4_0 K cases first diverged at step 15 and preserved 61 of 64.",
+    "All four direct Metal restores were slower than their matched native controls on this local unified-memory tier.",
+    "Q4_0/Q4_0 expanded the native payload by 3.62 percent and therefore failed the storage gate independently of latency.",
+    "The matrix is representative rather than exhaustive; F32 and the remaining mixed pairings retain fixture coverage only."
+  ]
+}
