@@ -39,7 +39,8 @@ for a much larger deterministic radix/blob ownership corpus. It uses the
 pinned `public cpu` image, has no secrets, records exact seed/step budgets and
 source SHA, and uploads the reproducible failure log.
 `llama-upstream-canary.yml` runs only on its daily schedule or an explicit
-manual dispatch; it is not ordinary push or PR CI. It executes trusted
+manual dispatch; it is not ordinary push or PR CI. One fixed concurrency group
+lets a new canary supersede stale in-progress work. It executes trusted
 default-branch content only on the persistent self-hosted `family-certify`
 runner group (tools come from the runner image; no GitHub Actions model
 caching). Before native compilation,
@@ -92,7 +93,9 @@ supported-family certification. A failed phase is handed to a non-interactive
 `LLAMA_CANARY_AGENT_MODEL`). The agent may run focused diagnostics and edit the
 local tree, but the wrapper restarts at prepare, reruns the complete build, and
 remains the sole authority for certification. Each phase permits
-`CANARY_REPAIR_MAX_TURNS` (default 2). The wrapper has a 690-minute internal
+`CANARY_REPAIR_MAX_TURNS` (default 2), each agent turn has a 60-minute ceiling,
+and all agent turns share a 90-minute aggregate budget. The repair ceilings are
+independently overridable for a deliberate deep run. The wrapper has a 690-minute internal
 work deadline inside the 720-minute Actions step and reserves 30 minutes for
 terminal publication. It publishes once to the unique
 `llama-canary/repair-<run>-<attempt>-<upstream>` branch. A certified terminal
@@ -111,8 +114,11 @@ the first phase. The canary job itself remains `contents: read`; the dedicated
 repair PAT performs the bounded PR lookup. Changed-pin evidence uses its own
 `llama-canary-changed-pin-*` artifact namespace. Every
 changed-pin outcome keeps the canary run red until a certified PR is reviewed
-and merged. Unchanged scheduled and forced certifications stay read-only and
-never invoke the repair agent.
+and merged. A GitHub-hosted metadata-only job with Actions-read and Issues-write
+permissions opens or updates one alert after two consecutive non-successful
+scheduled runs, and closes that alert after a successful scheduled recovery.
+Unchanged scheduled and forced certifications stay read-only and never invoke
+the repair agent.
 
 For a non-canary manual dispatch, `release.yml` runs the checked-in
 `scripts/release-version.sh`, creates one linear release-source commit when the

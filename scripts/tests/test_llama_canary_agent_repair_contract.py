@@ -90,6 +90,49 @@ class LlamaCanaryStateMachineContractTests(unittest.TestCase):
         self.assertIn("publication reserve is active", self.wrapper)
         self.assertIn("report_terminal failed", self.wrapper)
 
+    def test_agent_turn_has_independent_and_aggregate_time_budgets(self) -> None:
+        self.assertIn(
+            'REPAIR_TURN_TIMEOUT_SECONDS="${CANARY_REPAIR_TURN_TIMEOUT_SECONDS:-3600}"',
+            self.wrapper,
+        )
+        self.assertIn(
+            'REPAIR_TOTAL_BUDGET_SECONDS="${CANARY_REPAIR_TOTAL_BUDGET_SECONDS:-5400}"',
+            self.wrapper,
+        )
+        self.assertIn("remaining_repair_seconds()", self.wrapper)
+        agent = self.wrapper[
+            self.wrapper.index("agent_turn() {") : self.wrapper.index("write_repair_pin() {")
+        ]
+        self.assertIn(
+            'run_bounded_for "agent repair turn" "$repair_remaining"', agent
+        )
+        self.assertIn(
+            'AGENT_REPAIR_SECONDS_USED="$((AGENT_REPAIR_SECONDS_USED + elapsed))"',
+            agent,
+        )
+        main = self.wrapper[self.wrapper.index('phase="prepare"\nwhile true; do') :]
+        self.assertIn("aggregate budget", main)
+
+        result = subprocess.run(
+            [
+                str(ROOT / "scripts" / "run-command-with-timeout.py"),
+                "--seconds",
+                "1",
+                "--label",
+                "agent repair turn",
+                "--",
+                sys.executable,
+                "-c",
+                "import time; time.sleep(30)",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=15,
+        )
+        self.assertEqual(124, result.returncode)
+        self.assertIn("agent repair turn timed out after 1s", result.stderr)
+
     def test_repair_turn_limit_is_per_phase(self) -> None:
         for counter in (
             "PREPARE_REPAIR_TURNS",

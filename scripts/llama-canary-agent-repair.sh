@@ -29,6 +29,8 @@ AGENT_MODEL="${CANARY_AGENT_MODEL:-zai-coding-plan/glm-5.3-flash}"
 MAX_REPAIR_TURNS="${CANARY_REPAIR_MAX_TURNS:-2}"
 REPAIR_BUDGET_SECONDS="${CANARY_REPAIR_BUDGET_SECONDS:-41400}"
 PUBLISH_RESERVE_SECONDS="${CANARY_PUBLISH_RESERVE_SECONDS:-1800}"
+REPAIR_TURN_TIMEOUT_SECONDS="${CANARY_REPAIR_TURN_TIMEOUT_SECONDS:-3600}"
+REPAIR_TOTAL_BUDGET_SECONDS="${CANARY_REPAIR_TOTAL_BUDGET_SECONDS:-5400}"
 RUN_ID="${GITHUB_RUN_ID:-manual-$(date +%s)}"
 RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT:-1}"
 RUN_KEY="${RUN_ID}-${RUN_ATTEMPT}"
@@ -51,6 +53,7 @@ FAILED_PHASE=""
 PREPARE_REPAIR_TURNS=0
 BUILD_REPAIR_TURNS=0
 CERTIFY_REPAIR_TURNS=0
+AGENT_REPAIR_SECONDS_USED=0
 
 if [[ ! "$MAX_REPAIR_TURNS" =~ ^[0-9]+$ ]]; then
   echo "CANARY_REPAIR_MAX_TURNS must be a non-negative integer" >&2
@@ -59,6 +62,12 @@ fi
 if [[ ! "$REPAIR_BUDGET_SECONDS" =~ ^[0-9]+$ || ! "$PUBLISH_RESERVE_SECONDS" =~ ^[0-9]+$ ]] \
     || (( REPAIR_BUDGET_SECONDS <= PUBLISH_RESERVE_SECONDS )); then
   echo "the canary budget must be numeric and exceed the publication reserve" >&2
+  exit 1
+fi
+if [[ ! "$REPAIR_TURN_TIMEOUT_SECONDS" =~ ^[0-9]+$ \
+    || ! "$REPAIR_TOTAL_BUDGET_SECONDS" =~ ^[0-9]+$ ]] \
+    || (( REPAIR_TURN_TIMEOUT_SECONDS <= 0 || REPAIR_TOTAL_BUDGET_SECONDS <= 0 )); then
+  echo "the repair turn timeout and total repair budget must be positive integers" >&2
   exit 1
 fi
 for required_name in LLAMA_STAGE_BUILD_DIR HF_CACHE GITHUB_REPOSITORY; do
@@ -134,12 +143,33 @@ remaining_work_seconds() {
   printf '%s\n' "$remaining"
 }
 
+remaining_repair_seconds() {
+  local remaining
+  remaining="$((REPAIR_TOTAL_BUDGET_SECONDS - AGENT_REPAIR_SECONDS_USED))"
+  (( remaining > 0 )) || return 1
+  printf '%s\n' "$remaining"
+}
+
 run_bounded() {
   local label="$1" seconds
   shift
   if ! seconds="$(remaining_work_seconds)"; then
     echo "$label cannot start: internal canary deadline reached; publication reserve is active" >&2
     return 124
+  fi
+  python3 scripts/run-command-with-timeout.py \
+    --seconds "$seconds" --label "$label" -- "$@"
+}
+
+run_bounded_for() {
+  local label="$1" maximum_seconds="$2" seconds
+  shift 2
+  if ! seconds="$(remaining_work_seconds)"; then
+    echo "$label cannot start: internal canary deadline reached; publication reserve is active" >&2
+    return 124
+  fi
+  if (( maximum_seconds < seconds )); then
+    seconds="$maximum_seconds"
   fi
   python3 scripts/run-command-with-timeout.py \
     --seconds "$seconds" --label "$label" -- "$@"
@@ -159,7 +189,14 @@ git -C "$ROOT/.deps/llama.cpp" worktree prune >/dev/null 2>&1 || true
 rm -rf /tmp/llama-old-pin /tmp/llama-repair /tmp/llama-repair-* 2>/dev/null || true
 
 agent_turn() {
-  local prompt="$1" started heartbeat_pid status
+  local prompt="$1" started finished elapsed heartbeat_pid repair_remaining status
+  if ! repair_remaining="$(remaining_repair_seconds)"; then
+    echo "agent repair cannot start: ${REPAIR_TOTAL_BUDGET_SECONDS}s aggregate repair budget exhausted" >&2
+    return 124
+  fi
+  if (( REPAIR_TURN_TIMEOUT_SECONDS < repair_remaining )); then
+    repair_remaining="$REPAIR_TURN_TIMEOUT_SECONDS"
+  fi
   started="$(date +%s)"
   set -m
   # shellcheck disable=SC2016
@@ -175,13 +212,17 @@ agent_turn() {
   heartbeat_pid=$!
   set +m
   set +e
-  run_bounded "agent repair turn" env \
+  run_bounded_for "agent repair turn" "$repair_remaining" env \
     -u GH_TOKEN -u GITHUB_TOKEN -u CANARY_REPAIR_TOKEN \
     opencode run --auto --model "$AGENT_MODEL" "$prompt"
   status=$?
+  finished="$(date +%s)"
+  elapsed="$((finished - started))"
+  AGENT_REPAIR_SECONDS_USED="$((AGENT_REPAIR_SECONDS_USED + elapsed))"
   set -e
   kill -- "-$heartbeat_pid" 2>/dev/null || kill "$heartbeat_pid" 2>/dev/null || true
   wait "$heartbeat_pid" 2>/dev/null || true
+  echo "agent repair turn used ${elapsed}s; aggregate ${AGENT_REPAIR_SECONDS_USED}s/${REPAIR_TOTAL_BUDGET_SECONDS}s"
   return "$status"
 }
 
@@ -363,6 +404,7 @@ write_pr_body() {
     echo "- Workflow run: \`${RUN_KEY}\`"
     echo "- Terminal commit: \`${PUBLISHED_SHA}\`"
     echo "- Repair turns: prepare=${PREPARE_REPAIR_TURNS}, build=${BUILD_REPAIR_TURNS}, certify=${CERTIFY_REPAIR_TURNS}"
+    echo "- Agent repair wall time: ${AGENT_REPAIR_SECONDS_USED}s / ${REPAIR_TOTAL_BUDGET_SECONDS}s"
     echo
     if [[ "$outcome" == "certified" ]]; then
       echo "The wrapper applied the complete patch queue, completed the patched llama.cpp and Rust build gates, and passed the full supported-family certification on this exact commit."
@@ -464,6 +506,11 @@ while true; do
   fi
   if (( $(phase_turns "$phase") >= MAX_REPAIR_TURNS )); then
     echo "${phase} exhausted ${MAX_REPAIR_TURNS} repair turns" >&2
+    report_terminal failed
+    exit 1
+  fi
+  if ! remaining_repair_seconds >/dev/null; then
+    echo "agent repair exhausted its ${REPAIR_TOTAL_BUDGET_SECONDS}s aggregate budget" >&2
     report_terminal failed
     exit 1
   fi
