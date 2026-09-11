@@ -9,7 +9,7 @@ use nostr_sdk::prelude::*;
 // ---------------------------------------------------------------------------
 
 fn nostr_key_path() -> Result<std::path::PathBuf> {
-    Ok(crate::mesh::identity_state_dir().join("nostr.nsec"))
+    Ok(crate::mesh::identity_state_dir()?.join("nostr.nsec"))
 }
 
 /// Load or generate a Nostr keypair for publishing.

@@ -81,6 +81,11 @@ fn ensure_private_node_key_dir(dir: &Path) -> Result<(), CryptoError> {
     let mut missing = Vec::new();
     let mut current = dir;
     loop {
+        // A relative path such as `keys/node.key` bottoms out at the empty
+        // path, which is the current directory and already exists.
+        if current.as_os_str().is_empty() {
+            break;
+        }
         match std::fs::metadata(current) {
             Ok(metadata) => {
                 if !metadata.is_dir() {
@@ -298,6 +303,29 @@ mod tests {
             0o600
         );
         std::fs::remove_dir_all(temp).ok();
+    }
+
+    #[test]
+    fn relative_node_key_parent_is_created_in_the_current_directory() {
+        // `mesh-llm auth` rotation passes explicitly relative key paths
+        // through unchanged; the missing `keys/` ancestor must be created
+        // under the working directory instead of failing with NotFound.
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                std::fs::remove_dir_all(&self.0).ok();
+            }
+        }
+        let root = PathBuf::from(format!("mesh-node-key-relative-{}", rand::random::<u64>()));
+        assert!(root.is_relative());
+        let _cleanup = Cleanup(root.clone());
+        let key_path = root.join("keys").join("node.key");
+        let key = [9u8; NODE_KEY_BYTES];
+
+        save_node_key_bytes_to_path(&key_path, &key).unwrap();
+
+        assert!(key_path.is_file());
+        assert_eq!(load_node_key_bytes_from_path(&key_path).unwrap(), key);
     }
 
     #[test]

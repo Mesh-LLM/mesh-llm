@@ -805,6 +805,7 @@ class NativeArtifactVerifierTests(unittest.TestCase):
             result = self.run_verifier_with_stub_readelf(artifact, stub_bin)
 
             output = result.stdout + result.stderr
+            self.assertEqual(result.returncode, 0, output)
             self.assertNotIn("GLIBC", output, output)
 
     def test_runtime_still_rejects_an_over_floor_library(self) -> None:

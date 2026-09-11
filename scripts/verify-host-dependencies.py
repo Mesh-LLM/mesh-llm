@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -142,7 +143,15 @@ def inspect_dependencies(path: Path, format_name: str | None = None) -> tuple[st
 def run_tool(command: tuple[str, ...]) -> str:
     if shutil.which(command[0]) is None:
         raise RuntimeError(f"{command[0]} is required to inspect host dependencies")
-    return subprocess.check_output(command, text=True, stderr=subprocess.STDOUT)
+    # parse_elf_glibc_floor looks for the English "Version needs section"
+    # heading; a localized readelf would make the glibc floor check pass
+    # silently, so pin the C locale.
+    return subprocess.check_output(
+        command,
+        text=True,
+        stderr=subprocess.STDOUT,
+        env={**os.environ, "LC_ALL": "C"},
+    )
 
 
 def forbidden_imports(imports: list[str]) -> list[str]:

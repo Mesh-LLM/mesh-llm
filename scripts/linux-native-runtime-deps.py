@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import pathlib
 import re
 import shutil
@@ -80,6 +81,9 @@ def _readelf(*arguments: str, path: pathlib.Path) -> str:
             check=True,
             capture_output=True,
             text=True,
+            # _elf_image parses the "Class:" and "Machine:" labels, so keep
+            # readelf's output in the C locale regardless of the host's.
+            env={**os.environ, "LC_ALL": "C"},
         )
     except FileNotFoundError as error:
         raise RuntimeError("readelf is required to inspect Linux native runtime ELF files") from error
@@ -468,7 +472,11 @@ def dependency_order(
             visit(name)
     if primary in libraries:
         visit(primary)
-        primary_path = ordered.pop()
+        # A packaged library may list the primary in its own NEEDED, in which
+        # case traversal already appended it mid-list. Remove it by identity
+        # rather than popping whatever happens to be last.
+        primary_path = libraries[primary].path
+        ordered.remove(primary_path)
     else:
         primary_path = lib_dir / primary
     ordered_names = {path.name for path in ordered}

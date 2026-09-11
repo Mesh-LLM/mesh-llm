@@ -75,11 +75,17 @@ pub(crate) fn public_to_private_transition_clears_identity() {
 
     // --- Scenario 1: no marker → was_previously_public is false ---
     let _ = fs::remove_file(dir.join("was-public"));
-    assert!(!was_previously_public(), "should be false when no marker");
+    assert!(
+        !was_previously_public().expect("resolve marker"),
+        "should be false when no marker"
+    );
 
     // --- Scenario 2: mark as public → marker exists ---
     mark_was_public().expect("mark public identity");
-    assert!(was_previously_public(), "should be true after marking");
+    assert!(
+        was_previously_public().expect("resolve marker"),
+        "should be true after marking"
+    );
 
     // Plant some identity files to verify clear removes them.
     fs::write(dir.join("key"), b"test-key").unwrap();
@@ -96,7 +102,7 @@ pub(crate) fn public_to_private_transition_clears_identity() {
         );
     }
     assert!(
-        !was_previously_public(),
+        !was_previously_public().expect("resolve marker"),
         "marker should be gone after clear"
     );
 

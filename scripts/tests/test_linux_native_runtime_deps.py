@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 from pathlib import Path
+import platform
 import shutil
 import subprocess
 import tempfile
@@ -275,12 +276,15 @@ class LinuxNativeRuntimeDepsTests(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
+            # The copied /bin/true matches the host, so ask for the other one.
+            host = platform.machine().lower()
+            foreign = "aarch64" if host in {"x86_64", "amd64"} else "x86_64"
             with self.assertRaisesRegex(RuntimeError, "wrong architecture"):
                 DEPS.collect_dependencies(
                     lib_dir,
                     [provider_dir],
                     [lib_dir],
-                    arch="aarch64",
+                    arch=foreign,
                     cuda_major=12,
                 )
 

@@ -13,7 +13,7 @@ pub fn generate_mesh_id(name: Option<&str>, nostr_pubkey: Option<&str>) -> Resul
         hasher.update(nostr_pubkey.unwrap_or_default().as_bytes());
         Ok(hex::encode(hasher.finalize()))
     } else {
-        generate_random_mesh_id_at(&mesh_id_path())
+        generate_random_mesh_id_at(&mesh_id_path()?)
     }
 }
 
@@ -44,17 +44,17 @@ pub(crate) fn generate_random_mesh_id_at(path: &std::path::Path) -> Result<Strin
     Ok(id)
 }
 
-pub(crate) fn mesh_id_path() -> std::path::PathBuf {
-    identity_state_dir().join("mesh-id")
+pub(crate) fn mesh_id_path() -> Result<std::path::PathBuf> {
+    Ok(identity_state_dir()?.join("mesh-id"))
 }
 
-pub(crate) fn mesh_genesis_policy_path() -> std::path::PathBuf {
-    identity_state_dir().join("mesh-genesis-policy.json")
+pub(crate) fn mesh_genesis_policy_path() -> Result<std::path::PathBuf> {
+    Ok(identity_state_dir()?.join("mesh-genesis-policy.json"))
 }
 
 /// Save the mesh ID of the last mesh we successfully joined.
 pub fn save_last_mesh_id(mesh_id: &str) -> Result<()> {
-    let path = identity_state_dir().join("last-mesh");
+    let path = identity_state_dir()?.join("last-mesh");
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
@@ -63,8 +63,19 @@ pub fn save_last_mesh_id(mesh_id: &str) -> Result<()> {
 }
 
 /// Load the mesh ID of the last mesh we successfully joined.
+///
+/// A key-path resolution failure yields `None` (no sticky mesh) rather than
+/// reading the default identity's `last-mesh`; the callers only use this as
+/// a scoring hint, so there is nothing to propagate beyond the warning.
 pub fn load_last_mesh_id() -> Option<String> {
-    let path = identity_state_dir().join("last-mesh");
+    let state_dir = match identity_state_dir() {
+        Ok(dir) => dir,
+        Err(error) => {
+            tracing::warn!("cannot resolve identity state dir for last-mesh: {error:#}");
+            return None;
+        }
+    };
+    let path = state_dir.join("last-mesh");
     std::fs::read_to_string(&path)
         .ok()
         .map(|s| s.trim().to_string())
@@ -80,11 +91,15 @@ pub fn load_last_mesh_id() -> Option<String> {
 /// The historical default key keeps using `~/.mesh-llm`, while an explicit
 /// key path gets a private namespace under `~/.mesh-llm/identities`. This
 /// prevents one process from rotating another process's Nostr and mesh state.
-pub(crate) fn identity_state_dir() -> std::path::PathBuf {
+///
+/// A key-path resolution failure (for example a relative
+/// `MESH_LLM_NODE_KEY_PATH` when the working directory is gone) is an error
+/// rather than a fallback to the default namespace, so a custom-key process
+/// never reads or rotates the default identity's state by accident.
+pub(crate) fn identity_state_dir() -> Result<std::path::PathBuf> {
     let home = identity_home_dir();
-    let active_key_path =
-        default_node_key_path().unwrap_or_else(|_| home.join(".mesh-llm").join("key"));
-    identity_state_dir_for(&home, &active_key_path)
+    let active_key_path = default_node_key_path()?;
+    Ok(identity_state_dir_for(&home, &active_key_path))
 }
 
 pub(crate) fn identity_home_dir() -> std::path::PathBuf {
@@ -134,11 +149,10 @@ fn key_path_bytes(path: &std::path::Path) -> Vec<u8> {
     path.to_string_lossy().as_bytes().to_vec()
 }
 
-pub(crate) fn was_public_path() -> std::path::PathBuf {
+pub(crate) fn was_public_path() -> Result<std::path::PathBuf> {
     let home = identity_home_dir();
-    let active_key_path =
-        default_node_key_path().unwrap_or_else(|_| home.join(".mesh-llm").join("key"));
-    identity_state_dir_for(&home, &active_key_path).join("was-public")
+    let active_key_path = default_node_key_path()?;
+    Ok(was_public_path_for(&home, &active_key_path))
 }
 
 fn was_public_path_for(
@@ -175,8 +189,8 @@ fn mark_was_public_at(home: &std::path::Path, active_key_path: &std::path::Path)
 }
 
 /// Returns true if the previous run was public (marker file exists).
-pub fn was_previously_public() -> bool {
-    was_public_path().exists()
+pub fn was_previously_public() -> Result<bool> {
+    Ok(was_public_path()?.exists())
 }
 
 #[cfg(test)]
