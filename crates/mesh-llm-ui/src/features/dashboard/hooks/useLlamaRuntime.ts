@@ -100,9 +100,46 @@ export function useLlamaRuntime(enabled: boolean) {
       }
     }
 
+    // Single-flight with a trailing flag.
+    //
+    // `revision` advances once per published runtime event, and under load
+    // that is far faster than an authoritative `/api/runtime/llama` round
+    // trip. Refreshing on every bump aborted the in-flight request and
+    // started another, so a busy node could leave the panel starved -- a
+    // burst of N events produced N aborted requests and, in the worst case,
+    // zero completed ones.
+    //
+    // Now a refresh that arrives while one is in flight sets a flag instead.
+    // When the in-flight request settles, exactly one more runs, so the
+    // panel always ends up reflecting the newest revision without a request
+    // per event.
+    let inFlight = false
+    let trailing = false
+
+    const refresh = () => {
+      if (inFlight) {
+        trailing = true
+        return
+      }
+      void runRefresh()
+    }
+
+    async function runRefresh() {
+      inFlight = true
+      try {
+        await loadRuntime()
+      } finally {
+        inFlight = false
+        if (trailing && !cancelled) {
+          trailing = false
+          void runRefresh()
+        }
+      }
+    }
+
     const ensurePeriodicRefresh = () => {
       if (refreshInterval !== null) return
-      refreshInterval = window.setInterval(() => void loadRuntime(), LLAMA_RUNTIME_REFRESH_MS)
+      refreshInterval = window.setInterval(refresh, LLAMA_RUNTIME_REFRESH_MS)
     }
 
     const scheduleReconnect = () => {
@@ -158,8 +195,12 @@ export function useLlamaRuntime(enabled: boolean) {
       }
     }
 
-    reloadRef.current = () => void loadRuntime()
-    void loadRuntime()
+    reloadRef.current = refresh
+    // Through `refresh`, not `loadRuntime`: the mount fetch has to count as
+    // the in-flight one, or the first frame to arrive would start a second
+    // request alongside it -- which is the exact behavior single-flight is
+    // here to remove.
+    refresh()
     if (legacyStreamEnabled) connectLegacyRuntimeEvents()
     else ensurePeriodicRefresh()
 

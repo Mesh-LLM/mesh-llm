@@ -50,7 +50,17 @@ describe('useLlamaRuntime', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined)
   })
 
-  it('does not surface expected aborts from overlapping polls', async () => {
+  /**
+   * The periodic poll no longer overlaps the request already in flight.
+   *
+   * It used to: the interval fired while the mount fetch was outstanding,
+   * aborted it, and started another. The abort was expected and suppressed,
+   * which is what this test originally pinned -- but not aborting in the
+   * first place is better than suppressing the symptom. The poll now sets
+   * the trailing flag and the panel settles from the request that was
+   * already running.
+   */
+  it('does not start an overlapping poll while a request is in flight', async () => {
     vi.useFakeTimers()
     const runtimeRequests: DeferredFetch[] = []
     const fetchMock = vi.fn((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
@@ -67,9 +77,9 @@ describe('useLlamaRuntime', () => {
       await vi.advanceTimersByTimeAsync(2_500)
     })
 
-    expect(runtimeRequests).toHaveLength(2)
+    expect(runtimeRequests).toHaveLength(1)
     await act(async () => {
-      runtimeRequests[1].resolve(jsonResponse({ metrics: { status: 'ready' }, slots: { status: 'ready' } }))
+      runtimeRequests[0].resolve(jsonResponse({ metrics: { status: 'ready' }, slots: { status: 'ready' } }))
       await Promise.resolve()
       await Promise.resolve()
     })
@@ -121,6 +131,74 @@ describe('useLlamaRuntime', () => {
 
     await waitFor(() => expect(eventSources).toHaveLength(1))
     expect(eventSources[0]?.url).toBe('/api/runtime/events')
+  })
+
+  /**
+   * A burst of v1 frames must not become a burst of authoritative fetches.
+   *
+   * `revision` advances once per published runtime event, which on a busy
+   * node is far faster than a `/api/runtime/llama` round trip. The hook
+   * used to refresh on every bump, aborting the in-flight request each
+   * time -- so N events produced N aborted requests and, in the worst
+   * case, no completed one at all.
+   *
+   * The contract now: at most one request in flight, and exactly one more
+   * afterwards if anything arrived while it was running. The panel still
+   * ends up reflecting the newest revision.
+   */
+  it('coalesces a burst of v1 frames into a single trailing refresh', async () => {
+    const runtimeRequests: DeferredFetch[] = []
+    const fetchMock = vi.fn(async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      const url = String(input)
+      if (url.includes('/api/status')) {
+        return jsonResponse({ runtime: { capabilities: { runtime_events: ADVERTISED } } })
+      }
+      if (url.includes('/api/runtime/events/v1')) {
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            streamController = controller
+          }
+        })
+        return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+      }
+      const deferred = createDeferredFetch(init?.signal)
+      runtimeRequests.push(deferred)
+      return deferred.promise
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<RuntimeProbe />)
+    await settle()
+
+    // The mount's own authoritative fetch, still in flight.
+    expect(runtimeRequests).toHaveLength(1)
+
+    // Ten frames while that request is outstanding.
+    await act(async () => {
+      for (let sequence = 1; sequence <= 10; sequence += 1) {
+        streamController?.enqueue(new TextEncoder().encode(healthFrame(sequence)))
+      }
+      for (let index = 0; index < 16; index += 1) await Promise.resolve()
+    })
+
+    expect(runtimeRequests).toHaveLength(1)
+
+    // Settling the in-flight request releases exactly one trailing refresh,
+    // not one per frame.
+    await act(async () => {
+      runtimeRequests[0].resolve(jsonResponse({ metrics: { status: 'ready' }, slots: { status: 'ready' } }))
+      for (let index = 0; index < 16; index += 1) await Promise.resolve()
+    })
+
+    expect(runtimeRequests).toHaveLength(2)
+
+    await act(async () => {
+      runtimeRequests[1].resolve(jsonResponse({ metrics: { status: 'ready' }, slots: { status: 'ready' } }))
+      for (let index = 0; index < 16; index += 1) await Promise.resolve()
+    })
+
+    expect(runtimeRequests).toHaveLength(2)
+    await waitFor(() => expect(screen.getByTestId('metrics-status')).toHaveTextContent('ready'))
   })
 
   it('closes the legacy stream on teardown', async () => {

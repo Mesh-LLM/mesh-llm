@@ -21,6 +21,7 @@ import {
   parseSseBlock
 } from '@/features/network/api/runtime-events-v1-sse'
 import {
+  resetRuntimeEventsV1SharedState,
   useRuntimeEventsV1,
   STREAM_LIVENESS_MS,
   type RuntimeEventsFetch,
@@ -48,6 +49,9 @@ const HOOK_RECONNECT_DELAY_MS = 1_000
 
 afterEach(() => {
   cleanup()
+  // The stream's stores are module-level, so one test's connection would
+  // otherwise outlive it and be joined by the next.
+  resetRuntimeEventsV1SharedState()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   vi.useRealTimers()
@@ -687,5 +691,95 @@ describe('useRuntimeEventsV1', () => {
     await settle()
     expect(fetchImpl).not.toHaveBeenCalled()
     expect(screen.getByTestId('mode')).toHaveTextContent('probing')
+  })
+})
+
+// ─── E. one shared connection ──────────────────────────────────────────────
+
+describe('useRuntimeEventsV1 connection sharing', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+  })
+
+  /**
+   * Two consumers, one connection.
+   *
+   * The hook used to open a connection per calling component, and two
+   * components consume it: the dashboard's runtime panel and the network
+   * drawer's. That doubled the console's footprint against a server that
+   * caps subscribers at 32 and rate-limits a client to 10 connects per 60
+   * seconds, while both files' doc comments claimed the stream was shared.
+   */
+  it('opens one stream for two consumers and delivers frames to both', async () => {
+    const stream = sseResponse()
+    const v1Requests: string[] = []
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.includes('/api/status')) return jsonResponse(statusWithCapability(ADVERTISED))
+      v1Requests.push(url)
+      return stream.response
+    }) satisfies RuntimeEventsFetch
+
+    function TwoConsumers() {
+      return (
+        <>
+          <div data-testid="first">
+            <Probe fetchImpl={fetchImpl} />
+          </div>
+          <div data-testid="second">
+            <Probe fetchImpl={fetchImpl} />
+          </div>
+        </>
+      )
+    }
+
+    render(<TwoConsumers />)
+    await settle()
+
+    expect(v1Requests).toHaveLength(1)
+
+    await stream.controller.push(encodeFrame('runtime_state', 5, STATE_BODY))
+
+    const revisions = screen.getAllByTestId('revision')
+    expect(revisions).toHaveLength(2)
+    for (const revision of revisions) {
+      expect(revision).toHaveTextContent('1')
+    }
+    for (const mode of screen.getAllByTestId('mode')) {
+      expect(mode).toHaveTextContent('live')
+    }
+  })
+
+  /**
+   * The connection is reference-counted: one consumer unmounting must not
+   * take the stream away from the other.
+   */
+  it('keeps the stream open while any consumer remains', async () => {
+    const stream = sseResponse()
+    let v1Connects = 0
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.includes('/api/status')) return jsonResponse(statusWithCapability(ADVERTISED))
+      v1Connects += 1
+      return stream.response
+    }) satisfies RuntimeEventsFetch
+
+    function Pair({ showFirst }: { showFirst: boolean }) {
+      return (
+        <>
+          {showFirst ? <Probe fetchImpl={fetchImpl} /> : null}
+          <Probe fetchImpl={fetchImpl} />
+        </>
+      )
+    }
+
+    const view = render(<Pair showFirst />)
+    await settle()
+    expect(v1Connects).toBe(1)
+
+    view.rerender(<Pair showFirst={false} />)
+    await settle()
+
+    await stream.controller.push(encodeFrame('runtime_state', 5, STATE_BODY))
+    expect(screen.getByTestId('revision')).toHaveTextContent('1')
+    expect(v1Connects).toBe(1)
   })
 })

@@ -1,5 +1,6 @@
 /**
- * The console's single consumer of `GET /api/runtime/events/v1`.
+ * The console's single connection to `GET /api/runtime/events/v1`, shared
+ * by every component that consumes it.
  *
  * It follows `@/features/logs/api/use-logs-live-recovery`'s recovery shape —
  * connect, accept typed frames, hydrate authoritatively on a gap, degrade to
@@ -15,7 +16,7 @@
  * caller can run its legacy stream instead.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useSyncExternalStore } from 'react'
 
 import { env } from '@/lib/env'
 import {
@@ -145,143 +146,222 @@ function monotonicNow(): number {
   return Date.now()
 }
 
-export function useRuntimeEventsV1({ enabled, fetchImpl }: RuntimeEventsV1Options): RuntimeEventsV1 {
-  const [state, setState] = useState<RuntimeEventsV1>(IDLE)
-  const cursorRef = useRef<string | null>(null)
+/**
+ * One live connection, shared by every subscriber.
+ *
+ * The hook used to open a connection per calling component. Two components
+ * consume it today — the dashboard's runtime panel and the network drawer's
+ * — so the console opened two connections to a server that caps subscribers
+ * at 32 and rate-limits a client to 10 connects per 60 seconds. Both files'
+ * doc comments already claimed the stream was shared; this is what makes
+ * that true.
+ *
+ * The subscription is reference-counted: the first subscriber starts the
+ * connection, the last one to leave tears it down. A distinct `fetchImpl`
+ * gets its own store, so a test's injected transport never joins the real
+ * one.
+ */
+type Store = {
+  snapshot: RuntimeEventsV1
+  subscribers: Set<() => void>
+  stop: (() => void) | null
+}
 
-  useEffect(() => {
-    if (!enabled) return undefined
+const STORES = new Map<RuntimeEventsFetch | undefined, Store>()
 
-    const request = new AbortController()
-    const connect = fetchImpl ?? defaultFetch()
-    let disposed = false
+function storeFor(fetchImpl: RuntimeEventsFetch | undefined): Store {
+  const existing = STORES.get(fetchImpl)
+  if (existing) return existing
+  const created: Store = { snapshot: IDLE, subscribers: new Set(), stop: null }
+  STORES.set(fetchImpl, created)
+  return created
+}
 
-    const fallback = (reason: RuntimeEventsV1FallbackReason) => {
-      if (disposed) return
-      setState((current) => ({ ...current, mode: 'fallback', fallbackReason: reason }))
-    }
+function publish(store: Store, next: (current: RuntimeEventsV1) => RuntimeEventsV1) {
+  store.snapshot = next(store.snapshot)
+  for (const notify of store.subscribers) notify()
+}
 
-    const accept = (chunk: { event: string; lastEventId: string; data: string }) => {
-      const frame = parseRuntimeEventsV1Frame(chunk)
-      cursorRef.current = frame.envelope.cursor.toString()
-      if (disposed) return
-      setState((current) => ({
-        mode: 'live',
-        fallbackReason: null,
-        revision: current.revision + 1,
-        cursor: frame.envelope.cursor.toString(),
-        processInstanceId: frame.envelope.processInstanceId,
-        rebuildGeneration: frame.envelope.rebuildGeneration
-      }))
-    }
+/**
+ * Reset every shared store. Test-only: the stores are module-level, so one
+ * test's connection would otherwise outlive it and be joined by the next.
+ */
+export function resetRuntimeEventsV1SharedState() {
+  for (const store of STORES.values()) {
+    store.stop?.()
+  }
+  STORES.clear()
+}
 
-    const readStream = async (body: ReadableStream<Uint8Array>): Promise<Attempt> => {
-      const reader = body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      const connectedAt = monotonicNow()
-      let receivedBodyActivity = false
-      const connectionOutcome = (): Attempt =>
-        receivedBodyActivity && monotonicNow() - connectedAt >= STREAM_LIVENESS_MS ? 'sustained' : 'transient'
-      try {
-        for (;;) {
-          const { done, value } = await reader.read()
-          if (done || disposed) return connectionOutcome()
-          if (value && value.byteLength > 0) receivedBodyActivity = true
-          buffer += decoder.decode(value, { stream: true })
-          const split = splitSseBlocks(buffer)
-          buffer = split.rest
-          for (const block of split.blocks) {
-            const chunk = parseSseBlock(block)
-            if (!chunk) continue
-            accept(chunk)
-          }
+/**
+ * Open the shared connection for `store` and return its teardown.
+ *
+ * Module-level rather than inside a component effect: the connection
+ * belongs to the store, which outlives any one subscriber, and this is what
+ * lets the hook be a plain `useSyncExternalStore` reader.
+ */
+function startStore(store: Store, fetchImpl: RuntimeEventsFetch | undefined): () => void {
+  const request = new AbortController()
+  const connect = fetchImpl ?? defaultFetch()
+  const cursorRef: { current: string | null } = { current: null }
+  let disposed = false
+
+  const fallback = (reason: RuntimeEventsV1FallbackReason) => {
+    if (disposed) return
+    publish(store, (current) => ({ ...current, mode: 'fallback', fallbackReason: reason }))
+  }
+
+  const accept = (chunk: { event: string; lastEventId: string; data: string }) => {
+    const frame = parseRuntimeEventsV1Frame(chunk)
+    cursorRef.current = frame.envelope.cursor.toString()
+    if (disposed) return
+    publish(store, (current) => ({
+      mode: 'live',
+      fallbackReason: null,
+      revision: current.revision + 1,
+      cursor: frame.envelope.cursor.toString(),
+      processInstanceId: frame.envelope.processInstanceId,
+      rebuildGeneration: frame.envelope.rebuildGeneration
+    }))
+  }
+
+  const readStream = async (body: ReadableStream<Uint8Array>): Promise<Attempt> => {
+    const reader = body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    const connectedAt = monotonicNow()
+    let receivedBodyActivity = false
+    const connectionOutcome = (): Attempt =>
+      receivedBodyActivity && monotonicNow() - connectedAt >= STREAM_LIVENESS_MS ? 'sustained' : 'transient'
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done || disposed) return connectionOutcome()
+        if (value && value.byteLength > 0) receivedBodyActivity = true
+        buffer += decoder.decode(value, { stream: true })
+        const split = splitSseBlocks(buffer)
+        buffer = split.rest
+        for (const block of split.blocks) {
+          const chunk = parseSseBlock(block)
+          if (!chunk) continue
+          accept(chunk)
         }
-      } catch (error) {
-        if (error instanceof RuntimeEventsV1FrameError) {
-          fallback('malformed_frame')
-          return 'fatal'
-        }
-        return connectionOutcome()
-      } finally {
-        reader.cancel().catch(() => undefined)
       }
-    }
-
-    const attempt = async (endpoint: string): Promise<Attempt> => {
-      const cursor = cursorRef.current
-      const query = cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`
-      let response: RuntimeEventsResponse
-      try {
-        response = await connect!(`${env.managementApiUrl}${endpoint}${query}`, { signal: request.signal })
-      } catch {
-        return 'transient'
-      }
-      if (response.status === 404) {
-        fallback('not_found')
+    } catch (error) {
+      if (error instanceof RuntimeEventsV1FrameError) {
+        fallback('malformed_frame')
         return 'fatal'
       }
-      if (response.status === 403) {
-        fallback('forbidden')
-        return 'fatal'
-      }
-      if (!response.ok || !response.body) return 'transient'
-      return readStream(response.body)
+      return connectionOutcome()
+    } finally {
+      reader.cancel().catch(() => undefined)
     }
+  }
 
-    const probe = async (): Promise<Capability | undefined> => {
-      try {
-        const response = await connect!(`${env.managementApiUrl}/api/status`, { signal: request.signal })
-        if (!response.ok) {
-          fallback('capability_absent')
-          return undefined
-        }
-        const capability = readCapability(await response.json())
-        if (typeof capability === 'string') {
-          fallback(capability)
-          return undefined
-        }
-        return capability
-      } catch {
+  const attempt = async (endpoint: string): Promise<Attempt> => {
+    const cursor = cursorRef.current
+    const query = cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`
+    let response: RuntimeEventsResponse
+    try {
+      response = await connect!(`${env.managementApiUrl}${endpoint}${query}`, { signal: request.signal })
+    } catch {
+      return 'transient'
+    }
+    if (response.status === 404) {
+      fallback('not_found')
+      return 'fatal'
+    }
+    if (response.status === 403) {
+      fallback('forbidden')
+      return 'fatal'
+    }
+    if (!response.ok || !response.body) return 'transient'
+    return readStream(response.body)
+  }
+
+  const probe = async (): Promise<Capability | undefined> => {
+    try {
+      const response = await connect!(`${env.managementApiUrl}/api/status`, { signal: request.signal })
+      if (!response.ok) {
         fallback('capability_absent')
         return undefined
       }
+      const capability = readCapability(await response.json())
+      if (typeof capability === 'string') {
+        fallback(capability)
+        return undefined
+      }
+      return capability
+    } catch {
+      fallback('capability_absent')
+      return undefined
     }
+  }
 
-    const run = async () => {
-      if (!connect) {
-        fallback('unsupported_environment')
+  const run = async () => {
+    if (!connect) {
+      fallback('unsupported_environment')
+      return
+    }
+    const capability = await probe()
+    if (!capability || disposed) return
+
+    let failures = 0
+    while (!disposed) {
+      const outcome = await attempt(capability.endpoint)
+      if (outcome === 'fatal' || disposed) return
+      if (outcome === 'sustained') {
+        failures = 0
+      } else {
+        failures += 1
+      }
+      if (failures >= MAX_RECONNECT_ATTEMPTS) {
+        fallback('reconnect_exhausted')
         return
       }
-      const capability = await probe()
-      if (!capability || disposed) return
+      await delay(RECONNECT_DELAY_MS, request.signal)
+    }
+  }
 
-      let failures = 0
-      while (!disposed) {
-        const outcome = await attempt(capability.endpoint)
-        if (outcome === 'fatal' || disposed) return
-        if (outcome === 'sustained') {
-          failures = 0
-        } else {
-          failures += 1
+  void run()
+
+  return () => {
+    disposed = true
+    request.abort()
+    cursorRef.current = null
+  }
+}
+
+export function useRuntimeEventsV1({ enabled, fetchImpl }: RuntimeEventsV1Options): RuntimeEventsV1 {
+  const store = storeFor(fetchImpl)
+
+  // `useSyncExternalStore` rather than a `useState`/`useEffect` pair: the
+  // connection is genuinely external to any component, so React should read
+  // it rather than mirror it. Reference counting lives in `subscribe`,
+  // which React calls exactly once per subscriber and unsubscribes exactly
+  // once.
+  const subscribe = useCallback(
+    (onChange: () => void) => {
+      if (!enabled) return () => undefined
+      store.subscribers.add(onChange)
+      store.stop ??= startStore(store, fetchImpl)
+      return () => {
+        store.subscribers.delete(onChange)
+        if (store.subscribers.size === 0) {
+          store.stop?.()
+          store.stop = null
+          store.snapshot = IDLE
         }
-        if (failures >= MAX_RECONNECT_ATTEMPTS) {
-          fallback('reconnect_exhausted')
-          return
-        }
-        await delay(RECONNECT_DELAY_MS, request.signal)
       }
-    }
+    },
+    [enabled, fetchImpl, store]
+  )
 
-    void run()
+  const snapshot = useSyncExternalStore(
+    subscribe,
+    () => store.snapshot,
+    () => IDLE
+  )
 
-    return () => {
-      disposed = true
-      request.abort()
-      cursorRef.current = null
-      setState(IDLE)
-    }
-  }, [enabled, fetchImpl])
-
-  return enabled ? state : IDLE
+  return enabled ? snapshot : IDLE
 }
