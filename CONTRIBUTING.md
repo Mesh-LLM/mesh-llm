@@ -260,11 +260,11 @@ Co-authored-by: Real Person <real@example.com>                  # kept
 Trailers naming a human contributor are untouched. Extend the lists in
 `scripts/check-conventional-commit.py` when a new agent identity shows up.
 
-Keeping them out of branch commits is what matters, because GitHub composes a
-squash-merge body from the branch commit messages and carries their trailers
-into `main`. The repository-side controls for that are
-`squash_merge_commit_message` and a `commit_message_pattern` rule on the `main`
-ruleset; see the CI notes in
+A squash merge builds the commit on `main` from the pull request title and
+body, both of which CI validates, so a trailer in a branch commit cannot reach
+`main` on its own. Keep them out of branch commits anyway: branch history is
+still read during review, and that protection is a repository setting rather
+than a law of nature. See the CI notes in
 [`.agents/skills/manage-ci/references/current-inventory.md`](.agents/skills/manage-ci/references/current-inventory.md).
 
 

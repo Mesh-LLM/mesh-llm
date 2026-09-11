@@ -135,47 +135,48 @@ succeeds. The agent turn runs with `GH_TOKEN` and `GITHUB_TOKEN` stripped and
 never publishes. Any agent failure keeps the deterministic notes without
 failing the job. Evidence uploads as `release-notes-<tag>` for 90 days.
 
-Merge settings observed on 2026-09-10: `allow_merge_commit=false`,
+Merge settings as of 2026-09-10: `allow_merge_commit=false`,
 `allow_rebase_merge=true`, `allow_squash_merge=true`,
-`squash_merge_commit_title=COMMIT_OR_PR_TITLE`, and
-`squash_merge_commit_message=COMMIT_MESSAGES`. The `COMMIT_MESSAGES` setting
-composes the squash body from the branch commit messages, which is how agent
-and bot `Co-authored-by:` trailers reach `main` even when the PR title is
-clean. `scripts/hooks/commit-msg` rejects those trailers locally, and the
-`Check commit convention` step in `quality_contracts`
-(`ci-quality-slice.yml`) enforces them in CI: it validates the pull request
-title against Conventional Commits, because the squash subject comes from the
-title, and scans every branch commit message plus the pull request body for
-denied attribution trailers, because the squash body aggregates them. It runs
-only for `pull_request` events and reaches the script through environment
-variables so pull-request-authored text is never interpolated into the shell.
-Adding it as a step rather than a job keeps `ci/slices.yml` untouched; that
-catalog is protected-compared like `ci/ownership.yml`, so editing it would fail
-planning on the very pull request that changed it.
+`squash_merge_commit_title=PR_TITLE`, and
+`squash_merge_commit_message=PR_BODY`. The title and body settings were
+changed from `COMMIT_OR_PR_TITLE` and `COMMIT_MESSAGES` on that date.
+`COMMIT_MESSAGES` composed the squash body from the branch commit messages,
+which carried agent and bot `Co-authored-by:` trailers onto `main` even when
+the pull request title was clean. Composing from the title and body instead
+means the squash commit contains only text CI has validated. GitHub may still
+add its own `Co-authored-by:` trailer for a pull request whose commits have
+several distinct authors; no message-level control prevents that.
 
-The active `main` ruleset (id 20090642) carries `deletion`,
-`non_fast_forward`, `required_linear_history`, `required_status_checks`, and
-`pull_request`, and holds four bypass actors (`michaelneale`, `i386`,
-`ndizazzo`, `micspiral`) with `bypass_mode: always`.
+Attribution-trailer enforcement is CI plus merge-message composition, not a
+ruleset. A negated `commit_message_pattern` ruleset was created, measured and
+deleted on 2026-09-10. Rulesets accept commit-metadata rules on any plan and
+report them `active`, but GitHub gates metadata restrictions to Enterprise
+organizations and this organization is on Team, so the rule was never
+evaluated. Four pushes carrying the denied literal were accepted: branch
+creation and branch update, with both the `regex` and `contains` operators,
+from a ruleset reporting `current_user_can_bypass: "never"`. Do not re-add a
+commit-metadata rule here expecting it to enforce anything.
 
-Attribution-trailer enforcement lives in its own ruleset, added 2026-09-10:
-`No agent attribution trailers` (id 22828226), active, targeting
-`~DEFAULT_BRANCH`, holding exactly one negated `commit_message_pattern` rule
-and **an empty bypass list**, so it applies to maintainer merges that the
-`main` ruleset's bypass actors would otherwise skip. Its regex rejects
-`noreply@anthropic.com`, any `buzz.xyz` address, `[bot]` accounts, and
-`*-by:` trailers naming an agent. Dry-run evidence: over the last 800 `main`
-commits the pattern matched 95, every one a genuine agent, bot, or relay
-trailer, with no false positive.
+What enforces the convention instead:
 
-Keeping it separate from the `main` ruleset means it can be disabled or
-deleted without touching branch protection, and a misfire is recovered by
-editing the squash message before confirming the merge, or by setting that
-ruleset's enforcement to `disabled`.
+- `scripts/hooks/commit-msg` locally, installed by `just hooks-install` and by
+  the first local development build on every platform.
+- The `commit_convention` job in `ci-quality-slice.yml`, which validates the
+  pull request title against Conventional Commits and scans every branch
+  commit message plus the pull request body for denied attribution trailers.
+  It declares no `needs`, so it fails within a minute rather than after a lane
+  has compiled anything, and runs only for `pull_request` events.
+  Pull-request-authored text reaches the script through environment variables
+  and is never interpolated into the shell.
+- Merge-message composition. `squash_merge_commit_title=PR_TITLE` and
+  `squash_merge_commit_message=PR_BODY` since 2026-09-10, replacing
+  `COMMIT_OR_PR_TITLE` and `COMMIT_MESSAGES`. The squash commit is built from
+  the title and body that CI validated, so a branch commit that skipped the
+  hook cannot carry a trailer onto `main`.
 
-`squash_merge_commit_message` remains `COMMIT_MESSAGES`, which is what
-composes squash bodies from branch commit messages. It is not bypassable and
-has not been changed.
+The four `main` ruleset bypass actors remain deliberately: maintainers need a
+fast merge path. Required checks therefore do not bind them, and the CI check
+is the control for everyone else.
 
 The five PR lifecycle rows and five main push rows above are the complete
 allowed routine validation entry sets. The protected sibling monitor is
