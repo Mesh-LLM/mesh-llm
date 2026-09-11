@@ -372,10 +372,6 @@ impl MeshApi {
         self.inner.lock().await.draft_name = Some(name);
     }
 
-    #[expect(
-        dead_code,
-        reason = "retained for embedded callers that toggle client presentation state"
-    )]
     pub async fn set_client(&self, is_client: bool) {
         let mut inner = self.inner.lock().await;
         inner.is_client = is_client;
