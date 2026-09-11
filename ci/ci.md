@@ -370,9 +370,15 @@ runtime producers are not duplicated.
   protected default-branch reusable workflows, receives no repository secrets or
   credential-bearing caches, and is restricted to the repository's GPU runner
   group. Its PR runtime is compiled for both sm86 and sm120 because the scale
-  set currently contains RTX 3080 and RTX 5090 workers. The smoke installs the
-  pinned CUDA 12.9 user-space runtime libraries required by the host-linked
-  product before inference. Vulkan uses the same approved `gpu-nvidia` host
+  set currently contains RTX 3080 and RTX 5090 workers. The native runtime
+  artifact carries the redistributable CUDA toolkit closure required by the
+  host-linked product. NVIDIA objects remain byte-for-byte unchanged, the
+  collector admits only the reviewed cudart, cuBLAS, cuBLASLt, and nvJitLink
+  families for the declared CUDA major, and the package includes the toolkit
+  distribution license. The smoke verifies that closure from the extracted
+  artifact with `LD_LIBRARY_PATH` unset and does not install cudart or cuBLAS
+  packages on the runner; the NVIDIA driver remains host-owned. Vulkan uses
+  the same approved `gpu-nvidia` host
   with the explicit `Vulkan0` device. ROCm uses `ROCm0` and its reusable job is
   skipped unless `MESH_ROCM_INFERENCE_RUNNER_ENABLED` is exactly `true`; the
   corresponding repository-scoped `gpu-amd` runner could not be verified from

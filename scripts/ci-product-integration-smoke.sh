@@ -138,6 +138,38 @@ if [[ "$bundle_backend" != "$BACKEND" ]]; then
     exit 1
 fi
 
+verify_artifact_local_cuda_runtime() {
+    [[ "$BACKEND" == "cuda" ]] || return 0
+
+    local runtime_dir
+    runtime_dir="$(python3 - "$ARTIFACT_DIR/native-runtimes" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+matches = []
+for manifest_path in sorted(root.glob("*/manifest.json")):
+    with manifest_path.open(encoding="utf-8") as handle:
+        manifest = json.load(handle)
+    runtime = manifest.get("runtime") or {}
+    if (runtime.get("backend") or {}).get("kind") == "cuda":
+        matches.append(manifest_path.parent)
+if len(matches) != 1:
+    raise SystemExit(
+        "expected exactly one CUDA runtime in the composed product; "
+        f"found {len(matches)}"
+    )
+print(matches[0])
+PY
+    )"
+
+    echo "Verifying CUDA runtime dependency resolution from the product artifact"
+    env -u LD_LIBRARY_PATH scripts/verify-native-runtime-package.sh "$runtime_dir"
+}
+
+verify_artifact_local_cuda_runtime
+
 mkdir -p "$PHASE_ROOT"
 printf 'platform=%s\nbackend=%s\ndevice=%s\nproduct_backend=%s\n' \
     "$PLATFORM" "$BACKEND" "$DEVICE" "$bundle_backend" >"$PHASE_ROOT/provenance.txt"

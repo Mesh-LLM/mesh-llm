@@ -513,6 +513,7 @@ class PackageNativeRuntimeTests(unittest.TestCase):
             "NVCC",
             "MESH_CUDA_VERSION",
             "MESH_LLM_CUDA_TOOLKIT_MAJOR",
+            "MESH_LLM_CUDA_LICENSE_FILE",
         ):
             env.pop(name, None)
         env["PATH"] = f"{tool_dir}{os.pathsep}{env['PATH']}"

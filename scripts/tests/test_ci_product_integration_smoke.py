@@ -141,6 +141,27 @@ fi
             (artifact_dir / "product-manifest.json").write_text(
                 json.dumps({"backend": backend}) + "\n", encoding="utf-8"
             )
+            if backend == "cuda":
+                runtime_dir = artifact_dir / "native-runtimes" / "meshllm-runtime-linux-x86_64-cuda12"
+                runtime_dir.mkdir(parents=True)
+                (runtime_dir / "manifest.json").write_text(
+                    json.dumps(
+                        {
+                            "runtime": {
+                                "backend": {"kind": "cuda"},
+                                "id": runtime_dir.name,
+                            }
+                        }
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                verifier = scripts / "verify-native-runtime-package.sh"
+                verifier.write_text(
+                    "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'stub artifact verification: %s\\n' \"$1\"\n",
+                    encoding="utf-8",
+                )
+                verifier.chmod(verifier.stat().st_mode | stat.S_IXUSR)
             dense_model = root / "dense.gguf"
             recurrent_model = root / "recurrent.gguf"
             dense_model.write_bytes(DENSE_FIXTURE)
