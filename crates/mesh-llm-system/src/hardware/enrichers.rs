@@ -159,13 +159,19 @@ mod linux {
         unidentified
     }
 
+    /// `Vulkan` is deliberately not a signal here. Unlike `CUDA`, it is a
+    /// vendor-neutral backend prefix, so accepting it classifies every AMD and
+    /// Intel card on a Vulkan build as NVIDIA and names it in the degraded
+    /// survey warning. NVIDIA's Vulkan devices are still recognized: ggml takes
+    /// `display_name` from the Vulkan device name, which NVIDIA spells
+    /// `NVIDIA <model>`.
     fn looks_like_nvidia(gpu: &GpuFacts) -> bool {
         gpu.display_name.to_ascii_lowercase().contains("nvidia")
             || gpu.vendor_uuid.is_some()
             || gpu
                 .backend_device
                 .as_deref()
-                .is_some_and(|name| name.starts_with("CUDA") || name.starts_with("Vulkan"))
+                .is_some_and(|name| name.starts_with("CUDA"))
     }
 
     /// Resolves a GPU to a driver device by identity alone.
@@ -658,6 +664,50 @@ mod linux {
             let unidentified = enrich_nvidia_gpu_facts(&mut gpus, &[info_5090()]);
 
             assert_eq!(gpus[0].vram_bytes, 206_158_430_208);
+            assert!(unidentified.is_empty());
+        }
+
+        #[test]
+        fn amd_vulkan_gpus_are_not_classified_as_nvidia() {
+            // A Vulkan build enumerates every vendor's cards, and skippy
+            // leaves vendor_uuid unset for all of them. Only the display name
+            // separates an AMD device from an NVIDIA one here.
+            let mut gpus = vec![GpuFacts {
+                backend_device: Some("Vulkan0".to_string()),
+                pci_bdf: Some("00000000:03:00.0".to_string()),
+                stable_id: Some("pci:00000000:03:00.0".to_string()),
+                vendor_uuid: None,
+                ..gpu("AMD Radeon RX 7900 XTX", 0, 25_757_220_864)
+            }];
+
+            let unidentified = enrich_nvidia_gpu_facts(&mut gpus, &[info_5090()]);
+
+            assert_eq!(gpus[0].vram_bytes, 25_757_220_864);
+            assert_eq!(gpus[0].vendor_uuid, None);
+            assert_eq!(gpus[0].reserved_bytes, None);
+            assert!(
+                unidentified.is_empty(),
+                "an AMD Vulkan device must not be reported as an unidentified NVIDIA GPU"
+            );
+        }
+
+        #[test]
+        fn nvidia_vulkan_gpus_are_still_enriched() {
+            // The other half of the same trade: dropping the Vulkan prefix as
+            // a signal must not cost NVIDIA cards their driver facts.
+            let mut gpus = vec![GpuFacts {
+                backend_device: Some("Vulkan0".to_string()),
+                pci_bdf: Some(RTX_3080_BDF.to_string()),
+                stable_id: Some(format!("pci:{RTX_3080_BDF}")),
+                vendor_uuid: None,
+                ..gpu("NVIDIA GeForce RTX 3080", 0, RTX_3080_CUDA_TOTAL)
+            }];
+
+            let unidentified = enrich_nvidia_gpu_facts(&mut gpus, &[info_5090(), info_3080()]);
+
+            assert_eq!(gpus[0].vram_bytes, RTX_3080_NVML_TOTAL);
+            assert_eq!(gpus[0].reserved_bytes, Some(RTX_3080_NVML_RESERVED));
+            assert_eq!(gpus[0].vendor_uuid.as_deref(), Some(RTX_3080_UUID));
             assert!(unidentified.is_empty());
         }
 
