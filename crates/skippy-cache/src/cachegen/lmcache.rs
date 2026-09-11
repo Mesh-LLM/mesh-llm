@@ -52,6 +52,17 @@ struct Parsed<'a> {
     streams: &'a [u8],
 }
 
+/// Geometry and bounded byte ranges validated from a portable CacheGen
+/// segment. Device backends use this before accepting work from an archive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SegmentGeometry {
+    pub bins: u8,
+    pub rows: usize,
+    pub channels: usize,
+    pub metadata_bytes: usize,
+    pub stream_bytes: usize,
+}
+
 /// LMCache's generic model-family bin schedule.
 ///
 /// Models with fewer than ten layers use 32 bins everywhere. Larger models
@@ -182,6 +193,18 @@ pub fn decode_f16_segment(payload: &[u8]) -> Result<Vec<u8>> {
         }
     }
     Ok(raw)
+}
+
+/// Validates a portable segment without allocating its decoded F16 output.
+pub fn validate_f16_segment(payload: &[u8]) -> Result<SegmentGeometry> {
+    let parsed = parse(payload)?;
+    Ok(SegmentGeometry {
+        bins: parsed.bins,
+        rows: parsed.rows,
+        channels: parsed.channels,
+        metadata_bytes: payload.len() - parsed.streams.len(),
+        stream_bytes: parsed.streams.len(),
+    })
 }
 
 fn validate_input(raw: &[u8], channels: usize, bins: u8) -> Result<()> {
