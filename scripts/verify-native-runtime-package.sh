@@ -19,6 +19,7 @@ Verifies MeshLLM native runtime artifacts:
   - library_sha256 matches the primary library
   - Linux ELF libraries and tools stay within the declared glibc floor
   - Linux shared-library RUNPATH/RPATH is relocatable and resolves packaged deps
+  - Linux CUDA ELF dependencies are closed, same-architecture, and non-stub
   - Windows non-system DLL imports are present in the artifact
   - required archive checksum sidecar
   - archive paths and links cannot escape the extraction directory
@@ -438,6 +439,44 @@ PY
         exit 1
     fi
     verify_linux_glibc_floor "$artifact_dir" "$manifest"
+    local runtime_arch runtime_backend primary_name actual_order expected_order
+    read -r runtime_arch runtime_backend primary_name < <("$(python_bin)" - "$manifest" <<'PY'
+import json
+import os
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    manifest = json.load(fh)
+runtime = manifest["runtime"]
+primary = (manifest.get("build") or {}).get("primary_library") or runtime["libraries"][-1]
+print(runtime["platform"]["arch"], runtime["backend"]["kind"], os.path.basename(primary))
+PY
+    )
+    if [[ "$runtime_backend" == "cuda" ]]; then
+        "$(python_bin)" "$SCRIPT_DIR/linux-native-runtime-deps.py" verify \
+            --lib-dir "$artifact_dir/lib" \
+            --scan-dir "$artifact_dir/tools" \
+            --arch "$runtime_arch"
+        expected_order="$("$(python_bin)" "$SCRIPT_DIR/linux-native-runtime-deps.py" order \
+            --lib-dir "$artifact_dir/lib" \
+            --scan-dir "$artifact_dir/tools" \
+            --arch "$runtime_arch" \
+            --primary "$primary_name")"
+        actual_order="$("$(python_bin)" - "$manifest" <<'PY'
+import json
+import os
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    libraries = json.load(fh)["runtime"]["libraries"]
+print("\n".join(os.path.basename(path) for path in libraries))
+PY
+        )"
+        if [[ "$actual_order" != "$expected_order" ]]; then
+            echo "Linux CUDA runtime libraries are not in dependency-first order" >&2
+            exit 1
+        fi
+    fi
     "$(python_bin)" - "$artifact_dir" "$manifest" <<'PY'
 import json
 import os
@@ -453,6 +492,8 @@ with open(manifest_path, encoding="utf-8") as fh:
 
 libraries = manifest["runtime"]["libraries"]
 tools = list((manifest["runtime"].get("tools") or {}).keys())
+backend_kind = manifest["runtime"]["backend"]["kind"]
+relocatable_libraries = set((manifest.get("build") or {}).get("relocatable_libraries") or libraries)
 library_names = {os.path.basename(path) for path in libraries}
 artifact_root = os.path.realpath(artifact_dir)
 dynamic_re = re.compile(r"\((NEEDED|RPATH|RUNPATH)\).*\[(.*)\]")
@@ -515,10 +556,12 @@ for rel_path in [*libraries, *tools]:
         if entry.startswith("/"):
             raise SystemExit(f"{rel_path} contains absolute runtime search path: {entry}")
     expected_origin = "$ORIGIN/../lib" if rel_path in tools else "$ORIGIN"
-    if packaged_needed and expected_origin not in search_paths:
+    requires_origin = backend_kind != "cuda" or rel_path in relocatable_libraries or rel_path in tools
+    if packaged_needed and requires_origin and expected_origin not in search_paths:
         joined = ", ".join(packaged_needed)
         raise SystemExit(f"{rel_path} needs packaged libraries ({joined}) but is missing {expected_origin} RPATH/RUNPATH")
-    verify_ldd_resolution(rel_path, needed)
+    if backend_kind != "cuda":
+        verify_ldd_resolution(rel_path, needed)
 PY
 }
 

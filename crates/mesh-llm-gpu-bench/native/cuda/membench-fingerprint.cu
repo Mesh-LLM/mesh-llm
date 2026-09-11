@@ -108,8 +108,10 @@ static double steady_seconds() {
 
 int main(int argc, char** argv) {
     int jsonMode = 0;
+    int probeMode = 0;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--json") == 0) jsonMode = 1;
+        if (strcmp(argv[i], "--probe") == 0) probeMode = 1;
     }
 
     int deviceCount = 0;
@@ -118,6 +120,12 @@ int main(int argc, char** argv) {
         if (jsonMode) printf("{\"error\":\"No CUDA devices found\"}\n");
         else          printf("No CUDA devices found\n");
         return 1;
+    }
+
+    if (probeMode) {
+        if (jsonMode) printf("{\"device_count\":%d}\n", deviceCount);
+        else          printf("CUDA devices: %d\n", deviceCount);
+        return 0;
     }
 
     for (int dev = 0; dev < deviceCount; dev++) {
