@@ -242,6 +242,23 @@ selection = "vulcan"
     }
 
     #[test]
+    fn native_runtime_override_rejects_empty_exact_id_selections() {
+        for selection in ["exact:", "exact:   "] {
+            let error = parse_config_toml(&format!(
+                "[runtime.native_runtime]\nselection = \"{selection}\"\n"
+            ))
+            .expect_err("empty exact runtime selection should fail validation");
+
+            assert!(
+                error.to_string().contains(
+                    "runtime.native_runtime.selection must be one of recommended, cpu, metal, cuda or cudaNN, rocm, vulkan, exact:<id>, or meshllm-<id>"
+                ),
+                "unexpected validation error for {selection:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
     fn config_store_add_model_preserves_existing_fields() {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("config.toml");

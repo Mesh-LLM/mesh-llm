@@ -220,14 +220,13 @@ fn validate_runtime_config(config: &RuntimeConfig) -> Vec<ConfigDiagnostic> {
             "runtime.native_runtime.selection",
             "runtime.native_runtime.selection must not be empty",
         ));
-    } else if selection.is_some_and(|value| {
-        matches!(
-            RuntimeSelection::parse(Some(value)),
-            Ok(RuntimeSelection::Backend {
-                kind: NativeRuntimeBackendKind::Other(_),
-                ..
-            })
-        )
+    } else if selection.is_some_and(|value| match RuntimeSelection::parse(Some(value)) {
+        Ok(RuntimeSelection::Backend {
+            kind: NativeRuntimeBackendKind::Other(_),
+            ..
+        }) => true,
+        Ok(RuntimeSelection::Id(id)) => id.trim().is_empty(),
+        _ => false,
     }) {
         diagnostics.push(validation_diagnostic(
             "runtime.native_runtime.selection",
