@@ -16,7 +16,7 @@ use skippy_runtime::{
 use crate::{
     cli::{StageLoadMode, StateHandoffArgs, StatePayloadKind},
     report::{
-        StageModelReport, StateHandoffReport, StatePayloadBlockDigestReport,
+        CacheGenGateReport, StageModelReport, StateHandoffReport, StatePayloadBlockDigestReport,
         StatePayloadDigestReport,
     },
     support::{
@@ -69,11 +69,12 @@ struct BinaryStateHandoffResult {
     pub(in crate::runner) restored_output_matches: Option<bool>,
     pub(in crate::runner) suffix_prefill_matches: Option<bool>,
     pub(in crate::runner) cache_hit_matches: bool,
+    pub(in crate::runner) cachegen_gate: Option<CacheGenGateReport>,
     pub(in crate::runner) stage_models: Vec<StageModelReport>,
 }
 
 #[derive(Clone)]
-enum LocalStatePayload {
+pub(in crate::runner) enum LocalStatePayload {
     ResidentKv {
         cache_seq_id: i32,
         token_count: u64,
@@ -207,6 +208,11 @@ pub fn state_handoff(args: StateHandoffArgs) -> Result<()> {
         skip_suffix_prefill_check: args.skip_suffix_prefill_check,
         synthetic_input_activation: args.synthetic_input_activation,
         binary_control: args.binary_control,
+        cachegen_gate: args.cachegen_gate,
+        cachegen_continuation_steps: args.cachegen_continuation_steps,
+        cachegen_min_token_agreement: args.cachegen_min_token_agreement,
+        cachegen_max_p99_decode_regression: args.cachegen_max_p99_decode_regression,
+        cachegen_max_peak_working_bytes: args.cachegen_max_peak_working_bytes,
         child_logs: args.server.child_logs,
         startup_timeout_secs: args.server.startup_timeout_secs,
         max_inflight: args.server.max_inflight,
@@ -267,6 +273,7 @@ pub fn state_handoff(args: StateHandoffArgs) -> Result<()> {
         ),
         cache_hit_import_ms: handoff.cache_hit_import_ms,
         cache_hit_decode_ms: handoff.cache_hit_decode_ms,
+        cachegen_gate: handoff.cachegen_gate,
         stage_models: handoff.stage_models,
     };
     emit_report(&report, report_out.as_deref())?;
@@ -285,6 +292,27 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
     }
     if args.cache_hit_repeats == 0 {
         bail!("cache_hit_repeats must be greater than zero");
+    }
+    if args.cachegen_gate {
+        if args.binary_control
+            || args.state_payload_kind != StatePayloadKind::KvRecurrent
+            || args.state_layer_start != 0
+            || args.state_layer_end != args.layer_end
+            || args.synthetic_input_activation
+        {
+            bail!(
+                "--cachegen-gate requires a local full-model --state-payload-kind kv-recurrent handoff"
+            );
+        }
+        if args.cachegen_continuation_steps == 0 {
+            bail!("--cachegen-continuation-steps must be greater than zero");
+        }
+        if !(0.0..=1.0).contains(&args.cachegen_min_token_agreement) {
+            bail!("--cachegen-min-token-agreement must be between 0 and 1");
+        }
+        if args.cachegen_max_p99_decode_regression < 0.0 {
+            bail!("--cachegen-max-p99-decode-regression must be non-negative");
+        }
     }
     let include_embeddings = args.state_layer_start == 0;
     let include_output = args.state_layer_end == args.layer_end;
@@ -595,6 +623,7 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
         roundtrip_state_matches,
         restored_output_matches: None,
         suffix_prefill_matches: None,
+        cachegen_gate: None,
         cache_hit_matches,
         stage_models,
     })
@@ -743,6 +772,21 @@ fn run_local_state_handoff(
         .context("local state handoff resident KV size measurement failed")?;
     let source_guard = (args.state_payload_kind == StatePayloadKind::ResidentKv).then_some(source);
 
+    let cachegen_gate = if args.cachegen_gate {
+        Some(
+            super::cachegen_gate::run_cachegen_gate(
+                &model,
+                args,
+                &state_payload,
+                &prefix,
+                continuation,
+            )
+            .context("CacheGen acceptance gate failed to execute")?,
+        )
+    } else {
+        None
+    };
+
     let (
         roundtrip_state_payload,
         restored_predicted_token,
@@ -883,12 +927,14 @@ fn run_local_state_handoff(
         matches: predicted_token_matches
             && restored_output_matches
             && suffix_prefill_matches.unwrap_or(true)
-            && cache_hit_matches,
+            && cache_hit_matches
+            && cachegen_gate.as_ref().is_none_or(|gate| gate.passed),
         predicted_token_matches,
         roundtrip_state_matches,
         restored_output_matches: Some(restored_output_matches),
         suffix_prefill_matches,
         cache_hit_matches,
+        cachegen_gate,
         stage_models,
     })
 }
@@ -1077,6 +1123,7 @@ fn run_local_resident_slot_handoff(
         restored_output_matches: Some(restored_output_matches),
         suffix_prefill_matches: Some(suffix_prefill_matches),
         cache_hit_matches,
+        cachegen_gate: None,
         stage_models,
     })
 }
