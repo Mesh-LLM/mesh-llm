@@ -12,7 +12,6 @@ pub(super) use mesh_llm_system::capacity::{
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::mesh::{NodeRole, node::hardware_snapshot_for_start};
     use crate::system::hardware::{GpuFacts, HardwareSurvey};
 
@@ -117,15 +116,5 @@ mod tests {
         assert_eq!(snapshot.vram_bytes, 11_500_000_000);
         assert_eq!(snapshot.memory.total_bytes, 12_000_000_000);
         assert_eq!(snapshot.memory.usable_bytes, 9_500_000_000);
-    }
-
-    fn assert_breakdown_adds_up(memory: &AdvertisedMemory) {
-        assert_eq!(
-            memory.total_bytes,
-            memory.reserved_bytes
-                + memory.platform_reserve_bytes
-                + memory.configured_reserve_bytes
-                + memory.usable_bytes
-        );
     }
 }
