@@ -1411,11 +1411,15 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
     let captured_requests = Arc::clone(&requests);
     tokio::spawn(async move {
         while let Some(command) = control_rx.recv().await {
-            captured_requests
-                .lock()
-                .unwrap()
-                .push(command.request.clone());
-            let response = match &command.request {
+            let (request, resp) = match command {
+                skippy::StageControlCommand::Execute { request, resp } => (request, resp),
+                skippy::StageControlCommand::ValidateLoad { resp, .. } => {
+                    let _ = resp.send(None);
+                    continue;
+                }
+            };
+            captured_requests.lock().unwrap().push(request.clone());
+            let response = match &request {
                 skippy::StageControlRequest::Inventory(inventory) => Ok(
                     skippy::StageControlResponse::Inventory(test_inventory_from_request(inventory)),
                 ),
@@ -1445,7 +1449,7 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
                 )),
                 other => panic!("unexpected stage control request: {other:?}"),
             };
-            let _ = command.resp.send(response);
+            let _ = resp.send(response);
         }
     });
 

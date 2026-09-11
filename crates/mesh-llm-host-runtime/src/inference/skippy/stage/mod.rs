@@ -83,11 +83,18 @@ fn spawn_stage_control_loop_with_state(mut state: StageControlState) -> StageCon
                 _ = &mut shutdown_rx => break,
                 command = rx.recv() => {
                     let Some(command) = command else { break };
-                    tokio::select! {
-                        biased;
-                        _ = &mut shutdown_rx => break,
-                        result = state.handle(command.request) => {
-                            let _ = command.resp.send(result);
+                    match command {
+                        StageControlCommand::Execute { request, resp } => {
+                            tokio::select! {
+                                biased;
+                                _ = &mut shutdown_rx => break,
+                                result = state.handle(request) => {
+                                    let _ = resp.send(result);
+                                }
+                            }
+                        }
+                        StageControlCommand::ValidateLoad { load, resp } => {
+                            let _ = resp.send(state.validate_load_claim(&load));
                         }
                     }
                 }

@@ -10,7 +10,8 @@ use crate::mesh::stage_proto::{
 };
 use crate::mesh::stage_transport::{
     ARTIFACT_TRANSFER_BUFFER_BYTES, ARTIFACT_TRANSFER_INVALID_OFFSET_ERROR,
-    ARTIFACT_TRANSFER_OPEN_TIMEOUT, ARTIFACT_TRANSFER_READ_IDLE_TIMEOUT, StageTopologyInstance,
+    ARTIFACT_TRANSFER_OPEN_TIMEOUT, ARTIFACT_TRANSFER_READ_IDLE_TIMEOUT,
+    LOCAL_STAGE_CONTROL_RESPONSE_TIMEOUT, StageTopologyInstance,
     artifact_transfer_allowed_by_topology, wait_local_stage_control_response,
     write_artifact_transfer_response,
 };
@@ -140,19 +141,20 @@ impl Node {
         }
     }
 
-    pub(crate) async fn execute_stage_control_request(
-        &self,
+    async fn execute_stage_control_request_with_sender(
+        control_tx: Option<
+            tokio::sync::mpsc::UnboundedSender<crate::inference::skippy::StageControlCommand>,
+        >,
         request: crate::inference::skippy::StageControlRequest,
     ) -> anyhow::Result<crate::inference::skippy::StageControlResponse> {
         // Load can take minutes on large stages; use the same
         // per-request budget the remote sender uses instead of the short
         // local default, otherwise the executing node rejects its own load.
         let timeout = Self::stage_control_request_timeout(&request);
-        let control_tx = self.stage_control_tx.lock().await.clone();
         match control_tx {
             Some(tx) => {
                 let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                tx.send(crate::inference::skippy::StageControlCommand {
+                tx.send(crate::inference::skippy::StageControlCommand::Execute {
                     request,
                     resp: resp_tx,
                 })
@@ -160,17 +162,6 @@ impl Node {
                 wait_local_stage_control_response(resp_rx, timeout).await
             }
             None => Ok(stage_control_unavailable_response(request)),
-        }
-    }
-
-    pub(crate) async fn execute_stage_control_request_for_peer(
-        &self,
-        remote: EndpointId,
-        request: crate::inference::skippy::StageControlRequest,
-    ) -> anyhow::Result<crate::inference::skippy::StageControlResponse> {
-        match self.execute_stage_control_request(request.clone()).await {
-            Ok(response) => Ok(response),
-            Err(error) => Self::stage_control_load_failure_response(remote, request, error),
         }
     }
 
@@ -218,27 +209,13 @@ impl Node {
             remote.fmt_short()
         );
 
-        let mut request = stage_control_request_from_proto(frame)?;
-        self.resolve_stage_control_request(&mut request)
-            .await
-            .map_err(|e| {
-                tracing::warn!(
-                    "handle_stage_control: source resolution failed for {request_kind} from {}: {e}",
-                    remote.fmt_short()
-                );
-                e
-            })?;
-        if let crate::inference::skippy::StageControlRequest::Load(load)
-        | crate::inference::skippy::StageControlRequest::LoadLocal(load) = &request
-        {
-            self.record_stage_load_topology(load).await;
-        }
+        let request = stage_control_request_from_proto(frame)?;
         let status_filter = match &request {
             crate::inference::skippy::StageControlRequest::Status(filter) => Some(filter.clone()),
             _ => None,
         };
         let mut response = self
-            .execute_stage_control_request_for_peer(remote, request)
+            .authorize_resolve_and_execute_stage_control(remote, request_kind, request)
             .await?;
         self.append_locally_executing_statuses(status_filter, &mut response)
             .await;
@@ -247,6 +224,48 @@ impl Node {
         write_len_prefixed(&mut send, &proto_response.encode_to_vec()).await?;
         let _ = send.finish();
         Ok(())
+    }
+
+    async fn authorize_resolve_and_execute_stage_control(
+        &self,
+        remote: EndpointId,
+        request_kind: &str,
+        mut request: crate::inference::skippy::StageControlRequest,
+    ) -> anyhow::Result<crate::inference::skippy::StageControlResponse> {
+        // Keep claims and loads ordered while authorization and source
+        // resolution run. The load is enqueued before another claim can pass
+        // this gate, so a validated claim cannot become stale mid-resolution.
+        let control_tx_guard = self.stage_control_tx.lock().await;
+        let control_tx = control_tx_guard.clone();
+        let response = match self
+            .resolve_stage_control_request(control_tx.as_ref(), &mut request)
+            .await
+        {
+            Ok(()) => {
+                if let crate::inference::skippy::StageControlRequest::Load(load)
+                | crate::inference::skippy::StageControlRequest::LoadLocal(load) = &request
+                {
+                    self.record_stage_load_topology(load).await;
+                }
+                match Self::execute_stage_control_request_with_sender(control_tx, request.clone())
+                    .await
+                {
+                    Ok(response) => response,
+                    Err(error) => {
+                        Self::stage_control_load_failure_response(remote, request, error)?
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    "handle_stage_control: authorization or source resolution failed for {request_kind} from {}: {error}",
+                    remote.fmt_short()
+                );
+                Self::stage_control_load_failure_response(remote, request, error)?
+            }
+        };
+        drop(control_tx_guard);
+        Ok(response)
     }
 
     async fn append_locally_executing_statuses(
@@ -277,6 +296,9 @@ impl Node {
 
     pub(crate) async fn resolve_stage_control_request(
         &self,
+        control_tx: Option<
+            &tokio::sync::mpsc::UnboundedSender<crate::inference::skippy::StageControlCommand>,
+        >,
         request: &mut crate::inference::skippy::StageControlRequest,
     ) -> anyhow::Result<()> {
         if let crate::inference::skippy::StageControlRequest::LoadLocal(load) = request {
@@ -289,6 +311,9 @@ impl Node {
             crate::inference::skippy::StageControlRequest::Claim(_) => {}
             crate::inference::skippy::StageControlRequest::Load(load)
             | crate::inference::skippy::StageControlRequest::LoadLocal(load) => {
+                let control_tx =
+                    control_tx.context("stage control is unavailable before load authorization")?;
+                Self::authorize_stage_load(control_tx, load).await?;
                 self.resolve_stage_load_request(load).await?;
             }
             crate::inference::skippy::StageControlRequest::Stop(stop) => {
@@ -297,6 +322,31 @@ impl Node {
             }
             crate::inference::skippy::StageControlRequest::Status(_)
             | crate::inference::skippy::StageControlRequest::Inventory(_) => {}
+        }
+        Ok(())
+    }
+
+    async fn authorize_stage_load(
+        control_tx: &tokio::sync::mpsc::UnboundedSender<
+            crate::inference::skippy::StageControlCommand,
+        >,
+        load: &crate::inference::skippy::StageLoadRequest,
+    ) -> anyhow::Result<()> {
+        let (resp, rx) = tokio::sync::oneshot::channel();
+        control_tx
+            .send(
+                crate::inference::skippy::StageControlCommand::ValidateLoad {
+                    load: load.clone(),
+                    resp,
+                },
+            )
+            .map_err(|_| anyhow::anyhow!("stage control loop is unavailable"))?;
+        let rejection = tokio::time::timeout(LOCAL_STAGE_CONTROL_RESPONSE_TIMEOUT, rx)
+            .await
+            .context("timeout waiting for stage load authorization")?
+            .context("stage control loop closed before load authorization")?;
+        if let Some(error) = rejection {
+            anyhow::bail!("stage load claim rejected before source resolution: {error}");
         }
         Ok(())
     }

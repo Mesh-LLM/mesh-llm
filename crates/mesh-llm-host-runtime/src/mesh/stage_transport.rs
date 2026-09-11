@@ -932,7 +932,7 @@ impl Node {
             anyhow::bail!("stage control is not available");
         };
         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-        tx.send(crate::inference::skippy::StageControlCommand {
+        tx.send(crate::inference::skippy::StageControlCommand::Execute {
             request: crate::inference::skippy::StageControlRequest::Status(filter),
             resp: resp_tx,
         })
@@ -952,7 +952,12 @@ impl Node {
         &self,
         mut request: crate::inference::skippy::StageControlRequest,
     ) -> Result<crate::inference::skippy::StageControlResponse> {
-        self.resolve_stage_control_request(&mut request).await?;
+        // Serialize claim validation, source resolution, and load execution
+        // against other local stage-control commands.
+        let control_tx_guard = self.stage_control_tx.lock().await;
+        let control_tx = control_tx_guard.clone();
+        self.resolve_stage_control_request(control_tx.as_ref(), &mut request)
+            .await?;
         if let crate::inference::skippy::StageControlRequest::Load(load)
         | crate::inference::skippy::StageControlRequest::LoadLocal(load) = &request
         {
@@ -961,17 +966,17 @@ impl Node {
         // Loading can take minutes on large stages; use the same
         // per-request budget remote control uses instead of the short default.
         let timeout = Self::stage_control_request_timeout(&request);
-        let control_tx = self.stage_control_tx.lock().await.clone();
         let Some(tx) = control_tx else {
             anyhow::bail!("stage control is not available");
         };
         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-        tx.send(crate::inference::skippy::StageControlCommand {
+        tx.send(crate::inference::skippy::StageControlCommand::Execute {
             request,
             resp: resp_tx,
         })
         .map_err(|_| anyhow::anyhow!("stage control loop is unavailable"))?;
         let response = wait_local_stage_control_response(resp_rx, timeout).await?;
+        drop(control_tx_guard);
         match &response {
             crate::inference::skippy::StageControlResponse::Ready(ready) => {
                 self.record_stage_status(Some(self.endpoint.id()), ready.status.clone())

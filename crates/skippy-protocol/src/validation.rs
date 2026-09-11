@@ -32,6 +32,7 @@ pub enum StageFrameError {
     MissingRequiredSourceDigest,
     LocalSourcePolicyRequired,
     LocalSourceCommandRequired,
+    LocalSourceProjectorPathForbidden,
     InvalidLocalSourceLoadMode { got: i32 },
     InvalidLocalSourceReference,
     InvalidSourceResolutionPolicy { got: i32 },
@@ -82,6 +83,9 @@ impl std::fmt::Display for StageFrameError {
                     f,
                     "local-required source resolution requires the fail-closed local command"
                 )
+            }
+            StageFrameError::LocalSourceProjectorPathForbidden => {
+                write!(f, "strict local load cannot carry a projector path")
             }
             StageFrameError::InvalidLocalSourceLoadMode { got } => write!(
                 f,
@@ -207,6 +211,9 @@ fn validate_local_source_load(load: &proto::stage::LoadStage) -> Result<(), Stag
     )?;
     if load.source_model_sha256.as_deref() != Some(reference_digest) {
         return Err(StageFrameError::InvalidLocalSourceReference);
+    }
+    if load.projector_path.is_some() {
+        return Err(StageFrameError::LocalSourceProjectorPathForbidden);
     }
     Ok(())
 }

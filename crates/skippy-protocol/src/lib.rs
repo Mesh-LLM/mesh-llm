@@ -401,6 +401,7 @@ mod tests {
             validate_stage_control_request(&fallback_strict_load),
             Err(StageFrameError::LocalSourceCommandRequired)
         ));
+        strict_load_stage.projector_path = None;
         let strict_load = StageControlRequest {
             command: Some(stage_control_request::Command::LoadLocalStage(
                 strict_load_stage.clone(),
@@ -408,6 +409,17 @@ mod tests {
             ..frame.clone()
         };
         validate_stage_control_request(&strict_load).unwrap();
+        let mut projector_path_injection = strict_load.clone();
+        let Some(stage_control_request::Command::LoadLocalStage(load)) =
+            projector_path_injection.command.as_mut()
+        else {
+            unreachable!("strict fixture must contain LoadLocalStage")
+        };
+        load.projector_path = Some("/peer/private/mmproj.gguf".to_string());
+        assert!(matches!(
+            validate_stage_control_request(&projector_path_injection),
+            Err(StageFrameError::LocalSourceProjectorPathForbidden)
+        ));
         let mut malformed_reference = strict_load.clone();
         let Some(stage_control_request::Command::LoadLocalStage(load)) =
             malformed_reference.command.as_mut()

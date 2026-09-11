@@ -20,7 +20,7 @@ async fn stage_control_shutdown_closes_and_joins_the_control_loop() {
     let (resp, _rx) = oneshot::channel();
     assert!(
         sender
-            .send(StageControlCommand {
+            .send(StageControlCommand::Execute {
                 request: StageControlRequest::Status(StageStatusFilter {
                     topology_id: None,
                     run_id: None,
@@ -31,6 +31,28 @@ async fn stage_control_shutdown_closes_and_joins_the_control_loop() {
             .is_err(),
         "shutdown must close the stage control command channel"
     );
+}
+
+#[tokio::test]
+async fn stage_control_preflight_rejects_an_unclaimed_load() {
+    let handle = spawn_stage_control_loop(super::super::SkippyTelemetryOptions::default());
+    let sender = handle.sender();
+    let mut load = load_request();
+    load.coordinator_term = 11;
+    load.coordinator_id = Some(coordinator_id());
+    load.lease_until_unix_ms = u64::MAX;
+    let (resp, rx) = oneshot::channel();
+
+    sender
+        .send(StageControlCommand::ValidateLoad { load, resp })
+        .expect("stage control preflight should enqueue");
+    assert_eq!(
+        rx.await
+            .expect("stage control preflight should respond")
+            .as_deref(),
+        Some("missing coordinator claim")
+    );
+    handle.shutdown().await.unwrap();
 }
 
 fn load_request() -> StageLoadRequest {

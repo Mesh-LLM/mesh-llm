@@ -3,9 +3,15 @@ use skippy_protocol::{FlashAttentionType, LoadMode, SplitMode, StageDevice};
 use tokio::sync::oneshot;
 
 #[derive(Debug)]
-pub(crate) struct StageControlCommand {
-    pub(crate) request: StageControlRequest,
-    pub(crate) resp: oneshot::Sender<Result<StageControlResponse>>,
+pub(crate) enum StageControlCommand {
+    Execute {
+        request: StageControlRequest,
+        resp: oneshot::Sender<Result<StageControlResponse>>,
+    },
+    ValidateLoad {
+        load: StageLoadRequest,
+        resp: oneshot::Sender<Option<String>>,
+    },
 }
 
 #[derive(Clone, Debug)]
