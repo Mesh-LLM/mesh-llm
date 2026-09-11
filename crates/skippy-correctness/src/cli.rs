@@ -210,6 +210,24 @@ pub struct StateHandoffArgs {
     pub synthetic_input_activation: bool,
     #[arg(long)]
     pub binary_control: bool,
+    /// Run the experimental CacheGen acceptance gate against the native
+    /// KV-page control. Requires a local full-model kv-recurrent handoff.
+    #[arg(long)]
+    pub cachegen_gate: bool,
+    /// Teacher-forced continuation steps used for CacheGen quality and
+    /// steady-state decode measurements.
+    #[arg(long, default_value_t = 64)]
+    pub cachegen_continuation_steps: usize,
+    /// Minimum fraction of greedy tokens that must agree with native.
+    #[arg(long, default_value_t = 0.95)]
+    pub cachegen_min_token_agreement: f64,
+    /// Maximum allowed CacheGen/native p99 decode latency regression.
+    #[arg(long, default_value_t = 0.05)]
+    pub cachegen_max_p99_decode_regression: f64,
+    /// Optional maximum estimated codec working bytes. If omitted, peak
+    /// memory is reported without adding a pass/fail criterion.
+    #[arg(long)]
+    pub cachegen_max_peak_working_bytes: Option<usize>,
     #[arg(long)]
     pub allow_mismatch: bool,
 }

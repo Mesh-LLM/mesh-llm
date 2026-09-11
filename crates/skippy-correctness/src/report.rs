@@ -203,7 +203,50 @@ pub struct StateHandoffReport {
     pub cache_hit_import_ms: Vec<f64>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub cache_hit_decode_ms: Vec<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cachegen_gate: Option<CacheGenGateReport>,
     pub stage_models: Vec<StageModelReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CacheGenGateReport {
+    pub passed: bool,
+    pub failure_reasons: Vec<String>,
+    pub continuation_steps: usize,
+    pub native_storage_bytes: usize,
+    pub cachegen_storage_bytes: usize,
+    pub compression_ratio: f64,
+    pub tile_count: usize,
+    pub encode_ms: f64,
+    pub decode_ms: f64,
+    pub native_write_ms: f64,
+    pub cachegen_write_ms: f64,
+    pub native_persist_ms: f64,
+    pub cachegen_persist_ms: f64,
+    pub native_read_ms: f64,
+    pub cachegen_read_ms: f64,
+    pub native_import_ms: f64,
+    pub cachegen_import_ms: f64,
+    pub native_ttft_ms: f64,
+    pub cachegen_ttft_ms: f64,
+    pub native_decode_tokens_per_second: f64,
+    pub cachegen_decode_tokens_per_second: f64,
+    pub native_p99_decode_ms: f64,
+    pub cachegen_p99_decode_ms: f64,
+    pub p99_decode_regression: f64,
+    pub matching_tokens: usize,
+    pub token_agreement: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_token_mismatch_step: Option<usize>,
+    pub mean_entropy_abs_drift: f64,
+    pub max_entropy_abs_drift: f64,
+    pub mean_top_logprob_abs_drift: f64,
+    pub max_top_logprob_abs_drift: f64,
+    pub estimated_peak_codec_working_bytes: usize,
+    pub min_token_agreement: f64,
+    pub max_p99_decode_regression: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_peak_codec_working_bytes: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Clone)]
