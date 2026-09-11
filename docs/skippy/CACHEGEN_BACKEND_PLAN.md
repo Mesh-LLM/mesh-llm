@@ -11,13 +11,17 @@ contract, CPU+Metal parity, six measurements, stop rule).
 | Backend | Kernel | Status | Evidence |
 |---|---|---|---|
 | CPU (reference) | scalar Rust | **Correctness reference only** — portable F32, F16, Q8_0, Q4_0, and mixed K/V adapters are implemented; only F16 has passed the 19K quality gate | Python/Rust fixtures pin LMCache revision `b5d109e`; typed archive fixtures cover every current user-selectable runtime K/V type |
-| Metal (Apple GPU) | native MSL | **Implemented, not promoted** — exact single/multi-tile fixture parity and 64/64 continuation agreement; local 19K TTFT is 604.84 ms versus 385.41 ms native | Apple M1 Ultra device gate below |
-| CUDA (NVIDIA) | shared native CUDA/HIP source | **Compile/package qualified only** — no runtime claim yet | CUDA 12.9.2 native runtime and product packaging pass; real NVIDIA fixture and 19K gates remain |
-| HIP/ROCm (AMD) | shared native CUDA/HIP source | **Compile/package qualified only** — no runtime claim yet | ROCm gfx1100 native runtime and product packaging pass; real AMD fixture and 19K gates remain |
+| Metal (Apple GPU) | native MSL | **All typed restores implemented, not promoted** — F16, F32, Q8_0, and Q4_0 match native fixture layouts; the F16 local 19K gate has 64/64 continuation agreement but 604.84 ms TTFT versus 385.41 ms native | Apple M1 Ultra device fixture and F16 gate below; quantized 19K gates remain |
+| CUDA (NVIDIA) | shared native CUDA/HIP source | **All typed restores implemented, compile/package qualification pending** — no runtime claim yet | Real NVIDIA fixture and typed 19K gates remain |
+| HIP/ROCm (AMD) | shared native CUDA/HIP source | **All typed restores implemented, compile/package qualification pending** — no runtime claim yet | Real AMD fixture and typed 19K gates remain |
 
 Nothing may be marked implemented until it runs on real hardware and
 matches the CPU reference bit-for-bit. Compile-only checks prove the
 kernel lowers; they say nothing about the hardware.
+
+Native Metal fixture builds must set `GGML_CCACHE=OFF`. The embedded source is
+included through a generated assembly `.incbin`; an assembly cache can otherwise
+reuse an object after the Metal source changes and run a stale kernel.
 
 ## The six spike measurements (2026-09-11 re-run, M2 Max, 4096x128 tile,
 ## 524,288 f16 values = 1,048,576 raw bytes, release build, synchronized
@@ -133,10 +137,9 @@ meet the restore-to-first-token gate.
    scalar stream as the compatibility oracle for the new revision.
 5. Add encode from resident K/V storage and copy only the compact archive back
    to the persistence layer.
-6. Wire the completed portable F32, F16, Q8_0, Q4_0, and mixed K/V record
-   adapters into each native backend. Keep unsupported typed records outside the
-   FFI until that backend adapter exists, then run a separate quality and
-   latency gate for every claimed combination.
+6. Run separate quality and latency gates for Q8_0/Q8_0, Q4_0/Q4_0, and the
+   supported mixed K/V combinations now that every typed record is wired into
+   the native backend contract.
 
 ## Typed portable record boundary
 
@@ -148,14 +151,14 @@ packs the selected native row type. K and V carry independent kinds, so mixed
 selections do not require a second container or codec revision.
 
 The pure-Rust fixtures cover F32/F32, F16/F16, Q8_0/Q8_0, Q4_0/Q4_0,
-Q8_0/Q4_0, and transposed F32 V. Metal, CUDA, and ROCm now share a typed native
-decode contract for direct F16 and F32 resident writes, including transposed V;
-the former F16-only backend symbol was removed rather than retained as a
-compatibility alias. The runtime still rejects Q8_0 and Q4_0 records before FFI
-until their device quantization passes are present, and no scalar restore
-fallback is permitted. Quantized destinations remain unqualified until their
-matched end-to-end quality gates measure the combined CacheGen and native
-repacking loss.
+Q8_0/Q4_0, and transposed F32 V. Metal, CUDA, and ROCm share a typed native
+decode contract for direct F16 and F32 resident writes, including transposed V,
+and fused Q8_0/Q4_0 block quantization into row-major resident storage. The
+former F16-only backend symbol was removed rather than retained as a
+compatibility alias. The Metal device fixture compares both quantized outputs
+byte-for-byte with ggml's native quantizer. No scalar restore fallback is
+permitted. Quantized destinations remain unqualified until matched end-to-end
+quality gates measure the combined CacheGen and native repacking loss.
 
 ## Native runtime integration boundary
 

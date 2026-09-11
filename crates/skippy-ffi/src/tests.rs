@@ -3,10 +3,11 @@ use std::mem::{offset_of, size_of};
 use crate::{
     ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, ActivationBoundaryDesc,
     CACHEGEN_RECORD_EXACT, CACHEGEN_RECORD_F16, CACHEGEN_RECORD_F16_TRANSPOSED,
-    CACHEGEN_RECORD_F32, CACHEGEN_RECORD_F32_TRANSPOSED, CACHEGEN_RECORD_V1_ABI_VERSION,
-    CacheGenRecordV1, StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1,
-    StagePlanStateKind, StagePlanStringRefV1, StagePlanValueDescV1, StagePlannerConfigV1,
-    StagePlannerProfileV1, StagePlannerTensorV1, runtime_abi_supported,
+    CACHEGEN_RECORD_F32, CACHEGEN_RECORD_F32_TRANSPOSED, CACHEGEN_RECORD_Q4_0,
+    CACHEGEN_RECORD_Q8_0, CACHEGEN_RECORD_V1_ABI_VERSION, CacheGenRecordV1, StagePlanDescV1,
+    StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStateKind, StagePlanStringRefV1,
+    StagePlanValueDescV1, StagePlannerConfigV1, StagePlannerProfileV1, StagePlannerTensorV1,
+    runtime_abi_supported,
 };
 
 #[cfg(target_pointer_width = "64")]
@@ -87,6 +88,8 @@ fn cachegen_record_matches_native_layout() {
     assert_eq!(CACHEGEN_RECORD_F16_TRANSPOSED, 2);
     assert_eq!(CACHEGEN_RECORD_F32, 3);
     assert_eq!(CACHEGEN_RECORD_F32_TRANSPOSED, 4);
+    assert_eq!(CACHEGEN_RECORD_Q8_0, 5);
+    assert_eq!(CACHEGEN_RECORD_Q4_0, 6);
     assert_eq!(size_of::<CacheGenRecordV1>(), 72);
     assert_eq!(offset_of!(CacheGenRecordV1, output_offset), 16);
     assert_eq!(offset_of!(CacheGenRecordV1, decoded_bytes), 24);

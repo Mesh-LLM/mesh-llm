@@ -1,6 +1,6 @@
 use std::ptr;
 
-use anyhow::{Result, bail, ensure};
+use anyhow::{Result, ensure};
 use skippy_cache::cachegen::archive::{RecordKind, ValidatedArchive, validate_archive};
 use skippy_ffi::{CacheGenRecordV1, KvPageDesc as RawKvPageDesc};
 
@@ -20,9 +20,8 @@ fn cachegen_records(validated: &ValidatedArchive<'_>) -> Result<Vec<CacheGenReco
                     RecordKind::CacheGenTransposed => skippy_ffi::CACHEGEN_RECORD_F16_TRANSPOSED,
                     RecordKind::CacheGenF32 => skippy_ffi::CACHEGEN_RECORD_F32,
                     RecordKind::CacheGenF32Transposed => skippy_ffi::CACHEGEN_RECORD_F32_TRANSPOSED,
-                    RecordKind::CacheGenQ8_0 | RecordKind::CacheGenQ4_0 => {
-                        bail!("resident KV backend does not provide this typed CacheGen adapter")
-                    }
+                    RecordKind::CacheGenQ8_0 => skippy_ffi::CACHEGEN_RECORD_Q8_0,
+                    RecordKind::CacheGenQ4_0 => skippy_ffi::CACHEGEN_RECORD_Q4_0,
                 },
                 element_bytes: record.element_bytes as u32,
                 reserved0: 0,
@@ -427,7 +426,7 @@ mod tests {
     }
 
     #[test]
-    fn typed_records_fail_before_entering_an_unsupported_native_backend() {
+    fn maps_quantized_records_to_the_native_abi() {
         let payload = [1_u8, 2, 3, 4];
         let validated = ValidatedArchive {
             raw_len: 16,
@@ -443,7 +442,26 @@ mod tests {
             }],
         };
 
-        assert!(cachegen_records(&validated).is_err());
+        let records = cachegen_records(&validated).expect("Q8_0 records map to the native ABI");
+        assert_eq!(records[0].kind, skippy_ffi::CACHEGEN_RECORD_Q8_0);
+        assert_eq!(records[0].element_bytes, 34);
+
+        let validated = ValidatedArchive {
+            raw_len: 16,
+            records: vec![Record {
+                kind: RecordKind::CacheGenQ4_0,
+                element_bytes: 18,
+                output_offset: 0,
+                decoded_len: 16,
+                token_count: 1,
+                token_start: 0,
+                total_tokens: 0,
+                payload: &payload,
+            }],
+        };
+        let records = cachegen_records(&validated).expect("Q4_0 records map to the native ABI");
+        assert_eq!(records[0].kind, skippy_ffi::CACHEGEN_RECORD_Q4_0);
+        assert_eq!(records[0].element_bytes, 18);
     }
 
     #[test]
