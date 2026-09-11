@@ -117,6 +117,8 @@ fi
         recurrent_artifact_id: str = RECURRENT_ARTIFACT_ID,
         recurrent_sha256: str | None = None,
         split_evidence_mode: str = "valid",
+        cuda_normal_probe_status: int = 0,
+        cuda_strict_probe_status: int = 0,
     ) -> tuple[subprocess.CompletedProcess[str], dict | None]:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -166,7 +168,14 @@ fi
                 tools_dir.mkdir()
                 benchmark = tools_dir / "mesh-llm-gpu-benchmark"
                 benchmark.write_text(
-                    "#!/usr/bin/env bash\nset -euo pipefail\n[[ \"${1:-}\" == --probe ]]\nprintf 'CUDA devices: 1\\n'\n",
+                    "#!/usr/bin/env bash\n"
+                    "set -euo pipefail\n"
+                    "[[ \"${1:-}\" == --probe ]]\n"
+                    "printf 'CUDA devices: 1\\n'\n"
+                    "if [[ -n \"${LD_LIBRARY_PATH:-}\" ]]; then\n"
+                    "  exit \"${STUB_CUDA_NORMAL_PROBE_STATUS:?}\"\n"
+                    "fi\n"
+                    "exit \"${STUB_CUDA_STRICT_PROBE_STATUS:?}\"\n",
                     encoding="utf-8",
                 )
                 benchmark.chmod(benchmark.stat().st_mode | stat.S_IXUSR)
@@ -182,8 +191,11 @@ fi
             env = {
                 **os.environ,
                 "PATH": "/usr/bin:/bin",
+                "LD_LIBRARY_PATH": "/runner-cuda-runtime",
                 "MESH_PRODUCT_INTEGRATION_PHASE_ROOT": str(phase_root),
                 "STUB_SPLIT_EVIDENCE_MODE": split_evidence_mode,
+                "STUB_CUDA_NORMAL_PROBE_STATUS": str(cuda_normal_probe_status),
+                "STUB_CUDA_STRICT_PROBE_STATUS": str(cuda_strict_probe_status),
             }
             if failure_phase is not None:
                 env["STUB_FAIL_PHASE"] = failure_phase
@@ -299,6 +311,37 @@ fi
                 self.assertEqual(result.returncode, 0, result.stderr)
                 assert manifest is not None
                 self.assertEqual(manifest["provenance"]["device"], expected_device)
+
+    def test_cuda_device_probe_failures_stop_before_product_phases(self) -> None:
+        cases = {
+            "both-failed": (
+                3,
+                4,
+                "CUDA device access failed in both environments",
+            ),
+            "packaged-failed": (
+                0,
+                4,
+                "packaged runtime cannot expose the CUDA device",
+            ),
+            "runner-failed": (
+                3,
+                0,
+                "packaged runtime succeeds where the runner environment fails",
+            ),
+        }
+        for name, (normal_status, strict_status, expected_error) in cases.items():
+            with self.subTest(name=name):
+                result, manifest = self.run_suite(
+                    platform="linux",
+                    backend="cuda",
+                    cuda_normal_probe_status=normal_status,
+                    cuda_strict_probe_status=strict_status,
+                )
+
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(expected_error, result.stderr)
+                self.assertIsNone(manifest)
 
     def test_failed_phase_is_recorded_and_reconciliation_fails_closed(self) -> None:
         result, manifest = self.run_suite("dense-openai-sdk")

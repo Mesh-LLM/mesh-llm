@@ -295,7 +295,13 @@ build_gpu_benchmark_tool() {
     case "$BACKEND" in
         cuda|cuda-blackwell)
             compiler="$(cuda_selected_compiler)"
-            "$compiler" -O3 -std=c++17 "$source_root/cuda/membench-fingerprint.cu" -o "$tool_path"
+            if [[ "$runtime_os" == "linux" ]]; then
+                "$compiler" -O3 -std=c++17 -cudart shared \
+                    "$source_root/cuda/membench-fingerprint.cu" -o "$tool_path"
+            else
+                "$compiler" -O3 -std=c++17 \
+                    "$source_root/cuda/membench-fingerprint.cu" -o "$tool_path"
+            fi
             ;;
         rocm|hip)
             compiler="${HIPCC:-hipcc}"

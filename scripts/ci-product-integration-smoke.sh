@@ -208,11 +208,14 @@ PY
     if (( normal_probe_status == 0 && strict_probe_status == 0 )); then
         echo "CUDA device probe classification: runner and packaged runtime both passed"
     elif (( normal_probe_status != 0 && strict_probe_status != 0 )); then
-        echo "CUDA device probe classification: CUDA device access failed in both environments"
+        echo "CUDA device probe classification: CUDA device access failed in both environments" >&2
+        return 1
     elif (( normal_probe_status == 0 )); then
-        echo "CUDA device probe classification: packaged runtime cannot expose the CUDA device"
+        echo "CUDA device probe classification: packaged runtime cannot expose the CUDA device" >&2
+        return 1
     else
-        echo "CUDA device probe classification: packaged runtime succeeds where the runner environment fails"
+        echo "CUDA device probe classification: packaged runtime succeeds where the runner environment fails" >&2
+        return 1
     fi
 }
 

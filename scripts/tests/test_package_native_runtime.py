@@ -19,6 +19,63 @@ def write_failing_nvcc(path: Path) -> None:
 
 
 class PackageNativeRuntimeTests(unittest.TestCase):
+    def test_linux_cuda_benchmark_links_shared_cudart(self) -> None:
+        script = SCRIPT.read_text(encoding="utf-8")
+        start = script.index("build_gpu_benchmark_tool() {")
+        end = script.index("build_model_package_tool() {", start)
+        function = script[start:end]
+        harness = (
+            "set -euo pipefail\n"
+            + function
+            + 'BACKEND="cuda"\n'
+            + 'runtime_os="linux"\n'
+            + 'stage_dir="$TEST_ROOT/stage"\n'
+            + 'REPO_ROOT="$TEST_ROOT/repo"\n'
+            + 'gpu_benchmark_tool_path() { printf "%s\\n" "tools/mesh-llm-gpu-benchmark"; }\n'
+            + 'cuda_selected_compiler() { printf "%s\\n" "$FAKE_NVCC"; }\n'
+            + 'build_gpu_benchmark_tool\n'
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            nvcc = root / "nvcc"
+            nvcc.write_text(
+                "#!/bin/bash\n"
+                "set -euo pipefail\n"
+                "printf '%s\\n' \"$@\" >\"$NVCC_ARGS_LOG\"\n"
+                "output=\n"
+                "previous=\n"
+                "for argument in \"$@\"; do\n"
+                '  if [[ "$previous" == "-o" ]]; then output="$argument"; fi\n'
+                '  previous="$argument"\n'
+                "done\n"
+                ': >"$output"\n',
+                encoding="utf-8",
+            )
+            nvcc.chmod(0o755)
+            patchelf = root / "patchelf"
+            patchelf.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            patchelf.chmod(0o755)
+            env = {
+                **os.environ,
+                "FAKE_NVCC": str(nvcc),
+                "NVCC_ARGS_LOG": str(root / "nvcc-args.log"),
+                "PATH": f"{root}{os.pathsep}{os.environ['PATH']}",
+                "TEST_ROOT": str(root),
+            }
+            result = subprocess.run(
+                ["/bin/bash", "-s"],
+                input=harness,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            arguments = (root / "nvcc-args.log").read_text(encoding="utf-8").splitlines()
+            self.assertIn("-cudart", arguments)
+            self.assertEqual(arguments[arguments.index("-cudart") + 1], "shared")
+
     def test_linux_gnu_cuda_target_collects_runtime_dependencies(self) -> None:
         script = SCRIPT.read_text(encoding="utf-8")
         start = script.index("linux_cuda_redistributable_present() {")
