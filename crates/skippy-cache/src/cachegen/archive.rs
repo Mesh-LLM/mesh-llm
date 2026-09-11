@@ -11,7 +11,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use skippy_protocol::binary::{f16_bits_to_f32, f32_to_f16_bits};
 
 use super::lmcache::{
-    MAX_TOKENS_PER_CHUNK, bins_for_layer, decode_f16_segment, encode_f16_segment,
+    MAX_TOKENS_PER_CHUNK, bins_for_layer, decode_f16_segment, encode_f16_segment_packed,
     validate_f16_segment,
 };
 
@@ -470,7 +470,7 @@ fn encode_component(
                 token_count: rows as u64,
                 token_start: 0,
                 total_tokens: 0,
-                payload: encode_f16_segment(
+                payload: encode_f16_segment_packed(
                     &decode_native_rows_to_f16(component.k_type, tile, rows, k_row)?,
                     k_channels,
                     bins_for_layer(layer, layer_count, true),
@@ -521,7 +521,7 @@ fn encode_component(
                 token_count: rows as u64,
                 token_start,
                 total_tokens,
-                payload: encode_f16_segment(
+                payload: encode_f16_segment_packed(
                     &encoded_input,
                     v_channels,
                     bins_for_layer(layer, layer_count, false),
@@ -957,6 +957,10 @@ mod tests {
         assert_eq!(decoded.len(), raw.len());
         assert_eq!(archive.tile_count, 4);
         assert_ne!(decoded, raw, "fixture must exercise lossy quantization");
+        assert_eq!(
+            &archive.bytes[ARCHIVE_HEADER_BYTES + RECORD_HEADER_BYTES..][..4],
+            b"LCG2"
+        );
     }
 
     #[test]

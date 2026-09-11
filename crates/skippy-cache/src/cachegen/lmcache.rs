@@ -19,8 +19,11 @@
 //! language-neutral envelope, while preserving the codec inputs and outputs:
 //! per-token maximum magnitude, model/layer-selected 16- or 32-bin symmetric
 //! quantization, a 33-entry per-channel CDF, and one 32-bit arithmetic-coded
-//! stream per channel. Each segment is one K or V layer with at most 256
-//! token-major rows, matching LMCache's CUDA kernel limit.
+//! stream per channel. The scalar oracle retains that byte-compatible LCG1
+//! representation. Device archives use LCG2, which bit-packs the same symbols
+//! in token-major order for direct parallel restore. Each segment is one K or
+//! V layer with at most 256 token-major rows, matching LMCache's CUDA kernel
+//! limit.
 
 use anyhow::{Result, anyhow, bail};
 use skippy_protocol::binary::{f16_bits_to_f32, f32_to_f16_bits};
@@ -28,10 +31,11 @@ use skippy_protocol::binary::{f16_bits_to_f32, f32_to_f16_bits};
 use crate::l3::{CodecClass, SegmentCodecIdentity};
 
 pub const CACHEGEN_CODEC_NAME: &str = "lmcache-cachegen";
-pub const CACHEGEN_CODEC_VERSION: u32 = 1;
+pub const CACHEGEN_CODEC_VERSION: u32 = 2;
 pub const MAX_TOKENS_PER_CHUNK: usize = 256;
 
-const MAGIC: [u8; 4] = *b"LCG1";
+const MAGIC_V1: [u8; 4] = *b"LCG1";
+const MAGIC_V2: [u8; 4] = *b"LCG2";
 const HEADER_LEN: usize = 16;
 const MAX_BINS: usize = 32;
 const CDF_LEN: usize = MAX_BINS + 1;
@@ -46,6 +50,7 @@ struct Parsed<'a> {
     bins: u8,
     channels: usize,
     rows: usize,
+    bits_per_symbol: u8,
     maxes: Vec<f32>,
     cdfs: Vec<[u16; CDF_LEN]>,
     lengths: Vec<usize>,
@@ -126,7 +131,7 @@ pub fn encode_f16_segment(raw: &[u8], channels: usize, bins: u8) -> Result<Vec<u
         .and_then(|value| value.checked_add(channels.checked_mul(2)?))
         .ok_or_else(|| anyhow!("LMCache segment metadata length overflow"))?;
     let mut out = Vec::with_capacity(HEADER_LEN + metadata_len + streams.len());
-    out.extend_from_slice(&MAGIC);
+    out.extend_from_slice(&MAGIC_V1);
     out.push(bins);
     out.push(0);
     out.extend_from_slice(&rows_u16.to_le_bytes());
@@ -147,32 +152,79 @@ pub fn encode_f16_segment(raw: &[u8], channels: usize, bins: u8) -> Result<Vec<u
     Ok(out)
 }
 
-/// Decodes a portable segment produced by [`encode_f16_segment`].
+/// Encodes the LMCache-quantized symbols in a token-major packed layout for
+/// parallel device restore.
+pub fn encode_f16_segment_packed(raw: &[u8], channels: usize, bins: u8) -> Result<Vec<u8>> {
+    validate_input(raw, channels, bins)?;
+    let rows = raw.len() / 2 / channels;
+    if rows > MAX_TOKENS_PER_CHUNK {
+        bail!("LMCache CacheGen chunks are limited to {MAX_TOKENS_PER_CHUNK} tokens, got {rows}");
+    }
+    let values: Vec<f32> = raw
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|bytes| f16_bits_to_f32(u16::from_le_bytes(*bytes)))
+        .collect();
+    if values.iter().any(|value| !value.is_finite()) {
+        bail!("LMCache CacheGen input contains a non-finite F16 value");
+    }
+    let (symbols, maxes) = quantize(&values, rows, channels, bins);
+    let bits_per_symbol = if bins == 16 { 4 } else { 5 };
+    let packed = pack_symbols(&symbols, bits_per_symbol)?;
+    let channels_u32 = u32::try_from(channels).map_err(|_| anyhow!("channel count exceeds u32"))?;
+    let rows_u16 = u16::try_from(rows).expect("row limit fits u16");
+    let packed_len = u32::try_from(packed.len())
+        .map_err(|_| anyhow!("packed CacheGen segment exceeds u32 envelope field"))?;
+    let mut out = Vec::with_capacity(HEADER_LEN + maxes.len() * 4 + packed.len());
+    out.extend_from_slice(&MAGIC_V2);
+    out.push(bins);
+    out.push(bits_per_symbol);
+    out.extend_from_slice(&rows_u16.to_le_bytes());
+    out.extend_from_slice(&channels_u32.to_le_bytes());
+    out.extend_from_slice(&packed_len.to_le_bytes());
+    for value in maxes {
+        out.extend_from_slice(&value.to_bits().to_le_bytes());
+    }
+    out.extend_from_slice(&packed);
+    Ok(out)
+}
+
+/// Decodes a portable segment produced by either encoder.
 pub fn decode_f16_segment(payload: &[u8]) -> Result<Vec<u8>> {
     let parsed = parse(payload)?;
-    let mut symbols = vec![0u8; parsed.rows * parsed.channels];
-    let mut cursor = 0usize;
-    for channel in 0..parsed.channels {
-        let end = cursor
-            .checked_add(parsed.lengths[channel])
-            .ok_or_else(|| anyhow!("LMCache stream range overflow"))?;
-        let stream = parsed
-            .streams
-            .get(cursor..end)
-            .ok_or_else(|| anyhow!("LMCache channel stream exceeds payload"))?;
-        arithmetic_decode_channel(
-            stream,
-            parsed.rows,
-            parsed.channels,
-            channel,
-            &parsed.cdfs[channel],
-            &mut symbols,
-        )?;
-        cursor = end;
-    }
-    if cursor != parsed.streams.len() {
-        bail!("LMCache segment contains trailing stream bytes");
-    }
+    let symbols = if parsed.bits_per_symbol == 0 {
+        let mut symbols = vec![0u8; parsed.rows * parsed.channels];
+        let mut cursor = 0usize;
+        for channel in 0..parsed.channels {
+            let end = cursor
+                .checked_add(parsed.lengths[channel])
+                .ok_or_else(|| anyhow!("LMCache stream range overflow"))?;
+            let stream = parsed
+                .streams
+                .get(cursor..end)
+                .ok_or_else(|| anyhow!("LMCache channel stream exceeds payload"))?;
+            arithmetic_decode_channel(
+                stream,
+                parsed.rows,
+                parsed.channels,
+                channel,
+                &parsed.cdfs[channel],
+                &mut symbols,
+            )?;
+            cursor = end;
+        }
+        if cursor != parsed.streams.len() {
+            bail!("LMCache segment contains trailing stream bytes");
+        }
+        symbols
+    } else {
+        unpack_symbols(
+            parsed.streams,
+            parsed.rows * parsed.channels,
+            parsed.bits_per_symbol,
+        )?
+    };
 
     let center = f32::from(parsed.bins / 2 - 1);
     let max_symbol = parsed.bins - 2;
@@ -193,6 +245,49 @@ pub fn decode_f16_segment(payload: &[u8]) -> Result<Vec<u8>> {
         }
     }
     Ok(raw)
+}
+
+fn pack_symbols(symbols: &[u8], bits_per_symbol: u8) -> Result<Vec<u8>> {
+    let bit_len = symbols
+        .len()
+        .checked_mul(usize::from(bits_per_symbol))
+        .ok_or_else(|| anyhow!("packed CacheGen bit length overflow"))?;
+    let mut packed = vec![0u8; bit_len.div_ceil(8)];
+    let mask = (1u16 << bits_per_symbol) - 1;
+    for (index, &symbol) in symbols.iter().enumerate() {
+        if u16::from(symbol) > mask {
+            bail!("CacheGen symbol does not fit the packed width");
+        }
+        let bit = index * usize::from(bits_per_symbol);
+        let byte = bit / 8;
+        let shift = bit % 8;
+        let value = u16::from(symbol) << shift;
+        packed[byte] |= value as u8;
+        if shift + usize::from(bits_per_symbol) > 8 {
+            packed[byte + 1] |= (value >> 8) as u8;
+        }
+    }
+    Ok(packed)
+}
+
+fn unpack_symbols(packed: &[u8], count: usize, bits_per_symbol: u8) -> Result<Vec<u8>> {
+    let expected_bytes = count
+        .checked_mul(usize::from(bits_per_symbol))
+        .ok_or_else(|| anyhow!("packed CacheGen bit length overflow"))?
+        .div_ceil(8);
+    if packed.len() != expected_bytes {
+        bail!("packed CacheGen byte length is inconsistent");
+    }
+    let mask = (1u16 << bits_per_symbol) - 1;
+    let mut symbols = Vec::with_capacity(count);
+    for index in 0..count {
+        let bit = index * usize::from(bits_per_symbol);
+        let byte = bit / 8;
+        let shift = bit % 8;
+        let word = u16::from(packed[byte]) | u16::from(*packed.get(byte + 1).unwrap_or(&0)) << 8;
+        symbols.push(((word >> shift) & mask) as u8);
+    }
+    Ok(symbols)
 }
 
 /// Validates a portable segment without allocating its decoded F16 output.
@@ -460,11 +555,21 @@ impl<'a> BitReader<'a> {
 }
 
 fn parse(payload: &[u8]) -> Result<Parsed<'_>> {
-    if payload.len() < HEADER_LEN || payload[..4] != MAGIC {
+    if payload.len() < HEADER_LEN || (payload[..4] != MAGIC_V1 && payload[..4] != MAGIC_V2) {
         bail!("not an LMCache CacheGen portable segment");
     }
     let bins = payload[4];
-    if payload[5] != 0 || !matches!(bins, 16 | 32) {
+    let packed = payload[..4] == MAGIC_V2;
+    let bits_per_symbol = if !packed {
+        if payload[5] != 0 {
+            bail!("invalid LMCache CacheGen segment header");
+        }
+        0
+    } else {
+        payload[5]
+    };
+    let expected_bits = if bins == 16 { 4 } else { 5 };
+    if !matches!(bins, 16 | 32) || (packed && bits_per_symbol != expected_bits) {
         bail!("invalid LMCache CacheGen segment header");
     }
     let rows = usize::from(u16::from_le_bytes([payload[6], payload[7]]));
@@ -482,12 +587,20 @@ fn parse(payload: &[u8]) -> Result<Parsed<'_>> {
     let max_bytes = rows
         .checked_mul(4)
         .ok_or_else(|| anyhow!("max metadata overflow"))?;
-    let cdf_bytes = channels
-        .checked_mul(CDF_LEN * 2)
-        .ok_or_else(|| anyhow!("CDF metadata overflow"))?;
-    let length_bytes = channels
-        .checked_mul(2)
-        .ok_or_else(|| anyhow!("length metadata overflow"))?;
+    let cdf_bytes = if bits_per_symbol == 0 {
+        channels
+            .checked_mul(CDF_LEN * 2)
+            .ok_or_else(|| anyhow!("CDF metadata overflow"))?
+    } else {
+        0
+    };
+    let length_bytes = if bits_per_symbol == 0 {
+        channels
+            .checked_mul(2)
+            .ok_or_else(|| anyhow!("length metadata overflow"))?
+    } else {
+        0
+    };
     let metadata_end = HEADER_LEN
         .checked_add(max_bytes)
         .and_then(|value| value.checked_add(cdf_bytes))
@@ -510,6 +623,25 @@ fn parse(payload: &[u8]) -> Result<Parsed<'_>> {
         }
         maxes.push(value);
         cursor += 4;
+    }
+    if bits_per_symbol != 0 {
+        let expected_stream_len = values
+            .checked_mul(usize::from(bits_per_symbol))
+            .ok_or_else(|| anyhow!("packed CacheGen bit length overflow"))?
+            .div_ceil(8);
+        if stream_len != expected_stream_len {
+            bail!("packed CacheGen byte length is inconsistent");
+        }
+        return Ok(Parsed {
+            bins,
+            channels,
+            rows,
+            bits_per_symbol,
+            maxes,
+            cdfs: Vec::new(),
+            lengths: Vec::new(),
+            streams: &payload[cursor..],
+        });
     }
     let mut cdfs = Vec::with_capacity(channels);
     for _ in 0..channels {
@@ -543,6 +675,7 @@ fn parse(payload: &[u8]) -> Result<Parsed<'_>> {
         bins,
         channels,
         rows,
+        bits_per_symbol,
         maxes,
         cdfs,
         lengths,
@@ -602,6 +735,21 @@ mod tests {
     }
 
     #[test]
+    fn packed_segment_preserves_lmcache_quantized_values() {
+        let raw = input(64, 8);
+        for bins in [16, 32] {
+            let oracle = encode_f16_segment(&raw, 8, bins).expect("oracle encode");
+            let packed = encode_f16_segment_packed(&raw, 8, bins).expect("packed encode");
+            assert_eq!(&packed[..4], b"LCG2");
+            assert_eq!(packed[5], if bins == 16 { 4 } else { 5 });
+            assert_eq!(
+                decode_f16_segment(&packed).expect("packed decode"),
+                decode_f16_segment(&oracle).expect("oracle decode")
+            );
+        }
+    }
+
+    #[test]
     fn flat_rows_restore_exactly() {
         let mut raw = Vec::new();
         for value in [0.0f32, 0.5, -0.75] {
@@ -622,6 +770,12 @@ mod tests {
         let cdf_start = HEADER_LEN + 8 * 4;
         bad_cdf[cdf_start + 2..cdf_start + 4].copy_from_slice(&0u16.to_le_bytes());
         assert!(decode_f16_segment(&bad_cdf).is_err());
+
+        let packed = encode_f16_segment_packed(&raw, 4, 32).expect("packed encode");
+        assert!(decode_f16_segment(&packed[..packed.len() - 1]).is_err());
+        let mut bad_width = packed;
+        bad_width[5] = 4;
+        assert!(decode_f16_segment(&bad_width).is_err());
     }
 
     fn assert_lmcache_fixture(fixture: &[u8], bins: u8) {
