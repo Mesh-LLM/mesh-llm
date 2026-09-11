@@ -213,6 +213,8 @@ pub struct CacheGenGateReport {
     pub passed: bool,
     pub failure_reasons: Vec<String>,
     pub restore_path: &'static str,
+    pub cache_type_k: &'static str,
+    pub cache_type_v: &'static str,
     pub continuation_steps: usize,
     pub native_storage_bytes: usize,
     pub cachegen_storage_bytes: usize,

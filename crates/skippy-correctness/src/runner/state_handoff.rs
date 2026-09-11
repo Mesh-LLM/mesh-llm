@@ -9,8 +9,7 @@ use skippy_protocol::binary::{
     write_stage_message,
 };
 use skippy_runtime::{
-    ActivationFrame, GGML_TYPE_F16, MtpSource, RuntimeConfig, RuntimeKvPageDesc, StageModel,
-    StageSession,
+    ActivationFrame, MtpSource, RuntimeConfig, RuntimeKvPageDesc, StageModel, StageSession,
 };
 
 use crate::{
@@ -209,6 +208,8 @@ pub fn state_handoff(args: StateHandoffArgs) -> Result<()> {
         synthetic_input_activation: args.synthetic_input_activation,
         binary_control: args.binary_control,
         cachegen_gate: args.cachegen_gate,
+        cache_type_k: args.cache_type_k.ggml_type(),
+        cache_type_v: args.cache_type_v.ggml_type(),
         cachegen_continuation_steps: args.cachegen_continuation_steps,
         cachegen_min_token_agreement: args.cachegen_min_token_agreement,
         cachegen_max_p99_decode_regression: args.cachegen_max_p99_decode_regression,
@@ -415,6 +416,8 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
         "n_batch": args.n_batch,
         "n_ubatch": args.n_ubatch,
         "n_gpu_layers": args.n_gpu_layers,
+        "cache_type_k": cache_type_name(args.cache_type_k)?,
+        "cache_type_v": cache_type_name(args.cache_type_v)?,
         "flash_attn_type": protocol_flash_attn(args.flash_attn),
         "filter_tensors_on_load": should_filter_state_handoff_tensors(&args),
         "load_mode": protocol_load_mode(args.stage_load_mode),
@@ -444,6 +447,8 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
         "n_batch": args.n_batch,
         "n_ubatch": args.n_ubatch,
         "n_gpu_layers": args.n_gpu_layers,
+        "cache_type_k": cache_type_name(args.cache_type_k)?,
+        "cache_type_v": cache_type_name(args.cache_type_v)?,
         "flash_attn_type": protocol_flash_attn(args.flash_attn),
         "filter_tensors_on_load": should_filter_state_handoff_tensors(&args),
         "load_mode": protocol_load_mode(args.stage_load_mode),
@@ -714,8 +719,8 @@ fn run_local_state_handoff(
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
-        cache_type_k: GGML_TYPE_F16,
-        cache_type_v: GGML_TYPE_F16,
+        cache_type_k: args.cache_type_k,
+        cache_type_v: args.cache_type_v,
         flash_attn_type: runtime_flash_attn(args.flash_attn),
         kv_offload: None,
         kv_unified: None,
@@ -1497,8 +1502,8 @@ fn build_state_handoff_inputs(
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
-        cache_type_k: GGML_TYPE_F16,
-        cache_type_v: GGML_TYPE_F16,
+        cache_type_k: args.cache_type_k,
+        cache_type_v: args.cache_type_v,
         flash_attn_type: runtime_flash_attn(args.flash_attn),
         kv_offload: None,
         kv_unified: None,
@@ -1523,6 +1528,16 @@ fn build_state_handoff_inputs(
         );
     }
     Ok((Some(prefill_input), Some(decode_input), prefill_width))
+}
+
+fn cache_type_name(value: u32) -> Result<&'static str> {
+    match value {
+        skippy_runtime::GGML_TYPE_F16 => Ok("f16"),
+        skippy_runtime::GGML_TYPE_F32 => Ok("f32"),
+        skippy_runtime::GGML_TYPE_Q8_0 => Ok("q8_0"),
+        skippy_runtime::GGML_TYPE_Q4_0 => Ok("q4_0"),
+        _ => bail!("unsupported state-handoff K/V cache type {value}"),
+    }
 }
 
 fn synthetic_activation_frame(

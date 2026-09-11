@@ -140,6 +140,8 @@ pub(in crate::runner) fn run_cachegen_gate(
         passed: failure_reasons.is_empty(),
         failure_reasons,
         restore_path: "native-device",
+        cache_type_k: cache_type_name(kv_desc.k_type)?,
+        cache_type_v: cache_type_name(kv_desc.v_type)?,
         continuation_steps: args.cachegen_continuation_steps,
         native_storage_bytes,
         cachegen_storage_bytes,
@@ -397,6 +399,16 @@ fn cachegen_value_type(value: u32) -> Result<ValueType> {
         GGML_TYPE_F16 => Ok(ValueType::F16),
         GGML_TYPE_Q8_0 => Ok(ValueType::Q8_0),
         GGML_TYPE_Q4_0 => Ok(ValueType::Q4_0),
+        _ => bail!("CacheGen gate does not support runtime K/V type {value}"),
+    }
+}
+
+fn cache_type_name(value: u32) -> Result<&'static str> {
+    match value {
+        GGML_TYPE_F32 => Ok("f32"),
+        GGML_TYPE_F16 => Ok("f16"),
+        GGML_TYPE_Q8_0 => Ok("q8_0"),
+        GGML_TYPE_Q4_0 => Ok("q4_0"),
         _ => bail!("CacheGen gate does not support runtime K/V type {value}"),
     }
 }
