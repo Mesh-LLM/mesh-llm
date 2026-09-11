@@ -15,10 +15,14 @@ ARG NODE_ENV=production
 ENV NODE_ENV=$NODE_ENV
 ENV VITE_API_URL=$VITE_API_URL
 ENV VITE_STORAGE_NAMESPACE=$VITE_STORAGE_NAMESPACE
-RUN --mount=type=cache,id=mesh-llm-npm-alpine-node24-${TARGETARCH},target=/root/.npm,sharing=locked \
-    npm install -g pnpm
 WORKDIR /app
 COPY crates/mesh-llm-ui/package.json crates/mesh-llm-ui/pnpm-lock.yaml crates/mesh-llm-ui/pnpm-workspace.yaml ./
+# Install the pnpm pinned by package.json's packageManager field. An unpinned
+# `npm install -g pnpm` resolves to pnpm 12, which self-switches to the pinned
+# 10.x and then fails with ERR_PNPM_PNPM_ENGINE_IDENTITY_UNVERIFIABLE because a
+# pnpm 10 lockfile does not record the @pnpm/exe integrity that pnpm 12 checks.
+RUN --mount=type=cache,id=mesh-llm-npm-alpine-node24-${TARGETARCH},target=/root/.npm,sharing=locked \
+    npm install -g "$(node -p 'JSON.parse(require("fs").readFileSync("package.json", "utf8")).packageManager')"
 RUN --mount=type=cache,id=mesh-llm-pnpm-store-alpine-node24-${TARGETARCH},target=/root/.local/share/pnpm/store,sharing=locked \
     pnpm install --frozen-lockfile
 COPY crates/mesh-llm-ui/ ./
