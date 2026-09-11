@@ -16,13 +16,16 @@ worker-capable. See [Runtime Lifecycle](/docs/pages/runtime-lifecycle/).
 
 ## Can I share an existing Ollama or LM Studio server?
 
-Yes. Keep your existing server and models; run Mesh alongside it:
+Yes. `share` makes the models from an **already-running server** available to
+other users and machines on your mesh. **It does not start, stop, or restart
+that server.** You keep managing the server and its models with your existing
+tools; Mesh advertises the available models and forwards inference requests:
 
 ```bash
 # Ollama
 mesh-llm share http://localhost:11434
 
-# LM Studio (start its local API server first; use the port it shows)
+# LM Studio (API server already running; use the port it shows)
 mesh-llm share http://localhost:1234
 ```
 

@@ -38,8 +38,9 @@ Open a new terminal after install if the installer added Mesh to your `PATH`.
 
 ## Already running Ollama or LM Studio?
 
-You can use your existing server instead of setting up native model serving in
-Mesh. Start the upstream's API server, then choose the matching command:
+Make the models from your already-running API server available to users and
+machines on your mesh. **`share` does not start, stop, or restart that server**;
+you keep managing it with your existing tools. Choose the matching command:
 
 ```bash
 # Ollama

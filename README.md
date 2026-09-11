@@ -81,8 +81,10 @@ mesh-llm serve --auto --headless
 
 ## Already running Ollama or LM Studio?
 
-Keep your existing server and models. With its local API server running, share
-it through Mesh:
+Make the models from your already-running server available to users and
+machines on your mesh. **`share` does not start, stop, or restart that server.**
+You keep managing it with your existing tools; Mesh advertises the models and
+forwards inference requests:
 
 ```bash
 mesh-llm share http://localhost:11434  # Ollama

@@ -88,9 +88,10 @@ command. No plugin to install, no config file to edit:
 mesh-llm share http://localhost:11434
 ```
 
-Ollama keeps running the models. Mesh forwards requests to it and advertises
-its models to the mesh under their own names. This node never loads a native
-inference runtime and never loads a model of its own.
+You keep managing the existing server with your own tools. `share` never starts,
+stops, or restarts it. Mesh forwards inference requests and advertises its
+available models to the mesh under their own names. This node never loads a
+native inference runtime and never loads a model of its own.
 
 Like `mesh-llm serve`, this starts a **private** mesh by default. Nothing is
 advertised publicly and no peer can reach it until you make an explicit choice:

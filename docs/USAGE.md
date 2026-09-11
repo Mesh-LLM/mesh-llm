@@ -1065,9 +1065,11 @@ already running, publish its models to your mesh with one command:
 mesh-llm share http://localhost:11434
 ```
 
-The upstream server keeps running the models. Mesh forwards requests to it and
-advertises its models under their own names. This node does not install a
-plugin, does not load a native inference runtime, does not load a model of its
+`share` makes the models from an already-running server available to users and
+machines on your mesh. **It does not start, stop, or restart that server.** You
+keep managing the server and its models with your existing tools. Mesh forwards
+inference requests and advertises the available models under their own names.
+This node does not install a plugin, does not load a native inference runtime, does not load a model of its
 own, and does not rewrite your config file.
 
 Like `serve`, this starts a **private** mesh. Make the choice explicit to go

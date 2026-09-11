@@ -5,24 +5,29 @@ title: Share an existing model server
 # Share an existing model server
 
 Already running Ollama or LM Studio on your Mac Studio, desktop, or another
-machine? Keep that server and its models. Run Mesh alongside it to make its
-models available to your other machines through an OpenAI-compatible API.
+machine? `share` makes those existing models available to the users and
+machines on your mesh through an OpenAI-compatible API.
+
+**`share` does not start, stop, or restart your existing server.** It does not
+manage that server's model lifecycle. You continue to operate it with your
+existing tools; Mesh advertises its available models and forwards inference
+requests to it.
 
 Mesh forwards requests to the existing server; it does not split that server's
 model across GPUs. No plugin installation, native inference runtime, model
 downloads, or config edits are needed on the sharing node.
 
-## 1. Start your existing API server
+## 1. Identify the API you already run
 
-[Install Mesh](/docs/pages/installing-mesh/) on the server machine and on any
-machine you want to connect. Leave your existing model server running:
+Prerequisites: [Mesh installed](/docs/pages/installing-mesh/), an existing API
+server already running, and at least one model reported by its `/v1/models`
+endpoint. Server setup and model management remain outside `share`.
 
-- **Ollama:** start Ollama and make sure you have a model available. Its default
-  API address is `http://localhost:11434`.
-- **LM Studio:** load a model and start its local API server. Use the address
-  and port shown there; the examples below use `http://localhost:1234`.
-- **Other servers:** use an HTTP OpenAI-compatible server that exposes
-  `/v1/models` and `/v1/chat/completions`, without authentication.
+- **Ollama:** the default API address is `http://localhost:11434`.
+- **LM Studio:** use the address and port of its already-running local API
+  server; the examples below use `http://localhost:1234`.
+- **Other servers:** use an HTTP OpenAI-compatible API exposing `/v1/models`
+  and `/v1/chat/completions`, without authentication.
 
 Run Mesh on the same machine as the upstream, so you can keep the upstream
 bound to localhost. You do not need to expose Ollama or LM Studio's port to
@@ -51,10 +56,15 @@ In another terminal on this machine, check the advertised model IDs:
 curl http://localhost:9337/v1/models
 ```
 
-The models retain the IDs reported by your server. If startup fails, check that
-the upstream is running and that its `/v1/models` URL responds. If the list is
-empty, make a model available in the upstream first. The list refreshes
-periodically as upstream models change.
+The models retain the IDs reported by your server. If the upstream is
+unreachable or reports no models when you invoke `share`, the command reports
+an error; it does not launch the server or load a model for you. Resolve that
+in your existing server's tools, then retry `share`.
+
+While sharing, Mesh refreshes the advertised list as upstream models change.
+If the server goes away, Mesh withdraws its models after the health-check grace
+period; if it becomes available again, Mesh re-advertises them. **Mesh does not
+restart or repair the upstream.**
 
 ## 3. Connect a second machine
 
