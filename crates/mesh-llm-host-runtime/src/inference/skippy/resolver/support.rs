@@ -3,8 +3,8 @@ use skippy_protocol::{FlashAttentionType, StageKvCacheMode, StageKvCachePayload}
 
 use super::super::KvCachePolicy;
 use super::types::{
-    BUILTIN_BATCH, BUILTIN_PARALLEL, BUILTIN_SAFETY_MARGIN_GB, BUILTIN_UBATCH,
-    ResolvedStageKvCache, ResolvedStageKvCacheTemplate,
+    BUILTIN_BATCH, BUILTIN_PARALLEL, BUILTIN_UBATCH, ResolvedStageKvCache,
+    ResolvedStageKvCacheTemplate,
 };
 use crate::plugin::{
     BoolOrAuto, HardwareConfig, IntegerOrString, ModelConfigDefaults, ModelFitConfig, SkippyConfig,
@@ -20,7 +20,7 @@ pub(super) fn derive_fit_target_mib(
 }
 
 fn safety_margin_mib(safety_margin_gb: f64) -> u64 {
-    (safety_margin_gb * 1024.0).round().max(0.0) as u64
+    mesh_llm_system::capacity::safety_margin_mib(safety_margin_gb)
 }
 
 /// Bytes the local fit withholds on top of the driver reserve: the
@@ -29,13 +29,11 @@ fn safety_margin_mib(safety_margin_gb: f64) -> u64 {
 /// capacity breakdown reports this same value as the configured reserve, so
 /// peers see the margin the fit actually applies.
 pub(crate) fn effective_safety_margin_bytes(defaults: Option<&ModelConfigDefaults>) -> u64 {
-    let safety_margin_gb = defaults
-        .and_then(|defaults| defaults.hardware.as_ref())
-        .and_then(|hardware| hardware.safety_margin_gb)
-        .unwrap_or(BUILTIN_SAFETY_MARGIN_GB);
-    // The float-to-integer cast saturates on absurd margins; saturate the
-    // byte conversion the same way instead of overflowing.
-    safety_margin_mib(safety_margin_gb).saturating_mul(1024 * 1024)
+    mesh_llm_system::capacity::safety_margin_bytes(
+        defaults
+            .and_then(|defaults| defaults.hardware.as_ref())
+            .and_then(|hardware| hardware.safety_margin_gb),
+    )
 }
 
 pub(super) fn effective_flash_attention(cache_type_v: &str) -> FlashAttentionType {
