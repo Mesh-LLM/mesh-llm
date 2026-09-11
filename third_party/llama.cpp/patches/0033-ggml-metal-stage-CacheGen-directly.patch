@@ -1,0 +1,159 @@
+From: scama <a1860575018c4680d5669dd7bc3bd356b478bccb8d42e194df46304a5e25f49a@meshllm.local>
+Date: Fri, 12 Sep 2026 01:00:00 +1000
+Subject: [PATCH] ggml-metal: stage CacheGen payloads directly
+
+Avoid building each CacheGen job in NSMutableData and then copying the same
+bytes again into shared Metal buffers. Validate and size the job first, then
+fill its final MTLBuffers directly.
+---
+ ggml/src/ggml-metal/ggml-metal-device.m | 85 ++++++++++++------------
+ 1 file changed, 43 insertions(+), 42 deletions(-)
+
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
+index 0092c558f..79d40466f 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.m
++++ b/ggml/src/ggml-metal/ggml-metal-device.m
+@@ -2724,92 +2724,63 @@ bool ggml_metal_cachegen_decode(
+                 }
+             }
+ 
+-            NSMutableData * payload_data = [[NSMutableData alloc] init];
+-            NSMutableData * tile_data = [[NSMutableData alloc] init];
+-            NSMutableData * prefix_data = [[NSMutableData alloc] init];
++            size_t staged_payload_bytes = 0;
++            size_t staged_prefix_count = 0;
+             for (size_t tile_index = 0; tile_index < job->tile_count; ++tile_index) {
+                 const struct ggml_backend_cachegen_tile * tile = &job->tiles[tile_index];
+                 if (tile->payload == NULL || tile->payload_bytes < 16 || tile->token_count == 0 ||
+                         tile->token_offset > job->cell_count || tile->token_count > job->cell_count - tile->token_offset ||
+-                        payload_data.length > UINT32_MAX - 3 ||
+-                        prefix_data.length / sizeof(uint32_t) > UINT32_MAX - ((size_t) job->channels + 1)) {
+-                    [payload_data release];
+-                    [tile_data release];
+-                    [prefix_data release];
++                        staged_payload_bytes > UINT32_MAX - 3 ||
++                        staged_prefix_count > UINT32_MAX - ((size_t) job->channels + 1)) {
+                     [encoder endEncoding];
+                     [temporary_buffers release];
+                     return ggml_metal_cachegen_error(error, error_capacity, "Metal CacheGen tile exceeds bounded geometry");
+                 }
+-                const size_t aligned_payload_size = (payload_data.length + 3) & ~(size_t) 3;
++                const size_t aligned_payload_size = (staged_payload_bytes + 3) & ~(size_t) 3;
+                 if (tile->payload_bytes > UINT32_MAX - aligned_payload_size) {
+-                    [payload_data release];
+-                    [tile_data release];
+-                    [prefix_data release];
+                     [encoder endEncoding];
+                     [temporary_buffers release];
+                     return ggml_metal_cachegen_error(error, error_capacity, "Metal CacheGen payload offsets overflow");
+                 }
+-                const uint8_t padding[3] = { 0 };
+-                [payload_data appendBytes:padding length:aligned_payload_size - payload_data.length];
+                 const uint8_t * payload = (const uint8_t *) tile->payload;
+                 const size_t lengths_offset = 16 + (size_t) tile->token_count * sizeof(float) +
+                     (size_t) job->channels * 33 * sizeof(uint16_t);
+                 const size_t streams_offset = lengths_offset + (size_t) job->channels * sizeof(uint16_t);
+                 if (streams_offset > tile->payload_bytes) {
+-                    [payload_data release];
+-                    [tile_data release];
+-                    [prefix_data release];
+                     [encoder endEncoding];
+                     [temporary_buffers release];
+                     return ggml_metal_cachegen_error(error, error_capacity, "Metal CacheGen tile metadata is truncated");
+                 }
+-                struct ggml_metal_cachegen_tile encoded_tile = {
+-                    (uint32_t) aligned_payload_size,
+-                    (uint32_t) (prefix_data.length / sizeof(uint32_t)),
+-                    tile->token_offset,
+-                    tile->token_count,
+-                };
+                 uint32_t prefix = 0;
+-                [prefix_data appendBytes:&prefix length:sizeof(prefix)];
+                 for (uint32_t channel = 0; channel < job->channels; ++channel) {
+                     const size_t offset = lengths_offset + (size_t) channel * sizeof(uint16_t);
+                     const uint32_t length = (uint32_t) payload[offset] | (uint32_t) payload[offset + 1] << 8;
+                     if (prefix > UINT32_MAX - length) {
+-                        [payload_data release];
+-                        [tile_data release];
+-                        [prefix_data release];
+                         [encoder endEncoding];
+                         [temporary_buffers release];
+                         return ggml_metal_cachegen_error(error, error_capacity, "Metal CacheGen stream offsets overflow");
+                     }
+                     prefix += length;
+-                    [prefix_data appendBytes:&prefix length:sizeof(prefix)];
+                 }
+                 const uint32_t declared_stream_bytes = (uint32_t) payload[12] |
+                     (uint32_t) payload[13] << 8 | (uint32_t) payload[14] << 16 | (uint32_t) payload[15] << 24;
+                 if (prefix != declared_stream_bytes || prefix != tile->payload_bytes - streams_offset) {
+-                    [payload_data release];
+-                    [tile_data release];
+-                    [prefix_data release];
+                     [encoder endEncoding];
+                     [temporary_buffers release];
+                     return ggml_metal_cachegen_error(error, error_capacity, "Metal CacheGen stream length is inconsistent");
+                 }
+-                [tile_data appendBytes:&encoded_tile length:sizeof(encoded_tile)];
+-                [payload_data appendBytes:tile->payload length:tile->payload_bytes];
++                staged_payload_bytes = aligned_payload_size + tile->payload_bytes;
++                staged_prefix_count += (size_t) job->channels + 1;
+             }
+ 
+-            id<MTLBuffer> payload_buffer = [device->mtl_device newBufferWithBytes:payload_data.bytes
+-                length:payload_data.length options:MTLResourceStorageModeShared];
+-            id<MTLBuffer> tile_buffer = [device->mtl_device newBufferWithBytes:tile_data.bytes
+-                length:tile_data.length options:MTLResourceStorageModeShared];
+-            id<MTLBuffer> prefix_buffer = [device->mtl_device newBufferWithBytes:prefix_data.bytes
+-                length:prefix_data.length options:MTLResourceStorageModeShared];
++            id<MTLBuffer> payload_buffer = [device->mtl_device newBufferWithLength:staged_payload_bytes
++                options:MTLResourceStorageModeShared];
++            id<MTLBuffer> tile_buffer = [device->mtl_device newBufferWithLength:job->tile_count * sizeof(struct ggml_metal_cachegen_tile)
++                options:MTLResourceStorageModeShared];
++            id<MTLBuffer> prefix_buffer = [device->mtl_device newBufferWithLength:staged_prefix_count * sizeof(uint32_t)
++                options:MTLResourceStorageModeShared];
+             id<MTLBuffer> cell_buffer = [device->mtl_device newBufferWithBytes:job->cells
+                 length:job->cell_count * sizeof(uint32_t) options:MTLResourceStorageModeShared];
+-            [payload_data release];
+-            [tile_data release];
+-            [prefix_data release];
+             if (payload_buffer == nil || tile_buffer == nil || prefix_buffer == nil || cell_buffer == nil) {
+                 [payload_buffer release];
+                 [tile_buffer release];
+@@ -2819,6 +2790,35 @@ bool ggml_metal_cachegen_decode(
+                 [temporary_buffers release];
+                 return ggml_metal_cachegen_error(error, error_capacity, "Metal CacheGen staging allocation failed");
+             }
++            uint8_t * payload_contents = (uint8_t *) payload_buffer.contents;
++            struct ggml_metal_cachegen_tile * tile_contents =
++                (struct ggml_metal_cachegen_tile *) tile_buffer.contents;
++            uint32_t * prefix_contents = (uint32_t *) prefix_buffer.contents;
++            size_t payload_offset = 0;
++            size_t prefix_offset = 0;
++            for (size_t tile_index = 0; tile_index < job->tile_count; ++tile_index) {
++                const struct ggml_backend_cachegen_tile * tile = &job->tiles[tile_index];
++                const size_t aligned_payload_offset = (payload_offset + 3) & ~(size_t) 3;
++                memset(payload_contents + payload_offset, 0, aligned_payload_offset - payload_offset);
++                memcpy(payload_contents + aligned_payload_offset, tile->payload, tile->payload_bytes);
++                tile_contents[tile_index] = (struct ggml_metal_cachegen_tile) {
++                    (uint32_t) aligned_payload_offset,
++                    (uint32_t) prefix_offset,
++                    tile->token_offset,
++                    tile->token_count,
++                };
++                const uint8_t * payload = (const uint8_t *) tile->payload;
++                const size_t lengths_offset = 16 + (size_t) tile->token_count * sizeof(float) +
++                    (size_t) job->channels * 33 * sizeof(uint16_t);
++                uint32_t prefix = 0;
++                prefix_contents[prefix_offset++] = prefix;
++                for (uint32_t channel = 0; channel < job->channels; ++channel) {
++                    const size_t offset = lengths_offset + (size_t) channel * sizeof(uint16_t);
++                    prefix += (uint32_t) payload[offset] | (uint32_t) payload[offset + 1] << 8;
++                    prefix_contents[prefix_offset++] = prefix;
++                }
++                payload_offset = aligned_payload_offset + tile->payload_bytes;
++            }
+             [temporary_buffers addObject:payload_buffer];
+             [temporary_buffers addObject:tile_buffer];
+             [temporary_buffers addObject:prefix_buffer];
+-- 
+2.52.0
