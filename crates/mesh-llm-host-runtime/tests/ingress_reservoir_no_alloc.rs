@@ -166,19 +166,15 @@ fn assert_try_submit_is_alloc_free(
     );
 }
 
-/// Warms the state-transition lane's backing `VecDeque`/`HashMap` (owned
-/// by `engine/lanes.rs::StateLane` -- out of Task 13's ownership, which
-/// added the ingress-latency reservoir, not this lane) so their
-/// first-growth allocations happen BEFORE any measured window opens,
-/// mirroring this file's original wake-list warm-up precedent for
-/// `Terminal`. Every call here submits a genuinely distinct `(scope,
-/// kind)` key (a fresh `OperationId` each time, via `unreserved_ingress`
-/// so it never touches the reservation table), so every warm-up
-/// submission is itself `Accepted` -- the state-transition lane coalesces
-/// a REPEAT key instead of growing its backing collections further, so a
-/// repeat key would not actually warm anything up. This leaves the lane
-/// with capacity headroom well past the ONE additional key the real test
-/// below adds inside its measured window.
+/// Submits `count` state transitions before a measured window opens.
+///
+/// This used to warm a producer-side lane's backing collections, which no
+/// longer exist -- the ring is allocated once at construction, so there is
+/// nothing left to grow. It is kept because the tests below are
+/// deliberately about the WARMED steady state, and
+/// `the_first_submission_on_a_fresh_engine_allocates_nothing` covers the
+/// cold path separately. A fresh `OperationId` per call keeps every
+/// submission a distinct key, so none of them coalesce away.
 fn warm_up_state_transition_lane(engine: &Arc<RuntimeEventEngine>, count: usize) {
     for _ in 0..count {
         let scope = OperationScope::root_only(OperationId::new());
@@ -193,12 +189,9 @@ fn warm_up_state_transition_lane(engine: &Arc<RuntimeEventEngine>, count: usize)
     }
 }
 
-/// Warms the diagnostic lane's backing `VecDeque` (owned by
-/// `engine/lanes.rs::DiagnosticLane`) for the same reason as
-/// `warm_up_state_transition_lane`. Unlike the state-transition lane,
-/// diagnostics never coalesce by key -- every submission below the
-/// 2,048-entry depth is `Accepted` regardless of key reuse -- so this
-/// reuses one scope for every warm-up call.
+/// Submits `count` diagnostics before a measured window opens, for the
+/// same reason as `warm_up_state_transition_lane`. Diagnostics never
+/// coalesce by key, so this reuses one scope.
 fn warm_up_diagnostic_lane(engine: &Arc<RuntimeEventEngine>, count: usize) {
     let scope = OperationScope::root_only(OperationId::new());
     for _ in 0..count {
@@ -208,7 +201,7 @@ fn warm_up_diagnostic_lane(engine: &Arc<RuntimeEventEngine>, count: usize) {
         assert_eq!(
             outcome,
             SubmitOutcome::Accepted,
-            "warm-up diagnostic submission must itself be accepted (no coalescing in this lane)"
+            "warm-up diagnostic submission must itself be accepted (diagnostics never coalesce)"
         );
     }
 }
@@ -222,21 +215,18 @@ fn submit_records_ingress_latency_with_no_heap_allocation() {
     let ingress = reservation.ingress();
 
     // Warm up: the FIRST `try_submit` on this handle is the only one that
-    // can succeed (terminal slots are write-once) and is where any
-    // one-time lazy setup along the call chain (e.g. the wake list's
-    // `VecDeque` growing from empty) would show up. Excluding it from the
-    // measured window isolates what THIS task added -- the reservoir
-    // write -- from pre-existing allocation behavior elsewhere in
-    // `submit`, which is out of this task's ownership and not what this
-    // test is about.
+    // can succeed, because the terminal claim is write-once. Excluding it
+    // isolates the reservoir write from anything a first call might do.
+    // The cold path is covered directly by
+    // `the_first_submission_on_a_fresh_engine_allocates_nothing`.
     let _ = ingress.try_submit(terminal_fact());
 
     let before_net = net_allocs();
     let before_total = total_alloc_calls();
-    // Every call after the first is a duplicate-terminal rejection
+    // Every call after the first is a refused duplicate terminal
     // (`TerminalDeliveryFailed`): it still runs the full `submit` body,
-    // including the reservoir's `record` call, without ever touching the
-    // wake list or reservation table's write-once slot again.
+    // including the reservoir's `record` call, but its claim CAS loses, so
+    // nothing reaches the ring.
     for _ in 0..1_000 {
         let _ = ingress.try_submit(terminal_fact());
     }
@@ -293,19 +283,16 @@ fn submit_crosses_the_reservoir_milestone_with_no_heap_allocation() {
     );
 }
 
-/// Task 13 alloc-fix, delivery-class coverage: `Terminal`. Unlike the two
-/// tests above (which measure only DUPLICATE-REJECTED submissions after
-/// their one excluded warm-up write), this measures a genuinely fresh,
-/// `Accepted` terminal write -- a SECOND reservation's first-and-only
-/// submission, on an engine whose wake list was already warmed by an
-/// unrelated first reservation.
+/// Delivery-class coverage: `Terminal`. Unlike the two tests above (which
+/// measure only REFUSED duplicate submissions after their one excluded
+/// warm-up write), this measures a genuinely fresh, `Accepted` terminal --
+/// a second reservation's first-and-only submission.
 #[test]
 fn submit_delivers_an_accepted_terminal_fact_with_zero_allocation_calls() {
     let engine = RuntimeEventEngine::with_capacity(4);
-    // Warm-up (excluded from the window): a THROWAWAY reservation's own
-    // terminal write, purely to grow the wake list's `VecDeque` from
-    // empty -- see the module doc comment and this file's original
-    // precedent.
+    // Warm-up (excluded from the window): a throwaway reservation's own
+    // terminal, so this test measures the warmed steady state. The cold
+    // path has its own test above.
     let warm_up = engine
         .reserve_root(OperationId::new(), terminal_fact)
         .expect("reserve");
@@ -396,5 +383,154 @@ fn submit_delivers_an_accepted_diagnostic_fact_with_zero_allocation_calls() {
         diagnostic_fact(),
         SubmitOutcome::Accepted,
         "Diagnostic",
+    );
+}
+
+/// COLD: the very first submission on a freshly built engine allocates
+/// nothing.
+///
+/// Every other test in this file warms something first, which is honest
+/// about what it measures but leaves the first-use path unmeasured -- and
+/// the first use is exactly where a lazily-initialized container or a
+/// mutex's first-ever acquisition would show up. There is nothing to warm
+/// now: the ring is allocated at construction and the submit path takes no
+/// lock, so the first call has to cost what the ten-thousandth does.
+#[test]
+fn the_first_submission_on_a_fresh_engine_allocates_nothing() {
+    let engine = RuntimeEventEngine::with_capacity(4);
+    let reservation = engine
+        .reserve_root(OperationId::new(), terminal_fact)
+        .expect("reserve");
+    let ingress = reservation.ingress();
+
+    // No warm-up of any kind between here and the measured window.
+    let before = total_alloc_calls();
+    let outcome = ingress.try_submit(state_transition_fact());
+    let after = total_alloc_calls();
+
+    assert_eq!(outcome, SubmitOutcome::Accepted);
+    assert_eq!(
+        after, before,
+        "the FIRST submission on a fresh engine must allocate nothing \
+         (before={before}, after={after}); a cost that only the first call \
+         pays is still a cost a request pays"
+    );
+}
+
+/// COLD, every class: the first submission of each delivery class on its
+/// own fresh engine allocates nothing.
+///
+/// One engine per class, so no class can be warmed by another's traffic.
+#[test]
+fn the_first_submission_of_every_class_allocates_nothing() {
+    for (class_name, fact) in [
+        ("Terminal", terminal_fact as fn() -> RuntimeFact),
+        ("StateTransition", state_transition_fact),
+        ("Progress", progress_fact),
+        ("Diagnostic", diagnostic_fact),
+    ] {
+        let engine = RuntimeEventEngine::with_capacity(4);
+        let reservation = engine
+            .reserve_root(OperationId::new(), terminal_fact)
+            .expect("reserve");
+        let ingress = reservation.ingress();
+
+        let before = total_alloc_calls();
+        let outcome = ingress.try_submit(fact());
+        let after = total_alloc_calls();
+
+        assert_eq!(
+            outcome,
+            SubmitOutcome::Accepted,
+            "{class_name}: expected a delivered outcome on a fresh engine"
+        );
+        assert_eq!(
+            after, before,
+            "{class_name}: the first submission on a fresh engine allocated \
+             (before={before}, after={after})"
+        );
+    }
+}
+
+/// CONTENDED: eight producer threads submitting against a live drain each
+/// allocate nothing, across a thousand submissions apiece.
+///
+/// The counters are thread-local, so each producer measures only its own
+/// window -- the drain thread's allocations, which are real and expected,
+/// cannot be mistaken for a producer's. This is the shape the warmed
+/// single-threaded tests above deliberately do not cover: a submit racing
+/// a consumer that is actively popping, routing, reducing, and publishing.
+#[test]
+fn contended_submissions_against_a_live_drain_allocate_nothing() {
+    const PRODUCERS: usize = 8;
+    const PER_PRODUCER: usize = 1_000;
+
+    let engine = Arc::new(RuntimeEventEngine::new());
+    let draining = Arc::clone(&engine);
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let drain_stop = Arc::clone(&stop);
+
+    // A real consumer, running the whole time: popping, routing, reducing,
+    // publishing, and returning ring credits.
+    let drain = std::thread::spawn(move || {
+        while !drain_stop.load(std::sync::atomic::Ordering::Relaxed) {
+            draining.drain();
+            std::thread::yield_now();
+        }
+        draining.drain();
+    });
+
+    let accepted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    std::thread::scope(|threads| {
+        for _ in 0..PRODUCERS {
+            let engine = Arc::clone(&engine);
+            let accepted = Arc::clone(&accepted);
+            threads.spawn(move || {
+                let reservation = engine
+                    .reserve_root(OperationId::new(), terminal_fact)
+                    .expect("a full-capacity table has room for 8 roots");
+                let ingress = reservation.ingress();
+                // One warm-up submission: this thread's first touch of its
+                // own thread-locals is not what this test is about, and
+                // `the_first_submission_on_a_fresh_engine_allocates_nothing`
+                // covers the cold path directly.
+                let _ = ingress.try_submit(state_transition_fact());
+
+                let before = total_alloc_calls();
+                let mut delivered = 0usize;
+                for index in 0..PER_PRODUCER {
+                    let fact = match index % 3 {
+                        0 => state_transition_fact(),
+                        1 => progress_fact(),
+                        _ => diagnostic_fact(),
+                    };
+                    if ingress.try_submit(fact) == SubmitOutcome::Accepted {
+                        delivered += 1;
+                    }
+                }
+                let after = total_alloc_calls();
+                accepted.fetch_add(delivered, std::sync::atomic::Ordering::Relaxed);
+
+                assert_eq!(
+                    after,
+                    before,
+                    "a producer racing a live drain allocated {} times across \
+                     {PER_PRODUCER} submissions",
+                    after - before
+                );
+                reservation.cancel();
+            });
+        }
+    });
+
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    drain.join().expect("drain thread panicked");
+
+    let accepted = accepted.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(
+        accepted > PRODUCERS * PER_PRODUCER / 2,
+        "only {accepted} of {} submissions were delivered; a test that mostly \
+         measured the refusal path would not be measuring the submit path",
+        PRODUCERS * PER_PRODUCER
     );
 }

@@ -1035,3 +1035,42 @@ class CliHelpTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class P99BudgetProvenanceTests(unittest.TestCase):
+    """The comparator's p99 budget is a copy of a Rust constant.
+
+    `CERTIFICATION_P99_BUDGET_US_DEFAULT` here and
+    `CALLBACK_INGRESS_P99_BUDGET` in `runtime_events/config.rs` are the same
+    bound expressed twice. Two independent literals drift silently: one
+    could be tightened after a measurement and the other left behind, and
+    nothing would report a disagreement -- the comparator would pass a run
+    the in-process gate would have failed, or the reverse.
+    """
+
+    CONFIG = ROOT / "crates/mesh-llm-host-runtime/src/runtime_events/config.rs"
+
+    def rust_budget_micros(self) -> int:
+        source = self.CONFIG.read_text(encoding="utf-8")
+        marker = "pub const CALLBACK_INGRESS_P99_BUDGET: Duration = Duration::from_micros("
+        start = source.index(marker) + len(marker)
+        end = source.index(")", start)
+        return int(source[start:end].replace("_", ""))
+
+    def test_the_comparator_budget_matches_the_rust_constant(self) -> None:
+        module = load_module()
+        self.assertEqual(
+            module.CERTIFICATION_P99_BUDGET_US_DEFAULT,
+            float(self.rust_budget_micros()),
+            "the comparator's p99 budget and CALLBACK_INGRESS_P99_BUDGET have "
+            "diverged; change both or neither",
+        )
+
+    def test_the_rust_constant_is_still_where_this_test_looks_for_it(self) -> None:
+        """A cross-check that silently stops finding its source is worse
+        than no cross-check: it keeps passing while checking nothing."""
+        self.assertGreater(self.rust_budget_micros(), 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

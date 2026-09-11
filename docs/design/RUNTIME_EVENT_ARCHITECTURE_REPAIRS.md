@@ -45,43 +45,50 @@ before citing any performance number from this subsystem.
   Clippy, native CPU replay and tests, public headers, generated contracts,
   and a composed product build. These establish the behavioral guarantees in
   the acceptance table above.
-- **Warmed, single-threaded ingress allocation.**
+- **Ingress allocation, warmed, cold, and contended.**
   `crates/mesh-llm-host-runtime/tests/ingress_reservoir_no_alloc.rs` asserts a
   monotonic allocation-call counter stays flat across an accepted submission
-  for each of the four delivery classes, after the relevant lane and its
-  mutex have already been warmed by an earlier call in the same test.
+  for each of the four delivery classes; across the *first* submission on a
+  freshly constructed engine, per class, with no warm-up of any kind; and
+  across 1,000 submissions per thread on eight threads running against a
+  live drain. The counters are thread-local, so the consumer's own
+  allocations cannot be mistaken for a producer's.
+- **Producer-visible ingress p99, against the declared budget.**
+  `crates/mesh-llm-host-runtime/tests/ingress_budget.rs` runs a mixed
+  10,000-submission workload and asserts the measured `ingress_p99_us` is
+  within `CALLBACK_INGRESS_P99_BUDGET`. Refused submissions are measured
+  too, so the figure is not only the happy path. The benchmark comparator's
+  copy of the same bound is cross-checked against the Rust constant by
+  `scripts/tests/test_compare_event_benchmark_matrix.py`.
 - **Throughput and time-to-first-token under the class bypass.** Production
   versus `event-disabled` on the same release binary, three independent seeds:
   `decode_tok_s` and `decode_only_tok_s` inside a 3% bound, `ttft_ms` at
   +0.34% with a 95% CI of [-1.34%, +2.30%] at n=80.
+- **That a producer never waits on the consumer.**
+  `runtime_events::engine::tests::nonblocking` parks a whole drain pass, for
+  500 ms, inside everything it holds, and requires 32 producer threads
+  across every delivery class -- plus `reserve_root` and `cancel` -- to each
+  return within 50 ms. Separately, a lock-class audit makes a blocking
+  acquisition in producer context panic in any debug build, and a
+  source-shape test requires every production mutex in `runtime_events/` to
+  declare a class so the audit cannot be sidestepped.
 
 ### What is not measured
 
-- **Producer-visible ingress cost.** The reported `callback_ingress_p99` of
-  2.0 us starts its timer *inside* `RuntimeEventEngine::submit`. It therefore
-  excludes the skippy adapter mutex, the native reporter's sink mutex, fact
-  construction, the identity-registry lock, and `reserve_*`. It is a measure
-  of the gate-held critical section, not of what a producer thread pays to
-  emit an event.
-- **The declared callback budget.** `CALLBACK_INGRESS_P99_BUDGET` in
-  `runtime_events/config.rs` is a declared constant with no Rust reader. No
-  test or CI job asserts the measured p99 against it. The comparator's
-  matching 100 us literal is an independent copy, not a cross-check.
-- **Cold and contended submit paths.** The allocation test measures warmed,
-  uncontended submits only. A first submit on a fresh engine, and a submit
-  racing a live drain from multiple producer threads, are both unmeasured.
+- **Caller-side cost before `submit`.** `ingress_p99_us` times
+  `RuntimeEventEngine::submit` end to end -- the metadata fill, the class
+  decision, the reservation reads, the ring push, and the telemetry tail.
+  That is what a producer thread pays to emit one event through the engine.
+  It does not include a caller's own locking before it gets there: the
+  skippy adapter's mutex and the native reporter's sink mutex are both
+  outside this boundary and are not covered by this figure.
 - **Total cost of the event system.** `event-disabled` is a *class bypass*,
-  not an off switch. It still acquires `ingress_gate`, still reserves slots,
-  still writes terminals and state transitions, and still runs the reducer,
-  the replay buffer, and subscriber fan-out. Comparison A therefore bounds
+  not an off switch. It still reserves slots, still writes terminals and
+  state transitions, and still runs the reducer, the replay buffer, and
+  subscriber fan-out. Comparison A therefore bounds
   the cost of progress and diagnostic facts, and nothing more. A true
   whole-system off mode is required before any claim about the event system's
   total cost.
-- **Blocking behavior.** Bounded storage and short critical sections are not
-  a nonblocking guarantee. Producers serialize on one process-global
-  `ingress_gate`, and the driver holds that same mutex for the duration of a
-  drain pass. No test establishes an upper bound on how long a producer can
-  wait to submit.
 - **Anything in CI.** There is no performance gate on any CI lane. All
   performance numbers above come from local runs on a single machine.
 
