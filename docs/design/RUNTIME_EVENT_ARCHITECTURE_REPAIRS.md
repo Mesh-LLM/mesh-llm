@@ -6,6 +6,14 @@ original hash remains pinned in the event inventory. The implementation and
 tests, rather than earlier plan completion marks, determine which guarantees
 are established.
 
+**How to read this document.** "Design and acceptance" and "Validation
+limits" describe the current state and are maintained. Everything from
+"Local validation before rebase" onward is a dated record of what specific
+runs observed at the time; those counts are not updated as the code moves,
+and a number there is evidence about a past tree, not a claim about this
+one. If the two ever disagree, "Validation limits" is the one that is
+wrong and needs fixing.
+
 ## Design and acceptance
 
 | Area | Required behavior | Regression evidence |
@@ -60,10 +68,18 @@ before citing any performance number from this subsystem.
   too, so the figure is not only the happy path. The benchmark comparator's
   copy of the same bound is cross-checked against the Rust constant by
   `scripts/tests/test_compare_event_benchmark_matrix.py`.
-- **Throughput and time-to-first-token under the class bypass.** Production
-  versus `event-disabled` on the same release binary, three independent seeds:
-  `decode_tok_s` and `decode_only_tok_s` inside a 3% bound, `ttft_ms` at
-  +0.34% with a 95% CI of [-1.34%, +2.30%] at n=80.
+- **Throughput and time-to-first-token under the class bypass, on the
+  pre-rework implementation.** Production versus `event-disabled` on the
+  same release binary, three independent seeds: `decode_tok_s` and
+  `decode_only_tok_s` inside a 3% bound, `ttft_ms` at +0.34% with a 95% CI
+  of [-1.34%, +2.30%] at n=80.
+
+  Read the qualifier. Those runs measured the gated-ingress implementation,
+  the one with a process-global admission gate and four per-class lanes.
+  The producer boundary has since been rebuilt, so the figures describe a
+  tree that no longer exists. They are retained because they were honestly
+  obtained and they bound the *old* cost; they are not evidence about the
+  current one, and a rerun is what would make them so.
 - **That a producer never waits on the consumer.**
   `runtime_events::engine::tests::nonblocking` parks a whole drain pass, for
   500 ms, inside everything it holds, and requires 32 producer threads
@@ -79,9 +95,10 @@ before citing any performance number from this subsystem.
   `RuntimeEventEngine::submit` end to end -- the metadata fill, the class
   decision, the reservation reads, the ring push, and the telemetry tail.
   That is what a producer thread pays to emit one event through the engine.
-  It does not include a caller's own locking before it gets there: the
-  skippy adapter's mutex and the native reporter's sink mutex are both
-  outside this boundary and are not covered by this figure.
+  It does not include a caller's own locking before it gets there. One
+  such caller remains: the skippy generation adapter takes its own mutex
+  before calling `submit`. (The native reporter's sink mutex is gone -- its
+  callback now only copies a record into a ring.)
 - **Total cost of the event system, as of this writing.** The
   measurement is now *possible*: `MESH_LLM_EVENT_SYSTEM_TRIAL_MODE=off`
   installs no engine, and therefore no driver, no presentation subscriber,
@@ -98,6 +115,25 @@ before citing any performance number from this subsystem.
   it as a total-cost figure.
 - **Anything in CI.** There is no performance gate on any CI lane. All
   performance numbers above come from local runs on a single machine.
+
+### Where the spec's performance and ingress requirements are exercised
+
+Spec §17.2 and §17.5 state requirements; this is where each is actually
+asserted, so a reader can check rather than assume. The spec itself is
+unchanged -- nothing in it needed retracting, because it never made a
+performance claim, only set requirements.
+
+| Spec requirement | Where it is exercised |
+| --- | --- |
+| §17.2 no blocking on native producer threads | `crates/skippy-runtime/tests/reporter_trampoline_nonblocking.rs` -- callbacks with no consumer at all, and eight concurrent native threads |
+| §17.2 concurrent callback ingress | same file, `concurrent_native_threads_do_not_serialize_on_each_other` |
+| §17.2 full progress and diagnostic queues | `runtime_events::engine::tests::lanes` and `classes`, against the ring's non-terminal budget |
+| §17.2 terminal capacity under progress pressure | `runtime_events::ingress::tests::a_terminal_is_admitted_with_the_credit_budget_exhausted`, plus the const assert that makes the case unreachable |
+| §17.2 progress coalescing | `runtime_events::engine::tests::lanes::progress_on_a_reserved_operation_coalesces_to_the_latest_value` |
+| §17.2 sampling and drop accounting | the same tests, asserted on `runtime_health` counters rather than on published-sequence gaps |
+| §17.5 callback ingress latency measured | `crates/mesh-llm-host-runtime/tests/ingress_budget.rs`, against `CALLBACK_INGRESS_P99_BUDGET` |
+| §17.5 events disabled versus enabled | `scripts/run-event-benchmark-matrix.py --mode production --mode event-disabled` for the class bypass; `--mode off` for total cost |
+| §17.5 must not materially regress decode throughput or TTFT | measured for the class bypass only; see "What is not measured" |
 
 ### Historical corrections
 
@@ -125,7 +161,12 @@ identity on the wire to buy nothing a caller can rely on. The contract is
 pinned by a 14-case table test in
 `crates/mesh-llm-host-runtime/src/runtime/model_lifecycle/events.rs`.
 
-## Local validation before rebase
+## Historical run records
+
+Everything below is dated evidence about the tree as it stood at the time.
+The counts are not maintained.
+
+### Local validation before rebase
 
 - Host runtime: 3,353 unit tests and 10 public architecture regressions passed;
   nine pre-existing ignored tests were not executed.
@@ -148,7 +189,7 @@ The shutdown deadline is cooperative. It is checked between bounded reducer
 batches; waiting for an existing synchronous critical section or batch is not
 preemptible. This does not establish a hard two-second wall-clock ceiling.
 
-## Rebase validation
+### Rebase validation
 
 Rebased onto `main` at `2f8e609797aeec788766561df822c82dfcb3f068`.
 The removed legacy CI batch planner stays removed, and the retained CI shim
@@ -162,7 +203,7 @@ cache-installer test failed because the restricted macOS test `PATH` omitted
 `sha256sum`. Both cache-installer tests then passed with GNU coreutils on
 `PATH`. No production change was needed for that host prerequisite.
 
-## CI follow-up
+### CI follow-up
 
 The first rewritten push exposed a static-feature test compilation error in
 Linux SafeTensors smoke. The local model test called a dynamic-only loader
@@ -177,7 +218,7 @@ workflow contract tests passed, and a direct fixture check verified separate
 error output and executable discovery. The complete Python rerun also passed:
 965 tests passed and seven skipped out of 972.
 
-## Subsequent review corrections
+### Subsequent review corrections
 
 Cancelled reservation generations now have a separate rejection outcome and
 health counter. Intentional cancellation does not claim capacity loss or force
@@ -216,7 +257,7 @@ dynamic test loaded a real model through that rebuilt bundle, observed two
 structured production callbacks and two unload callbacks, and cleared the
 reporter successfully.
 
-## Runtime ownership follow-through
+### Runtime ownership follow-through
 
 The same early-error cleanup applies to mesh serving: the outer startup scope
 retains the engine, driver, and presentation task until initialization succeeds.
@@ -240,7 +281,7 @@ cleanup, plus retained-task release and selector replacement protection.
 Default and static host Clippy passed with warnings denied. The composed CPU
 product rebuilt successfully after these ownership changes.
 
-## Final review accounting corrections
+### Final review accounting corrections
 
 Drain reports and finite shutdown budgets count only facts successfully reduced
 and published. A separate internal count tracks physically removed entries, so
@@ -260,7 +301,7 @@ host configuration retains nine ignored tests. Full UI validation again passed
 Default and static warning-denying Clippy, formatting, and the composed CPU
 product build also passed on this tree.
 
-## Split serving lifecycle correction
+### Split serving lifecycle correction
 
 The Linux KV-cache smoke exposed a startup regression: the host installed its
 event-only observer in the exact generation-receipt slot. Skippy correctly
