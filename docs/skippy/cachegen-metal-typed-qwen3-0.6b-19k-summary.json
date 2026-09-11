@@ -1,8 +1,11 @@
 {
   "schema_version": 1,
-  "decision": "quality-floor-pass-local-promotion-stop",
-  "date": "2026-09-11",
-  "commit": "2e26d46ea87e1b8ee783460998e703f669513f91",
+  "decision": "f32-local-pass-other-representative-types-stop",
+  "date": "2026-09-12",
+  "commits": {
+    "quantized_and_mixed": "2e26d46ea87e1b8ee783460998e703f669513f91",
+    "f32": "74b4f60719d09dee7d9579c1365ac6f95d14c20c"
+  },
   "reference": {
     "implementation": "LMCache CacheGen",
     "revision": "b5d109ea99a89b4d8a670ee4fc2e8cb76411ee5c",
@@ -34,6 +37,23 @@
     "restore_to_first_token_must_beat_native": true
   },
   "cases": [
+    {
+      "cache_type_k": "f32",
+      "cache_type_v": "f32",
+      "passed": true,
+      "native_storage_bytes": 4358144000,
+      "cachegen_storage_bytes": 446903003,
+      "compression_ratio": 0.10254434066428278,
+      "native_import_ms": 494.848083,
+      "cachegen_import_ms": 521.351959,
+      "native_ttft_ms": 1199.1292079999998,
+      "cachegen_ttft_ms": 766.1168339999999,
+      "p99_decode_regression": -0.047207090345013546,
+      "matching_tokens": 64,
+      "token_agreement": 1.0,
+      "first_token_mismatch_step": null,
+      "failure_reasons": []
+    },
     {
       "cache_type_k": "q8_0",
       "cache_type_v": "q8_0",
@@ -114,9 +134,10 @@
   ],
   "notes": [
     "The scalar CPU decoder ran as an independently timed oracle and is excluded from direct-device TTFT.",
+    "The F32/F32 case passed all declared gates after fixing native model configuration to preserve GGML_TYPE_F32 enum value zero instead of silently replacing it with F16.",
     "Q8_0 cases preserved all 64 greedy continuation tokens; Q4_0 K cases first diverged at step 15 and preserved 61 of 64.",
-    "All four direct Metal restores were slower than their matched native controls on this local unified-memory tier.",
+    "F32/F32 beat its matched native control on this local unified-memory tier; the four sampled quantized and mixed restores were slower.",
     "Q4_0/Q4_0 expanded the native payload by 3.62 percent and therefore failed the storage gate independently of latency.",
-    "The matrix is representative rather than exhaustive; F32 and the remaining mixed pairings retain fixture coverage only."
+    "The matrix is representative rather than exhaustive; the remaining mixed pairings retain fixture coverage only."
   ]
 }

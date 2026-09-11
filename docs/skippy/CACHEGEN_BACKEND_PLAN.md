@@ -1,8 +1,8 @@
 # CacheGen Backend Qualification (#1652)
 
-Status: **LMCache-compatible direct Metal restore passes correctness and quality
-but fails the local-tier latency gate; native passthrough remains the promoted
-path**. Owner: jian yang.
+Status: **LMCache-compatible direct Metal restore passes the local F32/F32 gate;
+F16 and the sampled quantized/mixed types remain stopped on local latency, and
+CacheGen remains opt-in pending selection-path wiring**. Owner: jian yang.
 Reviewed against: #1652 scope, scama's directives of 2026-09-10 (v4
 contract, CPU+Metal parity, six measurements, stop rule).
 
@@ -11,9 +11,9 @@ contract, CPU+Metal parity, six measurements, stop rule).
 | Backend | Kernel | Status | Evidence |
 |---|---|---|---|
 | CPU (reference) | scalar Rust | **Correctness reference only** — portable F32, F16, Q8_0, Q4_0, and mixed K/V adapters are implemented | Python/Rust fixtures pin LMCache revision `b5d109e`; typed archive fixtures cover every current user-selectable runtime K/V type |
-| Metal (Apple GPU) | native MSL | **All typed restores implemented, not promoted** — F16, F32, Q8_0, and Q4_0 match native fixture layouts; representative 19K F16, Q8_0, Q4_0, and mixed gates meet the 95% quality floor but all lose the local latency gate, and Q4_0/Q4_0 is larger than native | Apple M1 Ultra device fixture and typed 19K gates below |
-| CUDA (NVIDIA) | shared native CUDA/HIP source | **All typed restores implemented, compile/package qualification pending** — no runtime claim yet | Real NVIDIA fixture and typed 19K gates remain |
-| HIP/ROCm (AMD) | shared native CUDA/HIP source | **All typed restores implemented, compile/package qualification pending** — no runtime claim yet | Real AMD fixture and typed 19K gates remain |
+| Metal (Apple GPU) | native MSL | **All typed restores implemented; F32/F32 clears the local gate** — F16, F32, Q8_0, and Q4_0 match native fixture layouts; the 19K F32/F32 gate passes quality, size, latency, and p99 criteria, while F16 and the sampled quantized/mixed cases remain stopped locally | Apple M1 Ultra device fixture and typed 19K gates below |
+| CUDA (NVIDIA) | shared native CUDA/HIP source | **Typed kernels landed; F16 fixture qualified** — the real RTX 5080 fixture matches F16 bytes, while F32, quantized, and matched typed 19K runtime gates remain | Real NVIDIA F16 fixture; remaining typed hardware gates pending |
+| HIP/ROCm (AMD) | shared native CUDA/HIP source | **Typed kernels landed; compile/package qualified** — no real AMD runtime claim yet | Real AMD fixture and typed 19K gates remain |
 
 Nothing may be marked implemented until it runs on real hardware and
 matches the CPU reference bit-for-bit. Compile-only checks prove the
@@ -232,31 +232,40 @@ not recover its 484.05 ms reconstruction penalty. The result does not decide a
 remote tier, where transfer time and pipelining differ; that tier needs its own
 matched end-to-end gate under #1427.
 
-## 19K typed Metal matrix (2026-09-11): QUALITY FLOOR PASS, LOCAL PROMOTION STOP
+## 19K typed Metal matrix (2026-09-12): F32 PASS, OTHER LOCAL PROMOTION STOPS
 
-The typed gate was run from exact commit
-`2e26d46ea87e1b8ee783460998e703f669513f91` on the same Apple M1 Ultra,
-pinned Qwen3 0.6B Q8_0 model, 19,000-token prefix, and 64-step continuation.
+The typed gate was run from exact commits
+`2e26d46ea87e1b8ee783460998e703f669513f91` (quantized and mixed rows) and
+`74b4f60719d09dee7d9579c1365ac6f95d14c20c` (F32/F32) on the same Apple M1
+Ultra, pinned Qwen3 0.6B Q8_0 model, 19,000-token prefix, and 64-step
+continuation. The F32 run also caught and fixed a native config defect where
+GGML enum value zero was interpreted as an unset cache type and silently
+replaced with F16. The native regression now pins both the F16 default and an
+explicit F32 request.
 The gate now accepts independent `--cache-type-k` and `--cache-type-v` values
 and records them in its report. The compact matrix is
 [`cachegen-metal-typed-qwen3-0.6b-19k-summary.json`](cachegen-metal-typed-qwen3-0.6b-19k-summary.json).
 
 | K/V type | Native bytes | CacheGen bytes | CacheGen/native | Agreement | Native TTFT | CacheGen TTFT | Decision |
 |---|---:|---:|---:|---:|---:|---:|---|
+| F32/F32 | 4,358,144,000 | 446,903,003 | 10.25% | 64/64 (100%) | 1,199.13 ms | 766.12 ms | Pass: quality, size, local latency, and p99 |
 | Q8_0/Q8_0 | 1,157,632,000 | 589,803,358 | 50.95% | 64/64 (100%) | 333.36 ms | 650.64 ms | Quality and size pass; local latency fails |
 | Q4_0/Q4_0 | 612,864,000 | 635,037,607 | 103.62% | 61/64 (95.31%) | 189.84 ms | 699.35 ms | Quality floor passes; size and local latency fail |
 | Q8_0/F16 | 1,668,352,000 | 565,441,003 | 33.89% | 64/64 (100%) | 558.28 ms | 792.05 ms | Quality and size pass; local latency fails |
 | Q4_0/F16 | 1,395,968,000 | 610,269,862 | 43.72% | 61/64 (95.31%) | 483.98 ms | 807.03 ms | Quality and size pass; local latency fails |
 
 These are representative homogeneous and mixed layouts, not qualification of
-all 16 pairings. The quantized K cases expose a consistent quality split:
-Q8_0 preserves all 64 greedy continuation tokens, while Q4_0 first diverges at
-step 15 and finishes at 61/64, barely above the declared 95% floor. All four
-CacheGen continuations stay within the p99 decode-regression budget after
-restore. None may be promoted for the local tier because end-to-end restore is
-slower than native; Q4_0/Q4_0 also has no storage benefit. F32 and the remaining
-mixed permutations retain fixture-level coverage and need separate 19K runs
-before any broader typed qualification claim.
+all 16 pairings. F32/F32 clears the matched local gate because reading the
+compact archive saves enough time against the 4.36 GB native page to absorb
+device reconstruction. The quantized K cases expose a consistent quality
+split: Q8_0 preserves all 64 greedy continuation tokens, while Q4_0 first
+diverges at step 15 and finishes at 61/64, barely above the declared 95% floor.
+Every sampled CacheGen continuation stays within the p99 decode-regression
+budget after restore. F16 and the sampled quantized/mixed cases remain stopped
+for the local tier because end-to-end restore is slower than native;
+Q4_0/Q4_0 also has no storage benefit. The remaining mixed permutations retain
+fixture-level coverage and need separate 19K runs before any broader typed
+qualification claim.
 
 ## 19K LMCache-compatible CPU result (2026-09-11): QUALITY PASS, LATENCY STOP
 
