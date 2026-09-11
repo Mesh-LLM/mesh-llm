@@ -116,14 +116,45 @@ pub(super) fn hardware_survey_for_start(
     }
 }
 
+/// Loads the on-disk config that node startup both advertises from and keeps
+/// as its live config state.
+pub(super) fn load_config_state_for_start(
+    config_path: Option<&std::path::Path>,
+) -> Result<crate::runtime::config_state::ConfigState> {
+    let path = crate::plugin::config_path(config_path)
+        .unwrap_or_else(|_| std::path::PathBuf::from("config.toml"));
+    crate::runtime::config_state::ConfigState::load(&path)
+}
+
+/// Surveys the host and derives the capacity this node will advertise. The
+/// advertised reserve mirrors what the local fit withholds, so the itemized
+/// capacity and the fit target agree on the configured margin.
+pub(super) fn advertised_hardware_for_start(
+    config: &crate::plugin::MeshConfig,
+    role: &NodeRole,
+    max_vram_gb: Option<f64>,
+    enumerate_host: bool,
+) -> NodeHardwareSnapshot {
+    let safety_margin_bytes =
+        crate::inference::skippy::effective_safety_margin_bytes(config.defaults.as_ref());
+    hardware_snapshot_for_start(
+        hardware_survey_for_start(max_vram_gb, enumerate_host),
+        role,
+        max_vram_gb,
+        safety_margin_bytes,
+    )
+}
+
 pub(crate) fn hardware_snapshot_for_start(
     hw: crate::system::hardware::HardwareSurvey,
     role: &NodeRole,
     max_vram_gb: Option<f64>,
+    safety_margin_bytes: u64,
 ) -> NodeHardwareSnapshot {
     let local_runtime_capacity_bytes =
         super::super::capacity::capped_capacity_bytes(hw.vram_bytes, max_vram_gb);
     let mut vram_bytes = super::super::capacity::advertised_capacity_bytes(&hw, max_vram_gb);
+    let memory = super::super::capacity::advertised_memory(&hw, max_vram_gb, safety_margin_bytes);
     let gpu_name = if matches!(role, NodeRole::Client) {
         None
     } else {
@@ -160,6 +191,7 @@ pub(crate) fn hardware_snapshot_for_start(
         is_soc,
         gpu_vram,
         gpu_reserved_bytes,
+        memory,
     }
 }
 
@@ -250,11 +282,43 @@ mod zero_capacity_tests {
         assert_eq!(hw.vram_bytes, 0);
         assert!(hw.gpu_name.is_none());
         assert!(hw.gpus.is_empty());
-        let snapshot = hardware_snapshot_for_start(hw, &NodeRole::Worker, Some(0.0));
+        let snapshot = hardware_snapshot_for_start(hw, &NodeRole::Worker, Some(0.0), 0);
         assert_eq!(snapshot.vram_bytes, 0);
         assert_eq!(snapshot.local_runtime_capacity_bytes, 0);
         assert!(snapshot.gpu_name.is_none());
         assert!(snapshot.gpu_vram.is_none());
         assert!(snapshot.gpu_reserved_bytes.is_none());
+    }
+
+    /// The production wrapper, not just the snapshot helper: a zero-capacity
+    /// sharing node must stay free of accelerator inventory even when the
+    /// owner configured a non-zero safety margin, and its itemized memory
+    /// must be all zeros rather than an underflowed reserve.
+    #[test]
+    fn zero_capacity_advertised_hardware_has_no_inventory_with_configured_margin() {
+        let config = crate::plugin::MeshConfig {
+            defaults: Some(crate::plugin::ModelConfigDefaults {
+                hardware: Some(crate::plugin::HardwareConfig {
+                    safety_margin_gb: Some(4.0),
+                    ..crate::plugin::HardwareConfig::default()
+                }),
+                ..crate::plugin::ModelConfigDefaults::default()
+            }),
+            ..crate::plugin::MeshConfig::default()
+        };
+
+        let snapshot = advertised_hardware_for_start(&config, &NodeRole::Worker, Some(0.0), false);
+
+        assert_eq!(snapshot.vram_bytes, 0);
+        assert_eq!(snapshot.local_runtime_capacity_bytes, 0);
+        assert!(snapshot.gpu_name.is_none());
+        assert!(snapshot.gpu_vram.is_none());
+        assert!(snapshot.gpu_reserved_bytes.is_none());
+        assert_eq!(snapshot.memory.total_bytes, 0);
+        assert_eq!(snapshot.memory.reserved_bytes, 0);
+        assert_eq!(snapshot.memory.platform_reserve_bytes, 0);
+        assert_eq!(snapshot.memory.configured_reserve_bytes, 0);
+        assert_eq!(snapshot.memory.usable_bytes, 0);
+        assert_eq!(snapshot.memory.ram_offload_bytes, 0);
     }
 }

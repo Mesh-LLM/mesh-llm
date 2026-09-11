@@ -4,8 +4,6 @@ name: Release
 # GPU runner; unset or false uses GitHub-hosted runners.
 
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
     inputs:
       version:
@@ -1862,12 +1860,21 @@ jobs:
       - name: Dispatch verified release to mesh-packaging
         env:
           GH_TOKEN: ${{ secrets.MESH_AGENT_IMAGES_DISPATCH_TOKEN }}
+          TARGET_REPOSITORY: Mesh-LLM/mesh-packaging
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
         run: |
           set -euo pipefail
           [[ -n "${GH_TOKEN:-}" ]] || {
             echo "MESH_AGENT_IMAGES_DISPATCH_TOKEN must grant Contents write access to Mesh-LLM/mesh-packaging for cross-repository dispatch" >&2
+            exit 1
+          }
+          target_permissions="$(gh api "repos/${TARGET_REPOSITORY}")" || {
+            echo "MESH_AGENT_IMAGES_DISPATCH_TOKEN cannot access ${TARGET_REPOSITORY}; update the secret with a credential that grants Contents write access" >&2
+            exit 1
+          }
+          [[ "$(jq -r '.permissions.push // false' <<<"$target_permissions")" == "true" ]] || {
+            echo "MESH_AGENT_IMAGES_DISPATCH_TOKEN must grant Contents write access to ${TARGET_REPOSITORY}; update the secret before retrying this release" >&2
             exit 1
           }
           jq -n \
@@ -1888,7 +1895,7 @@ jobs:
             }' |
             gh api \
               --method POST \
-              repos/Mesh-LLM/mesh-packaging/dispatches \
+              "repos/${TARGET_REPOSITORY}/dispatches" \
               --input -
 
   publish_crates_preflight:
