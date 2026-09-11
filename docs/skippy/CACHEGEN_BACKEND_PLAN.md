@@ -1,4 +1,4 @@
-# CacheGen Backend Plan (#1652)
+# CacheGen-Inspired Prototype Backend Plan (#1652)
 
 Status: **stopped at the acceptance gate**; native passthrough remains the promoted path. Owner: jian yang.
 Reviewed against: #1652 scope, scama's directives of 2026-09-10 (v4
@@ -101,7 +101,13 @@ lookup.
    the CPU reference bit-for-bit before either is marked implemented.
 
 
-## 19K acceptance result (2026-09-11): STOP
+## 19K prototype acceptance result (2026-09-11): STOP
+
+The implementation measured here is a Mesh-owned prototype inspired by
+CacheGen. It uses per-segment min/max affine 4-bit calibration. The published
+CacheGen design instead calibrates per model and applies mixed quantization
+across tensor dimensions. This gate therefore rejects the current prototype;
+it is not evidence that a paper-faithful CacheGen implementation fails.
 
 The opt-in gate in `skippy-correctness state-handoff --cachegen-gate` was run
 from exact commit `2677ad62e5295f6da2ac72ae7b8c978f87753d11` on an Apple M1 Ultra
@@ -130,9 +136,9 @@ reverse this decision: CacheGen's 23.52-second CPU decode alone is more than
 75 times the complete native restore-to-first-token path, and continuation
 quality fails independently.
 
-Per the issue's stop rule, this result ends production CacheGen work for this
-tier and workload. Do not add request-path wiring, promote the CubeCL spike,
-or implement CUDA/HIP backend variants on this branch. The pure-Rust reference,
-capability namespace, and reproducible gate remain as evidence for a future
-codec revision with materially different quality and decode cost. Native exact
+Per the issue's stop rule, this result ends production work on this simplified
+prototype for this tier and workload. Do not add request-path wiring, promote
+the CubeCL spike, or implement CUDA/HIP backend variants on this branch. A
+future attempt must first reproduce the paper's calibration and mixed
+quantization against reference fixtures, then pass this gate. Native exact
 `native-kv-page/1` remains the selected representation.
