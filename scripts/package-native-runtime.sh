@@ -454,7 +454,7 @@ linux_cuda_dependency_search_dirs() {
         done
     fi
 
-    for root in "${roots[@]}"; do
+    for root in ${roots[@]+"${roots[@]}"}; do
         for candidate in "$root/lib64" "$root/lib" "$root"/targets/*/lib; do
             [[ -d "$candidate" ]] || continue
             printf '%s\n' "$candidate"
@@ -483,7 +483,7 @@ cuda_distribution_license_file() {
     for root in "${CUDAToolkit_ROOT:-}" "${CUDA_HOME:-}" "${CUDA_PATH:-}"; do
         [[ -n "$root" ]] && roots+=("$root")
     done
-    for root in "${roots[@]}"; do
+    for root in ${roots[@]+"${roots[@]}"}; do
         for candidate in \
             "$root/EULA.txt" \
             "$root/LICENSE" \
@@ -519,7 +519,7 @@ bundle_cuda_distribution_license() {
 
 collect_linux_cuda_dependencies() {
     case "$TARGET_TRIPLE/$BACKEND" in
-        *linux/cuda|*linux/cuda-blackwell) ;;
+        *linux*/cuda|*linux*/cuda-blackwell) ;;
         *) return 0 ;;
     esac
 
@@ -535,7 +535,7 @@ collect_linux_cuda_dependencies() {
         --scan-dir "$stage_dir/tools" \
         --arch "$runtime_arch" \
         --cuda-major "$(cuda_toolkit_major)" \
-        "${dependency_args[@]}"
+        ${dependency_args[@]+"${dependency_args[@]}"}
 
     library_paths=()
     while IFS= read -r library; do

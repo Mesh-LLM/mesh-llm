@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 
 SCRIPT = Path(__file__).parents[1] / "linux-native-runtime-deps.py"
@@ -61,6 +62,53 @@ class LinuxNativeRuntimeDepsPolicyTests(unittest.TestCase):
 
             self.assertEqual(selected.path, x86_path)
 
+    def test_copy_rejects_existing_symlink_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_path = root / "source" / "libcudart.so.12"
+            source_path.parent.mkdir()
+            source_path.write_bytes(b"cuda runtime")
+            lib_dir = root / "lib"
+            lib_dir.mkdir()
+            (lib_dir / "libcudart.so.12").symlink_to(source_path)
+            source = DEPS.ElfImage(source_path, (), "libcudart.so.12", "", "")
+
+            with self.assertRaisesRegex(RuntimeError, "must not be a symlink"):
+                DEPS._copy_dependency(
+                    source,
+                    "libcudart.so.12",
+                    lib_dir,
+                    arch=None,
+                )
+
+    def test_collection_rejects_an_iteration_without_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_path = root / "source" / "libcudart.so.12"
+            source_path.parent.mkdir()
+            source_path.write_bytes(b"cuda runtime")
+            source = DEPS.ElfImage(source_path, (), "libcudart.so.12", "", "")
+            destination = root / "lib" / "libcudart.so.12"
+            destination.parent.mkdir()
+            gaps = {"libllama.so": {"libcudart.so.12"}}
+
+            with (
+                mock.patch.object(DEPS, "dependency_gaps", return_value=gaps),
+                mock.patch.object(
+                    DEPS,
+                    "_search_index",
+                    return_value=({"libcudart.so.12": [source]}, {}),
+                ),
+                mock.patch.object(DEPS, "_copy_dependency", return_value=destination),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "made no progress"):
+                    DEPS.collect_dependencies(
+                        destination.parent,
+                        [source_path.parent],
+                        arch=None,
+                        cuda_major=12,
+                    )
+
 
 class LinuxNativeRuntimeDepsTests(unittest.TestCase):
     @classmethod
@@ -78,6 +126,7 @@ class LinuxNativeRuntimeDepsTests(unittest.TestCase):
         soname: str,
         *,
         links: tuple[str, ...] = (),
+        link_directory: Path | None = None,
     ) -> Path:
         source = directory / f"{name}.c"
         output = directory / name
@@ -94,7 +143,7 @@ class LinuxNativeRuntimeDepsTests(unittest.TestCase):
             str(source),
         ]
         for link in links:
-            command.extend(["-L", str(directory), f"-l:{link}"])
+            command.extend(["-L", str(link_directory or directory), f"-l:{link}"])
         result = subprocess.run(command, capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
         return output
@@ -119,6 +168,7 @@ class LinuxNativeRuntimeDepsTests(unittest.TestCase):
             "libllama.so",
             "libllama.so",
             links=("libcudart.so.12", "libcublas.so.12"),
+            link_directory=toolkit_dir,
         )
         return lib_dir, tools_dir, toolkit_dir
 

@@ -335,6 +335,10 @@ def _copy_dependency(
 ) -> pathlib.Path:
     _check_arch(source, arch, "search dependency")
     destination = lib_dir / dependency
+    if destination.is_symlink():
+        raise RuntimeError(
+            f"packaged dependency destination must not be a symlink: {destination}"
+        )
     if destination.exists():
         if _sha256(destination) != _sha256(source.path):
             raise RuntimeError(
@@ -361,6 +365,7 @@ def collect_dependencies(
         gaps = dependency_gaps(lib_dir, scan_dirs, arch=arch)
         if not gaps:
             return copied
+        copied_before = len(copied)
         unresolved: dict[str, set[str]] = {}
         for importer, dependencies in sorted(gaps.items()):
             for dependency in sorted(dependencies):
@@ -385,6 +390,14 @@ def collect_dependencies(
                 for importer, dependencies in sorted(unresolved.items())
             )
             raise RuntimeError(f"unresolved Linux runtime ELF dependencies: {details}")
+        if len(copied) == copied_before:
+            details = "; ".join(
+                f"{importer}: {', '.join(sorted(dependencies))}"
+                for importer, dependencies in sorted(gaps.items())
+            )
+            raise RuntimeError(
+                "Linux runtime dependency collection made no progress: " + details
+            )
 
 
 def verify_dependencies(

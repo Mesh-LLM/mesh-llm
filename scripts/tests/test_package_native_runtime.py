@@ -19,6 +19,55 @@ def write_failing_nvcc(path: Path) -> None:
 
 
 class PackageNativeRuntimeTests(unittest.TestCase):
+    def test_linux_gnu_cuda_target_collects_runtime_dependencies(self) -> None:
+        script = SCRIPT.read_text(encoding="utf-8")
+        start = script.index("collect_linux_cuda_dependencies() {")
+        end = script.index("rewrite_macos_runtime_paths() {", start)
+        function = script[start:end]
+        harness = (
+            "set -euo pipefail\n"
+            + function
+            + 'TARGET_TRIPLE="x86_64-unknown-linux-gnu"\n'
+            + 'BACKEND="cuda"\n'
+            + 'runtime_arch="x86_64"\n'
+            + 'stage_dir="${TMPDIR:-/tmp}/mesh-linux-cuda-collector-test"\n'
+            + 'SCRIPT_DIR="/unused"\n'
+            + 'primary_name="libllama.so"\n'
+            + 'library_paths=("lib/libllama.so")\n'
+            + 'mkdir -p "$stage_dir/lib" "$stage_dir/tools"\n'
+            + 'linux_cuda_dependency_search_dirs() { printf "%s\\n" "/cuda/lib64"; }\n'
+            + 'python_bin() { printf "%s\\n" "$FAKE_PYTHON"; }\n'
+            + 'cuda_toolkit_major() { printf "%s\\n" "12"; }\n'
+            + 'bundle_cuda_distribution_license() { :; }\n'
+            + 'collect_linux_cuda_dependencies\n'
+            + '[[ "$(wc -l < "$CALL_LOG")" -eq 2 ]]\n'
+            + 'grep -q "linux-native-runtime-deps.py collect" "$CALL_LOG"\n'
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            fake_python = Path(directory) / "fake-python"
+            fake_python.write_text(
+                "#!/bin/bash\n"
+                'printf "%s\\n" "$*" >> "$CALL_LOG"\n'
+                'if [[ "$*" == *" order "* ]]; then\n'
+                '  printf "%s\\n" "libcudart.so.12" "libllama.so"\n'
+                "fi\n",
+                encoding="utf-8",
+            )
+            fake_python.chmod(0o755)
+            env = os.environ.copy()
+            env["CALL_LOG"] = str(Path(directory) / "calls.log")
+            env["FAKE_PYTHON"] = str(fake_python)
+            result = subprocess.run(
+                ["/bin/bash", "-s"],
+                input=harness,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_macos_model_package_tool_uses_only_a_probed_linker(self) -> None:
         """Installed is not enough: lld must also link against the active
         SDK, and a protected reusable workflow may not have installed it at
