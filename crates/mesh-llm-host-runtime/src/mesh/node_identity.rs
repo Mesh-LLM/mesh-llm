@@ -1,6 +1,38 @@
 use super::*;
 use crate::mesh::node::RequirementAwareMeshState;
 
+/// Merge the startup-discovered public address into an advertisement set.
+///
+/// An [`PublicAddr::Observed`] address carries the NAT-mapped port
+/// (#1300), so it *replaces* every IP candidate on the same address —
+/// advertising both leaves a dead candidate that sorts first in the
+/// `BTreeSet`. A [`PublicAddr::LocallyEnumerated`] address only fills a
+/// gap: the port was never verified externally, so it must not displace an
+/// existing public candidate.
+pub(crate) fn merge_public_addr_into_advertisement(
+    addr: &mut EndpointAddr,
+    pub_addr: &stun::PublicAddr,
+) {
+    match *pub_addr {
+        stun::PublicAddr::Observed(observed) => {
+            addr.addrs.retain(|candidate| match candidate {
+                TransportAddr::Ip(socket) => socket.ip() != observed.ip(),
+                _ => true,
+            });
+            addr.addrs.insert(TransportAddr::Ip(observed));
+        }
+        stun::PublicAddr::LocallyEnumerated(enumerated) => {
+            if !endpoint_addr_has_public_ipv4(addr) {
+                addr.addrs.insert(TransportAddr::Ip(enumerated));
+            }
+        }
+        stun::PublicAddr::RejectPublicIpv4 => addr.addrs.retain(|candidate| match candidate {
+            TransportAddr::Ip(socket) => !is_public_ipv4_candidate(socket),
+            _ => true,
+        }),
+    }
+}
+
 pub(crate) fn direct_admission_attestation_hash(
     release_attestation: Option<&crate::ReleaseBuildAttestation>,
 ) -> String {
@@ -104,11 +136,13 @@ impl Node {
 
     pub async fn invite_token(&self) -> String {
         let mut addr = self.endpoint_addr_for_advertisement();
-        // Inject STUN-discovered public address if relay STUN didn't provide one.
-        if let Some(pub_addr) = self.public_addr
-            && !endpoint_addr_has_public_ipv4(&addr)
-        {
-            addr.addrs.insert(TransportAddr::Ip(pub_addr));
+        // Inject the public address discovered at startup, preferring the
+        // externally observed tuple. An observed address carries the NAT-mapped
+        // port, so it *replaces* any enumerated candidate for the same purpose
+        // (advertising both leaves a dead candidate that sorts first in the
+        // BTreeSet, #1300); an enumerated one only fills a gap.
+        if let Some(pub_addr) = self.public_addr.as_ref() {
+            merge_public_addr_into_advertisement(&mut addr, pub_addr);
         }
         addr = filter_endpoint_addr_for_bind_ip(
             addr,
