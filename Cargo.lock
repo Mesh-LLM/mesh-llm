@@ -7548,6 +7548,7 @@ name = "skippy-runtime"
 version = "0.76.1"
 dependencies = [
  "anyhow",
+ "crossbeam-queue",
  "hex",
  "libc",
  "model-ref",

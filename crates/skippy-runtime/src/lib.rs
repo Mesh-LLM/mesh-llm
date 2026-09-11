@@ -48,10 +48,15 @@ pub use native::{StageModel, StageModelReader};
 pub use native_mtp::NativeMtpDraft;
 pub use native_test_evidence::write_evidence_marker;
 pub use ngram::{Cache as NgramCache, NGRAM_CACHE_MAX_NGRAM};
-pub use runtime_event_reporter::{clear_runtime_event_reporter, install_runtime_event_reporter};
+pub use runtime_event_reporter::{
+    RECORD_RING_CAPACITY, buffered_runtime_events, clear_runtime_event_reporter,
+    deliver_runtime_event_for_test, drain_runtime_events, dropped_runtime_events,
+    install_runtime_event_reporter,
+};
 pub use runtime_events::{
-    OperationId, RuntimeEvent, RuntimeEventCategory, RuntimeEventEmitterKind,
-    RuntimeEventFailureCode, RuntimeEventKind, RuntimeEventProgressUnit, next_operation_id,
+    INLINE_DETAIL_BYTES, NativeEventRecord, OperationId, RuntimeEvent, RuntimeEventCategory,
+    RuntimeEventEmitterKind, RuntimeEventFailureCode, RuntimeEventKind, RuntimeEventProgressUnit,
+    next_operation_id,
 };
 pub use session::{DecodeBatchRequest, StageSession};
 pub use skippy_ffi::LoadMode as RuntimeLoadMode;

@@ -180,7 +180,14 @@ mod dynamic {
     /// differently-composed runtimes simply keep operating without this
     /// reporter, matching the model-open feature-probe fallback contract.
     fn install_runtime_scoped_event_reporter() {
-        skippy_runtime::install_runtime_event_reporter(runtime_scoped_native_event_sink);
+        if !skippy_runtime::install_runtime_event_reporter() {
+            return;
+        }
+        // The reporter's callback only copies records into a ring; this is
+        // what moves them into the engine. Registering it here, next to the
+        // install it belongs with, is what lets `runtime_events` stay
+        // unaware that skippy exists.
+        crate::runtime_events::driver::install_pre_drain_ingest(ingest_native_runtime_events);
     }
 
     /// The installed callback (D7, `.omo/plans/event-system-fixes.md` task
@@ -195,14 +202,33 @@ mod dynamic {
     /// `skippy_emit_model_load_event_v2`); `native_family_fact` still
     /// returns `None` for them defensively rather than assuming that holds
     /// forever.
-    fn runtime_scoped_native_event_sink(event: RuntimeEvent) {
-        let Some(fact) = native_family_fact(&event) else {
+    fn runtime_scoped_native_event_sink(event: &RuntimeEvent) {
+        let Some(fact) = native_family_fact(event) else {
             return;
         };
         let Some(engine) = runtime_event_engine() else {
             return;
         };
         submit_native_family_fact(&engine, fact);
+    }
+
+    /// Move every buffered native record into the engine.
+    ///
+    /// Runs on the driver task, immediately before each drain pass. All the
+    /// work the callback refused to do on a native worker thread happens
+    /// here: expanding the record into an owned event, mapping native
+    /// identifiers to opaque contract identities under the registry lock,
+    /// building the fact, reserving, and submitting.
+    ///
+    /// Bounded per call by the ring's own capacity, so one pass cannot be
+    /// held open indefinitely by a native thread producing faster than the
+    /// driver ticks.
+    fn ingest_native_runtime_events() {
+        let mut records = Vec::new();
+        skippy_runtime::drain_runtime_events(&mut records, skippy_runtime::RECORD_RING_CAPACITY);
+        for record in records {
+            runtime_scoped_native_event_sink(&record.to_event());
+        }
     }
 
     async fn try_load_installed_native_runtime_with<

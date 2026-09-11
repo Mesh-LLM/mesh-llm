@@ -9,7 +9,9 @@ use skippy_ffi::{
     SkippyRuntimeEventV1 as RawRuntimeEvent, Status,
 };
 
+mod native_record;
 mod wire_types;
+pub use native_record::{INLINE_DETAIL_BYTES, NativeEventRecord};
 pub use wire_types::{
     RuntimeEvent, RuntimeEventCategory, RuntimeEventEmitterKind, RuntimeEventFailureCode,
     RuntimeEventKind, RuntimeEventProgressUnit,

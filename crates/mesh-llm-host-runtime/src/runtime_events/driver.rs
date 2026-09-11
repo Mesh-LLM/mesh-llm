@@ -49,7 +49,7 @@
 //! `CHILD_SETTLE_GRACE` remains enforced by each normal drain pass, while
 //! shutdown force-settles any still-pending root after the driver has stopped.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use tokio::task::JoinHandle;
@@ -111,6 +111,37 @@ pub fn spawn_engine_driver(engine: Arc<RuntimeEventEngine>) -> EngineDriverHandl
     EngineDriverHandle::from(tokio::spawn(drive_engine(engine)))
 }
 
+/// Work the driver performs immediately before every drain pass.
+///
+/// This exists for one caller: the native reporter. Its callback runs on a
+/// native worker thread and is allowed to do nothing but copy a record into
+/// a ring, so something has to move those records into the engine, and the
+/// driver is the thread whose whole job is consuming.
+///
+/// It is a registered function rather than a parameter so that
+/// `runtime_events` keeps knowing nothing about skippy: the same startup
+/// step that installs the native reporter installs this, which is also the
+/// only place that knows the two belong together.
+pub type PreDrainIngest = fn();
+
+static PRE_DRAIN_INGEST: OnceLock<PreDrainIngest> = OnceLock::new();
+
+/// Register the pre-drain ingest step. Idempotent: a second call is a
+/// silent no-op, matching `install_runtime_event_engine`'s
+/// install-once-at-startup contract.
+pub fn install_pre_drain_ingest(ingest: PreDrainIngest) {
+    let _ = PRE_DRAIN_INGEST.set(ingest);
+}
+
+/// Run the registered ingest step, if any. Called before every drain pass,
+/// including the final one during shutdown, so a record produced moments
+/// before teardown still reaches the stream.
+fn run_pre_drain_ingest() {
+    if let Some(ingest) = PRE_DRAIN_INGEST.get() {
+        ingest();
+    }
+}
+
 async fn drive_engine(engine: Arc<RuntimeEventEngine>) {
     let mut tick = tokio::time::interval(TUI_RENDER_TICK);
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -129,10 +160,12 @@ async fn drive_engine(engine: Arc<RuntimeEventEngine>) {
     loop {
         tokio::select! {
             () = engine.notified() => {
+                run_pre_drain_ingest();
                 engine.drain();
                 maybe_emit_health_log_line(&engine, &mut health_gate);
             }
             _ = tick.tick() => {
+                run_pre_drain_ingest();
                 engine.drain();
                 maybe_emit_health_log_line(&engine, &mut health_gate);
             }
@@ -175,6 +208,10 @@ pub async fn shutdown_engine_driver(
     let deadline = Instant::now() + SHUTDOWN_DRAIN_DEADLINE;
     engine.close_admission();
     driver_handle.stop_and_wait().await;
+    // One last ingest after the driver has stopped: a native callback that
+    // landed a record moments before teardown has no other way in, and the
+    // final drain is the last chance to publish it.
+    run_pre_drain_ingest();
     engine.shutdown_until(budget, deadline);
     // The final drain may create the only shutdown/capacity degradation seen
     // during process teardown. Deliver one uncadenced health line after the

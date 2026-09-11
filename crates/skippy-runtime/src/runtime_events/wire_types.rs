@@ -13,7 +13,7 @@ use skippy_ffi::{
 /// Safety bound on a native event's `detail_len`. A malformed or hostile
 /// value here must never drive an unbounded copy; anything past this is
 /// rejected rather than trusted.
-const MAX_DETAIL_BYTES: usize = 1 << 20;
+pub(super) const MAX_DETAIL_BYTES: usize = 1 << 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeEventCategory {
@@ -351,26 +351,26 @@ pub struct RuntimeEvent {
 /// reference reads only the common initial sequence, never past what
 /// `struct_size` proved is allocated.
 #[repr(C)]
-struct BaseRawRuntimeEvent {
-    abi_version: u32,
-    struct_size: u32,
-    category: RawRuntimeEventCategory,
-    kind: RawRuntimeEventKind,
-    emitter: RawRuntimeEventEmitterKind,
-    reserved0: u32,
-    sequence: u64,
-    timestamp_mono_ns: u64,
-    model_id: u64,
-    stage_id: u64,
-    session_id: u64,
-    progress_current: u64,
-    progress_total: u64,
-    progress_unit: RawRuntimeEventProgressUnit,
-    failure_code: RawRuntimeEventFailureCode,
-    status: Status,
-    reserved1: u32,
-    detail_ptr: *const std::ffi::c_char,
-    detail_len: u64,
+pub(super) struct BaseRawRuntimeEvent {
+    pub(super) abi_version: u32,
+    pub(super) struct_size: u32,
+    pub(super) category: RawRuntimeEventCategory,
+    pub(super) kind: RawRuntimeEventKind,
+    pub(super) emitter: RawRuntimeEventEmitterKind,
+    pub(super) reserved0: u32,
+    pub(super) sequence: u64,
+    pub(super) timestamp_mono_ns: u64,
+    pub(super) model_id: u64,
+    pub(super) stage_id: u64,
+    pub(super) session_id: u64,
+    pub(super) progress_current: u64,
+    pub(super) progress_total: u64,
+    pub(super) progress_unit: RawRuntimeEventProgressUnit,
+    pub(super) failure_code: RawRuntimeEventFailureCode,
+    pub(super) status: Status,
+    pub(super) reserved1: u32,
+    pub(super) detail_ptr: *const std::ffi::c_char,
+    pub(super) detail_len: u64,
 }
 
 macro_rules! const_assert_eq {

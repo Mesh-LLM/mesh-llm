@@ -92,60 +92,76 @@ fn run_real_native_gate() {
 
     let report = skippy_runtime::probe_capabilities();
 
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    // The reporter's callback now only copies records into a ring, so this
+    // test counts what the ring received rather than what a sink observed.
+    // That is the same evidence -- a record is in the ring if and only if a
+    // native callback produced it -- and it is what a real consumer sees.
+    fn is_structured(kind: skippy_runtime::RuntimeEventKind) -> bool {
+        use skippy_runtime::RuntimeEventKind as Kind;
+        matches!(
+            kind,
+            Kind::ModelLoadPhaseChanged
+                | Kind::ModelLoadMemoryAllocated
+                | Kind::ModelLoadTensorsOffloaded
+                | Kind::ModelLoadTokenizerReady
+                | Kind::ModelLoadAuxComponentReady
+                | Kind::KvInitialized
+                | Kind::KvPressureCrossed
+                | Kind::KvPressureCleared
+                | Kind::KvContextApproachingCapacity
+                | Kind::KvContextCapacityExhausted
+                | Kind::DeviceBackendInitialized
+                | Kind::DeviceReady
+                | Kind::DeviceDegraded
+                | Kind::DeviceUnavailable
+                | Kind::DeviceRecovered
+                | Kind::DeviceLost
+                | Kind::DeviceResourceAllocated
+                | Kind::DeviceOutOfMemory
+                | Kind::DeviceFallbackActivated
+                | Kind::DiagnosticWarningRaised
+                | Kind::DiagnosticWarningCleared
+                | Kind::DiagnosticRecoverableFailure
+                | Kind::DiagnosticFatalFailure
+                | Kind::DiagnosticInvariantViolation
+        ) || is_unload(kind)
+    }
 
-    let structured_callbacks = Arc::new(AtomicUsize::new(0));
-    let unload_callbacks = Arc::new(AtomicUsize::new(0));
-    let structured_callbacks_sink = Arc::clone(&structured_callbacks);
-    let unload_callbacks_sink = Arc::clone(&unload_callbacks);
-    let installed = skippy_runtime::install_runtime_event_reporter(move |event| {
-        let is_structured = matches!(
-            event.kind,
-            skippy_runtime::RuntimeEventKind::ModelLoadPhaseChanged
-                | skippy_runtime::RuntimeEventKind::ModelLoadMemoryAllocated
-                | skippy_runtime::RuntimeEventKind::ModelLoadTensorsOffloaded
-                | skippy_runtime::RuntimeEventKind::ModelLoadTokenizerReady
-                | skippy_runtime::RuntimeEventKind::ModelLoadAuxComponentReady
-                | skippy_runtime::RuntimeEventKind::KvInitialized
-                | skippy_runtime::RuntimeEventKind::KvPressureCrossed
-                | skippy_runtime::RuntimeEventKind::KvPressureCleared
-                | skippy_runtime::RuntimeEventKind::KvContextApproachingCapacity
-                | skippy_runtime::RuntimeEventKind::KvContextCapacityExhausted
-                | skippy_runtime::RuntimeEventKind::DeviceBackendInitialized
-                | skippy_runtime::RuntimeEventKind::DeviceReady
-                | skippy_runtime::RuntimeEventKind::DeviceDegraded
-                | skippy_runtime::RuntimeEventKind::DeviceUnavailable
-                | skippy_runtime::RuntimeEventKind::DeviceRecovered
-                | skippy_runtime::RuntimeEventKind::DeviceLost
-                | skippy_runtime::RuntimeEventKind::DeviceResourceAllocated
-                | skippy_runtime::RuntimeEventKind::DeviceOutOfMemory
-                | skippy_runtime::RuntimeEventKind::DeviceFallbackActivated
-                | skippy_runtime::RuntimeEventKind::DiagnosticWarningRaised
-                | skippy_runtime::RuntimeEventKind::DiagnosticWarningCleared
-                | skippy_runtime::RuntimeEventKind::DiagnosticRecoverableFailure
-                | skippy_runtime::RuntimeEventKind::DiagnosticFatalFailure
-                | skippy_runtime::RuntimeEventKind::DiagnosticInvariantViolation
-                | skippy_runtime::RuntimeEventKind::UnloadStarted
-                | skippy_runtime::RuntimeEventKind::UnloadCompleted
-                | skippy_runtime::RuntimeEventKind::UnloadFailed
-                | skippy_runtime::RuntimeEventKind::UnloadForced
-                | skippy_runtime::RuntimeEventKind::UnloadSessionDraining
-        );
-        if is_structured {
-            structured_callbacks_sink.fetch_add(1, Ordering::Relaxed);
+    fn is_unload(kind: skippy_runtime::RuntimeEventKind) -> bool {
+        use skippy_runtime::RuntimeEventKind as Kind;
+        matches!(
+            kind,
+            Kind::UnloadStarted
+                | Kind::UnloadCompleted
+                | Kind::UnloadFailed
+                | Kind::UnloadForced
+                | Kind::UnloadSessionDraining
+        )
+    }
+
+    /// Take everything buffered and classify it, the way the host driver's
+    /// pre-drain ingest does.
+    fn take_counts() -> (usize, usize) {
+        let mut records = Vec::new();
+        skippy_runtime::drain_runtime_events(&mut records, usize::MAX);
+        let mut structured = 0;
+        let mut unload = 0;
+        for record in records {
+            let kind = record.to_event().kind;
+            if is_structured(kind) {
+                structured += 1;
+            }
+            if is_unload(kind) {
+                unload += 1;
+            }
         }
-        if matches!(
-            event.kind,
-            skippy_runtime::RuntimeEventKind::UnloadStarted
-                | skippy_runtime::RuntimeEventKind::UnloadCompleted
-                | skippy_runtime::RuntimeEventKind::UnloadFailed
-                | skippy_runtime::RuntimeEventKind::UnloadForced
-                | skippy_runtime::RuntimeEventKind::UnloadSessionDraining
-        ) {
-            unload_callbacks_sink.fetch_add(1, Ordering::Relaxed);
-        }
-    });
+        (structured, unload)
+    }
+
+    // Start from a clean ring: it is process-global and outlives any one
+    // test, so a stale record would be miscounted as this run's evidence.
+    let _ = take_counts();
+    let installed = skippy_runtime::install_runtime_event_reporter();
     assert!(
         installed,
         "runtime event reporter must install when the explicit native gate is enabled"
@@ -160,10 +176,10 @@ fn run_real_native_gate() {
         }
     };
 
-    let structured_count = structured_callbacks.load(Ordering::Relaxed);
+    let (structured_count, _) = take_counts();
     let unload_advertised = report.family_confirmed(skippy_ffi::FEATURE_UNLOAD_EVENTS);
     drop(model);
-    let unload_count = unload_callbacks.load(Ordering::Relaxed);
+    let (_, unload_count) = take_counts();
     skippy_runtime::clear_runtime_event_reporter();
 
     assert!(
