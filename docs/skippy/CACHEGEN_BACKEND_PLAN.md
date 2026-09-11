@@ -10,7 +10,7 @@ contract, CPU+Metal parity, six measurements, stop rule).
 
 | Backend | Kernel | Status | Evidence |
 |---|---|---|---|
-| CPU (reference) | scalar Rust | **Correctness reference only** — passes the 19K quality threshold but is too slow for promotion | Python/Rust fixtures pin LMCache revision `b5d109e`; 19K gate below |
+| CPU (reference) | scalar Rust | **Correctness reference only** — portable F32, F16, Q8_0, Q4_0, and mixed K/V adapters are implemented; only F16 has passed the 19K quality gate | Python/Rust fixtures pin LMCache revision `b5d109e`; typed archive fixtures cover every current user-selectable runtime K/V type |
 | Metal (Apple GPU) | native MSL | **Implemented, not promoted** — exact single/multi-tile fixture parity and 64/64 continuation agreement; local 19K TTFT is 604.84 ms versus 385.41 ms native | Apple M1 Ultra device gate below |
 | CUDA (NVIDIA) | shared native CUDA/HIP source | **Compile/package qualified only** — no runtime claim yet | CUDA 12.9.2 native runtime and product packaging pass; real NVIDIA fixture and 19K gates remain |
 | HIP/ROCm (AMD) | shared native CUDA/HIP source | **Compile/package qualified only** — no runtime claim yet | ROCm gfx1100 native runtime and product packaging pass; real AMD fixture and 19K gates remain |
@@ -133,8 +133,27 @@ meet the restore-to-first-token gate.
    scalar stream as the compatibility oracle for the new revision.
 5. Add encode from resident K/V storage and copy only the compact archive back
    to the persistence layer.
-6. Add typed F32, Q8_0, Q4_0, and mixed K/V adapters over the shared codec core,
-   with a separate quality and latency gate for every claimed combination.
+6. Wire the completed portable F32, F16, Q8_0, Q4_0, and mixed K/V record
+   adapters into each native backend. Keep unsupported typed records outside the
+   FFI until that backend adapter exists, then run a separate quality and
+   latency gate for every claimed combination.
+
+## Typed portable record boundary
+
+The portable page archive uses one unchanged LMCache-compatible F16 entropy
+segment. Record kinds describe the runtime edge adapter: F32 and F16 scalar
+rows, Q8_0 and Q4_0 block rows, plus F32/F16 transposed V. Encode converts each
+native row into the shared F16 stream; decode reconstructs that stream and
+packs the selected native row type. K and V carry independent kinds, so mixed
+selections do not require a second container or codec revision.
+
+The pure-Rust fixtures cover F32/F32, F16/F16, Q8_0/Q8_0, Q4_0/Q4_0,
+Q8_0/Q4_0, and transposed F32 V. This establishes portable archive and scalar
+oracle support only. The runtime rejects typed records before FFI until the
+selected Metal, CUDA, ROCm, or CPU native adapter is present; no scalar restore
+fallback is permitted. Quantized destinations remain unqualified until their
+matched end-to-end quality gates measure the combined CacheGen and native
+repacking loss.
 
 ## Native runtime integration boundary
 
