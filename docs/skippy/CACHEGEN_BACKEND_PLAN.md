@@ -271,6 +271,25 @@ reconstruction as the next Metal target. F32/Q8_0 is not a valid control on this
 model: llama.cpp requires Flash Attention for quantized V, while that mixed
 cache pair does not have a compatible Flash Attention kernel.
 
+An exact-head Metal staging optimization at
+`e2bdc935e24cbed3bff767762547098db6028459` removes the second host copy that
+previously occurred when each validated job was accumulated in `NSMutableData`
+and then copied into a shared `MTLBuffer`. The backend now sizes and validates a
+job before writing its payload, tile descriptors, and stream prefixes directly
+into the final shared buffers. Q8_0/F32 import fell from 580.45 ms across the two
+boundary runs above to 491.92 ms across two post-change runs, a 15.25% reduction.
+F16/F16 import fell from 540.74 ms to 451.82 ms, a 16.44% reduction. Both cases
+remain stopped on local TTFT: the optimized F16/F16 run took 514.34 ms versus
+343.16 ms native, and the optimized Q8_0/F32 repeats took 713.51/701.97 ms versus
+571.88/547.78 ms native. The remaining gap is device arithmetic decode rather
+than redundant host staging.
+
+A diagnostic 128-row archive doubled tile count from 4,200 to 8,344, expanded
+Q8_0/F32 storage from 20.50% to 30.84% of native, and increased import to
+727.74 ms. Smaller independently decoded tiles therefore do not solve this
+format's Metal crossover; shared calibration with multiple arithmetic
+substreams would require a separate format change.
+
 The quantized K cases expose a consistent quality split: Q8_0 preserves all 64
 greedy continuation tokens, while Q4_0 first diverges at step 15 and finishes at
 61/64, barely above the declared 95% floor. Every completed CacheGen continuation
