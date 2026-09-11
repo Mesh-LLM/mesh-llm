@@ -96,8 +96,9 @@ impl ChatCompletionRequest {
                 "top_logprobs requires logprobs=true",
             ));
         }
-        if self.tools.as_ref().is_some_and(invalid_tools_value) {
-            return Err(OpenAiError::invalid_request("tools must be an array"));
+        if let Some(tools) = self.tools.as_ref() {
+            validate_tools_value(tools)
+                .map_err(|message| OpenAiError::invalid_request(message).with_param("tools"))?;
         }
         if self
             .response_format
@@ -126,8 +127,39 @@ fn invalid_response_format_value(value: &Value) -> bool {
         .is_some_and(Value::is_string)
 }
 
-fn invalid_tools_value(value: &Value) -> bool {
-    !matches!(value, Value::Array(_))
+fn validate_tools_value(value: &Value) -> Result<(), String> {
+    let Some(tools) = value.as_array() else {
+        return Err("tools must be an array".to_string());
+    };
+    for (index, tool) in tools.iter().enumerate() {
+        let Some(tool) = tool.as_object() else {
+            return Err(format!("tools[{index}] must be an object"));
+        };
+        if tool.get("type").and_then(Value::as_str) != Some("function") {
+            return Err(format!("tools[{index}].type must be `function`"));
+        }
+        let Some(function) = tool.get("function").and_then(Value::as_object) else {
+            return Err(format!("tools[{index}].function must be an object"));
+        };
+        if !function
+            .get("name")
+            .and_then(Value::as_str)
+            .is_some_and(|name| !name.trim().is_empty())
+        {
+            return Err(format!(
+                "tools[{index}].function.name must be a non-empty string"
+            ));
+        }
+        if function
+            .get("parameters")
+            .is_some_and(|parameters| !parameters.is_object())
+        {
+            return Err(format!(
+                "tools[{index}].function.parameters must be an object"
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
