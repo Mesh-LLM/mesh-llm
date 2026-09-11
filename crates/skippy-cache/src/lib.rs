@@ -18,11 +18,11 @@ pub use identity::{
     prefix_identity_with_namespace, prefix_namespace_hash,
 };
 pub use l3::{
-    CODEC_RAW, CODEC_RAW_VERSION, CodecClass, GeometryBlock, GeometryKind, HandoffManifest,
-    HandoffSegmentRef, HandoffSegmentStore, LEGACY_MANIFEST_VERSION,
-    LEGACY_PAYLOAD_CODEC_MANIFEST_VERSION, MANIFEST_VERSION, ManifestPin, PayloadCodec,
-    PayloadGeometry, Reservation, SegmentCodecIdentity, SegmentHold, SegmentPut, StoreLimits,
-    StoreReconciliation, StoreUsage, StoredSegment, WriteRefusal, segment_digest,
+    CODEC_NATIVE_KV_PAGE, CODEC_NATIVE_KV_PAGE_VERSION, CODEC_RAW, CODEC_RAW_VERSION, CodecClass,
+    GeometryBlock, GeometryKind, HandoffManifest, HandoffSegmentRef, HandoffSegmentStore,
+    LEGACY_MANIFEST_VERSION, LEGACY_PAYLOAD_CODEC_MANIFEST_VERSION, MANIFEST_VERSION, ManifestPin,
+    PayloadCodec, PayloadGeometry, Reservation, SegmentCodecIdentity, SegmentHold, SegmentPut,
+    StoreLimits, StoreReconciliation, StoreUsage, StoredSegment, WriteRefusal, segment_digest,
 };
 pub use manager::{
     L3ActivitySnapshot, L3CacheManager, L3EffectiveState, L3EffectiveStatus, L3InventoryEntry,
