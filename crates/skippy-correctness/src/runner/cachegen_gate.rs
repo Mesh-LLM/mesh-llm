@@ -8,11 +8,11 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use skippy_cache::cachegen::archive::{
-    CacheGenArchive, ComponentLayout, PageLayout, decode_f16_page, encode_f16_page,
+    CacheGenArchive, ComponentLayout, PageLayout, ValueType, decode_page, encode_page,
 };
 use skippy_runtime::{
-    GGML_TYPE_F16, KV_PAGE_FLAG_V_TRANSPOSED, RuntimeKvPageDesc, StageModel, StageSession,
-    TokenSignal,
+    GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, KV_PAGE_FLAG_V_TRANSPOSED,
+    RuntimeKvPageDesc, StageModel, StageSession, TokenSignal,
 };
 
 use crate::report::CacheGenGateReport;
@@ -311,13 +311,13 @@ fn compare_cachegen_continuation(
 
 fn encode_kv_archive(desc: &RuntimeKvPageDesc, raw: &[u8]) -> Result<CacheGenArchive> {
     desc.validate_payload(raw.len())?;
-    encode_f16_page(&page_layout(desc)?, raw)
+    encode_page(&page_layout(desc)?, raw)
 }
 
 fn decode_kv_archive(desc: &RuntimeKvPageDesc, archive: &[u8]) -> Result<Vec<u8>> {
     let raw_len = usize::try_from(desc.payload_bytes).context("descriptor length exceeds usize")?;
     desc.validate_payload(raw_len)?;
-    decode_f16_page(archive, raw_len)
+    decode_page(archive, raw_len)
 }
 
 fn page_layout(desc: &RuntimeKvPageDesc) -> Result<PageLayout> {
@@ -376,12 +376,11 @@ fn component_layout(
     payload_bytes: u64,
     flags: u64,
 ) -> Result<ComponentLayout> {
-    if k_type != GGML_TYPE_F16 || v_type != GGML_TYPE_F16 {
-        bail!("CacheGen gate only accepts runtime F16 K/V pages");
-    }
     Ok(ComponentLayout {
         token_count,
         layer_count,
+        k_type: cachegen_value_type(k_type)?,
+        v_type: cachegen_value_type(v_type)?,
         k_row_bytes,
         v_row_bytes,
         v_element_bytes,
@@ -390,6 +389,16 @@ fn component_layout(
         payload_bytes,
         v_transposed: flags & KV_PAGE_FLAG_V_TRANSPOSED != 0,
     })
+}
+
+fn cachegen_value_type(value: u32) -> Result<ValueType> {
+    match value {
+        GGML_TYPE_F32 => Ok(ValueType::F32),
+        GGML_TYPE_F16 => Ok(ValueType::F16),
+        GGML_TYPE_Q8_0 => Ok(ValueType::Q8_0),
+        GGML_TYPE_Q4_0 => Ok(ValueType::Q4_0),
+        _ => bail!("CacheGen gate does not support runtime K/V type {value}"),
+    }
 }
 
 fn persist_and_read_payloads(

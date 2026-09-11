@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, anyhow, bail};
+use skippy_protocol::binary::{f16_bits_to_f32, f32_to_f16_bits};
 
 use super::lmcache::{
     MAX_TOKENS_PER_CHUNK, bins_for_layer, decode_f16_segment, encode_f16_segment,
@@ -28,6 +29,10 @@ pub enum RecordKind {
     CacheGen = 0,
     Exact = 1,
     CacheGenTransposed = 2,
+    CacheGenF32 = 3,
+    CacheGenF32Transposed = 4,
+    CacheGenQ8_0 = 5,
+    CacheGenQ4_0 = 6,
 }
 
 impl TryFrom<u8> for RecordKind {
@@ -38,8 +43,70 @@ impl TryFrom<u8> for RecordKind {
             0 => Ok(Self::CacheGen),
             1 => Ok(Self::Exact),
             2 => Ok(Self::CacheGenTransposed),
+            3 => Ok(Self::CacheGenF32),
+            4 => Ok(Self::CacheGenF32Transposed),
+            5 => Ok(Self::CacheGenQ8_0),
+            6 => Ok(Self::CacheGenQ4_0),
             _ => bail!("unknown CacheGen archive record kind {value}"),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueType {
+    F32,
+    F16,
+    Q8_0,
+    Q4_0,
+}
+
+impl ValueType {
+    fn record_kind(self, transposed: bool) -> Result<RecordKind> {
+        match (self, transposed) {
+            (Self::F16, false) => Ok(RecordKind::CacheGen),
+            (Self::F16, true) => Ok(RecordKind::CacheGenTransposed),
+            (Self::F32, false) => Ok(RecordKind::CacheGenF32),
+            (Self::F32, true) => Ok(RecordKind::CacheGenF32Transposed),
+            (Self::Q8_0, false) => Ok(RecordKind::CacheGenQ8_0),
+            (Self::Q4_0, false) => Ok(RecordKind::CacheGenQ4_0),
+            (Self::Q8_0 | Self::Q4_0, true) => {
+                bail!("CacheGen does not accept transposed block-quantized rows")
+            }
+        }
+    }
+
+    fn element_bytes(self) -> u8 {
+        match self {
+            Self::F32 => 4,
+            Self::F16 => 2,
+            Self::Q8_0 => 34,
+            Self::Q4_0 => 18,
+        }
+    }
+
+    fn channels_for_row(self, row_bytes: usize) -> Result<usize> {
+        let (block_bytes, block_values) = match self {
+            Self::F32 => (4, 1),
+            Self::F16 => (2, 1),
+            Self::Q8_0 => (34, 32),
+            Self::Q4_0 => (18, 32),
+        };
+        if row_bytes == 0 || !row_bytes.is_multiple_of(block_bytes) {
+            bail!("CacheGen row size is invalid for {self:?}");
+        }
+        Ok(row_bytes / block_bytes * block_values)
+    }
+}
+
+fn record_value_type(kind: RecordKind) -> Option<(ValueType, bool)> {
+    match kind {
+        RecordKind::CacheGen => Some((ValueType::F16, false)),
+        RecordKind::CacheGenTransposed => Some((ValueType::F16, true)),
+        RecordKind::CacheGenF32 => Some((ValueType::F32, false)),
+        RecordKind::CacheGenF32Transposed => Some((ValueType::F32, true)),
+        RecordKind::CacheGenQ8_0 => Some((ValueType::Q8_0, false)),
+        RecordKind::CacheGenQ4_0 => Some((ValueType::Q4_0, false)),
+        RecordKind::Exact => None,
     }
 }
 
@@ -48,6 +115,8 @@ impl TryFrom<u8> for RecordKind {
 pub struct ComponentLayout {
     pub token_count: u64,
     pub layer_count: u32,
+    pub k_type: ValueType,
+    pub v_type: ValueType,
     pub k_row_bytes: u32,
     pub v_row_bytes: u32,
     pub v_element_bytes: u32,
@@ -101,7 +170,7 @@ struct OwnedRecord {
     payload: Vec<u8>,
 }
 
-pub fn encode_f16_page(layout: &PageLayout, raw: &[u8]) -> Result<CacheGenArchive> {
+pub fn encode_page(layout: &PageLayout, raw: &[u8]) -> Result<CacheGenArchive> {
     let raw_len = usize::try_from(layout.payload_bytes).context("page size exceeds usize")?;
     if raw.len() != raw_len {
         bail!("CacheGen page length disagrees with its layout");
@@ -145,7 +214,8 @@ pub fn encode_f16_page(layout: &PageLayout, raw: &[u8]) -> Result<CacheGenArchiv
         bytes.extend_from_slice(&record.payload);
         if record.kind != RecordKind::Exact {
             tile_count += 1;
-            let values = record.decoded_len / 2;
+            let segment = validate_f16_segment(&record.payload)?;
+            let values = segment.rows.saturating_mul(segment.channels);
             let codec_working = record
                 .decoded_len
                 .saturating_add(values.saturating_mul(5))
@@ -266,12 +336,12 @@ pub fn validate_archive(archive: &[u8], expected_raw_len: usize) -> Result<Valid
     Ok(ValidatedArchive { raw_len, records })
 }
 
-pub fn decode_f16_page(archive: &[u8], expected_raw_len: usize) -> Result<Vec<u8>> {
+pub fn decode_page(archive: &[u8], expected_raw_len: usize) -> Result<Vec<u8>> {
     let validated = validate_archive(archive, expected_raw_len)?;
     let mut decoded = vec![0u8; validated.raw_len];
     for record in validated.records {
-        match record.kind {
-            RecordKind::CacheGen => {
+        match record_value_type(record.kind) {
+            Some((value_type, false)) => {
                 let output_end = record
                     .output_offset
                     .checked_add(record.decoded_len)
@@ -279,18 +349,21 @@ pub fn decode_f16_page(archive: &[u8], expected_raw_len: usize) -> Result<Vec<u8
                 let output = decoded
                     .get_mut(record.output_offset..output_end)
                     .ok_or_else(|| anyhow!("record output range exceeds KV payload"))?;
-                let tile = decode_f16_segment(record.payload)?;
+                let f16 = decode_f16_segment(record.payload)?;
+                let tile = encode_native_rows_from_f16(value_type, &f16, record.token_count)?;
                 output.copy_from_slice(&tile);
             }
-            RecordKind::Exact => {
+            None => {
                 let output_end = record
                     .output_offset
                     .checked_add(record.decoded_len)
                     .context("record output range overflow")?;
                 decoded[record.output_offset..output_end].copy_from_slice(record.payload);
             }
-            RecordKind::CacheGenTransposed => {
-                let token_major = decode_f16_segment(record.payload)?;
+            Some((value_type, true)) => {
+                let f16 = decode_f16_segment(record.payload)?;
+                let token_major =
+                    encode_native_rows_from_f16(value_type, &f16, record.token_count)?;
                 let dims = record.decoded_len / record.token_count / record.element_bytes;
                 let layer_bytes = record.total_tokens * dims * record.element_bytes;
                 let output_end = record.output_offset + layer_bytes;
@@ -341,9 +414,7 @@ fn encode_component(
         usize::try_from(component.token_count).context("token count exceeds usize")?;
     let layer_count = component.layer_count as usize;
     let k_row = component.k_row_bytes as usize;
-    if k_row == 0 || !k_row.is_multiple_of(2) {
-        bail!("CacheGen requires non-empty whole-F16 K rows");
-    }
+    let k_channels = component.k_type.channels_for_row(k_row)?;
     let base = usize::try_from(component.payload_offset).context("payload offset exceeds usize")?;
     let component_len =
         usize::try_from(component.payload_bytes).context("payload size exceeds usize")?;
@@ -369,12 +440,10 @@ fn encode_component(
         bail!("V payload is not uniform across tokens");
     }
     let v_row = v_layer_bytes / token_count;
-    if v_row == 0 || !v_row.is_multiple_of(2) {
-        bail!("CacheGen requires non-empty whole-F16 V rows");
-    }
+    let v_channels = component.v_type.channels_for_row(v_row)?;
     if component.v_transposed {
-        if component.v_element_bytes != 2 {
-            bail!("transposed F16 V page must declare two-byte elements");
+        if component.v_type.element_bytes() as u32 != component.v_element_bytes {
+            bail!("transposed V page element size disagrees with its value type");
         }
     } else if component.v_row_bytes as usize != v_row {
         bail!("non-transposed V payload disagrees with its row size");
@@ -394,16 +463,16 @@ fn encode_component(
             let local_offset = layer_offset + row_start * k_row;
             let tile = &component_raw[local_offset..local_offset + rows * k_row];
             records.push(OwnedRecord {
-                kind: RecordKind::CacheGen,
-                element_bytes: 2,
+                kind: component.k_type.record_kind(false)?,
+                element_bytes: component.k_type.element_bytes(),
                 output_offset: base + local_offset,
                 decoded_len: tile.len(),
                 token_count: rows as u64,
                 token_start: 0,
                 total_tokens: 0,
                 payload: encode_f16_segment(
-                    tile,
-                    k_row / 2,
+                    &decode_native_rows_to_f16(component.k_type, tile, rows, k_row)?,
+                    k_channels,
                     bins_for_layer(layer, layer_count, true),
                 )?,
             });
@@ -418,41 +487,43 @@ fn encode_component(
             let rows = (token_count - row_start).min(MAX_TOKENS_PER_CHUNK);
             let (kind, output_offset, encoded_input, token_start, total_tokens) =
                 if component.v_transposed {
+                    let native = transpose_range_to_token_major(
+                        layer_tile,
+                        token_count,
+                        row_start,
+                        rows,
+                        v_channels,
+                        component.v_element_bytes as usize,
+                    )?;
                     (
-                        RecordKind::CacheGenTransposed,
+                        component.v_type.record_kind(true)?,
                         base + layer_offset,
-                        transpose_range_to_token_major(
-                            layer_tile,
-                            token_count,
-                            row_start,
-                            rows,
-                            v_row / 2,
-                            2,
-                        )?,
+                        decode_native_rows_to_f16(component.v_type, &native, rows, v_row)?,
                         row_start as u64,
                         token_count as u64,
                     )
                 } else {
                     let local_offset = layer_offset + row_start * v_row;
+                    let native = &component_raw[local_offset..local_offset + rows * v_row];
                     (
-                        RecordKind::CacheGen,
+                        component.v_type.record_kind(false)?,
                         base + local_offset,
-                        component_raw[local_offset..local_offset + rows * v_row].to_vec(),
+                        decode_native_rows_to_f16(component.v_type, native, rows, v_row)?,
                         0,
                         0,
                     )
                 };
             records.push(OwnedRecord {
                 kind,
-                element_bytes: 2,
+                element_bytes: component.v_type.element_bytes(),
                 output_offset,
-                decoded_len: encoded_input.len(),
+                decoded_len: rows * v_row,
                 token_count: rows as u64,
                 token_start,
                 total_tokens,
                 payload: encode_f16_segment(
                     &encoded_input,
-                    v_row / 2,
+                    v_channels,
                     bins_for_layer(layer, layer_count, false),
                 )?,
             });
@@ -478,21 +549,21 @@ fn validate_record_geometry(record: Record<'_>) -> Result<()> {
     if record.decoded_len == 0 || record.token_count == 0 {
         bail!("CacheGen archive record has empty geometry");
     }
-    match record.kind {
-        RecordKind::CacheGen | RecordKind::CacheGenTransposed => {
-            if record.element_bytes != 2 {
-                bail!("CacheGen F16 record has an invalid element size");
+    match record_value_type(record.kind) {
+        Some((value_type, transposed)) => {
+            if record.element_bytes != value_type.element_bytes() as usize {
+                bail!("CacheGen record has an invalid element size");
             }
             let segment = validate_f16_segment(record.payload)?;
+            let expected_row = native_row_bytes(value_type, segment.channels)?;
             let expected = segment
                 .rows
-                .checked_mul(segment.channels)
-                .and_then(|value| value.checked_mul(2))
-                .ok_or_else(|| anyhow!("CacheGen segment decoded length overflow"))?;
+                .checked_mul(expected_row)
+                .ok_or_else(|| anyhow!("CacheGen segment native decoded length overflow"))?;
             if segment.rows != record.token_count || expected != record.decoded_len {
                 bail!("CacheGen segment geometry disagrees with its archive record");
             }
-            if record.kind == RecordKind::CacheGenTransposed {
+            if transposed {
                 if record.total_tokens == 0
                     || record
                         .token_start
@@ -505,7 +576,7 @@ fn validate_record_geometry(record: Record<'_>) -> Result<()> {
                 bail!("non-transposed CacheGen record carries transpose geometry");
             }
         }
-        RecordKind::Exact => {
+        None => {
             if record.element_bytes != 1
                 || record.payload.len() != record.decoded_len
                 || record.token_start != 0
@@ -530,7 +601,7 @@ fn record_coverage(
     coverage: &mut Vec<ByteRange>,
     transposed: &mut TransposedCoverage,
 ) -> Result<()> {
-    if kind == RecordKind::CacheGenTransposed {
+    if record_value_type(kind).is_some_and(|(_, transposed)| transposed) {
         let dims = decoded_len
             .checked_div(token_count)
             .and_then(|value| value.checked_div(element_bytes))
@@ -604,6 +675,164 @@ fn validate_decoded_coverage(
         bail!("CacheGen archive records leave a gap in the KV payload");
     }
     Ok(())
+}
+
+fn native_row_bytes(value_type: ValueType, channels: usize) -> Result<usize> {
+    match value_type {
+        ValueType::F32 => channels.checked_mul(4).context("F32 row size overflow"),
+        ValueType::F16 => channels.checked_mul(2).context("F16 row size overflow"),
+        ValueType::Q8_0 => {
+            if !channels.is_multiple_of(32) {
+                bail!("Q8_0 rows require a multiple of 32 values");
+            }
+            channels
+                .checked_div(32)
+                .and_then(|blocks| blocks.checked_mul(34))
+                .context("Q8_0 row size overflow")
+        }
+        ValueType::Q4_0 => {
+            if !channels.is_multiple_of(32) {
+                bail!("Q4_0 rows require a multiple of 32 values");
+            }
+            channels
+                .checked_div(32)
+                .and_then(|blocks| blocks.checked_mul(18))
+                .context("Q4_0 row size overflow")
+        }
+    }
+}
+
+fn decode_native_rows_to_f16(
+    value_type: ValueType,
+    native: &[u8],
+    rows: usize,
+    row_bytes: usize,
+) -> Result<Vec<u8>> {
+    let expected = rows
+        .checked_mul(row_bytes)
+        .context("native tile size overflow")?;
+    if native.len() != expected {
+        bail!("native CacheGen tile length disagrees with its row geometry");
+    }
+    let channels = value_type.channels_for_row(row_bytes)?;
+    let mut output = Vec::with_capacity(
+        rows.checked_mul(channels)
+            .and_then(|values| values.checked_mul(2))
+            .context("F16 adapter output size overflow")?,
+    );
+    match value_type {
+        ValueType::F16 => output.extend_from_slice(native),
+        ValueType::F32 => {
+            for value in native.as_chunks::<4>().0 {
+                let value = f32::from_le_bytes(*value);
+                output.extend_from_slice(&f32_to_f16_bits(value).to_le_bytes());
+            }
+        }
+        ValueType::Q8_0 => {
+            for row in native.chunks_exact(row_bytes) {
+                for block in row.as_chunks::<34>().0 {
+                    let scale = f16_bits_to_f32(u16::from_le_bytes([block[0], block[1]]));
+                    for &quant in &block[2..] {
+                        let value = f32::from(quant as i8) * scale;
+                        output.extend_from_slice(&f32_to_f16_bits(value).to_le_bytes());
+                    }
+                }
+            }
+        }
+        ValueType::Q4_0 => {
+            for row in native.chunks_exact(row_bytes) {
+                for block in row.as_chunks::<18>().0 {
+                    let scale = f16_bits_to_f32(u16::from_le_bytes([block[0], block[1]]));
+                    for half in 0..2 {
+                        for &packed in &block[2..] {
+                            let quant = if half == 0 {
+                                packed & 0x0f
+                            } else {
+                                packed >> 4
+                            };
+                            let value = (i32::from(quant) - 8) as f32 * scale;
+                            output.extend_from_slice(&f32_to_f16_bits(value).to_le_bytes());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(output)
+}
+
+fn encode_native_rows_from_f16(value_type: ValueType, f16: &[u8], rows: usize) -> Result<Vec<u8>> {
+    if rows == 0 || !f16.len().is_multiple_of(rows * 2) {
+        bail!("decoded CacheGen tile has invalid row geometry");
+    }
+    let channels = f16.len() / rows / 2;
+    let row_bytes = native_row_bytes(value_type, channels)?;
+    let mut output = Vec::with_capacity(
+        rows.checked_mul(row_bytes)
+            .context("native adapter output size overflow")?,
+    );
+    for row in f16.chunks_exact(channels * 2) {
+        match value_type {
+            ValueType::F16 => output.extend_from_slice(row),
+            ValueType::F32 => {
+                for value in row.as_chunks::<2>().0 {
+                    let value = f16_bits_to_f32(u16::from_le_bytes([value[0], value[1]]));
+                    output.extend_from_slice(&value.to_le_bytes());
+                }
+            }
+            ValueType::Q8_0 => quantize_q8_0_row(row, &mut output),
+            ValueType::Q4_0 => quantize_q4_0_row(row, &mut output),
+        }
+    }
+    Ok(output)
+}
+
+fn f16_row_values(row: &[u8]) -> impl Iterator<Item = f32> + '_ {
+    row.as_chunks::<2>()
+        .0
+        .iter()
+        .map(|value| f16_bits_to_f32(u16::from_le_bytes([value[0], value[1]])))
+}
+
+fn quantize_q8_0_row(row: &[u8], output: &mut Vec<u8>) {
+    for block in row.as_chunks::<64>().0 {
+        let values = f16_row_values(block).collect::<Vec<_>>();
+        let amax = values
+            .iter()
+            .fold(0.0_f32, |acc, value| acc.max(value.abs()));
+        let scale = amax / 127.0;
+        let inverse = if scale == 0.0 { 0.0 } else { scale.recip() };
+        output.extend_from_slice(&f32_to_f16_bits(scale).to_le_bytes());
+        output.extend(
+            values
+                .into_iter()
+                .map(|value| (value * inverse).round().clamp(-127.0, 127.0) as i8 as u8),
+        );
+    }
+}
+
+fn quantize_q4_0_row(row: &[u8], output: &mut Vec<u8>) {
+    for block in row.as_chunks::<64>().0 {
+        let values = f16_row_values(block).collect::<Vec<_>>();
+        let mut amax = 0.0_f32;
+        let mut signed_max = 0.0_f32;
+        for &value in &values {
+            if amax < value.abs() {
+                amax = value.abs();
+                signed_max = value;
+            }
+        }
+        let scale = signed_max / -8.0;
+        let inverse = if scale == 0.0 { 0.0 } else { scale.recip() };
+        output.extend_from_slice(&f32_to_f16_bits(scale).to_le_bytes());
+        for index in 0..16 {
+            let low = (values[index] * inverse + 8.5).trunc().clamp(0.0, 15.0) as u8;
+            let high = (values[index + 16] * inverse + 8.5)
+                .trunc()
+                .clamp(0.0, 15.0) as u8;
+            output.push(low | (high << 4));
+        }
+    }
 }
 
 fn transpose_range_to_token_major(
@@ -706,6 +935,8 @@ mod tests {
             components: vec![ComponentLayout {
                 token_count,
                 layer_count: 2,
+                k_type: ValueType::F16,
+                v_type: ValueType::F16,
                 k_row_bytes: 6,
                 v_row_bytes: if v_transposed { 0 } else { 6 },
                 v_element_bytes: if v_transposed { 2 } else { 0 },
@@ -721,8 +952,8 @@ mod tests {
     fn page_roundtrip_preserves_geometry_and_length() {
         let layout = layout(4, false);
         let raw = f16_bytes(48);
-        let archive = encode_f16_page(&layout, &raw).expect("encode");
-        let decoded = decode_f16_page(&archive.bytes, raw.len()).expect("decode");
+        let archive = encode_page(&layout, &raw).expect("encode");
+        let decoded = decode_page(&archive.bytes, raw.len()).expect("decode");
         assert_eq!(decoded.len(), raw.len());
         assert_eq!(archive.tile_count, 4);
         assert_ne!(decoded, raw, "fixture must exercise lossy quantization");
@@ -732,8 +963,8 @@ mod tests {
     fn transposed_v_layout_uses_inferred_row_width() {
         let layout = layout(4, true);
         let raw = f16_bytes(48);
-        let archive = encode_f16_page(&layout, &raw).expect("encode");
-        let decoded = decode_f16_page(&archive.bytes, raw.len()).expect("decode");
+        let archive = encode_page(&layout, &raw).expect("encode");
+        let decoded = decode_page(&archive.bytes, raw.len()).expect("decode");
         assert_eq!(decoded.len(), raw.len());
         assert_eq!(archive.tile_count, 4);
     }
@@ -742,7 +973,7 @@ mod tests {
     fn validation_rejects_a_corrupt_nested_segment_before_decode() {
         let layout = layout(4, false);
         let raw = f16_bytes(48);
-        let mut archive = encode_f16_page(&layout, &raw).expect("encode").bytes;
+        let mut archive = encode_page(&layout, &raw).expect("encode").bytes;
         archive[ARCHIVE_HEADER_BYTES + RECORD_HEADER_BYTES] = b'X';
         assert!(validate_archive(&archive, raw.len()).is_err());
     }
@@ -752,8 +983,8 @@ mod tests {
         let token_count = MAX_TOKENS_PER_CHUNK as u64 + 4;
         let layout = layout(token_count, true);
         let raw = f16_bytes(layout.payload_bytes as usize / 2);
-        let archive = encode_f16_page(&layout, &raw).expect("encode");
-        let decoded = decode_f16_page(&archive.bytes, raw.len()).expect("decode");
+        let archive = encode_page(&layout, &raw).expect("encode");
+        let decoded = decode_page(&archive.bytes, raw.len()).expect("decode");
         assert_eq!(decoded.len(), raw.len());
         assert_eq!(archive.tile_count, 8);
     }
@@ -762,12 +993,137 @@ mod tests {
     fn archive_rejects_trailing_and_uncovered_bytes() {
         let layout = layout(4, false);
         let raw = f16_bytes(48);
-        let mut archive = encode_f16_page(&layout, &raw).expect("encode").bytes;
+        let mut archive = encode_page(&layout, &raw).expect("encode").bytes;
         archive.push(0);
         assert!(validate_archive(&archive, raw.len()).is_err());
 
         let mut uncovered = layout;
         uncovered.payload_bytes += 2;
-        assert!(encode_f16_page(&uncovered, &f16_bytes(49)).is_err());
+        assert!(encode_page(&uncovered, &f16_bytes(49)).is_err());
+    }
+
+    fn typed_layout(k_type: ValueType, v_type: ValueType) -> PageLayout {
+        let token_count = 4;
+        let layer_count = 2;
+        let channels = 32;
+        let k_row_bytes = native_row_bytes(k_type, channels).expect("K row");
+        let v_row_bytes = native_row_bytes(v_type, channels).expect("V row");
+        let payload_bytes = token_count * layer_count * (k_row_bytes + v_row_bytes);
+        PageLayout {
+            payload_bytes: payload_bytes as u64,
+            components: vec![ComponentLayout {
+                token_count: token_count as u64,
+                layer_count: layer_count as u32,
+                k_type,
+                v_type,
+                k_row_bytes: k_row_bytes as u32,
+                v_row_bytes: v_row_bytes as u32,
+                v_element_bytes: 0,
+                k_idx_row_bytes: 0,
+                payload_offset: 0,
+                payload_bytes: payload_bytes as u64,
+                v_transposed: false,
+            }],
+        }
+    }
+
+    fn typed_page(layout: &PageLayout) -> Vec<u8> {
+        let component = layout.components[0];
+        let rows = component.token_count as usize * component.layer_count as usize;
+        let channels = 32;
+        let mut f16 = Vec::with_capacity(rows * channels * 2);
+        for index in 0..rows * channels {
+            let value = ((index % 37) as f32 - 18.0) / 11.0;
+            f16.extend_from_slice(&f32_to_f16_bits(value).to_le_bytes());
+        }
+        let mut raw = encode_native_rows_from_f16(component.k_type, &f16, rows).expect("K");
+        raw.extend(encode_native_rows_from_f16(component.v_type, &f16, rows).expect("V"));
+        raw
+    }
+
+    #[test]
+    fn portable_archive_adapts_f32_q8_q4_and_mixed_pages() {
+        for (k_type, v_type, k_kind, v_kind) in [
+            (
+                ValueType::F32,
+                ValueType::F32,
+                RecordKind::CacheGenF32,
+                RecordKind::CacheGenF32,
+            ),
+            (
+                ValueType::Q8_0,
+                ValueType::Q8_0,
+                RecordKind::CacheGenQ8_0,
+                RecordKind::CacheGenQ8_0,
+            ),
+            (
+                ValueType::Q4_0,
+                ValueType::Q4_0,
+                RecordKind::CacheGenQ4_0,
+                RecordKind::CacheGenQ4_0,
+            ),
+            (
+                ValueType::Q8_0,
+                ValueType::Q4_0,
+                RecordKind::CacheGenQ8_0,
+                RecordKind::CacheGenQ4_0,
+            ),
+        ] {
+            let layout = typed_layout(k_type, v_type);
+            let raw = typed_page(&layout);
+            let archive = encode_page(&layout, &raw).expect("encode typed page");
+            let validated = validate_archive(&archive.bytes, raw.len()).expect("validate");
+            assert_eq!(validated.records.len(), 4);
+            assert!(
+                validated.records[..2]
+                    .iter()
+                    .all(|record| record.kind == k_kind)
+            );
+            assert!(
+                validated.records[2..]
+                    .iter()
+                    .all(|record| record.kind == v_kind)
+            );
+
+            let decoded = decode_page(&archive.bytes, raw.len()).expect("decode typed page");
+            assert_eq!(decoded.len(), raw.len());
+            assert_eq!(archive.tile_count, 4);
+        }
+    }
+
+    #[test]
+    fn f32_transposed_v_uses_a_typed_record_without_changing_the_container() {
+        let token_count = 4_u64;
+        let row_bytes = 32 * 4;
+        let payload_bytes = token_count * 2 * row_bytes;
+        let layout = PageLayout {
+            payload_bytes,
+            components: vec![ComponentLayout {
+                token_count,
+                layer_count: 1,
+                k_type: ValueType::F32,
+                v_type: ValueType::F32,
+                k_row_bytes: row_bytes as u32,
+                v_row_bytes: 0,
+                v_element_bytes: 4,
+                k_idx_row_bytes: 0,
+                payload_offset: 0,
+                payload_bytes,
+                v_transposed: true,
+            }],
+        };
+        let raw = (0..payload_bytes / 4)
+            .flat_map(|index| ((index as f32 - 50.0) / 13.0).to_le_bytes())
+            .collect::<Vec<_>>();
+        let archive = encode_page(&layout, &raw).expect("encode F32 transposed page");
+        let validated = validate_archive(&archive.bytes, raw.len()).expect("validate");
+        assert_eq!(validated.records[0].kind, RecordKind::CacheGenF32);
+        assert_eq!(validated.records[1].kind, RecordKind::CacheGenF32Transposed);
+        assert_eq!(
+            decode_page(&archive.bytes, raw.len())
+                .expect("decode")
+                .len(),
+            raw.len()
+        );
     }
 }

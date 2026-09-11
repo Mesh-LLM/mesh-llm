@@ -1,32 +1,40 @@
 use std::ptr;
 
-use anyhow::{Result, ensure};
+use anyhow::{Result, bail, ensure};
 use skippy_cache::cachegen::archive::{RecordKind, ValidatedArchive, validate_archive};
 use skippy_ffi::{CacheGenRecordV1, KvPageDesc as RawKvPageDesc};
 
 use crate::error::{ensure_ok, free_error};
 use crate::session::StageSession;
 
-fn cachegen_records(validated: &ValidatedArchive<'_>) -> Vec<CacheGenRecordV1> {
+fn cachegen_records(validated: &ValidatedArchive<'_>) -> Result<Vec<CacheGenRecordV1>> {
     validated
         .records
         .iter()
-        .map(|record| CacheGenRecordV1 {
-            abi_version: skippy_ffi::CACHEGEN_RECORD_V1_ABI_VERSION,
-            kind: match record.kind {
-                RecordKind::CacheGen => skippy_ffi::CACHEGEN_RECORD_F16,
-                RecordKind::Exact => skippy_ffi::CACHEGEN_RECORD_EXACT,
-                RecordKind::CacheGenTransposed => skippy_ffi::CACHEGEN_RECORD_F16_TRANSPOSED,
-            },
-            element_bytes: record.element_bytes as u32,
-            reserved0: 0,
-            output_offset: record.output_offset as u64,
-            decoded_bytes: record.decoded_len as u64,
-            token_count: record.token_count as u64,
-            token_start: record.token_start as u64,
-            total_tokens: record.total_tokens as u64,
-            payload: record.payload.as_ptr().cast(),
-            payload_bytes: record.payload.len(),
+        .map(|record| {
+            Ok(CacheGenRecordV1 {
+                abi_version: skippy_ffi::CACHEGEN_RECORD_V1_ABI_VERSION,
+                kind: match record.kind {
+                    RecordKind::CacheGen => skippy_ffi::CACHEGEN_RECORD_F16,
+                    RecordKind::Exact => skippy_ffi::CACHEGEN_RECORD_EXACT,
+                    RecordKind::CacheGenTransposed => skippy_ffi::CACHEGEN_RECORD_F16_TRANSPOSED,
+                    RecordKind::CacheGenF32
+                    | RecordKind::CacheGenF32Transposed
+                    | RecordKind::CacheGenQ8_0
+                    | RecordKind::CacheGenQ4_0 => {
+                        bail!("resident KV backend does not provide this typed CacheGen adapter")
+                    }
+                },
+                element_bytes: record.element_bytes as u32,
+                reserved0: 0,
+                output_offset: record.output_offset as u64,
+                decoded_bytes: record.decoded_len as u64,
+                token_count: record.token_count as u64,
+                token_start: record.token_start as u64,
+                total_tokens: record.total_tokens as u64,
+                payload: record.payload.as_ptr().cast(),
+                payload_bytes: record.payload.len(),
+            })
         })
         .collect()
 }
@@ -295,7 +303,7 @@ impl StageSession {
             anyhow::bail!("composite ISWA CacheGen page import requires a fresh session");
         }
         let validated = validate_archive(archive, raw_len)?;
-        let records = cachegen_records(&validated);
+        let records = cachegen_records(&validated)?;
         let raw = desc.as_raw();
         let mut error = ptr::null_mut();
         let status = unsafe {
@@ -403,7 +411,7 @@ mod tests {
             }],
         };
 
-        let records = cachegen_records(&validated);
+        let records = cachegen_records(&validated).expect("F16 records map to the native ABI");
         assert_eq!(records.len(), 1);
         let record = records[0];
         assert_eq!(record.abi_version, 1);
@@ -417,6 +425,26 @@ mod tests {
         assert_eq!(record.total_tokens, 5);
         assert_eq!(record.payload, payload.as_ptr().cast());
         assert_eq!(record.payload_bytes, payload.len());
+    }
+
+    #[test]
+    fn typed_records_fail_before_entering_an_unsupported_native_backend() {
+        let payload = [1_u8, 2, 3, 4];
+        let validated = ValidatedArchive {
+            raw_len: 16,
+            records: vec![Record {
+                kind: RecordKind::CacheGenQ8_0,
+                element_bytes: 34,
+                output_offset: 0,
+                decoded_len: 16,
+                token_count: 1,
+                token_start: 0,
+                total_tokens: 0,
+                payload: &payload,
+            }],
+        };
+
+        assert!(cachegen_records(&validated).is_err());
     }
 
     #[test]
