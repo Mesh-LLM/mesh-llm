@@ -943,7 +943,7 @@ fn test_remote_peer(seed: u32, model: &str) -> mesh::PeerInfo {
         bytes[..4].copy_from_slice(&seed_bytes);
         bytes[4] = 0xde;
         bytes[5] = 0xad;
-        iroh::SecretKey::try_from(bytes).expect("fixed-length test key")
+        iroh::SecretKey::from(bytes)
     };
     let peer_id = iroh::EndpointId::from(secret.public());
     mesh::PeerInfo {
