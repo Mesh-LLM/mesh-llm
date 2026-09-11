@@ -385,8 +385,15 @@ class CiProductComposerTests(unittest.TestCase):
         self.assertIn("scripts/verify-native-runtime-package.sh", action)
         self.assertIn("--check", action)
 
-    def test_smoke_restore_model_is_optional(self) -> None:
-        action = self.read_action("restore-smoke-inputs")
+    def test_test_model_restore_is_optional_and_verified(self) -> None:
+        """The shared model action: resolve, cache, download, verify.
+
+        This used to live inside `restore-smoke-inputs`. It moved out so a
+        lane that needs a model but not a built product artifact -- the
+        native runtime-event gate -- uses the same sequence instead of a
+        second copy of it.
+        """
+        action = self.read_action("restore-test-model")
         model_inputs_present = (
             "steps.resolve-model.outputs.url != '' && "
             "steps.resolve-model.outputs.file != ''"
@@ -418,6 +425,49 @@ class CiProductComposerTests(unittest.TestCase):
             "      id: model-file",
             action,
         )
+
+    def test_test_model_restore_selects_one_artifact_from_a_multi_artifact_manifest(
+        self,
+    ) -> None:
+        """`skippy-ci-smoke.json` holds two artifacts, so the gate has to
+        name the one it wants. Selection must reach BOTH the resolve and
+        the verify call, or verification would check a different file than
+        the one that was downloaded."""
+        action = self.read_action("restore-test-model")
+
+        self.assertIn("model_artifact_id:", action)
+        self.assertIn("MODEL_ARTIFACT_ID: ${{ inputs.model_artifact_id }}", action)
+        self.assertEqual(
+            action.count('artifact_args+=(--artifact-id "$MODEL_ARTIFACT_ID")'), 2
+        )
+        self.assertEqual(action.count('--cadence "$MODEL_CADENCE"'), 2)
+
+    def test_smoke_restore_delegates_model_restore_to_the_shared_action(self) -> None:
+        """One implementation, not two. A second copy of the
+        resolve/cache/download/verify sequence would drift silently."""
+        action = self.read_action("restore-smoke-inputs")
+
+        self.assertIn("uses: ./.github/actions/restore-test-model", action)
+        self.assertNotIn("actions/cache/restore@", action)
+        self.assertNotIn("scripts/resolve-test-model-manifest.py", action)
+        for forwarded in (
+            "model_url: ${{ inputs.model_url }}",
+            "model_file: ${{ inputs.model_file }}",
+            "model_manifest: ${{ inputs.model_manifest }}",
+            "model_cadence: ${{ inputs.model_cadence }}",
+            "model_cache_scope: ${{ inputs.model_cache_scope }}",
+            "save_model_cache: ${{ inputs.save_model_cache }}",
+        ):
+            self.assertIn(forwarded, action)
+        # The outputs it re-exports must come from the nested action's own
+        # names, not the ones the inlined step used to publish.
+        for exported in (
+            "value: ${{ steps.resolve-model.outputs.model_url }}",
+            "value: ${{ steps.resolve-model.outputs.model_file }}",
+            "value: ${{ steps.resolve-model.outputs.model_sha256 }}",
+            "value: ${{ steps.resolve-model.outputs.model_size_bytes }}",
+        ):
+            self.assertIn(exported, action)
 
     def test_product_action_rejects_destructive_output_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

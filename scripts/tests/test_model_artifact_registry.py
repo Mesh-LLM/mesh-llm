@@ -163,8 +163,12 @@ class ModelArtifactRegistryTests(unittest.TestCase):
             )
 
     def test_executable_manifest_consumers_declare_cadence(self) -> None:
+        # Every place that resolves a model from a manifest must say which
+        # cadence it is authorized for. `restore-smoke-inputs` used to
+        # resolve one itself; it now delegates to `restore-test-model`, so
+        # that is where the invocation -- and the cadence -- must be.
         consumers = (
-            ".github/actions/restore-smoke-inputs/action.yml",
+            ".github/actions/restore-test-model/action.yml",
             ".github/actions/restore-product-integration-inputs/action.yml",
             ".github/workflows/ci-rust-tests-slice.yml",
             "scripts/ci-hf-download-smoke.sh",

@@ -226,7 +226,7 @@ it after the protected-main runner-contract update is active.
 | `static-abi-artifact.yml` | Typed static llama ABI producer with internal runner policy and an exact toolchain-epoch output |
 | `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that verify the producer-owned static ABI toolchain epoch and a pinned, digest-verified Skippy correctness fixture; related PR changes additionally compile one asserted, fully qualified runtime test and smoke an immutable SmolLM2 SafeTensors checkpoint through the complete Mesh config/resolver/server/native path to sampled prefill and decode with every supported load-time quantization |
 | `ci-{linux,macos,windows}-host-slice.yml` | Platform-pure neutral host producers; no empty cross-platform jobs |
-| `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers |
+| `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers. The Linux CPU row also runs the native runtime-event gate against the runtime it just built and uploads its evidence. |
 | `ci-{linux,macos,windows}-product-slice.yml` | Platform-pure composition-only product consumers |
 | `ci-platform-checks-slice.yml` | macOS portable/unit, Windows portable, and Windows log-store privacy ACL checks |
 | `ci-linux-product-smoke-slice.yml`, `ci-macos-product-smoke-slice.yml` | Platform-local callers of the typed CPU/CUDA/Vulkan (`gpu-nvidia` self-hosted), conditional ROCm (`gpu-amd`), and Metal product-integration suite plus model-download. The suite stages the registry-pinned SmolLM2 Q8 and IBM Granite 4.0 H Q4 pair once, runs dense standalone/SDK/restart, then dense passive-client split routing and strict recurrent `KvRecurrent` validation. Each split phase persists strict-whitelist seed/worker node, mesh, and peer identity plus stage/model snapshots, then atomically reconciles exact two-observer, topology/run/model/package/manifest, two-stage contiguous-cut and bind-address, ready-status, and served-model agreement. A capped five-minute wall-clock deadline with parallel, bounded endpoint capture finalizes failure evidence before workflow cancellation; the status projection excludes invite tokens, nested fields, and unrelated paths. Product reconciliation independently verifies both evidence files, records their paths and SHA-256 digests in `phase-results.json`, rejects missing or modified evidence, and uploads every JSON snapshot/evidence file with logs on success or failure. Linux CUDA packages admit only the reviewed cudart, cuBLAS, cuBLASLt, and nvJitLink families for the declared CUDA major, retain NVIDIA object bytes, and include the toolkit distribution license. The Linux CUDA smoke verifies that closure with `LD_LIBRARY_PATH` unset; cudart and cuBLAS are not installed by apt, and the NVIDIA driver remains host-owned. Before inference, it records CUDA visibility variables, host driver-library resolution and NVIDIA device nodes, then runs the packaged benchmark's device-count probe without benchmark allocations, using inherited and strict packaged-library resolution. ROCm skips unless `MESH_ROCM_INFERENCE_RUNNER_ENABLED` is exactly `true`; accelerator product-integration rows remain outside the checked plan pending live qualification. |
@@ -571,9 +571,15 @@ fail-open policy.
   integrity, family capability tags, and allowed suite/cadence membership.
   `scripts/generate-test-model-manifests.py` owns the family battery and
   suite-specific projections; CI contract tests reject stale projections.
-- `restore-smoke-inputs`: product/model extraction for consumers. Model
-  restores resolve generated suite manifests, use exact digest-bearing cache
-  keys, and stream-verify size and SHA-256 before use.
+- `restore-test-model`: the single implementation of model resolve, cache,
+  download, and verify. Resolves generated suite manifests, uses exact
+  digest-bearing cache keys, and stream-verifies size and SHA-256 before use.
+  `model_artifact_id` selects one artifact from a multi-artifact manifest,
+  and reaches both the resolve and the verify call so verification cannot
+  check a different file than the one downloaded.
+- `restore-smoke-inputs`: product extraction for consumers; delegates model
+  restoration to `restore-test-model` rather than carrying a second copy of
+  that sequence.
 - `select-ci-runners`: provider labels, cache permissions, and the
   provider-derived `allow_native_github_cache` / `allow_depot_remote_cache`
   outputs. Depot selections disable both cache paths by default. During the
