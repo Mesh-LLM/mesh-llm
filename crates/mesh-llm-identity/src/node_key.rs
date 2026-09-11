@@ -5,7 +5,33 @@ use crate::CryptoError;
 
 pub const NODE_KEY_BYTES: usize = 32;
 
+/// Resolve the default node key path, honoring the explicit override.
+///
+/// `MESH_LLM_NODE_KEY_PATH` selects a dedicated key file for hosts running
+/// several node processes side by side (#1699). When unset, the key stays at
+/// `~/.mesh-llm/key` so existing installations keep their node identity.
 pub fn default_node_key_path() -> Result<PathBuf, CryptoError> {
+    resolve_node_key_path(std::env::var_os("MESH_LLM_NODE_KEY_PATH"))
+}
+
+/// Resolve a node key path with explicit inputs so precedence is testable
+/// without mutating process environment variables.
+///
+/// An empty override is treated as unset, so `MESH_LLM_NODE_KEY_PATH=` keeps
+/// the historical default rather than resolving to the working directory.
+pub fn resolve_node_key_path(
+    override_path: Option<std::ffi::OsString>,
+) -> Result<PathBuf, CryptoError> {
+    if let Some(path) = override_path
+        && !path.is_empty()
+    {
+        return Ok(PathBuf::from(path));
+    }
+    home_node_key_path()
+}
+
+/// The historical node key location: `~/.mesh-llm/key`.
+pub fn home_node_key_path() -> Result<PathBuf, CryptoError> {
     let home = dirs::home_dir().ok_or_else(|| {
         CryptoError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
@@ -190,5 +216,34 @@ mod tests {
 
         assert!(matches!(error, CryptoError::InvalidKeyMaterial { .. }));
         std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn node_key_path_honors_explicit_override() {
+        // #1699: a second node process on one machine gets its own key via
+        // MESH_LLM_NODE_KEY_PATH instead of silently sharing ~/.mesh-llm/key.
+        let override_path = std::path::Path::new("/tmp/mesh-second-node.key");
+
+        let resolved =
+            resolve_node_key_path(Some(override_path.as_os_str().to_os_string())).unwrap();
+
+        assert_eq!(resolved, override_path);
+    }
+
+    #[test]
+    fn empty_node_key_override_falls_back_to_home() {
+        // MESH_LLM_NODE_KEY_PATH= must not resolve to the working directory.
+        let resolved = resolve_node_key_path(Some(std::ffi::OsString::new())).unwrap();
+
+        assert_eq!(resolved, home_node_key_path().unwrap());
+    }
+
+    #[test]
+    fn node_key_path_defaults_to_home_without_override() {
+        // With no override set, the path must remain the historical
+        // ~/.mesh-llm/key so existing installs keep their node identity.
+        let resolved = resolve_node_key_path(None).unwrap();
+
+        assert_eq!(resolved, home_node_key_path().unwrap());
     }
 }

@@ -439,10 +439,32 @@ impl Node {
                 })?
             }
         };
+        self.reject_join_to_own_identity(&addr).await?;
         // Clear dead status — explicit join should always attempt connection
         self.state.lock().await.dead_peers.remove(&addr.id);
         self.remember_join_target(addr.clone()).await;
         self.connect_to_peer(addr).await
+    }
+
+    /// A join token that names our own endpoint id means a second node
+    /// process on this machine is loading the same node key (#1699). iroh
+    /// refuses self-connections, so both meshes silently collapse to one node
+    /// — fail loudly instead, naming the two escape hatches.
+    async fn reject_join_to_own_identity(&self, addr: &EndpointAddr) -> Result<()> {
+        if addr.id != self.endpoint.id() {
+            return Ok(());
+        }
+        let message = format!(
+            "join rejected: the invite token names this node's own id ({}) — \
+             another process on this machine is almost certainly serving with \
+             the same node key. Give this node its own key with \
+             MESH_LLM_NODE_KEY_PATH, or set MESH_LLM_EPHEMERAL_KEY for a \
+             throwaway identity",
+            self.endpoint.id().fmt_short()
+        );
+        tracing::error!("{message}");
+        emit_mesh_info(format!("⛔ {message}"));
+        anyhow::bail!("{message}")
     }
 
     /// Record a join target address so the LAN beacon can unicast a dial-back
@@ -511,6 +533,7 @@ impl Node {
         // 15s were not enough.  Three at 30s with 5s/10s gaps give ~105s
         // total budget which covers all but the worst relay conditions.
         let backoffs = [5, 10];
+        self.reject_join_to_own_identity(&addr).await?;
         self.state.lock().await.dead_peers.remove(&addr.id);
         self.remember_join_target(addr.clone()).await;
         let mut last_err = match self.connect_to_peer(addr.clone()).await {
