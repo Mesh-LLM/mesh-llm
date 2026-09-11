@@ -427,15 +427,24 @@ mod linux {
         if value.is_empty() { None } else { Some(value) }
     }
 
+    /// Canonicalises a PCI address to lowercase `00000000:bb:dd.f`.
+    ///
+    /// Case has to be folded here because the two sides that get compared
+    /// disagree on it: NVML documents its bus id as `%08X:%02X:%02X.0`, while
+    /// ggml lowercases the CUDA `device_id` it exports. Any domain, bus, or
+    /// device containing `A`-`F` would otherwise compare unequal and miss
+    /// either the CUDA/NVML merge or the backend-device match, which is the
+    /// same failure this module exists to prevent.
     fn normalize_pci_bdf(value: &str) -> Option<String> {
         let trimmed = value.trim();
         let (domain, rest) = trimmed.split_once(':')?;
-        if domain.len() == 4 && rest.contains(':') && rest.contains('.') {
-            Some(format!("0000{domain}:{rest}"))
-        } else if domain.len() == 8 && rest.contains(':') && rest.contains('.') {
-            Some(trimmed.to_string())
-        } else {
-            None
+        if !rest.contains(':') || !rest.contains('.') {
+            return None;
+        }
+        match domain.len() {
+            4 => Some(format!("0000{trimmed}").to_ascii_lowercase()),
+            8 => Some(trimmed.to_ascii_lowercase()),
+            _ => None,
         }
     }
 
@@ -460,6 +469,16 @@ mod linux {
         const RTX_3080_CUDA_TOTAL: u64 = 10_354_032_640;
         const RTX_3080_NVML_TOTAL: u64 = 10_737_418_240;
         const RTX_3080_NVML_RESERVED: u64 = 383_778_816;
+        // A slot whose bus digit is hexadecimal, spelled the way each side
+        // actually spells it: NVML uses uppercase, ggml lowercases its
+        // exported CUDA device id.
+        const HEX_BDF_NVML: &str = "00000000:AF:00.0";
+        const HEX_BDF_BACKEND: &str = "0000:af:00.0";
+        const HEX_BDF_CANONICAL: &str = "00000000:af:00.0";
+        const HEX_UUID: &str = "GPU-1c0ffee0-dead-4bee-9f00-0d15ea5eb0a7";
+        const HEX_CUDA_TOTAL: u64 = 23_836_852_224;
+        const HEX_NVML_TOTAL: u64 = 25_757_220_864;
+        const HEX_NVML_RESERVED: u64 = 452_984_832;
 
         fn gpu(display_name: &str, index: usize, vram_bytes: u64) -> GpuFacts {
             GpuFacts {
@@ -653,6 +672,83 @@ mod linux {
                 Some(RTX_3080_BDF)
             );
             assert_eq!(normalize_pci_bdf("0"), None);
+        }
+
+        #[test]
+        fn hexadecimal_pci_addresses_normalize_to_one_case() {
+            // NVML's uppercase spelling and ggml's lowercase spelling of the
+            // same slot have to land on the same key, or every comparison
+            // below them is a miss.
+            assert_eq!(
+                normalize_pci_bdf(HEX_BDF_NVML).as_deref(),
+                Some(HEX_BDF_CANONICAL)
+            );
+            assert_eq!(
+                normalize_pci_bdf(HEX_BDF_BACKEND).as_deref(),
+                Some(HEX_BDF_CANONICAL)
+            );
+            assert_eq!(
+                normalize_pci_bdf("00AB:CD:EF.0").as_deref(),
+                Some("000000ab:cd:ef.0")
+            );
+        }
+
+        #[test]
+        fn hexadecimal_pci_case_does_not_split_the_nvml_merge() {
+            let mut cuda = vec![info(
+                normalize_pci_bdf(HEX_BDF_BACKEND).as_deref(),
+                None,
+                HEX_CUDA_TOTAL,
+                0,
+            )];
+            cuda[0].reserved_bytes = None;
+
+            merge_device_infos(
+                &mut cuda,
+                &[info(
+                    normalize_pci_bdf(HEX_BDF_NVML).as_deref(),
+                    Some(HEX_UUID),
+                    HEX_NVML_TOTAL,
+                    HEX_NVML_RESERVED,
+                )],
+            );
+
+            assert_eq!(cuda.len(), 1, "the same slot must not merge as two devices");
+            assert_eq!(cuda[0].total_bytes, Some(HEX_NVML_TOTAL));
+            assert_eq!(cuda[0].reserved_bytes, Some(HEX_NVML_RESERVED));
+            assert_eq!(cuda[0].uuid.as_deref(), Some(HEX_UUID));
+        }
+
+        #[test]
+        fn hexadecimal_pci_case_does_not_split_the_backend_match() {
+            let mut gpus = vec![GpuFacts {
+                pci_bdf: Some(HEX_BDF_NVML.to_string()),
+                stable_id: Some(format!("pci:{HEX_BDF_NVML}")),
+                ..gpu("NVIDIA GeForce RTX 4090", 0, HEX_CUDA_TOTAL)
+            }];
+
+            let unidentified = enrich_nvidia_gpu_facts(
+                &mut gpus,
+                &[
+                    info_5090(),
+                    info(
+                        normalize_pci_bdf(HEX_BDF_BACKEND).as_deref(),
+                        Some(HEX_UUID),
+                        HEX_NVML_TOTAL,
+                        HEX_NVML_RESERVED,
+                    ),
+                ],
+            );
+
+            assert!(unidentified.is_empty());
+            assert_eq!(gpus[0].vram_bytes, HEX_NVML_TOTAL);
+            assert_eq!(gpus[0].reserved_bytes, Some(HEX_NVML_RESERVED));
+            assert_eq!(gpus[0].vendor_uuid.as_deref(), Some(HEX_UUID));
+            assert_eq!(gpus[0].pci_bdf.as_deref(), Some(HEX_BDF_CANONICAL));
+            assert_eq!(
+                gpus[0].stable_id.as_deref(),
+                Some(format!("pci:{HEX_BDF_CANONICAL}").as_str())
+            );
         }
     }
 }
