@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeMap,
     fs::{self, File},
     hint::black_box,
     io::Write,
@@ -7,9 +6,9 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{Context, Result, anyhow, bail};
-use skippy_cache::cachegen::lmcache::{
-    MAX_TOKENS_PER_CHUNK, bins_for_layer, decode_f16_segment, encode_f16_segment,
+use anyhow::{Context, Result, bail};
+use skippy_cache::cachegen::archive::{
+    CacheGenArchive, ComponentLayout, PageLayout, decode_f16_page, encode_f16_page,
 };
 use skippy_runtime::{
     GGML_TYPE_F16, KV_PAGE_FLAG_V_TRANSPOSED, RuntimeKvPageDesc, StageModel, StageSession,
@@ -21,24 +20,6 @@ use super::{
     stage_execution::{BinaryStateHandoffConfig, elapsed_ms},
     state_handoff::LocalStatePayload,
 };
-
-const ARCHIVE_MAGIC: [u8; 4] = *b"CKG1";
-const ARCHIVE_HEADER_BYTES: usize = 16;
-const RECORD_HEADER_BYTES: usize = 52;
-const CACHEGEN_ROWS_PER_TILE: usize = MAX_TOKENS_PER_CHUNK;
-const RECORD_CACHEGEN: u8 = 0;
-const RECORD_EXACT: u8 = 1;
-const RECORD_CACHEGEN_TRANSPOSED: u8 = 2;
-
-type ByteRange = (usize, usize);
-type TransposedRegion = (usize, usize, usize, usize);
-type TransposedCoverage = BTreeMap<TransposedRegion, Vec<ByteRange>>;
-
-struct CacheGenArchive {
-    bytes: Vec<u8>,
-    tile_count: usize,
-    estimated_peak_codec_working_bytes: usize,
-}
 
 struct PersistedPayloads {
     native_kv: Vec<u8>,
@@ -279,97 +260,59 @@ fn compare_continuation(
 
 fn encode_kv_archive(desc: &RuntimeKvPageDesc, raw: &[u8]) -> Result<CacheGenArchive> {
     desc.validate_payload(raw.len())?;
-    let mut records = Vec::new();
-    if desc.component_count == 0 {
-        encode_component(
-            ComponentLayout {
-                token_count: desc.token_count,
-                layer_count: desc.layer_count,
-                k_type: desc.k_type,
-                v_type: desc.v_type,
-                k_row_bytes: desc.k_row_bytes,
-                v_row_bytes: desc.v_row_bytes,
-                v_element_bytes: desc.v_element_bytes,
-                k_idx_row_bytes: desc.k_idx_row_bytes,
-                payload_offset: 0,
-                payload_bytes: desc.payload_bytes,
-                flags: desc.flags,
-            },
-            raw,
-            &mut records,
-        )?;
-    } else {
-        for component in desc.components.iter().take(desc.component_count as usize) {
-            encode_component(
-                ComponentLayout {
-                    token_count: component.token_count,
-                    layer_count: component.layer_count,
-                    k_type: component.k_type,
-                    v_type: component.v_type,
-                    k_row_bytes: component.k_row_bytes,
-                    v_row_bytes: component.v_row_bytes,
-                    v_element_bytes: component.v_element_bytes,
-                    k_idx_row_bytes: component.k_idx_row_bytes,
-                    payload_offset: component.payload_offset,
-                    payload_bytes: component.payload_bytes,
-                    flags: component.flags,
-                },
-                raw,
-                &mut records,
-            )?;
-        }
-    }
-    records.sort_by_key(|record| (record.output_offset, record.token_start));
-    validate_record_coverage(&records, raw.len())?;
+    encode_f16_page(&page_layout(desc)?, raw)
+}
 
-    let record_count = u32::try_from(records.len()).context("too many CacheGen archive records")?;
-    let payload_bytes = records
-        .iter()
-        .try_fold(ARCHIVE_HEADER_BYTES, |total, record| {
-            total
-                .checked_add(RECORD_HEADER_BYTES)
-                .and_then(|value| value.checked_add(record.payload.len()))
-                .ok_or_else(|| anyhow!("CacheGen archive length overflow"))
-        })?;
-    let mut bytes = Vec::with_capacity(payload_bytes);
-    bytes.extend_from_slice(&ARCHIVE_MAGIC);
-    bytes.extend_from_slice(&(raw.len() as u64).to_le_bytes());
-    bytes.extend_from_slice(&record_count.to_le_bytes());
-    let mut largest_working_set = 0usize;
-    let mut tile_count = 0usize;
-    for record in records {
-        bytes.push(record.kind);
-        bytes.push(record.element_bytes);
-        bytes.extend_from_slice(&[0, 0]);
-        bytes.extend_from_slice(&(record.output_offset as u64).to_le_bytes());
-        bytes.extend_from_slice(&(record.decoded_len as u64).to_le_bytes());
-        bytes.extend_from_slice(&record.token_count.to_le_bytes());
-        bytes.extend_from_slice(&record.token_start.to_le_bytes());
-        bytes.extend_from_slice(&record.total_tokens.to_le_bytes());
-        bytes.extend_from_slice(&(record.payload.len() as u64).to_le_bytes());
-        bytes.extend_from_slice(&record.payload);
-        if record.kind != RECORD_EXACT {
-            tile_count += 1;
-            let values = record.decoded_len / 2;
-            let codec_working = record
-                .decoded_len
-                .saturating_add(values.saturating_mul(5))
-                .saturating_add(record.payload.len());
-            largest_working_set = largest_working_set.max(codec_working);
-        }
-    }
-    Ok(CacheGenArchive {
-        estimated_peak_codec_working_bytes: bytes
-            .len()
-            .saturating_add(raw.len())
-            .saturating_add(largest_working_set),
-        bytes,
-        tile_count,
+fn decode_kv_archive(desc: &RuntimeKvPageDesc, archive: &[u8]) -> Result<Vec<u8>> {
+    let raw_len = usize::try_from(desc.payload_bytes).context("descriptor length exceeds usize")?;
+    desc.validate_payload(raw_len)?;
+    decode_f16_page(archive, raw_len)
+}
+
+fn page_layout(desc: &RuntimeKvPageDesc) -> Result<PageLayout> {
+    let components = if desc.component_count == 0 {
+        vec![component_layout(
+            desc.token_count,
+            desc.layer_count,
+            desc.k_type,
+            desc.v_type,
+            desc.k_row_bytes,
+            desc.v_row_bytes,
+            desc.v_element_bytes,
+            desc.k_idx_row_bytes,
+            0,
+            desc.payload_bytes,
+            desc.flags,
+        )?]
+    } else {
+        desc.components
+            .iter()
+            .take(desc.component_count as usize)
+            .map(|component| {
+                component_layout(
+                    component.token_count,
+                    component.layer_count,
+                    component.k_type,
+                    component.v_type,
+                    component.k_row_bytes,
+                    component.v_row_bytes,
+                    component.v_element_bytes,
+                    component.k_idx_row_bytes,
+                    component.payload_offset,
+                    component.payload_bytes,
+                    component.flags,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?
+    };
+    Ok(PageLayout {
+        payload_bytes: desc.payload_bytes,
+        components,
     })
 }
 
-#[derive(Clone, Copy)]
-struct ComponentLayout {
+#[allow(clippy::too_many_arguments)]
+fn component_layout(
     token_count: u64,
     layer_count: u32,
     k_type: u32,
@@ -381,414 +324,21 @@ struct ComponentLayout {
     payload_offset: u64,
     payload_bytes: u64,
     flags: u64,
-}
-
-struct ArchiveRecord {
-    kind: u8,
-    element_bytes: u8,
-    output_offset: usize,
-    decoded_len: usize,
-    token_count: u64,
-    token_start: u64,
-    total_tokens: u64,
-    payload: Vec<u8>,
-}
-
-fn encode_component(
-    component: ComponentLayout,
-    raw: &[u8],
-    records: &mut Vec<ArchiveRecord>,
-) -> Result<()> {
-    if component.k_type != GGML_TYPE_F16 || component.v_type != GGML_TYPE_F16 {
+) -> Result<ComponentLayout> {
+    if k_type != GGML_TYPE_F16 || v_type != GGML_TYPE_F16 {
         bail!("CacheGen gate only accepts runtime F16 K/V pages");
     }
-    let token_count =
-        usize::try_from(component.token_count).context("token count exceeds usize")?;
-    let layer_count = component.layer_count as usize;
-    let k_row = component.k_row_bytes as usize;
-    let v_row = component.v_row_bytes as usize;
-    if token_count == 0 || layer_count == 0 || k_row == 0 || v_row == 0 {
-        bail!("CacheGen gate received empty KV geometry");
-    }
-    if !k_row.is_multiple_of(2) || !v_row.is_multiple_of(2) {
-        bail!("CacheGen gate requires whole F16 rows");
-    }
-    let base = usize::try_from(component.payload_offset).context("payload offset exceeds usize")?;
-    let component_len =
-        usize::try_from(component.payload_bytes).context("payload size exceeds usize")?;
-    let k_layer_bytes = token_count
-        .checked_mul(k_row)
-        .context("K layer size overflow")?;
-    let v_layer_bytes = token_count
-        .checked_mul(v_row)
-        .context("V layer size overflow")?;
-    let k_bytes = layer_count
-        .checked_mul(k_layer_bytes)
-        .context("K size overflow")?;
-    let v_bytes = layer_count
-        .checked_mul(v_layer_bytes)
-        .context("V size overflow")?;
-    let k_idx_bytes = layer_count
-        .checked_mul(token_count)
-        .and_then(|value| value.checked_mul(component.k_idx_row_bytes as usize))
-        .context("K-index size overflow")?;
-    if k_bytes
-        .checked_add(v_bytes)
-        .and_then(|value| value.checked_add(k_idx_bytes))
-        != Some(component_len)
-    {
-        bail!("CacheGen gate descriptor geometry does not cover its component payload");
-    }
-    let end = base
-        .checked_add(component_len)
-        .context("component range overflow")?;
-    let component_raw = raw
-        .get(base..end)
-        .ok_or_else(|| anyhow!("component range exceeds KV payload"))?;
-
-    for layer in 0..layer_count {
-        let layer_offset = layer * k_layer_bytes;
-        for row_start in (0..token_count).step_by(CACHEGEN_ROWS_PER_TILE) {
-            let rows = (token_count - row_start).min(CACHEGEN_ROWS_PER_TILE);
-            let local_offset = layer_offset + row_start * k_row;
-            let tile = &component_raw[local_offset..local_offset + rows * k_row];
-            records.push(ArchiveRecord {
-                kind: RECORD_CACHEGEN,
-                element_bytes: 2,
-                output_offset: base + local_offset,
-                decoded_len: tile.len(),
-                token_count: rows as u64,
-                token_start: 0,
-                total_tokens: 0,
-                payload: encode_f16_segment(
-                    tile,
-                    k_row / 2,
-                    bins_for_layer(layer, layer_count, true),
-                )?,
-            });
-        }
-    }
-
-    let v_base = k_bytes;
-    let v_transposed = component.flags & KV_PAGE_FLAG_V_TRANSPOSED != 0;
-    for layer in 0..layer_count {
-        let layer_offset = v_base + layer * v_layer_bytes;
-        let layer_tile = &component_raw[layer_offset..layer_offset + v_layer_bytes];
-        for row_start in (0..token_count).step_by(CACHEGEN_ROWS_PER_TILE) {
-            let rows = (token_count - row_start).min(CACHEGEN_ROWS_PER_TILE);
-            let (kind, output_offset, encoded_input, token_start, total_tokens) = if v_transposed {
-                if component.v_element_bytes != 2 {
-                    bail!("transposed F16 V page must declare two-byte elements");
-                }
-                (
-                    RECORD_CACHEGEN_TRANSPOSED,
-                    base + layer_offset,
-                    transpose_range_to_token_major(
-                        layer_tile,
-                        token_count,
-                        row_start,
-                        rows,
-                        v_row / 2,
-                        2,
-                    )?,
-                    row_start as u64,
-                    token_count as u64,
-                )
-            } else {
-                let local_offset = layer_offset + row_start * v_row;
-                (
-                    RECORD_CACHEGEN,
-                    base + local_offset,
-                    component_raw[local_offset..local_offset + rows * v_row].to_vec(),
-                    0,
-                    0,
-                )
-            };
-            records.push(ArchiveRecord {
-                kind,
-                element_bytes: 2,
-                output_offset,
-                decoded_len: encoded_input.len(),
-                token_count: rows as u64,
-                token_start,
-                total_tokens,
-                payload: encode_f16_segment(
-                    &encoded_input,
-                    v_row / 2,
-                    bins_for_layer(layer, layer_count, false),
-                )?,
-            });
-        }
-    }
-    if k_idx_bytes > 0 {
-        let local_offset = k_bytes + v_bytes;
-        records.push(ArchiveRecord {
-            kind: RECORD_EXACT,
-            element_bytes: 1,
-            output_offset: base + local_offset,
-            decoded_len: k_idx_bytes,
-            token_count: component.token_count,
-            token_start: 0,
-            total_tokens: 0,
-            payload: component_raw[local_offset..local_offset + k_idx_bytes].to_vec(),
-        });
-    }
-    Ok(())
-}
-
-fn decode_kv_archive(desc: &RuntimeKvPageDesc, archive: &[u8]) -> Result<Vec<u8>> {
-    if archive.len() < ARCHIVE_HEADER_BYTES || archive[..4] != ARCHIVE_MAGIC {
-        bail!("invalid CacheGen gate archive header");
-    }
-    let raw_len =
-        usize::try_from(read_u64(&archive[4..12])?).context("raw length exceeds usize")?;
-    if raw_len != usize::try_from(desc.payload_bytes).context("descriptor length exceeds usize")? {
-        bail!("CacheGen archive raw length disagrees with KV descriptor");
-    }
-    let record_count = read_u32(&archive[12..16])? as usize;
-    let mut cursor = ARCHIVE_HEADER_BYTES;
-    let mut decoded = vec![0u8; raw_len];
-    let mut coverage = Vec::with_capacity(record_count);
-    let mut transposed_coverage = TransposedCoverage::new();
-    let mut decoded_total = 0usize;
-    for _ in 0..record_count {
-        let header = archive
-            .get(cursor..cursor + RECORD_HEADER_BYTES)
-            .ok_or_else(|| anyhow!("truncated CacheGen archive record header"))?;
-        cursor += RECORD_HEADER_BYTES;
-        let kind = header[0];
-        let element_bytes = header[1] as usize;
-        if header[2..4] != [0, 0] {
-            bail!("CacheGen archive record reserved bytes are non-zero");
-        }
-        let output_offset = usize::try_from(read_u64(&header[4..12])?)
-            .context("record output offset exceeds usize")?;
-        let decoded_len = usize::try_from(read_u64(&header[12..20])?)
-            .context("record decoded length exceeds usize")?;
-        let token_count = usize::try_from(read_u64(&header[20..28])?)
-            .context("record token count exceeds usize")?;
-        let token_start = usize::try_from(read_u64(&header[28..36])?)
-            .context("record token start exceeds usize")?;
-        let total_tokens = usize::try_from(read_u64(&header[36..44])?)
-            .context("record total token count exceeds usize")?;
-        let payload_len = usize::try_from(read_u64(&header[44..52])?)
-            .context("record payload length exceeds usize")?;
-        let payload = archive
-            .get(cursor..cursor + payload_len)
-            .ok_or_else(|| anyhow!("truncated CacheGen archive record payload"))?;
-        cursor += payload_len;
-        decoded_total = decoded_total
-            .checked_add(decoded_len)
-            .context("decoded archive size overflow")?;
-        match kind {
-            RECORD_CACHEGEN => {
-                let output_end = output_offset
-                    .checked_add(decoded_len)
-                    .context("record output range overflow")?;
-                let output = decoded
-                    .get_mut(output_offset..output_end)
-                    .ok_or_else(|| anyhow!("record output range exceeds KV payload"))?;
-                let tile = decode_f16_segment(payload)?;
-                if tile.len() != decoded_len {
-                    bail!("decoded CacheGen tile length disagrees with archive record");
-                }
-                output.copy_from_slice(&tile);
-                coverage.push((output_offset, output_end));
-            }
-            RECORD_EXACT => {
-                let output_end = output_offset
-                    .checked_add(decoded_len)
-                    .context("record output range overflow")?;
-                let output = decoded
-                    .get_mut(output_offset..output_end)
-                    .ok_or_else(|| anyhow!("record output range exceeds KV payload"))?;
-                if payload.len() != decoded_len {
-                    bail!("exact archive record length mismatch");
-                }
-                output.copy_from_slice(payload);
-                coverage.push((output_offset, output_end));
-            }
-            RECORD_CACHEGEN_TRANSPOSED => {
-                let token_major = decode_f16_segment(payload)?;
-                if token_major.len() != decoded_len
-                    || element_bytes == 0
-                    || token_count == 0
-                    || total_tokens == 0
-                    || token_start
-                        .checked_add(token_count)
-                        .is_none_or(|end| end > total_tokens)
-                {
-                    bail!("invalid transposed CacheGen archive record geometry");
-                }
-                let dims = decoded_len
-                    .checked_div(token_count)
-                    .and_then(|value| value.checked_div(element_bytes))
-                    .ok_or_else(|| anyhow!("transposed record geometry overflow"))?;
-                let layer_bytes = total_tokens
-                    .checked_mul(dims)
-                    .and_then(|value| value.checked_mul(element_bytes))
-                    .context("transposed output size overflow")?;
-                let output_end = output_offset
-                    .checked_add(layer_bytes)
-                    .context("transposed output range overflow")?;
-                let output = decoded
-                    .get_mut(output_offset..output_end)
-                    .ok_or_else(|| anyhow!("transposed output range exceeds KV payload"))?;
-                transpose_range_from_token_major(
-                    &token_major,
-                    output,
-                    total_tokens,
-                    token_start,
-                    token_count,
-                    dims,
-                    element_bytes,
-                )?;
-                transposed_coverage
-                    .entry((output_offset, total_tokens, dims, element_bytes))
-                    .or_default()
-                    .push((token_start, token_start + token_count));
-            }
-            _ => bail!("unknown CacheGen archive record kind {kind}"),
-        }
-    }
-    if cursor != archive.len() {
-        bail!("CacheGen archive has trailing bytes");
-    }
-    validate_decoded_coverage(
-        &mut coverage,
-        &mut transposed_coverage,
-        raw_len,
-        decoded_total,
-    )?;
-    desc.validate_payload(decoded.len())?;
-    Ok(decoded)
-}
-
-fn validate_record_coverage(records: &[ArchiveRecord], raw_len: usize) -> Result<()> {
-    let decoded_total = records.iter().try_fold(0usize, |total, record| {
-        total
-            .checked_add(record.decoded_len)
-            .ok_or_else(|| anyhow!("archive decoded size overflow"))
-    })?;
-    if decoded_total != raw_len {
-        bail!("CacheGen archive records do not account for the KV payload");
-    }
-    Ok(())
-}
-
-fn validate_decoded_coverage(
-    coverage: &mut Vec<ByteRange>,
-    transposed: &mut TransposedCoverage,
-    raw_len: usize,
-    decoded_total: usize,
-) -> Result<()> {
-    if decoded_total != raw_len {
-        bail!("CacheGen archive decoded bytes do not account for the KV payload");
-    }
-    for (&(output_offset, total_tokens, dims, element_bytes), ranges) in transposed.iter_mut() {
-        ranges.sort_unstable();
-        let mut next_token = 0usize;
-        for &(start, end) in ranges.iter() {
-            if start != next_token || end < start {
-                bail!("transposed CacheGen records overlap or leave a token gap");
-            }
-            next_token = end;
-        }
-        if next_token != total_tokens {
-            bail!("transposed CacheGen records leave a token gap");
-        }
-        let end = output_offset
-            .checked_add(
-                total_tokens
-                    .checked_mul(dims)
-                    .and_then(|value| value.checked_mul(element_bytes))
-                    .context("transposed coverage size overflow")?,
-            )
-            .context("transposed coverage range overflow")?;
-        coverage.push((output_offset, end));
-    }
-    coverage.sort_unstable();
-    let mut next = 0usize;
-    for &(start, end) in coverage.iter() {
-        if start != next || end < start {
-            bail!("CacheGen archive records do not exactly cover the KV payload");
-        }
-        next = end;
-    }
-    if next != raw_len {
-        bail!("CacheGen archive records leave a gap in the KV payload");
-    }
-    Ok(())
-}
-
-fn transpose_range_to_token_major(
-    source: &[u8],
-    total_tokens: usize,
-    token_start: usize,
-    token_count: usize,
-    dims: usize,
-    element_bytes: usize,
-) -> Result<Vec<u8>> {
-    let expected = total_tokens
-        .checked_mul(dims)
-        .and_then(|value| value.checked_mul(element_bytes))
-        .context("transpose size overflow")?;
-    if source.len() != expected {
-        bail!("transposed V tile length does not match its geometry");
-    }
-    let output_len = token_count
-        .checked_mul(dims)
-        .and_then(|value| value.checked_mul(element_bytes))
-        .context("transpose output size overflow")?;
-    if token_start
-        .checked_add(token_count)
-        .is_none_or(|end| end > total_tokens)
-    {
-        bail!("transpose token range exceeds source geometry");
-    }
-    let mut output = vec![0u8; output_len];
-    for local_token in 0..token_count {
-        let token = token_start + local_token;
-        for dim in 0..dims {
-            let source_offset = (dim * total_tokens + token) * element_bytes;
-            let output_offset = (local_token * dims + dim) * element_bytes;
-            output[output_offset..output_offset + element_bytes]
-                .copy_from_slice(&source[source_offset..source_offset + element_bytes]);
-        }
-    }
-    Ok(output)
-}
-
-fn transpose_range_from_token_major(
-    source: &[u8],
-    output: &mut [u8],
-    total_tokens: usize,
-    token_start: usize,
-    token_count: usize,
-    dims: usize,
-    element_bytes: usize,
-) -> Result<()> {
-    let expected_source = token_count
-        .checked_mul(dims)
-        .and_then(|value| value.checked_mul(element_bytes))
-        .context("transpose source size overflow")?;
-    let expected_output = total_tokens
-        .checked_mul(dims)
-        .and_then(|value| value.checked_mul(element_bytes))
-        .context("transpose output size overflow")?;
-    if source.len() != expected_source || output.len() != expected_output {
-        bail!("transposed CacheGen decode length mismatch");
-    }
-    for local_token in 0..token_count {
-        let token = token_start + local_token;
-        for dim in 0..dims {
-            let source_offset = (local_token * dims + dim) * element_bytes;
-            let output_offset = (dim * total_tokens + token) * element_bytes;
-            output[output_offset..output_offset + element_bytes]
-                .copy_from_slice(&source[source_offset..source_offset + element_bytes]);
-        }
-    }
-    Ok(())
+    Ok(ComponentLayout {
+        token_count,
+        layer_count,
+        k_row_bytes,
+        v_row_bytes,
+        v_element_bytes,
+        k_idx_row_bytes,
+        payload_offset,
+        payload_bytes,
+        v_transposed: flags & KV_PAGE_FLAG_V_TRANSPOSED != 0,
+    })
 }
 
 fn persist_and_read_payloads(
@@ -850,18 +400,6 @@ fn read_payload(path: &PathBuf) -> Result<(Vec<u8>, f64)> {
     Ok((bytes, elapsed_ms(started)))
 }
 
-fn read_u64(bytes: &[u8]) -> Result<u64> {
-    Ok(u64::from_le_bytes(
-        bytes.try_into().context("u64 field length")?,
-    ))
-}
-
-fn read_u32(bytes: &[u8]) -> Result<u32> {
-    Ok(u32::from_le_bytes(
-        bytes.try_into().context("u32 field length")?,
-    ))
-}
-
 fn percentile_99(samples: &[f64]) -> f64 {
     let mut sorted = samples.to_vec();
     sorted.sort_by(f64::total_cmp);
@@ -907,6 +445,7 @@ fn max_or_zero(values: &[f64]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use skippy_cache::cachegen::lmcache::MAX_TOKENS_PER_CHUNK;
 
     fn f16_bytes(values: usize) -> Vec<u8> {
         (0..values)
@@ -974,7 +513,7 @@ mod tests {
 
     #[test]
     fn archive_chunks_long_transposed_pages_at_the_reference_tile_size() {
-        let token_count = CACHEGEN_ROWS_PER_TILE as u64 + 4;
+        let token_count = MAX_TOKENS_PER_CHUNK as u64 + 4;
         let desc = descriptor_with_tokens(KV_PAGE_FLAG_V_TRANSPOSED, token_count);
         let raw = f16_bytes(desc.payload_bytes as usize / 2);
         let archive = encode_kv_archive(&desc, &raw).expect("encode");
