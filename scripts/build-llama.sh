@@ -399,6 +399,9 @@ if [[ "$LLAMA_STAGE_FULL_REPLAY" == "ON" ]]; then
     test-skippy-recurrent-state-roundtrip
     test-skippy-verify-checkpoint-retirement
   )
+  if [[ "$LLAMA_BACKEND" == "metal" ]]; then
+    BUILD_TARGETS+=(test-skippy-cachegen-metal)
+  fi
 fi
 
 if [[ "$LLAMA_STAGE_UPSTREAM_TESTS" == "ON" ]]; then
