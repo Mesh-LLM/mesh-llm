@@ -148,9 +148,11 @@ packs the selected native row type. K and V carry independent kinds, so mixed
 selections do not require a second container or codec revision.
 
 The pure-Rust fixtures cover F32/F32, F16/F16, Q8_0/Q8_0, Q4_0/Q4_0,
-Q8_0/Q4_0, and transposed F32 V. This establishes portable archive and scalar
-oracle support only. The runtime rejects typed records before FFI until the
-selected Metal, CUDA, ROCm, or CPU native adapter is present; no scalar restore
+Q8_0/Q4_0, and transposed F32 V. Metal, CUDA, and ROCm now share a typed native
+decode contract for direct F16 and F32 resident writes, including transposed V;
+the former F16-only backend symbol was removed rather than retained as a
+compatibility alias. The runtime still rejects Q8_0 and Q4_0 records before FFI
+until their device quantization passes are present, and no scalar restore
 fallback is permitted. Quantized destinations remain unqualified until their
 matched end-to-end quality gates measure the combined CacheGen and native
 repacking loss.

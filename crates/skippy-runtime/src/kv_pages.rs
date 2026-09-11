@@ -18,10 +18,9 @@ fn cachegen_records(validated: &ValidatedArchive<'_>) -> Result<Vec<CacheGenReco
                     RecordKind::CacheGen => skippy_ffi::CACHEGEN_RECORD_F16,
                     RecordKind::Exact => skippy_ffi::CACHEGEN_RECORD_EXACT,
                     RecordKind::CacheGenTransposed => skippy_ffi::CACHEGEN_RECORD_F16_TRANSPOSED,
-                    RecordKind::CacheGenF32
-                    | RecordKind::CacheGenF32Transposed
-                    | RecordKind::CacheGenQ8_0
-                    | RecordKind::CacheGenQ4_0 => {
+                    RecordKind::CacheGenF32 => skippy_ffi::CACHEGEN_RECORD_F32,
+                    RecordKind::CacheGenF32Transposed => skippy_ffi::CACHEGEN_RECORD_F32_TRANSPOSED,
+                    RecordKind::CacheGenQ8_0 | RecordKind::CacheGenQ4_0 => {
                         bail!("resident KV backend does not provide this typed CacheGen adapter")
                     }
                 },
@@ -445,6 +444,28 @@ mod tests {
         };
 
         assert!(cachegen_records(&validated).is_err());
+    }
+
+    #[test]
+    fn maps_f32_records_to_the_native_abi() {
+        let payload = [1_u8, 2, 3, 4];
+        let validated = ValidatedArchive {
+            raw_len: 16,
+            records: vec![Record {
+                kind: RecordKind::CacheGenF32Transposed,
+                element_bytes: 4,
+                output_offset: 8,
+                decoded_len: 16,
+                token_count: 2,
+                token_start: 3,
+                total_tokens: 5,
+                payload: &payload,
+            }],
+        };
+
+        let records = cachegen_records(&validated).expect("F32 records map to the native ABI");
+        assert_eq!(records[0].kind, skippy_ffi::CACHEGEN_RECORD_F32_TRANSPOSED);
+        assert_eq!(records[0].element_bytes, 4);
     }
 
     #[test]
