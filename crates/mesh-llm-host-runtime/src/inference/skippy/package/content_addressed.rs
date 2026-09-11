@@ -1,10 +1,37 @@
-use std::path::Path;
+use std::{ffi::OsStr, path::Path};
 
 use anyhow::{Context, Result};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use super::{SkippyPackageIdentity, SkippyPackageSourceFile, hex_lower, synthetic_gguf_package};
+
+fn managed_hf_snapshot_blob(path: &Path) -> Result<Option<std::path::PathBuf>> {
+    if crate::models::huggingface_identity_for_path(path).is_none() {
+        return Ok(None);
+    }
+    let Some(repo_dir) = path.ancestors().find_map(|revision_dir| {
+        let snapshots_dir = revision_dir.parent()?;
+        (snapshots_dir.file_name() == Some(OsStr::new("snapshots")))
+            .then(|| snapshots_dir.parent())
+            .flatten()
+    }) else {
+        return Ok(None);
+    };
+    let blob_root = repo_dir
+        .join("blobs")
+        .canonicalize()
+        .with_context(|| format!("canonicalize Hugging Face blob root {}", repo_dir.display()))?;
+    let target = path
+        .canonicalize()
+        .with_context(|| format!("resolve Hugging Face GGUF snapshot link {}", path.display()))?;
+    anyhow::ensure!(
+        target.starts_with(&blob_root),
+        "Hugging Face GGUF snapshot link escapes its blob store: {}",
+        path.display()
+    );
+    Ok(Some(target))
+}
 
 #[derive(Serialize)]
 struct ContentAddressedGgufManifest<'a> {
@@ -54,11 +81,25 @@ pub(super) fn validate_source_set(model_path: &Path) -> Result<()> {
     let validate_file = |path: &Path| -> Result<()> {
         let metadata = std::fs::symlink_metadata(path)
             .with_context(|| format!("stat content-addressed GGUF source {}", path.display()))?;
+        let managed_hf_snapshot_blob = if metadata.file_type().is_symlink() {
+            managed_hf_snapshot_blob(path)?
+        } else {
+            None
+        };
         anyhow::ensure!(
-            metadata.is_file() && !metadata.file_type().is_symlink(),
+            metadata.is_file() || managed_hf_snapshot_blob.is_some(),
             "content-addressed GGUF source must be a non-symlink file: {}",
             path.display()
         );
+        if let Some(target) = managed_hf_snapshot_blob {
+            let target_metadata = std::fs::symlink_metadata(&target)
+                .with_context(|| format!("stat Hugging Face GGUF blob {}", target.display()))?;
+            anyhow::ensure!(
+                target_metadata.is_file() && !target_metadata.file_type().is_symlink(),
+                "Hugging Face GGUF snapshot link must resolve to a regular file: {}",
+                path.display()
+            );
+        }
         anyhow::ensure!(
             path.to_str().is_some(),
             "content-addressed GGUF source path must be valid UTF-8: {}",
@@ -344,6 +385,65 @@ mod tests {
 
         assert!(error.contains("non-symlink file"));
         assert!(error.contains("00002-of-00002"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn split_accepts_hugging_face_snapshot_links_and_indexes_blob_targets() {
+        use std::os::unix::fs::symlink;
+
+        let cache = tempfile::tempdir().unwrap();
+        let repo = cache.path().join("models--example--model");
+        let blobs = repo.join("blobs");
+        let snapshot = repo.join("snapshots").join("revision");
+        std::fs::create_dir_all(&blobs).unwrap();
+        std::fs::create_dir_all(&snapshot).unwrap();
+
+        let first_blob = blobs.join("first-blob");
+        let second_blob = blobs.join("second-blob");
+        write_test_metadata_gguf(&first_blob, 4096);
+        write_test_metadata_gguf(&second_blob, 4096);
+
+        let first = snapshot.join("model-00001-of-00002.gguf");
+        let second = snapshot.join("model-00002-of-00002.gguf");
+        symlink(Path::new("../../blobs/first-blob"), &first).unwrap();
+        symlink(Path::new("../../blobs/second-blob"), &second).unwrap();
+
+        validate_source_set(&first).unwrap();
+        let source_paths = super::super::direct_gguf_source_paths(&first).unwrap();
+
+        assert_eq!(
+            source_paths,
+            vec![
+                first_blob.canonicalize().unwrap(),
+                second_blob.canonicalize().unwrap()
+            ]
+        );
+        assert!(source_paths.iter().all(|path| {
+            let metadata = std::fs::symlink_metadata(path).unwrap();
+            metadata.is_file() && !metadata.file_type().is_symlink()
+        }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hugging_face_snapshot_link_rejects_blob_store_escape() {
+        use std::os::unix::fs::symlink;
+
+        let cache = tempfile::tempdir().unwrap();
+        let repo = cache.path().join("models--example--model");
+        let snapshot = repo.join("snapshots").join("revision");
+        std::fs::create_dir_all(repo.join("blobs")).unwrap();
+        std::fs::create_dir_all(&snapshot).unwrap();
+
+        let outside = cache.path().join("outside.gguf");
+        let model = snapshot.join("model.gguf");
+        write_test_metadata_gguf(&outside, 4096);
+        symlink(&outside, &model).unwrap();
+
+        let error = validate_source_set(&model).unwrap_err().to_string();
+
+        assert!(error.contains("escapes its blob store"), "{error}");
     }
 
     // APFS rejects invalid UTF-8 path bytes at creation time; Linux permits

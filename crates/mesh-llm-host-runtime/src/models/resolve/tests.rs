@@ -189,6 +189,31 @@ async fn cached_hf_snapshot_symlink_resolves_to_verified_blob() {
     );
 }
 
+#[cfg(unix)]
+#[tokio::test]
+#[serial]
+async fn existing_hf_multipart_snapshot_path_keeps_its_shard_name() {
+    let cache = tempfile::tempdir().unwrap();
+    let repo = "mesh-test/cached-hf-multipart";
+    let revision = "cccccccccccccccccccccccccccccccccccccccc";
+    let filename = "Cached-HF-Multipart-Q8_0-00001-of-00002.gguf";
+    let (snapshot, _blob) = hf_snapshot_symlink(cache.path(), repo, revision, filename);
+    let _cache_guard = EnvGuard::set_path("HF_HUB_CACHE", cache.path());
+    let _hf_home_guard = EnvGuard::remove("HF_HOME");
+
+    let resolved = resolve_model_spec_with_progress(&snapshot, false)
+        .await
+        .unwrap();
+
+    assert_eq!(resolved, snapshot);
+    assert!(
+        std::fs::symlink_metadata(resolved)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
 #[tokio::test]
 async fn existing_model_path_resolves_to_canonical_path() {
     let temp = tempfile::tempdir().expect("create temp model dir");
