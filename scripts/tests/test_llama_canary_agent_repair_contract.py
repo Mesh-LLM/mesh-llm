@@ -26,6 +26,12 @@ class LlamaCanaryStateMachineContractTests(unittest.TestCase):
         self.assertNotIn("post_green", self.wrapper)
         self.assertNotIn("patch-queue | battery", self.wrapper)
 
+    def test_wrapper_reexecs_natively_before_state_initialization(self) -> None:
+        reexec = self.wrapper.index('exec arch -arm64 "${BASH_SOURCE[0]}" "$@"')
+        root = self.wrapper.index('ROOT="$(cd')
+        self.assertLess(reexec, root)
+        self.assertIn("sysctl -n hw.optional.arm64", self.wrapper[:root])
+
     def test_every_agent_edit_restarts_prepare_and_full_build(self) -> None:
         main = self.wrapper[self.wrapper.index('phase="prepare"\nwhile true; do') :]
         self.assertLess(main.index("run_prepare"), main.index("run_full_build"))

@@ -55,11 +55,17 @@ from `hyper_connection.count * embedding_length`. It emits
 deterministic bounded GitHub matrix shards; the current one-runner topology consumes one
 selected-family shard while retaining the plan as evidence. Changed llama.cpp pins
 always run the complete `llama-bump` family cohort; non-bump runs retain their
-cadence-owned cohort. The runner's `.env` exports
-`HF_CACHE` pointing at a pre-warmed HF cache that lives on the lab NFS models
+cadence-owned cohort. The workflow requires `HF_CACHE` to be exactly
+`/Users/lab/models/huggingface`, requires its `hub` directory, and exports
+`HF_HOME` and `HF_HUB_CACHE` from that canonical root for every later step.
+The runner's `.env` exports `HF_CACHE` pointing at that pre-warmed cache on the lab NFS models
 volume and `HF_HUB_OFFLINE=1` (NFS offers no `flock`, so `hf` on the runner is
 read-only; the cache is populated by a two-stage prewarm that downloads on
-local disk and moves each repo to NFS). The workflow builds its four
+local disk and moves each repo to NFS). On Apple Silicon, the wrapper and
+generated-family rewriter re-exec as native arm64 before creating build state;
+the rewriter discards a CMake cache for any other architecture. Correctness
+lanes derive filtered-load resident tensor names from the native stage graph
+planner, including GGUFs with non-finite metadata values. The workflow builds its four
 certification binaries before the manifest lanes; the family battery builds
 them once itself unless `--skip-build` is selected, in which case it verifies
 that every binary already exists. A scheduled unchanged pin selects the four

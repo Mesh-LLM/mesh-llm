@@ -48,7 +48,7 @@ jobs:
       # Models are never cached through GitHub Actions cache. The
       # family-certify runner ships a large pre-warmed HF cache exported as
       # HF_CACHE; scripts/skippy-family-battery.sh normalizes it into
-      # HF_HOME/HF_HUB_CACHE so `hf download` is only a cache-miss backstop.
+      # HF_HOME/HF_HUB_CACHE for read-only resolution.
       FORCE_CERTIFY: ${{ inputs.force_certify && 'true' || 'false' }}
     steps:
       # A manual dispatch can be issued from any ref, but the persistent runner
@@ -69,10 +69,24 @@ jobs:
               missing=1
             fi
           done
-          if [[ -z "${HF_CACHE:-}" ]]; then
-            echo "HF_CACHE is not exported on this runner" >&2
+          expected_hf_cache="/Users/lab/models/huggingface"
+          if [[ "${HF_CACHE:-}" != "$expected_hf_cache" ]]; then
+            echo "HF_CACHE must be $expected_hf_cache on this runner; got: ${HF_CACHE:-<unset>}" >&2
             missing=1
           fi
+          if [[ ! -d "$expected_hf_cache/hub" ]]; then
+            echo "pre-warmed Hugging Face hub cache is missing: $expected_hf_cache/hub" >&2
+            missing=1
+          fi
+          if [[ "${HF_HUB_OFFLINE:-}" != "1" ]]; then
+            echo "HF_HUB_OFFLINE must be 1 on the read-only family-certify runner" >&2
+            missing=1
+          fi
+          {
+            echo "HF_HOME=$expected_hf_cache"
+            echo "HF_HUB_CACHE=$expected_hf_cache/hub"
+            echo "HF_HUB_OFFLINE=1"
+          } >> "$GITHUB_ENV"
           # Match scripts/check-skippy-generated-family-patch.sh: prefer the
           # pinned llvm@22, but accept any Homebrew LLVM that provides Clang
           # LibTooling (bin/clang + ClangConfig.cmake) so a runner image whose

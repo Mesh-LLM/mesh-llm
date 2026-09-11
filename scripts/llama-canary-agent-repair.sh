@@ -11,6 +11,14 @@ set -euo pipefail
 # through prepare and the complete build before another certification attempt.
 # The branch and PR appear once, after success or a bounded terminal failure.
 
+# The persistent Apple Silicon runner service can be launched by an x86_64
+# parent under Rosetta. Re-enter the complete state machine as arm64 before it
+# configures or executes any native build artifact.
+if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "x86_64" ]] \
+    && [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" == "1" ]]; then
+  exec arch -arm64 "${BASH_SOURCE[0]}" "$@"
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UPSTREAM_SHA="${1:-${UPSTREAM_SHA_INPUT:-latest}}"
 if [[ "$UPSTREAM_SHA" == "latest" || -z "$UPSTREAM_SHA" ]]; then

@@ -20,6 +20,7 @@ BATTERY_PLANNER = ROOT / "scripts" / "plan-family-battery.py"
 FAMILY_CERTIFY = ROOT / "scripts" / "family-certify.sh"
 FAMILY_OUTCOME = ROOT / "scripts" / "lib" / "family-outcome.sh"
 TIMEOUT_RUNNER = ROOT / "scripts" / "run-command-with-timeout.py"
+REWRITER_CHECK = ROOT / "scripts" / "check-skippy-generated-family-patch.sh"
 
 
 def _step_block(workflow: str, name: str) -> str:
@@ -199,6 +200,24 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertNotIn("queue_ref", workflow)
         self.assertNotIn("github.token", workflow)
         self.assertNotIn("contents: write", workflow)
+
+    def test_persistent_runner_requires_exact_read_only_hf_cache(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        preflight = _step_block(workflow, "Verify runner toolchain")
+        self.assertIn('expected_hf_cache="/Users/lab/models/huggingface"', preflight)
+        self.assertIn('"${HF_CACHE:-}" != "$expected_hf_cache"', preflight)
+        self.assertIn('[[ ! -d "$expected_hf_cache/hub" ]]', preflight)
+        self.assertIn('"${HF_HUB_OFFLINE:-}" != "1"', preflight)
+        self.assertIn('echo "HF_HOME=$expected_hf_cache"', preflight)
+        self.assertIn('echo "HF_HUB_CACHE=$expected_hf_cache/hub"', preflight)
+
+    def test_rewriter_check_reexecs_and_pins_native_architecture(self) -> None:
+        checker = REWRITER_CHECK.read_text(encoding="utf-8")
+        self.assertIn('exec arch -arm64 "${BASH_SOURCE[0]}" "$@"', checker)
+        self.assertIn("sysctl -n hw.optional.arm64", checker)
+        self.assertIn('cached_tool_arch="$(sed -n', checker)
+        self.assertIn('rm -rf "$TOOL_BUILD"', checker)
+        self.assertIn('-DCMAKE_OSX_ARCHITECTURES="$NATIVE_ARCH"', checker)
 
     def test_changed_pin_never_pushes_directly_to_main(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
