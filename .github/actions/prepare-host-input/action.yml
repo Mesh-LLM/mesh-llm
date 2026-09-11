@@ -30,6 +30,10 @@ inputs:
     description: Optional release-attestation public key path used to inspect the stamp.
     required: false
     default: ""
+  commit:
+    description: Source revision recorded in the release attestation. Defaults to the checkout's HEAD.
+    required: false
+    default: ""
 
 outputs:
   binary_path:
@@ -59,6 +63,7 @@ runs:
         INPUT_BUILD_VERSION: ${{ inputs.build_version }}
         INPUT_ATTESTATION_SIGNING_KEY_FILE: ${{ inputs.attestation_signing_key_file }}
         INPUT_ATTESTATION_PUBLIC_KEY_FILE: ${{ inputs.attestation_public_key_file }}
+        INPUT_COMMIT: ${{ inputs.commit }}
       run: |
         set -euo pipefail
 
@@ -97,9 +102,15 @@ runs:
               python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])'
           )"
           attestation_verifier="$cargo_target_dir/debug/xtask"
-          "$attestation_verifier" release-attestation stamp \
-            --binary "$binary_path" \
+          stamp_args=(
+            --binary "$binary_path"
             --signing-key-file "$INPUT_ATTESTATION_SIGNING_KEY_FILE"
+            --require-source-commit
+          )
+          if [[ -n "$INPUT_COMMIT" ]]; then
+            stamp_args+=(--commit "$INPUT_COMMIT")
+          fi
+          "$attestation_verifier" release-attestation stamp "${stamp_args[@]}"
           "$attestation_verifier" release-attestation inspect \
             --binary "$binary_path" \
             --public-key-file "$INPUT_ATTESTATION_PUBLIC_KEY_FILE" \

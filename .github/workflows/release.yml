@@ -304,6 +304,7 @@ jobs:
           output_dir: host-input
           attestation_signing_key_file: ${{ runner.temp }}/mesh-release-attestation-private-key.json
           attestation_public_key_file: ${{ runner.temp }}/mesh-release-attestation-public-key.json
+          commit: ${{ needs.metadata.outputs.source_sha }}
 
       - name: Upload immutable host input
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -889,6 +890,7 @@ jobs:
           output_dir: host-input
           attestation_signing_key_file: ${{ runner.temp }}/mesh-release-attestation-private-key.json
           attestation_public_key_file: ${{ runner.temp }}/mesh-release-attestation-public-key.json
+          commit: ${{ needs.metadata.outputs.source_sha }}
 
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -1347,6 +1349,7 @@ jobs:
           skip_ui: "true"
           attestation_signing_key_file: ${{ runner.temp }}/mesh-release-attestation-private-key.json
           attestation_public_key_file: ${{ runner.temp }}/mesh-release-attestation-public-key.json
+          commit: ${{ needs.metadata.outputs.source_sha }}
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: host-input-windows-x86_64
