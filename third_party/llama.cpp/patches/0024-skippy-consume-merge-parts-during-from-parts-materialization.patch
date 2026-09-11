@@ -1,0 +1,165 @@
+From d5c31ea86b0f114b78930edfba5ea5d93b127255 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Fri, 11 Sep 2026 17:33:13 +1000
+Subject: [PATCH 24/24] skippy: consume merge parts during from-parts materialization
+
+HF Jobs pods are evicted once container-local ephemeral storage crosses 50G.
+The sharded split writer stages one per-shard part per layer (~16G for Kimi-K3)
+and then merges them into the layer GGUF while every part is still on disk, so
+parts+output coexistence doubles the per-layer peak and tips the eviction
+budget mid-merge. Add skippy_write_gguf_from_parts_consuming, an opt-in
+materializing variant that unlinks each input part as soon as its tensors have
+been absorbed into the output, halving the staging peak. The default
+skippy_write_gguf_from_parts keeps its byte-identical, inputs-preserved
+behavior for bench materialization and metadata carriers. Bump
+SKIPPY_ABI_VERSION_PATCH 53->54.
+---
+ include/skippy/common.h        |  2 +-
+ include/skippy/model_package.h | 11 +++++++
+ src/skippy/model_package.cpp   | 53 ++++++++++++++++++++++++++++++++--
+ 3 files changed, 62 insertions(+), 4 deletions(-)
+
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index 65cfa2ce8..5853db327 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -46,7 +46,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 53
++#define SKIPPY_ABI_VERSION_PATCH 54
+ 
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+diff --git a/include/skippy/model_package.h b/include/skippy/model_package.h
+index 6ea9b395f..1c19572b9 100644
+--- a/include/skippy/model_package.h
++++ b/include/skippy/model_package.h
+@@ -103,6 +103,17 @@ LLAMA_API enum skippy_status skippy_write_gguf_from_parts(
+         const char * output_path,
+         struct skippy_error ** out_error);
+ 
++// Materializing variant that unlinks each input part file as soon as its
++// tensors have been absorbed into the output. Use from staging pipelines whose
++// parts are scratch files (for example the HF Jobs sharded split writer, where
++// parts and output coexisting would double local disk usage); never use it on
++// published package files that must survive.
++LLAMA_API enum skippy_status skippy_write_gguf_from_parts_consuming(
++        const char * const * input_paths,
++        size_t input_count,
++        const char * output_path,
++        struct skippy_error ** out_error);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/src/skippy/model_package.cpp b/src/skippy/model_package.cpp
+index 6df18689e..acd468ef1 100644
+--- a/src/skippy/model_package.cpp
++++ b/src/skippy/model_package.cpp
+@@ -356,6 +356,7 @@ static enum skippy_status skippy_copy_source_tensors(
+         const std::vector<skippy_source_tensor> & selected,
+         const char * output_path,
+         gguf_context * out_ctx,
++        bool consume_sources,
+         struct skippy_error ** out_error) {
+     if (!gguf_write_to_file(out_ctx, output_path, true)) {
+         skippy_set_error(out_error, SKIPPY_STATUS_IO_ERROR, "failed to write output GGUF metadata");
+@@ -373,6 +374,20 @@ static enum skippy_status skippy_copy_source_tensors(
+     std::vector<uint8_t> zeroes(output_alignment, 0);
+     bool ok = true;
+ 
++    // When consuming, each source part is unlinked as soon as the last of its
++    // tensors has been absorbed into the output. `selected` is grouped by
++    // source part (the part loaders preserve input order), so a single
++    // trailing scan after each tensor copy is enough: any source whose last
++    // selected tensor was just copied can be released. Sources are opened
++    // metadata-only (no_alloc), so nothing pins the file after the per-tensor
++    // read handle is closed.
++    std::set<const skippy_model_info *> consumed;
++    const auto try_consume_source = [&consumed](const skippy_model_info * source) {
++        if (consumed.insert(source).second) {
++            std::remove(source->path.c_str());
++        }
++    };
++
+     for (const skippy_source_tensor & item : selected) {
+         FILE * input = ggml_fopen(item.source->path.c_str(), "rb");
+         if (input == nullptr) {
+@@ -433,6 +448,17 @@ static enum skippy_status skippy_copy_source_tensors(
+             ok = false;
+             break;
+         }
++
++        if (consume_sources) {
++            const bool more_from_this_source = std::any_of(
++                &item + 1, selected.data() + selected.size(),
++                [&item](const skippy_source_tensor & candidate) {
++                    return candidate.source == item.source;
++                });
++            if (!more_from_this_source) {
++                try_consume_source(item.source);
++            }
++        }
+     }
+ 
+     if (std::fclose(output) != 0) {
+@@ -640,7 +666,7 @@ enum skippy_status skippy_write_slice_gguf(
+         }
+     }
+ 
+-    const enum skippy_status status = skippy_copy_source_tensors(selected, output_path, out_ctx, out_error);
++    const enum skippy_status status = skippy_copy_source_tensors(selected, output_path, out_ctx, false, out_error);
+     ggml_free(ggml_ctx);
+     gguf_free(out_ctx);
+     if (status != SKIPPY_STATUS_OK) {
+@@ -778,10 +804,15 @@ enum skippy_status skippy_write_gguf_metadata_from_parts(
+     return skippy_success(out_error);
+ }
+ 
+-enum skippy_status skippy_write_gguf_from_parts(
++// Shared implementation for the from-parts writers. `consume_inputs` deletes
++// each input part file as soon as its tensors have been absorbed into the
++// output; callers that need the inputs to survive (bench materialization from
++// published package files, metadata carriers) pass false.
++static enum skippy_status skippy_write_gguf_parts_impl(
+         const char * const * input_paths,
+         size_t input_count,
+         const char * output_path,
++        bool consume_inputs,
+         struct skippy_error ** out_error) {
+     if (input_paths == nullptr || input_count == 0 || output_path == nullptr) {
+         skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "input paths and output_path are required");
+@@ -862,7 +893,7 @@ enum skippy_status skippy_write_gguf_from_parts(
+         }
+     }
+ 
+-    const enum skippy_status status = skippy_copy_source_tensors(selected, output_path, out_ctx, out_error);
++    const enum skippy_status status = skippy_copy_source_tensors(selected, output_path, out_ctx, consume_inputs, out_error);
+     ggml_free(ggml_ctx);
+     gguf_free(out_ctx);
+     for (skippy_model_info * source : sources) {
+@@ -874,3 +905,19 @@ enum skippy_status skippy_write_gguf_from_parts(
+ 
+     return skippy_success(out_error);
+ }
++
++enum skippy_status skippy_write_gguf_from_parts(
++        const char * const * input_paths,
++        size_t input_count,
++        const char * output_path,
++        struct skippy_error ** out_error) {
++    return skippy_write_gguf_parts_impl(input_paths, input_count, output_path, false, out_error);
++}
++
++enum skippy_status skippy_write_gguf_from_parts_consuming(
++        const char * const * input_paths,
++        size_t input_count,
++        const char * output_path,
++        struct skippy_error ** out_error) {
++    return skippy_write_gguf_parts_impl(input_paths, input_count, output_path, true, out_error);
++}
+-- 
+2.54.0 (Apple Git-157)
+

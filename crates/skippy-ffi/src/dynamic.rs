@@ -239,6 +239,7 @@ dynamic_symbols! {
     skippy_write_slice_gguf(info: *mut ModelInfo, plan: *const SlicePlan, stage_index: i32, output_path: *const c_char, out_error: *mut *mut Error) -> Status;
     skippy_write_gguf_metadata_from_parts(input_paths: *const *const c_char, input_count: usize, output_path: *const c_char, out_error: *mut *mut Error) -> Status;
     skippy_write_gguf_from_parts(input_paths: *const *const c_char, input_count: usize, output_path: *const c_char, out_error: *mut *mut Error) -> Status;
+    skippy_write_gguf_from_parts_consuming(input_paths: *const *const c_char, input_count: usize, output_path: *const c_char, out_error: *mut *mut Error) -> Status;
     skippy_stage_planner_create_v1(config: *const StagePlannerConfigV1, out_planner: *mut *mut StagePlanner, out_error: *mut *mut Error) -> Status;
     skippy_stage_planner_free(planner: *mut StagePlanner);
     skippy_stage_planner_realize_v1(planner: *const StagePlanner, layer_start: i32, layer_end: i32, out_plan: *mut *mut StagePlan, out_error: *mut *mut Error) -> Status;
