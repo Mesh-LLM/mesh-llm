@@ -84,8 +84,9 @@ mod dynamic {
         }
     }
 
-    pub(crate) fn load_local_native_runtime_for_embedded_serving()
-    -> Result<Option<LoadedNativeRuntime>> {
+    pub(crate) fn load_local_native_runtime_for_embedded_serving(
+        runtime_selection: &RuntimeSelection,
+    ) -> Result<Option<LoadedNativeRuntime>> {
         if skippy_runtime::native_runtime_loaded() {
             return Ok(None);
         }
@@ -98,7 +99,7 @@ mod dynamic {
             crate::BUILD_VERSION,
             crate::RELEASE_VERSION,
             Some(&crate::system::native_runtime_install::current_skippy_abi_version()),
-            &RuntimeSelection::Recommended,
+            runtime_selection,
         )?
         else {
             return Ok(None);

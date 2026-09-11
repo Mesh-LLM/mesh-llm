@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+mesh-llm-native-runtime = { path = "../mesh-llm-native-runtime", version = "0.76.0" }
 mesh-llm-types = { path = "../mesh-llm-types", version = "0.76.0"  }
 semver = "1"
 serde = { workspace = true }

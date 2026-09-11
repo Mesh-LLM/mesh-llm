@@ -186,11 +186,15 @@ fn cli_native_runtime_install_options(
 }
 
 fn print_configured_selector(configured: NativeRuntimeConfigSelection<'_>, json_output: bool) {
-    if json_output || configured.mesh_version.is_none() {
+    if json_output
+        || (configured.mesh_version.is_none()
+            && configured.skippy_abi_version.is_none()
+            && configured.selection.is_none())
+    {
         return;
     }
     let mesh_version = configured.mesh_version_or_current();
-    eprintln!("🔒 Using native runtime selector from config");
+    eprintln!("🔒 Using native runtime selector");
     eprintln!("   mesh version: {mesh_version}");
     if let Some(skippy_abi_version) = configured.skippy_abi_version {
         eprintln!("   Skippy ABI: {skippy_abi_version}");
@@ -409,7 +413,7 @@ pub fn run_native_runtime_doctor(
     Ok(())
 }
 
-fn native_runtime_selection(
+pub fn native_runtime_selection(
     llama_flavor: Option<BinaryFlavor>,
     configured_selection: Option<&str>,
 ) -> Option<&str> {
@@ -515,6 +519,27 @@ mod tests {
     #[test]
     fn doctor_uses_configured_runtime_selection_without_cli_flavor() {
         assert_eq!(native_runtime_selection(None, Some("cuda")), Some("cuda"));
+    }
+
+    #[test]
+    fn runtime_install_prefers_cli_flavor_over_configured_backend() {
+        let resolved = resolve_runtime_selection(
+            None,
+            NativeRuntimeConfigSelection {
+                mesh_version: None,
+                skippy_abi_version: None,
+                selection: native_runtime_selection(Some(BinaryFlavor::Vulkan), Some("rocm")),
+            },
+        )
+        .expect("runtime install selection should resolve");
+
+        assert_eq!(
+            resolved.selection,
+            RuntimeSelection::Backend {
+                kind: mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan,
+                cuda_toolkit_major: None,
+            }
+        );
     }
 
     #[test]

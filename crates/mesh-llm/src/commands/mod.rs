@@ -64,9 +64,12 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
             Ok(())
         }
         Command::Runtime { command } => {
-            dispatch_runtime_command(command.as_ref(), cli.config.as_deref()).await
+            dispatch_runtime_command(command.as_ref(), cli.config.as_deref(), cli.llama_flavor)
+                .await
         }
-        Command::Setup { .. } => dispatch_setup_command(cmd, cli.config.as_deref()).await,
+        Command::Setup { .. } => {
+            dispatch_setup_command(cmd, cli.config.as_deref(), cli.llama_flavor).await
+        }
         Command::Uninstall {
             dry_run,
             yes,
