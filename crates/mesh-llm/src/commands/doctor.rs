@@ -56,26 +56,12 @@ pub(crate) async fn dispatch_doctor_command(
             mesh_llm_commands::runtime_native::run_native_runtime_doctor(
                 native_runtime.mesh_version.as_deref(),
                 native_runtime.skippy_abi.as_deref(),
-                native_runtime_selection(llama_flavor, native_runtime.selection.as_deref()),
+                llama_flavor.map(crate::map_binary_flavor),
+                native_runtime.selection.as_deref(),
                 json_output,
             )
         }
     }
-}
-
-fn native_runtime_selection(
-    llama_flavor: Option<BinaryFlavor>,
-    configured_selection: Option<&str>,
-) -> Option<&str> {
-    llama_flavor
-        .map(|flavor| match flavor {
-            BinaryFlavor::Cpu => "cpu",
-            BinaryFlavor::Cuda => "cuda",
-            BinaryFlavor::Rocm => "rocm",
-            BinaryFlavor::Vulkan => "vulkan",
-            BinaryFlavor::Metal => "metal",
-        })
-        .or(configured_selection)
 }
 
 async fn run_split_doctor(
@@ -403,26 +389,12 @@ fn split_readiness_short_node_list(items: &[Value]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        SKIPPY_DIAGNOSTIC_ENDPOINTS, capture_skippy_native_log, native_runtime_selection,
-        select_runtime_instance, split_readiness_lines, write_split_readiness_report,
+        SKIPPY_DIAGNOSTIC_ENDPOINTS, capture_skippy_native_log, select_runtime_instance,
+        split_readiness_lines, write_split_readiness_report,
     };
-    use mesh_llm_cli::BinaryFlavor;
     use mesh_llm_host_runtime::command_support::runtime_instances::LocalInstanceSnapshot;
     use serde_json::json;
     use std::path::PathBuf;
-
-    #[test]
-    fn doctor_prefers_cli_flavor_over_configured_runtime_selection() {
-        assert_eq!(
-            native_runtime_selection(Some(BinaryFlavor::Vulkan), Some("cuda")),
-            Some("vulkan")
-        );
-    }
-
-    #[test]
-    fn doctor_uses_configured_runtime_selection_without_cli_flavor() {
-        assert_eq!(native_runtime_selection(None, Some("cuda")), Some("cuda"));
-    }
 
     #[test]
     fn split_readiness_lines_show_waiting_guidance() {
