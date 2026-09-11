@@ -75,6 +75,7 @@ pub(crate) fn elapsed_ms_u64(duration: std::time::Duration) -> u64 {
     duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
 
+mod advertisement;
 mod artifact_transfer_io;
 mod cache_affinity_gossip;
 mod capacity;
@@ -132,6 +133,7 @@ use stage_artifacts::*;
 use stage_transport::*;
 use stun::*;
 
+pub(crate) use advertisement::AdvertisedCandidate;
 pub use capacity::AdvertisedMemory;
 pub use connections::{QuicBindSelection, RelayConfig, RelayPolicy};
 pub(crate) use connectivity::MeshConnectivitySnapshot;
