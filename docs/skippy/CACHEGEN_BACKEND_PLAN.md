@@ -121,10 +121,56 @@ meet the restore-to-first-token gate.
 
 1. Preserve the scalar implementation and its pinned fixtures as the
    deterministic oracle for device kernels.
-2. Implement the parallel arithmetic path on an available device backend and
-   prove it byte-for-byte against the CPU reference before another 19K gate.
-3. Qualify CUDA and HIP/ROCm on real hardware before either is marked
-   implemented.
+2. Add a Skippy-owned compressed-page import/export contract at the native KV
+   boundary. Skippy keeps ownership of cell allocation, rollback, tensor
+   layout, and session-position commit.
+3. Expose one optional backend-registry codec hook from Metal and CUDA/HIP.
+   Import passes validated compressed records plus tensor/cell-run
+   destinations; it never exposes backend-specific device pointers through the
+   public Rust or C ABI.
+4. Implement the parallel arithmetic path on Metal and decode directly into
+   resident K/V storage, including transposed-V destination addressing. Prove
+   fixture parity before another 19K gate.
+5. Add encode from resident K/V storage and copy only the compact archive back
+   to the persistence layer.
+6. Compile the same CUDA-family source through CUDA and HIP/ROCm, then qualify
+   each backend on real hardware before marking it implemented.
+
+## Native runtime integration boundary
+
+The existing native page API is host-buffer oriented. Rust passes a `&[u8]`
+to `skippy_import_kv_page`; the C ABI receives a `const void *`; and
+`llama_kv_cache::stage_import_kv_page` allocates cells before copying each run
+with `ggml_backend_tensor_set`. A device decoder above this API would have to
+materialize the complete decoded page in host memory and upload it again. That
+would erase the main benefit on discrete CUDA and ROCm devices.
+
+CacheGen therefore belongs inside the Skippy state-transfer transaction while
+its portable envelope and scalar oracle remain in `skippy-cache`. The public
+runtime accepts a compressed portable page. The native implementation validates
+all records and destination coverage, allocates all target cell runs, resolves
+the codec hook for every owning backend, dispatches decode into the resident K
+and V tensors, synchronizes, and only then commits the session position. A
+validation, capability, launch, or synchronization failure restores the prior
+cell state. Unsupported backends return an explicit unsupported result; the
+performance gate cannot silently select the scalar oracle.
+
+The hook is an optional function obtained through
+`ggml_backend_reg_get_proc_address`, following the extension mechanism already
+used by Metal backend tuning. CacheGen state transfer is intentionally not a
+new global ggml graph operation: it runs outside model execution, and making it
+an op would also require global enum, scheduler, graph-identity, slice-planning,
+shape, and backend-support changes. The registry hook keeps the patch local to
+the state capability and the backends that implement it while still receiving
+the active backend context needed for ordered execution.
+
+CUDA and ROCm share the `ggml-cuda` source path, which llama.cpp already builds
+through CUDA or HIP. Metal implements the same contract in MSL. Each launch
+batches many 256-token arithmetic streams: one thread serially decodes at most
+256 symbols for one channel while hundreds of thousands of independent channel
+streams run in parallel. Destination metadata maps each stream to a K/V tensor,
+allocated cell run, row stride, and optional transposed-V stride. This avoids a
+launch per tile and permits dequantization and final layout writes in one pass.
 
 ## 19K LMCache-compatible CPU result (2026-09-11): QUALITY PASS, LATENCY STOP
 
