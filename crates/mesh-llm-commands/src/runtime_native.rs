@@ -12,6 +12,7 @@ use mesh_llm_runtime_install::{
     discover_native_runtime_bundle_dirs, host_runtime_profile, install_native_runtime,
     load_release_manifest_with_sources, native_runtime_cache,
 };
+use mesh_llm_system::backend::BinaryFlavor;
 use mesh_llm_tui::terminal_progress::{
     ratio_complete_u64, render_inline_gauge_with_reserved_width,
 };
@@ -185,11 +186,15 @@ fn cli_native_runtime_install_options(
 }
 
 fn print_configured_selector(configured: NativeRuntimeConfigSelection<'_>, json_output: bool) {
-    if json_output || configured.mesh_version.is_none() {
+    if json_output
+        || (configured.mesh_version.is_none()
+            && configured.skippy_abi_version.is_none()
+            && configured.selection.is_none())
+    {
         return;
     }
     let mesh_version = configured.mesh_version_or_current();
-    eprintln!("🔒 Using native runtime selector from config");
+    eprintln!("🔒 Using native runtime selector");
     eprintln!("   mesh version: {mesh_version}");
     if let Some(skippy_abi_version) = configured.skippy_abi_version {
         eprintln!("   Skippy ABI: {skippy_abi_version}");
@@ -342,14 +347,16 @@ pub fn run_native_runtime_prune(
 pub fn run_native_runtime_doctor(
     mesh_version: Option<&str>,
     skippy_abi_version: Option<&str>,
+    llama_flavor: Option<BinaryFlavor>,
     configured_selection: Option<&str>,
     json_output: bool,
 ) -> Result<()> {
+    let effective_selection = native_runtime_selection(llama_flavor, configured_selection);
     let cache = native_runtime_cache(None)?;
     let profile = host_runtime_profile();
     let installed = discover_local_native_runtimes(&[], &cache)?;
     let selected_mesh_version = mesh_version.unwrap_or(CURRENT_MESH_VERSION);
-    let runtime_selection = RuntimeSelection::parse(configured_selection)?;
+    let runtime_selection = RuntimeSelection::parse(effective_selection)?;
     let selected_version_runtimes = installed
         .iter()
         .filter(|runtime| runtime.mesh_version == selected_mesh_version)
@@ -382,7 +389,7 @@ pub fn run_native_runtime_doctor(
         running_mesh_version: CURRENT_MESH_VERSION.to_string(),
         selected_mesh_version: selected_mesh_version.to_string(),
         configured_skippy_abi: skippy_abi_version.map(ToString::to_string),
-        configured_selection: configured_selection.map(ToString::to_string),
+        configured_selection: effective_selection.map(ToString::to_string),
         host: profile,
         cache_path: cache.root().to_path_buf(),
         selected_runtime_id: selected.map(|runtime| runtime.native_runtime_id.clone()),
@@ -404,6 +411,15 @@ pub fn run_native_runtime_doctor(
         );
     }
     Ok(())
+}
+
+pub fn native_runtime_selection(
+    llama_flavor: Option<BinaryFlavor>,
+    configured_selection: Option<&str>,
+) -> Option<&str> {
+    llama_flavor
+        .map(BinaryFlavor::suffix)
+        .or(configured_selection)
 }
 
 fn native_runtime_doctor_readiness(
@@ -490,6 +506,40 @@ mod tests {
         }
         .write_to_dir(path)
         .unwrap();
+    }
+
+    #[test]
+    fn doctor_prefers_cli_flavor_over_configured_runtime_selection() {
+        assert_eq!(
+            native_runtime_selection(Some(BinaryFlavor::Vulkan), Some("cuda")),
+            Some("vulkan")
+        );
+    }
+
+    #[test]
+    fn doctor_uses_configured_runtime_selection_without_cli_flavor() {
+        assert_eq!(native_runtime_selection(None, Some("cuda")), Some("cuda"));
+    }
+
+    #[test]
+    fn runtime_install_prefers_cli_flavor_over_configured_backend() {
+        let resolved = resolve_runtime_selection(
+            None,
+            NativeRuntimeConfigSelection {
+                mesh_version: None,
+                skippy_abi_version: None,
+                selection: native_runtime_selection(Some(BinaryFlavor::Vulkan), Some("rocm")),
+            },
+        )
+        .expect("runtime install selection should resolve");
+
+        assert_eq!(
+            resolved.selection,
+            RuntimeSelection::Backend {
+                kind: mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan,
+                cuda_toolkit_major: None,
+            }
+        );
     }
 
     #[test]

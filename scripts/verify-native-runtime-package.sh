@@ -17,6 +17,7 @@ Verifies MeshLLM native runtime artifacts:
   - artifact directory name matches runtime.id
   - all runtime.libraries exist
   - library_sha256 matches the primary library
+  - Linux ELF libraries and tools stay within the declared glibc floor
   - Linux shared-library RUNPATH/RPATH is relocatable and resolves packaged deps
   - Linux CUDA ELF dependencies are closed, same-architecture, and non-stub
   - Windows non-system DLL imports are present in the artifact
@@ -373,6 +374,52 @@ for rel_path in [*libraries, *tools]:
 PY
 }
 
+# Keeps the packaged runtime loadable on every Linux distribution the release
+# claims to support. Without this the floor is whatever the build image
+# happened to provide, which is how mesh-llm#1522 shipped libraries needing
+# GLIBC_2.38 to hosts running 2.35. Covers runtime.libraries AND runtime.tools:
+# both ship in the package, and a tool linked above the ceiling fails on a
+# supported host exactly like a library does. The host import policy does not
+# apply here: runtime libraries legitimately import each other.
+verify_linux_glibc_floor() {
+    local artifact_dir="$1" manifest="$2"
+    local py rel_path
+    py="$(python_bin)"
+    while IFS= read -r rel_path; do
+        [[ -n "$rel_path" ]] || continue
+        "$py" "$SCRIPT_DIR/verify-host-dependencies.py" \
+            "$artifact_dir/$rel_path" \
+            --no-import-policy \
+            --max-glibc declared \
+            >/dev/null
+    done < <("$py" - "$artifact_dir" "$manifest" <<'PY'
+import json
+import os
+import sys
+
+artifact_dir, manifest_path = sys.argv[1:3]
+with open(manifest_path, encoding="utf-8") as fh:
+    manifest = json.load(fh)
+runtime = manifest["runtime"]
+# Tools ship in the package too: package-native-runtime.sh builds the GPU
+# benchmark and skippy-model-package, and the host executes the benchmark
+# from crates/mesh-llm-system/src/benchmark.rs. A tool linked above the
+# declared ceiling fails on a supported host exactly like a library does,
+# so the floor in scripts/linux-glibc-floor.txt covers both.
+for rel_path in [*runtime["libraries"], *(runtime.get("tools") or {})]:
+    # Only ELF objects have a glibc floor. Anything else in the package is
+    # the surrounding verifier's business, not this check's.
+    try:
+        with open(os.path.join(artifact_dir, rel_path), "rb") as handle:
+            if handle.read(4) != b"\x7fELF":
+                continue
+    except OSError:
+        continue
+    print(rel_path)
+PY
+    )
+}
+
 verify_linux_runtime_paths() {
     local artifact_dir="$1"
     local manifest="$2"
@@ -391,6 +438,7 @@ PY
         echo "readelf is required to verify Linux native runtime shared libraries" >&2
         exit 1
     fi
+    verify_linux_glibc_floor "$artifact_dir" "$manifest"
     local runtime_arch runtime_backend primary_name actual_order expected_order
     read -r runtime_arch runtime_backend primary_name < <("$(python_bin)" - "$manifest" <<'PY'
 import json
