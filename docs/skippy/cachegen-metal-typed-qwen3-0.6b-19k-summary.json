@@ -5,7 +5,8 @@
   "commits": {
     "quantized_and_mixed": "2e26d46ea87e1b8ee783460998e703f669513f91",
     "f32": "74b4f60719d09dee7d9579c1365ac6f95d14c20c",
-    "f32_mixed_crossover": "ddddf34aa5e64262c9e113d07f9dcb506e5f7aab"
+    "f32_mixed_crossover": "ddddf34aa5e64262c9e113d07f9dcb506e5f7aab",
+    "metal_direct_staging": "e2bdc935e24cbed3bff767762547098db6028459"
   },
   "reference": {
     "implementation": "LMCache CacheGen",
@@ -36,6 +37,32 @@
     "maximum_p99_decode_regression": 0.05,
     "encoded_payload_must_be_smaller_than_native": true,
     "restore_to_first_token_must_beat_native": true
+  },
+  "metal_direct_staging": {
+    "change": "write validated jobs directly into final shared MTLBuffers",
+    "q8_0_f32": {
+      "baseline_cachegen_import_ms": [586.035708, 574.8656669999999],
+      "optimized_cachegen_import_ms": [497.411834, 486.434625],
+      "mean_import_reduction": 0.1525,
+      "optimized_cachegen_ttft_ms": [713.511958, 701.9677919999999],
+      "optimized_native_ttft_ms": [571.8813749999999, 547.7787920000001],
+      "decision": "latency-stop"
+    },
+    "f16_f16": {
+      "baseline_cachegen_import_ms": 540.74,
+      "optimized_cachegen_import_ms": 451.817375,
+      "import_reduction": 0.1644,
+      "optimized_cachegen_ttft_ms": 514.338417,
+      "optimized_native_ttft_ms": 343.15962500000006,
+      "decision": "latency-stop"
+    },
+    "chunk_128_diagnostic": {
+      "tile_count": 8344,
+      "cachegen_storage_bytes": 850615819,
+      "compression_ratio": 0.3084301534362527,
+      "cachegen_import_ms": 727.739791,
+      "decision": "reject-smaller-chunks"
+    }
   },
   "cases": [
     {
@@ -194,6 +221,8 @@
     "Q8_0 cases preserved all 64 greedy continuation tokens; Q4_0 K cases first diverged at step 15 and preserved 61 of 64.",
     "F32/F32 beat its matched native control on this local unified-memory tier; the four sampled quantized and mixed restores were slower.",
     "Q4_0/Q4_0 expanded the native payload by 3.62 percent and therefore failed the storage gate independently of latency.",
-    "The matrix is representative rather than exhaustive; the remaining mixed pairings retain fixture coverage only."
+    "The matrix is representative rather than exhaustive; the remaining mixed pairings retain fixture coverage only.",
+    "Direct Metal staging reduced F16/F16 and Q8_0/F32 import by about 16 percent but did not make either case beat its matched native TTFT control.",
+    "A 128-row diagnostic doubled tile count, worsened compression, and increased import latency; further decoder parallelism needs shared calibration across multiple arithmetic substreams rather than smaller archive tiles."
   ]
 }
