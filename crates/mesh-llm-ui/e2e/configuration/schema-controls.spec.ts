@@ -328,7 +328,7 @@ function auditSetting(
   })
 }
 
-async function installConfigurationBackend(page: Page) {
+async function installConfigurationBackend(page: Page, configOverride: JsonRecord = initialConfig) {
   await page.addInitScript(
     ({ dataModeKey, featureFlagsKey, status, models, bootstrap, schema, controlState, config }) => {
       window.localStorage.setItem(dataModeKey, 'live')
@@ -445,7 +445,7 @@ async function installConfigurationBackend(page: Page) {
       bootstrap: bootstrapPayload,
       schema: schemaPayload,
       controlState: controlStatePayload,
-      config: initialConfig
+      config: configOverride
     }
   )
 }
@@ -638,5 +638,50 @@ test.describe('schema-driven configuration controls', () => {
       body: await page.screenshot({ fullPage: true, animations: 'disabled' }),
       contentType: 'image/png'
     })
+  })
+})
+
+test.describe('native runtime backend pin', () => {
+  // An `exact:` / `meshllm-` runtime pin is a deliberate config-file escape hatch that the runtime
+  // options source cannot enumerate. The backend select must surface it as a synthetic selected
+  // option so editing an unrelated setting and saving preserves the pin verbatim.
+  const NATIVE_BACKEND_PIN = 'exact:meshllm-native-runtime-linux-x86_64-cuda12'
+  const pinnedRuntimeConfig: JsonRecord = {
+    ...initialConfig,
+    runtime: { native_backend: NATIVE_BACKEND_PIN }
+  }
+
+  test('preserves an unmatched runtime backend pin through an unrelated edit and save', async ({ page }, testInfo) => {
+    await installConfigurationBackend(page, pinnedRuntimeConfig)
+    await page.goto(appUrl('/configuration/models', testInfo))
+    await expect(page.getByRole('heading', { name: 'Model settings' })).toBeVisible()
+
+    await page.getByRole('tab', { name: 'Runtime' }).click()
+    await expect(page.getByRole('heading', { name: 'Runtime settings' })).toBeVisible()
+
+    const backendSelect = page.getByRole('combobox', { name: 'Native backend' })
+    await expect(backendSelect).toHaveValue(NATIVE_BACKEND_PIN)
+    await expect(backendSelect.getByRole('option', { name: NATIVE_BACKEND_PIN })).toHaveCount(1)
+    await expect(page.getByText('Set in config file')).toBeVisible()
+
+    // Edit an unrelated setting so the config is dirty, then save.
+    await page.getByRole('tab', { name: 'Models' }).click()
+    await page.getByRole('button', { name: '8K', exact: true }).click()
+    await expect(page.getByRole('slider', { name: 'Context size' })).toHaveAttribute('aria-valuenow', '8192')
+
+    await page.getByRole('button', { name: 'Save config' }).click()
+    await expect
+      .poll(async () => {
+        const state = await readConfigState(page)
+        return state.applyRequests.length
+      })
+      .toBe(1)
+
+    const state = await readConfigState(page)
+    const applyRequest = state.applyRequests[0] as {
+      config: { runtime?: JsonRecord; defaults?: { model_fit?: JsonRecord } }
+    }
+    expect(applyRequest.config.defaults?.model_fit?.ctx_size).toBe(8192)
+    expect(applyRequest.config.runtime?.native_backend).toBe(NATIVE_BACKEND_PIN)
   })
 })
