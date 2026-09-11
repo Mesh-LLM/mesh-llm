@@ -17,19 +17,25 @@ on:
 # This workflow always checks out and executes trusted default-branch content.
 # It must never execute a caller-selected ref on the persistent
 # `family-certify` self-hosted runner. The job token is read-only. Changed pins
-# are prepared, built, certified, and published once through a wrapper-owned
-# run-specific PR; unchanged nightly sentinels remain read-only.
+# are repaired by one agent, independently verified by the harness, and then
+# published from a fresh GitHub-hosted job; unchanged nightly sentinels remain
+# read-only.
 permissions:
   contents: read
 
-concurrency:
-  group: llama-upstream-canary
-  cancel-in-progress: true
-
 jobs:
   latest-upstream:
+    concurrency:
+      group: llama-upstream-canary-runner
+      cancel-in-progress: true
     runs-on: [self-hosted, family-certify]
     timeout-minutes: 780
+    outputs:
+      changed: ${{ steps.sha.outputs.changed }}
+      candidate_ready: ${{ steps.changed_result.outputs.ready }}
+      candidate_branch: ${{ steps.changed_canary.outputs.branch }}
+      candidate_head: ${{ steps.changed_canary.outputs.head }}
+      candidate_upstream: ${{ steps.sha.outputs.new_sha }}
     permissions:
       contents: read
     env:
@@ -149,89 +155,68 @@ jobs:
             fi
           } >> "$GITHUB_OUTPUT"
 
-      - name: Detect existing changed-pin canary PR
-        id: existing_changed_pin
-        if: github.event_name == 'schedule' && steps.sha.outputs.changed == 'true'
-        env:
-          CANDIDATE_SHA: ${{ steps.sha.outputs.new_sha }}
-          GH_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}
-        run: |
-          set -euo pipefail
-          pr="$(
-            gh pr list \
-              --repo "$GITHUB_REPOSITORY" \
-              --state open \
-              --search "$CANDIDATE_SHA in:body" \
-              --limit 100 \
-              --json number,headRefName,body \
-              | jq -r --arg sha "$CANDIDATE_SHA" \
-                  'first(
-                     .[]
-                     | select(.headRefName | startswith("llama-canary/repair-"))
-                     | select((.body // "") | contains("- Candidate pin: `\($sha)`"))
-                     | .number
-                   ) // empty'
-          )"
-          if [[ -n "$pr" ]]; then
-            echo "found=true" >> "$GITHUB_OUTPUT"
-            echo "pr=$pr" >> "$GITHUB_OUTPUT"
-            echo "scheduled changed-pin certification already has open PR #${pr} for ${CANDIDATE_SHA}"
-          else
-            echo "found=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Changed-pin prepare, build, certify, and publish
+      - name: Changed-pin agent developer task
         id: changed_canary
-        if: steps.sha.outputs.changed == 'true' && steps.existing_changed_pin.outputs.found != 'true'
-        timeout-minutes: 720
+        if: steps.sha.outputs.changed == 'true'
+        timeout-minutes: 480
         continue-on-error: true
         env:
           CANARY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_AGENT_MODEL || 'zai-coding-plan/glm-5.3-flash' }}
-          CANARY_REPAIR_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}
-          CANARY_REPAIR_BUDGET_SECONDS: "41400"
-          CANARY_PUBLISH_RESERVE_SECONDS: "1800"
-          CANARY_REPAIR_TURN_TIMEOUT_SECONDS: "3600"
-          CANARY_REPAIR_TOTAL_BUDGET_SECONDS: "5400"
+          # One agent receives the complete developer task. Verification runs
+          # later in a separate job after this process context has ended.
+          CANARY_AGENT_TIMEOUT_SECONDS: "27000"
+          CANARY_HARNESS_MODE: repair
           FAMILY_BATTERY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           UPSTREAM_SHA_INPUT: ${{ steps.sha.outputs.new_sha }}
         run: scripts/llama-canary-agent-repair.sh
 
+      - name: Upload changed-pin agent candidate
+        id: candidate_upload
+        if: >-
+          !cancelled()
+          && steps.sha.outputs.changed == 'true'
+          && steps.changed_canary.outcome == 'success'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: llama-canary-agent-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.changed_canary.outputs.candidate_bundle }}
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Upload changed-pin canary evidence
-        if: ${{ !cancelled() && steps.sha.outputs.changed == 'true' && steps.existing_changed_pin.outputs.found != 'true' }}
+        if: ${{ !cancelled() && steps.sha.outputs.changed == 'true' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: llama-canary-changed-pin-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            target/family-battery/${{ github.run_id }}-${{ github.run_attempt }}/
-            target/skippy-stage-rewriter-check/
             .deps/llama-canary-state-${{ github.run_id }}-${{ github.run_attempt }}/
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Stop after changed-pin terminal PR
+      - name: Report changed-pin result
+        id: changed_result
         if: ${{ !cancelled() && steps.sha.outputs.changed == 'true' }}
         env:
           CHANGED_CANARY_OUTCOME: ${{ steps.changed_canary.outcome }}
-          DEDUPLICATION_OUTCOME: ${{ steps.existing_changed_pin.outcome }}
-          EXISTING_CANARY_FOUND: ${{ steps.existing_changed_pin.outputs.found }}
-          EXISTING_CANARY_PR: ${{ steps.existing_changed_pin.outputs.pr }}
+          CANDIDATE_UPLOAD_OUTCOME: ${{ steps.candidate_upload.outcome }}
         run: |
+          set -euo pipefail
           {
             echo "## llama.cpp changed-pin canary"
             echo
-            if [[ "$EXISTING_CANARY_FOUND" == "true" ]]; then
-              echo "Skipped duplicate scheduled certification because open canary PR #${EXISTING_CANARY_PR} already records this exact candidate SHA."
-            elif [[ "$DEDUPLICATION_OUTCOME" == "failure" ]]; then
-              echo "The scheduled duplicate-PR lookup failed before the changed-pin state machine started. No branch or PR was created; inspect that step for the GitHub API error."
-            elif [[ "$CHANGED_CANARY_OUTCOME" == "success" ]]; then
-              echo "The deterministic state machine certified the candidate and published its exact terminal commit in a run-specific PR."
+            if [[ "$CHANGED_CANARY_OUTCOME" != "success" ]]; then
+              echo "The agent task failed. No canary branch or pull request was published; inspect the uploaded evidence."
+            elif [[ "$CANDIDATE_UPLOAD_OUTCOME" != "success" ]]; then
+              echo "The agent finished, but its candidate bundle could not be handed to the isolated verifier. No branch or pull request was published."
             else
-              echo "The changed-pin state machine ended with outcome **${CHANGED_CANARY_OUTCOME}**."
-              echo "If terminal publication completed, the log names the preserved draft PR. A preflight failure can stop before any branch or PR is created."
+              echo "The agent completed the update. Its candidate bundle is ready for the separate verification job."
+              echo "ready=true" >> "$GITHUB_OUTPUT"
             fi
-            echo "The canary remains red until a certified PR is reviewed and merged."
           } >> "$GITHUB_STEP_SUMMARY"
-          exit 1
+          if [[ "$CHANGED_CANARY_OUTCOME" != "success" || "$CANDIDATE_UPLOAD_OUTCOME" != "success" ]]; then
+            exit 1
+          fi
 
       - name: Prepare pinned llama.cpp upstream
         id: prepare
@@ -420,10 +405,136 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1
 
+  verify-changed-canary:
+    name: Independently verify changed-pin candidate
+    needs: latest-upstream
+    if: ${{ needs.latest-upstream.outputs.candidate_ready == 'true' }}
+    concurrency:
+      group: llama-upstream-canary-runner
+      cancel-in-progress: true
+    runs-on: [self-hosted, family-certify]
+    timeout-minutes: 270
+    outputs:
+      certified_ready: ${{ steps.verification_result.outputs.ready }}
+      certified_branch: ${{ steps.verify.outputs.branch }}
+      certified_head: ${{ steps.verify.outputs.head }}
+    permissions:
+      contents: read
+    env:
+      RUSTC_WRAPPER: ""
+      LLAMA_STAGE_USE_SCCACHE: "0"
+      LLAMA_BUILD_DIR: ${{ github.workspace }}/.deps/llama-canary-verify-${{ github.run_id }}-${{ github.run_attempt }}
+      LLAMA_STAGE_BUILD_DIR: ${{ github.workspace }}/.deps/llama-canary-verify-${{ github.run_id }}-${{ github.run_attempt }}
+      LLAMA_STAGE_BACKEND: metal
+      HF_CACHE: /Users/lab/models/huggingface
+      HF_HOME: /Users/lab/models/huggingface
+      HF_HUB_CACHE: /Users/lab/models/huggingface/hub
+      HF_HUB_OFFLINE: "1"
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download agent candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: llama-canary-agent-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/llama-canary-agent-candidate
+
+      - name: Run independent changed-pin verification
+        id: verify
+        continue-on-error: true
+        env:
+          CANARY_HARNESS_MODE: verify
+          CANARY_INPUT_BUNDLE: ${{ runner.temp }}/llama-canary-agent-candidate/candidate.bundle
+          CANARY_CANDIDATE_SHA: ${{ needs.latest-upstream.outputs.candidate_head }}
+          CANARY_VERIFICATION_TIMEOUT_SECONDS: "14400"
+          FAMILY_BATTERY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          UPSTREAM_SHA_INPUT: ${{ needs.latest-upstream.outputs.candidate_upstream }}
+        run: scripts/llama-canary-agent-repair.sh
+
+      - name: Upload independently certified candidate
+        id: certified_upload
+        if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: llama-canary-certified-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.verify.outputs.candidate_bundle }}
+            ${{ steps.verify.outputs.pr_body }}
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload changed-pin verification evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: llama-canary-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deps/llama-canary-state-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Report independent verification result
+        id: verification_result
+        if: ${{ !cancelled() }}
+        env:
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.certified_upload.outcome }}
+        run: |
+          if [[ "$VERIFY_OUTCOME" == "success" && "$UPLOAD_OUTCOME" == "success" ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "The independent changed-pin verification or certified-bundle upload failed. No branch or pull request was published." >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+  publish-certified-canary:
+    name: Publish certified changed-pin PR
+    needs: verify-changed-canary
+    if: ${{ needs.verify-changed-canary.outputs.certified_ready == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download exact certified candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: llama-canary-certified-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .canary-candidate
+
+      - name: Publish ready pull request
+        id: publish
+        env:
+          CANARY_BRANCH: ${{ needs.verify-changed-canary.outputs.certified_branch }}
+          CANARY_CERTIFIED_SHA: ${{ needs.verify-changed-canary.outputs.certified_head }}
+          CANARY_BUNDLE: ${{ github.workspace }}/.canary-candidate/candidate.bundle
+          CANARY_PR_BODY: ${{ github.workspace }}/.canary-candidate/pr-body.md
+          CANARY_REPAIR_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}
+        run: scripts/llama-canary-publish.sh
+
+      - name: Report published pull request
+        env:
+          PR_URL: ${{ steps.publish.outputs.pr_url }}
+        run: |
+          {
+            echo "## llama.cpp changed-pin canary"
+            echo
+            echo "The agent completed the update, the isolated verification handoff passed, and a ready-for-review PR was published at ${PR_URL}."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   alert-consecutive-failures:
     name: Alert after consecutive scheduled failures
     if: ${{ !cancelled() && github.event_name == 'schedule' }}
-    needs: latest-upstream
+    needs: [latest-upstream, verify-changed-canary, publish-certified-canary]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -435,13 +546,21 @@ jobs:
         continue-on-error: true
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         env:
-          CURRENT_RESULT: ${{ needs.latest-upstream.result }}
+          CHANGED: ${{ needs.latest-upstream.outputs.changed }}
+          REPAIR_RESULT: ${{ needs.latest-upstream.result }}
+          VERIFY_RESULT: ${{ needs.verify-changed-canary.result }}
+          PUBLISH_RESULT: ${{ needs.publish-certified-canary.result }}
         with:
           script: |
             const marker = '<!-- llama-upstream-canary-consecutive-failure-alert -->';
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const currentResult = process.env.CURRENT_RESULT;
+            const currentResult = process.env.REPAIR_RESULT === 'success'
+              && (process.env.CHANGED !== 'true'
+                || (process.env.VERIFY_RESULT === 'success'
+                  && process.env.PUBLISH_RESULT === 'success'))
+              ? 'success'
+              : 'failure';
             const currentUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
             const issues = await github.paginate(github.rest.issues.listForRepo, {
               owner,

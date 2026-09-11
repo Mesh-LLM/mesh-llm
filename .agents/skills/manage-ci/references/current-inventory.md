@@ -88,39 +88,35 @@ evidence, and logs are uploaded for 14 days even when the battery fails. Stage
 readiness uses a declared per-model override or a model-size-derived deadline,
 each complete certification has
 a portable process-group wall-clock limit, and the workflow's outer battery
-ceiling is 12 hours. A changed pin runs one deterministic wrapper-owned state
-machine: `prepare -> build -> certify -> publish`. The wrapper writes the sole
-upstream selector, `third_party/llama.cpp/upstream.txt`, prepares through the
-checked-in `pinned` selector, verifies the prepared-upstream stamp, completes
-the patched llama.cpp/native-test and Rust build gates, and then runs the full
-supported-family certification. A failed phase is handed to a non-interactive
-`opencode` agent (`CANARY_AGENT_MODEL`, default
-`zai-coding-plan/glm-5.3-flash`, overridable through
-`LLAMA_CANARY_AGENT_MODEL`). The agent may run focused diagnostics and edit the
-local tree, but the wrapper restarts at prepare, reruns the complete build, and
-remains the sole authority for certification. Each phase permits
-`CANARY_REPAIR_MAX_TURNS` (default 2), each agent turn has a 60-minute ceiling,
-and all agent turns share a 90-minute aggregate budget. The repair ceilings are
-independently overridable for a deliberate deep run. The wrapper has a 690-minute internal
-work deadline inside the 720-minute Actions step and reserves 30 minutes for
-terminal publication. It publishes once to the unique
-`llama-canary/repair-<run>-<attempt>-<upstream>` branch. A certified terminal
-state opens a normal PR bound to the exact green commit; a turn- or time-bounded
-failure opens a draft PR preserving the last attempted bytes. The PR body
-includes a deterministic upstream diffstat and commit summary even though the
-unchanged-pin workflow summary path is skipped. Scheduled runs query open
-`llama-canary/repair-*` PR bodies before starting the state machine and skip an
-exact candidate SHA already under review. No agent turn runs after green, and
-changed pins are never pushed directly to `main`. Repair pushes and PR
-operations authenticate with the `CANARY_REPAIR_TOKEN` fine-grained PAT; Git
-receives it through a run-scoped askpass helper instead of a credential-bearing
-URL, and stderr redaction uses literal replacement. The wrapper validates the
-native build directory, HF cache, repository identity, and repair token before
-the first phase. The canary job itself remains `contents: read`; the dedicated
-repair PAT performs the bounded PR lookup. Changed-pin evidence uses its own
-`llama-canary-changed-pin-*` artifact namespace. Every
-changed-pin outcome keeps the canary run red until a certified PR is reviewed
-and merged. A GitHub-hosted metadata-only job with Actions-read and Issues-write
+ceiling is 12 hours. For a changed pin, one non-interactive `opencode` agent
+(`CANARY_AGENT_MODEL`, default `zai-coding-plan/glm-5.3-flash`, overridable
+through `LLAMA_CANARY_AGENT_MODEL`) receives the complete developer task:
+repair or regenerate the patch queue, address ABI fallout, and iterate through
+the canonical prepare, build, smoke, live-matrix, and family-certification
+commands. The agent has a 450-minute ceiling and no GitHub credentials. It may
+leave only uncommitted candidate changes and cannot alter `.github/`,
+`.agents/`, `scripts/`, `ci/ci.md`, or its runbook. Those paths form the fixed
+verification boundary.
+
+The repair job snapshots the agent result as an unreachable commit and uploads
+a thin candidate bundle. A separate self-hosted verification job and checkout
+download that bundle, materialize its commit in a fresh detached worktree, and
+run one ordered `prepare -> build -> certify` pass with a 240-minute budget. The
+wrapper owns the exact upstream selector, validates the prepared-upstream stamp,
+runs the patched llama.cpp/native-test and Rust build gates, and completes the
+full supported-family certification using new native-build and family-evidence
+directories. Only the passing bundle is uploaded as a one-day certified
+artifact. A separate success-gated job on a fresh
+GitHub-hosted runner receives the `CANARY_REPAIR_TOKEN`, validates the bundle,
+pushes the unique
+`llama-canary/repair-<run>-<attempt>-<upstream>` branch through a run-scoped
+askpass helper, and opens a normal PR bound to that exact commit. That publisher
+is outside the cancellable self-hosted runner concurrency group, and PR
+creation is its final external mutation. Any agent or verification failure
+uploads evidence and publishes no branch or PR. A green
+publication leaves the canary green; changed pins are never pushed directly to
+`main`. Changed-pin evidence uses its own `llama-canary-changed-pin-*` artifact
+namespace. A GitHub-hosted metadata-only job with Actions-read and Issues-write
 permissions opens or updates one alert after two consecutive non-successful
 scheduled runs, and closes that alert after a successful scheduled recovery.
 Unchanged scheduled and forced certifications stay read-only and never invoke
