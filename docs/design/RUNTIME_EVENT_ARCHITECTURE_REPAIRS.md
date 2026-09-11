@@ -82,13 +82,20 @@ before citing any performance number from this subsystem.
   It does not include a caller's own locking before it gets there: the
   skippy adapter's mutex and the native reporter's sink mutex are both
   outside this boundary and are not covered by this figure.
-- **Total cost of the event system.** `event-disabled` is a *class bypass*,
-  not an off switch. It still reserves slots, still writes terminals and
-  state transitions, and still runs the reducer, the replay buffer, and
-  subscriber fan-out. Comparison A therefore bounds
-  the cost of progress and diagnostic facts, and nothing more. A true
-  whole-system off mode is required before any claim about the event system's
-  total cost.
+- **Total cost of the event system, as of this writing.** The
+  measurement is now *possible*: `MESH_LLM_EVENT_SYSTEM_TRIAL_MODE=off`
+  installs no engine, and therefore no driver, no presentation subscriber,
+  no telemetry consumer, and no native reporter, so emitting an event is
+  one `Option` check. `scripts/run-event-benchmark-matrix.py` accepts
+  `--mode off`, and `production` versus `off` is comparison A0.
+  What is not here is a *result*: no A0 run has been performed, so this
+  document still carries no number for the event system's total cost.
+
+  `event-disabled` remains what it always was -- a class bypass that still
+  reserves slots, writes terminals and state transitions, and runs the
+  reducer, the replay buffer, and subscriber fan-out. Comparison A bounds
+  the cost of progress and diagnostic facts, and nothing more. Do not cite
+  it as a total-cost figure.
 - **Anything in CI.** There is no performance gate on any CI lane. All
   performance numbers above come from local runs on a single machine.
 

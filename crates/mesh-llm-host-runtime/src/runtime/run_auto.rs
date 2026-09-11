@@ -1492,8 +1492,15 @@ pub(super) struct RunAutoContext {
 /// engine is cleared. Runtime-event telemetry deliberately has no retained
 /// task handle: its workers use the telemetry module's weak-engine lifetime
 /// contract and are independent of this startup stack.
+/// Everything the runtime-event system installs at startup.
+///
+/// `engine` is `None` in the `off` trial mode, and then so is everything
+/// else: no driver, no presentation subscriber, no telemetry consumer.
+/// That is what makes `off` a real measurement rather than another bypass
+/// -- with no engine installed, every producer's `runtime_event_engine()`
+/// returns `None` and emitting an event is one `Option` check.
 struct RunAutoRuntimeEventStack {
-    engine: Arc<crate::runtime_events::engine::RuntimeEventEngine>,
+    engine: Option<Arc<crate::runtime_events::engine::RuntimeEventEngine>>,
     driver: Option<crate::runtime_events::driver::EngineDriverHandle>,
     presentation_subscriber: Option<tokio::task::JoinHandle<()>>,
 }
@@ -1515,13 +1522,26 @@ fn install_run_auto_runtime_event_stack(
     install_run_auto_runtime_event_stack_with_selector(
         config,
         mesh_llm_config::event_system_progress_diagnostic_bypass_enabled,
+        mesh_llm_config::event_system_off,
     )
 }
 
 fn install_run_auto_runtime_event_stack_with_selector(
     config: &plugin::MeshConfig,
     resolve_progress_diagnostic_class_bypass: impl FnOnce() -> Result<bool>,
+    resolve_off: impl FnOnce() -> Result<bool>,
 ) -> Result<RunAutoRuntimeEventStack> {
+    // Task 19: the hidden, TEST-ONLY `off` selector. Nothing is installed,
+    // so nothing downstream of an engine exists to install either. An
+    // invalid selector value is still a hard startup error rather than a
+    // silent fallback (see `mesh_llm_config::env_overrides`).
+    if resolve_off()? {
+        return Ok(RunAutoRuntimeEventStack {
+            engine: None,
+            driver: None,
+            presentation_subscriber: None,
+        });
+    }
     // Task 9: the runtime-event engine is installed here too (not only for
     // `--local-model-only`) so `LoadOperation`/`UnloadOperation` in
     // `runtime/model_lifecycle/{load,unload}.rs` are live on the mesh path.
@@ -1565,7 +1585,7 @@ fn install_run_auto_runtime_event_stack_with_selector(
             })
             .ok();
     Ok(RunAutoRuntimeEventStack {
-        engine,
+        engine: Some(engine),
         driver: Some(driver),
         presentation_subscriber,
     })
@@ -1579,7 +1599,9 @@ async fn cleanup_run_auto_runtime_event_stack(stack: &mut RunAutoRuntimeEventSta
         presentation_subscriber.abort();
         let _ = presentation_subscriber.await;
     }
-    crate::runtime_events::clear_runtime_event_engine_if_owned(&stack.engine);
+    if let Some(engine) = stack.engine.as_ref() {
+        crate::runtime_events::clear_runtime_event_engine_if_owned(engine);
+    }
 }
 
 pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
@@ -1859,10 +1881,11 @@ mod tests {
         let existing = RuntimeEventEngine::new();
         install_runtime_event_engine(existing.clone());
 
-        let result =
-            install_run_auto_runtime_event_stack_with_selector(&MeshConfig::default(), || {
-                Err(anyhow::anyhow!("invalid selector"))
-            });
+        let result = install_run_auto_runtime_event_stack_with_selector(
+            &MeshConfig::default(),
+            || Err(anyhow::anyhow!("invalid selector")),
+            || Ok(false),
+        );
 
         assert!(result.is_err(), "invalid selector must fail startup");
         let installed = runtime_event_engine().expect("existing engine remains installed");
@@ -1870,16 +1893,76 @@ mod tests {
         clear_runtime_event_engine();
     }
 
+    /// `off` installs nothing at all: no engine, and therefore no driver,
+    /// no presentation subscriber, and no telemetry consumer.
+    ///
+    /// This is the difference between `off` and `event-disabled`. The
+    /// latter still installs every one of those and only bypasses two
+    /// delivery classes at the submit boundary, which is why it cannot
+    /// measure what the event system costs in total.
+    #[tokio::test]
+    #[serial_test::serial(runtime_event_engine_state)]
+    async fn off_mode_installs_no_engine_and_nothing_downstream_of_one() {
+        clear_runtime_event_engine();
+
+        let mut stack = install_run_auto_runtime_event_stack_with_selector(
+            &MeshConfig::default(),
+            || Ok(false),
+            || Ok(true),
+        )
+        .expect("off mode must start cleanly");
+
+        assert!(stack.engine.is_none(), "off must install no engine");
+        assert!(stack.driver.is_none(), "no engine means no driver");
+        assert!(
+            stack.presentation_subscriber.is_none(),
+            "no engine means no presentation subscriber"
+        );
+        assert!(
+            runtime_event_engine().is_none(),
+            "a producer's engine lookup must be None, so emitting an event is \
+             one Option check"
+        );
+
+        // Cleanup is a no-op rather than a panic: there is nothing to stop.
+        cleanup_run_auto_runtime_event_stack(&mut stack).await;
+        assert!(runtime_event_engine().is_none());
+    }
+
+    /// `off` and `event-disabled` are not the same thing, asserted
+    /// directly: the bypass mode still installs the whole stack.
+    #[tokio::test]
+    #[serial_test::serial(runtime_event_engine_state)]
+    async fn event_disabled_still_installs_the_whole_stack() {
+        clear_runtime_event_engine();
+
+        let mut stack = install_run_auto_runtime_event_stack_with_selector(
+            &MeshConfig::default(),
+            || Ok(true),
+            || Ok(false),
+        )
+        .expect("event-disabled must start cleanly");
+
+        assert!(
+            stack.engine.is_some(),
+            "event-disabled bypasses two classes at the submit boundary; it \
+             does not remove the engine"
+        );
+        assert!(stack.driver.is_some());
+        cleanup_run_auto_runtime_event_stack(&mut stack).await;
+    }
+
     #[tokio::test]
     #[serial_test::serial(runtime_event_engine_state)]
     async fn cleanup_of_retained_stack_releases_both_owned_tasks() {
         clear_runtime_event_engine();
-        let mut stack =
-            install_run_auto_runtime_event_stack_with_selector(&MeshConfig::default(), || {
-                Ok(false)
-            })
-            .expect("representative startup stack");
-        let weak_engine = Arc::downgrade(&stack.engine);
+        let mut stack = install_run_auto_runtime_event_stack_with_selector(
+            &MeshConfig::default(),
+            || Ok(false),
+            || Ok(false),
+        )
+        .expect("representative startup stack");
+        let weak_engine = Arc::downgrade(stack.engine.as_ref().expect("engine installed"));
 
         cleanup_run_auto_runtime_event_stack(&mut stack).await;
 

@@ -70,7 +70,42 @@ class ModeAliasMappingTests(unittest.TestCase):
 
     def test_valid_modes_matches_the_alias_map_keys(self):
         harness = load_module()
-        self.assertEqual(set(harness.VALID_MODES), {"production", "event-disabled"})
+        self.assertEqual(
+            set(harness.VALID_MODES), {"production", "event-disabled", "off"}
+        )
+
+    def test_off_forwards_the_off_selector(self):
+        """`off` is the only mode that installs no engine, so it is the
+        only one a total-cost comparison can use as its reference side."""
+        harness = load_module()
+        self.assertEqual(harness.resolve_trial_env_value("off"), "off")
+
+    def test_the_default_side_pair_is_two_modes_not_every_mode(self):
+        """`build_trial_plan(sides=...)` takes a PAIR. Defaulting it to
+        `VALID_MODES` worked only while exactly two modes existed."""
+        harness = load_module()
+        self.assertEqual(len(harness.DEFAULT_COMPARISON_SIDES), 2)
+        self.assertTrue(
+            set(harness.DEFAULT_COMPARISON_SIDES) <= set(harness.VALID_MODES)
+        )
+
+    def test_comparison_a_accepts_any_two_distinct_modes(self):
+        """Comparison A used to require exactly the two known modes.
+        Production vs off is the total-cost comparison and must be
+        expressible the same way."""
+        harness = load_module()
+        side_a, side_b = harness.resolve_comparison_sides(
+            Path("/nonexistent"), None, ["production", "off"]
+        )
+        self.assertEqual((side_a.mode, side_b.mode), ("production", "off"))
+        self.assertEqual((side_a.side_id, side_b.side_id), ("production", "off"))
+
+    def test_comparison_a_still_rejects_a_repeated_mode(self):
+        harness = load_module()
+        with self.assertRaises(ValueError):
+            harness.resolve_comparison_sides(
+                Path("/nonexistent"), None, ["production", "production"]
+            )
 
 
 class SeedValidationTests(unittest.TestCase):
@@ -246,7 +281,11 @@ class TrialPlanDeterminismTests(unittest.TestCase):
         observed = {
             harness.build_trial_plan(seed, 1, 1, ["s"])[0].side_order_first for seed in range(50)
         }
-        self.assertEqual(observed, set(harness.VALID_MODES))
+        self.assertEqual(
+            observed,
+            set(harness.DEFAULT_COMPARISON_SIDES),
+            "side order must use both sides of the pair, not every valid mode",
+        )
 
 
 class ResolveComparisonSidesTests(unittest.TestCase):

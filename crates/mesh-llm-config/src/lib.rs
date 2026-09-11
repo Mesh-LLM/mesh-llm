@@ -24,8 +24,9 @@ pub use env_overrides::{
     CONFIG_OVERRIDE_ENV_NAMES, ConfigValueSource, EventSystemTrialMode,
     LifecycleLogParserSelection, MESH_LLM_BENCHMARK_TUNE_TRIAL_ENV, MESH_LLM_CONFIG_ENV,
     MESH_LLM_EVENT_SYSTEM_TRIAL_MODE_ENV, MESH_LLM_LIFECYCLE_LOG_PARSER_ENV, apply_env_overrides,
-    benchmark_tune_trial_enabled, event_system_progress_diagnostic_bypass_enabled,
-    event_system_trial_mode, resolve_benchmark_tune_trial_gate, resolve_event_system_trial_mode,
+    benchmark_tune_trial_enabled, event_system_off,
+    event_system_progress_diagnostic_bypass_enabled, event_system_trial_mode,
+    resolve_benchmark_tune_trial_gate, resolve_event_system_trial_mode,
     resolve_lifecycle_log_parser_override, with_env_override_for_test,
 };
 pub use model::*;

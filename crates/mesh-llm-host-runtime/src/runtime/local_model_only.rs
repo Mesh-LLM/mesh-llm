@@ -114,46 +114,68 @@ pub(super) async fn run_local_model_only(options: RuntimeOptions) -> Result<()> 
     // management subscribers attached: nothing here calls `.subscribers()`,
     // matching the plan's "zero management subscribers" requirement for
     // this mode without needing a separate no-op engine variant.
-    let runtime_event_engine = crate::runtime_events::engine::RuntimeEventEngine::new();
-    crate::runtime_events::install_runtime_event_engine(runtime_event_engine.clone());
+    // Task 19: the hidden, TEST-ONLY `off` selector, same as the
+    // mesh-serve path in `run_auto.rs`. Nothing is installed, so every
+    // producer's `runtime_event_engine()` returns `None` and emitting an
+    // event is one `Option` check.
+    let runtime_event_engine = if mesh_llm_config::event_system_off()? {
+        None
+    } else {
+        let engine = crate::runtime_events::engine::RuntimeEventEngine::new();
+        crate::runtime_events::install_runtime_event_engine(engine.clone());
+        Some(engine)
+    };
     // Task 3: same engine-owned driver as the mesh-serve path in
     // `run_auto.rs` (defect D3) -- this mode's own "zero management
     // subscribers" invariant only ever meant no PRESENTATION subscriber;
     // the driver needs no subscriber at all to apply and publish a fact
     // (see `runtime_events::driver`'s module doc and this module's own
     // `tests::engine_driver`).
-    let mut runtime_event_driver = Some(crate::runtime_events::driver::spawn_engine_driver(
-        runtime_event_engine.clone(),
-    ));
+    let mut runtime_event_driver = runtime_event_engine
+        .as_ref()
+        .map(|engine| crate::runtime_events::driver::spawn_engine_driver(engine.clone()));
 
-    let result =
-        run_local_model_only_inner(options, &runtime_event_engine, &mut runtime_event_driver).await;
-    cleanup_local_model_only_runtime_event_state(&runtime_event_engine, &mut runtime_event_driver)
-        .await;
+    let result = run_local_model_only_inner(
+        options,
+        runtime_event_engine.as_ref(),
+        &mut runtime_event_driver,
+    )
+    .await;
+    cleanup_local_model_only_runtime_event_state(
+        runtime_event_engine.as_ref(),
+        &mut runtime_event_driver,
+    )
+    .await;
     result
 }
 
 async fn cleanup_local_model_only_runtime_event_state(
-    runtime_event_engine: &Arc<crate::runtime_events::engine::RuntimeEventEngine>,
+    runtime_event_engine: Option<&Arc<crate::runtime_events::engine::RuntimeEventEngine>>,
     runtime_event_driver: &mut Option<crate::runtime_events::driver::EngineDriverHandle>,
 ) {
     if let Some(driver) = runtime_event_driver.take() {
         driver.stop_and_wait().await;
     }
-    crate::runtime_events::clear_runtime_event_engine_if_owned(runtime_event_engine);
+    if let Some(engine) = runtime_event_engine {
+        crate::runtime_events::clear_runtime_event_engine_if_owned(engine);
+    }
 }
 
 async fn run_local_model_only_inner(
     mut options: RuntimeOptions,
-    runtime_event_engine: &Arc<crate::runtime_events::engine::RuntimeEventEngine>,
+    runtime_event_engine: Option<&Arc<crate::runtime_events::engine::RuntimeEventEngine>>,
     runtime_event_driver: &mut Option<crate::runtime_events::driver::EngineDriverHandle>,
 ) -> Result<()> {
     // Task 19: same hidden, TEST-ONLY `event-disabled` A/B certification
     // selector as the mesh-serve path in `run_auto.rs` -- see its comment
     // for the gate/selector relationship; a no-op on every normal startup.
-    runtime_event_engine.set_progress_diagnostic_class_bypass(
-        mesh_llm_config::event_system_progress_diagnostic_bypass_enabled()?,
-    );
+    // Unreachable when the engine is absent: `off` and `event-disabled` are
+    // mutually exclusive selector values.
+    if let Some(engine) = runtime_event_engine {
+        engine.set_progress_diagnostic_class_bypass(
+            mesh_llm_config::event_system_progress_diagnostic_bypass_enabled()?,
+        );
+    }
     super::node_lifecycle_events::emit_node_starting();
     let serving_hooks_factory = native_serving_plugin_factory(&options)?;
     let mut config = plugin::load_config(options.config.as_deref())?;
@@ -170,8 +192,8 @@ async fn run_local_model_only_inner(
     // sample queue onto `runtime_event_engine` so the single local model's
     // real submissions feed the ingress-latency and class-outcome
     // instruments too.
-    let _runtime_event_telemetry =
-        survey::runtime_events::RuntimeEventTelemetry::start(&config, runtime_event_engine);
+    let _runtime_event_telemetry = runtime_event_engine
+        .map(|engine| survey::runtime_events::RuntimeEventTelemetry::start(&config, engine));
 
     let startup_specs = build_startup_model_specs(&options, &config)?;
     anyhow::ensure!(
@@ -605,7 +627,7 @@ mod tests {
             engine.clone(),
         ));
 
-        cleanup_local_model_only_runtime_event_state(&engine, &mut driver).await;
+        cleanup_local_model_only_runtime_event_state(Some(&engine), &mut driver).await;
 
         assert!(driver.is_none());
         assert!(runtime_event_engine().is_none());

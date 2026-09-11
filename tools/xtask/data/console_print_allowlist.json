@@ -1919,11 +1919,11 @@
   ],
   "crates/mesh-llm-host-runtime/src/runtime/local_model_only.rs": [
     {
-      "line": 456,
+      "line": 478,
       "macro_name": "eprintln!"
     },
     {
-      "line": 466,
+      "line": 488,
       "macro_name": "eprintln!"
     }
   ],

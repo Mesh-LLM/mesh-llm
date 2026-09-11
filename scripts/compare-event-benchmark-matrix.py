@@ -564,13 +564,26 @@ def evaluate_p99_gate(
     return results, blocking
 
 
+def mode_is_off(manifest: dict[str, Any]) -> bool:
+    """Whether this side ran with the event system switched off entirely."""
+    return manifest.get("mode") == "off"
+
+
 def health_is_available(manifest: dict[str, Any]) -> bool:
     """A manifest's `health` block is `None` (JSON null) when no call site
     collected it -- e.g. every real `--local-model-only` trial run today,
     which starts no console/management API (see the runner's `build_manifest`
     comment). Distinguishing "unavailable" from "present" is the caller's
     job precisely so an unavailable block is never misread as an all-zero
-    one -- see `evaluate_health_expectations`."""
+    one -- see `evaluate_health_expectations`.
+
+    An `off`-mode side is the one case where a missing block is the
+    CORRECT observation rather than a collection failure: no engine is
+    installed, so no engine health exists to report. Treating that as
+    unavailable would block certification on the mode whose entire purpose
+    is to have nothing running."""
+    if mode_is_off(manifest):
+        return True
     return manifest.get("health") is not None
 
 
@@ -588,6 +601,10 @@ def evaluate_health_expectations(manifest: dict[str, Any]) -> list[str]:
     never collected at all. Intentional cancelled-reservation rejections are
     retained as a non-negative health count; a positive count does not imply
     state degradation or capacity loss."""
+    if mode_is_off(manifest):
+        # No engine, so no counters. There is nothing here to be violated,
+        # and an absent block is not an all-zero one.
+        return []
     health = manifest.get("health")
     if health is None:
         return []
@@ -796,7 +813,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--production", required=True, type=Path, help="Production-mode manifest (current binary).")
     parser.add_argument(
-        "--event-disabled", required=True, type=Path, dest="event_disabled", help="event-disabled manifest (current binary)."
+        "--event-disabled",
+        required=True,
+        type=Path,
+        dest="event_disabled",
+        help=(
+            "Reference-side manifest on the current binary. Pass an "
+            "event-disabled manifest for comparison A (the cost of progress "
+            "and diagnostic facts), or an off-mode manifest for comparison "
+            "A0 (the cost of the event system, since off installs no engine "
+            "at all)."
+        ),
     )
     parser.add_argument("--baseline", required=True, type=Path, help="Production-mode manifest (baseline release binary).")
     parser.add_argument("--output", required=True, type=Path, help="Path to write the comparison report JSON.")

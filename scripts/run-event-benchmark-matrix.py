@@ -76,8 +76,22 @@ METRICS_SCHEMA = "streaming_v1"
 MODE_TO_TRIAL_ENV_VALUE: dict[str, str] = {
     "production": "production",
     "event-disabled": "event-disabled",
+    # The only mode that can answer "what does the event system cost".
+    # `event-disabled` bypasses two delivery classes at the submit boundary
+    # but still installs the engine, the driver, the reducer, the replay
+    # buffer and the subscriber registry, so a production/event-disabled
+    # comparison bounds the cost of progress and diagnostic facts and
+    # nothing more. `off` installs none of it.
+    "off": "off",
 }
 VALID_MODES = tuple(MODE_TO_TRIAL_ENV_VALUE)
+
+# The two sides of certification comparison A.
+#
+# Stated explicitly rather than derived from `VALID_MODES`: that worked
+# only while there were exactly two modes, and would silently become a
+# three-element "side pair" the moment a third was added.
+DEFAULT_COMPARISON_SIDES: tuple[str, str] = ("production", "event-disabled")
 
 TRIAL_ENV_NAME = "MESH_LLM_EVENT_SYSTEM_TRIAL_MODE"
 TRIAL_GATE_ENV_NAME = "MESH_LLM_BENCHMARK_TUNE_TRIAL"
@@ -294,7 +308,7 @@ def build_trial_plan(
     pairs_scenario: int,
     scenarios: Sequence[str],
     *,
-    sides: tuple[str, str] = VALID_MODES,
+    sides: tuple[str, str] = DEFAULT_COMPARISON_SIDES,
 ) -> list[TrialPlanEntry]:
     """Deterministic trial plan from `seed`: `pairs_primary` entries in the
     synthetic `__primary__` group, then `pairs_scenario` entries per named
@@ -306,8 +320,9 @@ def build_trial_plan(
     prompt and seed" pairing without the two sides needing to run in the
     same process. Each entry also carries `side_order_first` -- which
     `sides` value is nominally "first" for that pair -- minted from the
-    SAME seeded `rng` as `prompt_seed`. `sides` defaults to `VALID_MODES`
-    (comparison A: one binary, two trial modes); pass
+    SAME seeded `rng` as `prompt_seed`. `sides` defaults to
+    `DEFAULT_COMPARISON_SIDES` (comparison A: one binary, two trial
+    modes); pass
     `(side_a.side_id, side_b.side_id)` from `resolve_comparison_sides` for
     comparison B (one mode, two binaries -- e.g. `("current",
     "baseline")`), so the same deterministic-plan machinery covers both
@@ -363,9 +378,13 @@ def resolve_comparison_sides(
       differs). Sides: `(binary, mode, "current")`,
       `(baseline_binary, mode, "baseline")`.
     - Comparison A (`--baseline-binary` omitted): `--mode` must be given
-      exactly twice, covering both `VALID_MODES` with no repeat (the two
-      sides differ by mode on the SAME binary). Sides:
-      `(binary, modes[0], modes[0])`, `(binary, modes[1], modes[1])`.
+      exactly twice, with two DISTINCT valid modes (the two sides differ by
+      mode on the SAME binary). Sides: `(binary, modes[0], modes[0])`,
+      `(binary, modes[1], modes[1])`.
+
+      `production` vs `event-disabled` measures the cost of progress and
+      diagnostic facts. `production` vs `off` measures the cost of the
+      event system, because `off` installs no engine at all.
     """
     if baseline_binary is not None:
         if len(modes) != 1:
@@ -380,11 +399,14 @@ def resolve_comparison_sides(
             SideSpec(binary=binary, mode=mode, side_id="current"),
             SideSpec(binary=baseline_binary, mode=mode, side_id="baseline"),
         )
-    if len(modes) != 2 or set(modes) != set(VALID_MODES):
+    if len(modes) != 2 or len(set(modes)) != 2:
         raise ValueError(
             "without --baseline-binary (comparison A), --mode must be given exactly "
-            f"twice, once for each of {VALID_MODES}; got {len(modes)}: {list(modes)!r}"
+            f"twice with two distinct modes; got {len(modes)}: {list(modes)!r}"
         )
+    unknown = [mode for mode in modes if mode not in VALID_MODES]
+    if unknown:
+        raise ValueError(f"unknown --mode {unknown!r}; expected two of {VALID_MODES}")
     return (
         SideSpec(binary=binary, mode=modes[0], side_id=modes[0]),
         SideSpec(binary=binary, mode=modes[1], side_id=modes[1]),

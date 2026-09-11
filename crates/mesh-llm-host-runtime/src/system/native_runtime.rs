@@ -180,6 +180,15 @@ mod dynamic {
     /// differently-composed runtimes simply keep operating without this
     /// reporter, matching the model-open feature-probe fallback contract.
     fn install_runtime_scoped_event_reporter() {
+        // Task 19's `off` selector: with no engine installed there is
+        // nothing for these records to reach, so the native side is not
+        // asked to produce them at all. Leaving the reporter installed
+        // would leave every native thread still paying for a ring push
+        // whose contents nobody would ever drain, which is exactly the
+        // cost this mode exists to measure the absence of.
+        if mesh_llm_config::event_system_off().unwrap_or(false) {
+            return;
+        }
         if !skippy_runtime::install_runtime_event_reporter() {
             return;
         }

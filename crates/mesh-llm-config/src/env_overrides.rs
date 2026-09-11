@@ -184,17 +184,31 @@ pub fn resolve_benchmark_tune_trial_gate(environment: Option<&OsStr>) -> Result<
 }
 
 /// The event-system A/B certification trial selector. Hidden, undocumented,
-/// TEST-ONLY -- see [`event_system_trial_mode`]. `production` runs the
-/// complete event pipeline; `event-disabled` bypasses ONLY Progress and
-/// Diagnostic class submissions at the host engine's single contract
-/// boundary (`RuntimeEventEngine::submit`) and detaches every downstream
-/// consumer for those two classes, while terminals, state transitions,
-/// reservations, and the reducer remain fully active. These are the exact
-/// two `--mode` values `scripts/run-event-benchmark-matrix.py` accepts.
+/// TEST-ONLY -- see [`event_system_trial_mode`].
+///
+/// Three modes, and the difference between the last two is the whole point:
+///
+/// * `production` runs the complete event pipeline.
+/// * `event-disabled` bypasses ONLY Progress and Diagnostic submissions at
+///   the host engine's single contract boundary
+///   (`RuntimeEventEngine::submit`). Reservations, terminals, state
+///   transitions, the reducer, the replay buffer and subscriber fan-out all
+///   stay fully active. It therefore bounds the cost of two delivery
+///   classes, and nothing more -- it cannot measure what the event system
+///   costs in total, because most of the event system is still running.
+/// * `off` installs no engine at all, and with it no driver, no
+///   presentation subscriber, no telemetry consumer, and no native
+///   reporter. Every producer's `runtime_event_engine()` returns `None`, so
+///   emitting an event is one `Option` check. This is the only mode that
+///   can answer "what does the event system cost".
+///
+/// These are the exact three `--mode` values
+/// `scripts/run-event-benchmark-matrix.py` accepts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EventSystemTrialMode {
     Production,
     EventDisabled,
+    Off,
 }
 
 /// Pure resolver behind [`event_system_trial_mode`]. `trial_gate_enabled`
@@ -218,14 +232,17 @@ pub fn resolve_event_system_trial_mode(
     }
     let Some(environment) = environment.to_str() else {
         bail!(
-            "invalid {MESH_LLM_EVENT_SYSTEM_TRIAL_MODE_ENV}; expected production or event-disabled"
+            "invalid {MESH_LLM_EVENT_SYSTEM_TRIAL_MODE_ENV}; \
+             expected production, event-disabled, or off"
         );
     };
     let mode = match environment {
         "production" => EventSystemTrialMode::Production,
         "event-disabled" => EventSystemTrialMode::EventDisabled,
+        "off" => EventSystemTrialMode::Off,
         _ => bail!(
-            "invalid {MESH_LLM_EVENT_SYSTEM_TRIAL_MODE_ENV}; expected production or event-disabled"
+            "invalid {MESH_LLM_EVENT_SYSTEM_TRIAL_MODE_ENV}; \
+             expected production, event-disabled, or off"
         ),
     };
     Ok(Some(mode))
@@ -256,9 +273,59 @@ pub fn event_system_progress_diagnostic_bypass_enabled() -> Result<bool> {
     ))
 }
 
+/// Whether the event system is switched off entirely: no engine is
+/// installed, so nothing downstream of one exists either.
+///
+/// `true` only when the trial gate is on AND the selector is explicitly
+/// `off`. Every other state (gate off, selector unset, `production`,
+/// `event-disabled`) resolves to `false`.
+pub fn event_system_off() -> Result<bool> {
+    Ok(matches!(
+        event_system_trial_mode()?,
+        Some(EventSystemTrialMode::Off)
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `off` is accepted, and only under the trial gate like every other
+    /// selector value.
+    #[test]
+    fn off_is_a_gated_selector_value() {
+        assert_eq!(
+            resolve_event_system_trial_mode(true, Some(OsStr::new("off"))).unwrap(),
+            Some(EventSystemTrialMode::Off)
+        );
+        assert!(
+            resolve_event_system_trial_mode(false, Some(OsStr::new("off"))).is_err(),
+            "the selector must stay gated behind the trial flag"
+        );
+    }
+
+    /// The three modes are distinct, and only `off` means off. A rejected
+    /// value still names all three, so a typo is actionable.
+    #[test]
+    fn the_three_modes_are_distinct_and_named_in_the_rejection() {
+        for (value, expected) in [
+            ("production", EventSystemTrialMode::Production),
+            ("event-disabled", EventSystemTrialMode::EventDisabled),
+            ("off", EventSystemTrialMode::Off),
+        ] {
+            assert_eq!(
+                resolve_event_system_trial_mode(true, Some(OsStr::new(value))).unwrap(),
+                Some(expected)
+            );
+        }
+
+        let error = resolve_event_system_trial_mode(true, Some(OsStr::new("disabled")))
+            .expect_err("a near-miss must be rejected, never silently defaulted");
+        let message = error.to_string();
+        for named in ["production", "event-disabled", "off"] {
+            assert!(message.contains(named), "rejection must name {named}");
+        }
+    }
 
     #[test]
     fn env_overrides_owner_lists_every_config_override_name() {
