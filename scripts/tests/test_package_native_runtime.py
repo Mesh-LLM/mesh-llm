@@ -19,14 +19,19 @@ def write_failing_nvcc(path: Path) -> None:
 
 
 class PackageNativeRuntimeTests(unittest.TestCase):
-    def test_macos_model_package_tool_uses_portable_linker_flags(self) -> None:
+    def test_macos_model_package_tool_uses_only_a_probed_linker(self) -> None:
+        """Installed is not enough: lld must also link against the active
+        SDK, and a protected reusable workflow may not have installed it at
+        all. Both cases take an explicitly empty encoded flag set."""
         script = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('source "$SCRIPT_DIR/lib/lld.sh"', script)
         start = script.index("build_model_package_tool() {")
         end = script.index("collect_runtime_libraries() {", start)
         function = script[start:end]
-        self.assertIn('command -v ld64.lld', function)
+        self.assertNotIn('command -v ld64.lld', function)
+        self.assertIn('macos_lld="$(resolve_usable_lld)"', function)
         self.assertIn(
-            'CARGO_ENCODED_RUSTFLAGS=-Clink-arg=-fuse-ld=lld',
+            'CARGO_ENCODED_RUSTFLAGS=-Clink-arg=-fuse-ld=$macos_lld',
             function,
         )
         self.assertIn('cargo_env+=("CARGO_ENCODED_RUSTFLAGS=")', function)
