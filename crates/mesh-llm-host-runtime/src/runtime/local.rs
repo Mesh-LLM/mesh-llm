@@ -1,8 +1,11 @@
 use super::capacity::runtime_model_required_bytes;
 use super::context_planning::{
-    MeasuredBufferFootprint, RuntimeResourcePlan, RuntimeResourcePlanBreakdown,
-    RuntimeResourcePlanInput, RuntimeResourcePlanningProfile, plan_runtime_resources,
-    reconcile_memory_plan_with_measurements,
+    RuntimeResourcePlan, RuntimeResourcePlanInput, RuntimeResourcePlanningProfile,
+    plan_runtime_resources,
+};
+use super::local_memory_plan::{
+    MemoryPlanStartPath, emit_measured_memory_reconciliation, emit_memory_plan_resolved,
+    measured_buffers_footprint,
 };
 use super::split_planning::format_gb;
 use crate::api;
@@ -23,7 +26,6 @@ use skippy_server::serving_hooks::SharedModelServingHooksFactory;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::operational_logging::{
@@ -733,7 +735,11 @@ async fn start_local_skippy_model(
     tokio::sync::oneshot::Receiver<()>,
 )> {
     let context_length = plan.context_length;
-    emit_memory_plan_resolved(&model_name, plan.breakdown.as_ref());
+    emit_memory_plan_resolved(
+        &model_name,
+        plan.breakdown.as_ref(),
+        MemoryPlanStartPath::Direct,
+    );
     let fallback_projector_path = mmproj_path_for_model(&model_name).filter(|path| path.exists());
     let mut resolved = resolve_local_openai_skippy_config(
         &spec,
@@ -820,133 +826,6 @@ async fn start_local_skippy_model(
     ))
 }
 
-/// Host-side tie between this process's measured native buffers and the plan
-/// that produced them: which model the measurements belong to, the context
-/// length they were observed at, and the lane count the compute buffer was
-/// sized for. All three fields are stamped in a single write when a model
-/// start finishes opening (see [`emit_measured_memory_reconciliation`]), so
-/// a later start in this process reads one coherent tuple — never a mix of
-/// two different starts (e.g. a stale context length paired with a fresh
-/// model key).
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct MeasuredPlanSnapshot {
-    model_bytes: u64,
-    context_length: u32,
-    lane_count: u32,
-}
-
-static MEASURED_PLAN_SNAPSHOT: Mutex<Option<MeasuredPlanSnapshot>> = Mutex::new(None);
-
-/// Measured native buffer footprint for the budget-driven planner: the
-/// per-device-summed compute/KV buffer sizes from this process's context
-/// init (see [`skippy_runtime::measured_native_buffers`]), tied to the
-/// plan snapshot recorded when the measured model finished opening. The KV
-/// measurement is tied to the context length the plan actually built, so
-/// the budget-driven path can scale KV linearly when re-solving for a
-/// deeper context; the compute measurement carries the lane count it was
-/// measured at, so a re-plan at a different lane count scales the charge.
-///
-/// `model_bytes` keys the measurement to the model being started: a
-/// different model's measurements must not be charged against this model's
-/// budget (buffer shapes are model-specific), so a mismatch degrades to the
-/// estimate ladder instead.
-fn measured_buffers_footprint(model_bytes: u64) -> Option<MeasuredBufferFootprint> {
-    let measured = skippy_runtime::measured_native_buffers()?;
-    let snapshot = *MEASURED_PLAN_SNAPSHOT.lock().ok()?;
-    // Only trust the footprint when it belongs to this model: without the
-    // key, a re-open after teardown — or a start of a different model in
-    // the same process — would charge stale or foreign buffers. Model size
-    // is a coarse key, but it is exactly the quantity the planner charges
-    // the footprint against.
-    let snapshot = snapshot?;
-    if snapshot.model_bytes != model_bytes || snapshot.context_length == 0 {
-        return None;
-    }
-    let compute_bytes = measured.compute_mib.map(mib_to_bytes)?;
-    let kv_bytes = measured.kv_mib.map(mib_to_bytes)?;
-    Some(MeasuredBufferFootprint {
-        compute_bytes,
-        kv_bytes,
-        context_length: snapshot.context_length,
-        lane_count: snapshot.lane_count,
-    })
-}
-
-fn mib_to_bytes(mib: f64) -> u64 {
-    (mib * 1024.0 * 1024.0).round() as u64
-}
-
-/// Emit the structured `memory_plan` breakdown for a resolved plan. Shared by
-/// both solo start paths (direct GGUF and package-v2) so the event shape
-/// stays identical across them.
-fn emit_memory_plan_resolved(model_name: &str, breakdown: Option<&RuntimeResourcePlanBreakdown>) {
-    let Some(breakdown) = breakdown else {
-        return;
-    };
-    tracing::info!(
-        model = model_name,
-        memory_plan.vram_bytes = breakdown.vram_bytes,
-        memory_plan.model_bytes = breakdown.model_bytes,
-        memory_plan.kv_budget_bytes = breakdown.kv_budget_bytes,
-        memory_plan.planned_kv_bytes = breakdown.planned_kv_bytes,
-        memory_plan.kv_bytes_per_token = breakdown.kv_bytes_per_token,
-        memory_plan.context_length = breakdown.context_length,
-        memory_plan.slots = breakdown.slots,
-        memory_plan.slots_source = if breakdown.slots_auto {
-            "auto"
-        } else {
-            "override"
-        },
-        memory_plan.context_source = if breakdown.context_auto {
-            "auto"
-        } else {
-            "override"
-        },
-        "memory plan resolved: charged estimates at plan time; compare with measured buffer_mib native events"
-    );
-}
-
-/// Reconcile the charged memory plan against the buffers llama.cpp actually
-/// allocated at context init, once the native model has finished opening.
-///
-/// The native log callback is synchronous with model open, so by the time the
-/// load future resolves the `sched_reserve` compute/KV buffer lines have been
-/// parsed and [`skippy_runtime::measured_native_buffers`] holds the measured
-/// sizes. Emitted for both start paths (direct GGUF and package-v2); split
-/// stage loads reconcile on their own seam.
-fn emit_measured_memory_reconciliation(model_name: &str, plan: &RuntimeResourcePlan) {
-    let Some(breakdown) = plan.breakdown.as_ref() else {
-        return;
-    };
-    let measured = skippy_runtime::measured_native_buffers();
-    let reconciliation = reconcile_memory_plan_with_measurements(breakdown, measured);
-    if reconciliation.measured_compute_bytes.is_some() || reconciliation.measured_kv_bytes.is_some()
-    {
-        // Stamp the coherent plan tuple the measurements belong to — model,
-        // context length, lane count in ONE write — so a later start in this
-        // process trusts them only as a set (see [`measured_buffers_footprint`]).
-        if let Ok(mut snapshot) = MEASURED_PLAN_SNAPSHOT.lock() {
-            *snapshot = Some(MeasuredPlanSnapshot {
-                model_bytes: breakdown.model_bytes,
-                context_length: breakdown.context_length,
-                lane_count: breakdown.slots as u32,
-            });
-        }
-    }
-    let memory_plan_measured =
-        measured.is_some_and(|m| m.compute_mib.is_some() || m.kv_mib.is_some());
-    tracing::info!(
-        model = model_name,
-        memory_plan.measured_available = memory_plan_measured,
-        memory_plan.charged_compute_reserve_bytes = reconciliation.charged_compute_reserve_bytes,
-        memory_plan.measured_compute_bytes = reconciliation.measured_compute_bytes.unwrap_or(0),
-        memory_plan.measured_kv_bytes = reconciliation.measured_kv_bytes.unwrap_or(0),
-        memory_plan.residual_free_bytes = reconciliation.residual_free_bytes.unwrap_or(0),
-        memory_plan.measured_residual_available = reconciliation.residual_free_bytes.is_some(),
-        "memory plan reconciled with measured native buffers"
-    );
-}
-
 async fn start_local_package_v2_model(
     spec: LocalOpenAiModelStartSpec<'_>,
     model_name: String,
@@ -988,7 +867,11 @@ async fn start_local_package_v2_model(
         )
     };
     let context_length = plan.context_length;
-    emit_memory_plan_resolved(&model_name, plan.breakdown.as_ref());
+    emit_memory_plan_resolved(
+        &model_name,
+        plan.breakdown.as_ref(),
+        MemoryPlanStartPath::PackageV2,
+    );
     let fallback_projector_path = package_projector_path
         .or_else(|| mmproj_path_for_model(&model_name).filter(|path| path.exists()));
     let mut resolved = resolve_local_openai_skippy_config(
@@ -1164,8 +1047,7 @@ pub(super) fn local_process_snapshot(
 
 #[cfg(test)]
 mod tests {
-    use super::{MEASURED_PLAN_SNAPSHOT, measured_buffers_footprint, unix_nanos_to_unix_ms};
-    use crate::runtime::local::MeasuredPlanSnapshot;
+    use super::unix_nanos_to_unix_ms;
 
     #[test]
     fn unix_nanos_to_unix_ms_converts_a_real_capture_time() {
@@ -1181,67 +1063,5 @@ mod tests {
         // epoch". Callers must not project 1970 as a success timestamp.
         assert_eq!(unix_nanos_to_unix_ms(0), None);
         assert_eq!(unix_nanos_to_unix_ms(-1), None);
-    }
-
-    #[test]
-    fn measured_footprint_reads_one_coherent_plan_snapshot() {
-        // Review should-fix (PR #1719): the model key, context length, and
-        // lane count must move as one tuple. A start of a different model
-        // that never completes its open must not leave its context length
-        // paired with the previous model's key — the footprint degrades to
-        // None until a full snapshot for THIS model lands.
-        let _guard = MEASURED_PLAN_SNAPSHOT.lock().unwrap();
-        // (Tests in one process share the static; take the lock, set state,
-        // assert, restore.)
-        drop(_guard);
-
-        let mut guard = MEASURED_PLAN_SNAPSHOT.lock().unwrap();
-        // No snapshot yet -> no footprint even if native buffers exist.
-        *guard = None;
-        drop(guard);
-        assert!(measured_buffers_footprint(1000).is_none());
-
-        // Snapshot for a different model -> not trusted for this model.
-        guard = MEASURED_PLAN_SNAPSHOT.lock().unwrap();
-        *guard = Some(MeasuredPlanSnapshot {
-            model_bytes: 2000,
-            context_length: 32768,
-            lane_count: 4,
-        });
-        drop(guard);
-        assert!(measured_buffers_footprint(1000).is_none());
-
-        // Matching model key -> the tuple flows through whole: context
-        // length AND lane count from the same write.
-        guard = MEASURED_PLAN_SNAPSHOT.lock().unwrap();
-        *guard = Some(MeasuredPlanSnapshot {
-            model_bytes: 1000,
-            context_length: 8192,
-            lane_count: 2,
-        });
-        drop(guard);
-        // Native measured buffers are process-global and may be None in a
-        // bare unit test; the snapshot gate alone is what this pins.
-        // When buffers are absent the footprint is None regardless.
-        let footprint = measured_buffers_footprint(1000);
-        if let Some(fp) = footprint {
-            assert_eq!(fp.context_length, 8192);
-            assert_eq!(fp.lane_count, 2);
-        }
-
-        // Zero context length in the snapshot (plan never resolved) -> None.
-        guard = MEASURED_PLAN_SNAPSHOT.lock().unwrap();
-        *guard = Some(MeasuredPlanSnapshot {
-            model_bytes: 1000,
-            context_length: 0,
-            lane_count: 4,
-        });
-        drop(guard);
-        assert!(measured_buffers_footprint(1000).is_none());
-
-        // Restore clean state for other tests in this process.
-        guard = MEASURED_PLAN_SNAPSHOT.lock().unwrap();
-        *guard = None;
-        drop(guard);
     }
 }
