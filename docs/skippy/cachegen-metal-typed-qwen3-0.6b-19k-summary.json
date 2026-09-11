@@ -1,10 +1,11 @@
 {
   "schema_version": 1,
-  "decision": "f32-local-pass-other-representative-types-stop",
+  "decision": "f32-and-f32-f16-local-pass-lower-width-types-stop",
   "date": "2026-09-12",
   "commits": {
     "quantized_and_mixed": "2e26d46ea87e1b8ee783460998e703f669513f91",
-    "f32": "74b4f60719d09dee7d9579c1365ac6f95d14c20c"
+    "f32": "74b4f60719d09dee7d9579c1365ac6f95d14c20c",
+    "f32_mixed_crossover": "ddddf34aa5e64262c9e113d07f9dcb506e5f7aab"
   },
   "reference": {
     "implementation": "LMCache CacheGen",
@@ -49,6 +50,59 @@
       "native_ttft_ms": 1199.1292079999998,
       "cachegen_ttft_ms": 766.1168339999999,
       "p99_decode_regression": -0.047207090345013546,
+      "matching_tokens": 64,
+      "token_agreement": 1.0,
+      "first_token_mismatch_step": null,
+      "failure_reasons": []
+    },
+    {
+      "cache_type_k": "q8_0",
+      "cache_type_v": "f32",
+      "passed": false,
+      "stable_result": "one-pass-one-fail",
+      "native_storage_bytes": 2757888000,
+      "cachegen_storage_bytes": 565441003,
+      "compression_ratio": 0.20502681871054954,
+      "runs": [
+        {
+          "native_ttft_ms": 800.57175,
+          "cachegen_ttft_ms": 796.943875,
+          "passed": true
+        },
+        {
+          "native_ttft_ms": 727.173833,
+          "cachegen_ttft_ms": 792.1295419999999,
+          "passed": false
+        }
+      ],
+      "matching_tokens": 64,
+      "token_agreement": 1.0
+    },
+    {
+      "cache_type_k": "f32",
+      "cache_type_v": "f16",
+      "passed": true,
+      "native_storage_bytes": 3268608000,
+      "cachegen_storage_bytes": 446903003,
+      "compression_ratio": 0.13672578755237705,
+      "native_ttft_ms": 878.6078749999999,
+      "cachegen_ttft_ms": 686.1472490000001,
+      "p99_decode_regression": -0.19336615460457712,
+      "matching_tokens": 64,
+      "token_agreement": 1.0,
+      "first_token_mismatch_step": null,
+      "failure_reasons": []
+    },
+    {
+      "cache_type_k": "f16",
+      "cache_type_v": "f32",
+      "passed": true,
+      "native_storage_bytes": 3268608000,
+      "cachegen_storage_bytes": 446903003,
+      "compression_ratio": 0.13672578755237705,
+      "native_ttft_ms": 840.3155,
+      "cachegen_ttft_ms": 671.9314999999999,
+      "p99_decode_regression": -0.16524231813735718,
       "matching_tokens": 64,
       "token_agreement": 1.0,
       "first_token_mismatch_step": null,
@@ -135,6 +189,8 @@
   "notes": [
     "The scalar CPU decoder ran as an independently timed oracle and is excluded from direct-device TTFT.",
     "The F32/F32 case passed all declared gates after fixing native model configuration to preserve GGML_TYPE_F32 enum value zero instead of silently replacing it with F16.",
+    "Both F32/F16 directions passed with more than 160 ms of TTFT margin; Q8_0/F32 crossed the boundary between repeated runs and remains stopped.",
+    "F32/Q8_0 is not runtime-valid for this model because quantized V requires Flash Attention and this mixed pair has no compatible Flash Attention kernel.",
     "Q8_0 cases preserved all 64 greedy continuation tokens; Q4_0 K cases first diverged at step 15 and preserved 61 of 64.",
     "F32/F32 beat its matched native control on this local unified-memory tier; the four sampled quantized and mixed restores were slower.",
     "Q4_0/Q4_0 expanded the native payload by 3.62 percent and therefore failed the storage gate independently of latency.",

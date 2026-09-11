@@ -1,8 +1,9 @@
 # CacheGen Backend Qualification (#1652)
 
-Status: **LMCache-compatible direct Metal restore passes the local F32/F32 gate;
-F16 and the sampled quantized/mixed types remain stopped on local latency, and
-CacheGen remains opt-in pending selection-path wiring**. Owner: jian yang.
+Status: **LMCache-compatible direct Metal restore passes the local F32/F32 and
+F32+F16 gates; F16 and the lower-width sampled types remain stopped on local
+latency, and CacheGen remains opt-in pending selection-path wiring**. Owner:
+jian yang.
 Reviewed against: #1652 scope, scama's directives of 2026-09-10 (v4
 contract, CPU+Metal parity, six measurements, stop rule).
 
@@ -11,7 +12,7 @@ contract, CPU+Metal parity, six measurements, stop rule).
 | Backend | Kernel | Status | Evidence |
 |---|---|---|---|
 | CPU (reference) | scalar Rust | **Correctness reference only** — portable F32, F16, Q8_0, Q4_0, and mixed K/V adapters are implemented | Python/Rust fixtures pin LMCache revision `b5d109e`; typed archive fixtures cover every current user-selectable runtime K/V type |
-| Metal (Apple GPU) | native MSL | **All typed restores implemented; F32/F32 clears the local gate** — F16, F32, Q8_0, and Q4_0 match native fixture layouts; the 19K F32/F32 gate passes quality, size, latency, and p99 criteria, while F16 and the sampled quantized/mixed cases remain stopped locally | Apple M1 Ultra device fixture and typed 19K gates below |
+| Metal (Apple GPU) | native MSL | **All typed restores implemented; F32/F32 and F32+F16 clear the local gate** — F16, F32, Q8_0, and Q4_0 match native fixture layouts; Q8_0/F32 straddles the latency boundary across repeats, while F16 and the lower-width sampled cases remain stopped locally | Apple M1 Ultra device fixture and typed 19K gates below |
 | CUDA (NVIDIA) | shared native CUDA/HIP source | **Typed kernels landed; F16 fixture qualified** — the real RTX 5080 fixture matches F16 bytes, while F32, quantized, and matched typed 19K runtime gates remain | Real NVIDIA F16 fixture; remaining typed hardware gates pending |
 | HIP/ROCm (AMD) | shared native CUDA/HIP source | **Typed kernels landed; compile/package qualified** — no real AMD runtime claim yet | Real AMD fixture and typed 19K gates remain |
 
@@ -242,6 +243,8 @@ continuation. The F32 run also caught and fixed a native config defect where
 GGML enum value zero was interpreted as an unset cache type and silently
 replaced with F16. The native regression now pins both the F16 default and an
 explicit F32 request.
+The F32/F16 crossover probes were run from exact commit
+`ddddf34aa5e64262c9e113d07f9dcb506e5f7aab`.
 The gate now accepts independent `--cache-type-k` and `--cache-type-v` values
 and records them in its report. The compact matrix is
 [`cachegen-metal-typed-qwen3-0.6b-19k-summary.json`](cachegen-metal-typed-qwen3-0.6b-19k-summary.json).
@@ -249,21 +252,31 @@ and records them in its report. The compact matrix is
 | K/V type | Native bytes | CacheGen bytes | CacheGen/native | Agreement | Native TTFT | CacheGen TTFT | Decision |
 |---|---:|---:|---:|---:|---:|---:|---|
 | F32/F32 | 4,358,144,000 | 446,903,003 | 10.25% | 64/64 (100%) | 1,199.13 ms | 766.12 ms | Pass: quality, size, local latency, and p99 |
+| F32/F16 | 3,268,608,000 | 446,903,003 | 13.67% | 64/64 (100%) | 878.61 ms | 686.15 ms | Pass: quality, size, local latency, and p99 |
+| F16/F32 | 3,268,608,000 | 446,903,003 | 13.67% | 64/64 (100%) | 840.32 ms | 671.93 ms | Pass: quality, size, local latency, and p99 |
+| Q8_0/F32 | 2,757,888,000 | 565,441,003 | 20.50% | 64/64 (100%) | 800.57 / 727.17 ms | 796.94 / 792.13 ms | Unstable boundary: one pass, one latency stop |
 | Q8_0/Q8_0 | 1,157,632,000 | 589,803,358 | 50.95% | 64/64 (100%) | 333.36 ms | 650.64 ms | Quality and size pass; local latency fails |
 | Q4_0/Q4_0 | 612,864,000 | 635,037,607 | 103.62% | 61/64 (95.31%) | 189.84 ms | 699.35 ms | Quality floor passes; size and local latency fail |
 | Q8_0/F16 | 1,668,352,000 | 565,441,003 | 33.89% | 64/64 (100%) | 558.28 ms | 792.05 ms | Quality and size pass; local latency fails |
 | Q4_0/F16 | 1,395,968,000 | 610,269,862 | 43.72% | 61/64 (95.31%) | 483.98 ms | 807.03 ms | Quality and size pass; local latency fails |
 
-These are representative homogeneous and mixed layouts, not qualification of
-all 16 pairings. F32/F32 clears the matched local gate because reading the
-compact archive saves enough time against the 4.36 GB native page to absorb
-device reconstruction. The quantized K cases expose a consistent quality
-split: Q8_0 preserves all 64 greedy continuation tokens, while Q4_0 first
-diverges at step 15 and finishes at 61/64, barely above the declared 95% floor.
-Every sampled CacheGen continuation stays within the p99 decode-regression
-budget after restore. F16 and the sampled quantized/mixed cases remain stopped
-for the local tier because end-to-end restore is slower than native;
-Q4_0/Q4_0 also has no storage benefit. The remaining mixed permutations retain
+These are representative runtime-valid layouts, not qualification of every
+pairing. F32/F32 and both F32+F16 directions clear the matched local gate because
+reading the compact archive saves enough time against native pages of at least
+3.27 GB to absorb device reconstruction. At 2.76 GB, Q8_0/F32 is inside run
+variance: it won once by 3.63 ms and lost once by 64.96 ms, so it remains stopped.
+The nearly format-independent 521-586 ms CacheGen import times, compared with
+native import scaling from 80 to 495 ms with page width, identify arithmetic
+reconstruction as the next Metal target. F32/Q8_0 is not a valid control on this
+model: llama.cpp requires Flash Attention for quantized V, while that mixed
+cache pair does not have a compatible Flash Attention kernel.
+
+The quantized K cases expose a consistent quality split: Q8_0 preserves all 64
+greedy continuation tokens, while Q4_0 first diverges at step 15 and finishes at
+61/64, barely above the declared 95% floor. Every completed CacheGen continuation
+stays within the p99 decode-regression budget after restore. F16 and the
+lower-width sampled cases remain stopped for the local tier; Q4_0/Q4_0 also has
+no storage benefit. The remaining runtime-valid mixed permutations retain
 fixture-level coverage and need separate 19K runs before any broader typed
 qualification claim.
 
