@@ -1,4 +1,4 @@
-From 90cae5d566f4e9f50100458e603af77c80968576 Mon Sep 17 00:00:00 2001
+From 410d9f2d5535adefc17421f95f345115d32e46e9 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 9 Sep 2026 12:35:48 +1000
 Subject: [PATCH 22/23] skippy: bind carrier descriptors to payload parts

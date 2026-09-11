@@ -1,4 +1,4 @@
-From 91169c029c50a15f5de4093064c7fd7a2332ffe2 Mon Sep 17 00:00:00 2001
+From bd13b480f84db73a541065227ad78fc5f57094dc Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 7 Sep 2026 06:23:09 +1000
 Subject: [PATCH 05/23] skippy: derive and verify executable graph slices

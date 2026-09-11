@@ -1,4 +1,4 @@
-From 6251b55c28e9823eeb68be0d113deb9dfbe0921a Mon Sep 17 00:00:00 2001
+From e801a8a63474e023be5f0274a393bfca5c730eb0 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 8 Sep 2026 00:57:55 +1000
 Subject: [PATCH 17/23] skippy: classify MTP request inputs centrally

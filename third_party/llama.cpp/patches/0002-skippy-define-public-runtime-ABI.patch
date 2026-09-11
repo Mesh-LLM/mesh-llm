@@ -1,4 +1,4 @@
-From 137a585ebb37a6e115944a7c7e8b4b3ef29533e5 Mon Sep 17 00:00:00 2001
+From d8751975ebfbf4fbb06d7489e4a29d0e9c945024 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 7 Sep 2026 06:22:42 +1000
 Subject: [PATCH 02/23] skippy: define public runtime ABI

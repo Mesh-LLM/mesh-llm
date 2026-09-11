@@ -1,4 +1,4 @@
-From d503dc6e7b249d78412c2ff7e87d068923fa4427 Mon Sep 17 00:00:00 2001
+From 9d05dd3a29e6c3b19b2331bf2fd4afc27805dd52 Mon Sep 17 00:00:00 2001
 From: scama
  <a1860575018c4680d5669dd7bc3bd356b478bccb8d42e194df46304a5e25f49a@meshllm.communities.buzz.xyz>
 Date: Tue, 8 Sep 2026 07:24:43 +1000
@@ -177,7 +177,7 @@ index ad6612647..342a5d795 100644
      return output;
  }
 diff --git a/src/models/gemma4.cpp b/src/models/gemma4.cpp
-index 388126e26..72c9cbc5f 100644
+index 39e899aa6..8e52c3502 100644
 --- a/src/models/gemma4.cpp
 +++ b/src/models/gemma4.cpp
 @@ -107,8 +107,9 @@ void llama_model_gemma4::load_arch_tensors(llama_model_loader &) {
@@ -1213,10 +1213,10 @@ index b63fc9c6a..1bdfc3e3f 100644
      cb(state, "state_predelta", il);
  
 diff --git a/src/models/qwen3vl.cpp b/src/models/qwen3vl.cpp
-index 5596620f0..44e6a6815 100644
+index 30c08ed35..8e938a69a 100644
 --- a/src/models/qwen3vl.cpp
 +++ b/src/models/qwen3vl.cpp
-@@ -171,7 +171,8 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
+@@ -172,7 +172,8 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
      // lm_head
      cur = build_lora_mm(model.output, cur, model.output_s);
  

@@ -1,4 +1,4 @@
-From 34d751d72489811fe2d0c2db7e7718aed98491d9 Mon Sep 17 00:00:00 2001
+From fff7322eda38a35d2df8bc6561a7bde08f41cb54 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 8 Sep 2026 00:28:03 +1000
 Subject: [PATCH 15/23] skippy: keep MTP blocks outside pipeline stage ranges

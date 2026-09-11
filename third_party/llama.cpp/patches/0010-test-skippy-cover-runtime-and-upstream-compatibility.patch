@@ -1,4 +1,4 @@
-From 78415123b89c9402f3f28c6c7a4c7e9344d6b8bf Mon Sep 17 00:00:00 2001
+From 95c406f75c005d972d0f34db0eb2acc949703294 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 7 Sep 2026 06:23:40 +1000
 Subject: [PATCH 10/23] test(skippy): cover runtime and upstream compatibility
@@ -23,7 +23,7 @@ Subject: [PATCH 10/23] test(skippy): cover runtime and upstream compatibility
  create mode 100644 tests/test-skippy-verify-checkpoint-retirement.cpp
 
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 5531c4ce3..5a45037bb 100644
+index 0c4e4d5a9..26496c23e 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
 @@ -152,6 +152,12 @@ llama_build(test-recurrent-state-rollback.cpp)
@@ -511,7 +511,7 @@ index f27c91e4d..c608477f3 100644
          std::cout << "\n[chat] All template tests passed!" << '\n';
          return 0;
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index dbed9846f..53eafea50 100644
+index 3496f72e4..94639c879 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
 @@ -14,6 +14,7 @@
@@ -549,7 +549,7 @@ index dbed9846f..53eafea50 100644
  
      uint32_t n_vocab = 128;
      uint32_t n_embd  = 256;
-@@ -288,9 +303,19 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+@@ -289,9 +304,19 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
      ms.add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,
                arch == LLM_ARCH_QWEN4EXP ? n_embd_head : uint32_t(128));
  
@@ -570,7 +570,7 @@ index dbed9846f..53eafea50 100644
      ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
  
      if (arch == LLM_ARCH_HY_V4) {
-@@ -387,9 +412,57 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
+@@ -388,9 +413,57 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
      return true;
  }
  
@@ -629,7 +629,7 @@ index dbed9846f..53eafea50 100644
      GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
      llama_model_params model_params = llama_model_default_params();
      model_params.progress_callback = silent_model_load_progress;
-@@ -405,6 +478,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+@@ -406,6 +479,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
      if (!encode) {
          ctx_params.n_ubatch = 64;
      }
@@ -639,7 +639,7 @@ index dbed9846f..53eafea50 100644
  
      size_t tmp = seed;
      llama_model_ptr model(gguf_ctx != nullptr ?
-@@ -420,6 +496,20 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+@@ -421,6 +497,20 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
      return std::make_pair(std::move(model), std::move(lctx));
  }
  
@@ -660,7 +660,7 @@ index dbed9846f..53eafea50 100644
  static std::vector<float> get_logits(
          llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens, bool encode = false) {
      const uint32_t n_vocab  = llama_vocab_n_tokens(llama_model_get_vocab(model));
-@@ -560,6 +650,10 @@ static bool arch_supported(const llm_arch arch) {
+@@ -561,6 +651,10 @@ static bool arch_supported(const llm_arch arch) {
      if (arch == LLM_ARCH_DEEPSEEK2OCR) {
          return false;
      }
@@ -671,7 +671,7 @@ index dbed9846f..53eafea50 100644
      // FIXME: these hit scheduler/view-backed-output issues with WebGPU on CI.
  #ifdef GGML_USE_WEBGPU
      if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_DOTS3NOTE || arch == LLM_ARCH_QWEN4EXP) {
-@@ -578,6 +672,20 @@ static bool arch_supported(const llm_arch arch) {
+@@ -579,6 +673,20 @@ static bool arch_supported(const llm_arch arch) {
      return true;
  }
  
@@ -692,7 +692,7 @@ index dbed9846f..53eafea50 100644
  static int save_models(const llm_arch target_arch, const size_t seed, const int verbosity, const std::string & dir) {
      struct user_data_t {
          struct {
-@@ -754,6 +862,12 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
+@@ -755,6 +863,12 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
                  char nmse_str[12] = {0};
  
                  bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());

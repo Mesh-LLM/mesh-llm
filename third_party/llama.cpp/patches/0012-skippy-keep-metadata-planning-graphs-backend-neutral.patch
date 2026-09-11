@@ -1,4 +1,4 @@
-From b7910fe2247529d44f342d9bbdcca75a4e6f9cef Mon Sep 17 00:00:00 2001
+From 207e4ba7decb62855ad1092f89a3a2d75445a936 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 7 Sep 2026 15:34:55 +1000
 Subject: [PATCH 12/23] skippy: keep metadata planning graphs backend neutral

@@ -1,4 +1,4 @@
-From f0d44b4ab165981b7aabf3e9a8ae80897b8e29cf Mon Sep 17 00:00:00 2001
+From 20d031e38b4f04cd7505270f0ba76a022382c437 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 7 Sep 2026 06:23:51 +1000
 Subject: [PATCH 11/23] build(skippy): wire runtime and native tests
@@ -45,7 +45,7 @@ index 86b09dfd4..4a18a0c38 100644
  if (LLAMA_BUILD_COMMON)
      install(TARGETS llama-common LIBRARY)
 diff --git a/common/CMakeLists.txt b/common/CMakeLists.txt
-index 1506bf647..a821f591c 100644
+index 9a43911d3..0c66e485f 100644
 --- a/common/CMakeLists.txt
 +++ b/common/CMakeLists.txt
 @@ -103,6 +103,7 @@ add_library(${TARGET}
@@ -56,7 +56,7 @@ index 1506bf647..a821f591c 100644
      speculative.cpp
      speculative.h
      subproc.cpp
-@@ -141,6 +142,7 @@ endif()
+@@ -143,6 +144,7 @@ endif()
  
  if (BUILD_SHARED_LIBS)
      set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -65,7 +65,7 @@ index 1506bf647..a821f591c 100644
      # TODO: make fine-grained exports in the future
      set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 diff --git a/tools/mtmd/CMakeLists.txt b/tools/mtmd/CMakeLists.txt
-index 907468e87..392ffe068 100644
+index 176eb1505..6bbc4c7f2 100644
 --- a/tools/mtmd/CMakeLists.txt
 +++ b/tools/mtmd/CMakeLists.txt
 @@ -43,6 +43,7 @@ add_library(mtmd

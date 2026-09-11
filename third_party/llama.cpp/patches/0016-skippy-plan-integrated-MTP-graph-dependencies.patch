@@ -1,4 +1,4 @@
-From 550261cea6ab3c0e3d32731141bb191012476aa9 Mon Sep 17 00:00:00 2001
+From efb8b32465b7956c56cde5473b93d9ac2b87d43a Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 8 Sep 2026 00:47:32 +1000
 Subject: [PATCH 16/23] skippy: plan integrated MTP graph dependencies

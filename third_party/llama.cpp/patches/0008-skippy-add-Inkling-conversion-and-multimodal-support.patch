@@ -1,4 +1,4 @@
-From dbafed8f45a08d512844f0f2728f064a79d7dd20 Mon Sep 17 00:00:00 2001
+From 84557357b1f887bf3e75bfbac6b345b2cea6cf1e Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 7 Sep 2026 06:23:29 +1000
 Subject: [PATCH 08/23] skippy: add Inkling conversion and multimodal support

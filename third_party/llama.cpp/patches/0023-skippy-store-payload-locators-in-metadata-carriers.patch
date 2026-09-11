@@ -1,4 +1,4 @@
-From bd0a187cc565f52fc9d4029bfb31eb5899633ac7 Mon Sep 17 00:00:00 2001
+From e7c34003df9133484d08d92a038377a77aefd763 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 9 Sep 2026 13:19:51 +1000
 Subject: [PATCH 23/23] skippy: store payload locators in metadata carriers

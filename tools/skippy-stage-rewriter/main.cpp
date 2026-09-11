@@ -855,6 +855,61 @@ altupPrelude(const CompoundStmt *constructor_body, const ForStmt *loop,
   return result;
 }
 
+// Resolve the local helper this builder already uses to slice the active
+// altup prediction out of a stacked activation, e.g. gemma3n's
+// <prefix>_view_2d_slice(ctx0, <tensor>, i_altup_act). The generated
+// stage-boundary and per-layer-projection edits reuse that exact helper, so
+// its name must come from the builder's own calls instead of a spelling
+// template that upstream may rename.
+std::optional<std::string>
+altupSliceHelperName(const CompoundStmt *constructor_body,
+                     const SourceManager &sm, const clang::LangOptions &lang) {
+  const CallExpr *found = nullptr;
+  const FunctionDecl *callee = nullptr;
+  bool ambiguous = false;
+  class ActiveSliceVisitor final
+      : public RecursiveASTVisitor<ActiveSliceVisitor> {
+  public:
+    ActiveSliceVisitor(const SourceManager &sm, const clang::LangOptions &lang,
+                       const CallExpr *&found, const FunctionDecl *&callee,
+                       bool &ambiguous)
+        : sm_(sm), lang_(lang), found_(found), callee_(callee),
+          ambiguous_(ambiguous) {}
+
+    bool TraverseLambdaExpr(clang::LambdaExpr *) { return true; }
+
+    bool VisitCallExpr(CallExpr *call) {
+      const auto *candidate = directCallee(call);
+      if (candidate == nullptr || call->getNumArgs() != 3 ||
+          sourceText(call->getArg(2)->getSourceRange(), sm_, lang_) !=
+              "i_altup_act") {
+        return true;
+      }
+      if (found_ != nullptr &&
+          candidate->getCanonicalDecl() != callee_->getCanonicalDecl()) {
+        ambiguous_ = true;
+      }
+      if (found_ == nullptr) {
+        found_ = call;
+        callee_ = candidate;
+      }
+      return true;
+    }
+
+  private:
+    const SourceManager &sm_;
+    const clang::LangOptions &lang_;
+    const CallExpr *&found_;
+    const FunctionDecl *&callee_;
+    bool &ambiguous_;
+  } slice_visitor(sm, lang, found, callee, ambiguous);
+  slice_visitor.TraverseStmt(const_cast<CompoundStmt *>(constructor_body));
+  if (found == nullptr || ambiguous || callee == nullptr) {
+    return std::nullopt;
+  }
+  return callee->getNameAsString();
+}
+
 std::optional<PerLayerTokenProjection>
 perLayerTokenProjection(const CompoundStmt *constructor_body,
                         const ForStmt *loop, llvm::StringRef activation,
@@ -1321,6 +1376,14 @@ public:
                                *activation, *carried, sm, lang);
     const auto altup =
         altupPrelude(constructor_body, loop, *activation, *carried, sm, lang);
+    const auto altup_slice_helper =
+        altup ? altupSliceHelperName(constructor_body, sm, lang)
+              : std::nullopt;
+    if (altup && !altup_slice_helper) {
+      refuse(report, "cannot prove the altup active-slice helper");
+      reports_.push_back(std::move(report));
+      return;
+    }
     const auto per_layer_projection = perLayerTokenProjection(
         constructor_body, loop, *activation, facts, sm, lang);
     const auto attention_positions =
@@ -1621,9 +1684,9 @@ public:
         const std::string sideband_indent = indentationAt(
             per_layer_projection->build_statement->getBeginLoc(), sm);
         const std::string projection_fallback =
-            altup ? "stage_filtered && il_start > 0 ? "
-                    "ggml_view_2d_slice(ctx0, " +
-                        *carried + ", i_altup_act) : " + *activation
+            altup ? "stage_filtered && il_start > 0 ? " +
+                        *altup_slice_helper + "(ctx0, " + *carried +
+                        ", i_altup_act) : " + *activation
                   : *activation;
         const std::string sideband =
             "ggml_tensor * inp_per_layer_proj = " + projection_fallback +
@@ -2009,7 +2072,8 @@ public:
                     "    res->t_skippy_activation_output = "
                     "stage_boundary;\n" +
                     indent +
-                    "    res->t_embd = ggml_view_2d_slice(ctx0, "
+                    "    res->t_embd = " + *altup_slice_helper +
+                    "(ctx0, "
                     "stage_boundary, "
                     "i_altup_act);\n" +
                     indent +
@@ -2214,6 +2278,154 @@ private:
 
 } // namespace
 
+namespace {
+
+// CMake-generated compile commands may load a precompiled header built by a
+// different Clang than this tool. PCH files are format-locked across Clang
+// versions, so drop the PCH load flags instead of failing every translation
+// unit. CMake spells them "-Xclang -include-pch -Xclang <file>.pch" and
+// "-Xclang -include -Xclang <dir>/cmake_pch.hxx"; other drivers use the
+// direct "-include-pch <file>" / "-include <header>" forms.
+bool is_pch_header_argument(llvm::StringRef argument) {
+  return argument.ends_with(".pch") || argument.ends_with("cmake_pch.hxx");
+}
+
+clang::tooling::CommandLineArguments
+strip_pch_load_flags(clang::tooling::CommandLineArguments arguments) {
+  clang::tooling::CommandLineArguments adjusted;
+  adjusted.reserve(arguments.size());
+  for (size_t index = 0; index < arguments.size();) {
+    size_t drop = 0;
+    if (arguments[index] == "-Xclang" && index + 3 < arguments.size() &&
+        (arguments[index + 1] == "-include-pch" ||
+         arguments[index + 1] == "-include") &&
+        arguments[index + 2] == "-Xclang" &&
+        is_pch_header_argument(arguments[index + 3])) {
+      drop = 4;
+    } else if ((arguments[index] == "-include-pch" ||
+                arguments[index] == "-include") &&
+               index + 1 < arguments.size() &&
+               is_pch_header_argument(arguments[index + 1])) {
+      drop = 2;
+    } else if (arguments[index] == "-Winvalid-pch" ||
+               arguments[index] == "-emit-pch") {
+      drop = 1;
+    } else if (arguments[index] == "-Xclang" &&
+               index + 1 < arguments.size() &&
+               arguments[index + 1] == "-emit-pch") {
+      drop = 2;
+    } else if (arguments[index] == "-x" && index + 1 < arguments.size() &&
+               llvm::StringRef(arguments[index + 1]).ends_with("-header")) {
+      drop = 2;
+    } else if (llvm::StringRef(arguments[index]).starts_with("-x") &&
+               llvm::StringRef(arguments[index]).ends_with("-header")) {
+      drop = 1;
+    }
+    if (drop == 0) {
+      adjusted.push_back(arguments[index]);
+      ++index;
+    } else {
+      index += drop;
+    }
+  }
+  return adjusted;
+}
+
+std::optional<clang::tooling::CompileCommand>
+find_llama_target_command(const clang::tooling::CompilationDatabase &Base) {
+  // Prefer a real unity translation unit; the llama.dir PCH-generation
+  // command (-emit-pch -x c++-header) compiles a header, not a source.
+  std::optional<clang::tooling::CompileCommand> Fallback;
+  for (const auto &Command : Base.getAllCompileCommands()) {
+    const llvm::StringRef Filename(Command.Filename);
+    if (!Filename.contains("llama.dir") ||
+        Filename.contains("cmake_pch")) {
+      continue;
+    }
+    if (Filename.contains("llama.dir/Unity")) {
+      return Command;
+    }
+    if (!Fallback) {
+      Fallback = Command;
+    }
+  }
+  return Fallback;
+}
+
+// Unity-build compile databases do not list model translation units, so
+// ClangTool's database fallback can borrow a command from another target
+// whose include paths, defines, or PCH do not match the llama target that
+// owns the model sources. Synthesize every model command from the llama
+// target's own flags instead: identical compilation semantics for every
+// member of the target, with PCH load flags removed because the PCH may
+// have been produced by a different Clang than this tool.
+class ModelSourceCompilationDatabase
+    : public clang::tooling::CompilationDatabase {
+public:
+  ModelSourceCompilationDatabase(
+      clang::tooling::CompilationDatabase &Base,
+      clang::tooling::CompileCommand Template, std::string ModelsDirectory)
+      : Base(Base), Template(std::move(Template)),
+        ModelsDirectory(std::move(ModelsDirectory)) {}
+
+  static std::optional<ModelSourceCompilationDatabase>
+  create(clang::tooling::CompilationDatabase &Base,
+         llvm::StringRef ModelsDirectory) {
+    auto Template = find_llama_target_command(Base);
+    if (!Template) {
+      // No unity-build llama target in this database (for example the
+      // command-line fixture mode); pass every lookup through untouched.
+      return std::nullopt;
+    }
+    Template->CommandLine = strip_pch_load_flags(Template->CommandLine);
+    // Drop the trailing output/source arguments; getCompileCommands appends
+    // "-c <model source>" for every synthesized command.
+    for (size_t index = 0; index + 1 < Template->CommandLine.size();
+         ++index) {
+      if (Template->CommandLine[index] == "-o") {
+        Template->CommandLine.resize(index);
+        break;
+      }
+    }
+    return ModelSourceCompilationDatabase(Base, std::move(*Template),
+                                          ModelsDirectory.str());
+  }
+
+  std::vector<clang::tooling::CompileCommand>
+  getCompileCommands(llvm::StringRef File) const override {
+    if (llvm::sys::path::parent_path(File) ==
+        llvm::StringRef(ModelsDirectory)) {
+      clang::tooling::CompileCommand Command = Template;
+      Command.Filename = File.str();
+      Command.Heuristic = "llama target flags synthesized for model source";
+      if (std::getenv("SKIPPY_REWRITER_DEBUG_COMMAND") != nullptr) {
+        llvm::errs() << "synthesized: " << llvm::join(Command.CommandLine, " ")
+                     << "\n";
+      }
+      Command.CommandLine.push_back("-c");
+      Command.CommandLine.push_back(File.str());
+      return {Command};
+    }
+    return Base.getCompileCommands(File);
+  }
+
+  std::vector<clang::tooling::CompileCommand>
+  getAllCompileCommands() const override {
+    return Base.getAllCompileCommands();
+  }
+
+  std::vector<std::string> getAllFiles() const override {
+    return Base.getAllFiles();
+  }
+
+private:
+  clang::tooling::CompilationDatabase &Base;
+  clang::tooling::CompileCommand Template;
+  std::string ModelsDirectory;
+};
+
+} // namespace
+
 int main(int argc, const char **argv) {
   auto parser = clang::tooling::CommonOptionsParser::create(
       argc, argv, RewriterCategory, llvm::cl::OneOrMore);
@@ -2231,8 +2443,19 @@ int main(int argc, const char **argv) {
   }
   SourceRoot = canonical_source_root.str().str();
 
-  clang::tooling::ClangTool tool(parser->getCompilations(),
-                                 parser->getSourcePathList());
+  std::string ModelsDirectory =
+      (llvm::Twine(SourceRoot) + "/src/models").str();
+  auto ModelDatabase =
+      ModelSourceCompilationDatabase::create(parser->getCompilations(),
+                                             ModelsDirectory);
+  clang::tooling::CompilationDatabase &Database =
+      ModelDatabase
+          ? static_cast<clang::tooling::CompilationDatabase &>(
+                *ModelDatabase)
+          : parser->getCompilations();
+
+  clang::tooling::ClangTool tool(Database, parser->getSourcePathList());
+  tool.appendArgumentsAdjuster(parser->getArgumentsAdjuster());
   BuilderCallback callback;
   MatchFinder finder;
   finder.addMatcher(

@@ -1,4 +1,4 @@
-From c554a33ee380cd50673baa4907b8c402b51a27aa Mon Sep 17 00:00:00 2001
+From ea9c4eaf9d19928936f5a4c22d82c4040df3e313 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 7 Sep 2026 22:48:55 +1000
 Subject: [PATCH 14/23] skippy: infer writes to registered persistent state
@@ -11,10 +11,10 @@ Subject: [PATCH 14/23] skippy: infer writes to registered persistent state
  4 files changed, 148 insertions(+), 10 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 6884aff48..118134918 100644
+index 3c5955250..ae5b1c4f5 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -298,6 +298,24 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -312,6 +312,24 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_noalloc_graph_planning_msa PROPERTIES
          FIXTURES_REQUIRED skippy-noalloc-minimax-m3-fixture)
  
