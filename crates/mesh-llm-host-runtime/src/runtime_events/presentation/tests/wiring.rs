@@ -123,9 +123,8 @@ fn distinct_state_transition_fact() -> RuntimeFact {
 ///      time without touching tokio's still-paused virtual clock, so the
 ///      render tick's interval stays exactly where step 1 left it. The
 ///      second health event this test asserts can therefore ONLY come from
-///      the recv arm. Deleting that one call (mutation M4,
-///      `.omo/evidence/event-system-fixes/task-08/mutation-proof.txt`)
-///      makes this test fail (0 health events after priming, not 1).
+///      the recv arm. Deleting that one call (mutation M4) makes this
+///      test fail (0 health events after priming, not 1).
 #[tokio::test(start_paused = true)]
 async fn drive_presentation_subscriber_recv_arm_delivers_health_during_a_steady_frame_stream() {
     let engine = RuntimeEventEngine::with_capacity(1);

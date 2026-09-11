@@ -647,7 +647,7 @@ mod tests {
     }
 
     /// Fails if `maybe_write_health`'s call in `live_loop`'s recv arm is
-    /// removed (mutation M3, `.omo/evidence/event-system-fixes/task-08/mutation-proof.txt`).
+    /// removed (mutation M3).
     /// A fresh `HealthDeliveryGate` (mirroring `HealthDeliveryGate::new`'s
     /// own documented "never delivered yet" contract, exercised by
     /// `health_delivery_gate_delivers_on_the_first_check_from_new` in

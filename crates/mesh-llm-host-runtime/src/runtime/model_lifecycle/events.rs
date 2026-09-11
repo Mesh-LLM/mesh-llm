@@ -749,8 +749,8 @@ mod tests {
     /// F2 fix regression test (event-system-fixes, live-sampling finding):
     /// a `mesh-llm load <raw filesystem path>` argument must never appear,
     /// in whole or in the raw-path form itself, as any frame's
-    /// `scope.model_id` -- the exact leak `.omo/evidence/event-system-fixes/
-    /// final/f2/canary.txt` captured live (a directory-canary path leaking
+    /// `scope.model_id` -- the exact leak live sampling against a running
+    /// node captured (a directory-canary path leaking
     /// into `model_queued`/`model_resolution_started`/
     /// `model_load_requested`/`model_load_started`).
     #[test]
@@ -798,9 +798,9 @@ mod tests {
         clear_runtime_event_engine();
     }
 
-    /// `redact_local_path` input -> output table (event-system-fixes
-    /// deferral f2-relative-paths, `.omo/evidence/event-system-fixes/
-    /// deferrals/f2-relative-paths/analysis.md`). Pins every prefix-anchored
+    /// `redact_local_path` input -> output table, including the
+    /// deliberately-declined bare-relative-path case documented in
+    /// `docs/design/RUNTIME_EVENT_ARCHITECTURE_REPAIRS.md`. Pins every prefix-anchored
     /// shape the function already collapses to a basename, every
     /// non-path-shaped model reference it must leave untouched, AND the two
     /// literal bare-relative-path-with-directory-components inputs from the

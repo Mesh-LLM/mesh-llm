@@ -527,15 +527,14 @@ class SseStreamParsingTests(unittest.TestCase):
 
 class HealthExpectationTests(unittest.TestCase):
     def test_event_disabled_expects_the_fixed_per_trial_counts_not_the_run_total(self):
-        """D-6 fix (`.omo/evidence/event-system-fixes/deferrals/d6/`):
-        `event-disabled` mode's expectation is scoped to the SAME single
+        """D-6 fix: `event-disabled` mode's expectation is scoped to the
+        SAME single
         trial `health` actually reflects (Task 14's
         `health_and_p99_from_trial_log` reads only the side's LAST trial's
         log) -- it must NOT scale with `len(results)`, the OLD per-RUN
         total that fired `health_expectation_violation` on every real
         event-disabled manifest regardless of pair count (F4 certification
-        wave, `.omo/evidence/event-system-fixes/final/f4/f4-verdict.md`,
-        "New finding" section). 5 and 30 results (30 matches a real
+        wave, "New finding"). 5 and 30 results (30 matches a real
         20+10-pair matrix's per-side trial count) must produce the
         IDENTICAL fixed pair -- proof the expectation no longer grows with
         run length."""
@@ -806,7 +805,7 @@ def _event_disabled_manifest_at_full_scale(harness, *, dropped_progress, dropped
 
 
 class EndToEndHealthExpectationReconciliationTests(unittest.TestCase):
-    """D-6 (`.omo/evidence/event-system-fixes/deferrals/d6/`): feeds a
+    """D-6: feeds a
     manifest built by THIS module's real `build_manifest` straight into
     the comparator's real `evaluate_health_expectations`, so these tests
     exercise the actual producer/consumer pair the F4 certification wave
@@ -815,9 +814,9 @@ class EndToEndHealthExpectationReconciliationTests(unittest.TestCase):
 
     def test_real_f4_captured_event_disabled_manifest_has_no_expectation_violations(self):
         """Health counts taken verbatim from every one of 3 independent
-        full 30-pair event-disabled manifests in
-        `.omo/evidence/event-system-fixes/final/f4/f4-manifests.txt`
-        (dropped_progress=1, dropped_diagnostic=0). Before the D-6 fix,
+        full 30-pair event-disabled manifests captured during the F4
+        certification wave (dropped_progress=1, dropped_diagnostic=0).
+        Before the D-6 fix,
         `build_manifest` computed expected=30/30 here (len(results)), so
         this genuinely-captured, well-formed manifest showed violations
         against real data -- the exact defect F4 found."""

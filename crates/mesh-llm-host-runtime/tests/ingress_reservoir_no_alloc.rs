@@ -17,8 +17,9 @@
 //! `to_string()`, or scratch `Vec`) nets to zero and sails straight
 //! through a net-only assertion. The review proved this empirically by
 //! planting exactly such a `format!()` on the submit path and observing
-//! every test in this file stay green -- see
-//! `.omo/evidence/event-system-fixes/task-13/alloc-baseline.txt`.
+//! every test in this file stay green. Re-run that mutation against this
+//! file to reproduce it: the net-only assertion still passes, the
+//! `TOTAL_ALLOC_CALLS` assertions below do not.
 //!
 //! `TOTAL_ALLOC_CALLS` below fixes this: a monotonic counter incremented
 //! on every `alloc`/`realloc` call and NEVER decremented, so a
@@ -44,8 +45,7 @@
 //! rejected, never dropped) submission is allocation-free for all four
 //! `DeliveryClass` values: `Terminal`, `StateTransition`, `Progress`, and
 //! `Diagnostic`. Each new test documents exactly how its measured window
-//! is scoped; see also
-//! `.omo/evidence/event-system-fixes/task-13/alloc-coverage-note.txt`.
+//! is scoped, in its own doc comment.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -363,8 +363,7 @@ fn submit_delivers_an_accepted_state_transition_fact_with_zero_allocation_calls(
 /// still calls the SHARED `engine.wake().next_ingress_sequence()`, which
 /// locks the wake list's own `Mutex<Inner>`; on this platform a fresh
 /// `std::sync::Mutex`'s FIRST-EVER lock call costs exactly one allocation
-/// (confirmed directly with a standalone `std::sync::Mutex` probe -- see
-/// `.omo/evidence/event-system-fixes/task-13/alloc-coverage-note.txt`),
+/// (confirmed directly with a standalone `std::sync::Mutex` probe),
 /// and every OTHER class's test above happens to warm that same mutex
 /// incidentally through its own lane warm-up. Progress has no other
 /// reason to submit more than once, so it needs its OWN explicit one-call

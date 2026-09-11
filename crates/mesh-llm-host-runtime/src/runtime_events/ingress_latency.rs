@@ -53,10 +53,9 @@ impl IngressLatencyReservoir {
     /// this write completed a full [`INGRESS_LATENCY_MIN_SAMPLES`]-sample
     /// milestone (the 100th, 200th, ... write), so the caller can cheaply
     /// decide whether to bump `EngineHealth`'s version -- see
-    /// `RuntimeEventEngine::submit` and
-    /// `.omo/evidence/event-system-fixes/task-13/p99-cadence-note.txt` for
-    /// why bumping on every sample (flooding health delivery) and never
-    /// bumping (stranding a real p99 change forever) are both wrong.
+    /// `RuntimeEventEngine::submit` for why bumping on every sample
+    /// (flooding health delivery) and never bumping (stranding a real p99
+    /// change forever) are both wrong.
     pub(crate) fn record(&self, duration: Duration) -> bool {
         let micros = u64::try_from(duration.as_micros()).unwrap_or(u64::MAX);
         let previous_total = self.total_writes.fetch_add(1, Ordering::Relaxed);

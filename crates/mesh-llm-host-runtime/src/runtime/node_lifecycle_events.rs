@@ -34,8 +34,8 @@ fn emit_state_transition(kind: NodeAvailabilityEventKind) {
 /// `NodeStopped` is the one Terminal-class kind in this family
 /// (delivery/execution.rs). A Terminal-class fact submitted through
 /// `unreserved_ingress` always reports `TerminalDeliveryFailed` and never
-/// reaches any consumer -- confirmed by a real, caught red (see
-/// `.omo/evidence/event-system/task-10/red2.txt`). Reserve-and-
+/// reaches any consumer -- confirmed by a real, caught red during
+/// development. Reserve-and-
 /// immediately-resolve, mirroring `model_lifecycle::events::
 /// reconcile_process_crash`'s established pattern for a terminal with no
 /// live bounded operation to attach to.

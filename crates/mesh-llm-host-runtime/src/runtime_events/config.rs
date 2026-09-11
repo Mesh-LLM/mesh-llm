@@ -118,8 +118,7 @@ pub const CALLBACK_INGRESS_P99_BUDGET: Duration = Duration::from_micros(100);
 
 /// Task 13 (`.omo/plans/event-system-fixes.md`, defect D13's p99 half),
 /// amended via `[[health_bound_amendments]]` in
-/// `crates/mesh-llm-runtime-event-contracts/inventory/runtime_events.toml`
-/// (see `.omo/evidence/event-system-fixes/task-13/amendment-note.txt`):
+/// `crates/mesh-llm-runtime-event-contracts/inventory/runtime_events.toml`:
 /// the fixed ring size backing `runtime_events::ingress_latency::IngressLatencyReservoir`,
 /// the in-process, OTLP-independent ingress-latency instrument behind
 /// `runtime_health`'s `ingress_p99_us` wire field and the
@@ -139,8 +138,7 @@ pub const INGRESS_LATENCY_RESERVOIR_CAPACITY: usize = 4_096;
 /// -- `RuntimeEventEngine::submit` bumps `EngineHealth`'s version once per
 /// this many newly recorded samples, so a genuinely-changed p99 is never
 /// permanently stranded behind an unrelated counter, without bumping (and
-/// so gating health delivery) on every single submission; see
-/// `.omo/evidence/event-system-fixes/task-13/p99-cadence-note.txt`.
+/// so gating health delivery) on every single submission.
 pub const INGRESS_LATENCY_MIN_SAMPLES: usize = 100;
 
 /// Read-only snapshot of the frozen bounds, exposed through engine health.

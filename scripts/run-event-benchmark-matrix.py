@@ -1033,10 +1033,9 @@ def run_paired_trial_plan(
     )
 
 
-# D-6 (`.omo/evidence/event-system-fixes/deferrals/d6/`): per-TRIAL drop
-# counts confirmed IDENTICAL across 3 independent full 30-pair
-# certification runs (`final/f4/f4-manifests.txt`). Not scaled by trial
-# count -- see the docstring below.
+# D-6: per-TRIAL drop counts confirmed IDENTICAL across 3 independent
+# full 30-pair certification runs. Not scaled by trial count -- see the
+# docstring below.
 EVENT_DISABLED_EXPECTED_DROPPED_PROGRESS_PER_TRIAL = 1
 EVENT_DISABLED_EXPECTED_DROPPED_DIAGNOSTIC_PER_TRIAL = 0
 
@@ -1055,8 +1054,7 @@ def summarize_health_expectations(mode: str, results: Sequence[TrialResult]) -> 
     never was -- `health` has been single-last-trial-scoped since Task 14
     -- so this fired `health_expectation_violation` on every real
     event-disabled manifest regardless of pair count, seed, or parser mode
-    (F4 certification wave, `.omo/evidence/event-system-fixes/final/f4/
-    f4-verdict.md`, "New finding" section). Reconciled here to the fixed
+    (F4 certification wave, "New finding"). Reconciled here to the fixed
     per-trial counts above, which do NOT scale with `len(results)` --
     matching what a single trial's Progress/Diagnostic bypass reproducibly
     produces. Under `production`, expected drops are zero regardless of

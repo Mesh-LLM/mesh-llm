@@ -398,8 +398,7 @@ migration_task = 3
 # separate per-call model-open reporter's family and are deliberately absent
 # here.
 #
-# Bits renumbered during the origin/main rebase (event-system-fixes rebase,
-# `.omo/evidence/event-system-fixes/rebase/`): main independently claimed
+# Bits renumbered during the origin/main rebase: main independently claimed
 # bits 29 (SKIPPY_FEATURE_ACTIVATION_BOUNDARY) and 30 (SKIPPY_FEATURE_MODEL_SOURCE)
 # for unrelated capabilities, so this family's six bits (reporter registration
 # plus these five families) shifted from 29-34 to 31-36, preserving relative
@@ -589,7 +588,7 @@ reason = "Same disclosure gap as sessions above: Task 6 populated runtime_state.
 # `deny_unknown_fields`), so it cannot perturb the generated manifest/TS
 # fixture. Exists so the constant's provenance and arithmetic are
 # machine-parseable in the canonical inventory per the amendment
-# procedure, alongside `.omo/evidence/event-system-fixes/task-06/amendment-note-2.txt`.
+# procedure.
 [[reducer_bound_amendments]]
 constant = "UNRESERVED_OPERATION_BOUND"
 location = "crates/mesh-llm-host-runtime/src/runtime_events/config.rs"
@@ -620,7 +619,7 @@ location = "crates/mesh-llm-host-runtime/src/runtime_events/config.rs"
 value = 100
 derivation = "frozen literal from the plan's Frozen additions and amendments table: 'runtime_health additions | bounds object ... and ingress_p99_us (nullable until 100 samples exist)'"
 task = "13"
-reason = "The minimum number of recorded ingress-latency samples before ingress_p99_us reports Some instead of null. Reused as EngineHealth::bump_for_ingress_latency_milestone's cadence: RuntimeEventEngine::submit bumps the shared health_version once per this many newly recorded samples (via IngressLatencyReservoir::record's milestone return), so a genuinely-changed p99 is periodically observable through the existing change-gated health-delivery contract without bumping -- and so gating delivery -- on every single submission (see .omo/evidence/event-system-fixes/task-13/p99-cadence-note.txt)."
+reason = "The minimum number of recorded ingress-latency samples before ingress_p99_us reports Some instead of null. Reused as EngineHealth::bump_for_ingress_latency_milestone's cadence: RuntimeEventEngine::submit bumps the shared health_version once per this many newly recorded samples (via IngressLatencyReservoir::record's milestone return), so a genuinely-changed p99 is periodically observable through the existing change-gated health-delivery contract without bumping -- and so gating delivery -- on every single submission."
 
 [[event_projection_overrides]]
 profile = "progress"

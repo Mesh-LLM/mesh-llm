@@ -14,9 +14,9 @@ const KNOWN_FEATURE_BITS: [u32; 5] = [32, 33, 34, 35, 36];
 /// `runtime_events.toml`, so a row silently dropped or mistyped in the
 /// TOML fails this comparison.
 ///
-/// Bits renumbered 30-34 -> 32-36 during the origin/main rebase
-/// (`.omo/evidence/event-system-fixes/rebase/`): main independently
-/// claimed bits 29/30 for unrelated capabilities, shifting this family's
+/// Bits renumbered 30-34 -> 32-36 during the origin/main rebase: main
+/// independently claimed bits 29/30 for unrelated capabilities,
+/// shifting this family's
 /// bits +2 in lockstep with `runtime_events.toml`, `skippy-ffi`'s
 /// `abi.rs`/`lib.rs`, and `skippy-runtime`'s `capability_probe.rs`.
 fn expected_rows() -> Vec<(u32, u32, &'static str)> {

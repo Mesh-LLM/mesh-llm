@@ -24,19 +24,6 @@ The implementation workers own engine lifecycle, stream recovery, and native
 production separately. The parent reviews their designs and diffs, serializes
 Rust validation, and checks their combined behavior before pushing.
 
-After the final correction commit, rebase onto freshly fetched `main`, resolve
-conflicts, and validate the resulting tree. Squash all commits in the
-PR branch into one commit relative to that base, then force-push with an
-explicit lease against the freshly verified remote head. Preserve a local
-reference to the pre-squash history and verify the pushed tree is identical
-to the validated tree.
-
-Watch PR #1667 and its CI after the rewritten push. Verify follow-up CodeRabbit
-findings against the current code, repair valid findings, and resolve CI
-failures. Amend the single commit for subsequent corrections, validate the
-affected behavior, and force-push with a fresh lease. Completion requires green
-required CI and disposition of the review against the final head.
-
 The original six-outcome ingress plan omitted explicit state-capacity and
 cancelled-reservation rejection. `RejectedCapacity` supplies the capacity
 outcome: a new state key at capacity is rejected and counted, while already
@@ -49,22 +36,80 @@ it; incrementing a rebuild generation alone is not evidence of recovery.
 
 ## Validation limits
 
-The local validation covers deterministic regressions, affected Rust suites,
-warning-denying Clippy, native CPU replay and tests, public headers, generated
-contracts, and a composed product build. Results are recorded after execution.
+This section states what the shipped measurements actually cover. Read it
+before citing any performance number from this subsystem.
 
-These repairs do not by themselves establish the original release certification
-matrix. Comparison A measures the selected progress/diagnostic/consumer bypass;
-it does not remove reservations, state, terminals, or reduction and therefore
-cannot establish the total cost of the event system. Historical benchmark
-reports predate deterministic bootstrap seeding and are not retroactively
-validated by that fix. A valid baseline comparison and the specified platform
-and serving matrix remain necessary before claiming no measurable cost.
+### What is measured
 
-The warmed ingress allocation measurement describes that measured path only.
-Bounded storage and short internal critical sections do not establish a hard
-nonblocking or allocation-free guarantee for every first-use and contended
-producer path. Validation must state which behavior was measured.
+- **Deterministic correctness.** The affected Rust suites, warning-denying
+  Clippy, native CPU replay and tests, public headers, generated contracts,
+  and a composed product build. These establish the behavioral guarantees in
+  the acceptance table above.
+- **Warmed, single-threaded ingress allocation.**
+  `crates/mesh-llm-host-runtime/tests/ingress_reservoir_no_alloc.rs` asserts a
+  monotonic allocation-call counter stays flat across an accepted submission
+  for each of the four delivery classes, after the relevant lane and its
+  mutex have already been warmed by an earlier call in the same test.
+- **Throughput and time-to-first-token under the class bypass.** Production
+  versus `event-disabled` on the same release binary, three independent seeds:
+  `decode_tok_s` and `decode_only_tok_s` inside a 3% bound, `ttft_ms` at
+  +0.34% with a 95% CI of [-1.34%, +2.30%] at n=80.
+
+### What is not measured
+
+- **Producer-visible ingress cost.** The reported `callback_ingress_p99` of
+  2.0 us starts its timer *inside* `RuntimeEventEngine::submit`. It therefore
+  excludes the skippy adapter mutex, the native reporter's sink mutex, fact
+  construction, the identity-registry lock, and `reserve_*`. It is a measure
+  of the gate-held critical section, not of what a producer thread pays to
+  emit an event.
+- **The declared callback budget.** `CALLBACK_INGRESS_P99_BUDGET` in
+  `runtime_events/config.rs` is a declared constant with no Rust reader. No
+  test or CI job asserts the measured p99 against it. The comparator's
+  matching 100 us literal is an independent copy, not a cross-check.
+- **Cold and contended submit paths.** The allocation test measures warmed,
+  uncontended submits only. A first submit on a fresh engine, and a submit
+  racing a live drain from multiple producer threads, are both unmeasured.
+- **Total cost of the event system.** `event-disabled` is a *class bypass*,
+  not an off switch. It still acquires `ingress_gate`, still reserves slots,
+  still writes terminals and state transitions, and still runs the reducer,
+  the replay buffer, and subscriber fan-out. Comparison A therefore bounds
+  the cost of progress and diagnostic facts, and nothing more. A true
+  whole-system off mode is required before any claim about the event system's
+  total cost.
+- **Blocking behavior.** Bounded storage and short critical sections are not
+  a nonblocking guarantee. Producers serialize on one process-global
+  `ingress_gate`, and the driver holds that same mutex for the duration of a
+  drain pass. No test establishes an upper bound on how long a producer can
+  wait to submit.
+- **Anything in CI.** There is no performance gate on any CI lane. All
+  performance numbers above come from local runs on a single machine.
+
+### Historical corrections
+
+An earlier +28-40% decode figure measured against `v0.75.1` is retracted as
+void: it compared a debug build to a release archive across a window
+containing unrelated performance changes. Historical benchmark reports
+predate deterministic bootstrap seeding and are not retroactively validated by
+that fix.
+
+TTFT needed three runs to settle. At 20 primary pairs it read +15.7%, then
++8.8% -- both underpowered. Rerun at 80 pairs on a fresh seed it collapsed to
++0.34% (absolute paired means 22.388 ms vs 22.368 ms). The point estimate
+moved toward zero rather than tightening around +9-16%, which is the shape of
+jitter averaging out. Minimum detectable difference fell from ~16.5-18% to
+~2.59%.
+
+### Declined: bare-relative-path redaction
+
+`redact_local_path` collapses absolute, Windows, UNC, `./`, `../`, and `~`
+paths to a basename. Bare relative paths with directory components are
+deliberately left alone: `org/repo/file.gguf` is a legitimate canonical model
+reference that this codebase itself produces, and it is structurally
+indistinguishable from `models/secret/x.gguf`. Redacting it would break model
+identity on the wire to buy nothing a caller can rely on. The contract is
+pinned by a 14-case table test in
+`crates/mesh-llm-host-runtime/src/runtime/model_lifecycle/events.rs`.
 
 ## Local validation before rebase
 
