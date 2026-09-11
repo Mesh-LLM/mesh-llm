@@ -121,6 +121,9 @@ available without restarting Mesh.
 - **Ctrl-C stops sharing; it does not stop the upstream.** Ollama keeps running
   and keeps serving its own clients.
 
+For Ollama and LM Studio examples and a second-machine chat walkthrough, see
+[Share an existing model server](/docs/pages/share-model-server/).
+
 ## External-endpoint-only workflow (plugin)
 
 `mesh-llm share` above is the simpler way to expose one already-running

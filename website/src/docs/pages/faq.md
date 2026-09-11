@@ -14,6 +14,28 @@ No. Bare `mesh-llm serve` can run as a healthy idle daemon or route only to
 plugin and remote endpoints. Load a local model later if the node is
 worker-capable. See [Runtime Lifecycle](/docs/pages/runtime-lifecycle/).
 
+## Can I share an existing Ollama or LM Studio server?
+
+Yes. Keep your existing server and models; run Mesh alongside it:
+
+```bash
+# Ollama
+mesh-llm share http://localhost:11434
+
+# LM Studio (start its local API server first; use the port it shows)
+mesh-llm share http://localhost:1234
+```
+
+Mesh forwards requests to that server without downloading models, loading a
+native inference runtime, installing a plugin, or editing your config. It starts
+a **private mesh** by default. Other machines can connect with an invite token;
+public discovery requires an explicit `--publish` choice.
+
+One HTTP OpenAI-compatible upstream is supported per run; HTTPS and upstream
+authentication are not supported yet. Ctrl-C stops sharing, not your server.
+See [Share an existing model server](/docs/pages/share-model-server/) for the
+full walkthrough, including chatting from a second machine.
+
 ## What is the difference between client and on-demand mode?
 
 `client` is routing-only and disables local model loading. `on_demand` starts

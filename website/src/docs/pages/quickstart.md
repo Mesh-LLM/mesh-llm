@@ -36,6 +36,28 @@ Full guide: [Installing on Windows](/docs/pages/installing-windows/)
 
 Open a new terminal after install if the installer added Mesh to your `PATH`.
 
+## Already running Ollama or LM Studio?
+
+You can use your existing server instead of setting up native model serving in
+Mesh. Start the upstream's API server, then choose the matching command:
+
+```bash
+# Ollama
+mesh-llm share http://localhost:11434
+
+# LM Studio (use the port shown in its local server settings)
+mesh-llm share http://localhost:1234
+```
+
+Keep that terminal open. No model downloads, native inference runtime, plugin
+installation, or config edits are needed. Sharing starts a **private mesh**;
+Ctrl-C stops sharing without stopping your existing server. The upstream must
+be HTTP and must not require authentication.
+
+Follow [Share an existing model server](/docs/pages/share-model-server/) to
+connect a second machine and chat. Otherwise, continue below to serve a model
+with Mesh itself.
+
 ## 2. Finish setup
 
 Run the setup command after the executable is installed:

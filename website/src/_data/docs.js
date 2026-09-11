@@ -28,6 +28,7 @@ export default [
     links: [
       ["Run your first model", "/docs/pages/quickstart/#3-start-one-private-node"],
       ["Runtime lifecycle", "/docs/pages/runtime-lifecycle/"],
+      ["Share an existing model server", "/docs/pages/share-model-server/"],
       ["Choose a model", "/docs/pages/choose-a-model/"],
       ["Running large models", "/docs/pages/running-large-models/"],
       ["Console chat", "/docs/pages/console-chat/"],

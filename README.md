@@ -79,6 +79,24 @@ management API on the `--console` port:
 mesh-llm serve --auto --headless
 ```
 
+## Already running Ollama or LM Studio?
+
+Keep your existing server and models. With its local API server running, share
+it through Mesh:
+
+```bash
+mesh-llm share http://localhost:11434  # Ollama
+# Or: mesh-llm share http://localhost:1234  # LM Studio; use its configured port
+```
+
+No plugin installation, native inference runtime, model downloads, or config
+edits. Private by default; invite your other machines to connect. One HTTP
+OpenAI-compatible upstream per run, without upstream authentication. Ctrl-C
+stops sharing, not the server.
+
+[Share an existing model server](https://meshllm.cloud/docs/pages/share-model-server/)
+walks through connecting a second machine and sending a chat.
+
 ## Pick the workflow you need
 
 | Goal | Command | Full guide |
