@@ -10,10 +10,13 @@
 //! the minimal ack seam) belong to a later task.
 
 pub mod config;
+#[cfg(test)]
+pub(crate) mod drain_hold;
 pub mod driver;
 pub mod engine;
 pub mod health;
 mod ingress_latency;
+pub(crate) mod lock_audit;
 pub mod presentation;
 pub mod reducer;
 pub mod replay;

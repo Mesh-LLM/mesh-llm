@@ -10,6 +10,7 @@ mod classes;
 mod eviction;
 mod fixtures;
 mod lanes;
+mod lock_audit;
 mod ordering;
 mod rebuild;
 mod shutdown;

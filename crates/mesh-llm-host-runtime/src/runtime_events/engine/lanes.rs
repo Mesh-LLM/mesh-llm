@@ -9,12 +9,12 @@
 //! per call, regardless of outcome -- there is no second counter.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::Mutex;
 
 use mesh_llm_runtime_event_contracts::{OperationScope, RuntimeFact, SubmitOutcome};
 
 use super::RuntimeEventEngine;
 use crate::runtime_events::config::{DIAGNOSTIC_LANE_DEPTH, STATE_TRANSITION_LANE_DEPTH};
+use crate::runtime_events::lock_audit::{AuditedMutex, LockClass};
 use crate::runtime_events::reservation::{SlotHandle, TerminalRecord};
 
 /// A state-transition lane key: coalescing is per operation scope AND
@@ -31,14 +31,14 @@ type DiagnosticEntry = (OperationScope, RuntimeFact, u64, bool, Option<SlotHandl
 /// rejected without evicting an accepted state. Each held value carries the
 /// ingress sequence it was minted with.
 pub(crate) struct StateLane {
-    entries: Mutex<VecDeque<StateLaneKey>>,
+    entries: AuditedMutex<VecDeque<StateLaneKey>>,
     /// `(fact, ingress_sequence, reserved)` -- `reserved` (R1 fix, task
     /// 6-fix, `.omo/plans/event-system-fixes.md`) is threaded from
     /// `submit_state_transition`'s own `handle.is_some()` and carried all
     /// the way to the reducer's `ReducerInput::reserved`. The handle is
     /// retained so a queued fact can be validated against cancellation or a
     /// generation reuse before its terminal releases the slot.
-    latest: Mutex<HashMap<StateLaneKey, StateLaneValue>>,
+    latest: AuditedMutex<HashMap<StateLaneKey, StateLaneValue>>,
 }
 
 impl StateLane {
@@ -46,26 +46,15 @@ impl StateLane {
     /// lane, across every scope. Backs `RuntimeEventEngine::state_lane_kinds()`.
     #[cfg(test)]
     pub(super) fn kinds(&self) -> Vec<&'static str> {
-        self.entries
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .iter()
-            .map(|(_, kind)| *kind)
-            .collect()
+        self.entries.lock().iter().map(|(_, kind)| *kind).collect()
     }
 
     /// Drain only entries minted before `sequence`. A partial terminal drain
     /// leaves later state transitions queued until the remaining wake prefix
     /// is eligible, preserving the single global ingress order across passes.
     pub(super) fn drain_before_limit(&self, sequence: u64, limit: usize) -> Vec<StateLaneEntry> {
-        let mut entries = self
-            .entries
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut latest = self
-            .latest
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut entries = self.entries.lock();
+        let mut latest = self.latest.lock();
         let mut ready = Vec::with_capacity(limit.min(entries.len()));
         let mut retained = VecDeque::with_capacity(entries.capacity());
         for key in entries.drain(..) {
@@ -88,14 +77,8 @@ impl StateLane {
     /// The shutdown path uses this with the other lane views to choose one
     /// global sequence prefix before taking any values.
     pub(super) fn sequences_before(&self, sequence: u64) -> Vec<u64> {
-        let entries = self
-            .entries
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let latest = self
-            .latest
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entries = self.entries.lock();
+        let latest = self.latest.lock();
         entries
             .iter()
             .filter_map(|key| {
@@ -108,10 +91,7 @@ impl StateLane {
     }
 
     pub(super) fn len(&self) -> usize {
-        self.entries
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .len()
+        self.entries.lock().len()
     }
 }
 
@@ -120,15 +100,21 @@ impl StateLane {
 /// handle (R1 fix, task 6-fix -- see [`StateLane`]'s identical addition)
 /// it was submitted with.
 pub(crate) struct DiagnosticLane {
-    queue: Mutex<VecDeque<DiagnosticEntry>>,
+    queue: AuditedMutex<VecDeque<DiagnosticEntry>>,
 }
 
 impl StateLane {
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
-            entries: Mutex::new(VecDeque::with_capacity(STATE_TRANSITION_LANE_DEPTH)),
-            latest: Mutex::new(HashMap::with_capacity(STATE_TRANSITION_LANE_DEPTH)),
+            entries: AuditedMutex::new(
+                LockClass::StateLaneEntries,
+                VecDeque::with_capacity(STATE_TRANSITION_LANE_DEPTH),
+            ),
+            latest: AuditedMutex::new(
+                LockClass::StateLaneLatest,
+                HashMap::with_capacity(STATE_TRANSITION_LANE_DEPTH),
+            ),
         }
     }
 }
@@ -143,7 +129,10 @@ impl DiagnosticLane {
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
-            queue: Mutex::new(VecDeque::with_capacity(DIAGNOSTIC_LANE_DEPTH)),
+            queue: AuditedMutex::new(
+                LockClass::DiagnosticLane,
+                VecDeque::with_capacity(DIAGNOSTIC_LANE_DEPTH),
+            ),
         }
     }
 }
@@ -156,10 +145,7 @@ impl Default for DiagnosticLane {
 
 impl DiagnosticLane {
     pub(super) fn drain_before_limit(&self, sequence: u64, limit: usize) -> Vec<DiagnosticEntry> {
-        let mut queue = self
-            .queue
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut queue = self.queue.lock();
         let mut ready = Vec::with_capacity(limit.min(queue.len()));
         let mut retained = VecDeque::with_capacity(queue.capacity());
         for entry in queue.drain(..) {
@@ -176,7 +162,6 @@ impl DiagnosticLane {
     pub(super) fn sequences_before(&self, sequence: u64) -> Vec<u64> {
         self.queue
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .map(|(_, _, entry_sequence, _, _)| *entry_sequence)
             .filter(|entry_sequence| *entry_sequence < sequence)
@@ -184,10 +169,7 @@ impl DiagnosticLane {
     }
 
     pub(super) fn len(&self) -> usize {
-        self.queue
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .len()
+        self.queue.lock().len()
     }
 }
 
@@ -272,14 +254,8 @@ pub(super) fn submit_state_transition(
     // other. `inference::skippy::runtime_events::tests::concurrent_roots`
     // (task 5) was the first test to actually drive concurrent drain +
     // state-transition submits and surfaced this as an intermittent hang.
-    let mut entries = lane
-        .entries
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut latest = lane
-        .latest
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut entries = lane.entries.lock();
+    let mut latest = lane.latest.lock();
     if let Some(value) = latest.get_mut(&key) {
         *value = (fact, sequence, reserved, handle_for_lane);
         return SubmitOutcome::Coalesced;
@@ -310,11 +286,7 @@ pub(super) fn submit_diagnostic(
         engine.health().bump_dropped_diagnostic();
         return SubmitOutcome::DroppedDiagnostic;
     }
-    let mut queue = engine
-        .diagnostic_lane()
-        .queue
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut queue = engine.diagnostic_lane().queue.lock();
     if queue.len() >= DIAGNOSTIC_LANE_DEPTH {
         drop(queue);
         engine.health().bump_dropped_diagnostic();

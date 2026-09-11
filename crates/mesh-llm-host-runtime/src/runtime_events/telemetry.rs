@@ -18,8 +18,8 @@
 //! itself generate a new runtime event, so there is no recursion path.
 
 use std::collections::VecDeque;
+use std::sync::TryLockError;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, TryLockError};
 use std::time::{Duration, Instant};
 
 use mesh_llm_runtime_event_contracts::{
@@ -28,6 +28,7 @@ use mesh_llm_runtime_event_contracts::{
 
 use super::engine::RuntimeEventEngine;
 use super::health::EngineHealthSnapshot;
+use super::lock_audit::{AuditedMutex, LockClass};
 
 /// A privacy-safe, ID-free structured telemetry sample. Every variant here
 /// is bounded discrete data (an enum, a count, a duration) -- never an
@@ -71,7 +72,7 @@ pub struct TelemetryPipelineSnapshot {
 /// an independent worker drains and records.
 pub struct RuntimeEventTelemetryQueue {
     capacity: usize,
-    samples: Mutex<VecDeque<RuntimeEventTelemetrySample>>,
+    samples: AuditedMutex<VecDeque<RuntimeEventTelemetrySample>>,
     dropped: AtomicU64,
 }
 
@@ -80,7 +81,10 @@ impl RuntimeEventTelemetryQueue {
     pub fn new(capacity: usize) -> Self {
         Self {
             capacity: capacity.max(1),
-            samples: Mutex::new(VecDeque::with_capacity(capacity.max(1))),
+            samples: AuditedMutex::new(
+                LockClass::TelemetrySamples,
+                VecDeque::with_capacity(capacity.max(1)),
+            ),
             dropped: AtomicU64::new(0),
         }
     }
@@ -105,19 +109,13 @@ impl RuntimeEventTelemetryQueue {
 
     /// Drain every currently-queued sample for the worker to record.
     pub fn drain(&self) -> Vec<RuntimeEventTelemetrySample> {
-        let mut samples = self
-            .samples
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut samples = self.samples.lock();
         samples.drain(..).collect()
     }
 
     #[must_use]
     pub fn len(&self) -> usize {
-        self.samples
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .len()
+        self.samples.lock().len()
     }
 
     #[must_use]
@@ -267,7 +265,7 @@ mod tests {
     #[test]
     fn a_consumer_holding_the_queue_cannot_block_ingress_telemetry() {
         let queue = Arc::new(RuntimeEventTelemetryQueue::new(2));
-        let held = queue.samples.lock().expect("hold consumer lock");
+        let held = queue.samples.lock();
         let (finished, completion) = std::sync::mpsc::channel();
         let producer_queue = Arc::clone(&queue);
         let producer = std::thread::spawn(move || {

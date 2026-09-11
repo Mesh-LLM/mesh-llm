@@ -5,8 +5,7 @@
 //! match the slot's current generation is treated as late/unreserved rather
 //! than corrupting a reused slot.
 
-use std::sync::Mutex;
-
+use crate::runtime_events::lock_audit::{AuditedMutex, LockClass};
 use mesh_llm_runtime_event_contracts::{
     DiagnosticEventKind, FamilyFact, OperationId, OperationScope, RuntimeFact, ScopeIdentities,
 };
@@ -75,16 +74,21 @@ pub(crate) struct UnsettledReservation {
 /// slot; no second terminal lane exists anywhere in this table.
 #[derive(Debug)]
 pub struct ReservationTable {
-    slots: Vec<Mutex<Slot>>,
-    free: Mutex<Vec<usize>>,
+    slots: Vec<AuditedMutex<Slot>>,
+    free: AuditedMutex<Vec<usize>>,
 }
 
 impl ReservationTable {
     #[must_use]
     pub fn new(capacity: usize) -> Self {
         Self {
-            slots: (0..capacity).map(|_| Mutex::new(Slot::default())).collect(),
-            free: Mutex::new((0..capacity).rev().collect()),
+            slots: (0..capacity)
+                .map(|_| AuditedMutex::new(LockClass::ReservationSlot, Slot::default()))
+                .collect(),
+            free: AuditedMutex::new(
+                LockClass::ReservationFreeList,
+                (0..capacity).rev().collect(),
+            ),
         }
     }
 
@@ -108,12 +112,7 @@ impl ReservationTable {
         scope: OperationScope,
         synthetic_terminal: fn() -> RuntimeFact,
     ) -> Result<SlotHandle, ReserveError> {
-        let index = self
-            .free
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .pop()
-            .ok_or(ReserveError::Exhausted)?;
+        let index = self.free.lock().pop().ok_or(ReserveError::Exhausted)?;
         let mut slot = self.slot_lock(index);
         slot.occupant = Some(scope);
         slot.terminal = None;
@@ -237,9 +236,7 @@ impl ReservationTable {
         self.slots
             .iter()
             .filter_map(|slot| {
-                let slot = slot
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let slot = slot.lock();
                 (!slot.cancelled && slot.occupant.is_some())
                     .then_some(slot.progress.as_ref()?.1)
                     .filter(|progress_sequence| *progress_sequence < sequence)
@@ -252,9 +249,7 @@ impl ReservationTable {
         self.slots
             .iter()
             .filter(|slot| {
-                let slot = slot
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let slot = slot.lock();
                 !slot.cancelled && slot.occupant.is_some() && slot.progress.is_some()
             })
             .count()
@@ -343,10 +338,7 @@ impl ReservationTable {
         // operation with respect to duplicate/stale releases. `reserve`
         // drops its free-list guard before taking any slot lock, so this
         // slot-then-free order cannot form an ABBA cycle.
-        self.free
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(handle.index);
+        self.free.lock().push(handle.index);
     }
 
     /// The occupant of `index` at its *current* generation, regardless of
@@ -364,9 +356,7 @@ impl ReservationTable {
     #[must_use]
     pub fn has_active_scope(&self, scope: OperationScope) -> bool {
         self.slots.iter().any(|slot| {
-            let slot = slot
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let slot = slot.lock();
             slot.occupant == Some(scope) && !slot.cancelled
         })
     }
@@ -375,12 +365,7 @@ impl ReservationTable {
     pub fn occupied_len(&self) -> usize {
         self.slots
             .iter()
-            .filter(|slot| {
-                slot.lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .occupant
-                    .is_some()
-            })
+            .filter(|slot| slot.lock().occupant.is_some())
             .count()
     }
 
@@ -399,9 +384,7 @@ impl ReservationTable {
             .iter()
             .enumerate()
             .filter_map(|(index, slot)| {
-                let slot = slot
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let slot = slot.lock();
                 match (
                     slot.occupant,
                     !slot.cancelled,
@@ -426,9 +409,7 @@ impl ReservationTable {
     }
 
     fn slot_lock(&self, index: usize) -> std::sync::MutexGuard<'_, Slot> {
-        self.slots[index]
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.slots[index].lock()
     }
 }
 

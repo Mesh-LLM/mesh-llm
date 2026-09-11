@@ -29,12 +29,12 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use mesh_llm_runtime_event_contracts::{EventSequence, OperationScope, RuntimeFact};
 
 use super::config::{REPLAY_MAX_AGE, REPLAY_MAX_BYTES, REPLAY_MAX_FRAMES};
+use super::lock_audit::{AuditedMutex, LockClass};
 
 #[derive(Debug, Clone)]
 pub struct ReplayFrame {
@@ -74,7 +74,7 @@ struct Inner {
 
 #[derive(Debug)]
 pub struct ReplayBuffer {
-    inner: Mutex<Inner>,
+    inner: AuditedMutex<Inner>,
     capacity: usize,
     max_bytes: usize,
     max_age: Duration,
@@ -197,11 +197,14 @@ impl ReplayBuffer {
     #[must_use]
     pub fn with_bounds(capacity: usize, max_bytes: usize, max_age: Duration) -> Self {
         Self {
-            inner: Mutex::new(Inner {
-                frames: VecDeque::with_capacity(capacity),
-                total_bytes: 0,
-                evicted_through: None,
-            }),
+            inner: AuditedMutex::new(
+                LockClass::ReplayBuffer,
+                Inner {
+                    frames: VecDeque::with_capacity(capacity),
+                    total_bytes: 0,
+                    evicted_through: None,
+                },
+            ),
             capacity,
             max_bytes,
             max_age,
@@ -260,10 +263,7 @@ impl ReplayBuffer {
     /// is deterministically testable without sleeping on the wall clock.
     pub(crate) fn push_at(&self, frame: ReplayFrame, now: Instant) -> usize {
         let byte_cost = frame.wire_bytes.len();
-        let mut inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut inner = self.inner.lock();
         inner.frames.push_back(RetainedFrame { frame, byte_cost });
         inner.total_bytes += byte_cost;
 
@@ -299,10 +299,7 @@ impl ReplayBuffer {
     /// Drop every retained frame, used by `rebuild()` to make a fresh
     /// generation's replay window coherent rather than mixing generations.
     pub fn evict_all(&self) -> usize {
-        let mut inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut inner = self.inner.lock();
         let count = inner.frames.len();
         if let Some(last) = inner.frames.back() {
             inner.evicted_through = Some(
@@ -319,11 +316,7 @@ impl ReplayBuffer {
 
     #[must_use]
     pub fn len(&self) -> usize {
-        self.inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .frames
-            .len()
+        self.inner.lock().frames.len()
     }
 
     #[must_use]
@@ -335,7 +328,6 @@ impl ReplayBuffer {
     pub fn snapshot(&self) -> Vec<ReplayFrame> {
         self.inner
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .frames
             .iter()
             .map(|retained| retained.frame.clone())
@@ -348,10 +340,7 @@ impl ReplayBuffer {
     /// not create a replay gap.
     #[must_use]
     pub fn evicted_through(&self) -> Option<u64> {
-        self.inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .evicted_through
+        self.inner.lock().evicted_through
     }
 
     /// Look up every retained frame strictly after `cursor`, enforcing the
@@ -370,10 +359,7 @@ impl ReplayBuffer {
     /// a persistent per-caller copy of the buffer itself.
     #[must_use]
     pub fn frames_after(&self, cursor: u64, now: Instant) -> ReplayLookup {
-        let mut inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut inner = self.inner.lock();
         let replay = inner.frames.iter().map(|retained| &retained.frame);
         let read = classify_frames_after(replay, cursor, inner.evicted_through, now, self.max_age);
         inner.evicted_through = read.evicted_through;

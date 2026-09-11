@@ -11,16 +11,16 @@
 //! (`runtime_events::config::RESERVATION_TABLE_CAPACITY`).
 
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use mesh_llm_runtime_event_contracts::{OperationScope, RuntimeFact};
 
 use crate::runtime_events::config::TUI_RENDER_TICK;
+use crate::runtime_events::lock_audit::{AuditedMutex, LockClass};
 
 pub struct ProgressCoalescer {
-    pending: Mutex<HashMap<OperationScope, RuntimeFact>>,
-    last_flush: Mutex<Instant>,
+    pending: AuditedMutex<HashMap<OperationScope, RuntimeFact>>,
+    last_flush: AuditedMutex<Instant>,
     interval: Duration,
 }
 
@@ -37,8 +37,8 @@ impl ProgressCoalescer {
     #[must_use]
     pub fn with_interval(interval: Duration) -> Self {
         Self {
-            pending: Mutex::new(HashMap::new()),
-            last_flush: Mutex::new(Instant::now()),
+            pending: AuditedMutex::new(LockClass::PresentationCoalescer, HashMap::new()),
+            last_flush: AuditedMutex::new(LockClass::PresentationLastFlush, Instant::now()),
             interval,
         }
     }
@@ -72,15 +72,11 @@ impl ProgressCoalescer {
     }
 
     fn lock_pending(&self) -> std::sync::MutexGuard<'_, HashMap<OperationScope, RuntimeFact>> {
-        self.pending
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.pending.lock()
     }
 
     fn lock_last_flush(&self) -> std::sync::MutexGuard<'_, Instant> {
-        self.last_flush
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.last_flush.lock()
     }
 }
 

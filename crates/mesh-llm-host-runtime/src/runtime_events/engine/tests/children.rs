@@ -106,12 +106,7 @@ fn settled_child_slots_are_removed_during_repeated_child_churn() {
     }
 
     assert!(
-        engine
-            .children_by_root
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&root_id)
-            .is_none(),
+        engine.children_by_root.lock().get(&root_id).is_none(),
         "a root must not retain settled child indices across churn"
     );
     root.cancel();

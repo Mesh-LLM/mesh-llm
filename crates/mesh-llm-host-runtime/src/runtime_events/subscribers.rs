@@ -9,8 +9,8 @@
 //! first exceeded bound; other handles continue to receive independently.
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use tokio::sync::Notify;
@@ -21,6 +21,7 @@ use super::config::{
     SUBSCRIBER_LAG_MAX_FRAMES,
 };
 use super::health::EngineHealth;
+use super::lock_audit::{AuditedMutex, LockClass};
 use super::replay::ReplayFrame;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,12 +98,12 @@ impl QueueState {
 }
 
 struct SubscriberState {
-    queue: Mutex<QueueState>,
+    queue: AuditedMutex<QueueState>,
     notify: Notify,
 }
 
 struct RegistryInner {
-    subscribers: Mutex<HashMap<u64, Arc<SubscriberState>>>,
+    subscribers: AuditedMutex<HashMap<u64, Arc<SubscriberState>>>,
     next_id: AtomicU64,
     active: AtomicUsize,
     frame_capacity: usize,
@@ -134,7 +135,7 @@ impl SubscriberRegistry {
     pub fn with_capacity(lag_frames: usize) -> Self {
         Self {
             inner: Arc::new(RegistryInner {
-                subscribers: Mutex::new(HashMap::new()),
+                subscribers: AuditedMutex::new(LockClass::SubscriberRegistry, HashMap::new()),
                 next_id: AtomicU64::new(0),
                 active: AtomicUsize::new(0),
                 frame_capacity: lag_frames,
@@ -151,14 +152,10 @@ impl SubscriberRegistry {
 
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
         let state = Arc::new(SubscriberState {
-            queue: Mutex::new(QueueState::new()),
+            queue: AuditedMutex::new(LockClass::SubscriberQueue, QueueState::new()),
             notify: Notify::new(),
         });
-        self.inner
-            .subscribers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(id, Arc::clone(&state));
+        self.inner.subscribers.lock().insert(id, Arc::clone(&state));
         Ok(SubscriptionHandle {
             registry: Arc::clone(&self.inner),
             id,
@@ -171,20 +168,11 @@ impl SubscriberRegistry {
     /// exact bytes of this frame, so a large frame cannot falsely disconnect
     /// a fast neighbor merely because another queue is full.
     pub fn publish(&self, frame: ReplayFrame) {
-        let subscribers: Vec<Arc<SubscriberState>> = self
-            .inner
-            .subscribers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .values()
-            .cloned()
-            .collect();
+        let subscribers: Vec<Arc<SubscriberState>> =
+            self.inner.subscribers.lock().values().cloned().collect();
 
         for state in subscribers {
-            let mut queue = state
-                .queue
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut queue = state.queue.lock();
             if queue.lagged.is_some() {
                 continue;
             }
@@ -222,11 +210,7 @@ impl SubscriptionHandle {
         loop {
             let notified = self.state.notify.notified();
             let result = {
-                let mut queue = self
-                    .state
-                    .queue
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut queue = self.state.queue.lock();
                 self.check_locked(&mut queue, Instant::now());
                 if let Some(missed) = queue.lagged {
                     Some(Err(RecvError::Lagged(missed as u64)))
@@ -249,23 +233,14 @@ impl SubscriptionHandle {
     /// byte/count budget and are intentionally not reported as queued events.
     #[must_use]
     pub fn backlog_len(&self) -> usize {
-        self.state
-            .queue
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .frames
-            .len()
+        self.state.queue.lock().frames.len()
     }
 
     /// Exact bytes currently outstanding for this subscriber, including
     /// queued live frames and pending initial/replay/state/health writes.
     #[must_use]
     pub fn outstanding_bytes(&self) -> usize {
-        self.state
-            .queue
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .outstanding_bytes()
+        self.state.queue.lock().outstanding_bytes()
     }
 
     /// Reserve a batch of pending wire frames before their first write. The
@@ -274,11 +249,7 @@ impl SubscriptionHandle {
     /// socket is still sending it, rather than temporarily undercounting a
     /// slow connection.
     pub fn reserve_pending(&self, frame_count: usize, bytes: usize, recorded_at: Instant) -> bool {
-        let mut queue = self
-            .state
-            .queue
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut queue = self.state.queue.lock();
         if queue.lagged.is_some() {
             return false;
         }
@@ -299,11 +270,7 @@ impl SubscriptionHandle {
 
     /// Mark one previously reserved pending frame as written (or failed).
     pub fn complete_pending(&self, bytes: usize) {
-        let mut queue = self
-            .state
-            .queue
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut queue = self.state.queue.lock();
         queue.pending_frames = queue.pending_frames.saturating_sub(1);
         queue.pending_bytes = queue.pending_bytes.saturating_sub(bytes);
         if queue.pending_frames == 0 {
@@ -315,11 +282,7 @@ impl SubscriptionHandle {
     /// at the first exceeded bound. Returns true when it is closed for lag
     /// (or was already closed for lag).
     pub fn lag_bound_exceeded(&self, now: Instant) -> bool {
-        let mut queue = self
-            .state
-            .queue
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut queue = self.state.queue.lock();
         self.check_locked(&mut queue, now)
     }
 
@@ -342,11 +305,7 @@ impl SubscriptionHandle {
 
 impl Drop for SubscriptionHandle {
     fn drop(&mut self) {
-        self.registry
-            .subscribers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&self.id);
+        self.registry.subscribers.lock().remove(&self.id);
         self.registry.active.fetch_sub(1, Ordering::AcqRel);
     }
 }

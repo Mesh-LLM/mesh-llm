@@ -8,7 +8,7 @@ mod tests;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use mesh_llm_runtime_event_contracts::{
@@ -20,6 +20,7 @@ use tokio::sync::Notify;
 use super::config::{CHILD_MULTIPLIER, RESERVATION_TABLE_CAPACITY};
 use super::health::{EngineHealth, EngineHealthSnapshot};
 use super::ingress_latency::IngressLatencyReservoir;
+use super::lock_audit::{AuditedMutex, LockClass};
 use super::reducer::ReducerSnapshot;
 use super::replay::ReplayBuffer;
 use super::reservation::{ReservationTable, SlotHandle};
@@ -106,32 +107,32 @@ pub struct RuntimeEventEngine {
     /// bounded ingress container. A drain pass holds it only while taking a
     /// bounded collection snapshot; reducer application, serialization, and
     /// subscriber fan-out happen after it is released.
-    ingress_gate: Mutex<()>,
+    ingress_gate: AuditedMutex<()>,
     /// Serializes drain passes and rebuilds. It is deliberately separate from
     /// `ingress_gate`: a producer must never wait behind reducer work or a
     /// subscriber fan-out.
-    drain_gate: Mutex<()>,
+    drain_gate: AuditedMutex<()>,
     /// Publication boundary for replay, subscribers, reducer state, and the
     /// monotonic published frontier. Attachment captures under this lock so a
     /// new stream cannot fall between replay and live delivery.
-    publication_gate: Mutex<()>,
+    publication_gate: AuditedMutex<()>,
     published_frontier: AtomicU64,
     rebuild_invalidated_through: AtomicU64,
     has_rebuild_invalidated_through: AtomicBool,
     replay: ReplayBuffer,
     subscribers: SubscriberRegistry,
     health: EngineHealth,
-    children_by_root: Mutex<HashMap<OperationId, Vec<ChildSlot>>>,
+    children_by_root: AuditedMutex<HashMap<OperationId, Vec<ChildSlot>>>,
     /// Roots deferred by `engine::drain::release_or_defer` -- review
     /// defect D8 -- and resolved by `engine::drain::
     /// settle_pending_root_releases` on every drain pass. See
     /// [`PendingRootRelease`].
-    pending_root_releases: Mutex<HashMap<OperationId, PendingRootRelease>>,
+    pending_root_releases: AuditedMutex<HashMap<OperationId, PendingRootRelease>>,
     shutting_down: AtomicBool,
     rebuild_generation: AtomicU64,
     state_lane: StateLane,
     diagnostic_lane: DiagnosticLane,
-    reducer_state: Mutex<Arc<ReducerSnapshot>>,
+    reducer_state: AuditedMutex<Arc<ReducerSnapshot>>,
     process_instance: ProcessInstanceId,
     process_started: Instant,
     telemetry: OnceLock<Arc<RuntimeEventTelemetryQueue>>,
@@ -151,12 +152,17 @@ pub struct RuntimeEventEngine {
     /// `PROGRESS_EXPORT_INTERVAL` without a second timer: `None` until the
     /// first drain call, matching `EngineHealth`'s identical
     /// `last_published` convention.
-    progress_last_flush: Mutex<Option<Instant>>,
+    progress_last_flush: AuditedMutex<Option<Instant>>,
     /// Task 13 (`.omo/plans/event-system-fixes.md`, defect D13's p99
     /// half): the fixed, always-present ingress-latency ring backing
     /// `Self::ingress_p99_us`, written unconditionally in `submit` below,
     /// independent of whether a telemetry queue was ever installed.
     ingress_latency: IngressLatencyReservoir,
+    /// Test seam: when installed, every drain pass parks inside its
+    /// critical section for the hold's duration. See
+    /// `runtime_events::drain_hold`.
+    #[cfg(test)]
+    drain_hold: OnceLock<Arc<super::drain_hold::DrainHold>>,
 }
 
 fn inferred_rust_severity(fact: &RuntimeFact) -> Severity {
@@ -236,29 +242,37 @@ impl RuntimeEventEngine {
         Arc::new(Self {
             table: ReservationTable::new(capacity),
             wake: WakeList::new(),
-            ingress_gate: Mutex::new(()),
-            drain_gate: Mutex::new(()),
-            publication_gate: Mutex::new(()),
+            ingress_gate: AuditedMutex::new(LockClass::IngressGate, ()),
+            drain_gate: AuditedMutex::new(LockClass::DrainGate, ()),
+            publication_gate: AuditedMutex::new(LockClass::PublicationGate, ()),
             published_frontier: AtomicU64::new(0),
             rebuild_invalidated_through: AtomicU64::new(0),
             has_rebuild_invalidated_through: AtomicBool::new(false),
             replay: ReplayBuffer::new(),
             subscribers: SubscriberRegistry::with_capacity(subscriber_lag_frames),
             health: EngineHealth::default(),
-            children_by_root: Mutex::new(HashMap::with_capacity(capacity)),
-            pending_root_releases: Mutex::new(HashMap::with_capacity(capacity)),
+            children_by_root: AuditedMutex::new(
+                LockClass::ChildrenByRoot,
+                HashMap::with_capacity(capacity),
+            ),
+            pending_root_releases: AuditedMutex::new(
+                LockClass::PendingRootReleases,
+                HashMap::with_capacity(capacity),
+            ),
             shutting_down: AtomicBool::new(false),
             rebuild_generation: AtomicU64::new(0),
             state_lane: StateLane::default(),
             diagnostic_lane: DiagnosticLane::default(),
-            reducer_state: Mutex::new(ReducerSnapshot::empty()),
+            reducer_state: AuditedMutex::new(LockClass::ReducerState, ReducerSnapshot::empty()),
             process_instance: ProcessInstanceId::new(),
             process_started: Instant::now(),
             telemetry: OnceLock::new(),
             progress_diagnostic_class_bypass: AtomicBool::new(false),
             notify: Notify::new(),
-            progress_last_flush: Mutex::new(None),
+            progress_last_flush: AuditedMutex::new(LockClass::ProgressLastFlush, None),
             ingress_latency: IngressLatencyReservoir::new(),
+            #[cfg(test)]
+            drain_hold: OnceLock::new(),
         })
     }
 
@@ -330,10 +344,7 @@ impl RuntimeEventEngine {
     /// short-lived gate. The gate is released before the caller performs any
     /// socket writes.
     pub fn attach(&self) -> Result<RuntimeEventAttachment, SubscribeError> {
-        let _publication = self
-            .publication_gate
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _publication = self.publication_gate.lock();
         let subscription = self.subscribers.subscribe()?;
         let replay = self.replay.snapshot();
         let reducer = self.reducer_snapshot();
@@ -362,15 +373,10 @@ impl RuntimeEventEngine {
     /// `Arc` clone, never a copy of the underlying map.
     #[must_use]
     pub fn reducer_snapshot(&self) -> Arc<ReducerSnapshot> {
-        Arc::clone(
-            &self
-                .reducer_state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        )
+        Arc::clone(&self.reducer_state.lock())
     }
 
-    pub(super) fn reducer_state(&self) -> &Mutex<Arc<ReducerSnapshot>> {
+    pub(super) fn reducer_state(&self) -> &AuditedMutex<Arc<ReducerSnapshot>> {
         &self.reducer_state
     }
 
@@ -444,10 +450,8 @@ impl RuntimeEventEngine {
         scope: OperationScope,
         synthetic_terminal: SyntheticTerminal,
     ) -> Option<OperationReservation> {
-        let _ingress = self
-            .ingress_gate
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _audit = super::lock_audit::scope(super::lock_audit::Context::Reserve);
+        let _ingress = self.ingress_gate.lock();
         if self.is_shutting_down() {
             return None;
         }
@@ -459,7 +463,6 @@ impl RuntimeEventEngine {
                 if let OperationScope::Child { root, .. } = scope {
                     self.children_by_root
                         .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .entry(root)
                         .or_insert_with(|| Vec::with_capacity(CHILD_MULTIPLIER))
                         .push(ChildSlot {
@@ -490,6 +493,11 @@ impl RuntimeEventEngine {
         fact: RuntimeFact,
     ) -> SubmitOutcome {
         use mesh_llm_runtime_event_contracts::DeliveryClass;
+        // Every lock taken from here until this function returns is
+        // attributed to `Context::Producer`. The guard covers the metadata
+        // fill and the telemetry tail as well as the gate itself, because a
+        // producer thread pays for all of it inline with its real work.
+        let _audit = super::lock_audit::scope(super::lock_audit::Context::Producer);
         let started_at = Instant::now();
         let fact = self.fill_ingress_metadata(fact, started_at);
         let submitted_scope = fact.data().scope.clone();
@@ -506,10 +514,7 @@ impl RuntimeEventEngine {
         // terminals, the reducer) fall straight through to the normal
         // dispatch below regardless of this flag.
         let outcome = {
-            let _ingress = self
-                .ingress_gate
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _ingress = self.ingress_gate.lock();
             let bypass_classes = self
                 .progress_diagnostic_class_bypass
                 .load(Ordering::Relaxed);
@@ -642,15 +647,31 @@ impl RuntimeEventEngine {
         &self.wake
     }
 
-    pub(super) fn ingress_gate(&self) -> &Mutex<()> {
+    pub(super) fn ingress_gate(&self) -> &AuditedMutex<()> {
         &self.ingress_gate
     }
 
-    pub(super) fn drain_gate(&self) -> &Mutex<()> {
+    /// Install the drain-hold seam. Returns the installed hold, which is
+    /// the same one a second call would get back: a hold is installed once
+    /// per engine so a test cannot silently replace another test's.
+    #[cfg(test)]
+    pub(crate) fn install_drain_hold(
+        &self,
+        hold: Arc<super::drain_hold::DrainHold>,
+    ) -> Arc<super::drain_hold::DrainHold> {
+        Arc::clone(self.drain_hold.get_or_init(|| hold))
+    }
+
+    #[cfg(test)]
+    pub(super) fn drain_hold(&self) -> Option<&Arc<super::drain_hold::DrainHold>> {
+        self.drain_hold.get()
+    }
+
+    pub(super) fn drain_gate(&self) -> &AuditedMutex<()> {
         &self.drain_gate
     }
 
-    pub(super) fn publication_gate(&self) -> &Mutex<()> {
+    pub(super) fn publication_gate(&self) -> &AuditedMutex<()> {
         &self.publication_gate
     }
 
@@ -666,11 +687,7 @@ impl RuntimeEventEngine {
     pub(super) fn pending_work_counts(&self) -> (usize, usize) {
         let terminal_remainder = self.wake.len()
             + self.table.unsettled().len()
-            + self
-                .pending_root_releases
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .len();
+            + self.pending_root_releases.lock().len();
         let lane_remainder =
             self.state_lane.len() + self.diagnostic_lane.len() + self.table.pending_progress_len();
         (terminal_remainder + lane_remainder, terminal_remainder)
@@ -680,10 +697,7 @@ impl RuntimeEventEngine {
     /// submit/reserve. The caller can then stop/await the driver and perform
     /// an exclusive final drain without a minted-before-enqueue race.
     pub(super) fn close_admission(&self) {
-        let _ingress = self
-            .ingress_gate
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _ingress = self.ingress_gate.lock();
         self.shutting_down.store(true, Ordering::Release);
     }
 }
@@ -725,20 +739,18 @@ impl OperationReservation {
     /// this is a synchronous, out-of-band cancellation, not a drain pass.
     pub fn cancel(mut self) {
         self.cancelled = true;
+        // `Reserve`, not `Producer`: cancelling is the teardown counterpart
+        // to `reserve_scope`, performed once per operation rather than once
+        // per event. It is still called from a producer thread, and today it
+        // waits for a whole drain pass to finish -- see the lock-audit
+        // baseline test in `engine::tests::lock_audit`.
+        let _audit = super::lock_audit::scope(super::lock_audit::Context::Reserve);
         // Match the drain lock order (`drain_gate` then `ingress_gate`) so a
         // cancellation cannot deadlock with a pass that has already collected
         // this slot. The ingress guard is released before reducer eviction.
-        let _drain = self
-            .engine
-            .drain_gate()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _drain = self.engine.drain_gate().lock();
         let released = {
-            let _ingress = self
-                .engine
-                .ingress_gate()
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _ingress = self.engine.ingress_gate().lock();
             self.engine.table().mark_cancelled(self.handle);
             drain::release_or_defer(&self.engine, self.scope, self.handle, Instant::now())
         };
@@ -758,11 +770,7 @@ impl Drop for OperationReservation {
                 .scoped_synthetic_terminal(self.handle, self.synthetic_terminal),
             Instant::now(),
         );
-        let _ingress = self
-            .engine
-            .ingress_gate()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _ingress = self.engine.ingress_gate().lock();
         if !self.engine.table().has_terminal(self.handle) {
             let record = super::reservation::TerminalRecord {
                 fact: synthetic,

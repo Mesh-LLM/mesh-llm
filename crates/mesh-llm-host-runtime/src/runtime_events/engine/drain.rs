@@ -108,10 +108,10 @@ impl RuntimeEventEngine {
     /// the same pass; later lane values remain queued so they cannot overtake
     /// that terminal prefix on a subsequent pass.
     pub fn drain_up_to(&self, max: Option<usize>) -> DrainReport {
-        let _drain = self
-            .drain_gate()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _audit = crate::runtime_events::lock_audit::scope(
+            crate::runtime_events::lock_audit::Context::Drain,
+        );
+        let _drain = self.drain_gate().lock();
         self.drain_up_to_inner(max, Instant::now())
     }
 
@@ -124,10 +124,10 @@ impl RuntimeEventEngine {
     /// identical caller-supplied-`now` pattern.
     #[cfg(test)]
     pub(crate) fn drain_up_to_at(&self, max: Option<usize>, now: Instant) -> DrainReport {
-        let _drain = self
-            .drain_gate()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _audit = crate::runtime_events::lock_audit::scope(
+            crate::runtime_events::lock_audit::Context::Drain,
+        );
+        let _drain = self.drain_gate().lock();
         self.drain_up_to_inner(max, now)
     }
 
@@ -172,10 +172,15 @@ impl RuntimeEventEngine {
             // Admission and queue insertion are one short critical section.
             // No reducer, wire serialization, subscriber fan-out, or
             // telemetry work is performed while this gate is held.
-            let _ingress = self
-                .ingress_gate()
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _ingress = self.ingress_gate().lock();
+            // Test seam (`runtime_events::drain_hold`): park here, inside
+            // everything this pass is holding, so a producer that is
+            // coupled to the drain waits the full hold duration and one
+            // that is not returns immediately.
+            #[cfg(test)]
+            if let Some(hold) = self.drain_hold() {
+                hold.hold();
+            }
             let SequencePrefix {
                 wake: entries,
                 state: state_entries,
@@ -337,10 +342,7 @@ impl RuntimeEventEngine {
         synthesized: bool,
         reserved: bool,
     ) -> bool {
-        let _publication = self
-            .publication_gate()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _publication = self.publication_gate().lock();
         let fact_arc = Arc::new(fact.clone());
         let metadata = fact.metadata();
         let input = ReducerInput {
@@ -364,10 +366,7 @@ impl RuntimeEventEngine {
             reserved,
             fact,
         };
-        let mut reducer_state = self
-            .reducer_state()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut reducer_state = self.reducer_state().lock();
         let ReduceOutcome::Applied(next) = apply(&reducer_state, input) else {
             self.health.bump_reducer_rejected();
             return false;
@@ -449,14 +448,8 @@ impl RuntimeEventEngine {
         // to replay and the published frontier. Keep the mutation inside the
         // same publication boundary so a reconnect cannot observe a settled
         // scope in one snapshot and its removal in the next at one cursor.
-        let _publication = self
-            .publication_gate()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut reducer_state = self
-            .reducer_state()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _publication = self.publication_gate().lock();
+        let mut reducer_state = self.reducer_state().lock();
         *reducer_state = crate::runtime_events::reducer::evict(&reducer_state, scope);
     }
 
@@ -465,10 +458,7 @@ impl RuntimeEventEngine {
     /// be minted and left behind after collection. The values are returned to
     /// the normal ingress-sequence sort and published outside the gate.
     fn take_due_progress(&self, now: Instant, sequence: u64) -> Vec<ProgressEntry> {
-        let mut last = self
-            .progress_last_flush
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut last = self.progress_last_flush.lock();
         let due = match *last {
             None => true,
             Some(previous) => now.duration_since(previous) >= PROGRESS_EXPORT_INTERVAL,
@@ -544,31 +534,22 @@ impl RuntimeEventEngine {
     }
 
     fn progress_flush_due(&self, now: Instant) -> bool {
-        let last = self
-            .progress_last_flush
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let last = self.progress_last_flush.lock();
         last.is_none_or(|previous| now.duration_since(previous) >= PROGRESS_EXPORT_INTERVAL)
     }
 
     fn mark_progress_flush(&self, now: Instant) {
-        *self
-            .progress_last_flush
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(now);
+        *self.progress_last_flush.lock() = Some(now);
     }
 
     /// Increment `rebuild_generation` and evict every retained replay frame,
     /// simulating a reducer crash/restart recovering into a fresh window.
     pub fn rebuild(&self) -> u64 {
-        let _drain = self
-            .drain_gate()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let _publication = self
-            .publication_gate()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _audit = crate::runtime_events::lock_audit::scope(
+            crate::runtime_events::lock_audit::Context::Drain,
+        );
+        let _drain = self.drain_gate().lock();
+        let _publication = self.publication_gate().lock();
         let generation = self.rebuild_generation.fetch_add(1, Ordering::AcqRel) + 1;
         let previous_frontier = self.published_frontier();
         self.rebuild_invalidated_through
@@ -580,10 +561,7 @@ impl RuntimeEventEngine {
         for _ in 0..evicted {
             self.health.bump_replay_evicted();
         }
-        let mut reducer_state = self
-            .reducer_state()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut reducer_state = self.reducer_state().lock();
         if let crate::runtime_events::reducer::RebuildOutcome::Rebuilt(next) =
             crate::runtime_events::reducer::rebuild(&reducer_state, generation)
         {
@@ -609,10 +587,10 @@ impl RuntimeEventEngine {
         budget: Option<usize>,
         deadline: Instant,
     ) -> ShutdownReport {
-        let _drain = self
-            .drain_gate()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _audit = crate::runtime_events::lock_audit::scope(
+            crate::runtime_events::lock_audit::Context::Drain,
+        );
+        let _drain = self.drain_gate().lock();
         // Take the same lock order as drain and cancellation: exclusive
         // drain ownership first, then admission closure. A concurrent
         // cancellation can therefore never hold `drain_gate` while waiting
@@ -688,10 +666,7 @@ impl RuntimeEventEngine {
     /// short admission gate while snapshotting and enqueueing so a late guard
     /// drop cannot race the final synthesis pass.
     fn synthesize_unsettled_reservations_locked(&self) -> usize {
-        let _ingress = self
-            .ingress_gate()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _ingress = self.ingress_gate().lock();
         let unsettled = self.table().unsettled();
         let mut synthesized = 0;
         for unsettled in unsettled {
@@ -715,10 +690,7 @@ impl RuntimeEventEngine {
     }
 
     fn pending_root_releases_is_empty(&self) -> bool {
-        self.pending_root_releases
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_empty()
+        self.pending_root_releases.lock().is_empty()
     }
 }
 
@@ -755,17 +727,13 @@ pub(super) fn release_or_defer(
         unreachable!("child scope returned above");
     };
     if has_occupied_children(engine, root) {
-        engine
-            .pending_root_releases
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(
-                root,
-                PendingRootRelease {
-                    handle,
-                    deadline: now + CHILD_SETTLE_GRACE,
-                },
-            );
+        engine.pending_root_releases.lock().insert(
+            root,
+            PendingRootRelease {
+                handle,
+                deadline: now + CHILD_SETTLE_GRACE,
+            },
+        );
         return None;
     }
     engine.table().release(handle);
@@ -786,18 +754,11 @@ fn has_occupied_children(engine: &RuntimeEventEngine, root: OperationId) -> bool
 }
 
 fn forget_children(engine: &RuntimeEventEngine, root: OperationId) {
-    engine
-        .children_by_root
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .remove(&root);
+    engine.children_by_root.lock().remove(&root);
 }
 
 fn remove_child_slot(engine: &RuntimeEventEngine, root: OperationId, handle: SlotHandle) {
-    let mut children_by_root = engine
-        .children_by_root
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut children_by_root = engine.children_by_root.lock();
     let Some(children) = children_by_root.get_mut(&root) else {
         return;
     };
@@ -812,7 +773,6 @@ fn child_slots(engine: &RuntimeEventEngine, root: OperationId) -> Vec<ChildSlot>
     engine
         .children_by_root
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .get(&root)
         .cloned()
         .unwrap_or_default()
@@ -837,14 +797,10 @@ fn child_slots(engine: &RuntimeEventEngine, root: OperationId) -> Vec<ChildSlot>
 fn settle_pending_root_releases(engine: &RuntimeEventEngine, now: Instant) {
     let mut released_roots = Vec::new();
     {
-        let _ingress = engine
-            .ingress_gate()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _ingress = engine.ingress_gate().lock();
         let candidates: Vec<(OperationId, SlotHandle, Instant)> = engine
             .pending_root_releases
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .map(|(root, entry)| (*root, entry.handle, entry.deadline))
             .collect();
@@ -900,11 +856,7 @@ fn release_pending_root(
         return false;
     }
     engine.table().release(handle);
-    engine
-        .pending_root_releases
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .remove(&root);
+    engine.pending_root_releases.lock().remove(&root);
     forget_children(engine, root);
     true
 }
@@ -983,8 +935,8 @@ fn synthesize_child_not_delivered(engine: &RuntimeEventEngine, child: ChildSlot)
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::OnceLock;
     use std::sync::atomic::{AtomicBool, AtomicU64};
-    use std::sync::{Mutex, OnceLock};
     use std::time::Duration;
 
     use mesh_llm_runtime_event_contracts::{
@@ -995,6 +947,7 @@ mod tests {
     use super::*;
     use crate::runtime_events::engine::lanes::{DiagnosticLane, StateLane};
     use crate::runtime_events::health::EngineHealth;
+    use crate::runtime_events::lock_audit::{AuditedMutex, LockClass};
     use crate::runtime_events::reducer::ReducerSnapshot;
     use crate::runtime_events::replay::ReplayBuffer;
     use crate::runtime_events::reservation::ReservationTable;
@@ -1005,29 +958,33 @@ mod tests {
         Arc::new(RuntimeEventEngine {
             table: ReservationTable::new(64),
             wake: WakeList::new(),
-            ingress_gate: Mutex::new(()),
-            drain_gate: Mutex::new(()),
-            publication_gate: Mutex::new(()),
+            ingress_gate: AuditedMutex::new(LockClass::IngressGate, ()),
+            drain_gate: AuditedMutex::new(LockClass::DrainGate, ()),
+            publication_gate: AuditedMutex::new(LockClass::PublicationGate, ()),
             published_frontier: AtomicU64::new(0),
             rebuild_invalidated_through: AtomicU64::new(0),
             has_rebuild_invalidated_through: AtomicBool::new(false),
             replay: ReplayBuffer::with_bounds(1_000, usize::MAX, max_age),
             subscribers: SubscriberRegistry::with_capacity(64),
             health: EngineHealth::default(),
-            children_by_root: Mutex::new(HashMap::new()),
-            pending_root_releases: Mutex::new(HashMap::new()),
+            children_by_root: AuditedMutex::new(LockClass::ChildrenByRoot, HashMap::new()),
+            pending_root_releases: AuditedMutex::new(
+                LockClass::PendingRootReleases,
+                HashMap::new(),
+            ),
             shutting_down: AtomicBool::new(false),
             rebuild_generation: AtomicU64::new(0),
             state_lane: StateLane::default(),
             diagnostic_lane: DiagnosticLane::default(),
-            reducer_state: Mutex::new(ReducerSnapshot::empty()),
+            reducer_state: AuditedMutex::new(LockClass::ReducerState, ReducerSnapshot::empty()),
             process_instance: ProcessInstanceId::new(),
             process_started: Instant::now(),
             telemetry: OnceLock::new(),
             progress_diagnostic_class_bypass: AtomicBool::new(false),
             notify: Notify::new(),
-            progress_last_flush: Mutex::new(None),
+            progress_last_flush: AuditedMutex::new(LockClass::ProgressLastFlush, None),
             ingress_latency: crate::runtime_events::ingress_latency::IngressLatencyReservoir::new(),
+            drain_hold: OnceLock::new(),
         })
     }
 

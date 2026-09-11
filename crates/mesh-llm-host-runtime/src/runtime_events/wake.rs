@@ -17,8 +17,8 @@
 //! starts at one.
 
 use std::collections::VecDeque;
-use std::sync::Mutex;
 
+use super::lock_audit::{AuditedMutex, LockClass};
 use super::reservation::SlotHandle;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,7 +34,7 @@ struct Inner {
 
 #[derive(Debug)]
 pub struct WakeList {
-    inner: Mutex<Inner>,
+    inner: AuditedMutex<Inner>,
 }
 
 impl std::fmt::Debug for Inner {
@@ -50,17 +50,20 @@ impl WakeList {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(Inner {
-                next_sequence: 1,
-                entries: VecDeque::with_capacity(crate::runtime_events::config::WAKE_LIST_DEPTH),
-            }),
+            inner: AuditedMutex::new(
+                LockClass::WakeList,
+                Inner {
+                    next_sequence: 1,
+                    entries: VecDeque::with_capacity(
+                        crate::runtime_events::config::WAKE_LIST_DEPTH,
+                    ),
+                },
+            ),
         }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
-        self.inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.inner.lock()
     }
 
     /// Mint the next process-local ingress sequence without recording it.
