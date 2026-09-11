@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import importlib.util
 import os
 from pathlib import Path
 import subprocess
 import tempfile
+from unittest import mock
 import unittest
 
 
@@ -12,6 +14,11 @@ GUARD = ROOT / "scripts" / "check-llama-upstream-pin.py"
 QUALITY_LANE = ROOT / ".github" / "workflows" / "ci-quality-lane.yml"
 PR_QUALITY = ROOT / ".github" / "workflows" / "pr_quality.yml"
 PIN_PATH = Path("third_party/llama.cpp/upstream.txt")
+GUARD_SPEC = importlib.util.spec_from_file_location("check_llama_upstream_pin", GUARD)
+if GUARD_SPEC is None or GUARD_SPEC.loader is None:
+    raise RuntimeError(f"cannot load {GUARD}")
+GUARD_MODULE = importlib.util.module_from_spec(GUARD_SPEC)
+GUARD_SPEC.loader.exec_module(GUARD_MODULE)
 
 
 def run_git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -202,6 +209,53 @@ class LlamaUpstreamPinGuardTests(unittest.TestCase):
             result = self.run_guard(mesh, base, head, upstream)
             self.assertNotEqual(0, result.returncode)
             self.assertIn("fail closed", result.stderr)
+
+    def test_initial_upstream_fetch_timeout_fails_closed(self) -> None:
+        calls: list[tuple[list[str], dict[str, object]]] = []
+
+        def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            calls.append((command, kwargs))
+            if "fetch" in command:
+                raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with mock.patch.object(GUARD_MODULE.subprocess, "run", side_effect=run):
+            with self.assertRaises(GUARD_MODULE.PinGuardError) as raised:
+                GUARD_MODULE.fetch_upstream("fixture", "a" * 40, "b" * 40)
+
+        self.assertIn("timed out", str(raised.exception))
+        self.assertIn("fail closed", str(raised.exception))
+        fetch_calls = [(command, kwargs) for command, kwargs in calls if "fetch" in command]
+        self.assertEqual(1, len(fetch_calls))
+        self.assertEqual(
+            GUARD_MODULE.UPSTREAM_FETCH_TIMEOUT_SECONDS,
+            fetch_calls[0][1]["timeout"],
+        )
+
+    def test_unshallow_fetch_timeout_fails_closed(self) -> None:
+        calls: list[tuple[list[str], dict[str, object]]] = []
+
+        def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            calls.append((command, kwargs))
+            if "fetch" in command and "--unshallow" in command:
+                raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+            if "rev-parse" in command:
+                return subprocess.CompletedProcess(command, 0, "true\n", "")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with mock.patch.object(GUARD_MODULE.subprocess, "run", side_effect=run):
+            with self.assertRaises(GUARD_MODULE.PinGuardError) as raised:
+                GUARD_MODULE.fetch_upstream("fixture", "a" * 40, "b" * 40)
+
+        self.assertIn("timed out", str(raised.exception))
+        self.assertIn("fail closed", str(raised.exception))
+        fetch_calls = [(command, kwargs) for command, kwargs in calls if "fetch" in command]
+        self.assertEqual(2, len(fetch_calls))
+        self.assertEqual(
+            [GUARD_MODULE.UPSTREAM_FETCH_TIMEOUT_SECONDS] * 2,
+            [kwargs["timeout"] for _, kwargs in fetch_calls],
+        )
+        self.assertIn("--unshallow", fetch_calls[1][0])
 
     def test_symlink_pin_is_rejected_before_dereferencing_sibling_content(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

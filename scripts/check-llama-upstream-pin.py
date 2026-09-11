@@ -21,19 +21,33 @@ import tempfile
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 PIN_PATH = "third_party/llama.cpp/upstream.txt"
 DEFAULT_UPSTREAM_URL = "https://github.com/ggml-org/llama.cpp.git"
+UPSTREAM_FETCH_TIMEOUT_SECONDS = 300
 
 
 class PinGuardError(RuntimeError):
     """Raised when the pin comparison cannot be proved safe."""
 
 
-def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
-        ["git", "-C", str(repo), *args],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
+def git(
+    repo: Path,
+    *args: str,
+    check: bool = True,
+    timeout: float | None = None,
+) -> subprocess.CompletedProcess[str]:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), *args],
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as error:
+        timeout_detail = f" after {timeout:g} seconds" if timeout is not None else ""
+        raise PinGuardError(
+            f"git {' '.join(args)} timed out{timeout_detail}; "
+            "the guard cannot prove llama.cpp upstream ancestry and will fail closed"
+        ) from error
     if check and result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "no git output"
         raise PinGuardError(f"git {' '.join(args)} failed: {detail}")
@@ -91,6 +105,7 @@ def fetch_upstream(upstream_url: str, base_pin: str, proposed_pin: str) -> tempf
             base_pin,
             proposed_pin,
             check=False,
+            timeout=UPSTREAM_FETCH_TIMEOUT_SECONDS,
         )
         if fetched.returncode != 0:
             detail = fetched.stderr.strip() or fetched.stdout.strip() or "no git output"
@@ -111,6 +126,7 @@ def fetch_upstream(upstream_url: str, base_pin: str, proposed_pin: str) -> tempf
                 "--unshallow",
                 "origin",
                 check=False,
+                timeout=UPSTREAM_FETCH_TIMEOUT_SECONDS,
             )
             if unshallow.returncode != 0 or git(
                 upstream, "rev-parse", "--is-shallow-repository"
