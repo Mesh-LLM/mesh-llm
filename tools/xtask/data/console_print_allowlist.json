@@ -1117,19 +1117,19 @@
   ],
   "crates/mesh-llm-commands/src/runtime_native.rs": [
     {
-      "line": 68,
+      "line": 69,
       "macro_name": "eprintln!"
     },
     {
-      "line": 148,
+      "line": 149,
       "macro_name": "eprintln!"
     },
     {
-      "line": 151,
+      "line": 152,
       "macro_name": "eprintln!"
     },
     {
-      "line": 192,
+      "line": 194,
       "macro_name": "eprintln!"
     },
     {
@@ -1137,27 +1137,27 @@
       "macro_name": "eprintln!"
     },
     {
-      "line": 195,
+      "line": 196,
       "macro_name": "eprintln!"
     },
     {
-      "line": 198,
+      "line": 199,
       "macro_name": "eprintln!"
     },
     {
-      "line": 226,
+      "line": 227,
       "macro_name": "eprintln!"
     },
     {
-      "line": 262,
+      "line": 263,
       "macro_name": "eprint!"
     },
     {
-      "line": 266,
+      "line": 267,
       "macro_name": "eprint!"
     },
     {
-      "line": 274,
+      "line": 275,
       "macro_name": "eprintln!"
     }
   ],
@@ -2173,23 +2173,23 @@
   ],
   "crates/mesh-llm/src/commands/doctor.rs": [
     {
-      "line": 93,
+      "line": 79,
       "macro_name": "println!"
     },
     {
-      "line": 96,
+      "line": 82,
       "macro_name": "println!"
     },
     {
-      "line": 99,
+      "line": 85,
       "macro_name": "println!"
     },
     {
-      "line": 100,
+      "line": 86,
       "macro_name": "println!"
     },
     {
-      "line": 102,
+      "line": 88,
       "macro_name": "println!"
     }
   ],
