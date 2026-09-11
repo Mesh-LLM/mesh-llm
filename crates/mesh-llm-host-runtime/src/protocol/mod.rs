@@ -1,6 +1,8 @@
 // Protocol infrastructure — extracted from mesh.rs
 
 #[cfg(test)]
+use crate::mesh::ClaimedLogHead;
+#[cfg(test)]
 use crate::mesh::NodeRole;
 use crate::mesh::PeerAnnouncement;
 

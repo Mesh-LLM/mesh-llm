@@ -732,6 +732,8 @@ fn proto_cache_affinity_to_local(
         .then_some(advertisement)
 }
 
+/// Encodes a local `PeerAnnouncement` to its wire representation, after
+/// sanitizing it for outbound gossip.
 pub(crate) fn local_ann_to_proto_ann(
     ann: &PeerAnnouncement,
 ) -> crate::proto::node::PeerAnnouncement {
@@ -879,7 +881,51 @@ pub(crate) fn local_ann_to_proto_ann(
             .cache_affinity
             .as_ref()
             .map(local_cache_affinity_to_proto),
+        claimed_log_head: ann
+            .claimed_log_head
+            .as_ref()
+            .map(local_claimed_log_head_to_proto),
     }
+}
+
+/// Converts a local `ClaimedLogHead` to its wire form. No validation here:
+/// this node is the one asserting the claim, not receiving it.
+fn local_claimed_log_head_to_proto(
+    head: &crate::mesh::ClaimedLogHead,
+) -> crate::proto::node::ClaimedLogHead {
+    crate::proto::node::ClaimedLogHead {
+        log_id: head.log_id.clone(),
+        size: head.size,
+        root: head.root.clone(),
+        timestamp_unix_ms: head.timestamp_unix_ms,
+        claimed_signature: head.claimed_signature.clone(),
+        signature_algorithm: head.signature_algorithm.clone(),
+    }
+}
+
+/// Decodes a remote `ClaimedLogHead`, rejecting (as absent — never a panic,
+/// never a partial struct) any field that exceeds the memory-safety bounds
+/// below. mesh-llm never verifies `claimed_signature`; this only bounds
+/// untrusted remote byte lengths, the same ingest hygiene already applied to
+/// `CacheAffinityAdvertisement.salt` and remote model names.
+fn proto_claimed_log_head_to_local(
+    head: &crate::proto::node::ClaimedLogHead,
+) -> Option<crate::mesh::ClaimedLogHead> {
+    if head.log_id.len() > MAX_CLAIMED_LOG_ID_BYTES
+        || head.root.len() > MAX_CLAIMED_LOG_ROOT_BYTES
+        || head.claimed_signature.len() > MAX_CLAIMED_LOG_SIGNATURE_BYTES
+        || head.signature_algorithm.len() > MAX_CLAIMED_LOG_SIGNATURE_ALGORITHM_BYTES
+    {
+        return None;
+    }
+    Some(crate::mesh::ClaimedLogHead {
+        log_id: head.log_id.clone(),
+        size: head.size,
+        root: head.root.clone(),
+        timestamp_unix_ms: head.timestamp_unix_ms,
+        claimed_signature: head.claimed_signature.clone(),
+        signature_algorithm: head.signature_algorithm.clone(),
+    })
 }
 
 pub(crate) fn build_gossip_frame(
@@ -914,6 +960,34 @@ const MAX_REMOTE_MODEL_LIST_LEN: usize = 256;
 /// under this; anything larger is dropped rather than rendered.
 const MAX_REMOTE_MODEL_NAME_BYTES: usize = 512;
 
+/// Upper bound on `ClaimedLogHead.log_id`, in bytes. This is a memory-safety
+/// limit on untrusted remote bytes, not a format assertion: a log id is not
+/// a model name, so it gets its own constant rather than borrowing
+/// `MAX_REMOTE_MODEL_NAME_BYTES`, sized to match that existing remote-string
+/// cap.
+const MAX_CLAIMED_LOG_ID_BYTES: usize = 512;
+
+/// Upper bound on `ClaimedLogHead.root`, in bytes. This is a memory-safety
+/// limit on untrusted remote bytes, not a format assertion: mesh-llm treats
+/// the root as opaque and never verifies it, so the bound is sized generously
+/// enough to admit hash schemes wider than this node's own SHA-256 (e.g.
+/// SHA-512) rather than asserting our own scheme's exact length.
+const MAX_CLAIMED_LOG_ROOT_BYTES: usize = 64;
+
+/// Upper bound on `ClaimedLogHead.claimed_signature`, in bytes. Same
+/// memory-safety rationale as `MAX_CLAIMED_LOG_ROOT_BYTES`: wide enough for
+/// signature schemes larger than this node's own Ed25519 (e.g. post-quantum
+/// signatures), tight enough that a peer cannot advertise unbounded bytes.
+const MAX_CLAIMED_LOG_SIGNATURE_BYTES: usize = 128;
+
+/// Upper bound on `ClaimedLogHead.signature_algorithm`, in bytes. Same
+/// memory-safety rationale as the other `ClaimedLogHead` bounds: this is an
+/// untrusted remote string, not a known-set validator (mesh-llm never
+/// verifies the claim, so it has no fixed list of algorithm names to check
+/// against). 32 bytes comfortably fits real scheme identifiers (e.g.
+/// `"ed25519"`, `"ml-dsa-65"`) while still capping the field.
+const MAX_CLAIMED_LOG_SIGNATURE_ALGORITHM_BYTES: usize = 32;
+
 /// Sanitize a remotely-supplied list of model names: drop entries that exceed
 /// the per-name byte cap and keep at most `MAX_REMOTE_MODEL_LIST_LEN` of them.
 fn cap_remote_model_names(names: &[String]) -> Vec<String> {
@@ -925,6 +999,10 @@ fn cap_remote_model_names(names: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// Decodes a wire `PeerAnnouncement` into its local representation, applying
+/// every remote-bytes sanitization boundary (model names, cache affinity,
+/// claimed log head) along the way. Returns `None` if the endpoint id itself
+/// is malformed.
 pub(crate) fn proto_ann_to_local(
     pa: &crate::proto::node::PeerAnnouncement,
 ) -> Option<(EndpointAddr, PeerAnnouncement)> {
@@ -1122,6 +1200,10 @@ pub(crate) fn proto_ann_to_local(
             .cache_affinity
             .as_ref()
             .and_then(proto_cache_affinity_to_local),
+        claimed_log_head: pa
+            .claimed_log_head
+            .as_ref()
+            .and_then(proto_claimed_log_head_to_local),
     };
     crate::mesh::backfill_legacy_descriptors(&mut ann);
     ann.advertised_model_throughput = sanitize_model_throughput_hints_for_ann(&ann);
