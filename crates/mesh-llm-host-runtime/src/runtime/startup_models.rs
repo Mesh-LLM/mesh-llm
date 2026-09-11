@@ -1170,7 +1170,11 @@ async fn resolve_startup_models_with_package_discovery(
             n_batch: spec.n_batch,
             n_ubatch: spec.n_ubatch,
             flash_attention: spec.flash_attention,
-            local_source_required: false,
+            // Direct GGUF identities are content-addressed and have no
+            // independently resolvable package source. Every split
+            // participant must therefore prove it owns the same local bytes
+            // and receive the fail-closed LoadLocal command.
+            local_source_required: direct_local_gguf,
             profile: spec.profile.clone(),
         });
     }
