@@ -673,35 +673,35 @@
   ],
   "crates/mesh-llm-commands/src/gpus.rs": [
     {
-      "line": 29,
+      "line": 35,
       "macro_name": "println!"
     },
     {
-      "line": 50,
+      "line": 57,
       "macro_name": "println!"
     },
     {
-      "line": 61,
+      "line": 99,
       "macro_name": "println!"
     },
     {
-      "line": 78,
+      "line": 116,
       "macro_name": "println!"
     },
     {
-      "line": 79,
+      "line": 117,
       "macro_name": "println!"
     },
     {
-      "line": 83,
+      "line": 121,
       "macro_name": "println!"
     },
     {
-      "line": 84,
+      "line": 122,
       "macro_name": "println!"
     },
     {
-      "line": 195,
+      "line": 248,
       "macro_name": "println!"
     }
   ],
