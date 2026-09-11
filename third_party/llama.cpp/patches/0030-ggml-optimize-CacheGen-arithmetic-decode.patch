@@ -1,0 +1,126 @@
+From c18e4c75324d89f866236ca2fa631c23801a0830 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Fri, 11 Sep 2026 17:51:30 +1000
+Subject: [PATCH] ggml: optimize CacheGen arithmetic decode
+
+Assisted-by: scama
+---
+ ggml/src/ggml-cuda/cachegen.cu             | 39 +++++++++++++++++++---
+ ggml/src/ggml-metal/kernels/cachegen.metal | 37 +++++++++++++++++---
+ 2 files changed, 66 insertions(+), 10 deletions(-)
+
+diff --git a/ggml/src/ggml-cuda/cachegen.cu b/ggml/src/ggml-cuda/cachegen.cu
+index 5d91aa0ca..e8460cc99 100644
+--- a/ggml/src/ggml-cuda/cachegen.cu
++++ b/ggml/src/ggml-cuda/cachegen.cu
+@@ -11,6 +11,38 @@ static __device__ __forceinline__ uint32_t cachegen_read_bit(
+     return result;
+ }
+ 
++static __device__ __forceinline__ uint16_t cachegen_scaled_count(
++        uint32_t value, uint32_t low, uint64_t span) {
++    const uint64_t delta     = uint64_t(value) - uint64_t(low) + 1;
++    const uint64_t numerator = delta * 65536ull - 1;
++    uint32_t count = min(uint32_t(float(delta) * (65536.0f / float(span))), 65535u);
++    uint64_t product = uint64_t(count) * span;
++    while (product > numerator) {
++        --count;
++        product -= span;
++    }
++    while (count < 65535u && product + span <= numerator) {
++        ++count;
++        product += span;
++    }
++    return uint16_t(count);
++}
++
++static __device__ __forceinline__ uint32_t cachegen_find_symbol(
++        const uint16_t * cdf, uint16_t count) {
++    uint32_t first = 0;
++    uint32_t last  = 33;
++    while (first < last) {
++        const uint32_t middle = (first + last) >> 1;
++        if (cdf[middle] <= count) {
++            first = middle + 1;
++        } else {
++            last = middle;
++        }
++    }
++    return first - 1;
++}
++
+ static __global__ void cachegen_decode_f16(
+         const uint8_t * payload,
+         const ggml_cuda_cachegen_tile * tiles,
+@@ -50,11 +82,8 @@ static __global__ void cachegen_decode_f16(
+     const float center = float(bins / 2 - 1);
+     for (uint32_t row = 0; row < tile.rows; ++row) {
+         const uint64_t span = uint64_t(high) - uint64_t(low) + 1;
+-        const uint16_t count = uint16_t((((uint64_t(value) - uint64_t(low) + 1) * 65536ull - 1) / span));
+-        uint32_t symbol = 0;
+-        while (symbol + 1 < 33 && cdf[symbol + 1] <= count) {
+-            ++symbol;
+-        }
++        const uint16_t count  = cachegen_scaled_count(value, low, span);
++        const uint32_t symbol = cachegen_find_symbol(cdf, count);
+         if (symbol >= 32) {
+             return;
+         }
+diff --git a/ggml/src/ggml-metal/kernels/cachegen.metal b/ggml/src/ggml-metal/kernels/cachegen.metal
+index 82684a71e..22592c070 100644
+--- a/ggml/src/ggml-metal/kernels/cachegen.metal
++++ b/ggml/src/ggml-metal/kernels/cachegen.metal
+@@ -22,6 +22,36 @@ static inline uint cachegen_read_bit(const device uchar * stream, uint stream_by
+     return result;
+ }
+ 
++static inline ushort cachegen_scaled_count(uint value, uint low, ulong span) {
++    const ulong delta     = ulong(value) - ulong(low) + 1;
++    const ulong numerator = delta * 65536ul - 1;
++    uint count = min(uint(float(delta) * (65536.0f / float(span))), 65535u);
++    ulong product = ulong(count) * span;
++    while (product > numerator) {
++        --count;
++        product -= span;
++    }
++    while (count < 65535u && product + span <= numerator) {
++        ++count;
++        product += span;
++    }
++    return ushort(count);
++}
++
++static inline uint cachegen_find_symbol(const device ushort * cdf, ushort count) {
++    uint first = 0;
++    uint last  = 33;
++    while (first < last) {
++        const uint middle = (first + last) >> 1;
++        if (cdf[middle] <= count) {
++            first = middle + 1;
++        } else {
++            last = middle;
++        }
++    }
++    return first - 1;
++}
++
+ kernel void kernel_cachegen_decode_f16(const device uchar *         payload [[buffer(0)]],
+                                        const device cachegen_tile * tiles [[buffer(1)]],
+                                        const device uint *          prefixes [[buffer(2)]],
+@@ -58,11 +88,8 @@ kernel void kernel_cachegen_decode_f16(const device uchar *         payload [[bu
+     const float center = float(bins / 2 - 1);
+     for (uint row = 0; row < tile.rows; ++row) {
+         const ulong  span   = ulong(high) - ulong(low) + 1;
+-        const ushort count  = ushort((((ulong(value) - ulong(low) + 1) * 65536ul - 1) / span));
+-        uint         symbol = 0;
+-        while (symbol + 1 < 33 && cdf[symbol + 1] <= count) {
+-            ++symbol;
+-        }
++        const ushort count  = cachegen_scaled_count(value, low, span);
++        const uint   symbol = cachegen_find_symbol(cdf, count);
+         if (symbol >= 32) {
+             return;
+         }
+-- 
+2.54.0 (Apple Git-157)
+
