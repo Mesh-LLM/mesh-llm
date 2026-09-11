@@ -147,6 +147,11 @@ pub use identity_persistence::{
 };
 #[expect(
     unused_imports,
+    reason = "test-only home resolver used by environment-isolated identity tests"
+)]
+pub(crate) use identity_persistence::{identity_home_dir, identity_state_dir};
+#[expect(
+    unused_imports,
     reason = "public compatibility re-export for existing mesh node callers"
 )]
 pub use node::{
