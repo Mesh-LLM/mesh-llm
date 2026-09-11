@@ -129,7 +129,16 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
         self.assertIn('git symbolic-ref -q HEAD', guard)
         self.assertIn("git config --list --show-origin", guard)
         self.assertIn("git status --porcelain=v1 --untracked-files=all", guard)
-        for path in (".github", ".agents", "scripts", ".gitattributes", "ci/ci.md", "ci/llama-canary/agent-repair-prompt.md"):
+        for path in (
+            ".github",
+            ".agents",
+            "scripts",
+            ".gitattributes",
+            "ci/ci.md",
+            "ci/llama-canary/agent-repair-prompt.md",
+            "ci/llama-canary/family-certified.json",
+            "docs/skippy/llama-parity-candidates.json",
+        ):
             self.assertIn(path, guard)
 
     def test_protected_status_detects_untracked_python_startup_hook(self) -> None:

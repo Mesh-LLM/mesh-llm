@@ -200,6 +200,7 @@ assert_agent_control_unchanged() {
   changed_path="$(
     git status --porcelain=v1 --untracked-files=all -- \
       .github .agents scripts .gitattributes ci/ci.md ci/llama-canary/agent-repair-prompt.md \
+      ci/llama-canary/family-certified.json docs/skippy/llama-parity-candidates.json \
       | head -n 1
   )"
   if [[ -n "$changed_path" ]]; then
