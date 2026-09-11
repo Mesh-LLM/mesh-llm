@@ -12,6 +12,7 @@ use skippy_cache::cachegen::archive::{
 };
 use skippy_runtime::{
     GGML_TYPE_F16, KV_PAGE_FLAG_V_TRANSPOSED, RuntimeKvPageDesc, StageModel, StageSession,
+    TokenSignal,
 };
 
 use crate::report::CacheGenGateReport;
@@ -56,52 +57,51 @@ pub(in crate::runner) fn run_cachegen_gate(
     let cachegen_storage_bytes = archive.bytes.len().saturating_add(recurrent.len());
 
     let persisted = persist_and_read_payloads(kv, recurrent, &archive.bytes)?;
-    let decode_started = Instant::now();
-    let decoded_kv = decode_kv_archive(kv_desc, &persisted.cachegen_archive)?;
-    let decode_ms = elapsed_ms(decode_started);
+    // Keep the scalar decoder in the gate as an independently timed oracle,
+    // but never feed its multi-gigabyte output into the measured restore. The
+    // accelerated path must consume the persisted archive directly or fail.
+    let scalar_oracle_decode_started = Instant::now();
+    let scalar_oracle = decode_kv_archive(kv_desc, &persisted.cachegen_archive)?;
+    let scalar_oracle_decode_ms = elapsed_ms(scalar_oracle_decode_started);
+    black_box(&scalar_oracle);
+    drop(scalar_oracle);
 
     let native_payload = LocalStatePayload::KvRecurrent {
         kv_desc: Some(kv_desc.clone()),
         kv: persisted.native_kv,
         recurrent: persisted.native_recurrent,
     };
-    let cachegen_payload = LocalStatePayload::KvRecurrent {
-        kv_desc: Some(kv_desc.clone()),
-        kv: decoded_kv,
-        recurrent: persisted.cachegen_recurrent,
-    };
-
     let native_import_started = Instant::now();
     let mut native = import_session(model, &native_payload, prefix)?;
     let native_import_ms = elapsed_ms(native_import_started);
-    let cachegen_import_started = Instant::now();
-    let mut cachegen = import_session(model, &cachegen_payload, prefix)?;
-    let cachegen_import_ms = elapsed_ms(cachegen_import_started);
+    let native_continuation =
+        run_native_continuation(&mut native, continuation, args.cachegen_continuation_steps)?;
+    drop(native);
 
-    let continuation = compare_continuation(
-        &mut native,
-        &mut cachegen,
-        continuation,
-        args.cachegen_continuation_steps,
+    let cachegen_import_started = Instant::now();
+    let mut cachegen = import_cachegen_session(
+        model,
+        kv_desc,
+        &persisted.cachegen_archive,
+        &persisted.cachegen_recurrent,
+        prefix,
     )?;
+    let cachegen_import_ms = elapsed_ms(cachegen_import_started);
+    let continuation =
+        compare_cachegen_continuation(&mut cachegen, continuation, native_continuation)?;
     let native_p99_decode_ms = percentile_99(&continuation.native_decode_ms);
     let cachegen_p99_decode_ms = percentile_99(&continuation.cachegen_decode_ms);
     let p99_decode_regression = relative_regression(cachegen_p99_decode_ms, native_p99_decode_ms);
-    let native_ttft_ms = persisted.native_read_ms
-        + native_import_ms
-        + continuation
-            .native_decode_ms
-            .first()
-            .copied()
-            .unwrap_or(0.0);
-    let cachegen_ttft_ms = persisted.cachegen_read_ms
-        + decode_ms
-        + cachegen_import_ms
-        + continuation
-            .cachegen_decode_ms
-            .first()
-            .copied()
-            .unwrap_or(0.0);
+    let native_ttft_ms = restore_to_first_token_ms(
+        persisted.native_read_ms,
+        native_import_ms,
+        &continuation.native_decode_ms,
+    );
+    let cachegen_ttft_ms = restore_to_first_token_ms(
+        persisted.cachegen_read_ms,
+        cachegen_import_ms,
+        &continuation.cachegen_decode_ms,
+    );
     let token_agreement =
         continuation.matching_tokens as f64 / args.cachegen_continuation_steps as f64;
     let compression_ratio = cachegen_storage_bytes as f64 / native_storage_bytes.max(1) as f64;
@@ -139,13 +139,14 @@ pub(in crate::runner) fn run_cachegen_gate(
     Ok(CacheGenGateReport {
         passed: failure_reasons.is_empty(),
         failure_reasons,
+        restore_path: "native-device",
         continuation_steps: args.cachegen_continuation_steps,
         native_storage_bytes,
         cachegen_storage_bytes,
         compression_ratio,
         tile_count: archive.tile_count,
         encode_ms,
-        decode_ms,
+        scalar_oracle_decode_ms,
         native_write_ms: persisted.native_write_ms,
         cachegen_write_ms: persisted.cachegen_write_ms,
         native_persist_ms: persisted.native_write_ms,
@@ -173,6 +174,25 @@ pub(in crate::runner) fn run_cachegen_gate(
         max_p99_decode_regression: args.cachegen_max_p99_decode_regression,
         max_peak_codec_working_bytes: args.cachegen_max_peak_working_bytes,
     })
+}
+
+fn import_cachegen_session(
+    model: &StageModel,
+    kv_desc: &RuntimeKvPageDesc,
+    archive: &[u8],
+    recurrent: &[u8],
+    prefix: &[i32],
+) -> Result<StageSession> {
+    let mut session = model
+        .create_session()
+        .context("create CacheGen gate session")?;
+    session
+        .import_cachegen_kv_page(kv_desc, archive)
+        .context("import CacheGen archive directly into resident KV")?;
+    session
+        .import_recurrent_state_for_token_count(recurrent, prefix.len() as u64)
+        .context("import CacheGen gate recurrent state")?;
+    Ok(session)
 }
 
 fn import_session(
@@ -207,26 +227,56 @@ struct ContinuationComparison {
     top_logprob_abs_drift: Vec<f64>,
 }
 
-fn compare_continuation(
+struct NativeContinuation {
+    predicted_tokens: Vec<i32>,
+    signals: Vec<TokenSignal>,
+    decode_ms: Vec<f64>,
+}
+
+fn run_native_continuation(
     native: &mut StageSession,
-    cachegen: &mut StageSession,
     mut token: i32,
     steps: usize,
+) -> Result<NativeContinuation> {
+    let mut predicted_tokens = Vec::with_capacity(steps);
+    let mut signals = Vec::with_capacity(steps);
+    let mut decode_ms = Vec::with_capacity(steps);
+    for _ in 0..steps {
+        let started = Instant::now();
+        let prediction = native.decode_step(token).context("native gate decode")?;
+        decode_ms.push(elapsed_ms(started));
+        signals.push(
+            native
+                .last_token_signal()
+                .context("native gate token signal")?,
+        );
+        predicted_tokens.push(prediction);
+        token = prediction;
+    }
+    Ok(NativeContinuation {
+        predicted_tokens,
+        signals,
+        decode_ms,
+    })
+}
+
+fn compare_cachegen_continuation(
+    cachegen: &mut StageSession,
+    first_token: i32,
+    native: NativeContinuation,
 ) -> Result<ContinuationComparison> {
-    let mut native_decode_ms = Vec::with_capacity(steps);
+    let steps = native.predicted_tokens.len();
     let mut cachegen_decode_ms = Vec::with_capacity(steps);
     let mut matching_tokens = 0usize;
     let mut first_token_mismatch_step = None;
     let mut entropy_abs_drift = Vec::with_capacity(steps);
     let mut top_logprob_abs_drift = Vec::with_capacity(steps);
     for step in 0..steps {
-        let started = Instant::now();
-        let native_prediction = native.decode_step(token).context("native gate decode")?;
-        native_decode_ms.push(elapsed_ms(started));
-        let native_signal = native
-            .last_token_signal()
-            .context("native gate token signal")?;
-
+        let token = if step == 0 {
+            first_token
+        } else {
+            native.predicted_tokens[step - 1]
+        };
         let started = Instant::now();
         let cachegen_prediction = cachegen
             .decode_step(token)
@@ -235,6 +285,8 @@ fn compare_continuation(
         let cachegen_signal = cachegen
             .last_token_signal()
             .context("CacheGen gate token signal")?;
+        let native_prediction = native.predicted_tokens[step];
+        let native_signal = native.signals[step];
         if native_prediction == cachegen_prediction {
             matching_tokens += 1;
         } else if first_token_mismatch_step.is_none() {
@@ -246,10 +298,9 @@ fn compare_continuation(
         top_logprob_abs_drift.push(f64::from(
             (native_signal.top_logprob - cachegen_signal.top_logprob).abs(),
         ));
-        token = native_prediction;
     }
     Ok(ContinuationComparison {
-        native_decode_ms,
+        native_decode_ms: native.decode_ms,
         cachegen_decode_ms,
         matching_tokens,
         first_token_mismatch_step,
@@ -430,6 +481,10 @@ fn tokens_per_second(samples: &[f64]) -> f64 {
     }
 }
 
+fn restore_to_first_token_ms(read_ms: f64, import_ms: f64, decode_ms: &[f64]) -> f64 {
+    read_ms + import_ms + decode_ms.first().copied().unwrap_or(0.0)
+}
+
 fn mean(values: &[f64]) -> f64 {
     if values.is_empty() {
         0.0
@@ -520,5 +575,11 @@ mod tests {
         let decoded = decode_kv_archive(&desc, &archive.bytes).expect("decode");
         assert_eq!(decoded.len(), raw.len());
         assert_eq!(archive.tile_count, 8);
+    }
+
+    #[test]
+    fn restore_timing_contains_only_persisted_read_native_import_and_first_decode() {
+        let ttft_ms = restore_to_first_token_ms(12.0, 34.0, &[5.0, 999.0]);
+        assert_eq!(ttft_ms, 51.0);
     }
 }

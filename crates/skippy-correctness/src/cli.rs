@@ -211,7 +211,9 @@ pub struct StateHandoffArgs {
     #[arg(long)]
     pub binary_control: bool,
     /// Run the experimental CacheGen acceptance gate against the native
-    /// KV-page control. Requires a local full-model kv-recurrent handoff.
+    /// KV-page control. Requires a local full-model kv-recurrent handoff and
+    /// direct device decode support; unsupported backends fail without a
+    /// scalar restore fallback.
     #[arg(long)]
     pub cachegen_gate: bool,
     /// Teacher-forced continuation steps used for CacheGen quality and
