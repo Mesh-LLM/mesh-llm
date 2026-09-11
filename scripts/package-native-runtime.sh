@@ -6,6 +6,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/cuda-toolkit.sh"
+# shellcheck source=scripts/lib/lld.sh
+source "$SCRIPT_DIR/lib/lld.sh"
 
 BUILD=0
 OUT_DIR="$REPO_ROOT/dist/native-runtimes"
@@ -329,7 +331,7 @@ build_model_package_tool() {
         return 0
     fi
 
-    local tool_rel tool_path source_path configured cargo_target_dir
+    local tool_rel tool_path source_path configured cargo_target_dir macos_lld
     local -a cargo_env=(
         "LLAMA_STAGE_LINK_MODE=dynamic"
         "LLAMA_STAGE_LIB_DIR=$stage_dir/lib"
@@ -349,17 +351,16 @@ build_model_package_tool() {
         source_path="$configured"
     else
         if [[ "$runtime_os" == "macos" ]]; then
-            if command -v ld64.lld >/dev/null 2>&1; then
-                # Cargo's encoded flags override the checked-in target
-                # rustflags, whose absolute `-fuse-ld=/path/to/ld64.lld`
-                # form is rejected by Apple clang. Prefer the portable LLD
-                # driver name when the producer installed it.
-                cargo_env+=("CARGO_ENCODED_RUSTFLAGS=-Clink-arg=-fuse-ld=lld")
+            # Use lld only when it is installed AND links against the active
+            # SDK. A protected reusable workflow may not include the
+            # repository setup action at all, and on a developer machine lld
+            # can fall behind the SDK; both take the platform linker. The
+            # explicitly empty encoded flag set still overrides any RUSTFLAGS
+            # a caller exported. See scripts/lib/lld.sh.
+            macos_lld="$(resolve_usable_lld)"
+            if [[ -n "$macos_lld" ]]; then
+                cargo_env+=("CARGO_ENCODED_RUSTFLAGS=-Clink-arg=-fuse-ld=$macos_lld")
             else
-                # Protected reusable workflows may not include the repository
-                # setup action. An explicitly empty encoded flag set still
-                # overrides the non-portable checked-in target rustflags and
-                # lets Apple clang use the system linker.
                 cargo_env+=("CARGO_ENCODED_RUSTFLAGS=")
             fi
         fi

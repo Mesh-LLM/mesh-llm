@@ -3817,6 +3817,7 @@ version = "0.76.0"
 dependencies = [
  "anyhow",
  "dirs",
+ "mesh-llm-native-runtime",
  "mesh-llm-types",
  "semver",
  "serde",
