@@ -162,6 +162,14 @@ fi
                     encoding="utf-8",
                 )
                 verifier.chmod(verifier.stat().st_mode | stat.S_IXUSR)
+                tools_dir = runtime_dir / "tools"
+                tools_dir.mkdir()
+                benchmark = tools_dir / "mesh-llm-gpu-benchmark"
+                benchmark.write_text(
+                    "#!/usr/bin/env bash\nset -euo pipefail\n[[ \"${1:-}\" == --probe ]]\nprintf 'CUDA devices: 1\\n'\n",
+                    encoding="utf-8",
+                )
+                benchmark.chmod(benchmark.stat().st_mode | stat.S_IXUSR)
             dense_model = root / "dense.gguf"
             recurrent_model = root / "recurrent.gguf"
             dense_model.write_bytes(DENSE_FIXTURE)

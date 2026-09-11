@@ -194,6 +194,17 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         self.assertIn("verify_artifact_local_cuda_runtime", product_script)
         self.assertIn("verify-native-runtime-package.sh", product_script)
         self.assertIn("env -u LD_LIBRARY_PATH", product_script)
+        self.assertIn('"$benchmark" --probe', product_script)
+        self.assertIn('env -u LD_LIBRARY_PATH "$benchmark" --probe', product_script)
+        self.assertIn("CUDA_VISIBLE_DEVICES", product_script)
+        self.assertIn("NVIDIA_VISIBLE_DEVICES", product_script)
+
+        cuda_benchmark = (
+            ROOT
+            / "crates/mesh-llm-gpu-bench/native/cuda/membench-fingerprint.cu"
+        ).read_text()
+        self.assertIn('strcmp(argv[i], "--probe")', cuda_benchmark)
+        self.assertIn("if (probeMode)", cuda_benchmark)
 
     def test_two_node_split_smoke_covers_dense_and_recurrent_models(self):
         workflow = (WORKFLOWS / "product-integration-smoke.yml").read_text()

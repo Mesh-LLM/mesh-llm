@@ -377,7 +377,11 @@ runtime producers are not duplicated.
   families for the declared CUDA major, and the package includes the toolkit
   distribution license. The smoke verifies that closure from the extracted
   artifact with `LD_LIBRARY_PATH` unset and does not install cudart or cuBLAS
-  packages on the runner; the NVIDIA driver remains host-owned. Vulkan uses
+  packages on the runner; the NVIDIA driver remains host-owned. Before
+  inference, it records CUDA visibility variables, host driver-library
+  resolution and NVIDIA device nodes, then runs the packaged benchmark's
+  device-count probe without benchmark allocations, using inherited and
+  strict packaged-library resolution. Vulkan uses
   the same approved `gpu-nvidia` host
   with the explicit `Vulkan0` device. ROCm uses `ROCm0` and its reusable job is
   skipped unless `MESH_ROCM_INFERENCE_RUNNER_ENABLED` is exactly `true`; the
