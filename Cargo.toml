@@ -81,6 +81,7 @@ version = "0.76.1"
 ahash = "0.8.12"
 anyhow = "1"
 blake3 = "1"
+crossbeam-queue = "0.3"
 clap = { version = "4", features = ["derive"] }
 mesh-llm-build-info = { path = "crates/mesh-llm-build-info", version = "0.76.1" }
 mesh-llm-release-footer = { path = "crates/mesh-llm-release-footer", version = "0.76.1" }

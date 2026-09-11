@@ -354,30 +354,19 @@ fn submit_delivers_an_accepted_state_transition_fact_with_zero_allocation_calls(
 /// `Coalesced` here IS progress's own delivered, never-dropped success
 /// case, not a weaker stand-in for it.
 ///
-/// `coalesce_progress` itself only ever writes into the reservation
-/// table's OWN slot (`Option<(RuntimeFact, u64)>`), fully preallocated by
-/// `ReservationTable::new` at construction -- there is no separate
-/// growable collection behind THIS lane the way there is for `Terminal`
-/// (wake list), `StateTransition` (`VecDeque` + `HashMap`), or
-/// `Diagnostic` (`VecDeque`). But `submit_progress` -- like every lane --
-/// still calls the SHARED `engine.wake().next_ingress_sequence()`, which
-/// locks the wake list's own `Mutex<Inner>`; on this platform a fresh
-/// `std::sync::Mutex`'s FIRST-EVER lock call costs exactly one allocation
-/// (confirmed directly with a standalone `std::sync::Mutex` probe),
-/// and every OTHER class's test above happens to warm that same mutex
-/// incidentally through its own lane warm-up. Progress has no other
-/// reason to submit more than once, so it needs its OWN explicit one-call
-/// warm-up for exactly this shared, pre-existing, one-time cost -- never
-/// Task 13's ingress-latency reservoir, and never a per-call cost on the
-/// steady-state submit path.
+/// Progress no longer coalesces at the boundary -- the latest-value
+/// decision belongs to the drain now -- so the measured call is an
+/// ordinary accepted ring push, the same shape as every other class. The
+/// one warm-up submission remains because the first-ever call on a fresh
+/// engine can still pay a one-time cost that the steady state does not.
 #[test]
-fn submit_delivers_a_coalesced_progress_fact_with_zero_allocation_calls() {
+fn submit_delivers_an_accepted_progress_fact_with_zero_allocation_calls() {
     let engine = RuntimeEventEngine::with_capacity(4);
     let warm_up = engine
         .reserve_root(OperationId::new(), terminal_fact)
         .expect("reserve");
     let warm_outcome = warm_up.ingress().try_submit(progress_fact());
-    assert_eq!(warm_outcome, SubmitOutcome::Coalesced);
+    assert_eq!(warm_outcome, SubmitOutcome::Accepted);
 
     let reservation = engine
         .reserve_root(OperationId::new(), terminal_fact)
@@ -385,7 +374,7 @@ fn submit_delivers_a_coalesced_progress_fact_with_zero_allocation_calls() {
     assert_try_submit_is_alloc_free(
         &reservation.ingress(),
         progress_fact(),
-        SubmitOutcome::Coalesced,
+        SubmitOutcome::Accepted,
         "Progress",
     );
 }

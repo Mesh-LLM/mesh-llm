@@ -34,10 +34,18 @@ fn ingress_sequence_continues_monotonically_across_a_rebuild() {
         .expect("reserve");
     first.ingress().try_submit(terminal_success());
     engine.drain();
-    let before = engine.wake().next_ingress_sequence();
+    let before = engine.peek_next_sequence();
 
     engine.rebuild();
 
-    let after = engine.wake().next_ingress_sequence();
-    assert!(after > before, "sequence must not reset on rebuild");
+    let second = engine
+        .reserve_root(OperationId::new(), synthetic_unknown)
+        .expect("reserve");
+    second.ingress().try_submit(terminal_success());
+    engine.drain();
+
+    assert!(
+        engine.peek_next_sequence() > before,
+        "sequence must not reset on rebuild"
+    );
 }

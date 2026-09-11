@@ -35,7 +35,7 @@ use mesh_llm_runtime_event_contracts::ProgressUnit;
 /// a reservation slot, so it is structurally invisible to every existing
 /// Task 9 test in this file (StateTransition-class facts never reach
 /// `replay()`/`occupied_count()` -- see runtime_events/engine/mod.rs's
-/// `state_lane_kinds()` doc comment). Local-only: never gossiped.
+/// `published_kinds()` doc comment). Local-only: never gossiped.
 fn emit_available_model_set_changed(model: &str) {
     let Some(engine) = runtime_event_engine() else {
         return;
@@ -1181,7 +1181,7 @@ mod tests {
         availability.model_available("org/model");
         assert!(
             engine
-                .state_lane_kinds()
+                .published_kinds()
                 .contains(&"available_model_set_changed")
         );
         clear_runtime_event_engine();
@@ -1195,7 +1195,7 @@ mod tests {
         op.completed("org/model");
         assert!(
             engine
-                .state_lane_kinds()
+                .published_kinds()
                 .contains(&"available_model_set_changed"),
             "unload completed must report the model left the available set"
         );
@@ -1206,7 +1206,7 @@ mod tests {
         op.failed("org/model");
         assert!(
             engine
-                .state_lane_kinds()
+                .published_kinds()
                 .contains(&"available_model_set_changed"),
             "a failed unload still leaves the model no longer normally served"
         );
@@ -1220,7 +1220,7 @@ mod tests {
         reconcile_process_crash("org/model");
         assert!(
             engine
-                .state_lane_kinds()
+                .published_kinds()
                 .contains(&"available_model_set_changed")
         );
         clear_runtime_event_engine();

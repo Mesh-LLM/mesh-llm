@@ -11,7 +11,7 @@ fn session_becomes_active_on_start_and_idle_on_completion() {
         .try_submit(GenerationLifecycleObservation::Started(start(1, 2, None)))
         .unwrap();
     assert!(
-        engine.state_lane_kinds().contains(&"session_active"),
+        engine.published_kinds().contains(&"session_active"),
         "session must become active on generation start"
     );
     adapter
@@ -88,7 +88,7 @@ fn a_receipt_carrying_a_full_state_digest_does_not_double_emit_from_the_generati
     engine.drain();
     assert!(
         !engine
-            .state_lane_kinds()
+            .published_kinds()
             .contains(&"runtime_state_export_completed"),
         "the generation adapter must not derive an export fact from \
          GenerationReceipt::full_state any more -- that is now the \
@@ -150,7 +150,7 @@ fn first_token_produced_fires_exactly_once_on_the_first_commit() {
     }
     assert_eq!(
         engine
-            .state_lane_kinds()
+            .published_kinds()
             .iter()
             .filter(|kind| **kind == "first_token_produced")
             .count(),

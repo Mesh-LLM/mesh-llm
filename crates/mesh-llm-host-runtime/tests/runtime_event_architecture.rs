@@ -68,14 +68,24 @@ fn cancelled_state_cannot_join_a_new_reservation_reusing_the_scope() {
         SubmitOutcome::Accepted
     );
     engine.drain();
+    let frames = engine.replay().snapshot();
     assert_eq!(
-        engine
-            .replay()
-            .snapshot()
+        frames
+            .iter()
+            .map(|frame| frame.fact.kind_id())
+            .collect::<Vec<_>>(),
+        vec!["native_library_loaded", "runtime_stopped"],
+        "the first reservation's cancelled state must not publish under the \
+         second reservation, which reuses the same operation id"
+    );
+    assert_eq!(
+        frames
             .iter()
             .map(|frame| frame.sequence.get())
             .collect::<Vec<_>>(),
-        vec![2, 3],
+        vec![1, 2],
+        "sequences are assigned at publication, so the cancelled fact leaves \
+         no hole -- the health counters, not a gap, are what record a drop"
     );
 }
 
@@ -90,7 +100,7 @@ fn delayed_progress_does_not_regress_replay() {
             .try_submit(RuntimeFact::ModelLoading(FamilyFact::new(
                 ModelLoadingEventKind::ModelLoadProgress,
             ))),
-        SubmitOutcome::Coalesced,
+        SubmitOutcome::Accepted,
     );
     engine
         .unreserved_ingress(OperationScope::root_only(OperationId::new()))
@@ -131,10 +141,17 @@ fn shutdown_settles_a_reservation_whose_guard_is_still_alive() {
     assert_eq!(engine.replay().snapshot().len(), 1);
 }
 
+/// Capacity exhaustion reports the loss and preserves what was already
+/// accepted; it never evicts another operation's state to make room.
+///
+/// The ceiling is the ring's shared non-terminal budget rather than a
+/// per-class lane depth, and it is the sum of the two frozen lane depths
+/// so no class is admitted less than before.
 #[test]
-fn full_state_lane_preserves_accepted_inputs_and_rejects_the_new_key() {
+fn a_full_ingress_budget_preserves_accepted_inputs_and_rejects_the_new_key() {
+    let budget = mesh_llm_host_runtime::runtime_events::ingress::NON_TERMINAL_CREDITS;
     let engine = RuntimeEventEngine::with_capacity(4);
-    for _ in 0..4096 {
+    for _ in 0..budget {
         assert_eq!(
             engine
                 .unreserved_ingress(OperationScope::root_only(OperationId::new()))
@@ -148,7 +165,7 @@ fn full_state_lane_preserves_accepted_inputs_and_rejects_the_new_key() {
             .try_submit(state()),
         SubmitOutcome::RejectedCapacity,
     );
-    assert_eq!(engine.drain().applied, 4096);
+    assert_eq!(engine.drain().applied, budget);
 }
 
 #[test]

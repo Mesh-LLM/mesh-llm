@@ -12,23 +12,24 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use mesh_llm_runtime_event_contracts::{
-    DiagnosticEventKind, FactMetadata, OperationId, OperationScope, Outcome, ProcessInstanceId,
-    ProducerSource, ReasonCode, RuntimeEventIngress, RuntimeFact, Severity, SubmitOutcome,
+    DeliveryClass, DiagnosticEventKind, FactMetadata, OperationId, OperationScope, Outcome,
+    ProcessInstanceId, ProducerSource, ReasonCode, RuntimeEventIngress, RuntimeFact, Severity,
+    SubmitOutcome,
 };
 use tokio::sync::Notify;
 
 use super::config::{CHILD_MULTIPLIER, RESERVATION_TABLE_CAPACITY};
 use super::health::{EngineHealth, EngineHealthSnapshot};
+use super::ingress::{Ingress, IngressFact, IngressItem, PushError};
 use super::ingress_latency::IngressLatencyReservoir;
 use super::lock_audit::{AuditedMutex, LockClass};
 use super::reducer::ReducerSnapshot;
 use super::replay::ReplayBuffer;
-use super::reservation::{ReservationTable, SlotHandle};
+use super::reservation::{ReservationTable, SlotHandle, TerminalClaim};
 use super::subscribers::{SubscribeError, SubscriberRegistry, SubscriptionHandle};
 use super::telemetry::RuntimeEventTelemetryQueue;
-use super::wake::WakeList;
 
-use lanes::{DiagnosticLane, StateLane};
+use lanes::ProgressLane;
 
 /// Builds the family-correct synthesized terminal fact for a dropped guard
 /// or shutdown. Engine layer stays family-agnostic; callers (family
@@ -101,16 +102,17 @@ struct PendingRootRelease {
 
 pub struct RuntimeEventEngine {
     table: ReservationTable,
-    wake: WakeList,
-    /// Admission/collection boundary. Producers hold this only while checking
-    /// shutdown state, minting the shared sequence, and inserting into a
-    /// bounded ingress container. A drain pass holds it only while taking a
-    /// bounded collection snapshot; reducer application, serialization, and
-    /// subscriber fan-out happen after it is released.
-    ingress_gate: AuditedMutex<()>,
-    /// Serializes drain passes and rebuilds. It is deliberately separate from
-    /// `ingress_gate`: a producer must never wait behind reducer work or a
-    /// subscriber fan-out.
+    /// The producer boundary: one bounded lock-free ring, popped only by
+    /// the driver's drain pass. There is no admission gate -- see
+    /// `runtime_events::ingress`.
+    ingress: Ingress,
+    /// The next sequence a published fact will receive. Assigned at
+    /// publication, not at submission, so published sequences are
+    /// contiguous and monotonic by construction.
+    next_sequence: AtomicU64,
+    /// Serializes drain passes and rebuilds. No producer ever takes this,
+    /// which is what lets a pass hold it for as long as reducer work and
+    /// subscriber fan-out take.
     drain_gate: AuditedMutex<()>,
     /// Publication boundary for replay, subscribers, reducer state, and the
     /// monotonic published frontier. Attachment captures under this lock so a
@@ -130,8 +132,10 @@ pub struct RuntimeEventEngine {
     pending_root_releases: AuditedMutex<HashMap<OperationId, PendingRootRelease>>,
     shutting_down: AtomicBool,
     rebuild_generation: AtomicU64,
-    state_lane: StateLane,
-    diagnostic_lane: DiagnosticLane,
+    /// The one lane that survives a drain pass: the latest progress value
+    /// per operation, exported on the 100 ms cadence. Taken only in drain
+    /// context.
+    progress_lane: AuditedMutex<ProgressLane>,
     reducer_state: AuditedMutex<Arc<ReducerSnapshot>>,
     process_instance: ProcessInstanceId,
     process_started: Instant,
@@ -147,14 +151,7 @@ pub struct RuntimeEventEngine {
     /// -- the engine-owned driver's (`runtime_events::driver`, task 3) wake
     /// source, alongside its own fallback tick. See [`Self::notified`].
     notify: Notify,
-    /// The instant the progress lane was last flushed, so `engine::drain`
-    /// (task 4) can gate flushing to the frozen 100 ms
-    /// `PROGRESS_EXPORT_INTERVAL` without a second timer: `None` until the
-    /// first drain call, matching `EngineHealth`'s identical
-    /// `last_published` convention.
-    progress_last_flush: AuditedMutex<Option<Instant>>,
-    /// Task 13 (`.omo/plans/event-system-fixes.md`, defect D13's p99
-    /// half): the fixed, always-present ingress-latency ring backing
+    /// The fixed, always-present ingress-latency ring backing
     /// `Self::ingress_p99_us`, written unconditionally in `submit` below,
     /// independent of whether a telemetry queue was ever installed.
     ingress_latency: IngressLatencyReservoir,
@@ -241,8 +238,10 @@ impl RuntimeEventEngine {
     pub fn with_capacities(capacity: usize, subscriber_lag_frames: usize) -> Arc<Self> {
         Arc::new(Self {
             table: ReservationTable::new(capacity),
-            wake: WakeList::new(),
-            ingress_gate: AuditedMutex::new(LockClass::IngressGate, ()),
+            ingress: Ingress::new(),
+            // Sequence zero is reserved for the empty snapshot cursor;
+            // real publication starts at one.
+            next_sequence: AtomicU64::new(1),
             drain_gate: AuditedMutex::new(LockClass::DrainGate, ()),
             publication_gate: AuditedMutex::new(LockClass::PublicationGate, ()),
             published_frontier: AtomicU64::new(0),
@@ -261,15 +260,13 @@ impl RuntimeEventEngine {
             ),
             shutting_down: AtomicBool::new(false),
             rebuild_generation: AtomicU64::new(0),
-            state_lane: StateLane::default(),
-            diagnostic_lane: DiagnosticLane::default(),
+            progress_lane: AuditedMutex::new(LockClass::ProgressLane, ProgressLane::default()),
             reducer_state: AuditedMutex::new(LockClass::ReducerState, ReducerSnapshot::empty()),
             process_instance: ProcessInstanceId::new(),
             process_started: Instant::now(),
             telemetry: OnceLock::new(),
             progress_diagnostic_class_bypass: AtomicBool::new(false),
             notify: Notify::new(),
-            progress_last_flush: AuditedMutex::new(LockClass::ProgressLastFlush, None),
             ingress_latency: IngressLatencyReservoir::new(),
             #[cfg(test)]
             drain_hold: OnceLock::new(),
@@ -380,12 +377,25 @@ impl RuntimeEventEngine {
         &self.reducer_state
     }
 
-    pub(super) fn state_lane(&self) -> &StateLane {
-        &self.state_lane
+    pub(super) fn progress_lane(&self) -> &AuditedMutex<ProgressLane> {
+        &self.progress_lane
     }
 
-    pub(super) fn diagnostic_lane(&self) -> &DiagnosticLane {
-        &self.diagnostic_lane
+    /// Test-only: drain, then report every kind this engine has published.
+    ///
+    /// Replaces the old `published_kinds()`, which read a producer-side
+    /// latest-value lane that no longer exists. This asserts something
+    /// strictly stronger: the fact reached the reducer and the stream,
+    /// rather than merely landing in a container.
+    #[cfg(test)]
+    #[must_use]
+    pub fn published_kinds(&self) -> Vec<&'static str> {
+        self.drain();
+        self.replay
+            .snapshot()
+            .iter()
+            .map(|frame| frame.fact.kind_id())
+            .collect()
     }
 
     #[must_use]
@@ -451,7 +461,6 @@ impl RuntimeEventEngine {
         synthetic_terminal: SyntheticTerminal,
     ) -> Option<OperationReservation> {
         let _audit = super::lock_audit::scope(super::lock_audit::Context::Reserve);
-        let _ingress = self.ingress_gate.lock();
         if self.is_shutting_down() {
             return None;
         }
@@ -486,74 +495,28 @@ impl RuntimeEventEngine {
         }
     }
 
+    /// The one producer boundary. Takes no lock and never blocks: every
+    /// question it asks about a reservation is answered by an atomic read,
+    /// and placing the fact is a lock-free ring push.
     fn submit(
         &self,
         scope: OperationScope,
         handle: Option<SlotHandle>,
         fact: RuntimeFact,
     ) -> SubmitOutcome {
-        use mesh_llm_runtime_event_contracts::DeliveryClass;
         // Every lock taken from here until this function returns is
-        // attributed to `Context::Producer`. The guard covers the metadata
-        // fill and the telemetry tail as well as the gate itself, because a
-        // producer thread pays for all of it inline with its real work.
+        // attributed to `Context::Producer`, which is permitted to take
+        // none. The guard covers the metadata fill and the telemetry tail
+        // as well, because a producer thread pays for all of it inline
+        // with its real work.
         let _audit = super::lock_audit::scope(super::lock_audit::Context::Producer);
         let started_at = Instant::now();
         let fact = self.fill_ingress_metadata(fact, started_at);
-        let submitted_scope = fact.data().scope.clone();
         let class = fact.delivery_class();
         let telemetry = self.telemetry.get();
-        // Capture contention in the ingress path itself. The producer gate is
-        // intentionally held only for admission, sequence minting, and the
-        // bounded container insertion below; telemetry and reducer work stay
-        // outside it.
-        // The task 19 `event-disabled` class bypass: the SINGLE contract
-        // boundary for it. Only `Progress`/`Diagnostic` short-circuit here,
-        // before any lane, telemetry timing, or downstream consumer ever
-        // sees the fact -- `Terminal`/`StateTransition` (reservations,
-        // terminals, the reducer) fall straight through to the normal
-        // dispatch below regardless of this flag.
-        let outcome = {
-            let _ingress = self.ingress_gate.lock();
-            let bypass_classes = self
-                .progress_diagnostic_class_bypass
-                .load(Ordering::Relaxed);
-            let outcome = if self.is_shutting_down() {
-                SubmitOutcome::RejectedShuttingDown
-            } else {
-                match (bypass_classes, class) {
-                    (true, DeliveryClass::Progress) => {
-                        // Every outcome consumes the shared ingress sequence,
-                        // including a class bypass that is intentionally not
-                        // admitted into a lane.
-                        self.wake.next_ingress_sequence();
-                        self.health.bump_dropped_progress();
-                        SubmitOutcome::DroppedProgress
-                    }
-                    (true, DeliveryClass::Diagnostic) => {
-                        self.wake.next_ingress_sequence();
-                        self.health.bump_dropped_diagnostic();
-                        SubmitOutcome::DroppedDiagnostic
-                    }
-                    (_, DeliveryClass::Terminal) => {
-                        lanes::submit_terminal(self, scope, handle, fact)
-                    }
-                    (_, DeliveryClass::Progress) => lanes::submit_progress(self, handle, fact),
-                    (_, DeliveryClass::StateTransition) => {
-                        lanes::submit_state_transition(self, scope, handle, fact)
-                    }
-                    (_, DeliveryClass::Diagnostic) => {
-                        lanes::submit_diagnostic(self, scope, handle, fact)
-                    }
-                }
-            };
-            if matches!(outcome, SubmitOutcome::Accepted | SubmitOutcome::Coalesced)
-                && let Some(handle) = handle
-            {
-                self.table.remember_scope(handle, submitted_scope);
-            }
-            outcome
-        };
+
+        let outcome = self.admit(scope, handle, fact, class);
+
         let elapsed = started_at.elapsed();
         if self.ingress_latency.record(elapsed) {
             self.health.bump_for_ingress_latency_milestone();
@@ -565,6 +528,194 @@ impl RuntimeEventEngine {
             self.notify.notify_one();
         }
         outcome
+    }
+
+    /// Decide whether `fact` enters the ring, and under which outcome.
+    ///
+    /// Every branch here is atomic reads plus at most one lock-free push.
+    /// The class bypass (`event-disabled`) is the SINGLE contract boundary
+    /// for that trial mode: only `Progress`/`Diagnostic` short-circuit,
+    /// before anything downstream sees the fact.
+    fn admit(
+        &self,
+        scope: OperationScope,
+        handle: Option<SlotHandle>,
+        fact: RuntimeFact,
+        class: DeliveryClass,
+    ) -> SubmitOutcome {
+        if self.is_shutting_down() {
+            return SubmitOutcome::RejectedShuttingDown;
+        }
+        if self
+            .progress_diagnostic_class_bypass
+            .load(Ordering::Relaxed)
+        {
+            match class {
+                DeliveryClass::Progress => {
+                    self.health.bump_dropped_progress();
+                    return SubmitOutcome::DroppedProgress;
+                }
+                DeliveryClass::Diagnostic => {
+                    self.health.bump_dropped_diagnostic();
+                    return SubmitOutcome::DroppedDiagnostic;
+                }
+                DeliveryClass::Terminal | DeliveryClass::StateTransition => {}
+            }
+        }
+        match class {
+            DeliveryClass::Terminal => self.admit_terminal(scope, handle, fact),
+            DeliveryClass::Progress => self.admit_progress(scope, handle, fact),
+            DeliveryClass::StateTransition => self.admit_state_transition(scope, handle, fact),
+            DeliveryClass::Diagnostic => self.admit_diagnostic(scope, handle, fact),
+        }
+    }
+
+    /// Terminals are admitted by winning the slot's write-once claim, so
+    /// at most one can exist per occupied slot. That bound is what lets
+    /// them skip the ring's credit budget and never be lost to pressure.
+    fn admit_terminal(
+        &self,
+        scope: OperationScope,
+        handle: Option<SlotHandle>,
+        fact: RuntimeFact,
+    ) -> SubmitOutcome {
+        let Some(handle) = handle else {
+            self.health.bump_terminal_delivery_failed();
+            return SubmitOutcome::TerminalDeliveryFailed;
+        };
+        if self.table.claim_terminal(handle) == TerminalClaim::Refused {
+            self.health.bump_terminal_delivery_failed();
+            return SubmitOutcome::TerminalDeliveryFailed;
+        }
+        self.place(IngressItem::Fact(IngressFact {
+            scope,
+            fact,
+            handle: Some(handle),
+            reserved: true,
+            synthesized: false,
+            class: DeliveryClass::Terminal,
+        }))
+        .map_or_else(
+            |PushError::Full| {
+                // Unreachable by the ring's capacity arithmetic, and
+                // counted rather than assumed. The claim is already spent,
+                // so this operation now has no terminal.
+                self.health.bump_terminal_delivery_failed();
+                SubmitOutcome::TerminalDeliveryFailed
+            },
+            |()| SubmitOutcome::Accepted,
+        )
+    }
+
+    fn admit_progress(
+        &self,
+        scope: OperationScope,
+        handle: Option<SlotHandle>,
+        fact: RuntimeFact,
+    ) -> SubmitOutcome {
+        let Some(handle) = handle else {
+            self.health.bump_dropped_progress();
+            return SubmitOutcome::DroppedProgress;
+        };
+        if !self.table.is_live(handle) {
+            self.health.bump_dropped_progress();
+            return SubmitOutcome::DroppedProgress;
+        }
+        self.place(IngressItem::Fact(IngressFact {
+            scope,
+            fact,
+            handle: Some(handle),
+            reserved: true,
+            synthesized: false,
+            class: DeliveryClass::Progress,
+        }))
+        .map_or_else(
+            |PushError::Full| {
+                self.health.bump_dropped_progress();
+                SubmitOutcome::DroppedProgress
+            },
+            |()| SubmitOutcome::Accepted,
+        )
+    }
+
+    fn admit_state_transition(
+        &self,
+        scope: OperationScope,
+        handle: Option<SlotHandle>,
+        fact: RuntimeFact,
+    ) -> SubmitOutcome {
+        // A ScopedIngress may outlive an explicit reservation cancellation.
+        // Never let that stale handle resurrect reducer state.
+        if handle.is_some_and(|handle| !self.table.is_live(handle)) {
+            self.health.bump_cancelled_reservation_rejected();
+            return SubmitOutcome::RejectedCancelled;
+        }
+        self.place(IngressItem::Fact(IngressFact {
+            scope,
+            fact,
+            handle,
+            reserved: handle.is_some(),
+            synthesized: false,
+            class: DeliveryClass::StateTransition,
+        }))
+        .map_or_else(
+            |PushError::Full| {
+                self.health.bump_state_transition_rejected();
+                SubmitOutcome::RejectedCapacity
+            },
+            |()| SubmitOutcome::Accepted,
+        )
+    }
+
+    fn admit_diagnostic(
+        &self,
+        scope: OperationScope,
+        handle: Option<SlotHandle>,
+        fact: RuntimeFact,
+    ) -> SubmitOutcome {
+        if handle.is_some_and(|handle| !self.table.is_live(handle)) {
+            self.health.bump_dropped_diagnostic();
+            return SubmitOutcome::DroppedDiagnostic;
+        }
+        self.place(IngressItem::Fact(IngressFact {
+            scope,
+            fact,
+            handle,
+            reserved: handle.is_some(),
+            synthesized: false,
+            class: DeliveryClass::Diagnostic,
+        }))
+        .map_or_else(
+            |PushError::Full| {
+                self.health.bump_dropped_diagnostic();
+                SubmitOutcome::DroppedDiagnostic
+            },
+            |()| SubmitOutcome::Accepted,
+        )
+    }
+
+    /// Place one item in the ring. The single call site for every push, so
+    /// there is exactly one place a producer can touch the ring.
+    pub(super) fn place(&self, item: IngressItem) -> Result<(), PushError> {
+        self.ingress.push(item)
+    }
+
+    pub(super) fn ingress(&self) -> &Ingress {
+        &self.ingress
+    }
+
+    /// The next sequence a published fact will receive, without consuming
+    /// it. Pure observation, so calling it repeatedly is side-effect-free.
+    #[must_use]
+    pub fn peek_next_sequence(&self) -> u64 {
+        self.next_sequence.load(Ordering::Acquire)
+    }
+
+    /// Assign the next publication sequence. Called only from a drain
+    /// pass, which `drain_gate` serializes, so the values it hands out are
+    /// both unique and issued in publication order.
+    pub(super) fn next_publication_sequence(&self) -> u64 {
+        self.next_sequence.fetch_add(1, Ordering::AcqRel)
     }
 
     /// Fill missing Rust metadata and producer timestamps at the synchronous
@@ -631,26 +782,6 @@ impl RuntimeEventEngine {
             .count()
     }
 
-    /// Test-only observability into the `StateTransition` lane, which
-    /// (unlike Terminal-class facts) never reaches `replay()` -- it is a
-    /// bounded latest-value-wins map keyed by kind, not part of the
-    /// reducer-applied stream. Mirrors `occupied_count()`'s own
-    /// test-only-extension precedent (task 9) rather than widening any
-    /// production accessor.
-    #[cfg(test)]
-    #[must_use]
-    pub fn state_lane_kinds(&self) -> Vec<&'static str> {
-        self.state_lane.kinds()
-    }
-
-    pub(super) fn wake(&self) -> &WakeList {
-        &self.wake
-    }
-
-    pub(super) fn ingress_gate(&self) -> &AuditedMutex<()> {
-        &self.ingress_gate
-    }
-
     /// Install the drain-hold seam. Returns the installed hold, which is
     /// the same one a second call would get back: a hold is installed once
     /// per engine so a test cannot silently replace another test's.
@@ -681,23 +812,26 @@ impl RuntimeEventEngine {
     }
 
     /// Count accepted work that still has no publication/release outcome.
-    /// Terminal wake entries and unsettled slots are counted separately from
-    /// state/diagnostic/progress lane values because a reserved operation can
-    /// have both a queued state fact and a queued terminal.
+    /// Unsettled slots and deferred root releases are counted separately
+    /// from queued facts, because a reserved operation can have both a
+    /// queued fact and an unclaimed terminal.
     pub(super) fn pending_work_counts(&self) -> (usize, usize) {
-        let terminal_remainder = self.wake.len()
-            + self.table.unsettled().len()
-            + self.pending_root_releases.lock().len();
-        let lane_remainder =
-            self.state_lane.len() + self.diagnostic_lane.len() + self.table.pending_progress_len();
-        (terminal_remainder + lane_remainder, terminal_remainder)
+        let unsettled = self.table.unsettled().len() + self.pending_root_releases.lock().len();
+        // A terminal still in the ring is as undelivered as a reservation
+        // that never got one: the operation has no outcome on the stream
+        // either way.
+        let terminal_remainder = self.ingress.queued_terminals() + unsettled;
+        let total = self.ingress.len() + self.progress_lane.lock().len() + unsettled;
+        (total, terminal_remainder)
     }
 
-    /// Close admission while holding the same short ingress boundary used by
-    /// submit/reserve. The caller can then stop/await the driver and perform
-    /// an exclusive final drain without a minted-before-enqueue race.
+    /// Close admission. One release store: there is no gate to hold, so a
+    /// producer that already passed its shutdown check can still land one
+    /// push afterwards. That is deliberate -- shutdown drains cooperatively
+    /// and reports whatever remains, and the alternative is a lock every
+    /// producer would pay for on every submit to close a window the drain
+    /// already tolerates.
     pub(super) fn close_admission(&self) {
-        let _ingress = self.ingress_gate.lock();
         self.shutting_down.store(true, Ordering::Release);
     }
 }
@@ -729,40 +863,69 @@ impl OperationReservation {
         }
     }
 
-    /// Explicit pre-work cancellation: releases the reservation without a
-    /// terminal (no synthesis, no wake entry) -- or, for a root with at
-    /// least one still-occupied child, defers the release exactly like a
-    /// terminal-driven release (`engine::drain::release_or_defer`, task 5).
-    /// When the release happens immediately (not deferred), also evicts
-    /// this scope's reducer state (task 6-fix defect A): there is no
-    /// pending-apply race here the way there is inside the drain loop --
-    /// this is a synchronous, out-of-band cancellation, not a drain pass.
+    /// Explicit pre-work cancellation: the reservation is released without
+    /// a terminal, no synthesis and nothing published.
+    ///
+    /// The cancellation is marked here with one atomic flag flip -- which
+    /// immediately stops any surviving `ScopedIngress` from admitting a
+    /// fact -- and then queued through the ring for the drain to act on.
+    /// Two reasons it is not done inline:
+    ///
+    /// * Releasing the slot and evicting reducer state need `drain_gate`
+    ///   and `publication_gate`. Taking either here would make cancelling
+    ///   an operation wait out a whole drain pass, on the calling
+    ///   producer's thread.
+    /// * Ordering. A cancel applied inline could overtake facts submitted
+    ///   for this same scope moments earlier that are still in the ring,
+    ///   evicting reducer state those facts would then re-create. Going
+    ///   through the ring puts the cancel behind them, where it belongs.
+    ///
+    /// A root with at least one still-occupied child still has its release
+    /// deferred exactly like a terminal-driven one
+    /// (`engine::drain::release_or_defer`).
     pub fn cancel(mut self) {
         self.cancelled = true;
         // `Reserve`, not `Producer`: cancelling is the teardown counterpart
         // to `reserve_scope`, performed once per operation rather than once
-        // per event. It is still called from a producer thread, and today it
-        // waits for a whole drain pass to finish -- see the lock-audit
-        // baseline test in `engine::tests::lock_audit`.
+        // per event. Everything it touches here is a bounded reservation-
+        // table operation, never a lock a drain pass holds.
         let _audit = super::lock_audit::scope(super::lock_audit::Context::Reserve);
-        // Match the drain lock order (`drain_gate` then `ingress_gate`) so a
-        // cancellation cannot deadlock with a pass that has already collected
-        // this slot. The ingress guard is released before reducer eviction.
-        let _drain = self.engine.drain_gate().lock();
-        let released = {
-            let _ingress = self.engine.ingress_gate().lock();
-            self.engine.table().mark_cancelled(self.handle);
+        if !self.engine.table().mark_cancelled(self.handle) {
+            // Already cancelled, already released, or a stale generation.
+            // Whoever won that race owns the release.
+            return;
+        }
+        let Some(released) =
             drain::release_or_defer(&self.engine, self.scope, self.handle, Instant::now())
+        else {
+            // Deferred behind a live child. `settle_pending_root_releases`
+            // owns both the release and the eviction from here.
+            return;
         };
-        if let Some(scope) = released {
-            self.engine.evict_operation(scope);
+        // Eviction, unlike the release, needs the publication and reducer
+        // locks a drain pass holds. Queue it.
+        let queued = self.engine.place(IngressItem::Released { scope: released });
+        if queued.is_ok() {
+            self.engine.notify.notify_one();
         }
     }
 }
 
 impl Drop for OperationReservation {
+    /// A guard dropped without a terminal synthesizes one, through the
+    /// exact same write-once claim a real terminal submission uses. The CAS
+    /// is the arbiter: if a producer already submitted a terminal, or
+    /// shutdown already synthesized one, this claim is refused and the drop
+    /// publishes nothing.
     fn drop(&mut self) {
         if self.cancelled {
+            return;
+        }
+        // `Reserve`: synthesis happens once per operation, and reading the
+        // slot's remembered identities is a payload-lock read the producer
+        // path never performs.
+        let _audit = super::lock_audit::scope(super::lock_audit::Context::Reserve);
+        if self.engine.table().claim_terminal(self.handle) == TerminalClaim::Refused {
             return;
         }
         let synthetic = self.engine.fill_ingress_metadata(
@@ -770,15 +933,18 @@ impl Drop for OperationReservation {
                 .scoped_synthetic_terminal(self.handle, self.synthetic_terminal),
             Instant::now(),
         );
-        let _ingress = self.engine.ingress_gate().lock();
-        if !self.engine.table().has_terminal(self.handle) {
-            let record = super::reservation::TerminalRecord {
-                fact: synthetic,
-                synthesized: true,
-            };
-            if self.engine.table().write_terminal(self.handle, record) {
-                self.engine.wake().push_next(self.handle);
-            }
+        let queued = self.engine.place(IngressItem::Fact(IngressFact {
+            scope: self.scope,
+            fact: synthetic,
+            handle: Some(self.handle),
+            reserved: true,
+            synthesized: true,
+            class: DeliveryClass::Terminal,
+        }));
+        if queued.is_ok() {
+            self.engine.notify.notify_one();
+        } else {
+            self.engine.health.bump_terminal_delivery_failed();
         }
     }
 }

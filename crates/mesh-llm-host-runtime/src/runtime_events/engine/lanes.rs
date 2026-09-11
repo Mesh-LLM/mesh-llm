@@ -1,297 +1,184 @@
-//! Per-delivery-class submit handling.
+//! Drain-owned lane state.
 //!
-//! Terminal writes are the only path that touches the reservation table's
-//! write-once slot and the wake list; state-transition, diagnostic, and
-//! progress facts route through their own bounded structures below, each
-//! drained fully by `engine::drain` (task 4,
-//! `.omo/plans/event-system-fixes.md`). Every submit function here mints
-//! from the SAME shared counter (`wake.rs::next_sequence`) exactly once
-//! per call, regardless of outcome -- there is no second counter.
+//! Delivery classes used to be separated at the producer boundary: four
+//! bounded containers, each with its own mutex, each written by whichever
+//! thread happened to be emitting an event. That is what made a producer
+//! wait on a lane, and what forced the drain to reconstruct a total order
+//! across four containers under a shared gate.
+//!
+//! Now all four classes arrive through one ring in submission order, and
+//! this module is the consumer-side state that remains. Only a drain pass
+//! touches it, serialized by `drain_gate`, so it needs no producer-visible
+//! locking of its own:
+//!
+//! * **Terminal** and **diagnostic** facts pass straight through in the
+//!   pass that popped them. Neither accumulates.
+//! * **State transitions** coalesce per `(OperationScope, kind)` within a
+//!   pass. A repeated key keeps the newest value at the newest position,
+//!   because the newest value is what a consumer wants and the newest
+//!   position is where it actually arrived.
+//! * **Progress** is the only class that persists across passes: one
+//!   latest value per operation, exported at most once per
+//!   `PROGRESS_EXPORT_INTERVAL`. Everything in between is a superseded
+//!   snapshot and is counted as a drop rather than published.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+use std::time::Instant;
 
-use mesh_llm_runtime_event_contracts::{OperationScope, RuntimeFact, SubmitOutcome};
+use mesh_llm_runtime_event_contracts::{DeliveryClass, OperationScope, RuntimeFact};
 
-use super::RuntimeEventEngine;
-use crate::runtime_events::config::{DIAGNOSTIC_LANE_DEPTH, STATE_TRANSITION_LANE_DEPTH};
-use crate::runtime_events::lock_audit::{AuditedMutex, LockClass};
-use crate::runtime_events::reservation::{SlotHandle, TerminalRecord};
+use crate::runtime_events::config::PROGRESS_EXPORT_INTERVAL;
+use crate::runtime_events::ingress::IngressFact;
+use crate::runtime_events::reservation::SlotHandle;
 
-/// A state-transition lane key: coalescing is per operation scope AND
-/// kind, never globally by kind alone (review defect D2) -- two different
-/// operations reporting the same kind must never overwrite each other.
-type StateLaneKey = (OperationScope, &'static str);
-
-type StateLaneValue = (RuntimeFact, u64, bool, Option<SlotHandle>);
-type StateLaneEntry = (OperationScope, RuntimeFact, u64, bool, Option<SlotHandle>);
-type DiagnosticEntry = (OperationScope, RuntimeFact, u64, bool, Option<SlotHandle>);
-
-/// Per-engine bounded latest-value lane, keyed by `(OperationScope, kind)`:
-/// a repeat key coalesces in place; a new key past the depth ceiling is
-/// rejected without evicting an accepted state. Each held value carries the
-/// ingress sequence it was minted with.
-pub(crate) struct StateLane {
-    entries: AuditedMutex<VecDeque<StateLaneKey>>,
-    /// `(fact, ingress_sequence, reserved)` -- `reserved` (R1 fix, task
-    /// 6-fix, `.omo/plans/event-system-fixes.md`) is threaded from
-    /// `submit_state_transition`'s own `handle.is_some()` and carried all
-    /// the way to the reducer's `ReducerInput::reserved`. The handle is
-    /// retained so a queued fact can be validated against cancellation or a
-    /// generation reuse before its terminal releases the slot.
-    latest: AuditedMutex<HashMap<StateLaneKey, StateLaneValue>>,
+/// One fact on its way to the reducer, with the provenance the reducer and
+/// the liveness check both need.
+#[derive(Debug)]
+pub(crate) struct PendingFact {
+    pub(crate) scope: OperationScope,
+    pub(crate) fact: RuntimeFact,
+    pub(crate) handle: Option<SlotHandle>,
+    pub(crate) reserved: bool,
+    pub(crate) synthesized: bool,
+    /// Whether this fact's reservation was still valid when the pass
+    /// routed it. Decided at routing time, before any of this pass's
+    /// releases, so a terminal cannot invalidate facts that preceded it.
+    pub(crate) live: bool,
 }
 
-impl StateLane {
-    /// Test-only: the kinds currently held (latest-value-wins) in this
-    /// lane, across every scope. Backs `RuntimeEventEngine::state_lane_kinds()`.
-    #[cfg(test)]
-    pub(super) fn kinds(&self) -> Vec<&'static str> {
-        self.entries.lock().iter().map(|(_, kind)| *kind).collect()
-    }
-
-    /// Drain only entries minted before `sequence`. A partial terminal drain
-    /// leaves later state transitions queued until the remaining wake prefix
-    /// is eligible, preserving the single global ingress order across passes.
-    pub(super) fn drain_before_limit(&self, sequence: u64, limit: usize) -> Vec<StateLaneEntry> {
-        let mut entries = self.entries.lock();
-        let mut latest = self.latest.lock();
-        let mut ready = Vec::with_capacity(limit.min(entries.len()));
-        let mut retained = VecDeque::with_capacity(entries.capacity());
-        for key in entries.drain(..) {
-            let Some((_, entry_sequence, _, _)) = latest.get(&key) else {
-                continue;
-            };
-            if *entry_sequence < sequence && ready.len() < limit {
-                if let Some((fact, entry_sequence, reserved, handle)) = latest.remove(&key) {
-                    ready.push((key.0, fact, entry_sequence, reserved, handle));
-                }
-            } else {
-                retained.push_back(key);
-            }
+impl From<IngressFact> for PendingFact {
+    fn from(entry: IngressFact) -> Self {
+        Self {
+            scope: entry.scope,
+            fact: entry.fact,
+            handle: entry.handle,
+            reserved: entry.reserved,
+            synthesized: entry.synthesized,
+            // Overwritten by the router, which owns the decision.
+            live: true,
         }
-        *entries = retained;
-        ready
+    }
+}
+
+/// A state-transition coalescing key: per operation scope AND kind, never
+/// globally by kind alone -- two different operations reporting the same
+/// kind must never overwrite each other.
+type StateKey = (OperationScope, &'static str);
+
+/// What one drain pass accumulated, ready to apply in arrival order.
+#[derive(Debug, Default)]
+pub(crate) struct PassBatch {
+    /// Facts to apply, in arrival order. `None` marks a state transition
+    /// superseded by a later one for the same key in this same pass.
+    entries: Vec<Option<PendingFact>>,
+    /// Where each live state key currently sits in `entries`.
+    state_positions: HashMap<StateKey, usize>,
+    /// Progress values superseded before their export window came due.
+    pub(crate) superseded_progress: usize,
+}
+
+impl PassBatch {
+    /// Add one popped fact, coalescing it against this pass if its class
+    /// says to.
+    pub(crate) fn push(&mut self, entry: PendingFact, class: DeliveryClass) {
+        if class != DeliveryClass::StateTransition {
+            self.entries.push(Some(entry));
+            return;
+        }
+        let key: StateKey = (entry.scope, entry.fact.kind_id());
+        let position = self.entries.len();
+        if let Some(previous) = self.state_positions.insert(key, position) {
+            // Keep the newest value at the newest position: superseding in
+            // place would publish a value under an older arrival order it
+            // never had.
+            self.entries[previous] = None;
+        }
+        self.entries.push(Some(entry));
     }
 
-    /// Read the currently retained ingress sequences without removing them.
-    /// The shutdown path uses this with the other lane views to choose one
-    /// global sequence prefix before taking any values.
-    pub(super) fn sequences_before(&self, sequence: u64) -> Vec<u64> {
-        let entries = self.entries.lock();
-        let latest = self.latest.lock();
-        entries
-            .iter()
-            .filter_map(|key| {
-                latest
-                    .get(key)
-                    .map(|(_, entry_sequence, _, _)| *entry_sequence)
-            })
-            .filter(|entry_sequence| *entry_sequence < sequence)
+    /// Consume the batch in arrival order.
+    pub(crate) fn drain(self) -> impl Iterator<Item = PendingFact> {
+        self.entries.into_iter().flatten()
+    }
+}
+
+/// Progress values waiting for their export window, one per operation.
+///
+/// This is the only lane that survives a drain pass, because its whole
+/// purpose is to rate-limit: a generation emitting ten times a second
+/// should publish ten frames a second regardless of how often the driver
+/// happens to tick.
+#[derive(Debug, Default)]
+pub(crate) struct ProgressLane {
+    latest: HashMap<OperationScope, PendingFact>,
+    /// Arrival order of the keys in `latest`, so a flush publishes in the
+    /// order the operations last reported rather than in map order.
+    order: Vec<OperationScope>,
+    last_flush: Option<Instant>,
+}
+
+impl ProgressLane {
+    /// Record `entry` as this operation's latest progress. Returns whether
+    /// it superseded a value that had not yet been exported.
+    pub(crate) fn record(&mut self, entry: PendingFact) -> bool {
+        let scope = entry.scope;
+        let superseded = self.latest.insert(scope, entry).is_some();
+        if !superseded {
+            self.order.push(scope);
+        }
+        superseded
+    }
+
+    /// Whether the export window is due at `now`. The first call is always
+    /// due, matching `EngineHealth`'s identical never-published-yet
+    /// convention.
+    pub(crate) fn is_due(&self, now: Instant) -> bool {
+        self.last_flush
+            .is_none_or(|previous| now.duration_since(previous) >= PROGRESS_EXPORT_INTERVAL)
+    }
+
+    /// Take every held value and open a new export window.
+    ///
+    /// The window moves whenever it is due, held values or not, so the
+    /// cadence is anchored to drain passes rather than to traffic. An
+    /// operation that starts reporting mid-window therefore waits at most
+    /// one full interval, instead of publishing immediately and resetting
+    /// the cadence for everyone else.
+    pub(crate) fn take_due(&mut self, now: Instant) -> Vec<PendingFact> {
+        if !self.is_due(now) {
+            return Vec::new();
+        }
+        self.last_flush = Some(now);
+        let order = std::mem::take(&mut self.order);
+        let mut latest = std::mem::take(&mut self.latest);
+        order
+            .into_iter()
+            .filter_map(|scope| latest.remove(&scope))
             .collect()
     }
 
-    pub(super) fn len(&self) -> usize {
-        self.entries.lock().len()
-    }
-}
-
-/// Per-engine bounded diagnostic queue: strict FIFO, each entry carrying
-/// the scope, ingress sequence, reservation provenance, and reservation
-/// handle (R1 fix, task 6-fix -- see [`StateLane`]'s identical addition)
-/// it was submitted with.
-pub(crate) struct DiagnosticLane {
-    queue: AuditedMutex<VecDeque<DiagnosticEntry>>,
-}
-
-impl StateLane {
-    #[must_use]
-    pub(crate) fn new() -> Self {
-        Self {
-            entries: AuditedMutex::new(
-                LockClass::StateLaneEntries,
-                VecDeque::with_capacity(STATE_TRANSITION_LANE_DEPTH),
-            ),
-            latest: AuditedMutex::new(
-                LockClass::StateLaneLatest,
-                HashMap::with_capacity(STATE_TRANSITION_LANE_DEPTH),
-            ),
-        }
-    }
-}
-
-impl Default for StateLane {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl DiagnosticLane {
-    #[must_use]
-    pub(crate) fn new() -> Self {
-        Self {
-            queue: AuditedMutex::new(
-                LockClass::DiagnosticLane,
-                VecDeque::with_capacity(DIAGNOSTIC_LANE_DEPTH),
-            ),
-        }
-    }
-}
-
-impl Default for DiagnosticLane {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl DiagnosticLane {
-    pub(super) fn drain_before_limit(&self, sequence: u64, limit: usize) -> Vec<DiagnosticEntry> {
-        let mut queue = self.queue.lock();
-        let mut ready = Vec::with_capacity(limit.min(queue.len()));
-        let mut retained = VecDeque::with_capacity(queue.capacity());
-        for entry in queue.drain(..) {
-            if entry.2 < sequence && ready.len() < limit {
-                ready.push(entry);
-            } else {
-                retained.push_back(entry);
-            }
-        }
-        *queue = retained;
-        ready
-    }
-
-    pub(super) fn sequences_before(&self, sequence: u64) -> Vec<u64> {
-        self.queue
-            .lock()
-            .iter()
-            .map(|(_, _, entry_sequence, _, _)| *entry_sequence)
-            .filter(|entry_sequence| *entry_sequence < sequence)
+    /// Take every held value regardless of the export window. Shutdown
+    /// uses this so a final progress snapshot is not stranded by a cadence
+    /// that will never come due again.
+    pub(crate) fn take_all(&mut self) -> Vec<PendingFact> {
+        let order = std::mem::take(&mut self.order);
+        let mut latest = std::mem::take(&mut self.latest);
+        order
+            .into_iter()
+            .filter_map(|scope| latest.remove(&scope))
             .collect()
     }
 
-    pub(super) fn len(&self) -> usize {
-        self.queue.lock().len()
-    }
-}
-
-pub(super) fn submit_terminal(
-    engine: &RuntimeEventEngine,
-    scope: OperationScope,
-    handle: Option<SlotHandle>,
-    fact: RuntimeFact,
-) -> SubmitOutcome {
-    let Some(handle) = handle else {
-        engine.wake().next_ingress_sequence();
-        engine.health().bump_terminal_delivery_failed();
-        return SubmitOutcome::TerminalDeliveryFailed;
-    };
-    if engine.table().occupant(handle) != Some(scope) {
-        engine.wake().next_ingress_sequence();
-        engine.health().bump_terminal_delivery_failed();
-        return SubmitOutcome::TerminalDeliveryFailed;
-    }
-    let record = TerminalRecord {
-        fact,
-        synthesized: false,
-    };
-    if engine.table().write_terminal(handle, record) {
-        // Mint-and-enqueue as ONE atomic step (unchanged `push_next`):
-        // splitting these across two lock acquisitions would let a
-        // later-minted concurrent submission's push overtake an
-        // earlier-minted one's, breaking the wake list's FIFO ==
-        // ingress-sequence-order invariant under concurrent terminal
-        // writes to different scopes.
-        engine.wake().push_next(handle);
-        SubmitOutcome::Accepted
-    } else {
-        engine.wake().next_ingress_sequence();
-        engine.health().bump_terminal_delivery_failed();
-        SubmitOutcome::TerminalDeliveryFailed
-    }
-}
-
-pub(super) fn submit_progress(
-    engine: &RuntimeEventEngine,
-    handle: Option<SlotHandle>,
-    fact: RuntimeFact,
-) -> SubmitOutcome {
-    let sequence = engine.wake().next_ingress_sequence();
-    match handle {
-        Some(handle) if engine.table().coalesce_progress(handle, fact, sequence) => {
-            SubmitOutcome::Coalesced
-        }
-        _ => {
-            engine.health().bump_dropped_progress();
-            SubmitOutcome::DroppedProgress
+    /// Forget `scope`'s held progress. Called when a reservation is
+    /// cancelled or released, so a settled operation cannot publish a
+    /// progress frame afterwards.
+    pub(crate) fn forget(&mut self, scope: OperationScope) {
+        if self.latest.remove(&scope).is_some() {
+            self.order.retain(|held| *held != scope);
         }
     }
-}
 
-pub(super) fn submit_state_transition(
-    engine: &RuntimeEventEngine,
-    scope: OperationScope,
-    handle: Option<SlotHandle>,
-    fact: RuntimeFact,
-) -> SubmitOutcome {
-    let sequence = engine.wake().next_ingress_sequence();
-    let reserved = handle.is_some();
-    let handle_for_lane = handle;
-    if let Some(handle) = handle
-        && (engine.table().occupant(handle) != Some(scope) || engine.table().is_cancelled(handle))
-    {
-        // A ScopedIngress may outlive an explicit reservation cancellation.
-        // Consume its ingress sequence, but never let that stale handle
-        // resurrect reducer state after cancellation has evicted it.
-        engine.health().bump_cancelled_reservation_rejected();
-        return SubmitOutcome::RejectedCancelled;
+    pub(crate) fn len(&self) -> usize {
+        self.latest.len()
     }
-    let lane = engine.state_lane();
-    let key: StateLaneKey = (scope, fact.kind_id());
-    // Lock `entries` THEN `latest` -- the SAME order `StateLane::drain`
-    // above uses. Taking `latest` first (as this function used to) is an
-    // AB-BA inversion against `drain`'s `entries`-then-`latest` order: a
-    // concurrent drainer holding `entries` while waiting on `latest` and a
-    // submitter holding `latest` while waiting on `entries` deadlock each
-    // other. `inference::skippy::runtime_events::tests::concurrent_roots`
-    // (task 5) was the first test to actually drive concurrent drain +
-    // state-transition submits and surfaced this as an intermittent hang.
-    let mut entries = lane.entries.lock();
-    let mut latest = lane.latest.lock();
-    if let Some(value) = latest.get_mut(&key) {
-        *value = (fact, sequence, reserved, handle_for_lane);
-        return SubmitOutcome::Coalesced;
-    }
-    if entries.len() >= STATE_TRANSITION_LANE_DEPTH {
-        drop(latest);
-        drop(entries);
-        engine.health().bump_state_transition_rejected();
-        return SubmitOutcome::RejectedCapacity;
-    }
-    latest.insert(key, (fact, sequence, reserved, handle_for_lane));
-    entries.push_back(key);
-    SubmitOutcome::Accepted
-}
-
-pub(super) fn submit_diagnostic(
-    engine: &RuntimeEventEngine,
-    scope: OperationScope,
-    handle: Option<SlotHandle>,
-    fact: RuntimeFact,
-) -> SubmitOutcome {
-    let sequence = engine.wake().next_ingress_sequence();
-    let reserved = handle.is_some();
-    let handle_for_lane = handle;
-    if let Some(handle) = handle
-        && (engine.table().occupant(handle) != Some(scope) || engine.table().is_cancelled(handle))
-    {
-        engine.health().bump_dropped_diagnostic();
-        return SubmitOutcome::DroppedDiagnostic;
-    }
-    let mut queue = engine.diagnostic_lane().queue.lock();
-    if queue.len() >= DIAGNOSTIC_LANE_DEPTH {
-        drop(queue);
-        engine.health().bump_dropped_diagnostic();
-        return SubmitOutcome::DroppedDiagnostic;
-    }
-    queue.push_back((scope, fact, sequence, reserved, handle_for_lane));
-    SubmitOutcome::Accepted
 }

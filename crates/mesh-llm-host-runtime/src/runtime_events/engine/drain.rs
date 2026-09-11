@@ -1,75 +1,64 @@
-//! Drain wake entries in ingress-sequence order and apply each through the
-//! transactional reducer: only an accepted fact appends a replay frame and
-//! fans out to subscribers, so a rejected input never appears on the
-//! stream. The reservation is released after the reducer has settled the
-//! outcome either way, matching the release-after-ack contract.
+//! Pop the ingress ring in submission order and apply each fact through
+//! the transactional reducer: only an accepted fact appends a replay frame
+//! and fans out to subscribers, so a rejected input never appears on the
+//! stream.
 //!
-//! Every `drain`/`drain_up_to` call also drains the state-transition lane
-//! and the diagnostic queue fully, and flushes any progress slots due
-//! under the 100 ms export interval (task 4,
-//! `.omo/plans/event-system-fixes.md`) -- fixing review defect D2, where
-//! only terminal-class facts ever reached the reducer. `engine.drain()`
-//! stays the SAME single stable entry point the task-3 driver
-//! (`runtime_events::driver`) calls on every `Notify`/fallback tick; this
-//! module is the only place that decides what "drain" now does.
+//! ## Why this is short now
 //!
-//! Task 5 (review defect D8) additionally fixes how a root's release
-//! interacts with its still-occupied children: [`release_or_defer`]
-//! replaces the old `cascade_children`/`force_complete_child` pair, which
-//! force-released every outstanding child the instant the root's own
-//! terminal drained WITHOUT ever writing a terminal for it -- so a real,
-//! still-in-flight child terminal arriving moments later was rejected as
-//! stale (`TerminalDeliveryFailed`) instead of accepted. A root's own
-//! terminal still applies and publishes immediately either way; only the
-//! ROOT's slot release is now deferred while a child remains occupied,
-//! bounded by [`settle_pending_root_releases`]'s `CHILD_SETTLE_GRACE`.
+//! It used to have to rebuild a total order. Four bounded containers were
+//! written by producers under a shared gate that also minted the sequence,
+//! and a pass had to select one global sequence prefix across all four,
+//! drain each to that boundary, merge, and sort -- while holding the gate
+//! every producer needed.
 //!
-//! Task 6-fix defect A (`.omo/plans/event-system-fixes.md`): a scope whose
-//! reservation is actually released here is ALSO evicted from the
-//! reducer's `operations` map (`RuntimeEventEngine::evict_operation`,
-//! `reducer::evict`), so the map tracks in-flight operations only instead
-//! of every settled one forever. [`release_or_defer`] now reports whether
-//! it released THIS call (`Some(scope)`) or deferred (`None`); the
-//! per-entry loop in [`RuntimeEventEngine::drain_up_to_inner`] batches
-//! every scope released this pass and evicts them only AFTER this pass's
-//! `pending` facts -- including that scope's own just-drained terminal --
-//! have already been applied, so eviction can never race an application
-//! that would just re-insert the entry a moment later. [`release_pending_root`]
-//! evicts immediately: by the time a deferred root's slot is finally
-//! released, its own terminal was already applied in whichever earlier
-//! pass first drained it, so there is no such race there.
+//! With one ring there is nothing to reconstruct. Pop order is submission
+//! order, and a sequence is assigned when a fact publishes, so the
+//! published order is the pop order by construction. `collect_sequence_prefix`,
+//! the per-lane `drain_before_limit` cutoffs, the full-table progress scan,
+//! and the merge-and-sort are all gone with it, and a pass holds nothing a
+//! producer ever takes.
+//!
+//! ## What a pass does
+//!
+//! 1. Pop up to `max` items, returning ring credits as it goes.
+//! 2. Route by class ([`super::lanes`]): terminals, state transitions, and
+//!    diagnostics into this pass's batch; progress into the one lane that
+//!    persists, to be exported on its own 100 ms cadence.
+//! 3. Apply the batch in arrival order, assigning each published fact the
+//!    next sequence.
+//! 4. Release the slot of each terminal that applied, and evict its
+//!    reducer state -- after every fact in the pass has applied, so
+//!    eviction cannot race an application that would re-create the entry.
+//!
+//! A root whose own terminal has drained but which still has occupied
+//! children has only its *slot release* deferred ([`release_or_defer`]),
+//! bounded by [`settle_pending_root_releases`]'s `CHILD_SETTLE_GRACE`. Its
+//! terminal still applies and publishes immediately. Force-releasing the
+//! children instead would reject their real, still-in-flight terminals as
+//! stale moments later.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
-use mesh_llm_runtime_event_contracts::{EventSequence, OperationId, OperationScope, RuntimeFact};
+use mesh_llm_runtime_event_contracts::{
+    DeliveryClass, EventSequence, OperationId, OperationScope, RuntimeFact,
+};
 
+use super::lanes::{PassBatch, PendingFact};
 use super::{ChildSlot, PendingRootRelease, RuntimeEventEngine};
 use crate::runtime_events::config::{
-    CHILD_SETTLE_GRACE, PROGRESS_EXPORT_INTERVAL, SHUTDOWN_DRAIN_DEADLINE, TOTAL_OPERATION_BOUND,
+    CHILD_SETTLE_GRACE, SHUTDOWN_DRAIN_DEADLINE, TOTAL_OPERATION_BOUND,
 };
+use crate::runtime_events::ingress::{IngressFact, IngressItem};
 use crate::runtime_events::reducer::{ReduceOutcome, ReducerInput, apply};
 use crate::runtime_events::replay::ReplayFrame;
-use crate::runtime_events::reservation::{SlotHandle, TerminalRecord};
-use crate::runtime_events::wake::WakeEntry;
+use crate::runtime_events::reservation::{SlotHandle, TerminalClaim};
 
-// Shutdown work is split into small reducer batches so the elapsed deadline
-// is observed between bounded pieces of state/diagnostic work. This is an
-// implementation chunk size, not a public queue capacity; normal drains
-// retain their lane-specific bounds and semantics.
+// Shutdown work is split into small batches so the elapsed deadline is
+// observed between bounded pieces of reducer work. This is an
+// implementation chunk size, not a public queue capacity.
 const SHUTDOWN_WORK_CHUNK: usize = 64;
-
-type LaneEntry = (OperationScope, RuntimeFact, u64, bool, Option<SlotHandle>);
-type ProgressEntry = (OperationScope, RuntimeFact, u64, SlotHandle);
-
-#[derive(Default)]
-struct SequencePrefix {
-    wake: Vec<WakeEntry>,
-    state: Vec<LaneEntry>,
-    diagnostic: Vec<LaneEntry>,
-    progress: Vec<ProgressEntry>,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DrainReport {
@@ -81,9 +70,9 @@ pub struct DrainReport {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct DrainPass {
     report: DrainReport,
-    /// Queue entries physically popped before reservation, frontier, or
-    /// reducer filtering. This drives shutdown continuation independently of
-    /// the published-fact count in `report.applied`.
+    /// Items physically popped, before any liveness or reducer filtering.
+    /// Shutdown continues on this rather than on the published count, so a
+    /// rejected prefix cannot stop it early.
     consumed: usize,
 }
 
@@ -94,227 +83,135 @@ pub struct ShutdownReport {
     pub remaining_after_deadline: usize,
 }
 
+/// Whether a pass should export whatever progress it is holding regardless
+/// of the 100 ms window. Shutdown does; a normal pass does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProgressFlush {
+    WhenDue,
+    Everything,
+}
+
 impl RuntimeEventEngine {
-    /// Drain and apply every currently queued wake entry, the full
-    /// state-transition lane, and the full diagnostic queue; flush any
-    /// progress slots due under the 100 ms export interval.
+    /// Drain and apply everything currently queued.
     pub fn drain(&self) -> DrainReport {
         self.drain_up_to(None)
     }
 
-    /// Drain and apply at most `max` wake entries, leaving the rest queued
-    /// (`None` drains everything currently queued). State, diagnostic, and
-    /// due-progress values older than the retained terminal prefix drain in
-    /// the same pass; later lane values remain queued so they cannot overtake
-    /// that terminal prefix on a subsequent pass.
+    /// Drain and apply at most `max` queued items, leaving the rest for the
+    /// next pass. Held progress still exports only when its own window is
+    /// due.
     pub fn drain_up_to(&self, max: Option<usize>) -> DrainReport {
-        let _audit = crate::runtime_events::lock_audit::scope(
-            crate::runtime_events::lock_audit::Context::Drain,
-        );
-        let _drain = self.drain_gate().lock();
-        self.drain_up_to_inner(max, Instant::now())
+        self.drain_at(max, Instant::now())
     }
 
-    /// Test-only seam for the 100 ms progress-flush gate: identical to
-    /// [`Self::drain_up_to`] but takes an explicit `now` instead of
-    /// reading the wall clock, so a test can prove "at most one frame per
-    /// 100 ms" with pure `Instant` arithmetic -- no real sleep, and no
-    /// dependency on `tokio::time::pause` (which does not virtualize
-    /// `std::time::Instant::now()`). Mirrors `EngineHealth::publish_at`'s
-    /// identical caller-supplied-`now` pattern.
+    /// Test seam for the 100 ms progress window: identical to
+    /// [`Self::drain_up_to`] but takes an explicit `now` instead of reading
+    /// the wall clock, so a test can prove "at most one frame per 100 ms"
+    /// with pure `Instant` arithmetic -- no real sleep, and no dependency
+    /// on `tokio::time::pause` (which does not virtualize
+    /// `std::time::Instant::now()`).
     #[cfg(test)]
     pub(crate) fn drain_up_to_at(&self, max: Option<usize>, now: Instant) -> DrainReport {
+        self.drain_at(max, now)
+    }
+
+    fn drain_at(&self, max: Option<usize>, now: Instant) -> DrainReport {
         let _audit = crate::runtime_events::lock_audit::scope(
             crate::runtime_events::lock_audit::Context::Drain,
         );
         let _drain = self.drain_gate().lock();
-        self.drain_up_to_inner(max, now)
+        self.drain_pass(max, now, ProgressFlush::WhenDue).report
     }
 
-    fn drain_up_to_inner(&self, max: Option<usize>, now: Instant) -> DrainReport {
-        self.drain_up_to_inner_with_work_budget(max, now, None)
-            .report
-    }
+    /// One pass: pop, route, apply, release.
+    ///
+    /// Holds `drain_gate` (taken by the caller) and, briefly, the progress
+    /// lane and the publication/reducer locks. It holds nothing a producer
+    /// takes, which is what the stall tests in
+    /// `engine::tests::nonblocking` assert against a pass deliberately
+    /// parked mid-flight.
+    fn drain_pass(&self, max: Option<usize>, now: Instant, flush: ProgressFlush) -> DrainPass {
+        // Test seam (`runtime_events::drain_hold`): park here, inside
+        // everything this pass is holding, so a producer that is coupled to
+        // the drain waits the full hold duration and one that is not returns
+        // immediately.
+        #[cfg(test)]
+        if let Some(hold) = self.drain_hold() {
+            hold.hold();
+        }
 
-    /// Variant used by shutdown. A shutdown work budget selects one global
-    /// ingress prefix across all lanes, so a later terminal cannot overtake
-    /// older state or diagnostic facts. The bounded prefix is applied in
-    /// chunks so the cooperative deadline is checked between reducer batches.
-    fn drain_up_to_inner_with_work_budget(
-        &self,
-        max: Option<usize>,
-        now: Instant,
-        work_budget: Option<usize>,
-    ) -> DrainPass {
-        // Every fact pulled out of the wake list, state lane, or
-        // diagnostic queue this pass is collected here BEFORE any of them
-        // is applied, and then applied in ONE ingress-sequence-sorted
-        // pass below. Applying per-lane batches back to back (all
-        // terminals, then all state-transitions) would let a scope's
-        // terminal settle the reducer's per-scope state before an
-        // earlier-minted state-transition or diagnostic for that SAME
-        // scope -- sitting in a different lane, drained a moment later in
-        // program order -- ever applies, spuriously rejecting it as
-        // `OperationSettled` even though it was never actually stale.
-        // 5th element `reserved` (R1 fix, task 6-fix,
-        // `.omo/plans/event-system-fixes.md`): whether this fact arrived
-        // through a reservation-bound submission -- always `true` for a
-        // drained Terminal record (a terminal is only ever written into an
-        // OCCUPIED reservation-table slot) and for a flushed progress slot
-        // (progress coalescing itself requires a live `SlotHandle`); comes
-        // from the lane's own stored value for state-transition/diagnostic
-        // entries, which MAY be `false` (`unreserved_ingress`).
-        let mut pending: Vec<(u64, OperationScope, RuntimeFact, bool, bool, bool)> = Vec::new();
-        let mut released_now: Vec<OperationScope> = Vec::new();
-        let mut applied = 0;
-        let consumed;
-        {
-            // Admission and queue insertion are one short critical section.
-            // No reducer, wire serialization, subscriber fan-out, or
-            // telemetry work is performed while this gate is held.
-            let _ingress = self.ingress_gate().lock();
-            // Test seam (`runtime_events::drain_hold`): park here, inside
-            // everything this pass is holding, so a producer that is
-            // coupled to the drain waits the full hold duration and one
-            // that is not returns immediately.
-            #[cfg(test)]
-            if let Some(hold) = self.drain_hold() {
-                hold.hold();
-            }
-            let SequencePrefix {
-                wake: entries,
-                state: state_entries,
-                diagnostic: diagnostic_entries,
-                progress: progress_entries,
-            } = if let Some(work_budget) = work_budget {
-                self.collect_sequence_prefix(max, now, work_budget)
-            } else {
-                let entries = match max {
-                    Some(limit) => self.wake().drain_up_to(limit),
-                    None => self.wake().drain_all(),
-                };
-                // A partial wake drain leaves a terminal prefix in the queue.
-                // Do not let a later state/diagnostic/progress lane publish
-                // past that prefix; those lane values stay in place for the
-                // next pass.
-                let lane_cutoff = self.wake().first_sequence().unwrap_or(u64::MAX);
-                let state_entries = self
-                    .state_lane()
-                    .drain_before_limit(lane_cutoff, usize::MAX);
-                let diagnostic_entries = self
-                    .diagnostic_lane()
-                    .drain_before_limit(lane_cutoff, usize::MAX);
-                let progress_entries = self.take_due_progress(now, lane_cutoff);
-                SequencePrefix {
-                    wake: entries,
-                    state: state_entries,
-                    diagnostic: diagnostic_entries,
-                    progress: progress_entries,
-                }
-            };
-            consumed = state_entries.len()
-                + diagnostic_entries.len()
-                + progress_entries.len()
-                + entries.len();
-            pending.extend(state_entries.into_iter().map(
-                |(scope, fact, sequence, reserved, handle)| {
-                    let reservation_valid = !reserved
-                        || handle.is_some_and(|handle| {
-                            self.table().is_current(handle)
-                                && self.table().occupant(handle) == Some(scope)
-                                && !self.table().is_cancelled(handle)
-                        });
-                    (sequence, scope, fact, false, reserved, reservation_valid)
-                },
-            ));
+        let mut popped = Vec::new();
+        self.ingress()
+            .pop_up_to(max.unwrap_or(usize::MAX), &mut popped);
+        let consumed = popped.len();
 
-            pending.extend(diagnostic_entries.into_iter().map(
-                |(scope, fact, sequence, reserved, handle)| {
-                    let reservation_valid = !reserved
-                        || handle.is_some_and(|handle| {
-                            self.table().is_current(handle)
-                                && self.table().occupant(handle) == Some(scope)
-                                && !self.table().is_cancelled(handle)
-                        });
-                    (sequence, scope, fact, false, reserved, reservation_valid)
-                },
-            ));
+        let mut batch = PassBatch::default();
+        // Slots to release once every fact in this pass has applied. A
+        // release taken mid-pass would invalidate facts submitted BEFORE
+        // it that are still waiting their turn in the same batch.
+        let mut releases: Vec<(OperationScope, SlotHandle)> = Vec::new();
 
-            pending.extend(
-                progress_entries
-                    .into_iter()
-                    .map(|(scope, fact, sequence, handle)| {
-                        let reservation_valid = self.table().is_current(handle)
-                            && self.table().occupant(handle) == Some(scope)
-                            && !self.table().is_cancelled(handle);
-                        (sequence, scope, fact, false, true, reservation_valid)
-                    }),
-            );
-
-            for entry in entries {
-                let handle = entry.handle;
-                if !self.table().is_current(handle) {
-                    continue;
+        // Scopes whose slot was already released by a cancelling thread,
+        // waiting only for their reducer state to be evicted.
+        let mut cancelled: Vec<OperationScope> = Vec::new();
+        for item in popped {
+            match item {
+                IngressItem::Released { scope } => {
+                    // A cancelled operation must not publish the progress
+                    // snapshot it was holding.
+                    self.progress_lane().lock().forget(scope);
+                    cancelled.push(scope);
                 }
-                let Some(scope) = self.table().is_occupied(handle.index) else {
-                    continue;
-                };
-                if !self.table().is_cancelled(handle)
-                    && let Some(record) = self.table().terminal_record(handle)
-                {
-                    pending.push((
-                        entry.ingress_sequence,
-                        scope,
-                        record.fact,
-                        record.synthesized,
-                        true,
-                        true,
-                    ));
-                }
-                if let Some(released_scope) = release_or_defer(self, scope, handle, now) {
-                    released_now.push(released_scope);
-                }
+                IngressItem::Fact(entry) => self.route(entry, &mut batch),
             }
         }
 
-        pending.sort_by_key(|(sequence, ..)| *sequence);
-        for (sequence, scope, fact, synthesized, reserved, reservation_valid) in pending {
-            if fact.delivery_class() != mesh_llm_runtime_event_contracts::DeliveryClass::Terminal
-                && reserved
-                && !reservation_valid
-            {
-                match fact.delivery_class() {
-                    mesh_llm_runtime_event_contracts::DeliveryClass::Progress => {
-                        self.health.bump_dropped_progress();
-                    }
-                    mesh_llm_runtime_event_contracts::DeliveryClass::Diagnostic => {
-                        self.health.bump_dropped_diagnostic();
-                    }
-                    _ => {}
-                }
+        let due = match flush {
+            ProgressFlush::WhenDue => self.progress_lane().lock().take_due(now),
+            ProgressFlush::Everything => self.progress_lane().lock().take_all(),
+        };
+        for entry in due {
+            batch.push(entry, DeliveryClass::Progress);
+        }
+
+        for _ in 0..batch.superseded_progress {
+            self.health.bump_dropped_progress();
+        }
+
+        let mut applied = 0;
+        for pending in batch.drain() {
+            if !pending.live {
+                self.count_stale(&pending);
                 continue;
             }
-            // A coalesced progress value can survive until a later cadence
-            // after an unrelated higher-sequence fact has already published.
-            // It is explicitly superseded at the publication boundary rather
-            // than being applied after a terminal/state transition and
-            // regressing the replay cursor. State and terminal entries never
-            // take this path and remain lossless within their bounded lanes.
-            if fact.delivery_class() == mesh_llm_runtime_event_contracts::DeliveryClass::Progress
-                && sequence <= self.published_frontier()
+            if pending.fact.delivery_class() == DeliveryClass::Terminal
+                && let Some(handle) = pending.handle
             {
-                self.health.bump_dropped_progress();
-                continue;
+                releases.push((pending.scope, handle));
             }
-            if self.apply_and_publish_fact(scope, sequence, fact, synthesized, reserved) {
+            if let Some(handle) = pending.handle {
+                // Retaining typed identities is a payload-lock write, so it
+                // happens here rather than on the submitting thread.
+                self.table()
+                    .remember_scope(handle, pending.fact.data().scope.clone());
+            }
+            if self.apply_and_publish(pending) {
                 applied += 1;
             }
         }
 
-        // Defect A (task 6-fix): evict every scope released THIS pass only
-        // now that every fact drained this pass has already been applied
-        // above -- see the module doc comment for why the ordering matters.
+        let mut released_now = cancelled;
+        for (scope, handle) in releases {
+            if let Some(released) = release_or_defer(self, scope, handle, now) {
+                released_now.push(released);
+            }
+        }
+
+        // Evict only now that every fact this pass drained has applied:
+        // evicting earlier could race an application that would just
+        // re-insert the entry a moment later.
         for scope in released_now {
+            self.progress_lane().lock().forget(scope);
             self.evict_operation(scope);
         }
 
@@ -322,10 +219,72 @@ impl RuntimeEventEngine {
         DrainPass {
             report: DrainReport {
                 applied,
-                left_queued: self.wake().len(),
+                left_queued: self.ingress().len(),
             },
             consumed,
         }
+    }
+
+    /// Send one popped fact to its class's destination, recording whether
+    /// its reservation is still valid.
+    ///
+    /// Liveness is decided HERE, while routing, not at apply time: every
+    /// slot this pass releases is released after the apply loop, so a fact
+    /// submitted before a terminal cannot be invalidated by that terminal's
+    /// own release. What survives this check is then the reducer's call,
+    /// and the reducer counts what it rejects.
+    fn route(&self, entry: IngressFact, batch: &mut PassBatch) {
+        let class = entry.class;
+        let live = self.reservation_is_valid(&entry);
+        let mut pending = PendingFact::from(entry);
+        pending.live = live;
+        if class == DeliveryClass::Progress {
+            // Progress is rate-limited, not queued: only the latest value
+            // per operation survives to the next export window.
+            if self.progress_lane().lock().record(pending) {
+                batch.superseded_progress += 1;
+            }
+            return;
+        }
+        batch.push(pending, class);
+    }
+
+    /// Whether `entry`'s reservation is still the one it was submitted
+    /// against. A terminal is exempt from the scope and cancellation
+    /// checks: winning the write-once claim is what admitted it.
+    fn reservation_is_valid(&self, entry: &IngressFact) -> bool {
+        if entry.class == DeliveryClass::Terminal {
+            return entry
+                .handle
+                .is_some_and(|handle| self.table().is_current(handle));
+        }
+        if !entry.reserved {
+            return true;
+        }
+        entry.handle.is_some_and(|handle| {
+            self.table().is_current(handle)
+                && self.table().occupant(handle) == Some(entry.scope)
+                && !self.table().is_cancelled(handle)
+        })
+    }
+
+    fn count_stale(&self, pending: &PendingFact) {
+        match pending.fact.delivery_class() {
+            DeliveryClass::Progress => self.health.bump_dropped_progress(),
+            DeliveryClass::Diagnostic => self.health.bump_dropped_diagnostic(),
+            DeliveryClass::Terminal | DeliveryClass::StateTransition => {}
+        }
+    }
+
+    fn apply_and_publish(&self, pending: PendingFact) -> bool {
+        let sequence = self.next_publication_sequence();
+        self.apply_and_publish_fact(
+            pending.scope,
+            sequence,
+            pending.fact,
+            pending.synthesized,
+            pending.reserved,
+        )
     }
 
     /// Apply one fact through the transactional reducer and, on
@@ -453,95 +412,6 @@ impl RuntimeEventEngine {
         *reducer_state = crate::runtime_events::reducer::evict(&reducer_state, scope);
     }
 
-    /// Take every pending progress value when the export cadence is due. This
-    /// is called while `ingress_gate` is held, so a progress sequence cannot
-    /// be minted and left behind after collection. The values are returned to
-    /// the normal ingress-sequence sort and published outside the gate.
-    fn take_due_progress(&self, now: Instant, sequence: u64) -> Vec<ProgressEntry> {
-        let mut last = self.progress_last_flush.lock();
-        let due = match *last {
-            None => true,
-            Some(previous) => now.duration_since(previous) >= PROGRESS_EXPORT_INTERVAL,
-        };
-        if !due {
-            return Vec::new();
-        }
-        *last = Some(now);
-        drop(last);
-        self.table().take_progress_before(sequence)
-    }
-
-    /// Select and drain one global ingress-sequence prefix across the wake
-    /// list, state lane, diagnostic queue, and due progress slots. This is
-    /// used only for deadline-bounded shutdown work; selecting a per-lane
-    /// budget first would let a later terminal overtake older state facts that
-    /// remained queued for the next chunk.
-    fn collect_sequence_prefix(
-        &self,
-        max_wake_entries: Option<usize>,
-        now: Instant,
-        work_budget: usize,
-    ) -> SequencePrefix {
-        if work_budget == 0 {
-            return SequencePrefix::default();
-        }
-
-        let wake_probe = self
-            .wake()
-            .sequences_up_to(max_wake_entries.map(|limit| limit.saturating_add(1)));
-        let wake_limit = max_wake_entries.unwrap_or(usize::MAX);
-        let lane_cutoff = wake_probe.get(wake_limit).copied().unwrap_or(u64::MAX);
-        let mut candidates = wake_probe
-            .iter()
-            .take(wake_limit)
-            .copied()
-            .collect::<Vec<_>>();
-        candidates.extend(self.state_lane().sequences_before(lane_cutoff));
-        candidates.extend(self.diagnostic_lane().sequences_before(lane_cutoff));
-        let progress_due = self.progress_flush_due(now);
-        if progress_due {
-            candidates.extend(self.table().progress_sequences_before(lane_cutoff));
-        }
-        candidates.sort_unstable();
-        candidates.truncate(work_budget);
-        let Some(last_sequence) = candidates.last().copied() else {
-            return SequencePrefix::default();
-        };
-        let exclusive_sequence = last_sequence.saturating_add(1);
-
-        let entries = self.wake().drain_before_sequence(exclusive_sequence);
-        let state_entries = self
-            .state_lane()
-            .drain_before_limit(exclusive_sequence, usize::MAX);
-        let diagnostic_entries = self
-            .diagnostic_lane()
-            .drain_before_limit(exclusive_sequence, usize::MAX);
-        let progress_entries = if progress_due {
-            let progress_entries = self.table().take_progress_before(exclusive_sequence);
-            if !progress_entries.is_empty() {
-                self.mark_progress_flush(now);
-            }
-            progress_entries
-        } else {
-            Vec::new()
-        };
-        SequencePrefix {
-            wake: entries,
-            state: state_entries,
-            diagnostic: diagnostic_entries,
-            progress: progress_entries,
-        }
-    }
-
-    fn progress_flush_due(&self, now: Instant) -> bool {
-        let last = self.progress_last_flush.lock();
-        last.is_none_or(|previous| now.duration_since(previous) >= PROGRESS_EXPORT_INTERVAL)
-    }
-
-    fn mark_progress_flush(&self, now: Instant) {
-        *self.progress_last_flush.lock() = Some(now);
-    }
-
     /// Increment `rebuild_generation` and evict every retained replay frame,
     /// simulating a reducer crash/restart recovering into a fresh window.
     pub fn rebuild(&self) -> u64 {
@@ -591,12 +461,8 @@ impl RuntimeEventEngine {
             crate::runtime_events::lock_audit::Context::Drain,
         );
         let _drain = self.drain_gate().lock();
-        // Take the same lock order as drain and cancellation: exclusive
-        // drain ownership first, then admission closure. A concurrent
-        // cancellation can therefore never hold `drain_gate` while waiting
-        // for `ingress_gate` as shutdown waits in the opposite order.
         self.close_admission();
-        let started_with = self.wake().len();
+        let started_with = self.ingress().len();
         let mut report = DrainReport::default();
         let mut remaining_budget = budget;
         while Instant::now() < deadline && remaining_budget.is_none_or(|remaining| remaining > 0) {
@@ -630,9 +496,13 @@ impl RuntimeEventEngine {
         }
     }
 
-    /// Apply one bounded, globally ordered shutdown prefix. Both shutdown
-    /// phases use this helper so synthesis, deadline checks, and budget
-    /// accounting cannot drift apart when a deferred root is force-settled.
+    /// Apply one bounded shutdown chunk. Both shutdown phases use this
+    /// helper so synthesis, deadline checks, and budget accounting cannot
+    /// drift apart when a deferred root is force-settled.
+    ///
+    /// Held progress is exported unconditionally here: the 100 ms window
+    /// will never come due again, and a stranded snapshot would be a
+    /// silent loss rather than a counted one.
     fn drain_shutdown_chunk(
         &self,
         deadline: Instant,
@@ -643,47 +513,58 @@ impl RuntimeEventEngine {
         if Instant::now() >= deadline || remaining_budget.is_some_and(|remaining| remaining == 0) {
             return false;
         }
-        self.synthesize_unsettled_reservations_locked();
         let chunk = remaining_budget.map_or(SHUTDOWN_WORK_CHUNK, |remaining| {
             remaining.min(SHUTDOWN_WORK_CHUNK)
         });
-        let pass = self.drain_up_to_inner_with_work_budget(
-            budget.map(|limit| limit.min(chunk)),
+        // Drain BEFORE synthesizing. Applying a fact is what retains its
+        // typed identities on the slot (`remember_scope`), and synthesis
+        // reads those identities to give a synthesized terminal the right
+        // scope. Synthesizing first would settle a reservation whose
+        // identities were still sitting unread in the ring.
+        let pass = self.drain_pass(
+            budget.map(|limit| limit.min(chunk)).or(Some(chunk)),
             Instant::now(),
-            Some(chunk),
+            ProgressFlush::Everything,
         );
+        let synthesized = self.synthesize_unsettled_reservations();
         report.applied += pass.report.applied;
         if let Some(remaining) = remaining_budget.as_mut() {
             *remaining = (*remaining).saturating_sub(pass.report.applied);
         }
-        pass.consumed > 0
+        pass.consumed > 0 || synthesized > 0
     }
 
-    /// Synthesize every occupied slot that still lacks a terminal. The
-    /// original family synthesizer is retained in the reservation table, so a
-    /// live guard is settled with the same terminal kind as a normal guard
-    /// drop. Admission is already closed by the caller; this helper takes the
-    /// short admission gate while snapshotting and enqueueing so a late guard
-    /// drop cannot race the final synthesis pass.
-    fn synthesize_unsettled_reservations_locked(&self) -> usize {
-        let _ingress = self.ingress_gate().lock();
-        let unsettled = self.table().unsettled();
+    /// Synthesize a terminal for every occupied slot whose write-once claim
+    /// is still available. The original family synthesizer is retained in
+    /// the reservation table, so a live guard is settled with the same
+    /// terminal kind a normal guard drop would produce.
+    ///
+    /// Admission is already closed by the caller. The claim CAS is still
+    /// what arbitrates: a guard dropping concurrently either wins and this
+    /// skips the slot, or loses and publishes nothing.
+    fn synthesize_unsettled_reservations(&self) -> usize {
         let mut synthesized = 0;
-        for unsettled in unsettled {
+        for unsettled in self.table().unsettled() {
+            if self.table().claim_terminal(unsettled.handle) == TerminalClaim::Refused {
+                continue;
+            }
             let synthetic = (unsettled.synthetic_terminal)();
             let synthetic = match unsettled.scope_identities.as_ref() {
                 Some(scope) => synthetic.with_scope(scope),
                 None => synthetic,
             };
-            let record = TerminalRecord {
+            let placed = self.place(IngressItem::Fact(IngressFact {
+                scope: unsettled.scope,
                 fact: self.fill_ingress_metadata(synthetic, Instant::now()),
+                handle: Some(unsettled.handle),
+                reserved: true,
                 synthesized: true,
-            };
-            if self.table().occupant(unsettled.handle) == Some(unsettled.scope)
-                && self.table().write_terminal(unsettled.handle, record)
-            {
-                self.wake().push_next(unsettled.handle);
+                class: DeliveryClass::Terminal,
+            }));
+            if placed.is_ok() {
                 synthesized += 1;
+            } else {
+                self.health.bump_terminal_delivery_failed();
             }
         }
         synthesized
@@ -788,16 +669,15 @@ fn child_slots(engine: &RuntimeEventEngine, root: OperationId) -> Vec<ChildSlot>
 /// exactly like any other terminal) releases immediately, however much
 /// grace time is left. A root still short a child past `deadline` gets
 /// each remaining child's OWN synthesized `terminal_not_delivered`
-/// written and enqueued through the SAME `write_terminal` + `push_next`
-/// mechanism `OperationReservation::drop` already uses for a genuinely-
-/// dropped guard, so it is picked up and applied+published by the
-/// ordinary per-entry loop on this engine's very next drain call -- there
-/// is no second reducer path here, and no fact is applied synchronously
-/// inside this function.
+/// written and placed through the SAME write-once claim
+/// `OperationReservation::drop` already uses for a genuinely-dropped
+/// guard, so it is picked up and applied+published by the ordinary apply
+/// loop on this engine's very next pass -- there is no second reducer
+/// path here, and no fact is applied synchronously inside this
+/// function.
 fn settle_pending_root_releases(engine: &RuntimeEventEngine, now: Instant) {
     let mut released_roots = Vec::new();
     {
-        let _ingress = engine.ingress_gate().lock();
         let candidates: Vec<(OperationId, SlotHandle, Instant)> = engine
             .pending_root_releases
             .lock()
@@ -870,13 +750,12 @@ fn release_pending_root(
 /// Uses `child.generation` -- captured at RESERVE time -- rather than
 /// re-reading `current_generation(child.index)` here: re-reading would
 /// return whatever generation currently occupies that index, which
-/// `write_terminal`'s own generation check would then always match
-/// (having just been read from the same slot), landing this child's stale
-/// synthesized terminal in a slot a completely different, currently
-/// in-flight operation now legitimately owns -- and rejecting THAT
-/// operation's real terminal afterward as a duplicate. The reserve-time
-/// generation makes `write_terminal` correctly detect the mismatch and
-/// no-op instead.
+/// the claim's own generation check would then always match (having just
+/// been read from the same slot), landing this child's stale synthesized
+/// terminal in a slot a completely different, currently in-flight
+/// operation now legitimately owns -- and refusing THAT operation's real
+/// terminal afterward as a duplicate. The reserve-time generation makes
+/// `claim_terminal` correctly detect the mismatch and refuse instead.
 fn synthesize_child_not_delivered(engine: &RuntimeEventEngine, child: ChildSlot) {
     let handle = SlotHandle {
         index: child.index,
@@ -890,12 +769,22 @@ fn synthesize_child_not_delivered(engine: &RuntimeEventEngine, child: ChildSlot)
         Some(scope) => synthetic.with_scope(&scope),
         None => synthetic,
     };
-    let record = TerminalRecord {
-        fact: engine.fill_ingress_metadata(synthetic, Instant::now()),
-        synthesized: true,
+    let Some(scope) = engine.table().occupant(handle) else {
+        return;
     };
-    if engine.table().write_terminal(handle, record) {
-        engine.wake().push_next(handle);
+    if engine.table().claim_terminal(handle) == TerminalClaim::Refused {
+        return;
+    }
+    let placed = engine.place(IngressItem::Fact(IngressFact {
+        scope,
+        fact: engine.fill_ingress_metadata(synthetic, Instant::now()),
+        handle: Some(handle),
+        reserved: true,
+        synthesized: true,
+        class: DeliveryClass::Terminal,
+    }));
+    if placed.is_err() {
+        engine.health().bump_terminal_delivery_failed();
     }
 }
 
@@ -945,20 +834,19 @@ mod tests {
     use tokio::sync::Notify;
 
     use super::*;
-    use crate::runtime_events::engine::lanes::{DiagnosticLane, StateLane};
     use crate::runtime_events::health::EngineHealth;
+    use crate::runtime_events::ingress::Ingress;
     use crate::runtime_events::lock_audit::{AuditedMutex, LockClass};
     use crate::runtime_events::reducer::ReducerSnapshot;
     use crate::runtime_events::replay::ReplayBuffer;
     use crate::runtime_events::reservation::ReservationTable;
     use crate::runtime_events::subscribers::SubscriberRegistry;
-    use crate::runtime_events::wake::WakeList;
 
     fn engine_with_tiny_replay_age(max_age: Duration) -> Arc<RuntimeEventEngine> {
         Arc::new(RuntimeEventEngine {
             table: ReservationTable::new(64),
-            wake: WakeList::new(),
-            ingress_gate: AuditedMutex::new(LockClass::IngressGate, ()),
+            ingress: Ingress::new(),
+            next_sequence: AtomicU64::new(1),
             drain_gate: AuditedMutex::new(LockClass::DrainGate, ()),
             publication_gate: AuditedMutex::new(LockClass::PublicationGate, ()),
             published_frontier: AtomicU64::new(0),
@@ -974,15 +862,16 @@ mod tests {
             ),
             shutting_down: AtomicBool::new(false),
             rebuild_generation: AtomicU64::new(0),
-            state_lane: StateLane::default(),
-            diagnostic_lane: DiagnosticLane::default(),
+            progress_lane: AuditedMutex::new(
+                LockClass::ProgressLane,
+                crate::runtime_events::engine::lanes::ProgressLane::default(),
+            ),
             reducer_state: AuditedMutex::new(LockClass::ReducerState, ReducerSnapshot::empty()),
             process_instance: ProcessInstanceId::new(),
             process_started: Instant::now(),
             telemetry: OnceLock::new(),
             progress_diagnostic_class_bypass: AtomicBool::new(false),
             notify: Notify::new(),
-            progress_last_flush: AuditedMutex::new(LockClass::ProgressLastFlush, None),
             ingress_latency: crate::runtime_events::ingress_latency::IngressLatencyReservoir::new(),
             drain_hold: OnceLock::new(),
         })

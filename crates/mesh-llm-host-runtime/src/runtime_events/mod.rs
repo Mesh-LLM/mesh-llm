@@ -15,6 +15,7 @@ pub(crate) mod drain_hold;
 pub mod driver;
 pub mod engine;
 pub mod health;
+pub mod ingress;
 mod ingress_latency;
 pub(crate) mod lock_audit;
 pub mod presentation;
@@ -24,7 +25,6 @@ pub mod reservation;
 mod state;
 pub mod subscribers;
 pub mod telemetry;
-pub mod wake;
 
 #[cfg(test)]
 pub use state::clear_runtime_event_engine;

@@ -187,7 +187,7 @@ mod tests {
             matched_tokens: 512,
             resident_entries: 3,
         });
-        assert!(engine.state_lane_kinds().contains(&"cache_lookup_hit"));
+        assert!(engine.published_kinds().contains(&"cache_lookup_hit"));
         clear_runtime_event_engine();
     }
 
@@ -197,7 +197,7 @@ mod tests {
         let engine = install_test_engine();
         let observer = SkippyKvRuntimeEventObserver::new();
         observer.observe(KvLifecycleEvent::CacheLookupMiss);
-        assert!(engine.state_lane_kinds().contains(&"cache_lookup_miss"));
+        assert!(engine.published_kinds().contains(&"cache_lookup_miss"));
         clear_runtime_event_engine();
     }
 
@@ -214,7 +214,7 @@ mod tests {
             evicted_entries: 1,
             evicted_tokens: 128,
         });
-        let kinds = engine.state_lane_kinds();
+        let kinds = engine.published_kinds();
         assert!(kinds.contains(&"prefix_restored"));
         assert!(kinds.contains(&"cache_eviction"));
         clear_runtime_event_engine();
@@ -231,7 +231,7 @@ mod tests {
         observer.observe(KvLifecycleEvent::CapacityApproachingLimit {
             admission_deficit_tokens: 42,
         });
-        let kinds = engine.state_lane_kinds();
+        let kinds = engine.published_kinds();
         assert!(kinds.contains(&"kv_cache_initialization_started"));
         assert!(kinds.contains(&"kv_cache_initialization_completed"));
         assert!(kinds.contains(&"cache_record_failed"));

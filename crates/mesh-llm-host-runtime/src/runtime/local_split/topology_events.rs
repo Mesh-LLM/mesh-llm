@@ -494,7 +494,7 @@ mod tests {
         // per-node connection-recovered fact fires, no TopologyDegraded /
         // NodeDegraded.
         report_recovery_decision("topo-a", true, false, &[a], &[], true);
-        let kinds = engine.state_lane_kinds();
+        let kinds = engine.published_kinds();
         assert!(kinds.contains(&"stage_connection_recovered"));
         assert!(!kinds.contains(&"topology_degraded"));
         assert!(!kinds.contains(&"node_degraded"));
@@ -507,7 +507,7 @@ mod tests {
         let engine = install_test_engine();
         let a = node(1);
         report_recovery_decision("topo-a", false, false, &[], &[a], true);
-        let kinds = engine.state_lane_kinds();
+        let kinds = engine.published_kinds();
         assert!(kinds.contains(&"stage_connection_lost"));
         assert!(kinds.contains(&"topology_degraded"));
         assert!(kinds.contains(&"node_degraded"));
@@ -521,7 +521,7 @@ mod tests {
         let engine = install_test_engine();
         let a = node(1);
         report_recovery_decision("topo-a", false, true, &[], &[a], true);
-        let kinds = engine.state_lane_kinds();
+        let kinds = engine.published_kinds();
         assert!(kinds.contains(&"node_unavailable"));
         assert!(!kinds.contains(&"node_degraded"));
         clear_runtime_event_engine();
@@ -540,7 +540,7 @@ mod tests {
         report_recovery_decision("topo-a", true, false, &[], &[], false);
         assert!(
             engine
-                .state_lane_kinds()
+                .published_kinds()
                 .contains(&"resource_pressure_changed"),
             "must fire even on an otherwise-healthy tick"
         );
@@ -554,7 +554,7 @@ mod tests {
         emit_stage_connection_established("topo-a", "stage-1", 3);
         assert!(
             engine
-                .state_lane_kinds()
+                .published_kinds()
                 .contains(&"stage_connection_established")
         );
         engine.drain();

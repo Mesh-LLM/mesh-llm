@@ -148,7 +148,7 @@ mod tests {
         let engine = install_test_engine();
         let observer = SkippySessionRuntimeEventObserver::new();
         observer.observe(SessionLifecycleEvent::SessionReset { reset_ms: 2.0 });
-        assert!(engine.state_lane_kinds().contains(&"session_reset"));
+        assert!(engine.published_kinds().contains(&"session_reset"));
         clear_runtime_event_engine();
     }
 
@@ -158,7 +158,7 @@ mod tests {
         let engine = install_test_engine();
         let observer = SkippySessionRuntimeEventObserver::new();
         observer.observe(SessionLifecycleEvent::SessionTrimmed { token_count: 42 });
-        assert!(engine.state_lane_kinds().contains(&"session_trimmed"));
+        assert!(engine.published_kinds().contains(&"session_trimmed"));
         clear_runtime_event_engine();
     }
 
@@ -168,7 +168,7 @@ mod tests {
         let engine = install_test_engine();
         let observer = SkippySessionRuntimeEventObserver::new();
         observer.observe(SessionLifecycleEvent::SessionReclaimed);
-        assert!(engine.state_lane_kinds().contains(&"session_reclaimed"));
+        assert!(engine.published_kinds().contains(&"session_reclaimed"));
         clear_runtime_event_engine();
     }
 
@@ -189,7 +189,7 @@ mod tests {
         observer.observe(SessionLifecycleEvent::RuntimeStateExportFailed);
         observer.observe(SessionLifecycleEvent::RuntimeStateImportCompleted);
         observer.observe(SessionLifecycleEvent::RuntimeStateImportFailed);
-        let kinds = engine.state_lane_kinds();
+        let kinds = engine.published_kinds();
         assert!(kinds.contains(&"runtime_state_export_completed"));
         assert!(kinds.contains(&"runtime_state_export_failed"));
         assert!(kinds.contains(&"runtime_state_import_completed"));

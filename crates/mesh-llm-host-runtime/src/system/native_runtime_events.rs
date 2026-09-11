@@ -1127,7 +1127,7 @@ mod native_runtime_events_tests {
             0,
             "a StateTransition-class native fact must never consume a reservation slot"
         );
-        assert!(engine.state_lane_kinds().contains(&"device_ready"));
+        assert!(engine.published_kinds().contains(&"device_ready"));
         clear_runtime_event_engine();
     }
 

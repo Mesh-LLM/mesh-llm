@@ -52,7 +52,7 @@ fn bypass_enabled_never_touches_terminal_or_state_transition() {
         "StateTransition class must remain fully active under the bypass"
     );
     assert_eq!(
-        engine.state_lane_kinds().len(),
+        engine.published_kinds().len(),
         1,
         "the state lane must actually receive the fact, not just report Accepted"
     );
@@ -80,7 +80,7 @@ fn disabling_bypass_again_restores_normal_progress_coalescing() {
 
     assert_eq!(
         reservation.ingress().try_submit(progress_fact()),
-        SubmitOutcome::Coalesced,
+        SubmitOutcome::Accepted,
         "toggling the bypass back off restores the ordinary Progress lane"
     );
     assert_eq!(engine.health().snapshot().dropped_progress, 0);

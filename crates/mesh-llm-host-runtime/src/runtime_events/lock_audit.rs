@@ -17,11 +17,19 @@
 //!   guard. Every acquisition is OR-ed into a per-thread bitset that a
 //!   test can read back with [`thread_record`].
 //!
-//! This commit runs the audit in **record-only** mode: it observes and
-//! never fails. [`thread_record`] reads the observation back so a test can
-//! pin what the producer path locks today, which is the baseline the
-//! ingress rework has to move. A later commit turns [`note`] into a panic
-//! when a producer takes anything outside [`PRODUCER_ALLOWED`].
+//! The audit **enforces**. A blocking acquisition in producer context
+//! panics unless its class is in [`PRODUCER_ALLOWED`] -- which is empty --
+//! and one in reserve context panics unless it is in [`RESERVE_ALLOWED`].
+//! Because essentially every test in this crate submits events, a lock
+//! reintroduced on the submit path fails hundreds of tests rather than
+//! quietly costing latency in production.
+//!
+//! A `try_lock` is recorded but never enforced. The rule is about a
+//! producer *waiting*, and a non-blocking acquisition cannot make it
+//! wait.
+//!
+//! [`thread_record`] reads the per-thread observation back, for tests that
+//! want to assert the exact set rather than just its legality.
 //!
 //! Everything here compiles away outside `debug_assertions`: the release
 //! build of [`AuditedMutex`] is a `#[repr(transparent)]` newtype whose
@@ -43,8 +51,6 @@ use std::sync::{Mutex, MutexGuard, PoisonError, TryLockResult};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub(crate) enum LockClass {
-    /// The process-global producer admission gate.
-    IngressGate = 0,
     /// Serializes drain passes and rebuilds.
     DrainGate = 1,
     /// Publication boundary for replay, subscribers, and reducer state.
@@ -59,16 +65,9 @@ pub(crate) enum LockClass {
     PendingRootReleases = 6,
     /// The reducer's published snapshot.
     ReducerState = 7,
-    /// The last progress-flush instant.
-    ProgressLastFlush = 8,
-    /// The state-transition lane's key order.
-    StateLaneEntries = 9,
-    /// The state-transition lane's latest-value map.
-    StateLaneLatest = 10,
-    /// The diagnostic FIFO.
-    DiagnosticLane = 11,
-    /// The wake list and its ingress-sequence counter.
-    WakeList = 12,
+    /// The drain-owned progress lane: one latest value per operation,
+    /// exported on the 100 ms cadence.
+    ProgressLane = 8,
     /// The bounded replay buffer.
     ReplayBuffer = 13,
     /// One subscriber's bounded queue.
@@ -90,8 +89,7 @@ impl LockClass {
 
     /// Every class, for a test that wants to name what it observed.
     #[cfg(test)]
-    pub(crate) const ALL: [LockClass; 19] = [
-        LockClass::IngressGate,
+    pub(crate) const ALL: [LockClass; 14] = [
         LockClass::DrainGate,
         LockClass::PublicationGate,
         LockClass::ReservationSlot,
@@ -99,11 +97,7 @@ impl LockClass {
         LockClass::ChildrenByRoot,
         LockClass::PendingRootReleases,
         LockClass::ReducerState,
-        LockClass::ProgressLastFlush,
-        LockClass::StateLaneEntries,
-        LockClass::StateLaneLatest,
-        LockClass::DiagnosticLane,
-        LockClass::WakeList,
+        LockClass::ProgressLane,
         LockClass::ReplayBuffer,
         LockClass::SubscriberQueue,
         LockClass::SubscriberRegistry,
@@ -133,17 +127,24 @@ pub(crate) enum Context {
 
 /// Classes a reservation is permitted to take once the audit is enforcing.
 ///
-/// Reserving is a setup step a producer performs once per operation, not
-/// per event, so it is allowed to touch the table it is reserving in. It
-/// is still never allowed to touch a lane, the wake list, or a gate.
-#[cfg(test)]
+/// Reserving and releasing are setup and teardown steps a producer
+/// performs once per operation, not once per event, so they are allowed to
+/// touch the reservation table and its two indices. What matters is that
+/// every one of these is held only for a bounded map or vector operation
+/// and never across reducer work, serialization, or subscriber fan-out --
+/// so the longest a producer can wait on one is another producer's own
+/// short critical section, not a drain pass.
+///
+/// A gate, the progress lane, the reducer snapshot, the replay buffer, and
+/// the subscriber registry are all excluded, because a drain pass holds
+/// those for as long as its work takes.
 pub(crate) const RESERVE_ALLOWED: u32 = LockClass::ReservationSlot.bit()
     | LockClass::ReservationFreeList.bit()
-    | LockClass::ChildrenByRoot.bit();
+    | LockClass::ChildrenByRoot.bit()
+    | LockClass::PendingRootReleases.bit();
 
 /// Classes a producer is permitted to take once the audit is enforcing:
 /// none. `try_submit` must reach the ingress structure through atomics.
-#[cfg(test)]
 pub(crate) const PRODUCER_ALLOWED: u32 = 0;
 
 #[cfg(debug_assertions)]
@@ -164,11 +165,32 @@ mod recording {
         pub(super) static TAKEN: Cell<u32> = const { Cell::new(0) };
     }
 
-    pub(super) fn note(class: LockClass) {
+    /// Record `class`, and for a blocking acquisition also enforce the
+    /// calling context's policy.
+    pub(super) fn note(class: LockClass, blocking: bool) {
         TAKEN.with(|taken| taken.set(taken.get() | class.bit()));
+        if blocking {
+            enforce(class);
+        }
     }
 
-    #[cfg(test)]
+    fn enforce(class: LockClass) {
+        let (context, allowed) = match context() {
+            Context::Producer => ("producer", super::PRODUCER_ALLOWED),
+            Context::Reserve => ("reserve", super::RESERVE_ALLOWED),
+            // A drain pass is the consumer; it is allowed to hold whatever
+            // it needs, because nothing waits on it. Unmarked code is
+            // outside the submit/reserve/drain boundary entirely.
+            Context::Drain | Context::Unmarked => return,
+        };
+        assert!(
+            allowed & class.bit() != 0,
+            "{context} context took {class:?}, which it is not permitted to block on. \
+             Emitting an event must never make the thread doing real work wait. \
+             Reach this state through an atomic, or move the work into the drain."
+        );
+    }
+
     pub(super) fn context() -> Context {
         match CONTEXT.with(Cell::get) {
             1 => Context::Producer,
@@ -189,13 +211,14 @@ mod recording {
     }
 }
 
-/// Record that `class` was acquired in the current context.
+/// Record that `class` was acquired in the current context, and enforce
+/// the context's policy for a blocking acquisition.
 #[inline(always)]
-pub(crate) fn note(class: LockClass) {
+pub(crate) fn note(class: LockClass, blocking: bool) {
     #[cfg(debug_assertions)]
-    recording::note(class);
+    recording::note(class, blocking);
     #[cfg(not(debug_assertions))]
-    let _ = class;
+    let _ = (class, blocking);
 }
 
 /// The context the calling thread is currently running in.
@@ -295,16 +318,17 @@ impl<T> AuditedMutex<T> {
     /// an acquisition that then blocks forever is still observed.
     #[inline]
     pub(crate) fn lock(&self) -> MutexGuard<'_, T> {
-        note(self.class);
+        note(self.class, true);
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Non-blocking acquire, passed straight through to the inner mutex so
-    /// callers keep std's poison handling. Still recorded: a `try_lock`
-    /// that succeeds held the lock, and one that fails proves contention.
+    /// callers keep std's poison handling.
     #[inline]
     pub(crate) fn try_lock(&self) -> TryLockResult<MutexGuard<'_, T>> {
-        note(self.class);
+        // Recorded, not enforced: the policy is about a producer waiting,
+        // and `try_lock` returns immediately either way.
+        note(self.class, false);
         self.inner.try_lock()
     }
 }

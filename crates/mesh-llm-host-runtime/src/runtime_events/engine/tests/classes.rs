@@ -21,10 +21,9 @@ use mesh_llm_runtime_event_contracts::{
 use super::fixtures::{
     diagnostic_fact, progress_fact, state_transition_fact, synthetic_unknown, terminal_success,
 };
-use crate::runtime_events::config::{
-    DIAGNOSTIC_LANE_DEPTH, PROGRESS_EXPORT_INTERVAL, STATE_TRANSITION_LANE_DEPTH,
-};
+use crate::runtime_events::config::PROGRESS_EXPORT_INTERVAL;
 use crate::runtime_events::engine::RuntimeEventEngine;
+use crate::runtime_events::ingress::NON_TERMINAL_CREDITS;
 
 /// The core D2 regression: two DIFFERENT operations reporting the SAME
 /// state-transition kind must both reach the reducer and publish -- a
@@ -66,35 +65,54 @@ fn state_transitions_from_different_scopes_never_coalesce_across_scopes() {
     assert!(published_scopes.contains(&scope_b));
 }
 
-/// Same scope, same kind: this SHOULD coalesce (unchanged from before task
-/// 4), but the value that eventually publishes must be the LATEST
-/// submission's fact and ingress sequence, not the first.
+/// Same scope, same kind coalesces, and the value that publishes is the
+/// LATEST submission's, at the latest arrival position.
+///
+/// Both submissions are `Accepted`: the coalescing decision now belongs to
+/// the consumer, so a producer is never told its fact replaced another's.
 #[test]
-fn state_transition_repeat_key_coalesces_to_the_latest_sequence() {
+fn state_transition_repeat_key_coalesces_to_the_latest_value() {
     let engine = RuntimeEventEngine::with_capacity(4);
     let scope = OperationScope::root_only(OperationId::new());
+    let other = OperationScope::root_only(OperationId::new());
     let ingress = engine.unreserved_ingress(scope);
 
     assert_eq!(
         ingress.try_submit(state_transition_fact()),
         SubmitOutcome::Accepted
     );
+    // An unrelated scope between the two, so "latest position" is
+    // observable: the coalesced frame must publish AFTER this one.
+    assert_eq!(
+        engine
+            .unreserved_ingress(other)
+            .try_submit(state_transition_fact()),
+        SubmitOutcome::Accepted
+    );
     assert_eq!(
         ingress.try_submit(state_transition_fact()),
-        SubmitOutcome::Coalesced
+        SubmitOutcome::Accepted
     );
 
     let report = engine.drain();
     assert_eq!(
-        report.applied, 1,
-        "one coalesced key drains as exactly one entry"
+        report.applied, 2,
+        "the repeated key drains as exactly one entry, alongside the other scope's"
     );
     let frames = engine.replay().snapshot();
-    assert_eq!(frames.len(), 1);
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0].scope, other);
     assert_eq!(
-        frames[0].sequence.get(),
-        2,
-        "the published frame must carry the SECOND (latest) submission's sequence, not the first"
+        frames[1].scope, scope,
+        "the coalesced value publishes at its newest arrival position, not its first"
+    );
+    assert_eq!(
+        frames
+            .iter()
+            .map(|frame| frame.sequence.get())
+            .collect::<Vec<_>>(),
+        vec![1, 2],
+        "sequences are assigned at publication, so they are contiguous"
     );
 }
 
@@ -151,16 +169,15 @@ fn diagnostic_facts_drain_through_the_reducer_and_publish() {
     );
 }
 
-/// A diagnostic dropped for exceeding the bounded queue depth must never
-/// reach the reducer once the queue drains -- only what was actually
-/// accepted publishes.
+/// A diagnostic refused for exceeding the ring's non-terminal budget must
+/// never reach the reducer -- only what was actually accepted publishes.
 #[test]
-fn diagnostics_dropped_past_the_depth_bound_never_reach_the_reducer() {
+fn diagnostics_dropped_past_the_budget_never_reach_the_reducer() {
     let engine = RuntimeEventEngine::with_capacity(4);
     let scope = OperationScope::root_only(OperationId::new());
     let ingress = engine.unreserved_ingress(scope);
 
-    for _ in 0..DIAGNOSTIC_LANE_DEPTH {
+    for _ in 0..NON_TERMINAL_CREDITS {
         assert_eq!(
             ingress.try_submit(diagnostic_fact()),
             SubmitOutcome::Accepted
@@ -171,11 +188,10 @@ fn diagnostics_dropped_past_the_depth_bound_never_reach_the_reducer() {
         SubmitOutcome::DroppedDiagnostic
     );
 
-    engine.drain();
     assert_eq!(
-        engine.replay().snapshot().len(),
-        DIAGNOSTIC_LANE_DEPTH,
-        "the dropped entry must never have been applied or published"
+        engine.drain().applied,
+        NON_TERMINAL_CREDITS,
+        "the refused entry must never have been applied or published"
     );
 }
 
@@ -251,10 +267,7 @@ fn progress_flushes_at_most_once_per_hundred_milliseconds_with_the_latest_value(
     // pending yet, so the 100 ms gate below measures from a known instant.
     assert_eq!(engine.drain_up_to_at(None, t0).applied, 0);
 
-    assert_eq!(
-        ingress.try_submit(progress_fact()),
-        SubmitOutcome::Coalesced
-    );
+    assert_eq!(ingress.try_submit(progress_fact()), SubmitOutcome::Accepted);
     let mid_flush = engine.drain_up_to_at(None, t0 + Duration::from_millis(40));
     assert_eq!(
         mid_flush.applied, 0,
@@ -262,12 +275,9 @@ fn progress_flushes_at_most_once_per_hundred_milliseconds_with_the_latest_value(
     );
     assert!(engine.replay().is_empty());
 
-    // A second progress update before the interval elapses overwrites the
-    // same per-operation slot -- still only one value pending.
-    assert_eq!(
-        ingress.try_submit(progress_fact()),
-        SubmitOutcome::Coalesced
-    );
+    // A second progress update before the interval elapses supersedes the
+    // first -- still only one value pending per operation.
+    assert_eq!(ingress.try_submit(progress_fact()), SubmitOutcome::Accepted);
 
     let due_flush = engine.drain_up_to_at(None, t0 + PROGRESS_EXPORT_INTERVAL);
     assert_eq!(
@@ -278,9 +288,17 @@ fn progress_flushes_at_most_once_per_hundred_milliseconds_with_the_latest_value(
     assert_eq!(frames.len(), 1);
     assert_eq!(
         frames[0].sequence.get(),
-        2,
-        "the flushed frame must carry the LATEST progress submission's sequence"
+        1,
+        "sequences are assigned at publication, so the first published frame is 1 \
+         however many submissions were superseded to produce it"
     );
+    assert_eq!(
+        engine.health().snapshot().dropped_progress,
+        1,
+        "the superseded snapshot is counted"
+    );
+
+    reservation.cancel();
 }
 
 /// Terminal, state-transition, and diagnostic facts submitted for the SAME
@@ -386,8 +404,18 @@ fn drain_report_excludes_facts_rejected_by_the_reducer() {
     assert_eq!(engine.health().snapshot().reducer_rejected, 1);
 }
 
+/// Progress held across a pass is not stranded behind facts that
+/// published in the meantime.
+///
+/// The old drain assigned a progress fact its sequence at submission and
+/// then had to discard it if an unrelated fact had published past that
+/// number before its export window came due -- a value dropped purely for
+/// the order it was numbered in. Assigning the sequence at publication
+/// removes the problem rather than compensating for it: the held value
+/// publishes at its own window, with a sequence that reflects where it
+/// actually published.
 #[test]
-fn drain_report_excludes_progress_superseded_by_the_published_frontier() {
+fn progress_held_across_a_pass_still_publishes_at_its_window() {
     let engine = RuntimeEventEngine::with_capacity(4);
     let reservation = engine
         .reserve_root(OperationId::new(), synthetic_unknown)
@@ -396,14 +424,14 @@ fn drain_report_excludes_progress_superseded_by_the_published_frontier() {
     let t0 = Instant::now();
     assert_eq!(engine.drain_up_to_at(None, t0).applied, 0);
 
-    assert_eq!(
-        ingress.try_submit(progress_fact()),
-        SubmitOutcome::Coalesced
-    );
+    assert_eq!(ingress.try_submit(progress_fact()), SubmitOutcome::Accepted);
     assert_eq!(
         ingress.try_submit(state_transition_fact()),
         SubmitOutcome::Accepted
     );
+
+    // Inside the window: the state transition publishes, the progress does
+    // not.
     assert_eq!(
         engine
             .drain_up_to_at(None, t0 + Duration::from_millis(40))
@@ -412,82 +440,81 @@ fn drain_report_excludes_progress_superseded_by_the_published_frontier() {
     );
 
     let report = engine.drain_up_to_at(None, t0 + PROGRESS_EXPORT_INTERVAL);
-    assert_eq!(report.applied, 0);
-    assert_eq!(engine.replay().snapshot().len(), 1);
-    assert_eq!(engine.health().snapshot().dropped_progress, 1);
+    assert_eq!(
+        report.applied, 1,
+        "the held progress publishes once its window comes due"
+    );
+    let sequences: Vec<u64> = engine
+        .replay()
+        .snapshot()
+        .iter()
+        .map(|frame| frame.sequence.get())
+        .collect();
+    assert_eq!(
+        sequences,
+        vec![1, 2],
+        "the progress frame is numbered where it published, after the state transition"
+    );
+    assert_eq!(engine.health().snapshot().dropped_progress, 0);
 
     reservation.cancel();
 }
 
-/// The crux of task 4: ONE shared atomic counter, consumed by every
-/// submit outcome, regardless of class or whether the fact was ever
-/// queued anywhere. `peek_next_sequence` never itself consumes a
-/// sequence, so each assertion below isolates exactly one `try_submit`
-/// call's own consumption.
+/// Submitting consumes no sequence at all.
+///
+/// This inverts the previous contract, where every outcome -- including a
+/// coalesce or a drop -- burned a number under the admission gate. Minting
+/// at submission is exactly what forced that gate to exist: assigning a
+/// number and placing the fact had to be one atomic step for the drain to
+/// be able to reconstruct an order across four separate containers.
+/// Sequences are now assigned at publication instead, so there is nothing
+/// to mint and nothing to synchronize.
 #[test]
-fn every_submit_outcome_consumes_the_shared_ingress_sequence_counter() {
+fn submitting_consumes_no_sequence() {
     let engine = RuntimeEventEngine::with_capacity(4);
     let scope = OperationScope::root_only(OperationId::new());
     let ingress = engine.unreserved_ingress(scope);
+    let before = engine.peek_next_sequence();
 
-    let mut expected = engine.wake().peek_next_sequence();
-
-    // Accepted (state-transition, first time for this key).
     assert_eq!(
         ingress.try_submit(state_transition_fact()),
         SubmitOutcome::Accepted
     );
-    expected += 1;
-    assert_eq!(engine.wake().peek_next_sequence(), expected);
-
-    // Coalesced (repeat kind, same scope).
+    // Repeat kind for the same scope: coalescing now happens in the
+    // consumer, so the producer is simply told the fact was accepted.
     assert_eq!(
         ingress.try_submit(state_transition_fact()),
-        SubmitOutcome::Coalesced
+        SubmitOutcome::Accepted
     );
-    expected += 1;
-    assert_eq!(engine.wake().peek_next_sequence(), expected);
-
-    // DroppedProgress (unreserved -- no slot to coalesce into).
     assert_eq!(
         ingress.try_submit(progress_fact()),
         SubmitOutcome::DroppedProgress
     );
-    expected += 1;
-    assert_eq!(engine.wake().peek_next_sequence(), expected);
-
-    // TerminalDeliveryFailed (unreserved terminal -- no slot to own it).
     assert_eq!(
         ingress.try_submit(terminal_success()),
         SubmitOutcome::TerminalDeliveryFailed
     );
-    expected += 1;
-    assert_eq!(engine.wake().peek_next_sequence(), expected);
-
-    // Fill the diagnostic queue to depth (each Accepted, one mint apiece).
-    for _ in 0..DIAGNOSTIC_LANE_DEPTH {
-        assert_eq!(
-            ingress.try_submit(diagnostic_fact()),
-            SubmitOutcome::Accepted
-        );
-        expected += 1;
-    }
-    assert_eq!(engine.wake().peek_next_sequence(), expected);
-
-    // DroppedDiagnostic: the queue is now at depth.
     assert_eq!(
         ingress.try_submit(diagnostic_fact()),
-        SubmitOutcome::DroppedDiagnostic
+        SubmitOutcome::Accepted
     );
-    expected += 1;
-    assert_eq!(engine.wake().peek_next_sequence(), expected);
+
+    assert_eq!(
+        engine.peek_next_sequence(),
+        before,
+        "no submit outcome may advance the publication sequence"
+    );
 }
 
-/// The client-visible cursor contract: a dropped input between two
-/// published facts consumes a sequence number without ever publishing, so
-/// the published stream shows a GAP, never a re-numbering.
+/// The client-visible cursor contract: published sequences are contiguous
+/// and monotonic. A dropped input leaves no hole, because it never
+/// received a number to leave one with.
+///
+/// The drops themselves are not lost evidence -- `runtime_health` counts
+/// them per class, which says both what was dropped and how many, where an
+/// anonymous gap said neither.
 #[test]
-fn published_sequences_are_non_contiguous_when_a_drop_happens_between_them() {
+fn published_sequences_are_contiguous_across_a_drop() {
     let engine = RuntimeEventEngine::with_capacity(4);
     let scope_a = OperationScope::root_only(OperationId::new());
     let scope_b = OperationScope::root_only(OperationId::new());
@@ -498,7 +525,7 @@ fn published_sequences_are_non_contiguous_when_a_drop_happens_between_them() {
             .try_submit(state_transition_fact()),
         SubmitOutcome::Accepted
     );
-    // Consumes a sequence number but never publishes.
+    // Dropped at the boundary: never queued, never published.
     assert_eq!(
         engine
             .unreserved_ingress(scope_a)
@@ -519,47 +546,44 @@ fn published_sequences_are_non_contiguous_when_a_drop_happens_between_them() {
         .iter()
         .map(|frame| frame.sequence.get())
         .collect();
-    assert_eq!(
-        sequences,
-        vec![1, 3],
-        "the dropped progress at sequence 1 leaves a gap, not a re-numbering"
-    );
+    assert_eq!(sequences, vec![1, 2]);
+    assert_eq!(engine.health().snapshot().dropped_progress, 1);
 }
 
-/// The state lane's FIFO-of-keys is bounded at
-/// `STATE_TRANSITION_LANE_DEPTH`: a new distinct key past the ceiling is
-/// rejected without evicting an accepted state.
+/// Distinct state-transition keys are lossless up to the ring's shared
+/// non-terminal budget; the first past it is refused and counted, and no
+/// already-accepted key is evicted to make room for it.
+///
+/// The budget is the sum of the two frozen per-class lane depths, so one
+/// shared budget cannot admit less than the separate lanes promised.
 #[test]
-fn state_lane_rejects_a_new_key_past_the_depth_bound() {
+fn a_state_transition_past_the_non_terminal_budget_is_rejected_without_evicting() {
     let engine = RuntimeEventEngine::with_capacity(4);
-    for _ in 0..STATE_TRANSITION_LANE_DEPTH {
+    for _ in 0..NON_TERMINAL_CREDITS {
         let scope = OperationScope::root_only(OperationId::new());
         assert_eq!(
             engine
                 .unreserved_ingress(scope)
                 .try_submit(state_transition_fact()),
-            SubmitOutcome::Accepted,
-            "every key within the bound is retained"
+            SubmitOutcome::Accepted
         );
     }
-    let rejected_scope = OperationScope::root_only(OperationId::new());
+
+    let overflow = OperationScope::root_only(OperationId::new());
     assert_eq!(
         engine
-            .unreserved_ingress(rejected_scope)
+            .unreserved_ingress(overflow)
             .try_submit(state_transition_fact()),
         SubmitOutcome::RejectedCapacity
     );
     assert_eq!(engine.health().snapshot().state_transition_rejected, 1);
-    assert!(engine.health().snapshot().state_degraded);
-    assert!(engine.health().snapshot().rebuild_required);
 
-    let report = engine.drain();
+    // Asserted on what the pass published, not on replay length: replay
+    // is separately bounded at REPLAY_MAX_FRAMES and would cap the count
+    // long before the budget does.
     assert_eq!(
-        report.applied, STATE_TRANSITION_LANE_DEPTH,
-        "exactly the bound's worth of accepted keys survive to drain"
-    );
-    assert_eq!(
-        engine.replay().snapshot().len(),
-        STATE_TRANSITION_LANE_DEPTH
+        engine.drain().applied,
+        NON_TERMINAL_CREDITS,
+        "every accepted key must still publish; the rejection evicts nothing"
     );
 }

@@ -560,7 +560,7 @@ mod tests {
         engine.drain();
         assert!(
             !engine
-                .state_lane_kinds()
+                .published_kinds()
                 .contains(&"session_capacity_changed"),
             "this layer has no distinct session-capacity signal (owned by Task 12)"
         );

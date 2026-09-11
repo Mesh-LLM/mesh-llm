@@ -220,7 +220,6 @@ mod tests {
     use super::{finalize_engine_driver, shutdown_engine_driver, spawn_engine_driver};
     use crate::runtime_events::config::{TUI_RENDER_TICK, WAKE_LIST_DEPTH};
     use crate::runtime_events::engine::RuntimeEventEngine;
-    use crate::runtime_events::reservation::TerminalRecord;
     use crate::runtime_events::{clear_runtime_event_engine, install_runtime_event_engine};
 
     fn terminal_fact() -> RuntimeFact {
@@ -308,21 +307,31 @@ mod tests {
     /// minus the `Notify` call `RuntimeEventEngine::submit` performs on
     /// top of it -- so no signal is ever sent for this entry.
     #[tokio::test(start_paused = true)]
-    async fn fallback_tick_drains_a_wake_entry_that_never_signaled_notify() {
+    async fn fallback_tick_drains_a_queued_terminal_that_never_signaled_notify() {
         let engine = RuntimeEventEngine::new();
         let driver = spawn_engine_driver(engine.clone());
         settle_past_the_free_first_tick().await;
 
         let scope = OperationScope::root_only(OperationId::new());
         let handle = engine.table().reserve(scope).expect("reserve");
-        assert!(engine.table().write_terminal(
-            handle,
-            TerminalRecord {
-                fact: terminal_fact(),
-                synthesized: false,
-            }
-        ));
-        engine.wake().push_next(handle);
+        // Place the terminal directly, bypassing `submit`, so no `notify`
+        // is ever signaled for it: only the fallback tick can find it.
+        assert_eq!(
+            engine.table().claim_terminal(handle),
+            crate::runtime_events::reservation::TerminalClaim::Claimed
+        );
+        engine
+            .place(crate::runtime_events::ingress::IngressItem::Fact(
+                crate::runtime_events::ingress::IngressFact {
+                    scope,
+                    fact: terminal_fact(),
+                    handle: Some(handle),
+                    reserved: true,
+                    synthesized: false,
+                    class: mesh_llm_runtime_event_contracts::DeliveryClass::Terminal,
+                },
+            ))
+            .expect("a fresh ring has capacity");
 
         tokio::time::advance(TUI_RENDER_TICK * 3).await;
         for _ in 0..8 {

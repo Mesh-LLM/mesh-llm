@@ -66,7 +66,14 @@ pub const UNRESERVED_OPERATION_BOUND: usize = STATE_TRANSITION_LANE_DEPTH;
 /// `EngineHealth::bump_reducer_eviction_stalled` if it ever somehow does.
 pub const TOTAL_OPERATION_BOUND: usize = RESERVATION_TABLE_CAPACITY + UNRESERVED_OPERATION_BOUND;
 
-/// Wake list depth, equal to the reservation table.
+/// Terminals that can be in flight at once.
+///
+/// Named for the bounded wake list this used to be, which is the name the
+/// wire contract froze. The wake list is gone -- terminals now travel the
+/// same ingress ring as every other class -- but the bound it expressed is
+/// unchanged and still exact: a terminal is admitted only by claiming its
+/// slot's write-once flag, so there can never be more of them in flight
+/// than there are reservation slots.
 pub const WAKE_LIST_DEPTH: usize = RESERVATION_TABLE_CAPACITY;
 
 /// Replay retention: frame count, age, and byte ceilings (first limit wins).
