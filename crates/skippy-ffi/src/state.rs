@@ -31,6 +31,8 @@ pub const CACHEGEN_RECORD_EXACT: u32 = 1;
 pub const CACHEGEN_RECORD_F16_TRANSPOSED: u32 = 2;
 pub const CACHEGEN_RECORD_F32: u32 = 3;
 pub const CACHEGEN_RECORD_F32_TRANSPOSED: u32 = 4;
+pub const CACHEGEN_RECORD_Q8_0: u32 = 5;
+pub const CACHEGEN_RECORD_Q4_0: u32 = 6;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
