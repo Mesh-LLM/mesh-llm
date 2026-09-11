@@ -6,10 +6,11 @@ rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]
 
 [target.x86_64-linux-android]
 rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]
-# BEGIN Mesh-LLM lld config
-[target.aarch64-apple-darwin]
-rustflags = ["-C", "link-arg=-fuse-ld=/opt/homebrew/bin/ld64.lld"]
 
-[target.x86_64-apple-darwin]
-rustflags = ["-C", "link-arg=-fuse-ld=/opt/homebrew/bin/ld64.lld"]
-# END Mesh-LLM lld config
+# No macOS linker is configured here on purpose. A checked-in absolute
+# `-fuse-ld=/opt/homebrew/bin/ld64.lld` applied to every cargo invocation,
+# hardcoded an Apple-Silicon Homebrew path, and could not check that the
+# linker works first. When lld fell behind the macOS SDK, every `cargo build`
+# and `cargo test` failed to link while `cargo check` stayed green, because
+# check never links. lld is now resolved and probed at build time by
+# scripts/lib/lld.sh, which `just with-lld` and scripts/build-host.sh use.
