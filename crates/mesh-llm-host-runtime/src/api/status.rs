@@ -424,6 +424,52 @@ pub(crate) struct StatusPayload {
     /// state has been initialized so older consumers retain their prior shape.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) logging: Option<LoggingStatusPayload>,
+    /// Health of the upstream this node shares (`mesh-llm share <url>`).
+    /// Absent on every node that is not sharing, so existing consumers see
+    /// no shape change.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) shared_endpoint: Option<SharedEndpointStatusPayload>,
+}
+
+/// Monitoring-only view of the shared upstream.
+///
+/// There is deliberately no control field here: mesh-llm never starts, stops,
+/// or restarts the operator's server, and this payload must not imply it can.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct SharedEndpointStatusPayload {
+    /// The normalized API base this node forwards to. Credentials are rejected
+    /// at registration, so this carries none.
+    pub(crate) address: String,
+    /// `healthy` | `degraded` | `starting` | `unhealthy` | `unknown`.
+    pub(crate) state: String,
+    /// Whether requests are currently being routed to the upstream. A
+    /// `degraded` upstream is still available: one failed probe is tolerated.
+    pub(crate) available: bool,
+    /// Probe outcome, including the failure reason. Cleared on success.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) detail: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub(crate) models: Vec<String>,
+    pub(crate) consecutive_failures: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) last_probe_unix_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) last_success_unix_secs: Option<u64>,
+}
+
+impl From<crate::plugin::SharedEndpointHealth> for SharedEndpointStatusPayload {
+    fn from(health: crate::plugin::SharedEndpointHealth) -> Self {
+        Self {
+            address: health.address,
+            state: health.state,
+            available: health.available,
+            detail: health.detail,
+            models: health.models,
+            consecutive_failures: health.consecutive_failures,
+            last_probe_unix_secs: health.last_probe_unix_secs,
+            last_success_unix_secs: health.last_success_unix_secs,
+        }
+    }
 }
 
 /// Path-free local logging health. This is deliberately absent from mesh
@@ -1212,6 +1258,7 @@ mod tests {
             mesh_requirements: None,
             recent_mesh_rejections: vec![],
             logging: None,
+            shared_endpoint: None,
         };
 
         let json = serde_json::to_string(&status).expect("serialization failed");
@@ -1283,6 +1330,7 @@ mod tests {
             mesh_requirements: None,
             recent_mesh_rejections: vec![],
             logging: None,
+            shared_endpoint: None,
         };
 
         let json = serde_json::to_string(&status).expect("serialization failed");
@@ -1354,6 +1402,7 @@ mod tests {
             mesh_requirements: None,
             recent_mesh_rejections: vec![],
             logging: None,
+            shared_endpoint: None,
         };
 
         let json = serde_json::to_value(&status).expect("serialization failed");
@@ -1420,6 +1469,7 @@ mod tests {
             mesh_requirements: None,
             recent_mesh_rejections: vec![],
             logging: None,
+            shared_endpoint: None,
         };
 
         let json = serde_json::to_value(&status).expect("serialization failed");

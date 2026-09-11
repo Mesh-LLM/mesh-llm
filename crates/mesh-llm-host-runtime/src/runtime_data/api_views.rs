@@ -78,6 +78,7 @@ pub(crate) fn status_payload(snapshot: StatusViewSnapshot) -> StatusPayload {
         mesh_requirements: None,
         recent_mesh_rejections: vec![],
         logging: None,
+        shared_endpoint: None,
     }
 }
 
@@ -140,6 +141,7 @@ mod tests {
             is_host: false,
             is_client: false,
             llama_ready: false,
+            external_inference_ready: false,
             model_name: "Qwen-Test".into(),
             models: vec!["Qwen-Test".into()],
             available_models: vec!["Qwen-Test".into()],
@@ -238,6 +240,7 @@ mod tests {
             mesh_requirements: None,
             recent_mesh_rejections: vec![],
             logging: None,
+            shared_endpoint: None,
         };
 
         assert_eq!(

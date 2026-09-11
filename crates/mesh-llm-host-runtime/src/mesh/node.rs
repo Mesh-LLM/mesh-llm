@@ -1491,6 +1491,12 @@ impl Node {
             let state = self.state.lock().await;
             state.peers.values().cloned().collect::<Vec<_>>()
         };
+        // The manager builds its own collector in `start`, before this node
+        // exists. Give it the collector the management API reads so a
+        // probe-driven endpoint health change can wake `/api/events`.
+        plugin_manager
+            .set_status_notifier(self.runtime_data_collector())
+            .await;
         *self.plugin_manager.lock().await = Some(plugin_manager.clone());
         self.broadcast_existing_mesh_snapshot(&plugin_manager, peers)
             .await;

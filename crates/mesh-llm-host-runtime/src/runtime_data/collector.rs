@@ -372,6 +372,7 @@ impl RuntimeDataCollector {
             is_client: input.is_client,
             is_host: input.is_host,
             llama_ready: input.llama_ready,
+            external_inference_ready: input.external_inference_ready,
             local_processes: &input.local_processes,
             hosted_models: &input.hosted_models,
             serving_models: &input.serving_models,
@@ -968,6 +969,13 @@ struct RuntimeStatusDerivationInput<'a> {
     is_client: bool,
     is_host: bool,
     llama_ready: bool,
+    /// At least one external inference endpoint (a configured plugin endpoint,
+    /// or the `mesh-llm share` upstream) is currently available.
+    ///
+    /// This is deliberately separate from `llama_ready`: such a node serves
+    /// requests without ever loading a native runtime, so it must read as
+    /// serving while `llama_ready` stays honestly false.
+    external_inference_ready: bool,
     local_processes: &'a [crate::api::RuntimeProcessPayload],
     hosted_models: &'a [String],
     serving_models: &'a [String],
@@ -987,13 +995,14 @@ fn derive_runtime_status(input: RuntimeStatusDerivationInput<'_>) -> RuntimeStat
         .or_else(|| input.serving_models.first().cloned())
         .unwrap_or_else(|| input.model_name.to_string());
     let has_local_worker_activity = has_local_processes || !input.hosted_models.is_empty();
-    let node_state = derive_local_node_state(
-        input.is_client,
+    let node_state = derive_local_node_state(LocalNodeStateInput {
+        is_client: input.is_client,
         effective_is_host,
         effective_llama_ready,
+        external_inference_ready: input.external_inference_ready,
         has_local_worker_activity,
-        &display_model_name,
-    );
+        display_model_name: &display_model_name,
+    });
     let launch_pi = if effective_llama_ready {
         Some(format!(
             "mesh-llm pi --host 127.0.0.1:{} --model {}",
@@ -1027,19 +1036,40 @@ fn single_quote_shell_arg(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn derive_local_node_state(
-    is_client: bool,
-    effective_is_host: bool,
-    effective_llama_ready: bool,
-    has_local_worker_activity: bool,
-    display_model_name: &str,
-) -> NodeState {
-    let has_declared_local_serving_work =
-        (effective_is_host || has_local_worker_activity) && !display_model_name.trim().is_empty();
+pub(crate) struct LocalNodeStateInput<'a> {
+    pub(crate) is_client: bool,
+    pub(crate) effective_is_host: bool,
+    pub(crate) effective_llama_ready: bool,
+    pub(crate) external_inference_ready: bool,
+    pub(crate) has_local_worker_activity: bool,
+    pub(crate) display_model_name: &'a str,
+}
 
-    if is_client {
+/// Test-only alias for [`LocalNodeStateInput`], so tests exercise the
+/// production derivation rather than a copy of it.
+#[cfg(test)]
+pub(crate) type LocalNodeStateTestInput<'a> = LocalNodeStateInput<'a>;
+
+/// Test-only entry point to the production node-state derivation.
+#[cfg(test)]
+pub(crate) fn derive_local_node_state_for_test(input: LocalNodeStateInput<'_>) -> NodeState {
+    derive_local_node_state(input)
+}
+
+fn derive_local_node_state(input: LocalNodeStateInput<'_>) -> NodeState {
+    let has_declared_local_serving_work = (input.effective_is_host
+        || input.has_local_worker_activity)
+        && !input.display_model_name.trim().is_empty();
+
+    if input.is_client {
         NodeState::Client
-    } else if effective_llama_ready && has_declared_local_serving_work {
+    } else if (input.effective_llama_ready || input.external_inference_ready)
+        && has_declared_local_serving_work
+    {
+        // A node whose only inference source is an external endpoint is ready
+        // the moment that endpoint is available. Requiring a native runtime
+        // here is what left a fully functional sharing node reporting
+        // `Loading` forever, since one never loads.
         NodeState::Serving
     } else if has_declared_local_serving_work {
         NodeState::Loading

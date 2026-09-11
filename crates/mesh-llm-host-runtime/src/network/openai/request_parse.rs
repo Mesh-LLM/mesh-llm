@@ -312,6 +312,19 @@ where
         .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?;
 
     let tokenize_request = is_tokenize_request(&parsed.method, &parsed.path);
+    // A JSON inference route whose body is not JSON is a client error, and the
+    // only place that can say so accurately is here, where the parse actually
+    // fails. Downstream every parse result is an `Option`, so an unparseable
+    // body reaches routing indistinguishable from one that simply named no
+    // model — and then fails as a 503 routing outcome. Restricted to the
+    // closed set of JSON inference routes so binary (`/api/objects`) and
+    // multipart paths keep forwarding bytes untouched, and to non-empty
+    // bodies so a valid body that merely omits `model` still auto-routes.
+    if is_json_inference_request(&parsed.method, &parsed.path) && !body.is_empty() {
+        serde_json::from_slice::<serde_json::Value>(&body)
+            .map_err(|error| anyhow::anyhow!("request body is not valid JSON: {error}"))
+            .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?;
+    }
     let metadata = if body.is_empty() {
         None
     } else if tokenize_request {
@@ -1062,6 +1075,21 @@ pub fn is_legacy_lifecycle_path(path: &str) -> bool {
 
 fn is_tokenize_request(method: &str, path: &str) -> bool {
     method == "POST" && path == "/v1/tokenize"
+}
+
+/// The closed set of POST routes whose body this frontend requires to be JSON.
+///
+/// Deliberately an allowlist, not "everything that is not an upload":
+/// `/api/objects` carries binary bodies and plugin routes may carry shapes this
+/// frontend never parses, so neither may be rejected for failing to be JSON.
+/// `/v1/tokenize` is excluded because it already parses strictly with its own
+/// error (`parse /v1/tokenize request metadata`).
+fn is_json_inference_request(method: &str, path: &str) -> bool {
+    method == "POST"
+        && matches!(
+            path.split('?').next().unwrap_or(path),
+            "/v1/chat/completions" | "/v1/completions" | "/v1/responses" | "/v1/embeddings"
+        )
 }
 
 pub fn pipeline_request_supported(path: &str, body: &serde_json::Value) -> bool {

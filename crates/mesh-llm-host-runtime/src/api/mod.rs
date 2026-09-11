@@ -101,6 +101,19 @@ use crate::runtime::wakeable::{WakeableInventoryEntry, WakeableState};
 
 const MESH_LLM_BUILD_VERSION: &str = crate::BUILD_VERSION;
 
+/// Monitoring view of the `mesh-llm share` upstream for `/api/status`.
+///
+/// `None` on every node that is not sharing, so the status shape is unchanged
+/// there. Read-only: this reports health and never acts on the upstream.
+async fn shared_endpoint_status(
+    plugin_manager: &plugin::PluginManager,
+) -> Option<crate::api::status::SharedEndpointStatusPayload> {
+    plugin_manager
+        .shared_endpoint_health()
+        .await
+        .map(crate::api::status::SharedEndpointStatusPayload::from)
+}
+
 async fn external_inference_models(plugin_manager: &plugin::PluginManager) -> Vec<String> {
     plugin_manager
         .inference_models()
@@ -763,6 +776,13 @@ impl MeshApi {
         models
     }
 
+    /// Test shim over the **production** derivation in
+    /// `runtime_data::collector`.
+    ///
+    /// This deliberately delegates rather than reimplementing. A `#[cfg(test)]`
+    /// copy of this logic used to live here, and it silently stopped matching
+    /// the live collector — so these tests passed while `/api/status` reported
+    /// something else.
     #[cfg(test)]
     fn derive_local_node_state(
         is_client: bool,
@@ -771,18 +791,35 @@ impl MeshApi {
         has_local_worker_activity: bool,
         display_model_name: &str,
     ) -> NodeState {
-        let has_declared_local_serving_work = (effective_is_host || has_local_worker_activity)
-            && !display_model_name.trim().is_empty();
+        Self::derive_local_node_state_with_external(
+            is_client,
+            effective_is_host,
+            effective_llama_ready,
+            false,
+            has_local_worker_activity,
+            display_model_name,
+        )
+    }
 
-        if is_client {
-            NodeState::Client
-        } else if effective_llama_ready && has_declared_local_serving_work {
-            NodeState::Serving
-        } else if has_declared_local_serving_work {
-            NodeState::Loading
-        } else {
-            NodeState::Standby
-        }
+    #[cfg(test)]
+    fn derive_local_node_state_with_external(
+        is_client: bool,
+        effective_is_host: bool,
+        effective_llama_ready: bool,
+        external_inference_ready: bool,
+        has_local_worker_activity: bool,
+        display_model_name: &str,
+    ) -> NodeState {
+        crate::runtime_data::derive_local_node_state_for_test(
+            crate::runtime_data::LocalNodeStateTestInput {
+                is_client,
+                effective_is_host,
+                effective_llama_ready,
+                external_inference_ready,
+                has_local_worker_activity,
+                display_model_name,
+            },
+        )
     }
 
     #[cfg(test)]
@@ -977,6 +1014,7 @@ impl MeshApi {
                 is_host: runtime_status.is_host,
                 is_client,
                 llama_ready: runtime_status.llama_ready,
+                external_inference_ready: plugin_ingress,
                 model_name,
                 models: advertised_models,
                 available_models: node.available_models().await,
@@ -1001,12 +1039,27 @@ impl MeshApi {
             },
         ));
         payload.runtime = runtime;
+        self.attach_status_supplements(&mut payload, &node, &plugin_manager)
+            .await;
+        payload
+    }
+
+    /// Attach the status fields sourced outside the runtime-data status view.
+    ///
+    /// Extracted from `status` so each addition here does not push that
+    /// orchestration function past the configured cognitive-complexity limit.
+    async fn attach_status_supplements(
+        &self,
+        payload: &mut StatusPayload,
+        node: &mesh::Node,
+        plugin_manager: &plugin::PluginManager,
+    ) {
         payload.wanted_model_refs = self.wanted_model_refs().await;
         payload.mesh_requirements = node.mesh_requirement_policy_summary().await;
         payload.recent_mesh_rejections = node.recent_mesh_requirement_rejections().await;
         payload.logging =
             crate::logging_runtime_state().map(|state| LoggingStatusPayload::from(state.status()));
-        payload
+        payload.shared_endpoint = shared_endpoint_status(plugin_manager).await;
     }
 
     async fn push_status(&self) {

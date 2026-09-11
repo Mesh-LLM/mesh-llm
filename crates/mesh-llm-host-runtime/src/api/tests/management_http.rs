@@ -743,3 +743,62 @@ async fn test_api_events_push_publication_state_updates() {
     drop(stream);
     handle.abort();
 }
+
+/// The management port's `/v1/*` passthrough must return 400 for a malformed
+/// body, not drop the connection.
+///
+/// The JSON guard lives in the shared reader, which this boundary also calls
+/// — but `read_management_request` used to propagate the parse error, and
+/// `start_with_listener` only debug-logs it and closes the socket. So the same
+/// body that got a 400 on the inference port got no response at all here.
+/// Driven through the real management listener.
+#[tokio::test]
+async fn management_port_v1_passthrough_returns_400_for_malformed_json() {
+    let state = build_test_mesh_api().await;
+    let (addr, handle) = spawn_management_test_server(state).await;
+
+    let body = r#"{"model":"test","messages":[{"role":"user","content":"hi"}],}"#;
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
+
+    let response = send_management_request(addr, request).await;
+
+    assert!(
+        !response.is_empty(),
+        "the management boundary must answer, not drop the socket"
+    );
+    assert!(
+        response.starts_with("HTTP/1.1 400 Bad Request"),
+        "expected a client error: {response}"
+    );
+    assert!(
+        response.contains("not valid JSON"),
+        "the response should explain the parse failure: {response}"
+    );
+
+    handle.abort();
+}
+
+/// Well-formed management requests are unaffected by the 400 path.
+#[tokio::test]
+async fn management_port_still_serves_valid_requests() {
+    let state = build_test_mesh_api().await;
+    let (addr, handle) = spawn_management_test_server(state).await;
+
+    let response = send_management_request(
+        addr,
+        "GET /api/status HTTP/1.1\r\nHost: localhost\r\n\r\n".to_string(),
+    )
+    .await;
+
+    assert!(
+        response.starts_with("HTTP/1.1 200"),
+        "valid management requests must still succeed: {}",
+        response.lines().next().unwrap_or_default()
+    );
+
+    handle.abort();
+}

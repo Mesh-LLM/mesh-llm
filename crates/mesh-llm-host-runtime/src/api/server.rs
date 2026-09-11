@@ -203,6 +203,19 @@ pub(crate) async fn handle_request(mut stream: TcpStream, state: &MeshApi) -> an
     let Some(request) = read_management_request(&mut stream).await? else {
         return Ok(());
     };
+    let request = match request {
+        ManagementRequest::Parsed(request) => request,
+        // A request this boundary cannot parse is a client error, so answer it
+        // rather than dropping the socket. `start_with_listener` only
+        // debug-logs a propagated error, so a malformed body on the console
+        // port's `/v1/*` passthrough previously closed the connection with no
+        // response at all — while the same body on the inference port got a
+        // 400 from `send_read_failure`. Same contract on both listeners now.
+        ManagementRequest::Unparseable(error) => {
+            respond_error(&mut stream, 400, &error.to_string()).await?;
+            return Ok(());
+        }
+    };
     let req = String::from_utf8_lossy(&request.raw);
     let method = request.method.as_str();
     let path = request.path.as_str();
@@ -322,17 +335,27 @@ async fn dispatch_management_request(
     Ok(())
 }
 
+/// One management request, or the reason it could not be parsed.
+///
+/// The unparseable case is carried rather than propagated so the caller can
+/// answer the client. Propagating it reaches only a `tracing::debug!` in
+/// `start_with_listener`, which drops the socket silently.
+enum ManagementRequest {
+    Parsed(Box<proxy::BufferedHttpRequest>),
+    Unparseable(anyhow::Error),
+}
+
 async fn read_management_request(
     stream: &mut TcpStream,
-) -> anyhow::Result<Option<proxy::BufferedHttpRequest>> {
+) -> anyhow::Result<Option<ManagementRequest>> {
     match tokio::time::timeout(
         std::time::Duration::from_secs(5),
         proxy::read_http_request(stream),
     )
     .await
     {
-        Ok(Ok(request)) => Ok(Some(request)),
-        Ok(Err(e)) => Err(e),
+        Ok(Ok(request)) => Ok(Some(ManagementRequest::Parsed(Box::new(request)))),
+        Ok(Err(error)) => Ok(Some(ManagementRequest::Unparseable(error))),
         Err(_) => Ok(None), // read timeout — health check probe, just close
     }
 }

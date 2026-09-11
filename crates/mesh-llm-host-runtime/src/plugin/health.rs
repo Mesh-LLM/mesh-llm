@@ -27,6 +27,53 @@ pub(super) struct EndpointHealthState {
     record: EndpointHealthRecord,
     first_checked_at: Instant,
     consecutive_failures: u32,
+    /// Wall-clock time of the last probe that actually contacted the upstream,
+    /// and of the last one that succeeded. `Instant` is monotonic and has no
+    /// meaning outside this process, so it cannot be reported to an operator;
+    /// these are carried alongside it purely for the status surface. States
+    /// derived from a plugin's process status rather than a probe leave them
+    /// `None` — there was no probe to timestamp.
+    last_probe_at: Option<std::time::SystemTime>,
+    last_success_at: Option<std::time::SystemTime>,
+}
+
+/// Operator-facing view of the `mesh-llm share` upstream.
+///
+/// Monitoring only: there is no control surface here, and nothing in this
+/// struct can start, stop, or restart the upstream server.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SharedEndpointHealth {
+    pub(crate) address: String,
+    /// `healthy` | `degraded` | `starting` | `unhealthy` | `unknown`.
+    pub(crate) state: String,
+    /// Whether requests are currently routed to the upstream.
+    pub(crate) available: bool,
+    /// Probe outcome detail, including the failure reason when unhealthy.
+    /// Cleared by a successful probe.
+    pub(crate) detail: Option<String>,
+    pub(crate) models: Vec<String>,
+    pub(crate) consecutive_failures: u32,
+    pub(crate) last_probe_unix_secs: Option<u64>,
+    pub(crate) last_success_unix_secs: Option<u64>,
+}
+
+/// Whether two health states would read the same to an operator.
+///
+/// Probe timestamps are deliberately excluded. They advance on every tick, so
+/// including them would mark status dirty every 15 seconds on a healthy idle
+/// node and push an otherwise identical payload. A poll of `/api/status`
+/// always returns the current timestamps regardless; this only governs whether
+/// a *change* is worth waking the stream for.
+fn shared_endpoint_status_equivalent(
+    left: &EndpointHealthState,
+    right: &EndpointHealthState,
+) -> bool {
+    left.record == right.record && left.consecutive_failures == right.consecutive_failures
+}
+
+fn unix_secs(at: Option<std::time::SystemTime>) -> Option<u64> {
+    at.and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|since| since.as_secs())
 }
 
 impl PluginManager {
@@ -53,7 +100,7 @@ impl PluginManager {
             return Ok(());
         };
 
-        let now = Instant::now();
+        let clock = ProbeClock::now();
         let prefix = format!("{plugin_name}:");
         let previous = self
             .inner
@@ -84,7 +131,7 @@ impl PluginManager {
         for endpoint in &manifest.endpoints {
             let key = endpoint.endpoint_id.clone();
             let health =
-                endpoint_health_for_summary(&summary, endpoint, previous.get(&key), now).await;
+                endpoint_health_for_summary(&summary, endpoint, previous.get(&key), clock).await;
             for capability in endpoint_declared_capabilities(endpoint) {
                 providers.push(PluginCapabilityProvider {
                     capability,
@@ -182,6 +229,7 @@ impl PluginManager {
             .shared_endpoint
             .clone()
             .context("no shared endpoint was configured for this node")?;
+        let clock = ProbeClock::now();
         let record = probe_models_endpoint(&address, ProbePolicy::Strict).await;
         anyhow::ensure!(
             record.available,
@@ -207,10 +255,16 @@ impl PluginManager {
             endpoint_key(SHARED_ENDPOINT_NAME, SHARED_ENDPOINT_ID),
             EndpointHealthState {
                 record,
-                first_checked_at: Instant::now(),
+                first_checked_at: clock.mono,
                 consecutive_failures: 0,
+                last_probe_at: Some(clock.wall),
+                last_success_at: Some(clock.wall),
             },
         );
+        // Startup registration also transitions the surface (`unknown` ->
+        // `healthy`), so it must wake the status stream for the same reason
+        // `refresh_shared_endpoint` does.
+        self.notify_status_changed().await;
         Ok(models)
     }
 
@@ -226,8 +280,60 @@ impl PluginManager {
         let key = endpoint_key(SHARED_ENDPOINT_NAME, SHARED_ENDPOINT_ID);
         let previous = self.inner.endpoint_health.lock().await.get(&key).cloned();
         let probe = probe_models_endpoint(&address, ProbePolicy::Strict).await;
-        let state = apply_endpoint_probe(previous.as_ref(), probe, Instant::now());
+        let state = apply_endpoint_probe(previous.as_ref(), probe, ProbeClock::now());
+        let changed = previous
+            .as_ref()
+            .is_none_or(|previous| !shared_endpoint_status_equivalent(previous, &state));
         self.inner.endpoint_health.lock().await.insert(key, state);
+        // The health map is not a runtime-data snapshot, so writing it does not
+        // wake the `/api/status` stream: `/api/events` only rebuilds status on a
+        // collector notification, and its 15s timer emits a keepalive rather
+        // than fresh status. Without this, a probe-only transition (notably
+        // healthy -> degraded, which keeps the same model list) would reach a
+        // polling client but never push to an idle sharing node's stream.
+        if changed {
+            self.notify_status_changed().await;
+        }
+    }
+
+    /// Monitoring view of the shared upstream for the management status
+    /// surface. `None` when this node is not sharing an endpoint.
+    ///
+    /// Reads the same health record routing reads, so status cannot disagree
+    /// with routability. Read-only by construction.
+    pub(crate) async fn shared_endpoint_health(&self) -> Option<SharedEndpointHealth> {
+        let address = self.inner.shared_endpoint.clone()?;
+        let state = self
+            .inner
+            .endpoint_health
+            .lock()
+            .await
+            .get(&endpoint_key(SHARED_ENDPOINT_NAME, SHARED_ENDPOINT_ID))
+            .cloned();
+        Some(match state {
+            Some(state) => SharedEndpointHealth {
+                address,
+                state: state.record.state,
+                available: state.record.available,
+                detail: state.record.detail,
+                models: state.record.models,
+                consecutive_failures: state.consecutive_failures,
+                last_probe_unix_secs: unix_secs(state.last_probe_at),
+                last_success_unix_secs: unix_secs(state.last_success_at),
+            },
+            // Configured but not yet probed. Reported honestly rather than as
+            // a failure, which would misread a startup race as an outage.
+            None => SharedEndpointHealth {
+                address,
+                state: "unknown".into(),
+                available: false,
+                detail: Some("no probe has completed yet".into()),
+                models: Vec::new(),
+                consecutive_failures: 0,
+                last_probe_unix_secs: None,
+                last_success_unix_secs: None,
+            },
+        })
     }
 
     async fn plugin_inference_endpoints(&self) -> Result<Vec<InferenceEndpointRoute>> {
@@ -307,6 +413,10 @@ fn endpoint_state_from_plugin_status(summary: &PluginSummary, now: Instant) -> E
         record: endpoint_record_from_plugin_status(summary),
         first_checked_at: now,
         consecutive_failures: 0,
+        // Derived from the plugin's process status, not a probe: there is no
+        // probe to timestamp, so the status surface reports no probe time.
+        last_probe_at: None,
+        last_success_at: None,
     }
 }
 
@@ -338,10 +448,10 @@ async fn endpoint_health_for_summary(
     summary: &PluginSummary,
     endpoint: &proto::EndpointManifest,
     previous: Option<&EndpointHealthState>,
-    now: Instant,
+    clock: ProbeClock,
 ) -> EndpointHealthState {
     if summary.status != "running" {
-        return endpoint_state_from_plugin_status(summary, now);
+        return endpoint_state_from_plugin_status(summary, clock.mono);
     }
 
     let probe = probe_endpoint(endpoint)
@@ -352,21 +462,56 @@ async fn endpoint_health_for_summary(
             detail: None,
             models: Vec::new(),
         });
-    apply_endpoint_probe(previous, probe, now)
+    apply_endpoint_probe(previous, probe, clock)
+}
+
+/// The two clocks a probe is stamped with.
+///
+/// `mono` drives the grace/threshold policy and must stay monotonic. `wall` is
+/// reportable to an operator and is only ever read back out for display, never
+/// compared for policy.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ProbeClock {
+    mono: Instant,
+    wall: std::time::SystemTime,
+}
+
+impl ProbeClock {
+    fn now() -> Self {
+        Self {
+            mono: Instant::now(),
+            wall: std::time::SystemTime::now(),
+        }
+    }
+
+    #[cfg(test)]
+    fn at(mono: Instant) -> Self {
+        Self {
+            mono,
+            wall: std::time::SystemTime::now(),
+        }
+    }
 }
 
 fn apply_endpoint_probe(
     previous: Option<&EndpointHealthState>,
     probe: EndpointHealthRecord,
-    now: Instant,
+    clock: ProbeClock,
 ) -> EndpointHealthState {
+    let now = clock.mono;
     let first_checked_at = previous.map(|state| state.first_checked_at).unwrap_or(now);
+    let last_probe_at = Some(clock.wall);
 
     if probe.available {
         return EndpointHealthState {
             record: probe,
             first_checked_at,
             consecutive_failures: 0,
+            last_probe_at,
+            // A recovery clears the stale failure detail and re-stamps
+            // success, so an operator can tell a currently-healthy upstream
+            // from one that merely has not been probed since it failed.
+            last_success_at: last_probe_at,
         };
     }
 
@@ -414,6 +559,8 @@ fn apply_endpoint_probe(
         record,
         first_checked_at,
         consecutive_failures: failure_streak,
+        last_probe_at,
+        last_success_at: previous.and_then(|state| state.last_success_at),
     }
 }
 
@@ -1002,7 +1149,7 @@ mod tests {
                 detail: Some("GET /models failed".into()),
                 models: Vec::new(),
             },
-            now,
+            ProbeClock::at(now),
         );
         assert_eq!(state.record.state, "starting");
         assert!(!state.record.available);
@@ -1021,6 +1168,8 @@ mod tests {
             },
             first_checked_at: now - Duration::from_secs(ENDPOINT_STARTUP_GRACE_SECS + 1),
             consecutive_failures: 0,
+            last_probe_at: Some(std::time::SystemTime::now()),
+            last_success_at: Some(std::time::SystemTime::now()),
         };
 
         let degraded = apply_endpoint_probe(
@@ -1031,7 +1180,7 @@ mod tests {
                 detail: Some("503".into()),
                 models: Vec::new(),
             },
-            now,
+            ProbeClock::at(now),
         );
         assert_eq!(degraded.record.state, "degraded");
         assert!(degraded.record.available);
@@ -1045,7 +1194,7 @@ mod tests {
                 detail: Some("503".into()),
                 models: Vec::new(),
             },
-            now + Duration::from_secs(HEALTH_CHECK_INTERVAL_SECS),
+            ProbeClock::at(now + Duration::from_secs(HEALTH_CHECK_INTERVAL_SECS)),
         );
         assert_eq!(unhealthy.record.state, "unhealthy");
         assert!(!unhealthy.record.available);
@@ -1064,6 +1213,8 @@ mod tests {
             },
             first_checked_at: now - Duration::from_secs(ENDPOINT_STARTUP_GRACE_SECS + 1),
             consecutive_failures: ENDPOINT_FAILURE_THRESHOLD,
+            last_probe_at: Some(std::time::SystemTime::now()),
+            last_success_at: None,
         };
 
         let recovered = apply_endpoint_probe(
@@ -1074,7 +1225,7 @@ mod tests {
                 detail: None,
                 models: vec!["demo".into()],
             },
-            now,
+            ProbeClock::at(now),
         );
         assert_eq!(recovered.record.state, "healthy");
         assert!(recovered.record.available);
@@ -1155,6 +1306,202 @@ mod tests {
         assert_eq!(requests.load(Ordering::SeqCst), 2);
 
         handle.await.unwrap();
+    }
+
+    /// The whole point of the health surface: a sharing operator can see
+    /// healthy -> tolerated failure -> withdrawal -> recovery, with probe
+    /// timestamps and the failure reason, from `/api/status` alone. Before
+    /// this, a shrinking model list was the only visible clue.
+    #[tokio::test]
+    async fn shared_endpoint_health_reports_state_probe_times_and_error_detail() {
+        let (address, server, _) = spawn_fake_models_server(vec![
+            ("200 OK", r#"{"data":[{"id":"llama3.2"}]}"#),
+            ("503 Service Unavailable", "{}"),
+            ("503 Service Unavailable", "{}"),
+            ("200 OK", r#"{"data":[{"id":"llama3.2"}]}"#),
+        ])
+        .await;
+        let manager = PluginManager::for_test_shared_endpoint(&address);
+
+        manager.start_shared_endpoint().await.unwrap();
+        let healthy = manager.shared_endpoint_health().await.unwrap();
+        assert_eq!(healthy.address, address);
+        assert_eq!(healthy.state, "healthy");
+        assert!(healthy.available);
+        assert_eq!(healthy.models, vec!["llama3.2".to_string()]);
+        assert_eq!(healthy.consecutive_failures, 0);
+        let first_probe = healthy
+            .last_probe_unix_secs
+            .expect("a completed probe must be timestamped");
+        assert_eq!(healthy.last_success_unix_secs, Some(first_probe));
+
+        // One failure is tolerated: still routable, but the operator can now
+        // see the degradation and the upstream's error.
+        manager.refresh_shared_endpoint().await;
+        let degraded = manager.shared_endpoint_health().await.unwrap();
+        assert_eq!(degraded.state, "degraded");
+        assert!(
+            degraded.available,
+            "a single blip must not withdraw the upstream"
+        );
+        assert_eq!(degraded.consecutive_failures, 1);
+        assert!(
+            degraded
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("503")),
+            "the upstream failure reason must be visible: {:?}",
+            degraded.detail
+        );
+        assert!(degraded.last_probe_unix_secs.is_some());
+        assert_eq!(
+            degraded.last_success_unix_secs,
+            Some(first_probe),
+            "last success must not advance on a failed probe"
+        );
+
+        manager.refresh_shared_endpoint().await;
+        let unhealthy = manager.shared_endpoint_health().await.unwrap();
+        assert_eq!(unhealthy.state, "unhealthy");
+        assert!(!unhealthy.available);
+        assert_eq!(unhealthy.consecutive_failures, 2);
+        assert!(unhealthy.models.is_empty());
+
+        // Recovery clears the stale failure detail rather than leaving an
+        // operator staring at an error for a working upstream.
+        manager.refresh_shared_endpoint().await;
+        let recovered = manager.shared_endpoint_health().await.unwrap();
+        assert_eq!(recovered.state, "healthy");
+        assert!(recovered.available);
+        assert_eq!(recovered.consecutive_failures, 0);
+        assert!(
+            recovered
+                .detail
+                .as_deref()
+                .is_none_or(|detail| !detail.contains("503")),
+            "a recovered upstream must not still report the old failure: {:?}",
+            recovered.detail
+        );
+        assert!(recovered.last_success_unix_secs >= Some(first_probe));
+
+        server.await.unwrap();
+    }
+
+    /// Configured but not yet probed reports `unknown`, not a failure: a
+    /// startup race must not read as an outage.
+    #[tokio::test]
+    async fn shared_endpoint_health_is_unknown_before_the_first_probe() {
+        let manager = PluginManager::for_test_shared_endpoint("http://localhost:11434/v1");
+        let health = manager.shared_endpoint_health().await.unwrap();
+        assert_eq!(health.state, "unknown");
+        assert!(!health.available);
+        assert!(health.last_probe_unix_secs.is_none());
+        assert!(health.last_success_unix_secs.is_none());
+    }
+
+    /// Nodes that are not sharing keep their existing status shape.
+    #[tokio::test]
+    async fn nodes_without_a_shared_endpoint_report_no_health() {
+        let manager = PluginManager::for_test_summaries(Vec::new());
+        assert!(manager.shared_endpoint_health().await.is_none());
+    }
+
+    /// A probe-only health change must wake the `/api/status` stream.
+    ///
+    /// The health map is not a runtime-data snapshot, so writing it does not
+    /// notify the collector, and `/api/events` only rebuilds status on a
+    /// collector notification (its 15s timer sends a keepalive). The
+    /// healthy -> degraded transition is the sharp case: the model list is
+    /// unchanged, so nothing else in the payload would have marked status
+    /// dirty, and an idle sharing node would show a stale `healthy` badge
+    /// until unrelated activity happened to wake the stream.
+    #[tokio::test]
+    async fn shared_endpoint_probe_transitions_notify_the_status_stream() {
+        let (address, server, _) = spawn_fake_models_server(vec![
+            ("200 OK", r#"{"data":[{"id":"llama3.2"}]}"#),
+            ("503 Service Unavailable", "{}"),
+            ("503 Service Unavailable", "{}"),
+            ("503 Service Unavailable", "{}"),
+        ])
+        .await;
+        let manager = PluginManager::for_test_shared_endpoint(&address);
+        // Deliberately the *attached* collector, not `inner.runtime_data`.
+        // The manager's own collector is not the one `/api/status` reads, so
+        // asserting against it would pass while production never notified —
+        // which is exactly how the first version of this fix went wrong.
+        let collector = crate::runtime_data::RuntimeDataCollector::new();
+        manager.set_status_notifier(collector.clone()).await;
+        let mut subscription = collector.subscribe();
+        subscription.borrow_and_update();
+
+        // Startup registration (unknown -> healthy) is itself a transition.
+        manager.start_shared_endpoint().await.unwrap();
+        assert!(
+            subscription.has_changed().unwrap(),
+            "startup registration must notify the status stream"
+        );
+        let state = *subscription.borrow_and_update();
+        assert!(
+            state
+                .dirty
+                .contains(crate::runtime_data::RuntimeDataDirty::STATUS),
+            "the notification must mark STATUS dirty so /api/events rebuilds"
+        );
+
+        // healthy -> degraded: same model list, so only the health record and
+        // failure count differ.
+        manager.refresh_shared_endpoint().await;
+        assert_eq!(
+            manager.shared_endpoint_health().await.unwrap().state,
+            "degraded"
+        );
+        assert!(
+            subscription.has_changed().unwrap(),
+            "healthy -> degraded must notify even though the models are unchanged"
+        );
+        assert!(
+            subscription
+                .borrow_and_update()
+                .dirty
+                .contains(crate::runtime_data::RuntimeDataDirty::STATUS)
+        );
+
+        // degraded -> unhealthy is also a transition.
+        manager.refresh_shared_endpoint().await;
+        assert!(
+            subscription.has_changed().unwrap(),
+            "degraded -> unhealthy must notify"
+        );
+        subscription.borrow_and_update();
+
+        // A continuing outage still advances `consecutive_failures`, which is
+        // itself part of the reported payload, so it legitimately notifies.
+        // What must NOT notify is a tick where nothing an operator can see
+        // changed; probe timestamps alone are deliberately excluded from the
+        // equivalence check for exactly that reason.
+        manager.refresh_shared_endpoint().await;
+        let before = manager.shared_endpoint_health().await.unwrap();
+        assert_eq!(before.consecutive_failures, 3);
+        subscription.borrow_and_update();
+
+        let mut unchanged = manager
+            .inner
+            .endpoint_health
+            .lock()
+            .await
+            .get(&endpoint_key(SHARED_ENDPOINT_NAME, SHARED_ENDPOINT_ID))
+            .cloned()
+            .unwrap();
+        let mut identical = unchanged.clone();
+        // Only the probe timestamps differ, as they do on every tick.
+        identical.last_probe_at = Some(std::time::SystemTime::now());
+        unchanged.last_probe_at = Some(std::time::SystemTime::UNIX_EPOCH);
+        assert!(
+            shared_endpoint_status_equivalent(&unchanged, &identical),
+            "advancing probe timestamps alone must not count as a change"
+        );
+
+        server.await.unwrap();
     }
 
     #[test]

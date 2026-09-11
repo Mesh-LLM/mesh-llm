@@ -243,3 +243,64 @@ fn test_decode_runtime_model_path_decodes_utf8_multibyte() {
         None
     );
 }
+
+/// A node whose only inference source is an external endpoint is *serving*,
+/// not *Loading*. It never loads a native runtime, so the previous derivation
+/// left it reporting `Loading` for as long as it ran.
+///
+/// This calls the same function `/api/status` calls (`derive_local_node_state`
+/// in `runtime_data::collector`), not a test-local copy.
+#[test]
+fn external_endpoint_readiness_reports_serving_without_a_native_runtime() {
+    let sharing = MeshApi::derive_local_node_state_with_external(
+        false, // not a client
+        true,  // claims the host role for its endpoint's models
+        false, // llama_ready stays honestly false
+        true,  // the external endpoint is available
+        false,
+        "llama3.2",
+    );
+
+    assert_eq!(sharing, NodeState::Serving);
+    assert_eq!(MeshApi::derive_node_status(sharing), "Serving");
+}
+
+/// The fix must not turn an unavailable upstream into a serving badge. With
+/// the endpoint withdrawn and no native runtime, declared work is still
+/// loading/unready.
+#[test]
+fn withdrawn_external_endpoint_does_not_report_serving() {
+    let withdrawn = MeshApi::derive_local_node_state_with_external(
+        false, true, false, false, false, "llama3.2",
+    );
+
+    assert_eq!(withdrawn, NodeState::Loading);
+}
+
+/// Local serving is unchanged: `external_inference_ready` only ever adds a
+/// reason to be ready, and never suppresses or invents local readiness.
+#[test]
+fn external_endpoint_flag_does_not_change_local_serving_states() {
+    for external in [false, true] {
+        assert_eq!(
+            MeshApi::derive_local_node_state_with_external(
+                false, true, true, external, false, "Qwen"
+            ),
+            NodeState::Serving,
+        );
+        assert_eq!(
+            MeshApi::derive_local_node_state_with_external(
+                true, true, true, external, true, "Qwen"
+            ),
+            NodeState::Client,
+        );
+        // No declared work at all stays Standby regardless: an available
+        // endpoint with no models is not serving anything.
+        assert_eq!(
+            MeshApi::derive_local_node_state_with_external(
+                false, false, false, external, false, ""
+            ),
+            NodeState::Standby,
+        );
+    }
+}

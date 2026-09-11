@@ -111,6 +111,7 @@ fn status_view_input(
         is_host: false,
         is_client: false,
         llama_ready: false,
+        external_inference_ready: false,
         model_name: "test-model".to_string(),
         models: Vec::new(),
         available_models: Vec::new(),
@@ -305,5 +306,51 @@ fn headless_custom_console_port_keeps_api_and_disables_ui() {
     assert!(
         !is_ui_only_route("/v1/chat/completions"),
         "/v1/chat/completions must not be blocked"
+    );
+}
+
+/// End-to-end through the production status view: a sharing node reads
+/// `Serving` while `llama_ready` stays honestly false, and no fictitious
+/// "starting" native model appears in `runtime.models`.
+///
+/// The phantom-model insert in `build_runtime_status_payload` is gated on a
+/// non-empty `model_name`, which a sharing node has none of — this pins that,
+/// so a later change cannot reintroduce a fake native model beside the
+/// corrected badge.
+#[test]
+fn sharing_node_status_is_serving_with_llama_ready_false_and_no_phantom_model() {
+    let collector = crate::runtime_data::RuntimeDataCollector::new();
+    let mut input = status_view_input(&collector);
+    input.is_host = true;
+    input.llama_ready = false;
+    input.external_inference_ready = true;
+    input.model_name = "llama3.2".to_string();
+    input.serving_models = vec!["llama3.2".to_string()];
+    input.hosted_models = vec!["llama3.2".to_string()];
+
+    let snapshot = collector.build_status_view(input);
+    let payload = crate::runtime_data::status_payload(snapshot);
+
+    assert_eq!(payload.node_status, "Serving");
+    assert!(
+        !payload.llama_ready,
+        "no native runtime is loaded on a sharing node"
+    );
+
+    // The runtime payload is built separately by the API; assert the guard
+    // that keeps it free of an invented native model for this shape.
+    let runtime = crate::api::status::build_runtime_status_payload(
+        "", // a sharing node reports no primary native model
+        None,
+        None,
+        true,  // is_host
+        false, // llama_ready
+        None,
+        Vec::new(),
+    );
+    assert!(
+        runtime.models.is_empty(),
+        "a sharing node must not advertise a phantom starting model: {:?}",
+        runtime.models
     );
 }

@@ -16,6 +16,7 @@ mod transport;
 mod types;
 mod web_ui;
 
+pub(crate) use self::health::SharedEndpointHealth;
 pub(crate) use self::types::BridgeFuture;
 pub use self::types::{
     InferenceEndpointRoute, PluginCapabilityProvider, PluginEndpointSummary,
@@ -121,6 +122,14 @@ pub(in crate::plugin) struct PluginManagerInner {
     pub(in crate::plugin) shared_endpoint: Option<String>,
     pub(in crate::plugin) endpoint_health: Arc<Mutex<BTreeMap<String, EndpointHealthState>>>,
     pub(in crate::plugin) runtime_data: RuntimeDataCollector,
+    /// The collector that backs `/api/status` and `/api/events`.
+    ///
+    /// `runtime_data` above is this manager's own collector, created in
+    /// `start` and **not** the one the management API reads. Plugin data
+    /// published through it reaches the API by other means, but marking status
+    /// dirty has to land on the API's collector to wake the SSE stream, so the
+    /// node attaches it here once it is available.
+    pub(in crate::plugin) status_notifier: Arc<Mutex<Option<RuntimeDataCollector>>>,
     pub(in crate::plugin) rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
     pub(in crate::plugin) shutting_down: AtomicBool,
     #[cfg(test)]
@@ -162,6 +171,7 @@ impl PluginManager {
                 shared_endpoint: specs.shared_endpoint.clone(),
                 endpoint_health: Arc::new(Mutex::new(BTreeMap::new())),
                 runtime_data,
+                status_notifier: Arc::new(Mutex::new(None)),
                 rpc_bridge,
                 shutting_down: AtomicBool::new(false),
                 #[cfg(test)]
@@ -377,6 +387,7 @@ impl PluginManager {
                 shared_endpoint: None,
                 endpoint_health: Arc::new(Mutex::new(BTreeMap::new())),
                 runtime_data: RuntimeDataCollector::new(),
+                status_notifier: Arc::new(Mutex::new(None)),
                 rpc_bridge: Arc::new(Mutex::new(Some(bridge))),
                 shutting_down: AtomicBool::new(false),
                 bridged_plugins: plugin_names
@@ -401,6 +412,7 @@ impl PluginManager {
                 shared_endpoint: Some(address.to_string()),
                 endpoint_health: Arc::new(Mutex::new(BTreeMap::new())),
                 runtime_data: RuntimeDataCollector::new(),
+                status_notifier: Arc::new(Mutex::new(None)),
                 rpc_bridge: Arc::new(Mutex::new(None)),
                 shutting_down: AtomicBool::new(false),
                 bridged_plugins: BTreeSet::new(),
@@ -424,6 +436,7 @@ impl PluginManager {
                 shared_endpoint: None,
                 endpoint_health: Arc::new(Mutex::new(BTreeMap::new())),
                 runtime_data: RuntimeDataCollector::new(),
+                status_notifier: Arc::new(Mutex::new(None)),
                 rpc_bridge: Arc::new(Mutex::new(None)),
                 shutting_down: AtomicBool::new(false),
                 bridged_plugins: BTreeSet::new(),
@@ -432,6 +445,23 @@ impl PluginManager {
                 test_manifests: Arc::new(Mutex::new(BTreeMap::new())),
                 test_stream_handlers: Arc::new(Mutex::new(BTreeMap::new())),
             }),
+        }
+    }
+
+    /// Attach the collector that backs `/api/status` and `/api/events`, so a
+    /// probe-driven health change can wake the status stream.
+    ///
+    /// Separate from `runtime_data` because `start` runs before the node
+    /// exists and builds its own collector; only the node knows the one the
+    /// management API actually reads.
+    pub(crate) async fn set_status_notifier(&self, collector: RuntimeDataCollector) {
+        *self.inner.status_notifier.lock().await = Some(collector);
+    }
+
+    /// Mark `/api/status` dirty on the API's collector, if one is attached.
+    pub(in crate::plugin) async fn notify_status_changed(&self) {
+        if let Some(collector) = self.inner.status_notifier.lock().await.as_ref() {
+            collector.mark_dirty(crate::runtime_data::RuntimeDataDirty::STATUS);
         }
     }
 

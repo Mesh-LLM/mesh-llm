@@ -18,6 +18,8 @@ mod subscriptions;
 pub(crate) use self::api_views::{collect_views, mesh_models, status_payload};
 pub(crate) use self::collector::RuntimeDataCollector;
 #[cfg(test)]
+pub(crate) use self::collector::{LocalNodeStateTestInput, derive_local_node_state_for_test};
+#[cfg(test)]
 pub(crate) use self::inventory::InventoryScanError;
 pub(crate) use self::inventory::{
     InventoryScanDisposition, InventoryScanOutcome, InventoryScanResult, sorted_inventory_entries,
@@ -388,6 +390,7 @@ pub(crate) mod tests {
             is_host: false,
             is_client: false,
             llama_ready: false,
+            external_inference_ready: false,
             model_name: "Qwen-Test".into(),
             models: vec!["Qwen-Test".into()],
             available_models: vec!["Qwen-Test".into()],
@@ -486,6 +489,7 @@ pub(crate) mod tests {
             mesh_requirements: None,
             recent_mesh_rejections: vec![],
             logging: None,
+            shared_endpoint: None,
         };
 
         assert_eq!(
@@ -584,6 +588,7 @@ pub(crate) mod tests {
             is_host: true,
             is_client: false,
             llama_ready: true,
+            external_inference_ready: false,
             model_name: "Self-Model".into(),
             models: vec!["Self-Model".into()],
             available_models: vec!["Self-Model".into()],
@@ -721,6 +726,7 @@ pub(crate) mod tests {
             is_host: true,
             is_client: false,
             llama_ready: true,
+            external_inference_ready: false,
             model_name: "Self-Model".into(),
             models: vec!["Self-Model".into()],
             available_models: vec!["Self-Model".into()],
