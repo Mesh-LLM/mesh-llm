@@ -33,11 +33,21 @@ BROKEN_CC = (
 
 
 def run_with_stub_cc(cc_body: str, snippet: str) -> subprocess.CompletedProcess[str]:
-    """Source the library with a stub `cc` first on PATH, then run `snippet`."""
+    """Source the library with a stub `cc` first on PATH, then run `snippet`.
+
+    Stub `ld.lld` and `ld64.lld` are staged too, so `find_lld` resolves on
+    any host, including CI runners with no lld installed. Only the stub `cc`
+    decides whether the probe passes.
+    """
     with tempfile.TemporaryDirectory() as stub_dir:
-        cc = Path(stub_dir) / "cc"
-        cc.write_text(cc_body, encoding="utf-8")
-        cc.chmod(0o755)
+        for name, body in (
+            ("cc", cc_body),
+            ("ld.lld", "#!/bin/sh\nexit 0\n"),
+            ("ld64.lld", "#!/bin/sh\nexit 0\n"),
+        ):
+            stub = Path(stub_dir) / name
+            stub.write_text(body, encoding="utf-8")
+            stub.chmod(0o755)
         env = dict(os.environ, PATH=f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
         return subprocess.run(
             ["bash", "-c", f'set -euo pipefail\nsource "{LIB}"\n{snippet}'],
@@ -75,13 +85,17 @@ class LldProbeTests(unittest.TestCase):
         self.assertIn("platform default linker", result.stderr)
         self.assertIn("could not load TAPI file", result.stderr)
 
+    def test_find_lld_resolves_an_installed_linker(self) -> None:
+        result = run_with_stub_cc(WORKING_CC, "find_lld")
+        self.assertNotEqual(result.stdout.strip(), "", result.stderr)
+
     def test_resolve_prints_the_linker_when_the_probe_passes(self) -> None:
-        # Skip cleanly where no lld is installed: then there is nothing to resolve.
-        found = run_with_stub_cc(WORKING_CC, "find_lld")
-        if not found.stdout.strip():
-            self.skipTest("no lld installed on this machine")
-        result = run_with_stub_cc(WORKING_CC, "resolve_usable_lld")
-        self.assertEqual(result.stdout.strip(), found.stdout.strip(), result.stderr)
+        result = run_with_stub_cc(
+            WORKING_CC,
+            'resolved="$(resolve_usable_lld)"\n'
+            '[[ -n "$resolved" && "$resolved" == "$(find_lld)" ]] && echo SAME',
+        )
+        self.assertEqual(result.stdout.strip(), "SAME", result.stderr)
         self.assertEqual(result.stderr, "")
 
     def test_an_unusable_linker_never_fails_the_caller(self) -> None:
