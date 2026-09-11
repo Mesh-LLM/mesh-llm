@@ -10,6 +10,7 @@
 //!   DELETE /api/model-interests/{model_ref} — clear local explicit interest
 //!   GET  /api/model-targets — ranked model targets from explicit interest and demand
 //!   GET  /api/diagnostics/split-readiness — split peer eligibility and operator guidance
+//!   GET  /api/diagnostics/network — advertised direct-connect candidates and per-peer path state
 //!   GET  /api/runtime   — local model state (JSON)
 //!   GET  /api/runtime/llama — local llama.cpp runtime metrics + slots snapshots (JSON)
 //!   GET  /api/runtime/events — SSE stream of llama.cpp runtime metrics + slots snapshots
@@ -51,6 +52,7 @@ mod http;
 mod management_lifecycle;
 mod model_target_capacity;
 mod model_targets;
+mod network_diagnostics;
 mod routes;
 mod server;
 mod split_readiness;

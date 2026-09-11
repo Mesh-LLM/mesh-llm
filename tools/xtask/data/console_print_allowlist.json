@@ -2173,23 +2173,31 @@
   ],
   "crates/mesh-llm/src/commands/doctor.rs": [
     {
-      "line": 79,
+      "line": 71,
       "macro_name": "println!"
     },
     {
-      "line": 82,
+      "line": 75,
       "macro_name": "println!"
     },
     {
-      "line": 85,
+      "line": 194,
       "macro_name": "println!"
     },
     {
-      "line": 86,
+      "line": 197,
       "macro_name": "println!"
     },
     {
-      "line": 88,
+      "line": 200,
+      "macro_name": "println!"
+    },
+    {
+      "line": 201,
+      "macro_name": "println!"
+    },
+    {
+      "line": 203,
       "macro_name": "println!"
     }
   ],
