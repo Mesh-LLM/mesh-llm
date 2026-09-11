@@ -1033,6 +1033,9 @@ pub(super) async fn setup_run_auto_console_state(
             ctx.options.max_clients,
         )
         .await;
+    if ctx.options.client {
+        console_state.set_client(true).await;
+    }
     Ok(Some(console_state))
 }
 
