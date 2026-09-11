@@ -634,16 +634,6 @@ impl Drop for InflightRequestGuard {
     }
 }
 
-#[async_trait::async_trait]
-impl crate::inference::skippy::StagePackagePrefetcher for Node {
-    async fn prefetch_stage_package(
-        &self,
-        request: &crate::inference::skippy::StagePrepareRequest,
-    ) -> Result<()> {
-        self.prefetch_stage_package_from_coordinator(request).await
-    }
-}
-
 impl Node {
     pub(crate) fn set_routing_telemetry_sink(
         &self,
@@ -962,13 +952,13 @@ impl Node {
         &self,
         mut request: crate::inference::skippy::StageControlRequest,
     ) -> Result<crate::inference::skippy::StageControlResponse> {
-        self.prepare_stage_control_request(&mut request).await?;
+        self.resolve_stage_control_request(&mut request).await?;
         if let crate::inference::skippy::StageControlRequest::Load(load)
         | crate::inference::skippy::StageControlRequest::LoadLocal(load) = &request
         {
             self.record_stage_load_topology(load).await;
         }
-        // Load/Prepare can take minutes on large stages; use the same
+        // Loading can take minutes on large stages; use the same
         // per-request budget remote control uses instead of the short default.
         let timeout = Self::stage_control_request_timeout(&request);
         let control_tx = self.stage_control_tx.lock().await.clone();
@@ -1055,9 +1045,7 @@ impl Node {
             crate::inference::skippy::StageControlRequest::Claim(_)
             | crate::inference::skippy::StageControlRequest::Stop(_)
             | crate::inference::skippy::StageControlRequest::Status(_)
-            | crate::inference::skippy::StageControlRequest::Inventory(_)
-            | crate::inference::skippy::StageControlRequest::CancelPrepare(_)
-            | crate::inference::skippy::StageControlRequest::StatusUpdate(_) => {
+            | crate::inference::skippy::StageControlRequest::Inventory(_) => {
                 std::time::Duration::from_secs(30)
             }
             crate::inference::skippy::StageControlRequest::Load(load) => {
@@ -1065,9 +1053,6 @@ impl Node {
             }
             crate::inference::skippy::StageControlRequest::LoadLocal(load) => {
                 crate::inference::skippy::stage_load_timeout(load)
-            }
-            crate::inference::skippy::StageControlRequest::Prepare(prepare) => {
-                crate::inference::skippy::stage_load_timeout(&prepare.load)
             }
         }
     }

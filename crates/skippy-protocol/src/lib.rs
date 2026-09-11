@@ -40,7 +40,7 @@ pub use validation::{
     STAGE_STREAM_TRANSPORT, STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER,
     STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1, STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
     STAGE_SUBPROTOCOL_FEATURE_STAGE_GENERATION,
-    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V8, STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
+    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V9, STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
     STAGE_SUBPROTOCOL_MAJOR, STAGE_SUBPROTOCOL_NAME, StageFrameError,
     validate_stage_admission_descriptor, validate_stage_artifact_transfer_request,
     validate_stage_artifact_transfer_response, validate_stage_control_request,
@@ -51,32 +51,14 @@ pub use validation::{
 mod tests {
     use prost::Message as _;
 
-    #[derive(Clone, PartialEq, prost::Message)]
-    struct LegacyStageControlRequest {
-        #[prost(uint32, tag = "1")]
-        r#gen: u32,
-        #[prost(bytes = "vec", tag = "2")]
-        requester_id: Vec<u8>,
-        #[prost(oneof = "LegacyStageCommand", tags = "3")]
-        command: Option<LegacyStageCommand>,
-    }
-
-    #[derive(Clone, PartialEq, prost::Oneof)]
-    enum LegacyStageCommand {
-        #[prost(message, tag = "3")]
-        LoadStage(super::proto::stage::LoadStage),
-    }
-
     use super::proto::stage::{
-        CancelPrepareStage, GetLayerInventory, GetStageStatus, LayerInventory, LayerRange,
-        LoadStage, PrepareStage, PrepareStageAccepted, SourceModelKind, SourceResolutionPolicy,
-        StageActivationCodec, StageAdmissionAdmitted, StageAdmissionDescriptor,
-        StageAdmissionProfile, StageAdmissionSidecar, StageAdmissionSidecarKind,
-        StageArtifactTransferRequest, StageArtifactTransferResponse, StageControlRequest,
-        StageControlResponse, StageLoadMode, StagePreparationState, StagePreparationStatus,
-        StageReady, StageRuntimeState, StageStatus, StageStatusAck, StageStatusList,
-        StageStatusUpdate, StageTopologyStage, StageTransportOpen, StopStage,
-        stage_control_request, stage_control_response, stage_preparation_status, stage_status,
+        GetLayerInventory, GetStageStatus, LayerInventory, LayerRange, LoadStage, SourceModelKind,
+        SourceResolutionPolicy, StageActivationCodec, StageAdmissionAdmitted,
+        StageAdmissionDescriptor, StageAdmissionProfile, StageAdmissionSidecar,
+        StageAdmissionSidecarKind, StageArtifactTransferRequest, StageArtifactTransferResponse,
+        StageControlRequest, StageControlResponse, StageLoadMode, StageReady, StageRuntimeState,
+        StageStatus, StageStatusList, StageTopologyStage, StageTransportOpen, StopStage,
+        stage_control_request, stage_control_response, stage_status,
     };
 
     fn admission(layer_start: u32, layer_end: u32) -> StageAdmissionDescriptor {
@@ -224,7 +206,7 @@ mod tests {
         );
     }
     use super::{
-        STAGE_PROTOCOL_GENERATION, STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V8,
+        STAGE_PROTOCOL_GENERATION, STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V9,
         StageFrameError, validate_stage_admission_descriptor,
         validate_stage_artifact_transfer_request, validate_stage_artifact_transfer_response,
         validate_stage_control_request, validate_stage_control_response,
@@ -234,7 +216,7 @@ mod tests {
     #[test]
     fn stage_protocol_generation_feature_names_current_generation() {
         assert_eq!(
-            STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V8,
+            STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V9,
             format!("stage-generation-{STAGE_PROTOCOL_GENERATION}")
         );
     }
@@ -304,6 +286,9 @@ mod tests {
                 participant_set_hash: "participants".to_string(),
                 topology_hash: "topology".to_string(),
                 activation_codec: StageActivationCodec::F16RneV1 as i32,
+                activation_codec_policy: super::proto::stage::StageActivationCodecPolicy::FixedV1
+                    as i32,
+                load_mode: StageLoadMode::RuntimeSlice as i32,
                 projector_path: Some("/models/mmproj.gguf".to_string()),
                 source_model_sha256: Some("b6".repeat(32)),
                 source_resolution_policy: SourceResolutionPolicy::Fallback as i32,
@@ -395,25 +380,25 @@ mod tests {
         };
         strict_load_stage.package_ref = format!("local-gguf://sha256/{}", "b6".repeat(32));
         strict_load_stage.load_mode = StageLoadMode::RuntimeSlice as i32;
-        let legacy_content_ref_load = StageControlRequest {
+        let fallback_content_ref_load = StageControlRequest {
             command: Some(stage_control_request::Command::LoadStage(
                 strict_load_stage.clone(),
             )),
             ..frame.clone()
         };
         assert!(matches!(
-            validate_stage_control_request(&legacy_content_ref_load),
+            validate_stage_control_request(&fallback_content_ref_load),
             Err(StageFrameError::LocalSourceCommandRequired)
         ));
         strict_load_stage.source_resolution_policy = SourceResolutionPolicy::LocalRequired as i32;
-        let legacy_strict_load = StageControlRequest {
+        let fallback_strict_load = StageControlRequest {
             command: Some(stage_control_request::Command::LoadStage(
                 strict_load_stage.clone(),
             )),
             ..frame.clone()
         };
         assert!(matches!(
-            validate_stage_control_request(&legacy_strict_load),
+            validate_stage_control_request(&fallback_strict_load),
             Err(StageFrameError::LocalSourceCommandRequired)
         ));
         let strict_load = StageControlRequest {
@@ -464,10 +449,6 @@ mod tests {
             ));
         }
 
-        let legacy_decoded =
-            LegacyStageControlRequest::decode(strict_load.encode_to_vec().as_slice()).unwrap();
-        assert!(legacy_decoded.command.is_none());
-
         let mut fallback_strict_load = strict_load_stage;
         fallback_strict_load.source_resolution_policy = SourceResolutionPolicy::Fallback as i32;
         let fallback_strict = StageControlRequest {
@@ -480,159 +461,6 @@ mod tests {
             validate_stage_control_request(&fallback_strict),
             Err(StageFrameError::LocalSourcePolicyRequired)
         ));
-
-        let prepare = StageControlRequest {
-            command: Some(stage_control_request::Command::PrepareStage(PrepareStage {
-                load_stage: Some(LoadStage {
-                    topology_id: "topology-a".to_string(),
-                    run_id: "run-a".to_string(),
-                    model_id: "qwen".to_string(),
-                    backend: "skippy".to_string(),
-                    package_ref: "gguf:///model.gguf".to_string(),
-                    manifest_sha256: "direct-gguf:1:model.gguf".to_string(),
-                    stage_id: "stage-1".to_string(),
-                    stage_index: 1,
-                    layer_start: 8,
-                    layer_end: 16,
-                    admission: Some(admission(8, 16)),
-                    participant_set_hash: "participants".to_string(),
-                    topology_hash: "topology".to_string(),
-                    activation_codec: StageActivationCodec::F16RneV1 as i32,
-                    bind_addr: "127.0.0.1:9001".to_string(),
-                    topology_stages: vec![
-                        StageTopologyStage {
-                            stage_id: "stage-0".to_string(),
-                            stage_index: 0,
-                            node_id: vec![7u8; 32],
-                            layer_start: 0,
-                            layer_end: 8,
-                            bind_addr: "127.0.0.1:9000".to_string(),
-                        },
-                        StageTopologyStage {
-                            stage_id: "stage-1".to_string(),
-                            stage_index: 1,
-                            node_id: vec![8u8; 32],
-                            layer_start: 8,
-                            layer_end: 16,
-                            bind_addr: "127.0.0.1:9001".to_string(),
-                        },
-                    ],
-                    ..Default::default()
-                }),
-                coordinator_id: Some(vec![8u8; 32]),
-            })),
-            ..frame.clone()
-        };
-        validate_stage_control_request(&prepare).unwrap();
-
-        let mut legacy_content_ref_prepare = prepare.clone();
-        let Some(stage_control_request::Command::PrepareStage(legacy_prepare_payload)) =
-            legacy_content_ref_prepare.command.as_mut()
-        else {
-            unreachable!("prepare fixture must contain PrepareStage")
-        };
-        legacy_prepare_payload
-            .load_stage
-            .as_mut()
-            .expect("prepare load")
-            .package_ref = format!("local-gguf://sha256/{}", "b6".repeat(32));
-        assert!(matches!(
-            validate_stage_control_request(&legacy_content_ref_prepare),
-            Err(StageFrameError::LocalSourceCommandRequired)
-        ));
-
-        let mut strict_prepare = prepare;
-        let Some(stage_control_request::Command::PrepareStage(prepare)) =
-            strict_prepare.command.as_mut()
-        else {
-            unreachable!("prepare fixture must contain PrepareStage")
-        };
-        prepare
-            .load_stage
-            .as_mut()
-            .expect("prepare load")
-            .source_resolution_policy = SourceResolutionPolicy::LocalRequired as i32;
-        assert!(matches!(
-            validate_stage_control_request(&strict_prepare),
-            Err(StageFrameError::LocalSourceCommandRequired)
-        ));
-
-        let status_update = StageControlRequest {
-            command: Some(stage_control_request::Command::StageStatusUpdate(
-                StageStatusUpdate {
-                    status: Some(StagePreparationStatus {
-                        topology_id: "topology-a".to_string(),
-                        run_id: "run-a".to_string(),
-                        model_id: "qwen".to_string(),
-                        backend: "skippy".to_string(),
-                        package_ref: "gguf:///model.gguf".to_string(),
-                        manifest_sha256: "direct-gguf:1:model.gguf".to_string(),
-                        stage_id: "stage-1".to_string(),
-                        stage_index: 1,
-                        layer_start: 8,
-                        layer_end: 16,
-                        admission_state: Some(stage_preparation_status::AdmissionState::Admitted(
-                            StageAdmissionAdmitted {
-                                descriptor: Some(admission(8, 16)),
-                            },
-                        )),
-                        activation_codec: StageActivationCodec::F16RneV1 as i32,
-                        state: StagePreparationState::Loading as i32,
-                        bytes_done: Some(10),
-                        bytes_total: Some(20),
-                        shutdown_generation: 7,
-                        ..Default::default()
-                    }),
-                },
-            )),
-            ..frame.clone()
-        };
-        validate_stage_control_request(&status_update).unwrap();
-
-        let missing_status_admission = StageControlRequest {
-            command: Some(stage_control_request::Command::StageStatusUpdate(
-                StageStatusUpdate {
-                    status: Some(StagePreparationStatus {
-                        topology_id: "topology-a".to_string(),
-                        run_id: "run-a".to_string(),
-                        model_id: "qwen".to_string(),
-                        layer_start: 8,
-                        layer_end: 16,
-                        ..Default::default()
-                    }),
-                },
-            )),
-            ..frame.clone()
-        };
-        assert!(matches!(
-            validate_stage_control_request(&missing_status_admission),
-            Err(StageFrameError::MissingStageAdmissionDescriptor)
-        ));
-
-        let missing_prepare_load = StageControlRequest {
-            command: Some(stage_control_request::Command::PrepareStage(PrepareStage {
-                load_stage: None,
-                coordinator_id: None,
-            })),
-            ..frame.clone()
-        };
-        assert!(matches!(
-            validate_stage_control_request(&missing_prepare_load),
-            Err(StageFrameError::MissingStageAdmissionDescriptor)
-        ));
-
-        let cancel = StageControlRequest {
-            command: Some(stage_control_request::Command::CancelPrepareStage(
-                CancelPrepareStage {
-                    topology_id: "topology-a".to_string(),
-                    run_id: "run-a".to_string(),
-                    stage_id: "stage-1".to_string(),
-                    shutdown_generation: 8,
-                },
-            )),
-            ..frame.clone()
-        };
-        validate_stage_control_request(&cancel).unwrap();
 
         let missing_command = StageControlRequest {
             command: None,
@@ -674,6 +502,8 @@ mod tests {
                         },
                     )),
                     activation_codec: StageActivationCodec::F16RneV1 as i32,
+                    activation_codec_policy:
+                        super::proto::stage::StageActivationCodecPolicy::FixedV1 as i32,
                     state: StageRuntimeState::Ready as i32,
                     bind_addr: "127.0.0.1:0".to_string(),
                     shutdown_generation: 7,
@@ -722,49 +552,6 @@ mod tests {
         };
         validate_stage_control_response(&inventory_response).unwrap();
 
-        let prepare_response = StageControlResponse {
-            response: Some(stage_control_response::Response::PrepareStageAccepted(
-                PrepareStageAccepted {
-                    accepted: true,
-                    status: Some(StagePreparationStatus {
-                        topology_id: "topology-a".to_string(),
-                        run_id: "run-a".to_string(),
-                        model_id: "qwen".to_string(),
-                        backend: "skippy".to_string(),
-                        package_ref: "hf://repo/model".to_string(),
-                        manifest_sha256: "a5".repeat(32),
-                        stage_id: "stage-1".to_string(),
-                        stage_index: 1,
-                        layer_start: 8,
-                        layer_end: 16,
-                        admission_state: Some(stage_preparation_status::AdmissionState::Admitted(
-                            StageAdmissionAdmitted {
-                                descriptor: Some(admission(8, 16)),
-                            },
-                        )),
-                        activation_codec: StageActivationCodec::F16RneV1 as i32,
-                        state: StagePreparationState::Assigned as i32,
-                        shutdown_generation: 7,
-                        ..Default::default()
-                    }),
-                    error: None,
-                },
-            )),
-            ..frame.clone()
-        };
-        validate_stage_control_response(&prepare_response).unwrap();
-
-        let ack_response = StageControlResponse {
-            response: Some(stage_control_response::Response::StageStatusAck(
-                StageStatusAck {
-                    accepted: true,
-                    error: None,
-                },
-            )),
-            ..frame.clone()
-        };
-        validate_stage_control_response(&ack_response).unwrap();
-
         let status_list_response = StageControlResponse {
             response: Some(stage_control_response::Response::StageStatuses(
                 StageStatusList {
@@ -783,6 +570,8 @@ mod tests {
                             },
                         )),
                         activation_codec: StageActivationCodec::F16RneV1 as i32,
+                        activation_codec_policy:
+                            super::proto::stage::StageActivationCodecPolicy::FixedV1 as i32,
                         state: StageRuntimeState::Ready as i32,
                         bind_addr: "127.0.0.1:51234".to_string(),
                         shutdown_generation: 7,

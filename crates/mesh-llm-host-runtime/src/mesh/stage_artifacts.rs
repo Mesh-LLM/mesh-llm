@@ -117,7 +117,6 @@ impl Node {
                 "load-local"
             }
             Some(skippy_stage_proto::stage_control_request::Command::StopStage(_)) => "stop",
-            Some(skippy_stage_proto::stage_control_request::Command::PrepareStage(_)) => "prepare",
             _ => "other",
         }
     }
@@ -145,7 +144,7 @@ impl Node {
         &self,
         request: crate::inference::skippy::StageControlRequest,
     ) -> anyhow::Result<crate::inference::skippy::StageControlResponse> {
-        // Load/Prepare can take minutes on large stages; use the same
+        // Load can take minutes on large stages; use the same
         // per-request budget the remote sender uses instead of the short
         // local default, otherwise the executing node rejects its own load.
         let timeout = Self::stage_control_request_timeout(&request);
@@ -220,11 +219,11 @@ impl Node {
         );
 
         let mut request = stage_control_request_from_proto(frame)?;
-        self.prepare_stage_control_request(&mut request)
+        self.resolve_stage_control_request(&mut request)
             .await
             .map_err(|e| {
                 tracing::warn!(
-                    "handle_stage_control: prepare failed for {request_kind} from {}: {e}",
+                    "handle_stage_control: source resolution failed for {request_kind} from {}: {e}",
                     remote.fmt_short()
                 );
                 e
@@ -276,7 +275,7 @@ impl Node {
         }
     }
 
-    pub(crate) async fn prepare_stage_control_request(
+    pub(crate) async fn resolve_stage_control_request(
         &self,
         request: &mut crate::inference::skippy::StageControlRequest,
     ) -> anyhow::Result<()> {
@@ -290,63 +289,76 @@ impl Node {
             crate::inference::skippy::StageControlRequest::Claim(_) => {}
             crate::inference::skippy::StageControlRequest::Load(load)
             | crate::inference::skippy::StageControlRequest::LoadLocal(load) => {
-                let mut effective_load = load.clone();
-                let verified = tokio::task::spawn_blocking(move || {
-                    let verified =
-                        crate::inference::skippy::apply_verified_local_source(&mut effective_load)?;
-                    anyhow::Ok((effective_load, verified))
-                })
-                .await
-                .context("join verify local-required stage load source task")??;
-                *load = verified.0;
-                if !verified.1
-                    && load.load_mode == skippy_protocol::LoadMode::RuntimeSlice
-                    && load
-                        .model_path
-                        .as_deref()
-                        .is_none_or(|path| !std::path::Path::new(path).exists())
-                {
-                    for candidate in [
-                        load.model_id.as_str(),
-                        load.package_ref.strip_prefix("gguf://").unwrap_or_default(),
-                    ]
-                    .into_iter()
-                    .filter(|candidate| !candidate.is_empty())
-                    {
-                        if let Ok(path) =
-                            crate::models::resolve_model_spec(std::path::Path::new(candidate)).await
-                            && path.exists()
-                        {
-                            load.model_path = Some(path.to_string_lossy().to_string());
-                            break;
-                        }
-                    }
-                }
-                let topology_id = load.topology_id.clone();
-                let run_id = load.run_id.clone();
-                if let Some(upstream) = load.upstream.as_mut() {
-                    self.prepare_stage_peer_endpoint(&topology_id, &run_id, upstream)
-                        .await?;
-                }
-                if let Some(downstream) = load.downstream.as_mut() {
-                    self.prepare_stage_peer_endpoint(&topology_id, &run_id, downstream)
-                        .await?;
-                }
+                self.resolve_stage_load_request(load).await?;
             }
-            crate::inference::skippy::StageControlRequest::Prepare(_) => {}
             crate::inference::skippy::StageControlRequest::Stop(stop) => {
                 self.stop_stage_transport_bridge(&stop.topology_id, &stop.run_id, &stop.stage_id)
                     .await;
             }
             crate::inference::skippy::StageControlRequest::Status(_)
-            | crate::inference::skippy::StageControlRequest::Inventory(_)
-            | crate::inference::skippy::StageControlRequest::CancelPrepare(_)
-            | crate::inference::skippy::StageControlRequest::StatusUpdate(_) => {}
+            | crate::inference::skippy::StageControlRequest::Inventory(_) => {}
         }
         Ok(())
     }
 
-    pub(crate) async fn prepare_stage_peer_endpoint(
+    async fn resolve_stage_load_request(
+        &self,
+        load: &mut crate::inference::skippy::StageLoadRequest,
+    ) -> anyhow::Result<()> {
+        if let Err(error) = self.prefetch_stage_package_from_coordinator(load).await {
+            tracing::debug!(
+                topology_id = %load.topology_id,
+                run_id = %load.run_id,
+                stage_id = %load.stage_id,
+                "peer artifact fetch failed, falling back to local/HF resolution: {error:#}"
+            );
+        }
+        let mut effective_load = load.clone();
+        let verified = tokio::task::spawn_blocking(move || {
+            let verified =
+                crate::inference::skippy::apply_verified_local_source(&mut effective_load)?;
+            anyhow::Ok((effective_load, verified))
+        })
+        .await
+        .context("join verify local-required stage load source task")??;
+        *load = verified.0;
+        if !verified.1
+            && load.load_mode == skippy_protocol::LoadMode::RuntimeSlice
+            && load
+                .model_path
+                .as_deref()
+                .is_none_or(|path| !std::path::Path::new(path).exists())
+        {
+            for candidate in [
+                load.model_id.as_str(),
+                load.package_ref.strip_prefix("gguf://").unwrap_or_default(),
+            ]
+            .into_iter()
+            .filter(|candidate| !candidate.is_empty())
+            {
+                if let Ok(path) =
+                    crate::models::resolve_model_spec(std::path::Path::new(candidate)).await
+                    && path.exists()
+                {
+                    load.model_path = Some(path.to_string_lossy().to_string());
+                    break;
+                }
+            }
+        }
+        let topology_id = load.topology_id.clone();
+        let run_id = load.run_id.clone();
+        if let Some(upstream) = load.upstream.as_mut() {
+            self.resolve_stage_peer_endpoint(&topology_id, &run_id, upstream)
+                .await?;
+        }
+        if let Some(downstream) = load.downstream.as_mut() {
+            self.resolve_stage_peer_endpoint(&topology_id, &run_id, downstream)
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn resolve_stage_peer_endpoint(
         &self,
         topology_id: &str,
         run_id: &str,
@@ -367,9 +379,8 @@ impl Node {
 
     pub(crate) async fn prefetch_stage_package_from_coordinator(
         &self,
-        prepare: &crate::inference::skippy::StagePrepareRequest,
+        load: &crate::inference::skippy::StageLoadRequest,
     ) -> Result<()> {
-        let load = &prepare.load;
         if !matches!(
             load.load_mode,
             skippy_protocol::LoadMode::LayerPackage | skippy_protocol::LoadMode::RuntimeSlice
@@ -380,7 +391,7 @@ impl Node {
         if !crate::models::artifact_transfer::artifact_transfer_enabled() {
             return Ok(());
         }
-        let Some(coordinator_id) = prepare.coordinator_id else {
+        let Some(coordinator_id) = load.coordinator_id else {
             return Ok(());
         };
         if coordinator_id == self.endpoint.id() {

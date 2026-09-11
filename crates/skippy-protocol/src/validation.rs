@@ -6,13 +6,13 @@ pub const STAGE_ALPN_V2: &[u8] = b"skippy-stage/2";
 pub const STAGE_SUBPROTOCOL_NAME: &str = "skippy-stage";
 pub const STAGE_SUBPROTOCOL_MAJOR: u32 = 2;
 pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL: &str = "stage-control";
-pub const STAGE_PROTOCOL_GENERATION: u32 = 8;
+pub const STAGE_PROTOCOL_GENERATION: u32 = 9;
 /// Generation-scoped stage capability. A peer can advertise `stage-control`
 /// while still rejecting current-generation frames, so split planning gates on
 /// this exact token before sending current-generation control requests.
-pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V8: &str = "stage-generation-8";
+pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V9: &str = "stage-generation-9";
 pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_GENERATION: &str =
-    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V8;
+    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V9;
 pub const STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER: &str = "artifact-transfer";
 pub const STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST: &str = "status-list";
 pub const STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1: &str = "local-gguf-content-id-v1";
@@ -111,23 +111,23 @@ impl std::fmt::Display for StageFrameError {
             StageFrameError::MissingStageAdmissionDescriptor => {
                 write!(
                     f,
-                    "generation 8 stage load/status requires an admission descriptor"
+                    "generation 9 stage load/status requires an admission descriptor"
                 )
             }
             StageFrameError::MissingLoadClaimHashes => {
                 write!(
                     f,
-                    "generation 8 stage load requires participant and topology hashes"
+                    "generation 9 stage load requires participant and topology hashes"
                 )
             }
             StageFrameError::InvalidActivationCodec { got } => {
-                write!(f, "unsupported generation-8 activation codec {got}")
+                write!(f, "unsupported generation-9 activation codec {got}")
             }
             StageFrameError::InvalidActivationCodecPolicy { got } => {
-                write!(f, "unsupported generation-8 activation codec policy {got}")
+                write!(f, "unsupported generation-9 activation codec policy {got}")
             }
             StageFrameError::InvalidTopologyStages(reason) => {
-                write!(f, "invalid generation-8 topology stage list: {reason}")
+                write!(f, "invalid generation-9 topology stage list: {reason}")
             }
             StageFrameError::InvalidStageAdmissionDescriptor(reason) => {
                 write!(f, "invalid stage admission descriptor: {reason}")
@@ -156,7 +156,7 @@ pub fn validate_stage_control_request(
     match frame.command.as_ref() {
         Some(Command::LoadStage(load)) => {
             validate_load_stage_admission(load)?;
-            reject_local_source_in_legacy_command(load)?;
+            reject_local_source_in_fallback_command(load)?;
             validate_source_resolution(
                 load.source_model_sha256.as_deref(),
                 load.source_resolution_policy,
@@ -170,31 +170,12 @@ pub fn validate_stage_control_request(
             inventory.expected_source_model_sha256.as_deref(),
             inventory.source_resolution_policy,
         )?,
-        Some(Command::PrepareStage(prepare)) => {
-            let load = prepare
-                .load_stage
-                .as_ref()
-                .ok_or(StageFrameError::MissingStageAdmissionDescriptor)?;
-            validate_load_stage_admission(load)?;
-            reject_local_source_in_legacy_command(load)?;
-            validate_source_resolution(
-                load.source_model_sha256.as_deref(),
-                load.source_resolution_policy,
-            )?;
-        }
-        Some(Command::StageStatusUpdate(update)) => {
-            let status = update
-                .status
-                .as_ref()
-                .ok_or(StageFrameError::MissingStageAdmissionDescriptor)?;
-            validate_preparation_stage_admission(status)?;
-        }
         _ => {}
     }
     Ok(())
 }
 
-fn reject_local_source_in_legacy_command(
+fn reject_local_source_in_fallback_command(
     load: &proto::stage::LoadStage,
 ) -> Result<(), StageFrameError> {
     if load.source_resolution_policy == proto::stage::SourceResolutionPolicy::LocalRequired as i32
@@ -256,16 +237,6 @@ pub fn validate_stage_control_response(
             for status in &statuses.statuses {
                 validate_status_stage_admission(status)?;
             }
-        }
-        Some(Response::PrepareStageAccepted(accepted)) => {
-            let status = accepted
-                .status
-                .as_ref()
-                .ok_or(StageFrameError::MissingStageAdmissionDescriptor)?;
-            validate_preparation_stage_admission(status)?;
-        }
-        Some(Response::StagePreparationStatus(status)) => {
-            validate_preparation_stage_admission(status)?;
         }
         _ => {}
     }
@@ -390,36 +361,6 @@ fn validate_status_stage_admission(
     Ok(())
 }
 
-fn validate_preparation_stage_admission(
-    status: &proto::stage::StagePreparationStatus,
-) -> Result<(), StageFrameError> {
-    use proto::stage::stage_preparation_status::AdmissionState;
-    let admission = match status.admission_state.as_ref() {
-        Some(AdmissionState::Idle(_)) => {
-            if status.model_id.is_empty() {
-                return Ok(());
-            }
-            return Err(StageFrameError::InvalidStageAdmissionDescriptor(
-                "idle preparation must not identify a model",
-            ));
-        }
-        Some(AdmissionState::Admitted(admitted)) => admitted
-            .descriptor
-            .as_ref()
-            .ok_or(StageFrameError::MissingStageAdmissionDescriptor)?,
-        None => return Err(StageFrameError::MissingStageAdmissionDescriptor),
-    };
-    validate_stage_admission_descriptor(admission)?;
-    if admission.layer_start != status.layer_start || admission.layer_end != status.layer_end {
-        return Err(StageFrameError::InvalidStageAdmissionDescriptor(
-            "descriptor layer range does not match preparation range",
-        ));
-    }
-    validate_activation_codec(status.activation_codec)?;
-    validate_activation_codec_policy(status.activation_codec, status.activation_codec_policy)?;
-    Ok(())
-}
-
 fn validate_activation_codec(value: i32) -> Result<(), StageFrameError> {
     match proto::stage::StageActivationCodec::try_from(value) {
         Ok(proto::stage::StageActivationCodec::RawF32V1)
@@ -430,15 +371,13 @@ fn validate_activation_codec(value: i32) -> Result<(), StageFrameError> {
     }
 }
 
-/// `UNSPECIFIED` means a legacy peer that never sent the field; it maps to
-/// `Fixed` at the conversion boundary. Any unknown numeric value fails closed.
-/// `FIXED_V1` must agree with the load's codec, and `AUTO_LOSSLESS_V1` must
-/// configure RawF32V1 as its fallback codec.
+/// The policy must be explicit. `FIXED_V1` must agree with the load's codec,
+/// and `AUTO_LOSSLESS_V1` must configure RawF32V1 as its fallback codec.
 fn validate_activation_codec_policy(load_codec: i32, value: i32) -> Result<(), StageFrameError> {
     use proto::stage::StageActivationCodec as C;
     use proto::stage::StageActivationCodecPolicy as P;
     match P::try_from(value) {
-        Ok(P::Unspecified) => Ok(()),
+        Ok(P::Unspecified) => Err(StageFrameError::InvalidActivationCodecPolicy { got: value }),
         Ok(P::FixedV1) => Ok(()),
         Ok(P::AutoLosslessV1) => {
             if C::try_from(load_codec) == Ok(C::RawF32V1) {
@@ -559,7 +498,7 @@ fn validate_source_resolution(
         match proto::stage::SourceResolutionPolicy::try_from(source_resolution_policy) {
             Ok(proto::stage::SourceResolutionPolicy::Fallback) => false,
             Ok(proto::stage::SourceResolutionPolicy::LocalRequired) => true,
-            Err(_) => {
+            Ok(proto::stage::SourceResolutionPolicy::Unspecified) | Err(_) => {
                 return Err(StageFrameError::InvalidSourceResolutionPolicy {
                     got: source_resolution_policy,
                 });

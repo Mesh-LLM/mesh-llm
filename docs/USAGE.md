@@ -563,7 +563,6 @@ binary_stage_transport          = "auto"    # auto on off
 prefill_chunking                = "fixed"   # fixed schedule none
 prefill_chunk_size              = 512       # tokens per prefill chunk
 lifecycle_startup_timeout_ms    = 30000     # stage startup grace period (ms)
-lifecycle_readiness_interval_ms = 250       # readiness poll interval (ms)
 lifecycle_health_interval_ms    = 5000      # health-check interval (ms)
 
 # Staged-only / manual topology (set by planner; override carefully)

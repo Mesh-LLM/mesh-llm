@@ -1,20 +1,16 @@
 use super::*;
 use std::{
     fs,
-    sync::Arc,
     time::{Duration, Instant},
 };
 
-use super::inventory::{
-    inventory_source_candidates, prepare_stage_source, resolve_inventory_source,
-};
-use anyhow::{Result, anyhow};
+use super::inventory::{inventory_source_candidates, resolve_inventory_source};
 use skippy_protocol::{FlashAttentionType, LoadMode, StageDevice};
-use tokio::sync::{Mutex as TokioMutex, oneshot};
+use tokio::sync::oneshot;
 
 #[tokio::test]
 async fn stage_control_shutdown_closes_and_joins_the_control_loop() {
-    let handle = spawn_stage_control_loop(None, super::super::SkippyTelemetryOptions::default());
+    let handle = spawn_stage_control_loop(super::super::SkippyTelemetryOptions::default());
     let sender = handle.sender();
 
     tokio::time::timeout(Duration::from_secs(1), handle.shutdown())
@@ -35,33 +31,6 @@ async fn stage_control_shutdown_closes_and_joins_the_control_loop() {
             .is_err(),
         "shutdown must close the stage control command channel"
     );
-}
-
-#[tokio::test]
-async fn stage_control_shutdown_interrupts_an_active_request() {
-    let state = StageControlState::default();
-    let preparations = Arc::clone(&state.preparations);
-    let preparations_guard = preparations.lock().await;
-    let handle = spawn_stage_control_loop_with_state(state);
-    let (resp, _rx) = oneshot::channel();
-    handle
-        .sender()
-        .send(StageControlCommand {
-            request: StageControlRequest::StatusUpdate(preparation_status_from_load(
-                &load_request(),
-                StagePreparationState::Assigned,
-                None,
-            )),
-            resp,
-        })
-        .expect("control command accepted");
-    tokio::time::sleep(Duration::from_millis(25)).await;
-
-    tokio::time::timeout(Duration::from_secs(1), handle.shutdown())
-        .await
-        .expect("shutdown must interrupt the active request")
-        .expect("stage control shutdown should succeed");
-    drop(preparations_guard);
 }
 
 fn load_request() -> StageLoadRequest {
@@ -201,65 +170,23 @@ fn write_metadata_only_gguf_with_context(
     fs::write(path, bytes).unwrap();
 }
 
-struct BlockingPackagePrefetcher {
-    started: TokioMutex<Option<oneshot::Sender<()>>>,
-    release: TokioMutex<Option<oneshot::Receiver<Result<()>>>>,
-}
-
-impl BlockingPackagePrefetcher {
-    fn new() -> (Self, oneshot::Receiver<()>, oneshot::Sender<Result<()>>) {
-        let (started_tx, started_rx) = oneshot::channel();
-        let (release_tx, release_rx) = oneshot::channel();
-        (
-            Self {
-                started: TokioMutex::new(Some(started_tx)),
-                release: TokioMutex::new(Some(release_rx)),
-            },
-            started_rx,
-            release_tx,
-        )
-    }
-}
-
-#[async_trait::async_trait]
-impl StagePackagePrefetcher for BlockingPackagePrefetcher {
-    async fn prefetch_stage_package(&self, _request: &StagePrepareRequest) -> Result<()> {
-        if let Some(started) = self.started.lock().await.take() {
-            let _ = started.send(());
-        }
-        let Some(release) = self.release.lock().await.take() else {
-            return Ok(());
-        };
-        release
-            .await
-            .unwrap_or_else(|_| Err(anyhow!("prefetch cancelled")))
-    }
-}
-
-#[tokio::test]
-async fn fenced_prepare_requires_accepted_coordinator_claim() {
+#[test]
+fn fenced_load_requires_accepted_coordinator_claim() {
     let mut load = load_request();
     let coordinator_id = coordinator_id();
     load.coordinator_term = 11;
     load.coordinator_id = Some(coordinator_id);
     load.lease_until_unix_ms = u64::MAX;
-    let mut state = StageControlState::default();
+    let state = StageControlState::default();
 
-    let response = state
-        .prepare(StagePrepareRequest {
-            load,
-            coordinator_id: None,
-        })
-        .await
-        .unwrap();
-
-    assert!(!response.accepted);
-    assert_eq!(response.error.as_deref(), Some("missing coordinator claim"));
-    assert_eq!(response.status.state, StagePreparationState::Failed);
+    assert_eq!(
+        state.validate_load_claim(&load).as_deref(),
+        Some("missing coordinator claim")
+    );
 }
 
 #[tokio::test]
-async fn accepted_coordinator_claim_allows_fenced_prepare() {
+async fn accepted_coordinator_claim_allows_fenced_load() {
     let mut load = load_request();
     let coordinator_id = coordinator_id();
     load.coordinator_term = 11;
@@ -271,16 +198,7 @@ async fn accepted_coordinator_claim_allows_fenced_prepare() {
     let ack = state.claim(claim).await.unwrap();
     assert!(ack.accepted);
 
-    let response = state
-        .prepare(StagePrepareRequest {
-            load,
-            coordinator_id: None,
-        })
-        .await
-        .unwrap();
-
-    assert!(response.accepted);
-    assert_eq!(response.status.state, StagePreparationState::Assigned);
+    assert_eq!(state.validate_load_claim(&load), None);
 }
 
 #[test]
@@ -516,399 +434,6 @@ async fn stage_control_shutdown_cancels_and_joins_an_active_readiness_probe() {
     server.join().unwrap();
 }
 
-#[tokio::test]
-async fn prepare_stage_records_background_source_availability() {
-    let file = tempfile::NamedTempFile::new().unwrap();
-    let path = file.path().to_string_lossy().to_string();
-    let mut load = load_request();
-    load.model_path = Some(path.clone());
-    load.package_ref = "gguf:///definitely/missing/model.gguf".to_string();
-    load.downstream = None;
-    let mut state = StageControlState::default();
-
-    let accepted = state
-        .prepare(StagePrepareRequest {
-            load: load.clone(),
-            coordinator_id: None,
-        })
-        .await
-        .unwrap();
-
-    assert!(accepted.accepted);
-    assert_eq!(accepted.status.state, StagePreparationState::Assigned);
-
-    let mut last_state = StagePreparationState::Assigned;
-    for _ in 0..20 {
-        let inventory = state
-            .inventory(StageInventoryRequest {
-                model_id: load.model_id.clone(),
-                runtime_profile: load.runtime_profile.clone(),
-                package_ref: load.package_ref.clone(),
-                manifest_sha256: load.manifest_sha256.clone(),
-                expected_source_model_sha256: None,
-                local_source_required: false,
-            })
-            .await;
-        if let Some(status) = inventory
-            .preparing_ranges
-            .iter()
-            .find(|status| status.stage_id == load.stage_id)
-        {
-            last_state = status.state;
-            if status.state == StagePreparationState::Available {
-                assert_eq!(status.bytes_done, Some(0));
-                assert_eq!(status.bytes_total, Some(0));
-                return;
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-
-    panic!("prepare did not become available, last state: {last_state:?}");
-}
-
-#[tokio::test]
-async fn prepare_layer_package_stays_downloading_while_peer_prefetch_is_pending() {
-    let mut load = load_request();
-    load.load_mode = LoadMode::LayerPackage;
-    load.package_ref = "missing-layer-package".to_string();
-    load.manifest_sha256 = "a".repeat(64);
-    load.downstream = None;
-
-    let (prefetcher, started_rx, release_tx) = BlockingPackagePrefetcher::new();
-    let mut state = StageControlState {
-        package_prefetcher: Some(Arc::new(prefetcher)),
-        ..Default::default()
-    };
-
-    let accepted = state
-        .prepare(StagePrepareRequest {
-            load: load.clone(),
-            coordinator_id: None,
-        })
-        .await
-        .unwrap();
-
-    assert_eq!(accepted.status.state, StagePreparationState::Assigned);
-    started_rx.await.expect("prefetch must start");
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
-    let inventory = state
-        .inventory(StageInventoryRequest {
-            model_id: load.model_id.clone(),
-            runtime_profile: load.runtime_profile.clone(),
-            package_ref: load.package_ref.clone(),
-            manifest_sha256: load.manifest_sha256.clone(),
-            expected_source_model_sha256: None,
-            local_source_required: false,
-        })
-        .await;
-    let status = inventory
-        .preparing_ranges
-        .iter()
-        .find(|status| status.stage_id == load.stage_id)
-        .expect("prepare status must stay visible");
-    assert_eq!(status.state, StagePreparationState::Downloading);
-
-    let _ = release_tx.send(Err(anyhow!("peer stalled")));
-}
-
-#[tokio::test]
-async fn prepare_layer_package_reports_schema_v1_rejection_after_peer_prefetch_fails() {
-    let mut load = load_request();
-    load.load_mode = LoadMode::LayerPackage;
-    load.package_ref = "missing-layer-package".to_string();
-    load.manifest_sha256 = "a".repeat(64);
-    load.downstream = None;
-
-    let (prefetcher, started_rx, release_tx) = BlockingPackagePrefetcher::new();
-    let mut state = StageControlState {
-        package_prefetcher: Some(Arc::new(prefetcher)),
-        ..Default::default()
-    };
-
-    state
-        .prepare(StagePrepareRequest {
-            load: load.clone(),
-            coordinator_id: None,
-        })
-        .await
-        .unwrap();
-    started_rx.await.expect("prefetch must start");
-    release_tx.send(Err(anyhow!("peer unavailable"))).unwrap();
-
-    for _ in 0..40 {
-        let inventory = state
-            .inventory(StageInventoryRequest {
-                model_id: load.model_id.clone(),
-                runtime_profile: load.runtime_profile.clone(),
-                package_ref: load.package_ref.clone(),
-                manifest_sha256: load.manifest_sha256.clone(),
-                expected_source_model_sha256: None,
-                local_source_required: false,
-            })
-            .await;
-        if let Some(status) = inventory
-            .preparing_ranges
-            .iter()
-            .find(|status| status.stage_id == load.stage_id)
-        {
-            if status.state == StagePreparationState::Failed {
-                let error = status.error.as_deref().unwrap_or_default();
-                assert!(error.contains("layer-package schema v1 is offline-only"));
-                assert!(error.contains("peer artifact prefetch failed"));
-                return;
-            }
-            assert_ne!(status.state, StagePreparationState::Failed);
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-
-    panic!("prepare did not fail after peer prefetch and local resolution failed");
-}
-
-#[tokio::test]
-async fn cancel_prepare_persists_cancelled_status_and_blocks_late_prefetch_result() {
-    let mut load = load_request();
-    load.load_mode = LoadMode::LayerPackage;
-    load.package_ref = "missing-layer-package".to_string();
-    load.manifest_sha256 = "a".repeat(64);
-    load.downstream = None;
-
-    let (prefetcher, started_rx, release_tx) = BlockingPackagePrefetcher::new();
-    let mut state = StageControlState {
-        package_prefetcher: Some(Arc::new(prefetcher)),
-        ..Default::default()
-    };
-
-    state
-        .prepare(StagePrepareRequest {
-            load: load.clone(),
-            coordinator_id: None,
-        })
-        .await
-        .unwrap();
-    started_rx.await.expect("prefetch must start before cancel");
-
-    let status = state
-        .cancel_prepare(StageCancelPrepareRequest {
-            topology_id: load.topology_id.clone(),
-            run_id: load.run_id.clone(),
-            stage_id: load.stage_id.clone(),
-            shutdown_generation: load.shutdown_generation + 1,
-        })
-        .await;
-
-    assert_eq!(status.state, StagePreparationState::Cancelled);
-    assert_eq!(status.model_id, load.model_id);
-    assert_eq!(status.package_ref, load.package_ref);
-    assert_eq!(status.shutdown_generation, load.shutdown_generation + 1);
-
-    let _ = release_tx.send(Ok(()));
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
-    let inventory = state
-        .inventory(StageInventoryRequest {
-            model_id: load.model_id.clone(),
-            runtime_profile: load.runtime_profile.clone(),
-            package_ref: load.package_ref.clone(),
-            manifest_sha256: load.manifest_sha256.clone(),
-            expected_source_model_sha256: None,
-            local_source_required: false,
-        })
-        .await;
-    let status = inventory
-        .preparing_ranges
-        .iter()
-        .find(|status| status.stage_id == load.stage_id)
-        .expect("cancelled prepare status should remain visible");
-    assert_eq!(status.state, StagePreparationState::Cancelled);
-}
-
-#[tokio::test]
-async fn prepare_preserves_equal_or_newer_cancelled_status() {
-    let mut load = load_request();
-    load.load_mode = LoadMode::LayerPackage;
-    load.package_ref = "missing-layer-package".to_string();
-    load.manifest_sha256 = "a".repeat(64);
-    load.downstream = None;
-
-    let (prefetcher, started_rx, release_tx) = BlockingPackagePrefetcher::new();
-    let mut state = StageControlState {
-        package_prefetcher: Some(Arc::new(prefetcher)),
-        ..Default::default()
-    };
-    state
-        .prepare(StagePrepareRequest {
-            load: load.clone(),
-            coordinator_id: None,
-        })
-        .await
-        .unwrap();
-    started_rx.await.expect("prefetch must start before cancel");
-
-    let status = state
-        .cancel_prepare(StageCancelPrepareRequest {
-            topology_id: load.topology_id.clone(),
-            run_id: load.run_id.clone(),
-            stage_id: load.stage_id.clone(),
-            shutdown_generation: load.shutdown_generation + 1,
-        })
-        .await;
-    assert_eq!(status.state, StagePreparationState::Cancelled);
-
-    let response = state
-        .prepare(StagePrepareRequest {
-            load: load.clone(),
-            coordinator_id: None,
-        })
-        .await
-        .unwrap();
-
-    assert!(!response.accepted);
-    assert_eq!(response.error.as_deref(), Some("stale shutdown generation"));
-    assert_eq!(response.status.state, StagePreparationState::Cancelled);
-    assert_eq!(
-        response.status.error.as_deref(),
-        Some("stale shutdown generation")
-    );
-    assert_eq!(
-        response.status.shutdown_generation,
-        load.shutdown_generation + 1
-    );
-
-    let _ = release_tx.send(Ok(()));
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
-    let inventory = state
-        .inventory(StageInventoryRequest {
-            model_id: load.model_id.clone(),
-            runtime_profile: load.runtime_profile.clone(),
-            package_ref: load.package_ref.clone(),
-            manifest_sha256: load.manifest_sha256.clone(),
-            expected_source_model_sha256: None,
-            local_source_required: false,
-        })
-        .await;
-    let stored = inventory
-        .preparing_ranges
-        .iter()
-        .find(|status| status.stage_id == load.stage_id)
-        .expect("cancelled prepare status should remain visible");
-    assert_eq!(stored.state, StagePreparationState::Cancelled);
-    assert_eq!(stored.shutdown_generation, load.shutdown_generation + 1);
-    assert!(stored.error.is_none());
-}
-
-#[tokio::test]
-async fn stale_cancel_prepare_keeps_newer_prepare_status() {
-    let load = load_request();
-    let key = stage_key(&load.topology_id, &load.run_id, &load.stage_id);
-    let mut state = StageControlState::default();
-    let current = preparation_status_from_load(&load, StagePreparationState::Resolving, None);
-    state.preparations.lock().await.insert(key, current.clone());
-
-    let status = state
-        .cancel_prepare(StageCancelPrepareRequest {
-            topology_id: load.topology_id.clone(),
-            run_id: load.run_id.clone(),
-            stage_id: load.stage_id.clone(),
-            shutdown_generation: load.shutdown_generation.saturating_sub(1),
-        })
-        .await;
-
-    assert_eq!(status.state, StagePreparationState::Resolving);
-    assert_eq!(status.shutdown_generation, current.shutdown_generation);
-    assert_eq!(status.error.as_deref(), Some("stale shutdown generation"));
-}
-
-#[tokio::test]
-async fn status_update_upserts_preparation_status_and_rejects_stale_generation() {
-    let load = load_request();
-    let mut state = StageControlState::default();
-    let mut update = preparation_status_from_load(&load, StagePreparationState::Loading, None);
-    update.bytes_done = Some(1024);
-    update.bytes_total = Some(4096);
-
-    let ack = state.apply_status_update(update.clone()).await;
-
-    assert!(ack.accepted);
-    assert!(ack.error.is_none());
-    let inventory = state
-        .inventory(StageInventoryRequest {
-            model_id: load.model_id.clone(),
-            runtime_profile: load.runtime_profile.clone(),
-            package_ref: load.package_ref.clone(),
-            manifest_sha256: load.manifest_sha256.clone(),
-            expected_source_model_sha256: None,
-            local_source_required: false,
-        })
-        .await;
-    let status = inventory
-        .preparing_ranges
-        .iter()
-        .find(|status| status.stage_id == load.stage_id)
-        .expect("status update should be visible through inventory");
-    assert_eq!(status.state, StagePreparationState::Loading);
-    assert_eq!(status.bytes_done, Some(1024));
-
-    let mut stale = update;
-    stale.shutdown_generation = stale.shutdown_generation.saturating_sub(1);
-    stale.state = StagePreparationState::Failed;
-    stale.error = Some("late failure".to_string());
-
-    let ack = state.apply_status_update(stale).await;
-
-    assert!(!ack.accepted);
-    assert_eq!(ack.error.as_deref(), Some("stale shutdown generation"));
-    let inventory = state
-        .inventory(StageInventoryRequest {
-            model_id: load.model_id.clone(),
-            runtime_profile: load.runtime_profile.clone(),
-            package_ref: load.package_ref.clone(),
-            manifest_sha256: load.manifest_sha256.clone(),
-            expected_source_model_sha256: None,
-            local_source_required: false,
-        })
-        .await;
-    let status = inventory
-        .preparing_ranges
-        .iter()
-        .find(|status| status.stage_id == load.stage_id)
-        .expect("newer status should remain visible");
-    assert_eq!(status.state, StagePreparationState::Loading);
-    assert!(status.error.is_none());
-}
-
-#[tokio::test]
-async fn inventory_retains_failed_prepare_status() {
-    let load = load_request();
-    let key = stage_key(&load.topology_id, &load.run_id, &load.stage_id);
-    let state = StageControlState::default();
-    let mut failed = preparation_status_from_load(&load, StagePreparationState::Failed, None);
-    failed.error = Some("source unavailable".to_string());
-    state.preparations.lock().await.insert(key, failed);
-
-    let inventory = state
-        .inventory(StageInventoryRequest {
-            model_id: load.model_id.clone(),
-            runtime_profile: load.runtime_profile.clone(),
-            package_ref: load.package_ref.clone(),
-            manifest_sha256: load.manifest_sha256.clone(),
-            expected_source_model_sha256: None,
-            local_source_required: false,
-        })
-        .await;
-
-    let status = inventory
-        .preparing_ranges
-        .iter()
-        .find(|status| status.stage_id == load.stage_id)
-        .expect("failed prepare status should remain visible");
-    assert_eq!(status.state, StagePreparationState::Failed);
-    assert_eq!(status.error.as_deref(), Some("source unavailable"));
-}
-
 #[test]
 fn inventory_source_candidates_prefer_explicit_gguf_ref() {
     let request = StageInventoryRequest {
@@ -1002,24 +527,6 @@ async fn content_addressed_inventory_proves_local_bytes_without_leaking_path() {
     assert!(tampered.available_ranges.is_empty());
 }
 
-#[tokio::test]
-async fn local_required_prepare_never_falls_back_to_supplied_path() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("otherwise-resolvable.gguf");
-    write_metadata_only_gguf(&path, 61);
-    let mut load = load_request();
-    load.model_path = Some(path.to_string_lossy().into_owned());
-    load.package_ref = format!("local-gguf://sha256/{}", "c".repeat(64));
-    load.manifest_sha256 = "d".repeat(64);
-    load.source_model_sha256 = Some("c".repeat(64));
-    load.local_source_required = true;
-    load.load_mode = LoadMode::RuntimeSlice;
-
-    let error = prepare_stage_source(&load).await.unwrap_err().to_string();
-
-    assert!(error.contains("is not registered"), "{error}");
-}
-
 #[test]
 fn local_required_load_reverifies_content_after_inventory() {
     let dir = tempfile::tempdir().unwrap();
@@ -1055,17 +562,17 @@ fn local_required_load_reverifies_content_after_inventory() {
 }
 
 #[test]
-fn local_required_profile_rejects_legacy_request_without_raising_fallback_profile() {
+fn local_required_profile_rejects_request_without_runtime_profile() {
     let model_id = format!("mixed-profile-model-{}", std::process::id());
     super::super::register_local_source_policy(&model_id, "strict", true);
     super::super::register_local_source_policy(&model_id, "fallback", false);
 
-    let mut legacy = load_request();
-    legacy.model_id = model_id.clone();
-    legacy.runtime_profile = None;
-    legacy.local_source_required = false;
-    let error = super::super::apply_verified_local_source(&mut legacy)
-        .expect_err("profile-less legacy request must fail closed")
+    let mut incomplete = load_request();
+    incomplete.model_id = model_id.clone();
+    incomplete.runtime_profile = None;
+    incomplete.local_source_required = false;
+    let error = super::super::apply_verified_local_source(&mut incomplete)
+        .expect_err("profile-less request must fail closed")
         .to_string();
     assert!(error.contains("content-addressed RuntimeSlice"), "{error}");
 
