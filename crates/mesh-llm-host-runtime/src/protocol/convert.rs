@@ -974,10 +974,18 @@ const MAX_CLAIMED_LOG_ID_BYTES: usize = 512;
 /// SHA-512) rather than asserting our own scheme's exact length.
 const MAX_CLAIMED_LOG_ROOT_BYTES: usize = 64;
 
-/// Upper bound on `ClaimedLogHead.claimed_signature`, in bytes. Same
-/// memory-safety rationale as `MAX_CLAIMED_LOG_ROOT_BYTES`: wide enough for
-/// signature schemes larger than this node's own Ed25519 (e.g. post-quantum
-/// signatures), tight enough that a peer cannot advertise unbounded bytes.
+/// Upper bound on `ClaimedLogHead.claimed_signature`, in bytes. Sized for
+/// this node's own Ed25519 (64 bytes) and classical schemes of similar
+/// size, with headroom for encoding overhead — **not** for post-quantum
+/// schemes: ML-DSA-65 signatures are 3,309 bytes (NIST FIPS 204 gives the
+/// ML-DSA range as 2,420-4,627 bytes), all of which this bound rejects.
+/// That is deliberate, not an oversight: `claimed_log_head` rides on
+/// `PeerAnnouncement`, which is gossiped to every peer, and this node never
+/// verifies `claimed_signature` (see `proto_claimed_log_head_to_local`
+/// above) — so a bound wide enough to admit a real PQ signature would put
+/// multi-kilobyte unverified blobs on a hot broadcast path. Accepting PQ
+/// claims would need a deliberate bound raise with its own rationale, not
+/// a default this constant already provides.
 const MAX_CLAIMED_LOG_SIGNATURE_BYTES: usize = 128;
 
 /// Upper bound on `ClaimedLogHead.signature_algorithm`, in bytes. Same
