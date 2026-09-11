@@ -1,3 +1,5 @@
+use std::ffi::c_void;
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct KvPageComponentDesc {
@@ -22,6 +24,27 @@ pub const KV_PAGE_CODEC_ISWA_COMPOSITE_V1: u32 = 2;
 
 pub const KV_PAGE_FLAG_V_TRANSPOSED: u64 = 1 << 0;
 pub const KV_PAGE_FLAG_HAS_K_IDX: u64 = 1 << 1;
+
+pub const CACHEGEN_RECORD_V1_ABI_VERSION: u32 = 1;
+pub const CACHEGEN_RECORD_F16: u32 = 0;
+pub const CACHEGEN_RECORD_EXACT: u32 = 1;
+pub const CACHEGEN_RECORD_F16_TRANSPOSED: u32 = 2;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct CacheGenRecordV1 {
+    pub abi_version: u32,
+    pub kind: u32,
+    pub element_bytes: u32,
+    pub reserved0: u32,
+    pub output_offset: u64,
+    pub decoded_bytes: u64,
+    pub token_count: u64,
+    pub token_start: u64,
+    pub total_tokens: u64,
+    pub payload: *const c_void,
+    pub payload_bytes: usize,
+}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]

@@ -1,0 +1,87 @@
+From 216d925e721653b7134b46c175e679cc5d0f2eeb Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Fri, 11 Sep 2026 16:02:11 +1000
+Subject: [PATCH] skippy: define CacheGen page import ABI
+
+Expose validated record descriptors for direct decode into resident KV storage.
+
+Assisted-by: scama
+---
+ include/skippy/common.h |  4 +++-
+ include/skippy/state.h  | 31 +++++++++++++++++++++++++++++++
+ 2 files changed, 34 insertions(+), 1 deletion(-)
+
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index 65cfa2ce8..be996397a 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -46,7 +46,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 53
++#define SKIPPY_ABI_VERSION_PATCH 54
+ 
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+@@ -90,6 +90,8 @@ enum skippy_feature {
+     SKIPPY_FEATURE_MODEL_SOURCE            = 1 << 30,
+ };
+ 
++#define SKIPPY_FEATURE_CACHEGEN_KV_PAGE (UINT64_C(1) << 31)
++
+ enum skippy_status {
+     SKIPPY_STATUS_OK                      = 0,
+     SKIPPY_STATUS_ERROR                   = 1,
+diff --git a/include/skippy/state.h b/include/skippy/state.h
+index aa698c124..7504e573c 100644
+--- a/include/skippy/state.h
++++ b/include/skippy/state.h
+@@ -27,6 +27,29 @@ enum skippy_kv_page_component_role {
+     SKIPPY_KV_PAGE_COMPONENT_SWA  = 2,
+ };
+ 
++#define SKIPPY_CACHEGEN_RECORD_V1_ABI_VERSION 1
++
++enum skippy_cachegen_record_kind {
++    SKIPPY_CACHEGEN_RECORD_F16            = 0,
++    SKIPPY_CACHEGEN_RECORD_EXACT          = 1,
++    SKIPPY_CACHEGEN_RECORD_F16_TRANSPOSED = 2,
++};
++
++/** @brief Describes one validated CacheGen record and its logical page destination. */
++struct skippy_cachegen_record_v1 {
++    uint32_t abi_version;
++    uint32_t kind;
++    uint32_t element_bytes;
++    uint32_t reserved0;
++    uint64_t output_offset;
++    uint64_t decoded_bytes;
++    uint64_t token_count;
++    uint64_t token_start;
++    uint64_t total_tokens;
++    const void * payload;
++    size_t payload_bytes;
++};
++
+ /** @brief Describes one independently ranged cache in a composite KV page. */
+ struct skippy_kv_page_component_desc {
+     uint32_t version;
+@@ -153,6 +176,14 @@ LLAMA_API enum skippy_status skippy_import_kv_page(
+         size_t input_bytes,
+         struct skippy_error ** out_error);
+ 
++/** @brief Imports validated CacheGen records directly into resident KV storage. */
++LLAMA_API enum skippy_status skippy_import_cachegen_kv_page_v1(
++        struct skippy_session * session,
++        const struct skippy_kv_page_desc * desc,
++        const struct skippy_cachegen_record_v1 * records,
++        size_t record_count,
++        struct skippy_error ** out_error);
++
+ /** @brief Saves a session prefix into a resident cache sequence. */
+ LLAMA_API enum skippy_status skippy_session_save_prefix(
+         struct skippy_session * session,
+-- 
+2.54.0 (Apple Git-157)
+

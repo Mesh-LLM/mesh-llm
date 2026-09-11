@@ -470,6 +470,14 @@ unsafe extern "C" {
         out_error: *mut *mut Error,
     ) -> Status;
 
+    pub fn skippy_import_cachegen_kv_page_v1(
+        session: *mut Session,
+        desc: *const KvPageDesc,
+        records: *const crate::CacheGenRecordV1,
+        record_count: usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
     pub fn skippy_export_recurrent_state(
         session: *mut Session,
         output: *mut c_void,

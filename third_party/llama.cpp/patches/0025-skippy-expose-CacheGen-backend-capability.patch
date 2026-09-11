@@ -1,0 +1,64 @@
+From c95fb1f1001f0e7bce75676e4a6dc3b82b430d14 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Fri, 11 Sep 2026 16:02:47 +1000
+Subject: [PATCH] skippy: expose CacheGen backend capability
+
+Advertise the compressed-page contract and return an explicit unsupported status until a resident backend decoder is available.
+
+Assisted-by: scama
+---
+ src/skippy/abi.cpp   |  3 ++-
+ src/skippy/state.cpp | 23 +++++++++++++++++++++++
+ 2 files changed, 25 insertions(+), 1 deletion(-)
+
+diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
+index ec2b47444..2a0b1b097 100644
+--- a/src/skippy/abi.cpp
++++ b/src/skippy/abi.cpp
+@@ -39,7 +39,8 @@ uint64_t skippy_abi_features(void) {
+            SKIPPY_FEATURE_INKLING_MTP_MM |
+            SKIPPY_FEATURE_ITERATION_BATCH |
+            SKIPPY_FEATURE_ACTIVATION_BOUNDARY |
+-           SKIPPY_FEATURE_MODEL_SOURCE;
++           SKIPPY_FEATURE_MODEL_SOURCE |
++           SKIPPY_FEATURE_CACHEGEN_KV_PAGE;
+ }
+ 
+ void skippy_error_free(struct skippy_error * error) {
+diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
+index 620ee3578..af3a56601 100644
+--- a/src/skippy/state.cpp
++++ b/src/skippy/state.cpp
+@@ -657,6 +657,29 @@ enum skippy_status skippy_import_kv_page(
+     return skippy_success(out_error);
+ }
+ 
++enum skippy_status skippy_import_cachegen_kv_page_v1(
++        struct skippy_session * session,
++        const struct skippy_kv_page_desc * desc,
++        const struct skippy_cachegen_record_v1 * records,
++        size_t record_count,
++        struct skippy_error ** out_error) {
++    if (session == nullptr || session->ctx == nullptr || desc == nullptr || records == nullptr || record_count == 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session, descriptor, and CacheGen records are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    for (size_t i = 0; i < record_count; ++i) {
++        const auto & record = records[i];
++        if (record.abi_version != SKIPPY_CACHEGEN_RECORD_V1_ABI_VERSION || record.reserved0 != 0 ||
++                record.payload == nullptr || record.payload_bytes == 0 || record.decoded_bytes == 0 || record.token_count == 0 ||
++                record.kind > SKIPPY_CACHEGEN_RECORD_F16_TRANSPOSED) {
++            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "invalid CacheGen record descriptor");
++            return SKIPPY_STATUS_INVALID_ARGUMENT;
++        }
++    }
++    skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "CacheGen device import is unavailable on this backend");
++    return SKIPPY_STATUS_UNSUPPORTED;
++}
++
+ enum skippy_status skippy_retire_verify_checkpoint(
+         skippy_session * session,
+         uint64_t token_start,
+-- 
+2.54.0 (Apple Git-157)
+
