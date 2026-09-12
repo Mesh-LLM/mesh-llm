@@ -132,75 +132,74 @@ mod platform {
         if s.is_empty() {
             return Ok(None);
         }
-        parse_lstart(&s)
-    }
-
-    fn parse_lstart(s: &str) -> anyhow::Result<Option<i64>> {
-        use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone};
-
-        let parts: Vec<&str> = s.split_whitespace().collect();
-        if parts.len() != 5 {
-            return Ok(None);
-        }
-
-        let day: u32 = match parts[1].parse() {
-            Ok(d) => d,
-            Err(_) => return Ok(None),
-        };
-        let month: u32 = match parts[2] {
-            "Jan" => 1,
-            "Feb" => 2,
-            "Mar" => 3,
-            "Apr" => 4,
-            "May" => 5,
-            "Jun" => 6,
-            "Jul" => 7,
-            "Aug" => 8,
-            "Sep" => 9,
-            "Oct" => 10,
-            "Nov" => 11,
-            "Dec" => 12,
-            _ => return Ok(None),
-        };
-        let year: i32 = match parts[4].parse() {
-            Ok(y) => y,
-            Err(_) => return Ok(None),
-        };
-
-        let time_parts: Vec<&str> = parts[3].split(':').collect();
-        if time_parts.len() != 3 {
-            return Ok(None);
-        }
-        let (hour, min, sec): (u32, u32, u32) = match (
-            time_parts[0].parse(),
-            time_parts[1].parse(),
-            time_parts[2].parse(),
-        ) {
-            (Ok(h), Ok(m), Ok(s)) => (h, m, s),
-            _ => return Ok(None),
-        };
-
-        let date = match NaiveDate::from_ymd_opt(year, month, day) {
-            Some(d) => d,
-            None => return Ok(None),
-        };
-        let time = match NaiveTime::from_hms_opt(hour, min, sec) {
-            Some(t) => t,
-            None => return Ok(None),
-        };
-        let naive_dt = NaiveDateTime::new(date, time);
-
-        let local_dt = match Local.from_local_datetime(&naive_dt).single() {
-            Some(dt) => dt,
-            None => return Ok(None),
-        };
-
-        Ok(Some(local_dt.timestamp()))
+        super::parse_lstart(&s)
     }
 
     pub fn process_executable_name(pid: u32) -> anyhow::Result<Option<String>> {
         process_comm(pid)
     }
+}
+
+/// Parse the output of `ps -o lstart=` under `LANG=C`/`LC_ALL=C`, e.g.
+/// `Wed Sep  9 18:43:39 2026`: weekday, month, day, time, year, and convert
+/// it to a Unix timestamp in the local timezone.
+#[cfg(target_os = "macos")]
+fn parse_lstart(s: &str) -> anyhow::Result<Option<i64>> {
+    use chrono::{Local, TimeZone};
+
+    let Some(naive_dt) = parse_lstart_naive(s) else {
+        return Ok(None);
+    };
+
+    match Local.from_local_datetime(&naive_dt).single() {
+        Some(dt) => Ok(Some(dt.timestamp())),
+        None => Ok(None),
+    }
+}
+
+/// Parses the weekday/month/day/time/year fields into a naive (timezone-free)
+/// datetime. Split out of [`parse_lstart`] and out of the macOS-only platform
+/// module (its only real caller) so this field decoding is unit-tested on
+/// every CI runner rather than only a macOS one, and so the test doesn't
+/// depend on the runner's local timezone.
+#[cfg(any(test, target_os = "macos"))]
+fn parse_lstart_naive(s: &str) -> Option<chrono::NaiveDateTime> {
+    use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    if parts.len() != 5 {
+        return None;
+    }
+
+    let month: u32 = match parts[1] {
+        "Jan" => 1,
+        "Feb" => 2,
+        "Mar" => 3,
+        "Apr" => 4,
+        "May" => 5,
+        "Jun" => 6,
+        "Jul" => 7,
+        "Aug" => 8,
+        "Sep" => 9,
+        "Oct" => 10,
+        "Nov" => 11,
+        "Dec" => 12,
+        _ => return None,
+    };
+    let day: u32 = parts[2].parse().ok()?;
+    let year: i32 = parts[4].parse().ok()?;
+
+    let time_parts: Vec<&str> = parts[3].split(':').collect();
+    if time_parts.len() != 3 {
+        return None;
+    }
+    let hour: u32 = time_parts[0].parse().ok()?;
+    let min: u32 = time_parts[1].parse().ok()?;
+    let sec: u32 = time_parts[2].parse().ok()?;
+
+    let date = NaiveDate::from_ymd_opt(year, month, day)?;
+    let time = NaiveTime::from_hms_opt(hour, min, sec)?;
+    Some(NaiveDateTime::new(date, time))
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -270,4 +269,53 @@ pub fn validate_pid_matches(pid: u32, expected_comm: &str, expected_started_at_u
 pub fn current_process_start_time_unix() -> anyhow::Result<i64> {
     process_started_at_unix(std::process::id())?
         .ok_or_else(|| anyhow::anyhow!("could not determine start time of current process"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_lstart_naive;
+    use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+
+    fn naive(year: i32, month: u32, day: u32, hour: u32, min: u32, sec: u32) -> NaiveDateTime {
+        NaiveDateTime::new(
+            NaiveDate::from_ymd_opt(year, month, day).unwrap(),
+            NaiveTime::from_hms_opt(hour, min, sec).unwrap(),
+        )
+    }
+
+    #[test]
+    fn parses_single_digit_day_padded_with_a_double_space() {
+        // macOS `ps -o lstart=` right-aligns the day to two columns, so a
+        // single-digit day leaves two spaces before it — exactly what F8
+        // observed (galaxy's process started on Sep 9).
+        let parsed = parse_lstart_naive("Wed Sep  9 18:43:39 2026").unwrap();
+
+        assert_eq!(parsed, naive(2026, 9, 9, 18, 43, 39));
+    }
+
+    #[test]
+    fn parses_double_digit_day() {
+        let parsed = parse_lstart_naive("Mon Jan 12 09:05:00 2026").unwrap();
+
+        assert_eq!(parsed, naive(2026, 1, 12, 9, 5, 0));
+    }
+
+    #[test]
+    fn does_not_transpose_a_month_number_larger_than_any_day() {
+        // Regression guard for the day/month swap: December (month 12) used
+        // to get read as if it were the day field.
+        let parsed = parse_lstart_naive("Thu Dec  3 00:00:00 2026").unwrap();
+
+        assert_eq!(parsed, naive(2026, 12, 3, 0, 0, 0));
+    }
+
+    #[test]
+    fn rejects_malformed_field_count() {
+        assert!(parse_lstart_naive("Sep 9 18:43:39 2026").is_none());
+    }
+
+    #[test]
+    fn rejects_unknown_month_name() {
+        assert!(parse_lstart_naive("Wed Foo 9 18:43:39 2026").is_none());
+    }
 }

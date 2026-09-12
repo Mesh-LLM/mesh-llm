@@ -18,7 +18,7 @@ fs2 = "0.4"
 libc = "0.2.183"
 serde.workspace = true
 serde_json.workspace = true
-skippy-protocol = { path = "../skippy-protocol", version = "0.76.0-rc9"  }
+skippy-protocol = { path = "../skippy-protocol", version = "0.76.0"  }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

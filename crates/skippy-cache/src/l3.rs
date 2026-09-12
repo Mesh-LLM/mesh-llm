@@ -934,9 +934,12 @@ impl HandoffSegmentStore {
                 digest,
                 bytes: location.bytes,
                 location: &location,
+                output_offset: 0,
             }];
-            return match self.packed.read_many(&requests) {
-                Ok(mut bytes) => bytes.pop().context("packed segment read was empty"),
+            let len = usize::try_from(location.bytes).context("segment exceeds usize")?;
+            let mut bytes = Vec::with_capacity(len);
+            return match self.packed.append_many(&requests, &mut bytes, None) {
+                Ok(()) => Ok(bytes),
                 Err(failure) => {
                     let path = self.packed.pack_path(&failure.pack_digest);
                     let _ = self.quarantine(&path);
@@ -1143,55 +1146,76 @@ impl HandoffSegmentStore {
     pub fn assemble(&self, manifest: &HandoffManifest) -> Result<Vec<u8>> {
         let total = usize::try_from(manifest.total_bytes).context("payload exceeds usize")?;
         let mut payload = Vec::with_capacity(total);
+        let mut payload_hasher = blake3::Hasher::new();
         let locations = self
             .packed
             .load_manifest_index(&manifest.payload_digest, manifest.segments.len())?;
-        let packed_requests = manifest
-            .segments
-            .iter()
-            .zip(&locations)
-            .filter_map(|(segment, location)| {
-                location.as_ref().map(|location| PackedReadRequest {
+        let mut expected_offset = 0u64;
+        for segment in &manifest.segments {
+            if segment.offset != expected_offset {
+                bail!(
+                    "segment {} offset {} does not match assembled length {expected_offset}",
+                    segment.index,
+                    segment.offset,
+                );
+            }
+            expected_offset = expected_offset
+                .checked_add(segment.bytes)
+                .context("assembled payload size overflows")?;
+        }
+        if expected_offset != manifest.total_bytes {
+            bail!(
+                "assembled {expected_offset} bytes but manifest records {}",
+                manifest.total_bytes
+            );
+        }
+        let mut packed_requests = Vec::new();
+        for (segment, location) in manifest.segments.iter().zip(&locations) {
+            if let Some(location) = location.as_ref() {
+                packed_requests.push(PackedReadRequest {
                     digest: &segment.digest,
                     bytes: segment.bytes,
                     location,
-                })
-            })
-            .collect::<Vec<_>>();
-        let mut packed_bytes = match self.packed.read_many(&packed_requests) {
-            Ok(bytes) => bytes.into_iter(),
-            Err(failure) => {
-                let path = self.packed.pack_path(&failure.pack_digest);
-                let _ = self.quarantine(&path);
-                return Err(failure.error);
-            }
-        };
-        for (segment, location) in manifest.segments.iter().zip(locations) {
-            if segment.offset != payload.len() as u64 {
-                bail!(
-                    "segment {} offset {} does not match assembled length {}",
-                    segment.index,
-                    segment.offset,
-                    payload.len()
-                );
-            }
-            let bytes = if location.is_some() {
-                packed_bytes.next().context("missing packed segment read")?
+                    output_offset: segment.offset,
+                });
             } else {
-                self.read_segment(&segment.digest)?
-            };
-            payload.extend_from_slice(&bytes);
+                self.append_packed(&packed_requests, &mut payload, &mut payload_hasher)?;
+                packed_requests.clear();
+                let bytes = self.read_segment(&segment.digest)?;
+                payload_hasher.update(&bytes);
+                payload.extend_from_slice(&bytes);
+            }
         }
+        self.append_packed(&packed_requests, &mut payload, &mut payload_hasher)?;
         if payload.len() != total {
             bail!(
                 "assembled {} bytes but manifest records {total}",
                 payload.len()
             );
         }
-        if segment_digest(&payload) != manifest.payload_digest {
+        if payload_hasher.finalize().to_hex().as_str() != manifest.payload_digest {
             bail!("assembled payload failed manifest digest verification");
         }
         Ok(payload)
+    }
+
+    fn append_packed(
+        &self,
+        requests: &[PackedReadRequest<'_>],
+        payload: &mut Vec<u8>,
+        payload_hasher: &mut blake3::Hasher,
+    ) -> Result<()> {
+        match self
+            .packed
+            .append_many(requests, payload, Some(payload_hasher))
+        {
+            Ok(()) => Ok(()),
+            Err(failure) => {
+                let path = self.packed.pack_path(&failure.pack_digest);
+                let _ = self.quarantine(&path);
+                Err(failure.error)
+            }
+        }
     }
 
     pub fn segment_footprint_bytes(&self) -> Result<u64> {

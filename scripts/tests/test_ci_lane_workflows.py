@@ -346,6 +346,35 @@ class CiLaneWorkflowTests(unittest.TestCase):
                     )
             self.assertNotIn("contains(inputs.smoke_matrix,", workflow)
 
+    def test_every_planned_smoke_id_matches_a_product_smoke_job(self) -> None:
+        """Prevent planner rows from silently skipping their smoke jobs.
+
+        The product smoke workflows gate each job on an id from the formatted
+        ``smoke_matrix``. A stale id in ``smoke_domain_rows`` can therefore
+        leave the selected smoke coverage absent while the lane summary only
+        reports a skipped planned job.
+        """
+        slices = json.loads((ROOT / "ci" / "slices.yml").read_text())
+        declared = {row["id"] for row in slices["smoke_rows"]}
+        planned = {
+            smoke_id
+            for ids in slices["smoke_domain_rows"].values()
+            for smoke_id in ids
+        }
+
+        self.assertEqual(set(), planned - declared)
+
+        gated = set()
+        for path in sorted(WORKFLOWS.glob("ci-*-product-smoke-slice.yml")):
+            gated.update(
+                re.findall(
+                    r"contains\(fromJson\(inputs\.smoke_matrix\)\.\*\.id, '([^']+)'\)",
+                    path.read_text(encoding="utf-8"),
+                )
+            )
+
+        self.assertEqual(set(), planned - gated)
+
     def test_runtime_and_product_artifact_ids_preserve_architecture(self) -> None:
         for platform in ("linux", "macos", "windows"):
             with self.subTest(platform=platform):
