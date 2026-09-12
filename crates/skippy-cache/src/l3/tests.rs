@@ -891,11 +891,9 @@ fn startup_reconciliation_quarantines_unsupported_codec_manifest() {
         manifest.payload_digest
     };
 
-    let reopened = HandoffSegmentStore::open_unreconciled_with_limits(
-        &root,
-        StoreLimits::new(0, 0),
-    )
-    .expect("open unreconciled store");
+    let reopened =
+        HandoffSegmentStore::open_unreconciled_with_limits(&root, StoreLimits::new(0, 0))
+            .expect("open unreconciled store");
     let report = reopened.reconcile_startup().expect("reconcile");
     assert_eq!(
         report.quarantined_manifests, 1,
