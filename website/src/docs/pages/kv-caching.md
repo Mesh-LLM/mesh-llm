@@ -90,29 +90,15 @@ combinations fail during model load. A backend Flash Attention capability
 failure is only known when the runtime loads, so metadata validation alone
 cannot prove that every quantized combination will start.
 
-K and V may use different dtypes. Resolution order is per-model explicit
-dtype, per-model preset expansion, global explicit dtype, global preset
-expansion, family default, then the built-in size rule.
+K and V may use different dtypes. For these technical fields, per-model values
+override global values, which override family defaults and finally the built-in
+size rule.
 
 The config validator currently recognizes additional GGML dtype labels that
 the pinned embedded runtime does not load. The table above lists the values
 accepted by `skippy_runtime::parse_cache_type`; use those values for a serving
 configuration. `auto` is consumed by the resolver and does not reach that
 parser.
-
-### Compatibility presets
-
-`kv_cache_policy` is an older Mesh macro layered over the technical controls.
-It is still accepted, but it does not add another cache implementation:
-
-| Preset | Exact expansion before explicit overrides |
-|---|---|
-| `quality` | `cache_type_k = "f16"`, `cache_type_v = "f16"`, `kv_offload = "auto"` |
-| `saver` | `cache_type_k = "q8_0"`, `cache_type_v = "q8_0"`, `kv_offload = true` |
-| `auto` or `balanced` | Apply the built-in size-derived K/V dtype and leave `kv_offload = "auto"` |
-
-`auto` and `balanced` are aliases in the current resolver. New deployments
-that need a reproducible layout should set the technical fields directly.
 
 You can override one model without changing the others:
 
