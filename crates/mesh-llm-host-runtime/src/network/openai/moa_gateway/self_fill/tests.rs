@@ -44,6 +44,11 @@ async fn self_fill_preserves_each_physical_workers_routable_alias() {
     let first = fleet_peer_with_health(1, model, None, Some(100_000));
     let mut second = fleet_peer_with_health(2, model, None, Some(100_000));
     rename_peer_model(&mut second, long);
+    let expected_aliases = first
+        .http_routable_models()
+        .into_iter()
+        .chain(second.http_routable_models())
+        .collect::<HashSet<_>>();
     node.insert_test_peer(first).await;
     node.insert_test_peer(second).await;
 
@@ -54,9 +59,9 @@ async fn self_fill_preserves_each_physical_workers_routable_alias() {
     assert_eq!(
         models
             .iter()
-            .map(|model| model.name.as_str())
+            .map(|model| model.name.clone())
             .collect::<HashSet<_>>(),
-        HashSet::from([short, long])
+        expected_aliases
     );
 }
 

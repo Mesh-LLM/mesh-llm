@@ -1859,9 +1859,8 @@ fn transitive_peer_update_refreshes_memory_only_when_advertised() {
     let mut ann = peer_state_test_announcement(addr.clone());
     apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee));
     assert_eq!(
-        existing.memory,
-        Some(advertised),
-        "a relay without the block keeps the last advertised one"
+        existing.memory, None,
+        "an omitted block cannot prove the cached breakdown is current"
     );
 
     let refreshed = crate::mesh::AdvertisedMemory {
@@ -1905,10 +1904,10 @@ fn transitive_peer_update_drops_the_cached_memory_when_the_capacity_moves() {
         "a stale breakdown must not be paired with a new capacity"
     );
 
-    // The same relay with the unchanged capacity keeps the block.
+    // An unchanged capacity is not provenance for the omitted breakdown.
     existing.memory = Some(advertised);
     apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee));
-    assert_eq!(existing.memory, Some(advertised));
+    assert_eq!(existing.memory, None);
 }
 
 #[test]
