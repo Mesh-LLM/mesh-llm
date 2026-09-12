@@ -1,6 +1,7 @@
 pub mod config;
 pub mod fsinfo;
 pub mod identity;
+pub mod l2;
 pub mod l3;
 pub mod manager;
 pub mod payload;
@@ -15,6 +16,10 @@ pub use identity::{
     activation_page_id, exact_state_identity, exact_state_identity_for_stage,
     numerical_model_identity_for_stage, prefix_hash, prefix_hash_with_namespace, prefix_identity,
     prefix_identity_with_namespace, prefix_namespace_hash,
+};
+pub use l2::{
+    ExactStatePayloadMirror, L2Eviction, L2Hit, L2InsertRefusal, L2Origin, L2Peek, L2Stats, L2Tier,
+    l2_cache_key,
 };
 pub use l3::{
     GeometryBlock, GeometryKind, HandoffManifest, HandoffSegmentRef, HandoffSegmentStore,
