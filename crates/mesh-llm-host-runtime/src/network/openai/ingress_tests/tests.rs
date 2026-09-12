@@ -909,3 +909,58 @@ fn disconnect_is_dropped_and_cannot_audit_model_access_as_success() {
         proxy::RouteDispatchOutcome::Responded(200)
     ));
 }
+
+/// The host-served path's usage extraction turns a `RespondedWithUsage` outcome
+/// into the real `ExchangeUsage` the terminal envelope carries, and yields
+/// `None` for every non-usage-bearing outcome so no all-zero record is ever
+/// fabricated.
+#[test]
+fn exchange_usage_from_outcome_extracts_real_counts_and_omits_otherwise() {
+    use mesh_llm_events::logging::events::TokenUsage;
+
+    let with_usage = proxy::RouteDispatchOutcome::RespondedWithUsage {
+        status_code: 200,
+        usage: TokenUsage {
+            prompt_tokens: Some(42),
+            cached_prompt_tokens: None,
+            completion_tokens: Some(6),
+            total_tokens: Some(48),
+        },
+    };
+    let usage = exchange_usage_from_outcome(&with_usage).expect("real usage present");
+    assert_eq!(usage.prompt_tokens, 42);
+    assert_eq!(usage.completion_tokens, 6);
+    assert_eq!(usage.total_tokens, 48);
+
+    // total derived when the backend omitted it.
+    let derived = proxy::RouteDispatchOutcome::RespondedWithUsage {
+        status_code: 200,
+        usage: TokenUsage {
+            prompt_tokens: Some(10),
+            cached_prompt_tokens: None,
+            completion_tokens: Some(5),
+            total_tokens: None,
+        },
+    };
+    assert_eq!(
+        exchange_usage_from_outcome(&derived)
+            .expect("derives total")
+            .total_tokens,
+        15
+    );
+
+    // A status-only response, an error, and a wholly-empty usage object all
+    // yield None — never a fabricated all-zero record.
+    assert!(exchange_usage_from_outcome(&proxy::RouteDispatchOutcome::Responded(200)).is_none());
+    assert!(exchange_usage_from_outcome(&proxy::RouteDispatchOutcome::Failed("x")).is_none());
+    let empty = proxy::RouteDispatchOutcome::RespondedWithUsage {
+        status_code: 200,
+        usage: TokenUsage {
+            prompt_tokens: None,
+            cached_prompt_tokens: None,
+            completion_tokens: None,
+            total_tokens: None,
+        },
+    };
+    assert!(exchange_usage_from_outcome(&empty).is_none());
+}
