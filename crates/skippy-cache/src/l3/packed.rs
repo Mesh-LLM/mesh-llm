@@ -447,12 +447,16 @@ impl PackedSegmentStore {
     pub(super) fn remove_orphan_packs(
         &self,
         referenced_segments: &HashSet<String>,
-        held_segments: &HashSet<String>,
+        held_segments: impl FnOnce() -> HashSet<String>,
     ) -> Result<u64> {
         let _mutation = self
             .mutation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Snapshot in-flight publications only after taking the same lock that
+        // serializes pack publication, so collection cannot race a completed
+        // pack into existence before its manifest is committed.
+        let held_segments = held_segments();
         let locations = self
             .locations
             .read()

@@ -378,7 +378,8 @@ async fn spawn_held_upstream(
             tokio::spawn(async move {
                 let _raw = read_raw_http_request(&mut stream).await;
                 accepted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let _permit = release.acquire().await.expect("release semaphore");
+                let permit = release.acquire().await.expect("release semaphore");
+                permit.forget();
                 let reply = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     response.len(),

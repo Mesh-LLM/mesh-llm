@@ -90,6 +90,7 @@ fn resolve_parameter_size(
     parameter_count: Option<u64>,
 ) -> Option<String> {
     source_size
+        .and_then(non_empty)
         .or_else(|| parameter_count.and_then(parameter_size_from_count))
         .or_else(|| parameter_size_from_text(model_name))
 }
@@ -190,6 +191,13 @@ mod tests {
             resolve_parameter_size("model-7B", None, None).as_deref(),
             Some("7B")
         );
+        for blank in ["", "   ", "\t\n"] {
+            assert_eq!(
+                resolve_parameter_size("model-7B", Some(blank.to_string()), Some(8_000_000_000),)
+                    .as_deref(),
+                Some("8B")
+            );
+        }
     }
 
     #[test]
