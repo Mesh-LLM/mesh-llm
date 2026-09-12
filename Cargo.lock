@@ -3994,6 +3994,7 @@ dependencies = [
  "rmcp",
  "rpassword",
  "rustls",
+ "same-file",
  "schemars",
  "semver",
  "serde",

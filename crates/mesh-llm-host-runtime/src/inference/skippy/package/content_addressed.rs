@@ -138,31 +138,17 @@ fn ensure_same_regular_file(source: &Path, destination: &Path) -> Result<()> {
         "multipart GGUF view must contain regular files"
     );
     anyhow::ensure!(
-        same_file_identity(&source_metadata, &destination_metadata),
+        same_file::is_same_file(source, destination).with_context(|| {
+            format!(
+                "compare multipart GGUF view {} with Hugging Face blob {}",
+                destination.display(),
+                source.display()
+            )
+        })?,
         "multipart GGUF view does not reference its verified Hugging Face blob: {}",
         destination.display()
     );
     Ok(())
-}
-
-#[cfg(unix)]
-fn same_file_identity(source: &std::fs::Metadata, destination: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-
-    source.dev() == destination.dev() && source.ino() == destination.ino()
-}
-
-#[cfg(windows)]
-fn same_file_identity(source: &std::fs::Metadata, destination: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-
-    source.volume_serial_number() == destination.volume_serial_number()
-        && source.file_index() == destination.file_index()
-}
-
-#[cfg(not(any(unix, windows)))]
-fn same_file_identity(_source: &std::fs::Metadata, _destination: &std::fs::Metadata) -> bool {
-    false
 }
 
 #[derive(Serialize)]
@@ -556,14 +542,8 @@ mod tests {
             let metadata = std::fs::symlink_metadata(path).unwrap();
             metadata.is_file() && !metadata.file_type().is_symlink()
         }));
-        assert!(same_file_identity(
-            &first_blob.metadata().unwrap(),
-            &source_paths[0].metadata().unwrap()
-        ));
-        assert!(same_file_identity(
-            &second_blob.metadata().unwrap(),
-            &source_paths[1].metadata().unwrap()
-        ));
+        assert!(same_file::is_same_file(&first_blob, &source_paths[0]).unwrap());
+        assert!(same_file::is_same_file(&second_blob, &source_paths[1]).unwrap());
 
         let reused = super::super::direct_gguf_source_paths(&first).unwrap();
         assert_eq!(reused, source_paths);
