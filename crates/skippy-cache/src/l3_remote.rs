@@ -22,6 +22,7 @@
 use std::{
     io::{BufReader, BufWriter, Read, Write},
     net::{TcpListener, TcpStream},
+    time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
@@ -32,6 +33,18 @@ use crate::l3::{HandoffManifest, HandoffSegmentStore, segment_digest};
 const MAX_HEADER_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_SEGMENT_BYTES: u64 = 256 * 1024 * 1024;
 const STREAM_BUFFER_BYTES: usize = 1024 * 1024;
+const DEFAULT_IO_TIMEOUT: Duration = Duration::from_secs(600);
+
+fn configure_stream(stream: &TcpStream, timeout: Duration) -> Result<()> {
+    stream.set_nodelay(true).ok();
+    stream
+        .set_read_timeout(Some(timeout))
+        .context("failed to set skippy-kv read timeout")?;
+    stream
+        .set_write_timeout(Some(timeout))
+        .context("failed to set skippy-kv write timeout")?;
+    Ok(())
+}
 
 mod frame_kind {
     pub const GET_MANIFEST: u8 = 1;
@@ -80,7 +93,15 @@ pub struct FetchStats {
 
 /// Serve the store to one connected peer until it disconnects.
 pub fn serve_connection(store: &HandoffSegmentStore, stream: TcpStream) -> Result<()> {
-    stream.set_nodelay(true).ok();
+    serve_connection_with_timeout(store, stream, DEFAULT_IO_TIMEOUT)
+}
+
+fn serve_connection_with_timeout(
+    store: &HandoffSegmentStore,
+    stream: TcpStream,
+    timeout: Duration,
+) -> Result<()> {
+    configure_stream(&stream, timeout)?;
     let mut reader = BufReader::with_capacity(STREAM_BUFFER_BYTES, stream.try_clone()?);
     let mut writer = BufWriter::with_capacity(STREAM_BUFFER_BYTES, stream);
     loop {
@@ -155,17 +176,31 @@ pub fn serve_store(
     listener: &TcpListener,
     accept_count: usize,
 ) -> Result<()> {
-    let mut served = 0usize;
-    loop {
-        let (stream, _) = listener.accept().context("skippy-kv accept failed")?;
-        served += 1;
-        if let Err(error) = serve_connection(store, stream) {
-            eprintln!("skippy-kv connection failed: {error:#}");
+    serve_store_with_timeout(store, listener, accept_count, DEFAULT_IO_TIMEOUT)
+}
+
+/// Serve the store with an explicit per-connection I/O deadline.
+pub fn serve_store_with_timeout(
+    store: &HandoffSegmentStore,
+    listener: &TcpListener,
+    accept_count: usize,
+    timeout: Duration,
+) -> Result<()> {
+    std::thread::scope(|scope| -> Result<()> {
+        let mut served = 0usize;
+        loop {
+            let (stream, _) = listener.accept().context("skippy-kv accept failed")?;
+            served += 1;
+            scope.spawn(move || {
+                // A malformed, stalled, or disconnected peer is isolated to
+                // its worker. The listener remains available to other peers.
+                let _ = serve_connection_with_timeout(store, stream, timeout);
+            });
+            if accept_count != 0 && served >= accept_count {
+                return Ok(());
+            }
         }
-        if accept_count != 0 && served >= accept_count {
-            return Ok(());
-        }
-    }
+    })
 }
 
 /// A client connection to a peer's store.
@@ -176,9 +211,13 @@ pub struct KvFetchClient {
 
 impl KvFetchClient {
     pub fn connect(peer: &str) -> Result<Self> {
+        Self::connect_with_timeout(peer, DEFAULT_IO_TIMEOUT)
+    }
+
+    pub fn connect_with_timeout(peer: &str, timeout: Duration) -> Result<Self> {
         let stream = TcpStream::connect(peer)
             .with_context(|| format!("failed to connect to skippy-kv peer {peer}"))?;
-        stream.set_nodelay(true).ok();
+        configure_stream(&stream, timeout)?;
         Ok(Self {
             reader: BufReader::with_capacity(STREAM_BUFFER_BYTES, stream.try_clone()?),
             writer: BufWriter::with_capacity(STREAM_BUFFER_BYTES, stream),
@@ -411,6 +450,29 @@ mod tests {
         assert!(client.fetch_manifest(Some("no-such-key")).is_err());
         assert!(client.fetch_segment(&segment_digest(b"absent")).is_err());
         drop(client);
+        server.join().expect("server thread");
+    }
+
+    #[test]
+    fn stalled_peer_does_not_block_the_listener() {
+        let server_root = temp_root("concurrent-listener");
+        let (server_store, manifest) = seeded_store(&server_root, b"payload");
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("addr").to_string();
+        let server = std::thread::spawn(move || {
+            serve_store_with_timeout(&server_store, &listener, 2, Duration::from_secs(2))
+                .expect("serve");
+        });
+
+        let stalled = TcpStream::connect(&address).expect("connect stalled peer");
+        let mut client = KvFetchClient::connect_with_timeout(&address, Duration::from_secs(2))
+            .expect("connect active peer");
+        assert_eq!(
+            client.list_manifests().expect("list while peer is stalled"),
+            vec![manifest.payload_digest]
+        );
+        drop(client);
+        drop(stalled);
         server.join().expect("server thread");
     }
 }

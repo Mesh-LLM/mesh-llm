@@ -7,8 +7,8 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use skippy_cache::{
-    ExactStateIdentityParams, HandoffManifest, HandoffSegmentRef, HandoffSegmentStore,
-    KvFetchClient, exact_state_identity, serve_store,
+    HandoffManifest, HandoffSegmentRef, HandoffSegmentStore, KvFetchClient,
+    serve_store_with_timeout,
 };
 use skippy_runtime::{
     GGML_TYPE_F16, MtpSource, RuntimeConfig, RuntimeKvPageDesc, StageModel, StageSession,
@@ -21,10 +21,13 @@ use crate::{
 
 use super::native_mtp::emit_report;
 use super::stage_execution::{
-    PackageStageSpec, elapsed_ms, ensure_matches, runtime_flash_attn, runtime_load_mode,
-    runtime_model_identity, stage_id_for_index, stage_model_resolution, status,
+    PackageStageSpec, elapsed_ms, ensure_matches, protocol_load_mode, runtime_flash_attn,
+    runtime_load_mode, runtime_model_identity, stage_id_for_index, stage_model_resolution, status,
 };
 use super::state_handoff::state_handoff_tokens;
+
+mod identity;
+use identity::{effective_payload_kind, state_identity_for};
 
 const PROTOCOL_VERSION: u32 = 1;
 const MAX_HEADER_BYTES: u64 = 16 * 1024 * 1024;
@@ -188,7 +191,12 @@ fn run_serve(args: RemoteHandoffArgs) -> Result<()> {
         store_dir.display(),
         store.list_manifests()?.len()
     );
-    serve_store(&store, &listener, args.accept_count)
+    serve_store_with_timeout(
+        &store,
+        &listener,
+        args.accept_count,
+        Duration::from_secs(args.handshake_timeout_secs.max(1)),
+    )
 }
 
 /// Pull a manifest and its segments from a peer's store into the local one,
@@ -204,7 +212,10 @@ fn run_fetch(mut args: RemoteHandoffArgs) -> Result<()> {
         .context("--role fetch requires --store-dir")?;
     let store = HandoffSegmentStore::open(&store_dir, args.store_budget_bytes)?;
     let fetch_started = Instant::now();
-    let mut client = KvFetchClient::connect(&peer.to_string())?;
+    let mut client = KvFetchClient::connect_with_timeout(
+        &peer.to_string(),
+        Duration::from_secs(args.handshake_timeout_secs.max(1)),
+    )?;
     let (manifest, stats) = client
         .fetch_into_store(args.manifest.as_deref(), &store)
         .context("failed to fetch manifest from peer")?;
@@ -221,96 +232,6 @@ fn run_fetch(mut args: RemoteHandoffArgs) -> Result<()> {
     args.manifest = Some(manifest.payload_digest.clone());
     args.streaming = manifest.payload_kind == "kv-page-stream";
     run_restore(args)
-}
-
-fn effective_payload_kind(args: &RemoteHandoffArgs) -> &'static str {
-    if args.streaming {
-        "kv-page-stream"
-    } else {
-        payload_kind_name(args.state_payload_kind)
-    }
-}
-
-/// Content digest of the served artifact, memoized per path: two harness
-/// processes serving different local GGUFs behind the same display model id
-/// must never share a state identity. Directories (layer-package refs) are
-/// not hashed here; their identity rides the package manifest via the
-/// model-identity fields.
-fn artifact_sha256_cached(path: &std::path::Path) -> Option<String> {
-    use std::collections::HashMap;
-    use std::sync::{Mutex, OnceLock};
-    static CACHE: OnceLock<Mutex<HashMap<std::path::PathBuf, Option<String>>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(cached) = cache
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .get(path)
-    {
-        return cached.clone();
-    }
-    let digest = (|| -> Option<String> {
-        if !path.is_file() {
-            return None;
-        }
-        let mut file = std::fs::File::open(path).ok()?;
-        let mut hasher = sha2::Sha256::new();
-        use sha2::Digest as _;
-        let mut buffer = [0_u8; 64 * 1024];
-        loop {
-            let read = file.read(&mut buffer).ok()?;
-            if read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..read]);
-        }
-        Some(hex::encode(hasher.finalize()))
-    })();
-    cache
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(path.to_path_buf(), digest.clone());
-    digest
-}
-
-/// The numerical identity of the state this configuration produces or
-/// accepts. The harness pins F16 KV and does not resolve a concrete backend
-/// device, so the platform tag inside `exact_state_identity` (arch,
-/// endianness, pointer width) is the cross-machine guard — and the served
-/// artifact's content digest guards against two different local files
-/// behind the same display model id.
-fn state_identity_for(
-    args: &RemoteHandoffArgs,
-    identity: &model_artifact::ModelIdentity,
-) -> String {
-    let source_model_sha256 = artifact_sha256_cached(&args.runtime.model);
-    exact_state_identity(&ExactStateIdentityParams {
-        model_id: &identity.model_id,
-        model_revision: identity.source_revision.as_deref(),
-        model_file: identity.source_file.as_deref(),
-        manifest_sha256: None,
-        source_model_sha256: source_model_sha256.as_deref(),
-        package_ref: None,
-        cache_type_k: "f16",
-        cache_type_v: "f16",
-        flash_attn_type: protocol_flash_attn_type(args.runtime.flash_attn),
-        n_gpu_layers: args.runtime.n_gpu_layers,
-        backend_device: None,
-        layer_start: 0,
-        layer_end: args.runtime.layer_end,
-        ctx_size: args.runtime.ctx_size,
-        lane_count: effective_lane_count(args),
-        payload_kind: effective_payload_kind(args),
-    })
-}
-
-fn protocol_flash_attn_type(
-    value: crate::cli::FlashAttentionArg,
-) -> skippy_protocol::FlashAttentionType {
-    match value {
-        crate::cli::FlashAttentionArg::Auto => skippy_protocol::FlashAttentionType::Auto,
-        crate::cli::FlashAttentionArg::Disabled => skippy_protocol::FlashAttentionType::Disabled,
-        crate::cli::FlashAttentionArg::Enabled => skippy_protocol::FlashAttentionType::Enabled,
-    }
 }
 
 fn open_store(args: &RemoteHandoffArgs) -> Result<Option<HandoffSegmentStore>> {
@@ -1462,7 +1383,7 @@ fn handle_receiver_connection(
 /// no exporter. Restart survival: any manifest the store holds can be
 /// imported into a fresh process and decoded, and when the manifest records
 /// the exporter's continuation the run self-verifies determinism.
-fn run_restore(args: RemoteHandoffArgs) -> Result<()> {
+fn run_restore(mut args: RemoteHandoffArgs) -> Result<()> {
     let store_dir = args
         .store_dir
         .clone()
@@ -1477,6 +1398,10 @@ fn run_restore(args: RemoteHandoffArgs) -> Result<()> {
             .with_context(|| format!("store at {} holds no manifests", store_dir.display()))?,
     };
     let manifest = store.load_manifest(&key)?;
+    // The persisted manifest is authoritative for the encoded payload shape.
+    // A restart should not require the operator to repeat --streaming merely
+    // to reconstruct the identity of state already on disk.
+    args.streaming = manifest.payload_kind == "kv-page-stream";
     let model_identity = runtime_model_identity(&args.runtime)?;
     let local_state_identity = state_identity_for(&args, &model_identity);
     if manifest.state_identity != local_state_identity {
@@ -1895,77 +1820,4 @@ fn read_frame_expect<T: DeserializeOwned>(
 
 fn digest_hex(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
-}
-
-#[cfg(test)]
-mod state_identity_tests {
-    use super::*;
-    use crate::cli::{
-        FlashAttentionArg, OutputArgs, RemoteHandoffArgs, RemoteHandoffRole, RuntimeArgs,
-        StageLoadMode, StatePayloadKind,
-    };
-
-    fn args_for(model: std::path::PathBuf) -> RemoteHandoffArgs {
-        RemoteHandoffArgs {
-            runtime: RuntimeArgs {
-                model,
-                model_id: None,
-                stage_model: None,
-                stage_load_mode: StageLoadMode::RuntimeSlice,
-                layer_end: 28,
-                ctx_size: 2048,
-                n_gpu_layers: 99,
-                n_batch: None,
-                n_ubatch: None,
-                prompt: "Hello".to_string(),
-                flash_attn: FlashAttentionArg::Auto,
-            },
-            output: OutputArgs { report_out: None },
-            role: RemoteHandoffRole::Send,
-            listen: "0.0.0.0:19081".parse().expect("addr"),
-            peer: None,
-            state_payload_kind: StatePayloadKind::FullState,
-            prefix_token_count: None,
-            decode_tokens: 16,
-            segment_bytes: 8 * 1024 * 1024,
-            baseline: false,
-            runtime_lane_count: None,
-            handshake_timeout_secs: 600,
-            accept_count: 1,
-            store_dir: None,
-            store_budget_bytes: 0,
-            manifest: None,
-            streaming: false,
-            stream_chunk_tokens: 512,
-            allow_mismatch: false,
-        }
-    }
-
-    /// Two different local files behind the same display model id must not
-    /// share a handoff identity — the content digest, not the name, decides.
-    #[test]
-    fn different_file_contents_behind_one_model_id_change_identity() {
-        let dir = std::env::temp_dir()
-            .join("skippy-remote-handoff-identity-tests")
-            .join(std::process::id().to_string());
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        let first = dir.join("model-a.gguf");
-        let second = dir.join("model-b.gguf");
-        std::fs::write(&first, b"weights generation one").expect("write first");
-        std::fs::write(&second, b"weights generation two").expect("write second");
-        let identity = model_artifact::ModelIdentity::from_model_id("org/model:Q4_K_M");
-
-        let first_identity = state_identity_for(&args_for(first.clone()), &identity);
-        let second_identity = state_identity_for(&args_for(second), &identity);
-        assert_ne!(
-            first_identity, second_identity,
-            "same model id over different file contents must not share identity"
-        );
-
-        // Stable for the same content (memoized path re-queried).
-        assert_eq!(
-            first_identity,
-            state_identity_for(&args_for(first), &identity)
-        );
-    }
 }

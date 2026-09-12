@@ -3741,6 +3741,40 @@
       "macro_name": "println!"
     }
   ],
+  "crates/skippy-correctness/src/runner/remote_handoff.rs": [
+    {
+      "line": 188,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 224,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 928,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 937,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 949,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 952,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 956,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1299,
+      "macro_name": "eprintln!"
+    }
+  ],
   "crates/skippy-correctness/src/runner/stage_fa_parity.rs": [
     {
       "line": 51,

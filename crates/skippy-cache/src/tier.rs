@@ -233,11 +233,17 @@ impl L3Tier {
                     .into_owned(),
             ),
             ExactStatePayloadKind::KvRecurrent => (
-                payload
-                    .kv_bytes()
-                    .context("failed to reconstruct KV bytes for spill")?
-                    .map(|bytes| bytes.into_owned())
-                    .unwrap_or_default(),
+                {
+                    let kv = payload
+                        .kv_bytes()
+                        .context("failed to reconstruct KV bytes for spill")?
+                        .map(|bytes| bytes.into_owned())
+                        .unwrap_or_default();
+                    if kv.is_empty() {
+                        bail!("refusing to spill kv-recurrent state without a KV component");
+                    }
+                    kv
+                },
                 payload
                     .recurrent_state_bytes()
                     .context("failed to reconstruct recurrent state for spill")?
@@ -1007,6 +1013,16 @@ mod tests {
             tier.fill_longest("ns", &tokens(128), 64)
                 .expect("fill")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn kv_recurrent_payload_requires_kv_bytes() {
+        let tier = tier("empty-kv", "blake3:identity-a");
+        let payload = ExactStatePayload::kv_recurrent(Vec::new(), vec![1u8; 128]);
+        assert!(
+            tier.spill("ns", &tokens(128), &payload, None, None)
+                .is_err()
         );
     }
 

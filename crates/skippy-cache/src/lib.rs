@@ -22,7 +22,9 @@ pub use l3::{
     MANIFEST_VERSION, ManifestPin, PayloadGeometry, Reservation, SegmentHold, SegmentPut,
     StoreLimits, StoreReconciliation, StoreUsage, StoredSegment, WriteRefusal, segment_digest,
 };
-pub use l3_remote::{FetchStats, KvFetchClient, serve_connection, serve_store};
+pub use l3_remote::{
+    FetchStats, KvFetchClient, serve_connection, serve_store, serve_store_with_timeout,
+};
 pub use manager::{
     L3ActivitySnapshot, L3CacheManager, L3EffectiveState, L3EffectiveStatus, L3InventoryEntry,
     L3StateReason, L3StateTransition,

@@ -235,8 +235,8 @@ pub struct RemoteHandoffArgs {
     pub role: RemoteHandoffRole,
     #[arg(
         long,
-        default_value = "0.0.0.0:19081",
-        help = "Address the receiver listens on"
+        default_value = "127.0.0.1:19081",
+        help = "Address the receiver listens on; binding beyond loopback exposes the unauthenticated lab transport and requires a trusted private network"
     )]
     pub listen: SocketAddr,
     #[arg(long, help = "Receiver address the sender connects to")]

@@ -345,6 +345,10 @@ pub struct ExactStateIdentityParams<'a> {
     pub manifest_sha256: Option<&'a str>,
     pub source_model_sha256: Option<&'a str>,
     pub package_ref: Option<&'a str>,
+    /// Stable name of the tensor assembly path. Runtime slices, artifact
+    /// slices, and layer packages can produce different tensor layouts from
+    /// the same model coordinate and must not exchange resident state.
+    pub load_mode: &'a str,
     pub cache_type_k: &'a str,
     pub cache_type_v: &'a str,
     pub flash_attn_type: FlashAttentionType,
@@ -383,6 +387,8 @@ pub fn exact_state_identity(params: &ExactStateIdentityParams<'_>) -> String {
         }
     }
     hasher.update(b"kv:");
+    hasher.update(b"load:");
+    hasher.update(params.load_mode.as_bytes());
     hasher.update(params.cache_type_k.as_bytes());
     hasher.update(b"/");
     hasher.update(params.cache_type_v.as_bytes());
@@ -435,6 +441,7 @@ mod exact_state_identity_tests {
             manifest_sha256: Some("m".repeat(64).leak()),
             source_model_sha256: Some("s".repeat(64).leak()),
             package_ref: None,
+            load_mode: "runtime-slice",
             cache_type_k: "f16",
             cache_type_v: "f16",
             flash_attn_type: FlashAttentionType::Auto,
@@ -514,6 +521,18 @@ mod exact_state_identity_tests {
         assert_ne!(
             exact_state_identity(&params()),
             exact_state_identity(&absent_revision)
+        );
+    }
+
+    #[test]
+    fn load_mode_changes_identity() {
+        let artifact_slice = ExactStateIdentityParams {
+            load_mode: "artifact-slice",
+            ..params()
+        };
+        assert_ne!(
+            exact_state_identity(&params()),
+            exact_state_identity(&artifact_slice)
         );
     }
 

@@ -64,6 +64,13 @@ Restore from a page-stream manifest re-imports page by page (pass
 
 ## Peer fetch (`skippy-kv/1`) — cross-node prefix reuse
 
+The direct TCP listener is an unauthenticated lab transport. It defaults to
+loopback; bind it to a non-loopback address only on a trusted private network
+with host firewall rules limiting both peers. Production mesh exposure must use
+the registered `skippy-kv/1` iroh ALPN so mesh membership authenticates the
+peer. Each TCP connection has bounded read and write deadlines, but those
+deadlines do not provide authentication or confidentiality.
+
 Any node can serve its store and any node can pull by digest:
 
 ```bash
