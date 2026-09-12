@@ -4,8 +4,6 @@ name: Release
 # GPU runner; unset or false uses GitHub-hosted runners.
 
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
     inputs:
       version:
@@ -306,6 +304,7 @@ jobs:
           output_dir: host-input
           attestation_signing_key_file: ${{ runner.temp }}/mesh-release-attestation-private-key.json
           attestation_public_key_file: ${{ runner.temp }}/mesh-release-attestation-public-key.json
+          commit: ${{ needs.metadata.outputs.source_sha }}
 
       - name: Upload immutable host input
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -891,6 +890,7 @@ jobs:
           output_dir: host-input
           attestation_signing_key_file: ${{ runner.temp }}/mesh-release-attestation-private-key.json
           attestation_public_key_file: ${{ runner.temp }}/mesh-release-attestation-public-key.json
+          commit: ${{ needs.metadata.outputs.source_sha }}
 
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -1349,6 +1349,7 @@ jobs:
           skip_ui: "true"
           attestation_signing_key_file: ${{ runner.temp }}/mesh-release-attestation-private-key.json
           attestation_public_key_file: ${{ runner.temp }}/mesh-release-attestation-public-key.json
+          commit: ${{ needs.metadata.outputs.source_sha }}
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: host-input-windows-x86_64
@@ -1851,6 +1852,49 @@ jobs:
           overwrite_files: false
           files: release-artifacts/*
 
+  release_notes:
+    name: Regroup release notes
+    needs: [metadata, publish]
+    # Stable releases only: release-candidate notes are regenerated for the
+    # final release from the same stable base, so regrouping one is discarded.
+    if: ${{ needs.publish.result == 'success' && needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.release_notes_base != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          persist-credentials: false
+          # The deterministic pass classifies entries from the commit range
+          # between the comparison base and this tag.
+          fetch-depth: 0
+
+      - name: Regroup published release notes
+        id: regroup
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          RELEASE_NOTES_BASE: ${{ needs.metadata.outputs.release_notes_base }}
+          # Explicit, reviewable approval for this job to edit the release it
+          # just published. The script grants no implicit CI bypass.
+          RELEASE_NOTES_APPROVED: "true"
+          # Unset until a runner provides the agent CLI and credentials; the
+          # deterministic pass publishes on its own until then.
+          AGENT_MODEL: ${{ vars.RELEASE_NOTES_AGENT_MODEL }}
+          RELEASE_NOTES_WORKDIR: ${{ runner.temp }}/release-notes
+        run: scripts/release-notes-generate.sh
+
+      - name: Upload release-notes evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: release-notes-${{ needs.metadata.outputs.tag }}
+          path: ${{ runner.temp }}/release-notes
+          retention-days: 90
+          if-no-files-found: warn
+
   dispatch_packaging_release:
     name: Dispatch package and image publishing
     needs: [metadata, publish]
@@ -1862,12 +1906,21 @@ jobs:
       - name: Dispatch verified release to mesh-packaging
         env:
           GH_TOKEN: ${{ secrets.MESH_AGENT_IMAGES_DISPATCH_TOKEN }}
+          TARGET_REPOSITORY: Mesh-LLM/mesh-packaging
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
         run: |
           set -euo pipefail
           [[ -n "${GH_TOKEN:-}" ]] || {
             echo "MESH_AGENT_IMAGES_DISPATCH_TOKEN must grant Contents write access to Mesh-LLM/mesh-packaging for cross-repository dispatch" >&2
+            exit 1
+          }
+          target_permissions="$(gh api "repos/${TARGET_REPOSITORY}")" || {
+            echo "MESH_AGENT_IMAGES_DISPATCH_TOKEN cannot access ${TARGET_REPOSITORY}; update the secret with a credential that grants Contents write access" >&2
+            exit 1
+          }
+          [[ "$(jq -r '.permissions.push // false' <<<"$target_permissions")" == "true" ]] || {
+            echo "MESH_AGENT_IMAGES_DISPATCH_TOKEN must grant Contents write access to ${TARGET_REPOSITORY}; update the secret before retrying this release" >&2
             exit 1
           }
           jq -n \
@@ -1888,7 +1941,7 @@ jobs:
             }' |
             gh api \
               --method POST \
-              repos/Mesh-LLM/mesh-packaging/dispatches \
+              "repos/${TARGET_REPOSITORY}/dispatches" \
               --input -
 
   publish_crates_preflight:

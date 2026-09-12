@@ -436,7 +436,7 @@ fallbacks for non-Skippy builds and diagnostic surfaces, but they must not
 invent GPU count, backend identity, or usable runtime capacity when the embedded
 backend reports no selectable GPU.
 
-`survey()` calls all applicable collectors and returns a `HardwareSurvey` with `gpu_name`, `gpu_vram` (per-GPU bytes), `gpu_reserved` (per-GPU reserved or unavailable bytes when the platform reports a true reserved/unavailable metric), `vram_bytes` (total), `hostname`, `is_soc`, and per-device `GpuFacts` entries. Benchmark-derived memory-bandwidth and compute-throughput hints are attached later when cached or freshly measured results are available. ROCm `rocm-smi --showmeminfo` and Intel `xpu-smi` discovery expose live used-memory counters, so mesh-llm intentionally omits `gpu_reserved` for those backends instead of reinterpreting used bytes as reserved memory.
+`survey()` calls all applicable collectors and returns a `HardwareSurvey` with `gpu_name`, `gpu_vram` (per-GPU bytes), `gpu_reserved` (per-GPU reserved or unavailable bytes when the platform reports a true reserved/unavailable metric), `vram_bytes` (total), `hostname`, `is_soc`, per-device `GpuFacts` entries, `system_ram_bytes` (total system RAM when the platform reports it), and `ram_offload_bytes` (the share of `vram_bytes` backed by system RAM rather than accelerator memory, derived once in `query`). Benchmark-derived memory-bandwidth and compute-throughput hints are attached later when cached or freshly measured results are available. ROCm `rocm-smi --showmeminfo` and Intel `xpu-smi` discovery expose live used-memory counters, so mesh-llm intentionally omits `gpu_reserved` for those backends instead of reinterpreting used bytes as reserved memory.
 
 ### Gossip Fields
 
@@ -449,6 +449,7 @@ backend reports no selectable GPU.
 | `is_soc` | `Option<bool>` | True for Tegra/Jetson (unified memory) |
 | `gpu_vram` | `Option<String>` | Comma-separated per-GPU VRAM in bytes |
 | `gpu_reserved_bytes` | `Option<String>` | Comma-separated per-GPU reserved bytes when the platform reports a true reserved/unavailable metric |
+| `hardware.memory` | `optional MemoryInfo` | Itemized capacity behind `vram_bytes`: total, driver reserve, platform reserve, configured reserve, usable, plus system RAM and the RAM-backed share of the local budget as informational items |
 | `gpu_mem_bandwidth_gbps` | `Option<String>` | Comma-separated per-GPU memory bandwidth measurements or cached benchmark results |
 | `gpu_compute_tflops_fp32` | `Option<String>` | Comma-separated per-GPU FP32 compute-throughput hints |
 | `gpu_compute_tflops_fp16` | `Option<String>` | Comma-separated per-GPU FP16 compute-throughput hints |
@@ -461,7 +462,7 @@ GGUF-derived metadata (architecture, quantization type, tokenizer, RoPE paramete
 
 ### `--no-enumerate-host` Flag
 
-By default, nodes broadcast their GPU name, hostname, VRAM capacity, and reserved bytes to all mesh peers. Pass `--no-enumerate-host` to suppress this hardware identification. `is_soc` is always sent. Benchmark-derived bandwidth and compute hints remain additive optional fields when available. `gpu_reserved_bytes` stays omitted on backends such as ROCm and Intel where the tooling does not report a true reserved/unavailable memory metric.
+By default, nodes broadcast their GPU name, hostname, VRAM capacity, reserved bytes, and the itemized capacity block (`hardware.memory`) to all mesh peers. Pass `--no-enumerate-host` to suppress this hardware identification. `is_soc` and the `vram_bytes` budget are always sent. Benchmark-derived bandwidth and compute hints remain additive optional fields when available. `gpu_reserved_bytes` stays omitted on backends such as ROCm and Intel where the tooling does not report a true reserved/unavailable memory metric.
 
 ```
 --no-enumerate-host    # opt out: suppress GPU name and hostname from gossip
@@ -474,9 +475,12 @@ By default, nodes broadcast their GPU name, hostname, VRAM capacity, and reserve
 {
   "my_hostname": "carrack",
   "my_is_soc": false,
+  "my_memory": {"total_bytes": 34359738368, "reserved_bytes": 1073741824, "platform_reserve_bytes": 0, "configured_reserve_bytes": 2147483648, "usable_bytes": 31138512896, "system_ram_bytes": 68719476736, "ram_offload_bytes": 30923764531},
   "gpus": [{"name": "NVIDIA RTX 5090", "vram_bytes": 34359738368, "reserved_bytes": 1073741824, "mem_bandwidth_gbps": 1792.0, "compute_tflops_fp32": 104.8, "compute_tflops_fp16": 209.6}]
 }
 ```
+
+`my_memory` (and `memory` on the `peers[]` entries that advertise it) is the itemized capacity behind `my_vram_gb` / `vram_gb`, in bytes, exactly as the node announces it (see `hardware.memory` in [message_protocol.md](message_protocol.md)). The console renders a node's VRAM from the advertised `usable_bytes` when the block is present and only falls back to summing the per-GPU rated capacities for peers that predate it.
 
 For ROCm and Intel hosts, `reserved_bytes` is omitted because their standard CLI telemetry exposes live used-memory counters rather than a true reserved/system-memory value.
 

@@ -151,17 +151,17 @@ class InstallScriptTests(unittest.TestCase):
                 "mesh-llm-aarch64-unknown-linux-gnu-cuda-13.tar.gz",
             )
 
-    def test_detect_cuda_major_requires_matching_cuda_libraries(self) -> None:
+    def test_detect_cuda_major_prefers_toolkit_and_falls_back_to_driver(self) -> None:
         library_names = ("libcudart", "libcublas", "libcublasLt")
         cases = (
-            # A driver report alone is not enough to select an archive.
-            ("CUDA Version: 13.0", None, ""),
+            # Bundled Linux CUDA artifacts make driver-only installation safe.
+            ("CUDA Version: 13.0", None, "13"),
             ("CUDA Version: 13.0", ("13", "13", "13"), "13"),
             ("CUDA Version: 12.4", ("12", "12", "12"), "12"),
-            ("CUDA Version: 12.4", ("13", "13", "13"), ""),
+            ("CUDA Version: 12.4", ("13", "13", "13"), "12"),
             # A driver newer than any lane we publish clamps to the newest lane.
             ("CUDA Version: 14.2", ("14", "14", "14"), "13"),
-            ("CUDA Version: 13.0", ("13", "12", "13"), ""),
+            ("CUDA Version: 13.0", ("13", "12", "13"), "13"),
         )
         for header, library_majors, expected in cases:
             with self.subTest(header=header, library_majors=library_majors):
