@@ -632,7 +632,7 @@ pub(super) fn stage_load_mode_from_proto(value: i32) -> anyhow::Result<skippy_pr
             Ok(skippy_protocol::LoadMode::ArtifactSlice)
         }
         Ok(skippy_stage_proto::StageLoadMode::Unspecified) | Err(_) => {
-            anyhow::bail!("unsupported generation-9 stage load mode {value}")
+            anyhow::bail!("unsupported generation-10 stage load mode {value}")
         }
     }
 }
@@ -672,7 +672,7 @@ fn stage_activation_codec_from_proto(
         Ok(skippy_stage_proto::StageActivationCodec::S8RowF32RneV1) => {
             Ok(skippy_protocol::StageActivationCodec::S8RowF32RneV1)
         }
-        _ => anyhow::bail!("unsupported generation-9 activation codec {value}"),
+        _ => anyhow::bail!("unsupported generation-10 activation codec {value}"),
     }
 }
 
@@ -694,7 +694,7 @@ fn stage_activation_codec_policy_from_proto(
 ) -> anyhow::Result<skippy_protocol::StageActivationCodecPolicy> {
     match skippy_stage_proto::StageActivationCodecPolicy::try_from(value) {
         Ok(skippy_stage_proto::StageActivationCodecPolicy::Unspecified) => {
-            anyhow::bail!("generation-9 activation codec policy must be explicit")
+            anyhow::bail!("generation-10 activation codec policy must be explicit")
         }
         Ok(skippy_stage_proto::StageActivationCodecPolicy::FixedV1) => {
             Ok(skippy_protocol::StageActivationCodecPolicy::Fixed)
@@ -702,7 +702,7 @@ fn stage_activation_codec_policy_from_proto(
         Ok(skippy_stage_proto::StageActivationCodecPolicy::AutoLosslessV1) => {
             Ok(skippy_protocol::StageActivationCodecPolicy::AutoLosslessV1)
         }
-        _ => anyhow::bail!("unsupported generation-9 activation codec policy {value}"),
+        _ => anyhow::bail!("unsupported generation-10 activation codec policy {value}"),
     }
 }
 
@@ -1007,7 +1007,7 @@ fn source_resolution_policy_from_proto(value: i32) -> anyhow::Result<bool> {
         Ok(skippy_stage_proto::SourceResolutionPolicy::Fallback) => Ok(false),
         Ok(skippy_stage_proto::SourceResolutionPolicy::LocalRequired) => Ok(true),
         Ok(skippy_stage_proto::SourceResolutionPolicy::Unspecified) | Err(_) => {
-            anyhow::bail!("unsupported generation-9 stage source resolution policy {value}")
+            anyhow::bail!("unsupported generation-10 stage source resolution policy {value}")
         }
     }
 }
