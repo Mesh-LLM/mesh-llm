@@ -149,6 +149,7 @@ pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecy
         runtime_event_tx,
         survey_telemetry,
         startup_ready_reporter,
+        api_port,
         openai_guardrail_policy: &runtime_state.openai_guardrail_policy,
         model_target_reconciliation_policy: model_target_reconciliation_policy(config),
         model_target_reconciliation_state: ModelTargetReconciliationState::with_shared_history(

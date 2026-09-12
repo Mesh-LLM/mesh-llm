@@ -367,6 +367,14 @@ async fn finish_runtime_model_load(
     ctx.node
         .set_available_models(models::scan_local_models())
         .await;
+    // Peers only route HTTP inference to a node whose gossiped role is
+    // `Host`; a `Worker` advertising `serving_models` is filtered out by
+    // `accepts_http_inference`. The startup path claims this when it
+    // publishes a loaded model, so the runtime-load path must too, or a
+    // model loaded after startup is never reachable from the mesh.
+    ctx.node
+        .claim_host_role(mesh::HostRoleClaim::LocalModel, ctx.api_port)
+        .await;
     let payload = local_process_payload(
         &loaded_name,
         Some(&instance_id),

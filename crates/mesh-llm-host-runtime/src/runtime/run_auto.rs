@@ -1159,6 +1159,9 @@ pub(super) struct RunAutoRuntimeLoopContext<'a> {
     pub(super) runtime_event_tx: &'a tokio::sync::mpsc::UnboundedSender<RuntimeEvent>,
     pub(super) survey_telemetry: &'a survey::SurveyTelemetry,
     pub(super) startup_ready_reporter: &'a StartupReadyReporter,
+    /// Local OpenAI API port advertised to peers when this node claims the
+    /// host role for a runtime-loaded model.
+    pub(super) api_port: u16,
     pub(super) openai_guardrail_policy: &'a OpenAiGuardrailPolicyHandle,
     pub(super) model_target_reconciliation_policy: ModelTargetReconciliationPolicy,
     pub(super) model_target_reconciliation_state: ModelTargetReconciliationState,
