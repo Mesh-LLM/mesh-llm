@@ -4,6 +4,7 @@ pub mod identity;
 pub mod l3;
 pub mod manager;
 pub mod payload;
+pub mod policy;
 pub mod radix;
 pub mod resident;
 pub mod source;
