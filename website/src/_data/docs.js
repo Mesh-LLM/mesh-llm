@@ -62,6 +62,7 @@ export default [
     description: "Extend mesh-llm with managed plugin processes, MCP tools, and HTTP bindings.",
     links: [
       ["Plugins overview", "/docs/pages/plugins/"],
+      ["Share Ollama, vLLM or LM Studio", "/docs/pages/external-model-endpoints/"],
       ["Plugin architecture", "/docs/pages/plugin-architecture/"],
       ["Developing plugins", "/docs/pages/developing-plugins/"],
       ["Plugin reference", "/docs/pages/plugin-reference/"]

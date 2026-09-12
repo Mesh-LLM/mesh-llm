@@ -8,8 +8,10 @@ use crate::mesh::requirements::{MeshRequirementPolicySummary, MeshRequirementRej
 use crate::network::{affinity, metrics};
 use crate::runtime_data;
 use crate::system::hardware::expand_gpu_names;
+mod memory;
 mod runtime;
 
+pub(crate) use memory::MemoryPayload;
 pub(crate) use runtime::*;
 use serde::Serialize;
 use skippy_server::OpenAiGuardrailsStatus;
@@ -409,6 +411,8 @@ pub(crate) struct StatusPayload {
     pub(crate) publication_state: String,
     pub(crate) my_hostname: Option<String>,
     pub(crate) my_is_soc: Option<bool>,
+    /// Itemized view of `my_vram_gb`, the capacity this node advertises.
+    pub(crate) my_memory: MemoryPayload,
     pub(crate) gpus: Vec<GpuEntry>,
     pub(crate) routing_affinity: affinity::AffinityStatsSnapshot,
     /// Local-only routing outcome and current-node pressure snapshot measured on
@@ -580,6 +584,10 @@ pub(crate) struct PeerPayload {
     pub(crate) latency_observer_id: Option<String>,
     pub(crate) hostname: Option<String>,
     pub(crate) is_soc: Option<bool>,
+    /// Itemized view of `vram_gb` when the peer advertised one; absent from
+    /// peers that predate it or that hide their hardware.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) memory: Option<MemoryPayload>,
     pub(crate) gpus: Vec<GpuEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) first_joined_mesh_ts: Option<u64>,
@@ -1132,6 +1140,7 @@ mod tests {
     #[test]
     fn test_peer_payload_serializes_version_field() {
         let peer = PeerPayload {
+            memory: None,
             id: "test-id".to_string(),
             owner: test_owner_payload(),
             release_attestation: test_release_attestation_summary(),
@@ -1165,6 +1174,7 @@ mod tests {
     #[test]
     fn test_peer_payload_serializes_null_version() {
         let peer = PeerPayload {
+            memory: None,
             id: "test-id".to_string(),
             owner: test_owner_payload(),
             release_attestation: test_release_attestation_summary(),
@@ -1204,6 +1214,7 @@ mod tests {
     #[test]
     fn status_payload_serializes_node_state_and_node_status_alias() {
         let status = StatusPayload {
+            my_memory: crate::api::status::MemoryPayload::default(),
             version: "0.60.2".to_string(),
             latest_version: None,
             node_id: "node-1".to_string(),
@@ -1276,6 +1287,7 @@ mod tests {
     #[test]
     fn status_payload_keeps_node_status_for_compatibility() {
         let status = StatusPayload {
+            my_memory: crate::api::status::MemoryPayload::default(),
             version: "0.60.2".to_string(),
             latest_version: None,
             node_id: "node-1".to_string(),
@@ -1341,6 +1353,7 @@ mod tests {
     #[test]
     fn status_payload_serializes_wakeable_nodes_separately() {
         let status = StatusPayload {
+            my_memory: crate::api::status::MemoryPayload::default(),
             version: "0.60.2".to_string(),
             latest_version: None,
             node_id: "node-1".to_string(),
@@ -1415,6 +1428,7 @@ mod tests {
     #[test]
     fn status_payload_defaults_to_empty_wakeable_inventory() {
         let status = StatusPayload {
+            my_memory: crate::api::status::MemoryPayload::default(),
             version: "0.60.2".to_string(),
             latest_version: None,
             node_id: "node-1".to_string(),
@@ -1480,6 +1494,7 @@ mod tests {
     #[test]
     fn peer_status_serializes_state_without_mutating_role() {
         let peer = PeerPayload {
+            memory: None,
             id: "test-id".to_string(),
             owner: test_owner_payload(),
             release_attestation: test_release_attestation_summary(),

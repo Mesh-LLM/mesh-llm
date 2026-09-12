@@ -522,8 +522,6 @@ pub struct SkippyConfig {
     #[serde(default)]
     pub lifecycle_startup_timeout_ms: Option<u64>,
     #[serde(default)]
-    pub lifecycle_readiness_interval_ms: Option<u64>,
-    #[serde(default)]
     pub lifecycle_health_interval_ms: Option<u64>,
     #[serde(default)]
     pub prefill_chunking: Option<String>,

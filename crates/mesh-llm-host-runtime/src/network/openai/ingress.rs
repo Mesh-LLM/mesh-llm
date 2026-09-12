@@ -2,6 +2,7 @@ use crate::inference::{election, pipeline};
 use crate::logging::{CallerPathType, OpenAiLifecycleAttachment, OpenAiRouteObserver};
 use crate::mesh;
 use crate::network::affinity;
+use crate::network::openai::accept;
 use crate::network::openai::auto_route;
 use crate::network::openai::automatic;
 use crate::network::openai::client_stream::ClientStream;
@@ -120,6 +121,29 @@ pub(super) fn parse_model_with_profile(model: &str) -> (&str, &str) {
         }
     } else {
         (model, "")
+    }
+}
+
+/// Waits out an accept error so the caller can loop again.
+///
+/// Neither ingress loop drops its listener on an accept error. The listening
+/// socket survives every error `accept` reports, so returning here is how
+/// #1703 silently removed `:9338` from a node that otherwise looked healthy.
+/// Resource pressure is logged, because the previous code swallowed it and
+/// left nothing behind to explain the missing listener.
+async fn recover_accept_loop(port: u16, error: &std::io::Error, surface: &'static str) {
+    match accept::recover_from_accept_error(error) {
+        accept::AcceptRecovery::Retry => {}
+        accept::AcceptRecovery::Backoff(delay) => {
+            tracing::warn!(
+                port,
+                surface,
+                error = %error,
+                backoff_ms = delay.as_millis() as u64,
+                "accept failed; retrying without dropping the listener"
+            );
+            tokio::time::sleep(delay).await;
+        }
     }
 }
 
@@ -1239,8 +1263,11 @@ pub(crate) async fn api_proxy(
 
     loop {
         let (tcp_stream, _addr) = match listener.accept().await {
-            Ok(r) => r,
-            Err(_) => break,
+            Ok(accepted) => accepted,
+            Err(error) => {
+                recover_accept_loop(port, &error, "api_proxy").await;
+                continue;
+            }
         };
         let _ = tcp_stream.set_nodelay(true);
 
@@ -1290,8 +1317,11 @@ pub(crate) async fn bootstrap_proxy(
         tokio::select! {
             accept = listener.accept() => {
                 let (tcp_stream, _addr) = match accept {
-                    Ok(r) => r,
-                    Err(_) => continue,
+                    Ok(accepted) => accepted,
+                    Err(error) => {
+                        recover_accept_loop(port, &error, "bootstrap_proxy").await;
+                        continue;
+                    }
                 };
                 let _ = tcp_stream.set_nodelay(true);
                 let node = node.clone();

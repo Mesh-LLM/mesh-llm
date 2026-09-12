@@ -107,6 +107,7 @@ struct SettingPresentation {
 fn setting_presentation_for_path(rendered: &str) -> Option<SettingPresentation> {
     logging_presentation(rendered)
         .or_else(|| process_setting_presentation(rendered))
+        .or_else(|| native_runtime_presentation(rendered))
         .or_else(|| runtime_defaults_presentation(rendered))
         .or_else(|| generation_defaults_presentation(rendered))
         .or_else(|| skippy_multimodal_presentation(rendered))
@@ -263,7 +264,7 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
             ATTESTATION_CATEGORY,
             20,
         )
-        .placeholder("0.76.0")
+        .placeholder("0.76.1")
         .hint("text")),
         "mesh_requirements.min_protocol_version" => Some(sp(
             "Minimum protocol generation",
@@ -294,6 +295,45 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
         )
         .placeholder("ed25519:<64 hex characters>")
         .hint("text")),
+        _ => None,
+    }
+}
+
+fn native_runtime_presentation(rendered: &str) -> Option<SettingPresentation> {
+    match rendered {
+        "runtime.native_runtime.selection" => Some(
+            sp(
+                "Native runtime backend",
+                "Pin the native runtime backend loaded on startup. Recommended auto-detects from host hardware; cpu, metal, cuda (or cudaNN), rocm, and vulkan force a backend, and exact:<id> or meshllm-<id> pin a specific installed runtime.",
+                MESHLLM_CATEGORY,
+                40,
+            )
+            .hint("select")
+            .choices(&[(
+                "recommended",
+                "Recommended (auto-detect)",
+                "Auto-detect the best backend for this host.",
+            )]),
+        ),
+        "runtime.native_runtime.mesh_version" => Some(
+            sp(
+                "Native runtime Mesh version",
+                "Pin the Mesh release whose native runtime bundle is loaded. Leave unset to track the current release.",
+                MESHLLM_CATEGORY,
+                50,
+            )
+            .placeholder("track current release")
+            .hint("text"),
+        ),
+        "runtime.native_runtime.skippy_abi" => Some(
+            sp(
+                "Native runtime Skippy ABI",
+                "Pin the Skippy ABI string of the native runtime bundle. Only meaningful alongside a pinned Mesh version.",
+                MESHLLM_CATEGORY,
+                60,
+            )
+            .hint("text"),
+        ),
         _ => None,
     }
 }
@@ -1028,9 +1068,7 @@ fn unit_for_path(rendered: &str) -> Option<&'static str> {
         "parallel" | "cache_idle_slots" => Some("slots"),
         "safety_margin_gb" => Some("GB"),
         "cache_ram_mib" | "fit_target_mib" => Some("MiB"),
-        "lifecycle_startup_timeout_ms"
-        | "lifecycle_readiness_interval_ms"
-        | "lifecycle_health_interval_ms" => Some("ms"),
+        "lifecycle_startup_timeout_ms" | "lifecycle_health_interval_ms" => Some("ms"),
         _ => None,
     }
 }

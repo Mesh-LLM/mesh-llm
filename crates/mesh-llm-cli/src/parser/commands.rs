@@ -1216,6 +1216,15 @@ pub enum DoctorCommand {
         #[arg(long)]
         output_dir: Option<PathBuf>,
     },
+    /// Diagnose direct-connect networking on a running local mesh node.
+    Network {
+        /// Console/API port of the running mesh-llm instance.
+        #[arg(long, default_value = "3131")]
+        port: u16,
+        /// Print machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[cfg(test)]

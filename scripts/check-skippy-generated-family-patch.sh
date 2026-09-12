@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The family-certify service can be launched under Rosetta. The rewriter links
+# Homebrew's native LLVM/Clang libraries, so configure and execute it as the
+# host's native arm64 slice.
+NATIVE_ARCH="$(uname -m)"
+if [[ "$(uname -s)" == "Darwin" && "$NATIVE_ARCH" == "x86_64" ]] \
+    && [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" == "1" ]]; then
+  exec arch -arm64 "${BASH_SOURCE[0]}" "$@"
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOURCE_ROOT="${SKIPPY_REWRITER_SOURCE_ROOT:-$ROOT/.deps/llama.cpp}"
 LLAMA_BUILD_DIR="${LLAMA_STAGE_BUILD_DIR:-${LLAMA_BUILD_DIR:-$ROOT/.deps/llama-build/build-stage-abi-static-metal}}"
@@ -74,7 +83,18 @@ if [[ -z "$LLVM_PREFIX" || ! -x "$LLVM_PREFIX/bin/clang" ]]; then
 fi
 
 mkdir -p "$ARTIFACT_ROOT"
+cmake_arch_args=()
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  cached_tool_arch="$(sed -n 's/^CMAKE_OSX_ARCHITECTURES:STRING=\(.*\)$/\1/p' \
+    "$TOOL_BUILD/CMakeCache.txt" 2>/dev/null || true)"
+  if [[ -f "$TOOL_BUILD/CMakeCache.txt" && "$cached_tool_arch" != "$NATIVE_ARCH" ]]; then
+    echo "discarding rewriter tool build cached for architecture '${cached_tool_arch:-host-default}' (native: $NATIVE_ARCH)" >&2
+    rm -rf "$TOOL_BUILD"
+  fi
+  cmake_arch_args=(-DCMAKE_OSX_ARCHITECTURES="$NATIVE_ARCH")
+fi
 cmake -S "$ROOT/tools/skippy-stage-rewriter" -B "$TOOL_BUILD" -G Ninja \
+  "${cmake_arch_args[@]}" \
   -DLLVM_DIR="$LLVM_PREFIX/lib/cmake/llvm" \
   -DClang_DIR="$LLVM_PREFIX/lib/cmake/clang"
 cmake --build "$TOOL_BUILD"

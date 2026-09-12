@@ -15,7 +15,7 @@ use crate::system::{backend, hardware};
 use anyhow::{Context, Result};
 use mesh_llm_events::{OutputEvent, emit_event};
 use skippy_protocol::FlashAttentionType;
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
@@ -1115,7 +1115,15 @@ async fn resolve_startup_models_with_package_discovery(
             Some(mmproj) => Some(resolve_model(mmproj).await?),
             None => None,
         };
-        let preindexed_split_package = if direct_local_gguf {
+        // A remote model ref can resolve to a GGUF in the Hugging Face cache.
+        // Its synthetic split package is content-addressed just like an
+        // explicit local GGUF, so every participant must index its own cached
+        // bytes before coordinator election.
+        // Monolithic Hugging Face snapshot entries may already have been
+        // canonicalized to an extensionless blob path by model resolution, so
+        // the resolved filename cannot distinguish GGUF from SafeTensors.
+        let resolved_direct_gguf = is_gguf_file(&resolved_path)?;
+        let preindexed_split_package = if direct_local_gguf || resolved_direct_gguf {
             let model_id = spec
                 .config_model_id
                 .as_deref()
@@ -1174,7 +1182,11 @@ async fn resolve_startup_models_with_package_discovery(
             n_batch: spec.n_batch,
             n_ubatch: spec.n_ubatch,
             flash_attention: spec.flash_attention,
-            local_source_required: false,
+            // Direct GGUF identities are content-addressed and have no
+            // independently resolvable package source. Every split
+            // participant must therefore prove it owns the same local bytes
+            // and receive the fail-closed LoadLocal command.
+            local_source_required: direct_local_gguf || resolved_direct_gguf,
             profile: spec.profile.clone(),
         });
     }
@@ -1187,6 +1199,22 @@ pub(super) fn is_direct_local_gguf_source(path: &Path) -> bool {
             .extension()
             .and_then(|extension| extension.to_str())
             .is_some_and(|extension| extension.eq_ignore_ascii_case("gguf"))
+}
+
+fn is_gguf_file(path: &Path) -> Result<bool> {
+    if !path.is_file() {
+        return Ok(false);
+    }
+    let mut file = std::fs::File::open(path)
+        .with_context(|| format!("open resolved model file {}", path.display()))?;
+    let mut magic = [0_u8; 4];
+    match file.read_exact(&mut magic) {
+        Ok(()) => Ok(&magic == b"GGUF"),
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
+        Err(error) => {
+            Err(error).with_context(|| format!("read resolved model header {}", path.display()))
+        }
+    }
 }
 
 fn direct_gguf_model_id(identity: &skippy::SkippyPackageIdentity) -> String {

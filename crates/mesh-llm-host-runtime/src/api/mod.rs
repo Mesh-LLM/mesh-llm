@@ -10,6 +10,7 @@
 //!   DELETE /api/model-interests/{model_ref} — clear local explicit interest
 //!   GET  /api/model-targets — ranked model targets from explicit interest and demand
 //!   GET  /api/diagnostics/split-readiness — split peer eligibility and operator guidance
+//!   GET  /api/diagnostics/network — advertised direct-connect candidates and per-peer path state
 //!   GET  /api/runtime   — local model state (JSON)
 //!   GET  /api/runtime/llama — local llama.cpp runtime metrics + slots snapshots (JSON)
 //!   GET  /api/runtime/events — SSE stream of llama.cpp runtime metrics + slots snapshots
@@ -51,6 +52,7 @@ mod http;
 mod management_lifecycle;
 mod model_target_capacity;
 mod model_targets;
+mod network_diagnostics;
 mod routes;
 mod server;
 mod split_readiness;
@@ -385,10 +387,6 @@ impl MeshApi {
         self.inner.lock().await.draft_name = Some(name);
     }
 
-    #[expect(
-        dead_code,
-        reason = "retained for embedded callers that toggle client presentation state"
-    )]
     pub async fn set_client(&self, is_client: bool) {
         let mut inner = self.inner.lock().await;
         inner.is_client = is_client;
@@ -1313,6 +1311,7 @@ async fn node_hardware_input(
         gpu_compute_tflops_fp16: node_metric_csv(&node.gpu_compute_tflops_fp16).await,
         my_hostname: node.hostname.clone(),
         my_is_soc: node.is_soc,
+        memory: node.advertised_memory,
         my_vram_gb,
         model_size_gb: model_size_bytes as f64 / 1e9,
         first_joined_mesh_ts: node.first_joined_mesh_ts().await,

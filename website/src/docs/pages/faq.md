@@ -39,6 +39,34 @@ authentication are not supported yet. Ctrl-C stops sharing, not your server.
 See [Share an existing model server](/docs/pages/share-model-server/) for the
 full walkthrough, including chatting from a second machine.
 
+## Can I keep using Ollama, vLLM or LM Studio?
+
+Yes. Use the `openai-endpoint` plugin: start your existing server, install a
+host-compatible adapter, set its URL in one `[[plugin]]` entry, then run
+`mesh-llm serve`. No second model download and no separate `share` command.
+The [provider quick start](/docs/pages/external-model-endpoints/) has the exact
+Ollama, vLLM and LM Studio recipes, including the 0.1.2/0.76.0 compatibility warning.
+
+## Does the plugin launch my model server or split its weights?
+
+Neither. You keep managing your provider and its models. The plugin registers
+its endpoint; Mesh discovers model IDs and routes inference to it. It does not
+turn an Ollama/vLLM/LM Studio model into a distributed Mesh layer package.
+
+## Do I install the endpoint plugin on every machine?
+
+No. Install it on the node sharing the provider and use `serve` there. A consuming
+machine only needs `mesh-llm client --join YOUR_INVITE_TOKEN`; applications use
+that machine's `http://127.0.0.1:9337/v1` endpoint.
+
+## Can the endpoint plugin inject my provider API key?
+
+Not with its current URL-only configuration. Model discovery/health requests
+also need upstream authorization; an application's `OPENAI_API_KEY` does not
+configure those requests. Use a local loopback-only server for the simple recipe;
+do not remove authentication from an existing shared service. See the
+[API-key limitations](/docs/pages/external-model-endpoints/#what-about-upstream-api-keys).
+
 ## What is the difference between client and on-demand mode?
 
 `client` is routing-only and disables local model loading. `on_demand` starts

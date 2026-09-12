@@ -855,10 +855,9 @@ pub(super) async fn start_run_auto_node_and_plugins(
     // loop would offer a capability it can never honour. Scoped to sharing
     // rather than `allows_local_inference()` so client startup is unchanged.
     if options.shared_endpoint.is_none() {
-        node.set_stage_control_handle(skippy::spawn_stage_control_loop(
-            Some(Arc::new(node.clone())),
-            skippy_telemetry_options(options),
-        ))
+        node.set_stage_control_handle(skippy::spawn_stage_control_loop(skippy_telemetry_options(
+            options,
+        )))
         .await;
     } else {
         tracing::debug!("sharing an endpoint — skipping stage control startup");

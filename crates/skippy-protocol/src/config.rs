@@ -225,7 +225,7 @@ pub struct StageConfig {
     #[serde(default)]
     pub generation_signal_window: Option<u32>,
     /// Floating-point activation encoding for every downstream edge produced
-    /// by this stage. Generation 8 peers echo and bind this policy before the
+    /// by this stage. Generation 9 peers echo and bind this policy before the
     /// binary data plane starts.
     #[serde(default)]
     pub activation_codec: StageActivationCodec,

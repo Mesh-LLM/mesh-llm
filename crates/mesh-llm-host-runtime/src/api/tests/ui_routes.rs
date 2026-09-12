@@ -137,6 +137,7 @@ fn status_view_input(
                 gpu_name: None,
                 gpu_vram: None,
                 gpu_reserved_bytes: None,
+                memory: crate::mesh::AdvertisedMemory::default(),
                 gpu_mem_bandwidth_gbps: None,
                 gpu_compute_tflops_fp32: None,
                 gpu_compute_tflops_fp16: None,

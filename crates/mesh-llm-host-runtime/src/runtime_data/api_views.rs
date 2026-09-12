@@ -71,6 +71,7 @@ pub(crate) fn status_payload(snapshot: StatusViewSnapshot) -> StatusPayload {
         publication_state: snapshot.publication_state,
         my_hostname: snapshot.hardware.my_hostname,
         my_is_soc: snapshot.hardware.my_is_soc,
+        my_memory: snapshot.hardware.my_memory,
         gpus: snapshot.hardware.gpus,
         routing_affinity: snapshot.routing_affinity,
         routing_metrics: snapshot.routing_metrics,
@@ -117,6 +118,7 @@ mod tests {
             gpu_name: Some("RTX 4090".into()),
             gpu_vram: Some("25769803776".into()),
             gpu_reserved_bytes: None,
+            memory: crate::mesh::AdvertisedMemory::default(),
             gpu_mem_bandwidth_gbps: None,
             gpu_compute_tflops_fp32: None,
             gpu_compute_tflops_fp16: None,
@@ -167,6 +169,7 @@ mod tests {
 
         let payload = status_payload(snapshot);
         let expected = StatusPayload {
+            my_memory: crate::api::status::MemoryPayload::default(),
             version: "0.68.0".into(),
             latest_version: Some("0.68.0".into()),
             node_id: "node-1".into(),

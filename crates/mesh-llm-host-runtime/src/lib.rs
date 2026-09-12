@@ -199,7 +199,8 @@ pub async fn initialize_host_runtime_for_options(options: &RuntimeOptions) -> Re
     if !runtime_options_require_native_runtime(options) {
         return initialize_logging_for_cli(options.config.as_deref()).await;
     }
-    initialize_host_runtime_with_config(options.config.as_deref()).await
+    initialize_host_runtime_with_config_and_flavor(options.config.as_deref(), options.llama_flavor)
+        .await
 }
 
 /// Whether this startup must resolve a native inference runtime.
@@ -215,6 +216,13 @@ fn runtime_options_require_native_runtime(options: &RuntimeOptions) -> bool {
 }
 
 pub async fn initialize_host_runtime_with_config(config_path: Option<&Path>) -> Result<()> {
+    initialize_host_runtime_with_config_and_flavor(config_path, None).await
+}
+
+async fn initialize_host_runtime_with_config_and_flavor(
+    config_path: Option<&Path>,
+    llama_flavor: Option<mesh_llm_system::backend::BinaryFlavor>,
+) -> Result<()> {
     let config = plugin::load_config(config_path)?;
 
     // Logging config is validated as part of config loading and must be resolved
@@ -224,20 +232,10 @@ pub async fn initialize_host_runtime_with_config(config_path: Option<&Path>) -> 
 
     #[cfg(feature = "dynamic-native-runtime")]
     {
-        let native_runtime = config.runtime.native_runtime;
-        let startup_selection = match native_runtime.mesh_version {
-            Some(mesh_version) => {
-                let runtime_selection = mesh_llm_native_runtime::RuntimeSelection::parse(
-                    native_runtime.selection.as_deref(),
-                )?;
-                system::native_runtime::NativeRuntimeStartupSelection::explicit(
-                    mesh_version,
-                    native_runtime.skippy_abi,
-                    runtime_selection,
-                )
-            }
-            None => system::native_runtime::NativeRuntimeStartupSelection::current(),
-        };
+        let startup_selection = system::native_runtime::NativeRuntimeStartupSelection::from_config(
+            config.runtime.native_runtime,
+            llama_flavor,
+        )?;
         if let Some(runtime) =
             system::native_runtime::try_load_installed_native_runtime(startup_selection).await?
         {
@@ -250,7 +248,7 @@ pub async fn initialize_host_runtime_with_config(config_path: Option<&Path>) -> 
     }
     #[cfg(not(feature = "dynamic-native-runtime"))]
     {
-        let _ = config;
+        let _ = (config, llama_flavor);
     }
 
     Ok(())
