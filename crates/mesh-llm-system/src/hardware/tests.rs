@@ -1183,6 +1183,97 @@ fn test_parse_windows_video_controller_json_single_object() {
 }
 
 #[test]
+fn test_parse_windows_adapter_memory_json_reads_both_shapes() {
+    let array = r#"[{"Name":"AMD Radeon(TM) Graphics","Bytes":536870912},{"Name":"NVIDIA GeForce RTX 4070 Ti","Bytes":12878610432}]"#;
+    assert_eq!(
+        parse_windows_adapter_memory_json(array),
+        vec![
+            ("AMD Radeon(TM) Graphics".to_string(), 536_870_912),
+            ("NVIDIA GeForce RTX 4070 Ti".to_string(), 12_878_610_432),
+        ]
+    );
+
+    let single = r#"{"Name":"AMD Radeon 780M Graphics","Bytes":"536870912"}"#;
+    assert_eq!(
+        parse_windows_adapter_memory_json(single),
+        vec![("AMD Radeon 780M Graphics".to_string(), 536_870_912)]
+    );
+
+    assert!(parse_windows_adapter_memory_json("").is_empty());
+    assert!(parse_windows_adapter_memory_json(r#"{"Name":"No size"}"#).is_empty());
+}
+
+#[test]
+fn test_merge_adapter_memory_replaces_the_saturated_adapter_ram_by_name() {
+    // Measured on a Windows 11 box: CIM lists the discrete card first and the
+    // registry lists it second, and AdapterRAM saturates at 4095 MiB.
+    let controllers = vec![
+        ("NVIDIA GeForce RTX 4070 Ti".to_string(), 4_293_918_720),
+        ("AMD Radeon(TM) Graphics".to_string(), 536_870_912),
+    ];
+    let adapter_memory = vec![
+        ("AMD Radeon(TM) Graphics".to_string(), 536_870_912),
+        ("NVIDIA GeForce RTX 4070 Ti".to_string(), 12_878_610_432),
+    ];
+
+    assert_eq!(
+        merge_adapter_memory(&controllers, &adapter_memory),
+        vec![
+            ("NVIDIA GeForce RTX 4070 Ti".to_string(), 12_878_610_432),
+            ("AMD Radeon(TM) Graphics".to_string(), 536_870_912),
+        ]
+    );
+}
+
+#[test]
+fn test_merge_adapter_memory_keeps_adapters_the_registry_does_not_cover() {
+    let controllers = vec![
+        ("Virtual Display".to_string(), 0),
+        ("AMD Radeon RX 9070 XT".to_string(), 4_293_918_720),
+    ];
+    let adapter_memory = vec![("AMD Radeon RX 9070 XT".to_string(), 17_096_982_528)];
+
+    assert_eq!(
+        merge_adapter_memory(&controllers, &adapter_memory),
+        vec![
+            ("Virtual Display".to_string(), 0),
+            ("AMD Radeon RX 9070 XT".to_string(), 17_096_982_528),
+        ]
+    );
+}
+
+#[test]
+fn test_merge_adapter_memory_pairs_identical_cards_in_order() {
+    let controllers = vec![
+        ("NVIDIA GeForce RTX 4090".to_string(), 4_293_918_720),
+        ("NVIDIA GeForce RTX 4090".to_string(), 4_293_918_720),
+    ];
+    let adapter_memory = vec![
+        ("NVIDIA GeForce RTX 4090".to_string(), 25_757_220_864),
+        ("NVIDIA GeForce RTX 4090".to_string(), 25_757_220_864),
+    ];
+
+    assert_eq!(
+        merge_adapter_memory(&controllers, &adapter_memory),
+        vec![
+            ("NVIDIA GeForce RTX 4090".to_string(), 25_757_220_864),
+            ("NVIDIA GeForce RTX 4090".to_string(), 25_757_220_864),
+        ]
+    );
+}
+
+#[test]
+fn test_merge_adapter_memory_ignores_zero_sized_entries() {
+    let controllers = vec![("AMD Radeon 780M Graphics".to_string(), 536_870_912)];
+    let adapter_memory = vec![("AMD Radeon 780M Graphics".to_string(), 0)];
+
+    assert_eq!(
+        merge_adapter_memory(&controllers, &adapter_memory),
+        vec![("AMD Radeon 780M Graphics".to_string(), 536_870_912)]
+    );
+}
+
+#[test]
 fn test_windows_per_gpu_vram_keeps_zero_vram_adapters_aligned() {
     let controllers = vec![
         ("Virtual Display Adapter".to_string(), 0),
