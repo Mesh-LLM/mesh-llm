@@ -32,7 +32,7 @@ describe('StatusStrip', () => {
           { id: 'node-id', label: 'Node ID', value: 'abc123' },
           { id: 'owner', label: 'Owner', value: 'Unsigned' },
           { id: 'active-models', label: 'Active models', value: 1 },
-          { id: 'mesh-vram', label: 'Mesh VRAM', value: '32.5', unit: 'GB' },
+          { id: 'mesh-vram', label: 'Mesh Capacity', value: '32.5', unit: 'GB' },
           { id: 'nodes', label: 'Nodes', value: 2 },
           { id: 'inflight', label: 'Inflight', value: 3 }
         ]}
@@ -48,7 +48,7 @@ describe('StatusStrip', () => {
       <StatusStrip
         historyPointCount={5}
         metrics={[
-          { id: 'mesh-vram', label: 'Mesh VRAM', value: '32.5', unit: 'GB' },
+          { id: 'mesh-vram', label: 'Mesh Capacity', value: '32.5', unit: 'GB' },
           { id: 'inflight', label: 'Inflight', value: 3 }
         ]}
       />

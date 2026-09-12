@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -33,6 +34,49 @@ FORBIDDEN_IMPORTS = tuple(
         r"(^|[/\\])(?:lib)?llama",
     )
 )
+
+
+GLIBC_VERSION_RE = re.compile(r"GLIBC_(\d+)\.(\d+)")
+VERSION_NEEDS_HEADING = "Version needs section"
+
+
+def parse_version(value: str) -> tuple[int, int]:
+    major, _, minor = value.strip().partition(".")
+    return int(major), int(minor)
+
+
+def format_version(version: tuple[int, int]) -> str:
+    return f"{version[0]}.{version[1]}"
+
+
+def read_declared_glibc_floor(path: Path) -> tuple[int, int]:
+    """Reads the shared floor file, ignoring its explanatory comments."""
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            return parse_version(stripped)
+    raise ValueError(f"no glibc floor declared in {path}")
+
+
+def parse_elf_glibc_floor(output: str) -> tuple[int, int] | None:
+    """Highest GLIBC symbol version the binary needs from the host's libc.
+
+    Only the version-needs section counts. A shared library's own version
+    definitions live in the same `readelf -V` output and say nothing about
+    what libc it will refuse to load against.
+    """
+    _, heading, needs = output.partition(VERSION_NEEDS_HEADING)
+    if not heading:
+        return None
+    versions = [
+        (int(major), int(minor))
+        for major, minor in GLIBC_VERSION_RE.findall(needs)
+    ]
+    return max(versions) if versions else None
+
+
+def inspect_glibc_floor(path: Path) -> tuple[int, int] | None:
+    return parse_elf_glibc_floor(run_tool(("readelf", "-V", str(path))))
 
 
 def binary_format(path: Path) -> str:
@@ -99,7 +143,15 @@ def inspect_dependencies(path: Path, format_name: str | None = None) -> tuple[st
 def run_tool(command: tuple[str, ...]) -> str:
     if shutil.which(command[0]) is None:
         raise RuntimeError(f"{command[0]} is required to inspect host dependencies")
-    return subprocess.check_output(command, text=True, stderr=subprocess.STDOUT)
+    # parse_elf_glibc_floor looks for the English "Version needs section"
+    # heading; a localized readelf would make the glibc floor check pass
+    # silently, so pin the C locale.
+    return subprocess.check_output(
+        command,
+        text=True,
+        stderr=subprocess.STDOUT,
+        env={**os.environ, "LC_ALL": "C"},
+    )
 
 
 def forbidden_imports(imports: list[str]) -> list[str]:
@@ -115,19 +167,48 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("binary", type=Path)
     parser.add_argument("--format", choices=("elf", "macho", "pe"))
     parser.add_argument("--report", type=Path)
+    parser.add_argument(
+        "--no-import-policy",
+        action="store_true",
+        help=(
+            "Report imports without enforcing the host policy. Native runtime "
+            "libraries legitimately import each other, so only the glibc floor "
+            "applies to them."
+        ),
+    )
+    parser.add_argument(
+        "--max-glibc",
+        help=(
+            "Reject an ELF binary that needs a GLIBC symbol version above this "
+            "one, or the literal 'declared' to read scripts/linux-glibc-floor.txt."
+        ),
+    )
     return parser.parse_args(argv)
+
+
+def resolve_max_glibc(value: str | None) -> tuple[int, int] | None:
+    if value is None:
+        return None
+    if value == "declared":
+        return read_declared_glibc_floor(
+            Path(__file__).resolve().parent / "linux-glibc-floor.txt"
+        )
+    return parse_version(value)
 
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     try:
         format_name, imports = inspect_dependencies(args.binary, args.format)
-        rejected = forbidden_imports(imports)
+        rejected = [] if args.no_import_policy else forbidden_imports(imports)
+        max_glibc = resolve_max_glibc(args.max_glibc)
+        glibc_floor = inspect_glibc_floor(args.binary) if format_name == "elf" else None
         report = {
             "binary": args.binary.name,
             "format": format_name,
+            "glibc_floor": format_version(glibc_floor) if glibc_floor else None,
             "imports": imports,
-            "policy": "mesh-llm-dynamic-host-v2",
+            "policy": "none" if args.no_import_policy else "mesh-llm-dynamic-host-v2",
             "rejected_imports": rejected,
         }
         if args.report:
@@ -140,6 +221,14 @@ def main(argv: list[str]) -> int:
         if rejected:
             print(
                 "host dependency policy rejected: " + ", ".join(rejected),
+                file=sys.stderr,
+            )
+            return 1
+        if max_glibc and glibc_floor and glibc_floor > max_glibc:
+            print(
+                f"{args.binary.name} needs GLIBC_{format_version(glibc_floor)} but the "
+                f"declared floor is {format_version(max_glibc)}. Raising the floor drops "
+                "Linux distributions that were supported before; see mesh-llm#1522.",
                 file=sys.stderr,
             )
             return 1

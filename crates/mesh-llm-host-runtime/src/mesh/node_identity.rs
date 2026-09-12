@@ -1,6 +1,38 @@
 use super::*;
 use crate::mesh::node::RequirementAwareMeshState;
 
+/// Merge the startup-discovered public address into an advertisement set.
+///
+/// An [`PublicAddr::Observed`] address carries the NAT-mapped port
+/// (#1300), so it *replaces* every IP candidate on the same address —
+/// advertising both leaves a dead candidate that sorts first in the
+/// `BTreeSet`. A [`PublicAddr::LocallyEnumerated`] address only fills a
+/// gap: the port was never verified externally, so it must not displace an
+/// existing public candidate.
+pub(crate) fn merge_public_addr_into_advertisement(
+    addr: &mut EndpointAddr,
+    pub_addr: &stun::PublicAddr,
+) {
+    match *pub_addr {
+        stun::PublicAddr::Observed(observed) => {
+            addr.addrs.retain(|candidate| match candidate {
+                TransportAddr::Ip(socket) => socket.ip() != observed.ip(),
+                _ => true,
+            });
+            addr.addrs.insert(TransportAddr::Ip(observed));
+        }
+        stun::PublicAddr::LocallyEnumerated(enumerated) => {
+            if !endpoint_addr_has_public_ipv4(addr) {
+                addr.addrs.insert(TransportAddr::Ip(enumerated));
+            }
+        }
+        stun::PublicAddr::RejectPublicIpv4 => addr.addrs.retain(|candidate| match candidate {
+            TransportAddr::Ip(socket) => !is_public_ipv4_candidate(socket),
+            _ => true,
+        }),
+    }
+}
+
 pub(crate) fn direct_admission_attestation_hash(
     release_attestation: Option<&crate::ReleaseBuildAttestation>,
 ) -> String {
@@ -104,11 +136,13 @@ impl Node {
 
     pub async fn invite_token(&self) -> String {
         let mut addr = self.endpoint_addr_for_advertisement();
-        // Inject STUN-discovered public address if relay STUN didn't provide one.
-        if let Some(pub_addr) = self.public_addr
-            && !endpoint_addr_has_public_ipv4(&addr)
-        {
-            addr.addrs.insert(TransportAddr::Ip(pub_addr));
+        // Inject the public address discovered at startup, preferring the
+        // externally observed tuple. An observed address carries the NAT-mapped
+        // port, so it *replaces* any enumerated candidate for the same purpose
+        // (advertising both leaves a dead candidate that sorts first in the
+        // BTreeSet, #1300); an enumerated one only fills a gap.
+        if let Some(pub_addr) = self.public_addr.as_ref() {
+            merge_public_addr_into_advertisement(&mut addr, pub_addr);
         }
         addr = filter_endpoint_addr_for_bind_ip(
             addr,
@@ -408,11 +442,10 @@ impl Node {
         });
     }
 
-    pub async fn join(&self, invite_token: &str) -> Result<()> {
+    async fn prepare_join_target(&self, invite_token: &str) -> Result<EndpointAddr> {
         let addr = match parse_invite_token(invite_token)
             .map_err(|reason| anyhow::anyhow!("join rejected: {}", reason.code()))?
         {
-            InviteTokenMaterial::Legacy(addr) => addr,
             InviteTokenMaterial::Signed(token) => {
                 let addrs = match self.validate_bootstrap_token(&token).await {
                     Ok(addrs) => addrs,
@@ -426,6 +459,10 @@ impl Node {
                         return Err(anyhow::anyhow!("join rejected: {}", reason.code()));
                     }
                 };
+                let addr = addrs.into_iter().next().ok_or_else(|| {
+                    anyhow::anyhow!("bootstrap token does not contain any endpoint addresses")
+                })?;
+                self.reject_join_to_own_identity(&addr).await?;
                 self.install_requirement_aware_mesh_state(
                     token.mesh_id.clone(),
                     token.policy_hash.clone(),
@@ -434,15 +471,43 @@ impl Node {
                     Some(*token),
                 )
                 .await?;
-                addrs.into_iter().next().ok_or_else(|| {
-                    anyhow::anyhow!("bootstrap token does not contain any endpoint addresses")
-                })?
+                addr
+            }
+            InviteTokenMaterial::Legacy(addr) => {
+                self.reject_join_to_own_identity(&addr).await?;
+                addr
             }
         };
+        Ok(addr)
+    }
+
+    pub async fn join(&self, invite_token: &str) -> Result<()> {
+        let addr = self.prepare_join_target(invite_token).await?;
         // Clear dead status — explicit join should always attempt connection
         self.state.lock().await.dead_peers.remove(&addr.id);
         self.remember_join_target(addr.clone()).await;
         self.connect_to_peer(addr).await
+    }
+
+    /// A join token that names our own endpoint id means a second node
+    /// process on this machine is loading the same node key (#1699). iroh
+    /// refuses self-connections, so both meshes silently collapse to one node
+    /// — fail loudly instead, naming the two escape hatches.
+    async fn reject_join_to_own_identity(&self, addr: &EndpointAddr) -> Result<()> {
+        if addr.id != self.endpoint.id() {
+            return Ok(());
+        }
+        let message = format!(
+            "join rejected: the invite token names this node's own id ({}) — \
+             another process on this machine is almost certainly serving with \
+             the same node key. Give this node its own key with \
+             MESH_LLM_NODE_KEY_PATH, or set MESH_LLM_EPHEMERAL_KEY for a \
+             throwaway identity",
+            self.endpoint.id().fmt_short()
+        );
+        tracing::error!("{message}");
+        emit_mesh_info(format!("⛔ {message}"));
+        anyhow::bail!("{message}")
     }
 
     /// Record a join target address so the LAN beacon can unicast a dial-back
@@ -475,36 +540,7 @@ impl Node {
     /// Like [`join`], but retries once after a delay on transient (connect/timeout)
     /// errors.  Decode errors (invalid base64/JSON) fail immediately.
     pub async fn join_with_retry(&self, invite_token: &str) -> Result<()> {
-        let addr = match parse_invite_token(invite_token)
-            .map_err(|reason| anyhow::anyhow!("join rejected: {}", reason.code()))?
-        {
-            InviteTokenMaterial::Legacy(addr) => addr,
-            InviteTokenMaterial::Signed(token) => {
-                let addrs = match self.validate_bootstrap_token(&token).await {
-                    Ok(addrs) => addrs,
-                    Err(reason) => {
-                        self.record_mesh_requirement_rejection(
-                            MeshRequirementRejectionSource::Join,
-                            None,
-                            reason.clone(),
-                        )
-                        .await;
-                        return Err(anyhow::anyhow!("join rejected: {}", reason.code()));
-                    }
-                };
-                self.install_requirement_aware_mesh_state(
-                    token.mesh_id.clone(),
-                    token.policy_hash.clone(),
-                    token.genesis_policy.clone(),
-                    None,
-                    Some(*token),
-                )
-                .await?;
-                addrs.into_iter().next().ok_or_else(|| {
-                    anyhow::anyhow!("bootstrap token does not contain any endpoint addresses")
-                })?
-            }
-        };
+        let addr = self.prepare_join_target(invite_token).await?;
 
         // Three attempts with increasing backoff.  Relay-only joins need
         // WebSocket setup + QUIC handshake at high RTT — two attempts at
