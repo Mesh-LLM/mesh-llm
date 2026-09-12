@@ -3,11 +3,11 @@ set -euo pipefail
 
 # Developer-style llama.cpp canary harness for changed upstream pins.
 #
-# One agent owns the complete pin/patch/test task. After that agent exits, this
-# trusted wrapper runs one fresh deterministic verification pass and creates a
-# local certified commit. GitHub credentials and publication live in a later
-# workflow step, so an agent or verification failure cannot publish a branch or
-# pull request.
+# One agent session owns the complete pin/patch/test task. The trusted wrapper
+# runs deterministic gates after every coding turn and returns failures to that
+# same session. A separate job repeats the gates before creating the certified
+# bundle. GitHub credentials and publication live in a later workflow step, so
+# an agent or verification failure cannot publish a branch or pull request.
 
 # The persistent Apple Silicon runner service can be launched by an x86_64
 # parent under Rosetta. Re-enter the complete harness as arm64 before it
@@ -47,6 +47,7 @@ AGENT_LOG="$STATE_DIR/agent.log"
 PREPARE_LOG="$STATE_DIR/prepare.log"
 BUILD_LOG="$STATE_DIR/build.log"
 CERTIFY_LOG="$STATE_DIR/certify.log"
+MANIFEST_POLICY_LOG="$STATE_DIR/manifest-policy.log"
 PR_BODY="$STATE_DIR/pr-body.md"
 UPSTREAM_SUMMARY="$STATE_DIR/upstream-summary.md"
 BUNDLE="$STATE_DIR/candidate.bundle"
@@ -55,10 +56,13 @@ FAMILY_BATTERY_RUN_ID="${FAMILY_BATTERY_RUN_ID:-${RUN_KEY}}"
 PLAN_PATH="$ROOT/target/family-battery/$FAMILY_BATTERY_RUN_ID/policy-plan.json"
 BASE_HEAD="$(git rev-parse HEAD)"
 BASE_REF="$(git symbolic-ref -q HEAD || true)"
+CANDIDATE_BASE_HEAD="$BASE_HEAD"
 GIT_CONFIG_FINGERPRINT="$(git config --list --show-origin | shasum -a 256 | awk '{print $1}')"
 CERTIFIED_SHA=""
 VERIFICATION_TREE=""
 VERIFICATION_DEADLINE_AT=0
+REPAIR_DEADLINE_AT=0
+AGENT_SESSION_ID=""
 
 if [[ "$HARNESS_MODE" != "repair" && "$HARNESS_MODE" != "verify" ]]; then
   echo "CANARY_HARNESS_MODE must be repair or verify" >&2
@@ -100,6 +104,7 @@ fi
 
 mkdir -p "$STATE_DIR" "$(dirname "$PLAN_PATH")"
 rm -f "$AGENT_LOG" "$PREPARE_LOG" "$BUILD_LOG" "$CERTIFY_LOG" \
+  "$MANIFEST_POLICY_LOG" \
   "$PR_BODY" "$UPSTREAM_SUMMARY" "$BUNDLE"
 rm -rf "$EVIDENCE_DIR"
 printf '%s\n' "$UPSTREAM_SHA" > "$TARGET_SHA_FILE"
@@ -119,6 +124,13 @@ run_for() {
 remaining_verification_seconds() {
   local remaining
   remaining="$((VERIFICATION_DEADLINE_AT - $(date +%s)))"
+  (( remaining > 0 )) || return 1
+  printf '%s\n' "$remaining"
+}
+
+remaining_repair_seconds() {
+  local remaining
+  remaining="$((REPAIR_DEADLINE_AT - $(date +%s)))"
   (( remaining > 0 )) || return 1
   printf '%s\n' "$remaining"
 }
@@ -155,8 +167,13 @@ Do not weaken, skip, or narrow a gate. Do not edit the workflow, this wrapper, i
     "$UPSTREAM_SHA"
 }
 
-agent_turn() {
-  local started heartbeat_pid status
+agent_session_step() {
+  local prompt="$1" started heartbeat_pid status seconds
+  local -a opencode_args
+  if ! seconds="$(remaining_repair_seconds)"; then
+    echo "agent developer task cannot continue: repair budget exhausted" >&2
+    return 124
+  fi
   started="$(date +%s)"
   set -m
   # shellcheck disable=SC2016
@@ -172,14 +189,39 @@ agent_turn() {
   heartbeat_pid=$!
   set +m
   set +e
-  run_for "agent developer task" "$AGENT_TIMEOUT_SECONDS" env \
+  opencode_args=(run --auto --format json --model "$AGENT_MODEL" --dir "$ROOT")
+  if [[ -n "$AGENT_SESSION_ID" ]]; then
+    opencode_args+=(--session "$AGENT_SESSION_ID")
+  fi
+  run_for "agent developer task" "$seconds" env \
     -u GH_TOKEN -u GITHUB_TOKEN -u CANARY_REPAIR_TOKEN \
-    opencode run --auto --model "$AGENT_MODEL" "$(agent_prompt)" \
+    opencode "${opencode_args[@]}" "$prompt" \
     > >(tee -a "$AGENT_LOG") 2>&1
   status=$?
   set -e
   kill -- "-$heartbeat_pid" 2>/dev/null || kill "$heartbeat_pid" 2>/dev/null || true
   wait "$heartbeat_pid" 2>/dev/null || true
+  if (( status == 0 )) && [[ -z "$AGENT_SESSION_ID" ]]; then
+    AGENT_SESSION_ID="$(python3 - "$AGENT_LOG" <<'PY'
+import json
+import sys
+
+for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    session = event.get("sessionID")
+    if isinstance(session, str) and session:
+        print(session)
+        break
+PY
+)"
+    if [[ -z "$AGENT_SESSION_ID" ]]; then
+      echo "agent developer task did not emit an OpenCode session ID" >&2
+      return 1
+    fi
+  fi
   return "$status"
 }
 
@@ -200,7 +242,6 @@ assert_agent_control_unchanged() {
   changed_path="$(
     git status --porcelain=v1 --untracked-files=all -- \
       .github .agents scripts .gitattributes ci/ci.md ci/llama-canary/agent-repair-prompt.md \
-      ci/llama-canary/family-certified.json docs/skippy/llama-parity-candidates.json \
       | head -n 1
   )"
   if [[ -n "$changed_path" ]]; then
@@ -209,9 +250,23 @@ assert_agent_control_unchanged() {
   fi
 }
 
+validate_agent_manifest_changes() {
+  : > "$MANIFEST_POLICY_LOG"
+  python3 scripts/validate-llama-canary-agent-manifests.py \
+    --base-ref "$CANDIDATE_BASE_HEAD" \
+    --llama-src "$ROOT/.deps/llama.cpp" \
+    > >(tee -a "$MANIFEST_POLICY_LOG") 2>&1
+}
+
+agent_feedback_prompt() {
+  printf 'The trusted harness tested the current working tree and it is still red. Continue the same developer task in this session. Read the current failure logs at:\n\n- %s\n- %s\n- %s\n- %s\n\nFix the actual source or narrowly permitted manifest data, then rerun the affected command and keep going until the complete canonical path is green. Do not report completion while any required gate is red. The same control-file, Git, credential, and publication restrictions still apply.' \
+    "$PREPARE_LOG" "$MANIFEST_POLICY_LOG" "$BUILD_LOG" "$CERTIFY_LOG"
+}
+
 snapshot_candidate_tree() {
   assert_agent_control_unchanged || return 1
   verify_repair_pin || return 1
+  validate_agent_manifest_changes || return 1
   git add -A
   if git diff --cached --quiet; then
     echo "agent produced no candidate changes to verify" >&2
@@ -256,6 +311,7 @@ load_candidate_bundle() {
   fi
   git fetch "$input_bundle" "refs/heads/${BRANCH}"
   CERTIFIED_SHA="$expected_head"
+  CANDIDATE_BASE_HEAD="$(git rev-parse "${CERTIFIED_SHA}^")"
   VERIFICATION_TREE="$(git rev-parse "${CERTIFIED_SHA}^{tree}")"
 }
 
@@ -299,7 +355,7 @@ materialize_verification_tree() {
 run_prepare() {
   local prepared_upstream
   : > "$PREPARE_LOG"
-  echo "final verification: prepare" | tee -a "$PREPARE_LOG"
+  echo "trusted candidate gate: prepare" | tee -a "$PREPARE_LOG"
   write_repair_pin >>"$PREPARE_LOG" 2>&1 || return 1
   verify_repair_pin >>"$PREPARE_LOG" 2>&1 || return 1
   run_verification_logged "apply llama.cpp patch queue" "$PREPARE_LOG" \
@@ -314,7 +370,7 @@ run_prepare() {
 run_full_build() {
   local archive arches
   : > "$BUILD_LOG"
-  echo "final verification: build" | tee -a "$BUILD_LOG"
+  echo "trusted candidate gate: build" | tee -a "$BUILD_LOG"
   run_verification_logged "complete patched llama.cpp build" "$BUILD_LOG" env \
     LLAMA_STAGE_UPSTREAM_TESTS=ON uv run --no-project --with jinja2==3.1.6 -- \
     arch -arm64 bash scripts/build-llama.sh -DCMAKE_OSX_ARCHITECTURES=arm64 \
@@ -336,7 +392,7 @@ run_full_build() {
 
 run_certification() {
   : > "$CERTIFY_LOG"
-  echo "final verification: certify" | tee -a "$CERTIFY_LOG"
+  echo "trusted candidate gate: certify" | tee -a "$CERTIFY_LOG"
   run_verification_logged "parity manifest validation" "$CERTIFY_LOG" \
     python3 scripts/skippy-llama-parity.py --llama-src .deps/llama.cpp validate \
     || return 1
@@ -357,6 +413,42 @@ run_certification() {
   run_verification_logged "full supported-family certification" "$CERTIFY_LOG" env \
     FAMILY_BATTERY_RUN_ID="$FAMILY_BATTERY_RUN_ID" \
     scripts/skippy-family-battery.sh --skip-build --plan "$PLAN_PATH"
+}
+
+run_candidate_gates() {
+  : > "$PREPARE_LOG"
+  : > "$MANIFEST_POLICY_LOG"
+  : > "$BUILD_LOG"
+  : > "$CERTIFY_LOG"
+  run_prepare || return 1
+  validate_agent_manifest_changes || return 1
+  run_full_build || return 1
+  run_certification
+}
+
+repair_candidate_until_green() {
+  local prompt
+  REPAIR_DEADLINE_AT="$(( $(date +%s) + AGENT_TIMEOUT_SECONDS ))"
+  VERIFICATION_DEADLINE_AT="$REPAIR_DEADLINE_AT"
+  prompt="$(agent_prompt)"
+
+  while remaining_repair_seconds >/dev/null; do
+    agent_session_step "$prompt" || return 1
+    assert_agent_control_unchanged || return 1
+    if run_candidate_gates; then
+      assert_agent_control_unchanged || return 1
+      validate_agent_manifest_changes || return 1
+      return 0
+    fi
+    if ! remaining_repair_seconds >/dev/null; then
+      echo "candidate remains red and the repair budget is exhausted" >&2
+      return 124
+    fi
+    echo "candidate gates remain red; returning their logs to the same agent session"
+    prompt="$(agent_feedback_prompt)"
+  done
+  echo "candidate remains red and the repair budget is exhausted" >&2
+  return 124
 }
 
 write_upstream_summary() {
@@ -418,12 +510,11 @@ finalize_certified_tree() {
 if [[ "$HARNESS_MODE" == "repair" ]]; then
   write_repair_pin
   verify_repair_pin
-  echo "starting one agent developer task with a ${AGENT_TIMEOUT_SECONDS}s budget..."
-  if ! agent_turn; then
+  echo "starting one agent developer session with a ${AGENT_TIMEOUT_SECONDS}s repair-and-test budget..."
+  if ! repair_candidate_until_green; then
     echo "agent task failed or timed out; no canary branch or pull request was published" >&2
     exit 1
   fi
-  assert_agent_control_unchanged
   snapshot_candidate_tree
   write_candidate_bundle
   exit 0
@@ -434,7 +525,7 @@ trap cleanup_verification_worktree EXIT
 materialize_verification_tree
 VERIFICATION_DEADLINE_AT="$(( $(date +%s) + VERIFICATION_TIMEOUT_SECONDS ))"
 echo "starting one independent ${VERIFICATION_TIMEOUT_SECONDS}s verification pass..."
-if ! run_prepare || ! run_full_build || ! run_certification; then
+if ! run_candidate_gates; then
   echo "final canary verification failed; no canary branch or pull request was published" >&2
   exit 1
 fi

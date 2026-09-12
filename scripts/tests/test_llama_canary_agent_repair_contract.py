@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WRAPPER = ROOT / "scripts" / "llama-canary-agent-repair.sh"
 PUBLISHER = ROOT / "scripts" / "llama-canary-publish.sh"
 RUNBOOK = ROOT / "ci" / "llama-canary" / "agent-repair-prompt.md"
+MANIFEST_POLICY = ROOT / "scripts" / "validate-llama-canary-agent-manifests.py"
 
 
 class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
@@ -19,13 +20,23 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
         self.wrapper = WRAPPER.read_text(encoding="utf-8")
         self.publisher = PUBLISHER.read_text(encoding="utf-8")
 
-    def test_wrapper_runs_one_agent_then_one_ordered_verification(self) -> None:
+    def test_wrapper_keeps_one_agent_session_until_ordered_gates_are_green(self) -> None:
         main = self.wrapper[self.wrapper.index("write_repair_pin\n") :]
-        self.assertEqual(1, main.count("agent_turn"))
-        self.assertLess(main.index("agent_turn"), main.index("run_prepare"))
-        self.assertLess(main.index("run_prepare"), main.index("run_full_build"))
-        self.assertLess(main.index("run_full_build"), main.index("run_certification"))
-        self.assertLess(main.index("run_certification"), main.index("finalize_certified_tree"))
+        repair = self.wrapper[
+            self.wrapper.index("repair_candidate_until_green() {") :
+            self.wrapper.index("write_upstream_summary() {")
+        ]
+        gates = self.wrapper[
+            self.wrapper.index("run_candidate_gates() {") :
+            self.wrapper.index("repair_candidate_until_green() {")
+        ]
+        self.assertIn("while remaining_repair_seconds", repair)
+        self.assertLess(repair.index("agent_session_step"), repair.index("run_candidate_gates"))
+        self.assertIn('opencode_args+=(--session "$AGENT_SESSION_ID")', self.wrapper)
+        self.assertLess(gates.index("run_prepare"), gates.index("validate_agent_manifest_changes"))
+        self.assertLess(gates.index("validate_agent_manifest_changes"), gates.index("run_full_build"))
+        self.assertLess(gates.index("run_full_build"), gates.index("run_certification"))
+        self.assertLess(main.index("repair_candidate_until_green"), main.index("snapshot_candidate_tree"))
         for obsolete in (
             "MAX_REPAIR_TURNS",
             "PREPARE_REPAIR_TURNS",
@@ -51,7 +62,8 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
             'VERIFICATION_TIMEOUT_SECONDS="${CANARY_VERIFICATION_TIMEOUT_SECONDS:-14400}"',
             self.wrapper,
         )
-        self.assertIn('run_for "agent developer task" "$AGENT_TIMEOUT_SECONDS"', self.wrapper)
+        self.assertIn('run_for "agent developer task" "$seconds"', self.wrapper)
+        self.assertIn("REPAIR_DEADLINE_AT", self.wrapper)
         self.assertIn("VERIFICATION_DEADLINE_AT", self.wrapper)
         self.assertIn("scripts/run-command-with-timeout.py", self.wrapper)
 
@@ -113,10 +125,10 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
 
     def test_agent_has_no_github_credentials_or_publication_authority(self) -> None:
         agent = self.wrapper[
-            self.wrapper.index("agent_turn() {") : self.wrapper.index("assert_agent_control_unchanged() {")
+            self.wrapper.index("agent_session_step() {") : self.wrapper.index("assert_agent_control_unchanged() {")
         ]
         self.assertIn("-u GH_TOKEN -u GITHUB_TOKEN -u CANARY_REPAIR_TOKEN", agent)
-        self.assertIn('opencode run --auto --model "$AGENT_MODEL"', agent)
+        self.assertIn('run --auto --format json --model "$AGENT_MODEL"', agent)
         self.assertNotIn("git push", self.wrapper)
         self.assertNotIn("gh pr", self.wrapper)
         self.assertNotIn("CANARY_REPAIR_TOKEN:?", self.wrapper)
@@ -136,10 +148,16 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
             ".gitattributes",
             "ci/ci.md",
             "ci/llama-canary/agent-repair-prompt.md",
-            "ci/llama-canary/family-certified.json",
-            "docs/skippy/llama-parity-candidates.json",
         ):
             self.assertIn(path, guard)
+        self.assertNotIn("ci/llama-canary/family-certified.json", guard)
+        self.assertNotIn("docs/skippy/llama-parity-candidates.json", guard)
+        policy = MANIFEST_POLICY.read_text(encoding="utf-8")
+        self.assertIn("resources.estimated_model_bytes", policy)
+        self.assertIn("existing parity candidate rows changed or were reordered", policy)
+        self.assertIn("classification metadata only", policy)
+        self.assertIn("artifact selectors", policy.lower())
+        self.assertIn("scripts/validate-llama-canary-agent-manifests.py", self.wrapper)
 
     def test_protected_status_detects_untracked_python_startup_hook(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -188,8 +206,8 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
 
         main = self.wrapper[self.wrapper.index("write_repair_pin\n") :]
         self.assertLess(main.index("snapshot_candidate_tree"), main.index("materialize_verification_tree"))
-        self.assertLess(main.index("materialize_verification_tree"), main.index("run_prepare"))
-        self.assertLess(main.index("run_certification"), main.index("finalize_certified_tree"))
+        self.assertLess(main.index("materialize_verification_tree"), main.index("run_candidate_gates"))
+        self.assertLess(main.index("run_candidate_gates"), main.index("finalize_certified_tree"))
 
     def test_verify_mode_restores_tree_identity_from_candidate_commit(self) -> None:
         loader = self.wrapper[
