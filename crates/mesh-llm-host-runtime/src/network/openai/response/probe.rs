@@ -467,6 +467,45 @@ mod tests {
         assert!(buf.ends_with(body), "body must survive the replace: {text}");
     }
 
+    /// Regression (CodeRabbit, PR #1671: "the header-removal loop stops
+    /// after the first case-insensitive match"): a response carrying TWO
+    /// pre-existing `x-mesh-served-by` occurrences (mixed case, as an
+    /// upstream that itself failed to canonicalize might produce) must end
+    /// up with exactly one value after the splice, not one stale duplicate
+    /// left behind by a loop that returns after its first removal.
+    #[test]
+    fn insert_header_before_body_removes_every_duplicate_not_just_the_first() {
+        let body = b"{}";
+        let header = b"HTTP/1.1 200 OK\r\nx-mesh-served-by: first\r\nContent-Length: 2\r\nX-Mesh-Served-By: second\r\n\r\n";
+        let mut buf = header.to_vec();
+        buf.extend_from_slice(body);
+        let header_end = header.len();
+
+        insert_header_before_body(&mut buf, header_end, "x-mesh-served-by", "fresh");
+
+        let text = String::from_utf8_lossy(&buf);
+        assert_eq!(
+            text.to_ascii_lowercase()
+                .matches("x-mesh-served-by:")
+                .count(),
+            1,
+            "expected every duplicate collapsed to one header, got: {text}"
+        );
+        assert!(
+            text.contains("x-mesh-served-by: fresh\r\n"),
+            "expected the new value to win: {text}"
+        );
+        assert!(
+            !text.contains("first"),
+            "first duplicate must be gone: {text}"
+        );
+        assert!(
+            !text.contains("second"),
+            "second duplicate must be gone: {text}"
+        );
+        assert!(buf.ends_with(body), "body must survive the replace: {text}");
+    }
+
     #[test]
     fn insert_header_before_body_replace_is_case_insensitive() {
         let header = b"HTTP/1.1 200 OK\r\nX-Mesh-Served-By: stale\r\n\r\n";

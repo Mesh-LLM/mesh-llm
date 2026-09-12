@@ -434,6 +434,87 @@ fn mesh_routing_unsupported_dispatch_kind_is_none_for_ordinary_dispatch() {
     );
 }
 
+/// Regression (ndizazzo, PR #1671 -- "the model-less bypass remains"):
+/// `enforce_mesh_routing_headers_before_dispatch` calls
+/// `parse_mesh_routing_headers` unconditionally, before it ever asks whether
+/// this dispatch kind supports the headers -- so a malformed `x-mesh-target`
+/// must 400 even on a request that carries no `model` at all. The unit tests
+/// above exercise `mesh_routing_unsupported_dispatch_kind` and the header
+/// parsers in isolation; this test proves the composition end to end through
+/// the actual gate function, on the wire.
+#[tokio::test]
+async fn enforce_mesh_routing_headers_before_dispatch_rejects_malformed_header_without_model() {
+    use tokio::io::AsyncReadExt;
+
+    let body = serde_json::json!({ "messages": [{ "role": "user", "content": "hi" }] });
+    let body_bytes = serde_json::to_vec(&body).expect("serialize body");
+    let mut raw = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: t\r\nContent-Type: application/json\r\n\
+         x-mesh-target: not-a-valid-endpoint-id\r\nContent-Length: {}\r\n\r\n",
+        body_bytes.len()
+    )
+    .into_bytes();
+    raw.extend_from_slice(&body_bytes);
+    let request = proxy::BufferedHttpRequest {
+        raw,
+        method: "POST".to_owned(),
+        path: "/v1/chat/completions".to_owned(),
+        client_path: "/v1/chat/completions".to_owned(),
+        request_id: RequestId::default(),
+        body_json: None,
+        body_json_attempted: false,
+        body_bytes: None,
+        body_len_bytes: body_bytes.len(),
+        completion_tokens: None,
+        stream: None,
+        model_name: None,
+        request_object_request_ids: Vec::new(),
+        response_adapter: proxy::ResponseAdapter::None,
+        correlation_id: None,
+    };
+    let decision = AutoRouteDecision {
+        effective_model: None,
+        classification: None,
+        required_tokens: None,
+    };
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let client = tokio::net::TcpStream::connect(addr);
+    let server = async { listener.accept().await.map(|(stream, _)| stream) };
+    let (client_side, server_side) = tokio::join!(client, server);
+    let mut client_side = client_side.expect("connect");
+    let tcp_stream: ClientStream = server_side.expect("accept").into();
+
+    let result = enforce_mesh_routing_headers_before_dispatch(
+        tcp_stream,
+        &request,
+        &decision,
+        None,
+        OpenAiRouteObserver::default(),
+    )
+    .await;
+
+    let rejected_with_400 = matches!(result, Err(proxy::RouteDispatchOutcome::Responded(400)));
+    assert!(
+        rejected_with_400,
+        "expected a malformed x-mesh-target to 400 even on a model-less request"
+    );
+
+    let mut response = Vec::new();
+    client_side
+        .read_to_end(&mut response)
+        .await
+        .expect("read response");
+    let response_text = String::from_utf8_lossy(&response);
+    assert!(
+        response_text.starts_with("HTTP/1.1 400"),
+        "expected 400 on the wire, got: {response_text}"
+    );
+}
+
 // --- Routing behavior tests for model-independent daemon support ---
 
 #[test]
