@@ -106,10 +106,9 @@ pub(super) async fn wait_for_endpoint_online(
 /// A zero-capacity participant has no reason to initialize accelerator discovery.
 /// Keep hostname identity, but do not probe native runtimes or publish GPU inventory.
 pub(super) fn hardware_survey_for_start(
-    max_vram_gb: Option<f64>,
-    enumerate_host: bool,
+    minimal_hardware_survey: bool,
 ) -> crate::system::hardware::HardwareSurvey {
-    if max_vram_gb == Some(0.0) && !enumerate_host {
+    if minimal_hardware_survey {
         crate::system::hardware::query(&[crate::system::hardware::Metric::Hostname])
     } else {
         crate::system::hardware::survey()
@@ -133,12 +132,12 @@ pub(super) fn advertised_hardware_for_start(
     config: &crate::plugin::MeshConfig,
     role: &NodeRole,
     max_vram_gb: Option<f64>,
-    enumerate_host: bool,
+    minimal_hardware_survey: bool,
 ) -> NodeHardwareSnapshot {
     let safety_margin_bytes =
         crate::inference::skippy::effective_safety_margin_bytes(config.defaults.as_ref());
     hardware_snapshot_for_start(
-        hardware_survey_for_start(max_vram_gb, enumerate_host),
+        hardware_survey_for_start(minimal_hardware_survey),
         role,
         max_vram_gb,
         safety_margin_bytes,
@@ -278,7 +277,7 @@ mod zero_capacity_tests {
 
     #[test]
     fn zero_capacity_start_has_no_accelerator_inventory() {
-        let hw = hardware_survey_for_start(Some(0.0), false);
+        let hw = hardware_survey_for_start(true);
         assert_eq!(hw.vram_bytes, 0);
         assert!(hw.gpu_name.is_none());
         assert!(hw.gpus.is_empty());

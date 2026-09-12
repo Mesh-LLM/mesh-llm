@@ -49,6 +49,7 @@ struct ParsedHeaders {
     request_id: RequestId,
     content_length: Option<usize>,
     is_chunked: bool,
+    is_content_encoded: bool,
     expects_continue: bool,
     correlation_id: Option<String>,
 }
@@ -95,6 +96,28 @@ impl OpenAiRequestReadError {
         self.context.as_ref()
     }
 
+    pub(crate) fn http_status(&self) -> u16 {
+        let message = self.error.to_string();
+        if message.contains("body exceeds") || message.contains("chunked wire body exceeds") {
+            413
+        } else if message.contains("unexpected EOF")
+            || self.error.downcast_ref::<std::io::Error>().is_some()
+        {
+            500
+        } else {
+            400
+        }
+    }
+
+    pub(crate) fn public_message(&self) -> &'static str {
+        match self.http_status() {
+            413 => "request body is too large",
+            500 => "failed to read request",
+            _ => "invalid request",
+        }
+    }
+
+    #[cfg(test)]
     fn into_error(self) -> anyhow::Error {
         self.error
     }
@@ -261,11 +284,21 @@ struct RequestRewriteOutcome {
 /// This reads complete headers plus the full request body when body framing is
 /// known via `Content-Length` or `Transfer-Encoding: chunked`. The raw request
 /// bytes are preserved so the chosen upstream sees the original payload.
+#[cfg(test)]
 pub async fn read_http_request<S>(stream: &mut S) -> Result<BufferedHttpRequest>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     read_http_request_with_limits(stream, HTTP_READ_LIMITS, None).await
+}
+
+pub(crate) async fn read_http_request_with_context<S>(
+    stream: &mut S,
+) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    read_http_request_with_limits_with_context(stream, HTTP_READ_LIMITS, None).await
 }
 
 /// Variant for host ingress boundaries that need to bind locally generated
@@ -280,6 +313,7 @@ where
     read_http_request_with_limits_with_context(stream, HTTP_READ_LIMITS, plugin_manager).await
 }
 
+#[cfg(test)]
 pub(super) async fn read_http_request_with_limits<S>(
     stream: &mut S,
     limits: HttpReadLimits,
@@ -320,8 +354,11 @@ where
     // closed set of JSON inference routes so binary (`/api/objects`) and
     // multipart paths keep forwarding bytes untouched, and to non-empty
     // bodies so a valid body that merely omits `model` still auto-routes.
-    if is_json_inference_request(&parsed.method, &parsed.path) && !body.is_empty() {
-        serde_json::from_slice::<serde_json::Value>(&body)
+    if is_json_inference_request(&parsed.method, &parsed.path)
+        && !body.is_empty()
+        && !parsed.is_content_encoded
+    {
+        serde_json::from_slice::<serde::de::IgnoredAny>(&body)
             .map_err(|error| anyhow::anyhow!("request body is not valid JSON: {error}"))
             .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?;
     }
@@ -336,8 +373,11 @@ where
     } else {
         serde_json::from_slice::<RequestMetadata>(&body).ok()
     };
-    let requires_json_transform =
-        request_requires_json_transform(&parsed.path, &body, plugin_manager.is_some());
+    // Content encodings are an upstream concern. The gateway cannot inspect
+    // or rewrite compressed JSON without first decoding and later restoring
+    // the exact representation, so preserve those request bytes verbatim.
+    let requires_json_transform = !parsed.is_content_encoded
+        && request_requires_json_transform(&parsed.path, &body, plugin_manager.is_some());
     let rewrite = rewrite_request_body_for_forwarding(
         &parsed.path,
         &body,
@@ -662,6 +702,7 @@ where
 
                 let mut content_length = None;
                 let mut is_chunked = false;
+                let mut is_content_encoded = false;
                 let mut expects_continue = false;
                 let mut correlation_id = None;
 
@@ -679,6 +720,8 @@ where
                         is_chunked = val
                             .split(',')
                             .any(|part| part.trim().eq_ignore_ascii_case("chunked"));
+                    } else if header.name.eq_ignore_ascii_case("content-encoding") {
+                        is_content_encoded = true;
                     } else if header.name.eq_ignore_ascii_case("expect") {
                         let val = std::str::from_utf8(header.value).unwrap_or("");
                         expects_continue = val
@@ -706,6 +749,7 @@ where
                     request_id: request_id_from_headers(req.headers),
                     content_length,
                     is_chunked,
+                    is_content_encoded,
                     expects_continue,
                     correlation_id,
                 });

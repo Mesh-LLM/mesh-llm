@@ -377,6 +377,63 @@ fn callable_models_returns_empty_when_no_targets() {
     assert!(models.is_empty());
 }
 
+#[tokio::test]
+async fn local_shared_endpoint_wins_over_a_remote_advertisement_for_the_same_model() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind shared upstream");
+    let address = format!(
+        "http://{}/v1",
+        listener.local_addr().expect("upstream address")
+    );
+    let upstream = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept health probe");
+        let mut request = vec![0_u8; 2048];
+        let _ = stream.read(&mut request).await.expect("read health probe");
+        let body = r#"{"data":[{"id":"shared-model"}]}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write health response");
+    });
+
+    let manager = crate::plugin::PluginManager::for_test_shared_endpoint(&address);
+    manager
+        .start_shared_endpoint()
+        .await
+        .expect("seed shared endpoint health");
+    upstream.await.expect("health server task");
+
+    let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
+        .await
+        .expect("test node");
+    let peer_id = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+    let mut targets = election::ModelTargets::default();
+    targets.targets.insert(
+        "shared-model".to_owned(),
+        vec![election::InferenceTarget::Remote(peer_id)],
+    );
+    let affinity = affinity::AffinityRouter::new();
+    let ctx = IngressRouteContext {
+        node: &node,
+        targets: &targets,
+        affinity: &affinity,
+        plugin_manager: Some(&manager),
+    };
+
+    assert!(
+        should_prefer_local_endpoint(&ctx, "shared-model").await,
+        "the local shared upstream must terminate routing before a remote peer can bounce it back"
+    );
+}
+
 // --- Daemon state derivation tests for plugin-only and remote-only daemons ---
 
 #[test]

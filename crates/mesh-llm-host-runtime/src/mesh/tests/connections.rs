@@ -34,6 +34,7 @@ async fn inbound_http_tunnel_channel_retains_authenticated_remote_endpoint() {
             },
             Some(0.0),
             false,
+            false,
             None,
             None,
             crate::MeshRequirements::unrestricted(),

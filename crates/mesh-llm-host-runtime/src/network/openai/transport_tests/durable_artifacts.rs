@@ -25,6 +25,7 @@ async fn start_http_tunnel_test_node() -> (mesh::Node, mesh::TunnelChannels) {
         },
         Some(0.0),
         false,
+        false,
         None,
         None,
         crate::MeshRequirements::unrestricted(),

@@ -129,13 +129,27 @@ where
         // and renders help.
         Some("share") => {
             explicit_surface = Some(RuntimeSurface::Share);
-            if original
-                .get(pos + 1)
-                .and_then(|arg| arg.to_str())
-                .is_some_and(|arg| !arg.starts_with('-'))
-            {
+            let mut url_pos = pos + 1;
+            while url_pos < original.len() {
+                let arg = original[url_pos].to_string_lossy();
+                if arg
+                    .split_once('=')
+                    .is_some_and(|(flag, _)| value_taking_flags.contains(&flag))
+                {
+                    url_pos += 1;
+                } else if value_taking_flags.contains(&arg.as_ref()) {
+                    url_pos += 2;
+                } else if arg.starts_with('-') {
+                    url_pos += 1;
+                } else {
+                    break;
+                }
+            }
+            if url_pos < normalized.len() {
+                let url = normalized.remove(url_pos);
                 normalized.remove(pos);
                 normalized.insert(pos, OsString::from("--shared-endpoint"));
+                normalized.insert(pos + 1, url);
             }
         }
         Some("client") => {
@@ -251,6 +265,13 @@ mod tests {
                 "http://localhost:11434",
                 "--port",
                 "9447",
+            ],
+            vec![
+                "mesh-llm",
+                "share",
+                "--port",
+                "9447",
+                "http://localhost:11434",
             ],
             vec![
                 "mesh-llm",

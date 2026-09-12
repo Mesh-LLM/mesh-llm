@@ -602,6 +602,8 @@ pub(super) enum ProbePolicy {
 
 /// Largest models response the strict policy will read.
 const STRICT_PROBE_BODY_LIMIT_BYTES: usize = 1 << 20;
+const STRICT_PROBE_MAX_MODELS: usize = 4096;
+const STRICT_PROBE_MAX_MODEL_ID_BYTES: usize = 512;
 
 async fn probe_openai_compatible_http_endpoint(address: &str) -> EndpointHealthRecord {
     probe_models_endpoint(address, ProbePolicy::Lenient).await
@@ -708,13 +710,7 @@ async fn parse_models_response(
             .get("data")
             .and_then(|value| value.as_array())
             .context("response has no OpenAI `data` array")?;
-        anyhow::ensure!(
-            entries.iter().all(|entry| entry
-                .get("id")
-                .and_then(|id| id.as_str())
-                .is_some_and(|id| !id.trim().is_empty())),
-            "response `data` contains an entry without a model id"
-        );
+        validate_strict_model_entries(entries)?;
     }
     let models = body
         .get("data")
@@ -725,6 +721,25 @@ async fn parse_models_response(
         .map(|id| id.to_string())
         .collect::<Vec<_>>();
     Ok(models)
+}
+
+fn validate_strict_model_entries(entries: &[Value]) -> Result<()> {
+    anyhow::ensure!(
+        entries.len() <= STRICT_PROBE_MAX_MODELS,
+        "response `data` exceeds the {STRICT_PROBE_MAX_MODELS} model limit"
+    );
+    anyhow::ensure!(
+        entries.iter().all(|entry| entry
+            .get("id")
+            .and_then(|id| id.as_str())
+            .is_some_and(|id| {
+                !id.trim().is_empty()
+                    && id.len() <= STRICT_PROBE_MAX_MODEL_ID_BYTES
+                    && !id.chars().any(char::is_control)
+            })),
+        "response `data` contains an invalid model id"
+    );
+    Ok(())
 }
 
 /// Read at most `limit` bytes of a response body, failing if it is larger.
@@ -1067,6 +1082,24 @@ mod tests {
         assert_eq!(health.state, "healthy");
         assert!(health.models.is_empty());
         server.await.unwrap();
+    }
+
+    #[test]
+    fn strict_inventory_rejects_too_many_short_model_ids() {
+        let entries = (0..=STRICT_PROBE_MAX_MODELS)
+            .map(|index| serde_json::json!({"id": format!("m{index}")}))
+            .collect::<Vec<_>>();
+        let error = validate_strict_model_entries(&entries).unwrap_err();
+        assert!(error.to_string().contains("model limit"));
+    }
+
+    #[test]
+    fn strict_inventory_rejects_control_characters_and_long_ids() {
+        let long_id = "m".repeat(STRICT_PROBE_MAX_MODEL_ID_BYTES + 1);
+        for id in ["model\u{1b}]0;injected-title\u{7}", long_id.as_str()] {
+            let entries = vec![serde_json::json!({"id": id})];
+            assert!(validate_strict_model_entries(&entries).is_err());
+        }
     }
 
     #[tokio::test]

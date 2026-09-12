@@ -712,6 +712,7 @@ impl Node {
         quic_bind: QuicBindSelection,
         max_vram_gb: Option<f64>,
         enumerate_host: bool,
+        minimal_hardware_survey: bool,
         owner_config: Option<OwnerRuntimeConfig>,
         config_path: Option<&std::path::Path>,
         local_mesh_requirements: crate::MeshRequirements,
@@ -750,7 +751,7 @@ impl Node {
             config_state_init.config(),
             &role,
             max_vram_gb,
-            enumerate_host,
+            minimal_hardware_survey,
         );
         let owner_runtime = init_owner_runtime(
             owner_config.as_ref(),

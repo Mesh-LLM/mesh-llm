@@ -774,9 +774,10 @@ async fn management_port_v1_passthrough_returns_400_for_malformed_json() {
         response.starts_with("HTTP/1.1 400 Bad Request"),
         "expected a client error: {response}"
     );
+    assert!(response.contains("invalid request"), "response: {response}");
     assert!(
-        response.contains("not valid JSON"),
-        "the response should explain the parse failure: {response}"
+        !response.contains("not valid JSON"),
+        "parser detail must not be reflected to the caller: {response}"
     );
 
     handle.abort();

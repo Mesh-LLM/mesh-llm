@@ -7,6 +7,7 @@ use std::time::Duration;
 pub const SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum EmbeddedMeshNodeMode {
     /// Full mesh participation serving one already-running OpenAI-compatible
     /// HTTP server, with local inference disabled.

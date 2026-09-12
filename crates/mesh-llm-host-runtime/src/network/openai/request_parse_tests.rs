@@ -484,6 +484,54 @@ async fn test_read_http_request_fragmented_post_body() {
 }
 
 #[tokio::test]
+async fn encoded_json_inference_body_is_forwarded_without_local_json_validation() {
+    // A minimal gzip-shaped payload is intentionally not valid JSON. The
+    // gateway must leave content decoding and validation to the upstream.
+    let body = vec![0x1f, 0x8b, 0x08, 0x00, 0xff, 0x00, 0x01];
+    let mut raw = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    raw.extend_from_slice(&body);
+
+    let request = read_request_from_parts(vec![raw]).await;
+
+    assert!(request.raw.ends_with(&body));
+    assert!(
+        request
+            .raw
+            .windows(b"Content-Encoding: gzip".len())
+            .any(|window| window == b"Content-Encoding: gzip")
+    );
+    assert_eq!(request.body_bytes.as_deref(), Some(body.as_slice()));
+    assert_eq!(request.model_name, None);
+    assert!(!request.body_json_attempted);
+}
+
+#[test]
+fn contextual_read_errors_map_to_safe_management_statuses() {
+    let oversized = OpenAiRequestReadError::before_headers(anyhow::anyhow!(
+        "HTTP body exceeds 1048576 bytes and secret=do-not-reflect"
+    ));
+    assert_eq!(oversized.http_status(), 413);
+    assert_eq!(oversized.public_message(), "request body is too large");
+    assert!(!oversized.public_message().contains("secret"));
+
+    let truncated = OpenAiRequestReadError::before_headers(anyhow::anyhow!(
+        "unexpected EOF while reading HTTP body: bearer-secret"
+    ));
+    assert_eq!(truncated.http_status(), 500);
+    assert_eq!(truncated.public_message(), "failed to read request");
+
+    let malformed = OpenAiRequestReadError::before_headers(anyhow::anyhow!(
+        "request body is not valid JSON: caller-private-value"
+    ));
+    assert_eq!(malformed.http_status(), 400);
+    assert_eq!(malformed.public_message(), "invalid request");
+}
+
+#[tokio::test]
 async fn chat_reasoning_effort_none_is_canonicalized_before_forwarding() {
     let body = serde_json::json!({
         "model": "qwen",

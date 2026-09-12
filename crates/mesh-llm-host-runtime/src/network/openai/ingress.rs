@@ -729,6 +729,15 @@ async fn route_request(
 ) -> proxy::RouteDispatchOutcome {
     prepare_cache_routing_body(request, effective_model);
     if let Some(model_name) = effective_model {
+        // A model served by this node through an external endpoint must stay
+        // local when the target table also contains remote peers advertising
+        // the same name. Preferring a remote candidate here lets two sharing
+        // nodes forward the request back and forth indefinitely.
+        if should_prefer_local_endpoint(ctx, model_name).await {
+            return try_route_plugin_model(ctx, tcp_stream, request, model_name, route_observer)
+                .await;
+        }
+
         // Model explicitly requested. Check local candidates first.
         if !has_available_candidates(ctx.targets, model_name) {
             return route_missing_local_model(
@@ -773,6 +782,24 @@ async fn route_request(
         )
         .await
     }
+}
+
+async fn should_prefer_local_endpoint(ctx: &IngressRouteContext<'_>, model_name: &str) -> bool {
+    let has_local_runtime = ctx
+        .targets
+        .candidates(model_name)
+        .iter()
+        .any(|target| matches!(target, election::InferenceTarget::Local(_)));
+    if has_local_runtime {
+        return false;
+    }
+    let Some(plugin_manager) = ctx.plugin_manager else {
+        return false;
+    };
+    plugin_manager
+        .inference_endpoint_for_model(model_name)
+        .await
+        .is_ok_and(|endpoint| endpoint.is_some())
 }
 
 fn prepare_cache_routing_body(

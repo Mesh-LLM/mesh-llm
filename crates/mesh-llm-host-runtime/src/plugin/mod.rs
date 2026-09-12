@@ -1358,6 +1358,10 @@ impl PluginManager {
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(
                 health::HEALTH_CHECK_INTERVAL_SECS,
             ));
+            // `interval` completes its first tick immediately. Consume that
+            // tick so shared-endpoint startup can seed the authoritative
+            // record before the supervisor begins periodic reprobes.
+            ticker.tick().await;
             loop {
                 ticker.tick().await;
                 if manager.inner.shutting_down.load(Ordering::SeqCst) {

@@ -908,6 +908,7 @@ pub(crate) async fn run_plugin_mcp(options: &RuntimeOptions) -> Result<()> {
         },
         Some(0.0),
         !options.no_enumerate_host,
+        false,
         Some(owner_config),
         options.config.as_deref(),
         MeshRequirements::unrestricted(),

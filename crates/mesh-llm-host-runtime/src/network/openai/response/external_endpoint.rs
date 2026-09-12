@@ -255,19 +255,18 @@ fn rewrite_http_request_target(
     port: u16,
     strip_caller_credentials: bool,
 ) -> Result<Vec<u8>> {
-    use crate::network::openai::forwarded_request::finalize_forwarded_request;
-    let omitted = if strip_caller_credentials {
-        &[
-            "host",
-            "authorization",
-            "proxy-authorization",
-            "x-api-key",
-            "api-key",
-        ][..]
-    } else {
-        &["host"][..]
+    use crate::network::openai::forwarded_request::{
+        CALLER_CREDENTIAL_HEADERS, finalize_forwarded_request,
     };
-    let mut forwarded = finalize_forwarded_request(raw, false, Some(new_path), None, omitted)?;
+    let omitted = if strip_caller_credentials {
+        let mut omitted = Vec::with_capacity(CALLER_CREDENTIAL_HEADERS.len() + 1);
+        omitted.push("host");
+        omitted.extend_from_slice(CALLER_CREDENTIAL_HEADERS);
+        omitted
+    } else {
+        vec!["host"]
+    };
+    let mut forwarded = finalize_forwarded_request(raw, false, Some(new_path), None, &omitted)?;
     let line_end = forwarded
         .windows(2)
         .position(|bytes| bytes == b"\r\n")
@@ -295,7 +294,7 @@ mod tests {
 
     #[test]
     fn shared_endpoint_strips_credentials_and_preserves_header_bytes() {
-        let raw = b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer secret\r\nX-Api-Key: secret\r\nProxy-Authorization: secret\r\nApi-Key: secret\r\nX-Trace: \xff\r\nContent-Length: 2\r\n\r\n{}";
+        let raw = b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer secret\r\nX-Api-Key: secret\r\nProxy-Authorization: secret\r\nApi-Key: secret\r\nCookie: secret\r\nX-Trace: \xff\r\nContent-Length: 2\r\n\r\n{}";
         let rewritten =
             rewrite_http_request_target(raw, "/v1/chat/completions", "[::1]", 11434, true).unwrap();
         assert!(!rewritten.windows(6).any(|bytes| bytes == b"secret"));

@@ -842,6 +842,7 @@ pub(super) async fn start_run_auto_node_and_plugins(
         },
         max_vram,
         options.shared_endpoint.is_none() && !options.no_enumerate_host,
+        options.shared_endpoint.is_some(),
         Some(owner_config),
         options.config.as_deref(),
         startup_mesh_creation_state.requirements.clone(),
@@ -1713,7 +1714,8 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
     .await?;
 
     // Register the shared upstream before reporting ready. A failure here uses
-    // the ordinary shutdown path so a failed probe leaves no participant behind.
+    // the ordinary shutdown path; the mesh and listeners may already have been
+    // visible briefly, but the node never reports itself ready for sharing.
     let sharing_startup_result =
         super::shared_endpoint::start_from_options(&options, &plugin_manager).await;
     if sharing_startup_result.is_err() {

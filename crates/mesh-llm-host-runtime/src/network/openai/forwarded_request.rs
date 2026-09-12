@@ -14,6 +14,14 @@ use anyhow::{Context, Result, bail};
 use super::request_parse::MAX_HEADERS;
 use super::response::is_valid_header_name;
 
+pub(super) const CALLER_CREDENTIAL_HEADERS: &[&str] = &[
+    "authorization",
+    "proxy-authorization",
+    "x-api-key",
+    "api-key",
+    "cookie",
+];
+
 /// Parse every `Connection` header on the request and return its nominated
 /// hop-by-hop header names.
 ///
@@ -164,12 +172,6 @@ pub(super) fn finalize_forwarded_request(
 
 /// Rebuild a request for a remote peer without forwarding ingress credentials.
 pub(super) fn prepare_peer_forwarded_request(raw: &[u8]) -> Result<Vec<u8>> {
-    const CALLER_CREDENTIAL_HEADERS: &[&str] = &[
-        "authorization",
-        "proxy-authorization",
-        "x-api-key",
-        "api-key",
-    ];
     finalize_forwarded_request(raw, false, None, None, CALLER_CREDENTIAL_HEADERS)
 }
 

@@ -19,10 +19,15 @@ use crate::network::router;
 use std::time::{Duration, Instant};
 
 pub use super::request_normalize::{ResponseAdapter, release_request_objects};
-pub(crate) use super::request_parse::read_http_request_with_plugin_manager_with_context;
+#[cfg(test)]
+pub use super::request_parse::read_http_request;
 pub use super::request_parse::{
     BufferedHttpRequest, inject_mesh_hooks_flag, is_legacy_lifecycle_path, is_models_list_request,
-    read_http_request, rewrite_model_field, rewrite_public_model_alias,
+    rewrite_model_field, rewrite_public_model_alias,
+};
+pub(crate) use super::request_parse::{
+    OpenAiRequestReadError, read_http_request_with_context,
+    read_http_request_with_plugin_manager_with_context,
 };
 pub(crate) use super::response::{
     PipelineCapsuleNonce, PipelineProxyResult, append_safe_header, pipeline_proxy_local,

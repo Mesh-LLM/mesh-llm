@@ -205,14 +205,15 @@ pub(crate) async fn handle_request(mut stream: TcpStream, state: &MeshApi) -> an
     };
     let request = match request {
         ManagementRequest::Parsed(request) => request,
-        // A request this boundary cannot parse is a client error, so answer it
-        // rather than dropping the socket. `start_with_listener` only
+        // Answer parse/read failures rather than dropping the socket.
+        // `start_with_listener` only
         // debug-logs a propagated error, so a malformed body on the console
         // port's `/v1/*` passthrough previously closed the connection with no
         // response at all — while the same body on the inference port got a
-        // 400 from `send_read_failure`. Same contract on both listeners now.
+        // an error response from `send_read_failure`. Same contract on both
+        // listeners now.
         ManagementRequest::Unparseable(error) => {
-            respond_error(&mut stream, 400, &error.to_string()).await?;
+            respond_error(&mut stream, error.http_status(), error.public_message()).await?;
             return Ok(());
         }
     };
@@ -342,7 +343,7 @@ async fn dispatch_management_request(
 /// `start_with_listener`, which drops the socket silently.
 enum ManagementRequest {
     Parsed(Box<proxy::BufferedHttpRequest>),
-    Unparseable(anyhow::Error),
+    Unparseable(proxy::OpenAiRequestReadError),
 }
 
 async fn read_management_request(
@@ -350,7 +351,7 @@ async fn read_management_request(
 ) -> anyhow::Result<Option<ManagementRequest>> {
     match tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        proxy::read_http_request(stream),
+        proxy::read_http_request_with_context(stream),
     )
     .await
     {
