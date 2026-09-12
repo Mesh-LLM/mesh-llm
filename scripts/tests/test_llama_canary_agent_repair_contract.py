@@ -10,33 +10,70 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 WRAPPER = ROOT / "scripts" / "llama-canary-agent-repair.sh"
+PUBLISHER = ROOT / "scripts" / "llama-canary-publish.sh"
 RUNBOOK = ROOT / "ci" / "llama-canary" / "agent-repair-prompt.md"
 
 
-class LlamaCanaryStateMachineContractTests(unittest.TestCase):
+class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.wrapper = WRAPPER.read_text(encoding="utf-8")
+        self.publisher = PUBLISHER.read_text(encoding="utf-8")
 
-    def test_wrapper_has_one_ordered_state_machine(self) -> None:
-        main = self.wrapper[self.wrapper.index('phase="prepare"\nwhile true; do') :]
-        self.assertIn('phase="build"; continue', main)
-        self.assertIn('phase="certify"; continue', main)
-        self.assertIn("report_terminal certified", main)
-        self.assertIn('phase="prepare"\ndone', main)
-        self.assertNotIn("post_green", self.wrapper)
-        self.assertNotIn("patch-queue | battery", self.wrapper)
-
-    def test_every_agent_edit_restarts_prepare_and_full_build(self) -> None:
-        main = self.wrapper[self.wrapper.index('phase="prepare"\nwhile true; do') :]
+    def test_wrapper_runs_one_agent_then_one_ordered_verification(self) -> None:
+        main = self.wrapper[self.wrapper.index("write_repair_pin\n") :]
+        self.assertEqual(1, main.count("agent_turn"))
+        self.assertLess(main.index("agent_turn"), main.index("run_prepare"))
         self.assertLess(main.index("run_prepare"), main.index("run_full_build"))
         self.assertLess(main.index("run_full_build"), main.index("run_certification"))
-        self.assertLess(main.index("agent_turn"), main.rindex('phase="prepare"'))
-        prompt = self.wrapper[
-            self.wrapper.index("repair_prompt() {") : self.wrapper.index("current_pr() {")
-        ]
-        self.assertIn("restart at prepare", prompt)
-        self.assertIn("complete build", prompt)
-        self.assertIn("full supported-family certification", prompt)
+        self.assertLess(main.index("run_certification"), main.index("finalize_certified_tree"))
+        for obsolete in (
+            "MAX_REPAIR_TURNS",
+            "PREPARE_REPAIR_TURNS",
+            "BUILD_REPAIR_TURNS",
+            "CERTIFY_REPAIR_TURNS",
+            "report_terminal",
+            "while true",
+        ):
+            self.assertNotIn(obsolete, self.wrapper)
+
+    def test_wrapper_reexecs_natively_before_state_initialization(self) -> None:
+        reexec = self.wrapper.index('exec arch -arm64 "${BASH_SOURCE[0]}" "$@"')
+        root = self.wrapper.index('ROOT="$(cd')
+        self.assertLess(reexec, root)
+        self.assertIn("sysctl -n hw.optional.arm64", self.wrapper[:root])
+
+    def test_agent_and_final_verification_have_explicit_budgets(self) -> None:
+        self.assertIn(
+            'AGENT_TIMEOUT_SECONDS="${CANARY_AGENT_TIMEOUT_SECONDS:-27000}"',
+            self.wrapper,
+        )
+        self.assertIn(
+            'VERIFICATION_TIMEOUT_SECONDS="${CANARY_VERIFICATION_TIMEOUT_SECONDS:-14400}"',
+            self.wrapper,
+        )
+        self.assertIn('run_for "agent developer task" "$AGENT_TIMEOUT_SECONDS"', self.wrapper)
+        self.assertIn("VERIFICATION_DEADLINE_AT", self.wrapper)
+        self.assertIn("scripts/run-command-with-timeout.py", self.wrapper)
+
+        result = subprocess.run(
+            [
+                str(ROOT / "scripts" / "run-command-with-timeout.py"),
+                "--seconds",
+                "1",
+                "--label",
+                "agent developer task",
+                "--",
+                sys.executable,
+                "-c",
+                "import time; time.sleep(30)",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=15,
+        )
+        self.assertEqual(124, result.returncode)
+        self.assertIn("agent developer task timed out after 1s", result.stderr)
 
     def test_prepare_owns_pin_and_exact_prepared_upstream(self) -> None:
         prepare = self.wrapper[
@@ -46,9 +83,8 @@ class LlamaCanaryStateMachineContractTests(unittest.TestCase):
         self.assertIn("verify_repair_pin", prepare)
         self.assertIn("scripts/prepare-llama.sh pinned", prepare)
         self.assertIn(".mesh-llm-upstream-sha", prepare)
-        self.assertNotIn("PIN_MIRROR_FILE", self.wrapper)
 
-    def test_build_gate_is_complete_and_precedes_certification(self) -> None:
+    def test_build_gate_is_complete(self) -> None:
         build = self.wrapper[
             self.wrapper.index("run_full_build() {") : self.wrapper.index("run_certification() {")
         ]
@@ -67,7 +103,7 @@ class LlamaCanaryStateMachineContractTests(unittest.TestCase):
 
     def test_certification_is_full_and_uses_prebuilt_candidate(self) -> None:
         certify = self.wrapper[
-            self.wrapper.index("run_certification() {") : self.wrapper.index("phase_log() {")
+            self.wrapper.index("run_certification() {") : self.wrapper.index("write_upstream_summary() {")
         ]
         self.assertIn("skippy-llama-parity.py --llama-src .deps/llama.cpp validate", certify)
         self.assertIn("--cadence llama-bump", certify)
@@ -75,207 +111,141 @@ class LlamaCanaryStateMachineContractTests(unittest.TestCase):
         self.assertIn("scripts/skippy-canary-live-matrix.sh --prepare", certify)
         self.assertIn("scripts/skippy-family-battery.sh --skip-build --plan", certify)
 
-    def test_internal_deadline_reserves_terminal_publication_time(self) -> None:
-        self.assertIn('REPAIR_BUDGET_SECONDS="${CANARY_REPAIR_BUDGET_SECONDS:-41400}"', self.wrapper)
-        self.assertIn('PUBLISH_RESERVE_SECONDS="${CANARY_PUBLISH_RESERVE_SECONDS:-1800}"', self.wrapper)
-        self.assertIn("DEADLINE_AT - $(date +%s) - PUBLISH_RESERVE_SECONDS", self.wrapper)
-        self.assertIn("scripts/run-command-with-timeout.py", self.wrapper)
-        for label in (
-            "apply llama.cpp patch queue",
-            "complete patched llama.cpp build",
-            "full supported-family certification",
-            "agent repair turn",
-        ):
-            self.assertIn(label, self.wrapper)
-        self.assertIn("publication reserve is active", self.wrapper)
-        self.assertIn("report_terminal failed", self.wrapper)
-
-    def test_repair_turn_limit_is_per_phase(self) -> None:
-        for counter in (
-            "PREPARE_REPAIR_TURNS",
-            "BUILD_REPAIR_TURNS",
-            "CERTIFY_REPAIR_TURNS",
-        ):
-            self.assertIn(counter, self.wrapper)
-        self.assertIn('phase_turns "$phase"', self.wrapper)
-        self.assertIn('increment_phase_turns "$phase"', self.wrapper)
-
-    def test_terminal_publication_uses_unique_branch_without_force_push(self) -> None:
-        self.assertIn('BRANCH="llama-canary/repair-${RUN_KEY}-${UPSTREAM_SHA:0:10}"', self.wrapper)
-        publish = self.wrapper[
-            self.wrapper.index("publish_terminal_branch() {") : self.wrapper.index("write_pr_body() {")
-        ]
-        self.assertIn('"HEAD:refs/heads/${BRANCH}"', publish)
-        self.assertNotIn("+HEAD", publish)
-        self.assertNotIn("--force", publish)
-        main = self.wrapper[self.wrapper.index('phase="prepare"\nwhile true; do') :]
-        self.assertNotIn("publish_terminal_branch", main)
-        self.assertNotIn("gh pr create", main)
-        self.assertIn("report_terminal certified", main)
-        self.assertIn("report_terminal failed", main)
-
-    def test_failed_terminal_state_is_draft_and_green_is_exact_head(self) -> None:
-        ensure = self.wrapper[
-            self.wrapper.index("ensure_pr() {") : self.wrapper.index("verify_pr_head() {")
-        ]
-        self.assertIn("create_args=(--draft)", ensure)
-        self.assertIn("create_args=()", ensure)
-        self.assertIn("not certified and is not eligible to merge", self.wrapper)
-        report = self.wrapper[
-            self.wrapper.index("report_terminal() {") : self.wrapper.index('phase="prepare"')
-        ]
-        self.assertLess(report.index("publish_terminal_branch"), report.index("ensure_pr"))
-        self.assertLess(report.index("ensure_pr"), report.index("verify_pr_head"))
-        self.assertIn('CERTIFIED_SHA="$PUBLISHED_SHA"', self.wrapper)
-
-    def test_terminal_pr_creation_errors_remain_visible(self) -> None:
-        ensure = self.wrapper[
-            self.wrapper.index("ensure_pr() {") : self.wrapper.index("verify_pr_head() {")
-        ]
-        self.assertIn("2> >(redact_token >&2)", ensure)
-        self.assertNotIn("--body-file \"$PR_BODY\" 2>/dev/null", ensure)
-        self.assertIn("could not create the terminal canary PR", ensure)
-        self.assertIn("creation returned no PR number", ensure)
-
-    def test_runner_environment_is_validated_before_expensive_work(self) -> None:
-        preflight = self.wrapper[: self.wrapper.index("agent_turn() {")]
-        self.assertIn(
-            "for required_name in LLAMA_STAGE_BUILD_DIR HF_CACHE GITHUB_REPOSITORY",
-            preflight,
-        )
-        self.assertIn("CANARY_REPAIR_TOKEN is not set", preflight)
-        self.assertNotIn("${LLAMA_STAGE_BUILD_DIR:?}", self.wrapper)
-        self.assertNotIn("${HF_CACHE:?}", self.wrapper)
-
-        target = "a" * 40
-        base_env = {
-            **os.environ,
-            "CANARY_REPAIR_TOKEN": "fixture-token",
-            "GITHUB_REPOSITORY": "Mesh-LLM/mesh-llm",
-            "HF_CACHE": "/tmp/fixture-hf-cache",
-            "LLAMA_STAGE_BUILD_DIR": "/tmp/fixture-llama-build",
-        }
-        for missing in ("LLAMA_STAGE_BUILD_DIR", "HF_CACHE", "GITHUB_REPOSITORY"):
-            with self.subTest(missing=missing):
-                env = {**base_env}
-                env.pop(missing)
-                result = subprocess.run(
-                    [str(WRAPPER), target],
-                    cwd=ROOT,
-                    env=env,
-                    text=True,
-                    capture_output=True,
-                    check=False,
-                    timeout=30,
-                )
-                self.assertEqual(1, result.returncode)
-                self.assertIn(f"{missing} is not set", result.stderr)
-
-    def test_git_push_uses_env_sourced_askpass_without_token_in_argv(self) -> None:
-        publish = self.wrapper[
-            self.wrapper.index("publish_terminal_branch() {") : self.wrapper.index(
-                "write_upstream_summary() {"
-            )
-        ]
-        self.assertIn('GIT_ASKPASS="$GIT_ASKPASS_SCRIPT"', publish)
-        self.assertIn("GIT_TERMINAL_PROMPT=0", publish)
-        self.assertIn('git push "https://github.com/${GITHUB_REPOSITORY}.git"', publish)
-        self.assertNotIn("x-access-token:${CANARY_REPAIR_TOKEN}", self.wrapper)
-        self.assertIn('os.environ["CANARY_REPAIR_TOKEN"]', self.wrapper)
-        self.assertIn(".replace(token,", self.wrapper)
-
-        redact = self.wrapper[
-            self.wrapper.index("redact_token() {") : self.wrapper.index(
-                "remaining_work_seconds() {"
-            )
-        ]
-        token = "fixture/[]$.*\\token"
-        result = subprocess.run(
-            ["bash", "-c", f"{redact}\nprintf '%s' \"$INPUT\" | redact_token"],
-            env={**os.environ, "CANARY_REPAIR_TOKEN": token, "INPUT": f"a{token}b"},
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual("a***redacted***b", result.stdout)
-
-    def test_pr_body_contains_generated_upstream_summary(self) -> None:
-        summary = self.wrapper[
-            self.wrapper.index("write_upstream_summary() {") : self.wrapper.index(
-                "ensure_pr() {"
-            )
-        ]
-        self.assertIn("scripts/summarize-llama-upstream.sh", summary)
-        self.assertIn("$OLD_SHA", summary)
-        self.assertIn("$UPSTREAM_SHA", summary)
-        self.assertIn('cat "$UPSTREAM_SUMMARY"', summary)
-        self.assertIn("automated upstream summary was unavailable", summary)
-
-    def test_phase_error_propagation_is_documented_as_load_bearing(self) -> None:
-        main = self.wrapper[self.wrapper.index('phase="prepare"\nwhile true; do') :]
-        self.assertIn("inherits disabled errexit", main)
-        self.assertIn("explicit `|| return 1`", main)
-        self.assertIn("This is load-bearing", main)
-
-    def test_agent_runbook_matches_wrapper_owned_state_machine(self) -> None:
-        runbook = RUNBOOK.read_text(encoding="utf-8")
-        self.assertIn("prepare -> build -> certify -> publish", runbook)
-        self.assertIn("scripts/prepare-llama.sh pinned", runbook)
-        self.assertIn("Do not switch or create a branch in the mesh-llm", runbook)
-        self.assertIn("Do not push, open a PR, or use GitHub credentials", self.wrapper)
-        for obsolete in (
-            "patch-queue mode",
-            "battery mode",
-            "llama-canary/patch-queue-fix",
-            "separate review agent",
-        ):
-            self.assertNotIn(obsolete, runbook)
-
     def test_agent_has_no_github_credentials_or_publication_authority(self) -> None:
-        self.assertNotIn("export GH_TOKEN", self.wrapper)
         agent = self.wrapper[
-            self.wrapper.index("agent_turn() {") : self.wrapper.index("write_repair_pin() {")
+            self.wrapper.index("agent_turn() {") : self.wrapper.index("assert_agent_control_unchanged() {")
         ]
         self.assertIn("-u GH_TOKEN -u GITHUB_TOKEN -u CANARY_REPAIR_TOKEN", agent)
         self.assertIn('opencode run --auto --model "$AGENT_MODEL"', agent)
-        self.assertNotIn("git push", agent)
-        self.assertNotIn("gh pr", agent)
-        self.assertIn("heartbeat: agent repair running for", agent)
+        self.assertNotIn("git push", self.wrapper)
+        self.assertNotIn("gh pr", self.wrapper)
+        self.assertNotIn("CANARY_REPAIR_TOKEN:?", self.wrapper)
 
-    def test_every_github_call_is_token_scoped(self) -> None:
-        for line in self.wrapper.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("#") or " gh " not in f" {stripped} ":
-                continue
-            self.assertIn("gh_repair", stripped, stripped)
-
-    def test_token_permission_probe_is_unique_and_runs_before_work(self) -> None:
-        self.assertIn("canary-repair-token-preflight-${RUN_KEY}", self.wrapper)
-        self.assertIn("git/refs/heads%2F${probe_branch}", self.wrapper)
-        self.assertIn("Pull requests: write capability probe", self.wrapper)
-        self.assertIn("--method PATCH", self.wrapper)
-        self.assertIn('"repos/${GITHUB_REPOSITORY:?}/pulls/${probe_pr}"', self.wrapper)
-        call = self.wrapper.index("check_repair_token_permissions\n")
-        self.assertLess(call, self.wrapper.index("agent_turn()"))
-        self.assertLess(call, self.wrapper.index("run_prepare()"))
-
-    def test_terminal_network_operations_share_the_publication_deadline(self) -> None:
-        terminal = self.wrapper[
-            self.wrapper.index("current_pr() {") : self.wrapper.index('phase="prepare"')
+    def test_agent_cannot_change_harness_or_commit(self) -> None:
+        guard = self.wrapper[
+            self.wrapper.index("assert_agent_control_unchanged() {") : self.wrapper.index("run_prepare() {")
         ]
-        self.assertIn("remaining_publication_seconds", self.wrapper)
-        self.assertIn("run_publication_bounded", terminal)
-        self.assertIn("gh_repair_bounded", terminal)
-        for operation in (
-            "push terminal canary branch",
-            "find terminal canary PR",
-            "update terminal canary PR",
-            "create terminal canary PR",
-            "verify terminal canary PR head",
-            "comment on terminal canary PR",
+        self.assertIn('git rev-parse HEAD', guard)
+        self.assertIn('git symbolic-ref -q HEAD', guard)
+        self.assertIn("git config --list --show-origin", guard)
+        self.assertIn("git status --porcelain=v1 --untracked-files=all", guard)
+        for path in (
+            ".github",
+            ".agents",
+            "scripts",
+            ".gitattributes",
+            "ci/ci.md",
+            "ci/llama-canary/agent-repair-prompt.md",
+            "ci/llama-canary/family-certified.json",
+            "docs/skippy/llama-parity-candidates.json",
         ):
-            self.assertIn(operation, terminal)
+            self.assertIn(path, guard)
+
+    def test_protected_status_detects_untracked_python_startup_hook(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            (repo / "scripts").mkdir()
+            (repo / "scripts" / "sitecustomize.py").write_text("raise SystemExit(0)\n")
+            result = subprocess.run(
+                ["git", "status", "--porcelain=v1", "--untracked-files=all", "--", "scripts"],
+                cwd=repo,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            self.assertIn("?? scripts/sitecustomize.py", result.stdout)
+
+    def test_failure_paths_do_not_publish(self) -> None:
+        main = self.wrapper[self.wrapper.index("write_repair_pin\n") :]
+        self.assertIn("agent task failed or timed out; no canary branch or pull request was published", main)
+        self.assertIn("final canary verification failed; no canary branch or pull request was published", main)
+        self.assertNotIn("git push", main)
+
+    def test_certified_commit_is_bound_to_verified_tree(self) -> None:
+        finalize = self.wrapper[
+            self.wrapper.index("finalize_certified_tree() {") : self.wrapper.index("write_repair_pin\n")
+        ]
+        self.assertIn('BRANCH="llama-canary/repair-${RUN_KEY}-${UPSTREAM_SHA:0:10}"', self.wrapper)
+        snapshot = self.wrapper[
+            self.wrapper.index("snapshot_candidate_tree() {") : self.wrapper.index("run_prepare() {")
+        ]
+        self.assertIn('VERIFICATION_TREE="$(git write-tree)"', snapshot)
+        self.assertIn("git commit-tree", snapshot)
+        materialize = self.wrapper[
+            self.wrapper.index("materialize_verification_tree() {") : self.wrapper.index("run_prepare() {")
+        ]
+        self.assertIn("core.hooksPath=/dev/null", materialize)
+        self.assertIn('worktree add --detach "$VERIFY_ROOT" "$CERTIFIED_SHA"', materialize)
+        self.assertIn('git rev-parse "${CERTIFIED_SHA}^{tree}"', finalize)
+        self.assertIn("certified commit tree changed after final verification", finalize)
+        self.assertIn("git status --porcelain --untracked-files=no", finalize)
+        self.assertIn("branch=$BRANCH", finalize)
+        self.assertIn("head=$CERTIFIED_SHA", finalize)
+        self.assertIn("pr_body=$PR_BODY", finalize)
+        self.assertIn("git -C \"$TRUSTED_ROOT\" bundle create", finalize)
+        self.assertIn("candidate_bundle=$BUNDLE", finalize)
+
+        main = self.wrapper[self.wrapper.index("write_repair_pin\n") :]
+        self.assertLess(main.index("snapshot_candidate_tree"), main.index("materialize_verification_tree"))
+        self.assertLess(main.index("materialize_verification_tree"), main.index("run_prepare"))
+        self.assertLess(main.index("run_certification"), main.index("finalize_certified_tree"))
+
+    def test_verify_mode_restores_tree_identity_from_candidate_commit(self) -> None:
+        loader = self.wrapper[
+            self.wrapper.index("load_candidate_bundle() {") : self.wrapper.index("cleanup_verification_worktree() {")
+        ]
+        self.assertIn('CERTIFIED_SHA="$expected_head"', loader)
+        self.assertIn('VERIFICATION_TREE="$(git rev-parse "${CERTIFIED_SHA}^{tree}")"', loader)
+        self.assertLess(loader.index('CERTIFIED_SHA="$expected_head"'), loader.index("VERIFICATION_TREE="))
+
+    def test_publisher_pushes_only_exact_ready_commit(self) -> None:
+        self.assertIn('TOKEN="${CANARY_REPAIR_TOKEN:?CANARY_REPAIR_TOKEN is required}"', self.publisher)
+        self.assertIn('BUNDLE="${CANARY_BUNDLE:?CANARY_BUNDLE is required}"', self.publisher)
+        self.assertIn("git bundle verify", self.publisher)
+        self.assertIn("git bundle list-heads", self.publisher)
+        self.assertIn('git rev-parse HEAD', self.publisher)
+        self.assertIn("git status --porcelain", self.publisher)
+        self.assertIn('GIT_ASKPASS="$ASKPASS"', self.publisher)
+        self.assertIn('"HEAD:refs/heads/${BRANCH}"', self.publisher)
+        self.assertNotIn("--force", self.publisher)
+        self.assertIn("gh pr create", self.publisher)
+        self.assertNotIn("--draft", self.publisher)
+        self.assertIn('"$remote_head" != "$CERTIFIED_SHA"', self.publisher)
+        self.assertIn("cleanup_exact_remote_branch", self.publisher)
+        self.assertIn("trap 'cleanup_before_pr $?\' EXIT", self.publisher)
+        self.assertLess(self.publisher.index("git push"), self.publisher.index("gh pr create"))
+        terminal = self.publisher[self.publisher.index("gh pr create") :]
+        self.assertNotIn("gh pr view", terminal)
+        self.assertIn("find_exact_ready_pr", terminal)
+        self.assertIn("published=1", terminal)
+
+    def test_final_verification_clears_agent_native_products_and_forces_smokes(self) -> None:
+        materialize = self.wrapper[
+            self.wrapper.index("materialize_verification_tree() {") : self.wrapper.index("run_prepare() {")
+        ]
+        self.assertIn('rm -rf "$LLAMA_STAGE_BUILD_DIR"', materialize)
+        self.assertIn('"$ROOT/target/family-battery/$FAMILY_BATTERY_RUN_ID"', materialize)
+        self.assertIn('"$ROOT/target/skippy-stage-rewriter-check"', materialize)
+        build = self.wrapper[
+            self.wrapper.index("run_full_build() {") : self.wrapper.index("run_certification() {")
+        ]
+        certify = self.wrapper[
+            self.wrapper.index("run_certification() {") : self.wrapper.index("write_upstream_summary() {")
+        ]
+        self.assertIn("scripts/skippy-ci-smoke.sh", build)
+        self.assertIn("scripts/skippy-canary-live-matrix.sh --prepare", certify)
+        self.assertNotIn("LLAMA_UPSTREAM_CANARY_SMOKE", build + certify)
+
+    def test_agent_runbook_describes_complete_developer_task(self) -> None:
+        runbook = RUNBOOK.read_text(encoding="utf-8")
+        self.assertIn("# llama.cpp changed-pin canary developer task", runbook)
+        self.assertIn("scripts/prepare-llama.sh pinned", runbook)
+        self.assertIn("Run the canonical path repeatedly until it is green", runbook)
+        self.assertIn("Leave the finished changes uncommitted", runbook)
+        self.assertIn("do not add Actions caching or download logic", runbook)
+        for obsolete in ("failed phase", "agent turn", "uncertified draft", "terminal publication"):
+            self.assertNotIn(obsolete, runbook)
 
     def test_dispatch_sha_is_rejected_before_use(self) -> None:
         crafted = "not-a-sha; echo pwned"
@@ -294,18 +264,18 @@ class LlamaCanaryStateMachineContractTests(unittest.TestCase):
         self.assertEqual(1, combined.count("pwned"))
 
     def test_shell_syntax(self) -> None:
-        result = subprocess.run(
-            ["bash", "-n", str(WRAPPER)], capture_output=True, text=True, check=False
-        )
-        self.assertEqual(0, result.returncode, result.stderr)
+        for script in (WRAPPER, PUBLISHER):
+            with self.subTest(script=script.name):
+                result = subprocess.run(
+                    ["bash", "-n", str(script)], capture_output=True, text=True, check=False
+                )
+                self.assertEqual(0, result.returncode, result.stderr)
 
     def test_persistent_runner_scratch_is_scoped_and_pruned(self) -> None:
         self.assertIn('STATE_DIR="$ROOT/.deps/llama-canary-state-${RUN_KEY}"', self.wrapper)
         self.assertIn('TARGET_SHA_FILE="$ROOT/.deps/llama-canary-target-sha"', self.wrapper)
-        self.assertIn('printf \'%s\\n\' "$UPSTREAM_SHA" > "$TARGET_SHA_FILE"', self.wrapper)
         self.assertIn('git -C "$ROOT/.deps/llama.cpp" worktree prune', self.wrapper)
         self.assertIn("rm -rf /tmp/llama-old-pin /tmp/llama-repair /tmp/llama-repair-*", self.wrapper)
-        self.assertIn("redact_token", self.wrapper)
 
     def test_runnable_row_carrying_unsupported_reason_is_rejected(self) -> None:
         parity = ROOT / "scripts" / "skippy-llama-parity.py"
@@ -313,6 +283,7 @@ class LlamaCanaryStateMachineContractTests(unittest.TestCase):
         try:
             spec = importlib.util.spec_from_file_location("skippy_llama_parity_validate", parity)
             module = importlib.util.module_from_spec(spec)
+            assert spec.loader is not None
             spec.loader.exec_module(module)
         finally:
             sys.path.pop(0)

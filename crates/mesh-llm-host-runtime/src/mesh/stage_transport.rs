@@ -111,6 +111,15 @@ impl SplitStagePathSnapshot {
             _ => self,
         }
     }
+
+    /// Wire/doctor name for the path kind: "direct" | "relay" | "unknown".
+    pub(crate) fn kind_name(self) -> &'static str {
+        match self.kind {
+            SplitStagePathKind::Direct => "direct",
+            SplitStagePathKind::Relay => "relay",
+            SplitStagePathKind::Unknown => "unknown",
+        }
+    }
 }
 
 pub(crate) fn selected_path_observation(conn: &Connection) -> Option<SelectedPathObservation> {
