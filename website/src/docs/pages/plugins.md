@@ -90,8 +90,8 @@ the short setup, provider-specific URLs, a completion check and troubleshooting.
 
 **Release compatibility:** published adapter 0.1.2 uses plugin protocol 2 and
 cannot initialize on Mesh 0.76.0 (protocol 3), despite installing successfully.
-Use a compatible protocol-3 adapter build for that host. Check the
-[adapter compatibility/build instructions](https://github.com/Mesh-LLM/openai-endpoint/blob/ea568baff71037badb8e5c7e479c33c0082412b9/README.md#compatibility)
+Use adapter **0.2.0** (protocol 3) for that host. Check the
+[adapter compatibility/build instructions](https://github.com/Mesh-LLM/openai-endpoint/blob/v0.2.0/README.md#compatibility)
 before installing; do not assume “latest” means compatible. Older protocol-2
 hosts must retain a compatible adapter such as 0.1.2 rather than blindly updating.
 
