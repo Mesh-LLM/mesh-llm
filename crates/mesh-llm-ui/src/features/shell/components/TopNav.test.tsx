@@ -502,4 +502,45 @@ describe('TopNav', () => {
 
     expect(onTabChange).not.toHaveBeenCalled()
   })
+
+  it('shares a live invitation through the platform share sheet', async () => {
+    const user = userEvent.setup()
+    const share = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'share', { configurable: true, value: share })
+
+    renderTopNav({
+      joinCommands: [
+        { label: 'Invite token', value: 'invite-token-123', noWrapValue: true },
+        { label: 'Auto join and serve command', value: 'mesh-llm --auto --join invite-token-123', prefix: '$' }
+      ]
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Mesh join and invite instructions' }))
+    await user.click(screen.getByLabelText('Share Invitation'))
+
+    expect(share).toHaveBeenCalledTimes(1)
+    const payload = share.mock.calls[0][0] as { text: string }
+    expect(payload.text).toContain('mesh-llm --auto --join invite-token-123')
+    expect(payload.text).toContain('invite-token-123')
+
+    Object.defineProperty(navigator, 'share', { configurable: true, value: undefined })
+  })
+
+  it('offers no invitation to share while the token is still a placeholder or unavailable', async () => {
+    const user = userEvent.setup()
+
+    const { unmount } = renderTopNav()
+    await user.click(screen.getByRole('button', { name: 'Mesh join and invite instructions' }))
+    expect(screen.queryByLabelText('Share Invitation')).not.toBeInTheDocument()
+    unmount()
+
+    renderTopNav({
+      joinCommands: [
+        { label: 'Invite token', value: 'Invite token unavailable', disabled: true, noWrapValue: true },
+        { label: 'Auto join and serve command', value: 'Auto join command unavailable', prefix: '$', disabled: true }
+      ]
+    })
+    await user.click(screen.getByRole('button', { name: 'Mesh join and invite instructions' }))
+    expect(screen.queryByLabelText('Share Invitation')).not.toBeInTheDocument()
+  })
 })
