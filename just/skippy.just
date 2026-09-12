@@ -44,6 +44,11 @@ skippy-quantize-standalone-release-build backend="cpu":
     LLAMA_STAGE_BACKEND="{{ backend }}" LLAMA_STAGE_LINK_MODE=static scripts/build-llama.sh
     LLAMA_STAGE_BACKEND="{{ backend }}" LLAMA_STAGE_LINK_MODE=static just with-lld cargo build --release --locked -p skippy-quantize --no-default-features
 
+# Build isolated CPU workload certification producers (not a shipping runtime).
+[unix]
+skippy-workload-oracles-build output:
+    bash scripts/skippy-workload-oracles-build.sh "{{ output }}"
+
 # Build and execute the opt-in private native Skippy application probes.
 [unix]
 skippy-native-tests backend="cpu":

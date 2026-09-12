@@ -1,18 +1,59 @@
 from __future__ import annotations
 
 import os
+import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
 CHECK = ROOT / "scripts" / "check-skippy-workload-candidate.py"
+SPEC = importlib.util.spec_from_file_location("workload_candidate", CHECK)
+assert SPEC and SPEC.loader
+CANDIDATE = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(CANDIDATE)
 
 
 class CandidateBuildFreshnessTests(unittest.TestCase):
+    def test_producer_binds_source_native_stamp_and_every_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            native = root / "native"
+            (native / "bin").mkdir(parents=True)
+            stamp = native / ".mesh-llm-build-stamp"
+            stamp.write_text("cpu native fixture")
+            os.utime(stamp, ns=(1, 1))
+            binary, test_binary = root / "skippy-server", root / "skippy-tests"
+            files = CANDIDATE.producer_files(binary, native, test_binary)
+            for name, path in files.items():
+                if name != "native_stamp":
+                    path.write_text(name)
+                    path.chmod(0o755)
+            source = {"head": "a" * 40, "worktree_sha256": "b" * 64}
+            snapshot = root / "source.json"
+            snapshot.write_text(json.dumps(source))
+            manifest = root / "producer.json"
+            with mock.patch.object(CANDIDATE, "source_identity", return_value=source):
+                CANDIDATE.write_producer(manifest, binary, native, test_binary, snapshot)
+                CANDIDATE.verify_producer(manifest, binary, native)
+                for name, path in files.items():
+                    with self.subTest(artifact=name):
+                        original = path.read_bytes()
+                        path.write_bytes(original + b"tampered")
+                        with self.assertRaisesRegex(RuntimeError, "artifact changed"):
+                            CANDIDATE.verify_producer(manifest, binary, native)
+                        path.write_bytes(original)
+                source["head"] = "c" * 40
+                with self.assertRaisesRegex(RuntimeError, "current repository head"):
+                    CANDIDATE.verify_producer(manifest, binary, native)
+                with self.assertRaisesRegex(RuntimeError, "source changed while building"):
+                    CANDIDATE.write_producer(manifest, binary, native, test_binary, snapshot)
+
     def _check(self, binary: Path, build_dir: Path) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [

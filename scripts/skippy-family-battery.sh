@@ -161,6 +161,9 @@ if [[ -n "$FAMILY_FILTER" && ! "$FAMILY_FILTER" =~ ^[a-zA-Z0-9._-]+(,[a-zA-Z0-9.
 fi
 
 mkdir -p "$MODEL_SCAN_DIR" "$PREFLIGHT_DIR" "$CERT_DIR"
+if [[ -n "${SKIPPY_WORKLOAD_PRODUCER_MANIFEST:-}" ]]; then
+  cp "$SKIPPY_WORKLOAD_PRODUCER_MANIFEST" "$ARTIFACT_DIR/workload-producer.json"
+fi
 : > "$RESULTS_JSONL"
 printf 'family\tmodel_id\tsource_revision\tmodel_path\tmtp_layers\n' > "$NATIVE_MTP_MODELS_TSV"
 printf 'family|class|repo|source_revision|file|selector|sweep_period|layer_end|notes|target_path|draft_repo|draft_revision|draft_file|draft_path|native_mtp|model_size_bytes|mtp_layers|activation_width|startup_timeout_secs|lane_csv|mmproj_repo|mmproj_revision|mmproj_file|mmproj_path\n' > "$RESOLVED_MANIFEST"
@@ -942,7 +945,7 @@ run_workload_certify() {
       --evidence "$cert_run_dir/workload-oracle-evidence.json" \
       --class "$model_class" --smoke-lane "$smoke_lane" --oracle-lane "$oracle_lane" \
       --model-id "$model_id" --model-path "$target" \
-      --candidate-executable "$ROOT/target/debug/skippy-server" \
+      --candidate-executable "${SKIPPY_WORKLOAD_CANDIDATE_BIN_DIR:-$ROOT/target/debug}/skippy-server" \
       --oracle-executable "$oracle_executable" \
       --pinned-patch-sha "$(python3 "$ROOT/scripts/llama-oracle-source.py")")
     if [[ -n "$mmproj" ]]; then

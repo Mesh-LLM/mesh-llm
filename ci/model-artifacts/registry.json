@@ -4012,6 +4012,7 @@
         "llama-family-certification"
       ],
       "cadences": [
+        "llama-bump",
         "manual-full"
       ],
       "capability_tags": [
@@ -4034,6 +4035,7 @@
         "class": "embedding",
         "profile": "workload-oracle",
         "cadences": [
+          "llama-bump",
           "manual-full"
         ],
         "execution": {
@@ -4062,6 +4064,7 @@
         "llama-family-certification"
       ],
       "cadences": [
+        "llama-bump",
         "manual-full"
       ],
       "capability_tags": [
@@ -4084,6 +4087,7 @@
         "class": "rerank",
         "profile": "workload-oracle",
         "cadences": [
+          "llama-bump",
           "manual-full"
         ],
         "execution": {
@@ -4112,6 +4116,7 @@
         "llama-family-certification"
       ],
       "cadences": [
+        "llama-bump",
         "manual-full"
       ],
       "capability_tags": [
@@ -4134,6 +4139,7 @@
         "class": "encoder_decoder",
         "profile": "workload-oracle",
         "cadences": [
+          "llama-bump",
           "manual-full"
         ],
         "execution": {
@@ -4162,6 +4168,7 @@
         "llama-family-certification"
       ],
       "cadences": [
+        "llama-bump",
         "manual-full"
       ],
       "capability_tags": [
@@ -4184,6 +4191,7 @@
         "class": "ocr",
         "profile": "workload-oracle",
         "cadences": [
+          "llama-bump",
           "manual-full"
         ],
         "execution": {
@@ -4225,6 +4233,7 @@
         "llama-family-certification"
       ],
       "cadences": [
+        "llama-bump",
         "manual-full"
       ],
       "capability_tags": [
@@ -4247,6 +4256,7 @@
         "class": "speech_synthesis",
         "profile": "workload-oracle",
         "cadences": [
+          "llama-bump",
           "manual-full"
         ],
         "execution": {
@@ -4288,6 +4298,7 @@
         "llama-family-certification"
       ],
       "cadences": [
+        "llama-bump",
         "manual-full"
       ],
       "capability_tags": [
@@ -4310,6 +4321,7 @@
         "class": "speech_recognition",
         "profile": "workload-oracle",
         "cadences": [
+          "llama-bump",
           "manual-full"
         ],
         "execution": {

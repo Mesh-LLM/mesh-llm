@@ -20,7 +20,7 @@ usage: scripts/skippy-workload-certify.sh --class CLASS --lane LANE
   --model-path PATH --model-id ID --work-dir PATH [--projector-path PATH]
   [--oracle-server PATH] [--oracle-completion PATH] [--oracle-tts PATH]
   [--require-oracle]  # fail closed unless the class-appropriate oracle is selected
-  [--skip-build]  # skips the candidate build only for smoke-only runs
+  [--skip-build]  # oracle runs require a prebuilt SKIPPY_WORKLOAD_PRODUCER_MANIFEST
 EOF
 }
 
@@ -78,7 +78,10 @@ if (( ORACLE_REQUIRED == 1 )) && [[ -z "$ORACLE_SERVER" && -z "$ORACLE_COMPLETIO
   echo "certified workload requires a class-appropriate local-monolithic oracle" >&2
   exit 1
 fi
-CANDIDATE_BUILD_DIR="${LLAMA_STAGE_BUILD_DIR:-$(LLAMA_STAGE_BACKEND="${LLAMA_STAGE_BACKEND:-cpu}" LLAMA_STAGE_LINK_MODE=static "$ROOT/scripts/build-llama.sh" --print-build-dir)}"
+CANDIDATE_BUILD_DIR="${SKIPPY_WORKLOAD_NATIVE_BUILD_DIR:-${LLAMA_STAGE_BUILD_DIR:-$(LLAMA_STAGE_BACKEND="${LLAMA_STAGE_BACKEND:-cpu}" LLAMA_STAGE_LINK_MODE=static "$ROOT/scripts/build-llama.sh" --print-build-dir)}}"
+CANDIDATE_BIN_DIR="${SKIPPY_WORKLOAD_CANDIDATE_BIN_DIR:-$ROOT/target/debug}"
+PRODUCER_MANIFEST="${SKIPPY_WORKLOAD_PRODUCER_MANIFEST:-}"
+TEST_COMMAND=(cargo test --manifest-path "$ROOT/Cargo.toml" -p skippy-server --lib)
 require_pinned_cpu_oracle() {
   local executable="$1" expected_name="$2" cmake_option="$3"
   local build_dir stamp candidate_build_dir candidate_stamp patched_sha
@@ -140,6 +143,9 @@ LAYER_END="$(jq -r '.layer_count' <<<"$DIMENSIONS")"
 MODEL_SHA256="$(shasum -a 256 "$MODEL_PATH" | awk '{print $1}')"
 N_GPU_LAYERS="${SKIPPY_WORKLOAD_N_GPU_LAYERS:-0}"
 BACKEND="${LLAMA_STAGE_BACKEND:-cpu}"
+if [[ -n "$PRODUCER_MANIFEST" ]]; then
+  BACKEND=cpu
+fi
 if [[ ( -n "$ORACLE_SERVER" || -n "$ORACLE_COMPLETION" || -n "$ORACLE_TTS" ) &&
       ( "$N_GPU_LAYERS" != "0" || "$BACKEND" != "cpu" ) ]]; then
   echo "local-monolithic comparison requires CPU-only candidate execution" >&2
@@ -151,17 +157,24 @@ if [[ -n "$ORACLE_SERVER" || -n "$ORACLE_COMPLETION" || -n "$ORACLE_TTS" ]]; the
   export LLAMA_STAGE_BUILD_DIR="$CANDIDATE_BUILD_DIR"
 fi
 
-# An oracle result must never be based on a stale Rust executable. Cargo tracks
-# both Rust sources and the native archives, so always refresh the candidate
-# when comparing against a monolithic reference, even for battery runs that
-# prebuilt binaries and passed --skip-build.
-if (( SKIP_BUILD == 0 )) || [[ -n "$ORACLE_SERVER" || -n "$ORACLE_COMPLETION" || -n "$ORACLE_TTS" ]]; then
+# The canary explicitly produces a CPU candidate and test binary separately
+# from its Metal lane. Consume that immutable, source-bound closure without
+# rebuilding or changing the other family lanes' native/Rust outputs.
+if [[ -n "$PRODUCER_MANIFEST" ]]; then
+  python3 "$ROOT/scripts/check-skippy-workload-candidate.py" \
+    --candidate-binary "$CANDIDATE_BIN_DIR/skippy-server" \
+    --native-build-dir "$CANDIDATE_BUILD_DIR" --producer-manifest "$PRODUCER_MANIFEST"
+  TEST_COMMAND=("$(jq -er '.files.test_binary.path' "$PRODUCER_MANIFEST")")
+elif (( SKIP_BUILD == 0 )); then
   LLAMA_STAGE_BUILD_DIR="$CANDIDATE_BUILD_DIR" \
     cargo build -p skippy-server
+elif [[ -n "$ORACLE_SERVER" || -n "$ORACLE_COMPLETION" || -n "$ORACLE_TTS" ]]; then
+  echo "--skip-build oracle certification requires a source-bound workload producer manifest" >&2
+  exit 1
 fi
 if [[ -n "$ORACLE_SERVER" || -n "$ORACLE_COMPLETION" || -n "$ORACLE_TTS" ]]; then
   python3 "$ROOT/scripts/check-skippy-workload-candidate.py" \
-    --candidate-binary "$ROOT/target/debug/skippy-server" \
+    --candidate-binary "$CANDIDATE_BIN_DIR/skippy-server" \
     --native-build-dir "$CANDIDATE_BUILD_DIR"
 fi
 
@@ -171,6 +184,12 @@ case "$MODEL_CLASS" in
   speech_recognition) MEDIA_PATH="$ROOT/ci/llama-canary/fixtures/audio-smoke.wav" ;;
 esac
 
+TEST_FILTER=frontend::tests::non_chat::real_non_chat_class_smoke_when_fixture_is_set
+if [[ -n "$PRODUCER_MANIFEST" ]]; then
+  TEST_COMMAND+=("$TEST_FILTER" --nocapture --exact --test-threads=1)
+else
+  TEST_COMMAND+=("$TEST_FILTER" -- --nocapture --exact --test-threads=1)
+fi
 env \
   SKIPPY_WORKLOAD_CLASS="$MODEL_CLASS" \
   SKIPPY_WORKLOAD_MODEL="$MODEL_PATH" \
@@ -182,9 +201,7 @@ env \
   SKIPPY_WORKLOAD_MAX_TOKENS="${SKIPPY_WORKLOAD_MAX_TOKENS:-32}" \
   SKIPPY_WORKLOAD_N_GPU_LAYERS="$N_GPU_LAYERS" \
   LLAMA_STAGE_BACKEND="$BACKEND" \
-  cargo test --manifest-path "$ROOT/Cargo.toml" -p skippy-server --lib \
-    frontend::tests::non_chat::real_non_chat_class_smoke_when_fixture_is_set \
-    -- --nocapture --exact --test-threads=1
+  "${TEST_COMMAND[@]}"
 
 PORT="${SKIPPY_WORKLOAD_OPENAI_PORT:-19337}"
 CONFIG_PATH="$WORK_DIR/stage-openai.json"
@@ -225,7 +242,7 @@ PY
 
 SERVER_LOG="$WORK_DIR/workload-openai-server.log"
 LLAMA_STAGE_BACKEND="$BACKEND" \
-  "$ROOT/target/debug/skippy-server" serve-openai \
+  "$CANDIDATE_BIN_DIR/skippy-server" serve-openai \
     --config "$CONFIG_PATH" \
     --bind-addr "127.0.0.1:$PORT" \
     --telemetry-level off \
@@ -346,7 +363,7 @@ if [[ -n "$ORACLE_SERVER" || -n "$ORACLE_COMPLETION" || -n "$ORACLE_TTS" ]]; the
     --smoke-lane "$EXPECTED_LANE"
     --model-id "$MODEL_ID"
     --model-sha256 "$MODEL_SHA256"
-    --candidate-executable "$ROOT/target/debug/skippy-server"
+    --candidate-executable "$CANDIDATE_BIN_DIR/skippy-server"
     --oracle-executable "$ORACLE_EXECUTABLE"
     --pinned-patch-sha "$(python3 "$ROOT/scripts/llama-oracle-source.py")"
     --work-dir "$WORK_DIR")

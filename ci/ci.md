@@ -60,7 +60,19 @@ Scheduled coverage details: an unchanged-pin llama canary uses the bounded
 `nightly` cadence (Qwen3 dense, Falcon-H1, Qwen3Next, and Mamba). Changed pins
 use the complete `llama-bump` cohort, and a forced dispatch of the unchanged
 pin uses `manual-full`. Both latter paths retain the complete supported-family
-certification described in the table. The
+certification described in the table, including all six non-chat
+`workload-oracle` rows. Both ordinary and independently verified changed-pin
+canaries run `just skippy-workload-oracles-build` in a run-specific directory.
+It produces pinned CPU `llama-server`, `llama-completion`, and `llama-tts`
+references plus a separate static CPU `skippy-server` and test binary, without
+overwriting the Metal family outputs. Generated `SKIPPY_WORKLOAD_*` paths
+replace ambient runner configuration. `producer.json` binds the executables
+and native stamp to the repository head/worktree; consumers verify it and do
+not rebuild under `--skip-build`. Model/projector cache integrity is still
+checked before execution, and populating the read-only lab cache remains an
+external runner operation.
+
+The
 competitive benchmark can optionally download exact-cohort history from
 `MESH_PERFORMANCE_HISTORY_DATASET`, validate the checked-in schema, report
 regression candidates, and append one immutable run shard using

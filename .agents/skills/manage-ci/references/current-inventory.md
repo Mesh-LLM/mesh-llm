@@ -80,7 +80,14 @@ that every binary already exists. A scheduled unchanged pin selects the four
 `nightly` cache-mechanism sentinels (Qwen3 dense, Falcon-H1, Qwen3Next, and
 Mamba). A changed pin selects `llama-bump`; a manual dispatch may set
 `force_certify` to select `manual-full`. Both latter cadences retain the full
-family battery. Before any certification starts, every selected GGUF is resolved
+family battery, including all six `workload-oracle` rows. Both normal and
+independent changed-pin verification explicitly build a run-scoped CPU oracle
+closure with `just skippy-workload-oracles-build`: monolithic server/completion/
+TTS references plus separate static CPU candidate and test binaries. Generated
+`SKIPPY_WORKLOAD_*` paths select that closure without replacing Metal outputs.
+The source- and executable-bound `producer.json` is checked before consuming
+prebuilt workload binaries; `--skip-build` never silently rebuilds them.
+Before any certification starts, every selected GGUF is resolved
 directly by the immutable snapshot SHA checked into
 `ci/llama-canary/family-certified.json`. The runtime preflight records the
 revisions and verifies all shard/tensor scans, declared runtime/MTP layer

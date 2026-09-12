@@ -317,6 +317,14 @@ jobs:
           SKIPPY_CANARY_LIVE_MATRIX_ROOT: ${{ github.workspace }}/target/family-battery/${{ github.run_id }}-${{ github.run_attempt }}
         run: scripts/skippy-canary-live-matrix.sh --prepare
 
+      - name: Build pinned CPU workload oracles and candidate
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' && steps.family_patch.outcome == 'success' && steps.sha.outputs.cadence != 'nightly'
+        run: |
+          set -euo pipefail
+          workload_root="${LLAMA_STAGE_BUILD_DIR:?}-workloads"
+          arch -arm64 just skippy-workload-oracles-build "$workload_root"
+          bash scripts/skippy-workload-oracles-build.sh --print-env "$workload_root" >> "$GITHUB_ENV"
+
       - name: Supported-families certification battery (parity gate)
         id: battery
         if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' && steps.family_patch.outcome == 'success'
@@ -338,6 +346,7 @@ jobs:
           name: llama-family-battery-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             target/family-battery/${{ github.run_id }}-${{ github.run_attempt }}/
+            ${{ env.LLAMA_STAGE_BUILD_DIR }}-workloads/producer.json
             target/skippy-stage-rewriter-check/
           if-no-files-found: warn
           retention-days: 14

@@ -178,7 +178,7 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
                 self.assertEqual("workload-oracle", model["profile"])
                 self.assertEqual("certified", model["certification_status"])
                 self.assertEqual("local-monolithic", model["oracle"])
-                self.assertEqual(["manual-full"], model["cadences"])
+                self.assertEqual(["llama-bump", "manual-full"], model["cadences"])
                 self.assertEqual("disabled", model["execution"]["speculative_policy"])
                 self.assertEqual(0, model["execution"]["boundary_sweep_period"])
                 self.assertEqual(0, model["execution"]["mtp_layers"])
