@@ -1,3 +1,12 @@
+//! Write-path tests for `gpus tune apply`.
+//!
+//! Fixture configs quote model paths with TOML literal strings, which is the
+//! form `ConfigStore` itself emits. A Windows path carries backslashes, and
+//! inside a basic string those are escape sequences, so a fixture written as
+//! `model = "\\?\C:\Users\..."` fails to parse before the behaviour under
+//! test ever runs. Literal strings keep the path verbatim on every platform,
+//! and `toml_edit` picks the same form when it writes one back.
+
 use crate::gpus::tune_apply::{PreparedTunePlan, apply_prepared_tune_plans};
 use mesh_llm_config::{ConfigStore, parse_config_toml};
 use tempfile::tempdir;
@@ -13,7 +22,7 @@ fn gpu_tune_apply_preserves_comments_and_writes_nested_fields() {
         .canonicalize()
         .expect("fixture path should canonicalize");
     let raw_config = format!(
-        "# keep header\nversion = 1\n\n[gpu]\nassignment = \"pinned\"\n\n[telemetry]\nservice_name = \"keep-me\"\n\n[defaults.model_fit]\nctx_size = 16384\nbatch = 384\n\n[defaults.hardware]\nfit_target_mib = 12288\n\n[[models]]\nmodel = \"{}\"\n# keep row comment\nctx_size = 8192\ngpu_id = \"pci:0000:00:00.0\"\n",
+        "# keep header\nversion = 1\n\n[gpu]\nassignment = \"pinned\"\n\n[telemetry]\nservice_name = \"keep-me\"\n\n[defaults.model_fit]\nctx_size = 16384\nbatch = 384\n\n[defaults.hardware]\nfit_target_mib = 12288\n\n[[models]]\nmodel = '{}'\n# keep row comment\nctx_size = 8192\ngpu_id = \"pci:0000:00:00.0\"\n",
         canonical_model_path.display()
     );
     let config_path = temp.path().join("config.toml");
@@ -145,12 +154,18 @@ fn gpu_tune_apply_appends_unconfigured_local_target_with_canonical_path() {
         .expect("append apply should succeed");
 
     assert_eq!(written, 1);
-    let edited = std::fs::read_to_string(&config_path)
+    let edited_doc = std::fs::read_to_string(&config_path)
         .expect("written config should be readable")
         .parse::<DocumentMut>()
-        .expect("written config should remain valid TOML")
-        .to_string();
-    assert!(edited.contains(&format!("model = \"{}\"", canonical_model_path.display())));
+        .expect("written config should remain valid TOML");
+    let appended_model = edited_doc["models"]
+        .as_array_of_tables()
+        .and_then(|models| models.get(0))
+        .and_then(|row| row.get("model"))
+        .and_then(|item| item.as_str())
+        .expect("appended row should carry the model path");
+    assert_eq!(appended_model, canonical_model_path.display().to_string());
+    let edited = edited_doc.to_string();
     assert!(edited.contains("[models.model_fit]"));
     assert!(edited.contains("cache_type_k = \"q8_0\""));
 }
@@ -163,7 +178,7 @@ fn gpu_tune_apply_missing_preserves_legacy_manual_model_fit_fields() {
         .canonicalize()
         .expect("fixture path should canonicalize");
     let raw_config = format!(
-        "version = 1\n\n[[models]]\nmodel = \"{}\"\nctx_size = 8192\nbatch = 256\nubatch = 64\ncache_type_k = \"f16\"\ncache_type_v = \"f16\"\nflash_attention = \"disabled\"\n",
+        "version = 1\n\n[[models]]\nmodel = '{}'\nctx_size = 8192\nbatch = 256\nubatch = 64\ncache_type_k = \"f16\"\ncache_type_v = \"f16\"\nflash_attention = \"disabled\"\n",
         canonical_model_path.display()
     );
     let config_path = temp.path().join("config.toml");
@@ -206,7 +221,7 @@ fn gpu_tune_replace_existing_writes_nested_recommendations_over_legacy_manual_fi
         .canonicalize()
         .expect("fixture path should canonicalize");
     let raw_config = format!(
-        "version = 1\n\n[[models]]\nmodel = \"{}\"\nctx_size = 8192\nbatch = 256\nubatch = 64\ncache_type_k = \"f16\"\ncache_type_v = \"f16\"\nflash_attention = \"disabled\"\n",
+        "version = 1\n\n[[models]]\nmodel = '{}'\nctx_size = 8192\nbatch = 256\nubatch = 64\ncache_type_k = \"f16\"\ncache_type_v = \"f16\"\nflash_attention = \"disabled\"\n",
         canonical_model_path.display()
     );
     let config_path = temp.path().join("config.toml");
