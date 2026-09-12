@@ -30,22 +30,6 @@ Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 
 Other scheduled, deployment, Docker, package, canary and cache-warming
 workflows are independent of required PR readiness.
-`nightly-competitive-benchmark.yml` is an opt-in daily or explicit manual
-trusted-main benchmark on the persistent Linux `white` runner. Placement uses
-the fixed `[self-hosted, Linux, X64, cuda]` label set and then fails closed
-unless `RUNNER_NAME` is exactly `white`. It has read-only permissions, never
-accepts a ref or runner label, installs no tools, consumes pre-baked inputs
-selected by `MESH_NIGHTLY_COMPETITIVE_*` repository variables, and retains
-complete or partial benchmark/report evidence for 30 days. The pre-baked
-Hugging Face CLI is selected explicitly by
-`MESH_NIGHTLY_COMPETITIVE_HF_CLI`; it is required only when history is enabled.
-The workflow captures stable GPU/driver identity plus observed clocks and
-temperature.
-When `MESH_PERFORMANCE_HISTORY_ENABLED=1`, it requires the dataset repo
-variable and write-token secret, downloads prior immutable JSONL shards,
-verifies the checked-in schema, emits an exact-cohort regression report, and
-appends one source/run-addressed shard. Thresholds and promotion remain
-report-only reviewed decisions.
 `nightly-stability.yml` calls the fixed GitHub-hosted
 `nightly-stability-run.yml`; the reusable run executes both the general
 stability harness and the existing KV tool-loop/prefix-reuse harness, preserves
@@ -105,8 +89,10 @@ patch-apply failure it hands the queue to a non-interactive `opencode` agent
 (`CANARY_AGENT_MODEL`, default `zai-coding-plan/glm-5.3-flash`, overridable
 via the `LLAMA_CANARY_AGENT_MODEL` repository variable) which rebases
 `third_party/llama.cpp/patches`, runs the supported-families certification
-battery (`scripts/skippy-family-battery.sh`), and opens or reuses the repair PR
-on `llama-canary/patch-queue-fix`. The deterministic wrapper writes the sole
+battery (`scripts/skippy-family-battery.sh`), and keeps the repair local until
+the run reaches terminal success or failure. Only then does the wrapper publish
+or reuse the repair PR on `llama-canary/patch-queue-fix`. The deterministic
+wrapper writes the sole
 upstream selector, `third_party/llama.cpp/upstream.txt`, to the resolved repair
 target, prepares through the checked-in `pinned`
 selector, and verifies the prepared-upstream stamp before any repair branch is
@@ -114,11 +100,13 @@ published or certified. The same repair loop also runs when the queue applies
 but a certification lane fails (`battery` mode). After each agent turn the
 repair script itself runs the battery and, on failure, loops certify -> agent fix ->
 recertify up to `CANARY_REPAIR_MAX_TURNS` (default 2) turns; the script only
-succeeds when the wrapper's own battery run passes. Every outcome (battery
-green, queue still broken, battery exhausted) posts a status comment on the
-repair PR — creating the PR (or a fallback issue) itself if the agent did
-not — and an agent turn writes the PR description (key upstream changes,
-patch-queue evolution, risks) with a deterministic fallback. Repair pushes and
+succeeds when the wrapper's own battery run passes. After the first green
+battery, a fresh-context semantic review runs locally; any changes it makes
+must pass the complete battery again. Every terminal outcome (battery green,
+queue still broken, battery exhausted) then publishes the branch and posts a
+status comment on the repair PR — creating the PR (or a fallback issue) itself
+if the agent did not — and an earlier agent turn writes the PR description (key
+upstream changes, patch-queue evolution, risks) with a deterministic fallback. Repair pushes and
 PR operations authenticate with the `CANARY_REPAIR_TOKEN` fine-grained PAT;
 the canary job itself remains `contents: read`. Any repair outcome keeps the
 canary run red: the certified fix must be merged from the repair PR before
@@ -155,7 +143,7 @@ it after the protected-main runner-contract update is active.
 | `ci-website-lane.yml` | Console and website graph; reusable from PRs and dispatchable for main/manual |
 | `ci-linux-lane.yml` | Linux host/runtime/product/Rust/SDK/smoke graph with one platform-local UI producer |
 | `ci-macos-lane.yml` | macOS host/runtime/product/platform/Swift/Metal graph with one platform-local UI producer |
-| `ci-windows-lane.yml` | Windows host/runtime/product/platform graph with one platform-local UI producer |
+| `ci-windows-lane.yml` | Windows host/runtime/product/platform graph plus the CPU durable-L3 product qualification, with one platform-local UI producer |
 | `ci-quality-slice.yml` | Contracts, format, Clippy and generated CLI inventory freshness; additive protected authority sentinel |
 | `ci-web-slice.yml` | Console quality, console Playwright E2E, public website build, and CLI explorer browser validation |
 | `ci-ui-artifact-slice.yml` | Immutable console distribution producer; release callers prepare one source/version-bound UI with complete file checksums, shared by all hosts and SDK resources |
@@ -165,7 +153,7 @@ it after the protected-main runner-contract update is active.
 | `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers |
 | `ci-{linux,macos,windows}-product-slice.yml` | Platform-pure composition-only product consumers |
 | `ci-platform-checks-slice.yml` | macOS portable/unit, Windows portable, and Windows log-store privacy ACL checks |
-| `ci-linux-product-smoke-slice.yml`, `ci-macos-product-smoke-slice.yml` | Platform-local callers of the typed CPU/CUDA/Vulkan (`gpu-nvidia` self-hosted), conditional ROCm (`gpu-amd`), and Metal product-integration suite plus model-download. The suite stages the registry-pinned SmolLM2 Q8 and IBM Granite 4.0 H Q4 pair once, runs dense standalone/SDK/restart, then dense passive-client split routing and strict recurrent `KvRecurrent` validation. Each split phase persists strict-whitelist seed/worker node, mesh, and peer identity plus stage/model snapshots, then atomically reconciles exact two-observer, topology/run/model/package/manifest, two-stage contiguous-cut and bind-address, ready-status, and served-model agreement. A capped five-minute wall-clock deadline with parallel, bounded endpoint capture finalizes failure evidence before workflow cancellation; the status projection excludes invite tokens, nested fields, and unrelated paths. Product reconciliation independently verifies both evidence files, records their paths and SHA-256 digests in `phase-results.json`, rejects missing or modified evidence, and uploads every JSON snapshot/evidence file with logs on success or failure. ROCm skips unless `MESH_ROCM_INFERENCE_RUNNER_ENABLED` is exactly `true`; accelerator product-integration rows remain outside the checked plan pending live qualification. |
+| `ci-{linux,macos,windows}-product-smoke-slice.yml` | Platform-local callers of the typed CPU/CUDA/Vulkan (`gpu-nvidia` self-hosted), conditional ROCm (`gpu-amd`), Metal, and Windows CPU product-integration suite plus model-download. The suite stages the registry-pinned SmolLM2 Q8 and IBM Granite 4.0 H Q4 pair once, runs dense standalone/SDK/restart, dense passive-client split routing, strict recurrent `KvRecurrent` validation, and a separately reconciled durable-L3 phase. That phase preserves per-node roots and identities across full process restarts for both model families, requires active CLI-sourced disk configuration, persisted inventory, a post-restart L3 fill with cached tokens and exact output, then verifies status and clear. Windows CPU runs the durable phase alone on `windows-2022`; Linux CPU and macOS Metal run the complete suite. Evidence paths and SHA-256 digests are recorded in `phase-results.json` and every status, response, split snapshot, and log uploads on success or failure. ROCm skips unless `MESH_ROCM_INFERENCE_RUNNER_ENABLED` is exactly `true`; accelerator product-integration rows remain outside the checked plan pending live qualification. |
 | `ci-linux-sdk-slice.yml`, `ci-macos-sdk-slice.yml` | Platform-local Rust/Kotlin/Swift smoke consumers; SDK producers are independent top-level calls and each smoke receives the lane-local immutable UI artifact |
 | `ci-runner-contract-slice.yml` | Provider/cache/plan trust and main runner-image checks |
 | `native-sdk-artifact.yml` | Typed native SDK producer |
@@ -320,7 +308,7 @@ does not grant; GitHub rejects at run creation with a **zero-job
 `actionlint` cannot see it. Containerizing surfaced this because
 `packages: read` (needed to pull the private GHCR runner images) has to be
 granted at *every* hop, and
-`ci-linux-product-smoke-slice.yml` / `ci-macos-product-smoke-slice.yml` sat at
+the platform product-smoke slices sat at
 `contents: read` between granted parents and requesting children.
 `scripts/tests/test_ci_workflow_permission_contract.py` walks every local
 `uses: ./.github/workflows/X.yml` edge and asserts the caller's effective
@@ -709,7 +697,7 @@ Current image references and historical null evidence remain unchanged.
 
 The `product-smoke` catalog role covers both the legacy `smoke.yml` job and
 the typed `product-integration-smoke.yml` job. The latter uses the same pinned
-CPU image only for Linux CPU; accelerator and macOS paths retain their existing
+CPU image only for Linux CPU; accelerator, macOS, and Windows paths retain their
 container opt-outs. The inventory has 9 images, 32 roles and 33 literal workflow image bindings.
 
 ### Qualified lean UI consumers

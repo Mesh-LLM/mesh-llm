@@ -64,10 +64,11 @@ pub(crate) use local_source::{
 #[cfg(test)]
 pub(crate) use materialization::resolve_package_v2_stage_to_local;
 pub use materialization::{
-    configure_materialized_stage_cache, is_layer_package_ref, materialized_stage_cache_dir,
-    materialized_stages_for_sources, prune_unpinned_materialized_stages,
-    remove_materialized_stages_for_sources, resolve_hf_package_to_local,
-    resolve_package_v2_full_model_to_local, resolve_stage_load_package,
+    configure_materialized_stage_cache, download_package_v2_to_local, is_layer_package_ref,
+    materialized_stage_cache_dir, materialized_stages_for_sources,
+    prune_unpinned_materialized_stages, remove_materialized_stages_for_sources,
+    resolve_hf_package_to_local, resolve_package_v2_full_model_to_local,
+    resolve_stage_load_package,
 };
 #[cfg(test)]
 pub(crate) use package::write_test_package_v2_fixture;
@@ -589,6 +590,7 @@ fn embedded_openai_args_from(
         generation_receipt: serving_hooks.generation_receipt(),
         linear_proposal_ingress: serving_hooks.linear_proposal_ingress(),
         openai_guardrails: None,
+        l3_manager: crate::runtime::kv_disk_config::node_kv_disk_manager(),
     })
 }
 

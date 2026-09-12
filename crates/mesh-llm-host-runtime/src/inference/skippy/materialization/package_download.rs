@@ -1255,6 +1255,20 @@ pub fn resolve_package_v2_stage_to_local(
 pub fn resolve_package_v2_full_model_to_local(
     package_ref: &str,
 ) -> Result<(Vec<PathBuf>, Option<PathBuf>)> {
+    let (_, model_parts, projector) = resolve_package_v2_full_model_with_root(package_ref)?;
+    Ok((model_parts, projector))
+}
+
+/// Download every artifact needed to use a package-v2 model and return its
+/// local package root.
+pub fn download_package_v2_to_local(package_ref: &str) -> Result<PathBuf> {
+    let (package_dir, _, _) = resolve_package_v2_full_model_with_root(package_ref)?;
+    Ok(package_dir)
+}
+
+fn resolve_package_v2_full_model_with_root(
+    package_ref: &str,
+) -> Result<(PathBuf, Vec<PathBuf>, Option<PathBuf>)> {
     let local_ref = resolve_hf_package_to_local(package_ref, 0, 0, false, false)?;
     let manifest_path = Path::new(&local_ref).join("model-package.json");
     let manifest: PackageManifestV2 = serde_json::from_slice(
@@ -1286,7 +1300,7 @@ pub fn resolve_package_v2_full_model_to_local(
         sidecars,
     };
     let (_, model_parts, projector) = resolve_package_v2_stage_to_local(package_ref, &admission)?;
-    Ok((model_parts, projector))
+    Ok((PathBuf::from(local_ref), model_parts, projector))
 }
 
 fn safe_manifest_file_path(path: &str) -> Result<PathBuf> {
@@ -1327,6 +1341,35 @@ mod tests {
 
     fn sha256_hex(bytes: &[u8]) -> String {
         hex::encode(Sha256::digest(bytes))
+    }
+
+    #[test]
+    fn complete_package_v2_download_returns_the_package_root() {
+        let root = tempfile::tempdir().unwrap();
+        crate::inference::skippy::write_test_package_v2_fixture(
+            root.path(),
+            "fixture/llama-1b",
+            &[
+                (
+                    "layer-00000",
+                    "layers/layer-00000.gguf",
+                    "blk.0.attn.weight",
+                ),
+                (
+                    "layer-00001",
+                    "layers/layer-00001.gguf",
+                    "blk.1.attn.weight",
+                ),
+            ],
+        )
+        .unwrap();
+
+        let package_dir = download_package_v2_to_local(&root.path().to_string_lossy()).unwrap();
+
+        assert_eq!(package_dir, root.path());
+        assert!(package_dir.join("model-package.json").is_file());
+        assert!(package_dir.join("layers/layer-00000.gguf").is_file());
+        assert!(package_dir.join("layers/layer-00001.gguf").is_file());
     }
 
     struct EnvRestore {

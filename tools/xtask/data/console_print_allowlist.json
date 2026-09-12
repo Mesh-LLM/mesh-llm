@@ -723,6 +723,44 @@
       "macro_name": "eprintln!"
     }
   ],
+  "crates/mesh-llm-commands/src/kv_cache.rs": [
+    {
+      "line": 151,
+      "macro_name": "eprint!"
+    },
+    {
+      "line": 163,
+      "macro_name": "println!"
+    },
+    {
+      "line": 173,
+      "macro_name": "println!"
+    },
+    {
+      "line": 181,
+      "macro_name": "println!"
+    },
+    {
+      "line": 189,
+      "macro_name": "println!"
+    },
+    {
+      "line": 195,
+      "macro_name": "println!"
+    },
+    {
+      "line": 200,
+      "macro_name": "println!"
+    },
+    {
+      "line": 205,
+      "macro_name": "println!"
+    },
+    {
+      "line": 210,
+      "macro_name": "println!"
+    }
+  ],
   "crates/mesh-llm-commands/src/model_package.rs": [
     {
       "line": 117,
@@ -2533,35 +2571,43 @@
       "macro_name": "eprintln!"
     },
     {
-      "line": 566,
+      "line": 562,
       "macro_name": "println!"
     },
     {
-      "line": 575,
+      "line": 571,
       "macro_name": "println!"
     },
     {
-      "line": 576,
+      "line": 572,
       "macro_name": "println!"
     },
     {
-      "line": 577,
+      "line": 573,
       "macro_name": "println!"
     },
     {
-      "line": 578,
+      "line": 574,
       "macro_name": "println!"
     },
     {
-      "line": 586,
+      "line": 582,
       "macro_name": "println!"
     },
     {
-      "line": 595,
+      "line": 591,
       "macro_name": "println!"
     },
     {
-      "line": 596,
+      "line": 592,
+      "macro_name": "println!"
+    },
+    {
+      "line": 629,
+      "macro_name": "println!"
+    },
+    {
+      "line": 631,
       "macro_name": "println!"
     },
     {
@@ -2569,15 +2615,15 @@
       "macro_name": "println!"
     },
     {
-      "line": 635,
-      "macro_name": "println!"
-    },
-    {
       "line": 637,
       "macro_name": "println!"
     },
     {
-      "line": 641,
+      "line": 638,
+      "macro_name": "println!"
+    },
+    {
+      "line": 640,
       "macro_name": "println!"
     },
     {
@@ -2585,15 +2631,15 @@
       "macro_name": "println!"
     },
     {
-      "line": 644,
+      "line": 645,
       "macro_name": "println!"
     },
     {
-      "line": 646,
+      "line": 648,
       "macro_name": "println!"
     },
     {
-      "line": 649,
+      "line": 650,
       "macro_name": "println!"
     },
     {
@@ -2601,11 +2647,11 @@
       "macro_name": "println!"
     },
     {
-      "line": 654,
+      "line": 660,
       "macro_name": "println!"
     },
     {
-      "line": 656,
+      "line": 662,
       "macro_name": "println!"
     },
     {
@@ -2621,23 +2667,19 @@
       "macro_name": "println!"
     },
     {
-      "line": 670,
-      "macro_name": "println!"
-    },
-    {
       "line": 672,
       "macro_name": "println!"
     },
     {
-      "line": 676,
+      "line": 677,
       "macro_name": "println!"
     },
     {
-      "line": 681,
+      "line": 678,
       "macro_name": "println!"
     },
     {
-      "line": 682,
+      "line": 679,
       "macro_name": "println!"
     },
     {
@@ -2645,47 +2687,43 @@
       "macro_name": "println!"
     },
     {
-      "line": 687,
+      "line": 684,
       "macro_name": "println!"
     },
     {
-      "line": 688,
+      "line": 689,
       "macro_name": "println!"
     },
     {
-      "line": 693,
+      "line": 696,
       "macro_name": "println!"
     },
     {
-      "line": 700,
+      "line": 703,
       "macro_name": "println!"
     },
     {
-      "line": 707,
+      "line": 709,
       "macro_name": "println!"
+    },
+    {
+      "line": 710,
+      "macro_name": "println!"
+    },
+    {
+      "line": 711,
+      "macro_name": "print!"
     },
     {
       "line": 713,
-      "macro_name": "println!"
-    },
-    {
-      "line": 714,
-      "macro_name": "println!"
+      "macro_name": "print!"
     },
     {
       "line": 715,
-      "macro_name": "print!"
-    },
-    {
-      "line": 717,
-      "macro_name": "print!"
-    },
-    {
-      "line": 719,
       "macro_name": "println!"
     },
     {
-      "line": 729,
+      "line": 725,
       "macro_name": "println!"
     }
   ],
@@ -3659,6 +3697,12 @@
       "macro_name": "println!"
     }
   ],
+  "crates/skippy-cache/src/l3/tests.rs": [
+    {
+      "line": 508,
+      "macro_name": "println!"
+    }
+  ],
   "crates/skippy-correctness/src/glm_dsa_trace.rs": [
     {
       "line": 1434,
@@ -3667,17 +3711,27 @@
   ],
   "crates/skippy-correctness/src/main.rs": [
     {
-      "line": 22,
+      "line": 25,
       "macro_name": "eprintln!"
     },
     {
-      "line": 30,
+      "line": 33,
       "macro_name": "eprintln!"
     }
   ],
   "crates/skippy-correctness/src/native_mtp_openai/reporting.rs": [
     {
       "line": 14,
+      "macro_name": "println!"
+    }
+  ],
+  "crates/skippy-correctness/src/runner/kv_page_growth.rs": [
+    {
+      "line": 285,
+      "macro_name": "println!"
+    },
+    {
+      "line": 340,
       "macro_name": "println!"
     }
   ],
@@ -4275,27 +4329,27 @@
   ],
   "crates/skippy-server/src/binary_transport/binary_messaging.rs": [
     {
-      "line": 418,
+      "line": 423,
       "macro_name": "eprintln!"
     },
     {
-      "line": 428,
+      "line": 433,
       "macro_name": "println!"
     },
     {
-      "line": 463,
+      "line": 468,
       "macro_name": "eprintln!"
     },
     {
-      "line": 484,
+      "line": 489,
       "macro_name": "eprintln!"
     },
     {
-      "line": 492,
+      "line": 497,
       "macro_name": "eprintln!"
     },
     {
-      "line": 561,
+      "line": 566,
       "macro_name": "eprintln!"
     }
   ],
@@ -4387,7 +4441,7 @@
       "macro_name": "println!"
     },
     {
-      "line": 340,
+      "line": 343,
       "macro_name": "println!"
     }
   ],

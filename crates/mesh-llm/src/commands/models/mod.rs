@@ -9,7 +9,7 @@ use mesh_llm_cli::models::ModelSearchSort;
 use mesh_llm_cli::models::ModelsCommand;
 use mesh_llm_host_runtime::command_support::models::skippy::{
     CertificationGateStatus, SkippyCertificationRequest, certify_layer_package,
-    identity_from_layer_package, is_layer_package_ref, resolve_hf_package_to_local,
+    download_package_v2_to_local, is_layer_package_ref,
 };
 use mesh_llm_host_runtime::command_support::models::{
     DownloadTransferStats, ModelCleanupPlan, ModelCleanupResult, SearchArtifactFilter,
@@ -418,11 +418,7 @@ async fn download_layer_package_for_model_ref(
     };
     let package_dir = tokio::task::spawn_blocking({
         let package_ref = package_ref.clone();
-        move || {
-            let identity = identity_from_layer_package(&package_ref)?;
-            resolve_hf_package_to_local(&package_ref, 0, identity.layer_count, true, true)
-                .map(std::path::PathBuf::from)
-        }
+        move || download_package_v2_to_local(&package_ref)
     })
     .await??;
     Ok(Some((package_ref, package_dir)))
