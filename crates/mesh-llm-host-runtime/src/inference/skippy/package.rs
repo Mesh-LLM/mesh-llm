@@ -940,18 +940,28 @@ pub(crate) fn direct_gguf_source_paths(model_path: &Path) -> Result<Vec<PathBuf>
     let parent = model_path
         .parent()
         .with_context(|| format!("split GGUF shard has no parent: {}", model_path.display()))?;
-    let mut files = Vec::with_capacity(total as usize);
+    let mut snapshot_paths = Vec::with_capacity(total as usize);
     for index in 1..=total {
         let shard_name = format!("{}-{index:05}-of-{:05}.gguf", shard.prefix, total);
         let path = parent.join(shard_name);
-        files.push(path.canonicalize().with_context(|| {
+        path.metadata().with_context(|| {
             format!(
                 "read split GGUF shard {index}/{total} for {}",
                 model_path.display()
             )
-        })?);
+        })?;
+        snapshot_paths.push(path);
     }
-    Ok(files)
+    if let Some(view) = content_addressed::managed_hf_multipart_view(&snapshot_paths)? {
+        return Ok(view);
+    }
+    snapshot_paths
+        .into_iter()
+        .map(|path| {
+            path.canonicalize()
+                .with_context(|| format!("canonicalize split GGUF shard {}", path.display()))
+        })
+        .collect()
 }
 
 /// Build the source-complete metadata envelope required by generation-8
