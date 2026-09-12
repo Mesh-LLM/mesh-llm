@@ -1448,9 +1448,9 @@ impl HandoffSegmentStore {
         let mut reference_counts: std::collections::HashMap<String, (usize, u64)> =
             std::collections::HashMap::new();
         for key in &keys {
-            let Ok(manifest) = self.load_manifest(key) else {
-                continue;
-            };
+            let manifest = self.load_manifest(key).with_context(|| {
+                format!("failed to build eviction reference map from manifest {key}")
+            })?;
             let locations = self
                 .packed
                 .load_manifest_index(key, manifest.segments.len())?;
@@ -1552,9 +1552,9 @@ impl HandoffSegmentStore {
                 continue;
             }
             if let Some(model_identity) = model_identity {
-                let Ok(manifest) = self.load_manifest(&key) else {
-                    continue;
-                };
+                let manifest = self.load_manifest(&key).with_context(|| {
+                    format!("failed to inspect manifest {key} while clearing model state")
+                })?;
                 if manifest.model_identity != model_identity {
                     continue;
                 }
@@ -1594,10 +1594,11 @@ impl HandoffSegmentStore {
         let mut referenced = std::collections::HashSet::new();
         let manifest_keys = self.list_manifests()?;
         for key in &manifest_keys {
-            if let Ok(manifest) = self.load_manifest(key) {
-                for segment in manifest.segments {
-                    referenced.insert(segment.digest);
-                }
+            let manifest = self
+                .load_manifest(key)
+                .with_context(|| format!("failed to build GC reference map from manifest {key}"))?;
+            for segment in manifest.segments {
+                referenced.insert(segment.digest);
             }
         }
         let mut freed = 0u64;
@@ -1611,6 +1612,9 @@ impl HandoffSegmentStore {
         for entry in fs::read_dir(self.root.join(SEGMENT_DIR))? {
             let entry = entry?;
             let path = entry.path();
+            if path.extension().is_none_or(|extension| extension != "seg") {
+                continue;
+            }
             let Some(stem) = path
                 .file_stem()
                 .map(|stem| stem.to_string_lossy().into_owned())

@@ -650,3 +650,33 @@ fn unreferenced_segments_are_collected() {
     assert_eq!(freed, 12);
     assert!(store.assemble(&manifest).is_ok());
 }
+
+#[test]
+fn gc_aborts_when_a_manifest_is_unreadable() {
+    let root = temp_root("gc-corrupt-manifest");
+    let store = store(&root, 0);
+    let manifest = commit_payload(&store, b"referenced bytes", 4096);
+    let segment = store.segment_path(&manifest.segments[0].digest);
+    fs::write(store.manifest_path(&manifest.payload_digest), b"not json")
+        .expect("corrupt manifest");
+
+    assert!(store.collect_unreferenced_segments().is_err());
+    assert!(
+        segment.is_file(),
+        "GC deleted state behind an unreadable manifest"
+    );
+}
+
+#[test]
+fn gc_ignores_atomic_publish_temporary_files() {
+    let root = temp_root("gc-temp-file");
+    let store = store(&root, 0);
+    let temporary = root.join(SEGMENT_DIR).join(".tmp-test-writer");
+    fs::write(&temporary, b"in flight").expect("write temporary file");
+
+    assert_eq!(store.collect_unreferenced_segments().expect("collect"), 0);
+    assert!(
+        temporary.is_file(),
+        "GC removed an in-flight temporary file"
+    );
+}
