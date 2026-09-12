@@ -50,6 +50,36 @@ fn commit_payload(
     manifest
 }
 
+fn commit_packed_payload(
+    store: &HandoffSegmentStore,
+    payload: &[u8],
+    segment_bytes: usize,
+) -> HandoffManifest {
+    let chunks = payload.chunks(segment_bytes).collect::<Vec<_>>();
+    let held = store
+        .try_put_segments(&chunks)
+        .expect("packed put")
+        .expect("packed put admitted");
+    let mut manifest = HandoffManifest::new("blake3:test".to_string(), "full-state".into());
+    let mut offset = 0u64;
+    for (index, stored) in held.iter().enumerate() {
+        let bytes = chunks[index].len() as u64;
+        manifest.segments.push(HandoffSegmentRef {
+            index: index as u32,
+            offset,
+            bytes,
+            digest: stored.digest.clone(),
+            meta_json: None,
+        });
+        offset += bytes;
+    }
+    manifest.total_bytes = payload.len() as u64;
+    manifest.payload_digest = segment_digest(payload);
+    store.commit(&manifest).expect("packed commit");
+    drop(held);
+    manifest
+}
+
 fn temp_root(name: &str) -> PathBuf {
     let root = std::env::temp_dir()
         .join("skippy-l3-tests")
@@ -68,6 +98,73 @@ fn roundtrip_assembles_identical_payload() {
         .load_manifest(&manifest.payload_digest)
         .expect("load manifest");
     assert_eq!(store.assemble(&loaded).expect("assemble"), payload);
+}
+
+#[test]
+fn packed_roundtrip_uses_one_physical_file_and_survives_reopen() {
+    let root = temp_root("packed-roundtrip");
+    let payload: Vec<u8> = (0..100_000u32).map(|value| value as u8).collect();
+    let manifest = {
+        let store = store(&root, 0);
+        let manifest = commit_packed_payload(&store, &payload, 4096);
+        assert_eq!(fs::read_dir(root.join(PACK_DIR)).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(root.join(SEGMENT_DIR)).unwrap().count(), 0);
+        let manifest_json = fs::read_to_string(store.manifest_path(&manifest.payload_digest))
+            .expect("read portable manifest");
+        assert!(!manifest_json.contains("pack_digest"));
+        assert_eq!(store.assemble(&manifest).expect("assemble"), payload);
+        manifest
+    };
+
+    let reopened = store(&root, 0);
+    reopened
+        .reconcile_startup()
+        .expect("reconcile packed store");
+    let loaded = reopened
+        .load_manifest(&manifest.payload_digest)
+        .expect("load packed manifest after restart");
+    assert_eq!(reopened.assemble(&loaded).expect("assemble"), payload);
+}
+
+#[test]
+fn corrupt_pack_is_quarantined_and_never_served() {
+    let root = temp_root("packed-corruption");
+    let store = store(&root, 0);
+    let payload: Vec<u8> = (0..32_000u32).map(|value| value as u8).collect();
+    let manifest = commit_packed_payload(&store, &payload, 4096);
+    let pack = fs::read_dir(root.join(PACK_DIR))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let mut bytes = fs::read(&pack).unwrap();
+    bytes[0] ^= 0xff;
+    fs::write(&pack, bytes).unwrap();
+
+    assert!(store.assemble(&manifest).is_err());
+    assert!(!pack.exists());
+    assert!(root.join(QUARANTINE_DIR).exists());
+}
+
+#[test]
+fn uncommitted_pack_is_collected_after_holds_release() {
+    let root = temp_root("packed-orphan");
+    let store = store(&root, 0);
+    let payload = (0..16_000)
+        .map(|index| (index / 1024) as u8)
+        .collect::<Vec<_>>();
+    let chunks = payload.chunks(1024).collect::<Vec<_>>();
+    let held = store
+        .try_put_segments(&chunks)
+        .unwrap()
+        .expect("packed put admitted");
+    assert_eq!(store.collect_unreferenced_segments().unwrap(), 0);
+    drop(held);
+    assert_eq!(
+        store.collect_unreferenced_segments().unwrap(),
+        payload.len() as u64
+    );
 }
 
 #[test]
