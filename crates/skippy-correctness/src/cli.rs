@@ -445,6 +445,30 @@ pub enum StatePayloadKind {
     KvRecurrent,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_handoff_listener_defaults_to_loopback() {
+        let cli = Cli::try_parse_from([
+            "skippy-correctness",
+            "remote-handoff",
+            "--model",
+            "model.gguf",
+            "--role",
+            "serve",
+        ])
+        .expect("parse remote handoff defaults");
+        let CommandKind::RemoteHandoff(args) = cli.command else {
+            panic!("expected remote handoff command");
+        };
+
+        assert!(args.listen.ip().is_loopback());
+        assert_eq!(args.listen.port(), 19081);
+    }
+}
+
 #[derive(Args)]
 pub struct StageFaParityArgs {
     #[arg(long)]
