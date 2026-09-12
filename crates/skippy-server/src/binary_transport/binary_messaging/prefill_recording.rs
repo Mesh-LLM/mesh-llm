@@ -104,9 +104,14 @@ fn record_full_prefill_with_activations(
     activation_width: i32,
     output: &ActivationFrame,
 ) -> BinaryKvRecordResult {
-    let mut record = maybe_record_binary_full_prefill(
-        config, runtime, kv, telemetry, session_id, message, tokens,
-    );
+    let mut record = if kv.is_none_or(|kv| exact_prefill_record_allowed(kv, message, tokens.len()))
+    {
+        maybe_record_binary_full_prefill(
+            config, runtime, kv, telemetry, session_id, message, tokens,
+        )
+    } else {
+        BinaryKvRecordResult::default()
+    };
     if let Some(kv) = kv
         && config.downstream.is_some()
     {
@@ -126,9 +131,53 @@ fn record_full_prefill_with_activations(
     record
 }
 
+fn exact_prefill_record_allowed(
+    kv: &KvStageIntegration,
+    message: &StageWireMessage,
+    accumulated_token_count: usize,
+) -> bool {
+    if !kv.payload_is_exact_state() || !message.kind.is_prefill() {
+        return true;
+    }
+    let Ok(prompt_token_count) = u64::try_from(message.state.prompt_token_count) else {
+        return false;
+    };
+    kv.exact_state_record_token_count_allowed(prompt_token_count, accumulated_token_count as u64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::binary_transport::stage_execution::prefix_cache_test_config;
+    use skippy_protocol::{StageKvCachePayload, binary::StageStateHeader};
+    use skippy_runtime::ModelStateKind;
+
+    fn exact_prefill_fixture(prompt_token_count: i32) -> (KvStageIntegration, StageWireMessage) {
+        let mut config = prefix_cache_test_config();
+        config.kv_cache.as_mut().expect("test cache config").payload =
+            StageKvCachePayload::KvRecurrent;
+        let kv = KvStageIntegration::from_config(&config, ModelStateKind::Recurrent)
+            .unwrap()
+            .expect("exact cache enabled");
+        let mut state =
+            StageStateHeader::new(skippy_protocol::binary::WireMessageKind::PrefillEmbd);
+        state.prompt_token_count = prompt_token_count;
+        let message = StageWireMessage {
+            kind: skippy_protocol::binary::WireMessageKind::PrefillEmbd,
+            pos_start: 0,
+            token_count: 0,
+            state,
+            request_id: 11,
+            session_id: 13,
+            sampling: None,
+            chat_sampling_metadata: None,
+            tokens: Vec::new(),
+            positions: Vec::new(),
+            activation: Vec::new(),
+            raw_bytes: Vec::new(),
+        };
+        (kv, message)
+    }
 
     #[test]
     fn accumulated_prompt_takes_full_prefill_recording_path() {
@@ -180,5 +229,15 @@ mod tests {
         let plan = prefill_record_plan(Some(&accumulated), 4096, &remainder, 0);
 
         assert!(matches!(plan, PrefillRecordPlan::Incremental { .. }));
+    }
+
+    #[test]
+    fn exact_prefill_records_only_the_shared_checkpoint_when_available() {
+        let (kv, message) = exact_prefill_fixture(970);
+
+        assert!(!exact_prefill_record_allowed(&kv, &message, 128));
+        assert!(exact_prefill_record_allowed(&kv, &message, 768));
+        assert!(!exact_prefill_record_allowed(&kv, &message, 896));
+        assert!(!exact_prefill_record_allowed(&kv, &message, 970));
     }
 }

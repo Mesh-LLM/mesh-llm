@@ -99,6 +99,7 @@ class SccacheEvidenceTests(unittest.TestCase):
             ("ci-windows-host-slice.yml", "windows_host"): policy,
             ("ci-windows-runtime-slice.yml", "windows_runtime"): policy,
             ("cache-warm-sccache.yml", "warm"): "false",
+            ("depot-canary.yml", "runtime_seed"): "false",
             ("hf-download-smoke.yml", "hf_download_smoke"): "true",
             ("native-sdk-artifact.yml", "linux_native_sdk_artifact"): policy,
             ("native-sdk-artifact.yml", "macos_native_sdk_artifact"): policy,
@@ -112,6 +113,7 @@ class SccacheEvidenceTests(unittest.TestCase):
             ("release.yml", "build_native_runtime_linux_x86_64_rocm"): effective_release_runner_16,
             ("release.yml", "build_native_runtime_linux_x86_64_vulkan"): effective_release_runner_16,
             ("static-abi-artifact.yml", "static_abi_artifact"): policy,
+            ("swift-sdk-artifact.yml", "swift_sdk_target"): policy,
             ("swift-sdk-artifact.yml", "swift_sdk_artifact"): policy,
         }
         actual: dict[tuple[str, str], str] = {}
@@ -312,6 +314,54 @@ class SccacheEvidenceTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(stats_file.is_file())
         self.assertIn("::warning title=sccache reported zero compile requests", result.stdout)
+
+    def test_zero_warm_floor_allows_an_observation_without_cache_requests(self) -> None:
+        payload = valid_payload(compile_requests=0)
+        stats = payload["stats"]
+        self.assertIsInstance(stats, dict)
+        stats["requests_executed"] = 0
+        stats["compilations"] = 0
+        stats["cache_writes"] = 0
+        for name in ("cache_hits", "cache_misses"):
+            counts = stats[name]
+            self.assertIsInstance(counts, dict)
+            counts["counts"] = {}
+
+        result, stats_file, github_output = self.run_capture(
+            payload,
+            cache_expectation="warm",
+            minimum_hit_rate="0",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assessment = json.loads(stats_file.read_text())["assessment"]
+        self.assertEqual(assessment["classification"], "warm-pass")
+        self.assertIsNone(assessment["hit_rate"])
+        self.assertIn("cache_passed=true", github_output.read_text())
+        self.assertIn(
+            "::warning title=sccache reported zero compile requests",
+            result.stdout,
+        )
+
+    def test_positive_warm_floor_rejects_missing_cache_requests(self) -> None:
+        payload = valid_payload(compile_requests=0)
+        stats = payload["stats"]
+        self.assertIsInstance(stats, dict)
+        for name in ("cache_hits", "cache_misses"):
+            counts = stats[name]
+            self.assertIsInstance(counts, dict)
+            counts["counts"] = {}
+
+        result, stats_file, github_output = self.run_capture(
+            payload,
+            cache_expectation="warm",
+            minimum_hit_rate="0.01",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assessment = json.loads(stats_file.read_text())["assessment"]
+        self.assertEqual(assessment["classification"], "warm-failure")
+        self.assertIn("cache_passed=false", github_output.read_text())
 
     def test_warm_and_cold_observations_are_classified_separately(self) -> None:
         warm_result, warm_file, warm_output = self.run_capture(
@@ -547,15 +597,28 @@ class SccacheEvidenceTests(unittest.TestCase):
             "run: cargo clippy --locked -p mesh-llm --all-targets -- -D warnings",
             warmer,
         )
+        seed_recipe = (ROOT / "just" / "ci.just").read_text(encoding="utf-8")
+        recipe_match = re.search(
+            r"(?m)^ci-sccache-seed-build:\n(?P<body>(?:    .*\n)+)",
+            seed_recipe,
+        )
+        self.assertIsNotNone(recipe_match)
+        self.assertEqual(
+            [line.strip() for line in recipe_match.group("body").splitlines()],
+            [
+                "cargo clippy --locked -p mesh-llm --all-targets -- -D warnings",
+                "cargo test --locked -p mesh-llm-cli --no-run",
+            ],
+        )
         restore = (
             ROOT / ".github" / "actions" / "restore-sccache-seed" / "action.yml"
         ).read_text(encoding="utf-8")
         self.assertIn('echo "SCCACHE_CACHE_SIZE=2G" >> "$GITHUB_ENV"', restore)
 
-    def test_runtime_seed_restore_requires_matching_image_and_epoch(self) -> None:
+    def test_runtime_seed_restore_is_deliberately_disabled(self) -> None:
         runtime = WORKFLOWS["runtime"].read_text(encoding="utf-8")
-        self.assertIn(f"matrix.runtime.container_image == '{SEED_IMAGE}'", runtime)
-        self.assertIn(f"matrix.runtime.toolchain_epoch == '{SEED_EPOCH}'", runtime)
+        self.assertIn('allow_trusted_seed: "false"', runtime)
+        self.assertIn("uses: ./.github/actions/restore-sccache-seed", runtime)
 
     def test_instrumented_workflows_use_unique_evidence_artifacts(self) -> None:
         for workflow_name in INSTRUMENTED:
@@ -580,6 +643,17 @@ class SccacheEvidenceTests(unittest.TestCase):
                 self.assertEqual(len(names), len(set(names)))
                 for artifact_name in names:
                     self.assertIn("${{ github.run_attempt }}", artifact_name)
+
+    def test_safetensors_smoke_captures_cache_before_runtime_loop(self) -> None:
+        workflow = yaml.safe_load(WORKFLOWS["rust-tests"].read_text(encoding="utf-8"))
+        steps = workflow["jobs"]["safetensors_runtime_smoke"]["steps"]
+        step_names = [step.get("name") for step in steps]
+
+        build_index = step_names.index("Build and locate the SafeTensors smoke test")
+        capture_index = step_names.index("Capture SafeTensors smoke cache evidence")
+        exercise_index = step_names.index("Exercise every current direct-load quantization")
+        self.assertEqual(capture_index, build_index + 1)
+        self.assertLess(capture_index, exercise_index)
 
 
 class SccacheStatsSummaryTests(unittest.TestCase):

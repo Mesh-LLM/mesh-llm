@@ -141,7 +141,9 @@ pub fn command_family(command: &Command) -> CliCommandFamily {
             CliCommandFamily::Installation
         }
         Command::Gpus { .. } => CliCommandFamily::Hardware,
-        Command::Runtime { .. }
+        Command::Serve
+        | Command::Client
+        | Command::Runtime { .. }
         | Command::Load { .. }
         | Command::Unload { .. }
         | Command::Status { .. }

@@ -14,6 +14,8 @@ pub(crate) struct NodeHardwareSnapshot {
     pub(crate) is_soc: Option<bool>,
     pub(crate) gpu_vram: Option<String>,
     pub(crate) gpu_reserved_bytes: Option<String>,
+    /// Itemized view of `vram_bytes`, announced alongside the GPU inventory.
+    pub(crate) memory: AdvertisedMemory,
 }
 
 pub(crate) struct OwnerRuntimeInit {
@@ -754,10 +756,12 @@ impl Node {
         remote: EndpointId,
         closing_stable_id: usize,
     ) {
-        match self
+        let recovery = self
             .remove_closed_connection(remote, closing_stable_id)
-            .await
-        {
+            .await;
+        self.release_direct_rescue_endpoint(remote, closing_stable_id)
+            .await;
+        match recovery {
             ClosedConnectionRecovery::Reconnect(addr) => {
                 self.reconnect_closed_connection_or_remove(remote, addr)
                     .await;

@@ -7,10 +7,13 @@ mod routing_telemetry;
 mod startup;
 
 pub use startup::detect_vram_bytes_capped;
+#[cfg(test)]
+pub(crate) use startup::hardware_snapshot_for_start;
 use startup::{
-    bind_mesh_endpoint, init_owner_runtime, startup_secret_key, wait_for_endpoint_online,
+    advertised_hardware_for_start, bind_mesh_endpoint, init_owner_runtime, startup_secret_key,
+    wait_for_endpoint_online,
 };
-pub(crate) use startup::{default_plugin_event_source, hardware_snapshot_for_start};
+pub(crate) use startup::{default_plugin_event_source, startup_transport_config};
 
 /// Upper bound on how long shutdown waits for one iroh endpoint to close.
 ///
@@ -68,12 +71,15 @@ pub struct RouteEntry {
 pub struct Node {
     pub(crate) endpoint: Endpoint,
     pub(crate) endpoint_secret_key: SecretKey,
-    pub(crate) public_addr: Option<std::net::SocketAddr>,
+    pub(crate) public_addr: Option<stun::PublicAddr>,
     pub(crate) quic_bind: QuicBindSelection,
     pub(crate) relay_policy: RelayPolicy,
     pub(crate) owner_keypair: Option<crate::crypto::OwnerKeypair>,
     pub(crate) local_mesh_requirements: crate::MeshRequirements,
     pub(crate) state: Arc<Mutex<MeshState>>,
+    /// Relay-disabled same-identity endpoints that own recovered direct connections.
+    /// See [`super::direct_rescue`] for the ownership and shutdown rules.
+    pub(crate) direct_rescue_endpoints: super::direct_rescue::DirectRescueEndpoints,
     pub(crate) role: Arc<Mutex<NodeRole>>,
     pub(crate) host_role_claims: Arc<Mutex<HostRoleClaims>>,
     pub(crate) models: Arc<Mutex<Vec<String>>>,
@@ -155,6 +161,8 @@ pub struct Node {
     pub is_soc: Option<bool>,
     pub gpu_vram: Option<String>,
     pub gpu_reserved_bytes: Option<String>,
+    /// Itemized view of the advertised capacity, sent with the GPU inventory.
+    pub advertised_memory: AdvertisedMemory,
     pub gpu_mem_bandwidth_gbps: Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
     pub gpu_compute_tflops_fp32: Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
     pub gpu_compute_tflops_fp16: Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
@@ -659,6 +667,38 @@ impl Node {
     /// the final gossip updates) has finished. `accept_loop` observes the close
     /// as `Endpoint::accept` returning `None` and exits on its own.
     pub async fn close_endpoint(&self) {
+        // Closing the registry to new installs is what makes this drain
+        // complete: the relay-health monitor is an untracked task holding a
+        // `Node` clone, so without the flag it could park a fresh rescue
+        // endpoint after the drain had already passed, leaving it open and
+        // unowned for the process lifetime.
+        let rescue_endpoints = self.direct_rescue_endpoints.drain_for_shutdown().await;
+
+        // One shared budget for all rescue endpoints, not one each. These are
+        // per-peer, so a mesh with several rescued peers would otherwise add
+        // ENDPOINT_CLOSE_TIMEOUT per endpoint to shutdown before the main
+        // endpoint even starts closing.
+        if !rescue_endpoints.is_empty() {
+            let closes = rescue_endpoints
+                .iter()
+                .map(|endpoint| endpoint.close())
+                .collect::<Vec<_>>();
+            if tokio::time::timeout(
+                ENDPOINT_CLOSE_TIMEOUT,
+                futures_util::future::join_all(closes),
+            )
+            .await
+            .is_err()
+            {
+                tracing::warn!(
+                    endpoint = "direct-rescue",
+                    count = rescue_endpoints.len(),
+                    timeout_secs = ENDPOINT_CLOSE_TIMEOUT.as_secs(),
+                    "direct-rescue endpoints did not finish closing within the shutdown budget; peers may time those connections out instead of seeing them close"
+                );
+            }
+        }
+
         close_endpoint_gracefully(&self.endpoint, "mesh").await;
     }
 
@@ -690,10 +730,10 @@ impl Node {
         }
 
         // Use iroh's net report because it probes through the endpoint's actual QUIC sockets.
-        // Its direct address includes the observed NAT-mapped port; substituting the configured
+        // Its observed address includes the NAT-mapped port; substituting the configured
         // bind port would advertise an address that was never verified externally.
         let public_addr = if relay.policy.uses_raw_stun() {
-            stun_public_addr(&endpoint).await
+            stun_public_addr(&endpoint, relay.policy.uses_relay()).await
         } else {
             tracing::info!("Raw STUN: disabled by LAN-only discovery mode");
             None
@@ -705,8 +745,13 @@ impl Node {
         let (tunnel_http_tx, tunnel_http_rx) = tokio::sync::mpsc::channel(256);
         let (stage_transport_tx, stage_transport_rx) = tokio::sync::mpsc::channel(256);
 
+        let config_state_init = {
+            let path = crate::plugin::config_path(config_path)
+                .unwrap_or_else(|_| std::path::PathBuf::from("config.toml"));
+            crate::runtime::config_state::ConfigState::load(&path)?
+        };
         let hardware =
-            hardware_snapshot_for_start(crate::system::hardware::survey(), &role, max_vram_gb);
+            advertised_hardware_for_start(config_state_init.config(), &role, max_vram_gb);
         let owner_runtime = init_owner_runtime(
             owner_config.as_ref(),
             endpoint.id(),
@@ -719,11 +764,6 @@ impl Node {
             TrustPolicy::Off,
             current_time_unix_ms(),
         );
-        let config_state_init = {
-            let path = crate::plugin::config_path(config_path)
-                .unwrap_or_else(|_| std::path::PathBuf::from("config.toml"));
-            crate::runtime::config_state::ConfigState::load(&path)?
-        };
         let config_revision_init = config_state_init.revision();
         let runtime_data_collector = crate::runtime_data::RuntimeDataCollector::new();
         let runtime_data_producer =
@@ -777,6 +817,7 @@ impl Node {
                 requirement_rejected_peers: HashSet::new(),
                 recent_mesh_rejections: VecDeque::new(),
             })),
+            direct_rescue_endpoints: super::direct_rescue::DirectRescueEndpoints::default(),
             role: Arc::new(Mutex::new(role)),
             host_role_claims: Arc::new(Mutex::new(HostRoleClaims::default())),
             models: Arc::new(Mutex::new(Vec::new())),
@@ -840,6 +881,7 @@ impl Node {
             is_soc: hardware.is_soc,
             gpu_vram: hardware.gpu_vram,
             gpu_reserved_bytes: hardware.gpu_reserved_bytes,
+            advertised_memory: hardware.memory,
             gpu_mem_bandwidth_gbps: Arc::new(tokio::sync::Mutex::new(None)),
             gpu_compute_tflops_fp32: Arc::new(tokio::sync::Mutex::new(None)),
             gpu_compute_tflops_fp16: Arc::new(tokio::sync::Mutex::new(None)),
@@ -957,6 +999,7 @@ impl Node {
                 requirement_rejected_peers: HashSet::new(),
                 recent_mesh_rejections: VecDeque::new(),
             })),
+            direct_rescue_endpoints: super::direct_rescue::DirectRescueEndpoints::default(),
             role: Arc::new(Mutex::new(role)),
             host_role_claims: Arc::new(Mutex::new(HostRoleClaims::default())),
             models: Arc::new(Mutex::new(Vec::new())),
@@ -983,6 +1026,7 @@ impl Node {
             )),
             vram_bytes: 0,
             local_runtime_capacity_bytes: 0,
+            advertised_memory: AdvertisedMemory::default(),
             peer_change_tx,
             peer_change_rx,
             inflight_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),

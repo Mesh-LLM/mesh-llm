@@ -1,4 +1,6 @@
 import unittest
+
+import yaml
 import os
 from pathlib import Path
 import re
@@ -72,10 +74,29 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
 
     def test_canary_has_no_code_or_credential_access(self) -> None:
         self.assertIn("permissions: {}", self.workflow)
-        self.assertNotIn("actions/checkout", self.workflow)
+        for job in ("runner", "seed_authority_marker", "verify_pr_write"):
+            with self.subTest(job=job):
+                self.assertNotIn("actions/checkout", self._job_block(job))
         self.assertNotIn("secrets.", self.workflow)
         self.assertNotIn("pull_request", self.workflow)
         self.assertNotIn("push:", self.workflow)
+
+    def test_runtime_canary_checkout_is_hosted_and_read_only(self) -> None:
+        jobs = yaml.safe_load(self.workflow)["jobs"]
+        for name in ("runtime_seed", "runtime_seed_summary"):
+            with self.subTest(job=name):
+                job = jobs[name]
+                self.assertEqual(job["runs-on"], "ubuntu-24.04")
+                expected = {"contents": "read", "actions": "read"}
+                if name == "runtime_seed":
+                    expected["packages"] = "read"
+                self.assertEqual(job["permissions"], expected)
+                checkouts = [step for step in job["steps"]
+                             if step.get("uses", "").startswith("actions/checkout@")]
+                self.assertEqual(len(checkouts), 1)
+                self.assertEqual(checkouts[0]["with"], {
+                    "ref": "${{ github.sha }}", "persist-credentials": False,
+                })
 
     def test_canary_covers_measured_depot_sizes(self) -> None:
         for runner in (
@@ -445,7 +466,7 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
                     self.assertIn("depot_selected:", block)
                     self.assertIn("startsWith(", block)
                     self.assertIn("needs.runner_policy.outputs.", block)
-        self.assertEqual(audit_calls, 24)
+        self.assertEqual(audit_calls, 25)
 
     def test_endpoint_and_docker_auth_probes_fail_closed(self) -> None:
         action = (

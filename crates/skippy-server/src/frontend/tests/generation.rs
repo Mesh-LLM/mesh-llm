@@ -167,10 +167,13 @@ fn queued_arrival_cannot_be_overtaken_when_a_lane_opens() {
     let queue = Arc::new(GenerationAdmissionQueue::new());
     let generation_limit = Arc::new(Semaphore::new(0));
     let generation_queue_depth = Arc::new(AtomicUsize::new(0));
+    let token_budget = Arc::new(GenerationTokenBudget::new(128));
 
     let first = queue
         .claim_or_enqueue(
             generation_limit.clone(),
+            token_budget.clone(),
+            GenerationTokenBudgetRequest::new(1, 1),
             GenerationAdmissionScheduling::default(),
             generation_queue_depth.clone(),
             2,
@@ -182,6 +185,8 @@ fn queued_arrival_cannot_be_overtaken_when_a_lane_opens() {
     let second = queue
         .claim_or_enqueue(
             generation_limit.clone(),
+            token_budget,
+            GenerationTokenBudgetRequest::new(1, 1),
             GenerationAdmissionScheduling::default(),
             generation_queue_depth.clone(),
             2,

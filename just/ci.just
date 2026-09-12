@@ -1,9 +1,11 @@
 # ── Full Validation Gate ───────────────────────────────────────
 
-# Populate the trusted Linux compiler-object seed with the dominant host graph.
+# Populate the trusted Linux compiler-object seed with the dominant host graph
+# and the isolated test graph used by the high-fanout CLI test batch.
 [linux]
 ci-sccache-seed-build:
     cargo clippy --locked -p mesh-llm --all-targets -- -D warnings
+    cargo test --locked -p mesh-llm-cli --no-run
 
 # Validate CI definitions, planner fixtures, and repository consistency.
 ci-validate:

@@ -36,43 +36,189 @@ pub(crate) fn request_default_manifest_url(mesh_version: &str) -> String {
     }
 }
 
+/// Loads the merged runtime catalog for `options` and returns the manifest
+/// alone. See `load_release_manifest_with_sources` for the discovery rules.
 pub async fn load_release_manifest(
     options: NativeRuntimeManifestOptions,
 ) -> Result<NativeRuntimeReleaseManifest> {
     Ok(load_release_manifest_with_bundle_dirs(options).await?.0)
 }
 
+/// Which catalogs a merged manifest load consulted, so callers can explain a
+/// selection (or a rejection) in terms of where the candidates came from.
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct NativeRuntimeCatalogSources {
+    /// Explicit `--manifest` file that was read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_path: Option<PathBuf>,
+    /// Remote manifest URL that was consulted (explicit, environment, or the
+    /// default release URL), with any query string removed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_url: Option<String>,
+    /// Artifacts contributed by the manifest file or URL.
+    #[serde(default)]
+    pub manifest_artifacts: usize,
+    /// Why the remote manifest could not be used, when bundled artifacts
+    /// carried the load instead. `None` when the fetch succeeded or was not
+    /// attempted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_error: Option<String>,
+    /// Bundle directories whose artifacts were merged in.
+    #[serde(default)]
+    pub bundle_dirs: Vec<PathBuf>,
+    /// Artifacts the bundle directories added to the catalog.
+    #[serde(default)]
+    pub bundle_artifacts: usize,
+    /// Bundled runtimes that the release catalog already listed (kept once,
+    /// served from the bundle).
+    #[serde(default)]
+    pub bundle_duplicates_of_catalog: usize,
+    /// Bundled runtimes that another bundle directory had already
+    /// contributed, for example the same runtime reached through an explicit
+    /// `--bundle-dir` and through the executable-adjacent directory.
+    #[serde(default)]
+    pub bundle_duplicates_of_bundles: usize,
+}
+
+impl NativeRuntimeCatalogSources {
+    /// Human-readable lines stating which catalogs were consulted, suitable
+    /// for CLI output and for explaining a failed selection.
+    pub fn describe(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        if let Some(path) = &self.manifest_path {
+            lines.push(format!(
+                "manifest file {} ({} artifacts)",
+                path.display(),
+                self.manifest_artifacts
+            ));
+        } else if let Some(url) = &self.manifest_url {
+            match &self.remote_error {
+                Some(error) => lines.push(format!(
+                    "release catalog {url} unavailable, using bundles only: {error}"
+                )),
+                None => lines.push(format!(
+                    "release catalog {url} ({} artifacts)",
+                    self.manifest_artifacts
+                )),
+            }
+        } else {
+            lines.push("no release catalog consulted (downloads disabled)".to_string());
+        }
+        if self.bundle_dirs.is_empty() {
+            lines.push("no native runtime bundle directories".to_string());
+        } else {
+            let dirs = self
+                .bundle_dirs
+                .iter()
+                .map(|dir| dir.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            // Every bundle directory carries exactly one runtime manifest;
+            // say how many of them the catalog gained, and where the others
+            // had already been listed.
+            let mut counts = format!(
+                "{} runtimes: {} added to the catalog",
+                self.bundle_dirs.len(),
+                self.bundle_artifacts
+            );
+            if self.bundle_duplicates_of_catalog > 0 {
+                counts.push_str(&format!(
+                    ", {} already listed by the release catalog",
+                    self.bundle_duplicates_of_catalog
+                ));
+            }
+            if self.bundle_duplicates_of_bundles > 0 {
+                counts.push_str(&format!(
+                    ", {} duplicates of another bundle directory",
+                    self.bundle_duplicates_of_bundles
+                ));
+            }
+            lines.push(format!("bundle directories ({counts}): {dirs}"));
+        }
+        lines
+    }
+}
+
+/// Like `load_release_manifest_with_sources`, returning only the bundle
+/// directories that were merged in, for callers that resolve bundles by path.
 pub(crate) async fn load_release_manifest_with_bundle_dirs(
-    mut options: NativeRuntimeManifestOptions,
+    options: NativeRuntimeManifestOptions,
 ) -> Result<(NativeRuntimeReleaseManifest, Vec<PathBuf>)> {
+    let (manifest, sources) = load_release_manifest_with_sources(options).await?;
+    Ok((manifest, sources.bundle_dirs))
+}
+
+/// Merges every catalog the options allow: an explicit manifest file, else a
+/// remote manifest (explicit URL, environment URL, or the default release
+/// URL), plus every discovered bundle directory.
+///
+/// Precedence:
+/// 1. An explicit manifest file is required: a read failure is an error.
+/// 2. A remote manifest is consulted even when bundle directories exist, so
+///    an adjacent bundle cannot hide downloadable runtimes. If the fetch
+///    fails and bundles were discovered, the bundles carry the load and the
+///    failure is recorded in `NativeRuntimeCatalogSources::remote_error`.
+///    Without bundles the fetch failure is an error, as before.
+/// 3. Bundle artifacts are appended after the manifest artifacts. The
+///    manifest's `mesh_version` and `skippy_abi` win when a manifest was
+///    loaded; bundle values only describe the release when no manifest was
+///    available at all.
+///
+/// Candidates with the same identity coming from several sources are
+/// deduplicated downstream by the resolver, which also prefers a bundled copy
+/// over a download for the same artifact.
+pub async fn load_release_manifest_with_sources(
+    mut options: NativeRuntimeManifestOptions,
+) -> Result<(NativeRuntimeReleaseManifest, NativeRuntimeCatalogSources)> {
     options.bundle_dirs = discover_native_runtime_bundle_dirs(&options.bundle_dirs)?;
+    let mut sources = NativeRuntimeCatalogSources {
+        bundle_dirs: options.bundle_dirs.clone(),
+        ..Default::default()
+    };
     let mut artifacts = Vec::new();
     let mut mesh_version = options.mesh_version.clone();
     let mut skippy_abi = current_skippy_abi_version();
-    if let Some(path) = options.manifest_path {
+    let mut manifest_loaded = false;
+    if let Some(path) = options.manifest_path.take() {
         let manifest = NativeRuntimeReleaseManifest::read_from_path(&path)?;
+        sources.manifest_path = Some(path);
         mesh_version = manifest.mesh_version.clone();
         skippy_abi = manifest.skippy_abi.clone();
         artifacts.extend(manifest.artifacts);
+        manifest_loaded = true;
     } else if let Some(url) = manifest_url(&options) {
-        let manifest = download_release_manifest(&url).await?;
-        mesh_version = manifest.mesh_version.clone();
-        skippy_abi = manifest.skippy_abi.clone();
-        artifacts.extend(manifest.artifacts);
+        sources.manifest_url = Some(url_without_query(&url));
+        match download_release_manifest(&url).await {
+            Ok(manifest) => {
+                mesh_version = manifest.mesh_version.clone();
+                skippy_abi = manifest.skippy_abi.clone();
+                artifacts.extend(manifest.artifacts);
+                manifest_loaded = true;
+            }
+            Err(err) if !options.bundle_dirs.is_empty() => {
+                sources.remote_error = Some(format!("{err:#}"));
+            }
+            Err(err) => return Err(err),
+        }
     }
-    append_bundle_artifacts(
+    sources.manifest_artifacts = artifacts.len();
+    let merged = append_bundle_artifacts(
         &mut artifacts,
         &mut mesh_version,
         &mut skippy_abi,
         &options.bundle_dirs,
+        manifest_loaded,
     )?;
+    sources.bundle_artifacts = merged.added;
+    sources.bundle_duplicates_of_catalog = merged.duplicates_of_catalog;
+    sources.bundle_duplicates_of_bundles = merged.duplicates_of_bundles;
     Ok((
         NativeRuntimeReleaseManifest {
             mesh_version,
             skippy_abi,
             artifacts,
         },
-        options.bundle_dirs,
+        sources,
     ))
 }
 
@@ -140,19 +286,28 @@ pub(crate) fn verify_release_manifest_checksum(
     Ok(())
 }
 
+/// Derives the checksum URL from the manifest URL: `.sha256` goes on the
+/// path, the query string is kept, and a fragment is dropped since it never
+/// reaches the server (kept, it would end up inside the path and the server
+/// would answer with the manifest body instead of a checksum).
 pub(crate) fn release_manifest_checksum_url(url: &str) -> String {
+    let url = url.split_once('#').map_or(url, |(base, _)| base);
     match url.split_once('?') {
         Some((base, query)) => format!("{base}.sha256?{query}"),
         None => format!("{url}.sha256"),
     }
 }
 
-/// Strips the query string and redacts any userinfo (`user:pass@`) from a
-/// URL before it is surfaced in error context or progress events. Mirrors
-/// `redact_url_userinfo` in `mesh-llm-host-runtime::logging::policy`; kept
-/// local because this crate does not otherwise depend on host-runtime.
+/// Strips the query string and the fragment, and redacts any userinfo
+/// (`user:pass@`) from a URL before it is surfaced in error context,
+/// progress events or catalog reports. Mirrors `redact_url_userinfo` in
+/// `mesh-llm-host-runtime::logging::policy`; kept local because this crate
+/// does not otherwise depend on host-runtime.
 pub(crate) fn url_without_query(url: &str) -> String {
-    let without_query = url.split_once('?').map_or(url, |(base, _)| base);
+    let without_fragment = url.split_once('#').map_or(url, |(base, _)| base);
+    let without_query = without_fragment
+        .split_once('?')
+        .map_or(without_fragment, |(base, _)| base);
     redact_url_userinfo(without_query)
 }
 
@@ -176,6 +331,10 @@ fn redact_url_userinfo(url: &str) -> String {
     )
 }
 
+/// Picks the remote catalog URL to consult: the explicit option, then the
+/// `MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL` override, then the default release
+/// URL when `allow_default_manifest_url` is set. `None` means no remote
+/// catalog is consulted.
 pub(crate) fn manifest_url(options: &NativeRuntimeManifestOptions) -> Option<String> {
     options
         .manifest_url
@@ -186,27 +345,80 @@ pub(crate) fn manifest_url(options: &NativeRuntimeManifestOptions) -> Option<Str
                 .filter(|value| !value.trim().is_empty())
         })
         .or_else(|| {
-            (options.allow_default_manifest_url && options.bundle_dirs.is_empty())
+            // Bundle directories no longer suppress the default catalog: an
+            // adjacent CPU bundle must not hide downloadable GPU runtimes
+            // (#1612). Offline hosts fall back to the bundles when the fetch
+            // fails, see `load_release_manifest_with_sources`.
+            options
+                .allow_default_manifest_url
                 .then(|| request_default_manifest_url(&options.mesh_version))
         })
 }
 
+/// Appends the runtime described by each bundle directory to `artifacts`.
+///
+/// When no release manifest was loaded, the bundles also supply the release
+/// identity (`mesh_version` and `skippy_abi`). A runtime that is both bundled
+/// and already listed by the manifest is kept once; the resolver still serves
+/// that identity from the bundle directory.
 pub(crate) fn append_bundle_artifacts(
     artifacts: &mut Vec<NativeRuntimeArtifact>,
     mesh_version: &mut String,
     skippy_abi: &mut String,
     bundle_dirs: &[PathBuf],
-) -> Result<()> {
+    manifest_loaded: bool,
+) -> Result<BundleMergeCounts> {
+    // Entries below this index came from the release manifest; the ones
+    // appended afterwards came from earlier bundle directories.
+    let catalog_len = artifacts.len();
+    let mut counts = BundleMergeCounts::default();
     for dir in bundle_dirs {
         let manifest = NativeRuntimeManifest::read_from_dir(dir)
             .with_context(|| format!("read bundled native runtime {}", dir.display()))?;
-        if let Some(version) = &manifest.runtime.mesh_version {
-            *mesh_version = version.clone();
+        // A loaded release manifest describes the release; a bundle only
+        // stands in for it when no manifest was available at all.
+        if !manifest_loaded {
+            if let Some(version) = &manifest.runtime.mesh_version {
+                *mesh_version = version.clone();
+            }
+            *skippy_abi = manifest.runtime.skippy_abi.clone();
         }
-        *skippy_abi = manifest.runtime.skippy_abi.clone();
-        artifacts.push(manifest.runtime);
+        // The same runtime can be both bundled and published, or reached
+        // through two bundle directories. Keep one entry so listings stay
+        // unambiguous; the resolver still prefers a bundle directory as the
+        // source for that identity.
+        match artifacts
+            .iter()
+            .position(|existing| same_artifact_identity(existing, &manifest.runtime))
+        {
+            Some(index) if index < catalog_len => counts.duplicates_of_catalog += 1,
+            Some(_) => counts.duplicates_of_bundles += 1,
+            None => {
+                artifacts.push(manifest.runtime);
+                counts.added += 1;
+            }
+        }
     }
-    Ok(())
+    Ok(counts)
+}
+
+/// What merging the bundle directories into the catalog produced.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct BundleMergeCounts {
+    /// Runtimes the bundles added to the catalog.
+    pub(crate) added: usize,
+    /// Bundled runtimes the release catalog already listed.
+    pub(crate) duplicates_of_catalog: usize,
+    /// Bundled runtimes an earlier bundle directory had already contributed.
+    pub(crate) duplicates_of_bundles: usize,
+}
+
+/// Two catalog entries describe the same runtime when their id and release
+/// identity (`mesh_version`, `skippy_abi`) match, whichever source listed them.
+fn same_artifact_identity(left: &NativeRuntimeArtifact, right: &NativeRuntimeArtifact) -> bool {
+    left.id == right.id
+        && left.mesh_version == right.mesh_version
+        && left.skippy_abi == right.skippy_abi
 }
 
 pub(crate) fn normalize_sha256(value: &str) -> Result<String> {
@@ -219,6 +431,11 @@ pub(crate) fn normalize_sha256(value: &str) -> Result<String> {
     if digest.len() == 64 && digest.chars().all(|ch| ch.is_ascii_hexdigit()) {
         Ok(digest)
     } else {
-        bail!("native runtime manifest contains invalid sha256: {value}");
+        // Do not echo the value: when a checksum fetch answers with the wrong
+        // body (a manifest, an error page) it would be copied into the error.
+        bail!(
+            "invalid sha256 digest: expected 64 hexadecimal characters, got {} characters",
+            digest.len()
+        );
     }
 }

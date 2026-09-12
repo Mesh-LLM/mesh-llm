@@ -21,9 +21,11 @@ HOST_ARCH="$(uname -m)"
 case "$HOST_ARCH" in
   arm64|aarch64)
     RUST_TARGET="aarch64-apple-darwin"
+    CMAKE_ARCH="arm64"
     ;;
   x86_64)
     RUST_TARGET="x86_64-apple-darwin"
+    CMAKE_ARCH="x86_64"
     ;;
   *)
     echo "Unsupported macOS host architecture: $HOST_ARCH" >&2
@@ -41,7 +43,10 @@ export LLAMA_STAGE_BUILD_DIR="${LLAMA_STAGE_BUILD_DIR:-$REPO_ROOT/.deps/llama-bu
 
 echo "Preparing embedded llama.cpp ABI libraries..."
 "$REPO_ROOT/scripts/prepare-llama.sh" "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"
-LLAMA_BUILD_DIR="$LLAMA_STAGE_BUILD_DIR" "$REPO_ROOT/scripts/build-llama.sh"
+"$REPO_ROOT/scripts/build-llama.sh" \
+  -DCMAKE_OSX_SYSROOT=macosx \
+  -DCMAKE_OSX_ARCHITECTURES="$CMAKE_ARCH" \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET"
 
 RUSTUP_RUSTC="$(rustup which --toolchain "${RUSTUP_TOOLCHAIN:-stable}" rustc)"
 echo "Using rustc: $RUSTUP_RUSTC"

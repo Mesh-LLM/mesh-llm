@@ -329,28 +329,6 @@ The unchanged-pin daily llama canary uses the `nightly` cadence in
 Qwen3Next composite, and Mamba recurrent. Llama bumps and explicit forced
 certification retain the full 33-family battery.
 
-The trusted CUDA competitive benchmark normalizes every completed
-Thoughtworks cell with `scripts/performance-history.py`. When
-`MESH_PERFORMANCE_HISTORY_ENABLED=1`, set
-`MESH_PERFORMANCE_HISTORY_DATASET=meshllm/performance-history` and provide the
-write token as the `MESH_PERFORMANCE_HISTORY_HF_TOKEN` GitHub secret. The
-workflow runs on its daily schedule or by a manual dispatch explicitly
-selected from `main`; non-`main` dispatches cannot acquire the persistent GPU
-runner. The fixed `[self-hosted, Linux, X64, cuda]` selector must resolve to
-the runner named `white`, and
-`MESH_NIGHTLY_COMPETITIVE_HF_CLI` must name its pre-baked `hf` executable when
-history is enabled. It downloads prior immutable JSONL shards, requires the Hub
-schema to match `ci/performance-history/schema.json`, reports only exact-cohort
-drift, and uploads one source/run-addressed shard. Three prior complete
-matching runs are required before performance drift is classified; thresholds
-remain report-only during baseline collection. After the baseline window, set
-`MESH_PERFORMANCE_HISTORY_GATE_ENABLED=1` to make statistically sustained
-throughput or TTFT regressions fail the nightly job. Missing stable GPU
-fingerprints fail closed, and external backend runtime digests are part of the
-comparison cohort while the candidate Mesh binary digest remains an observed
-field. The Hub Dataset Viewer materializes the JSONL shards as Parquet without
-adding a runtime conversion dependency to the trusted benchmark runner.
-
 ### 0g. Logging workflow certification
 
 Use the request logging checks after changing the trusted-local logging service,
@@ -499,10 +477,19 @@ mesh-llm serve \
   response from the layer-package model.
 
 > **CI coverage:** `two_node_split_smoke` runs
-> `scripts/ci-two-node-split-smoke.sh` against the Linux inference binary and a
-> tiny GGUF. It starts two serving nodes, waits for a topology with stages on
-> two distinct nodes, checks `/v1/models`, and sends a short
-> `/v1/chat/completions` request through stage 0.
+> `scripts/ci-two-node-split-smoke.sh` against the Linux inference binary in two
+> model lanes: dense SmolLM2-135M and recurrent Qwen3.5-0.8B. Each lane starts
+> two serving nodes (the recurrent lane fixes a 4096-token context), waits for
+> a topology with stages on two distinct nodes, checks `/v1/models`, then sends
+> three progressively longer `/v1/chat/completions` prompts with one shared
+> prefix through stage 0. The smoke requires the reported cached-token count to
+> increase after each request so either model-state path cannot silently fall
+> back to cold prefill for prefix matches. A follow-up request that restores
+> nothing is the one outcome a loaded runner can produce without a regression,
+> because the host answers before the stage lane releases; the smoke retries the
+> whole sequence from a fresh cold prefix up to
+> `MESH_TWO_NODE_SPLIT_PREFIX_ATTEMPTS` times (3 by default) for that case only.
+> Reuse that is present but not growing fails immediately.
 >
 > Other nearby CI coverage:
 >
@@ -904,10 +891,10 @@ cached and a worker does not:
 - Current/current mesh: the worker may use mesh `STREAM_SUBPROTOCOL` (0x0d)
   to open `skippy-stage/2`, then Skippy artifact-transfer stream 0x03, to
   fetch only its assigned package files before the normal HF fallback path.
-- Current/released mixed mesh: a released coordinator without the complete
-  `stage-generation-7` control/status/content-identity bundle and
-  `direct-prediction-return` support must not be selected for a generation-7
-  split topology. Missing `artifact-transfer` only prevents peer cache
+- Current/released mixed mesh: a coordinator without the complete
+  `stage-generation-9` control/status/content-identity/admission bundle must not
+  be selected for a generation-9 split topology. Missing `artifact-transfer`
+  only prevents peer cache
   sourcing; the worker may still participate when local/HF package resolution
   provides an independent source.
 - Default public-mesh safety: with `MESH_LLM_ARTIFACT_TRANSFER` unset, the node

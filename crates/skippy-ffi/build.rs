@@ -24,20 +24,6 @@ fn main() {
         return;
     }
 
-    let link_mode =
-        std::env::var("LLAMA_STAGE_LINK_MODE").or_else(|_| std::env::var("SKIPPY_LLAMA_LINK_MODE"));
-    if link_mode.as_deref() == Ok("dynamic") {
-        if let Ok(lib_dir) =
-            std::env::var("LLAMA_STAGE_LIB_DIR").or_else(|_| std::env::var("SKIPPY_LLAMA_LIB_DIR"))
-        {
-            println!("cargo:rustc-link-search=native={lib_dir}");
-        }
-        println!("cargo:rustc-link-lib=dylib=mtmd");
-        println!("cargo:rustc-link-lib=dylib=llama-common");
-        println!("cargo:rustc-link-lib=dylib=llama");
-        return;
-    }
-
     let workspace_root = std::path::PathBuf::from(
         std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set"),
     )
@@ -61,6 +47,27 @@ fn main() {
             }
         })
         .unwrap_or_else(|_| default_build_dir(&workspace_root, &backend));
+    let link_mode =
+        std::env::var("LLAMA_STAGE_LINK_MODE").or_else(|_| std::env::var("SKIPPY_LLAMA_LINK_MODE"));
+    if link_mode.as_deref() == Ok("dynamic") {
+        if let Ok(lib_dir) =
+            std::env::var("LLAMA_STAGE_LIB_DIR").or_else(|_| std::env::var("SKIPPY_LLAMA_LIB_DIR"))
+        {
+            println!("cargo:rustc-link-search=native={lib_dir}");
+        }
+        println!("cargo:rustc-link-lib=dylib=mtmd");
+        println!("cargo:rustc-link-lib=dylib=llama-common");
+        println!("cargo:rustc-link-lib=dylib=llama");
+        if target.contains("linux") && backend == "cuda" {
+            // Driverless builders use the toolkit's link-time driver stub.
+            // Resolve the same library CMake selected without embedding its
+            // directory in RPATH or copying it into the runtime package.
+            let cmake_cache = build_dir.join("CMakeCache.txt");
+            println!("cargo:rerun-if-changed={}", cmake_cache.display());
+            link_linux_lib_from_cache(&cmake_cache, "CUDA_cuda_driver_LIBRARY", "cuda");
+        }
+        return;
+    }
     ensure_static_native_ready(&workspace_root, &build_dir, &target, &backend);
 
     let search_dirs = [
@@ -202,6 +209,7 @@ fn main() {
     println!("cargo:rustc-link-lib=static=ggml-base");
 
     if target.contains("apple") {
+        link_apple_openmp_libs(&cmake_cache);
         println!("cargo:rustc-link-lib=c++");
         println!("cargo:rustc-link-lib=framework=Accelerate");
         if static_archive_exists(
@@ -537,6 +545,20 @@ fn link_windows_openmp_libs(cmake_cache: &std::path::Path) {
     }
 }
 
+fn link_apple_openmp_libs(cmake_cache: &std::path::Path) {
+    let libs = openmp_libs(cmake_cache, "omp");
+    for path in cmake_openmp_search_paths(cmake_cache, &libs) {
+        if path.is_dir() {
+            println!("cargo:rustc-link-search=native={}", path.display());
+        }
+    }
+
+    for lib in libs {
+        let link_name = lib.strip_prefix("lib").unwrap_or(&lib);
+        println!("cargo:rustc-link-lib=dylib={link_name}");
+    }
+}
+
 fn link_linux_hip_libs() {
     // Add ROCm library search paths
     for search_path in ["/opt/rocm/lib", "/opt/rocm/hip/lib"] {
@@ -564,6 +586,21 @@ fn windows_openmp_search_paths(
     cmake_cache: &std::path::Path,
     libs: &[String],
 ) -> Vec<std::path::PathBuf> {
+    let mut paths = cmake_openmp_search_paths(cmake_cache, libs);
+    for env_name in ["ROCM_PATH", "HIP_PATH", "LLVMInstallDir"] {
+        if let Ok(root) = std::env::var(env_name) {
+            for suffix in ["lib", "llvm/lib"] {
+                push_unique_path(&mut paths, std::path::PathBuf::from(&root).join(suffix));
+            }
+        }
+    }
+    paths
+}
+
+fn cmake_openmp_search_paths(
+    cmake_cache: &std::path::Path,
+    libs: &[String],
+) -> Vec<std::path::PathBuf> {
     let mut paths = Vec::new();
     if let Ok(cache) = std::fs::read_to_string(cmake_cache) {
         for lib in libs {
@@ -581,15 +618,6 @@ fn windows_openmp_search_paths(
             }
         }
     }
-
-    for env_name in ["ROCM_PATH", "HIP_PATH", "LLVMInstallDir"] {
-        if let Ok(root) = std::env::var(env_name) {
-            for suffix in ["lib", "llvm/lib"] {
-                push_unique_path(&mut paths, std::path::PathBuf::from(&root).join(suffix));
-            }
-        }
-    }
-
     paths
 }
 

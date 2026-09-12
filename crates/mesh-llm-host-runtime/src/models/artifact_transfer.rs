@@ -215,25 +215,98 @@ pub(crate) fn required_stage_package_artifacts(
     Ok(out)
 }
 
-pub(crate) fn required_stage_package_bytes(
+pub(crate) fn package_manifest_schema_version(package_dir: &Path) -> Result<u64> {
+    let manifest_contents = read_bounded_package_manifest(package_dir)?;
+    let manifest =
+        serde_json::from_slice::<Value>(&manifest_contents).context("parse package manifest")?;
+    Ok(manifest
+        .get("schema_version")
+        .and_then(Value::as_u64)
+        .unwrap_or(1))
+}
+
+pub(crate) fn required_admitted_stage_package_artifacts(
     package_dir: &Path,
     package_ref: &str,
     manifest_sha256: &str,
-    selection: StageArtifactSelection,
-) -> Result<u64> {
-    let manifest_bytes = u64::try_from(read_bounded_package_manifest(package_dir)?.len())
-        .context("package manifest length exceeds u64")?;
-    required_stage_package_artifacts(package_dir, package_ref, manifest_sha256, selection)?
+    admission: &skippy_protocol::StageAdmissionDescriptor,
+) -> Result<Vec<PackageArtifactRequest>> {
+    validate_sha256(manifest_sha256).context("invalid package manifest sha256")?;
+    let manifest_contents = read_bounded_package_manifest(package_dir)?;
+    let actual_manifest_sha = sha256_bytes(&manifest_contents);
+    anyhow::ensure!(
+        actual_manifest_sha.eq_ignore_ascii_case(manifest_sha256),
+        "package manifest sha256 mismatch"
+    );
+    let manifest: skippy_package_format::PackageManifest =
+        serde_json::from_slice(&manifest_contents).context("parse package-v2 manifest")?;
+    let manifest =
+        skippy_model::package_carrier::resolve_package_carrier_from_dir(manifest, package_dir)
+            .context("resolve package-v2 metadata carrier")?;
+    let descriptor = skippy_package_format::stage_admission::StageAdmissionDescriptor {
+        package_id: admission.package_id.clone(),
+        resident_tensor_ids: admission.resident_tensor_ids.clone(),
+        sidecars: admission
+            .sidecars
+            .iter()
+            .map(|sidecar| skippy_package_format::Sidecar {
+                kind: match sidecar.kind {
+                    skippy_protocol::StageAdmissionSidecarKind::Mmproj => {
+                        skippy_package_format::SidecarKind::Mmproj
+                    }
+                },
+                artifact_id: sidecar.artifact_id.clone(),
+                name: sidecar.name.clone(),
+            })
+            .collect(),
+    };
+    let resolved = manifest
+        .resolve_stage_admission(&descriptor)
+        .context("resolve exact package-v2 stage admission")?;
+    resolved
+        .required_artifacts
         .into_iter()
-        .try_fold(manifest_bytes, |total, artifact| {
-            let artifact_bytes = artifact.expected_size.with_context(|| {
-                format!(
-                    "package manifest is missing the size of {}",
-                    artifact.relative_path.display()
-                )
-            })?;
-            Ok(total.saturating_add(artifact_bytes))
+        .map(|artifact| {
+            Ok(PackageArtifactRequest {
+                package_ref: package_ref.to_string(),
+                manifest_sha256: manifest_sha256.to_ascii_lowercase(),
+                relative_path: safe_relative_artifact_path(&artifact.path)?,
+                expected_size: Some(artifact.byte_size),
+                expected_sha256: Some(artifact.sha256.to_ascii_lowercase()),
+            })
         })
+        .collect()
+}
+
+pub(crate) fn package_v2_metadata_carrier_request(
+    package_dir: &Path,
+    package_ref: &str,
+    manifest_sha256: &str,
+) -> Result<PackageArtifactRequest> {
+    validate_sha256(manifest_sha256).context("invalid package manifest sha256")?;
+    let manifest_contents = read_bounded_package_manifest(package_dir)?;
+    anyhow::ensure!(
+        sha256_bytes(&manifest_contents).eq_ignore_ascii_case(manifest_sha256),
+        "package manifest sha256 mismatch"
+    );
+    let manifest: skippy_package_format::PackageManifest =
+        serde_json::from_slice(&manifest_contents).context("parse package-v2 manifest")?;
+    manifest
+        .validate_root()
+        .context("validate package-v2 manifest root")?;
+    let artifact = manifest
+        .artifact_catalog
+        .entries
+        .iter()
+        .find(|artifact| artifact.id == manifest.source_model.metadata_artifact_id)
+        .context("package-v2 metadata artifact is absent")?;
+    Ok(PackageArtifactRequest {
+        package_ref: package_ref.to_string(),
+        manifest_sha256: manifest_sha256.to_ascii_lowercase(),
+        relative_path: safe_relative_artifact_path(&artifact.path)?,
+        expected_size: Some(artifact.byte_size),
+        expected_sha256: Some(artifact.sha256.to_ascii_lowercase()),
+    })
 }
 
 pub(crate) fn local_artifact_path(package_dir: &Path, request: &PackageArtifactRequest) -> PathBuf {
@@ -454,6 +527,46 @@ fn push_manifest_artifact(
 fn declared_manifest_artifacts(manifest: &Value) -> Result<Vec<ManifestArtifact>> {
     let mut artifacts = Vec::new();
     let mut seen = HashSet::new();
+    if manifest.get("schema_version").and_then(Value::as_u64)
+        == Some(u64::from(skippy_package_format::PACKAGE_SCHEMA_VERSION))
+    {
+        let entries = manifest
+            .pointer("/artifact_catalog/entries")
+            .and_then(Value::as_array)
+            .context("package-v2 manifest is missing artifact_catalog.entries")?;
+        for entry in entries {
+            let relative_path = entry
+                .get("path")
+                .and_then(Value::as_str)
+                .context("package-v2 artifact is missing path")
+                .and_then(safe_relative_artifact_path)?;
+            let artifact_bytes = entry
+                .get("byte_size")
+                .and_then(Value::as_u64)
+                .context("package-v2 artifact is missing byte_size")?;
+            anyhow::ensure!(
+                artifact_bytes > 0,
+                "package artifact bytes must be positive"
+            );
+            let sha256 = entry
+                .get("sha256")
+                .and_then(Value::as_str)
+                .context("package-v2 artifact is missing sha256")?
+                .to_ascii_lowercase();
+            validate_sha256(&sha256)?;
+            anyhow::ensure!(
+                seen.insert(relative_path.clone()),
+                "package-v2 artifact catalog contains duplicate path {}",
+                relative_path.display()
+            );
+            artifacts.push(ManifestArtifact {
+                relative_path,
+                artifact_bytes,
+                sha256,
+            });
+        }
+        return Ok(artifacts);
+    }
     if let Some(metadata) = manifest.pointer("/shared/metadata") {
         push_declared_artifact(&mut artifacts, &mut seen, metadata)?;
     }
@@ -611,6 +724,28 @@ mod tests {
             package_dir,
             "hf://meshllm/demo-layers@abc123".to_string(),
             manifest_sha,
+        )
+    }
+
+    fn write_package_v2_manifest(root: &Path) -> (PathBuf, String, String, String) {
+        let manifest = crate::inference::skippy::write_test_package_v2_fixture(
+            root,
+            "meshllm/demo",
+            &[
+                ("primary", "artifacts/source-00000.gguf", "input.weight"),
+                ("resident", "artifacts/source-00001.gguf", "tensor-resident"),
+                ("unowned", "artifacts/unowned.gguf", "tensor-unowned"),
+            ],
+        )
+        .unwrap();
+        let package_id = manifest.package_id.clone();
+        let bytes = fs::read(root.join(PACKAGE_MANIFEST_FILE)).unwrap();
+        let manifest_sha = sha256_hex(&bytes);
+        (
+            root.to_path_buf(),
+            "hf://meshllm/demo@abc123".to_string(),
+            manifest_sha,
+            package_id,
         )
     }
 
@@ -783,34 +918,37 @@ mod tests {
     }
 
     #[test]
-    #[serial]
-    fn required_stage_package_bytes_include_manifest_and_selected_shared_artifacts() {
-        let prev = std::env::var_os("HF_HUB_CACHE");
+    fn package_v2_artifact_selection_uses_exact_admitted_tensor_ids() {
         let temp = tempfile::tempdir().unwrap();
-        // SAFETY: the enclosing test contract is `#[serial]`, so this process
-        // environment mutation cannot race another test.
-        unsafe { std::env::set_var("HF_HUB_CACHE", temp.path()) };
-        let (package_dir, package_ref, manifest_sha) = write_package_fixture(temp.path());
-        let manifest_bytes = fs::metadata(package_dir.join(PACKAGE_MANIFEST_FILE))
-            .unwrap()
-            .len();
+        let (package_dir, package_ref, manifest_sha, package_id) =
+            write_package_v2_manifest(temp.path());
+        let admission = skippy_protocol::StageAdmissionDescriptor {
+            version: skippy_protocol::STAGE_ADMISSION_DESCRIPTOR_VERSION,
+            package_id,
+            plan_id: format!("skippy-plan:v1:{}", "bb".repeat(32)),
+            layer_start: 1,
+            layer_end: 2,
+            resident_tensor_ids: vec!["tensor-resident".to_string()],
+            sidecars: Vec::new(),
+            profiles: Vec::new(),
+        };
 
-        let selected_bytes = required_stage_package_bytes(
+        let artifacts = required_admitted_stage_package_artifacts(
             &package_dir,
             &package_ref,
             &manifest_sha,
-            StageArtifactSelection {
-                layer_start: 1,
-                layer_end: 2,
-                include_embeddings: false,
-                include_output: true,
-                include_projectors: true,
-            },
+            &admission,
         )
         .unwrap();
-
-        assert_eq!(selected_bytes, manifest_bytes + 8 + 6 + 8 + 9);
-        restore_env("HF_HUB_CACHE", prev);
+        let paths = artifacts
+            .iter()
+            .map(|artifact| artifact.relative_path.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            vec!["shared/metadata.gguf", "artifacts/source-00001.gguf"]
+        );
+        assert!(!paths.iter().any(|path| path.contains("unowned")));
     }
 
     #[test]

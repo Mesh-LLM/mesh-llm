@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from fnmatch import fnmatch
 from pathlib import Path
 import re
 import shutil
@@ -18,6 +19,7 @@ ACTIONS = ROOT / ".github" / "actions"
 COMPOSE_SCRIPT = ROOT / "scripts" / "ci-compose-product-input.sh"
 RELEASE_FOOTER_MANIFEST = ROOT / "crates" / "mesh-llm-release-footer" / "Cargo.toml"
 XTASK_MANIFEST = ROOT / "tools" / "xtask" / "Cargo.toml"
+RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 
 
 class CiArtifactActionTests(unittest.TestCase):
@@ -508,6 +510,28 @@ class CiArtifactActionTests(unittest.TestCase):
         )
         self.assertNotIn("package-native-runtime.sh", action)
         self.assertNotIn("compose-product", action)
+
+    def test_release_stamps_refuse_to_guess_the_source_commit(self) -> None:
+        """A published binary has to say what it was built from (#1596)."""
+        for name in ("prepare-host-input", "prepare-windows-host-input"):
+            action = self.read_action(name)
+            with self.subTest(action=name):
+                self.assertIn("--require-source-commit", action)
+                self.assertIn("--commit", action)
+                self.assertIn("INPUT_COMMIT", action)
+
+    def test_release_workflow_stamps_the_immutable_source_revision(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        attest_steps = workflow.count(
+            "attestation_signing_key_file: ${{ runner.temp }}"
+            "/mesh-release-attestation-private-key.json"
+        )
+        stamped_commits = workflow.count(
+            "commit: ${{ needs.metadata.outputs.source_sha }}"
+        )
+
+        self.assertGreater(attest_steps, 0)
+        self.assertEqual(attest_steps, stamped_commits)
 
     def test_windows_attestation_verifier_stays_native_abi_free(self) -> None:
         xtask = tomllib.loads(XTASK_MANIFEST.read_text(encoding="utf-8"))
@@ -1671,6 +1695,29 @@ class CiArtifactActionTests(unittest.TestCase):
             producer,
         )
         self.assertIn("sdk/swift/scripts/build-xcframework.sh", producer)
+        self.assertIn("max-parallel: ${{ inputs.max_parallel }}", producer)
+        self.assertEqual(producer.count("- aarch64-apple-ios\n"), 1)
+        self.assertIn(
+            'build-xcframework.sh --target "${{ matrix.target }}"',
+            producer,
+        )
+        self.assertIn(
+            "name: swift-sdk-target-${{ matrix.target }}-"
+            "${{ github.run_attempt }}",
+            producer,
+        )
+        self.assertIn(
+            "pattern: swift-sdk-target-*",
+            producer,
+        )
+        self.assertNotIn(
+            "pattern: swift-sdk-target-*-${{ github.run_attempt }}",
+            producer,
+        )
+        self.assertIn(
+            "build-xcframework.sh --assemble-from dist/swift-targets",
+            producer,
+        )
         self.assertIn(
             "scripts/verify-swift-release-artifact.sh",
             producer,
@@ -1732,6 +1779,33 @@ class CiArtifactActionTests(unittest.TestCase):
             "artifact_name: sccache-swift-sdk-"
             "${{ inputs.mode }}-${{ github.run_attempt }}",
             producer,
+        )
+
+        targets = (
+            "aarch64-apple-ios",
+            "aarch64-apple-ios-sim",
+            "x86_64-apple-ios",
+            "aarch64-apple-ios-macabi",
+            "x86_64-apple-ios-macabi",
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+        )
+        assembly_only_retry = [
+            f"swift-sdk-target-{target}-1" for target in targets
+        ]
+        self.assertEqual(
+            {name.rsplit("-", maxsplit=1)[0] for name in assembly_only_retry
+             if fnmatch(name, "swift-sdk-target-*")},
+            {f"swift-sdk-target-{target}" for target in targets},
+        )
+        partial_matrix_retry = [
+            f"swift-sdk-target-{target}-{2 if index == 3 else 1}"
+            for index, target in enumerate(targets)
+        ]
+        self.assertEqual(
+            {name.rsplit("-", maxsplit=1)[0] for name in partial_matrix_retry
+             if fnmatch(name, "swift-sdk-target-*")},
+            {f"swift-sdk-target-{target}" for target in targets},
         )
 
         self.assertIn(
@@ -1817,10 +1891,19 @@ class CiArtifactActionTests(unittest.TestCase):
             / "build-host-macos-xcframework.sh"
         ).read_text(encoding="utf-8")
 
+        exact_key = "format('mesh-llm-swift-sdk-target-{0}-{1}-{2}-{3}-{4}'"
+        self.assertEqual(producer.count(exact_key), 2)
         self.assertIn(
-            "format('mesh-llm-swift-sdk-{0}-{1}-{2}-{3}', "
-            "runner.os, runner.arch, "
-            "steps.native_toolchain.outputs.epoch, hashFiles(",
+            "shared-key: swift-sdk-${{ matrix.target }}",
+            producer,
+        )
+        self.assertIn(
+            "shared-key: ${{ format('swift-sdk-{0}', runner.arch == 'ARM64' "
+            "&& 'aarch64-apple-darwin' || 'x86_64-apple-darwin') }}",
+            producer,
+        )
+        self.assertIn(
+            "path: ${{ format('.deps/llama-build/build-stage-abi-{0}-metal'",
             producer,
         )
         self.assertNotIn("runner.arch, inputs.mode, hashFiles(", producer)
@@ -1830,10 +1913,16 @@ class CiArtifactActionTests(unittest.TestCase):
         )
         self.assertIn('include_tool_versions: "true"', producer)
         self.assertNotIn("SWIFT_NATIVE_XCODE_CACHE_EPOCH", producer)
-        self.assertIn("trusted main full build", producer)
+        self.assertIn("Trusted main can", producer)
         self.assertNotIn("build-stage-abi-host-metal", producer)
         self.assertIn(
             ".deps/llama-build/build-stage-abi-$RUST_TARGET-metal",
+            host_builder,
+        )
+        self.assertIn("-DCMAKE_OSX_SYSROOT=macosx", host_builder)
+        self.assertIn('-DCMAKE_OSX_ARCHITECTURES="$CMAKE_ARCH"', host_builder)
+        self.assertIn(
+            '-DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET"',
             host_builder,
         )
 
@@ -2048,10 +2137,26 @@ class CiArtifactActionTests(unittest.TestCase):
     def test_smoke_restore_model_is_optional(self) -> None:
         action = self.read_action("restore-smoke-inputs")
         model_inputs_present = (
-            "inputs.model_url != '' && inputs.model_file != ''"
+            "steps.resolve-model.outputs.url != '' && "
+            "steps.resolve-model.outputs.file != ''"
         )
 
         self.assertEqual(action.count(model_inputs_present), 4)
+        self.assertIn("model_manifest:", action)
+        self.assertIn("model_cadence:", action)
+        self.assertIn("scripts/resolve-test-model-manifest.py", action)
+        self.assertIn('--cadence "$MODEL_CADENCE"', action)
+        self.assertIn("--require-single-file", action)
+        self.assertIn('^[A-Za-z0-9][A-Za-z0-9._-]*$', action)
+        self.assertIn("--verify-root \"$HOME/.models\"", action)
+        self.assertIn("MODEL_MANIFEST: ${{ inputs.model_manifest }}", action)
+        self.assertIn("MODEL_CADENCE: ${{ inputs.model_cadence }}", action)
+        self.assertIn("MODEL_URL: ${{ steps.resolve-model.outputs.url }}", action)
+        self.assertIn("MODEL_FILE: ${{ steps.resolve-model.outputs.file }}", action)
+        self.assertNotIn('"${{ inputs.model_manifest }}"', action)
+        self.assertNotIn('"${{ inputs.model_cadence }}"', action)
+        self.assertNotIn('"${{ steps.resolve-model.outputs.url }}"', action)
+        self.assertNotIn('"${{ steps.resolve-model.outputs.file }}"', action)
         self.assertIn(
             f"if: ${{{{ {model_inputs_present} }}}}\n"
             "      id: cache-model",
@@ -2743,7 +2848,8 @@ class CiArtifactActionTests(unittest.TestCase):
         }
         expected_jobs = {
             "ci-quality-slice.yml": {
-                "runner_policy", "quality_contracts", "rust_fmt", "rust_clippy", "cli_docs_sync", "authority_sentinel",
+                "commit_convention", "runner_policy", "quality_contracts", "rust_fmt", "rust_clippy",
+                "cli_docs_sync", "authority_sentinel",
             },
             "ci-web-slice.yml": {"runner_policy", "ui_quality", "ui_e2e", "website"},
             "ci-ui-artifact-slice.yml": {"runner_policy", "ui_artifact"},
@@ -2759,7 +2865,11 @@ class CiArtifactActionTests(unittest.TestCase):
             "ci-windows-host-slice.yml": {"runner_policy", "windows_host"},
             "ci-windows-runtime-slice.yml": {"runner_policy", "windows_runtime"},
             "static-abi-artifact.yml": {"runner_policy", "static_abi_artifact"},
-            "swift-sdk-artifact.yml": {"runner_policy", "swift_sdk_artifact"},
+            "swift-sdk-artifact.yml": {
+                "runner_policy",
+                "swift_sdk_target",
+                "swift_sdk_artifact",
+            },
         }
 
         def step_block(workflow: str, marker: str) -> str:
@@ -2802,7 +2912,13 @@ class CiArtifactActionTests(unittest.TestCase):
                     block = step_block(workflow, marker)
                     with self.subTest(consumer=marker):
                         if "restore-sccache-seed" in marker:
-                            self.assertIn("allow_trusted_sccache_seed", block)
+                            if filename == "ci-linux-runtime-slice.yml":
+                                self.assertEqual(
+                                    re.findall(r'^\s*allow_trusted_seed:\s*(.+)$', block, re.MULTILINE),
+                                    ['"false"'],
+                                )
+                            else:
+                                self.assertIn("allow_trusted_sccache_seed", block)
                         else:
                             self.assertIn("allow_native_github_cache", block)
 
@@ -2844,11 +2960,11 @@ class CiArtifactActionTests(unittest.TestCase):
         # baked pnpm store instead (#1392); see the comment on
         # `eligible_consumers` above.
         self.assertIn(
-            f"cache: ${{{{ {native_cache_expression} && 'pnpm' || '' }}}}",
+            f"cache: ${{{{ inputs.ui_artifact_name == '' && {native_cache_expression} && 'pnpm' || '' }}}}",
             swift,
         )
         self.assertIn(
-            f"package-manager-cache: ${{{{ {native_cache_expression} }}}}",
+            f"package-manager-cache: ${{{{ inputs.ui_artifact_name == '' && {native_cache_expression} }}}}",
             swift,
         )
         self.assertIn(

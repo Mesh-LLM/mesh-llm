@@ -158,8 +158,12 @@ impl Drop for GenerationConcurrencyPermit {
         if retirement.pending > 0 {
             retirement.pending -= 1;
             permit.forget();
+            drop(retirement);
+            self.admission_queue.notify_lane_available();
+            return;
         }
         drop(retirement);
+        drop(permit);
         self.admission_queue.notify_lane_available();
     }
 }

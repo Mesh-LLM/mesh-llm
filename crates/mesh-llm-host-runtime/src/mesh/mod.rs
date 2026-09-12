@@ -75,6 +75,7 @@ pub(crate) fn elapsed_ms_u64(duration: std::time::Duration) -> u64 {
     duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
 
+mod advertisement;
 mod artifact_transfer_io;
 mod cache_affinity_gossip;
 mod capacity;
@@ -82,6 +83,7 @@ mod connection_reservation;
 mod connections;
 mod connectivity;
 mod direct_path;
+mod direct_rescue;
 mod gossip;
 mod heartbeat;
 mod host_role_claims;
@@ -131,6 +133,8 @@ use stage_artifacts::*;
 use stage_transport::*;
 use stun::*;
 
+pub(crate) use advertisement::AdvertisedCandidate;
+pub use capacity::AdvertisedMemory;
 pub use connections::{QuicBindSelection, RelayConfig, RelayPolicy};
 pub(crate) use connectivity::MeshConnectivitySnapshot;
 pub use gossip::backfill_legacy_descriptors;
@@ -143,6 +147,11 @@ pub use identity_persistence::{
     load_node_key_from_path, mark_was_public, save_last_mesh_id, save_node_key_to_path,
     was_previously_public,
 };
+#[expect(
+    unused_imports,
+    reason = "test-only home resolver used by environment-isolated identity tests"
+)]
+pub(crate) use identity_persistence::{identity_home_dir, identity_state_dir};
 #[expect(
     unused_imports,
     reason = "public compatibility re-export for existing mesh node callers"
@@ -183,6 +192,7 @@ use gossip::{apply_transitive_ann, peer_meaningfully_changed};
 use heartbeat::heartbeat_failure_policy_for_peer;
 pub(crate) use heartbeat::resolve_peer_down;
 use heartbeat::{PeerDownReportDisposition, peer_down_report_disposition};
+pub(crate) use stage_proto::stage_status_from_load;
 use stage_proto::*;
 
 #[cfg(test)]

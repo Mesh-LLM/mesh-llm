@@ -101,6 +101,7 @@
   "models": [
     {
       "key": "llama32-dense",
+      "artifact_id": "family-llama",
       "family": "Llama 3.2 1B dense",
       "repo": "bartowski/Llama-3.2-1B-Instruct-GGUF",
       "revision": "067b946cf014b7c697f3654f621d577a3e3afd1c",
@@ -121,6 +122,7 @@
     },
     {
       "key": "deepseek-v2-moe",
+      "artifact_id": "deepseek2-q3-competitive",
       "family": "DeepSeek Coder V2 Lite MoE",
       "repo": "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF",
       "revision": "8f248fa2072348f77a8bc37754e470de1f61866e",
@@ -151,6 +153,7 @@
     },
     {
       "key": "falcon-h1-recurrent",
+      "artifact_id": "family-falcon-h1",
       "family": "Falcon-H1 1.5B recurrent",
       "repo": "tiiuae/Falcon-H1-1.5B-Instruct-GGUF",
       "revision": "0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a",
@@ -181,6 +184,7 @@
     },
     {
       "key": "granite-h1-hybrid",
+      "artifact_id": "granite-h1-bf16-competitive",
       "family": "Granite 4.0 H 1B hybrid",
       "repo": "ibm-granite/granite-4.0-h-1b-GGUF",
       "revision": "c2cb1972f511add21f3bae244990b8ff3a3ffb23",

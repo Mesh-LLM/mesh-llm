@@ -29,7 +29,8 @@ use super::stage_execution::{
     BinaryStateHandoffConfig, PackageStageSpec, StageModelResolution, configure_child_logs,
     elapsed_ms, ensure_matches, mean_pair_sum, protocol_flash_attn, protocol_load_mode,
     runtime_flash_attn, runtime_load_mode, runtime_model_identity, speedup, stage_id_for_index,
-    stage_model_resolution, stage_server_model_path, status, tokenizer_model_for_state_handoff,
+    stage_model_resolution, stage_resident_tensor_names_for_range, stage_server_model_path, status,
+    tokenizer_model_for_state_handoff,
 };
 
 struct BinaryStateHandoffResult {
@@ -304,6 +305,20 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
         &args.model_identity,
         stage_spec,
     )?;
+    let lane_count = effective_state_handoff_lane_count(&args);
+    let resident_tensor_names = if should_filter_state_handoff_tensors(&args) {
+        stage_resident_tensor_names_for_range(
+            args.stage_load_mode,
+            &args.model,
+            &stage_resolution.path,
+            (args.state_layer_start, args.state_layer_end),
+            args.layer_end,
+            args.ctx_size,
+            lane_count,
+        )?
+    } else {
+        Vec::new()
+    };
     let (tokenizer_path, tokenizer_config) = tokenizer_model_for_state_handoff(&args)?;
     let tokenizer = StageModel::open(&tokenizer_path, &tokenizer_config).with_context(|| {
         format!(
@@ -362,6 +377,7 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
             stage_activation_width,
             include_embeddings,
             include_output,
+            resident_tensor_names,
         );
     }
 
@@ -389,6 +405,7 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
         "n_gpu_layers": args.n_gpu_layers,
         "flash_attn_type": protocol_flash_attn(args.flash_attn),
         "filter_tensors_on_load": should_filter_state_handoff_tensors(&args),
+        "resident_tensor_names": resident_tensor_names.clone(),
         "load_mode": protocol_load_mode(args.stage_load_mode),
         "bind_addr": args.source_bind_addr,
         "upstream": {
@@ -418,6 +435,7 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
         "n_gpu_layers": args.n_gpu_layers,
         "flash_attn_type": protocol_flash_attn(args.flash_attn),
         "filter_tensors_on_load": should_filter_state_handoff_tensors(&args),
+        "resident_tensor_names": resident_tensor_names,
         "load_mode": protocol_load_mode(args.stage_load_mode),
         "bind_addr": args.restore_bind_addr,
         "upstream": {
@@ -646,6 +664,7 @@ fn run_local_state_handoff(
     activation_width: i32,
     include_embeddings: bool,
     include_output: bool,
+    resident_tensor_names: Vec<String>,
 ) -> Result<BinaryStateHandoffResult> {
     let lane_count = effective_state_handoff_lane_count(args);
     let runtime_config = RuntimeConfig {
@@ -681,6 +700,7 @@ fn run_local_state_handoff(
         include_output,
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: should_filter_state_handoff_tensors(args),
+        resident_tensor_names,
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
@@ -1412,6 +1432,15 @@ fn build_state_handoff_inputs(
     let Some(input_resolution) = input_resolution else {
         return Ok((None, None, args.activation_width));
     };
+    let resident_tensor_names = stage_resident_tensor_names_for_range(
+        args.stage_load_mode,
+        &args.model,
+        &input_resolution.path,
+        (0, args.state_layer_start),
+        args.layer_end,
+        args.ctx_size,
+        1,
+    )?;
     let input_config = RuntimeConfig {
         stage_index: args.state_stage_index.saturating_sub(1),
         layer_start: 0,
@@ -1445,6 +1474,7 @@ fn build_state_handoff_inputs(
         include_output: false,
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
+        resident_tensor_names,
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
@@ -1529,7 +1559,8 @@ fn send_prefill_for_state_handoff(
         .map(|frame| frame.desc.producer_stage_index)
         .unwrap_or(-1);
     state.flags |= activation_state_flags_optional(input);
-    let activation = encode_handoff_activation(input, token_count, activation_width)?;
+    let activation =
+        encode_handoff_activation(state.activation_codec, input, token_count, activation_width)?;
     let message = StageWireMessage {
         kind: WireMessageKind::PrefillEmbd,
         pos_start: 0,
@@ -1634,7 +1665,7 @@ fn decode_for_state_handoff(
         .map(|frame| frame.desc.producer_stage_index)
         .unwrap_or(-1);
     state.flags |= activation_state_flags_optional(input);
-    let activation = encode_handoff_activation(input, 1, activation_width)?;
+    let activation = encode_handoff_activation(state.activation_codec, input, 1, activation_width)?;
     let message = StageWireMessage {
         kind: WireMessageKind::DecodeEmbd,
         pos_start: i32::try_from(pos_start).context("decode position exceeds i32")?,
@@ -1658,6 +1689,7 @@ fn decode_for_state_handoff(
 }
 
 fn encode_handoff_activation(
+    codec: skippy_protocol::StageActivationCodec,
     input: Option<&ActivationFrame>,
     token_count: i32,
     activation_width: i32,
@@ -1665,7 +1697,8 @@ fn encode_handoff_activation(
     let Some(input) = input else {
         return Ok(Vec::new());
     };
-    skippy_protocol::binary::encode_f32_activation_payload_with_state_flags(
+    skippy_protocol::binary::encode_activation_payload_with_state_flags(
+        codec,
         token_count,
         activation_width,
         &input.payload,

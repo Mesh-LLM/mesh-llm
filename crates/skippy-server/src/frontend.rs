@@ -33,11 +33,12 @@ use self::{
 pub use self::admission::DECODE_BATCH_HEADROOM_TOKENS;
 use self::generation::*;
 pub use self::generation::{
-    CONTEXT_BUDGET_MAX_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS, EmbeddedOpenAiArgs,
-    EmbeddedOpenAiBackend, EmbeddedOpenAiRequestDefaults, EmbeddedOpenAiRouter,
-    EmbeddedReasoningBudget, EmbeddedReasoningEnabled, EmbeddedReasoningFormat,
-    embedded_openai_backend, embedded_openai_router, serve_embedded_openai,
-    serve_embedded_openai_with_shutdown, serve_openai,
+    CONTEXT_BUDGET_MAX_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS,
+    DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS, EmbeddedOpenAiArgs, EmbeddedOpenAiBackend,
+    EmbeddedOpenAiRequestDefaults, EmbeddedOpenAiRouter, EmbeddedReasoningBudget,
+    EmbeddedReasoningEnabled, EmbeddedReasoningFormat, embedded_openai_backend,
+    embedded_openai_router, serve_embedded_openai, serve_embedded_openai_with_shutdown,
+    serve_openai,
 };
 pub(crate) use self::generation::{
     default_generation_queue_capacity, resolve_adaptive_generation_min_concurrency,

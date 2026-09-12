@@ -90,6 +90,32 @@ fn resident_capacity_unknown_fails_closed() {
 }
 
 #[test]
+fn resident_capacity_keeps_decode_watermark_separate_from_prompt_reservation() {
+    let config = prefix_cache_test_config();
+    let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
+        .unwrap()
+        .expect("resident prefix cache enabled");
+    let mut runtime = crate::runtime_state::RuntimeState::new_modelless_with_capacity_for_test(
+        config.lane_count,
+        31_613,
+    );
+    let _reservation = kv
+        .reserve_resident_capacity("queued", 31_101)
+        .unwrap()
+        .expect("resident reservation");
+
+    let decision = kv
+        .admit_resident_capacity(&mut runtime, "active", 0, 512, 512, None)
+        .unwrap();
+
+    assert!(decision.admitted);
+    assert_eq!(decision.active_tokens, 0);
+    assert_eq!(decision.inflight_outstanding_tokens, 31_101);
+    assert_eq!(decision.projected_free_tokens, 512);
+    assert_eq!(decision.admission_deficit_tokens, 0);
+}
+
+#[test]
 fn resident_capacity_admission_evicts_for_the_aggregate_active_four_wave() {
     let config = StageConfig {
         ctx_size: 131_072,

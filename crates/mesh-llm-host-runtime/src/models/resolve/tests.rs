@@ -104,6 +104,116 @@ fn remote_catalog_entry_with_mmproj(
     entry
 }
 
+#[cfg(unix)]
+fn hf_snapshot_symlink(
+    cache: &Path,
+    repo: &str,
+    revision: &str,
+    filename: &str,
+) -> (PathBuf, PathBuf) {
+    use std::os::unix::fs::symlink;
+
+    let repo_dir = cache.join(format!("models--{}", repo.replace('/', "--")));
+    let blob_name = "78f1dbb60dedc080b99d26b8098f719f020b0f9bafe9e12a20c7d25652d4fd86";
+    let blob = repo_dir.join("blobs").join(blob_name);
+    let snapshot = repo_dir.join("snapshots").join(revision).join(filename);
+    std::fs::create_dir_all(blob.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(repo_dir.join("refs")).unwrap();
+    std::fs::write(&blob, b"verified gguf bytes").unwrap();
+    std::fs::write(repo_dir.join("refs").join("main"), revision).unwrap();
+    symlink(Path::new("../../blobs").join(blob_name), &snapshot).unwrap();
+    (snapshot, blob)
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[serial]
+async fn fresh_hf_snapshot_symlink_resolves_to_verified_blob() {
+    let cache = tempfile::tempdir().unwrap();
+    let variant = "Fresh-HF-Snapshot-Q8_0";
+    let repo = "mesh-test/fresh-hf-snapshot";
+    let filename = "Fresh-HF-Snapshot-Q8_0.gguf";
+    let (snapshot, blob) = hf_snapshot_symlink(cache.path(), repo, "revision-a", filename);
+    let _cache_guard = EnvGuard::set_path("HF_HUB_CACHE", cache.path());
+    let _hf_home_guard = EnvGuard::remove("HF_HOME");
+    let _catalog_guard =
+        crate::models::remote_catalog::set_catalog_entries_for_test(vec![remote_catalog_entry(
+            variant, variant, repo, filename,
+        )]);
+    let _download_guard = crate::models::catalog::set_download_hf_assets_label_override(
+        variant.to_string(),
+        Arc::new({
+            let snapshot = snapshot.clone();
+            move |_| Ok(vec![snapshot.clone()])
+        }),
+    );
+
+    let resolved = resolve_model_spec_with_progress(Path::new(variant), false)
+        .await
+        .unwrap();
+
+    assert_eq!(resolved, blob.canonicalize().unwrap());
+    assert!(
+        !std::fs::symlink_metadata(resolved)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[serial]
+async fn cached_hf_snapshot_symlink_resolves_to_verified_blob() {
+    let cache = tempfile::tempdir().unwrap();
+    let repo = "mesh-test/cached-hf-snapshot";
+    let revision = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let filename = "Cached-HF-Snapshot-Q8_0.gguf";
+    let (_snapshot, blob) = hf_snapshot_symlink(cache.path(), repo, revision, filename);
+    let _cache_guard = EnvGuard::set_path("HF_HUB_CACHE", cache.path());
+    let _hf_home_guard = EnvGuard::remove("HF_HOME");
+    let _catalog_guard = crate::models::remote_catalog::set_catalog_entries_for_test(Vec::new());
+    let model_ref = format!("{repo}@{revision}:Q8_0");
+
+    let resolved = resolve_model_spec_with_progress(Path::new(&model_ref), false)
+        .await
+        .unwrap();
+
+    assert_eq!(resolved, blob.canonicalize().unwrap());
+    assert!(
+        !std::fs::symlink_metadata(resolved)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[serial]
+async fn existing_hf_multipart_snapshot_path_keeps_its_shard_name() {
+    let cache = tempfile::tempdir().unwrap();
+    let repo = "mesh-test/cached-hf-multipart";
+    let revision = "cccccccccccccccccccccccccccccccccccccccc";
+    let filename = "Cached-HF-Multipart-Q8_0-00001-of-00002.gguf";
+    let (snapshot, _blob) = hf_snapshot_symlink(cache.path(), repo, revision, filename);
+    let _cache_guard = EnvGuard::set_path("HF_HUB_CACHE", cache.path());
+    let _hf_home_guard = EnvGuard::remove("HF_HOME");
+
+    let resolved = resolve_model_spec_with_progress(&snapshot, false)
+        .await
+        .unwrap();
+
+    assert_eq!(resolved, snapshot);
+    assert!(
+        std::fs::symlink_metadata(resolved)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
 #[tokio::test]
 async fn existing_model_path_resolves_to_canonical_path() {
     let temp = tempfile::tempdir().expect("create temp model dir");

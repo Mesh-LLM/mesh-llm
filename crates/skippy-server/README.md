@@ -15,12 +15,12 @@ mesh/openai-frontend; diagnostic and benchmark clients may connect directly to
 the first stage.
 
 The full request/reply path is tip-to-tip: token IDs enter at the driver-facing
-tip, and activations flow through the stage chain. Stage protocol generation 7
-is a compatibility-breaking contract: prediction-bearing replies return
-directly from the final/readout tip to the driver-facing stage instead of being
-relayed back through intermediate stages. Middle-out is the prefill optimization
-inside that path, where internal boundary activations are handed downstream
-while local compute advances.
+tip, and activations flow through the stage chain. Generation 7 introduced
+direct prediction return from the final/readout tip to the driver-facing stage.
+Generation 9 retains that path and requires mandatory canonical stage-admission
+descriptors with exact participant echo before topology publication. Middle-out
+is the prefill optimization inside that path, where internal boundary
+activations are handed downstream while local compute advances.
 
 ```mermaid
 flowchart LR
@@ -115,7 +115,7 @@ Rosetta vocabulary or control identities. The loaded backend accepts only
 lossless inputs it can preserve; unsupported controls, invalid UTF-8, interior
 NULs, identity mismatches, and limit violations return explicit errors rather
 than being decoded with replacement semantics. Native-serving plugins receive
-the same capability and inventory during activation and must prepare outside
+the same capability and inventory during activation and must complete setup outside
 the proposal deadline.
 
 The `/v1/tokenize` route is retained only as an explicit compatibility and
@@ -126,13 +126,11 @@ deadline handling.
 ## Notes
 
 - `serve-binary` is the tuned binary stage-to-stage path.
-- `serve-binary` participates in the breaking generation-7 stage protocol.
-  Stage compatibility requires the complete `stage-generation-7` control,
-  status-list, and strict-content-identity bundle; direct prediction return and
-  exact verify-checkpoint retirement are part of that generation's contract, so
-  older peers are rejected during split planning instead of being mixed into a
-  generation-7 topology. Generation 6 is historical and is not accepted by the
-  current serve binary.
+- `serve-binary` participates in the breaking generation-9 stage protocol.
+  Stage compatibility requires the complete `stage-generation-9` control,
+  status-list, strict-content-identity, and stage-admission bundle. Older peers,
+  including generation 7 peers, are rejected during split planning rather than
+  being mixed into a generation-9 topology.
 - `serve-binary` accepts upstream protocol connections concurrently. Model
   execution remains serialized by the per-process runtime lock, but readiness,
   abandoned, or broken connections do not monopolize the listener and block the
@@ -156,8 +154,10 @@ deadline handling.
   at once and defaults to the config's KV-derived `lane_count`.
   `--generation-queue-capacity` independently bounds additional waiting
   requests (default `clamp(8 * lanes, 16, 256)`), while
-  `--generation-admission-timeout-secs` bounds predicted and actual queue wait
-  (default 60 seconds). KV restore and prefill-record work runs on a separate
+  `--generation-admission-timeout-secs` can bound predicted and actual queue
+  wait; the default `0` waits until client cancellation so capacity pressure
+  drains through the bounded queue instead of rejecting accepted work. KV
+  restore and prefill-record work runs on a separate
   prompt-scaled deadline: admission timeout plus about one minute per 4,000
   prompt tokens, clamped to at least 60 seconds and at most 30 minutes. A
   legitimate prompt-sized prefill is therefore not killed by the queue-wait

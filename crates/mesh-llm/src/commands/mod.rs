@@ -23,6 +23,9 @@ pub async fn dispatch(cli: &Cli) -> Result<bool> {
     let Some(cmd) = cli.command.as_ref() else {
         return Ok(false);
     };
+    if matches!(cmd, Command::Serve | Command::Client) {
+        return Ok(false);
+    }
     let family = match cmd {
         Command::ExternalPlugin(args) => plugin_cli::external_cli_command_family(cli, args),
         _ => mesh_llm_commands::operational_logging::command_family(cmd),
@@ -47,6 +50,7 @@ async fn dispatch_command(cli: &Cli, cmd: &Command) -> Result<()> {
 
 async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
     match cmd {
+        Command::Serve | Command::Client => Ok(()),
         Command::Models { command } => {
             dispatch_models_command(command).await?;
             Ok(())
@@ -60,9 +64,12 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
             Ok(())
         }
         Command::Runtime { command } => {
-            dispatch_runtime_command(command.as_ref(), cli.config.as_deref()).await
+            dispatch_runtime_command(command.as_ref(), cli.config.as_deref(), cli.llama_flavor)
+                .await
         }
-        Command::Setup { .. } => dispatch_setup_command(cmd, cli.config.as_deref()).await,
+        Command::Setup { .. } => {
+            dispatch_setup_command(cmd, cli.config.as_deref(), cli.llama_flavor).await
+        }
         Command::Uninstall {
             dry_run,
             yes,
@@ -89,7 +96,13 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
         ),
         Command::Config { command } => dispatch_config_command(cli, command),
         Command::Doctor { command, json } => {
-            dispatch_doctor_command(command.as_ref(), cli.config.as_deref(), *json).await
+            dispatch_doctor_command(
+                command.as_ref(),
+                cli.config.as_deref(),
+                cli.llama_flavor,
+                *json,
+            )
+            .await
         }
         Command::Load { name, port } => run_load(name, *port).await,
         Command::Unload { name, port } => run_drop(name, *port).await,

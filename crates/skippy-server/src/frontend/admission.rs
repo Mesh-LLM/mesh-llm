@@ -1,12 +1,20 @@
+#[cfg(test)]
 use crate::frontend::generation::GENERATION_RETRY_AFTER_SECS;
+#[cfg(test)]
 use axum::http::StatusCode;
 use openai_frontend::OpenAiError;
+#[cfg(test)]
 use openai_frontend::OpenAiErrorKind;
 use openai_frontend::OpenAiResult;
 use std::sync::Arc;
-use std::sync::Condvar;
 use std::sync::Mutex;
+use tokio::sync::Notify;
+
+#[cfg(test)]
+use std::sync::Condvar;
+#[cfg(test)]
 use std::time::Duration;
+#[cfg(test)]
 use std::time::Instant;
 
 /// Decode headroom this server actually reserves per in-flight request.
@@ -25,7 +33,9 @@ pub const DECODE_BATCH_HEADROOM_TOKENS: usize = 512;
 pub(super) struct GenerationTokenBudget {
     capacity_tokens: usize,
     state: Mutex<GenerationTokenBudgetState>,
+    #[cfg(test)]
     released: Condvar,
+    released_async: Notify,
 }
 
 #[derive(Debug, Default)]
@@ -51,8 +61,48 @@ impl GenerationTokenBudget {
         Self {
             capacity_tokens: ctx_size.max(1),
             state: Mutex::new(GenerationTokenBudgetState::default()),
+            #[cfg(test)]
             released: Condvar::new(),
+            released_async: Notify::new(),
         }
+    }
+
+    pub(super) fn try_reserve(
+        self: &Arc<Self>,
+        request: GenerationTokenBudgetRequest,
+    ) -> OpenAiResult<Option<GenerationTokenReservation>> {
+        let tokens = request.reservation_tokens();
+        self.ensure_request_fits(tokens)?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| OpenAiError::backend("generation token budget lock poisoned"))?;
+        if state.active_tokens.saturating_add(tokens) > self.capacity_tokens {
+            return Ok(None);
+        }
+        state.active_tokens = state.active_tokens.saturating_add(tokens);
+        Ok(Some(GenerationTokenReservation {
+            budget: self.clone(),
+            tokens,
+            active_tokens_after_reservation: state.active_tokens,
+        }))
+    }
+
+    pub(super) fn can_reserve_now(
+        &self,
+        request: GenerationTokenBudgetRequest,
+    ) -> OpenAiResult<bool> {
+        let tokens = request.reservation_tokens();
+        self.ensure_request_fits(tokens)?;
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| OpenAiError::backend("generation token budget lock poisoned"))?;
+        Ok(state.active_tokens.saturating_add(tokens) <= self.capacity_tokens)
+    }
+
+    pub(super) fn release_notification(&self) -> &Notify {
+        &self.released_async
     }
 
     #[cfg(test)]
@@ -64,13 +114,15 @@ impl GenerationTokenBudget {
         self.reserve_cancellable(request, admission_timeout, None)
     }
 
-    pub(super) fn reserve_cancellable(
+    #[cfg(test)]
+    fn reserve_cancellable(
         self: &Arc<Self>,
         request: GenerationTokenBudgetRequest,
         admission_timeout: Duration,
         cancellation: Option<&openai_frontend::CancellationToken>,
     ) -> OpenAiResult<GenerationTokenReservation> {
-        let tokens = request.reservation_tokens(self.capacity_tokens);
+        let tokens = request.reservation_tokens();
+        self.ensure_request_fits(tokens)?;
         let deadline = Instant::now() + admission_timeout;
         let mut state = self
             .state
@@ -124,8 +176,18 @@ impl GenerationTokenBudget {
         self.capacity_tokens
     }
 
+    fn ensure_request_fits(&self, requested_tokens: usize) -> OpenAiResult<()> {
+        if requested_tokens <= self.capacity_tokens {
+            return Ok(());
+        }
+        Err(OpenAiError::context_length_exceeded(format!(
+            "request requires {requested_tokens} KV tokens but the runtime pool holds {}",
+            self.capacity_tokens
+        )))
+    }
+
     #[cfg(test)]
-    fn active_tokens(&self) -> usize {
+    pub(super) fn active_tokens(&self) -> usize {
         self.state
             .lock()
             .expect("generation token budget lock")
@@ -141,12 +203,10 @@ impl GenerationTokenBudgetRequest {
         }
     }
 
-    fn reservation_tokens(self, capacity_tokens: usize) -> usize {
+    pub(super) fn reservation_tokens(self) -> usize {
         let max_tokens = usize::try_from(self.max_tokens).unwrap_or(usize::MAX);
         let decode_headroom = max_tokens.min(DECODE_BATCH_HEADROOM_TOKENS);
-        self.prompt_tokens
-            .saturating_add(decode_headroom)
-            .min(capacity_tokens.max(1))
+        self.prompt_tokens.saturating_add(decode_headroom)
     }
 }
 
@@ -167,11 +227,14 @@ impl Drop for GenerationTokenReservation {
         }
         if let Ok(mut state) = self.budget.state.lock() {
             state.active_tokens = state.active_tokens.saturating_sub(self.tokens);
+            #[cfg(test)]
             self.budget.released.notify_one();
+            self.budget.released_async.notify_waiters();
         }
     }
 }
 
+#[cfg(test)]
 fn generation_token_budget_timeout_error(
     timeout: Duration,
     requested_tokens: usize,

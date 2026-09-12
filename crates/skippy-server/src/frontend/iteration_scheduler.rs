@@ -108,6 +108,7 @@ pub(crate) struct CacheAwareRuntimeRequest<'a> {
 
 struct IterationSchedulerShared {
     commands: std_mpsc::SyncSender<SchedulerCommand>,
+    max_direct_iteration_tokens: usize,
     owner_count: AtomicUsize,
     worker: Mutex<Option<JoinHandle<()>>>,
 }
@@ -360,6 +361,7 @@ struct SchedulerWorker {
     commands: std_mpsc::Receiver<SchedulerCommand>,
     kv_capacity_tokens: usize,
     max_direct_batch_size: usize,
+    max_direct_iteration_tokens: usize,
     max_commands_per_turn: usize,
     iteration_interval: Duration,
     active_runtime_sessions: usize,
@@ -407,6 +409,7 @@ impl IterationScheduler {
         let max_consecutive_prefill_iterations =
             scheduler_config.max_consecutive_prefill_iterations;
         let mixed_prefill_decode = scheduler_config.mixed_prefill_decode;
+        let max_direct_iteration_tokens = scheduler_config.max_tokens_per_iteration;
         let cache_runtime_queue = CacheRuntimeQueue::new(
             scheduler_config.cache_aging_cost_per_iteration,
             scheduler_config.group_waiting_prefixes,
@@ -459,6 +462,7 @@ impl IterationScheduler {
                     commands: receiver,
                     kv_capacity_tokens,
                     max_direct_batch_size: scheduler_lane_count.max(1),
+                    max_direct_iteration_tokens,
                     max_commands_per_turn: command_queue_capacity.min(MAX_COMMANDS_PER_TURN),
                     iteration_interval,
                     active_runtime_sessions: 0,
@@ -476,6 +480,7 @@ impl IterationScheduler {
         Ok(Self {
             shared: Arc::new(IterationSchedulerShared {
                 commands,
+                max_direct_iteration_tokens,
                 owner_count: AtomicUsize::new(1),
                 worker: Mutex::new(Some(worker)),
             }),
@@ -693,7 +698,11 @@ impl IterationScheduler {
         deadline: Option<Instant>,
         cancellation: Option<&openai_frontend::CancellationToken>,
     ) -> OpenAiResult<SchedulerIterationOutcome> {
-        validate_direct_iteration(token_ids, positions)?;
+        validate_direct_iteration(
+            token_ids,
+            positions,
+            self.shared.max_direct_iteration_tokens,
+        )?;
         ensure_direct_iteration_active(deadline, cancellation)?;
         self.enqueue_command(SchedulerCommand::ExecuteIteration(DirectIteration {
             session_id: session_id.to_string(),
@@ -1300,7 +1309,7 @@ impl SchedulerWorker {
         let batch = take_direct_iteration_batch(
             &mut self.direct_iterations,
             self.max_direct_batch_size,
-            MAX_NATIVE_ITERATION_TOKENS,
+            self.max_direct_iteration_tokens,
         );
         debug_assert!(!batch.is_empty(), "validated direct queue must yield work");
 

@@ -30,6 +30,7 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         self.assertTrue(profile["all_rows"])
         self.assertEqual(profile["budgets"]["total_max_workers"], 18)
         self.assertEqual(profile["budgets"]["linux_max_parallel"], 12)
+        self.assertEqual(profile["budgets"]["macos_max_parallel"], 4)
         self.assertEqual(profile["budgets"]["windows_max_parallel"], 2)
 
     def test_orchestrator_calls_same_slices_for_pr_and_main(self):
@@ -83,6 +84,22 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         self.assertNotIn("runtime_product", kotlin)
         self.assertNotIn("needs:", swift)
         self.assertNotIn("runtime_product", swift)
+        self.assertIn(
+            "max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.macos_max_parallel }}",
+            swift,
+        )
+        self.assertIn(
+            "fail_fast: ${{ inputs.original_event_name == 'pull_request' }}",
+            swift,
+        )
+        swift_producer = (WORKFLOWS / "swift-sdk-artifact.yml").read_text()
+        self.assertIn("fail-fast: ${{ inputs.fail_fast }}", swift_producer)
+        release = (WORKFLOWS / "release.yml").read_text()
+        release_swift = release[
+            release.index("  build_swift_sdk_artifact:"):
+            release.index("  publish:")
+        ]
+        self.assertIn("fail_fast: false", release_swift)
         self.assertIn("needs: [runtime_product, kotlin_sdk_input]", linux)
         self.assertIn(
             "needs: [validate_plan, runtime_product, swift_sdk_input]",
@@ -149,20 +166,119 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         )
 
     def test_cuda_smoke_uses_the_registered_gpu_runner_labels(self):
-        product_smoke = (
-            WORKFLOWS / "ci-linux-product-smoke-slice.yml"
-        ).read_text()
-        smoke = (WORKFLOWS / "smoke.yml").read_text()
+        product_smoke = (WORKFLOWS / "product-integration-smoke.yml").read_text()
 
-        self.assertIn("runner: gpu-nvidia", product_smoke)
         self.assertIn(
             '["self-hosted","Linux","X64","amd64","gpu-nvidia",'
             '"mesh-llm-amd64","mesh-llm"]',
-            smoke,
+            product_smoke,
         )
-        self.assertIn("if: inputs.runner == 'gpu-nvidia'", smoke)
-        self.assertIn("cuda-cudart-12-9", smoke)
-        self.assertIn("libcublas-12-9", smoke)
+        self.assertIn("inputs.platform == 'linux' && inputs.backend == 'cuda'", product_smoke)
+        self.assertNotIn("cuda-cudart-12-9", product_smoke)
+        self.assertNotIn("libcublas-12-9", product_smoke)
+
+    def test_product_integration_supports_accelerator_backends(self):
+        product_smoke = (WORKFLOWS / "product-integration-smoke.yml").read_text()
+        linux = (WORKFLOWS / "ci-linux-product-smoke-slice.yml").read_text()
+        product_script = (ROOT / "scripts/ci-product-integration-smoke.sh").read_text()
+
+        self.assertIn("inputs.backend == 'vulkan'", product_smoke)
+        self.assertIn("MESH_ROCM_INFERENCE_RUNNER_ENABLED == 'true'", product_smoke)
+        self.assertIn('"gpu-amd"', product_smoke)
+        self.assertIn("vulkaninfo --summary", product_smoke)
+        self.assertIn("rocminfo", product_smoke)
+        self.assertIn("product_integration_vulkan:", linux)
+        self.assertIn("product_integration_rocm:", linux)
+        self.assertIn("linux/vulkan) DEVICE=Vulkan0", product_script)
+        self.assertIn("linux/rocm) DEVICE=ROCm0", product_script)
+        self.assertIn("verify_artifact_local_cuda_runtime", product_script)
+        self.assertIn("verify-native-runtime-package.sh", product_script)
+        self.assertIn("env -u LD_LIBRARY_PATH", product_script)
+        self.assertIn('"$benchmark" --probe', product_script)
+        self.assertIn('env -u LD_LIBRARY_PATH "$benchmark" --probe', product_script)
+        self.assertIn("CUDA_VISIBLE_DEVICES", product_script)
+        self.assertIn("NVIDIA_VISIBLE_DEVICES", product_script)
+
+        cuda_benchmark = (
+            ROOT
+            / "crates/mesh-llm-gpu-bench/native/cuda/membench-fingerprint.cu"
+        ).read_text()
+        self.assertIn('strcmp(argv[i], "--probe")', cuda_benchmark)
+        self.assertIn("if (probeMode)", cuda_benchmark)
+
+    def test_two_node_split_smoke_covers_dense_and_recurrent_models(self):
+        workflow = (WORKFLOWS / "product-integration-smoke.yml").read_text()
+        restore = (ROOT / ".github/actions/restore-product-integration-inputs/action.yml").read_text()
+        product_script = (ROOT / "scripts/ci-product-integration-smoke.sh").read_text()
+        smoke_script = (ROOT / "scripts/ci-two-node-split-smoke.sh").read_text()
+
+        self.assertIn("restore-product-integration-inputs", workflow)
+        self.assertIn("dense_model_artifact_id:", restore)
+        self.assertIn("dense_model_sha256:", restore)
+        self.assertIn("recurrent_model_artifact_id:", restore)
+        self.assertIn("recurrent_model_sha256:", restore)
+        self.assertIn("steps.resolve.outputs.dense_artifact_id", restore)
+        self.assertIn("steps.resolve.outputs.dense_sha256", restore)
+        self.assertIn("steps.resolve.outputs.recurrent_artifact_id", restore)
+        self.assertIn("steps.resolve.outputs.recurrent_sha256", restore)
+        self.assertIn("tr '[:lower:]' '[:upper:]'", restore)
+        self.assertNotIn("${fixture^^}", restore)
+        self.assertIn("steps.inputs.outputs.dense_model_artifact_id", workflow)
+        self.assertIn("steps.inputs.outputs.dense_model_sha256", workflow)
+        self.assertIn("steps.inputs.outputs.recurrent_model_artifact_id", workflow)
+        self.assertIn("steps.inputs.outputs.recurrent_model_sha256", workflow)
+        self.assertIn("smollm2-q8-inference", restore)
+        self.assertIn("family-granite-hybrid", restore)
+        self.assertIn("--github-output-prefix dense_", restore)
+        self.assertIn("--github-output-prefix recurrent_", restore)
+        self.assertIn("MESH_TWO_NODE_SPLIT_CLIENT_ROUTING=1", product_script)
+        self.assertIn("run_phase dense-split-kv", product_script)
+        self.assertIn("run_phase recurrent-split-kv", product_script)
+        self.assertIn("MESH_TWO_NODE_SPLIT_EXPECTED_EXACT_PAYLOAD_KIND=kv-recurrent", product_script)
+        self.assertNotIn("MESH_TWO_NODE_SPLIT_RECURRENT_MODEL=", product_script)
+        self.assertIn("run_client_routing_probe", smoke_script)
+        self.assertIn("Passive client routing and streaming validated", smoke_script)
+        self.assertIn(
+            'checkpointed_restore = exact_payload_kind == "kv-recurrent"',
+            smoke_script,
+        )
+        self.assertIn(
+            "if not checkpointed_restore and (", smoke_script
+        )
+
+    def test_product_integration_uploads_reconciled_phase_evidence_on_every_outcome(self):
+        workflow = (WORKFLOWS / "product-integration-smoke.yml").read_text()
+
+        self.assertIn("name: Upload product integration phase evidence", workflow)
+        self.assertIn("if: success() || failure()", workflow)
+        self.assertIn("phase-results.json", workflow)
+        self.assertIn("*/split-evidence.json", workflow)
+        self.assertIn("*/split-evidence-snapshots/*.json", workflow)
+        self.assertIn("*/*.log", workflow)
+        self.assertIn("-evidence", workflow)
+        self.assertIn("if-no-files-found: error", workflow)
+
+    def test_protected_catalog_defers_product_integration_rollout(self):
+        slices = json.loads(SLICES.read_text())
+        smoke_ids = {row["id"] for row in slices["smoke_rows"]}
+        linux = (WORKFLOWS / "ci-linux-product-smoke-slice.yml").read_text()
+
+        self.assertNotIn("product-integration-cpu", smoke_ids)
+        self.assertNotIn("qwen-recurrent-gate", smoke_ids)
+        self.assertIn("core", smoke_ids)
+        self.assertIn("two-node-client", smoke_ids)
+        self.assertIn("two-node-split", smoke_ids)
+        for smoke_id in ("core", "two-node-client", "two-node-split"):
+            self.assertIn(
+                f"contains(fromJson(inputs.smoke_matrix).*.id, '{smoke_id}')",
+                linux,
+            )
+        self.assertIn("Qwen3.5-0.8B-Q4_K_M.gguf", linux)
+        self.assertIn("expected_exact_payload_kind: kv-recurrent", linux)
+        self.assertNotIn("product-integration-cuda", smoke_ids)
+        self.assertNotIn("product-integration-metal", smoke_ids)
+        self.assertIn("core-cuda", smoke_ids)
+        self.assertIn("metal-model-load", smoke_ids)
 
     def test_cuda_product_supports_the_registered_gpu_runner_architecture(self):
         runtimes = json.loads(SLICES.read_text())["runtime_rows"]

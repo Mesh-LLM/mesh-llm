@@ -46,11 +46,55 @@ fn relay_health_reconnects_degraded_relay_paths() {
                 kind: SelectedPathKind::Relay,
                 rtt_ms: Some(RELAY_DEGRADED_RTT_MS + 50),
             },
+            false,
             now,
             0,
             true,
         ),
         Some(RelayReconnectReason::RelayRttDegraded)
+    );
+}
+
+#[test]
+fn relay_health_rescues_known_direct_candidate_after_short_grace() {
+    let now = std::time::Instant::now();
+    let mut health = RelayPeerHealth::default();
+    health.observe(
+        RelayPathSnapshot {
+            kind: SelectedPathKind::Relay,
+            rtt_ms: Some(260),
+        },
+        now - std::time::Duration::from_secs(RELAY_ONLY_DIRECT_RESCUE_SECS + 1),
+    );
+
+    assert_eq!(
+        relay_reconnect_reason(
+            &health,
+            RelayPathSnapshot {
+                kind: SelectedPathKind::Relay,
+                rtt_ms: Some(260),
+            },
+            true,
+            now,
+            0,
+            true,
+        ),
+        Some(RelayReconnectReason::RelayOnlyTooLong)
+    );
+    assert_eq!(
+        relay_reconnect_reason(
+            &health,
+            RelayPathSnapshot {
+                kind: SelectedPathKind::Relay,
+                rtt_ms: Some(260),
+            },
+            false,
+            now,
+            0,
+            true,
+        ),
+        None,
+        "relay-only peers without a direct candidate keep the longer fallback grace"
     );
 }
 
@@ -73,6 +117,7 @@ fn relay_health_reconnects_long_lived_relay_paths() {
                 kind: SelectedPathKind::Relay,
                 rtt_ms: Some(260),
             },
+            false,
             now,
             0,
             true,
@@ -102,6 +147,7 @@ fn relay_health_respects_cooldown_and_inflight_requests() {
                 kind: SelectedPathKind::Relay,
                 rtt_ms: Some(RELAY_DEGRADED_RTT_MS + 10),
             },
+            false,
             now,
             0,
             true,
@@ -118,6 +164,7 @@ fn relay_health_respects_cooldown_and_inflight_requests() {
                 kind: SelectedPathKind::Relay,
                 rtt_ms: Some(RELAY_DEGRADED_RTT_MS + 10),
             },
+            false,
             now,
             1,
             true,
@@ -132,6 +179,7 @@ fn relay_health_respects_cooldown_and_inflight_requests() {
                 kind: SelectedPathKind::Relay,
                 rtt_ms: Some(RELAY_DEGRADED_RTT_MS + 10),
             },
+            false,
             now,
             0,
             false,
@@ -158,6 +206,7 @@ fn relay_reconnect_controller_prioritizes_degraded_rtt_over_aged_relay() {
                         kind: SelectedPathKind::Relay,
                         rtt_ms: Some(250),
                     },
+                    has_direct_candidate: false,
                 },
                 RelayPeerObservation {
                     peer_id: degraded_peer,
@@ -165,6 +214,7 @@ fn relay_reconnect_controller_prioritizes_degraded_rtt_over_aged_relay() {
                         kind: SelectedPathKind::Relay,
                         rtt_ms: Some(250),
                     },
+                    has_direct_candidate: false,
                 },
             ],
             initial,
@@ -183,6 +233,7 @@ fn relay_reconnect_controller_prioritizes_degraded_rtt_over_aged_relay() {
                         kind: SelectedPathKind::Relay,
                         rtt_ms: Some(250),
                     },
+                    has_direct_candidate: false,
                 },
                 RelayPeerObservation {
                     peer_id: degraded_peer,
@@ -190,6 +241,7 @@ fn relay_reconnect_controller_prioritizes_degraded_rtt_over_aged_relay() {
                         kind: SelectedPathKind::Relay,
                         rtt_ms: Some(RELAY_DEGRADED_RTT_MS + 25),
                     },
+                    has_direct_candidate: false,
                 },
             ],
             now,
@@ -257,6 +309,7 @@ fn relay_reconnect_controller_applies_cooldown_after_attempt_and_prunes_gone_pee
                     kind: SelectedPathKind::Relay,
                     rtt_ms: Some(RELAY_DEGRADED_RTT_MS + 10),
                 },
+                has_direct_candidate: false,
             }],
             now,
             0,
@@ -274,6 +327,7 @@ fn relay_reconnect_controller_applies_cooldown_after_attempt_and_prunes_gone_pee
                     kind: SelectedPathKind::Relay,
                     rtt_ms: Some(RELAY_DEGRADED_RTT_MS + 10),
                 },
+                has_direct_candidate: false,
             }],
             now + std::time::Duration::from_secs(RELAY_RECONNECT_COOLDOWN_SECS - 1),
             0,
@@ -290,6 +344,7 @@ fn relay_reconnect_controller_applies_cooldown_after_attempt_and_prunes_gone_pee
                 kind: SelectedPathKind::Direct,
                 rtt_ms: Some(15),
             },
+            has_direct_candidate: false,
         }],
         now + std::time::Duration::from_secs(RELAY_RECONNECT_COOLDOWN_SECS + 1),
         0,
@@ -324,6 +379,7 @@ fn peer_state_test_announcement(addr: EndpointAddr) -> super::PeerAnnouncement {
         is_soc: None,
         gpu_vram: None,
         gpu_reserved_bytes: None,
+        memory: None,
         gpu_mem_bandwidth_gbps: None,
         gpu_compute_tflops_fp32: None,
         gpu_compute_tflops_fp16: None,
@@ -928,6 +984,7 @@ fn gossip_frame_roundtrip_preserves_scanned_model_metadata() {
         is_soc: Some(true),
         gpu_vram: Some("128 GB".to_string()),
         gpu_reserved_bytes: None,
+        memory: None,
         gpu_mem_bandwidth_gbps: None,
         gpu_compute_tflops_fp32: None,
         gpu_compute_tflops_fp16: None,
@@ -1310,6 +1367,7 @@ fn transitive_peer_update_refreshes_metadata_fields() {
         is_soc: None,
         gpu_vram: None,
         gpu_reserved_bytes: None,
+        memory: None,
         gpu_mem_bandwidth_gbps: None,
         gpu_compute_tflops_fp32: None,
         gpu_compute_tflops_fp16: None,
@@ -1403,6 +1461,7 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         is_soc: None,
         gpu_vram: None,
         gpu_reserved_bytes: None,
+        memory: None,
         gpu_mem_bandwidth_gbps: None,
         gpu_compute_tflops_fp32: None,
         gpu_compute_tflops_fp16: None,
@@ -1470,6 +1529,7 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         is_soc: None,
         gpu_vram: None,
         gpu_reserved_bytes: None,
+        memory: None,
         gpu_mem_bandwidth_gbps: None,
         gpu_compute_tflops_fp32: None,
         gpu_compute_tflops_fp16: None,
@@ -1775,4 +1835,104 @@ async fn connectivity_snapshot_does_not_treat_admitted_membership_as_connected()
             connected_peer_count: 0,
         }
     );
+}
+
+#[test]
+fn transitive_peer_update_refreshes_memory_only_when_advertised() {
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0x11; 32]).public());
+    let advertised = crate::mesh::AdvertisedMemory {
+        total_bytes: 12_000_000_000,
+        reserved_bytes: 0,
+        platform_reserve_bytes: 0,
+        configured_reserve_bytes: 2_000_000_000,
+        usable_bytes: 10_000_000_000,
+        system_ram_bytes: None,
+        ram_offload_bytes: 0,
+    };
+    let mut existing = make_test_peer_info(peer_id);
+    existing.memory = Some(advertised);
+
+    let addr = EndpointAddr {
+        id: peer_id,
+        addrs: Default::default(),
+    };
+    let mut ann = peer_state_test_announcement(addr.clone());
+    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee));
+    assert_eq!(
+        existing.memory,
+        Some(advertised),
+        "a relay without the block keeps the last advertised one"
+    );
+
+    let refreshed = crate::mesh::AdvertisedMemory {
+        configured_reserve_bytes: 3_000_000_000,
+        usable_bytes: 9_000_000_000,
+        ..advertised
+    };
+    ann.memory = Some(refreshed);
+    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee));
+    assert_eq!(existing.memory, Some(refreshed));
+}
+
+#[test]
+fn transitive_peer_update_drops_the_cached_memory_when_the_capacity_moves() {
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0x12; 32]).public());
+    let advertised = crate::mesh::AdvertisedMemory {
+        total_bytes: 12_000_000_000,
+        reserved_bytes: 0,
+        platform_reserve_bytes: 0,
+        configured_reserve_bytes: 2_000_000_000,
+        usable_bytes: 10_000_000_000,
+        system_ram_bytes: None,
+        ram_offload_bytes: 0,
+    };
+    let mut existing = make_test_peer_info(peer_id);
+    existing.vram_bytes = 10_000_000_000;
+    existing.memory = Some(advertised);
+
+    let addr = EndpointAddr {
+        id: peer_id,
+        addrs: Default::default(),
+    };
+    // An older relay strips the block and carries a new cap: the cached block
+    // explained the old budget, so it must not travel with the new one.
+    let mut ann = peer_state_test_announcement(addr.clone());
+    ann.vram_bytes = 8_000_000_000;
+    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee));
+    assert_eq!(existing.vram_bytes, 8_000_000_000);
+    assert_eq!(
+        existing.memory, None,
+        "a stale breakdown must not be paired with a new capacity"
+    );
+
+    // The same relay with the unchanged capacity keeps the block.
+    existing.memory = Some(advertised);
+    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee));
+    assert_eq!(existing.memory, Some(advertised));
+}
+
+#[test]
+fn peer_meaningfully_changed_detects_memory_updates() {
+    let peer_id = make_test_endpoint_id(13);
+    let mut old_peer = make_test_peer_info(peer_id);
+    let mut new_peer = old_peer.clone();
+
+    let advertised = crate::mesh::AdvertisedMemory {
+        total_bytes: 12_000_000_000,
+        reserved_bytes: 0,
+        platform_reserve_bytes: 0,
+        configured_reserve_bytes: 2_000_000_000,
+        usable_bytes: 10_000_000_000,
+        system_ram_bytes: None,
+        ram_offload_bytes: 0,
+    };
+    old_peer.memory = Some(advertised);
+    new_peer.memory = Some(crate::mesh::AdvertisedMemory {
+        configured_reserve_bytes: 3_000_000_000,
+        usable_bytes: 9_000_000_000,
+        ..advertised
+    });
+
+    assert!(peer_meaningfully_changed(&old_peer, &new_peer));
+    assert!(!peer_meaningfully_changed(&old_peer, &old_peer.clone()));
 }

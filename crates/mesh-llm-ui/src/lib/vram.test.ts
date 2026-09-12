@@ -2,11 +2,18 @@ import { describe, expect, it } from 'vitest'
 
 import {
   allocatableVramBytes,
+  formatDecimalVramGB,
   formatRatedVramBytes,
   gpuAllocatableVramGB,
   gpuRatedVramGB,
   gpuReservedVramGB,
   gpuSystemReportedVramGB,
+  meshAdvertisedVramGB,
+  isClientPeer,
+  meshCapacityInputFromStatus,
+  memoryBreakdownGB,
+  nodeAdvertisedVramGB,
+  nodeRatedVramGB,
   ratedVramGBFromBytes
 } from '@/lib/vram'
 
@@ -40,5 +47,111 @@ describe('VRAM accounting utilities', () => {
   it('subtracts reserved memory from allocatable bytes with saturation', () => {
     expect(allocatableVramBytes(1_000, 400)).toBe(600)
     expect(allocatableVramBytes(1_000, 1_400)).toBe(0)
+  })
+
+  it('prefers the advertised capacity a node announces to the mesh over its GPU inventory', () => {
+    const node = {
+      vram_gb: 44.02970624,
+      gpus: [
+        { rated_vram_gb: 32, vram_bytes: 34_190_917_632, reserved_bytes: 514_850_816 },
+        { rated_vram_gb: 10, vram_bytes: 10_737_418_240, reserved_bytes: 383_778_816 }
+      ]
+    }
+
+    expect(nodeAdvertisedVramGB(node)).toBe(44.02970624)
+    expect(nodeRatedVramGB(node)).toBe(42)
+  })
+
+  it('falls back to allocatable inventory, then the rated class, when nothing is advertised', () => {
+    const withReserve = { vram_gb: 0, gpus: [{ vram_bytes: 32_000_000_000, reserved_bytes: 1_000_000_000 }] }
+    expect(nodeAdvertisedVramGB(withReserve)).toBe(31)
+
+    const ratedOnly = { gpus: [{ rated_vram_gb: 24 }] }
+    expect(nodeAdvertisedVramGB(ratedOnly)).toBe(24)
+
+    expect(nodeAdvertisedVramGB({ vram_gb: 0, gpus: [] })).toBeNull()
+  })
+
+  it('reads legacy my_vram_gb when vram_gb is absent', () => {
+    expect(nodeAdvertisedVramGB({ my_vram_gb: 12.5 })).toBe(12.5)
+  })
+
+  it('sums advertised capacity across the local node and peers', () => {
+    const mesh = {
+      vram_gb: 115.448725504,
+      gpus: [{ rated_vram_gb: 128, vram_bytes: 115_448_725_504 }],
+      peers: [{ vram_gb: 44.02970624, gpus: [{ rated_vram_gb: 32 }, { rated_vram_gb: 10 }] }]
+    }
+
+    expect(meshAdvertisedVramGB(mesh)).toBeCloseTo(159.478, 3)
+  })
+
+  it('leaves client-role nodes out of mesh totals even when they advertise capacity', () => {
+    expect(nodeAdvertisedVramGB({ vram_gb: 24, client: true })).toBeNull()
+
+    const input = meshCapacityInputFromStatus({
+      my_vram_gb: 115.4,
+      node_state: 'serving',
+      peers: [
+        { vram_gb: 44, state: 'serving', role: 'Host' },
+        { vram_gb: 24, state: 'client', role: 'Client' },
+        { vram_gb: 16, state: 'serving', role: 'Client' }
+      ]
+    })
+
+    expect(meshAdvertisedVramGB(input)).toBeCloseTo(159.4, 6)
+  })
+
+  it('suppresses the local node capacity when this node is a client', () => {
+    expect(
+      meshAdvertisedVramGB(
+        meshCapacityInputFromStatus({ my_vram_gb: 115.4, is_client: true, peers: [{ vram_gb: 44 }] })
+      )
+    ).toBe(44)
+    expect(
+      meshAdvertisedVramGB(meshCapacityInputFromStatus({ my_vram_gb: 115.4, node_state: 'client', peers: [] }))
+    ).toBe(0)
+  })
+
+  it('recognises a client peer from node_state, state, or role', () => {
+    expect(isClientPeer({ node_state: 'client' })).toBe(true)
+    expect(isClientPeer({ state: 'client' })).toBe(true)
+    expect(isClientPeer({ role: 'Client' })).toBe(true)
+    expect(isClientPeer({ node_state: 'serving', role: 'Host' })).toBe(false)
+  })
+})
+
+describe('advertised memory breakdown', () => {
+  const memory = {
+    total_bytes: 12_000_000_000,
+    reserved_bytes: 500_000_000,
+    platform_reserve_bytes: 0,
+    configured_reserve_bytes: 2_000_000_000,
+    usable_bytes: 9_500_000_000,
+    system_ram_bytes: 32_000_000_000,
+    ram_offload_bytes: 18_000_000_000
+  }
+
+  it('converts the breakdown to decimal GB and leaves absent system RAM absent', () => {
+    expect(memoryBreakdownGB(memory)).toEqual({
+      totalGB: 12,
+      reservedGB: 0.5,
+      platformReserveGB: 0,
+      configuredReserveGB: 2,
+      usableGB: 9.5,
+      systemRamGB: 32,
+      ramOffloadGB: 18
+    })
+    expect(memoryBreakdownGB({ ...memory, system_ram_bytes: undefined })?.systemRamGB).toBeNull()
+    expect(memoryBreakdownGB({ ...memory, platform_reserve_bytes: undefined })?.platformReserveGB).toBe(0)
+    expect(memoryBreakdownGB({ ...memory, usable_bytes: Number.NaN })).toBeNull()
+    expect(memoryBreakdownGB(null)).toBeNull()
+    expect(memoryBreakdownGB(undefined)).toBeNull()
+  })
+
+  it('formats itemized values with one decimal instead of a capacity class', () => {
+    expect(formatDecimalVramGB(9.5)).toBe('9.5 GB')
+    expect(formatDecimalVramGB(0)).toBe('0.0 GB')
+    expect(formatDecimalVramGB(null)).toBe('Unknown')
   })
 })

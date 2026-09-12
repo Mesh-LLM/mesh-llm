@@ -68,7 +68,7 @@ impl StageOpenAiBackend {
     /// The caller must hold the runtime lock. This check is intentionally
     /// canonical-position based: token text or a caller-supplied count cannot
     /// authorize exporting a state at a different native position.
-    pub(super) fn record_exact_state_at_tokens(
+    pub(in crate::frontend) fn record_exact_state_at_tokens(
         &self,
         runtime: &mut RuntimeState,
         session_id: &str,

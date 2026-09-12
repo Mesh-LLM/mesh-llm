@@ -67,7 +67,6 @@ jobs:
           grep -Fq 'pull_request|pull_request_target' .github/actions/select-ci-runners/action.yml
           grep -Fq 'depot_enabled=false' .github/actions/select-ci-runners/action.yml
           workflow_targets=(
-            .github/workflows/ci.yml
             .github/workflows/main_*.yml
             .github/workflows/pr_quality.yml
             .github/workflows/pr_website.yml

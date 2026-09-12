@@ -63,15 +63,13 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             self.assertNotIn("actions.createWorkflowDispatch", workflow)
             self.assertNotIn("prepare-host-input", workflow)
 
-    def test_legacy_entrypoints_are_inert_migration_shims(self):
-        for filename in ("pr_builds.yml", "ci-orchestrator.yml", "ci.yml"):
-            with self.subTest(filename=filename):
-                workflow = self.workflow(filename)
-                self.assertIn("workflow_call:", workflow)
-                self.assertNotIn("pull_request:", workflow)
-                self.assertNotIn("\n  push:\n", workflow)
-                self.assertNotIn("uses: ./.github/workflows/ci-", workflow)
-                self.assertNotIn("Mesh-LLM/mesh-llm/.github/workflows/ci-", workflow)
+    def test_retained_ci_shim_is_inert(self):
+        workflow = self.workflow("ci.yml")
+        self.assertIn("workflow_call:", workflow)
+        self.assertNotIn("pull_request:", workflow)
+        self.assertNotIn("\n  push:\n", workflow)
+        self.assertNotIn("uses: ./.github/workflows/ci-", workflow)
+        self.assertNotIn("Mesh-LLM/mesh-llm/.github/workflows/ci-", workflow)
 
     def test_pr_validation_has_exactly_five_focused_entrypoints(self):
         expected = {
@@ -92,10 +90,6 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         self.assertTrue(NON_VALIDATION_PR_WORKFLOWS <= pr_attached)
         actual = pr_attached - NON_VALIDATION_PR_WORKFLOWS
         self.assertEqual(set(expected), actual)
-        orchestrator = self.workflow("ci-orchestrator.yml")
-        self.assertNotIn("pull_request:", orchestrator)
-        self.assertNotIn("lane_plan_json", orchestrator)
-
         for filename, lane in expected.items():
             workflow = self.workflow(filename)
             protected_calls = [
@@ -150,7 +144,7 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         docs = (ROOT / "ci" / "ci.md").read_text()
         self.assertIn("The five-way split is a hard CI architecture invariant", docs)
         self.assertIn("`dispatched`, with the real work detached", docs)
-        self.assertIn("Do not reintroduce", docs)
+        self.assertIn("Do not add another all-lanes PR", docs)
         self.assertIn("Do not funnel main pushes through `ci-control.yml`", docs)
 
     def test_controller_dispatches_only_named_topic_and_platform_workflows(self):
@@ -160,7 +154,6 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         self.assertEqual(1, workflow.count("uses: ./.github/actions/plan-ci"))
         self.assertIn("name: 'CI Required'", workflow)
         compatibility = self.workflow("ci.yml")
-        self.assertNotIn("ci-orchestrator.yml", compatibility)
         self.assertNotIn("createWorkflowDispatch", compatibility)
 
     def test_platform_consumers_require_only_matching_producers(self):
@@ -228,13 +221,11 @@ class PrWorkflowArtifactTests(unittest.TestCase):
     def test_rust_tests_restore_only_verified_trusted_model_cache(self):
         workflow = self.workflow("ci-rust-tests-slice.yml")
         self.assertIn(
-            "SKIPPY_CORRECTNESS_MODEL_REVISION: "
-            "ef4088322893040952513f532f736ddeab518403",
+            "ci/model-artifacts/manifests/skippy-correctness.json",
             workflow,
         )
         self.assertIn(
-            "SKIPPY_CORRECTNESS_MODEL_SHA256: "
-            "12fae8b8f78f0360b498d04c8db7d33aff29ab7d8080231f93a17c18119e6735",
+            "scripts/resolve-test-model-manifest.py",
             workflow,
         )
         self.assertIn("Restore Skippy correctness model cache", workflow)
@@ -243,8 +234,11 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             "needs.runner_policy.outputs.allow_native_github_cache == 'true'",
             workflow,
         )
-        self.assertIn("--revision \"$SKIPPY_CORRECTNESS_MODEL_REVISION\"", workflow)
-        self.assertIn("sha256sum --check --strict", workflow)
+        self.assertIn(
+            '--revision "${{ steps.skippy_correctness_model.outputs.revision }}"',
+            workflow,
+        )
+        self.assertIn('--verify-root "$RUNNER_TEMP/skippy-correctness-model"', workflow)
         self.assertIn("Save trusted Skippy correctness model cache", workflow)
         self.assertIn("uses: actions/cache/save@", workflow)
         self.assertIn(

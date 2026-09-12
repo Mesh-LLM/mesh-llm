@@ -36,7 +36,7 @@ use super::{
         elapsed_us, ensure_matches, ensure_reply_kind, parse_chain_splits, parse_split_list,
         protocol_flash_attn, protocol_load_mode, runtime_flash_attn, runtime_load_mode,
         runtime_model_identity, send_generation_config, stage_model_resolution,
-        stage_server_model_path, status,
+        stage_resident_tensor_names, stage_server_model_path, status,
     },
 };
 
@@ -268,6 +268,22 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         &args.model_identity,
         stage2_spec,
     )?;
+    let resident_tensor_names = stage_resident_tensor_names(
+        args.stage_load_mode,
+        &args.model,
+        &[
+            &stage0_resolution.path,
+            &stage1_resolution.path,
+            &stage2_resolution.path,
+        ],
+        &[
+            (0, args.split_layer_1),
+            (args.split_layer_1, args.split_layer_2),
+            (args.split_layer_2, args.layer_end),
+        ],
+        args.ctx_size,
+        1,
+    )?;
     let stage0_config = RuntimeConfig {
         stage_index: 0,
         layer_start: 0,
@@ -301,6 +317,7 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         include_output: false,
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
+        resident_tensor_names: resident_tensor_names[0].clone(),
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
@@ -355,6 +372,7 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         "n_gpu_layers": args.n_gpu_layers,
         "flash_attn_type": protocol_flash_attn(args.flash_attn),
         "filter_tensors_on_load": true,
+        "resident_tensor_names": resident_tensor_names[2],
         "load_mode": protocol_load_mode(args.stage_load_mode),
         "bind_addr": args.stage2_bind_addr,
         "upstream": {
@@ -384,6 +402,7 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         "n_gpu_layers": args.n_gpu_layers,
         "flash_attn_type": protocol_flash_attn(args.flash_attn),
         "filter_tensors_on_load": true,
+        "resident_tensor_names": resident_tensor_names[1],
         "load_mode": protocol_load_mode(args.stage_load_mode),
         "bind_addr": args.stage1_bind_addr,
         "upstream": {

@@ -23,8 +23,8 @@ pub use server::{
 };
 
 pub(in crate::frontend) use cache_hints::{
-    ChainPrefixRestore, GENERATION_RETRY_AFTER_SECS, GENERATION_TOKEN_BUDGET_TIMEOUT,
-    GenerationCacheStats, MAX_EXACT_REPLAY_TOKENS, OpenAiCacheHints, OpenAiGenerationIds,
+    ChainPrefixRestore, GENERATION_RETRY_AFTER_SECS, GenerationCacheStats, MAX_EXACT_REPLAY_TOKENS,
+    OpenAiCacheHints, OpenAiGenerationIds,
 };
 pub(in crate::frontend) use concurrency::*;
 pub(in crate::frontend) use draft_runner::*;
@@ -41,11 +41,19 @@ pub(crate) fn default_generation_queue_capacity(generation_concurrency: usize) -
     generation_concurrency.saturating_mul(8).clamp(16, 256)
 }
 
+/// Zero keeps accepted generation work queued until client cancellation.
+pub const DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS: u64 = 0;
+
 pub(crate) use server::resolve_adaptive_generation_min_concurrency;
 
 #[cfg(test)]
 mod admission_defaults_tests {
-    use super::default_generation_queue_capacity;
+    use super::{DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS, default_generation_queue_capacity};
+
+    #[test]
+    fn accepted_generation_waits_for_capacity_by_default() {
+        assert_eq!(DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS, 0);
+    }
 
     #[test]
     fn queue_capacity_tracks_lane_waves_with_bounds() {

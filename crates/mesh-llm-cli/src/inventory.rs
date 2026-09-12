@@ -209,6 +209,9 @@ pub fn build_cli_inventory() -> CliInventory {
     ));
 
     for subcommand in command.get_subcommands() {
+        if subcommand.get_name() == "serve" || subcommand.get_name() == "client" {
+            continue;
+        }
         children.push(build_command_node(subcommand, &root_path, &root_global_ids));
     }
 
@@ -782,5 +785,25 @@ mod tests {
                 }));
             }
         }
+    }
+
+    #[test]
+    fn inventory_contains_exactly_one_serve_and_client_surface_node() {
+        let inventory = build_cli_inventory();
+        let serve_count = inventory
+            .root
+            .children
+            .iter()
+            .filter(|child| child.name == "serve")
+            .count();
+        let client_count = inventory
+            .root
+            .children
+            .iter()
+            .filter(|child| child.name == "client")
+            .count();
+
+        assert_eq!(serve_count, 1, "serve should appear exactly once");
+        assert_eq!(client_count, 1, "client should appear exactly once");
     }
 }

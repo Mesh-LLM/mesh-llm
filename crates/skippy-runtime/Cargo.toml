@@ -13,8 +13,10 @@ dynamic-native-runtime = ["skippy-ffi/dynamic-runtime"]
 
 [dependencies]
 anyhow.workspace = true
-skippy-ffi = { path = "../skippy-ffi", version = "0.76.0-rc9", default-features = false  }
-skippy-model = { path = "../skippy-model", version = "0.76.0-rc9" }
+hex = "0.4"
+skippy-ffi = { path = "../skippy-ffi", version = "0.76.1", default-features = false  }
+skippy-model = { path = "../skippy-model", version = "0.76.1" }
+model-ref = { path = "../model-ref", version = "0.76.1" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

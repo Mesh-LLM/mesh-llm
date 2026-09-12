@@ -81,15 +81,20 @@ pub(super) fn take_direct_iteration_batch(
     batch
 }
 
-pub(super) fn validate_direct_iteration(token_ids: &[i32], positions: &[i32]) -> OpenAiResult<()> {
+pub(super) fn validate_direct_iteration(
+    token_ids: &[i32],
+    positions: &[i32],
+    max_iteration_tokens: usize,
+) -> OpenAiResult<()> {
     if token_ids.is_empty() {
         return Err(OpenAiError::invalid_request(
             "scheduler iteration requires at least one token",
         ));
     }
-    if token_ids.len() > MAX_NATIVE_ITERATION_TOKENS {
+    let token_limit = max_iteration_tokens.min(MAX_NATIVE_ITERATION_TOKENS);
+    if token_ids.len() > token_limit {
         return Err(OpenAiError::invalid_request(format!(
-            "scheduler iteration exceeds the {MAX_NATIVE_ITERATION_TOKENS}-token limit"
+            "scheduler iteration exceeds the {token_limit}-token configured iteration limit"
         )));
     }
     if !positions.is_empty() && !positions.len().is_multiple_of(token_ids.len()) {

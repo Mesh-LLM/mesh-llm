@@ -78,12 +78,11 @@ jobs:
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ runner.temp }}/mesh-llm-hf-download-cache
-          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-hf-download-smoke-models-${{ hashFiles('.github/cache-version.txt') }}
-          restore-keys: |
-            ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-hf-download-smoke-models-
+          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-hf-download-smoke-models-${{ hashFiles('ci/model-artifacts/manifests/hf-download-smoke.json', '.github/cache-version.txt') }}
       - name: HuggingFace download integration tests
         env:
           MESH_HF_DOWNLOAD_TEST_CACHE_DIR: ${{ runner.temp }}/mesh-llm-hf-download-cache
+          MESH_HF_DOWNLOAD_TEST_CADENCE: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' || github.event.inputs.original_event_name == 'pull_request' || github.event.inputs.original_event_name == 'pull_request_target') && 'pull-request' || 'main' }}
         run: scripts/ci-hf-download-smoke.sh
       - name: Save Hugging Face download test model cache
         if: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' && steps.hf_download_model_cache.outputs.cache-hit != 'true' }}

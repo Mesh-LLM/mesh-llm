@@ -25,17 +25,17 @@ base64 = "0.23"
 blake3.workspace = true
 clap.workspace = true
 futures-util = "0.3"
-skippy-runtime = { path = "../skippy-runtime", version = "0.76.0-rc9"  }
-skippy-scheduler = { path = "../skippy-scheduler", version = "0.76.0-rc9" }
-skippy-tokenizer = { path = "../skippy-tokenizer", version = "0.76.0-rc9" }
-model-artifact = { path = "../model-artifact", version = "0.76.0-rc9" }
-mesh-llm-events = { path = "../mesh-llm-events", version = "0.76.0-rc9" }
-mesh-native-serving-plugin-api = { path = "../mesh-native-serving-plugin-api", version = "0.76.0-rc9" }
-skippy-protocol = { path = "../skippy-protocol", version = "0.76.0-rc9"  }
-skippy-cache = { path = "../skippy-cache", version = "0.76.0-rc9"  }
-skippy-metrics = { path = "../skippy-metrics", version = "0.76.0-rc9"  }
-skippy-topology = { path = "../skippy-topology", version = "0.76.0-rc9" }
-openai-frontend = { path = "../openai-frontend", version = "0.76.0-rc9"  }
+skippy-runtime = { path = "../skippy-runtime", version = "0.76.1"  }
+skippy-scheduler = { path = "../skippy-scheduler", version = "0.76.1" }
+skippy-tokenizer = { path = "../skippy-tokenizer", version = "0.76.1" }
+model-artifact = { path = "../model-artifact", version = "0.76.1" }
+mesh-llm-events = { path = "../mesh-llm-events", version = "0.76.1" }
+mesh-native-serving-plugin-api = { path = "../mesh-native-serving-plugin-api", version = "0.76.1" }
+skippy-protocol = { path = "../skippy-protocol", version = "0.76.1"  }
+skippy-cache = { path = "../skippy-cache", version = "0.76.1"  }
+skippy-metrics = { path = "../skippy-metrics", version = "0.76.1"  }
+skippy-topology = { path = "../skippy-topology", version = "0.76.1" }
+openai-frontend = { path = "../openai-frontend", version = "0.76.1"  }
 opentelemetry-proto = "0.32.0"
 serde.workspace = true
 serde_json.workspace = true
@@ -48,5 +48,6 @@ tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
+skippy-package-format = { path = "../skippy-package-format", version = "0.76.1" }
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }

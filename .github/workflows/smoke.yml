@@ -39,8 +39,6 @@ on:
 
 env:
   CACHE_NAMESPACE: mesh-llm
-  MODEL_URL: https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf
-  MODEL_FILE: SmolLM2-135M-Instruct-Q8_0.gguf
 
 permissions:
   contents: read
@@ -166,12 +164,13 @@ jobs:
             --format=csv,noheader
 
       - uses: ./.github/actions/restore-smoke-inputs
+        id: model_inputs
         with:
           artifact_name: ${{ inputs.artifact_name }}
           artifact_path: ${{ inputs.artifact_path }}
           staged_binary_path: ${{ inputs.mesh_binary_target }}
-          model_url: ${{ env.MODEL_URL }}
-          model_file: ${{ env.MODEL_FILE }}
+          model_manifest: ci/model-artifacts/manifests/product-smoke.json
+          model_cadence: ${{ inputs.release_tag != '' && 'release' || (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' || github.event.inputs.original_event_name == 'pull_request' || github.event.inputs.original_event_name == 'pull_request_target') && 'pull-request' || 'main' }}
           model_cache_scope: inference-smoke-model
           cache_key_prefix: ${{ inputs.cache_key_prefix }}
           save_model_cache: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
@@ -181,14 +180,14 @@ jobs:
           scripts/ci-smoke-test.sh \
             "${{ inputs.mesh_binary_target }}" \
             "${{ inputs.artifact_path }}" \
-            "$HOME/.models/$MODEL_FILE"
+            "$HOME/.models/${{ steps.model_inputs.outputs.model_file }}"
 
       - name: OpenAI client compatibility smoke
         run: |
           scripts/ci-compat-smoke.sh \
             "${{ inputs.mesh_binary_target }}" \
             "${{ inputs.artifact_path }}" \
-            "$HOME/.models/$MODEL_FILE"
+            "$HOME/.models/${{ steps.model_inputs.outputs.model_file }}"
 
       - name: Constrained-stack smoke (detect oversized spawned futures)
         # Canary that detects pathologically oversized spawned futures by
@@ -206,7 +205,7 @@ jobs:
           scripts/ci-smoke-test.sh \
             "${{ inputs.mesh_binary_target }}" \
             "${{ inputs.artifact_path }}" \
-            "$HOME/.models/$MODEL_FILE"
+            "$HOME/.models/${{ steps.model_inputs.outputs.model_file }}"
 
   smoke_tests_macos:
     name: Skippy Inference Smoke Tests (macOS Metal)
@@ -263,12 +262,13 @@ jobs:
         run: npm install --global openai@7.5.0
 
       - uses: ./.github/actions/restore-smoke-inputs
+        id: model_inputs
         with:
           artifact_name: ${{ inputs.artifact_name }}
           artifact_path: ${{ inputs.artifact_path }}
           staged_binary_path: ${{ inputs.mesh_binary_target }}
-          model_url: ${{ env.MODEL_URL }}
-          model_file: ${{ env.MODEL_FILE }}
+          model_manifest: ci/model-artifacts/manifests/product-smoke.json
+          model_cadence: ${{ inputs.release_tag != '' && 'release' || (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' || github.event.inputs.original_event_name == 'pull_request' || github.event.inputs.original_event_name == 'pull_request_target') && 'pull-request' || 'main' }}
           model_cache_scope: inference-smoke-model
           cache_key_prefix: ${{ inputs.cache_key_prefix }}
           save_model_cache: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
@@ -278,14 +278,14 @@ jobs:
           scripts/ci-smoke-test.sh \
             "${{ inputs.mesh_binary_target }}" \
             "${{ inputs.artifact_path }}" \
-            "$HOME/.models/$MODEL_FILE"
+            "$HOME/.models/${{ steps.model_inputs.outputs.model_file }}"
 
       - name: OpenAI client compatibility smoke
         run: |
           scripts/ci-compat-smoke.sh \
             "${{ inputs.mesh_binary_target }}" \
             "${{ inputs.artifact_path }}" \
-            "$HOME/.models/$MODEL_FILE"
+            "$HOME/.models/${{ steps.model_inputs.outputs.model_file }}"
 
       - name: Constrained-stack smoke (detect oversized spawned futures)
         # Canary that detects pathologically oversized spawned futures by
@@ -303,4 +303,4 @@ jobs:
           scripts/ci-smoke-test.sh \
             "${{ inputs.mesh_binary_target }}" \
             "${{ inputs.artifact_path }}" \
-            "$HOME/.models/$MODEL_FILE"
+            "$HOME/.models/${{ steps.model_inputs.outputs.model_file }}"

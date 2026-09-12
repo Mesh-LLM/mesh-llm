@@ -32,6 +32,7 @@ fn expired_direct_iteration_behind_blocked_worker_never_reaches_native_runtime()
             commands: receiver,
             kv_capacity_tokens: 64,
             max_direct_batch_size: 1,
+            max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
             active_runtime_sessions: 0,
@@ -87,6 +88,7 @@ fn direct_iteration_rechecks_deadline_after_worker_reply() {
     let scheduler = IterationScheduler {
         shared: Arc::new(IterationSchedulerShared {
             commands,
+            max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             owner_count: AtomicUsize::new(1),
             worker: Mutex::new(None),
         }),
@@ -200,6 +202,7 @@ fn server_scheduler_worker_batches_and_completes_default_generations() {
         commands: receiver,
         kv_capacity_tokens: 64,
         max_direct_batch_size: 2,
+        max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
         max_commands_per_turn: 8,
         iteration_interval: Duration::ZERO,
         active_runtime_sessions: 0,
@@ -281,11 +284,15 @@ fn server_scheduler_worker_batches_and_completes_default_generations() {
 
 #[test]
 fn feature_driver_iterations_enforce_the_native_batch_shape() {
-    assert!(validate_direct_iteration(&[1], &[]).is_ok());
-    assert!(validate_direct_iteration(&[1, 2], &[0, 1]).is_ok());
-    assert!(validate_direct_iteration(&[], &[]).is_err());
-    assert!(validate_direct_iteration(&[1, 2], &[0, 1, 2]).is_err());
-    assert!(validate_direct_iteration(&vec![1; MAX_NATIVE_ITERATION_TOKENS + 1], &[]).is_err());
+    assert!(validate_direct_iteration(&[1], &[], 512).is_ok());
+    assert!(validate_direct_iteration(&[1, 2], &[0, 1], 512).is_ok());
+    assert!(validate_direct_iteration(&[], &[], 512).is_err());
+    assert!(validate_direct_iteration(&[1, 2], &[0, 1, 2], 512).is_err());
+    assert!(validate_direct_iteration(&vec![1; 513], &[], 512).is_err());
+    assert!(
+        validate_direct_iteration(&vec![1; MAX_NATIVE_ITERATION_TOKENS + 1], &[], usize::MAX)
+            .is_err()
+    );
 }
 
 #[test]
@@ -310,6 +317,25 @@ fn direct_iteration_batch_defers_duplicate_sessions() {
 }
 
 #[test]
+fn direct_prefill_wave_never_exceeds_configured_native_batch_tokens() {
+    let mut queue = (0..8)
+        .map(|index| direct_iteration(&format!("session-{index}"), 128))
+        .collect::<VecDeque<_>>();
+
+    let batch = take_direct_iteration_batch(&mut queue, 8, 512);
+
+    assert_eq!(batch.len(), 4);
+    assert_eq!(
+        batch
+            .iter()
+            .map(|request| request.token_ids.len())
+            .sum::<usize>(),
+        512
+    );
+    assert_eq!(queue.len(), 4);
+}
+
+#[test]
 fn token_control_is_applied_without_blocking_the_scheduler_iteration() {
     let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
     let (_commands, receiver) = std_mpsc::channel();
@@ -322,6 +348,7 @@ fn token_control_is_applied_without_blocking_the_scheduler_iteration() {
         commands: receiver,
         kv_capacity_tokens: 64,
         max_direct_batch_size: 1,
+        max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
         max_commands_per_turn: 8,
         iteration_interval: Duration::ZERO,
         active_runtime_sessions: 0,
@@ -378,6 +405,7 @@ fn resumed_request_cancellation_leaves_runtime_for_caller_cleanup() {
         commands: receiver,
         kv_capacity_tokens: 64,
         max_direct_batch_size: 1,
+        max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
         max_commands_per_turn: 8,
         iteration_interval: Duration::ZERO,
         active_runtime_sessions: 0,
@@ -432,6 +460,7 @@ fn feature_runtime_operations_execute_on_the_scheduler_worker() {
             commands: receiver,
             kv_capacity_tokens: 64,
             max_direct_batch_size: 3,
+            max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
             active_runtime_sessions: 0,
@@ -446,6 +475,7 @@ fn feature_runtime_operations_execute_on_the_scheduler_worker() {
     let scheduler = IterationScheduler {
         shared: Arc::new(IterationSchedulerShared {
             commands,
+            max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             owner_count: AtomicUsize::new(1),
             worker: Mutex::new(Some(worker)),
         }),
@@ -474,6 +504,7 @@ fn detached_runtime_operation_returns_before_work_completes() {
             commands: receiver,
             kv_capacity_tokens: 64,
             max_direct_batch_size: 3,
+            max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
             active_runtime_sessions: 0,
@@ -488,6 +519,7 @@ fn detached_runtime_operation_returns_before_work_completes() {
     let scheduler = IterationScheduler {
         shared: Arc::new(IterationSchedulerShared {
             commands,
+            max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             owner_count: AtomicUsize::new(1),
             worker: Mutex::new(Some(worker)),
         }),
@@ -613,6 +645,7 @@ fn full_direct_wave_suppresses_cache_runtime_while_direct_queue_is_temporarily_e
         commands: receiver,
         kv_capacity_tokens: 64,
         max_direct_batch_size: 1,
+        max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
         max_commands_per_turn: 8,
         iteration_interval: Duration::ZERO,
         active_runtime_sessions: 1,
@@ -657,6 +690,7 @@ fn resident_kv_does_not_engage_direct_wave_gate() {
         commands: receiver,
         kv_capacity_tokens: 64,
         max_direct_batch_size: 1,
+        max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
         max_commands_per_turn: 8,
         iteration_interval: Duration::ZERO,
         active_runtime_sessions: 1,
@@ -715,6 +749,7 @@ fn bounded_command_queue_fails_closed_with_overload() {
     let scheduler = IterationScheduler {
         shared: Arc::new(IterationSchedulerShared {
             commands,
+            max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             owner_count: AtomicUsize::new(1),
             worker: Mutex::new(None),
         }),
@@ -747,6 +782,7 @@ fn worker_panic_is_contained_and_fails_active_requests() {
             commands: receiver,
             kv_capacity_tokens: 64,
             max_direct_batch_size: 1,
+            max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
             active_runtime_sessions: 0,

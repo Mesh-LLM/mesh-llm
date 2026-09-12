@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) use super::{
-    admission::GenerationTokenBudget,
+    admission::{GenerationTokenBudget, GenerationTokenBudgetRequest},
     iteration_scheduler::IterationScheduler,
     prefill::{
         EmbeddedPrefillDrain, PrefillChunkObservation, PrefillChunkPolicy, PrefillChunkPolicyArgs,

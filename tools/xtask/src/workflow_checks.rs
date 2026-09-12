@@ -3,8 +3,9 @@ use crate::command::{
 };
 use crate::repo_consistency::{script_workspace_members, workspace_package_names};
 use std::fs;
+use std::io::Write;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 pub(crate) fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<()> {
     check_current_ci_invariants(repo_root)
@@ -16,7 +17,6 @@ fn check_current_ci_invariants(repo_root: &Path) -> DynResult<()> {
     let release = fs::read_to_string(repo_root.join("RELEASE.md"))?;
     let release_package_source = fs::read_to_string(repo_root.join("just/release-bundle.just"))?;
     let release_workflow = fs::read_to_string(repo_root.join(".github/workflows/release.yml"))?;
-    let ci_workflow = fs::read_to_string(repo_root.join(".github/workflows/ci.yml"))?;
     let pr_workflows = ["quality", "website", "linux", "macos", "windows"]
         .into_iter()
         .map(|lane| {
@@ -97,7 +97,6 @@ fn check_current_ci_invariants(repo_root: &Path) -> DynResult<()> {
     )?;
     check_workflow_invariants(
         &release_workflow,
-        &ci_workflow,
         &pr_workflows,
         &main_workflows,
         &website_pages,
@@ -183,7 +182,6 @@ fn check_documentation_invariants(
 
 fn check_workflow_invariants(
     release_workflow: &str,
-    ci_workflow: &str,
     pr_workflows: &[(&str, String)],
     main_workflows: &[(&str, String)],
     website_pages: &str,
@@ -213,8 +211,6 @@ fn check_workflow_invariants(
         ensure_contains(text, needle, context)?;
     }
 
-    ensure_contains(ci_workflow, "workflow_call:", "legacy main CI shim")?;
-    ensure_not_contains(ci_workflow, "push:", "legacy main CI event trigger")?;
     for (lane, workflow) in pr_workflows {
         ensure_contains(workflow, "pull_request:", &format!("PR {lane} trigger"))?;
         ensure_contains(
@@ -261,11 +257,6 @@ fn check_workflow_invariants(
             &format!("main {lane} exhaustive evidence"),
         )?;
     }
-    ensure_not_contains(
-        ci_workflow,
-        "uses: ./.github/workflows/ci-orchestrator.yml",
-        "main entrypoint must not expand the monolithic bootstrap graph",
-    )?;
     Ok(())
 }
 
@@ -970,48 +961,59 @@ pub(crate) fn check_ci_crate_test_coverage_files(repo_root: &Path) -> DynResult<
     let quality_workflow =
         fs::read_to_string(repo_root.join(".github/workflows/ci-quality-slice.yml"))?;
     check_ci_crate_test_coverage(&linux_lane_workflow, &quality_workflow)?;
-    check_test_batch_planner_covers_workspace(repo_root)
+    check_main_plan_test_coverage(repo_root)
 }
 
-fn check_test_batch_planner_covers_workspace(repo_root: &Path) -> DynResult<()> {
-    let output = Command::new("bash")
+fn check_main_plan_test_coverage(repo_root: &Path) -> DynResult<()> {
+    let input = r#"{"profile":"main","event_name":"push","source_sha":"0000000000000000000000000000000000000000","base_sha":"","changed_files":[]}"#;
+    let mut child = Command::new("python3")
         .current_dir(repo_root)
-        .args(["scripts/plan-test-batches.sh", "--all", "--bins", "4"])
-        .output()?;
+        .args(["scripts/plan-ci.py"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    child
+        .stdin
+        .take()
+        .ok_or("failed to open planner stdin")?
+        .write_all(input.as_bytes())?;
+    let output = child.wait_with_output()?;
     if !output.status.success() {
         return Err(format!(
-            "test batch planner failed: {}",
+            "main CI planner failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )
         .into());
     }
 
-    let batches: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let plan: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let batches = plan
+        .get("matrices")
+        .and_then(|matrices| matrices.get("rust_tests"))
+        .ok_or("main CI plan is missing matrices.rust_tests")?;
     let mut actual = std::collections::BTreeSet::new();
     for crate_name in batches
         .as_array()
-        .ok_or("test batch planner output must be an array")?
+        .ok_or("main CI rust-test matrix must be an array")?
         .iter()
         .flat_map(|batch| batch["crates"].as_array().into_iter().flatten())
     {
         let crate_name = crate_name
             .as_str()
-            .ok_or("test batch planner crate names must be strings")?;
+            .ok_or("main CI rust-test crate names must be strings")?;
         if !actual.insert(crate_name.to_owned()) {
-            return Err(format!("test batch planner duplicated crate `{crate_name}`").into());
+            return Err(format!("main CI rust-test matrix duplicated crate `{crate_name}`").into());
         }
     }
 
     let expected = workspace_package_names(repo_root)?;
-    ensure_set_eq(&expected, &actual, "Cargo test batch workspace coverage")
+    ensure_set_eq(&expected, &actual, "main CI rust-test workspace coverage")
 }
 
 pub(crate) fn check_ci_script_workspace_members(repo_root: &Path) -> DynResult<()> {
     let expected = workspace_package_names(repo_root)?;
-    let scripts = [
-        "scripts/affected-crates.sh",
-        "scripts/plan-clippy-batches.sh",
-    ];
+    let scripts = ["scripts/affected-crates.sh"];
 
     for script in scripts {
         let actual = script_workspace_members(repo_root, script)?;

@@ -554,13 +554,6 @@
       }
     },
     {
-      "canonical_path": "defaults.skippy.lifecycle_readiness_interval_ms",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
       "canonical_path": "defaults.skippy.lifecycle_startup_timeout_ms",
       "support": "supported",
       "source": {

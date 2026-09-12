@@ -46,6 +46,7 @@ set -euo pipefail
 
 ROOT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG="${MESH_COMPETITIVE_CONFIG:-$ROOT_SCRIPT_DIR/../evals/skippy-competitive-benchmark.json}"
+MODEL_MANIFEST="${MESH_COMPETITIVE_MODEL_MANIFEST:-$ROOT_SCRIPT_DIR/../ci/model-artifacts/manifests/competitive-benchmark.json}"
 PROMPT_GENERATOR="$ROOT_SCRIPT_DIR/../evals/skippy-agentic-prompt-manifest.py"
 
 ROOT="${MESH_COMPETITIVE_INPUT_ROOT:-$PWD/bench-inputs}"
@@ -72,6 +73,7 @@ command -v jq >/dev/null 2>&1 || { echo "error: jq not found" >&2; exit 1; }
 command -v hf >/dev/null 2>&1 || { echo "error: hf CLI not found (pip install \"huggingface_hub[cli]\")" >&2; exit 1; }
 
 [[ -f "$CONFIG" ]] || { echo "error: config not found: $CONFIG" >&2; exit 1; }
+[[ -f "$MODEL_MANIFEST" ]] || { echo "error: model manifest not found: $MODEL_MANIFEST" >&2; exit 1; }
 [[ -f "$PROMPT_GENERATOR" ]] || { echo "error: prompt generator not found: $PROMPT_GENERATOR" >&2; exit 1; }
 
 # Pin the model list from the config (single source of truth) unless overridden.
@@ -114,26 +116,21 @@ IFS=',' read -ra MODEL_KEYS <<< "$MODELS"
 for key in "${MODEL_KEYS[@]}"; do
   key="$(echo "$key" | xargs)"
   [[ -n "$key" ]] || continue
-  repo="$(model_field "$key" '.repo')"
-  revision="$(model_field "$key" '.revision')"
-  filename="$(model_field "$key" '.filename')"
-  sha="$(model_field "$key" '.sha256')"
-  [[ "$repo" != "null" ]] || { echo "error: unknown model key: $key" >&2; fail_count=$((fail_count+1)); continue; }
+  artifact_id="$(model_field "$key" '.artifact_id')"
+  [[ "$artifact_id" != "null" ]] || { echo "error: unknown model key or artifact id: $key" >&2; fail_count=$((fail_count+1)); continue; }
+  fixture="$($PYTHON_BIN "$ROOT_SCRIPT_DIR/resolve-test-model-manifest.py" "$MODEL_MANIFEST" --artifact-id "$artifact_id" --cadence manual)"
+  repo="$(jq -r '.repo' <<<"$fixture")"
+  revision="$(jq -r '.revision' <<<"$fixture")"
+  filename="$(jq -r '.file' <<<"$fixture")"
 
   echo "--- model $key: $repo @$revision"
   # No --local-dir: the blob lands in the HF cache; -q prints the path only.
   cached="$(hf download -q "$repo" "$filename" --revision "$revision" | tail -1)"
-  actual="$("$PYTHON_BIN" - "$cached" <<'PY'
-import hashlib, sys
-digest = hashlib.sha256()
-with open(sys.argv[1], "rb") as handle:
-    for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
-        digest.update(chunk)
-print(digest.hexdigest())
-PY
-)"
-  if [[ "$actual" != "$sha" ]]; then
-    echo "error: $key GGUF SHA-256 mismatch: expected=$sha actual=$actual" >&2
+  if ! "$PYTHON_BIN" "$ROOT_SCRIPT_DIR/resolve-test-model-manifest.py" \
+    "$MODEL_MANIFEST" \
+    --artifact-id "$artifact_id" \
+    --cadence manual \
+    --verify-root "$(dirname "$cached")"; then
     fail_count=$((fail_count+1))
     continue
   fi

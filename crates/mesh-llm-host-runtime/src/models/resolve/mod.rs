@@ -240,7 +240,14 @@ pub async fn resolve_model_spec_with_progress(input: &Path, progress: bool) -> R
     }
 
     if input.exists() {
-        let resolved = input.canonicalize().unwrap_or_else(|_| input.to_path_buf());
+        // Multipart Hugging Face GGUFs need their snapshot filename until the
+        // complete sibling set has been enumerated. The packaging path then
+        // canonicalizes every managed snapshot link to its regular blob.
+        let resolved = if huggingface_identity_for_path(input).is_some() {
+            canonicalize_cached_hf_path(input)?
+        } else {
+            input.canonicalize().unwrap_or_else(|_| input.to_path_buf())
+        };
         record_resolved_model_usage(&resolved, Some(raw.as_ref()));
         return Ok(resolved);
     }
@@ -268,7 +275,7 @@ pub async fn resolve_model_spec_with_progress(input: &Path, progress: bool) -> R
                 progress,
             )
             .await
-            .map(|download| download.path);
+            .and_then(|download| canonicalize_hf_download_path(download.path));
         }
         let installed_path = find_model_path(installed_name);
         if installed_path.exists() {
@@ -276,13 +283,14 @@ pub async fn resolve_model_spec_with_progress(input: &Path, progress: bool) -> R
                 .map(|identity| identity.canonical_ref)
                 .unwrap_or_else(|| installed_name.to_string());
             record_resolved_model_usage(&installed_path, Some(&model_ref));
-            return Ok(installed_path);
+            return canonicalize_cached_hf_path(&installed_path);
         }
         if let Ok(canonical) = canonicalize_model_ref_input(&raw).await
             && canonical != raw
         {
             return download_exact_ref_with_progress(&canonical, progress)
                 .await
+                .and_then(canonicalize_hf_download_path)
                 .with_context(|| format!("Resolve model spec {raw}"));
         }
         bail!(
@@ -294,14 +302,18 @@ pub async fn resolve_model_spec_with_progress(input: &Path, progress: bool) -> R
     let installed_path = find_model_path(&raw);
     if installed_path.exists() {
         record_resolved_model_usage(&installed_path, Some(raw.as_ref()));
-        return Ok(installed_path);
+        return canonicalize_cached_hf_path(&installed_path);
     }
 
     let download = download_model_ref_with_progress_details(&raw, progress)
         .await
         .with_context(|| format!("Resolve model spec {raw}"))?;
-    Ok(download.path)
+    canonicalize_hf_download_path(download.path)
 }
+
+mod downloaded_path;
+
+use downloaded_path::{canonicalize_cached_hf_path, canonicalize_hf_download_path};
 
 fn record_resolved_model_usage(path: &Path, model_ref: Option<&str>) {
     if let Err(err) = track_model_usage(path, None, model_ref, Some("resolve")) {
