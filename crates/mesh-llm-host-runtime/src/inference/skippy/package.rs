@@ -270,7 +270,7 @@ pub struct SkippyPackageSourceFile {
 
 /// Resolve a validated package-v2 directory into the existing host planning
 /// identity. The content-derived package ID remains in the v2 manifest and is
-/// carried into split control by the generation-8 admission descriptor.
+/// carried into split control by the generation-9 admission descriptor.
 pub fn identity_from_package_v2(package_dir: &Path) -> Result<SkippyPackageIdentity> {
     let package_dir = package_dir.canonicalize().with_context(|| {
         format!(
@@ -913,19 +913,21 @@ fn synthetic_manifest_sha256(input: SyntheticManifestInput<'_>) -> Result<String
 }
 
 pub(crate) fn direct_gguf_source_paths(model_path: &Path) -> Result<Vec<PathBuf>> {
-    let canonical = model_path
-        .canonicalize()
-        .with_context(|| format!("canonicalize GGUF path {}", model_path.display()))?;
-    let Some(file_name) = canonical.file_name().and_then(|name| name.to_str()) else {
-        anyhow::bail!("GGUF path has no UTF-8 filename: {}", canonical.display());
+    // Parse multipart names before canonicalizing. Hugging Face snapshots keep
+    // those names on symlinks whose blob targets are content-addressed hashes;
+    // canonicalizing the primary first would erase the shard-set information.
+    let Some(file_name) = model_path.file_name().and_then(|name| name.to_str()) else {
+        anyhow::bail!("GGUF path has no UTF-8 filename: {}", model_path.display());
     };
     let Some(shard) = model_ref::split_gguf_shard_info(file_name) else {
-        return Ok(vec![canonical]);
+        return Ok(vec![model_path.canonicalize().with_context(|| {
+            format!("canonicalize GGUF path {}", model_path.display())
+        })?]);
     };
     anyhow::ensure!(
         shard.part == "00001",
         "split GGUF inputs must point at the first shard, got {}",
-        canonical.display()
+        model_path.display()
     );
     let total = shard
         .total
@@ -935,24 +937,34 @@ pub(crate) fn direct_gguf_source_paths(model_path: &Path) -> Result<Vec<PathBuf>
         total > 0,
         "split GGUF shard total must be greater than zero"
     );
-    let parent = canonical
+    let parent = model_path
         .parent()
-        .with_context(|| format!("split GGUF shard has no parent: {}", canonical.display()))?;
-    let mut files = Vec::with_capacity(total as usize);
+        .with_context(|| format!("split GGUF shard has no parent: {}", model_path.display()))?;
+    let mut snapshot_paths = Vec::with_capacity(total as usize);
     for index in 1..=total {
         let shard_name = format!("{}-{index:05}-of-{:05}.gguf", shard.prefix, total);
         let path = parent.join(shard_name);
-        files.push(path.canonicalize().with_context(|| {
+        path.metadata().with_context(|| {
             format!(
                 "read split GGUF shard {index}/{total} for {}",
-                canonical.display()
+                model_path.display()
             )
-        })?);
+        })?;
+        snapshot_paths.push(path);
     }
-    Ok(files)
+    if let Some(view) = content_addressed::managed_hf_multipart_view(&snapshot_paths)? {
+        return Ok(view);
+    }
+    snapshot_paths
+        .into_iter()
+        .map(|path| {
+            path.canonicalize()
+                .with_context(|| format!("canonicalize split GGUF shard {}", path.display()))
+        })
+        .collect()
 }
 
-/// Build the source-complete metadata envelope required by generation-8
+/// Build the source-complete metadata envelope required by generation-9
 /// planning directly from local GGUF shards. The envelope is in memory: the
 /// source files remain at their original paths and no package or layer shard
 /// is written.

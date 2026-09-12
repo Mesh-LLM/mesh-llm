@@ -59,7 +59,7 @@ export function SchemaChoiceControl({
   setting,
   value
 }: SchemaSettingControlProps) {
-  const options = resolvedChoiceOptions(setting)
+  const options = resolvedChoiceOptions(setting, value)
   const presentation = setting.control.kind === 'choice' ? (setting.control.presentation ?? 'segmented') : 'segmented'
   const selectedDescription = options.find((option) => option.value === value)?.description
 

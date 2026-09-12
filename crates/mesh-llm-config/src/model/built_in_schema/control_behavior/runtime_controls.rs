@@ -1,7 +1,8 @@
 use super::shared::{
     absent_condition, equals_bool_condition, present_condition, push_allowed_pattern_constraint,
     push_dependency_disable, push_non_empty_constraint, push_range_constraint,
-    push_requires_constraint, set_numeric, set_static_options, set_text_format,
+    push_requires_constraint, set_numeric, set_runtime_native_backend_options, set_static_options,
+    set_text_format,
 };
 use super::*;
 
@@ -74,6 +75,10 @@ pub(super) fn apply_runtime_controls_behavior(setting: &mut ConfigSettingSchema,
             set_static_options(setting)
         }
         "runtime.mode" | "runtime.startup_failure_policy" => set_static_options(setting),
+        "runtime.native_runtime.selection" => {
+            set_runtime_native_backend_options(setting);
+            push_non_empty_constraint(setting);
+        }
         "runtime.drain_timeout_secs" => {
             set_numeric(setting, Some(1.0), Some(3600.0), Some(1.0), Some("sec"));
             push_range_constraint(

@@ -14,7 +14,7 @@ use skippy_coordinator::{ClaimDecision, ClaimFence, LoadClaimRef};
 use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig, StageConfig};
 use skippy_server::{EmbeddedServerHandle, binary_transport::BinaryStageOptions};
 use tokio::{
-    sync::{Mutex, mpsc, oneshot},
+    sync::{mpsc, oneshot},
     task::JoinHandle,
 };
 
@@ -23,7 +23,7 @@ mod inventory;
 mod tests;
 mod types;
 
-use inventory::{resolve_inventory_source, run_stage_prepare_task};
+use inventory::resolve_inventory_source;
 pub(crate) use types::*;
 
 struct RunningStage {
@@ -36,16 +36,8 @@ struct RunningStage {
 struct StageControlState {
     stages: HashMap<String, RunningStage>,
     coordinator_claims: ClaimFence,
-    preparations: Arc<Mutex<HashMap<String, StagePreparationStatus>>>,
-    preparation_tasks: HashMap<String, StagePreparationTask>,
     readiness_probe: Option<StageReadinessProbe>,
-    package_prefetcher: Option<Arc<dyn StagePackagePrefetcher>>,
     telemetry: super::SkippyTelemetryOptions,
-}
-
-struct StagePreparationTask {
-    cancelled: Arc<AtomicBool>,
-    handle: JoinHandle<()>,
 }
 
 struct StageReadinessProbe {
@@ -72,17 +64,10 @@ impl StageControlHandle {
     }
 }
 
-#[async_trait::async_trait]
-pub(crate) trait StagePackagePrefetcher: Send + Sync {
-    async fn prefetch_stage_package(&self, request: &StagePrepareRequest) -> Result<()>;
-}
-
 pub(crate) fn spawn_stage_control_loop(
-    package_prefetcher: Option<Arc<dyn StagePackagePrefetcher>>,
     telemetry: super::SkippyTelemetryOptions,
 ) -> StageControlHandle {
     spawn_stage_control_loop_with_state(StageControlState {
-        package_prefetcher,
         telemetry,
         ..Default::default()
     })
@@ -98,11 +83,18 @@ fn spawn_stage_control_loop_with_state(mut state: StageControlState) -> StageCon
                 _ = &mut shutdown_rx => break,
                 command = rx.recv() => {
                     let Some(command) = command else { break };
-                    tokio::select! {
-                        biased;
-                        _ = &mut shutdown_rx => break,
-                        result = state.handle(command.request) => {
-                            let _ = command.resp.send(result);
+                    match command {
+                        StageControlCommand::Execute { request, resp } => {
+                            tokio::select! {
+                                biased;
+                                _ = &mut shutdown_rx => break,
+                                result = state.handle(request) => {
+                                    let _ = resp.send(result);
+                                }
+                            }
+                        }
+                        StageControlCommand::ValidateLoad { load, resp } => {
+                            let _ = resp.send(state.validate_load_claim(&load));
                         }
                     }
                 }
@@ -119,11 +111,6 @@ fn spawn_stage_control_loop_with_state(mut state: StageControlState) -> StageCon
 
 impl StageControlState {
     async fn shutdown(&mut self) -> Result<()> {
-        for (_, task) in self.preparation_tasks.drain() {
-            task.cancelled.store(true, Ordering::Release);
-            task.handle.abort();
-            let _ = task.handle.await;
-        }
         if let Some(mut probe) = self.readiness_probe.take() {
             probe.cancelled.store(true, Ordering::Release);
             let _ = (&mut probe.handle).await;
@@ -164,15 +151,6 @@ impl StageControlState {
             StageControlRequest::Inventory(request) => Ok(StageControlResponse::Inventory(
                 self.inventory(request).await,
             )),
-            StageControlRequest::Prepare(request) => Ok(StageControlResponse::PrepareAccepted(
-                self.prepare(request).await?,
-            )),
-            StageControlRequest::CancelPrepare(cancel) => Ok(
-                StageControlResponse::PreparationStatus(self.cancel_prepare(cancel).await),
-            ),
-            StageControlRequest::StatusUpdate(_status) => Ok(StageControlResponse::StatusAck(
-                self.apply_status_update(_status).await,
-            )),
         }
     }
 
@@ -207,18 +185,6 @@ impl StageControlState {
     }
 
     async fn inventory(&self, request: StageInventoryRequest) -> StageLayerInventory {
-        let preparing_ranges = self
-            .preparations
-            .lock()
-            .await
-            .values()
-            .filter(|status| {
-                status.model_id == request.model_id
-                    && status.package_ref == request.package_ref
-                    && status.manifest_sha256 == request.manifest_sha256
-            })
-            .cloned()
-            .collect::<Vec<_>>();
         let source_request = request.clone();
         let source =
             match tokio::task::spawn_blocking(move || resolve_inventory_source(&source_request))
@@ -285,7 +251,6 @@ impl StageControlState {
             ready_ranges,
             available_ranges,
             missing_ranges,
-            preparing_ranges,
             source_model_path: (!local_source_required && !content_addressed_ref)
                 .then(|| {
                     source
@@ -300,154 +265,6 @@ impl StageControlState {
                 .as_ref()
                 .map(|source| source.kind)
                 .unwrap_or(SourceModelKind::Unknown),
-        }
-    }
-
-    async fn prepare(
-        &mut self,
-        mut request: StagePrepareRequest,
-    ) -> Result<StagePrepareAcceptedResponse> {
-        if let Some(error) = self.validate_load_claim(&request.load) {
-            return Ok(StagePrepareAcceptedResponse {
-                accepted: false,
-                status: preparation_status_from_load(
-                    &request.load,
-                    StagePreparationState::Failed,
-                    Some(error.clone()),
-                ),
-                error: Some(error),
-            });
-        }
-        let mut load = request.load.clone();
-        let verified_load = tokio::task::spawn_blocking(move || {
-            crate::inference::skippy::apply_verified_local_source(&mut load).map(|_| load)
-        })
-        .await
-        .context("join verify local-required stage prepare source task")?;
-        match verified_load {
-            Ok(load) => request.load = load,
-            Err(error) => {
-                let error = format!("{error:#}");
-                return Ok(StagePrepareAcceptedResponse {
-                    accepted: false,
-                    status: preparation_status_from_load(
-                        &request.load,
-                        StagePreparationState::Failed,
-                        Some(error.clone()),
-                    ),
-                    error: Some(error),
-                });
-            }
-        }
-        let key = stage_key(
-            &request.load.topology_id,
-            &request.load.run_id,
-            &request.load.stage_id,
-        );
-        let status =
-            preparation_status_from_load(&request.load, StagePreparationState::Assigned, None);
-        {
-            let mut preparations = self.preparations.lock().await;
-            if let Some(existing) = preparations.get(&key)
-                && existing.state == StagePreparationState::Cancelled
-                && existing.shutdown_generation >= request.load.shutdown_generation
-            {
-                let mut status = existing.clone();
-                status.error = Some("stale shutdown generation".to_string());
-                return Ok(StagePrepareAcceptedResponse {
-                    accepted: false,
-                    status,
-                    error: Some("stale shutdown generation".to_string()),
-                });
-            }
-            preparations.insert(key.clone(), status.clone());
-        }
-        if let Some(task) = self.preparation_tasks.remove(&key) {
-            task.cancelled.store(true, Ordering::Release);
-            task.handle.abort();
-        }
-        let preparations = Arc::clone(&self.preparations);
-        let package_prefetcher = self.package_prefetcher.clone();
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let task_cancelled = Arc::clone(&cancelled);
-        let task_key = key.clone();
-        let handle = tokio::spawn(async move {
-            run_stage_prepare_task(
-                preparations,
-                task_key,
-                request,
-                package_prefetcher,
-                task_cancelled,
-            )
-            .await;
-        });
-        self.preparation_tasks
-            .insert(key.clone(), StagePreparationTask { cancelled, handle });
-        Ok(StagePrepareAcceptedResponse {
-            accepted: true,
-            status,
-            error: None,
-        })
-    }
-
-    async fn cancel_prepare(
-        &mut self,
-        cancel: StageCancelPrepareRequest,
-    ) -> StagePreparationStatus {
-        let key = stage_key(&cancel.topology_id, &cancel.run_id, &cancel.stage_id);
-        let mut preparations = self.preparations.lock().await;
-        if let Some(existing) = preparations.get(&key)
-            && cancel.shutdown_generation < existing.shutdown_generation
-        {
-            let mut status = existing.clone();
-            status.error = Some("stale shutdown generation".to_string());
-            return status;
-        }
-
-        if let Some(task) = self.preparation_tasks.remove(&key) {
-            task.cancelled.store(true, Ordering::Release);
-            task.handle.abort();
-        }
-
-        let status = preparations
-            .get(&key)
-            .cloned()
-            .map(|mut status| {
-                status.state = StagePreparationState::Cancelled;
-                status.shutdown_generation = cancel.shutdown_generation;
-                status.error = None;
-                status
-            })
-            .unwrap_or_else(|| preparation_status_from_cancel(cancel));
-        preparations.insert(key, status.clone());
-        status
-    }
-
-    async fn apply_status_update(&mut self, status: StagePreparationStatus) -> StageStatusAck {
-        if status.topology_id.is_empty() || status.run_id.is_empty() || status.stage_id.is_empty() {
-            return StageStatusAck {
-                accepted: false,
-                error: Some(
-                    "stage status update requires topology_id, run_id, and stage_id".into(),
-                ),
-            };
-        }
-        let key = stage_key(&status.topology_id, &status.run_id, &status.stage_id);
-        let mut preparations = self.preparations.lock().await;
-        if preparations.get(&key).is_some_and(|existing| {
-            status.shutdown_generation < existing.shutdown_generation
-                || (matches!(existing.state, StagePreparationState::Cancelled)
-                    && status.shutdown_generation <= existing.shutdown_generation)
-        }) {
-            return StageStatusAck {
-                accepted: false,
-                error: Some("stale shutdown generation".to_string()),
-            };
-        }
-        preparations.insert(key, status);
-        StageStatusAck {
-            accepted: true,
-            error: None,
         }
     }
 
@@ -637,28 +454,6 @@ impl StageControlState {
         for key in stale_keys {
             if let Some(stage) = self.stages.remove(&key) {
                 stage.server.shutdown().await?;
-            }
-        }
-
-        let mut preparations = self.preparations.lock().await;
-        let stale_preparations = preparations
-            .iter()
-            .filter_map(|(key, status)| {
-                (status.model_id == claim.model_id
-                    && status.package_ref == claim.package_ref
-                    && status.manifest_sha256 == claim.manifest_sha256
-                    && status.coordinator_term < claim.coordinator_term)
-                    .then_some(key.clone())
-            })
-            .collect::<Vec<_>>();
-        for key in stale_preparations {
-            if let Some(task) = self.preparation_tasks.remove(&key) {
-                task.cancelled.store(true, Ordering::Release);
-                task.handle.abort();
-            }
-            if let Some(status) = preparations.get_mut(&key) {
-                status.state = StagePreparationState::Cancelled;
-                status.error = Some("superseded by newer coordinator term".to_string());
             }
         }
 
@@ -1172,63 +967,5 @@ fn failed_status_from_load(load: &StageLoadRequest, error: String) -> StageStatu
         coordinator_term: load.coordinator_term,
         coordinator_id: load.coordinator_id,
         lease_until_unix_ms: load.lease_until_unix_ms,
-    }
-}
-
-fn preparation_status_from_load(
-    load: &StageLoadRequest,
-    state: StagePreparationState,
-    error: Option<String>,
-) -> StagePreparationStatus {
-    StagePreparationStatus {
-        topology_id: load.topology_id.clone(),
-        run_id: load.run_id.clone(),
-        model_id: load.model_id.clone(),
-        backend: load.backend.clone(),
-        package_ref: load.package_ref.clone(),
-        manifest_sha256: load.manifest_sha256.clone(),
-        stage_id: load.stage_id.clone(),
-        stage_index: load.stage_index,
-        layer_start: load.layer_start,
-        layer_end: load.layer_end,
-        admission: Some(load.admission.clone()),
-        activation_codec: load.activation_codec,
-        activation_codec_policy: load.activation_codec_policy,
-        state,
-        bytes_done: None,
-        bytes_total: None,
-        bind_addr: None,
-        error,
-        shutdown_generation: load.shutdown_generation,
-        coordinator_term: load.coordinator_term,
-        coordinator_id: load.coordinator_id,
-        lease_until_unix_ms: load.lease_until_unix_ms,
-    }
-}
-
-fn preparation_status_from_cancel(cancel: StageCancelPrepareRequest) -> StagePreparationStatus {
-    StagePreparationStatus {
-        topology_id: cancel.topology_id,
-        run_id: cancel.run_id,
-        model_id: String::new(),
-        backend: "skippy".to_string(),
-        package_ref: String::new(),
-        manifest_sha256: String::new(),
-        stage_id: cancel.stage_id,
-        stage_index: 0,
-        layer_start: 0,
-        layer_end: 0,
-        admission: None,
-        activation_codec: skippy_protocol::StageActivationCodec::default(),
-        activation_codec_policy: skippy_protocol::StageActivationCodecPolicy::default(),
-        state: StagePreparationState::Cancelled,
-        bytes_done: None,
-        bytes_total: None,
-        bind_addr: None,
-        error: None,
-        shutdown_generation: cancel.shutdown_generation,
-        coordinator_term: 0,
-        coordinator_id: None,
-        lease_until_unix_ms: 0,
     }
 }

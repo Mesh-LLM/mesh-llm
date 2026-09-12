@@ -104,12 +104,13 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("  workflow_dispatch:", workflow)
         self.assertNotIn("\n  push:", workflow)
 
-    def test_new_canary_supersedes_a_stale_run(self) -> None:
+    def test_new_canary_queues_behind_active_runner_work(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn(
-            "concurrency:\n  group: llama-upstream-canary\n  cancel-in-progress: true",
-            workflow,
-        )
+        self.assertEqual(2, workflow.count("group: llama-upstream-canary-runner"))
+        self.assertEqual(2, workflow.count("cancel-in-progress: false"))
+        self.assertNotIn("cancel-in-progress: true", workflow)
+        publisher = workflow[workflow.index("  publish-certified-canary:") : workflow.index("  alert-consecutive-failures:")]
+        self.assertNotIn("concurrency:", publisher)
 
     def test_workflow_builds_binaries_before_skipping_per_lane_builds(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -170,7 +171,8 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("timeout-minutes: 720", battery)
 
         upload = _step_block(workflow, "Upload supported-families battery evidence")
-        self.assertIn("if: ${{ !cancelled()", upload)
+        self.assertIn("success() || failure() || cancelled()", upload)
+        self.assertNotIn("always()", upload)
         self.assertIn("actions/upload-artifact@", upload)
         self.assertIn("target/family-battery/", upload)
         self.assertIn("retention-days: 14", upload)
@@ -221,11 +223,15 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
 
     def test_changed_pin_never_pushes_directly_to_main(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        changed = _step_block(workflow, "Changed-pin prepare, build, certify, and publish")
+        changed = _step_block(workflow, "Changed-pin agent developer task")
+        publisher = workflow[workflow.index("  publish-certified-canary:") : workflow.index("  alert-consecutive-failures:")]
         self.assertIn("steps.sha.outputs.changed == 'true'", changed)
         self.assertIn("scripts/llama-canary-agent-repair.sh", changed)
-        self.assertIn("CANARY_REPAIR_TOKEN:", changed)
+        self.assertNotIn("CANARY_REPAIR_TOKEN:", changed)
         self.assertIn("UPSTREAM_SHA_INPUT:", changed)
+        self.assertIn("runs-on: ubuntu-24.04", publisher)
+        self.assertIn("CANARY_REPAIR_TOKEN:", publisher)
+        self.assertIn("scripts/llama-canary-publish.sh", publisher)
         self.assertNotIn("update-pin:", workflow)
         self.assertNotIn("HEAD:refs/heads/main", workflow)
 
@@ -282,43 +288,62 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
             self.assertEqual(0, prepared.returncode, prepared.stderr)
             self.assertEqual(prepared_target + "\n", pin.read_text(encoding="utf-8"))
 
-    def test_changed_pin_uses_one_terminal_state_machine(self) -> None:
+    def test_changed_pin_uses_one_agent_then_success_gated_publication(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        duplicate = _step_block(workflow, "Detect existing changed-pin canary PR")
-        self.assertIn("github.event_name == 'schedule'", duplicate)
-        self.assertIn("$CANDIDATE_SHA in:body", duplicate)
-        self.assertIn('startswith("llama-canary/repair-")', duplicate)
-        self.assertIn('contains("- Candidate pin: `\\($sha)`")', duplicate)
-        self.assertIn('echo "found=true"', duplicate)
-
-        changed = _step_block(
-            workflow, "Changed-pin prepare, build, certify, and publish"
-        )
+        self.assertNotIn("Detect existing changed-pin canary PR", workflow)
+        changed = _step_block(workflow, "Changed-pin agent developer task")
         self.assertIn("steps.sha.outputs.changed == 'true'", changed)
-        self.assertIn("steps.existing_changed_pin.outputs.found != 'true'", changed)
-        self.assertIn("timeout-minutes: 720", changed)
+        self.assertIn("timeout-minutes: 480", changed)
         self.assertIn("continue-on-error: true", changed)
-        self.assertIn("CANARY_REPAIR_BUDGET_SECONDS: \"41400\"", changed)
-        self.assertIn("CANARY_PUBLISH_RESERVE_SECONDS: \"1800\"", changed)
-        self.assertIn("CANARY_REPAIR_TURN_TIMEOUT_SECONDS: \"3600\"", changed)
-        self.assertIn("CANARY_REPAIR_TOTAL_BUDGET_SECONDS: \"5400\"", changed)
-        self.assertIn("CANARY_REPAIR_TOKEN:", changed)
+        self.assertIn('CANARY_AGENT_TIMEOUT_SECONDS: "27000"', changed)
+        self.assertIn("CANARY_HARNESS_MODE: repair", changed)
+        self.assertNotIn("CANARY_REPAIR_TOKEN:", changed)
         self.assertIn("UPSTREAM_SHA_INPUT:", changed)
         self.assertIn("scripts/llama-canary-agent-repair.sh", changed)
-        self.assertNotIn("patch-queue", changed)
-        self.assertNotIn(" battery", changed)
 
-        stop = _step_block(workflow, "Stop after changed-pin terminal PR")
-        self.assertIn("steps.sha.outputs.changed == 'true'", stop)
-        self.assertIn("!cancelled()", stop)
-        self.assertNotIn("always()", stop)
-        self.assertIn("exit 1", stop)
-        self.assertIn("EXISTING_CANARY_FOUND", stop)
-        self.assertIn("Skipped duplicate scheduled certification", stop)
-        self.assertIn("duplicate-PR lookup failed", stop)
-        self.assertIn("A preflight failure can stop before any branch or PR", stop)
+        handoff = _step_block(workflow, "Upload changed-pin agent candidate")
+        self.assertIn("!cancelled()", handoff)
+        self.assertNotIn("always()", handoff)
+        self.assertIn("steps.changed_canary.outcome == 'success'", handoff)
+        self.assertIn("steps.changed_canary.outputs.candidate_bundle", handoff)
+        self.assertNotIn("CANARY_REPAIR_TOKEN", handoff)
+
+        verifier = workflow[workflow.index("  verify-changed-canary:") : workflow.index("  publish-certified-canary:")]
+        self.assertIn("needs: latest-upstream", verifier)
+        self.assertIn("runs-on: [self-hosted, family-certify]", verifier)
+        self.assertIn("CANARY_HARNESS_MODE: verify", verifier)
+        self.assertIn('CANARY_VERIFICATION_TIMEOUT_SECONDS: "14400"', verifier)
+        self.assertIn("actions/download-artifact@", verifier)
+        self.assertIn("Upload independently certified candidate", verifier)
+        self.assertIn("Configure verifier LLVM", verifier)
+        self.assertNotIn("CANARY_REPAIR_TOKEN", verifier)
+
+        verifier_llvm = _step_block(workflow, "Configure verifier LLVM")
+        self.assertIn("brew --prefix llvm@22", verifier_llvm)
+        self.assertIn("brew --prefix llvm", verifier_llvm)
+        self.assertIn("ClangConfig.cmake", verifier_llvm)
+        self.assertIn(
+            'echo "SKIPPY_REWRITER_LLVM_PREFIX=$llvm_prefix" >> "$GITHUB_ENV"',
+            verifier_llvm,
+        )
+
+        publisher = workflow[workflow.index("  publish-certified-canary:") : workflow.index("  alert-consecutive-failures:")]
+        self.assertIn("needs: verify-changed-canary", publisher)
+        self.assertIn("runs-on: ubuntu-24.04", publisher)
+        self.assertIn("actions/download-artifact@", publisher)
+        self.assertIn("CANARY_BUNDLE:", publisher)
+        self.assertIn("CANARY_REPAIR_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}", publisher)
+        self.assertIn("scripts/llama-canary-publish.sh", publisher)
+
+        report = _step_block(workflow, "Report changed-pin result")
+        self.assertIn("CANDIDATE_UPLOAD_OUTCOME", report)
+        self.assertIn("No canary branch or pull request was published", report)
+        self.assertIn('echo "ready=true"', report)
+        self.assertIn('if [[ "$CHANGED_CANARY_OUTCOME" != "success" || "$CANDIDATE_UPLOAD_OUTCOME" != "success" ]]', report)
 
         upload = _step_block(workflow, "Upload changed-pin canary evidence")
+        self.assertIn("success() || failure() || cancelled()", upload)
+        self.assertNotIn("always()", upload)
         self.assertIn("llama-canary-state-${{ github.run_id }}-${{ github.run_attempt }}", upload)
         self.assertIn("llama-canary-changed-pin-${{ github.run_id }}-${{ github.run_attempt }}", upload)
         self.assertNotIn("name: llama-family-battery-", upload)
@@ -328,13 +353,16 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         alert = workflow[workflow.index("  alert-consecutive-failures:") :]
         self.assertIn("!cancelled() && github.event_name == 'schedule'", alert)
-        self.assertIn("needs: latest-upstream", alert)
+        self.assertNotIn("always()", alert)
+        self.assertIn("needs: [latest-upstream, verify-changed-canary, publish-certified-canary]", alert)
         self.assertIn("runs-on: ubuntu-24.04", alert)
         self.assertIn("actions: read", alert)
         self.assertIn("issues: write", alert)
         self.assertNotIn("actions/checkout@", alert)
         self.assertIn("continue-on-error: true", alert)
         self.assertIn("actions.listWorkflowRuns", alert)
+        self.assertIn("process.env.VERIFY_RESULT === 'success'", alert)
+        self.assertIn("process.env.PUBLISH_RESULT === 'success'", alert)
         self.assertIn("previous.conclusion === 'success'", alert)
         self.assertIn("issues.create", alert)
         self.assertIn("issues.createComment", alert)

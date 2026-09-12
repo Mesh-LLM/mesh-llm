@@ -1,5 +1,4 @@
 use crate::inference::skippy;
-use skippy_protocol::LoadMode;
 
 pub(super) fn split_stage_source_is_ready(
     inventory: &skippy::StageLayerInventory,
@@ -21,29 +20,10 @@ pub(super) fn split_stage_source_is_ready(
     if ready_running_stage {
         return true;
     }
-    if load.load_mode != LoadMode::LayerPackage {
-        return inventory
-            .available_ranges
-            .iter()
-            .any(|range| split_layer_range_covers(range, load));
-    }
-    inventory.preparing_ranges.iter().any(|status| {
-        status.topology_id == load.topology_id
-            && status.run_id == load.run_id
-            && status.stage_id == load.stage_id
-            && status.model_id == load.model_id
-            && status.package_ref == load.package_ref
-            && status.manifest_sha256 == load.manifest_sha256
-            && status.admission.as_ref() == Some(&load.admission)
-            && status.activation_codec == load.activation_codec
-            && status.activation_codec_policy == load.activation_codec_policy
-            && status.layer_start <= load.layer_start
-            && status.layer_end >= load.layer_end
-            && matches!(
-                status.state,
-                skippy::StagePreparationState::Available | skippy::StagePreparationState::Ready
-            )
-    })
+    inventory
+        .available_ranges
+        .iter()
+        .any(|range| split_layer_range_covers(range, load))
 }
 
 pub(super) fn strict_ready_status_matches(

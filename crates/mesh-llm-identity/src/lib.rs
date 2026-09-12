@@ -31,8 +31,8 @@ pub use keystore::{
 };
 #[cfg(feature = "host-io")]
 pub use node_key::{
-    NODE_KEY_BYTES, default_node_key_path, load_node_key_bytes_from_path,
-    save_node_key_bytes_to_path,
+    NODE_KEY_BYTES, default_node_key_path, home_node_key_path, load_node_key_bytes_from_path,
+    resolve_node_key_path, save_node_key_bytes_to_path,
 };
 #[cfg(feature = "host-io")]
 pub use ownership::{
