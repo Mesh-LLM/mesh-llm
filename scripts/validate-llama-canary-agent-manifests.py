@@ -135,11 +135,18 @@ def validate_parity_manifest(
     if after_rows[: len(before_rows)] != before_rows:
         raise PolicyError("existing parity candidate rows changed or were reordered")
 
-    existing_names = {
-        row.get("llama_model") for row in before_rows if isinstance(row, dict)
-    }
-    if None in existing_names or len(existing_names) != len(before_rows):
-        raise PolicyError("base parity manifest has missing or duplicate llama_model rows")
+    existing_name_values = [
+        row.get("llama_model") if isinstance(row, dict) else None
+        for row in before_rows
+    ]
+    if any(not isinstance(name, str) or not name for name in existing_name_values):
+        raise PolicyError("base parity manifest has missing llama_model rows")
+    # One llama.cpp source may intentionally have several immutable
+    # classification rows for distinct Mesh family variants. Treat the source
+    # names as a set when determining which newly observed sources still need
+    # classification; the prefix equality check above continues to protect
+    # every existing row byte-for-byte.
+    existing_names = set(existing_name_values)
     expected_new_names = source_models - existing_names
     new_rows = after_rows[len(before_rows) :]
     new_names = []

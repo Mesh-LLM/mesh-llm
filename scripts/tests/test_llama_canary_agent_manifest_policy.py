@@ -71,6 +71,43 @@ class LlamaCanaryAgentManifestPolicyTests(unittest.TestCase):
             {"alpha", "beta"},
         )
 
+    def test_parity_allows_immutable_variant_rows_for_one_source(self) -> None:
+        before = copy.deepcopy(self.parity)
+        before["candidates"].append(
+            {
+                "llama_model": "alpha",
+                "family": "alpha_multimodal",
+                "status": "candidate_multimodal",
+            }
+        )
+        after = copy.deepcopy(before)
+        after["candidates"].append(
+            {
+                "llama_model": "beta",
+                "family": "beta",
+                "status": "candidate",
+            }
+        )
+
+        self.policy.validate_parity_manifest(
+            before,
+            after,
+            {"alpha", "beta"},
+            {"alpha", "beta"},
+        )
+
+    def test_parity_rejects_missing_existing_source_identity(self) -> None:
+        before = copy.deepcopy(self.parity)
+        del before["candidates"][0]["llama_model"]
+
+        with self.assertRaisesRegex(self.policy.PolicyError, "missing llama_model"):
+            self.policy.validate_parity_manifest(
+                before,
+                copy.deepcopy(before),
+                {"alpha"},
+                {"alpha"},
+            )
+
     def test_parity_rejects_existing_row_changes_and_missing_sources(self) -> None:
         changed = copy.deepcopy(self.parity)
         changed["candidates"][0]["status"] = "needs_candidate"
