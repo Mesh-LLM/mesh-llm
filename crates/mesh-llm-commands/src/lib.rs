@@ -6,6 +6,7 @@ pub mod benchmark;
 pub mod config;
 pub mod doctor;
 pub mod gpus;
+pub mod kv_cache;
 pub mod model_package;
 pub mod operational_logging;
 pub mod plugin;
