@@ -7604,7 +7604,7 @@ dependencies = [
 
 [[package]]
 name = "skippy-topology-sim"
-version = "0.76.0-rc9"
+version = "0.76.1"
 dependencies = [
  "serde",
  "serde_json",
