@@ -132,6 +132,16 @@ pub(crate) fn push_batch_statuses(
             existing_ubatch_source(model_entry, defaults),
         ),
     ] {
+        if field == TuneField::Ubatch
+            && source.is_none()
+            && effective_tuning_profile(model_entry, defaults).is_some()
+        {
+            plan.field_statuses.push(TuneFieldStatus::Preserved {
+                field,
+                reason: "the effective throughput tuning profile remains authoritative".to_string(),
+            });
+            continue;
+        }
         if let Some(source) = source
             && apply_mode != TuneApplyMode::ReplaceExisting
         {
@@ -156,6 +166,16 @@ pub(crate) fn push_batch_statuses(
             edit,
         });
     }
+}
+
+fn effective_tuning_profile<'a>(
+    model_entry: Option<&'a ModelConfigEntry>,
+    defaults: Option<&'a ModelConfigDefaults>,
+) -> Option<&'a str> {
+    model_entry
+        .and_then(|entry| entry.throughput.as_ref())
+        .and_then(|throughput| throughput.tuning_profile.as_deref())
+        .or_else(|| defaults?.throughput.as_ref()?.tuning_profile.as_deref())
 }
 
 pub(crate) fn push_gpu_layers_status(
