@@ -27,6 +27,14 @@ class ResumeCratesReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("../controller/scripts/publish-crates.sh --resume", workflow)
         self.assertIn("working-directory: release-source", workflow)
 
+    def test_publisher_uses_checksummed_release_runtime_libraries(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertIn("mesh-llm-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz", workflow)
+        self.assertIn('sha256sum --check "$archive.sha256"', workflow)
+        self.assertIn("libmtmd.so libllama-common.so libllama.so", workflow)
+        self.assertIn("LLAMA_STAGE_LIB_DIR: ${{ steps.runtime.outputs.lib_dir }}", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

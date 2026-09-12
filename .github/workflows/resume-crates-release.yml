@@ -82,9 +82,50 @@ jobs:
         working-directory: release-source
         run: cargo run -p xtask -- repo-consistency publish-crates
 
+      - name: Restore verified release runtime libraries
+        id: runtime
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          archive="mesh-llm-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz"
+          runtime_root="$RUNNER_TEMP/mesh-llm-release-runtime"
+          mkdir -p "$runtime_root"
+          curl --fail --location --retry 3 \
+            --output "$runtime_root/$archive" \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${archive}"
+          curl --fail --location --retry 3 \
+            --output "$runtime_root/$archive.sha256" \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${archive}.sha256"
+          (
+            cd "$runtime_root"
+            sha256sum --check "$archive.sha256"
+            tar --extract --gzip --file "$archive"
+          )
+          lib_dir="$(
+            find "$runtime_root" \
+              -type d \
+              -path '*/native-runtimes/*/lib' \
+              -print \
+              -quit
+          )"
+          if [[ -z "$lib_dir" ]]; then
+            echo "release archive does not contain a native runtime library directory" >&2
+            exit 1
+          fi
+          for library in libmtmd.so libllama-common.so libllama.so; do
+            if [[ ! -f "$lib_dir/$library" ]]; then
+              echo "release runtime is missing $library" >&2
+              exit 1
+            fi
+          done
+          printf 'lib_dir=%s\n' "$lib_dir" >> "$GITHUB_OUTPUT"
+
       - name: Resume crates.io package chain
         working-directory: release-source
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
           LLAMA_STAGE_BUILD_DIR: ${{ runner.temp }}/mesh-llm-publish-crates-native-verify
+          LLAMA_STAGE_LIB_DIR: ${{ steps.runtime.outputs.lib_dir }}
         run: ../controller/scripts/publish-crates.sh --resume

@@ -136,8 +136,10 @@ commit SHA. The workflow runs only from the default branch, verifies those two
 identities against the remote tag and checkout, and uses the trusted
 default-branch `publish-crates.sh` controller against the tagged source. Resume
 mode skips versions that crates.io confirms are already published and falls
-back to Cargo for unknown registry responses. The workflow does not move or
-recreate the release tag.
+back to Cargo for unknown registry responses. Cargo verification links against
+the checksummed CPU runtime libraries from that same GitHub release, preserving
+isolated binary-crate verification without rebuilding native inputs. The
+workflow does not move or recreate the release tag.
 
 Release efficiency TODOs:
 
