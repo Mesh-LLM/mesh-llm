@@ -14,9 +14,10 @@ import {
   peerLatencyHint as formatPeerLatencyHint,
   formatPeerLatencySummary as formatPeerLatencySummaryFn
 } from '@/lib/format-latency'
-import { formatRatedVramBytes, formatRatedVramGB, gpuRatedVramGB } from '@/lib/vram'
+import { formatRatedVramBytes, formatRatedVramGB, gpuRatedVramGB, nodeAdvertisedVramGB } from '@/lib/vram'
+import type { VramGpuInput } from '@/lib/vram'
 
-type GpuInventoryItem = { total_vram_gb?: number; rated_vram_gb?: number; vram_bytes?: number }
+type GpuInventoryItem = VramGpuInput
 type GpuInventory = GpuInventoryItem[]
 
 export function modelDisplayName(model?: MeshModel | null) {
@@ -67,9 +68,13 @@ export function gpuInventoryVramGb(gpus?: GpuInventory | null) {
   return total > 0 ? total : null
 }
 
+/**
+ * Capacity a node contributes to mesh totals: the advertised figure first (what
+ * `/api/status` and the scheduler use), then allocatable inventory, then the rated class.
+ */
 export function displayVramGb(isClient: boolean, capacityVramGb?: number | null, gpus?: GpuInventory | null) {
   if (isClient) return 0
-  return gpuInventoryVramGb(gpus) ?? overviewVramGb(false, capacityVramGb)
+  return nodeAdvertisedVramGB({ vram_gb: capacityVramGb, gpus }) ?? 0
 }
 
 function assertLiveNodeState(state: LiveNodeState | undefined | null): LiveNodeState | null {
