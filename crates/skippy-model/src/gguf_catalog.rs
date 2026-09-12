@@ -234,7 +234,7 @@ impl CatalogReader {
         // Unsloth diffusion GGUFs carry `__index_timestep_zero__` with dims
         // `[0]`), so skip the entry instead of rejecting the whole catalog;
         // its table entry has already been consumed above.
-        if dimensions.iter().any(|dimension| *dimension == 0) {
+        if dimensions.contains(&0) {
             return Ok(None);
         }
         Ok(Some(GgufTensor {
