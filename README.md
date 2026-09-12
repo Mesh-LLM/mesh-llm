@@ -151,8 +151,8 @@ OpenAI endpoint must bind beyond loopback. Startup fails if the complete model
 does not fit within detected local capacity (or `--max-vram`); it never falls
 back to distributed serving.
 
-For `--local-model-only`, `--model`, `--gguf`, and `--mmproj` values must be
-absolute paths and must not be symlinks. If you downloaded a model through
+Values passed to `--model`, `--gguf`, and `--mmproj` must be absolute paths and
+must not be symlinks. If you downloaded a model through
 Hugging Face, resolve the cache symlink before passing the path:
 `realpath <path-from-hf-cache>`.
 
