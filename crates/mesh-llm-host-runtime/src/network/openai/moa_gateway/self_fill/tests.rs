@@ -17,6 +17,54 @@ async fn fleet(count: u32) -> (mesh::Node, Vec<InferenceTarget>) {
     (node, candidates)
 }
 
+fn rename_peer_model(peer: &mut mesh::PeerInfo, name: &str) {
+    peer.models = vec![name.to_string()];
+    peer.serving_models = vec![name.to_string()];
+    peer.hosted_models = vec![name.to_string()];
+    for descriptor in &mut peer.served_model_descriptors {
+        descriptor.identity.model_name = name.to_string();
+    }
+    for runtime in &mut peer.served_model_runtime {
+        runtime.model_name = name.to_string();
+    }
+}
+
+#[tokio::test]
+async fn self_fill_preserves_each_physical_workers_routable_alias() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .unwrap();
+    let model = BIG_MODELS[1];
+    let short = model.name;
+    let long = "unsloth/Qwen3-32B-GGUF:Q4_K_M";
+    assert_eq!(
+        super::super::pool::canonical_base_name(short),
+        super::super::pool::canonical_base_name(long)
+    );
+    let first = fleet_peer_with_health(1, model, None, Some(100_000));
+    let mut second = fleet_peer_with_health(2, model, None, Some(100_000));
+    rename_peer_model(&mut second, long);
+    let expected_aliases = first
+        .http_routable_models()
+        .into_iter()
+        .chain(second.http_routable_models())
+        .collect::<HashSet<_>>();
+    node.insert_test_peer(first).await;
+    node.insert_test_peer(second).await;
+
+    let (backends, models) =
+        assemble_worker_pool(&node, None, Some(13_000), &reqwest::Client::new(), None).await;
+
+    assert_eq!(backends.len(), 2);
+    assert_eq!(
+        models
+            .iter()
+            .map(|model| model.name.clone())
+            .collect::<HashSet<_>>(),
+        expected_aliases
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_committees_spread_across_twenty_clones() {
     let (node, candidates) = fleet(20).await;

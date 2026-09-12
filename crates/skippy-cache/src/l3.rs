@@ -14,7 +14,7 @@
 //!   is present and the assembled payload digest matches. Partial state can
 //!   never be loaded — there is nothing to load until commit.
 //! - **Idempotency**: putting a segment that already exists is a no-op;
-//!   concurrent writers of the same bytes converge on one file via
+//!   concurrent writers of the same bytes converge on one object via
 //!   temp-file + atomic rename.
 //! - **Capped budget**: `enforce_budget` evicts oldest manifests first (the
 //!   newest is never evicted) and garbage-collects unreferenced segments.
@@ -33,6 +33,9 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::fsinfo;
+
+mod packed;
+use packed::{PACK_DIR, PACK_INDEX_DIR, PackedReadRequest, PackedSegmentStore};
 
 const SEGMENT_DIR: &str = "segments";
 const MANIFEST_DIR: &str = "manifests";
@@ -433,6 +436,7 @@ pub struct HandoffSegmentStore {
     /// them. Left unprotected this fails as "manifest references missing
     /// segment" under exactly the pressure the cache is for.
     inflight_segments: Mutex<std::collections::BTreeMap<String, usize>>,
+    packed: PackedSegmentStore,
 }
 
 pub fn segment_digest(bytes: &[u8]) -> String {
@@ -478,6 +482,15 @@ impl HandoffSegmentStore {
     /// filesystem: both break the atomic-rename and containment assumptions
     /// every later guarantee rests on, and neither is worth a partial mode.
     pub fn open_with_limits(root: impl Into<PathBuf>, limits: StoreLimits) -> Result<Self> {
+        let store = Self::open_unreconciled_with_limits(root, limits)?;
+        store.reconcile_startup()?;
+        Ok(store)
+    }
+
+    pub(crate) fn open_unreconciled_with_limits(
+        root: impl Into<PathBuf>,
+        limits: StoreLimits,
+    ) -> Result<Self> {
         let root = root.into();
         if !root.is_absolute() {
             bail!("cache root must be absolute: {}", root.display());
@@ -495,7 +508,13 @@ impl HandoffSegmentStore {
                 root.display()
             );
         }
-        for directory in [SEGMENT_DIR, MANIFEST_DIR, PREFIX_INDEX_DIR] {
+        for directory in [
+            SEGMENT_DIR,
+            MANIFEST_DIR,
+            PREFIX_INDEX_DIR,
+            PACK_DIR,
+            PACK_INDEX_DIR,
+        ] {
             let path = root.join(directory);
             fsinfo::refuse_symlinked_descendant(&root, &path)?;
             fs::create_dir_all(&path).with_context(|| {
@@ -505,6 +524,7 @@ impl HandoffSegmentStore {
         }
         fsinfo::restrict_to_owner(&root, 0o700)?;
         let root_lock = acquire_root_lock(&root)?;
+        let packed = PackedSegmentStore::open(&root)?;
         Ok(Self {
             root,
             limits: RwLock::new(limits),
@@ -519,6 +539,7 @@ impl HandoffSegmentStore {
             evicted_manifests: AtomicU64::new(0),
             quarantined_objects: AtomicU64::new(0),
             inflight_segments: Mutex::new(std::collections::BTreeMap::new()),
+            packed,
         })
     }
 
@@ -559,7 +580,13 @@ impl HandoffSegmentStore {
     /// the manager exposes this root to any stage.
     pub fn reconcile_startup(&self) -> Result<StoreReconciliation> {
         let mut report = StoreReconciliation::default();
-        for directory in [SEGMENT_DIR, MANIFEST_DIR, PREFIX_INDEX_DIR] {
+        for directory in [
+            SEGMENT_DIR,
+            MANIFEST_DIR,
+            PREFIX_INDEX_DIR,
+            PACK_DIR,
+            PACK_INDEX_DIR,
+        ] {
             report.removed_temporary_files = report
                 .removed_temporary_files
                 .saturating_add(remove_temporary_files(&self.root.join(directory))?);
@@ -571,6 +598,7 @@ impl HandoffSegmentStore {
                 report.quarantined_manifests += 1;
             }
         }
+        self.rebuild_packed_index()?;
         report.removed_prefix_links = self.remove_dangling_prefix_links()?;
         report.removed_orphan_bytes = self.collect_unreferenced_segments()?;
         Ok(report)
@@ -585,15 +613,15 @@ impl HandoffSegmentStore {
             );
         }
         let mut expected_offset = 0u64;
-        for (position, segment) in manifest.segments.iter().enumerate() {
+        let locations = self
+            .packed
+            .load_manifest_index(key, manifest.segments.len())?;
+        for (position, (segment, location)) in manifest.segments.iter().zip(locations).enumerate() {
             if segment.index as usize != position || segment.offset != expected_offset {
                 bail!("manifest {key} has invalid segment ordering");
             }
-            let metadata = fs::metadata(self.segment_path(&segment.digest))
+            self.validate_segment_ref(segment, location.as_ref())
                 .with_context(|| format!("manifest {key} references a missing segment"))?;
-            if metadata.len() != segment.bytes {
-                bail!("manifest {key} references a truncated segment");
-            }
             expected_offset = expected_offset
                 .checked_add(segment.bytes)
                 .context("manifest segment offsets overflow")?;
@@ -628,6 +656,38 @@ impl HandoffSegmentStore {
 
     fn segment_path(&self, digest: &str) -> PathBuf {
         self.root.join(SEGMENT_DIR).join(format!("{digest}.seg"))
+    }
+
+    fn validate_segment_ref(
+        &self,
+        segment: &HandoffSegmentRef,
+        location: Option<&packed::PackedSegmentLocation>,
+    ) -> Result<()> {
+        if let Some(location) = location {
+            return self.packed.validate(location, segment.bytes);
+        }
+        let metadata = fs::metadata(self.segment_path(&segment.digest))?;
+        if metadata.len() != segment.bytes {
+            bail!("segment {} is truncated", segment.digest);
+        }
+        Ok(())
+    }
+
+    fn rebuild_packed_index(&self) -> Result<()> {
+        let mut entries = Vec::new();
+        for key in self.list_manifests()? {
+            let Ok(manifest) = self.load_manifest(&key) else {
+                continue;
+            };
+            let locations = self
+                .packed
+                .load_manifest_index(&key, manifest.segments.len())?;
+            entries.extend(manifest.segments.into_iter().zip(locations).filter_map(
+                |(segment, location)| location.map(|location| (segment.digest, location)),
+            ));
+        }
+        self.packed.rebuild(entries);
+        Ok(())
     }
 
     fn manifest_path(&self, payload_digest: &str) -> PathBuf {
@@ -824,12 +884,78 @@ impl HandoffSegmentStore {
         }))
     }
 
+    /// Store one spill's logical segments in one immutable physical pack.
+    pub fn try_put_segments<'store>(
+        &'store self,
+        segments: &[&[u8]],
+    ) -> Result<Result<Vec<StoredSegment<'store>>, WriteRefusal>> {
+        let digests = segments
+            .iter()
+            .map(|bytes| segment_digest(bytes))
+            .collect::<Vec<_>>();
+        let holds = digests
+            .iter()
+            .map(|digest| self.hold_segment(digest))
+            .collect::<Vec<_>>();
+        let inputs = digests
+            .iter()
+            .zip(segments)
+            .map(|(digest, bytes)| (digest.as_str(), *bytes))
+            .collect::<Vec<_>>();
+        let estimated = self.packed.estimated_new_bytes(&inputs);
+        let reservation = match self.reserve(estimated)? {
+            Ok(reservation) => reservation,
+            Err(refusal) => return Ok(Err(refusal)),
+        };
+        let (packed, new_bytes) = match self.packed.write_batch(&inputs) {
+            Ok(result) => result,
+            Err(error) => {
+                self.invalidate_usage();
+                return Err(error);
+            }
+        };
+        self.add_usage_bytes(new_bytes);
+        drop(reservation);
+        Ok(Ok(digests
+            .into_iter()
+            .zip(holds)
+            .zip(packed)
+            .zip(segments)
+            .map(|(((digest, hold), packed), bytes)| StoredSegment {
+                digest,
+                put: SegmentPut {
+                    new: packed.new,
+                    bytes: bytes.len() as u64,
+                },
+                _hold: hold,
+            })
+            .collect()))
+    }
+
     pub fn has_segment(&self, digest: &str) -> bool {
-        self.segment_path(digest).exists()
+        self.segment_path(digest).exists() || self.packed.location(digest).is_some()
     }
 
     /// Read one segment, verifying its content digest.
     pub fn read_segment(&self, digest: &str) -> Result<Vec<u8>> {
+        if let Some(location) = self.packed.location(digest) {
+            let requests = [PackedReadRequest {
+                digest,
+                bytes: location.bytes,
+                location: &location,
+                output_offset: 0,
+            }];
+            let len = usize::try_from(location.bytes).context("segment exceeds usize")?;
+            let mut bytes = Vec::with_capacity(len);
+            return match self.packed.append_many(&requests, &mut bytes, None) {
+                Ok(()) => Ok(bytes),
+                Err(failure) => {
+                    let path = self.packed.pack_path(&failure.pack_digest);
+                    let _ = self.quarantine(&path);
+                    Err(failure.error)
+                }
+            };
+        }
         let path = self.segment_path(digest);
         let bytes = fs::read(&path).with_context(|| format!("failed to read segment {digest}"))?;
         if segment_digest(&bytes) != digest {
@@ -893,7 +1019,13 @@ impl HandoffSegmentStore {
             bail!("manifest has no payload digest");
         }
         let mut expected_offset = 0u64;
-        for (position, segment) in manifest.segments.iter().enumerate() {
+        let locations = manifest
+            .segments
+            .iter()
+            .map(|segment| self.packed.location(&segment.digest))
+            .collect::<Vec<_>>();
+        for (position, (segment, location)) in manifest.segments.iter().zip(&locations).enumerate()
+        {
             if segment.index as usize != position {
                 bail!(
                     "manifest segment order broken: index {} at position {position}",
@@ -907,21 +1039,13 @@ impl HandoffSegmentStore {
                     segment.offset
                 );
             }
-            let path = self.segment_path(&segment.digest);
-            let metadata = fs::metadata(&path).with_context(|| {
-                format!(
-                    "manifest references missing segment {} ({})",
-                    segment.index, segment.digest
-                )
-            })?;
-            if metadata.len() != segment.bytes {
-                bail!(
-                    "segment {} has {} bytes on disk but manifest records {}",
-                    segment.digest,
-                    metadata.len(),
-                    segment.bytes
-                );
-            }
+            self.validate_segment_ref(segment, location.as_ref())
+                .with_context(|| {
+                    format!(
+                        "manifest references missing segment {} ({})",
+                        segment.index, segment.digest
+                    )
+                })?;
             expected_offset = expected_offset
                 .checked_add(segment.bytes)
                 .context("manifest offsets overflow")?;
@@ -941,6 +1065,14 @@ impl HandoffSegmentStore {
         // build its reference map. Indentation is pure cost on a file nobody
         // reads by hand.
         let serialized = serde_json::to_vec(manifest).context("failed to serialize manifest")?;
+        let segment_digests = manifest
+            .segments
+            .iter()
+            .map(|segment| segment.digest.clone())
+            .collect::<Vec<_>>();
+        let packed_index = self
+            .packed
+            .encode_manifest_index(&manifest.payload_digest, &segment_digests)?;
         // The manifest is what makes the segments loadable, so it is pinned
         // while it lands: eviction triggered by its own admission check must
         // not remove the entry being committed.
@@ -956,8 +1088,23 @@ impl HandoffSegmentStore {
                 }
             })?;
         let growth_bytes = (serialized.len() as u64).saturating_sub(replaced_bytes);
-        match self.reserve_write(serialized.len() as u64, growth_bytes)? {
+        let packed_index_path = self.packed.index_path(&manifest.payload_digest);
+        let replaced_index_bytes = fs::metadata(&packed_index_path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        let index_bytes = packed_index.as_ref().map_or(0, |bytes| bytes.len() as u64);
+        let write_bytes = (serialized.len() as u64).saturating_add(index_bytes);
+        let total_growth =
+            growth_bytes.saturating_add(index_bytes.saturating_sub(replaced_index_bytes));
+        match self.reserve_write(write_bytes, total_growth)? {
             Ok(_reservation) => {
+                if let Some(index) = &packed_index {
+                    self.packed
+                        .publish_manifest_index(&manifest.payload_digest, index)?;
+                } else {
+                    self.packed
+                        .remove_manifest_index(&manifest.payload_digest)?;
+                }
                 write_atomically(&manifest_path, &serialized)?;
                 fsinfo::restrict_to_owner(&manifest_path, 0o600)?;
             }
@@ -1008,31 +1155,81 @@ impl HandoffSegmentStore {
     pub fn assemble(&self, manifest: &HandoffManifest) -> Result<Vec<u8>> {
         let total = usize::try_from(manifest.total_bytes).context("payload exceeds usize")?;
         let mut payload = Vec::with_capacity(total);
+        let mut payload_hasher = blake3::Hasher::new();
+        let locations = self
+            .packed
+            .load_manifest_index(&manifest.payload_digest, manifest.segments.len())?;
+        let mut expected_offset = 0u64;
         for segment in &manifest.segments {
-            if segment.offset != payload.len() as u64 {
+            if segment.offset != expected_offset {
                 bail!(
-                    "segment {} offset {} does not match assembled length {}",
+                    "segment {} offset {} does not match assembled length {expected_offset}",
                     segment.index,
                     segment.offset,
-                    payload.len()
                 );
             }
-            payload.extend_from_slice(&self.read_segment(&segment.digest)?);
+            expected_offset = expected_offset
+                .checked_add(segment.bytes)
+                .context("assembled payload size overflows")?;
         }
+        if expected_offset != manifest.total_bytes {
+            bail!(
+                "assembled {expected_offset} bytes but manifest records {}",
+                manifest.total_bytes
+            );
+        }
+        let mut packed_requests = Vec::new();
+        for (segment, location) in manifest.segments.iter().zip(&locations) {
+            if let Some(location) = location.as_ref() {
+                packed_requests.push(PackedReadRequest {
+                    digest: &segment.digest,
+                    bytes: segment.bytes,
+                    location,
+                    output_offset: segment.offset,
+                });
+            } else {
+                self.append_packed(&packed_requests, &mut payload, &mut payload_hasher)?;
+                packed_requests.clear();
+                let bytes = self.read_segment(&segment.digest)?;
+                payload_hasher.update(&bytes);
+                payload.extend_from_slice(&bytes);
+            }
+        }
+        self.append_packed(&packed_requests, &mut payload, &mut payload_hasher)?;
         if payload.len() != total {
             bail!(
                 "assembled {} bytes but manifest records {total}",
                 payload.len()
             );
         }
-        if segment_digest(&payload) != manifest.payload_digest {
+        if payload_hasher.finalize().to_hex().as_str() != manifest.payload_digest {
             bail!("assembled payload failed manifest digest verification");
         }
         Ok(payload)
     }
 
+    fn append_packed(
+        &self,
+        requests: &[PackedReadRequest<'_>],
+        payload: &mut Vec<u8>,
+        payload_hasher: &mut blake3::Hasher,
+    ) -> Result<()> {
+        match self
+            .packed
+            .append_many(requests, payload, Some(payload_hasher))
+        {
+            Ok(()) => Ok(()),
+            Err(failure) => {
+                let path = self.packed.pack_path(&failure.pack_digest);
+                let _ = self.quarantine(&path);
+                Err(failure.error)
+            }
+        }
+    }
+
     pub fn segment_footprint_bytes(&self) -> Result<u64> {
-        directory_bytes(&self.root.join(SEGMENT_DIR))
+        Ok(directory_bytes(&self.root.join(SEGMENT_DIR))?
+            .saturating_add(self.packed.footprint_bytes()?))
     }
 
     /// Every byte the store manages: committed segments, the manifests that
@@ -1054,6 +1251,8 @@ impl HandoffSegmentStore {
     /// Stat every managed file and adopt the result as the running total.
     fn rescan_usage_bytes(&self) -> Result<u64> {
         let mut total = directory_bytes(&self.root.join(SEGMENT_DIR))?;
+        total = total.saturating_add(self.packed.footprint_bytes()?);
+        total = total.saturating_add(self.packed.index_footprint_bytes()?);
         total = total.saturating_add(directory_bytes(&self.root.join(MANIFEST_DIR))?);
         total = total.saturating_add(directory_bytes_recursive(
             &self.root.join(PREFIX_INDEX_DIR),
@@ -1261,18 +1460,30 @@ impl HandoffSegmentStore {
             let Ok(manifest) = self.load_manifest(key) else {
                 continue;
             };
-            for segment in &manifest.segments {
-                let entry = reference_counts
-                    .entry(segment.digest.clone())
-                    .or_insert((0, segment.bytes));
+            let locations = self
+                .packed
+                .load_manifest_index(key, manifest.segments.len())?;
+            for (segment, location) in manifest.segments.iter().zip(&locations) {
+                let (object, bytes) = location.as_ref().map_or_else(
+                    || (segment.digest.clone(), segment.bytes),
+                    |location| {
+                        (
+                            format!("pack:{}", location.pack_digest),
+                            fs::metadata(self.packed.pack_path(&location.pack_digest))
+                                .map(|metadata| metadata.len())
+                                .unwrap_or(0),
+                        )
+                    },
+                );
+                let entry = reference_counts.entry(object).or_insert((0, bytes));
                 entry.0 += 1;
             }
-            manifests.push(manifest);
+            manifests.push((manifest, locations));
         }
         let mut freeable = usage_before;
         let mut evicted_any = false;
         while freeable > target_bytes {
-            let Some(position) = manifests.iter().rposition(|manifest| {
+            let Some(position) = manifests.iter().rposition(|(manifest, _)| {
                 !self.is_pinned(&manifest.payload_digest)
                     && model_identity.is_none_or(|identity| manifest.model_identity == identity)
             }) else {
@@ -1280,7 +1491,7 @@ impl HandoffSegmentStore {
                 // tearing state out from under a live operation is not.
                 break;
             };
-            let evicted = manifests.remove(position);
+            let (evicted, locations) = manifests.remove(position);
             let manifest_path = self.manifest_path(&evicted.payload_digest);
             let manifest_bytes = fs::metadata(&manifest_path)
                 .map(|metadata| metadata.len())
@@ -1288,10 +1499,17 @@ impl HandoffSegmentStore {
             self.invalidate_usage();
             fs::remove_file(&manifest_path)
                 .with_context(|| format!("failed to evict manifest {}", evicted.payload_digest))?;
+            let index_bytes = self.packed.remove_manifest_index(&evicted.payload_digest)?;
             self.evicted_manifests.fetch_add(1, Ordering::Relaxed);
-            freeable = freeable.saturating_sub(manifest_bytes);
-            for segment in &evicted.segments {
-                if let Some(entry) = reference_counts.get_mut(&segment.digest) {
+            freeable = freeable
+                .saturating_sub(manifest_bytes)
+                .saturating_sub(index_bytes);
+            for (segment, location) in evicted.segments.iter().zip(locations) {
+                let object = location.map_or_else(
+                    || segment.digest.clone(),
+                    |location| format!("pack:{}", location.pack_digest),
+                );
+                if let Some(entry) = reference_counts.get_mut(&object) {
                     entry.0 = entry.0.saturating_sub(1);
                     if entry.0 == 0 {
                         freeable = freeable.saturating_sub(entry.1);
@@ -1358,6 +1576,7 @@ impl HandoffSegmentStore {
                     return Err(error).with_context(|| format!("failed to clear manifest {key}"));
                 }
             }
+            self.packed.remove_manifest_index(&key)?;
         }
         self.remove_dangling_prefix_links()?;
         self.collect_unreferenced_segments()?;
@@ -1382,14 +1601,22 @@ impl HandoffSegmentStore {
         // Files are about to be removed or rewritten in bulk.
         self.invalidate_usage();
         let mut referenced = std::collections::HashSet::new();
-        for key in self.list_manifests()? {
-            if let Ok(manifest) = self.load_manifest(&key) {
+        let manifest_keys = self.list_manifests()?;
+        for key in &manifest_keys {
+            if let Ok(manifest) = self.load_manifest(key) {
                 for segment in manifest.segments {
                     referenced.insert(segment.digest);
                 }
             }
         }
         let mut freed = 0u64;
+        let held = self
+            .inflight_segments
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .keys()
+            .cloned()
+            .collect::<std::collections::HashSet<_>>();
         for entry in fs::read_dir(self.root.join(SEGMENT_DIR))? {
             let entry = entry?;
             let path = entry.path();
@@ -1399,17 +1626,24 @@ impl HandoffSegmentStore {
             else {
                 continue;
             };
-            let held = self
-                .inflight_segments
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .contains_key(&stem);
-            if !referenced.contains(&stem) && !held {
+            if !referenced.contains(&stem) && !held.contains(&stem) {
                 freed = freed.saturating_add(entry.metadata()?.len());
                 fs::remove_file(&path)
                     .with_context(|| format!("failed to collect segment {stem}"))?;
             }
         }
+        let manifests = manifest_keys
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>();
+        freed = freed.saturating_add(self.packed.remove_orphan_indexes(&manifests)?);
+        freed = freed.saturating_add(self.packed.remove_orphan_packs(&referenced, || {
+            self.inflight_segments
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .keys()
+                .cloned()
+                .collect()
+        })?);
         Ok(freed)
     }
 }

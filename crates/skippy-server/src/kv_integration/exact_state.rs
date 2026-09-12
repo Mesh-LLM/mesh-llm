@@ -15,6 +15,10 @@ fn l3_fill_claim_key(l3: &skippy_cache::L3Tier, location: &skippy_cache::L3Locat
     format!("{}:{}", l3.state_identity(), location.manifest_key)
 }
 
+fn resident_prefix_is_complete(matched_tokens: usize, requested_tokens: usize) -> bool {
+    matched_tokens >= requested_tokens
+}
+
 impl KvStageIntegration {
     pub fn restore_exact_state(
         &self,
@@ -33,7 +37,21 @@ impl KvStageIntegration {
         session_id: &str,
         identities: &[PrefillKvIdentity],
     ) -> Result<Option<ExactStateRestore>> {
-        if !self.should_lookup() || !self.payload.is_exact_state() {
+        if !self.should_lookup() || self.exact_state_payload().is_none() {
+            return Ok(None);
+        }
+        // Dense L3 uses serialized exact state only as the durable floor.
+        // Prefer a native resident-prefix hit whenever one is already warm;
+        // importing the serialized snapshot would otherwise make enabling L3
+        // slower than the ordinary L1 path on every repeated request.
+        if self.payload == StagePrefixCachePayload::ResidentKv
+            && identities.iter().any(|identity| {
+                self.probe_resident_prefix(identity)
+                    .is_some_and(|resident| {
+                        resident_prefix_is_complete(resident.token_count, identity.token_ids.len())
+                    })
+            })
+        {
             return Ok(None);
         }
         for identity in identities {
@@ -253,7 +271,10 @@ impl KvStageIntegration {
         session_id: &str,
         identity: &PrefillKvIdentity,
     ) -> Result<Option<ExactStateRecord>> {
-        if !self.should_record() || !self.payload.is_exact_state() {
+        let Some(exact_state_payload) = self.exact_state_payload() else {
+            return Ok(None);
+        };
+        if !self.should_record() {
             return Ok(None);
         }
         let token_count = identity.identity.token_count;
@@ -288,7 +309,7 @@ impl KvStageIntegration {
             self.finish_record(&identity.page_id);
             return Ok(None);
         }
-        let exported = match self.payload {
+        let exported = match exact_state_payload {
             StagePrefixCachePayload::FullState => {
                 runtime.export_full_state(session_id).map(|state| {
                     (
@@ -677,12 +698,19 @@ mod tests {
 
     use skippy_cache::UnifiedRadixCache;
 
-    use super::try_touch_exact_state;
+    use super::{resident_prefix_is_complete, try_touch_exact_state};
 
     type TestRadix = UnifiedRadixCache<
         crate::kv_integration::RadixResidentEntry,
         crate::kv_integration::RadixExactEntry,
     >;
+
+    #[test]
+    fn only_complete_resident_prefixes_skip_exact_restore() {
+        assert!(resident_prefix_is_complete(4_000, 4_000));
+        assert!(resident_prefix_is_complete(4_001, 4_000));
+        assert!(!resident_prefix_is_complete(200, 4_000));
+    }
 
     #[test]
     fn busy_exact_state_lock_skips_touch_without_waiting() {

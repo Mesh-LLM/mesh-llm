@@ -50,6 +50,36 @@ fn commit_payload(
     manifest
 }
 
+fn commit_packed_payload(
+    store: &HandoffSegmentStore,
+    payload: &[u8],
+    segment_bytes: usize,
+) -> HandoffManifest {
+    let chunks = payload.chunks(segment_bytes).collect::<Vec<_>>();
+    let held = store
+        .try_put_segments(&chunks)
+        .expect("packed put")
+        .expect("packed put admitted");
+    let mut manifest = HandoffManifest::new("blake3:test".to_string(), "full-state".into());
+    let mut offset = 0u64;
+    for (index, stored) in held.iter().enumerate() {
+        let bytes = chunks[index].len() as u64;
+        manifest.segments.push(HandoffSegmentRef {
+            index: index as u32,
+            offset,
+            bytes,
+            digest: stored.digest.clone(),
+            meta_json: None,
+        });
+        offset += bytes;
+    }
+    manifest.total_bytes = payload.len() as u64;
+    manifest.payload_digest = segment_digest(payload);
+    store.commit(&manifest).expect("packed commit");
+    drop(held);
+    manifest
+}
+
 fn temp_root(name: &str) -> PathBuf {
     let root = std::env::temp_dir()
         .join("skippy-l3-tests")
@@ -68,6 +98,72 @@ fn roundtrip_assembles_identical_payload() {
         .load_manifest(&manifest.payload_digest)
         .expect("load manifest");
     assert_eq!(store.assemble(&loaded).expect("assemble"), payload);
+}
+
+#[test]
+fn packed_roundtrip_uses_one_physical_file_and_survives_reopen() {
+    let root = temp_root("packed-roundtrip");
+    let payload: Vec<u8> = (0..100_000u32).map(|value| value as u8).collect();
+    let manifest = {
+        let store = store(&root, 0);
+        let manifest = commit_packed_payload(&store, &payload, 4096);
+        assert_eq!(fs::read_dir(root.join(PACK_DIR)).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(root.join(SEGMENT_DIR)).unwrap().count(), 0);
+        let manifest_json = fs::read_to_string(store.manifest_path(&manifest.payload_digest))
+            .expect("read portable manifest");
+        assert!(!manifest_json.contains("pack_digest"));
+        assert_eq!(store.assemble(&manifest).expect("assemble"), payload);
+        manifest
+    };
+
+    // Direct callers receive a fully reconciled store, including the packed
+    // location map needed to read manifests from the previous process.
+    let reopened = store(&root, 0);
+    let loaded = reopened
+        .load_manifest(&manifest.payload_digest)
+        .expect("load packed manifest after restart");
+    assert_eq!(reopened.assemble(&loaded).expect("assemble"), payload);
+}
+
+#[test]
+fn corrupt_pack_is_quarantined_and_never_served() {
+    let root = temp_root("packed-corruption");
+    let store = store(&root, 0);
+    let payload: Vec<u8> = (0..32_000u32).map(|value| value as u8).collect();
+    let manifest = commit_packed_payload(&store, &payload, 4096);
+    let pack = fs::read_dir(root.join(PACK_DIR))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let mut bytes = fs::read(&pack).unwrap();
+    bytes[0] ^= 0xff;
+    fs::write(&pack, bytes).unwrap();
+
+    assert!(store.assemble(&manifest).is_err());
+    assert!(!pack.exists());
+    assert!(root.join(QUARANTINE_DIR).exists());
+}
+
+#[test]
+fn uncommitted_pack_is_collected_after_holds_release() {
+    let root = temp_root("packed-orphan");
+    let store = store(&root, 0);
+    let payload = (0..16_000)
+        .map(|index| (index / 1024) as u8)
+        .collect::<Vec<_>>();
+    let chunks = payload.chunks(1024).collect::<Vec<_>>();
+    let held = store
+        .try_put_segments(&chunks)
+        .unwrap()
+        .expect("packed put admitted");
+    assert_eq!(store.collect_unreferenced_segments().unwrap(), 0);
+    drop(held);
+    assert_eq!(
+        store.collect_unreferenced_segments().unwrap(),
+        payload.len() as u64
+    );
 }
 
 #[test]
@@ -229,28 +325,24 @@ fn a_segment_larger_than_the_budget_is_refused() {
 
 #[test]
 fn an_entry_larger_than_a_shrunken_budget_is_refused_at_commit() {
-    // A budget shrunk between runs is the realistic way an entry ends up
-    // bigger than the cap: it was admissible when its segments were
-    // written and is not any more.
+    // A live budget update can make an in-flight entry larger than the cap:
+    // it was admissible when its segments were written and is not any more.
     let root = temp_root("oversize-commit");
-    let uncapped = store(&root, 0);
-    let manifest = {
-        let (manifest, held) = manifest_for(&uncapped, &vec![7u8; 16_000], 4_000);
-        drop(held);
-        manifest
-    };
-    drop(uncapped);
-
-    let capped = store(&root, 8_000);
-    let error = capped
+    let store = store(&root, 0);
+    let (manifest, held) = manifest_for(&store, &vec![7u8; 16_000], 4_000);
+    store
+        .update_limits(StoreLimits::new(8_000, 0))
+        .expect("shrink limits");
+    let error = store
         .commit(&manifest)
         .expect_err("an entry larger than the budget was committed");
+    drop(held);
     assert!(
         format!("{error:#}").contains("skipped_oversize"),
         "refusal did not carry the reason code: {error:#}"
     );
     assert!(
-        capped.list_manifests().expect("list").is_empty(),
+        store.list_manifests().expect("list").is_empty(),
         "the refused entry was left loadable"
     );
 }

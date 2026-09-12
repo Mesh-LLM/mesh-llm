@@ -300,27 +300,35 @@ impl L3Tier {
                 cuts
             }
         };
+        let segment_slices = cuts
+            .iter()
+            .map(|(offset, len, _)| {
+                let start = usize::try_from(*offset).context("segment offset exceeds usize")?;
+                let end = start
+                    .checked_add(usize::try_from(*len).context("segment length exceeds usize")?)
+                    .context("segment range overflows")?;
+                Ok(&wire[start..end])
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let stored_segments = match self.store().try_put_segments(&segment_slices) {
+            Ok(Ok(stored)) => stored,
+            Ok(Err(refusal)) => {
+                self.manager.record_write_refusal(refusal);
+                bail!("cannot store packed segments: {}", refusal.reason());
+            }
+            Err(error) => {
+                self.manager.record_storage_error();
+                return Err(error);
+            }
+        };
         let mut new_bytes = 0u64;
         // Held until after the commit below: until the manifest names them
         // these segments are unreferenced, and an eviction triggered by
         // another writer would collect them mid-build.
-        let mut held = Vec::with_capacity(manifest.segments.capacity());
-        for (index, (offset, len, label)) in cuts.into_iter().enumerate() {
-            let start = usize::try_from(offset).context("segment offset exceeds usize")?;
-            let end = start
-                .checked_add(usize::try_from(len).context("segment length exceeds usize")?)
-                .context("segment range overflows")?;
-            let stored = match self.store().try_put_segment(&wire[start..end]) {
-                Ok(Ok(stored)) => stored,
-                Ok(Err(refusal)) => {
-                    self.manager.record_write_refusal(refusal);
-                    bail!("cannot store segment: {}", refusal.reason());
-                }
-                Err(error) => {
-                    self.manager.record_storage_error();
-                    return Err(error);
-                }
-            };
+        let mut held = Vec::with_capacity(stored_segments.len());
+        for ((index, (offset, len, label)), stored) in
+            cuts.into_iter().enumerate().zip(stored_segments)
+        {
             if stored.put.new {
                 new_bytes = new_bytes.saturating_add(stored.put.bytes);
             }
