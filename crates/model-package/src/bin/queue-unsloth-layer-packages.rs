@@ -1157,6 +1157,10 @@ fn job_spec_with_token(
         "CATALOG_CREATE_PR".into(),
         if args.catalog_direct { "false" } else { "true" }.into(),
     );
+    environment.insert(
+        "REPUBLISH".into(),
+        if args.republish { "true" } else { "false" }.into(),
+    );
 
     let mut secrets = HashMap::new();
     secrets.insert("HF_TOKEN".into(), hf_token.to_string());
@@ -1538,7 +1542,7 @@ mod tests {
             model_id: "unsloth/GLM-5-GGUF:UD-Q4_K_XL".to_string(),
             family: "glm".to_string(),
         };
-        let args = Args {
+        let mut args = Args {
             author: "unsloth".to_string(),
             search: "GGUF".to_string(),
             recent_limit: 1,
@@ -1595,6 +1599,10 @@ mod tests {
             Some("0123456789abcdef")
         );
         assert_eq!(
+            spec.environment.get("REPUBLISH").map(String::as_str),
+            Some("false")
+        );
+        assert_eq!(
             spec.environment
                 .get("SOURCE_PROJECTOR_FILES")
                 .map(String::as_str),
@@ -1611,6 +1619,13 @@ mod tests {
         );
         assert_eq!(spec.volumes[1].mount_path, "/source");
         assert_eq!(spec.volumes[1].read_only, Some(true));
+
+        args.republish = true;
+        let replacement = job_spec_with_token(&candidate, &args, "hf_test", &job_plan).unwrap();
+        assert_eq!(
+            replacement.environment.get("REPUBLISH").map(String::as_str),
+            Some("true")
+        );
     }
 
     #[test]

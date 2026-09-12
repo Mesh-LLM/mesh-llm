@@ -15,9 +15,9 @@ behavior for bench materialization and metadata carriers. Bump
 SKIPPY_ABI_VERSION_PATCH 53->54.
 ---
  include/skippy/common.h        |  2 +-
- include/skippy/model_package.h | 11 +++++++
+ include/skippy/model_package.h | 14 ++++++++++
  src/skippy/model_package.cpp   | 53 ++++++++++++++++++++++++++++++++--
- 3 files changed, 62 insertions(+), 4 deletions(-)
+ 3 files changed, 65 insertions(+), 4 deletions(-)
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
 index 65cfa2ce8..5853db327 100644
@@ -36,15 +36,18 @@ diff --git a/include/skippy/model_package.h b/include/skippy/model_package.h
 index 6ea9b395f..1c19572b9 100644
 --- a/include/skippy/model_package.h
 +++ b/include/skippy/model_package.h
-@@ -103,6 +103,17 @@ LLAMA_API enum skippy_status skippy_write_gguf_from_parts(
+@@ -103,6 +103,20 @@ LLAMA_API enum skippy_status skippy_write_gguf_from_parts(
          const char * output_path,
          struct skippy_error ** out_error);
  
-+// Materializing variant that unlinks each input part file as soon as its
-+// tensors have been absorbed into the output. Use from staging pipelines whose
-+// parts are scratch files (for example the HF Jobs sharded split writer, where
-+// parts and output coexisting would double local disk usage); never use it on
-+// published package files that must survive.
++/**
++ * @brief Materialize a GGUF while consuming scratch input parts.
++ *
++ * Each input is unlinked after its last selected tensor is copied. If the
++ * operation fails, earlier inputs may already be deleted and the output may be
++ * incomplete; later inputs remain available. Use only with disposable staging
++ * parts, never published package files that must survive.
++ */
 +LLAMA_API enum skippy_status skippy_write_gguf_from_parts_consuming(
 +        const char * const * input_paths,
 +        size_t input_count,
@@ -162,4 +165,3 @@ index 6df18689e..acd468ef1 100644
 +}
 -- 
 2.54.0 (Apple Git-157)
-

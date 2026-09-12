@@ -10,6 +10,7 @@ set -euo pipefail
 #   SOURCE_PIPELINE_TAG — source model pipeline tag for the published model card
 #   MESH_LLM_REF — git ref to build from (default: main)
 #   CATALOG_CREATE_PR — "true" to open a PR for catalog updates (non-org members)
+#   REPUBLISH — "true" to stage a replacement and atomically promote it to main
 #   PACKAGE_EXPERIMENTAL — "true" to label the public package as not runtime-certified
 #   HF_TOKEN — injected as a secret by HF Jobs
 #
@@ -19,6 +20,7 @@ set -euo pipefail
 MESH_LLM_REF="${MESH_LLM_REF:-main}"
 SOURCE_REVISION="${SOURCE_REVISION:-main}"
 SOURCE_QUANT="${SOURCE_QUANT:-}"
+REPUBLISH="${REPUBLISH:-false}"
 : "${SOURCE_REPO:?SOURCE_REPO is required}"
 if [ -z "$SOURCE_QUANT" ] && [[ "${MODEL_ID:-}" == *:* ]]; then
     SOURCE_QUANT="${MODEL_ID##*:}"
@@ -75,6 +77,7 @@ TOOL_DIR="${TOOL_DIR:-${LOCAL_WORK_DIR}/tools}"
 VENV_DIR="${VENV_DIR:-${LOCAL_WORK_DIR}/venv}"
 ARTIFACT_UPLOAD_SCRIPT="${ARTIFACT_UPLOAD_SCRIPT:-${LOCAL_WORK_DIR}/upload-package-artifact.py}"
 ARTIFACT_UPLOAD_HOOK="${ARTIFACT_UPLOAD_HOOK:-${LOCAL_WORK_DIR}/upload-package-artifact.sh}"
+SNAPSHOT_PROMOTER="${SNAPSHOT_PROMOTER:-${TOOL_DIR}/promote_layer_package_snapshot.py}"
 CARGO_HOME="${CARGO_HOME:-${LOCAL_WORK_DIR}/cargo-home}"
 RUSTUP_HOME="${RUSTUP_HOME:-${LOCAL_WORK_DIR}/rustup-home}"
 CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${LOCAL_WORK_DIR}/cargo-target}"
@@ -243,6 +246,7 @@ if [ ! -f "$SLICER" ]; then
     exit 1
 fi
 cp "$SLICER" "${TOOL_DIR}/skippy-model-package"
+cp scripts/promote_layer_package_snapshot.py "$SNAPSHOT_PROMOTER"
 SLICER="${TOOL_DIR}/skippy-model-package"
 chmod +x "$SLICER"
 cd /
@@ -265,6 +269,20 @@ import os
 api = HfApi(token=os.environ["HF_TOKEN"])
 api.create_repo(os.environ["TARGET_REPO"], exist_ok=True)
 PYTHON
+TARGET_UPLOAD_REVISION="main"
+TARGET_MAIN_PARENT=""
+if [ "$REPUBLISH" = "true" ]; then
+    mapfile -t SNAPSHOT_STATE < <(
+        "$VENV_DIR/bin/python3" "$SNAPSHOT_PROMOTER" prepare \
+            --repo "$TARGET_REPO" \
+            --source-revision "$SOURCE_REVISION" \
+            --token "$(date -u +%Y%m%d%H%M%S)-$$"
+    )
+    TARGET_UPLOAD_REVISION="${SNAPSHOT_STATE[0]:?missing staging revision}"
+    TARGET_MAIN_PARENT="${SNAPSHOT_STATE[1]:?missing target main parent}"
+    echo "  Staging replacement on ${TARGET_UPLOAD_REVISION} from ${TARGET_MAIN_PARENT}"
+fi
+export TARGET_UPLOAD_REVISION TARGET_MAIN_PARENT
 cat > "$ARTIFACT_UPLOAD_SCRIPT" <<'PYTHON'
 from huggingface_hub import HfApi
 from pathlib import Path
@@ -274,6 +292,7 @@ import time
 path = Path(os.environ["SKIPPY_PACKAGE_ARTIFACT_PATH"])
 relative = os.environ["SKIPPY_PACKAGE_ARTIFACT_RELATIVE_PATH"]
 target_repo = os.environ["TARGET_REPO"]
+target_revision = os.environ["TARGET_UPLOAD_REVISION"]
 max_attempts = int(os.environ.get("ARTIFACT_UPLOAD_ATTEMPTS", "8"))
 
 api = HfApi(token=os.environ["HF_TOKEN"])
@@ -285,6 +304,7 @@ for attempt in range(1, max_attempts + 1):
             path_or_fileobj=str(path),
             path_in_repo=relative,
             repo_type="model",
+            revision=target_revision,
             commit_message=f"Add package artifact {relative}",
         )
         last_error = None
@@ -466,6 +486,7 @@ from pathlib import Path
 
 api = HfApi(token=os.environ['HF_TOKEN'])
 target_repo = os.environ['TARGET_REPO']
+target_revision = os.environ['TARGET_UPLOAD_REVISION']
 source_repo = os.environ['SOURCE_REPO']
 model_id = os.environ.get('MODEL_ID', '')
 manifest_path = Path(os.environ['PACKAGE_DIR']) / 'model-package.json'
@@ -475,16 +496,26 @@ api.upload_file(
     path_or_fileobj=str(manifest_path),
     path_in_repo='model-package.json',
     repo_type='model',
+    revision=target_revision,
     commit_message=f'Add layer package manifest from {source_repo} ({model_id})',
 )
 
-# Print summary
 manifest = json.load(open(manifest_path))
-print(f'  ✓ Published: https://huggingface.co/{target_repo}')
+action = 'Staged replacement' if target_revision != 'main' else 'Published'
+print(f'  ✓ {action}: https://huggingface.co/{target_repo}/tree/{target_revision}')
 print(f'    Model:  {manifest["model_id"]}')
 print(f'    Layers: {manifest["layer_count"]}')
 print(f'    Schema: {manifest["schema_version"]}')
 PYTHON
+
+if [ "$REPUBLISH" = "true" ]; then
+    "$VENV_DIR/bin/python3" "$SNAPSHOT_PROMOTER" promote \
+        --repo "$TARGET_REPO" \
+        --manifest "$PACKAGE_DIR/model-package.json" \
+        --staging-revision "$TARGET_UPLOAD_REVISION" \
+        --parent-commit "$TARGET_MAIN_PARENT"
+    echo "  ✓ Atomically promoted replacement snapshot to main"
+fi
 
 # ─── Update catalog ───────────────────────────────────────────────────────
 echo ""
