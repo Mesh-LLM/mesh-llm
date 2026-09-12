@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 import tempfile
@@ -103,6 +104,47 @@ class KvRestartReplayTest(unittest.TestCase):
 
         self.assertEqual(result["error"], "stream ended without terminal [DONE] marker")
 
+    def test_stream_request_requires_prompt_and_cached_usage(self) -> None:
+        class Response:
+            status = 200
+
+            def __init__(self, usage):
+                self.usage = usage
+
+            def __iter__(self):
+                return iter(
+                    [
+                        b'data: {"choices":[{"delta":{"content":"ok"}}]}\n',
+                        f'data: {json.dumps({"choices": [], "usage": self.usage})}\n'.encode(),
+                        b"data: [DONE]\n",
+                    ]
+                )
+
+        class Connection:
+            usage = {}
+
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def request(self, *_args, **_kwargs):
+                pass
+
+            def getresponse(self):
+                return Response(self.usage)
+
+            def close(self):
+                pass
+
+        for usage, expected in [
+            ({"prompt_tokens_details": {"cached_tokens": 0}}, "prompt token usage"),
+            ({"prompt_tokens": 10}, "cached token usage"),
+        ]:
+            with self.subTest(expected=expected):
+                Connection.usage = usage
+                with mock.patch.object(BENCH.http.client, "HTTPConnection", Connection):
+                    result = BENCH.stream_request("request", [], "model", 8, 10)
+                self.assertIn(expected, result["error"])
+
     def test_single_restore_sample_does_not_report_p95(self) -> None:
         summary = BENCH.summarize_cohort(
             "restore",
@@ -178,6 +220,62 @@ class KvRestartReplayTest(unittest.TestCase):
         self.assertTrue(all(messages[-1]["role"] == "user" for _, messages in calls))
         self.assertEqual(calls[1][1], calls[2][1])
         self.assertEqual(calls[2][1], calls[3][1])
+
+    def test_run_arm_propagates_final_server_shutdown_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / "mesh-llm"
+            model = root / "model.gguf"
+            binary.write_bytes(b"binary")
+            model.write_bytes(b"model")
+            args = SimpleNamespace(
+                binary=str(binary),
+                model=str(model),
+                turns=1,
+                turn_target_tokens=32,
+                system_tokens=16,
+                restore_repeats=1,
+                max_output_tokens=8,
+                request_timeout=10.0,
+                ready_timeout=10.0,
+                serve_extra_args=[],
+            )
+            with (
+                mock.patch.object(BENCH, "start_server", return_value=(SimpleNamespace(), [])),
+                mock.patch.object(BENCH, "wait_for_model", return_value="model"),
+                mock.patch.object(BENCH, "stop_server", side_effect=[None, RuntimeError("did not stop")]),
+                mock.patch.object(
+                    BENCH,
+                    "stream_request",
+                    return_value={
+                        "request_id": "fill-1",
+                        "ttft_seconds": 0.1,
+                        "total_seconds": 0.2,
+                        "prompt_tokens": 10,
+                        "completion_tokens": 1,
+                        "cached_tokens": 0,
+                        "decode_tokens_per_second": 10.0,
+                    },
+                ),
+                mock.patch.object(BENCH, "binary_provenance", return_value={"source_sha": "a" * 40}),
+                mock.patch.object(BENCH, "hardware_fingerprint", return_value={"platform": "test"}),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "did not stop"):
+                    BENCH.run_arm(args, root / "output")
+
+    def test_main_rejects_any_nonempty_output_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "output"
+            output.mkdir()
+            (output / "partial.log").write_text("partial", encoding="utf-8")
+            with mock.patch.object(
+                sys,
+                "argv",
+                ["kv-restart-replay.py", "--model", str(root / "model.gguf"), "--output", str(output)],
+            ):
+                with self.assertRaisesRegex(SystemExit, "not empty"):
+                    BENCH.main()
 
 
 if __name__ == "__main__":
