@@ -692,6 +692,100 @@ async fn resolve_model_accepts_non_catalog_name_from_hf_cache() {
     let _ = std::fs::remove_dir_all(&cache_root);
 }
 
+#[tokio::test]
+#[serial_test::serial]
+async fn cached_hf_gguf_is_preindexed_for_split_standby_inventory() {
+    let cache_root = std::env::temp_dir().join(format!(
+        "mesh-llm-preindex-hf-cache-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&cache_root).unwrap();
+    let _hub_cache = EnvVarGuard::set_path("HF_HUB_CACHE", &cache_root);
+    let _hf_home = EnvVarGuard::remove("HF_HOME");
+    let _xdg_cache_home = EnvVarGuard::remove("XDG_CACHE_HOME");
+
+    let repo_id = "someone/Standby-Inventory-GGUF";
+    let repo_dir = cache_root.join(huggingface_repo_folder_name(repo_id, RepoTypeModel));
+    std::fs::create_dir_all(repo_dir.join("refs")).unwrap();
+    std::fs::write(repo_dir.join("refs").join("main"), "test-commit").unwrap();
+    let snapshot_path = huggingface_snapshot_path(repo_id, RepoTypeModel, "test-commit")
+        .join("Standby-Inventory-Q4_K_M.gguf");
+    std::fs::create_dir_all(snapshot_path.parent().unwrap()).unwrap();
+    let blob_dir = repo_dir.join("blobs");
+    std::fs::create_dir_all(&blob_dir).unwrap();
+    let blob_path = blob_dir.join("content-blob");
+    write_identity_test_gguf(&blob_path, 4096);
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("../../blobs/content-blob", &snapshot_path).unwrap();
+    #[cfg(not(unix))]
+    std::fs::copy(&blob_path, &snapshot_path).unwrap();
+
+    let plans = resolve_startup_models(
+        &[direct_gguf_startup_spec(
+            Path::new("Standby-Inventory-Q4_K_M"),
+            None,
+        )],
+        true,
+    )
+    .await
+    .expect("cached Hugging Face GGUF resolves");
+
+    assert_eq!(plans.len(), 1);
+    assert!(plans[0].local_source_required);
+    let package = plans[0]
+        .preindexed_split_package
+        .as_ref()
+        .expect("cached Hugging Face GGUF must be indexed before election");
+    let verified = crate::inference::skippy::verify_registered_content_source(
+        &plans[0].declared_ref,
+        &package.package_ref,
+        &package.manifest_sha256,
+        &package.source_model_sha256,
+    )
+    .expect("standby inventory can verify its registered cached source");
+    assert_eq!(verified.package_ref, package.package_ref);
+
+    let _ = std::fs::remove_dir_all(&cache_root);
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn cached_hf_safetensors_is_not_indexed_as_gguf() {
+    let cache_root = std::env::temp_dir().join(format!(
+        "mesh-llm-preindex-hf-safetensors-cache-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&cache_root).unwrap();
+    let _hub_cache = EnvVarGuard::set_path("HF_HUB_CACHE", &cache_root);
+    let _hf_home = EnvVarGuard::remove("HF_HOME");
+    let _xdg_cache_home = EnvVarGuard::remove("XDG_CACHE_HOME");
+
+    let repo_id = "someone/Standby-Inventory-MLX";
+    let repo_dir = cache_root.join(huggingface_repo_folder_name(repo_id, RepoTypeModel));
+    std::fs::create_dir_all(repo_dir.join("refs")).unwrap();
+    std::fs::write(repo_dir.join("refs").join("main"), "test-commit").unwrap();
+    let snapshot_path =
+        huggingface_snapshot_path(repo_id, RepoTypeModel, "test-commit").join("model.safetensors");
+    std::fs::create_dir_all(snapshot_path.parent().unwrap()).unwrap();
+    std::fs::write(&snapshot_path, b"SAFE").unwrap();
+
+    let plans = resolve_startup_models(&[direct_gguf_startup_spec(&snapshot_path, None)], true)
+        .await
+        .expect("cached Hugging Face SafeTensors resolves");
+
+    assert_eq!(plans.len(), 1);
+    assert!(!plans[0].local_source_required);
+    assert!(plans[0].preindexed_split_package.is_none());
+
+    let _ = std::fs::remove_dir_all(&cache_root);
+}
+
 struct EnvVarGuard {
     key: &'static str,
     previous: Option<std::ffi::OsString>,
