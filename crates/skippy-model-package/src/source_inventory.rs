@@ -182,9 +182,15 @@ fn validate_shards(shards: &[SourceShard]) -> Result<()> {
 
 pub(crate) fn inspect(path: &Path, artifact_id: &str) -> Result<(GgufCatalog, TensorCatalog)> {
     let directory = read_gguf_catalog(path)?;
+    // Zero-element placeholders (e.g. Unsloth diffusion `__index_timestep_zero__`)
+    // are skipped by the GGUF catalog reader; drop them from the native side too
+    // so the inventories agree.
     let native = ModelInfo::open(path)
         .with_context(|| format!("native GGUF inspection failed for {}; shared-offset aliases/non-contiguous storage require a native inspection extension", path.display()))?
-        .tensors()?;
+        .tensors()?
+        .into_iter()
+        .filter(|tensor| tensor.element_count > 0)
+        .collect::<Vec<_>>();
     let tensors = catalog_from_inspection(&directory, &native, artifact_id)?;
     Ok((directory, tensors))
 }
