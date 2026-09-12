@@ -48,6 +48,11 @@ curl -s http://localhost:9337/v1/chat/completions -H "Content-Type: application/
 
 Clients that support streamed OpenAI-compatible responses can use the same base URL.
 
+Repeated prompt prefixes are reused automatically when the selected model
+supports them. Responses report reused prompt tokens in
+`usage.prompt_tokens_details.cached_tokens`. See [KV Caching](/docs/pages/kv-caching/)
+for defaults, memory policy, and durable disk-cache controls.
+
 ## Tool calling
 
 Tool-calling support depends on the selected model and the agent client. Start with console chat, then test the specific agent workflow you plan to use.
