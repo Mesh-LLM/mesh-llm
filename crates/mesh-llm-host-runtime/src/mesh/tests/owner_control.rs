@@ -29,6 +29,7 @@ fn make_test_peer_info(peer_id: EndpointId) -> PeerInfo {
         is_soc: None,
         gpu_vram: None,
         gpu_reserved_bytes: None,
+        memory: None,
         gpu_mem_bandwidth_gbps: None,
         gpu_compute_tflops_fp32: None,
         gpu_compute_tflops_fp16: None,
@@ -168,6 +169,39 @@ fn write_hf_artifact_stream_package(
         package_dir,
         "hf://meshllm/stream-package@abc123".to_string(),
         manifest_sha,
+    )
+}
+
+fn write_hf_package_v2_artifact_stream_package(
+    root: &std::path::Path,
+) -> (std::path::PathBuf, String, String, String) {
+    let package_dir = root
+        .join("models--meshllm--stream-package-v2")
+        .join("snapshots")
+        .join("abc123");
+    let manifest = crate::inference::skippy::write_test_package_v2_fixture(
+        &package_dir,
+        "meshllm/stream-package-v2",
+        &[
+            ("primary", "artifacts/primary.gguf", "input.weight"),
+            (
+                "resident",
+                "artifacts/resident.gguf",
+                "resident-tensor",
+            ),
+            ("unowned", "artifacts/unowned.gguf", "unowned-tensor"),
+        ],
+    )
+    .unwrap();
+    let package_id = manifest.package_id.clone();
+    let manifest_bytes = std::fs::read(package_dir.join("model-package.json")).unwrap();
+    let manifest_sha = sha256_hex(&manifest_bytes);
+
+    (
+        package_dir,
+        "hf://meshllm/stream-package-v2@abc123".to_string(),
+        manifest_sha,
+        package_id,
     )
 }
 

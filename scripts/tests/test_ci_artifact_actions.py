@@ -19,6 +19,7 @@ ACTIONS = ROOT / ".github" / "actions"
 COMPOSE_SCRIPT = ROOT / "scripts" / "ci-compose-product-input.sh"
 RELEASE_FOOTER_MANIFEST = ROOT / "crates" / "mesh-llm-release-footer" / "Cargo.toml"
 XTASK_MANIFEST = ROOT / "tools" / "xtask" / "Cargo.toml"
+RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 
 
 class CiArtifactActionTests(unittest.TestCase):
@@ -509,6 +510,28 @@ class CiArtifactActionTests(unittest.TestCase):
         )
         self.assertNotIn("package-native-runtime.sh", action)
         self.assertNotIn("compose-product", action)
+
+    def test_release_stamps_refuse_to_guess_the_source_commit(self) -> None:
+        """A published binary has to say what it was built from (#1596)."""
+        for name in ("prepare-host-input", "prepare-windows-host-input"):
+            action = self.read_action(name)
+            with self.subTest(action=name):
+                self.assertIn("--require-source-commit", action)
+                self.assertIn("--commit", action)
+                self.assertIn("INPUT_COMMIT", action)
+
+    def test_release_workflow_stamps_the_immutable_source_revision(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        attest_steps = workflow.count(
+            "attestation_signing_key_file: ${{ runner.temp }}"
+            "/mesh-release-attestation-private-key.json"
+        )
+        stamped_commits = workflow.count(
+            "commit: ${{ needs.metadata.outputs.source_sha }}"
+        )
+
+        self.assertGreater(attest_steps, 0)
+        self.assertEqual(attest_steps, stamped_commits)
 
     def test_windows_attestation_verifier_stays_native_abi_free(self) -> None:
         xtask = tomllib.loads(XTASK_MANIFEST.read_text(encoding="utf-8"))
@@ -2825,7 +2848,8 @@ class CiArtifactActionTests(unittest.TestCase):
         }
         expected_jobs = {
             "ci-quality-slice.yml": {
-                "runner_policy", "quality_contracts", "rust_fmt", "rust_clippy", "cli_docs_sync", "authority_sentinel",
+                "commit_convention", "runner_policy", "quality_contracts", "rust_fmt", "rust_clippy",
+                "cli_docs_sync", "authority_sentinel",
             },
             "ci-web-slice.yml": {"runner_policy", "ui_quality", "ui_e2e", "website"},
             "ci-ui-artifact-slice.yml": {"runner_policy", "ui_artifact"},
@@ -2888,7 +2912,13 @@ class CiArtifactActionTests(unittest.TestCase):
                     block = step_block(workflow, marker)
                     with self.subTest(consumer=marker):
                         if "restore-sccache-seed" in marker:
-                            self.assertIn("allow_trusted_sccache_seed", block)
+                            if filename == "ci-linux-runtime-slice.yml":
+                                self.assertEqual(
+                                    re.findall(r'^\s*allow_trusted_seed:\s*(.+)$', block, re.MULTILINE),
+                                    ['"false"'],
+                                )
+                            else:
+                                self.assertIn("allow_trusted_sccache_seed", block)
                         else:
                             self.assertIn("allow_native_github_cache", block)
 
@@ -2930,11 +2960,11 @@ class CiArtifactActionTests(unittest.TestCase):
         # baked pnpm store instead (#1392); see the comment on
         # `eligible_consumers` above.
         self.assertIn(
-            f"cache: ${{{{ {native_cache_expression} && 'pnpm' || '' }}}}",
+            f"cache: ${{{{ inputs.ui_artifact_name == '' && {native_cache_expression} && 'pnpm' || '' }}}}",
             swift,
         )
         self.assertIn(
-            f"package-manager-cache: ${{{{ {native_cache_expression} }}}}",
+            f"package-manager-cache: ${{{{ inputs.ui_artifact_name == '' && {native_cache_expression} }}}}",
             swift,
         )
         self.assertIn(

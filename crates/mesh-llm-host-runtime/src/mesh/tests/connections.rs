@@ -295,6 +295,12 @@ fn stage_load_request() -> crate::inference::skippy::StageLoadRequest {
         stage_index: 1,
         layer_start: 4,
         layer_end: 8,
+        admission: crate::inference::skippy::test_stage_admission(4, 8),
+        participant_set_hash: "participants".to_string(),
+        topology_hash: "topology".to_string(),
+        activation_codec: skippy_protocol::StageActivationCodec::default(),
+        activation_codec_policy: Default::default(),
+        topology_stages: Vec::new(),
         model_path: Some("/models/demo.gguf".to_string()),
         source_model_bytes: Some(123_456_789),
         source_model_sha256: None,
@@ -457,6 +463,7 @@ async fn make_test_node_with_requirements(
         is_soc: None,
         gpu_vram: None,
         gpu_reserved_bytes: None,
+        advertised_memory: crate::mesh::AdvertisedMemory::default(),
         gpu_mem_bandwidth_gbps: Arc::new(tokio::sync::Mutex::new(None)),
         gpu_compute_tflops_fp32: Arc::new(tokio::sync::Mutex::new(None)),
         gpu_compute_tflops_fp16: Arc::new(tokio::sync::Mutex::new(None)),
@@ -485,6 +492,46 @@ async fn make_test_node_with_requirements(
     });
 
     Ok(node)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn join_rejects_token_naming_own_identity() -> Result<()> {
+    // #1699: two serve processes on one machine silently load the same node
+    // key, so the joiner's token names its own endpoint id. iroh refuses
+    // self-connections, so before the guard this failed opaquely (or looked
+    // like a successful one-node mesh). It must fail loudly instead.
+    let node = make_test_node(super::NodeRole::Worker).await?;
+    node.start_accepting();
+
+    let self_token = node.invite_token().await;
+    let err = node
+        .join(&self_token)
+        .await
+        .expect_err("joining our own invite token must be rejected");
+
+    assert!(
+        err.to_string().contains("own id"),
+        "unexpected error: {err:#}"
+    );
+
+    assert!(
+        node.active_mesh_policy_state().await.is_none(),
+        "a rejected self-token must not install signed mesh policy state"
+    );
+    assert!(
+        node.bootstrap_token.lock().await.is_none(),
+        "a rejected self-token must not install the bootstrap token"
+    );
+
+    let retry_err = node
+        .join_with_retry(&self_token)
+        .await
+        .expect_err("retrying our own invite token must be rejected");
+    assert!(
+        retry_err.to_string().contains("own id"),
+        "unexpected retry error: {retry_err:#}"
+    );
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

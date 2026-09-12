@@ -123,6 +123,13 @@ class CiLaneWorkflowTests(unittest.TestCase):
                     workflow,
                 )
 
+    def test_macos_runtime_configures_lld_before_building_packaged_tools(self) -> None:
+        workflow = self.workflow("ci-macos-runtime-slice.yml")
+        setup = "uses: ./.github/actions/setup-macos-lld"
+        prepare = "uses: ./.github/actions/prepare-native-runtime-input"
+        self.assertIn(setup, workflow)
+        self.assertLess(workflow.index(setup), workflow.index(prepare))
+
     def test_dispatched_lanes_pass_source_sha_only_to_product_workflows(
         self,
     ) -> None:
@@ -162,6 +169,7 @@ class CiLaneWorkflowTests(unittest.TestCase):
             "swift-sdk-artifact.yml",
             "smoke.yml",
             "scripted-binary-smoke.yml",
+            "product-integration-smoke.yml",
             "sdk-smoke.yml",
             "hf-download-smoke.yml",
         )
@@ -171,7 +179,10 @@ class CiLaneWorkflowTests(unittest.TestCase):
                 self.assertIn("source_sha:", workflow)
                 checkout_ref = (
                     "ref: ${{ inputs.source_sha }}"
-                    if workflow_name == "ci-windows-runtime-slice.yml"
+                    if workflow_name in (
+                        "ci-windows-runtime-slice.yml",
+                        "product-integration-smoke.yml",
+                    )
                     else "ref: ${{ inputs.source_sha || github.sha }}"
                 )
                 self.assertIn(
@@ -203,6 +214,14 @@ class CiLaneWorkflowTests(unittest.TestCase):
             self.assertIn(f'echo "{output}=$', action)
         for platform in ("linux", "macos", "windows"):
             self.assertIn(f'select(.platform == "{platform}")', action)
+        self.assertIn(
+            'smoke: [.matrices.smoke[] | select(.id != "metal-model-load")]',
+            action,
+        )
+        self.assertIn(
+            'smoke: [.matrices.smoke[] | select(.id == "metal-model-load")]',
+            action,
+        )
 
     def test_pr_planner_uses_only_immutable_source_manifests(self) -> None:
         action = (ROOT / ".github/actions/plan-ci/action.yml").read_text(
@@ -297,12 +316,18 @@ class CiLaneWorkflowTests(unittest.TestCase):
         smoke_workflows = {
             "ci-linux-product-smoke-slice.yml": (
                 "core",
-                "core-cuda",
                 "two-node-client",
                 "two-node-split",
+                "product-integration-cpu",
+                "product-integration-cuda",
+                "qwen-recurrent-gate",
+                "core-cuda",
                 "model-download",
             ),
-            "ci-macos-product-smoke-slice.yml": ("metal-model-load",),
+            "ci-macos-product-smoke-slice.yml": (
+                "metal-model-load",
+                "product-integration-metal",
+            ),
         }
         for workflow_name, smoke_ids in smoke_workflows.items():
             workflow = self.workflow(workflow_name)
@@ -313,6 +338,35 @@ class CiLaneWorkflowTests(unittest.TestCase):
                         workflow,
                     )
             self.assertNotIn("contains(inputs.smoke_matrix,", workflow)
+
+    def test_every_planned_smoke_id_matches_a_product_smoke_job(self) -> None:
+        """Prevent planner rows from silently skipping their smoke jobs.
+
+        The product smoke workflows gate each job on an id from the formatted
+        ``smoke_matrix``. A stale id in ``smoke_domain_rows`` can therefore
+        leave the selected smoke coverage absent while the lane summary only
+        reports a skipped planned job.
+        """
+        slices = json.loads((ROOT / "ci" / "slices.yml").read_text())
+        declared = {row["id"] for row in slices["smoke_rows"]}
+        planned = {
+            smoke_id
+            for ids in slices["smoke_domain_rows"].values()
+            for smoke_id in ids
+        }
+
+        self.assertEqual(set(), planned - declared)
+
+        gated = set()
+        for path in sorted(WORKFLOWS.glob("ci-*-product-smoke-slice.yml")):
+            gated.update(
+                re.findall(
+                    r"contains\(fromJson\(inputs\.smoke_matrix\)\.\*\.id, '([^']+)'\)",
+                    path.read_text(encoding="utf-8"),
+                )
+            )
+
+        self.assertEqual(set(), planned - gated)
 
     def test_runtime_and_product_artifact_ids_preserve_architecture(self) -> None:
         for platform in ("linux", "macos", "windows"):

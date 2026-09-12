@@ -13,7 +13,7 @@ mod tests;
 use parsers::macos_metal_gpu_budget;
 pub use parsers::*;
 
-#[derive(Default, Debug, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq, serde::Serialize)]
 pub struct GpuFacts {
     pub index: usize,
     pub display_name: String,
@@ -120,10 +120,21 @@ impl std::fmt::Display for PinnedGpuResolverError {
 
 impl std::error::Error for PinnedGpuResolverError {}
 
-#[derive(Default, Debug, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq, serde::Serialize)]
 pub struct HardwareSurvey {
     pub vram_bytes: u64,
+    /// GPU name as reported by the OS/driver (e.g. Metal, nvidia-smi, ROCm).
+    /// Best-effort and OS-reported, not an independently verified measurement.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub gpu_name: Option<String>,
+    /// Collection mechanism behind `gpu_name`. A source, not a verification —
+    /// it names which probe produced the string, not that the string is a
+    /// confirmed-accurate GPU identifier. `None` when no source is available
+    /// for `gpu_name`. Note this is not the same as `gpu_name` being `None`:
+    /// `hydrate_gpu_facts_with_identities` backfills placeholder `"GPU N"`
+    /// names with no naming probe behind them, tagged `GpuNameSource::Unknown`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gpu_name_source: Option<GpuNameSource>,
     pub gpu_count: u8,
     pub hostname: Option<String>,
     pub is_soc: bool,
@@ -136,6 +147,64 @@ pub struct HardwareSurvey {
     pub gpu_reserved: Vec<Option<u64>>,
     /// Per-GPU facts in device-enumeration order.
     pub gpus: Vec<GpuFacts>,
+    /// Total system RAM in bytes when the platform reports it. Informational:
+    /// it feeds the itemized capacity announcement, never a budget.
+    pub system_ram_bytes: Option<u64>,
+    /// Portion of `vram_bytes` that system RAM backs rather than accelerator
+    /// memory: the RAM-offload credit on discrete-GPU hosts, the whole budget
+    /// on CPU-only hosts, zero on unified-memory hosts. Derived once in
+    /// `query` so every collector path reports it the same way.
+    pub ram_offload_bytes: u64,
+}
+
+/// Where a `HardwareSurvey.gpu_name` value came from. Each variant names a
+/// collection mechanism, not a claim that the resulting string is a verified
+/// GPU identifier.
+///
+/// `HardwareSurvey` and `GpuFacts` are serialize-only (`serde::Serialize`).
+/// This enum therefore derives only `Serialize` — a `Deserialize` impl would
+/// be unreachable through any serializable struct and is omitted to avoid a
+/// dead, untestable code path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GpuNameSource {
+    /// A Metal device name from `MTLDevice.name` (macOS). Assigned when the
+    /// native-runtime backend reports a device whose backend name starts with
+    /// `"MTL"`, or when `MTLCreateSystemDefaultDevice` is queried directly
+    /// via the DefaultCollector macOS path. On switchable-graphics Macs the
+    /// default device is a moment-in-time fact: it can differ between
+    /// collections as the OS switches GPUs. Best-effort, OS-reported, not a
+    /// verified GPU identifier.
+    MetalDefaultDevice,
+    /// macOS `sysctl -n machdep.cpu.brand_string`, used before upstream
+    /// commit 6e16b84a2 (`fix(system): report the real macOS GPU name`).
+    /// **Not assigned by new collections.** Kept in the vocabulary so that
+    /// consumers reading surveys recorded before 6e16b84a2 can deserialise
+    /// the field; it will never appear in a freshly collected survey.
+    /// (`HardwareSurvey` has no `Deserialize` impl today, so this variant
+    /// is currently write-only; it is preserved for when a `Deserialize` impl
+    /// is added rather than forcing a breaking vocabulary change at that point.)
+    CpuBrandString,
+    /// The skippy native-runtime's backend device enumeration reporting a
+    /// non-Metal accelerator (CUDA, ROCm, Vulkan, SYCL, ...). Names whichever
+    /// accelerator the loaded runtime enumerated; does not by itself say
+    /// which of those backends answered.
+    NativeRuntimeDevice,
+    /// `nvidia-smi --query-gpu=name` output.
+    NvidiaSmi,
+    /// `rocm-smi --showproductname` output.
+    RocmSmi,
+    /// `xpu-smi discovery` JSON output (Intel GPUs).
+    XpuSmi,
+    /// Windows `Win32_VideoController` CIM/WMI query (`Name` field).
+    WindowsVideoController,
+    /// A device-tree model string read from sysfs
+    /// (`/sys/firmware/devicetree/base/model`), used on Tegra/Jetson boards.
+    Sysfs,
+    /// A name is present but was not produced by any naming probe above —
+    /// e.g. a placeholder ("GPU 0") backfilled from GPU count/VRAM data
+    /// alone. Never treat this as identifying real hardware.
+    Unknown,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -206,6 +275,7 @@ fn apply_cpu_only_runtime_budget(
     }
     let system_ram = system_ram();
     if system_ram > 0 {
+        survey.system_ram_bytes = Some(system_ram);
         survey.vram_bytes = (system_ram as f64 * 0.75) as u64;
     }
 }
@@ -272,6 +342,30 @@ fn read_windows_video_controllers() -> Vec<(String, u64)> {
     parse_windows_video_controller_json(&output)
 }
 
+/// Owns an Objective-C object retained via the "create rule" (e.g.
+/// `MTLCreateSystemDefaultDevice`, `NS_RETURNS_RETAINED`) and releases it on
+/// drop, so every return path -- including early `?`/null-check returns --
+/// balances the retain instead of leaking the object.
+#[cfg(target_os = "macos")]
+struct RetainedObjcObject(*mut std::ffi::c_void);
+
+#[cfg(target_os = "macos")]
+impl Drop for RetainedObjcObject {
+    /// Releases the retained object, balancing the "create rule" retain.
+    fn drop(&mut self) {
+        if self.0.is_null() {
+            return;
+        }
+        #[link(name = "objc")]
+        unsafe extern "C" {
+            fn objc_release(obj: *mut std::ffi::c_void);
+        }
+        unsafe { objc_release(self.0) };
+    }
+}
+
+/// Queries the Metal-recommended working-set size in bytes for the default
+/// device — best-effort, OS-reported, not a verified measurement.
 #[cfg(target_os = "macos")]
 fn query_metal_recommended_working_set_bytes() -> Option<u64> {
     use std::ffi::{c_char, c_void};
@@ -293,6 +387,7 @@ fn query_metal_recommended_working_set_bytes() -> Option<u64> {
         if device.is_null() {
             return None;
         }
+        let _device = RetainedObjcObject(device);
         let selector = c"recommendedMaxWorkingSetSize";
         let selector = sel_registerName(selector.as_ptr());
         if selector.is_null() {
@@ -300,6 +395,60 @@ fn query_metal_recommended_working_set_bytes() -> Option<u64> {
         }
         let bytes = objc_msgSend(device, selector) as u64;
         (bytes > 0).then_some(bytes)
+    }
+}
+
+/// Queries the GPU name as reported by the OS via `MTLDevice.name` (e.g.
+/// "Apple M4 Max" or "AMD Radeon Pro 5500M") — best-effort, not a verified
+/// measurement, but sourced from the GPU device rather than the CPU.
+#[cfg(target_os = "macos")]
+#[cfg_attr(
+    all(feature = "skippy-devices", not(feature = "dynamic-native-runtime")),
+    allow(dead_code)
+)]
+fn query_metal_device_name() -> Option<String> {
+    use std::ffi::{CStr, c_char, c_void};
+
+    // `objc_msgSend` is declared to return `usize` here (matching the other
+    // FFI declaration of the same linked symbol above) and the pointer
+    // results below are recovered with `as *mut/*const _` casts, to avoid a
+    // `clashing_extern_declarations` warning from two conflicting return
+    // types for one symbol.
+    #[link(name = "objc")]
+    unsafe extern "C" {
+        fn sel_registerName(name: *const c_char) -> *mut c_void;
+        fn objc_msgSend(receiver: *mut c_void, selector: *mut c_void, ...) -> usize;
+    }
+
+    unsafe {
+        let metal =
+            libloading::Library::new("/System/Library/Frameworks/Metal.framework/Versions/A/Metal")
+                .ok()?;
+        let create_device = metal
+            .get::<unsafe extern "C" fn() -> *mut c_void>(b"MTLCreateSystemDefaultDevice")
+            .ok()?;
+        let device = create_device();
+        if device.is_null() {
+            return None;
+        }
+        let _device = RetainedObjcObject(device);
+        let name_sel = sel_registerName(c"name".as_ptr());
+        if name_sel.is_null() {
+            return None;
+        }
+        let name_obj = objc_msgSend(device, name_sel) as *mut c_void;
+        if name_obj.is_null() {
+            return None;
+        }
+        let utf8_sel = sel_registerName(c"UTF8String".as_ptr());
+        if utf8_sel.is_null() {
+            return None;
+        }
+        let utf8_ptr = objc_msgSend(name_obj, utf8_sel) as *const c_char;
+        if utf8_ptr.is_null() {
+            return None;
+        }
+        Some(CStr::from_ptr(utf8_ptr).to_string_lossy().into_owned())
     }
 }
 
@@ -348,11 +497,13 @@ fn survey_system_ram() -> u64 {
 /// Applies a GPU probe outcome to the survey. The real probe (skippy device
 /// enumeration, /proc/meminfo, the Windows CIM query) stays in the callers so
 /// this decision can be exercised with injected values on every platform.
-/// The system RAM closure feeds the CPU-only fallback branches and the
-/// discrete-GPU RAM-offload credit; it runs only when VramBytes is requested,
-/// and never for a unified-memory survey, so probes that skip VramBytes never
-/// pay for it. Platform gating lives in the production RAM source
-/// (`survey_system_ram`), which keeps this seam platform-pure.
+/// The system RAM closure feeds the CPU-only fallback branches, the
+/// informational `system_ram_bytes` of every GPU survey and the discrete-GPU
+/// RAM-offload credit; it runs whenever VramBytes is requested and never
+/// otherwise, so probes that skip VramBytes never pay for it. A
+/// unified-memory survey records the reading but never credits it. Platform
+/// gating lives in the production RAM source (`survey_system_ram`), which
+/// keeps this seam platform-pure.
 #[cfg(any(feature = "skippy-devices", test))]
 fn apply_gpu_probe_outcome_to_survey<E>(
     survey: &mut HardwareSurvey,
@@ -376,7 +527,24 @@ fn apply_gpu_probe_outcome_to_survey<E>(
 
     if metrics.contains(&Metric::GpuName) {
         let names: Vec<String> = gpus.iter().map(|gpu| gpu.display_name.clone()).collect();
-        survey.gpu_name = summarize_gpu_name(&names);
+        // Derive the source from the actual backend device names the
+        // runtime reported, not from the target OS: a macOS host running
+        // MoltenVK/Vulkan stamps non-MTL device names and must not be
+        // labelled MetalDefaultDevice.
+        let is_metal = gpus.iter().any(|gpu| {
+            gpu.backend_device
+                .as_deref()
+                .map(|d| d.starts_with("MTL"))
+                .unwrap_or(false)
+        });
+        let name = summarize_gpu_name(&names);
+        let source = if is_metal {
+            GpuNameSource::MetalDefaultDevice
+        } else {
+            GpuNameSource::NativeRuntimeDevice
+        };
+        survey.gpu_name_source = name.is_some().then_some(source);
+        survey.gpu_name = name;
     }
     if metrics.contains(&Metric::GpuCount) {
         survey.gpu_count = u8::try_from(gpus.len()).unwrap_or(u8::MAX);
@@ -392,11 +560,17 @@ fn apply_gpu_probe_outcome_to_survey<E>(
         survey.gpu_vram = gpus.iter().map(|gpu| gpu.vram_bytes).collect();
         survey.gpu_reserved = gpus.iter().map(|gpu| gpu.reserved_bytes).collect();
         let vram: u64 = survey.gpu_vram.iter().sum();
+        // The RAM reading is recorded on every host as an informational
+        // item; only the discrete branch turns it into an offload credit.
+        let system_ram = system_ram();
+        if system_ram > 0 {
+            survey.system_ram_bytes = Some(system_ram);
+        }
         if unified_memory {
             let reserved: u64 = survey.gpu_reserved.iter().flatten().copied().sum();
             survey.vram_bytes = vram.saturating_sub(reserved);
         } else {
-            let ram_offload = system_ram().saturating_sub(vram);
+            let ram_offload = system_ram.saturating_sub(vram);
             survey.vram_bytes = vram + (ram_offload as f64 * 0.90) as u64;
         }
     }
@@ -434,17 +608,11 @@ impl Collector for DefaultCollector {
                 survey.gpu_vram = vec![vram_bytes];
                 survey.gpu_reserved = vec![reserved_bytes];
             }
-            let macos_gpu_name = if metrics.contains(&Metric::GpuName) {
-                std::process::Command::new("sysctl")
-                    .args(["-n", "machdep.cpu.brand_string"])
-                    .output()
-                    .ok()
-                    .and_then(|out| String::from_utf8(out.stdout).ok())
-            } else {
-                None
-            };
-            if let Some(gpu_name) = macos_gpu_name {
-                survey.gpu_name = parse_macos_cpu_brand(&gpu_name);
+            if metrics.contains(&Metric::GpuName) {
+                let name = sanitize_macos_gpu_name(query_metal_device_name());
+                survey.gpu_name_source =
+                    name.is_some().then_some(GpuNameSource::MetalDefaultDevice);
+                survey.gpu_name = name;
             }
             if metrics.contains(&Metric::GpuCount) {
                 survey.gpu_count = 1;
@@ -457,6 +625,9 @@ impl Collector for DefaultCollector {
         ))]
         {
             let system_ram = read_system_ram_bytes();
+            if system_ram > 0 {
+                survey.system_ram_bytes = Some(system_ram);
+            }
 
             if metrics.contains(&Metric::VramBytes) {
                 // Try NVIDIA (mesh.rs:284-316)
@@ -626,7 +797,9 @@ impl Collector for DefaultCollector {
 
                 if let Some(ref names) = nvidia_names {
                     if metrics.contains(&Metric::GpuName) {
-                        survey.gpu_name = summarize_gpu_name(names);
+                        let name = summarize_gpu_name(names);
+                        survey.gpu_name_source = name.is_some().then_some(GpuNameSource::NvidiaSmi);
+                        survey.gpu_name = name;
                     }
                     if metrics.contains(&Metric::GpuCount) {
                         survey.gpu_count = u8::try_from(names.len()).unwrap_or(u8::MAX);
@@ -641,7 +814,10 @@ impl Collector for DefaultCollector {
                             if let Ok(s) = String::from_utf8(out.stdout) {
                                 let names = parse_rocm_gpu_names(&s);
                                 if metrics.contains(&Metric::GpuName) {
-                                    survey.gpu_name = summarize_gpu_name(&names);
+                                    let name = summarize_gpu_name(&names);
+                                    survey.gpu_name_source =
+                                        name.is_some().then_some(GpuNameSource::RocmSmi);
+                                    survey.gpu_name = name;
                                 }
                                 if metrics.contains(&Metric::GpuCount) {
                                     survey.gpu_count = u8::try_from(names.len()).unwrap_or(u8::MAX);
@@ -666,7 +842,10 @@ impl Collector for DefaultCollector {
                                         let names: Vec<String> =
                                             gpus.iter().map(|gpu| gpu.name.clone()).collect();
                                         if metrics.contains(&Metric::GpuName) {
-                                            survey.gpu_name = summarize_gpu_name(&names);
+                                            let name = summarize_gpu_name(&names);
+                                            survey.gpu_name_source =
+                                                name.is_some().then_some(GpuNameSource::XpuSmi);
+                                            survey.gpu_name = name;
                                         }
                                         if metrics.contains(&Metric::GpuCount) {
                                             survey.gpu_count =
@@ -689,6 +868,9 @@ impl Collector for DefaultCollector {
         ))]
         {
             let system_ram = read_windows_total_ram_bytes().unwrap_or(0);
+            if system_ram > 0 {
+                survey.system_ram_bytes = Some(system_ram);
+            }
             let want_gpu_info =
                 metrics.contains(&Metric::GpuName) || metrics.contains(&Metric::GpuCount);
             let want_vram = metrics.contains(&Metric::VramBytes);
@@ -761,7 +943,9 @@ impl Collector for DefaultCollector {
             if want_gpu_info {
                 if let Some(ref names) = nvidia_names {
                     if metrics.contains(&Metric::GpuName) {
-                        survey.gpu_name = summarize_gpu_name(names);
+                        let name = summarize_gpu_name(names);
+                        survey.gpu_name_source = name.is_some().then_some(GpuNameSource::NvidiaSmi);
+                        survey.gpu_name = name;
                     }
                     if metrics.contains(&Metric::GpuCount) {
                         survey.gpu_count = u8::try_from(names.len()).unwrap_or(u8::MAX);
@@ -770,7 +954,11 @@ impl Collector for DefaultCollector {
                     let names: Vec<String> =
                         windows_gpus.iter().map(|(name, _)| name.clone()).collect();
                     if metrics.contains(&Metric::GpuName) {
-                        survey.gpu_name = summarize_gpu_name(&names);
+                        let name = summarize_gpu_name(&names);
+                        survey.gpu_name_source = name
+                            .is_some()
+                            .then_some(GpuNameSource::WindowsVideoController);
+                        survey.gpu_name = name;
                     }
                     if metrics.contains(&Metric::GpuCount) {
                         survey.gpu_count = u8::try_from(names.len()).unwrap_or(u8::MAX);
@@ -781,6 +969,28 @@ impl Collector for DefaultCollector {
 
         survey
     }
+}
+
+/// Read the Tegra/Jetson model name from `model_path` and record it (with its
+/// `Sysfs` source) on `survey`. Leaves both `gpu_name` and `gpu_name_source`
+/// untouched when the path is absent or unparseable — never a guessed source
+/// for a name that was not actually read. Split out from `collect` so the path
+/// can be driven deterministically in tests rather than depending on host
+/// filesystem state.
+#[cfg(all(
+    target_os = "linux",
+    any(
+        not(feature = "skippy-devices"),
+        feature = "dynamic-native-runtime",
+        test
+    )
+))]
+fn tegra_gpu_name_from_model_path(survey: &mut HardwareSurvey, model_path: &std::path::Path) {
+    let name = std::fs::read_to_string(model_path)
+        .ok()
+        .and_then(|model| parse_tegra_model_name(&model));
+    survey.gpu_name_source = name.is_some().then_some(GpuNameSource::Sysfs);
+    survey.gpu_name = name;
 }
 
 #[cfg(all(
@@ -800,9 +1010,10 @@ impl Collector for TegraCollector {
         }
 
         if metrics.contains(&Metric::GpuName) {
-            survey.gpu_name = std::fs::read_to_string("/sys/firmware/devicetree/base/model")
-                .ok()
-                .and_then(|model| parse_tegra_model_name(&model));
+            tegra_gpu_name_from_model_path(
+                &mut survey,
+                std::path::Path::new("/sys/firmware/devicetree/base/model"),
+            );
         }
 
         if metrics.contains(&Metric::VramBytes) {
@@ -818,6 +1029,7 @@ impl Collector for TegraCollector {
             })()
             .or_else(try_tegrastats_ram);
             if let Some(ram) = total_ram {
+                survey.system_ram_bytes = Some(ram);
                 survey.vram_bytes = (ram as f64 * 0.90) as u64;
                 survey.gpu_vram = vec![ram];
             }
@@ -1217,7 +1429,9 @@ fn hydrate_gpu_facts_with_identities(
             .iter()
             .map(|gpu| gpu.display_name.clone())
             .collect();
-        survey.gpu_name = summarize_gpu_name(&names);
+        let name = summarize_gpu_name(&names);
+        survey.gpu_name_source = name.is_some().then_some(GpuNameSource::Unknown);
+        survey.gpu_name = name;
     }
 }
 
@@ -1232,7 +1446,27 @@ pub fn query(metrics: &[Metric]) -> HardwareSurvey {
     if metrics.contains(&Metric::GpuFacts) && survey.gpus.is_empty() {
         hydrate_gpu_facts(&mut survey, metrics);
     }
+    survey.ram_offload_bytes = ram_offload_bytes(&survey);
     survey
+}
+
+/// Portion of `vram_bytes` that system RAM backs: whatever the budget carries
+/// beyond the enumerated accelerator memory. Unified-memory hosts budget from
+/// their working set, so they never carry a RAM credit, and a budget that
+/// trails the enumerated memory (reserved bytes subtracted) yields zero.
+fn ram_offload_bytes(survey: &HardwareSurvey) -> u64 {
+    if survey.is_soc {
+        return 0;
+    }
+    // Same precedence as the host runtime's capacity accounting: the
+    // per-device facts first, the legacy per-GPU list only when there are
+    // none, so the two never disagree on which source wins.
+    let device_vram: u64 = if survey.gpus.is_empty() {
+        survey.gpu_vram.iter().sum()
+    } else {
+        survey.gpus.iter().map(|gpu| gpu.vram_bytes).sum()
+    };
+    survey.vram_bytes.saturating_sub(device_vram)
 }
 
 pub fn survey() -> HardwareSurvey {

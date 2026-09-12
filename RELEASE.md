@@ -29,12 +29,11 @@ dispatch the full packaging matrix.
 
 Do not use GitHub's bare **Draft a new release** form as an alternate release
 path. It bypasses the verified artifact graph. The Release workflow is the only
-supported GitHub release publisher; the Actions UI, `just release`, and a
-pre-versioned tag all enter that workflow.
+supported GitHub release publisher; use the Actions UI or `just release` to
+dispatch it from `main`.
 
-The sections below document the underlying steps. They matter when releasing
-manually via a tag push, debugging the workflow, or validating bundles
-locally.
+The sections below document the underlying steps, workflow debugging, and local
+bundle validation.
 
 ## Prerequisites
 
@@ -46,8 +45,9 @@ locally.
 - `MESH_AGENT_IMAGES_DISPATCH_TOKEN` configured as a fine-grained repository
   token or GitHub App token with Contents write access to
   `Mesh-LLM/mesh-packaging`, which is the permission required to create a
-  repository dispatch event. The legacy secret name is retained so existing
-  release environments do not require a coordinated secret rename.
+  repository dispatch event. The workflow checks this access without printing
+  the credential before it sends the event. The legacy secret name is retained
+  so existing release environments do not require a coordinated secret rename.
 
 ## Release Attestation Signing Keys
 
@@ -151,9 +151,11 @@ just release-build-cuda
 just release-bundle-cuda v0.X.Y
 ```
 
-Before manually cutting a tag that should be consumable through SwiftPM,
-prepare the Swift binary target manifest on macOS and commit the resulting
-`Package.swift` change:
+Before dispatching a release that should be consumable through SwiftPM,
+prepare the Swift binary target manifest on macOS and land the resulting
+`Package.swift` change on `main`. This is local preparation only; it publishes
+nothing, and the release itself is still cut by dispatching the Release
+workflow, which creates the tag:
 
 ```bash
 scripts/prepare-swift-package-release.sh v0.X.Y
@@ -168,10 +170,10 @@ exact platform and architecture slices plus the macOS framework layout, runs a
 zipped-artifact SwiftPM consumer smoke, and checks that the tagged
 `Package.swift` already points at the exact release URL and checksum. The
 producer also uploads the generated `mesh_ffi.swift` as a separate immutable
-companion artifact. Main and tag builds fail when that generated binding drifts
-from the tracked source. If `Package.swift` still contains placeholders on a
-tag push, if the generated binding is stale, or if the checksum does not match
-the artifact built in release CI, the release fails before publishing.
+companion artifact. Main release builds fail when that generated binding drifts
+from the tracked source. If the generated binding is stale, or if the checksum
+does not match the artifact built in release CI, the release fails before
+publishing.
 Producer and smoke use the pinned `macos-15` image and an explicit native/Xcode
 cache epoch. Downstream Swift smoke consumes both verified producer artifacts
 and never compiles an XCFramework replacement.
@@ -230,28 +232,20 @@ Verify:
 
 ## Publish
 
-Push a `v*` tag to run `.github/workflows/release.yml`. This lower-level path is
-accepted only when the tag points to `main` history and already contains the
-complete matching version update. Prepare and commit it before creating the
-tag:
-
-```bash
-scripts/release-version.sh v0.X.Y
-git add --update
-git commit -m "v0.X.Y: prepare release source"
-git push origin main
-git tag v0.X.Y
-git push origin v0.X.Y
-```
-
-The workflow rejects version-drifted tags instead of publishing binaries whose
-source version disagrees with the release. The upstream release workflow owns
-release archive production, but it does not publish OCI images.
+The dispatched release workflow owns release archive production, but it does
+not publish OCI images.
 `Mesh-LLM/mesh-packaging` is the canonical package, GHCR, and npm producer. It
 starts only after a stable GitHub release and its complete CPU/GPU archive set
 have published successfully. Prereleases never dispatch it. The upstream
 `docker.yml` workflow performs Dockerfile validation only and is not a
 distribution channel.
+
+If the downstream dispatch preflight fails, update the repository Actions secret
+`MESH_AGENT_IMAGES_DISPATCH_TOKEN` with a fine-grained token or GitHub App token
+that has Contents write access to `Mesh-LLM/mesh-packaging`, then retry the
+failed dispatch job. A repository secret's presence does not prove that its
+credential can write the target repository. Do not put the token in workflow
+logs or command output.
 
 On non-prerelease tags, the release workflow also publishes the Rust SDK crate
 chain to crates.io in dependency order:
@@ -273,14 +267,6 @@ The script builds `crates/mesh-llm-ui/dist` in release mode and copies it to
 the canonical SDK resource locations: `sdk/node/console`,
 `sdk/swift/Sources/MeshLLM/Resources/Console`, and
 `sdk/kotlin/src/main/resources/mesh-llm/console`.
-
-These generated directories are ignored during normal development. For a
-manual tag push, force-add them into the release commit before tagging because
-SwiftPM resolves package resources from the Git tag:
-
-```bash
-git add -f sdk/node/console sdk/swift/Sources/MeshLLM/Resources/Console sdk/kotlin/src/main/resources/mesh-llm/console
-```
 
 Workflow-dispatch releases generate and force-add these resources into the
 release tag commit automatically.

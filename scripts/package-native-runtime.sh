@@ -6,6 +6,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/cuda-toolkit.sh"
+# shellcheck source=scripts/lib/lld.sh
+source "$SCRIPT_DIR/lib/lld.sh"
 
 BUILD=0
 OUT_DIR="$REPO_ROOT/dist/native-runtimes"
@@ -32,7 +34,9 @@ Environment:
   LLAMA_STAGE_AMDGPU_TARGETS / SKIPPY_AMDGPU_TARGETS
   LLAMA_STAGE_BUILD_DIR
   MESH_NATIVE_RUNTIME_TARGET
+  MESH_NATIVE_RUNTIME_MODEL_PACKAGE_TOOL (non-Windows test/packaging override)
   MESH_CUDA_VERSION / MESH_LLM_CUDA_TOOLKIT_MAJOR (validated against the selected compiler)
+  MESH_LLM_CUDA_LICENSE_FILE (optional CUDA EULA/copyright file override)
   MESH_LLM_LLAMA_PIN_SHA
 EOF
 }
@@ -257,6 +261,10 @@ gpu_benchmark_tool_path() {
     fi
 }
 
+model_package_tool_path() {
+    printf 'tools/skippy-model-package\n'
+}
+
 hip_offload_arch_args() {
     local raw arch
     local -a arches=()
@@ -287,7 +295,13 @@ build_gpu_benchmark_tool() {
     case "$BACKEND" in
         cuda|cuda-blackwell)
             compiler="$(cuda_selected_compiler)"
-            "$compiler" -O3 -std=c++17 "$source_root/cuda/membench-fingerprint.cu" -o "$tool_path"
+            if [[ "$runtime_os" == "linux" ]]; then
+                "$compiler" -O3 -std=c++17 -cudart shared \
+                    "$source_root/cuda/membench-fingerprint.cu" -o "$tool_path"
+            else
+                "$compiler" -O3 -std=c++17 \
+                    "$source_root/cuda/membench-fingerprint.cu" -o "$tool_path"
+            fi
             ;;
         rocm|hip)
             compiler="${HIPCC:-hipcc}"
@@ -309,6 +323,81 @@ build_gpu_benchmark_tool() {
     case "$runtime_os" in
         linux) patchelf --set-rpath "\$ORIGIN/../lib" "$tool_path" ;;
         macos) install_name_tool -add_rpath '@loader_path/../lib' "$tool_path" ;;
+    esac
+    chmod +x "$tool_path"
+    tool_paths+=("$tool_rel")
+}
+
+build_model_package_tool() {
+    # The package tool links against the staged Skippy DLLs. Windows native
+    # runtime producers do not have a robust import-library path for that
+    # dynamic link, and the current consumers do not need this offline tool.
+    # Keep Windows runtime artifacts limited to the established DLL producer
+    # path until an import-library mechanism is available.
+    if [[ "$runtime_os" == "windows" ]]; then
+        return 0
+    fi
+
+    local tool_rel tool_path source_path configured cargo_target_dir macos_lld
+    local -a cargo_env=(
+        "LLAMA_STAGE_LINK_MODE=dynamic"
+        "LLAMA_STAGE_LIB_DIR=$stage_dir/lib"
+        "LLAMA_STAGE_BUILD_DIR=$LLAMA_STAGE_BUILD_DIR"
+        "LLAMA_STAGE_BACKEND=$(build_backend)"
+    )
+    tool_rel="$(model_package_tool_path)"
+    tool_path="$stage_dir/$tool_rel"
+    configured="${MESH_NATIVE_RUNTIME_MODEL_PACKAGE_TOOL:-}"
+    mkdir -p "$(dirname "$tool_path")"
+
+    if [[ -n "$configured" ]]; then
+        if [[ ! -x "$configured" ]]; then
+            echo "configured model package tool is not executable: $configured" >&2
+            exit 1
+        fi
+        source_path="$configured"
+    else
+        if [[ "$runtime_os" == "macos" ]]; then
+            # Use lld only when it is installed AND links against the active
+            # SDK. A protected reusable workflow may not include the
+            # repository setup action at all, and on a developer machine lld
+            # can fall behind the SDK; both take the platform linker. The
+            # explicitly empty encoded flag set still overrides any RUSTFLAGS
+            # a caller exported. See scripts/lib/lld.sh.
+            macos_lld="$(resolve_usable_lld)"
+            if [[ -n "$macos_lld" ]]; then
+                cargo_env+=("CARGO_ENCODED_RUSTFLAGS=-Clink-arg=-fuse-ld=$macos_lld")
+            else
+                cargo_env+=("CARGO_ENCODED_RUSTFLAGS=")
+            fi
+        fi
+        env "${cargo_env[@]}" \
+            cargo build --release --locked --target "$TARGET_TRIPLE" \
+                -p skippy-model-package
+        cargo_target_dir="$(
+            cargo metadata --no-deps --format-version 1 |
+                "$(python_bin)" -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])'
+        )"
+        source_path="$cargo_target_dir/$TARGET_TRIPLE/release/$(basename "$tool_rel")"
+        if [[ ! -x "$source_path" ]]; then
+            echo "model package tool build did not produce $source_path" >&2
+            exit 1
+        fi
+    fi
+
+    cp "$source_path" "$tool_path"
+    case "$runtime_os" in
+        linux)
+            patchelf --set-rpath "\$ORIGIN/../lib" "$tool_path"
+            ;;
+        macos)
+            if ! otool -l "$tool_path" | awk '
+                $1 == "cmd" && $2 == "LC_RPATH" { in_rpath = 1; next }
+                in_rpath && $1 == "path" { print $2; in_rpath = 0 }
+            ' | grep -qx '@loader_path/../lib'; then
+                install_name_tool -add_rpath '@loader_path/../lib' "$tool_path"
+            fi
+            ;;
     esac
     chmod +x "$tool_path"
     tool_paths+=("$tool_rel")
@@ -348,6 +437,138 @@ collect_runtime_libraries() {
                 if (chosen_primary != "") print chosen_primary
             }
         '
+}
+
+linux_cuda_dependency_search_dirs() {
+    local compiler root candidate value
+    local -a roots=()
+
+    if compiler="$(cuda_selected_compiler 2>/dev/null)"; then
+        if root="$(cuda_toolkit_root_for_compiler "$compiler" 2>/dev/null)"; then
+            roots+=("$root")
+        fi
+    fi
+    for value in "${CUDAToolkit_ROOT:-}" "${CUDA_HOME:-}" "${CUDA_PATH:-}"; do
+        [[ -n "$value" ]] && roots+=("$value")
+    done
+
+    if [[ -n "${CUDA_LIBRARY_PATH:-}" ]]; then
+        local IFS=:
+        read -r -a cuda_library_paths <<< "$CUDA_LIBRARY_PATH"
+        for candidate in "${cuda_library_paths[@]}"; do
+            [[ -d "$candidate" ]] && printf '%s\n' "$candidate"
+        done
+    fi
+
+    for root in ${roots[@]+"${roots[@]}"}; do
+        for candidate in "$root/lib64" "$root/lib" "$root"/targets/*/lib; do
+            [[ -d "$candidate" ]] || continue
+            printf '%s\n' "$candidate"
+        done
+    done
+}
+
+cuda_distribution_license_file() {
+    local compiler root candidate major_dash
+
+    if [[ -n "${MESH_LLM_CUDA_LICENSE_FILE:-}" ]]; then
+        if [[ ! -f "$MESH_LLM_CUDA_LICENSE_FILE" ]]; then
+            echo "configured CUDA license file does not exist: $MESH_LLM_CUDA_LICENSE_FILE" >&2
+            return 1
+        fi
+        printf '%s\n' "$MESH_LLM_CUDA_LICENSE_FILE"
+        return 0
+    fi
+
+    local -a roots=()
+    if compiler="$(cuda_selected_compiler 2>/dev/null)"; then
+        if root="$(cuda_toolkit_root_for_compiler "$compiler" 2>/dev/null)"; then
+            roots+=("$root")
+        fi
+    fi
+    for root in "${CUDAToolkit_ROOT:-}" "${CUDA_HOME:-}" "${CUDA_PATH:-}"; do
+        [[ -n "$root" ]] && roots+=("$root")
+    done
+    for root in ${roots[@]+"${roots[@]}"}; do
+        for candidate in \
+            "$root/EULA.txt" \
+            "$root/LICENSE" \
+            "$root/LICENSE.txt" \
+            "$root/doc/EULA.txt"; do
+            if [[ -f "$candidate" ]]; then
+                printf '%s\n' "$candidate"
+                return 0
+            fi
+        done
+    done
+
+    major_dash="$(cuda_toolkit_major)-"
+    for candidate in \
+        /usr/share/doc/cuda-cudart-"$major_dash"*/copyright \
+        /usr/share/doc/libcublas-"$major_dash"*/copyright; do
+        if [[ -f "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    echo "CUDA redistribution license material was not found; set MESH_LLM_CUDA_LICENSE_FILE" >&2
+    return 1
+}
+
+bundle_cuda_distribution_license() {
+    local source
+    source="$(cuda_distribution_license_file)" || return 1
+    mkdir -p "$stage_dir/licenses"
+    cp "$source" "$stage_dir/licenses/NVIDIA-CUDA-LICENSE.txt"
+    license_paths+=("licenses/NVIDIA-CUDA-LICENSE.txt")
+}
+
+linux_cuda_redistributable_present() {
+    local rel_path library_name
+    for rel_path in "${library_paths[@]}"; do
+        library_name="$(basename "$rel_path")"
+        case "$library_name" in
+            libcudart.so|libcudart.so.*|libcublas.so|libcublas.so.*|\
+            libcublasLt.so|libcublasLt.so.*|libnvJitLink.so|libnvJitLink.so.*)
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
+collect_linux_cuda_dependencies() {
+    case "$TARGET_TRIPLE/$BACKEND" in
+        *linux*/cuda|*linux*/cuda-blackwell) ;;
+        *) return 0 ;;
+    esac
+
+    local -a dependency_args=()
+    local dependency_dir
+    while IFS= read -r dependency_dir; do
+        [[ -n "$dependency_dir" ]] && dependency_args+=(--search-dir "$dependency_dir")
+    done < <(linux_cuda_dependency_search_dirs | awk '!seen[$0]++')
+
+    "$(python_bin)" "$SCRIPT_DIR/linux-native-runtime-deps.py" collect \
+        --lib-dir "$stage_dir/lib" \
+        --scan-dir "$stage_dir/tools" \
+        --arch "$runtime_arch" \
+        --cuda-major "$(cuda_toolkit_major)" \
+        ${dependency_args[@]+"${dependency_args[@]}"}
+
+    library_paths=()
+    while IFS= read -r library; do
+        [[ -n "$library" ]] && library_paths+=("lib/$library")
+    done < <(
+        "$(python_bin)" "$SCRIPT_DIR/linux-native-runtime-deps.py" order \
+            --lib-dir "$stage_dir/lib" \
+            --scan-dir "$stage_dir/tools" \
+            --arch "$runtime_arch" \
+            --primary "$primary_name"
+    )
+    if linux_cuda_redistributable_present; then
+        bundle_cuda_distribution_license
+    fi
 }
 
 rewrite_macos_runtime_paths() {
@@ -402,7 +623,7 @@ rewrite_linux_runtime_paths() {
     fi
 
     local rel_path library
-    for rel_path in "${library_paths[@]}"; do
+    for rel_path in "${linux_relocatable_library_paths[@]}"; do
         library="$stage_dir/$rel_path"
         patchelf --set-rpath "\$ORIGIN" "$library"
     done
@@ -461,6 +682,7 @@ rm -rf "$stage_dir"
 mkdir -p "$stage_dir/lib"
 
 tool_paths=()
+license_paths=()
 
 library_paths=()
 for library in "${runtime_libraries[@]}"; do
@@ -468,8 +690,10 @@ for library in "${runtime_libraries[@]}"; do
     cp "$library" "$stage_dir/lib/$name"
     library_paths+=("lib/$name")
 done
+linux_relocatable_library_paths=("${library_paths[@]}")
 
 build_gpu_benchmark_tool
+build_model_package_tool
 
 if [[ "$runtime_os" == "windows" ]]; then
     dependency_args=()
@@ -531,6 +755,8 @@ if [[ "$runtime_os" == "windows" ]]; then
     library_paths+=("lib/$primary_name")
 fi
 
+collect_linux_cuda_dependencies
+
 rewrite_macos_runtime_paths
 rewrite_linux_runtime_paths
 
@@ -564,6 +790,11 @@ manifest_args=("$stage_dir/manifest.json" "$primary_library" "${library_paths[@]
 if [[ "${#tool_paths[@]}" -gt 0 ]]; then
     manifest_args+=("${tool_paths[@]}")
 fi
+manifest_args+=(--)
+if [[ "${#license_paths[@]}" -gt 0 ]]; then
+    manifest_args+=("${license_paths[@]}")
+fi
+manifest_args+=(-- "${linux_relocatable_library_paths[@]}")
 
 "$(python_bin)" - "${manifest_args[@]}" <<PY
 import json
@@ -574,8 +805,12 @@ import sys
 manifest_path = sys.argv[1]
 primary_library = sys.argv[2]
 separator = sys.argv.index("--")
+file_separator = sys.argv.index("--", separator + 1)
+relocatable_separator = sys.argv.index("--", file_separator + 1)
 library_paths = sys.argv[3:separator]
-tool_paths = sys.argv[separator + 1:]
+tool_paths = sys.argv[separator + 1:file_separator]
+license_paths = sys.argv[file_separator + 1:relocatable_separator]
+relocatable_library_paths = sys.argv[relocatable_separator + 1:]
 backend = "$BACKEND"
 kind = {"hip": "rocm", "cuda-blackwell": "cuda"}.get(backend, backend)
 
@@ -605,7 +840,7 @@ def file_sha256(path):
 
 files = {
     path: file_sha256(os.path.join(os.path.dirname(manifest_path), path))
-    for path in library_paths
+    for path in [*library_paths, *license_paths]
 }
 tools = {
     path: file_sha256(os.path.join(os.path.dirname(manifest_path), path))
@@ -656,6 +891,7 @@ manifest = {
         "platform": "$platform",
         "backend": "$BACKEND",
         "primary_library": primary_library,
+        "relocatable_libraries": relocatable_library_paths if "$runtime_os" == "linux" else [],
         "library_sha256": "$primary_sha",
         "llama_upstream_sha": "$upstream_sha" or None,
         "llama_patched_sha": "$patched_sha" or None,
@@ -683,9 +919,17 @@ checksum from \`native-runtimes.json\`, installs the artifact into the
 versioned native runtime cache, and loads these libraries before Skippy starts.
 EOF
 
+if [[ "${#license_paths[@]}" -gt 0 ]]; then
+    cat >> "$stage_dir/README.md" <<'EOF'
+
+Redistributed NVIDIA CUDA libraries remain byte-for-byte unchanged. Their
+distribution terms are included at `licenses/NVIDIA-CUDA-LICENSE.txt`.
+EOF
+fi
+
 mkdir -p "$OUT_DIR"
 archive="$OUT_DIR/$artifact_id.tar.gz"
-tar -C "$OUT_DIR" -czf "$archive" "$artifact_id"
+COPYFILE_DISABLE=1 tar -C "$OUT_DIR" -czf "$archive" "$artifact_id"
 archive_sha="$(sha256_file "$archive")"
 printf '%s  %s\n' "$archive_sha" "$(basename "$archive")" > "$archive.sha256"
 

@@ -1,5 +1,8 @@
 use anyhow::{Context, Result};
-use skippy_protocol::binary::{StageWireMessage, read_stage_message};
+use skippy_protocol::{
+    StageActivationCodec, StageActivationCodecPolicy,
+    binary::{StageWireMessage, read_stage_message_for_codec_policy},
+};
 use std::io;
 use std::net::{Shutdown, TcpStream};
 use std::sync::Arc;
@@ -88,6 +91,8 @@ impl Drop for InboundMessageReader {
 pub(super) fn spawn_message_reader(
     upstream: &TcpStream,
     activation_width: i32,
+    activation_codec: StageActivationCodec,
+    activation_codec_policy: StageActivationCodecPolicy,
     capacity: usize,
     registry: Arc<StaleDiscardRegistry>,
     worker_control: Arc<ConnectionWorkerControl>,
@@ -129,7 +134,12 @@ pub(super) fn spawn_message_reader(
             }
             // `&TcpStream` implements `Read`, so the framed read runs on the
             // shared handle that `Drop` can shut down.
-            match read_stage_message(&mut &*reader, activation_width) {
+            match read_stage_message_for_codec_policy(
+                &mut &*reader,
+                activation_width,
+                activation_codec,
+                activation_codec_policy,
+            ) {
                 Ok(message) => {
                     if message.kind.is_stale_window_discard() {
                         registry.record_message(&message);
@@ -213,6 +223,22 @@ mod tests {
         Arc::new(ConnectionWorkerControl::default())
     }
 
+    fn spawn_test_message_reader(
+        upstream: &TcpStream,
+        capacity: usize,
+        registry: Arc<StaleDiscardRegistry>,
+    ) -> Result<InboundMessageReader> {
+        spawn_message_reader(
+            upstream,
+            4,
+            StageActivationCodec::default(),
+            StageActivationCodecPolicy::default(),
+            capacity,
+            registry,
+            test_worker_control(),
+        )
+    }
+
     fn control_message(kind: WireMessageKind, tokens: Vec<i32>) -> StageWireMessage {
         StageWireMessage {
             kind,
@@ -244,8 +270,7 @@ mod tests {
         let registry = Arc::new(StaleDiscardRegistry::default());
         // Execution queue of one; the reader must still look past a full
         // admitted backlog without anything being dequeued.
-        let reader = spawn_message_reader(&upstream, 4, 1, registry.clone(), test_worker_control())
-            .expect("spawn");
+        let reader = spawn_test_message_reader(&upstream, 1, registry.clone()).expect("spawn");
 
         for _ in 0..skippy_protocol::MAX_VERIFY_WINDOW_PIPELINE_DEPTH {
             let stale = control_message(WireMessageKind::Stop, Vec::new());
@@ -269,8 +294,7 @@ mod tests {
     fn dropping_the_reader_completes_while_it_is_parked_on_the_byte_ceiling() {
         let (mut peer, upstream) = connected_pair();
         let registry = Arc::new(StaleDiscardRegistry::default());
-        let reader =
-            spawn_message_reader(&upstream, 4, 1, registry, test_worker_control()).expect("spawn");
+        let reader = spawn_test_message_reader(&upstream, 1, registry).expect("spawn");
 
         // Park the reader: pretend the executor is holding the whole byte
         // budget, so the backoff loop is the only thing running.
@@ -299,8 +323,7 @@ mod tests {
     fn dropping_the_reader_completes_while_the_lookahead_channel_is_full() {
         let (mut peer, upstream) = connected_pair();
         let registry = Arc::new(StaleDiscardRegistry::default());
-        let reader =
-            spawn_message_reader(&upstream, 4, 1, registry, test_worker_control()).expect("spawn");
+        let reader = spawn_test_message_reader(&upstream, 1, registry).expect("spawn");
 
         // Fill the lookahead queue and leave the reader blocked in `send`.
         for _ in 0..(INBOUND_LOOKAHEAD_MESSAGES + 4) {
@@ -331,8 +354,7 @@ mod tests {
     fn dropping_the_reader_completes_while_a_read_is_stalled_mid_frame() {
         let (mut peer, upstream) = connected_pair();
         let registry = Arc::new(StaleDiscardRegistry::default());
-        let reader =
-            spawn_message_reader(&upstream, 4, 1, registry, test_worker_control()).expect("spawn");
+        let reader = spawn_test_message_reader(&upstream, 1, registry).expect("spawn");
 
         // A frame prefix with no body behind it: enough to make the socket
         // readable and commit the reader to the framed read, never enough to
@@ -364,8 +386,7 @@ mod tests {
     fn dropping_the_reader_joins_the_thread_while_the_peer_stays_open() {
         let (peer, upstream) = connected_pair();
         let registry = Arc::new(StaleDiscardRegistry::default());
-        let reader =
-            spawn_message_reader(&upstream, 4, 1, registry, test_worker_control()).expect("spawn");
+        let reader = spawn_test_message_reader(&upstream, 1, registry).expect("spawn");
 
         let (done, dropped) = mpsc::channel();
         thread::spawn(move || {

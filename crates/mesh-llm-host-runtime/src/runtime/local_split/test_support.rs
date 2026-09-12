@@ -53,6 +53,12 @@ pub(super) fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadReques
         stage_index: 1,
         layer_start: 18,
         layer_end: 36,
+        admission: skippy::test_stage_admission(18, 36),
+        participant_set_hash: "participants".to_string(),
+        topology_hash: "topology".to_string(),
+        activation_codec: skippy_protocol::StageActivationCodec::default(),
+        activation_codec_policy: Default::default(),
+        topology_stages: Vec::new(),
         model_path: Some("/models/qwen.gguf".to_string()),
         source_model_bytes: Some(4_900_000_000),
         source_model_sha256: None,
@@ -156,6 +162,7 @@ pub(super) fn split_test_peer(
         is_soc: None,
         gpu_vram: None,
         gpu_reserved_bytes: None,
+        memory: None,
         gpu_mem_bandwidth_gbps: None,
         gpu_compute_tflops_fp32: None,
         gpu_compute_tflops_fp16: None,
@@ -336,6 +343,12 @@ pub(super) fn runtime_status_for_stage(
         node_id: Some(stage.node_id),
         layer_start: stage.layer_start,
         layer_end: stage.layer_end,
+        admission: Some(skippy::test_stage_admission(
+            stage.layer_start,
+            stage.layer_end,
+        )),
+        activation_codec: generation.activation_codec,
+        activation_codec_policy: Default::default(),
         state,
         bind_addr: "127.0.0.1:31000".to_string(),
         input_activation_boundary: None,
@@ -439,24 +452,30 @@ stop = ["END"]
         projector_path = projector_path_toml
     ))
     .expect("test mesh config should parse");
-    let mut package = package(40);
-    package.package_ref = "hf://Mesh-LLM/test-split-package".to_string();
+    let package = package(40);
     let temp_dir = tempfile::tempdir().unwrap();
     let model_path = temp_dir.path().join("qwen.gguf");
     write_fake_gguf_model(&model_path);
     let compact_meta =
         crate::models::gguf::scan_gguf_compact_meta(&model_path).expect("synthetic GGUF metadata");
     let local_id = node.id();
+    let stages = vec![
+        local_stage(local_id, 0, 0, 12),
+        local_stage(local_id, 1, 12, 40),
+    ];
+    let admissions = stages
+        .iter()
+        .map(|stage| skippy::test_stage_admission(stage.layer_start, stage.layer_end))
+        .collect();
     let generation = SplitTopologyGeneration::new(
         "resolver-topology".into(),
         "resolver-run".into(),
         1,
         vec![SplitParticipant::new(local_id, 24_000_000_000, None)],
-        vec![
-            local_stage(local_id, 0, 0, 12),
-            local_stage(local_id, 1, 12, 40),
-        ],
-    );
+        stages,
+    )
+    .with_admissions(admissions)
+    .unwrap();
 
     let mut spec = SplitGenerationLoadSpec {
         node: &node,
@@ -492,7 +511,7 @@ stop = ["END"]
         .expect("split settings should resolve");
 
     assert_eq!(split_allocatable_memory_bytes(&spec), Some(6_000_000_000));
-    assert_eq!(settings.load_mode, LoadMode::LayerPackage);
+    assert_eq!(settings.load_mode, LoadMode::RuntimeSlice);
     assert_eq!(settings.embedded_openai.activation_width, 0);
     assert_eq!(settings.runtime_options.n_threads, Some(6));
     assert_eq!(settings.runtime_options.n_threads_batch, Some(3));
@@ -888,6 +907,9 @@ pub(super) fn test_stage_status_from_load(
         stage_index: load.stage_index,
         layer_start: load.layer_start,
         layer_end: load.layer_end,
+        admission: Some(load.admission.clone()),
+        activation_codec: load.activation_codec,
+        activation_codec_policy: Default::default(),
         state,
         bind_addr: "127.0.0.1:31000".to_string(),
         input_activation_boundary: boundary.filter(|_| load.layer_start > 0),
@@ -936,6 +958,9 @@ pub(super) fn test_stage_status_from_stop(
         stage_index: 0,
         layer_start: 0,
         layer_end: 0,
+        admission: None,
+        activation_codec: skippy_protocol::StageActivationCodec::default(),
+        activation_codec_policy: Default::default(),
         state: skippy::StageRuntimeState::Stopped,
         bind_addr: String::new(),
         input_activation_boundary: None,
@@ -954,32 +979,6 @@ pub(super) fn test_stage_status_from_stop(
     }
 }
 
-pub(super) fn test_preparation_status_from_load(
-    load: &skippy::StageLoadRequest,
-) -> skippy::StagePreparationStatus {
-    skippy::StagePreparationStatus {
-        topology_id: load.topology_id.clone(),
-        run_id: load.run_id.clone(),
-        model_id: load.model_id.clone(),
-        backend: load.backend.clone(),
-        package_ref: load.package_ref.clone(),
-        manifest_sha256: load.manifest_sha256.clone(),
-        stage_id: load.stage_id.clone(),
-        stage_index: load.stage_index,
-        layer_start: load.layer_start,
-        layer_end: load.layer_end,
-        state: skippy::StagePreparationState::Available,
-        bytes_done: load.source_model_bytes,
-        bytes_total: load.source_model_bytes,
-        bind_addr: None,
-        error: None,
-        shutdown_generation: load.shutdown_generation,
-        coordinator_term: load.coordinator_term,
-        coordinator_id: load.coordinator_id,
-        lease_until_unix_ms: load.lease_until_unix_ms,
-    }
-}
-
 pub(super) fn test_inventory_from_request(
     request: &skippy::StageInventoryRequest,
 ) -> skippy::StageLayerInventory {
@@ -994,7 +993,6 @@ pub(super) fn test_inventory_from_request(
             layer_end: 40,
         }],
         missing_ranges: Vec::new(),
-        preparing_ranges: Vec::new(),
         source_model_path: Some("/models/qwen.gguf".to_string()),
         source_model_bytes: Some(40_000_000),
         source_model_sha256: None,

@@ -161,6 +161,8 @@ fn handle_binary_connection_messages(
     let inbound_reader = spawn_message_reader(
         upstream,
         input_activation_width,
+        config.activation_codec,
+        config.activation_codec_policy,
         max_inflight.max(1),
         discard_registry.clone(),
         worker_control,
@@ -823,6 +825,9 @@ fn handle_binary_connection_messages(
             if output.payload.is_empty() {
                 bail!("stage has downstream but produced an empty activation payload");
             }
+            // Encoding is fail-closed. An error returns from this connection;
+            // `handle_binary_connection` then unconditionally drains the
+            // tracker and drops this already-advanced native session.
             let forwarded =
                 forwarded_stage_message_timed(config, &message, &output, output_activation_width)?;
             forward_activation_encode_ms += forwarded.activation_encode_ms;

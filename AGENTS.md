@@ -284,7 +284,7 @@ Other top-level directories:
 - `docs/plugins/` — Plugin architecture docs and plans.
 - `docs/specs/` — Focused behavior specs for individual features.
 - `.agents/agents/release-validation.md` — Canonical Markdown definition for the selectable release-validation specialist; it uses the canonical release-validation skill in `.agents/skills/`.
-- `.agents/skills/` — Canonical repo-local agent skills, including per-platform deploy, mesh operations, release validation, Skippy internals, patch queues, and benchmarks.
+- `.agents/skills/` — Canonical repo-local agent skills, including per-platform deploy, mesh operations, release validation, release notes, Skippy internals, patch queues, and benchmarks.
 - `sdk/` — SDK packaging for Node, Swift, Kotlin.
 - `fly/` — Fly.io deployment (console + API client apps).
 - `tools/relay-fly-legacy/` — Archived self-hosted iroh relay reference; production uses services.iroh.computer.
@@ -560,6 +560,8 @@ you want quiet output, use `--log-format json` and parse what you need.
 
 Before committing, run the local checks most likely to fail in CI for the files you touched. Do not rely on CI to catch basic formatting, compile, or stale UI build issues.
 
+Run `just hooks-install` once per clone before your first commit; git cannot activate a committed hook on clone, so nothing else enables it, and `just build` only enables it after a local build. Commit subjects must follow Conventional Commits v1.0.0, and `just check-commits` validates a range. The type decides which release-notes section the change lands in, and the PR title becomes the squash-merge subject, so give the PR a conventional title too. See `.agents/skills/release-notes/SKILL.md`.
+
 ### Minimum validation by change type
 
 Choose validation from the changed surface, not merely from the directory that contains the changed file. A non-Rust file under a Rust crate does not require Cargo validation only when it cannot affect Cargo metadata, build scripts, generated Rust, or the shipped binary. Treat Cargo and build configuration changes as Rust-impacting.
@@ -579,6 +581,13 @@ Do not rerun otherwise unchanged validation solely because a commit is about to 
 - Format Rust files in a way that preserves the owning crate's edition metadata. Prefer `cargo fmt -p <crate> -- path/to/file.rs` for a narrow edit, or `cargo fmt --all` when changes span packages. Do not use `cargo fmt --all -- path/to/file.rs`: workspace-level file arguments can be parsed without the owning crate's Rust 2024 edition metadata and fail on let-chains.
 - If you must invoke `rustfmt` directly on a standalone file, pass the edition resolved from that manifest lookup, for example `--edition 2024` for the current workspace default; otherwise use `cargo fmt` through the owning package.
 - Before committing Rust changes, ensure the formatting check passes with `cargo fmt --all --check`.
+- After Rust changes, run `just no-console-print`. The allowlist records source
+  locations, so adding or removing unrelated lines can move an existing
+  approved occurrence and invalidate the ratchet. If the check reports only
+  moved existing occurrences, regenerate it with
+  `cargo run -p xtask -- repo-consistency no-console-print --regen`, review the
+  allowlist diff to confirm that no new console prints were approved, and
+  commit the regenerated allowlist with the source change.
 - After Rust changes, run `cargo check` and `cargo clippy --all-targets -- -D warnings` for each touched crate (`-p <crate>`), and at least `cargo check -p mesh-llm` plus `cargo clippy -p mesh-llm --all-targets -- -D warnings` if the change is reachable from the shipped binary.
 - Treat Clippy as a required local gate, not a CI-only cleanup step. `cargo check`, `just build`, and formatter success do not catch lints such as `clippy::collapsible-if`; run the warning-denying Clippy command before opening or updating a PR.
 - If you touched tests, public APIs, routing, inference, gossip, plugin protocol, skippy ABI, or CLI behavior, run the relevant tests before committing.

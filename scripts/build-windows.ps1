@@ -14,6 +14,26 @@ $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptDir ".."))
 $llamaDir = if ($env:MESH_LLM_LLAMA_DIR) { $env:MESH_LLM_LLAMA_DIR } else { Join-Path $repoRoot ".deps\llama.cpp" }
 $llamaBuildRoot = if ($env:MESH_LLM_LLAMA_BUILD_ROOT) { $env:MESH_LLM_LLAMA_BUILD_ROOT } else { Join-Path $repoRoot ".deps\llama-build" }
 $buildDir = if ($env:LLAMA_STAGE_BUILD_DIR) { $env:LLAMA_STAGE_BUILD_DIR } else { Join-Path $llamaBuildRoot "build-stage-abi" }
+# Git never activates a committed hook on clone, so enable the repository hooks
+# on the first local development build. Skipped in CI, and never overrides a
+# hooks path the developer chose themselves.
+function Enable-RepoGitHooks {
+    if ($env:CI) { return }
+    try {
+        $current = & git -C $repoRoot config --get core.hooksPath 2>$null
+        if ($LASTEXITCODE -eq 0 -and $current) { return }
+        & git -C $repoRoot config core.hooksPath scripts/hooks 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "enabled repository git hooks (core.hooksPath=scripts/hooks); commit messages are now checked locally"
+        }
+    } catch {
+        # A missing or unusual git installation must never fail a build.
+    }
+    $global:LASTEXITCODE = 0
+}
+
+Enable-RepoGitHooks
+
 $meshUiDir = Join-Path $repoRoot "crates\mesh-llm-ui"
 $compilerLauncherArgs = @()
 $compilerCacheBin = $null

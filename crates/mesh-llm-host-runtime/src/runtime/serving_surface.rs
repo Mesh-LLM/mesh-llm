@@ -368,7 +368,6 @@ pub(crate) fn assert_passive_path_immediate_spawn_behavior() {
 pub(crate) fn assert_quitting_during_startup_cancels_without_late_ready_render() {
     let reporter = StartupReadyReporter::new(
         &["Qwen3-8B-Q4_K_M".to_string()],
-        "Qwen3-8B-Q4_K_M".to_string(),
         "http://127.0.0.1:9337".to_string(),
         Some("http://127.0.0.1:3131".to_string()),
         9337,
@@ -376,7 +375,9 @@ pub(crate) fn assert_quitting_during_startup_cancels_without_late_ready_render()
     );
     reporter.mark_shutdown_requested();
     assert!(
-        reporter.mark_ready_and_build_event(0).is_none(),
+        reporter
+            .mark_ready_and_build_event(0, "Qwen3-8B-Q4_K_M")
+            .is_none(),
         "startup shutdown should cancel any late RuntimeReady emission"
     );
 }
@@ -386,7 +387,6 @@ pub(crate) fn assert_startup_ready_reporter_waits_for_rust_owned_model_ready_edg
     let models = vec!["model-a".to_string(), "model-b".to_string()];
     let reporter = StartupReadyReporter::new(
         &models,
-        "model-a".to_string(),
         "http://127.0.0.1:9337".to_string(),
         Some("http://127.0.0.1:3131".to_string()),
         9337,
@@ -394,16 +394,16 @@ pub(crate) fn assert_startup_ready_reporter_waits_for_rust_owned_model_ready_edg
     );
 
     assert!(
-        reporter.mark_ready_and_build_event(0).is_none(),
+        reporter.mark_ready_and_build_event(0, "model-a").is_none(),
         "one model-ready edge must not replace the remaining Rust-owned readiness edges"
     );
     assert!(
-        reporter.mark_ready_and_build_event(0).is_none(),
+        reporter.mark_ready_and_build_event(0, "model-a").is_none(),
         "a repeated edge for one startup slot must not mark a different slot ready"
     );
     assert!(
         matches!(
-            reporter.mark_ready_and_build_event(1),
+            reporter.mark_ready_and_build_event(1, "model-b"),
             Some(OutputEvent::RuntimeReady { .. })
         ),
         "RuntimeReady should appear only after every startup model hits the Rust-owned ready path"
@@ -462,6 +462,7 @@ pub(super) fn startup_model_plan_fixture() -> Vec<StartupModelPlan> {
             declared_ref: "unsloth/Model-A-GGUF:Q4_K_M".to_string(),
             config_model_id: None,
             resolved_path: PathBuf::from("/tmp/Model-A-Q4_K_M.gguf"),
+            preindexed_split_package: None,
             mmproj_path: None,
             ctx_size: Some(8192),
             gpu_id: Some("GPU0".to_string()),
@@ -479,6 +480,7 @@ pub(super) fn startup_model_plan_fixture() -> Vec<StartupModelPlan> {
             declared_ref: "Model-B".to_string(),
             config_model_id: None,
             resolved_path: PathBuf::from("/tmp/Model-B.gguf"),
+            preindexed_split_package: None,
             mmproj_path: None,
             ctx_size: Some(4096),
             gpu_id: None,
@@ -559,6 +561,7 @@ pub(super) fn startup_launch_plan_uses_metal_device_fallback_for_unpinned_model(
         declared_ref: "Qwen/Qwen2.5-0.5B-Instruct-GGUF:qwen2.5-0.5b-instruct-q4_k_m".to_string(),
         config_model_id: None,
         resolved_path: PathBuf::from("/tmp/qwen2.5-0.5b-instruct-q4_k_m.gguf"),
+        preindexed_split_package: None,
         mmproj_path: None,
         ctx_size: Some(4096),
         gpu_id: None,
@@ -652,7 +655,6 @@ pub(super) async fn startup_ready_reporter_uses_bound_urls_for_runtime_ready() {
     let models = vec!["model-a".to_string()];
     let reporter = StartupReadyReporter::new(
         &models,
-        "model-a".to_string(),
         api_url.clone(),
         Some(console_url.clone()),
         api_port,
@@ -665,7 +667,7 @@ pub(super) async fn startup_ready_reporter_uses_bound_urls_for_runtime_ready() {
         api_port: reported_api_port,
         console_port: reported_console_port,
         ..
-    }) = reporter.mark_ready_and_build_event(0)
+    }) = reporter.mark_ready_and_build_event(0, "model-a")
     else {
         panic!("reporter should emit RuntimeReady when the model is ready");
     };
@@ -681,6 +683,56 @@ pub(super) async fn startup_ready_reporter_uses_bound_urls_for_runtime_ready() {
 #[test]
 pub(super) fn startup_ready_reporter_waits_for_rust_owned_model_ready_edges() {
     assert_startup_ready_reporter_waits_for_rust_owned_model_ready_edges();
+}
+
+#[test]
+fn startup_ready_commands_use_the_primary_served_model_in_either_load_order() {
+    let primary_id = "local-gguf/sha256-f90897d3a4d7e185";
+    for primary_first in [true, false] {
+        let models = vec![
+            "/models/primary.gguf".to_string(),
+            "other-model".to_string(),
+        ];
+        let reporter = StartupReadyReporter::new(
+            &models,
+            "http://127.0.0.1:9337".to_string(),
+            None,
+            9337,
+            None,
+        );
+        let (first, last) = if primary_first { (0, 1) } else { (1, 0) };
+        let served_models = [primary_id, "other-served-model"];
+        assert!(
+            reporter
+                .mark_ready_and_build_event(first, served_models[first])
+                .is_none()
+        );
+        let Some(OutputEvent::RuntimeReady {
+            pi_command,
+            goose_command,
+            ..
+        }) = reporter
+            .clone()
+            .mark_ready_and_build_event(last, served_models[last])
+        else {
+            panic!("both loaded models should make the runtime ready");
+        };
+        assert_eq!(
+            pi_command.unwrap(),
+            format!("mesh-llm pi --host 127.0.0.1:9337 --model '{primary_id}'")
+        );
+        assert_eq!(
+            goose_command.unwrap(),
+            format!(
+                "GOOSE_PROVIDER=openai OPENAI_HOST=http://127.0.0.1:9337 OPENAI_API_KEY=mesh GOOSE_MODEL={primary_id} goose session"
+            )
+        );
+        assert!(
+            reporter
+                .mark_ready_and_build_event(last, served_models[last])
+                .is_none()
+        );
+    }
 }
 
 #[cfg(test)]
@@ -981,6 +1033,9 @@ pub(super) async fn setup_run_auto_console_state(
             ctx.options.max_clients,
         )
         .await;
+    if ctx.options.client {
+        console_state.set_client(true).await;
+    }
     Ok(Some(console_state))
 }
 
@@ -1150,6 +1205,7 @@ pub(super) async fn spawn_run_auto_additional_model_tasks(ctx: RunAutoAdditional
             target_tx: ctx.target_tx.clone(),
             model_path: extra_model.resolved_path.clone(),
             model_ref: extra_model.declared_ref.clone(),
+            preindexed_split_package: extra_model.preindexed_split_package.clone(),
             config_model_id: extra_model.config_model_id.clone(),
             readiness_index,
             profile: extra_model.profile.clone(),

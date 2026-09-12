@@ -8,6 +8,7 @@ pub(in crate::runtime) struct StartupLoopContext<'a> {
     pub(super) target_tx: &'a Arc<tokio::sync::watch::Sender<election::ModelTargets>>,
     pub(super) model_path: &'a PathBuf,
     pub(super) model_ref: &'a str,
+    pub(super) preindexed_split_package: Option<&'a skippy::SkippyPackageIdentity>,
     pub(super) config_model_id: Option<&'a str>,
     pub(super) runtime_profile: &'a str,
     pub(super) readiness_index: usize,
@@ -106,6 +107,7 @@ pub(in crate::runtime) struct StartupLaunchRuntimeContext<'a> {
     pub(super) target_tx: &'a Arc<tokio::sync::watch::Sender<election::ModelTargets>>,
     pub(super) model_path: &'a PathBuf,
     pub(super) model_ref: &'a str,
+    pub(super) preindexed_split_package: Option<&'a skippy::SkippyPackageIdentity>,
     pub(super) config_model_id: Option<&'a str>,
     pub(super) runtime_profile: &'a str,
     pub(super) model_name: &'a str,
@@ -247,6 +249,7 @@ pub(in crate::runtime) async fn startup_handle_local_fallback_event(
             config_model_id: ctx.config_model_id,
             runtime_profile: ctx.runtime_profile,
             model_path: ctx.model_path,
+            preindexed_split_package: ctx.preindexed_split_package,
             model_bytes,
             mmproj_override: ctx.mmproj_path.map(PathBuf::as_path),
             ctx_size_override: ctx.ctx_size,
@@ -673,6 +676,7 @@ async fn launch_startup_local_model_task(
         target_tx: &params.target_tx,
         model_path: &params.model_path,
         model_ref: &params.model_ref,
+        preindexed_split_package: params.preindexed_split_package.as_ref(),
         config_model_id: params.config_model_id.as_deref(),
         runtime_profile: &params.profile,
         model_name: &params.model_name,
@@ -717,6 +721,7 @@ fn startup_loop_context<'a>(
         target_tx: &params.target_tx,
         model_path: &params.model_path,
         model_ref: &params.model_ref,
+        preindexed_split_package: params.preindexed_split_package.as_ref(),
         config_model_id: params.config_model_id.as_deref(),
         runtime_profile: &params.profile,
         readiness_index: params.readiness_index,
@@ -913,7 +918,7 @@ pub(in crate::runtime) async fn startup_publish_loaded_runtime(
         cs.update(true, true).await;
     }
     update_pi_models_json(loaded_name, ctx.api_port);
-    startup_ready_reporter.mark_ready_and_maybe_emit(ctx.readiness_index);
+    startup_ready_reporter.mark_ready_and_maybe_emit(ctx.readiness_index, loaded_name);
     let _ = emit_event(OutputEvent::ModelReady {
         model: loaded_name.to_string(),
         internal_port: Some(handle.port),

@@ -176,20 +176,86 @@ mesh_version = "0.68.0"
         )
         .expect("mesh-version-only native runtime selector should parse");
 
-        let err = parse_config_toml(
+        let config = parse_config_toml(
             r#"
 [runtime.native_runtime]
 selection = "cuda12"
 "#,
         )
-        .expect_err("partial native runtime selector should fail validation");
+        .expect("selection-only native runtime selector should parse");
+
+        assert_eq!(config.runtime.native_runtime.mesh_version, None);
+        assert_eq!(
+            config.runtime.native_runtime.selection.as_deref(),
+            Some("cuda12")
+        );
+    }
+
+    #[test]
+    fn native_runtime_override_rejects_abi_without_mesh_version() {
+        let err = parse_config_toml(
+            r#"
+[runtime.native_runtime]
+skippy_abi = "0.1.25"
+"#,
+        )
+        .expect_err("ABI-only native runtime selector should fail validation");
 
         assert!(
             err.to_string().contains(
-                "runtime.native_runtime override must set mesh_version when skippy_abi or selection is set"
+                "runtime.native_runtime override must set mesh_version when skippy_abi is set"
             ),
             "unexpected validation error: {err}"
         );
+    }
+
+    #[test]
+    fn native_runtime_override_rejects_unknown_backend_selection() {
+        let err = parse_config_toml(
+            r#"
+[runtime.native_runtime]
+selection = "vulcan"
+"#,
+        )
+        .expect_err("unknown native runtime backend should fail validation");
+
+        assert!(
+            err.to_string().contains(
+                "runtime.native_runtime.selection must be one of recommended, cpu, metal, cuda or cudaNN, rocm, vulkan, exact:<id>, or meshllm-<id>"
+            ),
+            "unexpected validation error: {err}"
+        );
+    }
+
+    #[test]
+    fn native_runtime_override_accepts_cuda_major_and_exact_id_selections() {
+        for selection in [
+            "cuda12",
+            "exact:meshllm-native-runtime-linux-x86_64-cuda12",
+            "meshllm-native-runtime-linux-x86_64-vulkan",
+        ] {
+            parse_config_toml(&format!(
+                "[runtime.native_runtime]\nselection = \"{selection}\"\n"
+            ))
+            .unwrap_or_else(|error| panic!("selection {selection} should parse: {error}"));
+        }
+    }
+
+    #[test]
+    fn native_runtime_override_rejects_empty_exact_id_selections() {
+        for selection in ["exact:", "exact:   "] {
+            let error = parse_config_toml(&format!(
+                "[runtime.native_runtime]\nselection = \"{selection}\"\n"
+            ))
+            .expect_err("empty exact runtime selection should fail validation");
+
+            assert!(
+                error.to_string().contains(
+                    "runtime.native_runtime.selection must be one of recommended, cpu, metal, cuda or cudaNN, rocm, vulkan, exact:<id>, or meshllm-<id>"
+                ),
+                "unexpected validation error for {selection:?}: {error}"
+            );
+        }
     }
 
     #[test]

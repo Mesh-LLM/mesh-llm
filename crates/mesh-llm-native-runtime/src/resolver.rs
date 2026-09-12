@@ -37,6 +37,102 @@ pub enum CandidateRejection {
     SelectionMismatch { selection: String },
 }
 
+impl std::fmt::Display for CandidateRejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MeshVersionMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "MeshLLM version mismatch: expected {expected}, found {actual}"
+                )
+            }
+            Self::SkippyAbiMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "Skippy ABI mismatch: expected {expected}, found {actual}"
+                )
+            }
+            Self::OsMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "OS mismatch: expected {expected}, artifact is for {actual}"
+                )
+            }
+            Self::ArchMismatch { expected, actual } => write!(
+                f,
+                "CPU architecture mismatch: expected {expected}, artifact is for {actual}"
+            ),
+            Self::TargetTripleMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "target triple mismatch: expected {expected}, host is {actual}"
+                )
+            }
+            Self::BackendNotSupported { backend } => {
+                write!(f, "backend {backend} is not supported on this host")
+            }
+            Self::CudaProfileMissing => {
+                write!(
+                    f,
+                    "CUDA runtime requires CUDA, but no CUDA profile was detected"
+                )
+            }
+            Self::CudaToolkitMajorMismatch {
+                required,
+                installed,
+            } => {
+                let installed = installed
+                    .iter()
+                    .map(|major| major.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(
+                    f,
+                    "CUDA toolkit mismatch: runtime requires CUDA {required}, host has CUDA {installed} installed"
+                )
+            }
+            Self::CudaToolkitMajorAboveDriver {
+                required,
+                driver_max,
+            } => write!(
+                f,
+                "CUDA driver too old: runtime requires CUDA {required}, driver supports up to CUDA {driver_max}"
+            ),
+            Self::CudaToolkitNotDetected { required } => write!(
+                f,
+                "no CUDA toolkit detected: runtime requires CUDA {required} libraries \
+                 (libcudart, libcublas, libcublasLt) on the loader path; \
+                 set MESH_LLM_CUDA_TOOLKIT_MAJORS if the toolkit is installed elsewhere"
+            ),
+            Self::CudaGpuArchUnsupported { supported } => write!(
+                f,
+                "CUDA GPU architecture unsupported: runtime supports {}",
+                supported.join(", ")
+            ),
+            Self::RocmProfileMissing => {
+                write!(
+                    f,
+                    "ROCm runtime requires ROCm, but no ROCm profile was detected"
+                )
+            }
+            Self::RocmGpuArchUnsupported { supported } => write!(
+                f,
+                "ROCm GPU architecture unsupported: runtime supports {}",
+                supported.join(", ")
+            ),
+            Self::VulkanProfileMissing => {
+                write!(
+                    f,
+                    "Vulkan runtime requires Vulkan, but no Vulkan profile was detected"
+                )
+            }
+            Self::SelectionMismatch { selection } => {
+                write!(f, "selection mismatch: requested {selection}")
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CandidateEvaluation {
     pub artifact: NativeRuntimeArtifact,
@@ -419,9 +515,9 @@ fn evaluate_cuda_requirements(
 }
 
 /// A CUDA runtime can only load if the CUDA runtime libraries it links against
-/// are present. Runtimes that ship their own copies (Windows) are self
-/// contained; runtimes that do not (Linux) need a matching toolkit major
-/// installed on the host.
+/// are present. Runtimes that ship their own complete copies (Windows and
+/// packaged Linux CUDA runtimes) are self contained; host-linked runtimes need
+/// a matching toolkit major installed on the host.
 ///
 /// `nvidia-smi` reports the highest CUDA major the *driver* supports, which is
 /// routinely newer than the installed toolkit. Treat it as an upper bound only,
@@ -442,7 +538,7 @@ fn evaluate_cuda_toolkit_major(
         return;
     }
 
-    if artifact_bundles_cuda_runtime(artifact) {
+    if artifact_bundles_cuda_runtime(artifact, required) {
         return;
     }
 
@@ -474,19 +570,24 @@ fn evaluate_cuda_toolkit_major(
 /// Requires the complete set the runtime loads (`cudart`, `cublas`,
 /// `cublasLt`). A single bundled library does not make an artifact self
 /// contained: shipping `cudart` alone still leaves `cublas` to the host.
-fn artifact_bundles_cuda_runtime(artifact: &NativeRuntimeArtifact) -> bool {
+fn artifact_bundles_cuda_runtime(artifact: &NativeRuntimeArtifact, required: u32) -> bool {
     let mut cudart = false;
     let mut cublas = false;
     let mut cublas_lt = false;
     for library in &artifact.libraries {
         let name = library.rsplit('/').next().unwrap_or(library).to_lowercase();
-        let name = name.strip_prefix("lib").unwrap_or(&name);
-        // `cublaslt` is checked first so it is not shadowed by `cublas`.
-        if name.starts_with("cublaslt") {
+
+        let linux_matches = |component: &str| {
+            let prefix = format!("lib{component}.so.{required}");
+            name == prefix || name.starts_with(&format!("{prefix}."))
+        };
+        let windows_matches = |component: &str| name == format!("{component}64_{required}.dll");
+
+        if linux_matches("cublaslt") || windows_matches("cublaslt") {
             cublas_lt = true;
-        } else if name.starts_with("cublas") {
+        } else if linux_matches("cublas") || windows_matches("cublas") {
             cublas = true;
-        } else if name.starts_with("cudart") {
+        } else if linux_matches("cudart") || windows_matches("cudart") {
             cudart = true;
         }
     }
@@ -710,9 +811,7 @@ mod tests {
     }
 
     /// A CUDA 13 driver with only a CUDA 12 toolkit installed must still select
-    /// the cuda12 runtime. Linux runtimes do not bundle `libcudart`, so
-    /// selecting cuda13 here fails at load with
-    /// `libcudart.so.13: cannot open shared object file`.
+    /// the cuda12 host-linked runtime.
     #[test]
     fn newer_driver_with_older_toolkit_selects_installed_toolkit_runtime() {
         let mut host = profile();
@@ -815,6 +914,77 @@ mod tests {
                 12,
                 &["sm_90"],
             )],
+        };
+
+        assert!(
+            select_native_runtime(&manifest, &host, "0.68.0", &RuntimeSelection::Recommended)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn bundled_linux_cuda_runtime_is_accepted_without_detected_toolkit() {
+        let mut host = profile();
+        let cuda = host.cuda.as_mut().unwrap();
+        cuda.toolkit_majors = BTreeSet::new();
+        cuda.driver_max_major = Some(13);
+
+        let mut bundled = cuda_runtime("meshllm-runtime-linux-x86_64-cuda13", 13, &["sm_90"]);
+        bundled.libraries.extend([
+            "lib/libcudart.so.13".to_string(),
+            "lib/libcublas.so.13".to_string(),
+            "lib/libcublasLt.so.13".to_string(),
+        ]);
+        let manifest = NativeRuntimeReleaseManifest {
+            mesh_version: "0.68.0".to_string(),
+            skippy_abi: "0.1.25".to_string(),
+            artifacts: vec![bundled],
+        };
+
+        let selected =
+            select_native_runtime(&manifest, &host, "0.68.0", &RuntimeSelection::Recommended)
+                .unwrap();
+        assert_eq!(selected.artifact.id, "meshllm-runtime-linux-x86_64-cuda13");
+    }
+
+    #[test]
+    fn partially_bundled_linux_cuda_runtime_still_requires_toolkit() {
+        let mut host = profile();
+        let cuda = host.cuda.as_mut().unwrap();
+        cuda.toolkit_majors = BTreeSet::new();
+        cuda.driver_max_major = Some(13);
+
+        let mut partial = cuda_runtime("meshllm-runtime-linux-x86_64-cuda13", 13, &["sm_90"]);
+        partial.libraries.push("lib/libcudart.so.13".to_string());
+        let manifest = NativeRuntimeReleaseManifest {
+            mesh_version: "0.68.0".to_string(),
+            skippy_abi: "0.1.25".to_string(),
+            artifacts: vec![partial],
+        };
+
+        assert!(
+            select_native_runtime(&manifest, &host, "0.68.0", &RuntimeSelection::Recommended)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn bundled_linux_cuda_runtime_must_match_required_toolkit_major() {
+        let mut host = profile();
+        let cuda = host.cuda.as_mut().unwrap();
+        cuda.toolkit_majors = BTreeSet::new();
+        cuda.driver_max_major = Some(13);
+
+        let mut mismatched = cuda_runtime("meshllm-runtime-linux-x86_64-cuda13", 13, &["sm_90"]);
+        mismatched.libraries.extend([
+            "lib/libcudart.so.12".to_string(),
+            "lib/libcublas.so.12".to_string(),
+            "lib/libcublasLt.so.12".to_string(),
+        ]);
+        let manifest = NativeRuntimeReleaseManifest {
+            mesh_version: "0.68.0".to_string(),
+            skippy_abi: "0.1.25".to_string(),
+            artifacts: vec![mismatched],
         };
 
         assert!(

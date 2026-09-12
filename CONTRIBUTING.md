@@ -162,6 +162,112 @@ not report, lock, or clean a second artifact tree.
 
 On native Windows, `just check-release` runs the host-safe Rust/doc invariant subset and skips the Bash-only `install.sh` / `package-release.sh` parity checks. Run it on macOS or Linux when you need full shell parity coverage.
 
+### Testing crates on native Windows
+
+A bare Windows checkout cannot build the test targets of crates that pull in
+`skippy-ffi`'s static link mode (`mesh-llm-system` does, through
+`mesh-llm-runtime-install`, which depends on `skippy-ffi` with
+`default-features = false`), because `skippy-ffi/build.rs` then requires
+the llama.cpp ABI archives to be prepared
+(`automatic native preparation is not supported for Windows from build.rs yet`).
+`just test-all` needs the same native preparation, through its Bash pipeline.
+
+For crate suites that do not exercise the native runtime, enable
+`dynamic-native-runtime`: feature unification turns on `skippy-ffi`'s
+`dynamic-runtime`, whose build script returns early. The `mesh-llm-system`
+gates then run on a machine without a prepared native build:
+
+```powershell
+cargo test --locked -p mesh-llm-system --lib --features dynamic-native-runtime
+cargo clippy --no-deps -p mesh-llm-system --all-targets --features dynamic-native-runtime -- -D warnings
+cargo fmt --check -p mesh-llm-system
+cargo run -p xtask -- repo-consistency no-console-print
+```
+
+`--no-deps` keeps Clippy scoped to the package you are changing. `cfg`-gated
+code can be dead on one platform only, so if a platform-specific warning
+appears that your diff does not touch, compare the run against the same
+command on `main` before attributing it to your change. Running the
+native-runtime suites still needs a prepared build (`LLAMA_STAGE_BUILD_DIR`
+or `SKIPPY_LLAMA_BUILD_DIR` pointing at one), which this section does not cover.
+The Rust MSVC toolchain needs the Visual Studio Build Tools with the
+"Desktop development with C++" workload installed.
+
+## Commit messages
+
+Commit subjects follow [Conventional Commits
+v1.0.0](https://www.conventionalcommits.org/en/v1.0.0/):
+
+```
+<type>(<optional scope>)<optional !>: <description>
+```
+
+Install the hook that enforces it:
+
+```bash
+just hooks-install          # sets core.hooksPath to scripts/hooks
+just check-commits          # validates origin/main..HEAD
+```
+
+Git cannot activate a committed hook on clone — that would make `git clone` of
+any repository arbitrary code execution — so the hook needs one local opt-in.
+`just build` enables it for you on the first local development build, on every
+platform, unless you have already pointed `core.hooksPath` somewhere yourself.
+CI enforces the same rules regardless, so a clone that never builds is still
+covered.
+
+Valid types are `feat`, `fix`, `perf`, `security`, `revert`, `refactor`,
+`style`, `test`, `build`, `deps`, `ci`, `chore`, and `docs`. This is not
+bookkeeping: the release-notes job classifies each release entry from these
+subjects, so the type decides which section a change appears under. `feat`
+lands in Added, `fix` in Fixed, `perf` in Changed, `security` in Security, and
+the tooling types collapse into a folded Internal section. A subject that is
+not conventional cannot be classified and lands in "Other changes".
+
+Two overrides exist. `BREAKING CHANGE: <what>` in the body (or `!` after the
+type) moves the entry to Changed, whatever its type. `Release-Notes: <Section>` in the body wins
+outright — reach for it when the type cannot express the change, above all for
+a fix that closes a security exposure and belongs in Security rather than
+Fixed.
+
+Because the repository squash-merges, the PR title becomes the commit subject
+on `main`. Give the PR the conventional title, not just the branch commits.
+
+The hook is opt-in per clone, so CI is what actually enforces this. The Quality
+lane rejects a pull request whose title is not conventional, and rejects any
+branch commit carrying a denied attribution trailer, because the squash body
+aggregates those messages. Branch commit *subjects* are not judged in CI --
+messy work-in-progress subjects are fine, since only the title survives the
+squash.
+
+See [`.agents/skills/release-notes/SKILL.md`](.agents/skills/release-notes/SKILL.md)
+for the full pipeline.
+
+### Attribution trailers
+
+Agent, bot, and relay attribution trailers are not kept in this history. The
+hook rejects a commit whose trailers name an agent or bot, use an agent
+attribution address such as `noreply@anthropic.com`, sit at a relay identity
+domain such as `meshllm.communities.buzz.xyz`, or belong to a `[bot]` account:
+
+```
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>          # rejected
+Co-authored-by: scama <a1860575018c46@meshllm.communities.buzz.xyz>  # rejected
+Co-authored-by: coderabbitai[bot] <...@users.noreply.github.com>     # rejected
+Co-authored-by: Real Person <real@example.com>                  # kept
+```
+
+Trailers naming a human contributor are untouched. Extend the lists in
+`scripts/check-conventional-commit.py` when a new agent identity shows up.
+
+A squash merge builds the commit on `main` from the pull request title and
+body, both of which CI validates, so a trailer in a branch commit cannot reach
+`main` on its own. Keep them out of branch commits anyway: branch history is
+still read during review, and that protection is a repository setting rather
+than a law of nature. See the CI notes in
+[`.agents/skills/manage-ci/references/current-inventory.md`](.agents/skills/manage-ci/references/current-inventory.md).
+
+
 ## CI / GitHub Actions
 
 For the current PR and main topology, read [`ci/ci.md`](ci/ci.md), the

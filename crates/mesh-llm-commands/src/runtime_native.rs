@@ -10,8 +10,9 @@ use mesh_llm_runtime_install::{
     CURRENT_MESH_VERSION, NativeRuntimeBundleInstallPolicy, NativeRuntimeDownloadProgressCallback,
     NativeRuntimeInstallOptions, NativeRuntimeManifestOptions, discover_local_native_runtimes,
     discover_native_runtime_bundle_dirs, host_runtime_profile, install_native_runtime,
-    load_release_manifest, native_runtime_cache,
+    load_release_manifest_with_sources, native_runtime_cache,
 };
+use mesh_llm_system::backend::BinaryFlavor;
 use mesh_llm_tui::terminal_progress::{
     ratio_complete_u64, render_inline_gauge_with_reserved_width,
 };
@@ -64,27 +65,28 @@ pub async fn run_native_runtime_list(
     if available {
         let discovered_bundle_dirs = discover_native_runtime_bundle_dirs(bundle_dirs)?;
         print_configured_selector(configured, json_output);
-        if !json_output && manifest_path.is_none() && discovered_bundle_dirs.is_empty() {
+        if !json_output && manifest_path.is_none() {
             eprintln!("🔎 Loading native runtime release manifest");
         }
-        let manifest = load_release_manifest(NativeRuntimeManifestOptions {
-            mesh_version: mesh_version.to_string(),
-            manifest_path: manifest_path.map(Path::to_path_buf),
-            bundle_dirs: discovered_bundle_dirs.clone(),
-            ..Default::default()
-        })
-        .await?;
+        let (manifest, sources) =
+            load_release_manifest_with_sources(NativeRuntimeManifestOptions {
+                mesh_version: mesh_version.to_string(),
+                manifest_path: manifest_path.map(Path::to_path_buf),
+                bundle_dirs: discovered_bundle_dirs.clone(),
+                ..Default::default()
+            })
+            .await?;
         let profile = host_runtime_profile();
         let cache = native_runtime_cache(cache_dir)?;
         let mut resolver =
             NativeRuntimeResolver::new(mesh_version, profile.clone(), manifest.clone(), cache)
-                .with_bundle_dirs(discovered_bundle_dirs);
+                .with_bundle_dirs(sources.bundle_dirs.clone());
         if let Some(skippy_abi_version) = configured.skippy_abi_version {
             resolver = resolver.with_skippy_abi_version(skippy_abi_version);
         }
         let evaluated = resolver.evaluate(&selection)?;
         let rows = available_runtime_rows(&manifest, &evaluated);
-        return formatter.render_available(&rows);
+        return formatter.render_available(&rows, &sources);
     }
 
     let installed = discover_local_native_runtimes(bundle_dirs, &cache)?;
@@ -143,7 +145,7 @@ pub async fn run_native_runtime_install(
     json_output: bool,
 ) -> Result<()> {
     let resolved_selection = resolve_runtime_selection(requested_runtime, configured)?;
-    if !json_output && manifest_path.is_none() && bundle_dirs.is_empty() {
+    if !json_output && manifest_path.is_none() {
         eprintln!("🔎 Loading native runtime release manifest");
     }
     if !json_output {
@@ -184,11 +186,15 @@ fn cli_native_runtime_install_options(
 }
 
 fn print_configured_selector(configured: NativeRuntimeConfigSelection<'_>, json_output: bool) {
-    if json_output || configured.mesh_version.is_none() {
+    if json_output
+        || (configured.mesh_version.is_none()
+            && configured.skippy_abi_version.is_none()
+            && configured.selection.is_none())
+    {
         return;
     }
     let mesh_version = configured.mesh_version_or_current();
-    eprintln!("🔒 Using native runtime selector from config");
+    eprintln!("🔒 Using native runtime selector");
     eprintln!("   mesh version: {mesh_version}");
     if let Some(skippy_abi_version) = configured.skippy_abi_version {
         eprintln!("   Skippy ABI: {skippy_abi_version}");
@@ -341,14 +347,16 @@ pub fn run_native_runtime_prune(
 pub fn run_native_runtime_doctor(
     mesh_version: Option<&str>,
     skippy_abi_version: Option<&str>,
+    llama_flavor: Option<BinaryFlavor>,
     configured_selection: Option<&str>,
     json_output: bool,
 ) -> Result<()> {
+    let effective_selection = native_runtime_selection(llama_flavor, configured_selection);
     let cache = native_runtime_cache(None)?;
     let profile = host_runtime_profile();
     let installed = discover_local_native_runtimes(&[], &cache)?;
     let selected_mesh_version = mesh_version.unwrap_or(CURRENT_MESH_VERSION);
-    let runtime_selection = RuntimeSelection::parse(configured_selection)?;
+    let runtime_selection = RuntimeSelection::parse(effective_selection)?;
     let selected_version_runtimes = installed
         .iter()
         .filter(|runtime| runtime.mesh_version == selected_mesh_version)
@@ -382,6 +390,7 @@ pub fn run_native_runtime_doctor(
         selected_mesh_version: selected_mesh_version.to_string(),
         configured_skippy_abi: skippy_abi_version.map(ToString::to_string),
         configured_selection: configured_selection.map(ToString::to_string),
+        effective_selection: effective_selection.map(ToString::to_string),
         host: profile,
         cache_path: cache.root().to_path_buf(),
         selected_runtime_id: selected.map(|runtime| runtime.native_runtime_id.clone()),
@@ -403,6 +412,15 @@ pub fn run_native_runtime_doctor(
         );
     }
     Ok(())
+}
+
+pub fn native_runtime_selection(
+    llama_flavor: Option<BinaryFlavor>,
+    configured_selection: Option<&str>,
+) -> Option<&str> {
+    llama_flavor
+        .map(BinaryFlavor::suffix)
+        .or(configured_selection)
 }
 
 fn native_runtime_doctor_readiness(
@@ -489,6 +507,40 @@ mod tests {
         }
         .write_to_dir(path)
         .unwrap();
+    }
+
+    #[test]
+    fn doctor_prefers_cli_flavor_over_configured_runtime_selection() {
+        assert_eq!(
+            native_runtime_selection(Some(BinaryFlavor::Vulkan), Some("cuda")),
+            Some("vulkan")
+        );
+    }
+
+    #[test]
+    fn doctor_uses_configured_runtime_selection_without_cli_flavor() {
+        assert_eq!(native_runtime_selection(None, Some("cuda")), Some("cuda"));
+    }
+
+    #[test]
+    fn runtime_install_prefers_cli_flavor_over_configured_backend() {
+        let resolved = resolve_runtime_selection(
+            None,
+            NativeRuntimeConfigSelection {
+                mesh_version: None,
+                skippy_abi_version: None,
+                selection: native_runtime_selection(Some(BinaryFlavor::Vulkan), Some("rocm")),
+            },
+        )
+        .expect("runtime install selection should resolve");
+
+        assert_eq!(
+            resolved.selection,
+            RuntimeSelection::Backend {
+                kind: mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan,
+                cuda_toolkit_major: None,
+            }
+        );
     }
 
     #[test]

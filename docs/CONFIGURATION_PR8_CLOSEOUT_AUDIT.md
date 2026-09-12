@@ -85,7 +85,7 @@ schema row or stale manifest row from passing review:
 `topology.stages`, `skippy.stage_model_path`, `skippy.source_policy`, `skippy.stage_role`,
 `skippy.stage_topology`, `skippy.activation_wire_dtype`,
 `skippy.binary_stage_transport`, `skippy.lifecycle_startup_timeout_ms`,
-`skippy.lifecycle_readiness_interval_ms`, `skippy.lifecycle_health_interval_ms`,
+`skippy.lifecycle_health_interval_ms`,
 `skippy.prefill_chunking`, `skippy.prefill_chunk_size`,
 `skippy.prefill_chunk_schedule`, `speculative.strategy`, `speculative.mode`,
 `speculative.draft_model`, `speculative.draft_hf_repo`,

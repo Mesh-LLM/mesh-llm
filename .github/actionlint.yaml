@@ -5,6 +5,7 @@ self-hosted-runner:
     - X64
     - amd64
     - gpu-nvidia
+    - gpu-amd
     - cuda
     - family-certify
     - mesh-llm-amd64
@@ -17,3 +18,4 @@ self-hosted-runner:
     - depot-ubuntu-24.04-arm-4
     - depot-ubuntu-24.04-arm-8
     - depot-ubuntu-24.04-arm-16
+    - agentic-replay

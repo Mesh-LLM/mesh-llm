@@ -26,7 +26,7 @@ use super::{
         configure_child_logs, correctness_topology, elapsed_us, ensure_matches, ensure_reply_kind,
         protocol_flash_attn, protocol_load_mode, runtime_flash_attn, runtime_load_mode,
         runtime_model_identity, send_generation_config, split_report, stage_model_resolution,
-        stage_server_model_path, status,
+        stage_resident_tensor_names, stage_server_model_path, status,
     },
 };
 
@@ -140,6 +140,7 @@ pub(in crate::runner) fn run_full_model_decode(args: &RuntimeArgs) -> Result<Ful
         include_output: true,
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: false,
+        resident_tensor_names: Vec::new(),
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
@@ -208,6 +209,14 @@ pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<Bin
         &args.model_identity,
         stage1_spec,
     )?;
+    let resident_tensor_names = stage_resident_tensor_names(
+        args.stage_load_mode,
+        &args.model,
+        &[&stage0_resolution.path, &stage1_resolution.path],
+        &[(0, args.split_layer), (args.split_layer, args.layer_end)],
+        args.ctx_size,
+        1,
+    )?;
     let stage0_config = RuntimeConfig {
         stage_index: 0,
         layer_start: 0,
@@ -241,6 +250,7 @@ pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<Bin
         include_output: false,
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
+        resident_tensor_names: resident_tensor_names[0].clone(),
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
@@ -292,6 +302,7 @@ pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<Bin
         "n_gpu_layers": args.n_gpu_layers,
         "flash_attn_type": protocol_flash_attn(args.flash_attn),
         "filter_tensors_on_load": true,
+        "resident_tensor_names": resident_tensor_names[1],
         "load_mode": protocol_load_mode(args.stage_load_mode),
         "bind_addr": args.stage1_bind_addr,
         "upstream": {

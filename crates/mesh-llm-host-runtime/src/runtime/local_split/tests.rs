@@ -30,7 +30,6 @@ fn lifecycle_config() -> plugin::MeshConfig {
         r#"
 [defaults.skippy]
 lifecycle_startup_timeout_ms = 25
-lifecycle_readiness_interval_ms = 40
 lifecycle_health_interval_ms = 70
 
 [[models]]
@@ -38,11 +37,59 @@ model = "test/model"
 
 [models.skippy]
 lifecycle_startup_timeout_ms = 75
-lifecycle_readiness_interval_ms = 125
 lifecycle_health_interval_ms = 5000
 "#,
     )
     .expect("lifecycle config")
+}
+
+#[test]
+fn topology_hash_commits_exact_stage_admission() {
+    let stages = vec![stage(1, 0, 0, 8)];
+    let mut admissions = std::collections::BTreeMap::from([(
+        stages[0].stage_id.clone(),
+        skippy::test_stage_admission(0, 8),
+    )]);
+    let original = split_topology_hash(
+        &stages,
+        &admissions,
+        skippy_protocol::StageActivationCodec::F16RneV1,
+        skippy_protocol::StageActivationCodecPolicy::default(),
+    );
+    admissions.get_mut(&stages[0].stage_id).unwrap().plan_id =
+        format!("skippy-plan:v1:{}", "c7".repeat(32));
+    assert_ne!(
+        original,
+        split_topology_hash(
+            &stages,
+            &admissions,
+            skippy_protocol::StageActivationCodec::F16RneV1,
+            skippy_protocol::StageActivationCodecPolicy::default(),
+        )
+    );
+}
+
+#[test]
+fn topology_hash_commits_activation_codec() {
+    let stages = vec![stage(1, 0, 0, 8)];
+    let admissions = std::collections::BTreeMap::from([(
+        stages[0].stage_id.clone(),
+        skippy::test_stage_admission(0, 8),
+    )]);
+    assert_ne!(
+        split_topology_hash(
+            &stages,
+            &admissions,
+            skippy_protocol::StageActivationCodec::RawF32V1,
+            skippy_protocol::StageActivationCodecPolicy::default(),
+        ),
+        split_topology_hash(
+            &stages,
+            &admissions,
+            skippy_protocol::StageActivationCodec::F16RneV1,
+            skippy_protocol::StageActivationCodecPolicy::default(),
+        )
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -54,16 +101,6 @@ async fn configured_startup_timeout_drives_real_timeout_deadline() {
 
     assert!(result.is_err());
     assert_eq!(started.elapsed(), Duration::from_millis(75));
-}
-
-#[tokio::test(start_paused = true)]
-async fn configured_readiness_interval_drives_real_poll_sleep() {
-    let intervals = configured_stage_lifecycle_intervals(&lifecycle_config(), Some("test/model"));
-    let started = tokio::time::Instant::now();
-
-    wait_for_stage_readiness_poll(intervals.readiness_interval).await;
-
-    assert_eq!(started.elapsed(), Duration::from_millis(125));
 }
 
 #[tokio::test(start_paused = true)]
@@ -227,7 +264,6 @@ fn staged_lifecycle_intervals_use_model_over_defaults() {
         r#"
 [defaults.skippy]
 lifecycle_startup_timeout_ms = 90000
-lifecycle_readiness_interval_ms = 250
 lifecycle_health_interval_ms = 30000
 
 [[models]]
@@ -235,7 +271,6 @@ model = "test/model"
 
 [models.skippy]
 lifecycle_startup_timeout_ms = 120000
-lifecycle_readiness_interval_ms = 125
 lifecycle_health_interval_ms = 5000
 "#,
     )
@@ -245,10 +280,8 @@ lifecycle_health_interval_ms = 5000
     let defaults = configured_stage_lifecycle_intervals(&config, None);
 
     assert_eq!(configured.startup_timeout, Duration::from_secs(120));
-    assert_eq!(configured.readiness_interval, Duration::from_millis(125));
     assert_eq!(configured.health_interval, Duration::from_secs(5));
     assert_eq!(defaults.startup_timeout, Duration::from_secs(90));
-    assert_eq!(defaults.readiness_interval, Duration::from_millis(250));
     assert_eq!(defaults.health_interval, Duration::from_secs(30));
 }
 
@@ -452,7 +485,6 @@ fn split_inventory_package_signal_counts_cached_and_missing_ranges() {
             layer_start: 6,
             layer_end: 10,
         }],
-        preparing_ranges: Vec::new(),
         source_model_path: None,
         source_model_bytes: None,
         source_model_sha256: None,
@@ -607,9 +639,9 @@ fn split_package_signal_still_requires_transfer_for_missing_local_package() {
 }
 
 #[test]
-fn layer_package_stage_source_waits_for_exact_prepare_availability() {
+fn layer_package_stage_source_accepts_inventory_availability() {
     let load = stage_load_request(LoadMode::LayerPackage);
-    let mut inventory = skippy::StageLayerInventory {
+    let inventory = skippy::StageLayerInventory {
         model_id: load.model_id.clone(),
         package_ref: load.package_ref.clone(),
         manifest_sha256: load.manifest_sha256.clone(),
@@ -620,7 +652,6 @@ fn layer_package_stage_source_waits_for_exact_prepare_availability() {
             layer_end: 36,
         }],
         missing_ranges: Vec::new(),
-        preparing_ranges: Vec::new(),
         source_model_path: Some(
             "/cache/models--meshllm--Qwen3-8B-Q4_K_M-layers/snapshots/main".to_string(),
         ),
@@ -629,12 +660,6 @@ fn layer_package_stage_source_waits_for_exact_prepare_availability() {
         content_addressed_local_source: None,
         source_model_kind: skippy::SourceModelKind::LayerPackage,
     };
-
-    assert!(!split_stage_source_is_ready(&inventory, &load));
-
-    inventory
-        .preparing_ranges
-        .push(test_preparation_status_from_load(&load));
 
     assert!(split_stage_source_is_ready(&inventory, &load));
 }
@@ -653,8 +678,32 @@ fn runtime_slice_stage_source_accepts_inventory_availability() {
             layer_end: 36,
         }],
         missing_ranges: Vec::new(),
-        preparing_ranges: Vec::new(),
         source_model_path: Some("/models/qwen.gguf".to_string()),
+        source_model_bytes: Some(4_900_000_000),
+        source_model_sha256: None,
+        content_addressed_local_source: None,
+        source_model_kind: skippy::SourceModelKind::PlainGguf,
+    };
+
+    assert!(split_stage_source_is_ready(&inventory, &load));
+}
+
+#[test]
+fn remote_package_v2_runtime_slice_accepts_inventory_availability() {
+    let mut load = stage_load_request(LoadMode::RuntimeSlice);
+    load.package_ref = "hf://meshllm/package-v2@abc123".to_string();
+    let inventory = skippy::StageLayerInventory {
+        model_id: load.model_id.clone(),
+        package_ref: load.package_ref.clone(),
+        manifest_sha256: load.manifest_sha256.clone(),
+        layer_count: 36,
+        ready_ranges: Vec::new(),
+        available_ranges: vec![skippy::LayerRange {
+            layer_start: 0,
+            layer_end: 36,
+        }],
+        missing_ranges: Vec::new(),
+        source_model_path: Some("/cache/package-v2/model-metadata.gguf".to_string()),
         source_model_bytes: Some(4_900_000_000),
         source_model_sha256: None,
         content_addressed_local_source: None,
@@ -679,7 +728,6 @@ fn split_inventory_package_signal_treats_unknown_inventory_as_missing_package() 
         ready_ranges: Vec::new(),
         available_ranges: Vec::new(),
         missing_ranges: Vec::new(),
-        preparing_ranges: Vec::new(),
         source_model_path: None,
         source_model_bytes: None,
         source_model_sha256: None,
@@ -714,7 +762,6 @@ fn split_inventory_package_signal_result_classifies_empty_inventory() {
         ready_ranges: Vec::new(),
         available_ranges: Vec::new(),
         missing_ranges: Vec::new(),
-        preparing_ranges: Vec::new(),
         source_model_path: None,
         source_model_bytes: None,
         source_model_sha256: None,
@@ -746,7 +793,6 @@ fn split_inventory_package_signal_result_classifies_manifest_mismatch() {
             layer_end: 10,
         }],
         missing_ranges: Vec::new(),
-        preparing_ranges: Vec::new(),
         source_model_path: Some("/cache/layer-package".to_string()),
         source_model_bytes: Some(1_000),
         source_model_sha256: None,
@@ -789,7 +835,6 @@ fn split_inventory_package_signal_result_requires_transfer_for_partial_package()
             layer_start: 4,
             layer_end: 10,
         }],
-        preparing_ranges: Vec::new(),
         source_model_path: Some("/cache/layer-package".to_string()),
         source_model_bytes: Some(1_000),
         source_model_sha256: None,
@@ -809,19 +854,12 @@ fn split_inventory_package_signal_result_requires_transfer_for_partial_package()
 #[test]
 fn split_startup_error_messages_include_specific_blocker_tokens() {
     let control = stage_control_unreachable_message("stage-1", make_id(2));
-    let failed = stage_source_prepare_failed_message("stage-1", "package missing");
-    let timeout = stage_source_prepare_timeout_message("stage-1", Duration::from_secs(30));
-
     assert!(control.contains("stage_control_unreachable"));
     assert!(control.contains(&make_id(2).fmt_short().to_string()));
-    assert!(failed.contains("stage_source_prepare_failed"));
-    assert!(failed.contains("package missing"));
-    assert!(timeout.contains("stage_source_prepare_timeout"));
-    assert!(timeout.contains("30s"));
 }
 
 #[test]
-fn stage_source_prepare_timeout_scales_with_assigned_package_bytes() {
+fn stage_source_load_timeout_scales_with_assigned_package_bytes() {
     let package = skippy::SkippyPackageIdentity {
         source_model_bytes: 975_000_000_000,
         layer_count: 66,
@@ -853,15 +891,73 @@ fn stage_source_prepare_timeout_scales_with_assigned_package_bytes() {
         parameter_bytes: 0,
     };
 
-    let model_path = Path::new("/nonexistent/direct.gguf");
-    let small_timeout =
-        stage_source_prepare_timeout(model_path, &package, &small_stage, true).unwrap();
-    let large_timeout =
-        stage_source_prepare_timeout(model_path, &package, &large_stage, false).unwrap();
+    let small_timeout = stage_source_load_timeout(&package, &small_stage);
+    let large_timeout = stage_source_load_timeout(&package, &large_stage);
 
-    assert!(small_timeout > MIN_STAGE_SOURCE_PREPARE_TIMEOUT);
+    assert!(small_timeout > MIN_STAGE_SOURCE_LOAD_TIMEOUT);
     assert!(large_timeout > small_timeout);
     assert!(large_timeout > Duration::from_secs(6 * 60 * 60));
+}
+
+#[test]
+fn split_stage_topology_instance_populates_stage_zero_endpoint() {
+    let stages = vec![
+        RuntimeSliceStagePlan {
+            stage_id: "stage-0".to_string(),
+            stage_index: 0,
+            node_id: make_id(1),
+            layer_start: 0,
+            layer_end: 12,
+            parameter_bytes: 0,
+        },
+        RuntimeSliceStagePlan {
+            stage_id: "stage-1".to_string(),
+            stage_index: 1,
+            node_id: make_id(2),
+            layer_start: 12,
+            layer_end: 24,
+            parameter_bytes: 0,
+        },
+    ];
+
+    let initial_topology = split_stage_topology_instance(
+        "topology-a",
+        "run-a",
+        "model-a",
+        &package(24),
+        &stages,
+        &std::collections::BTreeMap::new(),
+        None,
+        &std::collections::HashMap::new(),
+    );
+    assert!(initial_topology.stages[0].endpoint.bind_addr.is_empty());
+    assert!(initial_topology.stages[1].endpoint.bind_addr.is_empty());
+
+    let downstream_load = stage_load_request(LoadMode::LayerPackage);
+    let mut ready_by_stage = std::collections::HashMap::new();
+    ready_by_stage.insert(
+        downstream_load.stage_id.clone(),
+        test_stage_status_from_load(&downstream_load, skippy::StageRuntimeState::Ready),
+    );
+    let active_topology = split_stage_topology_instance(
+        "topology-a",
+        "run-a",
+        "model-a",
+        &package(24),
+        &stages,
+        &std::collections::BTreeMap::new(),
+        Some("127.0.0.1:5501"),
+        &ready_by_stage,
+    );
+
+    assert_eq!(
+        active_topology.stages[0].endpoint.bind_addr,
+        "127.0.0.1:5501"
+    );
+    assert_eq!(
+        active_topology.stages[1].endpoint.bind_addr,
+        "127.0.0.1:31000"
+    );
 }
 
 #[test]
@@ -875,18 +971,66 @@ fn startup_runtime_plan_auto_splits_when_model_exceeds_local_capacity() {
 }
 
 #[test]
-fn runtime_model_planning_bytes_uses_layer_package_source_model_bytes() {
+fn runtime_model_planning_bytes_rejects_legacy_layer_package() {
     let dir = tempfile::tempdir().unwrap();
     write_test_layer_package(dir.path(), 4_800_000_000);
 
-    let model_bytes = runtime_model_planning_bytes(dir.path()).unwrap();
+    let error = runtime_model_planning_bytes(dir.path())
+        .unwrap_err()
+        .to_string();
 
-    assert_eq!(model_bytes, 4_800_000_000);
+    assert!(error.contains("requires package schema 2"), "{error}");
+}
+
+#[tokio::test]
+async fn generation9_split_accepts_direct_gguf_without_package_v2() {
+    let root = tempfile::tempdir().unwrap();
+    let gguf = root.path().join("model.gguf");
+    write_fake_gguf_model(&gguf);
+
+    let package = resolve_split_runtime_package(&gguf, "test/model", false)
+        .await
+        .unwrap();
+
+    assert!(package.package_ref.starts_with("local-gguf://sha256/"));
+    assert_eq!(package.layer_count, 24);
+    assert_eq!(package.source_model_path, gguf.canonicalize().unwrap());
+    assert!(!root.path().join("model-package.json").exists());
+}
+
+#[tokio::test]
+async fn generation9_local_direct_gguf_identity_ignores_worker_path() {
+    let first_root = tempfile::tempdir().unwrap();
+    let second_root = tempfile::tempdir().unwrap();
+    let first = first_root.path().join("first.gguf");
+    let second = second_root.path().join("relocated.gguf");
+    write_fake_gguf_model(&first);
+    std::fs::copy(&first, &second).unwrap();
+
+    let first_package = resolve_split_runtime_package(&first, "test/model", true)
+        .await
+        .unwrap();
+    let second_package = resolve_split_runtime_package(&second, "test/model", true)
+        .await
+        .unwrap();
+
+    assert!(
+        first_package
+            .package_ref
+            .starts_with("local-gguf://sha256/")
+    );
+    assert_eq!(first_package.package_ref, second_package.package_ref);
     assert_eq!(
-        startup_runtime_plan(false, 3_000_000_000, model_bytes),
-        StartupRuntimePlan::Split {
-            reason: SplitRuntimeReason::LocalCapacity
-        }
+        first_package.manifest_sha256,
+        second_package.manifest_sha256
+    );
+    assert_eq!(
+        first_package.source_model_sha256,
+        second_package.source_model_sha256
+    );
+    assert_ne!(
+        first_package.source_model_path,
+        second_package.source_model_path
     );
 }
 
@@ -1119,6 +1263,26 @@ fn split_participant_signature_includes_package_signals_for_claim_identity() {
 }
 
 #[test]
+fn new_split_generation_uses_automatic_lossless_activation_codecs() {
+    let generation = SplitTopologyGeneration::new(
+        "topology-a".into(),
+        "run-a".into(),
+        1,
+        vec![participant(1), participant(2)],
+        vec![stage(1, 0, 0, 20), stage(2, 1, 20, 40)],
+    );
+
+    assert_eq!(
+        generation.activation_codec,
+        skippy_protocol::StageActivationCodec::RawF32V1
+    );
+    assert_eq!(
+        generation.activation_codec_policy,
+        skippy_protocol::StageActivationCodecPolicy::AutoLosslessV1
+    );
+}
+
+#[test]
 fn split_missing_active_stage_nodes_ignores_unused_lost_nodes() {
     let active = SplitTopologyGeneration::new(
         "topology-a".into(),
@@ -1244,42 +1408,21 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
     node.set_stage_control_sender(control_tx).await;
 
     let requests = Arc::new(StdMutex::new(Vec::new()));
-    let preparations = Arc::new(StdMutex::new(Vec::<skippy::StagePreparationStatus>::new()));
     let captured_requests = Arc::clone(&requests);
-    let captured_preparations = Arc::clone(&preparations);
     tokio::spawn(async move {
         while let Some(command) = control_rx.recv().await {
-            captured_requests
-                .lock()
-                .unwrap()
-                .push(command.request.clone());
-            let response = match &command.request {
-                skippy::StageControlRequest::Prepare(prepare) => {
-                    let status = test_preparation_status_from_load(&prepare.load);
-                    captured_preparations.lock().unwrap().push(status.clone());
-                    Ok(skippy::StageControlResponse::PrepareAccepted(
-                        skippy::StagePrepareAcceptedResponse {
-                            accepted: true,
-                            status,
-                            error: None,
-                        },
-                    ))
+            let (request, resp) = match command {
+                skippy::StageControlCommand::Execute { request, resp } => (request, resp),
+                skippy::StageControlCommand::ValidateLoad { resp, .. } => {
+                    let _ = resp.send(None);
+                    continue;
                 }
-                skippy::StageControlRequest::Inventory(inventory) => {
-                    let mut response = test_inventory_from_request(inventory);
-                    response.preparing_ranges = captured_preparations
-                        .lock()
-                        .unwrap()
-                        .iter()
-                        .filter(|status| {
-                            status.model_id == inventory.model_id
-                                && status.package_ref == inventory.package_ref
-                                && status.manifest_sha256 == inventory.manifest_sha256
-                        })
-                        .cloned()
-                        .collect();
-                    Ok(skippy::StageControlResponse::Inventory(response))
-                }
+            };
+            captured_requests.lock().unwrap().push(request.clone());
+            let response = match &request {
+                skippy::StageControlRequest::Inventory(inventory) => Ok(
+                    skippy::StageControlResponse::Inventory(test_inventory_from_request(inventory)),
+                ),
                 skippy::StageControlRequest::Claim(claim) => Ok(
                     skippy::StageControlResponse::ClaimAccepted(skippy::StageCoordinatorClaimAck {
                         accepted: true,
@@ -1306,29 +1449,36 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
                 )),
                 other => panic!("unexpected stage control request: {other:?}"),
             };
-            let _ = command.resp.send(response);
+            let _ = resp.send(response);
         }
     });
 
     let mut package = package(40);
-    package.package_ref = "hf://Mesh-LLM/test-split-package".to_string();
     let temp_dir = tempfile::tempdir().unwrap();
     let model_path = temp_dir.path().join("qwen.gguf");
     write_fake_gguf_model(&model_path);
+    package.source_model_path = model_path.clone();
     let compact_meta =
         crate::models::gguf::scan_gguf_compact_meta(&model_path).expect("synthetic GGUF metadata");
     let local_id = node.id();
+    let stages = vec![
+        local_stage(local_id, 0, 0, 12),
+        local_stage(local_id, 1, 12, 24),
+        local_stage(local_id, 2, 24, 40),
+    ];
+    let admissions = stages
+        .iter()
+        .map(|stage| skippy::test_stage_admission(stage.layer_start, stage.layer_end))
+        .collect();
     let generation = SplitTopologyGeneration::new(
         "candidate-topology".into(),
         "candidate-run".into(),
         2,
         vec![SplitParticipant::new(local_id, 24_000_000_000, None)],
-        vec![
-            local_stage(local_id, 0, 0, 12),
-            local_stage(local_id, 1, 12, 24),
-            local_stage(local_id, 2, 24, 40),
-        ],
-    );
+        stages,
+    )
+    .with_admissions(admissions)
+    .unwrap();
     let mesh_config = plugin::MeshConfig::default();
 
     let error = match Box::pin(load_split_runtime_generation(SplitGenerationLoadSpec {
@@ -1835,6 +1985,32 @@ fn split_planning_uses_family_kv_defaults_for_inkling() {
     let overridden =
         split_runtime_kv_bytes_per_token(&identity, &meta, Some("f16"), Some("f16")).unwrap();
     assert!(overridden > planned);
+}
+
+#[test]
+fn split_planning_allows_zero_kv_only_for_proven_pure_recurrent_metadata() {
+    let identity = package(24);
+    let pure_recurrent = crate::models::gguf::GgufCompactMeta {
+        architecture: "mamba".to_string(),
+        context_length: 2048,
+        layer_count: 24,
+        ssm_conv_kernel: 4,
+        ssm_inner_size: 1536,
+        ssm_state_size: 16,
+        ..Default::default()
+    };
+    assert_eq!(
+        split_runtime_kv_bytes_per_token(&identity, &pure_recurrent, None, None).unwrap(),
+        0
+    );
+
+    let dense_missing_heads = crate::models::gguf::GgufCompactMeta {
+        architecture: "future_dense".to_string(),
+        context_length: 2048,
+        layer_count: 24,
+        ..Default::default()
+    };
+    assert!(split_runtime_kv_bytes_per_token(&identity, &dense_missing_heads, None, None).is_err());
 }
 
 /// The family default must get the same metadata guard as the size-tiered

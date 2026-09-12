@@ -15,6 +15,10 @@ pub(super) async fn handle(
     if path.starts_with("/api/diagnostics/split-readiness") {
         return handle_split_readiness(stream, state, path).await;
     }
+    if path == "/api/diagnostics/network" {
+        let report = state.network_diagnostics_report().await;
+        return respond_json(stream, 200, &report).await;
+    }
     if path == "/api/diagnostics" {
         return handle_general_diagnostics(stream, state).await;
     }
