@@ -79,6 +79,11 @@ class MultimodalOracleTests(unittest.TestCase):
                                 "I can help you with transcribing audio to text.",
                                 None, transcript=True)
 
+    def test_asr_repeated_reference_content_is_not_normalized_away(self):
+        with self.assertRaisesRegex(RuntimeError, "differs from monolithic"):
+            oracle.compare_text("The mesh is ready", "The mesh is ready. The mesh is ready.",
+                                None, transcript=True)
+
     def test_ocr_sends_same_request_to_both_servers(self):
         reply = {"choices": [{"message": {"content": "MESH 42"}}]}
         with patch.object(oracle, "request_json", side_effect=[reply, reply]) as request:
@@ -102,8 +107,13 @@ class MultimodalOracleTests(unittest.TestCase):
                          ("http://reference/v1", "/chat/completions"))
         payload = reference.call_args.args[2]
         parts = payload["messages"][0]["content"]
-        self.assertEqual(parts[0]["text"], oracle.ASR_PROMPT)
+        self.assertEqual(parts[0]["text"], oracle.ASR_PROMPT + "\n")
         self.assertEqual(parts[1]["input_audio"]["data"], "d2F2")
+        self.assertEqual(payload["max_tokens"], oracle.ASR_MAX_TOKENS)
+        # The multipart API has no max_tokens field; set the candidate server's
+        # default explicitly instead of comparing its CLI default of 16 to 128.
+        runner = (ROOT / "scripts/skippy-workload-certify.sh").read_text()
+        self.assertIn(f"--default-max-tokens {oracle.ASR_MAX_TOKENS}", runner)
 
     def test_asr_multipart_contains_deterministic_fields_and_audio(self):
         with patch.object(oracle, "response_json", return_value={"text": "ok"}) as response:

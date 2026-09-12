@@ -21,6 +21,7 @@ import urllib.request
 OCR_PROMPT = "Read all visible text. Return only the transcription."
 OCR_FIXTURE_TEXT = "MESH 42"
 ASR_PROMPT = "Transcribe audio to text"
+ASR_MAX_TOKENS = 128
 BOUNDARY = "mesh-llm-ocr-asr-oracle"
 NON_TRANSCRIPT_PREFIXES = (
     "i can t fulfill",
@@ -164,20 +165,22 @@ def compare_asr(candidate_url: str, oracle_url: str, model: str, audio: bytes,
     # llama-server's /audio/transcriptions substitutes its own default user
     # instruction. Compare the actual Skippy audio route with monolithic chat
     # using the exact instruction and media ordering that Skippy constructs.
+    # message_content_to_generation_text joins text/media parts with a newline;
+    # llama-server concatenates them directly, so preserve that separator here.
     candidate = request_multipart(candidate_url, "/audio/transcriptions", model, audio)
     reference = request_json(oracle_url, "/chat/completions", {
         "model": model,
         "messages": [{
             "role": "user",
             "content": [
-                {"type": "text", "text": ASR_PROMPT},
+                {"type": "text", "text": ASR_PROMPT + "\n"},
                 {"type": "input_audio", "input_audio": {
                     "data": base64.b64encode(audio).decode("ascii"), "format": "wav"
                 }},
             ],
         }],
         "temperature": 0.0,
-        "max_tokens": 128,
+        "max_tokens": ASR_MAX_TOKENS,
     })
     return compare_text(
         candidate.get("text"),

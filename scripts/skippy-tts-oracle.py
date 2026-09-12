@@ -160,6 +160,29 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def candidate_test_command(env: dict[str, str]) -> list[str]:
+    manifest = env.get("SKIPPY_WORKLOAD_PRODUCER_MANIFEST")
+    if not manifest:
+        return ["cargo", "test", "--manifest-path", str(ROOT / "Cargo.toml"),
+                "-p", "skippy-server", "--lib", TEST_NAME,
+                "--", "--exact", "--nocapture", "--test-threads=1"]
+    binary_dir = env.get("SKIPPY_WORKLOAD_CANDIDATE_BIN_DIR")
+    native_dir = env.get("SKIPPY_WORKLOAD_NATIVE_BUILD_DIR")
+    if not binary_dir or not native_dir:
+        raise RuntimeError("prebuilt TTS oracle requires workload candidate and native build paths")
+    # The deterministic waveform probe must use the same source-bound test
+    # executable as the class smoke, without rebuilding the canary's Metal tree.
+    subprocess.run(
+        [sys.executable, str(ROOT / "scripts/check-skippy-workload-candidate.py"),
+         "--candidate-binary", str(Path(binary_dir) / "skippy-server"),
+         "--native-build-dir", native_dir, "--producer-manifest", manifest],
+        cwd=ROOT, env=env, check=True,
+    )
+    producer = json.loads(Path(manifest).read_text(encoding="utf-8"))
+    return [producer["files"]["test_binary"]["path"], TEST_NAME,
+            "--exact", "--nocapture", "--test-threads=1"]
+
+
 def run_oracle(args: argparse.Namespace) -> dict[str, object]:
     oracle_cli = Path(args.oracle_cli).resolve()
     model_path = Path(args.model_path).resolve()
@@ -198,9 +221,7 @@ def run_oracle(args: argparse.Namespace) -> dict[str, object]:
         "SKIPPY_TTS_ORACLE_MAX_FRAMES": str(MAX_FRAMES),
     })
     run_logged(
-        ["cargo", "test", "--manifest-path", str(ROOT / "Cargo.toml"),
-         "-p", "skippy-server", "--lib", TEST_NAME,
-         "--", "--exact", "--nocapture", "--test-threads=1"],
+        candidate_test_command(candidate_env),
         work_dir / "tts-candidate-test.log",
         env=candidate_env,
     )

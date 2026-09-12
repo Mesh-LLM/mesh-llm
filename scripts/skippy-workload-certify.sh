@@ -245,6 +245,7 @@ LLAMA_STAGE_BACKEND="$BACKEND" \
   "$CANDIDATE_BIN_DIR/skippy-server" serve-openai \
     --config "$CONFIG_PATH" \
     --bind-addr "127.0.0.1:$PORT" \
+    --default-max-tokens 128 \
     --telemetry-level off \
     >"$SERVER_LOG" 2>&1 &
 SERVER_PID="$!"

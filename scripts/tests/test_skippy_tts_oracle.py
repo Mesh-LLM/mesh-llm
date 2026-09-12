@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 from array import array
 import importlib.util
+import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -32,6 +34,39 @@ def write_wav(path: Path, samples: list[int], *, rate: int = 8000) -> None:
 
 
 class TtsOracleTests(unittest.TestCase):
+    def test_prebuilt_candidate_requires_verified_producer_and_never_runs_cargo(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manifest = root / "producer.json"
+            test_binary = str(root / "candidate tests")
+            manifest.write_text(json.dumps({"files": {"test_binary": {"path": test_binary}}}))
+            env = {
+                "SKIPPY_WORKLOAD_PRODUCER_MANIFEST": str(manifest),
+                "SKIPPY_WORKLOAD_CANDIDATE_BIN_DIR": str(root / "bin"),
+                "SKIPPY_WORKLOAD_NATIVE_BUILD_DIR": str(root / "native"),
+            }
+            with mock.patch.object(oracle.subprocess, "run") as verify:
+                command = oracle.candidate_test_command(env)
+            self.assertEqual([test_binary, oracle.TEST_NAME, "--exact", "--nocapture", "--test-threads=1"], command)
+            verify.assert_called_once_with(
+                [sys.executable, str(ROOT / "scripts/check-skippy-workload-candidate.py"),
+                 "--candidate-binary", str(root / "bin/skippy-server"),
+                 "--native-build-dir", str(root / "native"), "--producer-manifest", str(manifest)],
+                cwd=ROOT, env=env, check=True,
+            )
+            with mock.patch.object(oracle.subprocess, "run", side_effect=subprocess.CalledProcessError(1, ["verify"])):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    oracle.candidate_test_command(env)
+
+    def test_incomplete_producer_paths_do_not_fall_back_to_cargo(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "requires workload candidate and native build paths"):
+            oracle.candidate_test_command({"SKIPPY_WORKLOAD_PRODUCER_MANIFEST": "producer.json"})
+
+    def test_standalone_candidate_retains_explicit_cargo_test(self) -> None:
+        command = oracle.candidate_test_command({})
+        self.assertEqual(["cargo", "test"], command[:2])
+        self.assertIn(oracle.TEST_NAME, command)
+
     def test_oracle_invocation_matches_candidate_no_repack_context(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             test_root = Path(temp_dir)
@@ -55,7 +90,7 @@ class TtsOracleTests(unittest.TestCase):
                 layer_end=28,
                 work_dir=str(work_dir),
             )
-            with mock.patch.dict(os.environ, {"LLAMA_STAGE_BUILD_DIR": str(test_root / "abi")}):
+            with mock.patch.dict(os.environ, {"LLAMA_STAGE_BUILD_DIR": str(test_root / "abi")}, clear=True):
                 with mock.patch.object(oracle, "require_pinned_cpu_oracle", return_value="pinned-sha"):
                     with mock.patch.object(oracle, "require_candidate_cpu_static_build"):
                         with mock.patch.object(oracle, "run_logged", side_effect=fake_run_logged):
