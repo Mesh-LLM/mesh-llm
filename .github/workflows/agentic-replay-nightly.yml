@@ -202,10 +202,10 @@ jobs:
           # run; auth, permission, and network failures must fail loudly so
           # the gate never fails open on infrastructure errors.
           rm -rf "$HISTORY_LOCAL"
-          if ! hf download "$DATASET_REPO" \
+          if ! HF_HUB_OFFLINE=0 hf download "$DATASET_REPO" \
             --repo-type dataset --local-dir "$HISTORY_LOCAL" --exclude "*.md" \
             > "$RUNNER_TEMP/hf-download.log" 2>&1; then
-            if python3 - "$DATASET_REPO" <<'PY' > "$RUNNER_TEMP/hf-probe.log" 2>&1; then
+            if HF_HUB_OFFLINE=0 python3 - "$DATASET_REPO" <<'PY' > "$RUNNER_TEMP/hf-probe.log" 2>&1; then
           import os, sys
           import huggingface_hub
           repo = sys.argv[1]
@@ -278,10 +278,10 @@ jobs:
           set -euo pipefail
           OUTPUT_DIR="$RUNNER_TEMP/agentic-replay-artifacts"
           RUN_DATE=$(date -u +%F)
-          hf upload "$DATASET_REPO" \
+          HF_HUB_OFFLINE=0 hf upload "$DATASET_REPO" \
             "$OUTPUT_DIR/summary/history.jsonl" "data/runs/$RUN_DATE/${{ github.run_id }}.jsonl" \
             --repo-type dataset --commit-message "run $RUN_DATE ${{ github.run_id }} @ ${{ github.sha }}"
-          hf upload "$DATASET_REPO" \
+          HF_HUB_OFFLINE=0 hf upload "$DATASET_REPO" \
             "$OUTPUT_DIR/card.md" "card.md" --repo-type dataset \
             --commit-message "card refresh $RUN_DATE"
 

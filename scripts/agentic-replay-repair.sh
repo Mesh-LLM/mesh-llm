@@ -46,7 +46,7 @@ done
 # see GitHub credentials. The same wrapper is used for every command that can
 # execute repair-modified repository code.
 run_untrusted opencode run --mode agent \
-  "The nightly agentic replay benchmark on micstudio regressed. Evidence: $OUTPUT_DIR/summary/history.jsonl and per-model artifacts in $OUTPUT_DIR. Analyze the regression, identify the offending change (git log origin/main is available), and attempt a minimal fix. Do not touch ci/agentic-replay-nightly baselines or thresholds." || true
+  "The nightly agentic replay benchmark on micstudio regressed at immutable base $BASE_SHA. Evidence: $OUTPUT_DIR/summary/history.jsonl and per-model artifacts in $OUTPUT_DIR. Analyze the regression against that exact base (git log $BASE_SHA is available) and attempt a minimal fix. Do not touch ci/agentic-replay-nightly baselines or thresholds." || true
 
 git add -A
 git reset --soft "$BASE_SHA"
@@ -98,7 +98,7 @@ PY
     )
     run_untrusted python3 evals/agentic-replay.py run \
       --ref fixed=HEAD \
-      --ref base=origin/main \
+      --ref "base=$BASE_SHA" \
       --model "$model_uri" \
       --backend metal \
       --replay-mode "$REPLAY_MODE" \

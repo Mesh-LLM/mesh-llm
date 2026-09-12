@@ -95,6 +95,16 @@ class AgenticReplayRepairContractTests(unittest.TestCase):
         self.assertNotIn("--trajectories-per-framework 8", self.repair)
         self.assertNotIn("--warmup-turns 4", self.repair)
 
+    def test_repair_compares_against_the_immutable_workflow_base(self) -> None:
+        self.assertIn("immutable base $BASE_SHA", self.repair)
+        self.assertIn('--ref "base=$BASE_SHA"', self.repair)
+        self.assertNotIn("origin/main", self.repair)
+
+    def test_history_and_publication_override_the_offline_runner_default(self) -> None:
+        self.assertIn('HF_HUB_OFFLINE=0 hf download "$DATASET_REPO"', self.workflow)
+        self.assertIn('HF_HUB_OFFLINE=0 python3 - "$DATASET_REPO"', self.workflow)
+        self.assertEqual(self.workflow.count('HF_HUB_OFFLINE=0 hf upload "$DATASET_REPO"'), 2)
+
     def test_workflow_validates_and_passes_mode_and_max_output(self) -> None:
         self.assertIn("python3 scripts/agentic-replay-params.py", self.workflow)
         self.assertIn('--github-env "$GITHUB_ENV"', self.workflow)
