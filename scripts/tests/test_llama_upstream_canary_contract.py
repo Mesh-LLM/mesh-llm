@@ -313,7 +313,17 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn('CANARY_VERIFICATION_TIMEOUT_SECONDS: "14400"', verifier)
         self.assertIn("actions/download-artifact@", verifier)
         self.assertIn("Upload independently certified candidate", verifier)
+        self.assertIn("Configure verifier LLVM", verifier)
         self.assertNotIn("CANARY_REPAIR_TOKEN", verifier)
+
+        verifier_llvm = _step_block(workflow, "Configure verifier LLVM")
+        self.assertIn("brew --prefix llvm@22", verifier_llvm)
+        self.assertIn("brew --prefix llvm", verifier_llvm)
+        self.assertIn("ClangConfig.cmake", verifier_llvm)
+        self.assertIn(
+            'echo "SKIPPY_REWRITER_LLVM_PREFIX=$llvm_prefix" >> "$GITHUB_ENV"',
+            verifier_llvm,
+        )
 
         publisher = workflow[workflow.index("  publish-certified-canary:") : workflow.index("  alert-consecutive-failures:")]
         self.assertIn("needs: verify-changed-canary", publisher)

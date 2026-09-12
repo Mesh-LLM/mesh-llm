@@ -36,11 +36,14 @@ commit and uploads a thin bundle. A separate self-hosted verification job and
 checkout materialize that commit in a fresh detached worktree, prepare through
 the checked-in `pinned` selector, verify the prepared-upstream stamp, and execute
 the complete build and certification sequence with new native-build and
-family-evidence directories. Only that passing commit is exported as the
-certified bundle. A later job on a fresh GitHub-hosted runner validates it, uses an
-environment-sourced askpass helper so the repair PAT never appears in the push
-URL or process arguments, pushes without force, and opens a ready PR as its
-final external mutation. If either the agent or trusted verification fails, only the distinct
+family-evidence directories. The verifier resolves and exports its own Homebrew
+LLVM prefix before the generated-family rewriter check because job environment
+files are not shared with the repair job. Only that passing commit is exported
+as the certified bundle. A later job on a fresh GitHub-hosted runner validates
+it, uses an environment-sourced askpass helper so the repair PAT never appears
+in the push URL or process arguments, pushes without force, and opens a ready
+PR as its final external mutation. If either the agent or trusted verification
+fails, only the distinct
 `llama-canary-changed-pin-*` evidence artifact is retained.
 
 Scheduled coverage details: an unchanged-pin llama canary uses the bounded

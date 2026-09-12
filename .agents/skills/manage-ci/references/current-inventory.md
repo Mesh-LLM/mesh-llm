@@ -102,6 +102,9 @@ The repair job snapshots the agent result as an unreachable commit and uploads
 a thin candidate bundle. A separate self-hosted verification job and checkout
 download that bundle, materialize its commit in a fresh detached worktree, and
 run one ordered `prepare -> build -> certify` pass with a 240-minute budget. The
+verification job independently resolves the installed Homebrew LLVM prefix and
+exports `SKIPPY_REWRITER_LLVM_PREFIX` before invoking the generated-family
+rewriter check because `GITHUB_ENV` state does not cross job boundaries. The
 wrapper owns the exact upstream selector, validates the prepared-upstream stamp,
 runs the patched llama.cpp/native-test and Rust build gates, and completes the
 full supported-family certification using new native-build and family-evidence
