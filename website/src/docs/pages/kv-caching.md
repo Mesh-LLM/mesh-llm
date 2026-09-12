@@ -30,10 +30,11 @@ With no cache settings:
 - Mesh enables the in-memory prefix cache with family-aware limits. Prefixes of
   at least 256 tokens are eligible, and Mesh selects the stored state format
   from the model architecture.
-- The balanced KV memory policy uses Q8_0 key and value caches for models under
-  50 GiB and Q4_0 for models at or above 50 GiB. If metadata proves that the
-  selected quantized format cannot load, the automatic policy falls back to
-  F16. An explicit incompatible override fails instead of changing silently.
+- With no explicit K/V dtype, the resolver selects Q8_0 for both caches when
+  the model is smaller than 50 GiB and Q4_0 for both caches at 50 GiB or above.
+  It checks GGUF architecture and head dimensions before applying that default
+  and falls back to F16 when metadata proves the quantized layout is invalid.
+  An explicit incompatible dtype fails instead of changing silently.
 - KV offload and unified-cache behavior remain automatic.
 - The durable disk cache is off, so a process restart starts with an empty
   prompt cache and Mesh writes no prompt state to disk.
@@ -44,9 +45,10 @@ These defaults apply across the supported CPU, Metal, CUDA, and ROCm runtimes.
 
 | Goal | Setting | Default | Where to set it |
 |---|---|---|---|
-| Choose KV memory/quality policy | `model_fit.kv_cache_policy` | `balanced` | `[defaults.model_fit]` or `[models.model_fit]` |
 | Pin key/value cache formats | `model_fit.cache_type_k`, `model_fit.cache_type_v` | `auto` | config file |
 | Control KV device offload | `model_fit.kv_offload` | `auto` | config file |
+| Control unified KV allocation | `model_fit.kv_unified` | `auto` | config file |
+| Control the attention kernel required by quantized V | `model_fit.flash_attention` | derived from V dtype | config file |
 | Cap retained idle native sessions | `model_fit.cache_idle_slots` | lane count | config file |
 | Disable all prompt-prefix reuse | `model_fit.prompt_cache` | `auto` | config file |
 | Tune or disable in-memory prefix reuse | `model_fit.prefix_cache.*` | family defaults | config file |
@@ -57,22 +59,60 @@ Model-level cache controls do not currently have CLI equivalents. Use
 `~/.mesh-llm/config.toml`, or pass a different file with `mesh-llm serve
 --config PATH`. The disk tier has CLI overrides for one-off runs.
 
-## Tune KV memory use
+## Choose the KV representation
 
-Set a policy for every model under `[defaults.model_fit]`:
+Configure the representation directly when you need deterministic behavior:
 
 ```toml
 [defaults.model_fit]
-kv_cache_policy = "balanced"
+cache_type_k = "q8_0"
+cache_type_v = "q8_0"
+kv_offload = "auto"
+kv_unified = "auto"
+flash_attention = "enabled"
 ```
 
-The policies expand to these runtime choices:
+The relevant controls are:
 
-| Policy | Key/value format | KV offload | Use when |
-|---|---|---|---|
-| `balanced` or `auto` | Q8_0 below 50 GiB, Q4_0 at or above 50 GiB, with compatibility fallback | `auto` | General use; this is the default |
-| `quality` | F16/F16 | `auto` | You prefer maximum KV precision over memory savings |
-| `saver` | Q8_0/Q8_0 | enabled | You want a fixed quantized cache and forced KV offload |
+| Setting | Loadable embedded-runtime values | Runtime effect |
+|---|---|---|
+| `cache_type_k` | `auto`, `f16`, `q8_0`, `q4_0` | Storage and compute dtype for attention keys |
+| `cache_type_v` | `auto`, `f16`, `q8_0`, `q4_0` | Storage and compute dtype for attention values |
+| `kv_offload` | `auto`, `true`, `false` | Whether KV tensors may reside on the selected accelerator rather than host memory |
+| `kv_unified` | `auto`, `true`, `false` | Whether runtime slots use the backend unified KV allocation |
+| `flash_attention` | `auto`, `enabled`, `disabled` | Selects the fused attention path; a quantized V cache requires the enabled path |
+
+Q8_0 and Q4_0 encode values in 32-element blocks. A model whose KV head
+dimension cannot satisfy that block layout cannot use the corresponding
+quantized cache. Automatic selection can detect that from GGUF metadata and
+fall back to F16. Explicit dtype selection bypasses that fallback so invalid
+combinations fail during model load. A backend Flash Attention capability
+failure is only known when the runtime loads, so metadata validation alone
+cannot prove that every quantized combination will start.
+
+K and V may use different dtypes. Resolution order is per-model explicit
+dtype, per-model preset expansion, global explicit dtype, global preset
+expansion, family default, then the built-in size rule.
+
+The config validator currently recognizes additional GGML dtype labels that
+the pinned embedded runtime does not load. The table above lists the values
+accepted by `skippy_runtime::parse_cache_type`; use those values for a serving
+configuration. `auto` is consumed by the resolver and does not reach that
+parser.
+
+### Compatibility presets
+
+`kv_cache_policy` is an older Mesh macro layered over the technical controls.
+It is still accepted, but it does not add another cache implementation:
+
+| Preset | Exact expansion before explicit overrides |
+|---|---|
+| `quality` | `cache_type_k = "f16"`, `cache_type_v = "f16"`, `kv_offload = "auto"` |
+| `saver` | `cache_type_k = "q8_0"`, `cache_type_v = "q8_0"`, `kv_offload = true` |
+| `auto` or `balanced` | Apply the built-in size-derived K/V dtype and leave `kv_offload = "auto"` |
+
+`auto` and `balanced` are aliases in the current resolver. New deployments
+that need a reproducible layout should set the technical fields directly.
 
 You can override one model without changing the others:
 
@@ -81,18 +121,9 @@ You can override one model without changing the others:
 model = "org/model-GGUF"
 
 [models.model_fit]
-kv_cache_policy = "quality"
-```
-
-For direct control, set `cache_type_k` and `cache_type_v` to a supported dtype
-of `f16`, `q8_0`, or `q4_0`. Explicit types take precedence over
-`kv_cache_policy`:
-
-```toml
-[defaults.model_fit]
-cache_type_k = "q8_0"
+cache_type_k = "f16"
 cache_type_v = "f16"
-kv_offload = "auto"
+kv_offload = false
 ```
 
 ## Tune in-memory prefix reuse
