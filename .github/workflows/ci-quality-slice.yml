@@ -64,9 +64,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      # Checked out from the default branch: the job validates PR-authored
+      # text (title/body/commit messages, all delivered via env/API), so it
+      # only needs the script itself. Branches created before this script
+      # landed would otherwise fail with a missing file.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha || github.sha }}
+          ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
       - name: Check commit convention
         env:

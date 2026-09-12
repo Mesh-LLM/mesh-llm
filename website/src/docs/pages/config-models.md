@@ -45,7 +45,7 @@ gpu_layers = "auto"
 
 ## Plugins
 
-The `[[plugin]]` array configures plugin instances as local processes or remote services.
+The `[[plugin]]` array configures local plugin processes, which can attach to external services.
 
 ```toml
 [[plugin]]
@@ -62,12 +62,15 @@ optional             = false
 lazy_start           = false
 ```
 
-For network-based plugins, use a `url` instead of `command`/`args`:
+For the installed endpoint adapter, `url` names the upstream HTTP service. Mesh
+still starts a local plugin process; `url` does not replace the adapter's
+control connection. Install a host-compatible adapter first, or set `command`
+to a compatible source-built adapter:
 
 ```toml
 [[plugin]]
 name = "openai-endpoint"
-url  = "http://gpu-box:8000/v1"
+url  = "http://127.0.0.1:8000/v1"
 ```
 
 An external-endpoint-only node needs no `[[models]]` entry:
@@ -78,13 +81,14 @@ mode = "on_demand"
 
 [[plugin]]
 name = "openai-endpoint"
-url = "http://gpu-box:8000/v1"
+url = "http://127.0.0.1:8000/v1"
 ```
 
 Start it with bare `mesh-llm serve`. Provider models can appear in
 `/v1/models` while no local model process exists. See
 [Runtime Lifecycle](/docs/pages/runtime-lifecycle/) and
-[Plugins](/docs/pages/plugins/#external-endpoint-only-workflow).
+[provider quick start](/docs/pages/external-model-endpoints/) for Ollama, vLLM
+and LM Studio, release compatibility, and HTTP/authentication limitations.
 
 ### Plugin startup config
 
