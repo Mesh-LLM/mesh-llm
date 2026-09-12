@@ -17,8 +17,9 @@ use skippy_protocol::binary::{
     activation_state_flags_from_frame_flags, recv_reply, write_stage_message,
 };
 use skippy_runtime::{
-    ActivationFrame, GGML_TYPE_F16, MtpSource, RuntimeConfig, RuntimeLoadMode,
+    ActivationFrame, GGML_TYPE_F16, ModelInfo, MtpSource, RuntimeConfig, RuntimeLoadMode,
     package::{MaterializedPackage, PackageStageRequest, materialize_layer_package_details},
+    plan_gguf_stage_resident_tensor_names,
 };
 
 use crate::{
@@ -426,6 +427,24 @@ pub(in crate::runner) fn tokenizer_model_for_state_handoff(
             false,
         ),
     };
+    let resident_tensor_names = if filter_tensors_on_load {
+        let mut names = ModelInfo::open(&path)
+            .context("open state handoff tokenizer tensor inventory")?
+            .tensors()
+            .context("read state handoff tokenizer tensor inventory")?
+            .into_iter()
+            .map(|tensor| tensor.name)
+            .collect::<Vec<_>>();
+        names.sort();
+        names.dedup();
+        anyhow::ensure!(
+            !names.is_empty(),
+            "state handoff tokenizer tensor inventory is empty"
+        );
+        names
+    } else {
+        Vec::new()
+    };
 
     Ok((
         path,
@@ -462,7 +481,7 @@ pub(in crate::runner) fn tokenizer_model_for_state_handoff(
             include_output: false,
             mtp_source: MtpSource::Disabled,
             filter_tensors_on_load,
-            resident_tensor_names: Vec::new(),
+            resident_tensor_names,
             checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
             checkpoint_imatrix: None,
             checkpoint_imatrix_sha256: None,
@@ -489,6 +508,85 @@ pub(in crate::runner) fn runtime_load_mode(stage_load_mode: StageLoadMode) -> Ru
         StageLoadMode::ArtifactSlice => RuntimeLoadMode::ArtifactSlice,
         StageLoadMode::LayerPackage => RuntimeLoadMode::LayerPackage,
     }
+}
+
+pub(in crate::runner) fn stage_resident_tensor_names(
+    stage_load_mode: StageLoadMode,
+    baseline_model: &Path,
+    stage_paths: &[&Path],
+    ranges: &[(u32, u32)],
+    ctx_size: u32,
+    lane_count: u32,
+) -> Result<Vec<Vec<String>>> {
+    anyhow::ensure!(
+        stage_paths.len() == ranges.len(),
+        "stage paths and layer ranges differ in length"
+    );
+    match stage_load_mode {
+        StageLoadMode::RuntimeSlice => {
+            plan_gguf_stage_resident_tensor_names(baseline_model, ranges, ctx_size, lane_count)
+                .context("derive native resident tensor closures for correctness stages")
+        }
+        StageLoadMode::ArtifactSlice | StageLoadMode::LayerPackage => stage_paths
+            .iter()
+            .enumerate()
+            .map(|(index, path)| {
+                let mut names = ModelInfo::open(path)
+                    .with_context(|| format!("open stage {index} tensor inventory"))?
+                    .tensors()
+                    .with_context(|| format!("read stage {index} tensor inventory"))?
+                    .into_iter()
+                    .map(|tensor| tensor.name)
+                    .collect::<Vec<_>>();
+                names.sort();
+                names.dedup();
+                anyhow::ensure!(!names.is_empty(), "stage {index} tensor inventory is empty");
+                Ok(names)
+            })
+            .collect(),
+    }
+}
+
+pub(in crate::runner) fn stage_resident_tensor_names_for_range(
+    stage_load_mode: StageLoadMode,
+    baseline_model: &Path,
+    stage_path: &Path,
+    range: (u32, u32),
+    layer_end: u32,
+    ctx_size: u32,
+    lane_count: u32,
+) -> Result<Vec<String>> {
+    if stage_load_mode != StageLoadMode::RuntimeSlice {
+        return stage_resident_tensor_names(
+            stage_load_mode,
+            baseline_model,
+            &[stage_path],
+            &[range],
+            ctx_size,
+            lane_count,
+        )
+        .map(|mut stages| stages.remove(0));
+    }
+
+    let mut ranges = Vec::with_capacity(3);
+    if range.0 > 0 {
+        ranges.push((0, range.0));
+    }
+    let target_index = ranges.len();
+    ranges.push(range);
+    if range.1 < layer_end {
+        ranges.push((range.1, layer_end));
+    }
+    let stage_paths = vec![baseline_model; ranges.len()];
+    stage_resident_tensor_names(
+        stage_load_mode,
+        baseline_model,
+        &stage_paths,
+        &ranges,
+        ctx_size,
+        lane_count,
+    )
+    .map(|stages| stages[target_index].clone())
 }
 
 pub(in crate::runner) fn runtime_flash_attn(

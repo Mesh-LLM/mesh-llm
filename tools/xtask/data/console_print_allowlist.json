@@ -661,6 +661,16 @@
       "macro_name": "println!"
     }
   ],
+  "crates/mesh-llm-commands/src/doctor.rs": [
+    {
+      "line": 10,
+      "macro_name": "println!"
+    },
+    {
+      "line": 14,
+      "macro_name": "println!"
+    }
+  ],
   "crates/mesh-llm-commands/src/gpus.rs": [
     {
       "line": 29,
@@ -1155,85 +1165,7 @@
   ],
   "crates/mesh-llm-commands/src/runtime_native.rs": [
     {
-      "line": 68,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 148,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 151,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 192,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 193,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 195,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 198,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 226,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 262,
-      "macro_name": "eprint!"
-    },
-    {
-      "line": 266,
-      "macro_name": "eprint!"
-    },
-    {
-      "line": 274,
-      "macro_name": "eprintln!"
-    }
-  ],
-  "crates/mesh-llm-commands/src/runtime_native/formatters.rs": [
-    {
-      "line": 90,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 92,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 113,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 114,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 121,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 125,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 127,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 138,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 140,
+      "line": 69,
       "macro_name": "eprintln!"
     },
     {
@@ -1241,23 +1173,93 @@
       "macro_name": "eprintln!"
     },
     {
-      "line": 151,
+      "line": 152,
       "macro_name": "eprintln!"
     },
     {
-      "line": 156,
+      "line": 197,
       "macro_name": "eprintln!"
     },
     {
-      "line": 235,
-      "macro_name": "println!"
+      "line": 198,
+      "macro_name": "eprintln!"
     },
     {
-      "line": 248,
-      "macro_name": "println!"
+      "line": 200,
+      "macro_name": "eprintln!"
     },
     {
-      "line": 249,
+      "line": 203,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 231,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 267,
+      "macro_name": "eprint!"
+    },
+    {
+      "line": 271,
+      "macro_name": "eprint!"
+    },
+    {
+      "line": 279,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-commands/src/runtime_native/formatters.rs": [
+    {
+      "line": 94,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 96,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 117,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 118,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 125,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 129,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 131,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 142,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 144,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 153,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 155,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 160,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 239,
       "macro_name": "println!"
     },
     {
@@ -1265,27 +1267,27 @@
       "macro_name": "println!"
     },
     {
-      "line": 260,
+      "line": 253,
       "macro_name": "println!"
     },
     {
-      "line": 265,
+      "line": 256,
       "macro_name": "println!"
     },
     {
-      "line": 270,
+      "line": 264,
       "macro_name": "println!"
     },
     {
-      "line": 273,
+      "line": 269,
       "macro_name": "println!"
     },
     {
-      "line": 280,
+      "line": 274,
       "macro_name": "println!"
     },
     {
-      "line": 281,
+      "line": 277,
       "macro_name": "println!"
     },
     {
@@ -1297,7 +1299,11 @@
       "macro_name": "println!"
     },
     {
-      "line": 287,
+      "line": 288,
+      "macro_name": "println!"
+    },
+    {
+      "line": 289,
       "macro_name": "println!"
     },
     {
@@ -1305,19 +1311,15 @@
       "macro_name": "println!"
     },
     {
-      "line": 298,
-      "macro_name": "eprintln!"
+      "line": 295,
+      "macro_name": "println!"
     },
     {
       "line": 302,
       "macro_name": "eprintln!"
     },
     {
-      "line": 303,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 304,
+      "line": 306,
       "macro_name": "eprintln!"
     },
     {
@@ -1329,11 +1331,15 @@
       "macro_name": "eprintln!"
     },
     {
-      "line": 309,
+      "line": 311,
       "macro_name": "eprintln!"
     },
     {
-      "line": 310,
+      "line": 312,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 313,
       "macro_name": "eprintln!"
     },
     {
@@ -1341,20 +1347,8 @@
       "macro_name": "eprintln!"
     },
     {
-      "line": 319,
-      "macro_name": "println!"
-    },
-    {
-      "line": 320,
-      "macro_name": "println!"
-    },
-    {
-      "line": 321,
-      "macro_name": "println!"
-    },
-    {
-      "line": 322,
-      "macro_name": "println!"
+      "line": 318,
+      "macro_name": "eprintln!"
     },
     {
       "line": 323,
@@ -1365,23 +1359,35 @@
       "macro_name": "println!"
     },
     {
-      "line": 329,
+      "line": 325,
       "macro_name": "println!"
     },
     {
-      "line": 332,
+      "line": 326,
       "macro_name": "println!"
     },
     {
-      "line": 335,
+      "line": 327,
       "macro_name": "println!"
     },
     {
-      "line": 337,
+      "line": 328,
       "macro_name": "println!"
     },
     {
-      "line": 338,
+      "line": 333,
+      "macro_name": "println!"
+    },
+    {
+      "line": 336,
+      "macro_name": "println!"
+    },
+    {
+      "line": 339,
+      "macro_name": "println!"
+    },
+    {
+      "line": 344,
       "macro_name": "println!"
     },
     {
@@ -1389,15 +1395,11 @@
       "macro_name": "println!"
     },
     {
-      "line": 349,
+      "line": 347,
       "macro_name": "println!"
     },
     {
-      "line": 351,
-      "macro_name": "println!"
-    },
-    {
-      "line": 354,
+      "line": 355,
       "macro_name": "println!"
     },
     {
@@ -1405,11 +1407,11 @@
       "macro_name": "println!"
     },
     {
-      "line": 361,
+      "line": 360,
       "macro_name": "println!"
     },
     {
-      "line": 362,
+      "line": 363,
       "macro_name": "println!"
     },
     {
@@ -1417,23 +1419,35 @@
       "macro_name": "println!"
     },
     {
-      "line": 368,
-      "macro_name": "println!"
-    },
-    {
       "line": 370,
       "macro_name": "println!"
     },
     {
-      "line": 374,
+      "line": 371,
       "macro_name": "println!"
     },
     {
-      "line": 375,
+      "line": 376,
       "macro_name": "println!"
     },
     {
       "line": 377,
+      "macro_name": "println!"
+    },
+    {
+      "line": 379,
+      "macro_name": "println!"
+    },
+    {
+      "line": 383,
+      "macro_name": "println!"
+    },
+    {
+      "line": 384,
+      "macro_name": "println!"
+    },
+    {
+      "line": 386,
       "macro_name": "println!"
     }
   ],
@@ -1847,7 +1861,7 @@
       "macro_name": "eprintln!"
     },
     {
-      "line": 261,
+      "line": 268,
       "macro_name": "eprintln!"
     }
   ],
@@ -1869,11 +1883,19 @@
   ],
   "crates/mesh-llm-host-runtime/src/network/nostr/keys.rs": [
     {
-      "line": 91,
+      "line": 86,
       "macro_name": "eprintln!"
     },
     {
-      "line": 93,
+      "line": 88,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 94,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 96,
       "macro_name": "eprintln!"
     },
     {
@@ -1881,15 +1903,7 @@
       "macro_name": "eprintln!"
     },
     {
-      "line": 101,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 104,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 105,
+      "line": 100,
       "macro_name": "eprintln!"
     }
   ],
@@ -2211,23 +2225,23 @@
   ],
   "crates/mesh-llm/src/commands/doctor.rs": [
     {
-      "line": 77,
+      "line": 82,
       "macro_name": "println!"
     },
     {
-      "line": 80,
+      "line": 85,
       "macro_name": "println!"
     },
     {
-      "line": 83,
+      "line": 88,
       "macro_name": "println!"
     },
     {
-      "line": 84,
+      "line": 89,
       "macro_name": "println!"
     },
     {
-      "line": 86,
+      "line": 91,
       "macro_name": "println!"
     }
   ],
@@ -2747,52 +2761,32 @@
   ],
   "crates/mesh-llm/src/commands/runtime.rs": [
     {
-      "line": 252,
+      "line": 262,
       "macro_name": "println!"
     },
     {
-      "line": 256,
+      "line": 266,
       "macro_name": "println!"
-    },
-    {
-      "line": 380,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 383,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 384,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 385,
-      "macro_name": "eprintln!"
     },
     {
       "line": 390,
       "macro_name": "eprintln!"
     },
     {
-      "line": 467,
-      "macro_name": "println!"
+      "line": 393,
+      "macro_name": "eprintln!"
     },
     {
-      "line": 468,
-      "macro_name": "println!"
+      "line": 394,
+      "macro_name": "eprintln!"
     },
     {
-      "line": 471,
-      "macro_name": "println!"
+      "line": 395,
+      "macro_name": "eprintln!"
     },
     {
-      "line": 472,
-      "macro_name": "println!"
-    },
-    {
-      "line": 473,
-      "macro_name": "println!"
+      "line": 400,
+      "macro_name": "eprintln!"
     },
     {
       "line": 477,
@@ -2803,31 +2797,51 @@
       "macro_name": "println!"
     },
     {
-      "line": 480,
+      "line": 481,
       "macro_name": "println!"
     },
     {
-      "line": 496,
+      "line": 482,
       "macro_name": "println!"
     },
     {
-      "line": 512,
+      "line": 483,
       "macro_name": "println!"
     },
     {
-      "line": 517,
+      "line": 487,
       "macro_name": "println!"
     },
     {
-      "line": 687,
+      "line": 488,
       "macro_name": "println!"
     },
     {
-      "line": 688,
+      "line": 490,
       "macro_name": "println!"
     },
     {
-      "line": 690,
+      "line": 506,
+      "macro_name": "println!"
+    },
+    {
+      "line": 522,
+      "macro_name": "println!"
+    },
+    {
+      "line": 527,
+      "macro_name": "println!"
+    },
+    {
+      "line": 697,
+      "macro_name": "println!"
+    },
+    {
+      "line": 698,
+      "macro_name": "println!"
+    },
+    {
+      "line": 700,
       "macro_name": "println!"
     }
   ],

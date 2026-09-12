@@ -71,7 +71,7 @@ pub struct RouteEntry {
 pub struct Node {
     pub(crate) endpoint: Endpoint,
     pub(crate) endpoint_secret_key: SecretKey,
-    pub(crate) public_addr: Option<std::net::SocketAddr>,
+    pub(crate) public_addr: Option<stun::PublicAddr>,
     pub(crate) quic_bind: QuicBindSelection,
     pub(crate) relay_policy: RelayPolicy,
     pub(crate) owner_keypair: Option<crate::crypto::OwnerKeypair>,
@@ -730,10 +730,10 @@ impl Node {
         }
 
         // Use iroh's net report because it probes through the endpoint's actual QUIC sockets.
-        // Its direct address includes the observed NAT-mapped port; substituting the configured
+        // Its observed address includes the NAT-mapped port; substituting the configured
         // bind port would advertise an address that was never verified externally.
         let public_addr = if relay.policy.uses_raw_stun() {
-            stun_public_addr(&endpoint).await
+            stun_public_addr(&endpoint, relay.policy.uses_relay()).await
         } else {
             tracing::info!("Raw STUN: disabled by LAN-only discovery mode");
             None

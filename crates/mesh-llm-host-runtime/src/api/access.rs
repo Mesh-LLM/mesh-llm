@@ -20,6 +20,7 @@ pub(crate) fn requires_trusted_local_access(method: &str, path: &str) -> bool {
     matches!(
         (method, path),
         ("GET", "/api/runtime/endpoints")
+            | ("GET", "/api/diagnostics/network")
             | ("GET", "/api/runtime/config-schema")
             | ("GET", "/api/runtime/config-control-state")
             | ("GET", "/api/runtime/control-bootstrap")
@@ -138,6 +139,7 @@ mod tests {
             ("POST", "/api/objects/complete"),
             ("POST", "/mesh/hook"),
             ("GET", "/api/runtime/endpoints"),
+            ("GET", "/api/diagnostics/network"),
             ("POST", "/api/runtime/models"),
             ("DELETE", "/api/runtime/models/qwen"),
             ("DELETE", "/api/runtime/instances/instance-1"),
