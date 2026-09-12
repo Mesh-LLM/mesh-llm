@@ -19,9 +19,7 @@ pub(super) fn apply_skippy_behavior(setting: &mut ConfigSettingSchema, prefix: &
             setting,
             "OpenAI frontend override wiring is intentionally rejected on the built-in schema surface.",
         ),
-        "lifecycle_startup_timeout_ms"
-        | "lifecycle_readiness_interval_ms"
-        | "lifecycle_health_interval_ms" => {
+        "lifecycle_startup_timeout_ms" | "lifecycle_health_interval_ms" => {
             set_numeric(setting, Some(1.0), None, Some(1.0), Some("ms"));
         }
         "prefill_chunk_size" => {

@@ -56,6 +56,43 @@ permissions:
   packages: read
 
 jobs:
+  commit_convention:
+    name: Commit convention
+    # No `needs`, so this starts at once and fails long before any runner
+    # selection, toolchain install, or compile has finished.
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # Checked out from the default branch: the job validates PR-authored
+      # text (title/body/commit messages, all delivered via env/API), so it
+      # only needs the script itself. Branches created before this script
+      # landed would otherwise fail with a missing file.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Check commit convention
+        env:
+          # Pull-request-authored text reaches the script through the
+          # environment and is never interpolated into the shell.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # The repository squash-merges, so the pull request title becomes the
+          # commit subject on main and has to satisfy Conventional Commits.
+          python3 scripts/check-conventional-commit.py --message "$PR_TITLE"
+          # The squash body aggregates the branch commit messages, so their
+          # attribution trailers land on main even when their subjects do not.
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/commits" --paginate \
+            --jq '.[].commit.message' > "$RUNNER_TEMP/pr-commit-messages.txt"
+          printf '%s\n' "$PR_BODY" >> "$RUNNER_TEMP/pr-commit-messages.txt"
+          python3 scripts/check-conventional-commit.py \
+            --trailers-only "$RUNNER_TEMP/pr-commit-messages.txt"
+
   runner_policy:
     name: Select quality runner
     runs-on: ubuntu-24.04

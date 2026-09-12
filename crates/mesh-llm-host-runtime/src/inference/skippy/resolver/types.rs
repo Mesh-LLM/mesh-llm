@@ -116,7 +116,6 @@ pub(crate) struct ResolvedSkippyExecutionConfig {
     pub(crate) prefill_chunk_schedule: Option<String>,
     pub(crate) prefill_controls_explicit: bool,
     pub(crate) lifecycle_startup_timeout_ms: Option<u64>,
-    pub(crate) lifecycle_readiness_interval_ms: Option<u64>,
     pub(crate) lifecycle_health_interval_ms: Option<u64>,
 }
 
