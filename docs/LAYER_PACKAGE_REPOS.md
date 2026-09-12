@@ -320,7 +320,7 @@ The HF Jobs script performs the publishing work:
 The printed run command follows this shape:
 
 ```bash
-mesh-llm serve --model <target-repo> --split
+mesh-llm serve --model <target-repo>
 ```
 
 For package refs in hand-written docs and configs, prefer the explicit package

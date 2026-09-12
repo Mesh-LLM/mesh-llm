@@ -120,9 +120,11 @@ mod tests {
     use super::EMBEDDED_SCRIPT;
 
     #[test]
-    fn embedded_script_prints_mesh_llm_repo_shorthand() {
-        assert!(EMBEDDED_SCRIPT.contains(r#"mesh-llm serve --model "{target_repo}" --split"#));
-        assert!(EMBEDDED_SCRIPT.contains("mesh-llm serve --model ${TARGET_REPO} --split"));
+    fn embedded_script_prints_mesh_llm_repo_shorthand_without_forced_split() {
+        assert!(EMBEDDED_SCRIPT.contains(r#"mesh-llm serve --model "{target_repo}""#));
+        assert!(EMBEDDED_SCRIPT.contains("mesh-llm serve --model ${TARGET_REPO}"));
+        assert!(!EMBEDDED_SCRIPT.contains(r#"mesh-llm serve --model "{target_repo}" --split"#));
+        assert!(!EMBEDDED_SCRIPT.contains("mesh-llm serve --model ${TARGET_REPO} --split"));
         assert!(!EMBEDDED_SCRIPT.contains(r#"mesh-llm serve --model "hf://${TARGET_REPO}""#));
         assert!(!EMBEDDED_SCRIPT.contains("mesh-llm serve --model hf://${TARGET_REPO}"));
     }

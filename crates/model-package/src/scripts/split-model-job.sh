@@ -827,7 +827,7 @@ For upstream architecture details, chat template guidance, sampling recommendati
 
 ```bash
 # Run this on each machine that should contribute memory/compute.
-mesh-llm serve --model "{target_repo}" --split
+mesh-llm serve --model "{target_repo}"
 ```
 
 ```bash
@@ -913,4 +913,4 @@ echo "  Layers:     ${LAYER_COUNT}"
 echo "  Total size: ${TOTAL_SIZE_LABEL}"
 echo ""
 echo "  Use with mesh-llm:"
-echo "    mesh-llm serve --model ${TARGET_REPO} --split"
+echo "    mesh-llm serve --model ${TARGET_REPO}"
