@@ -271,6 +271,11 @@ class PublishCratesScriptTests(unittest.TestCase):
                 "model-ref@0.68.0 already published; skipping",
                 result.stdout,
             )
+            self.assertIn(
+                "--user-agent mesh-llm-publish-crates/0.68.0 "
+                "(https://github.com/Mesh-LLM/mesh-llm)",
+                fixture.read_log("curl-args.log"),
+            )
 
     def test_resume_falls_back_to_cargo_when_registry_status_is_unknown(self) -> None:
         with PublishCratesFixture() as fixture:
@@ -436,6 +441,7 @@ case "$url" in
 {cases}
 esac
 echo "$url" >> "{self.tmp_path}/curl.log"
+echo "$*" >> "{self.tmp_path}/curl-args.log"
 printf '%s' "$status"
 """,
         )

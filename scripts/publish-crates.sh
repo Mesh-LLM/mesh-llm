@@ -146,6 +146,7 @@ registry_version_status() {
         curl \
             --silent \
             --show-error \
+            --user-agent "mesh-llm-publish-crates/${workspace_version} (https://github.com/Mesh-LLM/mesh-llm)" \
             --output /dev/null \
             --write-out '%{http_code}' \
             "https://crates.io/api/v1/crates/${crate}/${workspace_version}" \
