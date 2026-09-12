@@ -9,13 +9,42 @@
 //! not load: this is a self-reported value, so it surfaces an honest node's
 //! stale or swapped file, not a host that lies about what it loaded.
 //!
+//! **Known limitation, not closed by this module (TOCTOU):** the hash here is
+//! read via an independent `File::open` of `path`, entirely separate from
+//! whatever open the model runtime itself performs to actually serve the
+//! file. Verified against `skippy_runtime::native::StageModel::open`: it
+//! marshals only a C-string path across the FFI boundary to
+//! `skippy_ffi::skippy_model_open` and gets back an opaque model handle --
+//! the native (llama.cpp) loader owns that read and never returns the loaded
+//! bytes, a file descriptor, or a streaming-hash hook to the Rust side. There
+//! is no API to derive this digest from the same load. A file replaced
+//! between the two opens can make this digest describe different bytes than
+//! the ones served. [`file_fingerprint`] exists so a caller can narrow (not
+//! eliminate) that window by re-checking the file's (size, mtime) after the
+//! model has finished loading and discarding the digest on any mismatch (see
+//! `runtime/local.rs::start_runtime_local_model`); a replacement that
+//! preserves both size AND mtime exactly is the same documented blind spot
+//! the cache key below already has, and remains undetected.
+//!
 //! Cached by (path, size, mtime): hashing an 8GB GGUF costs real wall-clock
 //! time, and must happen once per file, never once per request. Concurrent
 //! callers racing for the same (path, size, mtime) single-flight onto one
 //! computation instead of each independently streaming the file -- the
 //! cache's mutex is only ever held to read or install an entry, never across
-//! the file read itself.
+//! the file read itself. The in-memory map only ever holds the most recent
+//! entry per path (older states for a repeatedly-rewritten file are evicted
+//! as the new one is installed), so it cannot grow without bound.
+//!
+//! The result is also persisted to a small JSON record under
+//! `mesh_llm_cache_dir()/weights-digest/`, keyed by a hash of the path and
+//! carrying the same (size, mtime) recipe, so a later process restart that
+//! finds the file unchanged loads the digest from that record instead of
+//! re-hashing the file -- the in-memory cache above is process-local and does
+//! not survive a restart on its own. Persistence is best-effort: a failure to
+//! read or write the record falls back to re-hashing, never to a fabricated
+//! digest.
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::File;
@@ -73,7 +102,10 @@ impl SingleFlightCache {
         }
 
         let role = {
-            let mut entries = self.entries.lock().expect("weights digest cache poisoned");
+            let mut entries = self
+                .entries
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             match entries.get(&key) {
                 Some(CacheEntry::Ready(digest)) => Role::Cached(digest.clone()),
                 Some(CacheEntry::Pending(pending)) => Role::Wait(pending.clone()),
@@ -104,12 +136,12 @@ impl SingleFlightCache {
                 let mut result = pending
                     .result
                     .lock()
-                    .expect("weights digest cache poisoned");
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 while result.is_none() {
                     result = pending
                         .ready
                         .wait(result)
-                        .expect("weights digest cache poisoned");
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
                 }
                 result
                     .clone()
@@ -121,22 +153,27 @@ impl SingleFlightCache {
                 // other caller checking a different (or even the same) key.
                 let digest = compute();
                 {
-                    let mut entries = self.entries.lock().expect("weights digest cache poisoned");
-                    match &digest {
-                        Some(computed) => {
-                            entries.insert(key, CacheEntry::Ready(computed.clone()));
-                        }
-                        // Unreadable: never cache a fabricated absence, so a
-                        // later retry (e.g. once the file exists) can succeed.
-                        None => {
-                            entries.remove(&key);
-                        }
+                    let mut entries = self
+                        .entries
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    // A repeatedly-rewritten file mints a fresh (path, size,
+                    // mtime) key every time; only the newest state is ever
+                    // looked up again, so drop every other entry for this
+                    // path here instead of letting the map grow without
+                    // bound for the lifetime of the process.
+                    entries.retain(|existing_key, _| existing_key.0 != key.0);
+                    // Unreadable (`None`): never cache a fabricated absence,
+                    // so a later retry (e.g. once the file exists) can
+                    // succeed.
+                    if let Some(computed) = &digest {
+                        entries.insert(key, CacheEntry::Ready(computed.clone()));
                     }
                 }
                 *pending
                     .result
                     .lock()
-                    .expect("weights digest cache poisoned") = Some(digest.clone());
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(digest.clone());
                 pending.ready.notify_all();
                 digest
             }
@@ -149,13 +186,12 @@ fn cache() -> &'static SingleFlightCache {
     CACHE.get_or_init(SingleFlightCache::new)
 }
 
-/// SHA-256 of `path`'s bytes, lowercase hex. `None` when the file cannot be
-/// stat'd or read -- an honest absent fact, never a fabricated value (never a
-/// `0`-repeat placeholder). A second call for the same (path, size, mtime)
-/// returns the cached digest without re-reading the file. Concurrent calls
-/// for the same (path, size, mtime) single-flight onto one read instead of
-/// each streaming the file independently.
-pub(crate) fn weights_digest_for_file(path: &Path) -> Option<String> {
+/// (size in bytes, mtime as nanos since the epoch) for `path` -- the same
+/// recipe the digest cache keys on, exposed so a caller can independently
+/// confirm the file's state hasn't changed between reading this digest and
+/// finishing whatever it loaded the file for (see the module TOCTOU note).
+/// `None` when the file cannot be stat'd.
+pub(crate) fn file_fingerprint(path: &Path) -> Option<(u64, u128)> {
     let metadata = std::fs::metadata(path).ok()?;
     let size = metadata.len();
     let mtime_nanos = metadata
@@ -164,10 +200,30 @@ pub(crate) fn weights_digest_for_file(path: &Path) -> Option<String> {
         .duration_since(UNIX_EPOCH)
         .ok()?
         .as_nanos();
+    Some((size, mtime_nanos))
+}
+
+/// SHA-256 of `path`'s bytes, lowercase hex. `None` when the file cannot be
+/// stat'd or read -- an honest absent fact, never a fabricated value (never a
+/// `0`-repeat placeholder). A second call for the same (path, size, mtime)
+/// returns the cached digest without re-reading the file, whether that call
+/// lands in this process (in-memory single-flight cache) or a later restart
+/// finds the same file state (persisted record). Concurrent calls for the
+/// same (path, size, mtime) single-flight onto one read instead of each
+/// streaming the file independently.
+pub(crate) fn weights_digest_for_file(path: &Path) -> Option<String> {
+    let (size, mtime_nanos) = file_fingerprint(path)?;
     let key: CacheKey = (path.to_path_buf(), size, mtime_nanos);
 
     let path_for_compute = path.to_path_buf();
     cache().get_or_compute(key, path, move || {
+        if let Some(digest) = load_persisted_record(&path_for_compute, size, mtime_nanos) {
+            tracing::debug!(
+                path = %path_for_compute.display(),
+                "weights_digest loaded from persisted record -- not re-hashed on this restart"
+            );
+            return Some(digest);
+        }
         let started = Instant::now();
         let digest = hash_file_bytes(&path_for_compute)?;
         tracing::info!(
@@ -176,6 +232,7 @@ pub(crate) fn weights_digest_for_file(path: &Path) -> Option<String> {
             elapsed_ms = started.elapsed().as_millis() as u64,
             "computed weights_digest for served GGUF (one-time cost for this file)"
         );
+        store_persisted_record(&path_for_compute, size, mtime_nanos, &digest);
         Some(digest)
     })
 }
@@ -192,6 +249,75 @@ fn hash_file_bytes(path: &Path) -> Option<String> {
         hasher.update(&buffer[..read]);
     }
     Some(hex::encode(hasher.finalize()))
+}
+
+/// One persisted (path, size, mtime) -> digest fact, one JSON file per
+/// hashed path under [`weights_digest_cache_dir`].
+#[derive(Debug, Serialize, Deserialize)]
+struct PersistedDigestRecord {
+    path: PathBuf,
+    size: u64,
+    mtime_nanos: u128,
+    digest: String,
+}
+
+fn weights_digest_cache_dir() -> PathBuf {
+    crate::models::mesh_llm_cache_dir().join("weights-digest")
+}
+
+/// Stable filename for `path`'s record -- a hash of the path itself, since
+/// the path can contain characters that are not safe as a bare filename.
+fn persisted_record_path(path: &Path) -> PathBuf {
+    let mut hasher = Sha256::new();
+    hasher.update(path.to_string_lossy().as_bytes());
+    weights_digest_cache_dir().join(format!("{}.json", hex::encode(hasher.finalize())))
+}
+
+/// Best-effort: any read/parse/mismatch failure falls back to re-hashing,
+/// never to a fabricated digest.
+fn load_persisted_record(path: &Path, size: u64, mtime_nanos: u128) -> Option<String> {
+    let contents = std::fs::read(persisted_record_path(path)).ok()?;
+    let record: PersistedDigestRecord = serde_json::from_slice(&contents).ok()?;
+    if record.path == path && record.size == size && record.mtime_nanos == mtime_nanos {
+        Some(record.digest)
+    } else {
+        None
+    }
+}
+
+/// Best-effort: a failure to persist is logged and otherwise ignored -- the
+/// digest just computed is still returned to the caller and is correct for
+/// this process, it simply will not be free on the next restart.
+fn store_persisted_record(path: &Path, size: u64, mtime_nanos: u128, digest: &str) {
+    let dir = weights_digest_cache_dir();
+    if let Err(error) = std::fs::create_dir_all(&dir) {
+        tracing::warn!(
+            path = %dir.display(),
+            %error,
+            "cannot create weights_digest cache dir; digest will not survive a restart"
+        );
+        return;
+    }
+    let record = PersistedDigestRecord {
+        path: path.to_path_buf(),
+        size,
+        mtime_nanos,
+        digest: digest.to_string(),
+    };
+    let record_path = persisted_record_path(path);
+    let tmp_path = record_path.with_extension("json.tmp");
+    let write_result = serde_json::to_vec(&record)
+        .map_err(std::io::Error::other)
+        .and_then(|bytes| std::fs::write(&tmp_path, bytes))
+        .and_then(|()| std::fs::rename(&tmp_path, &record_path));
+    if let Err(error) = write_result {
+        tracing::warn!(
+            path = %record_path.display(),
+            %error,
+            "cannot persist weights_digest record; digest will not survive a restart"
+        );
+        let _ = std::fs::remove_file(&tmp_path);
+    }
 }
 
 #[cfg(test)]
@@ -279,6 +405,96 @@ mod tests {
         ));
         let _ = std::fs::remove_file(&path);
         assert!(weights_digest_for_file(&path).is_none());
+    }
+
+    /// Item 1 (michaelneale): a persisted record surviving a process restart
+    /// must be used instead of re-hashing. Simulated here by writing the
+    /// record directly (bypassing `weights_digest_for_file`'s own in-memory
+    /// cache, which a real restart would not have either) with a value that
+    /// could not be a real SHA-256 of the file's contents, then confirming a
+    /// fresh call for the SAME (path, size, mtime) returns that planted
+    /// value rather than a freshly computed one.
+    #[test]
+    fn unchanged_file_loads_digest_from_a_persisted_record_without_rehashing() {
+        let path = temp_file("persisted-hit", b"persisted-bytes-under-test");
+        let (size, mtime_nanos) = file_fingerprint(&path).expect("fingerprint");
+        store_persisted_record(&path, size, mtime_nanos, "not-a-real-sha256-digest");
+
+        let digest = weights_digest_for_file(&path).expect("digest loaded");
+        assert_eq!(
+            digest, "not-a-real-sha256-digest",
+            "a matching persisted record must be used instead of re-hashing the file"
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+        let _ = std::fs::remove_file(persisted_record_path(&path));
+    }
+
+    /// A persisted record for a file's OLD (size, mtime) must be ignored
+    /// once the file has detectably changed -- the persisted cache must not
+    /// resurrect a stale digest for bytes that are no longer on disk.
+    #[test]
+    fn persisted_record_for_a_stale_file_state_is_ignored() {
+        let path = temp_file("persisted-stale", b"original-bytes-0000000");
+        let (size, mtime_nanos) = file_fingerprint(&path).expect("fingerprint");
+        store_persisted_record(
+            &path,
+            size,
+            mtime_nanos,
+            "stale-digest-from-before-the-rewrite",
+        );
+
+        // Different length AND a forced later mtime, so the record above no
+        // longer matches the file's current (size, mtime).
+        std::fs::write(&path, b"rewritten-with-a-different-length").expect("rewrite file");
+        let future = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("reopen for mtime bump");
+        file.set_modified(future).expect("bump mtime");
+
+        let digest = weights_digest_for_file(&path).expect("digest computed");
+        assert_ne!(digest, "stale-digest-from-before-the-rewrite");
+        let mut hasher = Sha256::new();
+        hasher.update(b"rewritten-with-a-different-length");
+        assert_eq!(digest, hex::encode(hasher.finalize()));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+        let _ = std::fs::remove_file(persisted_record_path(&path));
+    }
+
+    /// Documents the known blind spot stated in the module doc comment: a
+    /// file rewritten with content that changes but happens to preserve
+    /// BOTH the exact size and the exact mtime aliases the cache key, so
+    /// the stale digest is returned unchanged. This is not a bug to fix
+    /// (the cache key is (path, size, mtime) by design, and mtime
+    /// resolution/rewrite races are out of this module's control) -- it is
+    /// a characterization test that pins the documented limitation so a
+    /// future change to the cache key does not silently alter it un-noticed.
+    #[test]
+    fn same_size_and_mtime_rewrite_is_the_documented_blind_spot() {
+        let path = temp_file("blind-spot", b"aaaaaaaaaaaaaaaaaaaa");
+        let before = weights_digest_for_file(&path).expect("first digest");
+
+        let metadata = std::fs::metadata(&path).expect("stat before rewrite");
+        let original_mtime = metadata.modified().expect("mtime before rewrite");
+
+        // Same length, different bytes, mtime forced back to the exact
+        // original value -- the cache key is identical to the first call.
+        std::fs::write(&path, b"bbbbbbbbbbbbbbbbbbbb").expect("rewrite file, same length");
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("reopen for mtime pin");
+        file.set_modified(original_mtime)
+            .expect("pin mtime back to the original value");
+
+        let after = weights_digest_for_file(&path).expect("second digest");
+        assert_eq!(
+            before, after,
+            "a same-size/same-mtime rewrite is the documented blind spot: the stale digest is returned"
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+        let _ = std::fs::remove_file(persisted_record_path(&path));
     }
 
     /// Concurrent callers racing for the SAME key must single-flight onto

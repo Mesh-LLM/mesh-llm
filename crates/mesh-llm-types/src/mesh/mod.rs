@@ -43,6 +43,7 @@ pub struct ServedModelIdentity {
     /// Distinct from `identity_hash`: a name/reference-string hash and a
     /// content hash are different facts about the model, and this field
     /// never replaces the other.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub weights_digest: Option<String>,
 }
 

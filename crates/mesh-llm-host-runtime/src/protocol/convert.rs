@@ -279,9 +279,10 @@ fn descriptor_identity_to_proto(
         // `weights_digest` deliberately does NOT cross the gossip wire: it is
         // a hash of file bytes only THIS node can read, so a peer receiving
         // it over gossip could never verify it against anything -- it would
-        // be a claim, not a locally-checkable fact. It is intended to ride the
-        // `openai.exchange.v1` serving-provenance event instead, straight to
-        // whoever actually served the exchange.
+        // be a claim, not a locally-checkable fact. A future exchange-event
+        // consumer could carry it to whoever actually served the exchange
+        // instead, but no such consumer exists in this crate today -- see
+        // `runtime/local.rs::set_local_model_weights_digest`'s doc comment.
     }
 }
 
