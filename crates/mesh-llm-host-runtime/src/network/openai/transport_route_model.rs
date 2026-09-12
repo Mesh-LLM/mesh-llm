@@ -95,11 +95,11 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
     } = args;
     let route_started = Instant::now();
     let mut tcp_stream = tcp_stream;
-    let candidates = super::super::workload_routing::eligible_targets(
+    let candidates = super::super::workload_routing::ingress_candidates(
         &node,
         model,
         &request.client_path,
-        &targets.candidates(model),
+        targets,
     )
     .await;
     let ranked = rank_targets_by_context(&node, model, required_tokens, &candidates).await;
@@ -114,7 +114,8 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
     }
     route_observer.route_selected(Some(model));
 
-    let prefix_hash = crate::network::affinity::cache_prefix_hash(request.body_json.as_ref());
+    let affinity_body = super::super::workload_routing::affinity_body(request);
+    let prefix_hash = crate::network::affinity::cache_prefix_hash(affinity_body);
     let cache_target =
         cache_target_for_request(&node, affinity, model, prefix_hash, &ordered_candidates).await;
     let Some(ReservedModelRoute {
@@ -125,7 +126,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         targets,
         &ranked,
         model,
-        request.body_json.as_ref(),
+        affinity_body,
         affinity,
         cache_target,
     )

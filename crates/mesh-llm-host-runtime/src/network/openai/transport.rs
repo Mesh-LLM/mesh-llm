@@ -597,7 +597,7 @@ fn prepare_mesh_targets(
     if !request.is_tokenize_request() && effective_model.is_some() && !target_hosts.is_empty() {
         request.ensure_body_json();
     }
-    let body_json = request.body_json.as_ref();
+    let body_json = workload_routing::affinity_body(request);
     effective_model
         .map(|name| prepare_remote_targets_for_request(name, target_hosts, body_json, affinity))
         .unwrap_or(PreparedTargets {
@@ -1161,7 +1161,7 @@ fn auto_session_key_for_request(
     request: &mut BufferedHttpRequest,
     is_auto_request: bool,
 ) -> Option<u64> {
-    if !is_auto_request {
+    if !is_auto_request || !workload_routing::supports_generation_affinity(&request.client_path) {
         return None;
     }
     request.ensure_body_json();

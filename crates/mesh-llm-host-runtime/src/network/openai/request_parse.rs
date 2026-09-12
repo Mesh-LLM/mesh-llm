@@ -11,7 +11,9 @@ use super::request_normalize::{
 use super::routing_rank::descriptor_for_model;
 
 mod audio_multipart;
-use audio_multipart::{multipart_model_field, multipart_model_value_range};
+use audio_multipart::multipart_model_field;
+mod body_rewrite;
+pub use body_rewrite::{inject_mesh_hooks_flag, rewrite_model_field};
 
 pub(crate) const MAX_HEADER_BYTES: usize = 64 * 1024;
 /// Private lifecycle ownership assertion used only on trusted mesh forwarding.
@@ -988,131 +990,6 @@ fn request_requires_json_transform(path: &str, body: &[u8], plugin_manager_prese
 pub(super) fn parse_json_body_from_http_request(raw: &[u8]) -> Option<serde_json::Value> {
     let header_end = raw.windows(4).position(|window| window == b"\r\n\r\n")? + 4;
     serde_json::from_slice(&raw[header_end..]).ok()
-}
-
-/// Inject `"mesh_hooks": true/false` into the JSON body of an HTTP request.
-///
-/// Inserts the field right after the opening `{` in the body, then rebuilds
-/// the Content-Length header to match.
-pub fn inject_mesh_hooks_flag(raw: &mut Vec<u8>, enabled: bool) {
-    let Some(header_end) = raw.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4) else {
-        return;
-    };
-    let body = &raw[header_end..];
-    let Some(brace) = body.iter().position(|&b| b == b'{') else {
-        return;
-    };
-
-    // Build new body with mesh_hooks injected after opening brace
-    let fragment = if enabled {
-        &b"\"mesh_hooks\":true,"[..]
-    } else {
-        &b"\"mesh_hooks\":false,"[..]
-    };
-    let mut new_body = Vec::with_capacity(body.len() + fragment.len());
-    new_body.extend_from_slice(&body[..brace + 1]);
-    new_body.extend_from_slice(fragment);
-    new_body.extend_from_slice(&body[brace + 1..]);
-
-    // Rebuild headers with correct Content-Length
-    let headers = std::str::from_utf8(&raw[..header_end - 4]).unwrap_or("");
-    let mut rebuilt = String::new();
-    for line in headers.split("\r\n") {
-        if line.to_ascii_lowercase().starts_with("content-length:") {
-            rebuilt.push_str(&format!("Content-Length: {}", new_body.len()));
-        } else {
-            rebuilt.push_str(line);
-        }
-        rebuilt.push_str("\r\n");
-    }
-    rebuilt.push_str("\r\n");
-
-    let mut result = rebuilt.into_bytes();
-    result.extend_from_slice(&new_body);
-    *raw = result;
-}
-
-fn content_type_from_request(raw: &[u8]) -> Option<String> {
-    let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
-    let mut parsed = httparse::Request::new(&mut headers);
-    let httparse::Status::Complete(_) = parsed.parse(raw).ok()? else {
-        return None;
-    };
-    parsed
-        .headers
-        .iter()
-        .find(|header| header.name.eq_ignore_ascii_case("content-type"))
-        .and_then(|header| std::str::from_utf8(header.value).ok())
-        .map(str::to_string)
-}
-
-fn rebuild_request_body(
-    request: &mut BufferedHttpRequest,
-    header_end: usize,
-    new_body: Vec<u8>,
-    body_json: Option<serde_json::Value>,
-    model: &str,
-) {
-    let headers = std::str::from_utf8(&request.raw[..header_end - 4]).unwrap_or("");
-    let mut rebuilt = String::new();
-    for line in headers.split("\r\n") {
-        if line.to_ascii_lowercase().starts_with("content-length:") {
-            rebuilt.push_str(&format!("Content-Length: {}", new_body.len()));
-        } else {
-            rebuilt.push_str(line);
-        }
-        rebuilt.push_str("\r\n");
-    }
-    rebuilt.push_str("\r\n");
-
-    let mut raw = rebuilt.into_bytes();
-    raw.extend_from_slice(&new_body);
-    request.raw = raw;
-    request.body_len_bytes = new_body.len();
-    request.body_bytes = Some(new_body);
-    request.body_json = body_json;
-    request.body_json_attempted = true;
-    request.model_name = Some(model.to_string());
-}
-
-/// Rewrite the JSON or multipart `model` field and rebuild Content-Length.
-pub fn rewrite_model_field(request: &mut BufferedHttpRequest, model: &str) {
-    let Some(header_end) = request
-        .raw
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .map(|i| i + 4)
-    else {
-        return;
-    };
-
-    if let Ok(mut body) = serde_json::from_slice::<serde_json::Value>(&request.raw[header_end..]) {
-        let Some(object) = body.as_object_mut() else {
-            return;
-        };
-        object.insert(
-            "model".to_string(),
-            serde_json::Value::String(model.to_string()),
-        );
-        let Ok(new_body) = serde_json::to_vec(&body) else {
-            return;
-        };
-        rebuild_request_body(request, header_end, new_body, Some(body), model);
-        return;
-    }
-
-    let Some(content_type) = content_type_from_request(&request.raw) else {
-        return;
-    };
-    let original = &request.raw[header_end..];
-    let Ok(Some(range)) = multipart_model_value_range(&content_type, original) else {
-        return;
-    };
-    let mut new_body = Vec::with_capacity(original.len() - range.len() + model.len());
-    new_body.extend_from_slice(&original[..range.start]);
-    new_body.extend_from_slice(model.as_bytes());
-    new_body.extend_from_slice(&original[range.end..]);
-    rebuild_request_body(request, header_end, new_body, None, model);
 }
 
 pub fn is_models_list_request(method: &str, path: &str) -> bool {

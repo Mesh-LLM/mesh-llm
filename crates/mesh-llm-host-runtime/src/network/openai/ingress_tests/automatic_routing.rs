@@ -15,6 +15,35 @@ use super::super::ingress::{
     AutoRouteResolution, prepare_cache_routing_body, resolve_auto_routed_model,
 };
 
+#[tokio::test]
+async fn auto_readiness_uses_remote_embedding_despite_local_causal_copy() {
+    let model = "shared-workload-model";
+    let (node, targets) = node_serving(&[model]).await;
+    node.set_served_model_descriptors(vec![workload_descriptor(
+        model,
+        mesh::ModelWorkloadClass::CausalGeneration,
+    )])
+    .await;
+    let peer_id = iroh::SecretKey::generate().public();
+    let mut peer = peer_serving(peer_id, model, false);
+    peer.served_model_descriptors = vec![workload_descriptor(
+        model,
+        mesh::ModelWorkloadClass::Embedding,
+    )];
+    node.insert_test_peer(peer).await;
+    assert!(
+        super::super::ingress::auto_route_model_has_ready_ingress_target(
+            &node,
+            &targets,
+            model,
+            None,
+            "/v1/embeddings",
+            &affinity::AffinityRouter::new()
+        )
+        .await
+    );
+}
+
 /// A served model with the given capabilities, ready for the media filter.
 fn descriptor(model: &str, vision: bool, audio: bool) -> mesh::ServedModelDescriptor {
     use crate::models::CapabilityLevel;

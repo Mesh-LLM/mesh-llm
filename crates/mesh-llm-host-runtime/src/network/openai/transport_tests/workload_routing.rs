@@ -7,6 +7,54 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const MODEL: &str = "shared-workload-model";
 
+#[tokio::test]
+async fn explicit_ingress_falls_back_to_capable_remote_when_local_workload_is_incompatible() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+        .await
+        .expect("node");
+    let remote = peer(&node, Some(ModelWorkloadClass::Embedding), false).await;
+    for class in [None, Some(ModelWorkloadClass::CausalGeneration)] {
+        node.set_served_model_descriptors(vec![descriptor(class, false)])
+            .await;
+        let mut targets = election::ModelTargets::default();
+        targets
+            .targets
+            .insert(MODEL.into(), vec![election::InferenceTarget::Local(9337)]);
+        let selected =
+            workload_routing::ingress_candidates(&node, MODEL, "/v1/embeddings", &targets).await;
+        assert_eq!(selected, vec![election::InferenceTarget::Remote(remote)]);
+    }
+}
+
+#[tokio::test]
+async fn stateless_user_metadata_does_not_disable_replica_reservation_spreading() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("node");
+    for (path, class) in [
+        ("/v1/embeddings", ModelWorkloadClass::Embedding),
+        ("/v1/rerank", ModelWorkloadClass::Rerank),
+        ("/v1/audio/speech", ModelWorkloadClass::SpeechSynthesis),
+    ] {
+        let first = peer(&node, Some(class), false).await;
+        let second = peer(&node, Some(class), false).await;
+        let affinity = AffinityRouter::new();
+        let mut request = request(path, MODEL);
+        let plan = build_mesh_request_plan(&node, &mut request, false, &affinity)
+            .await
+            .unwrap_or_else(|_| panic!("compatible replicas"));
+        assert!(!plan.affinity_applied);
+        assert_eq!(plan.equivalent_hosts, 2);
+        assert!(plan.target_hosts.contains(&first) && plan.target_hosts.contains(&second));
+        let (first_hosts, _first_reservation) = reserve_mesh_request_target(&plan, &affinity);
+        let (second_hosts, _second_reservation) = reserve_mesh_request_target(&plan, &affinity);
+        assert_ne!(
+            first_hosts[0], second_hosts[0],
+            "concurrent stateless requests must spread"
+        );
+    }
+}
+
 fn descriptor(class: Option<ModelWorkloadClass>, audio: bool) -> mesh::ServedModelDescriptor {
     mesh::ServedModelDescriptor {
         identity: mesh::ServedModelIdentity {
@@ -241,7 +289,9 @@ async fn passive_auto_model_cache_cannot_cross_workload_boundaries() {
         .await;
     let affinity = AffinityRouter::new();
     let mut request = request("/v1/embeddings", "auto");
-    let key = auto_session_key_for_request(&mut request, true).expect("explicit cache key");
+    let key = crate::network::affinity::auto_model_session_key(request.body_json.as_ref())
+        .expect("legacy cache key");
+    assert_eq!(auto_session_key_for_request(&mut request, true), None);
     affinity.remember_auto_model(key, "legacy-chat");
     // No healthy compatible alternative: the availability fallback must still
     // stay inside the requested workload, never restore the cached chat model.
@@ -255,7 +305,10 @@ async fn passive_auto_model_cache_cannot_cross_workload_boundaries() {
         .unwrap_or_else(|_| panic!("embedding fallback remains available"));
     assert_eq!(plan.effective_model.as_deref(), Some(MODEL));
     assert_eq!(plan.target_hosts, vec![capable]);
-    assert_eq!(affinity.lookup_auto_model(key).as_deref(), Some(MODEL));
+    assert_eq!(
+        affinity.lookup_auto_model(key).as_deref(),
+        Some("legacy-chat")
+    );
 }
 
 #[tokio::test]
@@ -279,11 +332,10 @@ async fn audio_upload_capabilities_must_belong_to_one_descriptor_on_the_target()
 }
 
 #[tokio::test]
-async fn host_dispatch_rejects_local_legacy_target_despite_capable_remote_metadata() {
+async fn host_dispatch_rejects_local_legacy_target_without_capable_replicas() {
     let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
         .await
         .expect("node");
-    peer(&node, Some(ModelWorkloadClass::Embedding), false).await;
     node.set_served_model_descriptors(vec![descriptor(None, false)])
         .await;
     let backend = tokio::net::TcpListener::bind("127.0.0.1:0")

@@ -492,44 +492,6 @@ impl PeerInfo {
     }
 }
 
-pub(crate) fn public_model_id_from_identity(identity: &ServedModelIdentity) -> Option<String> {
-    match identity.source_kind {
-        ModelSourceKind::HuggingFace => identity
-            .repository
-            .as_deref()
-            .map(|repo| {
-                let selector = identity
-                    .artifact
-                    .as_deref()
-                    .and_then(model_ref::quant_selector_from_gguf_file)
-                    .or_else(|| identity.artifact.clone());
-                model_ref::format_model_ref(repo, identity.revision.as_deref(), selector.as_deref())
-            })
-            .or_else(|| {
-                identity
-                    .canonical_ref
-                    .as_deref()
-                    .and_then(|model_ref| model_ref::ModelRef::parse(model_ref).ok())
-                    .map(|model_ref| model_ref.display_id())
-            }),
-        ModelSourceKind::Catalog => identity
-            .canonical_ref
-            .as_deref()
-            .and_then(|model_ref| model_ref::ModelRef::parse(model_ref).ok())
-            .map(|model_ref| model_ref.display_id()),
-        ModelSourceKind::LocalGguf | ModelSourceKind::DirectUrl | ModelSourceKind::Unknown => None,
-    }
-}
-
-pub(crate) fn canonical_demand_model_ref(model: &str) -> String {
-    if let Ok(model_ref) = model_ref::ModelRef::parse(model) {
-        return model_ref.display_id();
-    }
-    crate::models::find_loaded_remote_catalog_model_exact(model)
-        .map(|remote_model| crate::models::remote_catalog_model_ref(&remote_model))
-        .unwrap_or_else(|| model.to_string())
-}
-
 /// Peers not directly verified within this window are considered stale
 /// and excluded from gossip propagation. After 2x this duration they're removed entirely.
 pub(crate) const PEER_STALE_SECS: u64 = 180; // 3 minutes

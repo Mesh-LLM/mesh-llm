@@ -6,6 +6,7 @@
 //! context ranking, affinity, reservations, and retry selection.
 
 use crate::inference::election::InferenceTarget;
+use crate::mesh::model_identity::descriptor_matches_routable_name;
 use crate::mesh::{self, ModelWorkloadClass, ServedModelDescriptor};
 
 #[cfg(test)]
@@ -32,6 +33,47 @@ pub(super) fn request_workload_class(path: &str) -> Option<ModelWorkloadClass> {
     }
 }
 
+/// Only generation requests reuse KV/session state. Metadata such as an
+/// embeddings `user` field must not pin a stateless workload to one replica.
+pub(super) fn supports_generation_affinity(path: &str) -> bool {
+    matches!(
+        path.split('?').next().unwrap_or(path),
+        "/v1/chat/completions" | "/v1/completions" | "/v1/responses"
+    )
+}
+
+pub(super) fn affinity_body(
+    request: &super::request_parse::BufferedHttpRequest,
+) -> Option<&serde_json::Value> {
+    supports_generation_affinity(&request.client_path)
+        .then_some(request.body_json.as_ref())
+        .flatten()
+}
+
+/// Prefer the elected targets only when at least one supports this request.
+/// A stale/local incompatible copy must not shadow capable remote replicas.
+pub(super) async fn ingress_candidates(
+    node: &mesh::Node,
+    model: &str,
+    path: &str,
+    targets: &crate::inference::election::ModelTargets,
+) -> Vec<InferenceTarget> {
+    let local = eligible_targets(node, model, path, &targets.candidates(model)).await;
+    if local
+        .iter()
+        .any(|target| !matches!(target, InferenceTarget::None))
+    {
+        return local;
+    }
+    let remote = node
+        .hosts_for_model(model)
+        .await
+        .into_iter()
+        .map(InferenceTarget::Remote)
+        .collect::<Vec<_>>();
+    eligible_targets(node, model, path, &remote).await
+}
+
 fn class_is_compatible(
     requested: ModelWorkloadClass,
     advertised: Option<ModelWorkloadClass>,
@@ -54,7 +96,7 @@ pub(super) fn model_satisfies_workload_class(
 ) -> bool {
     let mut matching = descriptors
         .iter()
-        .filter(|descriptor| descriptor.identity.model_name == model)
+        .filter(|descriptor| descriptor_matches_routable_name(descriptor, model))
         .peekable();
     if matching.peek().is_none() {
         return class_is_compatible(requested, None);
@@ -90,7 +132,8 @@ pub(super) fn model_satisfies_request_workload(
 ) -> bool {
     if is_audio_upload_path(path) {
         descriptors.iter().any(|descriptor| {
-            descriptor.identity.model_name == model && descriptor_supports_audio_upload(descriptor)
+            descriptor_matches_routable_name(descriptor, model)
+                && descriptor_supports_audio_upload(descriptor)
         })
     } else {
         model_satisfies_workload_class(model, workload, descriptors)
@@ -103,7 +146,7 @@ pub(super) fn descriptor_for_request<'a>(
     descriptors: &'a [ServedModelDescriptor],
 ) -> Option<&'a ServedModelDescriptor> {
     descriptors.iter().find(|descriptor| {
-        descriptor.identity.model_name == model
+        descriptor_matches_routable_name(descriptor, model)
             && request_workload_class(path).is_none_or(|workload| {
                 model_satisfies_request_workload(
                     model,

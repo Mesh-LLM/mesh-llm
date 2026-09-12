@@ -380,7 +380,8 @@ async fn auto_route_model_has_ready_ingress_target(
     request_path: &str,
     affinity: &affinity::AffinityRouter,
 ) -> bool {
-    let local_candidates = targets.candidates(model);
+    let local_candidates =
+        workload_routing::ingress_candidates(node, model, request_path, targets).await;
     if contains_routable_candidate(&local_candidates) {
         return auto_route::model_has_eligible_target(
             node,
@@ -1419,6 +1420,10 @@ mod durable_artifacts;
 #[cfg(test)]
 #[path = "ingress_tests/automatic_routing.rs"]
 mod automatic_routing;
+
+#[cfg(test)]
+#[path = "ingress_tests/audio_workloads.rs"]
+mod audio_workloads;
 
 #[cfg(test)]
 #[path = "ingress_tests/tests.rs"]

@@ -869,7 +869,7 @@ async fn multipart_model_is_parsed_and_rewritten_without_touching_file_bytes() {
         .position(|window| window == b"\r\n\r\n")
         .unwrap()
         + 4;
-    let content_type = content_type_from_request(&request.raw).unwrap();
+    let content_type = format!("multipart/form-data; boundary={BOUNDARY}");
     assert_eq!(
         multipart_model_field(&content_type, &request.raw[header_end..])
             .unwrap()

@@ -90,7 +90,7 @@ mod heartbeat;
 mod host_role_claims;
 mod identity_persistence;
 mod lan_bootstrap;
-mod model_identity;
+pub(crate) mod model_identity;
 mod node;
 mod node_identity;
 mod node_requirements;
