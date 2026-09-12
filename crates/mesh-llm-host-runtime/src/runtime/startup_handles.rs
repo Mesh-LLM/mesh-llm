@@ -872,6 +872,13 @@ impl StartupReadyReporter {
         self.shutdown_requested.store(true, Ordering::SeqCst);
     }
 
+    /// Whether shutdown has been requested. Supervised automatic loads consult
+    /// this at each launch boundary so a slow download cannot register a model
+    /// after the runtime has begun stopping.
+    pub(super) fn is_shutdown_requested(&self) -> bool {
+        self.shutdown_requested.load(Ordering::SeqCst)
+    }
+
     pub(super) fn mark_ready_and_build_event(
         &self,
         readiness_index: usize,

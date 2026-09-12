@@ -1,3 +1,8 @@
+use super::supervised_load::{
+    drain_pending_supervised_launch_events, drain_supervised_launch_tasks,
+    run_auto_handle_supervised_load_launched, run_auto_handle_supervised_load_resolved,
+    spawn_supervised_load_resolve,
+};
 /// Wait for either SIGINT (ctrl-c) or SIGTERM. Without this, an unhandled
 /// SIGTERM aborts the process before runtime cleanup can run.
 use super::{
@@ -5,17 +10,17 @@ use super::{
     ModelIntent, ModelTargetReconciliationState, OpenAiGuardrailPolicyHandle,
     RunAutoRuntimeLifecycleContext, RunAutoRuntimeLoopContext, RunAutoShutdownContext,
     RunAutoStartupTasksContext, RuntimeEvent, RuntimeOperationalEvent,
-    ShutdownRuntimeLoadedModelsContext, UnloadTarget, advertise_run_auto_models,
-    apply_startup_model_load_finished, cleanup_run_auto_runtime_dir, current_time_secs,
-    dashboard_context_usage_source, emit_shutdown, model_target_reconciliation_policy,
-    normalize_runtime_model_request_for_config, publish_runtime_llama_slots,
-    record_runtime_operational_event_with_context, refresh_dashboard_context_usage_batch,
-    resolve_eager_startup_models, resolve_runtime_unload_target,
-    run_auto_handle_model_target_reconciliation_result, run_auto_handle_runtime_exit,
-    run_auto_load_runtime_model, run_auto_model_identity, run_auto_reconcile_model_targets,
-    run_auto_record_model_target_manual_unload, run_auto_unload_runtime_model,
-    runtime_unload_candidates, set_openai_guardrail_policy_mode, shutdown_run_auto_services,
-    shutdown_runtime_loaded_models, shutdown_runtime_managed_models,
+    ShutdownRuntimeLoadedModelsContext, SupervisedLoadRequest, UnloadTarget,
+    advertise_run_auto_models, apply_startup_model_load_finished, cleanup_run_auto_runtime_dir,
+    current_time_secs, dashboard_context_usage_source, emit_shutdown,
+    model_target_reconciliation_policy, normalize_runtime_model_request_for_config,
+    publish_runtime_llama_slots, record_runtime_operational_event_with_context,
+    refresh_dashboard_context_usage_batch, resolve_eager_startup_models,
+    resolve_runtime_unload_target, run_auto_handle_model_target_reconciliation_result,
+    run_auto_handle_runtime_exit, run_auto_load_runtime_model, run_auto_model_identity,
+    run_auto_reconcile_model_targets, run_auto_record_model_target_manual_unload,
+    run_auto_unload_runtime_model, runtime_unload_candidates, set_openai_guardrail_policy_mode,
+    shutdown_run_auto_services, shutdown_runtime_loaded_models, shutdown_runtime_managed_models,
     spawn_run_auto_startup_model_tasks, startup_default_backend_device, startup_launch_plan,
     suppress_desired_for_resolved_unload_candidate, unpublish_run_auto_nostr_listing,
 };
@@ -120,6 +125,7 @@ pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecy
         console_port,
         interactive_started,
         lan_bootstrap_tasks,
+        mut automatic_serving_tasks,
         runtime,
     } = ctx;
     let input_handler_enabled = runtime_state.input_handler_enabled;
@@ -143,11 +149,14 @@ pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecy
         runtime_event_tx,
         survey_telemetry,
         startup_ready_reporter,
+        api_port,
         openai_guardrail_policy: &runtime_state.openai_guardrail_policy,
         model_target_reconciliation_policy: model_target_reconciliation_policy(config),
         model_target_reconciliation_state: ModelTargetReconciliationState::with_shared_history(
             node.runtime_intents.clone(),
         ),
+        supervised_resolve_tasks: tokio::task::JoinSet::new(),
+        supervised_launch_tasks: tokio::task::JoinSet::new(),
     };
 
     // Seed startup config as desired state before any resolution I/O.
@@ -299,6 +308,28 @@ pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecy
         run_auto_runtime_event_loop(&mut loop_ctx, control_rx, runtime_event_rx, model_intent_rx)
             .await;
     }
+
+    // Stop automatic serving before anything else is torn down, producer
+    // first. Aborting the selector prevents it from emitting a new intent
+    // into a runtime that is already stopping; only then is it safe to drain
+    // the supervised consumer work it may already have started. Any load that
+    // completes during the drain finds the event channel closed and stops its
+    // own native handle rather than registering it.
+    automatic_serving_tasks.shutdown().await;
+    // Resolve/plan tasks are cancellable at their await points; aborting them
+    // strands nothing, because nothing is reserved or launched yet.
+    loop_ctx.supervised_resolve_tasks.shutdown().await;
+    // Native-start tasks must be JOINED, not aborted. They reach
+    // `spawn_blocking` work inside `start_runtime_local_model` that cannot be
+    // cancelled once running, so aborting the wrapper would orphan a live
+    // native load rather than drain it. Each task shuts its own handle down
+    // when it finds the control loop gone.
+    drain_supervised_launch_tasks(&mut loop_ctx).await;
+    // Close the sending half first so no further outcome can be enqueued,
+    // then stop any handle already sitting on the channel before it is
+    // dropped with the receiver.
+    runtime_event_rx.close();
+    drain_pending_supervised_launch_events(node, runtime_event_rx).await;
 
     // This audit must precede the cleanup-worker stop and service drain below,
     // so normal shutdown retains the same durable boundary as other lifecycle
@@ -559,6 +590,33 @@ pub(super) async fn run_auto_handle_model_intent(
             if let Some(tx) = completion {
                 ctx.model_target_reconciliation_state
                     .stack_load_completion(&spec, &profile, tx);
+            }
+
+            // Automatic (mesh-demand) loads may download many gigabytes. Running
+            // them inline blocks this loop, so Shutdown, Join, Unload, and the
+            // shutdown-signal branch cannot be serviced until the download
+            // finishes. Those loads are therefore supervised: the slow phases
+            // run in owned tasks and report back as runtime events, while this
+            // loop keeps ownership of the capacity ledger, the serving
+            // assignment, and registration. Operator-driven loads keep the
+            // inline path, where the caller is already awaiting a response.
+            if source == IntentSource::MeshDemand {
+                spawn_supervised_load_resolve(
+                    ctx,
+                    SupervisedLoadRequest {
+                        intent_id,
+                        spec,
+                        config_model_id,
+                        profile,
+                        source,
+                        // Both are assigned by the dispatcher below, which
+                        // owns the instance sequence.
+                        instance_id: String::new(),
+                        load_started: Instant::now(),
+                        runtime_model_name: None,
+                    },
+                );
+                return;
             }
 
             let result =
@@ -834,6 +892,12 @@ pub(super) async fn run_auto_runtime_event_loop(
                             result,
                             current_time_secs(),
                         );
+                    }
+                    RuntimeEvent::SupervisedLoadResolved { request, result } => {
+                        run_auto_handle_supervised_load_resolved(ctx, *request, *result).await;
+                    }
+                    RuntimeEvent::SupervisedLoadLaunched { request, result } => {
+                        run_auto_handle_supervised_load_launched(ctx, *request, *result).await;
                     }
                     RuntimeEvent::Exited { instance_id, model, port } => {
                         run_auto_handle_runtime_exit(ctx, instance_id, model, port).await;

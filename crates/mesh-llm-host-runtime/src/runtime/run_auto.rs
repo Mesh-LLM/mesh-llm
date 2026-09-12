@@ -307,6 +307,7 @@ pub(super) async fn run_runtime_cli(
         options.checkpoint_imatrix.as_deref(),
     )?;
     apply_runtime_config_options(&mut options, &config);
+    super::startup_identity::pin_explicit_join(&mut options);
 
     initialize_audit_logging_for_options(&options)?;
 
@@ -1157,9 +1158,22 @@ pub(super) struct RunAutoRuntimeLoopContext<'a> {
     pub(super) runtime_event_tx: &'a tokio::sync::mpsc::UnboundedSender<RuntimeEvent>,
     pub(super) survey_telemetry: &'a survey::SurveyTelemetry,
     pub(super) startup_ready_reporter: &'a StartupReadyReporter,
+    /// Local OpenAI API port advertised to peers when this node claims the
+    /// host role for a runtime-loaded model.
+    pub(super) api_port: u16,
     pub(super) openai_guardrail_policy: &'a OpenAiGuardrailPolicyHandle,
     pub(super) model_target_reconciliation_policy: ModelTargetReconciliationPolicy,
     pub(super) model_target_reconciliation_state: ModelTargetReconciliationState,
+    /// In-flight supervised resolve/plan phases. These perform catalog and
+    /// download I/O at `.await` points and are safely cancellable, so
+    /// shutdown aborts them.
+    pub(super) supervised_resolve_tasks: tokio::task::JoinSet<()>,
+    /// In-flight supervised native-start phases. These reach `spawn_blocking`
+    /// native work that cannot be aborted once running, so shutdown must
+    /// *join* rather than abort them: aborting the wrapper would orphan the
+    /// blocking load instead of draining it. Each task shuts down its own
+    /// handle when the control loop is no longer there to register it.
+    pub(super) supervised_launch_tasks: tokio::task::JoinSet<()>,
 }
 
 pub(super) struct RunAutoRuntimeState {
@@ -1623,6 +1637,13 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
     })
     .await?;
 
+    // Keep automatic model selection inside the daemon, after admission and
+    // surface startup. Ownership passes to the runtime lifecycle below, which
+    // aborts and joins the selector during shutdown before draining any
+    // supervised load it produced.
+    let automatic_serving_tasks =
+        super::automatic_serving::spawn(&options, &config, &node, &local_models);
+
     let primary_model_name = requested_model_names.first().cloned().unwrap_or_default();
     let startup_ready_reporter = StartupReadyReporter::new_with_failure_policy(
         &requested_model_names,
@@ -1679,6 +1700,7 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         console_port,
         interactive_started,
         lan_bootstrap_tasks,
+        automatic_serving_tasks,
         runtime,
     })
     .await;

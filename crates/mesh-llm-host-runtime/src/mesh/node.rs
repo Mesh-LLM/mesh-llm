@@ -91,6 +91,7 @@ pub struct Node {
     pub(crate) llama_ready: Arc<Mutex<bool>>,
     pub(crate) available_models: Arc<Mutex<Vec<String>>>,
     pub(crate) requested_models: Arc<Mutex<Vec<String>>>,
+    pub(crate) automatic_model_request: Arc<std::sync::Mutex<Option<Arc<String>>>>,
     pub(crate) explicit_model_interests: Arc<Mutex<Vec<String>>>,
     /// Mesh-wide demand map — merged from gossip + local API requests.
     /// This is the single source of truth for "what does the mesh want?"
@@ -829,6 +830,7 @@ impl Node {
             llama_ready: Arc::new(Mutex::new(false)),
             available_models: Arc::new(Mutex::new(Vec::new())),
             requested_models: Arc::new(Mutex::new(Vec::new())),
+            automatic_model_request: Arc::default(),
             explicit_model_interests: Arc::new(Mutex::new(Vec::new())),
             model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
             requirement_mesh_state: Arc::new(Mutex::new(None)),
@@ -1011,6 +1013,7 @@ impl Node {
             llama_ready: Arc::new(Mutex::new(false)),
             available_models: Arc::new(Mutex::new(Vec::new())),
             requested_models: Arc::new(Mutex::new(Vec::new())),
+            automatic_model_request: Arc::default(),
             explicit_model_interests: Arc::new(Mutex::new(Vec::new())),
             model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
             requirement_mesh_state: Arc::new(Mutex::new(None)),
@@ -1770,7 +1773,7 @@ impl Node {
     }
 
     async fn pinned_requested_models(&self) -> std::collections::HashSet<String> {
-        let my_requested = self.requested_models.lock().await;
+        let my_requested = self.requested_models().await;
         let peers = self.state.lock().await;
         let mut pinned: std::collections::HashSet<String> = my_requested.iter().cloned().collect();
         for peer in peers.peers.values() {
@@ -1797,7 +1800,9 @@ impl Node {
     }
 
     pub async fn requested_models(&self) -> Vec<String> {
-        self.requested_models.lock().await.clone()
+        let mut models = self.requested_models.lock().await.clone();
+        self.append_automatic_model_request(&mut models);
+        models
     }
 
     pub async fn set_explicit_model_interests(&self, mut model_refs: Vec<String>) {

@@ -1,7 +1,7 @@
 use super::*;
 use crate::runtime::{DrainCoordinator, DrainResult};
 
-pub(super) fn unregister_local_source_policy_if_unused(
+pub(crate) fn unregister_local_source_policy_if_unused(
     ctx: &RunAutoRuntimeLoopContext<'_>,
     model: &str,
     profile: &str,
@@ -347,6 +347,12 @@ pub(crate) async fn run_auto_unload_runtime_entry(
         cs.remove_local_process(&unload.instance_id).await;
     }
     unregister_local_source_policy_if_unused(ctx, &model, &profile);
+    // Balances the claim taken when this instance was registered. The claim
+    // is reference counted, so the node stays a host while any other
+    // runtime-loaded model is still serving.
+    ctx.node
+        .release_host_role(mesh::HostRoleClaim::LocalModel)
+        .await;
     let _ = emit_event(OutputEvent::Info {
         message: format!("Unloaded local model '{}' from :{}", model, port),
         context: None,
@@ -427,6 +433,12 @@ pub(crate) async fn run_auto_handle_runtime_exit(
         handle.shutdown().await;
         drop(capacity_reservation);
         unregister_local_source_policy_if_unused(ctx, &model, &profile);
+        // An unexpected exit still consumed a claim at registration. Without
+        // this the node keeps advertising the host role after its last model
+        // died, and peers route inference to a port with nothing behind it.
+        ctx.node
+            .release_host_role(mesh::HostRoleClaim::LocalModel)
+            .await;
     }
     remove_runtime_local_target(ctx.target_tx, &model, port);
     let _ = emit_event(OutputEvent::Warning {

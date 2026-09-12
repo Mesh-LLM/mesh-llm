@@ -21,6 +21,7 @@ import {
 import { HeaderHoverCard } from '@/features/shell/components/HeaderHoverCard'
 import { TopNavPluginPages, type TopNavPluginPageItem } from '@/features/shell/components/TopNavPluginPages'
 import { CopyInstructionRow } from '@/components/ui/CopyInstructionRow'
+import { ShareInviteRow } from '@/components/ui/ShareInviteRow'
 import type { LinkItem, TopNavJoinCommand, Theme, AppTab } from '@/features/app-tabs/types'
 import { cn } from '@/lib/cn'
 import { useDataMode, type DataMode } from '@/lib/data-mode'
@@ -340,11 +341,36 @@ const DEFAULT_JOIN_LINKS: LinkItem[] = [
   { href: 'https://meshllm.cloud/#blackboard', label: 'Blackboard' }
 ]
 
+/**
+ * The share sheet hands over the invitation a recipient actually needs: the
+ * token plus the command that consumes it. Built from the same live commands
+ * shown below, so it can never drift from them or leak a placeholder token.
+ */
+function buildShareInvitation(commands: TopNavJoinCommand[]): string | null {
+  const usable = commands.filter((cmd) => !cmd.disabled)
+  const token = usable.find((cmd) => cmd.label === 'Invite token')
+  const joinCommand = usable.find((cmd) => cmd.prefix === '$')
+  if (!joinCommand) return null
+  if (joinCommand.value.includes('<mesh-invite-token>')) return null
+  const lines = ['Join my Mesh:', '', joinCommand.value]
+  if (token) lines.push('', `Invite token: ${token.value}`)
+  return lines.join('\n')
+}
+
 function JoinInviteContent({ commands, links }: { commands?: TopNavJoinCommand[]; links?: LinkItem[] }) {
   const resolvedCommands = commands ?? DEFAULT_JOIN_COMMANDS
   const resolvedLinks = links ?? DEFAULT_JOIN_LINKS
+  const shareInvitation = buildShareInvitation(resolvedCommands)
   return (
     <>
+      {shareInvitation ? (
+        <ShareInviteRow
+          label="Invitation"
+          hint="Send this to someone — they join and chat straight away. Admission stays token-gated and traffic stays encrypted."
+          shareText={shareInvitation}
+          shareTitle="Join my Mesh"
+        />
+      ) : null}
       {resolvedCommands.map((cmd) => (
         <CopyInstructionRow
           key={cmd.label}

@@ -92,6 +92,20 @@ mesh-llm client --auto
 ## Start a private mesh
 
 ```bash
+mesh-llm serve
+```
+
+With no configured or explicit models in serving mode, Mesh automatically chooses
+one suitable chat model that fits this machine. It prefers complete cached models,
+then validated curated downloads. Downloads require network access; private mesh
+membership does not mean offline artifact acquisition. `local-required` policy
+restricts selection to real non-symlink cached GGUF files, preserving its existing
+source policy (HF snapshot symlinks are not eligible). Progress and terminal failures appear in runtime
+events; the API starts before the model is ready.
+
+To choose the model yourself:
+
+```bash
 mesh-llm serve --model Qwen3-8B-Q4_K_M
 ```
 
@@ -106,6 +120,12 @@ Join from another GPU node:
 ```bash
 mesh-llm serve --join <token>
 ```
+
+An unconfigured joiner waits for admission and checks the selected mesh before
+loading. A usable model on a peer avoids an unnecessary local duplicate; warming
+and concurrent requests receive bounded waits so failed peers cannot suppress
+serving forever. An explicit `--join` stays pinned to that mesh, even if combined
+with `--auto`: rejection or peer loss never enables public discovery fallback.
 
 Join from an API-only client:
 
