@@ -27,6 +27,6 @@ Related docs: `docs/USAGE.md` (install/service/storage), `docs/CLI.md`
 `docs/AGENTS.md` (agent clients), `docs/SKIPPY_SPLITS.md` (big-model splits).
 
 The other directories beside these operator workflows are maintainer-facing
-skills for release validation, Skippy internals, patch queues, benchmarks, CI,
-plugins, telemetry, and lab work. Plugin-shipped skills install via
-`mesh-llm skills install`.
+skills for release validation, release notes, Skippy internals, patch queues,
+benchmarks, CI, plugins, telemetry, and lab work. Plugin-shipped skills install
+via `mesh-llm skills install`.

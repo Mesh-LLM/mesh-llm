@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Reject commit subjects that are not Conventional Commits v1.0.0.
+#
+# Release notes are regrouped from the canonical squash-merge commit subjects,
+# so the type prefix decides which section a change lands in. Install with
+# `just hooks-install`; bypass a single commit with `git commit --no-verify`.
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+exec python3 "$repo_root/scripts/check-conventional-commit.py" "$1"

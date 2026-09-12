@@ -90,11 +90,11 @@ jobs:
         if: inputs.platform == 'linux' && inputs.backend == 'cpu'
         run: verify-runner-image public cpu
 
-      - name: Install CUDA runtime libraries and record device provenance
+      - name: Record CUDA device provenance
         if: inputs.platform == 'linux' && inputs.backend == 'cuda'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cuda-cudart-12-9 libcublas-12-9 curl jq lsof
+          sudo apt-get install -y --no-install-recommends curl jq lsof
           nvidia-smi --query-gpu=name,compute_cap,driver_version --format=csv,noheader
 
       - name: Record Vulkan device provenance

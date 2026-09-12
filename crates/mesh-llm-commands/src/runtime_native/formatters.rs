@@ -34,7 +34,11 @@ pub(crate) struct NativeRuntimeDoctorReport {
     pub(crate) running_mesh_version: String,
     pub(crate) selected_mesh_version: String,
     pub(crate) configured_skippy_abi: Option<String>,
+    /// The raw `runtime.native_runtime.selection` value from config.
     pub(crate) configured_selection: Option<String>,
+    /// The selection the doctor actually resolved against: a `--llama-flavor`
+    /// CLI override wins over the configured value.
+    pub(crate) effective_selection: Option<String>,
     pub(crate) host: HostRuntimeProfile,
     pub(crate) cache_path: PathBuf,
     pub(crate) selected_runtime_id: Option<String>,
@@ -333,6 +337,11 @@ fn print_doctor_human(report: &NativeRuntimeDoctorReport) {
     }
     if let Some(selection) = &report.configured_selection {
         println!("  configured selection: {selection}");
+    }
+    if let Some(selection) = &report.effective_selection
+        && report.configured_selection.as_deref() != Some(selection.as_str())
+    {
+        println!("  effective selection: {selection} (from --llama-flavor)");
     }
     println!("  cache: {}", report.cache_path.display());
     println!("  host: {}/{}", report.host.os, report.host.arch);
