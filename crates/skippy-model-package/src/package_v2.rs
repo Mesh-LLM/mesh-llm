@@ -61,12 +61,12 @@ pub(crate) fn write_package(
         .unwrap_or_default();
     let mut catalog = Vec::with_capacity(source_tensors.len());
     let no_hook = ArtifactHook { command: None };
-    // Payload artifacts are uploaded (and locally deleted) as soon as they are
-    // verified, so the metadata carrier cannot be built from the full parts at
-    // the end. Each artifact's header — everything before its aligned data
-    // start — fully determines its descriptor table and tensor offsets, so a
-    // header-only stub of each part carries the same locators while occupying
-    // kilobytes instead of the full payload.
+    // Payload artifacts may be uploaded and locally deleted by their hook as
+    // soon as they are verified, so the metadata carrier cannot depend on the
+    // full parts surviving until the end. Each artifact's header — everything
+    // before its aligned data start — fully determines its descriptor table and
+    // tensor offsets, so a header-only stub of each part carries the same
+    // locators while occupying kilobytes instead of the full payload.
     let headers_dir = out_dir.join(".headers");
     fs::create_dir_all(&headers_dir)?;
     let mut header_stubs = Vec::with_capacity(planned.len());
@@ -90,14 +90,6 @@ pub(crate) fn write_package(
         header_stubs.push(header);
         run_artifact_hook(&artifact_hook, &path, &artifact.path)?;
         verify_hook_result(&artifact, &path, &artifact_hook)?;
-        // The upload hook publishes each verified part immediately and deletes
-        // its local copy. If a hook left the part in place we still delete it:
-        // keeping it would re-accumulate the full package in the workspace and
-        // re-trigger the HF Jobs 50G ephemeral-storage eviction.
-        if artifact_hook.command.is_some() && path.exists() {
-            fs::remove_file(&path)
-                .with_context(|| format!("remove uploaded artifact {}", path.display()))?;
-        }
         progress.finish_step(&format!(
             "{} {}",
             artifact.path,
@@ -148,7 +140,7 @@ pub(crate) fn write_package(
         "metadata carrier tensor inventory differs from the independently verified payloads"
     );
     // The carrier is fully verified against the manifest while it is still on
-    // disk; only then does the upload hook publish (and delete) it.
+    // disk; only then does the optional artifact hook run.
     let carrier_path = out_dir.join("shared/metadata.gguf");
     run_artifact_hook(&artifact_hook, &carrier_path, "shared/metadata.gguf")?;
     verify_hook_result(
@@ -473,7 +465,7 @@ fn emit_payload_artifact(
 }
 
 /// Path of the header-only stub kept for artifact `id` while its full payload
-/// is being uploaded and deleted.
+/// may be uploaded and deleted by its hook.
 fn header_stub_path(headers_dir: &Path, artifact_id: &str) -> PathBuf {
     let safe_id = artifact_id
         .chars()
@@ -564,11 +556,10 @@ fn verify_hook_result(artifact: &Artifact, path: &Path, hook: &ArtifactHook) -> 
 
 /// Whether the on-disk artifact still matches its record.
 ///
-/// An upload hook removing the artifact is the expected outcome, and a FUSE
-/// bucket mount can keep reporting a freshly unlinked file as present via a
-/// stale attr cache — so a file that can no longer be opened counts as
-/// unchanged rather than corrupted. Only a file that opens but differs (the
-/// hook mutated it) fails.
+/// A hook may retain or remove the artifact. A FUSE bucket mount can keep
+/// reporting a freshly unlinked file as present via a stale attr cache, so a
+/// file that can no longer be opened counts as unchanged rather than corrupted.
+/// Only a file that opens but differs (the hook mutated it) fails.
 fn artifact_unchanged_on_disk(artifact: &Artifact, path: &Path) -> Result<bool> {
     let probe =
         || -> Result<bool> {

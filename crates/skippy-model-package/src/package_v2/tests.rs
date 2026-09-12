@@ -463,6 +463,36 @@ fn upload_hook_can_delete_verified_copies_without_losing_inventory() {
     assert!(source.exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn successful_artifact_hook_may_leave_verified_copies_for_rechecking() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.gguf");
+    fixture(&source, &[tensor("first", 0), tensor("second", 32)], None);
+    let out = temp.path().join("package");
+    write_package(
+        source.display().to_string(),
+        out.clone(),
+        Vec::new(),
+        ArtifactHook {
+            command: Some("/usr/bin/true".into()),
+        },
+        ArtifactHook { command: None },
+        explicit(&source),
+        false,
+    )
+    .unwrap();
+    let manifest = read_manifest(&out);
+    manifest.validate().unwrap();
+    assert!(
+        manifest
+            .artifact_catalog
+            .entries
+            .iter()
+            .all(|artifact| out.join(&artifact.path).is_file())
+    );
+}
+
 #[test]
 fn hook_verification_treats_deleted_artifact_as_unchanged() {
     use skippy_package_format::Artifact;
