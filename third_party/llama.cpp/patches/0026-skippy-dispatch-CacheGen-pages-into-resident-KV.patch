@@ -1,0 +1,554 @@
+From 562610033432885cdbae80b4fe7d038f2e070ae1 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Fri, 11 Sep 2026 16:42:03 +1000
+Subject: [PATCH] skippy: dispatch CacheGen pages into resident KV
+
+Assisted-by: scama
+---
+ ggml/include/ggml-backend.h |  27 +++
+ src/llama-kv-cache.cpp      | 338 ++++++++++++++++++++++++++++++++++++
+ src/llama-kv-cache.h        |  12 ++
+ src/skippy/state.cpp        | 105 +++++++++--
+ 4 files changed, 466 insertions(+), 16 deletions(-)
+
+diff --git a/ggml/include/ggml-backend.h b/ggml/include/ggml-backend.h
+index cc3f8cd36..e2460fcda 100644
+--- a/ggml/include/ggml-backend.h
++++ b/ggml/include/ggml-backend.h
+@@ -224,6 +224,33 @@ extern "C" {
+     };
+     typedef struct ggml_backend_feature * (*ggml_backend_get_features_t)(ggml_backend_reg_t reg);
+ 
++    // Optional backend entry point for decoding validated CacheGen F16 tiles
++    // directly into resident tensors. Callers resolve
++    // `ggml_backend_cachegen_decode_f16` through get_proc_address.
++    struct ggml_backend_cachegen_tile {
++        const void * payload;
++        size_t payload_bytes;
++        uint32_t token_offset;
++        uint32_t token_count;
++    };
++
++    struct ggml_backend_cachegen_job {
++        struct ggml_tensor * dst;
++        const struct ggml_backend_cachegen_tile * tiles;
++        size_t tile_count;
++        const uint32_t * cells;
++        size_t cell_count;
++        uint32_t channels;
++        uint64_t token_stride;
++        uint64_t channel_stride;
++    };
++
++    typedef bool (*ggml_backend_cachegen_decode_f16_t)(
++            const struct ggml_backend_cachegen_job * jobs,
++            size_t job_count,
++            char * error,
++            size_t error_capacity);
++
+     //
+     // Backend registry
+     //
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index a7d65f23f..dfd00139b 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -1958,6 +1958,344 @@ bool llama_kv_cache::stage_import_kv_page(
+     return src == static_cast<const char *>(input) + input_bytes;
+ }
+ 
++static uint16_t skippy_cachegen_read_u16(const uint8_t * bytes) {
++    return static_cast<uint16_t>(bytes[0]) | static_cast<uint16_t>(bytes[1]) << 8;
++}
++
++static uint32_t skippy_cachegen_read_u32(const uint8_t * bytes) {
++    return static_cast<uint32_t>(bytes[0]) | static_cast<uint32_t>(bytes[1]) << 8 |
++           static_cast<uint32_t>(bytes[2]) << 16 | static_cast<uint32_t>(bytes[3]) << 24;
++}
++
++static bool skippy_cachegen_validate_segment(const skippy_cachegen_record_v1 & record,
++                                             size_t                            expected_rows,
++                                             size_t                            expected_channels,
++                                             std::string &                     error) {
++    constexpr size_t header_bytes = 16;
++    constexpr size_t cdf_entries  = 33;
++    constexpr size_t max_rows     = 256;
++    const auto *     payload      = static_cast<const uint8_t *>(record.payload);
++    if (record.abi_version != SKIPPY_CACHEGEN_RECORD_V1_ABI_VERSION || record.reserved0 != 0 ||
++        record.element_bytes != 2 || payload == nullptr || record.payload_bytes < header_bytes ||
++        record.decoded_bytes == 0 || record.token_count != expected_rows || expected_rows == 0 ||
++        expected_rows > max_rows || expected_channels == 0 ||
++        expected_channels > std::numeric_limits<uint32_t>::max()) {
++        error = "invalid CacheGen F16 record descriptor";
++        return false;
++    }
++    if (std::memcmp(payload, "LCG1", 4) != 0 || payload[5] != 0 || (payload[4] != 16 && payload[4] != 32) ||
++        skippy_cachegen_read_u16(payload + 6) != expected_rows ||
++        skippy_cachegen_read_u32(payload + 8) != expected_channels) {
++        error = "CacheGen record disagrees with its segment header";
++        return false;
++    }
++    if (expected_rows > std::numeric_limits<size_t>::max() / expected_channels ||
++        expected_rows * expected_channels > std::numeric_limits<size_t>::max() / 2 ||
++        record.decoded_bytes != expected_rows * expected_channels * 2) {
++        error = "CacheGen record decoded geometry is inconsistent";
++        return false;
++    }
++    const size_t max_bytes = expected_rows * sizeof(float);
++    if (expected_channels > std::numeric_limits<size_t>::max() / (cdf_entries * sizeof(uint16_t)) ||
++        expected_channels > std::numeric_limits<size_t>::max() / sizeof(uint16_t)) {
++        error = "CacheGen segment metadata overflows";
++        return false;
++    }
++    const size_t cdf_bytes    = expected_channels * cdf_entries * sizeof(uint16_t);
++    const size_t length_bytes = expected_channels * sizeof(uint16_t);
++    if (header_bytes > std::numeric_limits<size_t>::max() - max_bytes ||
++        header_bytes + max_bytes > std::numeric_limits<size_t>::max() - cdf_bytes ||
++        header_bytes + max_bytes + cdf_bytes > std::numeric_limits<size_t>::max() - length_bytes) {
++        error = "CacheGen segment metadata range overflows";
++        return false;
++    }
++    const size_t cdf_offset    = header_bytes + max_bytes;
++    const size_t length_offset = cdf_offset + cdf_bytes;
++    const size_t stream_offset = length_offset + length_bytes;
++    const size_t stream_bytes  = skippy_cachegen_read_u32(payload + 12);
++    if (stream_offset > record.payload_bytes || stream_bytes != record.payload_bytes - stream_offset) {
++        error = "CacheGen segment stream length is inconsistent";
++        return false;
++    }
++    for (size_t row = 0; row < expected_rows; ++row) {
++        const uint32_t bits = skippy_cachegen_read_u32(payload + header_bytes + row * sizeof(float));
++        float          value;
++        std::memcpy(&value, &bits, sizeof(value));
++        if (!std::isfinite(value) || value < 0.0f) {
++            error = "CacheGen segment contains an invalid row maximum";
++            return false;
++        }
++    }
++    for (size_t channel = 0; channel < expected_channels; ++channel) {
++        const uint8_t * cdf      = payload + cdf_offset + channel * cdf_entries * sizeof(uint16_t);
++        uint16_t        previous = skippy_cachegen_read_u16(cdf);
++        if (previous != 0) {
++            error = "CacheGen segment has an invalid CDF endpoint";
++            return false;
++        }
++        for (size_t entry = 1; entry < cdf_entries; ++entry) {
++            const uint16_t current = skippy_cachegen_read_u16(cdf + entry * sizeof(uint16_t));
++            if (current <= previous) {
++                error = "CacheGen segment CDF is not strictly increasing";
++                return false;
++            }
++            previous = current;
++        }
++        if (previous != std::numeric_limits<uint16_t>::max()) {
++            error = "CacheGen segment has an invalid CDF endpoint";
++            return false;
++        }
++    }
++    size_t summed_stream_bytes = 0;
++    for (size_t channel = 0; channel < expected_channels; ++channel) {
++        const size_t length = skippy_cachegen_read_u16(payload + length_offset + channel * sizeof(uint16_t));
++        if (length == 0 || length > max_rows || summed_stream_bytes > stream_bytes ||
++            length > stream_bytes - summed_stream_bytes) {
++            error = "CacheGen segment has an invalid channel stream length";
++            return false;
++        }
++        summed_stream_bytes += length;
++    }
++    if (summed_stream_bytes != stream_bytes) {
++        error = "CacheGen channel lengths do not cover the segment stream";
++        return false;
++    }
++    return true;
++}
++
++struct skippy_cachegen_job_storage {
++    ggml_tensor *                           dst = nullptr;
++    std::vector<ggml_backend_cachegen_tile> tiles;
++    uint32_t                                channels       = 0;
++    uint64_t                                token_stride   = 0;
++    uint64_t                                channel_stride = 0;
++};
++
++bool llama_kv_cache::stage_import_cachegen_kv_page(llama_seq_id                      seq_id,
++                                                   const skippy_kv_page_desc &       desc,
++                                                   const skippy_cachegen_record_v1 * records,
++                                                   size_t                            record_count,
++                                                   size_t                            output_base,
++                                                   std::string &                     error,
++                                                   bool &                            unsupported,
++                                                   bool &                            invalid_argument,
++                                                   bool                              validate_only) {
++    unsupported                 = false;
++    invalid_argument            = true;
++    uint8_t validation_sentinel = 0;
++    if (!stage_import_kv_page(seq_id, desc, &validation_sentinel, desc.payload_bytes, error, true)) {
++        return false;
++    }
++    if (records == nullptr || record_count == 0 || desc.k_type != GGML_TYPE_F16 || desc.v_type != GGML_TYPE_F16) {
++        error = "CacheGen import requires non-empty F16 K/V records";
++        return false;
++    }
++
++    const uint32_t                strm = seq_to_stream[seq_id];
++    std::vector<const kv_layer *> selected;
++    for (const auto & layer : layers) {
++        if (layer.il >= static_cast<uint32_t>(desc.layer_start) && layer.il < static_cast<uint32_t>(desc.layer_end) &&
++            layer.k_stream.size() > strm && layer.k_stream[strm] != nullptr) {
++            selected.push_back(&layer);
++        }
++    }
++
++    size_t                                   record_index   = 0;
++    size_t                                   logical_offset = output_base;
++    std::vector<skippy_cachegen_job_storage> storage;
++    storage.reserve(selected.size() * 2);
++    auto consume_tiles = [&](ggml_tensor * dst, size_t row_bytes, bool transposed) -> bool {
++        skippy_cachegen_job_storage entry;
++        entry.dst             = dst;
++        entry.token_stride    = transposed ? desc.v_element_bytes : row_bytes;
++        entry.channel_stride  = transposed ? static_cast<uint64_t>(v_cells[strm].size()) * desc.v_element_bytes : 2;
++        const size_t channels = row_bytes / 2;
++        entry.channels        = static_cast<uint32_t>(channels);
++        size_t token_offset   = 0;
++        while (token_offset < desc.token_count) {
++            if (record_index >= record_count) {
++                error = "CacheGen records do not cover the native KV page";
++                return false;
++            }
++            const auto &   record = records[record_index++];
++            const size_t   rows   = static_cast<size_t>(record.token_count);
++            const uint32_t expected_kind =
++                transposed ? SKIPPY_CACHEGEN_RECORD_F16_TRANSPOSED : SKIPPY_CACHEGEN_RECORD_F16;
++            if (record.kind != expected_kind || rows == 0 || rows > desc.token_count - token_offset ||
++                record.output_offset != logical_offset + (transposed ? 0 : token_offset * row_bytes) ||
++                record.token_start != (transposed ? token_offset : 0) ||
++                record.total_tokens != (transposed ? desc.token_count : 0) ||
++                !skippy_cachegen_validate_segment(record, rows, channels, error)) {
++                if (error.empty()) {
++                    error = "CacheGen record order or destination geometry is invalid";
++                }
++                return false;
++            }
++            entry.tiles.push_back({ record.payload, record.payload_bytes, static_cast<uint32_t>(token_offset),
++                                    static_cast<uint32_t>(rows) });
++            token_offset += rows;
++        }
++        storage.push_back(std::move(entry));
++        logical_offset += static_cast<size_t>(desc.token_count) * row_bytes;
++        return true;
++    };
++
++    for (const auto * layer : selected) {
++        if (!consume_tiles(layer->k_stream[strm], desc.k_row_bytes, false)) {
++            return false;
++        }
++    }
++    for (const auto * layer : selected) {
++        const size_t v_row_bytes =
++            v_trans ? static_cast<size_t>(hparams.n_embd_v_gqa(layer->il)) * desc.v_element_bytes : desc.v_row_bytes;
++        if (!consume_tiles(layer->v_stream[strm], v_row_bytes, v_trans)) {
++            return false;
++        }
++    }
++
++    const skippy_cachegen_record_v1 * exact = nullptr;
++    if (desc.k_idx_row_bytes != 0 && (desc.token_count > std::numeric_limits<size_t>::max() / desc.k_idx_row_bytes ||
++                                      static_cast<size_t>(desc.token_count) * desc.k_idx_row_bytes >
++                                          std::numeric_limits<size_t>::max() / selected.size())) {
++        error = "CacheGen exact indexer geometry overflows";
++        return false;
++    }
++    const size_t exact_bytes = static_cast<size_t>(desc.token_count) * desc.k_idx_row_bytes * selected.size();
++    if (exact_bytes > 0) {
++        if (record_index >= record_count) {
++            error = "CacheGen page is missing exact indexer state";
++            return false;
++        }
++        exact = &records[record_index++];
++        if (exact->abi_version != SKIPPY_CACHEGEN_RECORD_V1_ABI_VERSION ||
++            exact->kind != SKIPPY_CACHEGEN_RECORD_EXACT || exact->element_bytes != 1 || exact->reserved0 != 0 ||
++            exact->output_offset != logical_offset || exact->decoded_bytes != exact_bytes ||
++            exact->token_count != desc.token_count || exact->token_start != 0 || exact->total_tokens != 0 ||
++            exact->payload == nullptr || exact->payload_bytes != exact_bytes) {
++            error = "CacheGen exact indexer record is invalid";
++            return false;
++        }
++        logical_offset += exact_bytes;
++    }
++    if (record_index != record_count || logical_offset != output_base + desc.payload_bytes) {
++        error = "CacheGen records do not exactly cover the native KV page";
++        return false;
++    }
++
++    ggml_backend_cachegen_decode_f16_t decode = nullptr;
++    for (const auto & entry : storage) {
++        if (entry.dst == nullptr || entry.dst->buffer == nullptr) {
++            error = "CacheGen destination tensor has no backend buffer";
++            return false;
++        }
++        const auto buft      = ggml_backend_buffer_get_type(entry.dst->buffer);
++        const auto device    = ggml_backend_buft_get_device(buft);
++        const auto reg       = device == nullptr ? nullptr : ggml_backend_dev_backend_reg(device);
++        auto       candidate = reg == nullptr ?
++                                   nullptr :
++                                   reinterpret_cast<ggml_backend_cachegen_decode_f16_t>(
++                                       ggml_backend_reg_get_proc_address(reg, "ggml_backend_cachegen_decode_f16"));
++        if (candidate == nullptr || (decode != nullptr && candidate != decode)) {
++            invalid_argument = false;
++            unsupported      = true;
++            error            = "resident KV backend does not provide CacheGen F16 decode";
++            return false;
++        }
++        decode = candidate;
++    }
++    invalid_argument = false;
++    if (validate_only) {
++        return true;
++    }
++
++    auto & stream_cells = v_cells[strm];
++    for (uint32_t i = 0; i < stream_cells.size(); ++i) {
++        if (stream_cells.seq_has(i, seq_id)) {
++            invalid_argument = true;
++            error            = "CacheGen page import requires an empty session KV sequence";
++            return false;
++        }
++    }
++
++    llama_ubatch   ubatch   = {};
++    auto           udata    = std::make_shared<llama_ubatch::data_t>();
++    const uint32_t n_tokens = static_cast<uint32_t>(desc.token_count);
++    const uint32_t n_pos    = hparams.n_pos_per_embd();
++    if (n_pos != 0 && n_tokens > std::numeric_limits<size_t>::max() / n_pos) {
++        invalid_argument = true;
++        error            = "CacheGen page position geometry overflows";
++        return false;
++    }
++    udata->token.resize(n_tokens);
++    udata->pos.resize(static_cast<size_t>(n_tokens) * n_pos);
++    udata->n_seq_id.resize(n_tokens, 1);
++    udata->seq_id.resize(n_tokens);
++    udata->seq_id_unq = { seq_id };
++    udata->seq_idx.resize(LLAMA_MAX_SEQ, -1);
++    udata->seq_idx[seq_id] = 0;
++    udata->output.resize(n_tokens, 0);
++    udata->seq_id_data.resize(n_tokens, 0);
++    for (uint32_t i = 0; i < n_tokens; ++i) {
++        const llama_pos pos = static_cast<llama_pos>(desc.token_start + i);
++        for (uint32_t j = 0; j < n_pos; ++j) {
++            udata->pos[static_cast<size_t>(j) * n_tokens + i] = pos;
++        }
++        udata->seq_id_data[i] = seq_id;
++        udata->seq_id[i]      = &udata->seq_id_data[i];
++    }
++    ubatch.b_equal_seqs = true;
++    ubatch.n_tokens     = n_tokens;
++    ubatch.n_seq_tokens = n_tokens;
++    ubatch.n_seqs       = 1;
++    ubatch.n_seqs_unq   = 1;
++    ubatch.n_pos        = n_pos;
++    ubatch.token        = udata->token.data();
++    ubatch.pos          = udata->pos.data();
++    ubatch.n_seq_id     = udata->n_seq_id.data();
++    ubatch.seq_id       = udata->seq_id.data();
++    ubatch.seq_id_unq   = udata->seq_id_unq.data();
++    ubatch.seq_idx      = udata->seq_idx.data();
++    ubatch.output       = udata->output.data();
++    ubatch.data         = std::move(udata);
++
++    const uint32_t  head_before = v_heads[strm];
++    const slot_info sinfo       = find_slot(ubatch, false);
++    if (sinfo.empty()) {
++        error = "failed to allocate KV cache cells for CacheGen page";
++        return false;
++    }
++    apply_ubatch(sinfo, ubatch);
++
++    std::vector<ggml_backend_cachegen_job> jobs;
++    jobs.reserve(storage.size());
++    for (const auto & entry : storage) {
++        jobs.push_back({ entry.dst, entry.tiles.data(), entry.tiles.size(), sinfo.idxs[0].data(), sinfo.idxs[0].size(),
++                         entry.channels, entry.token_stride, entry.channel_stride });
++    }
++    char backend_error[256] = {};
++    if (!decode(jobs.data(), jobs.size(), backend_error, sizeof(backend_error))) {
++        seq_rm(seq_id, static_cast<llama_pos>(desc.token_start),
++               static_cast<llama_pos>(desc.token_start + desc.token_count));
++        v_heads[strm] = head_before;
++        error         = backend_error[0] == '\0' ? "CacheGen backend decode failed" : backend_error;
++        return false;
++    }
++
++    if (exact != nullptr) {
++        const char * src       = static_cast<const char *>(exact->payload);
++        const auto   cell_runs = llama_kv_cache_cell_runs(sinfo.idxs[0]);
++        for (const auto * layer : selected) {
++            auto * k_idx = layer->k_idx_stream[strm];
++            for (const auto & run : cell_runs) {
++                const size_t run_bytes = static_cast<size_t>(run.count) * desc.k_idx_row_bytes;
++                ggml_backend_tensor_set(k_idx, src, static_cast<size_t>(run.first) * desc.k_idx_row_bytes, run_bytes);
++                src += run_bytes;
++            }
++        }
++    }
++    return true;
++}
++
+ uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
+     uint32_t result = 0;
+ 
+diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
+index 8368e0ee2..ba95e63dc 100644
+--- a/src/llama-kv-cache.h
++++ b/src/llama-kv-cache.h
+@@ -14,6 +14,7 @@ struct llama_hparams;
+ struct llama_model;
+ struct llama_context;
+ struct skippy_kv_page_desc;
++struct skippy_cachegen_record_v1;
+ 
+ //
+ // llama_kv_cache
+@@ -209,6 +210,17 @@ public:
+             std::string & error,
+             bool validate_only = false);
+ 
++    bool stage_import_cachegen_kv_page(
++            llama_seq_id seq_id,
++            const skippy_kv_page_desc & desc,
++            const skippy_cachegen_record_v1 * records,
++            size_t record_count,
++            size_t output_base,
++            std::string & error,
++            bool & unsupported,
++            bool & invalid_argument,
++            bool validate_only = false);
++
+     //
+     // graph_build API
+     //
+diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
+index af3a56601..dc2203735 100644
+--- a/src/skippy/state.cpp
++++ b/src/skippy/state.cpp
+@@ -657,27 +657,100 @@ enum skippy_status skippy_import_kv_page(
+     return skippy_success(out_error);
+ }
+ 
+-enum skippy_status skippy_import_cachegen_kv_page_v1(
+-        struct skippy_session * session,
+-        const struct skippy_kv_page_desc * desc,
+-        const struct skippy_cachegen_record_v1 * records,
+-        size_t record_count,
+-        struct skippy_error ** out_error) {
++enum skippy_status skippy_import_cachegen_kv_page_v1(struct skippy_session *                  session,
++                                                     const struct skippy_kv_page_desc *       desc,
++                                                     const struct skippy_cachegen_record_v1 * records,
++                                                     size_t                                   record_count,
++                                                     struct skippy_error **                   out_error) {
+     if (session == nullptr || session->ctx == nullptr || desc == nullptr || records == nullptr || record_count == 0) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session, descriptor, and CacheGen records are required");
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                         "session, descriptor, and CacheGen records are required");
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
+-    for (size_t i = 0; i < record_count; ++i) {
+-        const auto & record = records[i];
+-        if (record.abi_version != SKIPPY_CACHEGEN_RECORD_V1_ABI_VERSION || record.reserved0 != 0 ||
+-                record.payload == nullptr || record.payload_bytes == 0 || record.decoded_bytes == 0 || record.token_count == 0 ||
+-                record.kind > SKIPPY_CACHEGEN_RECORD_F16_TRANSPOSED) {
+-            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "invalid CacheGen record descriptor");
+-            return SKIPPY_STATUS_INVALID_ARGUMENT;
++    if (session->n_past != 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "CacheGen page import requires a fresh session");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++
++    std::string error;
++    bool        ok               = false;
++    bool        unsupported      = false;
++    bool        invalid_argument = false;
++    if (desc->codec == SKIPPY_KV_PAGE_CODEC_ISWA_COMPOSITE_V1) {
++        auto * iswa = skippy_get_iswa_cache(session);
++        if (!skippy_validate_composite_desc(*desc, desc->payload_bytes, error)) {
++            invalid_argument = true;
++        } else if (iswa == nullptr) {
++            unsupported = true;
++            error       = "composite CacheGen page requires ISWA memory";
++        } else {
++            const auto     base         = skippy_page_from_component(*desc, desc->components[0]);
++            const auto     swa          = skippy_page_from_component(*desc, desc->components[1]);
++            const uint64_t split_offset = desc->components[1].payload_offset;
++            size_t         split        = 0;
++            while (split < record_count && records[split].output_offset < split_offset) {
++                ++split;
++            }
++            if (split == 0 || split == record_count) {
++                invalid_argument = true;
++                error            = "CacheGen records do not cover both ISWA components";
++            } else {
++                bool       base_unsupported = false;
++                bool       swa_unsupported  = false;
++                bool       base_invalid     = false;
++                bool       swa_invalid      = false;
++                const bool base_valid       = iswa->get_base()->stage_import_cachegen_kv_page(
++                    session->seq_id, base, records, split, 0, error, base_unsupported, base_invalid, true);
++                const bool swa_valid =
++                    base_valid && iswa->get_swa()->stage_import_cachegen_kv_page(
++                                      session->seq_id, swa, records + split, record_count - split,
++                                      static_cast<size_t>(split_offset), error, swa_unsupported, swa_invalid, true);
++                unsupported      = base_unsupported || swa_unsupported;
++                invalid_argument = base_invalid || swa_invalid;
++                if (base_valid && swa_valid) {
++                    bool ignored         = false;
++                    bool ignored_invalid = false;
++                    ok = iswa->get_base()->stage_import_cachegen_kv_page(session->seq_id, base, records, split, 0,
++                                                                         error, ignored, ignored_invalid) &&
++                         iswa->get_swa()->stage_import_cachegen_kv_page(
++                             session->seq_id, swa, records + split, record_count - split,
++                             static_cast<size_t>(split_offset), error, ignored, ignored_invalid);
++                    invalid_argument = ignored_invalid;
++                }
++            }
++        }
++        if (!ok && iswa != nullptr) {
++            iswa->get_base()->seq_rm(session->seq_id, -1, -1);
++            iswa->get_swa()->seq_rm(session->seq_id, -1, -1);
+         }
++    } else if (desc->codec == 0 || desc->codec == SKIPPY_KV_PAGE_CODEC_SINGLE_V1) {
++        if (auto * kv = skippy_get_kv_cache(session, out_error)) {
++            ok = kv->stage_import_cachegen_kv_page(session->seq_id, *desc, records, record_count, 0, error, unsupported,
++                                                   invalid_argument);
++        } else {
++            return SKIPPY_STATUS_UNSUPPORTED;
++        }
++    } else {
++        invalid_argument = true;
++        error            = "unsupported native KV page codec";
++    }
++    if (!ok) {
++        const enum skippy_status status = invalid_argument ?
++                                              SKIPPY_STATUS_INVALID_ARGUMENT :
++                                              (unsupported ? SKIPPY_STATUS_UNSUPPORTED : SKIPPY_STATUS_RUNTIME_ERROR);
++        skippy_set_error(out_error, status, error.c_str());
++        return status;
++    }
++    if (llm_graph_result * graph = session->ctx->get_gf_res_prev()) {
++        graph->reset();
+     }
+-    skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "CacheGen device import is unavailable on this backend");
+-    return SKIPPY_STATUS_UNSUPPORTED;
++    session->n_past = std::max<int32_t>(session->n_past,
++                                        static_cast<int32_t>(std::min<uint64_t>(desc->token_start + desc->token_count,
++                                                                                std::numeric_limits<int32_t>::max())));
++    skippy_mtp_clear_session_state(session);
++    session->verify_checkpoints.clear();
++    session->ctx->synchronize();
++    return skippy_success(out_error);
+ }
+ 
+ enum skippy_status skippy_retire_verify_checkpoint(
+-- 
+2.54.0 (Apple Git-157)
+

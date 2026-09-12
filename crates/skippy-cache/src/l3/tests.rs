@@ -27,6 +27,7 @@ fn manifest_for<'store>(
             offset: (index * segment_bytes) as u64,
             bytes: chunk.len() as u64,
             digest: stored.digest.clone(),
+            codec_identity: Some(SegmentCodecIdentity::raw(chunk.len() as u64)),
             meta_json: None,
         });
         held.push(stored);
@@ -69,6 +70,7 @@ fn commit_packed_payload(
             offset,
             bytes,
             digest: stored.digest.clone(),
+            codec_identity: Some(SegmentCodecIdentity::raw(bytes)),
             meta_json: None,
         });
         offset += bytes;
@@ -582,6 +584,7 @@ fn eviction_cost_at_realistic_segment_counts() {
                 offset: (index * bytes.len()) as u64,
                 bytes: bytes.len() as u64,
                 digest: digest.clone(),
+                codec_identity: Some(SegmentCodecIdentity::raw(bytes.len() as u64)),
                 meta_json: Some(format!("k:{}:0:{}", index % 32, index / 32)),
             });
         }
@@ -644,4 +647,587 @@ fn unreferenced_segments_are_collected() {
     let freed = store.collect_unreferenced_segments().expect("collect");
     assert_eq!(freed, 12);
     assert!(store.assemble(&manifest).is_ok());
+}
+
+#[test]
+fn manifest_stamps_explicit_raw_codec_and_round_trips() {
+    let root = temp_root("codec-raw-roundtrip");
+    let store = store(&root, 0);
+    let payload: Vec<u8> = (0..50_000u32).map(|value| value as u8).collect();
+    let manifest = commit_payload(&store, &payload, 4096);
+    assert_eq!(manifest.codec, Some(PayloadCodec::raw()));
+
+    // The codec identity is written explicitly, not inferred at read time.
+    let manifest_json = fs::read_to_string(store.manifest_path(&manifest.payload_digest))
+        .expect("read manifest json");
+    let value: serde_json::Value =
+        serde_json::from_str(&manifest_json).expect("parse manifest json");
+    assert_eq!(value["codec"]["name"], CODEC_RAW);
+    assert_eq!(value["codec"]["version"], CODEC_RAW_VERSION);
+
+    let loaded = store
+        .load_manifest(&manifest.payload_digest)
+        .expect("load manifest");
+    assert_eq!(loaded.codec, Some(PayloadCodec::raw()));
+    assert_eq!(store.assemble(&loaded).expect("assemble"), payload);
+}
+
+#[test]
+fn legacy_manifest_without_codec_field_reads_and_assembles_as_raw() {
+    let root = temp_root("codec-legacy-read");
+    let store = store(&root, 0);
+    let payload: Vec<u8> = (0..40_000u32).map(|value| value as u8).collect();
+    let manifest = commit_payload(&store, &payload, 4096);
+
+    // Rewrite the on-disk manifest as an older build wrote it: the legacy
+    // format version and no codec field.
+    let path = store.manifest_path(&manifest.payload_digest);
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read manifest")).expect("parse manifest");
+    {
+        let object = value.as_object_mut().expect("manifest object");
+        object.insert(
+            "version".to_string(),
+            serde_json::json!(LEGACY_MANIFEST_VERSION),
+        );
+        object.remove("codec");
+    }
+    assert!(value.get("codec").is_none(), "legacy manifest has no codec");
+    fs::write(&path, serde_json::to_vec(&value).expect("serialize legacy"))
+        .expect("write legacy manifest");
+
+    let loaded = store
+        .load_manifest(&manifest.payload_digest)
+        .expect("load legacy manifest");
+    assert_eq!(
+        loaded.codec,
+        Some(PayloadCodec::raw()),
+        "a manifest without a codec field is the legacy raw format"
+    );
+    assert_eq!(store.assemble(&loaded).expect("assemble legacy"), payload);
+}
+
+#[test]
+fn unknown_codec_is_refused_at_commit_and_leaves_no_manifest() {
+    let root = temp_root("codec-unknown-commit");
+    let store = store(&root, 0);
+    let payload = vec![7u8; 8192];
+    let (mut manifest, held) = manifest_for(&store, &payload, 4096);
+    manifest.codec = Some(PayloadCodec {
+        name: "zstd".to_string(),
+        version: 1,
+    });
+
+    let error = store
+        .commit(&manifest)
+        .expect_err("unknown codec must not commit");
+    assert!(
+        error.to_string().contains("codec"),
+        "commit error should name the codec: {error}"
+    );
+    drop(held);
+
+    // Fallback contract: nothing unassemblable was persisted, so a later
+    // restore is a clean miss rather than a broken entry.
+    assert!(
+        store.load_manifest(&manifest.payload_digest).is_err(),
+        "no manifest should exist after a refused unknown-codec commit"
+    );
+}
+
+#[test]
+fn unknown_codec_is_rejected_before_assembly() {
+    let root = temp_root("codec-unknown-assemble");
+    let store = store(&root, 0);
+    let payload = vec![3u8; 8192];
+    let manifest = commit_payload(&store, &payload, 4096);
+    let mut loaded = store
+        .load_manifest(&manifest.payload_digest)
+        .expect("load manifest");
+    loaded.codec = Some(PayloadCodec {
+        name: "lz4".to_string(),
+        version: 1,
+    });
+    let error = store
+        .assemble(&loaded)
+        .expect_err("unknown codec must not assemble");
+    assert!(
+        error.to_string().contains("codec"),
+        "assemble error should name the codec: {error}"
+    );
+}
+
+#[test]
+fn unknown_raw_codec_version_is_rejected_at_commit_and_assembly() {
+    let root = temp_root("codec-unknown-version");
+    let store = store(&root, 0);
+    let payload = vec![5u8; 8192];
+
+    // Writer side: a future raw version is refused, never migrated.
+    let (mut manifest, held) = manifest_for(&store, &payload, 4096);
+    manifest.codec = Some(PayloadCodec {
+        name: CODEC_RAW.to_string(),
+        version: CODEC_RAW_VERSION + 1,
+    });
+    assert!(
+        store.commit(&manifest).is_err(),
+        "a future raw codec version must not commit"
+    );
+    drop(held);
+
+    // Reader side: a valid raw entry re-tagged to a future version is refused.
+    let good = commit_payload(&store, &payload, 4096);
+    let mut loaded = store
+        .load_manifest(&good.payload_digest)
+        .expect("load manifest");
+    loaded.codec.as_mut().expect("codec present").version = CODEC_RAW_VERSION + 1;
+    assert!(
+        store.assemble(&loaded).is_err(),
+        "a future raw codec version must not assemble"
+    );
+}
+
+#[test]
+fn codec_gate_does_not_mask_payload_corruption() {
+    let root = temp_root("codec-corruption");
+    let store = store(&root, 0);
+    let payload = vec![1u8; 8192];
+    let manifest = commit_packed_payload(&store, &payload, 4096);
+
+    // Supported codec, but the underlying bytes are tampered: the codec check
+    // passes and digest verification still catches the corruption.
+    let loaded = store
+        .load_manifest(&manifest.payload_digest)
+        .expect("load manifest");
+    assert_eq!(loaded.codec, Some(PayloadCodec::raw()));
+    let pack = fs::read_dir(root.join(PACK_DIR))
+        .expect("read packs")
+        .next()
+        .expect("one pack")
+        .expect("pack entry")
+        .path();
+    let mut bytes = fs::read(&pack).expect("read pack");
+    bytes[0] ^= 0xFF;
+    fs::write(&pack, &bytes).expect("corrupt pack");
+
+    assert!(
+        store.assemble(&loaded).is_err(),
+        "corruption under a supported codec must still fail"
+    );
+}
+
+/// Overwrite the `codec` object of an on-disk manifest, simulating a
+/// future/remote entry this build cannot decode.
+fn rewrite_on_disk_codec(store: &HandoffSegmentStore, digest: &str, name: &str, version: u32) {
+    let path = store.manifest_path(digest);
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read manifest")).expect("parse manifest");
+    value["codec"] = serde_json::json!({ "name": name, "version": version });
+    fs::write(&path, serde_json::to_vec(&value).expect("serialize")).expect("write manifest");
+}
+
+#[test]
+fn stripping_codec_from_current_version_rejects_but_legacy_v2_reads_as_raw() {
+    let root = temp_root("codec-downgrade");
+    let store = store(&root, 0);
+    let payload = vec![2u8; 8192];
+    let manifest = commit_payload(&store, &payload, 4096);
+    let path = store.manifest_path(&manifest.payload_digest);
+    let original: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read manifest")).expect("parse manifest");
+    assert_eq!(original["version"], MANIFEST_VERSION);
+
+    // Current version with the codec stripped: reject, never default to raw.
+    let mut stripped = original.clone();
+    stripped.as_object_mut().expect("object").remove("codec");
+    fs::write(&path, serde_json::to_vec(&stripped).expect("serialize")).expect("write stripped");
+    assert!(
+        store.load_manifest(&manifest.payload_digest).is_err(),
+        "a current-version manifest with codec removed must be rejected"
+    );
+
+    // A genuine legacy v2 manifest without a codec still reads/assembles as raw.
+    let mut legacy = original;
+    {
+        let object = legacy.as_object_mut().expect("object");
+        object.insert(
+            "version".to_string(),
+            serde_json::json!(LEGACY_MANIFEST_VERSION),
+        );
+        object.remove("codec");
+    }
+    fs::write(&path, serde_json::to_vec(&legacy).expect("serialize")).expect("write legacy");
+    let loaded = store
+        .load_manifest(&manifest.payload_digest)
+        .expect("legacy v2 load");
+    assert_eq!(loaded.codec, Some(PayloadCodec::raw()));
+    assert_eq!(store.assemble(&loaded).expect("assemble legacy"), payload);
+}
+
+#[test]
+fn on_disk_unsupported_codec_fails_direct_load() {
+    let root = temp_root("codec-load-reject");
+    let store = store(&root, 0);
+    let payload = vec![4u8; 8192];
+    let manifest = commit_payload(&store, &payload, 4096);
+    rewrite_on_disk_codec(&store, &manifest.payload_digest, "zstd", 1);
+    let error = store
+        .load_manifest(&manifest.payload_digest)
+        .expect_err("unsupported codec must not load");
+    assert!(
+        error.to_string().contains("codec"),
+        "load error should name the codec: {error}"
+    );
+}
+
+#[test]
+fn startup_reconciliation_quarantines_unsupported_codec_manifest() {
+    let root = temp_root("codec-reconcile");
+    let payload = vec![6u8; 8192];
+    let digest = {
+        let store = store(&root, 0);
+        let manifest = commit_packed_payload(&store, &payload, 4096);
+        rewrite_on_disk_codec(&store, &manifest.payload_digest, "future", 9);
+        manifest.payload_digest
+    };
+
+    let reopened =
+        HandoffSegmentStore::open_unreconciled_with_limits(&root, StoreLimits::new(0, 0))
+            .expect("open unreconciled store");
+    let report = reopened.reconcile_startup().expect("reconcile");
+    assert_eq!(
+        report.quarantined_manifests, 1,
+        "an unsupported-codec manifest is not a valid committed entry"
+    );
+    assert!(
+        reopened.load_manifest(&digest).is_err(),
+        "the quarantined manifest is gone from the live set"
+    );
+    assert!(root.join(QUARANTINE_DIR).exists());
+}
+
+#[test]
+fn future_version_raw_manifest_is_refused_at_commit_and_leaves_no_manifest() {
+    let root = temp_root("codec-future-version-commit");
+    let store = store(&root, 0);
+    let payload = vec![8u8; 8192];
+    let (mut manifest, held) = manifest_for(&store, &payload, 4096);
+    // A supported (raw) codec but an unknown future version: commit must refuse
+    // it, or it would persist a manifest load_manifest immediately rejects.
+    manifest.version = MANIFEST_VERSION + 1;
+    let error = store
+        .commit(&manifest)
+        .expect_err("a future manifest version must not commit");
+    assert!(
+        error.to_string().contains("version"),
+        "commit error should name the version: {error}"
+    );
+    drop(held);
+    assert!(
+        store.load_manifest(&manifest.payload_digest).is_err(),
+        "no manifest should exist after a refused future-version commit"
+    );
+}
+
+#[test]
+fn future_version_raw_manifest_is_refused_before_assembly() {
+    let root = temp_root("codec-future-version-assemble");
+    let store = store(&root, 0);
+    let payload = vec![9u8; 8192];
+    let manifest = commit_payload(&store, &payload, 4096);
+    let mut loaded = store
+        .load_manifest(&manifest.payload_digest)
+        .expect("load manifest");
+    loaded.version = MANIFEST_VERSION + 1;
+    let error = store
+        .assemble(&loaded)
+        .expect_err("a future manifest version must not assemble");
+    assert!(
+        error.to_string().contains("version"),
+        "assemble error should name the version: {error}"
+    );
+}
+
+/// Rewrites the on-disk manifest as a v3 (#1750) build wrote it: payload-level
+/// codec identity only, no per-segment identity.
+fn rewrite_on_disk_as_v3(store: &HandoffSegmentStore, digest: &str) {
+    let path = store.manifest_path(digest);
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read manifest")).expect("parse manifest");
+    let object = value.as_object_mut().expect("manifest object");
+    object.insert(
+        "version".to_string(),
+        serde_json::json!(LEGACY_PAYLOAD_CODEC_MANIFEST_VERSION),
+    );
+    for segment in object
+        .get_mut("segments")
+        .expect("segments")
+        .as_array_mut()
+        .expect("segment array")
+    {
+        segment
+            .as_object_mut()
+            .expect("segment object")
+            .remove("codec_identity");
+    }
+    fs::write(&path, serde_json::to_vec(&value).expect("serialize")).expect("write v3 manifest");
+}
+
+#[test]
+fn v4_manifest_stamps_per_segment_identity_and_round_trips() {
+    let root = temp_root("codec-v4-roundtrip");
+    let store = store(&root, 0);
+    let payload: Vec<u8> = (0..50_000u32).map(|value| value as u8).collect();
+    let manifest = commit_payload(&store, &payload, 4096);
+    assert_eq!(manifest.version, MANIFEST_VERSION);
+    assert!(
+        manifest.segments.iter().all(|segment| segment.codec_identity
+            == Some(SegmentCodecIdentity::raw(segment.bytes))),
+        "every v4 segment carries its raw identity"
+    );
+
+    // The identity is written explicitly per segment, not inferred at read.
+    let manifest_json = fs::read_to_string(store.manifest_path(&manifest.payload_digest))
+        .expect("read manifest json");
+    let value: serde_json::Value =
+        serde_json::from_str(&manifest_json).expect("parse manifest json");
+    for segment in value["segments"].as_array().expect("segment array") {
+        assert_eq!(segment["codec_identity"]["name"], CODEC_RAW);
+        assert_eq!(segment["codec_identity"]["version"], CODEC_RAW_VERSION);
+        assert_eq!(segment["codec_identity"]["class"], "exact");
+        assert_eq!(segment["codec_identity"]["decoded_len"], segment["bytes"]);
+        assert!(
+            segment["codec_identity"]
+                .get("calibration_digest")
+                .is_none()
+        );
+    }
+
+    let loaded = store
+        .load_manifest(&manifest.payload_digest)
+        .expect("load manifest");
+    assert_eq!(store.assemble(&loaded).expect("assemble"), payload);
+}
+
+#[test]
+fn v3_manifest_reads_and_assembles_through_payload_codec() {
+    let root = temp_root("codec-v3-read");
+    let store = store(&root, 0);
+    let payload = vec![11u8; 8192];
+    let manifest = commit_payload(&store, &payload, 4096);
+    rewrite_on_disk_as_v3(&store, &manifest.payload_digest);
+
+    let loaded = store
+        .load_manifest(&manifest.payload_digest)
+        .expect("load v3 manifest");
+    assert_eq!(
+        loaded.version, LEGACY_PAYLOAD_CODEC_MANIFEST_VERSION,
+        "v3 stays v3: identity is normalized per segment, not rewritten"
+    );
+    assert!(
+        loaded
+            .segments
+            .iter()
+            .all(|segment| segment.codec_identity.is_none()),
+        "v3 segments carry no per-segment identity"
+    );
+    assert_eq!(store.assemble(&loaded).expect("assemble v3"), payload);
+}
+
+#[test]
+fn stripping_identity_from_a_v4_segment_rejects_everywhere() {
+    let root = temp_root("codec-v4-stripped");
+    let store = store(&root, 0);
+    let payload = vec![12u8; 8192];
+    let manifest = commit_payload(&store, &payload, 4096);
+    let path = store.manifest_path(&manifest.payload_digest);
+    let original: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read manifest")).expect("parse manifest");
+    assert_eq!(original["version"], MANIFEST_VERSION);
+
+    // On-disk: a v4 manifest with one segment's identity stripped must never
+    // load — it cannot fall back to the payload codec or to raw.
+    let mut stripped = original.clone();
+    stripped["segments"][1]
+        .as_object_mut()
+        .expect("segment object")
+        .remove("codec_identity");
+    fs::write(&path, serde_json::to_vec(&stripped).expect("serialize")).expect("write stripped");
+    let error = store
+        .load_manifest(&manifest.payload_digest)
+        .expect_err("a stripped v4 segment identity must not load");
+    assert!(
+        error.to_string().contains("per-segment codec identity"),
+        "load error should name the missing per-segment identity: {error}"
+    );
+
+    // In-memory: the same shape must not commit (nothing unassemblable is
+    // ever persisted) and must not assemble (an unloadable entry is a miss).
+    let mut memory = manifest.clone();
+    memory.segments[0].codec_identity = None;
+    assert!(
+        store.commit(&memory).is_err(),
+        "a v4 commit with a stripped segment identity must be refused"
+    );
+    assert!(
+        store.assemble(&memory).is_err(),
+        "a v4 assembly with a stripped segment identity must be refused"
+    );
+
+    // Restore the on-disk manifest and strip ALL identities: still rejected,
+    // proving no aggregate fallback to the payload codec exists.
+    fs::write(&path, serde_json::to_vec(&original).expect("serialize")).expect("write original");
+    let mut all_stripped: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read manifest")).expect("parse");
+    for segment in all_stripped["segments"]
+        .as_array_mut()
+        .expect("segment array")
+    {
+        segment
+            .as_object_mut()
+            .expect("segment object")
+            .remove("codec_identity");
+    }
+    fs::write(&path, serde_json::to_vec(&all_stripped).expect("serialize"))
+        .expect("write all-stripped");
+    assert!(
+        store.load_manifest(&manifest.payload_digest).is_err(),
+        "stripping every v4 segment identity must not enable a payload-codec fallback"
+    );
+}
+
+#[test]
+fn v4_rejects_unsupported_segment_codecs_naming_the_segment() {
+    let root = temp_root("codec-v4-unsupported");
+    let store = store(&root, 0);
+    let payload = vec![13u8; 8192];
+    let manifest = commit_payload(&store, &payload, 4096);
+
+    // In-memory: a single lossy-coded segment makes the whole manifest
+    // unassemblable here, and the refusal names the offending segment.
+    let mut tampered = manifest.clone();
+    tampered.segments[0].codec_identity = Some(SegmentCodecIdentity {
+        name: "cachegen".to_string(),
+        version: 1,
+        class: CodecClass::Lossy,
+        decoded_len: tampered.segments[0].bytes,
+        calibration_digest: Some("blake3:calibration".to_string()),
+    });
+    let error = store
+        .commit(&tampered)
+        .expect_err("an unsupported segment codec must not commit");
+    let message = error.to_string();
+    assert!(
+        message.contains("segment 0") && message.contains("cachegen"),
+        "commit error should name the segment and codec: {message}"
+    );
+    drop(store);
+
+    // On-disk: the same shape cannot load on a fresh store. Tamper only the
+    // segment's identity (payload codec stays raw) so the per-segment gate,
+    // not the payload gate, is what rejects it.
+    let reopened = HandoffSegmentStore::open(&root, 0).expect("reopen store");
+    let path = reopened.manifest_path(&manifest.payload_digest);
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read manifest")).expect("parse manifest");
+    value["segments"][0]["codec_identity"] = serde_json::json!({
+        "name": "cachegen",
+        "version": 1,
+        "class": "lossy",
+        "decoded_len": manifest.segments[0].bytes,
+        "calibration_digest": "blake3:calibration",
+    });
+    fs::write(&path, serde_json::to_vec(&value).expect("serialize")).expect("write tampered");
+    let error = reopened
+        .load_manifest(&manifest.payload_digest)
+        .expect_err("an on-disk unsupported segment codec must not load");
+    assert!(
+        error.to_string().contains("segment"),
+        "load error should name the segment: {error}"
+    );
+}
+
+#[test]
+fn v4_rejects_unknown_native_kv_version_before_assembly() {
+    let root = temp_root("codec-v4-native-future");
+    let store = store(&root, 0);
+    let payload = vec![15u8; 8192];
+    let manifest = commit_payload(&store, &payload, 4096);
+    let mut future = manifest.clone();
+    future.payload_kind = "kv-recurrent".to_string();
+    future.kv_bytes = future.total_bytes;
+    future.kv_desc_json = Some("{\"runtime\":\"native\"}".to_string());
+    for segment in &mut future.segments {
+        let mut identity = SegmentCodecIdentity::native_kv_page(segment.bytes);
+        identity.version = CODEC_NATIVE_KV_PAGE_VERSION + 1;
+        segment.codec_identity = Some(identity);
+    }
+
+    let error = store
+        .assemble(&future)
+        .expect_err("a future native KV representation must not assemble");
+    let message = error.to_string();
+    assert!(
+        message.contains(CODEC_NATIVE_KV_PAGE) && message.contains("unsupported codec"),
+        "error should name the unsupported native representation: {message}"
+    );
+    assert!(
+        store.commit(&future).is_err(),
+        "a future native KV representation must not commit"
+    );
+}
+
+#[test]
+fn v4_native_kv_segments_must_tile_exactly_to_the_kv_boundary() {
+    let root = temp_root("codec-v4-native-boundary");
+    let store = store(&root, 0);
+    let payload = vec![16u8; 8192];
+    let manifest = commit_payload(&store, &payload, 4096);
+    let mut mixed = manifest.clone();
+    mixed.payload_kind = "kv-recurrent".to_string();
+    mixed.kv_bytes = 4096;
+    mixed.recurrent_bytes = 4096;
+    mixed.kv_desc_json = Some("{\"runtime\":\"native\"}".to_string());
+    mixed.segments[0].codec_identity = Some(SegmentCodecIdentity::native_kv_page(4096));
+    assert_eq!(
+        store.assemble(&mixed).expect("valid mixed manifest"),
+        payload
+    );
+
+    let mut crossing = mixed.clone();
+    crossing.kv_bytes = 5000;
+    crossing.recurrent_bytes = 3192;
+    let error = store
+        .assemble(&crossing)
+        .expect_err("a segment crossing the KV boundary must not assemble");
+    assert!(error.to_string().contains("crosses the native KV boundary"));
+
+    let mut native_auxiliary = mixed;
+    native_auxiliary.segments[1].codec_identity = Some(SegmentCodecIdentity::native_kv_page(4096));
+    let error = store
+        .assemble(&native_auxiliary)
+        .expect_err("auxiliary bytes cannot claim the native KV representation");
+    assert!(error.to_string().contains("representation disagrees"));
+}
+
+#[test]
+fn v4_segment_identity_length_mismatch_is_refused() {
+    let root = temp_root("codec-v4-length");
+    let store = store(&root, 0);
+    let payload = vec![14u8; 8192];
+    let manifest = commit_payload(&store, &payload, 4096);
+
+    // An exact identity whose decoded_len disagrees with the stored bytes is
+    // corruption, not a hint: refuse before any segment is read.
+    let mut tampered = manifest.clone();
+    let bytes = tampered.segments[0].bytes;
+    tampered.segments[0].codec_identity = Some(SegmentCodecIdentity::raw(bytes + 1));
+    assert!(
+        store.assemble(&tampered).is_err(),
+        "an exact identity with a decoded_len mismatch must not assemble"
+    );
+    assert!(
+        store.commit(&tampered).is_err(),
+        "an exact identity with a decoded_len mismatch must not commit"
+    );
 }

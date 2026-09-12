@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "decision": "stop",
+  "date": "2026-09-11",
+  "commit": "2677ad62e5295f6da2ac72ae7b8c978f87753d11",
+  "hardware": {
+    "model": "Mac Studio",
+    "chip": "Apple M1 Ultra",
+    "memory_gib": 128,
+    "backend": "Metal"
+  },
+  "model": {
+    "id": "Qwen/Qwen3-0.6B-GGUF:Q8_0",
+    "sha256": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031",
+    "layer_end": 28
+  },
+  "workload": {
+    "prefix_tokens": 19000,
+    "continuation_steps": 64,
+    "ctx_size": 19200,
+    "cache_types": {
+      "k": "f16",
+      "v": "f16"
+    },
+    "tile_rows": 4096
+  },
+  "thresholds": {
+    "minimum_token_agreement": 0.95,
+    "maximum_p99_decode_regression": 0.05,
+    "restore_to_first_token_must_beat_native": true
+  },
+  "metrics": {
+    "native_storage_bytes": 2179072000,
+    "cachegen_storage_bytes": 202373739,
+    "compression_ratio": 0.09287152466738134,
+    "tile_count": 280,
+    "encode_ms": 15394.387625,
+    "decode_ms": 23521.694708,
+    "native_write_ms": 1369.8386249999999,
+    "cachegen_write_ms": 114.436834,
+    "native_persist_ms": 1369.8386249999999,
+    "cachegen_persist_ms": 15508.824459,
+    "native_read_ms": 239.139542,
+    "cachegen_read_ms": 22.285667,
+    "native_import_ms": 53.609541,
+    "cachegen_import_ms": 51.117250000000006,
+    "native_ttft_ms": 311.610791,
+    "cachegen_ttft_ms": 23604.395332999997,
+    "native_decode_tokens_per_second": 120.22645848205526,
+    "cachegen_decode_tokens_per_second": 121.2529795622552,
+    "native_p99_decode_ms": 18.861708,
+    "cachegen_p99_decode_ms": 9.297708,
+    "p99_decode_regression": -0.507059063792102,
+    "matching_tokens": 12,
+    "token_agreement": 0.1875,
+    "first_token_mismatch_step": 1,
+    "mean_entropy_abs_drift": 2.5719402572722174,
+    "max_entropy_abs_drift": 7.5579400062561035,
+    "mean_top_logprob_abs_drift": 0.9204300816782052,
+    "max_top_logprob_abs_drift": 3.5587148666381836,
+    "estimated_peak_codec_working_bytes": 2412371750
+  },
+  "failure_reasons": [
+    "restore-to-first-token did not beat native (23604.395 ms >= 311.611 ms)",
+    "token agreement 0.1875 is below 0.9500"
+  ],
+  "notes": [
+    "Filesystem writes used sync_all; reads were matched same-run filesystem reads and may be page-cache warm.",
+    "The codec decode cost alone exceeds the native full restore-to-first-token path by more than two orders of magnitude, so read-cache state cannot change the stop decision."
+  ]
+}

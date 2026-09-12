@@ -1,0 +1,117 @@
+From 717bca3cc3cc9ef8272cb37c63c7c700ab567009 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Fri, 11 Sep 2026 17:43:11 +1000
+Subject: [PATCH] ggml-metal: align staged CacheGen tiles
+
+Assisted-by: scama
+---
+ ggml/src/ggml-metal/ggml-metal-device.m | 15 ++++++++++++--
+ tests/test-skippy-cachegen-metal.cpp    | 27 ++++++++++++++++++++++++-
+ 2 files changed, 39 insertions(+), 3 deletions(-)
+
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
+index c6e22a863..d05b7c32c 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.m
++++ b/ggml/src/ggml-metal/ggml-metal-device.m
+@@ -2721,7 +2721,7 @@ bool ggml_metal_cachegen_decode_f16(
+                 const struct ggml_backend_cachegen_tile * tile = &job->tiles[tile_index];
+                 if (tile->payload == NULL || tile->payload_bytes < 16 || tile->token_count == 0 ||
+                         tile->token_offset > job->cell_count || tile->token_count > job->cell_count - tile->token_offset ||
+-                        payload_data.length > UINT32_MAX || tile->payload_bytes > UINT32_MAX - payload_data.length ||
++                        payload_data.length > UINT32_MAX - 3 ||
+                         prefix_data.length / sizeof(uint32_t) > UINT32_MAX - ((size_t) job->channels + 1)) {
+                     [payload_data release];
+                     [tile_data release];
+@@ -2730,6 +2730,17 @@ bool ggml_metal_cachegen_decode_f16(
+                     [temporary_buffers release];
+                     return ggml_metal_cachegen_error(error, error_capacity, "Metal CacheGen tile exceeds bounded geometry");
+                 }
++                const size_t aligned_payload_size = (payload_data.length + 3) & ~(size_t) 3;
++                if (tile->payload_bytes > UINT32_MAX - aligned_payload_size) {
++                    [payload_data release];
++                    [tile_data release];
++                    [prefix_data release];
++                    [encoder endEncoding];
++                    [temporary_buffers release];
++                    return ggml_metal_cachegen_error(error, error_capacity, "Metal CacheGen payload offsets overflow");
++                }
++                const uint8_t padding[3] = { 0 };
++                [payload_data appendBytes:padding length:aligned_payload_size - payload_data.length];
+                 const uint8_t * payload = (const uint8_t *) tile->payload;
+                 const size_t lengths_offset = 16 + (size_t) tile->token_count * sizeof(float) +
+                     (size_t) job->channels * 33 * sizeof(uint16_t);
+@@ -2743,7 +2754,7 @@ bool ggml_metal_cachegen_decode_f16(
+                     return ggml_metal_cachegen_error(error, error_capacity, "Metal CacheGen tile metadata is truncated");
+                 }
+                 struct ggml_metal_cachegen_tile encoded_tile = {
+-                    (uint32_t) payload_data.length,
++                    (uint32_t) aligned_payload_size,
+                     (uint32_t) (prefix_data.length / sizeof(uint32_t)),
+                     tile->token_offset,
+                     tile->token_count,
+diff --git a/tests/test-skippy-cachegen-metal.cpp b/tests/test-skippy-cachegen-metal.cpp
+index b64ba373c..f300b18b0 100644
+--- a/tests/test-skippy-cachegen-metal.cpp
++++ b/tests/test-skippy-cachegen-metal.cpp
+@@ -148,6 +148,8 @@ int main() {
+     ggml_tensor * transposed16 = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, capacity, channels);
+     ggml_tensor * row_major32 = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, channels, capacity);
+     ggml_tensor * transposed32 = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, capacity, channels);
++    constexpr uint32_t multi_capacity = rows * 2 + 5;
++    ggml_tensor * multi_tile = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, channels, multi_capacity);
+     ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+     if (buffer == nullptr) {
+         ggml_free(ctx);
+@@ -167,11 +169,20 @@ int main() {
+     }
+     const ggml_backend_cachegen_tile tile16 = { encoded16, sizeof(encoded16), 0, rows };
+     const ggml_backend_cachegen_tile tile32 = { encoded32, sizeof(encoded32), 0, rows };
++    const ggml_backend_cachegen_tile multi_tiles[] = {
++        { encoded16, sizeof(encoded16), 0, rows },
++        { encoded32, sizeof(encoded32), rows, rows },
++    };
++    std::vector<uint32_t> multi_cells(rows * 2);
++    for (uint32_t row = 0; row < rows * 2; ++row) {
++        multi_cells[row] = multi_capacity - 1 - row;
++    }
+     const ggml_backend_cachegen_job jobs[] = {
+         { row_major16, &tile16, 1, cells.data(), cells.size(), channels, channels * 2, 2 },
+         { transposed16, &tile16, 1, cells.data(), cells.size(), channels, 2, capacity * 2 },
+         { row_major32, &tile32, 1, cells.data(), cells.size(), channels, channels * 2, 2 },
+         { transposed32, &tile32, 1, cells.data(), cells.size(), channels, 2, capacity * 2 },
++        { multi_tile, multi_tiles, 2, multi_cells.data(), multi_cells.size(), channels, channels * 2, 2 },
+     };
+     ggml_backend_dev_t device = ggml_backend_get_device(backend);
+     auto decode = reinterpret_cast<ggml_backend_cachegen_decode_f16_t>(
+@@ -181,7 +192,7 @@ int main() {
+         return finish(4);
+     }
+     char error[256] = {};
+-    if (!decode(jobs, 4, error, sizeof(error))) {
++    if (!decode(jobs, 5, error, sizeof(error))) {
+         return finish(5);
+     }
+     ggml_backend_cachegen_job invalid_job = jobs[0];
+@@ -220,5 +231,19 @@ int main() {
+     if (const int status = check_fixture(row_major32, transposed32, expected32, 7)) {
+         return finish(status);
+     }
++    std::vector<uint8_t> multi_bytes(ggml_nbytes(multi_tile));
++    ggml_backend_tensor_get(multi_tile, multi_bytes.data(), 0, multi_bytes.size());
++    const uint8_t * expected_tiles[] = { expected16, expected32 };
++    for (uint32_t tile = 0; tile < 2; ++tile) {
++        for (uint32_t row = 0; row < rows; ++row) {
++            const uint32_t source_row = tile * rows + row;
++            if (std::memcmp(
++                    multi_bytes.data() + static_cast<size_t>(multi_cells[source_row]) * channels * 2,
++                    expected_tiles[tile] + static_cast<size_t>(row) * channels * 2,
++                    channels * 2) != 0) {
++                return finish(9);
++            }
++        }
++    }
+     return finish(0);
+ }
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,3 +1,4 @@
+mod cachegen_gate;
 mod kv_page_growth;
 pub(crate) mod native_mtp;
 mod prediction_return;

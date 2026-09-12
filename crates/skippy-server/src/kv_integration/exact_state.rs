@@ -19,6 +19,28 @@ fn resident_prefix_is_complete(matched_tokens: usize, requested_tokens: usize) -
     matched_tokens >= requested_tokens
 }
 
+fn preflight_native_kv_location(
+    location: &skippy_cache::L3Location,
+) -> Result<Option<skippy_runtime::RuntimeKvPageDesc>> {
+    if !location.native_kv_passthrough {
+        return Ok(None);
+    }
+    let json = location
+        .kv_desc_json
+        .as_deref()
+        .context("native KV manifest has no runtime page descriptor")?;
+    let desc: skippy_runtime::RuntimeKvPageDesc =
+        serde_json::from_str(json).context("native KV manifest has an invalid page descriptor")?;
+    let kv_bytes =
+        usize::try_from(location.kv_bytes).context("native KV payload length exceeds usize")?;
+    desc.validate_payload(kv_bytes)
+        .context("native KV manifest page descriptor is incompatible")?;
+    if desc.token_start != 0 || desc.token_count != location.token_count {
+        anyhow::bail!("native KV manifest page descriptor does not cover the located prefix");
+    }
+    Ok(Some(desc))
+}
+
 impl KvStageIntegration {
     pub fn restore_exact_state(
         &self,
@@ -478,6 +500,13 @@ impl KvStageIntegration {
         l3: &std::sync::Arc<skippy_cache::L3Tier>,
         location: &skippy_cache::L3Location,
     ) -> Result<Option<ExactStateRestore>> {
+        // Native page capability is checked from manifest metadata before the
+        // tier reads any segment bytes. Runtime ABI, platform and numerical
+        // mode are already bound by the tier's exact-state identity; the page
+        // descriptor completes the representation check.
+        let Ok(native_kv_desc) = preflight_native_kv_location(location) else {
+            return Ok(None);
+        };
         let fill_started = Instant::now();
         // A load failure (corrupt segment, now quarantined) is a miss, not a
         // request failure. Import failures below do propagate: the transaction
@@ -488,12 +517,19 @@ impl KvStageIntegration {
         if fill.payload.byte_len() == 0 {
             return Ok(None);
         }
+        if location.native_kv_passthrough
+            && (fill.token_count != location.token_count
+                || fill.kv_desc_json != location.kv_desc_json)
+        {
+            return Ok(None);
+        }
         let fill_ms = fill_started.elapsed().as_secs_f64() * 1000.0;
         let token_count = fill.token_count;
-        let kv_desc: Option<skippy_runtime::RuntimeKvPageDesc> = fill
-            .kv_desc_json
-            .as_deref()
-            .and_then(|json| serde_json::from_str(json).ok());
+        let kv_desc: Option<skippy_runtime::RuntimeKvPageDesc> = native_kv_desc.or_else(|| {
+            fill.kv_desc_json
+                .as_deref()
+                .and_then(|json| serde_json::from_str(json).ok())
+        });
         let lookup_ms = lookup_started.elapsed().as_secs_f64() * 1000.0;
         let mut kv_import_ms = 0.0;
         let mut recurrent_import_ms = 0.0;
@@ -696,9 +732,9 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use skippy_cache::UnifiedRadixCache;
+    use skippy_cache::{L3Location, UnifiedRadixCache};
 
-    use super::{resident_prefix_is_complete, try_touch_exact_state};
+    use super::{preflight_native_kv_location, resident_prefix_is_complete, try_touch_exact_state};
 
     type TestRadix = UnifiedRadixCache<
         crate::kv_integration::RadixResidentEntry,
@@ -753,5 +789,58 @@ mod tests {
             try_touch_exact_state(&cache, "namespace", &[1]).unwrap(),
             Some(false)
         );
+    }
+
+    fn native_location(desc: &skippy_runtime::RuntimeKvPageDesc) -> L3Location {
+        L3Location {
+            namespace_key: "namespace".to_string(),
+            prefix_key: "prefix".to_string(),
+            token_count: desc.token_count,
+            manifest_key: "manifest".to_string(),
+            kv_desc_json: Some(serde_json::to_string(desc).unwrap()),
+            kv_bytes: desc.payload_bytes,
+            native_kv_passthrough: true,
+        }
+    }
+
+    fn native_desc() -> skippy_runtime::RuntimeKvPageDesc {
+        skippy_runtime::RuntimeKvPageDesc {
+            version: 1,
+            layer_start: 0,
+            layer_end: 1,
+            token_start: 0,
+            token_count: 8,
+            layer_count: 1,
+            k_type: skippy_runtime::GGML_TYPE_Q8_0,
+            v_type: skippy_runtime::GGML_TYPE_Q8_0,
+            k_row_bytes: 16,
+            v_row_bytes: 16,
+            v_element_bytes: 2,
+            k_idx_row_bytes: 0,
+            payload_bytes: 256,
+            flags: 0,
+            codec: 0,
+            component_count: 0,
+            components: Box::new([Default::default(); 2]),
+        }
+    }
+
+    #[test]
+    fn native_kv_descriptor_is_validated_before_segment_load() {
+        let desc = native_desc();
+        assert_eq!(
+            preflight_native_kv_location(&native_location(&desc)).unwrap(),
+            Some(desc)
+        );
+
+        let mut wrong_length = native_desc();
+        wrong_length.payload_bytes += 1;
+        let mut location = native_location(&wrong_length);
+        location.kv_bytes -= 1;
+        assert!(preflight_native_kv_location(&location).is_err());
+
+        let mut wrong_prefix = native_desc();
+        wrong_prefix.token_start = 1;
+        assert!(preflight_native_kv_location(&native_location(&wrong_prefix)).is_err());
     }
 }
