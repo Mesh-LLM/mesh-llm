@@ -14,8 +14,9 @@ Shared default settings applied to every model. Individual model entries can ove
 ctx_size                = 0              # Context window (0 = auto)
 batch                   = 0              # Batch size (0 = auto)
 ubatch                  = 0              # Micro-batch size (0 = auto)
-cache_type_k            = "f16"          # Key cache dtype
-cache_type_v            = "f16"          # Value cache dtype
+cache_type_k            = "auto"         # Key cache dtype (resolved by policy)
+cache_type_v            = "auto"         # Value cache dtype (resolved by policy)
+kv_cache_policy         = "balanced"     # "balanced", "quality", or "saver"
 kv_offload              = "auto"        # KV-cache offload policy
 prompt_cache            = "auto"        # Prompt-cache policy
 flash_attention         = "auto"        # Flash-attention policy
