@@ -1,100 +1,69 @@
-# llama.cpp canary patch-queue repair runbook (agent instructions)
+# llama.cpp changed-pin canary developer task
 
-You are running on the `family-certify` self-hosted runner inside a mesh-llm
-checkout. The nightly llama-upstream canary either failed to apply our patch
-queue in `third_party/llama.cpp/patches/` onto the new upstream pin
-(patch-queue mode) or applied the queue but failed a certification lane
-(battery mode). Your job:
+You are working on a trusted `main` checkout on the `family-certify`
+self-hosted runner. Complete the llama.cpp upstream update as one developer
+task. The harness has written the exact target SHA to
+`third_party/llama.cpp/upstream.txt` and `.deps/llama-canary-target-sha`.
 
-**Before touching the queue, read the repo skills and follow them:**
-`.agents/skills/llama-patch-changes/SKILL.md` (queue edits, upstream pin,
-prepare/build flow, patch ownership boundaries) and, when a patch changes the
-stage ABI, `.agents/skills/llama-stage-patch-changes/SKILL.md`. The boundaries
-in those skills are hard requirements for this repair, not suggestions.
+Read `.agents/skills/llama-patch-changes/SKILL.md` before changing the queue.
+When the stage ABI changes, also read
+`.agents/skills/llama-stage-patch-changes/SKILL.md`. Their patch ownership,
+queue reconstruction, ABI, and validation rules are requirements.
 
-1. **Reproduce.** Run `scripts/prepare-llama.sh "$(cat .deps/llama-canary-target-sha)"`
-   and capture which patch fails to apply (`git -C .deps/llama.cpp am --3way ...`).
-   A `.git/rebase-apply` state may be left behind; use `git am --show-current-patch`
-   and `git am --3way --continue`/`--abort` to inspect the conflict.
+Own the repair end to end:
 
-2. **Fix the queue — follow `llama-patch-changes`, do not loop on `git am`.**
-   If a patch fails to apply, `git am --3way` retry alone is not an acceptable
-   resolution: a conflict means upstream refactored code a patch owns, and the
-   skill's deliberate queue rewrite is the required path. Resolve the conflict
-   on a llama.cpp branch (base on upstream `ggml-org/llama.cpp` `master` at the
-   canary target SHA), reconstruct capability-owned commits, verify the
-   reconstructed head is tree-identical to the intended final checkout, then
-   regenerate the series with `git format-patch` per the skill. Keep the series
-   ordered, keep every patch that still applies unchanged, and make the minimal
-   semantic fix in the broken ones. Regenerate the series so
-   `scripts/prepare-llama.sh` runs clean end to end.
+1. Run `scripts/prepare-llama.sh pinned` and inspect the first real failure. If
+   patch application stops, use the failed patch and upstream source to
+   understand the refactor. Reconstruct the affected capability commits on the
+   target llama.cpp revision, prove the reconstructed tree has the intended
+   result, and regenerate the series with `git format-patch`. Repeating
+   `git am --3way` without resolving the semantic conflict is not a repair.
+2. Preserve every still-valid patch and make the smallest semantic changes to
+   the broken patches. Keep the queue ordered. Do not delete instrumentation or
+   weaken a gate to get a build through.
+3. Generate model-builder stage controls through the Clang rewriter and
+   `scripts/generate-skippy-family-patch.py`. Do not hand-edit per-family stage
+   filtering or `begin_block`/`end_block` patches. Extend general AST rules for
+   conventional upstream shapes. Preserve an exact `unsupported_shape` refusal
+   for irregular builders until a sound general rule exists.
+4. Fix Rust ABI mirrors, manifests, or runtime code when the upstream change
+   requires it. Bump the prepare schema and ABI version together where the
+   repository skills require that. A model row may change only when runtime
+   evidence shows that its immutable manifest data is stale.
+5. Run the canonical path repeatedly until it is green: prepare, the complete
+   patched llama.cpp build with upstream tests, the generated-family check, all
+   four Rust package builds, Skippy smoke tests, parity validation, the
+   `llama-bump` family plan, the live package-v2 matrix, and the full family
+   battery. Inspect failures and continue repairing rather than stopping after
+   the first partial pass.
 
-   Model-builder stage controls live in the single generated family patch.
-   Run the Clang rewriter and `scripts/generate-skippy-family-patch.py`; do not
-   hand-edit per-family stage-filter or `begin_block`/`end_block` patches. A
-   conventional builder must be regenerated from its proven source shape. An
-   irregular builder remains unchanged with the rewriter's precise
-   `unsupported_shape` reason until a sound general rule exists.
+The models are already available in the runner's `HF_CACHE`. Stay offline and
+do not add Actions caching or download logic. Every runnable `model_pin` row
+must still resolve its exact GGUF bytes, package as source-complete package-v2,
+pass independent verification, and pass the two-node split smoke. Full family
+certification must retain all planned single-step, chain, state-handoff, native
+draft, and multimodal lanes.
 
-3. **Build.** `scripts/build-llama.sh` then
-   `cargo check -p skippy-ffi -p skippy-runtime -p skippy-server`.
+Leave the finished changes uncommitted in the current mesh-llm checkout. Do not
+change the target pin, create or switch branches, commit, push, use GitHub
+credentials, or open or edit a pull request. Do not edit `.github/`,
+`.agents/`, any file under `scripts/`, `ci/ci.md`, or this runbook. Those files
+define the trusted verification boundary. Repair the patch queue, rewriter
+implementation, Rust code, and model manifests that the fixed gates exercise.
 
-4. **Certify.** `scripts/skippy-family-battery.sh --skip-build`.
-   All lanes must pass. Do not weaken a failing lane; if a model is genuinely
-   broken by upstream, revert to fixing our patches or flag it in the PR body.
-   The wrapper re-runs the battery itself after your turn; if lanes fail you
-   will get the failure output in a follow-up repair turn — the loop only
-   ends when the wrapper's own battery run passes.
-
-5. **Commit locally; the wrapper owns the PR.** Work on branch
-   `llama-canary/patch-queue-fix`. Commit the patch-queue changes with a
-   `fix(llama): rebase patch queue onto upstream <short-sha>` message. You
-   have no GitHub credentials: the deterministic wrapper that drives you
-   keeps the repair local while repair and certification are active, then
-   commits any remaining work, pushes the branch, and creates/updates the
-   repair PR only at terminal success or failure. The wrapper separately asks
-   you to write the full PR
-   description (key upstream changes, how the patch queue evolved, risks for
-   reviewers) — when that turn arrives, write the finished Markdown to the
-   file it names and touch nothing else. After the wrapper's own battery run
-   passes, a separate review agent — not you — gets one fresh-context turn
-   to review the certified repair and fix any dropped intent or rebase
-   leftovers it finds; its changes land as their own `review(llama):`
-   commit locally and must pass the complete battery again before the wrapper
-   publishes the branch and PR.
-
-Notes:
-- Models come from the runner's pre-warmed HF cache (`HF_CACHE`); `hf download`
-  is only a miss backstop. Never add GitHub Actions model caching.
-- The deterministic wrapper owns the sole upstream selector,
-  `third_party/llama.cpp/upstream.txt`. It writes it to the repair target and
-  validates the queue through `scripts/prepare-llama.sh pinned`; do not edit
-  the pin file yourself.
-- Do not modify files outside `third_party/llama.cpp/patches/` unless the
-  Rust ABI mirrors in `crates/` genuinely need to track a patch ABI change
-  (bump `PREPARE_SCHEMA`/ABI version together in that case). Existing
-  model-manifest rows may be corrected when a battery failure proves they are
-  stale. Do not add a checkpoint merely because an upstream builder is new;
-  the source rewriter supplies structural stage-control coverage.
+After you finish, the trusted harness independently reruns the complete gate
+sequence on the exact working tree. Only that verification may create the local
+certified commit; a later success-gated step owns GitHub publication.
 
 ## New upstream model families
 
-Run the source rewriter across every `src/models/*.cpp` translation unit. A
-new conventional builder should appear in the consolidated generated patch
-without a family-specific rule or checkpoint. If it reports
-`unsupported_shape`, preserve the refusal and add a general AST rule only when
-the activation loop and ownership edits can be proved. Never use an
-architecture name or tensor spelling as the eligibility predicate.
+Run the source rewriter across every `src/models/*.cpp` translation unit. A new
+conventional builder belongs in the consolidated generated patch without a
+family-specific rule or checkpoint. If it reports `unsupported_shape`, add a
+general AST rule only when the activation loop and ownership edits can be
+proved. Never use an architecture name or tensor spelling as the eligibility
+predicate.
 
-The family manifests remain the executable numeric battery. New source
-coverage does not automatically create a new model row and does not trigger a
-download. Add or change a row only when there is an independent numeric,
-backend, or state-pattern reason and immutable artifact evidence is available.
-
-The canary continues to run `scripts/skippy-canary-live-matrix.sh` after the smoke
-gates: every runnable `model_pin` row must resolve its pinned GGUF, pass
-size/sha256 verification, package as source-complete package-v2, pass
-independent `verify-package-v2`, and pass the two-node split smoke. Its
-per-row evidence lives under `target/family-battery/<run>/live-matrix/` in
-the uploaded battery artifact; a failed existing row routes here for a
-semantic patch or manifest repair backed by that evidence.
+Source coverage alone does not add a family manifest row or trigger a model
+download. Add or change a row only for an independent numeric, backend, or
+state-pattern reason backed by immutable artifact evidence.

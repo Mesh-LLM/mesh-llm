@@ -18,6 +18,7 @@ pub mod package;
 mod path_cstring;
 mod runtime_events;
 mod session;
+mod stage_planning;
 mod types;
 
 pub use activation::{DecodeFrameBatchRequest, IterationBatchPhase, IterationBatchRequest};
@@ -52,6 +53,7 @@ pub use skippy_ffi::{
     ACTIVATION_FLAG_GEMMA3N_ALTUP, ACTIVATION_SIDEBAND_TOKEN_IDS,
     ActivationDType as RuntimeActivationDType, ActivationLayout as RuntimeActivationLayout,
 };
+pub use stage_planning::plan_gguf_stage_resident_tensor_names;
 pub use types::{
     ActivationBoundaryDesc, ActivationDesc, ActivationFrame, ChatReasoningFormat,
     ChatTemplateJsonOptions, ChatTemplateJsonResult, ChatTemplateMessage, ChatTemplateOptions,

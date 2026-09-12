@@ -209,6 +209,7 @@ fn main() {
     println!("cargo:rustc-link-lib=static=ggml-base");
 
     if target.contains("apple") {
+        link_apple_openmp_libs(&cmake_cache);
         println!("cargo:rustc-link-lib=c++");
         println!("cargo:rustc-link-lib=framework=Accelerate");
         if static_archive_exists(
@@ -544,6 +545,20 @@ fn link_windows_openmp_libs(cmake_cache: &std::path::Path) {
     }
 }
 
+fn link_apple_openmp_libs(cmake_cache: &std::path::Path) {
+    let libs = openmp_libs(cmake_cache, "omp");
+    for path in cmake_openmp_search_paths(cmake_cache, &libs) {
+        if path.is_dir() {
+            println!("cargo:rustc-link-search=native={}", path.display());
+        }
+    }
+
+    for lib in libs {
+        let link_name = lib.strip_prefix("lib").unwrap_or(&lib);
+        println!("cargo:rustc-link-lib=dylib={link_name}");
+    }
+}
+
 fn link_linux_hip_libs() {
     // Add ROCm library search paths
     for search_path in ["/opt/rocm/lib", "/opt/rocm/hip/lib"] {
@@ -571,6 +586,21 @@ fn windows_openmp_search_paths(
     cmake_cache: &std::path::Path,
     libs: &[String],
 ) -> Vec<std::path::PathBuf> {
+    let mut paths = cmake_openmp_search_paths(cmake_cache, libs);
+    for env_name in ["ROCM_PATH", "HIP_PATH", "LLVMInstallDir"] {
+        if let Ok(root) = std::env::var(env_name) {
+            for suffix in ["lib", "llvm/lib"] {
+                push_unique_path(&mut paths, std::path::PathBuf::from(&root).join(suffix));
+            }
+        }
+    }
+    paths
+}
+
+fn cmake_openmp_search_paths(
+    cmake_cache: &std::path::Path,
+    libs: &[String],
+) -> Vec<std::path::PathBuf> {
     let mut paths = Vec::new();
     if let Ok(cache) = std::fs::read_to_string(cmake_cache) {
         for lib in libs {
@@ -588,15 +618,6 @@ fn windows_openmp_search_paths(
             }
         }
     }
-
-    for env_name in ["ROCM_PATH", "HIP_PATH", "LLVMInstallDir"] {
-        if let Ok(root) = std::env::var(env_name) {
-            for suffix in ["lib", "llvm/lib"] {
-                push_unique_path(&mut paths, std::path::PathBuf::from(&root).join(suffix));
-            }
-        }
-    }
-
     paths
 }
 

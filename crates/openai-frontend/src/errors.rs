@@ -11,6 +11,7 @@ pub struct OpenAiError {
     status: StatusCode,
     message: String,
     error_type: String,
+    param: Option<String>,
     code: Option<String>,
     retry_after_secs: Option<u64>,
 }
@@ -42,6 +43,7 @@ impl OpenAiError {
             status,
             message: message.into(),
             error_type: error_type.to_string(),
+            param: None,
             code: Some(code.to_string()),
             retry_after_secs: None,
         }
@@ -147,6 +149,11 @@ impl OpenAiError {
         self
     }
 
+    pub fn with_param(mut self, param: impl Into<String>) -> Self {
+        self.param = Some(param.into());
+        self
+    }
+
     pub fn with_retry_after_secs(mut self, retry_after_secs: u64) -> Self {
         self.retry_after_secs = Some(retry_after_secs);
         self
@@ -157,7 +164,7 @@ impl OpenAiError {
             error: ErrorBody {
                 message: self.message.clone(),
                 error_type: self.error_type.clone(),
-                param: None,
+                param: self.param.clone(),
                 code: self.code.clone(),
             },
         }

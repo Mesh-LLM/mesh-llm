@@ -21,7 +21,7 @@ Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 | `main_windows.yml` (`Main · Windows`) | push to `main` | Exhaustive main planning plus the same-commit reusable Windows lane |
 | `ci.yml` | `workflow_call` only | Temporary inert shim for the former main ingress filename; pending protected-main runner-contract update; no push trigger or dispatch |
 | `ci-control.yml` (`CI · Manual Full`) | dispatch on default branch | Explicit operator-only full plan, bounded lane dispatch and correlated diagnostic checks |
-| `release.yml` | release tags, dispatch | Canonical version synchronization, release-only signing, assets and publication |
+| `release.yml` | dispatch on the default branch | Canonical version synchronization, release-only signing, assets, publication, post-publish release-notes regrouping, and a preflighted downstream `mesh-packaging` dispatch |
 | `website-pages.yml` | main website paths, dispatch | Public website deployment |
 | `pr_cleanup.yml` | PR close, dispatch | Positively matched cleanup only |
 | `pr_auto_assign.yml` | PR lifecycle | Metadata only |
@@ -39,7 +39,8 @@ for a much larger deterministic radix/blob ownership corpus. It uses the
 pinned `public cpu` image, has no secrets, records exact seed/step budgets and
 source SHA, and uploads the reproducible failure log.
 `llama-upstream-canary.yml` runs only on its daily schedule or an explicit
-manual dispatch; it is not ordinary push or PR CI. It executes trusted
+manual dispatch; it is not ordinary push or PR CI. One fixed concurrency group
+lets a new canary supersede stale in-progress work. It executes trusted
 default-branch content only on the persistent self-hosted `family-certify`
 runner group (tools come from the runner image; no GitHub Actions model
 caching). Before native compilation,
@@ -52,16 +53,19 @@ shard, and requires every shard that carries `*.block_count` and
 before compilation; Qwen4 experimental artifacts derive their wider boundary
 from `hyper_connection.count * embedding_length`. It emits
 deterministic bounded GitHub matrix shards; the current one-runner topology consumes one
-selected-family shard while retaining the plan as evidence. On a changed llama.cpp pin,
-the canary diffs the actual old and new upstream revisions inside the prepared llama.cpp
-checkout. A change limited to model implementation files named by the generated-family
-map selects their certified families plus fixed architecture sentinels. Any shared
-upstream source, unmapped model source, or unavailable diff fails closed to the full
-bump battery; non-bump runs retain their cadence-owned cohort. The runner's `.env` exports
-`HF_CACHE` pointing at a pre-warmed HF cache that lives on the lab NFS models
+selected-family shard while retaining the plan as evidence. Changed llama.cpp pins
+always run the complete `llama-bump` family cohort; non-bump runs retain their
+cadence-owned cohort. The workflow requires `HF_CACHE` to be exactly
+`/Users/lab/models/huggingface`, requires its `hub` directory, and exports
+`HF_HOME` and `HF_HUB_CACHE` from that canonical root for every later step.
+The runner's `.env` exports `HF_CACHE` pointing at that pre-warmed cache on the lab NFS models
 volume and `HF_HUB_OFFLINE=1` (NFS offers no `flock`, so `hf` on the runner is
 read-only; the cache is populated by a two-stage prewarm that downloads on
-local disk and moves each repo to NFS). The workflow builds its four
+local disk and moves each repo to NFS). On Apple Silicon, the wrapper and
+generated-family rewriter re-exec as native arm64 before creating build state;
+the rewriter discards a CMake cache for any other architecture. Correctness
+lanes derive filtered-load resident tensor names from the native stage graph
+planner, including GGUFs with non-finite metadata values. The workflow builds its four
 certification binaries before the manifest lanes; the family battery builds
 them once itself unless `--skip-build` is selected, in which case it verifies
 that every binary already exists. A scheduled unchanged pin selects the four
@@ -84,48 +88,106 @@ evidence, and logs are uploaded for 14 days even when the battery fails. Stage
 readiness uses a declared per-model override or a model-size-derived deadline,
 each complete certification has
 a portable process-group wall-clock limit, and the workflow's outer battery
-ceiling is 12 hours. On a
-patch-apply failure it hands the queue to a non-interactive `opencode` agent
+ceiling is 12 hours. For a changed pin, one non-interactive `opencode` agent
 (`CANARY_AGENT_MODEL`, default `zai-coding-plan/glm-5.3-flash`, overridable
-via the `LLAMA_CANARY_AGENT_MODEL` repository variable) which rebases
-`third_party/llama.cpp/patches`, runs the supported-families certification
-battery (`scripts/skippy-family-battery.sh`), and keeps the repair local until
-the run reaches terminal success or failure. Only then does the wrapper publish
-or reuse the repair PR on `llama-canary/patch-queue-fix`. The deterministic
-wrapper writes the sole
-upstream selector, `third_party/llama.cpp/upstream.txt`, to the resolved repair
-target, prepares through the checked-in `pinned`
-selector, and verifies the prepared-upstream stamp before any repair branch is
-published or certified. The same repair loop also runs when the queue applies
-but a certification lane fails (`battery` mode). After each agent turn the
-repair script itself runs the battery and, on failure, loops certify -> agent fix ->
-recertify up to `CANARY_REPAIR_MAX_TURNS` (default 2) turns; the script only
-succeeds when the wrapper's own battery run passes. After the first green
-battery, a fresh-context semantic review runs locally; any changes it makes
-must pass the complete battery again. Every terminal outcome (battery green,
-queue still broken, battery exhausted) then publishes the branch and posts a
-status comment on the repair PR — creating the PR (or a fallback issue) itself
-if the agent did not — and an earlier agent turn writes the PR description (key
-upstream changes, patch-queue evolution, risks) with a deterministic fallback. Repair pushes and
-PR operations authenticate with the `CANARY_REPAIR_TOKEN` fine-grained PAT;
-the canary job itself remains `contents: read`. Any repair outcome keeps the
-canary run red: the certified fix must be merged from the repair PR before
-trusted main can certify. The upstream pin commit to
-`main` is gated on the battery passing and writes the sole upstream pin from
-the validated SHA.
+through `LLAMA_CANARY_AGENT_MODEL`) receives the complete developer task:
+repair or regenerate the patch queue, address ABI fallout, and iterate through
+the canonical prepare, build, smoke, live-matrix, and family-certification
+commands. The agent has a 450-minute ceiling and no GitHub credentials. It may
+leave only uncommitted candidate changes and cannot alter `.github/`,
+`.agents/`, `scripts/`, `ci/ci.md`, or its runbook. Those paths form the fixed
+verification boundary.
+
+The repair job snapshots the agent result as an unreachable commit and uploads
+a thin candidate bundle. A separate self-hosted verification job and checkout
+download that bundle, materialize its commit in a fresh detached worktree, and
+run one ordered `prepare -> build -> certify` pass with a 240-minute budget. The
+verification job independently resolves the installed Homebrew LLVM prefix and
+exports `SKIPPY_REWRITER_LLVM_PREFIX` before invoking the generated-family
+rewriter check because `GITHUB_ENV` state does not cross job boundaries. The
+wrapper owns the exact upstream selector, validates the prepared-upstream stamp,
+runs the patched llama.cpp/native-test and Rust build gates, and completes the
+full supported-family certification using new native-build and family-evidence
+directories. Only the passing bundle is uploaded as a one-day certified
+artifact. A separate success-gated job on a fresh
+GitHub-hosted runner receives the `CANARY_REPAIR_TOKEN`, validates the bundle,
+pushes the unique
+`llama-canary/repair-<run>-<attempt>-<upstream>` branch through a run-scoped
+askpass helper, and opens a normal PR bound to that exact commit. That publisher
+is outside the cancellable self-hosted runner concurrency group, and PR
+creation is its final external mutation. Any agent or verification failure
+uploads evidence and publishes no branch or PR. A green
+publication leaves the canary green; changed pins are never pushed directly to
+`main`. Changed-pin evidence uses its own `llama-canary-changed-pin-*` artifact
+namespace. A GitHub-hosted metadata-only job with Actions-read and Issues-write
+permissions opens or updates one alert after two consecutive non-successful
+scheduled runs, and closes that alert after a successful scheduled recovery.
+Unchanged scheduled and forced certifications stay read-only and never invoke
+the repair agent.
 
 For a non-canary manual dispatch, `release.yml` runs the checked-in
 `scripts/release-version.sh`, creates one linear release-source commit when the
 tracked version surface changes, and fast-forwards `main` before any release
 build starts. `just release` is a preflight and synchronous dispatcher for that
-same workflow. A tag-push release is read-only with respect to `main` and is
-accepted only when the tag is already reachable from `main` and applying the
-same version script produces no tracked diff. Canary dispatches never update
-`main` or publish. The publish job creates only the release-specific tag commit
+same workflow. Canary dispatches never update `main` or publish. The publish job
+creates only the release-specific tag commit
 for generated Swift/SDK resources and enables GitHub-generated release notes.
 The comparison base is the highest stable `vMAJOR.MINOR.PATCH` tag below the
 target; prerelease tags are excluded so RC and final notes use the same stable
 baseline.
+
+The `release_notes` job runs after a successful stable publish with
+`contents: write` and regroups that published body into Keep a Changelog
+sections through `scripts/release-notes-generate.sh`. The deterministic
+classifier maps Conventional Commits types from the canonical commit range; the
+optional agent review pass runs only when `RELEASE_NOTES_AGENT_MODEL` is set,
+the agent CLI is installed, credentials exist, and a bounded liveness probe
+succeeds. The agent turn runs with `GH_TOKEN` and `GITHUB_TOKEN` stripped and
+never publishes. Any agent failure keeps the deterministic notes without
+failing the job. Evidence uploads as `release-notes-<tag>` for 90 days.
+
+Merge settings as of 2026-09-10: `allow_merge_commit=false`,
+`allow_rebase_merge=true`, `allow_squash_merge=true`,
+`squash_merge_commit_title=PR_TITLE`, and
+`squash_merge_commit_message=PR_BODY`. The title and body settings were
+changed from `COMMIT_OR_PR_TITLE` and `COMMIT_MESSAGES` on that date.
+`COMMIT_MESSAGES` composed the squash body from the branch commit messages,
+which carried agent and bot `Co-authored-by:` trailers onto `main` even when
+the pull request title was clean. Composing from the title and body instead
+means the squash commit contains only text CI has validated. GitHub may still
+add its own `Co-authored-by:` trailer for a pull request whose commits have
+several distinct authors; no message-level control prevents that.
+
+Attribution-trailer enforcement is CI plus merge-message composition, not a
+ruleset. A negated `commit_message_pattern` ruleset was created, measured and
+deleted on 2026-09-10. Rulesets accept commit-metadata rules on any plan and
+report them `active`, but GitHub gates metadata restrictions to Enterprise
+organizations and this organization is on Team, so the rule was never
+evaluated. Four pushes carrying the denied literal were accepted: branch
+creation and branch update, with both the `regex` and `contains` operators,
+from a ruleset reporting `current_user_can_bypass: "never"`. Do not re-add a
+commit-metadata rule here expecting it to enforce anything.
+
+What enforces the convention instead:
+
+- `scripts/hooks/commit-msg` locally, installed by `just hooks-install` and by
+  the first local development build on every platform.
+- The `commit_convention` job in `ci-quality-slice.yml`, which validates the
+  pull request title against Conventional Commits and scans every branch
+  commit message plus the pull request body for denied attribution trailers.
+  It declares no `needs`, so it fails within a minute rather than after a lane
+  has compiled anything, and runs only for `pull_request` events.
+  Pull-request-authored text reaches the script through environment variables
+  and is never interpolated into the shell.
+- Merge-message composition. `squash_merge_commit_title=PR_TITLE` and
+  `squash_merge_commit_message=PR_BODY` since 2026-09-10, replacing
+  `COMMIT_OR_PR_TITLE` and `COMMIT_MESSAGES`. The squash commit is built from
+  the title and body that CI validated, so a branch commit that skipped the
+  hook cannot carry a trailer onto `main`.
+
+The four `main` ruleset bypass actors remain deliberately: maintainers need a
+fast merge path. Required checks therefore do not bind them, and the CI check
+is the control for everyone else.
 
 The five PR lifecycle rows and five main push rows above are the complete
 allowed routine validation entry sets. The protected sibling monitor is
@@ -153,7 +215,7 @@ it after the protected-main runner-contract update is active.
 | `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers |
 | `ci-{linux,macos,windows}-product-slice.yml` | Platform-pure composition-only product consumers |
 | `ci-platform-checks-slice.yml` | macOS portable/unit, Windows portable, and Windows log-store privacy ACL checks |
-| `ci-linux-product-smoke-slice.yml`, `ci-macos-product-smoke-slice.yml` | Platform-local callers of the typed CPU/CUDA/Vulkan (`gpu-nvidia` self-hosted), conditional ROCm (`gpu-amd`), and Metal product-integration suite plus model-download. The suite stages the registry-pinned SmolLM2 Q8 and IBM Granite 4.0 H Q4 pair once, runs dense standalone/SDK/restart, then dense passive-client split routing and strict recurrent `KvRecurrent` validation. Each split phase persists strict-whitelist seed/worker node, mesh, and peer identity plus stage/model snapshots, then atomically reconciles exact two-observer, topology/run/model/package/manifest, two-stage contiguous-cut and bind-address, ready-status, and served-model agreement. A capped five-minute wall-clock deadline with parallel, bounded endpoint capture finalizes failure evidence before workflow cancellation; the status projection excludes invite tokens, nested fields, and unrelated paths. Product reconciliation independently verifies both evidence files, records their paths and SHA-256 digests in `phase-results.json`, rejects missing or modified evidence, and uploads every JSON snapshot/evidence file with logs on success or failure. ROCm skips unless `MESH_ROCM_INFERENCE_RUNNER_ENABLED` is exactly `true`; accelerator product-integration rows remain outside the checked plan pending live qualification. |
+| `ci-linux-product-smoke-slice.yml`, `ci-macos-product-smoke-slice.yml` | Platform-local callers of the typed CPU/CUDA/Vulkan (`gpu-nvidia` self-hosted), conditional ROCm (`gpu-amd`), and Metal product-integration suite plus model-download. The suite stages the registry-pinned SmolLM2 Q8 and IBM Granite 4.0 H Q4 pair once, runs dense standalone/SDK/restart, then dense passive-client split routing and strict recurrent `KvRecurrent` validation. Each split phase persists strict-whitelist seed/worker node, mesh, and peer identity plus stage/model snapshots, then atomically reconciles exact two-observer, topology/run/model/package/manifest, two-stage contiguous-cut and bind-address, ready-status, and served-model agreement. A capped five-minute wall-clock deadline with parallel, bounded endpoint capture finalizes failure evidence before workflow cancellation; the status projection excludes invite tokens, nested fields, and unrelated paths. Product reconciliation independently verifies both evidence files, records their paths and SHA-256 digests in `phase-results.json`, rejects missing or modified evidence, and uploads every JSON snapshot/evidence file with logs on success or failure. Linux CUDA packages admit only the reviewed cudart, cuBLAS, cuBLASLt, and nvJitLink families for the declared CUDA major, retain NVIDIA object bytes, and include the toolkit distribution license. The Linux CUDA smoke verifies that closure with `LD_LIBRARY_PATH` unset; cudart and cuBLAS are not installed by apt, and the NVIDIA driver remains host-owned. Before inference, it records CUDA visibility variables, host driver-library resolution and NVIDIA device nodes, then runs the packaged benchmark's device-count probe without benchmark allocations, using inherited and strict packaged-library resolution. ROCm skips unless `MESH_ROCM_INFERENCE_RUNNER_ENABLED` is exactly `true`; accelerator product-integration rows remain outside the checked plan pending live qualification. |
 | `ci-linux-sdk-slice.yml`, `ci-macos-sdk-slice.yml` | Platform-local Rust/Kotlin/Swift smoke consumers; SDK producers are independent top-level calls and each smoke receives the lane-local immutable UI artifact |
 | `ci-runner-contract-slice.yml` | Provider/cache/plan trust and main runner-image checks |
 | `native-sdk-artifact.yml` | Typed native SDK producer |

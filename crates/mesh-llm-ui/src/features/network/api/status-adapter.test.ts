@@ -166,25 +166,42 @@ describe('adaptStatusToDashboard', () => {
     )
   })
 
-  it('uses per-GPU rated VRAM for mesh aggregate display before legacy totals', () => {
+  it('uses advertised capacity for mesh VRAM so the headline matches /api/status and doctor split', () => {
     const dashboard = adaptStatusToDashboard({
       ...PUBLIC_STATUS_PAYLOAD,
-      my_vram_gb: 30.15,
-      gpus: [{ idx: 0, name: 'local-gpu', total_vram_gb: 30.15, rated_vram_gb: 32, vram_bytes: 32_000_000_000 }],
+      my_vram_gb: 115.448725504,
+      gpus: [
+        {
+          idx: 0,
+          name: 'Apple M4 Max',
+          rated_vram_gb: 128,
+          vram_bytes: 115_448_725_504,
+          allocatable_vram_bytes: 115_448_725_504
+        }
+      ],
       peers: [
         {
           id: 'remote-serving',
           role: 'Host',
           state: 'serving',
           models: [],
-          vram_gb: 20,
+          vram_gb: 44.02970624,
           gpus: [
             {
               idx: 0,
-              name: 'remote-gpu',
-              total_vram_gb: 22.35,
-              rated_vram_gb: 24,
-              vram_bytes: 24_000_000_000
+              name: 'NVIDIA GeForce RTX 5090',
+              rated_vram_gb: 32,
+              vram_bytes: 34_190_917_632,
+              reserved_bytes: 514_850_816,
+              allocatable_vram_bytes: 33_676_066_816
+            },
+            {
+              idx: 1,
+              name: 'NVIDIA GeForce RTX 3080',
+              rated_vram_gb: 10,
+              vram_bytes: 10_737_418_240,
+              reserved_bytes: 383_778_816,
+              allocatable_vram_bytes: 10_353_639_424
             }
           ],
           hostname: 'remote-serving'
@@ -192,12 +209,86 @@ describe('adaptStatusToDashboard', () => {
       ]
     })
 
+    // 115.4 + 44.0 advertised, not the 128 + 32 + 10 = 170 rated sum.
     expect(dashboard.statusMetrics.find((metric) => metric.id === 'mesh-vram')).toEqual(
-      expect.objectContaining({ value: '56.0', unit: 'GB' })
+      expect.objectContaining({ value: '159.5', unit: 'GB' })
     )
-    expect(dashboard.peers.find((peer) => peer.id === '16ce0bb4de')).toEqual(expect.objectContaining({ vramGB: 32 }))
+    expect(dashboard.statusMetrics.find((metric) => metric.id === 'mesh-vram')).not.toHaveProperty('meta')
+    expect(dashboard.peers.find((peer) => peer.id === '16ce0bb4de')).toEqual(
+      expect.objectContaining({ vramGB: 115.448725504 })
+    )
     expect(dashboard.peers.find((peer) => peer.id === 'remote-serving')).toEqual(
-      expect.objectContaining({ vramGB: 24 })
+      expect.objectContaining({ vramGB: 44.02970624 })
+    )
+    expect(dashboard.peerSummary.capacity).toBe('159 GB')
+  })
+
+  it('excludes client-role nodes from Mesh Capacity even when they advertise VRAM', () => {
+    const dashboard = adaptStatusToDashboard({
+      ...PUBLIC_STATUS_PAYLOAD,
+      my_vram_gb: 115.4,
+      peers: [
+        { id: 'host-peer', role: 'Host', state: 'serving', models: [], vram_gb: 44, hostname: 'host-peer' },
+        { id: 'client-peer', role: 'Client', state: 'client', models: [], vram_gb: 24, hostname: 'client-peer' },
+        {
+          id: 'client-by-node-state',
+          role: 'Worker',
+          node_state: 'client',
+          models: [],
+          vram_gb: 16,
+          hostname: 'client-by-node-state'
+        }
+      ]
+    })
+
+    expect(dashboard.statusMetrics.find((metric) => metric.id === 'mesh-vram')).toEqual(
+      expect.objectContaining({ value: '159.4', unit: 'GB' })
+    )
+    expect(dashboard.peers.find((peer) => peer.id === 'client-peer')).toEqual(expect.objectContaining({ vramGB: 0 }))
+    expect(dashboard.peers.find((peer) => peer.id === 'client-by-node-state')).toEqual(
+      expect.objectContaining({ vramGB: 0 })
+    )
+    expect(dashboard.peerSummary.capacity).toBe('159 GB')
+  })
+
+  it('suppresses local capacity in Mesh Capacity when this node is a client', () => {
+    const dashboard = adaptStatusToDashboard({
+      ...PUBLIC_STATUS_PAYLOAD,
+      node_state: 'client',
+      my_vram_gb: 115.4,
+      peers: [{ id: 'host-peer', role: 'Host', state: 'serving', models: [], vram_gb: 44, hostname: 'host-peer' }]
+    })
+
+    expect(dashboard.statusMetrics.find((metric) => metric.id === 'mesh-vram')).toEqual(
+      expect.objectContaining({ value: '44.0', unit: 'GB' })
+    )
+    expect(dashboard.peers.find((peer) => peer.id === '16ce0bb4de')).toEqual(expect.objectContaining({ vramGB: 0 }))
+  })
+
+  it('falls back to allocatable GPU inventory, then rated class, when a node advertises no capacity', () => {
+    const dashboard = adaptStatusToDashboard({
+      ...PUBLIC_STATUS_PAYLOAD,
+      my_vram_gb: 0,
+      gpus: [
+        { idx: 0, name: 'local-gpu', rated_vram_gb: 32, vram_bytes: 32_000_000_000, reserved_bytes: 1_000_000_000 }
+      ],
+      peers: [
+        {
+          id: 'legacy-peer',
+          role: 'Host',
+          state: 'serving',
+          models: [],
+          vram_gb: 0,
+          gpus: [{ idx: 0, name: 'legacy-gpu', rated_vram_gb: 24 }],
+          hostname: 'legacy-peer'
+        }
+      ]
+    })
+
+    expect(dashboard.peers.find((peer) => peer.id === '16ce0bb4de')).toEqual(expect.objectContaining({ vramGB: 31 }))
+    expect(dashboard.peers.find((peer) => peer.id === 'legacy-peer')).toEqual(expect.objectContaining({ vramGB: 24 }))
+    expect(dashboard.statusMetrics.find((metric) => metric.id === 'mesh-vram')).toEqual(
+      expect.objectContaining({ value: '55.0', unit: 'GB' })
     )
   })
 
@@ -522,5 +613,65 @@ describe('adaptStatusToDashboard', () => {
     const peer = dashboard.peers.find((p) => p.id === 'rtt-peer')
     expect(peer).toBeDefined()
     expect(peer!.latencyMs).toBe(12.5)
+  })
+})
+
+describe('advertised memory in the dashboard adapter', () => {
+  const memory = {
+    total_bytes: 12_000_000_000,
+    reserved_bytes: 500_000_000,
+    platform_reserve_bytes: 0,
+    configured_reserve_bytes: 2_000_000_000,
+    usable_bytes: 9_500_000_000,
+    system_ram_bytes: 32_000_000_000,
+    ram_offload_bytes: 18_000_000_000
+  }
+
+  it('carries the breakdown each node advertises into the node model without touching totals', () => {
+    const dashboard = adaptStatusToDashboard({
+      ...PUBLIC_STATUS_PAYLOAD,
+      my_vram_gb: 9.5,
+      my_memory: memory,
+      peers: [
+        {
+          ...PUBLIC_STATUS_PAYLOAD.peers[0],
+          role: 'Worker',
+          state: 'serving',
+          vram_gb: 37,
+          memory: {
+            ...memory,
+            total_bytes: 40_000_000_000,
+            reserved_bytes: 1_000_000_000,
+            usable_bytes: 37_000_000_000
+          }
+        }
+      ]
+    })
+
+    const [self, worker] = dashboard.peers
+    expect(self.memory).toEqual({
+      totalGB: 12,
+      reservedGB: 0.5,
+      platformReserveGB: 0,
+      configuredReserveGB: 2,
+      usableGB: 9.5,
+      systemRamGB: 32,
+      ramOffloadGB: 18
+    })
+    expect(self.vramGB).toBe(9.5)
+    expect(worker.memory?.totalGB).toBe(40)
+    expect(worker.memory?.usableGB).toBe(37)
+    expect(worker.vramGB).toBe(37)
+  })
+
+  it('leaves the breakdown absent for nodes that did not advertise one', () => {
+    const dashboard = adaptStatusToDashboard({
+      ...PUBLIC_STATUS_PAYLOAD,
+      peers: [{ ...PUBLIC_STATUS_PAYLOAD.peers[0], role: 'Worker', state: 'serving', vram_gb: 39 }]
+    })
+
+    const [self, worker] = dashboard.peers
+    expect(self.memory).toBeUndefined()
+    expect(worker.memory).toBeUndefined()
   })
 })
