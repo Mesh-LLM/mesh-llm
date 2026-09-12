@@ -1,6 +1,55 @@
 use super::*;
 use serial_test::serial;
 
+#[cfg(all(
+    target_os = "linux",
+    any(
+        not(feature = "skippy-devices"),
+        feature = "dynamic-native-runtime",
+        test
+    )
+))]
+struct TestDirectory(std::path::PathBuf);
+
+#[cfg(all(
+    target_os = "linux",
+    any(
+        not(feature = "skippy-devices"),
+        feature = "dynamic-native-runtime",
+        test
+    )
+))]
+impl TestDirectory {
+    fn new(label: &str) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("test clock follows Unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "mesh-llm-{label}-{}-{timestamp}-{id}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&path).expect("create collision-resistant test directory");
+        Self(path)
+    }
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(
+        not(feature = "skippy-devices"),
+        feature = "dynamic-native-runtime",
+        test
+    )
+))]
+impl Drop for TestDirectory {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 fn synthetic_gpu(index: usize, stable_id: Option<&str>) -> GpuFacts {
     GpuFacts {
         index,
@@ -414,11 +463,12 @@ fn test_tegra_collector_gpu_name_absent_leaves_source_none() {
     // model file present, which made the old `TegraCollector.collect` form flip
     // on such a host). With the model file absent, both the name and its source
     // must stay absent — never a guessed source for a name that was never read.
-    let missing = std::path::Path::new("/nonexistent/mesh-llm/tegra/devicetree/base/model");
+    let directory = TestDirectory::new("tegra-model-absent");
+    let missing = directory.0.join("missing-model");
     assert!(!missing.exists());
 
     let mut survey = HardwareSurvey::default();
-    tegra_gpu_name_from_model_path(&mut survey, missing);
+    tegra_gpu_name_from_model_path(&mut survey, &missing);
 
     assert_eq!(survey.gpu_name, None);
     assert_eq!(survey.gpu_name_source, None);
@@ -439,15 +489,14 @@ fn test_tegra_collector_gpu_name_absent_leaves_source_none() {
 fn test_tegra_collector_gpu_name_present_tags_sysfs_source() {
     use std::io::Write as _;
 
-    let path = std::env::temp_dir().join("mesh_llm_test_tegra_model_present");
+    let directory = TestDirectory::new("tegra-model-present");
+    let path = directory.0.join("model");
     let mut f = std::fs::File::create(&path).expect("create temp model file");
     write!(f, "NVIDIA Jetson AGX Orin Developer Kit\0").expect("write model file");
     drop(f);
 
     let mut survey = HardwareSurvey::default();
     tegra_gpu_name_from_model_path(&mut survey, &path);
-
-    let _ = std::fs::remove_file(&path);
 
     assert_eq!(survey.gpu_name.as_deref(), Some("Jetson AGX Orin"));
     assert_eq!(survey.gpu_name_source, Some(GpuNameSource::Sysfs));

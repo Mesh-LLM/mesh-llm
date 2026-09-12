@@ -102,7 +102,7 @@ gh_repair() {
 }
 
 check_repair_token_permissions() {
-  local login default_branch head_sha probe_branch probe_ref
+  local login default_branch head_sha probe_branch probe_ref probe_pr
   login="$(gh_repair gh api user --jq .login 2>/dev/null)" || {
     echo "preflight: CANARY_REPAIR_TOKEN does not authenticate" >&2
     return 1
@@ -119,6 +119,15 @@ check_repair_token_permissions() {
   if ! gh_repair gh api --method DELETE \
       "repos/${GITHUB_REPOSITORY:?}/git/refs/heads%2F${probe_branch}" >/dev/null 2>&1; then
     echo "preflight: WARNING: could not delete temporary ref ${probe_ref}" >&2
+  fi
+  probe_pr="$(gh_repair gh api "repos/${GITHUB_REPOSITORY:?}/pulls?state=all&per_page=1" --jq '.[0].number' 2>/dev/null)" || {
+    echo "preflight: could not select a pull request for the Pull requests: write capability probe" >&2
+    return 1
+  }
+  if [[ -z "$probe_pr" ]] || ! printf '%s\n' '{}' | gh_repair gh api --method PATCH \
+      "repos/${GITHUB_REPOSITORY:?}/pulls/${probe_pr}" --input - >/dev/null 2>&1; then
+    echo "preflight: identity '${login}' lacks Pull requests: write on ${GITHUB_REPOSITORY}" >&2
+    return 1
   fi
   echo "preflight: repair token identity '${login}' verified read+write on ${GITHUB_REPOSITORY}"
 }
@@ -143,6 +152,30 @@ run_bounded() {
   fi
   python3 scripts/run-command-with-timeout.py \
     --seconds "$seconds" --label "$label" -- "$@"
+}
+
+remaining_publication_seconds() {
+  local remaining
+  remaining="$((DEADLINE_AT - $(date +%s)))"
+  (( remaining > 0 )) || return 1
+  printf '%s\n' "$remaining"
+}
+
+run_publication_bounded() {
+  local label="$1" seconds
+  shift
+  if ! seconds="$(remaining_publication_seconds)"; then
+    echo "$label cannot start: internal canary deadline reached" >&2
+    return 124
+  fi
+  python3 scripts/run-command-with-timeout.py \
+    --seconds "$seconds" --label "$label" -- "$@"
+}
+
+gh_repair_bounded() {
+  local label="$1"
+  shift
+  GH_TOKEN="$CANARY_REPAIR_TOKEN" run_publication_bounded "$label" "$@"
 }
 
 run_logged() {
@@ -305,7 +338,8 @@ Failure evidence (tail):
 }
 
 current_pr() {
-  gh_repair gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number' 2>/dev/null || true
+  gh_repair_bounded "find terminal canary PR" gh pr list \
+    --head "$BRANCH" --state open --json number --jq '.[0].number'
 }
 
 commit_terminal_tree() {
@@ -330,7 +364,8 @@ publish_terminal_branch() {
   if [[ "$outcome" == "certified" ]]; then
     CERTIFIED_SHA="$PUBLISHED_SHA"
   fi
-  if ! GIT_ASKPASS="$GIT_ASKPASS_SCRIPT" GIT_TERMINAL_PROMPT=0 \
+  if ! run_publication_bounded "push terminal canary branch" env \
+      GIT_ASKPASS="$GIT_ASKPASS_SCRIPT" GIT_TERMINAL_PROMPT=0 \
       git push "https://github.com/${GITHUB_REPOSITORY}.git" \
       "HEAD:refs/heads/${BRANCH}" 2> >(redact_token >&2); then
     echo "ERROR: could not push ${BRANCH}; the identity behind CANARY_REPAIR_TOKEN needs Contents and pull-request write access" >&2
@@ -381,7 +416,8 @@ ensure_pr() {
   local -a create_args
   pr="$(current_pr)"
   if [[ -n "$pr" ]]; then
-    gh_repair gh pr edit "$pr" --body-file "$PR_BODY" >/dev/null
+    gh_repair_bounded "update terminal canary PR" gh pr edit \
+      "$pr" --body-file "$PR_BODY" >/dev/null
     printf '%s\n' "$pr"
     return 0
   fi
@@ -392,7 +428,8 @@ ensure_pr() {
     title="draft(llama): failed canary at ${UPSTREAM_SHA:0:10}"
     create_args=(--draft)
   fi
-  if ! created="$(gh_repair gh pr create --base main --head "$BRANCH" "${create_args[@]}" \
+  if ! created="$(gh_repair_bounded "create terminal canary PR" gh pr create \
+      --base main --head "$BRANCH" "${create_args[@]}" \
       --title "$title" --body-file "$PR_BODY" 2> >(redact_token >&2))"; then
     echo "ERROR: could not create the terminal canary PR for ${BRANCH}" >&2
     return 1
@@ -409,7 +446,8 @@ verify_pr_head() {
   pr="$(current_pr)"
   [[ -n "$pr" ]] || { echo "terminal canary PR was not created" >&2; return 1; }
   for attempt in 1 2 3; do
-    remote_head="$(gh_repair gh pr view "$pr" --json headRefOid --jq .headRefOid 2>/dev/null || true)"
+    remote_head="$(gh_repair_bounded "verify terminal canary PR head" gh pr view \
+      "$pr" --json headRefOid --jq .headRefOid 2>/dev/null || true)"
     [[ "$remote_head" == "$expected" ]] && return 0
     sleep "$attempt"
   done
@@ -428,7 +466,8 @@ report_terminal() {
   else
     comment="**Uncertified terminal state.** The internal deadline or repair-turn limit stopped the \`${FAILED_PHASE}\` phase. This draft preserves the final attempted bytes and must not merge until the complete state machine passes."
   fi
-  gh_repair gh pr comment "$pr" --body "$comment" >/dev/null 2>&1 || true
+  gh_repair_bounded "comment on terminal canary PR" gh pr comment \
+    "$pr" --body "$comment" >/dev/null 2>&1 || true
   echo "terminal canary PR #${pr}: ${outcome}; branch=${BRANCH}; head=${PUBLISHED_SHA}"
 }
 

@@ -282,6 +282,8 @@ def stream_request(
     completion_tokens = 0
     prompt_tokens = 0
     cached_tokens = 0
+    saw_prompt_tokens = False
+    saw_cached_tokens = False
     saw_done = False
     connection = http.client.HTTPConnection(DEFAULT_HOST, DEFAULT_PORT, timeout=timeout)
     payload = {
@@ -325,10 +327,17 @@ def stream_request(
             usage = event.get("usage")
             if isinstance(usage, dict):
                 completion_tokens = int(usage.get("completion_tokens") or completion_tokens)
-                prompt_tokens = int(usage.get("prompt_tokens") or prompt_tokens)
+                if "prompt_tokens" in usage and usage["prompt_tokens"] is not None:
+                    prompt_tokens = int(usage["prompt_tokens"])
+                    saw_prompt_tokens = True
                 details = usage.get("prompt_tokens_details")
-                if isinstance(details, dict):
-                    cached_tokens = int(details.get("cached_tokens") or cached_tokens)
+                if (
+                    isinstance(details, dict)
+                    and "cached_tokens" in details
+                    and details["cached_tokens"] is not None
+                ):
+                    cached_tokens = int(details["cached_tokens"])
+                    saw_cached_tokens = True
             choices = event.get("choices")
             if not isinstance(choices, list) or not choices:
                 continue
@@ -339,6 +348,10 @@ def stream_request(
             return {"request_id": request_id, "error": "stream completed without content tokens"}
         if not saw_done:
             return {"request_id": request_id, "error": "stream ended without terminal [DONE] marker"}
+        if not saw_prompt_tokens:
+            return {"request_id": request_id, "error": "stream completed without prompt token usage"}
+        if not saw_cached_tokens:
+            return {"request_id": request_id, "error": "stream completed without cached token usage"}
         ended = time.monotonic()
         return {
             "request_id": request_id,
@@ -578,10 +591,7 @@ def run_arm(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         replay_frozen("warm", model_id, repeats=max(args.restore_repeats - 1, 0))
     finally:
         if process is not None:
-            try:
-                stop_server(process)
-            except RuntimeError:
-                pass
+            stop_server(process)
 
     provenance["cohorts"] = [
         summarize_cohort("fill", [row for row in rows if row["cohort"] == "fill"]),
@@ -649,8 +659,8 @@ def main() -> int:
     args = parser.parse_args()
 
     output = args.output.resolve()
-    if (output / "run.json").exists():
-        raise SystemExit(f"output already contains run.json: {output}")
+    if output.exists() and any(output.iterdir()):
+        raise SystemExit(f"output directory is not empty: {output}")
     output.mkdir(parents=True, exist_ok=True)
 
     run = run_arm(args, output)

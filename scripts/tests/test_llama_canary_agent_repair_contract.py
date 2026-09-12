@@ -253,9 +253,29 @@ class LlamaCanaryStateMachineContractTests(unittest.TestCase):
     def test_token_permission_probe_is_unique_and_runs_before_work(self) -> None:
         self.assertIn("canary-repair-token-preflight-${RUN_KEY}", self.wrapper)
         self.assertIn("git/refs/heads%2F${probe_branch}", self.wrapper)
+        self.assertIn("Pull requests: write capability probe", self.wrapper)
+        self.assertIn("--method PATCH", self.wrapper)
+        self.assertIn('"repos/${GITHUB_REPOSITORY:?}/pulls/${probe_pr}"', self.wrapper)
         call = self.wrapper.index("check_repair_token_permissions\n")
         self.assertLess(call, self.wrapper.index("agent_turn()"))
         self.assertLess(call, self.wrapper.index("run_prepare()"))
+
+    def test_terminal_network_operations_share_the_publication_deadline(self) -> None:
+        terminal = self.wrapper[
+            self.wrapper.index("current_pr() {") : self.wrapper.index('phase="prepare"')
+        ]
+        self.assertIn("remaining_publication_seconds", self.wrapper)
+        self.assertIn("run_publication_bounded", terminal)
+        self.assertIn("gh_repair_bounded", terminal)
+        for operation in (
+            "push terminal canary branch",
+            "find terminal canary PR",
+            "update terminal canary PR",
+            "create terminal canary PR",
+            "verify terminal canary PR head",
+            "comment on terminal canary PR",
+        ):
+            self.assertIn(operation, terminal)
 
     def test_dispatch_sha_is_rejected_before_use(self) -> None:
         crafted = "not-a-sha; echo pwned"

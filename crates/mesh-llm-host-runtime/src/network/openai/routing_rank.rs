@@ -309,6 +309,31 @@ pub(super) async fn rank_targets_by_context(
     rank_candidates_by_context_and_throughput(&candidates, required_tokens)
 }
 
+pub(super) async fn rank_aliased_targets_by_context(
+    node: &mesh::Node,
+    required_tokens: Option<u32>,
+    targets: &[(election::InferenceTarget, String)],
+) -> RankedCandidates<(election::InferenceTarget, String)> {
+    let mut candidates = Vec::with_capacity(targets.len());
+    for (target, model) in targets {
+        let context_length = match target {
+            election::InferenceTarget::Local(_) => node.local_model_context_length(model).await,
+            election::InferenceTarget::Remote(peer_id) => {
+                node.peer_model_context_length(*peer_id, model).await
+            }
+            election::InferenceTarget::None => None,
+        };
+        let throughput = match target {
+            election::InferenceTarget::Remote(peer_id) => {
+                remote_target_throughput_rank(node, model, *peer_id).await
+            }
+            _ => local_target_throughput_rank(node, model, target),
+        };
+        candidates.push(((target.clone(), model.clone()), context_length, throughput));
+    }
+    rank_candidates_by_context_and_throughput(&candidates, required_tokens)
+}
+
 #[cfg(test)]
 pub(super) async fn order_targets_by_context(
     node: &mesh::Node,
