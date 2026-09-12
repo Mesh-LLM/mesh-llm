@@ -116,10 +116,9 @@ fn packed_roundtrip_uses_one_physical_file_and_survives_reopen() {
         manifest
     };
 
+    // Direct callers receive a fully reconciled store, including the packed
+    // location map needed to read manifests from the previous process.
     let reopened = store(&root, 0);
-    reopened
-        .reconcile_startup()
-        .expect("reconcile packed store");
     let loaded = reopened
         .load_manifest(&manifest.payload_digest)
         .expect("load packed manifest after restart");
@@ -326,28 +325,24 @@ fn a_segment_larger_than_the_budget_is_refused() {
 
 #[test]
 fn an_entry_larger_than_a_shrunken_budget_is_refused_at_commit() {
-    // A budget shrunk between runs is the realistic way an entry ends up
-    // bigger than the cap: it was admissible when its segments were
-    // written and is not any more.
+    // A live budget update can make an in-flight entry larger than the cap:
+    // it was admissible when its segments were written and is not any more.
     let root = temp_root("oversize-commit");
-    let uncapped = store(&root, 0);
-    let manifest = {
-        let (manifest, held) = manifest_for(&uncapped, &vec![7u8; 16_000], 4_000);
-        drop(held);
-        manifest
-    };
-    drop(uncapped);
-
-    let capped = store(&root, 8_000);
-    let error = capped
+    let store = store(&root, 0);
+    let (manifest, held) = manifest_for(&store, &vec![7u8; 16_000], 4_000);
+    store
+        .update_limits(StoreLimits::new(8_000, 0))
+        .expect("shrink limits");
+    let error = store
         .commit(&manifest)
         .expect_err("an entry larger than the budget was committed");
+    drop(held);
     assert!(
         format!("{error:#}").contains("skipped_oversize"),
         "refusal did not carry the reason code: {error:#}"
     );
     assert!(
-        capped.list_manifests().expect("list").is_empty(),
+        store.list_manifests().expect("list").is_empty(),
         "the refused entry was left loadable"
     );
 }

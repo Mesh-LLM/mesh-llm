@@ -127,6 +127,24 @@ impl RuntimeState {
         Ok(self.session_stats())
     }
 
+    pub(crate) fn warmup_generation_graph(&self) -> Result<bool> {
+        if self.model.input_activation_boundary().is_some()
+            || self.model.output_activation_boundary().is_some()
+        {
+            return Ok(false);
+        }
+        let token_id = self
+            .model
+            .tokenize("", true)?
+            .into_iter()
+            .next()
+            .unwrap_or(0);
+        let mut session = self.model.create_session()?;
+        session.decode_step(token_id)?;
+        session.reset()?;
+        Ok(true)
+    }
+
     /// Release the session slot identified by `session_id`.
     ///
     /// This is the cleanup path called at the end of every chat

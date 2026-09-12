@@ -482,6 +482,15 @@ impl HandoffSegmentStore {
     /// filesystem: both break the atomic-rename and containment assumptions
     /// every later guarantee rests on, and neither is worth a partial mode.
     pub fn open_with_limits(root: impl Into<PathBuf>, limits: StoreLimits) -> Result<Self> {
+        let store = Self::open_unreconciled_with_limits(root, limits)?;
+        store.reconcile_startup()?;
+        Ok(store)
+    }
+
+    pub(crate) fn open_unreconciled_with_limits(
+        root: impl Into<PathBuf>,
+        limits: StoreLimits,
+    ) -> Result<Self> {
         let root = root.into();
         if !root.is_absolute() {
             bail!("cache root must be absolute: {}", root.display());
@@ -1627,7 +1636,14 @@ impl HandoffSegmentStore {
             .into_iter()
             .collect::<std::collections::HashSet<_>>();
         freed = freed.saturating_add(self.packed.remove_orphan_indexes(&manifests)?);
-        freed = freed.saturating_add(self.packed.remove_orphan_packs(&referenced, &held)?);
+        freed = freed.saturating_add(self.packed.remove_orphan_packs(&referenced, || {
+            self.inflight_segments
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .keys()
+                .cloned()
+                .collect()
+        })?);
         Ok(freed)
     }
 }

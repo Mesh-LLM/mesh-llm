@@ -430,7 +430,7 @@ fn open_store_for_acquire(
     let attempts = if expiring_owner { HANDOFF_ATTEMPTS } else { 1 };
     let mut last = None;
     for attempt in 0..attempts {
-        match HandoffSegmentStore::open_with_limits(root, limits) {
+        match HandoffSegmentStore::open_unreconciled_with_limits(root, limits) {
             Ok(store) => return Ok(store),
             Err(error) => {
                 last = Some(error);

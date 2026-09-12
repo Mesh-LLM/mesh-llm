@@ -1,6 +1,55 @@
 use super::*;
 use serial_test::serial;
 
+#[cfg(all(
+    target_os = "linux",
+    any(
+        not(feature = "skippy-devices"),
+        feature = "dynamic-native-runtime",
+        test
+    )
+))]
+struct TestDirectory(std::path::PathBuf);
+
+#[cfg(all(
+    target_os = "linux",
+    any(
+        not(feature = "skippy-devices"),
+        feature = "dynamic-native-runtime",
+        test
+    )
+))]
+impl TestDirectory {
+    fn new(label: &str) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("test clock follows Unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "mesh-llm-{label}-{}-{timestamp}-{id}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&path).expect("create collision-resistant test directory");
+        Self(path)
+    }
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(
+        not(feature = "skippy-devices"),
+        feature = "dynamic-native-runtime",
+        test
+    )
+))]
+impl Drop for TestDirectory {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 fn synthetic_gpu(index: usize, stable_id: Option<&str>) -> GpuFacts {
     GpuFacts {
         index,
@@ -378,6 +427,81 @@ fn test_hydrate_gpu_facts_uses_uuid_and_cuda_for_tegra_soc() {
     assert!(survey.gpus[0].unified_memory);
 }
 
+// Snapshot: when no collector set gpu_name, the placeholder "GPU {index}"
+// join that backfills it is unchanged by this PR; gpu_name_source labels it
+// Unknown so nothing downstream mistakes a placeholder for real hardware.
+#[test]
+fn test_hydrate_gpu_facts_backfill_tags_unknown_gpu_name_source() {
+    let mut survey = HardwareSurvey {
+        gpu_count: 2,
+        gpu_vram: vec![8_000_000_000, 8_000_000_000],
+        ..Default::default()
+    };
+
+    hydrate_gpu_facts(&mut survey, &[Metric::GpuFacts, Metric::GpuName]);
+
+    assert_eq!(survey.gpu_name.as_deref(), Some("GPU 0, GPU 1"));
+    assert_eq!(survey.gpu_name_source, Some(GpuNameSource::Unknown));
+}
+
+// Mirrors the cfg on `tegra_gpu_name_from_model_path`: the Tegra collector only
+// compiles for Linux non-skippy / dynamic-native-runtime builds. The tests now
+// drive the model path directly, so they no longer depend on host filesystem
+// state (the deterministic fix), only on the collector being present at all.
+#[cfg(all(
+    target_os = "linux",
+    any(
+        not(feature = "skippy-devices"),
+        feature = "dynamic-native-runtime",
+        test
+    )
+))]
+#[test]
+fn test_tegra_collector_gpu_name_absent_leaves_source_none() {
+    // Drive the model read with a path guaranteed not to exist, so the result
+    // is independent of host filesystem state (a real Tegra host has the sysfs
+    // model file present, which made the old `TegraCollector.collect` form flip
+    // on such a host). With the model file absent, both the name and its source
+    // must stay absent — never a guessed source for a name that was never read.
+    let directory = TestDirectory::new("tegra-model-absent");
+    let missing = directory.0.join("missing-model");
+    assert!(!missing.exists());
+
+    let mut survey = HardwareSurvey::default();
+    tegra_gpu_name_from_model_path(&mut survey, &missing);
+
+    assert_eq!(survey.gpu_name, None);
+    assert_eq!(survey.gpu_name_source, None);
+}
+
+// Sysfs-PRESENT case: the helper reads a real temp file containing a Tegra
+// model string, parses it, and tags both the name and source. Exercisable on
+// any platform because the helper is path-injectable.
+#[cfg(all(
+    target_os = "linux",
+    any(
+        not(feature = "skippy-devices"),
+        feature = "dynamic-native-runtime",
+        test
+    )
+))]
+#[test]
+fn test_tegra_collector_gpu_name_present_tags_sysfs_source() {
+    use std::io::Write as _;
+
+    let directory = TestDirectory::new("tegra-model-present");
+    let path = directory.0.join("model");
+    let mut f = std::fs::File::create(&path).expect("create temp model file");
+    write!(f, "NVIDIA Jetson AGX Orin Developer Kit\0").expect("write model file");
+    drop(f);
+
+    let mut survey = HardwareSurvey::default();
+    tegra_gpu_name_from_model_path(&mut survey, &path);
+
+    assert_eq!(survey.gpu_name.as_deref(), Some("Jetson AGX Orin"));
+    assert_eq!(survey.gpu_name_source, Some(GpuNameSource::Sysfs));
+}
+
 #[test]
 fn test_summarize_gpu_name_single() {
     assert_eq!(
@@ -660,6 +784,7 @@ fn test_hardware_survey_default() {
     let s = HardwareSurvey::default();
     assert_eq!(s.vram_bytes, 0);
     assert_eq!(s.gpu_name, None);
+    assert_eq!(s.gpu_name_source, None);
     assert_eq!(s.gpu_count, 0);
     assert_eq!(s.hostname, None);
     assert!(s.gpu_vram.is_empty());
@@ -729,6 +854,7 @@ fn test_empty_gpu_probe_applies_cpu_only_budget_only_when_vram_requested() {
     );
     assert!(handled);
     assert_eq!(survey.vram_bytes, 12_000_000_000);
+    assert_eq!(survey.system_ram_bytes, Some(16_000_000_000));
     assert!(survey.gpu_vram.is_empty());
     assert!(survey.gpus.is_empty());
 
@@ -741,6 +867,7 @@ fn test_empty_gpu_probe_applies_cpu_only_budget_only_when_vram_requested() {
     );
     assert!(handled);
     assert_eq!(survey.vram_bytes, 0);
+    assert_eq!(survey.system_ram_bytes, None);
 }
 
 #[test]
@@ -760,6 +887,7 @@ fn test_healthy_gpu_probe_credits_ram_offload_from_injected_source() {
     assert!(handled);
     assert_eq!(survey.vram_bytes, 30_000_000_000);
     assert_eq!(survey.gpu_vram, vec![12_000_000_000]);
+    assert_eq!(survey.system_ram_bytes, Some(32_000_000_000));
 }
 
 #[test]
@@ -777,6 +905,7 @@ fn test_healthy_gpu_probe_with_zero_ram_source_advertises_bare_vram() {
     );
     assert!(handled);
     assert_eq!(survey.vram_bytes, 12_000_000_000);
+    assert_eq!(survey.system_ram_bytes, None);
 }
 
 #[test]
@@ -795,7 +924,7 @@ fn test_healthy_gpu_probe_ram_below_vram_saturates_to_bare_vram() {
 }
 
 #[test]
-fn test_healthy_soc_probe_does_not_probe_system_ram() {
+fn test_healthy_soc_probe_records_system_ram_without_crediting_it() {
     let mut survey = HardwareSurvey::default();
     let mut gpu = synthetic_gpu(0, None);
     gpu.vram_bytes = 16_000_000_000;
@@ -805,9 +934,12 @@ fn test_healthy_soc_probe_does_not_probe_system_ram() {
         &mut survey,
         &[Metric::IsSoc, Metric::VramBytes],
         Ok::<Vec<GpuFacts>, ()>(vec![gpu]),
-        || panic!("system RAM must not be probed for a unified-memory survey"),
+        || 32_000_000_000,
     );
     assert!(handled);
+    assert!(survey.is_soc);
+    // Informational only: the budget stays the working set minus the reserve.
+    assert_eq!(survey.system_ram_bytes, Some(32_000_000_000));
     assert_eq!(survey.vram_bytes, 14_000_000_000);
 }
 
@@ -822,10 +954,11 @@ fn test_healthy_soc_probe_without_is_soc_metric_still_skips_ram_offload() {
         &mut survey,
         &[Metric::VramBytes],
         Ok::<Vec<GpuFacts>, ()>(vec![gpu]),
-        || panic!("system RAM must not be probed for unified memory, even without IsSoc"),
+        || 32_000_000_000,
     );
     assert!(handled);
     assert!(!survey.is_soc);
+    assert_eq!(survey.system_ram_bytes, Some(32_000_000_000));
     assert_eq!(survey.vram_bytes, 14_000_000_000);
 }
 
@@ -840,6 +973,54 @@ fn test_healthy_gpu_probe_without_vram_metric_does_not_probe_system_ram() {
     );
     assert!(handled);
     assert_eq!(survey.vram_bytes, 0);
+}
+
+// Snapshot: this probe's gpu_name value must stay exactly what it was before
+// gpu_name_source existed (the display_name join over the probed GPUs).
+// gpu_name_source is new; gpu_name is not.
+#[test]
+fn test_skippy_probe_gpu_name_unchanged_and_source_tagged() {
+    // synthetic_gpu uses "CUDA0" as backend_device — NativeRuntimeDevice on
+    // every platform, regardless of target OS.
+    let mut survey = HardwareSurvey::default();
+    let handled = apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::GpuName],
+        Ok::<Vec<GpuFacts>, ()>(vec![synthetic_gpu(0, None)]),
+        || 0,
+    );
+    assert!(handled);
+    assert_eq!(survey.gpu_name.as_deref(), Some("GPU 0"));
+    assert_eq!(
+        survey.gpu_name_source,
+        Some(GpuNameSource::NativeRuntimeDevice)
+    );
+}
+
+#[test]
+fn test_skippy_probe_metal_backend_device_tagged_metal_default_device() {
+    // A device whose backend_device name starts with "MTL" (as the skippy
+    // Metal backend uses) must be labelled MetalDefaultDevice regardless of
+    // the host OS, so a macOS host running MoltenVK (Vulkan backend) is not
+    // mislabelled.
+    let mut survey = HardwareSurvey::default();
+    let metal_gpu = GpuFacts {
+        backend_device: Some("MTL0".to_string()),
+        display_name: "Apple M4 Max".to_string(),
+        ..synthetic_gpu(0, None)
+    };
+    let handled = apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::GpuName],
+        Ok::<Vec<GpuFacts>, ()>(vec![metal_gpu]),
+        || 0,
+    );
+    assert!(handled);
+    assert_eq!(survey.gpu_name.as_deref(), Some("Apple M4 Max"));
+    assert_eq!(
+        survey.gpu_name_source,
+        Some(GpuNameSource::MetalDefaultDevice)
+    );
 }
 
 #[cfg(target_os = "macos")]
@@ -882,6 +1063,7 @@ fn test_skippy_backend_error_uses_cpu_only_budget_without_legacy_fallback() {
 
     assert!(handled);
     assert_eq!(survey.gpu_name, None);
+    assert_eq!(survey.gpu_name_source, None);
     assert_eq!(survey.gpu_count, 0);
     assert!(survey.gpu_vram.is_empty());
     assert!(survey.gpus.is_empty());
@@ -909,6 +1091,7 @@ fn test_skippy_backend_empty_result_uses_cpu_only_budget_without_legacy_fallback
 
     assert!(handled);
     assert_eq!(survey.gpu_name, None);
+    assert_eq!(survey.gpu_name_source, None);
     assert_eq!(survey.gpu_count, 0);
     assert!(survey.gpu_vram.is_empty());
     assert!(survey.gpus.is_empty());
@@ -1180,4 +1363,75 @@ fn test_tegra_collector_sysfs_fixture() {
         parse_tegra_model_name("NVIDIA Jetson AGX Orin Developer Kit\0"),
         Some("Jetson AGX Orin".to_string())
     );
+}
+
+#[test]
+fn test_ram_offload_bytes_is_the_budget_beyond_device_vram_on_discrete_hosts() {
+    // 12 GB dGPU credited to 30 GB: the 18 GB beyond the device is RAM.
+    let survey = HardwareSurvey {
+        vram_bytes: 30_000_000_000,
+        gpu_vram: vec![12_000_000_000],
+        ..HardwareSurvey::default()
+    };
+    assert_eq!(ram_offload_bytes(&survey), 18_000_000_000);
+}
+
+#[test]
+fn test_ram_offload_bytes_uses_gpu_facts_when_the_legacy_list_is_empty() {
+    let mut gpu = synthetic_gpu(0, None);
+    gpu.vram_bytes = 12_000_000_000;
+    let survey = HardwareSurvey {
+        vram_bytes: 30_000_000_000,
+        gpus: vec![gpu],
+        ..HardwareSurvey::default()
+    };
+    assert_eq!(ram_offload_bytes(&survey), 18_000_000_000);
+}
+
+#[test]
+fn test_ram_offload_bytes_prefers_gpu_facts_over_the_legacy_list() {
+    // Both sources populated and disagreeing: the per-device facts win, the
+    // same precedence the host runtime applies when it itemizes capacity.
+    let mut gpu = synthetic_gpu(0, None);
+    gpu.vram_bytes = 12_000_000_000;
+    let survey = HardwareSurvey {
+        vram_bytes: 30_000_000_000,
+        gpu_vram: vec![16_000_000_000],
+        gpus: vec![gpu],
+        ..HardwareSurvey::default()
+    };
+    assert_eq!(ram_offload_bytes(&survey), 18_000_000_000);
+}
+
+#[test]
+fn test_ram_offload_bytes_is_the_whole_budget_on_cpu_only_hosts() {
+    let survey = HardwareSurvey {
+        vram_bytes: 24_000_000_000,
+        ..HardwareSurvey::default()
+    };
+    assert_eq!(ram_offload_bytes(&survey), 24_000_000_000);
+}
+
+#[test]
+fn test_ram_offload_bytes_is_zero_on_unified_memory_hosts() {
+    let survey = HardwareSurvey {
+        vram_bytes: 96_000_000_000,
+        is_soc: true,
+        gpu_vram: vec![128_000_000_000],
+        gpu_reserved: vec![Some(16_000_000_000)],
+        ..HardwareSurvey::default()
+    };
+    assert_eq!(ram_offload_bytes(&survey), 0);
+}
+
+#[test]
+fn test_ram_offload_bytes_never_underflows_when_the_budget_trails_device_vram() {
+    // A unified-memory probe answered without the IsSoc metric leaves is_soc
+    // false while the budget already sits below the enumerated memory.
+    let survey = HardwareSurvey {
+        vram_bytes: 96_000_000_000,
+        gpu_vram: vec![128_000_000_000],
+        ..HardwareSurvey::default()
+    };
+    assert_eq!(ram_offload_bytes(&survey), 0);
 }

@@ -289,6 +289,7 @@ pub(super) fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool 
         || old.version != new.version
         || old.owner_summary != new.owner_summary
         || old.gpu_reserved_bytes != new.gpu_reserved_bytes
+        || old.memory != new.memory
         || old.propagated_latency != new.propagated_latency
         || old.inference_admission_state != new.inference_admission_state
 }
@@ -344,6 +345,10 @@ pub(super) fn apply_transitive_ann(
     if ann.gpu_reserved_bytes.is_some() {
         existing.gpu_reserved_bytes = ann.gpu_reserved_bytes.clone();
     }
+    // A transitive announcement is a complete snapshot at its revision. An
+    // omitted memory block must clear an older cached value; retaining it can
+    // rebroadcast a breakdown the announcing peer no longer claims.
+    existing.memory = ann.memory;
     if ann.gpu_mem_bandwidth_gbps.is_some() {
         existing.gpu_mem_bandwidth_gbps = ann.gpu_mem_bandwidth_gbps.clone();
     }
@@ -835,6 +840,7 @@ impl Node {
         existing.is_soc = ann.is_soc;
         existing.gpu_vram = ann.gpu_vram.clone();
         existing.gpu_reserved_bytes = ann.gpu_reserved_bytes.clone();
+        existing.memory = ann.memory;
         existing.gpu_mem_bandwidth_gbps = ann.gpu_mem_bandwidth_gbps.clone();
         existing.gpu_compute_tflops_fp32 = ann.gpu_compute_tflops_fp32.clone();
         existing.gpu_compute_tflops_fp16 = ann.gpu_compute_tflops_fp16.clone();
@@ -1175,6 +1181,7 @@ impl Node {
             is_soc: peer.is_soc,
             gpu_vram: peer.gpu_vram.clone(),
             gpu_reserved_bytes: peer.gpu_reserved_bytes.clone(),
+            memory: peer.memory,
             gpu_mem_bandwidth_gbps: peer.gpu_mem_bandwidth_gbps.clone(),
             gpu_compute_tflops_fp32: peer.gpu_compute_tflops_fp32.clone(),
             gpu_compute_tflops_fp16: peer.gpu_compute_tflops_fp16.clone(),
@@ -1242,6 +1249,7 @@ impl Node {
                 .enumerate_host
                 .then(|| self.gpu_reserved_bytes.clone())
                 .flatten(),
+            memory: self.enumerate_host.then_some(self.advertised_memory),
             gpu_mem_bandwidth_gbps: data.gpu_mem_bandwidth_gbps,
             gpu_compute_tflops_fp32: data.gpu_compute_tflops_fp32,
             gpu_compute_tflops_fp16: data.gpu_compute_tflops_fp16,

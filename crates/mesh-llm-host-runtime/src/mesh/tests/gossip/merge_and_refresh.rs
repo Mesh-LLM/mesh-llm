@@ -74,6 +74,26 @@ pub(crate) fn test_merge_equal_values_unchanged() {
 }
 
 #[test]
+pub(crate) fn test_transitive_snapshot_clears_omitted_memory_breakdown() {
+    let mut existing = test_peer(Some(100));
+    existing.memory = Some(crate::mesh::AdvertisedMemory {
+        total_bytes: 1024,
+        usable_bytes: 1024,
+        ..Default::default()
+    });
+    let ann = test_announcement(Some(100));
+
+    apply_transitive_ann(
+        &mut existing,
+        &test_addr(0x33),
+        &ann,
+        test_endpoint_id(0xee),
+    );
+
+    assert_eq!(existing.memory, None);
+}
+
+#[test]
 pub(crate) fn test_meaningfully_changed_first_joined_mesh_ts() {
     let old_peer = test_peer(Some(100));
     let new_peer = test_peer(Some(200));
