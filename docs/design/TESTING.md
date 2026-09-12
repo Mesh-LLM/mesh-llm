@@ -66,7 +66,24 @@ mesh-llm serve
 ```
 
 - Both configured startup models should be considered for launch
-- If `[[models]]` is empty, `mesh-llm serve` should print a `⚠️` warning, show help, and exit cleanly
+- With empty `[[models]]` in `serve` mode, start a private mesh and automatically
+  select a complete cached chat model that fits; otherwise download a validated
+  curated candidate. Poll `/v1/models`, then send an actual chat request.
+- With `--join`, wait for admission first. Ready HTTP-host coverage should avoid
+  a duplicate load; worker-only assignments receive a bounded warming wait.
+- Repeat with two empty joiners, both gossip orders, a silent requester, and
+  a requester lost during download. Duplicate avoidance is bounded, not a lease.
+- Check Stop/Quit and manual model changes during selection, download and native
+  startup. An automatic task must not block control or override human intent.
+- Rejected/unreachable `--auto --join <token>` must not fall back to public
+  discovery. Client, `on_demand`, split, and explicit-model modes must not invoke
+  automatic selection.
+- With `defaults.skippy.source_policy = "local-required"`, select only real,
+  non-symlink GGUF files accepted by the existing source validator; HF snapshot
+  symlinks must be skipped rather than canonicalized to bypass that policy.
+  Complete real-file shard sets remain eligible. Make no remote lookup.
+  Missing shards, unsuitable models and exhausted candidates must report a
+  visible failure rather than claim that a model is warming indefinitely.
 - Explicit `--model` or `--gguf` should ignore configured `[[models]]` for
   model selection and tuning, except that an exact, unique `--model` ref may
   inherit its configured pinned GPU selector

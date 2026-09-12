@@ -15,9 +15,8 @@ use super::{
     remove_runtime_local_target, remove_serving_assignment, reserve_runtime_capacity_for_model,
     resolve_model, runtime_model_ctx_size_override, runtime_model_planning_bytes,
     runtime_process_payload_with_status, runtime_registry_has_model,
-    runtime_resource_planning_profile, set_advertised_model_context, skippy_telemetry_options,
-    start_runtime_local_model, unregister_runtime_instance, upsert_dashboard_process,
-    withdraw_advertised_model,
+    runtime_resource_planning_profile, set_advertised_model_context, start_runtime_local_model,
+    unregister_runtime_instance, upsert_dashboard_process, withdraw_advertised_model,
 };
 use crate::api;
 use crate::inference::election;
@@ -52,8 +51,15 @@ mod load;
 pub(crate) mod reconciliation;
 mod unload;
 
-pub(crate) use load::{normalize_runtime_model_request_for_config, run_auto_load_runtime_model};
-pub(crate) use unload::{run_auto_handle_runtime_exit, run_auto_unload_runtime_model};
+pub(crate) use load::{
+    SupervisedLaunchInputs, SupervisedResolveInputs, normalize_runtime_model_request_for_config,
+    run_auto_load_runtime_model, supervised_discard_runtime_model, supervised_launch_runtime_model,
+    supervised_register_runtime_model, supervised_resolve_runtime_model,
+};
+pub(crate) use unload::{
+    run_auto_handle_runtime_exit, run_auto_unload_runtime_model,
+    unregister_local_source_policy_if_unused,
+};
 
 // Re-export reconciliation module's public API for callers in parent scope
 pub(crate) use reconciliation::{
@@ -114,6 +120,11 @@ pub(super) struct RunAutoRuntimeLifecycleContext<'a> {
     pub(super) console_port: Option<u16>,
     pub(super) interactive_started: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub(super) lan_bootstrap_tasks: LanBootstrapTasks,
+    /// Automatic-serving selection producer. Owned here rather than by the
+    /// caller so shutdown can abort and join it before the consumer's
+    /// in-flight work is drained, instead of letting it drop after the whole
+    /// runtime loop has already returned.
+    pub(super) automatic_serving_tasks: tokio::task::JoinSet<()>,
     pub(super) runtime: Option<std::sync::Arc<crate::runtime::instance::InstanceRuntime>>,
 }
 

@@ -1117,7 +1117,7 @@ impl Node {
             serving_models,
             hosted_models,
             available_models: self.available_models.lock().await.clone(),
-            requested_models: self.requested_models.lock().await.clone(),
+            requested_models: self.requested_models().await,
             explicit_model_interests: self.explicit_model_interests.lock().await.clone(),
             model_demand: self.get_demand(),
             mesh_id,

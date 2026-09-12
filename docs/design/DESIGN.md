@@ -209,8 +209,23 @@ Pinned GPU startup is also local-node only:
   configured refs are rejected because the CLI has no profile selector
 - an explicit `--device` is resolved even when `[gpu].assignment = "auto"`
 
-Bare `mesh-llm serve` is the config-owned path. If `[[models]]` is empty, it warns,
-prints help, and exits cleanly. Background services use that path directly.
+Bare `mesh-llm serve` is the config-owned path. With empty `[[models]]` in serving
+mode it starts the API and chooses one automatic contribution through the normal
+low-priority model-intent path. Complete, suitable cached chat models are preferred;
+otherwise a validated curated candidate must fit the local runtime capacity with
+headroom. Strict-local policy never performs remote selection. Failed loads try
+at most three distinct candidates and report terminal failure if none succeeds.
+
+Explicit joins wait for admitted peers before selecting. An already usable HTTP
+host avoids duplicate loading; warming assignments receive a bounded wait, not
+permanent coverage. Concurrent selectors advertise a task-owned canonical request
+using the existing `requested_models` gossip field, settle briefly and break ties
+by endpoint ID. A lower-ID requester can defer another selector for at most 60
+seconds per attempt: this is best-effort duplicate avoidance, not an exclusive
+lease under partitions. Cancellation withdraws only the automatic hint; configured
+or later human requests remain intact. Explicit models, manual intents, client,
+`on_demand`, and split modes retain precedence. Automatic serving does not enable
+public discovery; an explicit bootstrap token disables public discovery fallback.
 
 Creation-time mesh requirement fields live under `[mesh_requirements]` in
 `~/.mesh-llm/config.toml`:

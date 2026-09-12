@@ -1,7 +1,7 @@
 use super::*;
 use crate::runtime::{DrainCoordinator, DrainResult};
 
-pub(super) fn unregister_local_source_policy_if_unused(
+pub(crate) fn unregister_local_source_policy_if_unused(
     ctx: &RunAutoRuntimeLoopContext<'_>,
     model: &str,
     profile: &str,

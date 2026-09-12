@@ -22,7 +22,10 @@ use skippy_server::serving_hooks::SharedModelServingHooksFactory;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+use super::capacity::RuntimeCapacityReservation;
+use super::model_reconciliation::IntentSource;
 
 use super::operational_logging::{
     LocalServingOperationalEvent, record_local_serving_operational_event,
@@ -80,6 +83,83 @@ pub(super) enum RuntimeEvent {
         profile: String,
         result: std::result::Result<api::RuntimeLoadResponse, String>,
     },
+    /// Phase 1 of a supervised runtime load finished off the control loop:
+    /// the model source and its planning bytes are resolved, but nothing has
+    /// been reserved, assigned, or launched yet. The loop owns the capacity
+    /// ledger and serving assignment, so it performs those steps itself after
+    /// re-checking the launch boundary.
+    SupervisedLoadResolved {
+        request: Box<SupervisedLoadRequest>,
+        result: Box<std::result::Result<SupervisedLoadResolution, String>>,
+    },
+    /// Phase 2 of a supervised runtime load finished off the control loop: the
+    /// native runtime is started and carries a live handle. The loop re-checks
+    /// the launch boundary once more and then either registers the handle or
+    /// drains it without registration.
+    SupervisedLoadLaunched {
+        request: Box<SupervisedLoadRequest>,
+        result: Box<std::result::Result<SupervisedLaunchOutcome, String>>,
+    },
+}
+
+/// Identity of an in-flight supervised load, carried across both async phases
+/// so the control loop can resolve completions and desired-state bookkeeping
+/// without holding a borrow of its own state during the slow work.
+#[derive(Clone, Debug)]
+pub(super) struct SupervisedLoadRequest {
+    pub(super) intent_id: String,
+    pub(super) spec: String,
+    pub(super) config_model_id: Option<String>,
+    pub(super) profile: String,
+    /// Retained so teardown and diagnostics can attribute the load to the
+    /// intent source that produced it.
+    #[expect(
+        dead_code,
+        reason = "intent provenance for supervised-load diagnostics"
+    )]
+    pub(super) source: IntentSource,
+    /// One instance identity and one start time for the whole supervised
+    /// load, so both phases audit under the same instance as an inline load.
+    pub(super) instance_id: String,
+    pub(super) load_started: Instant,
+    /// Canonical runtime model identity, known only after phase 1. Teardown
+    /// must use this rather than the requested spec: the spec may be an HF
+    /// reference or an absolute path, which would not match the published
+    /// serving assignment.
+    pub(super) runtime_model_name: Option<String>,
+}
+
+/// Output of the resolve/plan phase. Deliberately carries no capacity
+/// reservation and no serving assignment: both belong to the control loop.
+#[derive(Debug)]
+pub(super) struct SupervisedLoadResolution {
+    pub(super) model_path: PathBuf,
+    pub(super) runtime_model_name: String,
+    pub(super) profile: String,
+    pub(super) local_source_required: bool,
+    pub(super) model_bytes: u64,
+}
+
+/// Output of the native-start phase, including the live handle that must be
+/// either registered or drained by the control loop.
+pub(super) struct SupervisedLaunchOutcome {
+    pub(super) resolution: SupervisedLoadResolution,
+    pub(super) instance_id: String,
+    pub(super) loaded_name: String,
+    pub(super) handle: LocalRuntimeModelHandle,
+    pub(super) death_rx: tokio::sync::oneshot::Receiver<()>,
+    pub(super) capacity_reservation: RuntimeCapacityReservation,
+    pub(super) launch_started: Instant,
+    pub(super) load_started: Instant,
+}
+
+impl std::fmt::Debug for SupervisedLaunchOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SupervisedLaunchOutcome")
+            .field("instance_id", &self.instance_id)
+            .field("loaded_name", &self.loaded_name)
+            .finish_non_exhaustive()
+    }
 }
 
 pub(super) enum LocalRuntimeBackendHandle {

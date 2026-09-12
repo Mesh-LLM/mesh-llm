@@ -39,3 +39,47 @@ pub(super) fn handle_public_identity_transition(options: &RuntimeOptions) -> Res
     }
     Ok(())
 }
+
+/// An explicit bootstrap token pins all discovery phases, not only the first probe.
+pub(super) fn pin_explicit_join(options: &mut RuntimeOptions) {
+    if !options.join.is_empty() {
+        options.auto = false;
+        options.discover = None;
+        options.nostr_discovery = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_join_disables_public_fallback_but_preserves_admission_and_publish() {
+        let mut options = RuntimeOptions {
+            join: vec!["private-token".into()],
+            auto: true,
+            discover: Some("public".into()),
+            nostr_discovery: true,
+            owner_required: true,
+            publish: true,
+            ..RuntimeOptions::default()
+        };
+        pin_explicit_join(&mut options);
+        assert!(!options.auto);
+        assert!(options.discover.is_none());
+        assert!(!options.nostr_discovery);
+        assert!(options.owner_required);
+        assert!(options.publish);
+        assert_eq!(options.join, ["private-token"]);
+    }
+
+    #[test]
+    fn discovery_without_explicit_join_is_unchanged() {
+        let mut options = RuntimeOptions {
+            auto: true,
+            ..RuntimeOptions::default()
+        };
+        pin_explicit_join(&mut options);
+        assert!(options.auto);
+    }
+}

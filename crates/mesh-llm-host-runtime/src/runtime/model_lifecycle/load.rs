@@ -1,5 +1,9 @@
 use super::*;
 use crate::inference::skippy;
+use crate::runtime::{
+    OpenAiGuardrailPolicyHandle, SupervisedLaunchOutcome, SupervisedLoadResolution,
+    skippy_telemetry_options,
+};
 use anyhow::Context;
 use std::path::{Path, PathBuf};
 
@@ -232,17 +236,34 @@ fn local_required_runtime_model_path(
 
 /// Resolve source policy before entering any remote resolver. An unknown
 /// caller-supplied profile must never discard a configured strict-local policy.
-async fn resolve_runtime_model_source(
-    ctx: &RunAutoRuntimeLoopContext<'_>,
-    spec: &str,
-    config_model_id: Option<&str>,
-    profile: &str,
-    model_overrides: Option<&plugin::ModelConfigEntry>,
-    instance_id: &str,
+struct RuntimeModelSourceRequest<'a> {
+    config: &'a plugin::MeshConfig,
+    spec: &'a str,
+    config_model_id: Option<&'a str>,
+    profile: &'a str,
+    model_overrides: Option<&'a plugin::ModelConfigEntry>,
+    instance_id: &'a str,
     load_started: Instant,
+    /// Whether this call owns registering the strict-local source policy.
+    /// Supervised loads defer it to the control loop, because this function
+    /// runs in a cancellable task that must not strand a global entry.
+    register_policy: bool,
+}
+
+async fn resolve_runtime_model_source_owned(
+    request: RuntimeModelSourceRequest<'_>,
 ) -> Result<ResolvedRuntimeModelSource> {
-    let default_skippy = ctx
-        .config
+    let RuntimeModelSourceRequest {
+        config,
+        spec,
+        config_model_id,
+        profile,
+        model_overrides,
+        instance_id,
+        load_started,
+        register_policy,
+    } = request;
+    let default_skippy = config
         .defaults
         .as_ref()
         .and_then(|defaults| defaults.skippy.as_ref());
@@ -254,7 +275,7 @@ async fn resolve_runtime_model_source(
         let selector = config_model_id.unwrap_or(spec);
         audit_runtime_model_load_result(
             (|| {
-                let path = local_required_runtime_model_path(ctx.config, model_overrides, spec)
+                let path = local_required_runtime_model_path(config, model_overrides, spec)
                     .with_context(|| {
                         format!(
                             "skippy.source_policy = \"local-required\" for {selector} requires hardware.model_path or an absolute model path"
@@ -287,7 +308,14 @@ async fn resolve_runtime_model_source(
     // Once strict identity is known, register it before the first await. The
     // serving assignment is gossiped and stage-control requests can arrive
     // while a large GGUF is still being hashed and indexed.
-    skippy::register_local_source_policy(&runtime_model_name, profile, local_source_required);
+    //
+    // A supervised load registers later instead: this runs in a cancellable
+    // task, and an abort here would strand a global policy entry with no
+    // owner. Its caller registers on the control loop immediately before the
+    // assignment is published, preserving the same ordering guarantee.
+    if register_policy {
+        skippy::register_local_source_policy(&runtime_model_name, profile, local_source_required);
+    }
     Ok(ResolvedRuntimeModelSource {
         model_path,
         runtime_model_name,
@@ -447,15 +475,16 @@ pub(crate) async fn run_auto_load_runtime_model(
         model_path,
         runtime_model_name,
         local_source_required,
-    } = resolve_runtime_model_source(
-        ctx,
-        &spec,
-        config_model_id.as_deref(),
-        &profile,
+    } = resolve_runtime_model_source_owned(RuntimeModelSourceRequest {
+        config: ctx.config,
+        spec: &spec,
+        config_model_id: config_model_id.as_deref(),
+        profile: &profile,
         model_overrides,
-        &instance_id,
+        instance_id: &instance_id,
         load_started,
-    )
+        register_policy: true,
+    })
     .await?;
     let requested_model = spec.clone();
     let model_bytes = plan_runtime_model_bytes(&model_path, &requested_model).await;
@@ -573,6 +602,260 @@ pub(crate) async fn run_auto_load_runtime_model(
         },
     )
     .await)
+}
+
+/// Owned inputs for the resolve/plan phase of a supervised load.
+///
+/// Everything here is cloned off the control loop before the task is spawned,
+/// so the slow work holds no borrow of loop-owned state.
+pub(crate) struct SupervisedResolveInputs {
+    pub(crate) config: plugin::MeshConfig,
+    pub(crate) spec: String,
+    pub(crate) config_model_id: Option<String>,
+    pub(crate) profile: String,
+    pub(crate) instance_id: String,
+    pub(crate) load_started: Instant,
+}
+
+/// Phase 1: resolve the model source and plan its size, off the control loop.
+///
+/// This performs the catalog/filesystem resolution and any download, which is
+/// the long pole. It deliberately does not reserve capacity, publish a serving
+/// assignment, or start a native runtime: those are control-loop-owned steps
+/// that happen between this phase and the next, after the launch boundary is
+/// re-checked against state that may have changed while this ran.
+pub(crate) async fn supervised_resolve_runtime_model(
+    inputs: SupervisedResolveInputs,
+) -> Result<SupervisedLoadResolution> {
+    let SupervisedResolveInputs {
+        config,
+        spec,
+        config_model_id,
+        profile,
+        instance_id,
+        load_started,
+    } = inputs;
+    let (model_overrides, profile) = audit_runtime_model_load_result(
+        resolve_runtime_model_config(&config, config_model_id.as_deref(), &spec, &profile),
+        runtime_model_audit_context(None, &instance_id),
+        load_started,
+    )?;
+    let ResolvedRuntimeModelSource {
+        model_path,
+        runtime_model_name,
+        local_source_required,
+    } = resolve_runtime_model_source_owned(RuntimeModelSourceRequest {
+        config: &config,
+        spec: &spec,
+        config_model_id: config_model_id.as_deref(),
+        profile: &profile,
+        model_overrides,
+        instance_id: &instance_id,
+        load_started,
+        register_policy: false,
+    })
+    .await?;
+    let model_bytes = plan_runtime_model_bytes(&model_path, &spec).await;
+    Ok(SupervisedLoadResolution {
+        model_path,
+        runtime_model_name,
+        profile,
+        local_source_required,
+        model_bytes,
+    })
+}
+
+/// Owned inputs for the native-start phase of a supervised load.
+pub(crate) struct SupervisedLaunchInputs {
+    pub(crate) node: mesh::Node,
+    pub(crate) config: plugin::MeshConfig,
+    pub(crate) options: RuntimeOptions,
+    pub(crate) resolution: SupervisedLoadResolution,
+    pub(crate) spec: String,
+    pub(crate) config_model_id: Option<String>,
+    pub(crate) instance_id: String,
+    pub(crate) capacity_reservation: RuntimeCapacityReservation,
+    pub(crate) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
+    pub(crate) survey_telemetry: survey::SurveyTelemetry,
+    pub(crate) load_started: Instant,
+}
+
+/// Phase 2: start the native runtime, off the control loop.
+///
+/// The capacity reservation is moved in and moved back out with the outcome so
+/// it is released by `Drop` on every failure path, and so a cancelled task can
+/// never leak it. The caller is responsible for either registering the
+/// returned handle or draining it.
+pub(crate) async fn supervised_launch_runtime_model(
+    inputs: SupervisedLaunchInputs,
+) -> std::result::Result<SupervisedLaunchOutcome, (String, RuntimeCapacityReservation)> {
+    let SupervisedLaunchInputs {
+        node,
+        config,
+        options,
+        resolution,
+        spec,
+        config_model_id,
+        instance_id,
+        capacity_reservation,
+        openai_guardrail_policy,
+        survey_telemetry,
+        load_started,
+    } = inputs;
+    let model_overrides = match resolve_runtime_model_config(
+        &config,
+        config_model_id.as_deref(),
+        &spec,
+        &resolution.profile,
+    ) {
+        Ok((model_overrides, _)) => model_overrides,
+        Err(error) => return Err((error.to_string(), capacity_reservation)),
+    };
+    let ctx_size_override = runtime_model_ctx_size_override(&options, model_overrides);
+    let parallel_override = crate::runtime::startup_models::resolve_model_parallel_override(
+        model_overrides.and_then(|m| m.parallel),
+        &config.gpu,
+    );
+    let launch_started = Instant::now();
+    let capacity_budget_bytes = capacity_reservation.capacity_budget_bytes();
+    let started = start_runtime_local_model(
+        LocalRuntimeModelStartSpec {
+            node: &node,
+            mesh_config: &config,
+            config_model_id: config_model_id
+                .as_deref()
+                .or_else(|| model_overrides.map(|model| model.model.as_str())),
+            runtime_profile: &resolution.profile,
+            model_path: &resolution.model_path,
+            preindexed_split_package: None,
+            model_bytes: resolution.model_bytes,
+            mmproj_override: None,
+            ctx_size_override,
+            pinned_gpu: None,
+            device_override: None,
+            capacity_budget_bytes: Some(capacity_budget_bytes),
+            cache_type_k_override: model_overrides.and_then(|m| m.cache_type_k.as_deref()),
+            cache_type_v_override: model_overrides.and_then(|m| m.cache_type_v.as_deref()),
+            n_batch_override: model_overrides.and_then(|m| m.batch),
+            n_ubatch_override: model_overrides.and_then(|m| m.ubatch),
+            flash_attention_override: model_overrides
+                .and_then(|m| m.flash_attention)
+                .unwrap_or(FlashAttentionType::Auto),
+            parallel_override,
+            local_source_required: resolution.local_source_required,
+            split_topology_lock: None,
+            planning_profile: runtime_resource_planning_profile(&options),
+            openai_guardrail_policy,
+            skippy_telemetry: skippy_telemetry_options(&options),
+            survey_telemetry: survey_telemetry.clone(),
+        },
+        &resolution.runtime_model_name,
+    )
+    .await;
+    match started {
+        Ok((loaded_name, handle, death_rx)) => Ok(SupervisedLaunchOutcome {
+            resolution,
+            instance_id,
+            loaded_name,
+            handle,
+            death_rx,
+            capacity_reservation,
+            launch_started,
+            load_started,
+        }),
+        Err(err) => {
+            survey_telemetry.record_launch_failure(
+                survey::SurveyModelSpec {
+                    model: &spec,
+                    configured_model_selector: config_model_id.as_deref(),
+                    model_path: Some(&resolution.model_path),
+                    launch_kind: survey::SurveyLaunchKind::RuntimeLoad,
+                    pinned_gpu: None,
+                    backend: None,
+                    context_length: ctx_size_override.map(u64::from),
+                },
+                launch_started.elapsed(),
+                survey::classify_launch_failure(&err),
+            );
+            record_runtime_model_load_terminal(
+                RuntimeOperationalEvent::ModelLoadFailed,
+                &resolution.runtime_model_name,
+                &instance_id,
+                "failed",
+                load_started,
+            );
+            Err((err.to_string(), capacity_reservation))
+        }
+    }
+}
+
+/// Register a supervised launch that survived the final launch-boundary
+/// re-check. Runs on the control loop, which owns the state it mutates.
+pub(crate) async fn supervised_register_runtime_model(
+    ctx: &mut RunAutoRuntimeLoopContext<'_>,
+    outcome: SupervisedLaunchOutcome,
+    spec: String,
+    config_model_id: Option<String>,
+) -> api::RuntimeLoadResponse {
+    let SupervisedLaunchOutcome {
+        resolution,
+        instance_id,
+        loaded_name,
+        handle,
+        death_rx,
+        capacity_reservation,
+        launch_started,
+        load_started,
+    } = outcome;
+    finish_runtime_model_load(
+        ctx,
+        RuntimeModelLaunchSuccess {
+            requested_model: spec,
+            config_model_id,
+            profile: resolution.profile,
+            instance_id,
+            model_path: resolution.model_path,
+            loaded_name,
+            handle,
+            death_rx,
+            capacity_reservation,
+            launch_started,
+            load_started,
+        },
+    )
+    .await
+}
+
+/// Drain a supervised launch that must not be registered, because shutdown or
+/// a higher-precedence manual intent overtook it while the native runtime was
+/// starting. Releases the assignment, the reservation, and the policy entry in
+/// the same order as a failed inline load.
+pub(crate) async fn supervised_discard_runtime_model(
+    ctx: &RunAutoRuntimeLoopContext<'_>,
+    outcome: SupervisedLaunchOutcome,
+    reason: &str,
+) {
+    let SupervisedLaunchOutcome {
+        resolution,
+        handle,
+        capacity_reservation,
+        ..
+    } = outcome;
+    let _ = emit_event(OutputEvent::Info {
+        message: format!(
+            "Discarding automatic model '{}' before registration",
+            resolution.runtime_model_name
+        ),
+        context: Some(reason.to_string()),
+    });
+    handle.shutdown().await;
+    drop(capacity_reservation);
+    remove_serving_assignment(ctx.node, &resolution.runtime_model_name).await;
+    super::unload::unregister_local_source_policy_if_unused(
+        ctx,
+        &resolution.runtime_model_name,
+        &resolution.profile,
+    );
 }
 
 #[cfg(test)]

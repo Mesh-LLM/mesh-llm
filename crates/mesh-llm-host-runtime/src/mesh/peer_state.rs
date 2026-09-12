@@ -682,7 +682,7 @@ impl Node {
     pub async fn mesh_catalog(&self) -> Vec<String> {
         // Snapshot each lock independently to avoid holding multiple locks.
         let my_available = self.available_models.lock().await.clone();
-        let my_requested = self.requested_models.lock().await.clone();
+        let my_requested = self.requested_models().await;
         let my_serving_models = self.serving_models.lock().await.clone();
         let peer_data: Vec<_> = {
             let state = self.state.lock().await;

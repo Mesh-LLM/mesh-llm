@@ -17,13 +17,6 @@ pub(crate) enum IntentSource {
     OwnerUnload,
     OwnerEnsure,
     OwnerDrain,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "advisory mesh demand is modeled and covered by pure reconciliation tests"
-        )
-    )]
     MeshDemand,
 }
 

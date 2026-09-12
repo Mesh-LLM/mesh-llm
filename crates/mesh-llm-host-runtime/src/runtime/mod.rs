@@ -1,5 +1,6 @@
 pub(crate) mod activity_policy;
 mod auto_join;
+mod automatic_serving;
 mod capacity;
 pub(crate) mod config_state;
 mod context_planning;
@@ -34,6 +35,7 @@ mod startup_identity;
 mod startup_models;
 mod startup_retry;
 mod status;
+mod supervised_load;
 pub(crate) mod survey;
 #[cfg(test)]
 mod tests;
@@ -56,6 +58,7 @@ use self::local::{
     LocalOpenAiModelStartSpec, LocalRuntimeModelHandle, LocalRuntimeModelStartSpec,
     ManagedModelController, OpenAiGuardrailPolicyHandle, RuntimeEvent, SplitCoordinatorAck,
     SplitCoordinatorEvent, SplitRuntimeReason, SplitRuntimeStart, StartupRuntimePlan,
+    SupervisedLaunchOutcome, SupervisedLoadRequest, SupervisedLoadResolution,
     add_runtime_local_target, add_serving_assignment, advertise_model_ready, local_process_payload,
     openai_guardrail_policy_handle, remove_runtime_local_target, remove_serving_assignment,
     resolved_model_name, runtime_model_planning_bytes, set_advertised_model_context,
