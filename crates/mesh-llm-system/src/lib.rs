@@ -3,6 +3,7 @@ pub mod autoupdate;
 pub mod backend;
 pub mod benchmark;
 pub mod benchmark_prompts;
+pub mod capacity;
 pub use mesh_llm_release_footer as embedded_release_footer;
 pub mod hardware;
 pub mod process;

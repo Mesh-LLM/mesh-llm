@@ -15,7 +15,8 @@ pub(super) const BUILTIN_PREFILL_ADAPTIVE_START: usize = 64;
 pub(super) const BUILTIN_PREFILL_ADAPTIVE_STEP: usize = 64;
 pub(super) const BUILTIN_PREFILL_ADAPTIVE_MAX: usize = 512;
 pub(super) const BUILTIN_PREFILL_ADAPTIVE_TARGET_MS: f64 = 100.0;
-pub(super) const BUILTIN_SAFETY_MARGIN_GB: f64 = 2.0;
+pub(super) const BUILTIN_SAFETY_MARGIN_GB: f64 =
+    mesh_llm_system::capacity::BUILTIN_SAFETY_MARGIN_GB;
 
 #[derive(Clone, Debug)]
 pub(crate) struct SkippyConfigResolveRequest<'a> {

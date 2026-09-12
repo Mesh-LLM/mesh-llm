@@ -507,6 +507,8 @@ is present, the command requires `--public-key-file` and otherwise reports
 
 Use this to inspect local GPU identity and capacity, including per-device VRAM, unified-memory state, and cached benchmark-derived bandwidth when present. `mesh-llm gpus detect` refreshes the raw hardware fingerprint, bandwidth, and compute hints used by local planning.
 
+After the per-device lines, `gpus` prints what this host would advertise to a mesh and where each byte went: the enumerated device memory, the driver reserve, a platform reserve on unified-memory hosts, the configured safety margin (`defaults.hardware.safety_margin_gb`, or the built-in 2 GB when unset), and the share left for mesh placement. The RAM-backed budget is listed separately because it feeds the local fit only and is never advertised as accelerator capacity. `--json` carries the same figures under `advertised_memory`. A `serve --max-vram` ceiling is not applied here, so the usable share shown is the uncapped one.
+
 ### `benchmark tune`
 
 Use this to benchmark model-serving throughput for already-downloaded local models. It resolves local targets, plans safe startup settings, then starts isolated trial `mesh-llm serve` children from temporary configs and reports per-candidate decode tok/s.
