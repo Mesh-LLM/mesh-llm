@@ -51,9 +51,29 @@ credentials, or open or edit a pull request. Do not edit `.github/`,
 define the trusted verification boundary. Repair the patch queue, rewriter
 implementation, Rust code, and model manifests that the fixed gates exercise.
 
-After you finish, the trusted harness independently reruns the complete gate
-sequence on the exact working tree. Only that verification may create the local
-certified commit; a later success-gated step owns GitHub publication.
+Manifest edits are deliberately narrow. In
+`ci/llama-canary/family-certified.json`, keep the roster, artifact identities,
+cadences, lanes, execution policy, and every other field unchanged; only
+`resources.estimated_model_bytes` may be corrected from the immutable GGUF
+tensor scan. In `docs/skippy/llama-parity-candidates.json`, keep every existing
+row and all top-level policy unchanged. Append exactly one classification row
+for each source file missing from the manifest. New rows are limited to the
+classification fields `llama_model`, `family`, `status`, and optional `notes`
+or `unsupported_reason`; do not add artifact selectors, source revisions,
+integrity records, or execution settings such as `repo`, `include`, `revision`,
+`file_integrity`, `splits`, `recurrent`, `model_pin`, or `artifact_id`. A new
+boundary-registered source must remain a runnable candidate. The trusted
+wrapper checks these limits before it accepts the tree, and the full battery
+independently verifies every corrected tensor-byte value against the pinned
+local artifact.
+
+Returning from the coding session is not a success signal. The trusted harness
+runs the complete gate sequence on the working tree. If a gate is red, it
+returns the current logs to this same session and you continue the task within
+the shared repair-and-test deadline. Only a green repair pass may create the
+local candidate commit. A separate job then independently reruns the same
+sequence on that exact tree before a later success-gated step owns GitHub
+publication.
 
 ## New upstream model families
 
