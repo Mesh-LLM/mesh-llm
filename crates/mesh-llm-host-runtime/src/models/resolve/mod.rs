@@ -240,7 +240,14 @@ pub async fn resolve_model_spec_with_progress(input: &Path, progress: bool) -> R
     }
 
     if input.exists() {
-        let resolved = input.canonicalize().unwrap_or_else(|_| input.to_path_buf());
+        // Multipart Hugging Face GGUFs need their snapshot filename until the
+        // complete sibling set has been enumerated. The packaging path then
+        // canonicalizes every managed snapshot link to its regular blob.
+        let resolved = if huggingface_identity_for_path(input).is_some() {
+            canonicalize_cached_hf_path(input)?
+        } else {
+            input.canonicalize().unwrap_or_else(|_| input.to_path_buf())
+        };
         record_resolved_model_usage(&resolved, Some(raw.as_ref()));
         return Ok(resolved);
     }

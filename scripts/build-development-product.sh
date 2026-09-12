@@ -7,6 +7,20 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# Git never activates a committed hook on clone, so enable the repository hooks
+# on the first local development build. Skipped in CI, and never overrides a
+# hooks path the developer chose themselves.
+enable_repo_git_hooks() {
+    [[ -z "${CI:-}" ]] || return 0
+    local current
+    current="$(git -C "$REPO_ROOT" config --get core.hooksPath 2>/dev/null || true)"
+    [[ -z "$current" ]] || return 0
+    git -C "$REPO_ROOT" config core.hooksPath scripts/hooks 2>/dev/null || return 0
+    echo "enabled repository git hooks (core.hooksPath=scripts/hooks); commit messages are now checked locally" >&2
+}
+
+enable_repo_git_hooks
+
 BACKEND=""
 CUDA_ARCH=""
 ROCM_ARCH=""
