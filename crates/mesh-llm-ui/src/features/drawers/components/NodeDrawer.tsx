@@ -13,6 +13,7 @@ import { meshNodeStatusSource, meshStatusLabel, meshStatusTone } from '@/feature
 import { useLlamaRuntime } from '@/features/network/api/use-llama-runtime'
 import { LatencySource } from '@/lib/api/types'
 import { formatPeerLatencySummary } from '@/lib/format-latency'
+import { formatDecimalVramGB } from '@/lib/vram'
 import type { ConfigNode, MeshNode, ModelSummary, Peer } from '@/features/app-tabs/types'
 import type { LlamaRuntimeMetricSample, LlamaRuntimePayload, LlamaRuntimeSlotItem } from '@/lib/api/types'
 
@@ -369,6 +370,32 @@ function NodeDrawerContent({
                 {hardwareLabel(peer, node)}
               </KV>
             </div>
+
+            {peer.memory ? (
+              <>
+                <h3 className="sr-only">Advertised memory</h3>
+                <SectionHead icon={drawerIcon(HardDrive)}>Memory</SectionHead>
+                <div className="space-y-2 px-[18px]">
+                  <p className="text-[length:var(--density-type-caption)] leading-5 text-fg-faint">
+                    As advertised to the mesh. Placement counts on the usable share; the reserves are withheld from the
+                    total before it.
+                  </p>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                    <KV label="Total">{formatDecimalVramGB(peer.memory.totalGB)}</KV>
+                    <KV label="Usable">{formatDecimalVramGB(peer.memory.usableGB)}</KV>
+                    <KV label="Driver reserved">{formatDecimalVramGB(peer.memory.reservedGB)}</KV>
+                    {peer.memory.platformReserveGB > 0 ? (
+                      <KV label="Platform reserve">{formatDecimalVramGB(peer.memory.platformReserveGB)}</KV>
+                    ) : null}
+                    <KV label="Configured reserve">{formatDecimalVramGB(peer.memory.configuredReserveGB)}</KV>
+                    {peer.memory.systemRamGB != null ? (
+                      <KV label="System RAM">{formatDecimalVramGB(peer.memory.systemRamGB)}</KV>
+                    ) : null}
+                    <KV label="RAM-backed local budget">{formatDecimalVramGB(peer.memory.ramOffloadGB)}</KV>
+                  </div>
+                </div>
+              </>
+            ) : null}
           </>
         ) : null}
 

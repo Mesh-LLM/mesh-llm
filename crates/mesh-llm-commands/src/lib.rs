@@ -4,6 +4,7 @@ pub mod agent_cli;
 pub mod auth;
 pub mod benchmark;
 pub mod config;
+pub mod doctor;
 pub mod gpus;
 pub mod model_package;
 pub mod operational_logging;

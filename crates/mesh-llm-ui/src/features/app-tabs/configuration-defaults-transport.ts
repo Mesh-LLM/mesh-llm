@@ -158,26 +158,6 @@ export const CONFIGURATION_DEFAULT_TRANSPORT_SETTINGS = [
     }
   },
   {
-    id: 'lifecycle-readiness-interval-ms',
-    categoryId: 'skippy-transport',
-    icon: 'gauge',
-    label: 'Lifecycle readiness interval',
-    description: 'Set how often readiness is re-checked while startup is in flight.',
-    inheritedLabel: 'Inherited by stage chains without a readiness polling override',
-    tomlSection: SKIPPY_TRANSPORT_TOML_SECTION,
-    visibility: 'advanced',
-    mutability: 'restart-required',
-    control: {
-      kind: 'range',
-      name: 'lifecycle_readiness_interval_ms',
-      value: '1000',
-      min: 100,
-      max: 60000,
-      step: 100,
-      unit: 'ms'
-    }
-  },
-  {
     id: 'lifecycle-health-interval-ms',
     categoryId: 'skippy-transport',
     icon: 'shield',

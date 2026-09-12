@@ -514,6 +514,10 @@ impl Node {
     ) -> Result<()> {
         let remote = context.remote;
         if peer_id == self.endpoint.id() {
+            // Our own announcement echoed back is normal gossip: peers
+            // rebroadcast their full peer table, including us. A peer sharing
+            // our key is detected at join time instead, where the token
+            // names our own id (#1699).
             return Ok(());
         }
         if peer_id == remote {

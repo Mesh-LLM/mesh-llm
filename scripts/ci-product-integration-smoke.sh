@@ -24,6 +24,11 @@ PHASE_RECORDS="$PHASE_ROOT/.phase-results.jsonl"
 SUITE_STARTED_AT_UNIX_NS=""
 SUITE_FINALIZED=0
 
+# This suite qualifies the runtime bundled in the product assembled by the
+# current workflow. A same-version published catalog may describe an older
+# artifact, so force the resolver onto its documented bundle fallback path.
+export MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL="http://127.0.0.1:9/native-runtimes.json"
+
 readonly -a REQUIRED_PHASES=(
     dense-standalone
     dense-openai-sdk
@@ -137,6 +142,89 @@ if [[ "$bundle_backend" != "$BACKEND" ]]; then
     echo "composed product backend mismatch: expected $BACKEND, got ${bundle_backend:-empty}" >&2
     exit 1
 fi
+
+verify_artifact_local_cuda_runtime() {
+    [[ "$BACKEND" == "cuda" ]] || return 0
+
+    local benchmark
+    local normal_probe_status
+    local runtime_dir
+    local strict_probe_status
+    runtime_dir="$(python3 - "$ARTIFACT_DIR/native-runtimes" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+matches = []
+for manifest_path in sorted(root.glob("*/manifest.json")):
+    with manifest_path.open(encoding="utf-8") as handle:
+        manifest = json.load(handle)
+    runtime = manifest.get("runtime") or {}
+    if (runtime.get("backend") or {}).get("kind") == "cuda":
+        matches.append(manifest_path.parent)
+if len(matches) != 1:
+    raise SystemExit(
+        "expected exactly one CUDA runtime in the composed product; "
+        f"found {len(matches)}"
+    )
+print(matches[0])
+PY
+    )"
+
+    echo "Verifying CUDA runtime dependency resolution from the product artifact"
+    env -u LD_LIBRARY_PATH scripts/verify-native-runtime-package.sh "$runtime_dir"
+
+    benchmark="$runtime_dir/tools/mesh-llm-gpu-benchmark"
+    if [[ ! -x "$benchmark" ]]; then
+        echo "missing packaged CUDA device probe: $benchmark" >&2
+        return 1
+    fi
+
+    printf 'CUDA_VISIBLE_DEVICES=%s\n' "${CUDA_VISIBLE_DEVICES-<unset>}"
+    printf 'NVIDIA_VISIBLE_DEVICES=%s\n' "${NVIDIA_VISIBLE_DEVICES-<unset>}"
+    if command -v ldconfig >/dev/null 2>&1; then
+        echo "Host CUDA driver library resolution:"
+        ldconfig -p | grep -E 'libcuda\.so\.1([[:space:]]|$)' || echo "libcuda.so.1 is absent from the linker cache"
+    fi
+    if command -v ldd >/dev/null 2>&1; then
+        echo "CUDA benchmark libraries with the runner environment:"
+        ldd "$benchmark" | grep -E 'libcudart|libcuda' || echo "No CUDA libraries reported by ldd"
+        echo "CUDA benchmark libraries with packaged runtime resolution:"
+        env -u LD_LIBRARY_PATH ldd "$benchmark" | grep -E 'libcudart|libcuda' || echo "No CUDA libraries reported by ldd"
+    fi
+    echo "NVIDIA device nodes:"
+    compgen -G '/dev/nvidia*' || echo "No NVIDIA device nodes found"
+
+    echo "Probing CUDA devices with the runner environment"
+    if "$benchmark" --probe; then
+        normal_probe_status=0
+    else
+        normal_probe_status=$?
+    fi
+
+    echo "Probing CUDA devices with packaged runtime libraries"
+    if env -u LD_LIBRARY_PATH "$benchmark" --probe; then
+        strict_probe_status=0
+    else
+        strict_probe_status=$?
+    fi
+
+    if (( normal_probe_status == 0 && strict_probe_status == 0 )); then
+        echo "CUDA device probe classification: runner and packaged runtime both passed"
+    elif (( normal_probe_status != 0 && strict_probe_status != 0 )); then
+        echo "CUDA device probe classification: CUDA device access failed in both environments" >&2
+        return 1
+    elif (( normal_probe_status == 0 )); then
+        echo "CUDA device probe classification: packaged runtime cannot expose the CUDA device" >&2
+        return 1
+    else
+        echo "CUDA device probe classification: packaged runtime succeeds where the runner environment fails" >&2
+        return 1
+    fi
+}
+
+verify_artifact_local_cuda_runtime
 
 mkdir -p "$PHASE_ROOT"
 printf 'platform=%s\nbackend=%s\ndevice=%s\nproduct_backend=%s\n' \

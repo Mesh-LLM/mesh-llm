@@ -203,3 +203,67 @@ fn runtime_config_control_state_builder_uses_disabled_or_omitted_policy_for_miss
             .contains_key("plugin.demo.settings.plugin_name")
     );
 }
+
+#[test]
+fn native_runtime_selection_setting_surfaces_native_backend_options() {
+    let path = mesh_llm_config::ConfigPath::parse_rendered("runtime.native_runtime.selection")
+        .expect("selection path should parse");
+    let setting = mesh_llm_config::built_in_config_schema_descriptor(&path)
+        .expect("built-in schema should define runtime.native_runtime.selection");
+
+    assert_eq!(
+        setting
+            .control_behavior
+            .as_ref()
+            .and_then(|behavior| behavior.options_source),
+        Some(ConfigOptionsSource::RuntimeNativeBackends),
+        "selection must be backed by the native runtime backend options source"
+    );
+    assert!(
+        setting
+            .constraints
+            .iter()
+            .any(|constraint| matches!(constraint, mesh_llm_config::ConfigConstraint::NonEmpty)),
+        "selection must reject an empty backend choice"
+    );
+
+    let payload = crate::api::routes::runtime_control_state::build_runtime_control_state_payload(
+        [&setting],
+        &crate::api::routes::runtime_control_state::RuntimeControlStateSources {
+            native_backends:
+                crate::api::routes::runtime_control_state::RuntimeOptionsState::Options(vec![
+                    super::runtime_control_state_builder::runtime_option(
+                        super::runtime_control_state_builder::RuntimeOptionSpec::enabled(
+                            ConfigOptionsSource::RuntimeNativeBackends,
+                            "cpu",
+                            "CPU",
+                        ),
+                    ),
+                    super::runtime_control_state_builder::runtime_option(
+                        super::runtime_control_state_builder::RuntimeOptionSpec::enabled(
+                            ConfigOptionsSource::RuntimeNativeBackends,
+                            "metal",
+                            "Metal",
+                        ),
+                    ),
+                ]),
+            ..Default::default()
+        },
+    );
+
+    let options = payload
+        .settings
+        .get("runtime.native_runtime.selection")
+        .and_then(|entry| entry.options.as_ref())
+        .expect("selection should surface native backend options");
+    assert_eq!(
+        options
+            .iter()
+            .map(|option| option.value.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            ConfigConditionValue::String("cpu".to_string()),
+            ConfigConditionValue::String("metal".to_string()),
+        ]
+    );
+}
