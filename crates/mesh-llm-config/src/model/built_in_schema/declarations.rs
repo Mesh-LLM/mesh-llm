@@ -631,10 +631,6 @@ fn skippy_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
             ConfigValueSchema::Integer,
         ),
         basic_setting(
-            &format!("{prefix}.lifecycle_readiness_interval_ms"),
-            ConfigValueSchema::Integer,
-        ),
-        basic_setting(
             &format!("{prefix}.lifecycle_health_interval_ms"),
             ConfigValueSchema::Integer,
         ),

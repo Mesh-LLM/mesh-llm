@@ -643,16 +643,6 @@ impl Drop for InflightRequestGuard {
     }
 }
 
-#[async_trait::async_trait]
-impl crate::inference::skippy::StagePackagePrefetcher for Node {
-    async fn prefetch_stage_package(
-        &self,
-        request: &crate::inference::skippy::StagePrepareRequest,
-    ) -> Result<()> {
-        self.prefetch_stage_package_from_coordinator(request).await
-    }
-}
-
 impl Node {
     pub(crate) fn set_routing_telemetry_sink(
         &self,
@@ -951,7 +941,7 @@ impl Node {
             anyhow::bail!("stage control is not available");
         };
         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-        tx.send(crate::inference::skippy::StageControlCommand {
+        tx.send(crate::inference::skippy::StageControlCommand::Execute {
             request: crate::inference::skippy::StageControlRequest::Status(filter),
             resp: resp_tx,
         })
@@ -971,26 +961,31 @@ impl Node {
         &self,
         mut request: crate::inference::skippy::StageControlRequest,
     ) -> Result<crate::inference::skippy::StageControlResponse> {
-        self.prepare_stage_control_request(&mut request).await?;
+        // Serialize claim validation, source resolution, and load execution
+        // against other local stage-control commands.
+        let control_tx_guard = self.stage_control_tx.lock().await;
+        let control_tx = control_tx_guard.clone();
+        self.resolve_stage_control_request(control_tx.as_ref(), &mut request)
+            .await?;
         if let crate::inference::skippy::StageControlRequest::Load(load)
         | crate::inference::skippy::StageControlRequest::LoadLocal(load) = &request
         {
             self.record_stage_load_topology(load).await;
         }
-        // Load/Prepare can take minutes on large stages; use the same
+        // Loading can take minutes on large stages; use the same
         // per-request budget remote control uses instead of the short default.
         let timeout = Self::stage_control_request_timeout(&request);
-        let control_tx = self.stage_control_tx.lock().await.clone();
         let Some(tx) = control_tx else {
             anyhow::bail!("stage control is not available");
         };
         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-        tx.send(crate::inference::skippy::StageControlCommand {
+        tx.send(crate::inference::skippy::StageControlCommand::Execute {
             request,
             resp: resp_tx,
         })
         .map_err(|_| anyhow::anyhow!("stage control loop is unavailable"))?;
         let response = wait_local_stage_control_response(resp_rx, timeout).await?;
+        drop(control_tx_guard);
         match &response {
             crate::inference::skippy::StageControlResponse::Ready(ready) => {
                 self.record_stage_status(Some(self.endpoint.id()), ready.status.clone())
@@ -1064,9 +1059,7 @@ impl Node {
             crate::inference::skippy::StageControlRequest::Claim(_)
             | crate::inference::skippy::StageControlRequest::Stop(_)
             | crate::inference::skippy::StageControlRequest::Status(_)
-            | crate::inference::skippy::StageControlRequest::Inventory(_)
-            | crate::inference::skippy::StageControlRequest::CancelPrepare(_)
-            | crate::inference::skippy::StageControlRequest::StatusUpdate(_) => {
+            | crate::inference::skippy::StageControlRequest::Inventory(_) => {
                 std::time::Duration::from_secs(30)
             }
             crate::inference::skippy::StageControlRequest::Load(load) => {
@@ -1074,9 +1067,6 @@ impl Node {
             }
             crate::inference::skippy::StageControlRequest::LoadLocal(load) => {
                 crate::inference::skippy::stage_load_timeout(load)
-            }
-            crate::inference::skippy::StageControlRequest::Prepare(prepare) => {
-                crate::inference::skippy::stage_load_timeout(&prepare.load)
             }
         }
     }
