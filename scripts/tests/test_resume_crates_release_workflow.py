@@ -24,7 +24,7 @@ class ResumeCratesReleaseWorkflowTests(unittest.TestCase):
 
         self.assertEqual(workflow.count("secrets.CARGO_REGISTRY_TOKEN"), 1)
         self.assertIn("persist-credentials: false", workflow)
-        self.assertIn("../controller/scripts/publish-crates.sh", workflow)
+        self.assertIn("../controller/scripts/publish-crates.sh --resume", workflow)
         self.assertIn("working-directory: release-source", workflow)
 
 

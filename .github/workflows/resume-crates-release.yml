@@ -87,4 +87,4 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
           LLAMA_STAGE_BUILD_DIR: ${{ runner.temp }}/mesh-llm-publish-crates-native-verify
-        run: ../controller/scripts/publish-crates.sh
+        run: ../controller/scripts/publish-crates.sh --resume

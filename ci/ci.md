@@ -134,9 +134,10 @@ If crates.io accepts only a prefix of the stable package chain,
 release tag. The operator supplies both the stable tag and its exact peeled
 commit SHA. The workflow runs only from the default branch, verifies those two
 identities against the remote tag and checkout, and uses the trusted
-default-branch `publish-crates.sh` controller against the tagged source. Cargo
-continues past immutable versions that are already uploaded; the workflow does
-not move or recreate the release tag.
+default-branch `publish-crates.sh` controller against the tagged source. Resume
+mode skips versions that crates.io confirms are already published and falls
+back to Cargo for unknown registry responses. The workflow does not move or
+recreate the release tag.
 
 Release efficiency TODOs:
 
