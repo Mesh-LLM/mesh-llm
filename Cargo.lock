@@ -7391,6 +7391,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "skippy-cache",
  "skippy-protocol",
  "skippy-runtime",
  "skippy-topology",
