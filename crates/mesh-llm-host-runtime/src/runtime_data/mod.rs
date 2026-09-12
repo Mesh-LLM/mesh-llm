@@ -364,6 +364,7 @@ pub(crate) mod tests {
             gpu_name: Some("RTX 4090".into()),
             gpu_vram: Some("25769803776".into()),
             gpu_reserved_bytes: None,
+            memory: crate::mesh::AdvertisedMemory::default(),
             gpu_mem_bandwidth_gbps: None,
             gpu_compute_tflops_fp32: None,
             gpu_compute_tflops_fp16: None,
@@ -413,6 +414,7 @@ pub(crate) mod tests {
 
         let payload = status_payload(snapshot);
         let expected = StatusPayload {
+            my_memory: crate::api::status::MemoryPayload::default(),
             version: "0.68.0".into(),
             latest_version: Some("0.68.0".into()),
             node_id: "node-1".into(),
@@ -559,6 +561,7 @@ pub(crate) mod tests {
             gpu_name: None,
             gpu_vram: None,
             gpu_reserved_bytes: None,
+            memory: crate::mesh::AdvertisedMemory::default(),
             gpu_mem_bandwidth_gbps: None,
             gpu_compute_tflops_fp32: None,
             gpu_compute_tflops_fp16: None,
@@ -702,6 +705,7 @@ pub(crate) mod tests {
             gpu_name: None,
             gpu_vram: None,
             gpu_reserved_bytes: None,
+            memory: crate::mesh::AdvertisedMemory::default(),
             gpu_mem_bandwidth_gbps: None,
             gpu_compute_tflops_fp32: None,
             gpu_compute_tflops_fp16: None,

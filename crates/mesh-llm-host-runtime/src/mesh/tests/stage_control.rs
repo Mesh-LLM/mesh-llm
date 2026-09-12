@@ -150,7 +150,7 @@ async fn stage_control_bundle_gate_rejects_legacy_peer() -> Result<()> {
     assert!(
         error
             .to_string()
-            .contains("does not advertise the required generation-8 control bundle"),
+            .contains("does not advertise the required generation-9 control bundle"),
         "unexpected error: {error:#}"
     );
 
@@ -163,35 +163,6 @@ async fn stage_control_bundle_gate_rejects_legacy_peer() -> Result<()> {
         .stage_protocol_generation_supported = true;
     node.ensure_current_stage_control_peer(peer_id).await?;
     Ok(())
-}
-
-fn test_preparation_status(
-    state: crate::inference::skippy::StagePreparationState,
-) -> crate::inference::skippy::StagePreparationStatus {
-    crate::inference::skippy::StagePreparationStatus {
-        topology_id: "topology-a".to_string(),
-        run_id: "run-a".to_string(),
-        model_id: "model-a".to_string(),
-        backend: "skippy".to_string(),
-        package_ref: "gguf:///model.gguf".to_string(),
-        manifest_sha256: "direct-gguf:1:model.gguf".to_string(),
-        stage_id: "stage-1".to_string(),
-        stage_index: 1,
-        layer_start: 12,
-        layer_end: 24,
-        admission: Some(crate::inference::skippy::test_stage_admission(12, 24)),
-        activation_codec: skippy_protocol::StageActivationCodec::default(),
-        activation_codec_policy: Default::default(),
-        state,
-        bytes_done: Some(1024),
-        bytes_total: Some(4096),
-        bind_addr: Some("127.0.0.1:51234".to_string()),
-        error: None,
-        shutdown_generation: 7,
-        coordinator_term: 11,
-        coordinator_id: Some(make_test_endpoint_id(0x70)),
-        lease_until_unix_ms: 999_999,
-    }
 }
 
 #[test]
@@ -278,15 +249,6 @@ fn status_conversions_preserve_activation_codec_policy() {
         None,
     );
     assert_eq!(snapshot.activation_codec_policy, load.activation_codec_policy);
-    let preparation = stage_preparation_status_from_load(
-        &load,
-        crate::inference::skippy::StagePreparationState::Ready,
-        None,
-    );
-    assert_eq!(
-        preparation.activation_codec_policy,
-        load.activation_codec_policy
-    );
 }
 
 #[test]
@@ -346,7 +308,7 @@ fn local_load_command_strengthens_a_stale_fallback_domain_flag() {
 }
 
 #[test]
-fn strict_local_load_cannot_use_the_legacy_domain_command() {
+fn strict_local_load_requires_the_load_local_domain_command() {
     let requester = make_test_endpoint_id(0x86);
     let digest = "b".repeat(64);
     let mut load = test_stage_load_request();
@@ -365,7 +327,7 @@ fn strict_local_load_cannot_use_the_legacy_domain_command() {
 }
 
 #[test]
-fn content_addressed_load_cannot_use_legacy_domain_command_with_fallback_flag() {
+fn content_addressed_load_cannot_use_fallback_domain_command() {
     let requester = make_test_endpoint_id(0x89);
     let digest = "c".repeat(64);
     let mut load = test_stage_load_request();
@@ -381,51 +343,6 @@ fn content_addressed_load_cannot_use_legacy_domain_command_with_fallback_flag() 
     .to_string();
 
     assert!(error.contains("fail-closed LoadLocal"));
-}
-
-#[test]
-fn strict_local_load_cannot_use_the_legacy_prepare_command() {
-    let requester = make_test_endpoint_id(0x87);
-    let mut load = test_stage_load_request();
-    load.local_source_required = true;
-
-    let error = stage_control_request_to_proto(
-        requester,
-        crate::inference::skippy::StageControlRequest::Prepare(
-            crate::inference::skippy::StagePrepareRequest {
-                load,
-                coordinator_id: Some(make_test_endpoint_id(0x88)),
-            },
-        ),
-    )
-    .unwrap_err()
-    .to_string();
-
-    assert!(error.contains("cannot use the legacy Prepare"));
-}
-
-#[test]
-fn content_addressed_load_cannot_use_legacy_prepare_with_fallback_flag() {
-    let requester = make_test_endpoint_id(0x8a);
-    let digest = "d".repeat(64);
-    let mut load = test_stage_load_request();
-    load.package_ref = format!("local-gguf://sha256/{digest}");
-    load.source_model_sha256 = Some(digest);
-    load.local_source_required = false;
-
-    let error = stage_control_request_to_proto(
-        requester,
-        crate::inference::skippy::StageControlRequest::Prepare(
-            crate::inference::skippy::StagePrepareRequest {
-                load,
-                coordinator_id: Some(make_test_endpoint_id(0x8b)),
-            },
-        ),
-    )
-    .unwrap_err()
-    .to_string();
-
-    assert!(error.contains("cannot use the legacy Prepare"));
 }
 
 #[test]
@@ -453,63 +370,6 @@ fn unavailable_strict_local_load_never_exposes_worker_path() {
 }
 
 #[test]
-fn stage_control_prepare_request_round_trips_proto() {
-    let requester = make_test_endpoint_id(0x82);
-    let coordinator_id = make_test_endpoint_id(0x83);
-    let request = crate::inference::skippy::StageControlRequest::Prepare(
-        crate::inference::skippy::StagePrepareRequest {
-            load: test_stage_load_request(),
-            coordinator_id: Some(coordinator_id),
-        },
-    );
-
-    let frame = stage_control_request_to_proto(requester, request).unwrap();
-    let decoded = stage_control_request_from_proto(frame).unwrap();
-
-    let crate::inference::skippy::StageControlRequest::Prepare(prepare) = decoded else {
-        panic!("expected prepare request");
-    };
-    assert_eq!(prepare.coordinator_id, Some(coordinator_id));
-    assert_eq!(prepare.load.stage_id, "stage-1");
-    assert_eq!(prepare.load.layer_start, 12);
-    assert_eq!(prepare.load.layer_end, 24);
-    assert_eq!(prepare.load.model_path.as_deref(), Some("/model.gguf"));
-    assert_eq!(
-        prepare.load.load_mode,
-        skippy_protocol::LoadMode::RuntimeSlice
-    );
-    assert_eq!(
-        prepare.load.runtime_settings,
-        test_stage_load_request().runtime_settings
-    );
-    assert_eq!(
-        prepare.load.downstream.and_then(|peer| peer.node_id),
-        Some(make_test_endpoint_id(0x80))
-    );
-}
-
-#[test]
-fn stage_control_status_update_request_round_trips_proto() {
-    let requester = make_test_endpoint_id(0x84);
-    let status = test_preparation_status(crate::inference::skippy::StagePreparationState::Loading);
-    let request = crate::inference::skippy::StageControlRequest::StatusUpdate(status);
-
-    let frame = stage_control_request_to_proto(requester, request).unwrap();
-    let decoded = stage_control_request_from_proto(frame).unwrap();
-
-    let crate::inference::skippy::StageControlRequest::StatusUpdate(status) = decoded else {
-        panic!("expected status update request");
-    };
-    assert_eq!(
-        status.state,
-        crate::inference::skippy::StagePreparationState::Loading
-    );
-    assert_eq!(status.bind_addr.as_deref(), Some("127.0.0.1:51234"));
-    assert_eq!(status.bytes_done, Some(1024));
-    assert_eq!(status.bytes_total, Some(4096));
-}
-
-#[test]
 fn stage_control_inventory_response_round_trips_plain_gguf_source() {
     let response = crate::inference::skippy::StageControlResponse::Inventory(
         crate::inference::skippy::StageLayerInventory {
@@ -526,9 +386,6 @@ fn stage_control_inventory_response_round_trips_plain_gguf_source() {
                 layer_end: 32,
             }],
             missing_ranges: Vec::new(),
-            preparing_ranges: vec![test_preparation_status(
-                crate::inference::skippy::StagePreparationState::Resolving,
-            )],
             source_model_path: Some("/model.gguf".to_string()),
             source_model_bytes: Some(4_096),
             source_model_sha256: None,
@@ -551,41 +408,6 @@ fn stage_control_inventory_response_round_trips_plain_gguf_source() {
     assert_eq!(inventory.source_model_path.as_deref(), Some("/model.gguf"));
     assert_eq!(inventory.available_ranges[0].layer_start, 0);
     assert_eq!(inventory.available_ranges[0].layer_end, 32);
-    assert_eq!(
-        inventory.preparing_ranges[0].state,
-        crate::inference::skippy::StagePreparationState::Resolving
-    );
-}
-
-#[test]
-fn stage_control_prepare_response_round_trips_failed_status() {
-    let mut status =
-        test_preparation_status(crate::inference::skippy::StagePreparationState::Failed);
-    status.error = Some("source GGUF missing".to_string());
-    let response = crate::inference::skippy::StageControlResponse::PrepareAccepted(
-        crate::inference::skippy::StagePrepareAcceptedResponse {
-            accepted: false,
-            status,
-            error: Some("source GGUF missing".to_string()),
-        },
-    );
-
-    let decoded =
-        stage_control_response_from_proto(stage_control_response_to_proto(response)).unwrap();
-
-    let crate::inference::skippy::StageControlResponse::PrepareAccepted(accepted) = decoded else {
-        panic!("expected prepare response");
-    };
-    assert!(!accepted.accepted);
-    assert_eq!(
-        accepted.status.state,
-        crate::inference::skippy::StagePreparationState::Failed
-    );
-    assert_eq!(accepted.error.as_deref(), Some("source GGUF missing"));
-    assert_eq!(
-        accepted.status.error.as_deref(),
-        Some("source GGUF missing")
-    );
 }
 
 #[test]

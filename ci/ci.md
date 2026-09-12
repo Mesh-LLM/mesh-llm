@@ -26,21 +26,25 @@ and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 | `nightly-stability.yml` / `nightly-stability-run.yml` | daily schedule, dispatch / reusable | GitHub-hosted live-endpoint evidence. The general stability and KV tool-loop/prefix-reuse harnesses run independently, upload both evidence sets, and preserve either failure. The reusable workflow accepts no runner label. |
 | `nightly-kv-coverage.yml` | daily schedule, dispatch | Trusted-`main`, read-only, GitHub-hosted expansion of deterministic radix lease/eviction and blob-ownership state machines. Seed/step budgets and the exact source SHA are uploaded; no secrets or privileged runner are used. |
 | `agentic-replay-nightly.yml` | daily schedule, trusted-main dispatch | Opt-in coding-agent replay benchmark on the persistent macOS `micstudio` runner. The fixed `[self-hosted, X64, macOS, family-certify, agentic-replay]` selector is backed by a fail-closed `RUNNER_NAME=micstudio` check; both manual and scheduled execution check out trusted `main`. It resolves exact model and trajectory revisions from the pre-warmed Hugging Face cache, verifies their SHA-256 digests, uploads immutable evidence, publishes cohort-matched history, gates configured regressions, and may open a repair PR without executing pull-request content on the persistent runner. |
-| `llama-upstream-canary.yml` | daily schedule, dispatch | Trusted default-branch llama.cpp bump certification on the self-hosted `family-certify` runner. It never runs as ordinary push or PR CI. `scripts/plan-family-battery.py` validates the generated `ci/llama-canary/family-certified.json` policy (sourced from `ci/model-artifacts/registry.json`) and every file's exact immutable cache blob identity and byte size before native compilation. Each target/draft artifact must have at least one metadata-bearing GGUF shard; every shard that carries architecture dimensions must match the declared runtime range and activation width, including Qwen4's `hyper_connection.count * embedding_length` boundary. Optional `mmproj_artifact` rows pin a projector GGUF sidecar (exact blob identity, exempt from trunk-dimension checks), and each family that pins one runs an additional multimodal smoke lane after its core lanes: the real-projector + deterministic-image harness in `crates/skippy-server/src/frontend/tests/multimodal.rs` (local monolithic and split stages) via `SKIPPY_MM_*`, reconciled against the plan like every other lane. It emits deterministic bounded matrix shards and records the plan with evidence. The current single-runner workflow consumes one selected-family shard and builds the certification binaries once. Changed pins always run the complete `llama-bump` cohort. Before any lane starts, the battery verifies shard/tensor scans, declared runtime/MTP layer counts, model bytes, disk headroom and certification ports. Native MTP/NextN heads remain part of the single target model; the battery does not reopen the model as a separate draft. Those rows require native draft sidebands in staged single-step and chain correctness, where each proposed token is verified against the target. Every certified profile must retain strict `single-step`, `chain`, and `state-handoff` parity. Single-step and chain exercise the sole shipping raw-f32 activation wire and any mismatch is a hard failure. Planned families, sweep cuts, and multimodal smokes are reconciled exactly against executed lanes and recorded results. Declared per-model or model-size-derived startup deadlines, complete-certification wall-clock limits and typed lane outcomes are recorded, and immutable plans/model manifests/preflight evidence/certification logs upload even on failure. Manual dispatch can force this certification when the upstream SHA is unchanged. Persistent-runner execution is always a read-only checkout of trusted `main`. Changed pins route through one deterministic `prepare -> build -> certify -> publish` wrapper (`scripts/llama-canary-agent-repair.sh`). A failed phase may receive bounded local agent repairs, but every edit restarts prepare and the complete build before the wrapper can certify. The 690-minute internal work deadline reserves 30 minutes inside the 720-minute step for one terminal publication to a run-specific branch. Green opens a normal exact-head PR; an exhausted phase opens an explicitly uncertified draft. The canary remains red until a certified PR merges, and changed pins are never pushed directly to `main`. Unchanged scheduled and forced certifications remain read-only and do not invoke the agent. Runner reads its pre-warmed HF cache over NFS (`HF_CACHE` + `HF_HUB_OFFLINE=1` in the runner `.env`; no `flock` on NFS, so the runner never downloads) |
+| `llama-upstream-canary.yml` | daily schedule, dispatch | Trusted default-branch llama.cpp bump certification on the self-hosted `family-certify` runner. It never runs as ordinary push or PR CI. A new run supersedes the older sentinel so stale work cannot monopolize the runner. `scripts/plan-family-battery.py` validates the generated `ci/llama-canary/family-certified.json` policy (sourced from `ci/model-artifacts/registry.json`) and every file's exact immutable cache blob identity and byte size before native compilation. Each target/draft artifact must have at least one metadata-bearing GGUF shard; every shard that carries architecture dimensions must match the declared runtime range and activation width, including Qwen4's `hyper_connection.count * embedding_length` boundary. Optional `mmproj_artifact` rows pin a projector GGUF sidecar (exact blob identity, exempt from trunk-dimension checks), and each family that pins one runs an additional multimodal smoke lane after its core lanes: the real-projector + deterministic-image harness in `crates/skippy-server/src/frontend/tests/multimodal.rs` (local monolithic and split stages) via `SKIPPY_MM_*`, reconciled against the plan like every other lane. It emits deterministic bounded matrix shards and records the plan with evidence. The current single-runner workflow consumes one selected-family shard and builds the certification binaries once. Changed pins always run the complete `llama-bump` cohort. Before any lane starts, the battery verifies shard/tensor scans, declared runtime/MTP layer counts, model bytes, disk headroom and certification ports. Native MTP/NextN heads remain part of the single target model; the battery does not reopen the model as a separate draft. Those rows require native draft sidebands in staged single-step and chain correctness, where each proposed token is verified against the target. Every certified profile must retain strict `single-step`, `chain`, and `state-handoff` parity. Filtered correctness stages derive their exact resident tensor names from the native stage graph planner, including GGUFs with non-finite metadata values. Single-step and chain exercise the sole shipping raw-f32 activation wire and any mismatch is a hard failure. Planned families, sweep cuts, and multimodal smokes are reconciled exactly against executed lanes and recorded results. Declared per-model or model-size-derived startup deadlines, complete-certification wall-clock limits and typed lane outcomes are recorded, and immutable plans/model manifests/preflight evidence/certification logs upload even on failure. Manual dispatch can force this certification when the upstream SHA is unchanged. Persistent-runner execution is always a read-only checkout of trusted `main`. Changed pins give one agent the complete developer task: repair or regenerate the queue, address ABI fallout, and iterate through every canonical gate. The agent runs for at most 450 minutes without GitHub credentials. After it exits successfully, the repair job snapshots the candidate as an unreachable local commit and uploads a thin candidate bundle. A separate self-hosted verification job and checkout download that bundle, materialize its commit in a fresh detached worktree, and independently run one ordered `prepare -> build -> certify` pass with a 240-minute budget and new native-build and family-evidence directories. Only the exact passing commit is exported as the certified bundle. A separate success-gated job on a fresh GitHub-hosted runner receives the repair token, validates the one-day bundle artifact, pushes a run-specific branch, and opens a normal exact-head PR as its final external mutation. Agent or verification failures retain logs and create no branch or PR. Successful publication leaves the canary green; changed pins are never pushed directly to `main`. Unchanged scheduled and forced certifications remain read-only and do not invoke the agent. Runner requires `HF_CACHE=/Users/lab/models/huggingface`, verifies its `hub` directory, exports `HF_HOME` and `HF_HUB_CACHE` from that root, and stays offline on the NFS-backed cache (`HF_HUB_OFFLINE=1`; no `flock`, so the runner never downloads). |
 
 The changed-pin canary wrapper owns the target-pin transition: it writes the
-sole upstream selector, `third_party/llama.cpp/upstream.txt`, prepares through
-the checked-in `pinned` selector, and verifies the prepared-upstream stamp
-before build or certification. Publication happens once at terminal state.
-Scheduled changed-pin runs first query open `llama-canary/repair-*` PR bodies
-and skip the expensive state machine when one records the exact candidate SHA.
-The wrapper validates its runner paths, model cache, repository identity, and
-repair token before phase execution; a failed preflight is reported without
-claiming that a terminal PR exists. Git publication uses an environment-sourced
-askpass helper so the repair PAT never appears in the push URL or process
-arguments. Terminal PR bodies include the generated upstream diffstat and
-commit summary, and changed-pin evidence has a distinct artifact name from the
-unchanged-pin battery upload.
+sole upstream selector, `third_party/llama.cpp/upstream.txt`, before the agent
+starts. The agent cannot change that selector or the harness control files.
+After the agent finishes, its job snapshots the candidate as an unreachable
+commit and uploads a thin bundle. A separate self-hosted verification job and
+checkout materialize that commit in a fresh detached worktree, prepare through
+the checked-in `pinned` selector, verify the prepared-upstream stamp, and execute
+the complete build and certification sequence with new native-build and
+family-evidence directories. The verifier resolves and exports its own Homebrew
+LLVM prefix before the generated-family rewriter check because job environment
+files are not shared with the repair job. Only that passing commit is exported
+as the certified bundle. A later job on a fresh GitHub-hosted runner validates
+it, uses an environment-sourced askpass helper so the repair PAT never appears
+in the push URL or process arguments, pushes without force, and opens a ready
+PR as its final external mutation. If either the agent or trusted verification
+fails, only the distinct
+`llama-canary-changed-pin-*` evidence artifact is retained.
 
 Scheduled coverage details: an unchanged-pin llama canary uses the bounded
 `nightly` cadence (Qwen3 dense, Falcon-H1, Qwen3Next, and Mamba). Changed pins
@@ -185,6 +189,21 @@ release candidates and their final stable release use the same stable baseline;
 the final notes retain the RC changes and add any post-RC changes.
 The workflow-scoped token push does not fan out another main CI run; the release
 graph is the evidence for that version-only source commit.
+
+After a stable release publishes, the `release_notes` job regroups the
+GitHub-generated body into Keep a Changelog sections. A deterministic pass
+classifies each entry from the Conventional Commits type on the canonical
+squash-merge commit between the comparison base and the tag; an optional agent
+review pass then reclassifies what commit metadata could not place. Both passes
+render through the same validator, which refuses a plan that does not cover the
+published body exactly, and the job re-verifies the live body after editing.
+Every agent failure mode -- absent CLI, missing credentials, failed probe,
+exhausted quota, blown budget, or an invalid plan -- keeps the deterministic
+notes and leaves the job green. `RELEASE_NOTES_AGENT_MODEL` is unset, so the
+pipeline is deterministic-only until a runner provides the agent CLI and
+credentials. Prereleases are skipped because RC notes are regenerated for the
+final release. Work products upload as `release-notes-<tag>` evidence for 90
+days.
 
 After a stable release with the full GPU matrix succeeds, the downstream
 `mesh-packaging` dispatch job first checks that its
@@ -370,9 +389,19 @@ runtime producers are not duplicated.
   protected default-branch reusable workflows, receives no repository secrets or
   credential-bearing caches, and is restricted to the repository's GPU runner
   group. Its PR runtime is compiled for both sm86 and sm120 because the scale
-  set currently contains RTX 3080 and RTX 5090 workers. The smoke installs the
-  pinned CUDA 12.9 user-space runtime libraries required by the host-linked
-  product before inference. Vulkan uses the same approved `gpu-nvidia` host
+  set currently contains RTX 3080 and RTX 5090 workers. The native runtime
+  artifact carries the redistributable CUDA toolkit closure required by the
+  host-linked product. NVIDIA objects remain byte-for-byte unchanged, the
+  collector admits only the reviewed cudart, cuBLAS, cuBLASLt, and nvJitLink
+  families for the declared CUDA major, and the package includes the toolkit
+  distribution license. The smoke verifies that closure from the extracted
+  artifact with `LD_LIBRARY_PATH` unset and does not install cudart or cuBLAS
+  packages on the runner; the NVIDIA driver remains host-owned. Before
+  inference, it records CUDA visibility variables, host driver-library
+  resolution and NVIDIA device nodes, then runs the packaged benchmark's
+  device-count probe without benchmark allocations, using inherited and
+  strict packaged-library resolution. Vulkan uses
+  the same approved `gpu-nvidia` host
   with the explicit `Vulkan0` device. ROCm uses `ROCm0` and its reusable job is
   skipped unless `MESH_ROCM_INFERENCE_RUNNER_ENABLED` is exactly `true`; the
   corresponding repository-scoped `gpu-amd` runner could not be verified from

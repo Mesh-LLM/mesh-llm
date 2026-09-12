@@ -15,10 +15,14 @@ ARG NODE_ENV=production
 ENV NODE_ENV=$NODE_ENV
 ENV VITE_API_URL=$VITE_API_URL
 ENV VITE_STORAGE_NAMESPACE=$VITE_STORAGE_NAMESPACE
-RUN --mount=type=cache,id=mesh-llm-npm-alpine-node24-${TARGETARCH},target=/root/.npm,sharing=locked \
-    npm install -g pnpm
 WORKDIR /app
 COPY crates/mesh-llm-ui/package.json crates/mesh-llm-ui/pnpm-lock.yaml crates/mesh-llm-ui/pnpm-workspace.yaml ./
+# Install the pnpm pinned by package.json's packageManager field. An unpinned
+# `npm install -g pnpm` resolves to pnpm 12, which self-switches to the pinned
+# 10.x and then fails with ERR_PNPM_PNPM_ENGINE_IDENTITY_UNVERIFIABLE because a
+# pnpm 10 lockfile does not record the @pnpm/exe integrity that pnpm 12 checks.
+RUN --mount=type=cache,id=mesh-llm-npm-alpine-node24-${TARGETARCH},target=/root/.npm,sharing=locked \
+    npm install -g "$(node -p 'JSON.parse(require("fs").readFileSync("package.json", "utf8")).packageManager')"
 RUN --mount=type=cache,id=mesh-llm-pnpm-store-alpine-node24-${TARGETARCH},target=/root/.local/share/pnpm/store,sharing=locked \
     pnpm install --frozen-lockfile
 COPY crates/mesh-llm-ui/ ./
@@ -40,73 +44,12 @@ RUN --mount=type=cache,id=mesh-llm-rustup-stable-debian-bookworm-${TARGETARCH},t
 ENV PATH="/root/.cargo/bin:$PATH"
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
-COPY crates/mesh-llm-ui/ crates/mesh-llm-ui/
-COPY crates/mesh-llm-gpu-bench/ crates/mesh-llm-gpu-bench/
-COPY crates/mesh-llm-identity/ crates/mesh-llm-identity/
-COPY crates/mesh-llm-protocol/ crates/mesh-llm-protocol/
-COPY crates/mesh-llm-release-footer/ crates/mesh-llm-release-footer/
-COPY crates/mesh-llm-routing/ crates/mesh-llm-routing/
-COPY crates/mesh-llm-guardrails/ crates/mesh-llm-guardrails/
-COPY crates/mesh-llm-system/ crates/mesh-llm-system/
-COPY crates/mesh-llm-types/ crates/mesh-llm-types/
-COPY crates/mesh-llm-config/ crates/mesh-llm-config/
-COPY crates/mesh-llm-console-server/ crates/mesh-llm-console-server/
-COPY crates/mesh-llm-host-runtime/Cargo.toml crates/mesh-llm-host-runtime/Cargo.toml
-COPY crates/mesh-llm/Cargo.toml crates/mesh-llm/Cargo.toml
-COPY crates/mesh-llm/build.rs crates/mesh-llm/build.rs
-COPY crates/mesh-llm-plugin/Cargo.toml crates/mesh-llm-plugin/Cargo.toml
-COPY crates/mesh-llm-plugin/build.rs crates/mesh-llm-plugin/build.rs
-COPY crates/mesh-llm-skills/Cargo.toml crates/mesh-llm-skills/Cargo.toml
-COPY crates/mesh-llm-plugin-manager/Cargo.toml crates/mesh-llm-plugin-manager/Cargo.toml
-COPY crates/mesh-llm-host-runtime/ crates/mesh-llm-host-runtime/
-COPY crates/mesh-llm/ crates/mesh-llm/
-COPY crates/mesh-llm-plugin/ crates/mesh-llm-plugin/
-COPY crates/mesh-llm-skills/ crates/mesh-llm-skills/
-COPY crates/mesh-llm-plugin-manager/ crates/mesh-llm-plugin-manager/
-COPY crates/mesh-client/ crates/mesh-client/
-COPY crates/mesh-llm-api-client/ crates/mesh-llm-api-client/
-COPY crates/mesh-llm-api-server/ crates/mesh-llm-api-server/
-COPY crates/mesh-llm-node/ crates/mesh-llm-node/
-COPY crates/mesh-llm-ffi/ crates/mesh-llm-ffi/
-COPY crates/mesh-llm-nodejs/ crates/mesh-llm-nodejs/
-COPY crates/mesh-llm-test-harness/ crates/mesh-llm-test-harness/
-COPY crates/model-ref/ crates/model-ref/
-COPY crates/model-artifact/ crates/model-artifact/
-COPY crates/model-hf/ crates/model-hf/
-COPY crates/model-package/ crates/model-package/
-COPY crates/model-resolver/ crates/model-resolver/
-COPY crates/skippy-protocol/ crates/skippy-protocol/
-COPY crates/skippy-topology/ crates/skippy-topology/
-COPY crates/skippy-cache/ crates/skippy-cache/
-COPY crates/skippy-metrics/ crates/skippy-metrics/
-COPY crates/openai-frontend/ crates/openai-frontend/
-COPY crates/skippy-ffi/ crates/skippy-ffi/
-COPY crates/skippy-model/ crates/skippy-model/
-COPY crates/skippy-quantize/ crates/skippy-quantize/
-COPY crates/llama-quant-ffi/ crates/llama-quant-ffi/
-COPY crates/skippy-runtime/ crates/skippy-runtime/
-COPY crates/skippy-server/ crates/skippy-server/
-COPY crates/metrics-server/ crates/metrics-server/
-COPY crates/skippy-model-package/ crates/skippy-model-package/
-COPY crates/skippy-coordinator/ crates/skippy-coordinator/
-COPY crates/skippy-correctness/ crates/skippy-correctness/
-COPY crates/llama-spec-bench/ crates/llama-spec-bench/
-COPY crates/skippy-bench/ crates/skippy-bench/
-COPY crates/skippy-prompt/ crates/skippy-prompt/
-COPY crates/mesh-mixture-of-agents/ crates/mesh-mixture-of-agents/
-COPY crates/mesh-llm-cli/ crates/mesh-llm-cli/
-COPY crates/mesh-llm-commands/ crates/mesh-llm-commands/
-COPY crates/mesh-llm-embedded-runtime/ crates/mesh-llm-embedded-runtime/
-COPY crates/mesh-llm-events/ crates/mesh-llm-events/
-COPY crates/mesh-llm-build-info/ crates/mesh-llm-build-info/
-COPY crates/mesh-llm-hardware-profile/ crates/mesh-llm-hardware-profile/
-COPY crates/mesh-llm-native-runtime/ crates/mesh-llm-native-runtime/
-COPY crates/mesh-llm-runtime-install/ crates/mesh-llm-runtime-install/
-COPY crates/mesh-llm-sdk/ crates/mesh-llm-sdk/
-COPY crates/mesh-llm-tui/ crates/mesh-llm-tui/
-COPY crates/skippy-tokenizer/ crates/skippy-tokenizer/
-COPY crates/mesh-native-serving-plugin-api/ crates/mesh-native-serving-plugin-api/
-COPY crates/mesh-native-serving-plugin-host/ crates/mesh-native-serving-plugin-host/
+# Copy the whole crates tree. A hand-maintained per-crate list went stale twice
+# (#1241, and again once skippy-package-format, skippy-scheduler, and
+# mesh-llm-log-store landed), which breaks `cargo build --locked` at deploy time.
+# .dockerignore already drops node_modules, dist, and target, so this costs no
+# extra context and invalidates the same downstream layers as the list did.
+COPY crates/ crates/
 COPY tools/xtask/ tools/xtask/
 COPY scripts/prepare-llama.sh scripts/build-llama.sh scripts/
 COPY scripts/lib/ scripts/lib/

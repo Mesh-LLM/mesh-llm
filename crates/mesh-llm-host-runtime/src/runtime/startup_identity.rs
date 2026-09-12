@@ -30,7 +30,7 @@ pub(super) fn handle_public_identity_transition(options: &RuntimeOptions) -> Res
         return Ok(());
     }
 
-    if mesh::was_previously_public() {
+    if mesh::was_previously_public()? {
         let _ = emit_event(OutputEvent::Info {
             message: "Previous run was public — rotating identity for private mesh".to_string(),
             context: None,

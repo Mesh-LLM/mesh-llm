@@ -909,8 +909,8 @@ cached and a worker does not:
   to open `skippy-stage/2`, then Skippy artifact-transfer stream 0x03, to
   fetch only its assigned package files before the normal HF fallback path.
 - Current/released mixed mesh: a coordinator without the complete
-  `stage-generation-8` control/status/content-identity/admission bundle must not
-  be selected for a generation-8 split topology. Missing `artifact-transfer`
+  `stage-generation-9` control/status/content-identity/admission bundle must not
+  be selected for a generation-9 split topology. Missing `artifact-transfer`
   only prevents peer cache
   sourcing; the worker may still participate when local/HF package resolution
   provides an independent source.

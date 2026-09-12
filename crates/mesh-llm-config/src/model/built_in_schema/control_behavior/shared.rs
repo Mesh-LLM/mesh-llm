@@ -26,6 +26,10 @@ pub(super) fn set_runtime_gpu_options(setting: &mut ConfigSettingSchema) {
     control_behavior_mut(setting).options_source = Some(ConfigOptionsSource::RuntimeGpus);
 }
 
+pub(super) fn set_runtime_native_backend_options(setting: &mut ConfigSettingSchema) {
+    control_behavior_mut(setting).options_source = Some(ConfigOptionsSource::RuntimeNativeBackends);
+}
+
 pub(super) fn set_static_unavailable(setting: &mut ConfigSettingSchema, reason: &str) {
     control_behavior_mut(setting).availability = Some(ConfigControlAvailability {
         enabled: false,

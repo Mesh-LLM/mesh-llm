@@ -347,8 +347,7 @@ cuda_library_major() {
 
     for lib in \
         "$probe_root"/usr/local/cuda*/lib64/"$library".so.* \
-        "$probe_root"/usr/local/cuda*/targets/*/lib/"$library".so.* \
-        "$probe_root"/usr/local/cuda*/targets/*/lib/stubs/"$library".so.*; do
+        "$probe_root"/usr/local/cuda*/targets/*/lib/"$library".so.*; do
         if [[ -f "$lib" ]]; then
             major="$(basename "$lib" | grep -oE "${library}\.so\.[0-9]+" | awk -F. '{print $3}' | head -n 1 || true)"
             if [[ -n "$major" ]]; then
@@ -373,9 +372,10 @@ detect_cuda_major() {
         local cublas_major
         local cublas_lt_major
 
-        # nvidia-smi reports the maximum CUDA major supported by the driver. It
-        # does not prove that the matching runtime libraries are installed, so
-        # use it only as an upper bound for the library evidence below.
+        # nvidia-smi reports the maximum CUDA major supported by the driver.
+        # Prefer a complete toolkit when one is installed, but keep the driver
+        # value as the fallback because Linux CUDA runtime packages now carry
+        # their redistributable toolkit libraries.
         if command -v nvidia-smi >/dev/null 2>&1; then
             driver_max="$(nvidia-smi 2>/dev/null | grep -oE 'CUDA Version: *[0-9]+' | grep -oE '[0-9]+' | head -n 1 || true)"
             if [[ -n "$driver_max" ]] && (( driver_max > 13 )); then
@@ -394,6 +394,9 @@ detect_cuda_major() {
             if [[ -n "$driver_max" ]] && (( ver > driver_max )); then
                 ver=""
             fi
+        fi
+        if [[ -z "$ver" ]]; then
+            ver="$driver_max"
         fi
     fi
     case "$ver" in
@@ -836,6 +839,8 @@ main() {
     tmp_dir="$(mktemp -d)"
     local tmp_dir_escaped
     printf -v tmp_dir_escaped '%q' "$tmp_dir"
+    # Expand the shell-escaped local now; the EXIT trap runs after main returns.
+    # shellcheck disable=SC2064
     trap "rm -rf -- $tmp_dir_escaped" EXIT
 
     info "Release channel: $(bool_is_true "$INSTALL_PRERELEASE" && echo prerelease || echo stable)"

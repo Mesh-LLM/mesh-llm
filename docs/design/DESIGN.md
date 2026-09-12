@@ -490,9 +490,12 @@ By default, nodes broadcast their GPU name, hostname, VRAM capacity, reserved by
 {
   "my_hostname": "carrack",
   "my_is_soc": false,
+  "my_memory": {"total_bytes": 34359738368, "reserved_bytes": 1073741824, "platform_reserve_bytes": 0, "configured_reserve_bytes": 2147483648, "usable_bytes": 31138512896, "system_ram_bytes": 68719476736, "ram_offload_bytes": 30923764531},
   "gpus": [{"name": "NVIDIA RTX 5090", "vram_bytes": 34359738368, "reserved_bytes": 1073741824, "mem_bandwidth_gbps": 1792.0, "compute_tflops_fp32": 104.8, "compute_tflops_fp16": 209.6}]
 }
 ```
+
+`my_memory` (and `memory` on the `peers[]` entries that advertise it) is the itemized capacity behind `my_vram_gb` / `vram_gb`, in bytes, exactly as the node announces it (see `hardware.memory` in [message_protocol.md](message_protocol.md)). The console renders a node's VRAM from the advertised `usable_bytes` when the block is present and only falls back to summing the per-GPU rated capacities for peers that predate it.
 
 For ROCm and Intel hosts, `reserved_bytes` is omitted because their standard CLI telemetry exposes live used-memory counters rather than a true reserved/system-memory value.
 
