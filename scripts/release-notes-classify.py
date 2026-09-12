@@ -94,6 +94,16 @@ def read_body_prs(path):
     return prs
 
 
+def load_links(path):
+    """Load commit records for pull requests the subject suffix cannot key.
+
+    scripts/release-notes-link.py establishes these through the GitHub API for
+    commits that reached the release without a "(#N)" suffix.
+    """
+    with open(path, encoding="utf-8") as handle:
+        return {int(pr): record for pr, record in json.load(handle).items()}
+
+
 def read_commits(git_range, repo_root=None):
     """Map PR number -> {subject, trailers} from the canonical commits."""
     result = subprocess.run(
@@ -254,12 +264,17 @@ def main():
     parser.add_argument("--date", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--repo-root", default=None)
+    parser.add_argument(
+        "--links", help="extra commit records keyed by pull request number"
+    )
     args = parser.parse_args()
 
     prs = read_body_prs(args.body)
     if not prs:
         sys.exit("error: no PR entries found in the release body")
     commits = read_commits(args.range, args.repo_root)
+    if args.links:
+        commits.update(load_links(args.links))
     plan, unclassified = build_plan(prs, commits, args.version, args.date)
 
     with open(args.out, "w", encoding="utf-8") as handle:
