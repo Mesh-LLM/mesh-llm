@@ -86,6 +86,7 @@ pub struct Node {
     pub(crate) model_source: Arc<Mutex<Option<String>>>,
     pub(crate) serving_models: Arc<Mutex<Vec<String>>>,
     pub(crate) served_model_descriptors: Arc<Mutex<Vec<ServedModelDescriptor>>>,
+    pub(crate) served_model_generations: Arc<Mutex<HashMap<String, u64>>>,
     pub(crate) model_runtime_descriptors: Arc<Mutex<Vec<ModelRuntimeDescriptor>>>,
     pub(crate) hosted_models: Arc<Mutex<Vec<String>>>,
     pub(crate) llama_ready: Arc<Mutex<bool>>,
@@ -824,6 +825,7 @@ impl Node {
             model_source: Arc::new(Mutex::new(None)),
             serving_models: Arc::new(Mutex::new(Vec::new())),
             served_model_descriptors: Arc::new(Mutex::new(Vec::new())),
+            served_model_generations: Arc::new(Mutex::new(HashMap::new())),
             model_runtime_descriptors: Arc::new(Mutex::new(Vec::new())),
             hosted_models: Arc::new(Mutex::new(Vec::new())),
             llama_ready: Arc::new(Mutex::new(false)),
@@ -1006,6 +1008,7 @@ impl Node {
             model_source: Arc::new(Mutex::new(None)),
             serving_models: Arc::new(Mutex::new(Vec::new())),
             served_model_descriptors: Arc::new(Mutex::new(Vec::new())),
+            served_model_generations: Arc::new(Mutex::new(HashMap::new())),
             model_runtime_descriptors: Arc::new(Mutex::new(Vec::new())),
             hosted_models: Arc::new(Mutex::new(Vec::new())),
             llama_ready: Arc::new(Mutex::new(false)),
@@ -1249,18 +1252,106 @@ impl Node {
         self.refresh_served_model_descriptors().await;
     }
 
-    pub async fn set_served_model_descriptors(&self, descriptors: Vec<ServedModelDescriptor>) {
+    pub async fn set_served_model_descriptors(&self, mut descriptors: Vec<ServedModelDescriptor>) {
         let model_names: std::collections::HashSet<_> = descriptors
             .iter()
             .map(|descriptor| descriptor.identity.model_name.clone())
             .collect();
-        *self.served_model_descriptors.lock().await = descriptors;
+        let mut generations = self.served_model_generations.lock().await;
+        let mut current = self.served_model_descriptors.lock().await;
+        for descriptor in &mut descriptors {
+            if descriptor.identity.weights_digest.is_none() {
+                descriptor.identity.weights_digest = current
+                    .iter()
+                    .find(|existing| existing.identity.model_name == descriptor.identity.model_name)
+                    .and_then(|existing| existing.identity.weights_digest.clone());
+            }
+        }
+        for removed in current
+            .iter()
+            .filter(|descriptor| !model_names.contains(&descriptor.identity.model_name))
+        {
+            let generation = generations
+                .entry(removed.identity.model_name.clone())
+                .or_default();
+            *generation = generation.wrapping_add(1);
+        }
+        *current = descriptors;
+        drop(current);
+        drop(generations);
         self.model_runtime_descriptors
             .lock()
             .await
             .retain(|runtime| model_names.contains(&runtime.model_name));
     }
 
+    pub(crate) async fn update_served_model_descriptor(
+        &self,
+        model_name: &str,
+        update: impl FnOnce(Option<ServedModelDescriptor>) -> ServedModelDescriptor,
+    ) {
+        let mut descriptors = self.served_model_descriptors.lock().await;
+        if let Some(existing) = descriptors
+            .iter_mut()
+            .find(|descriptor| descriptor.identity.model_name == model_name)
+        {
+            *existing = update(Some(existing.clone()));
+        } else {
+            descriptors.push(update(None));
+        }
+    }
+
+    pub(crate) async fn begin_served_model_generation(&self, model_name: &str) -> u64 {
+        let mut generations = self.served_model_generations.lock().await;
+        let generation = generations.entry(model_name.to_string()).or_default();
+        *generation = generation.wrapping_add(1);
+        let generation = *generation;
+
+        let mut descriptors = self.served_model_descriptors.lock().await;
+        if let Some(descriptor) = descriptors
+            .iter_mut()
+            .find(|descriptor| descriptor.identity.model_name == model_name)
+        {
+            descriptor.identity.weights_digest = None;
+        } else {
+            descriptors.push(ServedModelDescriptor {
+                identity: ServedModelIdentity {
+                    model_name: model_name.to_string(),
+                    source_kind: ModelSourceKind::LocalGguf,
+                    local_file_name: Some(format!("{model_name}.gguf")),
+                    ..Default::default()
+                },
+                capabilities_known: false,
+                capabilities: crate::models::ModelCapabilities::default(),
+                topology: None,
+                metadata: crate::models::served_model_metadata_for_model(model_name),
+            });
+        }
+        generation
+    }
+
+    pub(crate) async fn set_served_model_weights_digest_for_generation(
+        &self,
+        model_name: &str,
+        generation: u64,
+        weights_digest: Option<String>,
+    ) -> bool {
+        let generations = self.served_model_generations.lock().await;
+        if generations.get(model_name).copied() != Some(generation) {
+            return false;
+        }
+        let mut descriptors = self.served_model_descriptors.lock().await;
+        let Some(descriptor) = descriptors
+            .iter_mut()
+            .find(|descriptor| descriptor.identity.model_name == model_name)
+        else {
+            return false;
+        };
+        descriptor.identity.weights_digest = weights_digest;
+        true
+    }
+
+    #[cfg(test)]
     pub async fn upsert_served_model_descriptor(&self, descriptor: ServedModelDescriptor) {
         let mut descriptors = self.served_model_descriptors.lock().await;
         if let Some(existing) = descriptors
@@ -1274,10 +1365,14 @@ impl Node {
     }
 
     pub async fn remove_served_model_descriptor(&self, model_name: &str) {
+        let mut generations = self.served_model_generations.lock().await;
+        let generation = generations.entry(model_name.to_string()).or_default();
+        *generation = generation.wrapping_add(1);
         self.served_model_descriptors
             .lock()
             .await
             .retain(|descriptor| descriptor.identity.model_name != model_name);
+        drop(generations);
         self.model_runtime_descriptors
             .lock()
             .await
@@ -1354,6 +1449,7 @@ impl Node {
         })
     }
 
+    #[cfg(test)]
     pub async fn served_model_descriptors(&self) -> Vec<ServedModelDescriptor> {
         self.served_model_descriptors.lock().await.clone()
     }

@@ -471,27 +471,11 @@ pub(super) async fn set_advertised_model_context(
 pub(super) async fn set_local_model_weights_digest(
     node: &mesh::Node,
     model_name: &str,
+    generation: u64,
     weights_digest: Option<String>,
-) {
-    let mut descriptor = node
-        .served_model_descriptors()
+) -> bool {
+    node.set_served_model_weights_digest_for_generation(model_name, generation, weights_digest)
         .await
-        .into_iter()
-        .find(|descriptor| descriptor.identity.model_name == model_name)
-        .unwrap_or_else(|| mesh::ServedModelDescriptor {
-            identity: mesh::ServedModelIdentity {
-                model_name: model_name.to_string(),
-                source_kind: mesh::ModelSourceKind::LocalGguf,
-                local_file_name: Some(format!("{model_name}.gguf")),
-                ..Default::default()
-            },
-            capabilities_known: false,
-            capabilities: models::ModelCapabilities::default(),
-            topology: None,
-            metadata: crate::models::served_model_metadata_for_model(model_name),
-        });
-    descriptor.identity.weights_digest = weights_digest;
-    node.upsert_served_model_descriptor(descriptor).await;
 }
 
 pub(super) async fn withdraw_advertised_model(node: &mesh::Node, model_name: &str, profile: &str) {
@@ -527,17 +511,18 @@ pub(super) async fn add_serving_assignment(
         serving_models.insert(0, primary);
     }
     node.set_serving_models(serving_models).await;
-    if let Some(mut descriptor) =
+    if let Some(descriptor) =
         mesh::infer_local_served_model_descriptor(model_name, model_name == primary_model_name)
     {
-        let existing_digest = node
-            .served_model_descriptors()
-            .await
-            .into_iter()
-            .find(|existing| existing.identity.model_name == model_name)
-            .and_then(|existing| existing.identity.weights_digest);
-        carry_forward_weights_digest(&mut descriptor, existing_digest);
-        node.upsert_served_model_descriptor(descriptor).await;
+        node.update_served_model_descriptor(model_name, move |existing| {
+            let mut descriptor = descriptor;
+            carry_forward_weights_digest(
+                &mut descriptor,
+                existing.and_then(|existing| existing.identity.weights_digest),
+            );
+            descriptor
+        })
+        .await;
     }
     node.regossip().await;
 }
@@ -582,18 +567,15 @@ pub(super) async fn set_runtime_verified_served_model_capabilities(
     model_name: &str,
     capabilities: models::ModelCapabilities,
 ) {
-    let existing = node
-        .served_model_descriptors()
-        .await
-        .into_iter()
-        .find(|descriptor| descriptor.identity.model_name == model_name);
-    let descriptor = runtime_verified_served_model_descriptor(
-        existing,
-        primary_model_name,
-        model_name,
-        capabilities,
-    );
-    node.upsert_served_model_descriptor(descriptor).await;
+    node.update_served_model_descriptor(model_name, |existing| {
+        runtime_verified_served_model_descriptor(
+            existing,
+            primary_model_name,
+            model_name,
+            capabilities,
+        )
+    })
+    .await;
 }
 
 pub(super) fn runtime_verified_served_model_descriptor(
@@ -739,6 +721,10 @@ pub(super) async fn start_runtime_local_model(
     // rather than aborted: it still populates the persisted cache for a
     // later retry, it just never touches the descriptor.
     if start_result.is_ok() {
+        let generation = spec
+            .node
+            .begin_served_model_generation(runtime_model_name)
+            .await;
         let node = spec.node.clone();
         let runtime_model_name = runtime_model_name.to_string();
         let model_path_for_recheck = spec.model_path.to_path_buf();
@@ -781,7 +767,20 @@ pub(super) async fn start_runtime_local_model(
                     None
                 }
             });
-            set_local_model_weights_digest(&node, &runtime_model_name, weights_digest).await;
+            if !set_local_model_weights_digest(
+                &node,
+                &runtime_model_name,
+                generation,
+                weights_digest,
+            )
+            .await
+            {
+                tracing::debug!(
+                    model = %runtime_model_name,
+                    generation,
+                    "discarding weights_digest for a model generation that is no longer active"
+                );
+            }
         });
     }
 
@@ -1253,12 +1252,16 @@ mod tests {
         })
         .await;
 
-        super::set_local_model_weights_digest(
-            &node,
-            model_name,
-            Some("sha256:abc123deadbeef".to_string()),
-        )
-        .await;
+        let generation = node.begin_served_model_generation(model_name).await;
+        assert!(
+            super::set_local_model_weights_digest(
+                &node,
+                model_name,
+                generation,
+                Some("sha256:abc123deadbeef".to_string()),
+            )
+            .await
+        );
 
         let descriptors = node.served_model_descriptors().await;
         let descriptor = descriptors
@@ -1288,12 +1291,16 @@ mod tests {
             "test setup: no descriptor should exist yet"
         );
 
-        super::set_local_model_weights_digest(
-            &node,
-            model_name,
-            Some("sha256:xyz789feedface".to_string()),
-        )
-        .await;
+        let generation = node.begin_served_model_generation(model_name).await;
+        assert!(
+            super::set_local_model_weights_digest(
+                &node,
+                model_name,
+                generation,
+                Some("sha256:xyz789feedface".to_string()),
+            )
+            .await
+        );
 
         let descriptors = node.served_model_descriptors().await;
         let descriptor = descriptors
@@ -1339,6 +1346,71 @@ mod tests {
         assert_eq!(
             descriptor.identity.weights_digest.as_deref(),
             Some("sha256:fresh")
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_generation_cannot_restore_a_removed_descriptor() {
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+            .await
+            .unwrap();
+        let model_name = "test-model-removed-before-digest";
+        let generation = node.begin_served_model_generation(model_name).await;
+        node.remove_served_model_descriptor(model_name).await;
+
+        assert!(
+            !super::set_local_model_weights_digest(
+                &node,
+                model_name,
+                generation,
+                Some("sha256:stale".to_string()),
+            )
+            .await
+        );
+        assert!(
+            node.served_model_descriptors()
+                .await
+                .iter()
+                .all(|descriptor| descriptor.identity.model_name != model_name)
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_generation_cannot_overwrite_a_replacement_descriptor() {
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+            .await
+            .unwrap();
+        let model_name = "test-model-replaced-before-digest";
+        let old_generation = node.begin_served_model_generation(model_name).await;
+        let current_generation = node.begin_served_model_generation(model_name).await;
+
+        assert!(
+            !super::set_local_model_weights_digest(
+                &node,
+                model_name,
+                old_generation,
+                Some("sha256:stale".to_string()),
+            )
+            .await
+        );
+        assert!(
+            super::set_local_model_weights_digest(
+                &node,
+                model_name,
+                current_generation,
+                Some("sha256:current".to_string()),
+            )
+            .await
+        );
+        let descriptor = node
+            .served_model_descriptors()
+            .await
+            .into_iter()
+            .find(|descriptor| descriptor.identity.model_name == model_name)
+            .unwrap();
+        assert_eq!(
+            descriptor.identity.weights_digest.as_deref(),
+            Some("sha256:current")
         );
     }
 

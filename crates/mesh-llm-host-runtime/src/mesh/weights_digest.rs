@@ -76,13 +76,23 @@ enum CacheEntry {
 /// map's mutex is only ever held long enough to read or install an entry,
 /// never across the (potentially multi-GB) computation itself.
 struct SingleFlightCache {
-    entries: Mutex<HashMap<CacheKey, CacheEntry>>,
+    state: Mutex<SingleFlightState>,
+}
+
+struct SingleFlightState {
+    entries: HashMap<CacheKey, (u64, CacheEntry)>,
+    latest_generation_by_path: HashMap<PathBuf, u64>,
+    next_generation: u64,
 }
 
 impl SingleFlightCache {
     fn new() -> Self {
         Self {
-            entries: Mutex::new(HashMap::new()),
+            state: Mutex::new(SingleFlightState {
+                entries: HashMap::new(),
+                latest_generation_by_path: HashMap::new(),
+                next_generation: 0,
+            }),
         }
     }
 
@@ -102,19 +112,27 @@ impl SingleFlightCache {
         }
 
         let role = {
-            let mut entries = self
-                .entries
+            let mut state = self
+                .state
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            match entries.get(&key) {
-                Some(CacheEntry::Ready(digest)) => Role::Cached(digest.clone()),
-                Some(CacheEntry::Pending(pending)) => Role::Wait(pending.clone()),
+            match state.entries.get(&key) {
+                Some((_, CacheEntry::Ready(digest))) => Role::Cached(digest.clone()),
+                Some((_, CacheEntry::Pending(pending))) => Role::Wait(pending.clone()),
                 None => {
                     let pending = Arc::new(PendingDigest {
                         result: Mutex::new(None),
                         ready: Condvar::new(),
                     });
-                    entries.insert(key.clone(), CacheEntry::Pending(pending.clone()));
+                    state.next_generation = state.next_generation.wrapping_add(1);
+                    let generation = state.next_generation;
+                    state
+                        .latest_generation_by_path
+                        .insert(key.0.clone(), generation);
+                    state.entries.insert(
+                        key.clone(),
+                        (generation, CacheEntry::Pending(pending.clone())),
+                    );
                     Role::Compute(pending)
                 }
             }
@@ -153,21 +171,28 @@ impl SingleFlightCache {
                 // other caller checking a different (or even the same) key.
                 let digest = compute();
                 {
-                    let mut entries = self
-                        .entries
+                    let mut state = self
+                        .state
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    // A repeatedly-rewritten file mints a fresh (path, size,
-                    // mtime) key every time; only the newest state is ever
-                    // looked up again, so drop every other entry for this
-                    // path here instead of letting the map grow without
-                    // bound for the lifetime of the process.
-                    entries.retain(|existing_key, _| existing_key.0 != key.0);
-                    // Unreadable (`None`): never cache a fabricated absence,
-                    // so a later retry (e.g. once the file exists) can
-                    // succeed.
-                    if let Some(computed) = &digest {
-                        entries.insert(key, CacheEntry::Ready(computed.clone()));
+                    let generation = state.entries.remove(&key).map(|entry| entry.0);
+                    let is_latest = generation.is_some_and(|generation| {
+                        state.latest_generation_by_path.get(&key.0).copied() == Some(generation)
+                    });
+                    if is_latest {
+                        // Keep older computations alive so their waiters are
+                        // still single-flighted, but never let one that
+                        // finishes late evict or replace this newer state.
+                        state.entries.retain(|existing_key, (_, entry)| {
+                            existing_key.0 != key.0 || matches!(entry, CacheEntry::Pending(_))
+                        });
+                        // Unreadable (`None`): never cache a fabricated
+                        // absence, so a later retry can succeed.
+                        if let (Some(generation), Some(computed)) = (generation, &digest) {
+                            state
+                                .entries
+                                .insert(key, (generation, CacheEntry::Ready(computed.clone())));
+                        }
                     }
                 }
                 *pending
@@ -544,6 +569,50 @@ mod tests {
             1,
             "concurrent callers racing for the same key must single-flight onto one computation"
         );
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn older_completion_cannot_evict_a_newer_pending_or_ready_entry() {
+        let cache = SingleFlightCache::new();
+        let path = temp_file("out-of-order", b"out-of-order-bytes");
+        let old_key: CacheKey = (path.clone(), 1, 1);
+        let new_key: CacheKey = (path.clone(), 2, 2);
+        let (old_started_tx, old_started_rx) = std::sync::mpsc::channel();
+        let (release_old_tx, release_old_rx) = std::sync::mpsc::channel();
+
+        std::thread::scope(|scope| {
+            let old_path = path.clone();
+            let cache_ref = &cache;
+            let old = scope.spawn(move || {
+                cache_ref.get_or_compute(old_key, &old_path, || {
+                    old_started_tx.send(()).unwrap();
+                    release_old_rx.recv().unwrap();
+                    Some("old-digest".to_string())
+                })
+            });
+
+            old_started_rx.recv().unwrap();
+            assert_eq!(
+                cache.get_or_compute(new_key.clone(), &path, || {
+                    Some("new-digest".to_string())
+                }),
+                Some("new-digest".to_string())
+            );
+            release_old_tx.send(()).unwrap();
+            assert_eq!(old.join().unwrap(), Some("old-digest".to_string()));
+
+            let recomputes = AtomicUsize::new(0);
+            assert_eq!(
+                cache.get_or_compute(new_key, &path, || {
+                    recomputes.fetch_add(1, Ordering::SeqCst);
+                    Some("unexpected-recompute".to_string())
+                }),
+                Some("new-digest".to_string())
+            );
+            assert_eq!(recomputes.load(Ordering::SeqCst), 0);
+        });
 
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
