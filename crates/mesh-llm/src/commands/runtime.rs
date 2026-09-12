@@ -2,14 +2,15 @@ use anyhow::{Context, Result, bail};
 use serde_json::json;
 use std::path::Path;
 
-use mesh_llm_cli::MeshGuardrailCliMode;
 use mesh_llm_cli::runtime::RuntimeCommand;
+use mesh_llm_cli::{BinaryFlavor, MeshGuardrailCliMode};
 use mesh_llm_commands::runtime_native::NativeRuntimeConfigSelection;
 use mesh_llm_host_runtime::command_support::plugin::{MeshConfig, load_config};
 
 pub(crate) async fn dispatch_runtime_command(
     command: Option<&RuntimeCommand>,
     config_path: Option<&Path>,
+    llama_flavor: Option<BinaryFlavor>,
 ) -> Result<()> {
     match command {
         Some(RuntimeCommand::List {
@@ -30,7 +31,7 @@ pub(crate) async fn dispatch_runtime_command(
                 manifest.as_deref(),
                 bundle_dirs,
                 cache_dir.as_deref(),
-                native_runtime_command_selection(selector.as_ref()),
+                native_runtime_command_selection(selector.as_ref(), llama_flavor),
                 *json,
             )
             .await
@@ -48,7 +49,7 @@ pub(crate) async fn dispatch_runtime_command(
                 manifest.as_deref(),
                 bundle_dirs,
                 cache_dir.as_deref(),
-                native_runtime_command_selection(selector.as_ref()),
+                native_runtime_command_selection(selector.as_ref(), llama_flavor),
                 *json,
             )
             .await
@@ -80,7 +81,7 @@ pub(crate) async fn dispatch_runtime_command(
                 mesh_version.as_deref().or_else(|| {
                     selector
                         .as_ref()
-                        .map(|selector| selector.mesh_version.as_str())
+                        .and_then(|selector| selector.mesh_version.as_deref())
                 }),
                 cache_dir.as_deref(),
                 *json,
@@ -166,7 +167,7 @@ pub(crate) async fn dispatch_runtime_command(
 }
 
 pub(crate) struct NativeRuntimeConfigSelector {
-    mesh_version: String,
+    mesh_version: Option<String>,
     skippy_abi: Option<String>,
     selection: Option<String>,
 }
@@ -175,23 +176,32 @@ pub(crate) fn native_runtime_config_selector(
     config_path: Option<&Path>,
 ) -> Result<Option<NativeRuntimeConfigSelector>> {
     let config = load_config(config_path)?;
-    Ok(match config.runtime.native_runtime.mesh_version {
-        Some(mesh_version) => Some(NativeRuntimeConfigSelector {
-            mesh_version,
-            skippy_abi: config.runtime.native_runtime.skippy_abi,
-            selection: config.runtime.native_runtime.selection,
-        }),
-        None => None,
-    })
+    let native_runtime = config.runtime.native_runtime;
+    if native_runtime.mesh_version.is_none()
+        && native_runtime.skippy_abi.is_none()
+        && native_runtime.selection.is_none()
+    {
+        return Ok(None);
+    }
+    Ok(Some(NativeRuntimeConfigSelector {
+        mesh_version: native_runtime.mesh_version,
+        skippy_abi: native_runtime.skippy_abi,
+        selection: native_runtime.selection,
+    }))
 }
 
 pub(crate) fn native_runtime_command_selection<'a>(
     selector: Option<&'a NativeRuntimeConfigSelector>,
+    llama_flavor: Option<BinaryFlavor>,
 ) -> NativeRuntimeConfigSelection<'a> {
+    let configured_selection = selector.and_then(|selector| selector.selection.as_deref());
     NativeRuntimeConfigSelection {
-        mesh_version: selector.map(|selector| selector.mesh_version.as_str()),
+        mesh_version: selector.and_then(|selector| selector.mesh_version.as_deref()),
         skippy_abi_version: selector.and_then(|selector| selector.skippy_abi.as_deref()),
-        selection: selector.and_then(|selector| selector.selection.as_deref()),
+        selection: mesh_llm_commands::runtime_native::native_runtime_selection(
+            llama_flavor.map(crate::map_binary_flavor),
+            configured_selection,
+        ),
     }
 }
 
@@ -754,11 +764,34 @@ mod tests {
     use super::{
         build_apply_config_request, build_control_endpoint_request, build_guardrail_mode_request,
         build_lifecycle_request, control_bootstrap_lines, control_scan_refresh_lines,
-        display_backend_label, runtime_success_lines, yes_no,
+        display_backend_label, native_runtime_command_selection, native_runtime_config_selector,
+        runtime_success_lines, yes_no,
     };
-    use mesh_llm_cli::MeshGuardrailCliMode;
+    use mesh_llm_cli::{BinaryFlavor, MeshGuardrailCliMode};
     use mesh_llm_host_runtime::command_support::plugin::{GpuAssignment, GpuConfig, MeshConfig};
     use serde_json::json;
+
+    #[test]
+    fn native_runtime_selector_preserves_selection_without_pinned_version_and_cli_flavor() {
+        let temp = tempfile::tempdir().expect("temporary config directory");
+        let config_path = temp.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            "[runtime.native_runtime]\nselection = \"rocm\"\n",
+        )
+        .expect("write selection-only runtime config");
+
+        let selector = native_runtime_config_selector(Some(&config_path))
+            .expect("load runtime config selector")
+            .expect("selection-only config should produce a selector");
+        assert_eq!(selector.mesh_version, None);
+        assert_eq!(selector.selection.as_deref(), Some("rocm"));
+
+        let configured =
+            native_runtime_command_selection(Some(&selector), Some(BinaryFlavor::Vulkan));
+        assert_eq!(configured.mesh_version, None);
+        assert_eq!(configured.selection, Some("vulkan"));
+    }
 
     #[test]
     fn runtime_success_lines_print_loaded_instance_id() {
