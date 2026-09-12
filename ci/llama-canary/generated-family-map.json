@@ -25,7 +25,7 @@
     "gemma4": ["src/models/gemma4.cpp"],
     "gemma4-assistant": ["src/models/gemma4-assistant.cpp"],
     "glm4": ["src/models/glm4.cpp"],
-    "glm4-expansion": ["src/models/chatglm.cpp"],
+    "glm4-expansion": ["src/models/chatglm.cpp", "src/models/glm4.cpp"],
     "glm45-air": ["src/models/glm4-moe.cpp"],
     "glm47-flash": ["src/models/glm-dsa.cpp", "src/models/glm4-moe.cpp"],
     "gpt-oss": ["src/models/openai-moe.cpp"],

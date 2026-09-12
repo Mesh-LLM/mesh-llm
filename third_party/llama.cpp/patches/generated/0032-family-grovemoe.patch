@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/grovemoe.cpp b/src/models/grovemoe.cpp
-index 643a448e59ac103c170f6bbbada7cfd597fd4f71..d9e7857bdae5d77c078b6559ebe31b1fbd8d400c 100644
+index f32f3e9ed933189a2efa2279f58ac8d5197633a9..029a2fa362ce187698cf97ef630a2d13b08312fc 100644
 --- a/src/models/grovemoe.cpp
 +++ b/src/models/grovemoe.cpp
 @@ -75,16 +75,23 @@ llama_model_grovemoe::graph::graph(const llama_model & model, const llm_graph_pa

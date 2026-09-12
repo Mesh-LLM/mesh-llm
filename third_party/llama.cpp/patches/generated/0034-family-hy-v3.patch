@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/hy-v3.cpp b/src/models/hy-v3.cpp
-index 61db93af85ce29257b95bf75e9b1c15e0ae90da7..e42259309ffa5e1d9a3b5fbe56f4e179254edddd 100644
+index f6b72d843c86611e741e49cd5d181c83b7ef7ab9..beaf147c1774de669908193acd52402d6429bbff 100644
 --- a/src/models/hy-v3.cpp
 +++ b/src/models/hy-v3.cpp
-@@ -116,15 +116,22 @@ llama_model_hy_v3::graph::graph(const llama_model & model, const llm_graph_param
+@@ -112,15 +112,22 @@ llama_model_hy_v3::graph::graph(const llama_model & model, const llm_graph_param
      ggml_tensor * cur;
      ggml_tensor * inpL;
  
@@ -38,7 +38,7 @@ index 61db93af85ce29257b95bf75e9b1c15e0ae90da7..e42259309ffa5e1d9a3b5fbe56f4e179
          ggml_tensor * inpSA = inpL;
  
          cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
-@@ -152,7 +159,7 @@ llama_model_hy_v3::graph::graph(const llama_model & model, const llm_graph_param
+@@ -148,7 +155,7 @@ llama_model_hy_v3::graph::graph(const llama_model & model, const llm_graph_param
              cb(cur, "attn_out", il);
          }
  
@@ -47,7 +47,7 @@ index 61db93af85ce29257b95bf75e9b1c15e0ae90da7..e42259309ffa5e1d9a3b5fbe56f4e179
              cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
-@@ -210,7 +217,15 @@ llama_model_hy_v3::graph::graph(const llama_model & model, const llm_graph_param
+@@ -206,7 +213,15 @@ llama_model_hy_v3::graph::graph(const llama_model & model, const llm_graph_param
          cb(cur, "l_out", il);
  
          inpL = cur;

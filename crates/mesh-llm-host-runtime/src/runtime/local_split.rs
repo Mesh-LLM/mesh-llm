@@ -35,7 +35,7 @@ use crate::mesh;
 use crate::models;
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const SPLIT_PARTICIPANT_STABLE_FOR: Duration = Duration::from_secs(2);
@@ -469,6 +469,22 @@ fn realize_split_stage_admissions(
     runtime_profile: &str,
 ) -> Result<Vec<skippy_protocol::StageAdmissionDescriptor>> {
     let package_ref = Path::new(&package.package_ref);
+    let resolved_package_dir = if [model_path, package_ref]
+        .into_iter()
+        .any(|path| path.join("model-package.json").is_file())
+    {
+        None
+    } else if skippy::is_layer_package_ref(&package.package_ref) {
+        Some(PathBuf::from(skippy::resolve_hf_package_to_local(
+            &package.package_ref,
+            0,
+            0,
+            false,
+            false,
+        )?))
+    } else {
+        None
+    };
     let lanes = u32::try_from(topology.slots).context("split lane count exceeds u32")?;
     let batched_tokens = lanes
         .checked_mul(8)
@@ -513,6 +529,7 @@ fn realize_split_stage_admissions(
         .collect::<Vec<_>>();
     if let Some(package_dir) = [model_path, package_ref]
         .into_iter()
+        .chain(resolved_package_dir.as_deref())
         .find(|path| path.join("model-package.json").is_file())
     {
         super::stage_admission::realize_stage_admissions(
@@ -525,7 +542,7 @@ fn realize_split_stage_admissions(
     } else {
         anyhow::ensure!(
             model_path.is_file(),
-            "generation-8 direct-GGUF split source must be a local file: {}",
+            "generation-9 direct-GGUF split source must be a local file: {}",
             model_path.display()
         );
         super::stage_admission::realize_direct_gguf_stage_admissions(
@@ -537,7 +554,7 @@ fn realize_split_stage_admissions(
             "skippy-backend:auto:v1",
         )
     }
-    .context("realize and admit generation-8 native stage chain")
+    .context("realize and admit generation-9 native stage chain")
 }
 
 async fn elect_split_start_coordinator(

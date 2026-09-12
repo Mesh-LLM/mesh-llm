@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/dots1.cpp b/src/models/dots1.cpp
-index 07d6ab1b7cdb25e9a09cbc470748c21a383385fc..f85431c70998a9875de337279502a1929654f4e5 100644
+index a3a85748ef19c380764056615d55262fb6040cb9..e26d0205a4780f801615e7f564a2d5b416972aa8 100644
 --- a/src/models/dots1.cpp
 +++ b/src/models/dots1.cpp
 @@ -81,16 +81,23 @@ llama_model_dots1::graph::graph(const llama_model & model, const llm_graph_param

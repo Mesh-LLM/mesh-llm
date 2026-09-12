@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/laguna.cpp b/src/models/laguna.cpp
-index 82c9a9538cd467da00e9c915adfb8c0a146b3e46..0e58c494b1b3e6e0d854b1bd68a3932a0c781eaa 100644
+index 556400bfcef14e9e7f196279f0e4ca5a7a9ee827..823d37c99f79cb622d24345290f1e0dc016a1e64 100644
 --- a/src/models/laguna.cpp
 +++ b/src/models/laguna.cpp
 @@ -158,7 +158,12 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para

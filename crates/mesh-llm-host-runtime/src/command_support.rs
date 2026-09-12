@@ -28,9 +28,10 @@ pub mod models {
     pub mod skippy {
         pub use crate::inference::skippy::{
             CertificationGateStatus, SkippyCertificationRequest, certify_layer_package,
-            identity_from_layer_package, is_layer_package_ref, materialized_stage_cache_dir,
-            materialized_stages_for_sources, prune_unpinned_materialized_stages,
-            remove_materialized_stages_for_sources, resolve_hf_package_to_local,
+            download_package_v2_to_local, identity_from_layer_package, is_layer_package_ref,
+            materialized_stage_cache_dir, materialized_stages_for_sources,
+            prune_unpinned_materialized_stages, remove_materialized_stages_for_sources,
+            resolve_hf_package_to_local,
         };
     }
 

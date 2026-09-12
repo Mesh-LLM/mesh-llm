@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/kimi-k3.cpp b/src/models/kimi-k3.cpp
-index 20c861076c9cd9f24311136b4210b332396c2ee7..9bd3caab5f1e55fcc4b2979facc6f26b8715b302 100644
+index 17ff450ee32900bfd771da63b33c11a007b5d0fe..056f6be5b1f937dac5675dff37ae41c1413c4bd6 100644
 --- a/src/models/kimi-k3.cpp
 +++ b/src/models/kimi-k3.cpp
-@@ -237,7 +237,12 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
+@@ -239,7 +239,12 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
      ggml_tensor * cur;
      ggml_tensor * inpL;
  
@@ -26,7 +26,7 @@ index 20c861076c9cd9f24311136b4210b332396c2ee7..9bd3caab5f1e55fcc4b2979facc6f26b
      cb(inpL, "inp_embd", -1);
  
      // K3 MLA is nope-only, so there is no position input
-@@ -248,7 +253,7 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
+@@ -250,7 +255,7 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
      auto * inp_attn_kv = !hparams.is_mla() ? inp_kv->get_attn() : nullptr;
      auto * inp_attn_k  =  hparams.is_mla() ? inp_k->get_attn()  : nullptr;
  
@@ -35,7 +35,7 @@ index 20c861076c9cd9f24311136b4210b332396c2ee7..9bd3caab5f1e55fcc4b2979facc6f26b
  
      const int64_t n_head_kda = hparams.n_head();
      const int64_t head_dim   = hparams.n_embd_head_kda;
-@@ -272,7 +277,9 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
+@@ -274,7 +279,9 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
      const bool     use_attn_res  = res_bs > 0;
      const int64_t  n_embd_latent = hparams.n_expert_latent > 0 ? hparams.n_expert_latent : n_embd;
  
@@ -46,7 +46,7 @@ index 20c861076c9cd9f24311136b4210b332396c2ee7..9bd3caab5f1e55fcc4b2979facc6f26b
          const auto & layer = model.layers[il];
  
          // the residual stream, banked on checkpoint layers and then restarted
-@@ -325,7 +332,15 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
+@@ -327,7 +334,15 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
          cb(prefix_sum, "l_out", il);
  
          inpL = prefix_sum;

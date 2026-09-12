@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/deepseek32.cpp b/src/models/deepseek32.cpp
-index a475d0a6fee8ee65e2ccbf4f4a63f80dd7f566a2..44ac26f0af93ff2250f68bafd4d811f9ed9d4e00 100644
+index bfeefa9e646ff7e48e5dcc9734cb31d8c59c66c1..52c9a6fd5eef165da649746a84e96a7a6bb9d67d 100644
 --- a/src/models/deepseek32.cpp
 +++ b/src/models/deepseek32.cpp
-@@ -201,18 +201,25 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
+@@ -197,18 +197,25 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
      ggml_tensor * inpL;
  
      // {n_embd, n_tokens}
@@ -41,7 +41,7 @@ index a475d0a6fee8ee65e2ccbf4f4a63f80dd7f566a2..44ac26f0af93ff2250f68bafd4d811f9
          ggml_tensor * inpSA = inpL;
  
          // norm
-@@ -420,7 +427,7 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
+@@ -416,7 +423,7 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
          }
          // when unmasked nextn embeddings are requested, t_h_nextn must keep all rows,
          // so the early output masking has to be skipped (it is applied after the final norm instead)
@@ -50,7 +50,7 @@ index a475d0a6fee8ee65e2ccbf4f4a63f80dd7f566a2..44ac26f0af93ff2250f68bafd4d811f9
              cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
-@@ -478,7 +485,15 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
+@@ -474,7 +481,15 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
  
          // input for next layer
          inpL = cur;

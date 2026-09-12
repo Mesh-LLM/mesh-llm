@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/jais2.cpp b/src/models/jais2.cpp
-index 8610fcc9f82f6c854329e8e1ba46d0b845e14b83..ca1b4be250c178bee142537125e930f4ff8edc54 100644
+index 64813b7b6b23b552e320c518f422351854051373..e93d3f31006a183187ac5c7b2481a081c666be0f 100644
 --- a/src/models/jais2.cpp
 +++ b/src/models/jais2.cpp
-@@ -66,7 +66,12 @@ llama_model_jais2::graph::graph(const llama_model & model, const llm_graph_param
+@@ -60,7 +60,12 @@ llama_model_jais2::graph::graph(const llama_model & model, const llm_graph_param
      ggml_tensor * cur;
      ggml_tensor * inpL;
  
@@ -26,7 +26,7 @@ index 8610fcc9f82f6c854329e8e1ba46d0b845e14b83..ca1b4be250c178bee142537125e930f4
  
      // inp_pos - contains the positions
      ggml_tensor * inp_pos = build_inp_pos();
-@@ -74,9 +79,11 @@ llama_model_jais2::graph::graph(const llama_model & model, const llm_graph_param
+@@ -68,9 +73,11 @@ llama_model_jais2::graph::graph(const llama_model & model, const llm_graph_param
      // KV input for attention
      auto * inp_attn = build_attn_inp_kv();
  
@@ -40,7 +40,7 @@ index 8610fcc9f82f6c854329e8e1ba46d0b845e14b83..ca1b4be250c178bee142537125e930f4
          // Pre-attention LayerNorm
          cur = build_norm(inpL,
                  model.layers[il].attn_norm,
-@@ -110,7 +117,7 @@ llama_model_jais2::graph::graph(const llama_model & model, const llm_graph_param
+@@ -104,7 +111,7 @@ llama_model_jais2::graph::graph(const llama_model & model, const llm_graph_param
                      Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
          }
  
@@ -49,7 +49,7 @@ index 8610fcc9f82f6c854329e8e1ba46d0b845e14b83..ca1b4be250c178bee142537125e930f4
              cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
              inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
          }
-@@ -140,7 +147,15 @@ llama_model_jais2::graph::graph(const llama_model & model, const llm_graph_param
+@@ -134,7 +141,15 @@ llama_model_jais2::graph::graph(const llama_model & model, const llm_graph_param
          inpL = ggml_add(ctx0, cur, ffn_inp);
          inpL = build_cvec(inpL, il);
          cb(inpL, "l_out", il);

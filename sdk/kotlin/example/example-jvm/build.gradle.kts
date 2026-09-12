@@ -8,7 +8,7 @@ kotlin {
 }
 
 group = "ai.meshllm.example"
-version = "0.76.0-rc9"
+version = "0.76.1"
 
 repositories {
     mavenCentral()

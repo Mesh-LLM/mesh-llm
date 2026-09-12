@@ -811,10 +811,9 @@ pub(super) async fn start_run_auto_node_and_plugins(
     .await?;
     node.set_swarm_capture_recorder(swarm_capture);
     attach_local_release_attestation(&node).await?;
-    node.set_stage_control_handle(skippy::spawn_stage_control_loop(
-        Some(Arc::new(node.clone())),
-        skippy_telemetry_options(options),
-    ))
+    node.set_stage_control_handle(skippy::spawn_stage_control_loop(skippy_telemetry_options(
+        options,
+    )))
     .await;
     node.start_accepting();
     node.set_display_name(node_display_name(options, &node))
@@ -1627,7 +1626,6 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
     let primary_model_name = requested_model_names.first().cloned().unwrap_or_default();
     let startup_ready_reporter = StartupReadyReporter::new_with_failure_policy(
         &requested_model_names,
-        primary_model_name.clone(),
         api_ready_url,
         ready_console_url,
         ready_api_port,

@@ -92,7 +92,21 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
           persist-credentials: false
+      - name: Guard PR llama.cpp upstream pin monotonicity
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || [[ ! "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "pull request base/head identity is malformed" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin "$BASE_SHA" "$HEAD_SHA"
+          python3 scripts/check-llama-upstream-pin.py "$BASE_SHA" "$HEAD_SHA"
       - name: Validate planned quality jobs
         id: validate
         continue-on-error: true

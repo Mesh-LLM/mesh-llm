@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/ernie4-5.cpp b/src/models/ernie4-5.cpp
-index 895cf690bd2d8e9f21ebfcc153ebd77fb73ae32f..ce3f6236a9b0fca0e8bbd1127c1d5b031912467c 100644
+index 7bf7be648a1e259fbe09f7f955a1d933d65e58ca..1ab126281f8cce68409c29893cda283dc6840664 100644
 --- a/src/models/ernie4-5.cpp
 +++ b/src/models/ernie4-5.cpp
 @@ -83,16 +83,23 @@ llama_model_ernie4_5::graph::graph(const llama_model & model, const llm_graph_pa

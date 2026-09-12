@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/glm4-moe.cpp b/src/models/glm4-moe.cpp
-index 83ea7f8ac65771955cf6d88204879dacd01c1ccb..6cc174b95dae41829f546dd8de08bb8b9f047f5e 100644
+index d6ae5783cb9495d9791fa67dc16cf1aa8cff76d5..c0d6b6bdf73ea178b114f013b9b97f76107d1f10 100644
 --- a/src/models/glm4-moe.cpp
 +++ b/src/models/glm4-moe.cpp
-@@ -303,10 +303,15 @@ llama_model_glm4_moe::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -299,10 +299,15 @@ llama_model_glm4_moe::graph::graph(const llama_model & model, const llm_graph_pa
      ggml_tensor * cur;
      ggml_tensor * inpL;
  
@@ -30,7 +30,7 @@ index 83ea7f8ac65771955cf6d88204879dacd01c1ccb..6cc174b95dae41829f546dd8de08bb8b
          // unfortunately, we need to forcefully stop here, to avoid users complaining about wrong results
          GGML_ABORT("This GGUF does not support multimodal. Please reconvert it.");
      }
-@@ -316,10 +321,12 @@ llama_model_glm4_moe::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -312,10 +317,12 @@ llama_model_glm4_moe::graph::graph(const llama_model & model, const llm_graph_pa
  
      auto * inp_attn = build_attn_inp_kv();
  
@@ -45,7 +45,7 @@ index 83ea7f8ac65771955cf6d88204879dacd01c1ccb..6cc174b95dae41829f546dd8de08bb8b
          ggml_tensor * inpSA = inpL;
  
          // Pre-attention norm
-@@ -368,7 +375,7 @@ llama_model_glm4_moe::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -364,7 +371,7 @@ llama_model_glm4_moe::graph::graph(const llama_model & model, const llm_graph_pa
                      model.layers[il].wo, NULL, model.layers[il].wo_s,
                      Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
          }
@@ -54,7 +54,7 @@ index 83ea7f8ac65771955cf6d88204879dacd01c1ccb..6cc174b95dae41829f546dd8de08bb8b
              cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
-@@ -424,7 +431,15 @@ llama_model_glm4_moe::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -420,7 +427,15 @@ llama_model_glm4_moe::graph::graph(const llama_model & model, const llm_graph_pa
  
          // input for next layer
          inpL = cur;

@@ -1034,13 +1034,6 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         behavior: WiringBehavior::None,
     },
     WiringEntry {
-        path: "skippy.lifecycle_readiness_interval_ms",
-        status: WiringStatus::Wired,
-        owner: "n/a",
-        reason: "",
-        behavior: WiringBehavior::None,
-    },
-    WiringEntry {
         path: "skippy.lifecycle_health_interval_ms",
         status: WiringStatus::Wired,
         owner: "n/a",

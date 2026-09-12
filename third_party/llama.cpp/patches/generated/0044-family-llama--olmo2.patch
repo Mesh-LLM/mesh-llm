@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/olmo2.cpp b/src/models/olmo2.cpp
-index cb52cdef720486f4b99f033acee0b76ba215e628..2f449d31135369370d4e8378f80d10a99bc0e350 100644
+index 05b9394b8fe463b16d9174fd31da662efbe98109..f4198bbaded4d3f6c36870ead09eadb5f6211440 100644
 --- a/src/models/olmo2.cpp
 +++ b/src/models/olmo2.cpp
 @@ -71,7 +71,12 @@ llama_model_olmo2::graph<iswa>::graph(const llama_model & model, const llm_graph
@@ -40,7 +40,7 @@ index cb52cdef720486f4b99f033acee0b76ba215e628..2f449d31135369370d4e8378f80d10a9
          ggml_tensor * inpSA = inpL;
  
          cur = inpL;
-@@ -153,7 +160,7 @@ llama_model_olmo2::graph<iswa>::graph(const llama_model & model, const llm_graph
+@@ -152,7 +159,7 @@ llama_model_olmo2::graph<iswa>::graph(const llama_model & model, const llm_graph
                      model.layers[il].wo, NULL, model.layers[il].wo_s,
                      Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
          }
@@ -49,7 +49,7 @@ index cb52cdef720486f4b99f033acee0b76ba215e628..2f449d31135369370d4e8378f80d10a9
              cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
-@@ -187,7 +194,15 @@ llama_model_olmo2::graph<iswa>::graph(const llama_model & model, const llm_graph
+@@ -186,7 +193,15 @@ llama_model_olmo2::graph<iswa>::graph(const llama_model & model, const llm_graph
  
          // input for next layer
          inpL = cur;

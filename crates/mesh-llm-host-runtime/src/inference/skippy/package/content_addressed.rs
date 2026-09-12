@@ -1,10 +1,155 @@
-use std::path::Path;
+use std::{ffi::OsStr, path::Path};
 
 use anyhow::{Context, Result};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use super::{SkippyPackageIdentity, SkippyPackageSourceFile, hex_lower, synthetic_gguf_package};
+
+struct ManagedHfSnapshotBlob {
+    blob_root: std::path::PathBuf,
+    target: std::path::PathBuf,
+}
+
+fn managed_hf_snapshot_blob(path: &Path) -> Result<Option<ManagedHfSnapshotBlob>> {
+    if crate::models::huggingface_identity_for_path(path).is_none() {
+        return Ok(None);
+    }
+    let Some(repo_dir) = path.ancestors().find_map(|revision_dir| {
+        let snapshots_dir = revision_dir.parent()?;
+        (snapshots_dir.file_name() == Some(OsStr::new("snapshots")))
+            .then(|| snapshots_dir.parent())
+            .flatten()
+    }) else {
+        return Ok(None);
+    };
+    let blob_root = repo_dir
+        .join("blobs")
+        .canonicalize()
+        .with_context(|| format!("canonicalize Hugging Face blob root {}", repo_dir.display()))?;
+    let target = path
+        .canonicalize()
+        .with_context(|| format!("resolve Hugging Face GGUF snapshot link {}", path.display()))?;
+    anyhow::ensure!(
+        target.starts_with(&blob_root),
+        "Hugging Face GGUF snapshot link escapes its blob store: {}",
+        path.display()
+    );
+    Ok(Some(ManagedHfSnapshotBlob { blob_root, target }))
+}
+
+/// Give native multipart GGUF discovery stable upstream filenames without
+/// loading through mutable snapshot symlinks. The view consists only of hard
+/// links to the already validated Hugging Face blobs, so it consumes no model
+/// payload space and remains compatible with strict regular-file attestation.
+pub(super) fn managed_hf_multipart_view(
+    snapshot_paths: &[std::path::PathBuf],
+) -> Result<Option<Vec<std::path::PathBuf>>> {
+    if snapshot_paths.len() <= 1 {
+        return Ok(None);
+    }
+
+    let mut sources = Vec::with_capacity(snapshot_paths.len());
+    for snapshot_path in snapshot_paths {
+        let metadata = std::fs::symlink_metadata(snapshot_path)
+            .with_context(|| format!("stat GGUF snapshot path {}", snapshot_path.display()))?;
+        if !metadata.file_type().is_symlink() {
+            return Ok(None);
+        }
+        let Some(source) = managed_hf_snapshot_blob(snapshot_path)? else {
+            return Ok(None);
+        };
+        sources.push(source);
+    }
+
+    let blob_root = &sources[0].blob_root;
+    anyhow::ensure!(
+        sources.iter().all(|source| source.blob_root == *blob_root),
+        "multipart Hugging Face GGUF shards span multiple blob stores"
+    );
+
+    let mut view_id = Sha256::new();
+    view_id.update(b"mesh-llm-hf-multipart-view-v1\0");
+    for (snapshot_path, source) in snapshot_paths.iter().zip(&sources) {
+        let name = snapshot_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .with_context(|| {
+                format!(
+                    "Hugging Face GGUF snapshot path has no UTF-8 filename: {}",
+                    snapshot_path.display()
+                )
+            })?;
+        view_id.update((name.len() as u64).to_le_bytes());
+        view_id.update(name.as_bytes());
+        let target = source.target.to_string_lossy();
+        view_id.update((target.len() as u64).to_le_bytes());
+        view_id.update(target.as_bytes());
+    }
+    let repo_root = blob_root.parent().with_context(|| {
+        format!(
+            "Hugging Face blob root has no parent: {}",
+            blob_root.display()
+        )
+    })?;
+    let view_dir = repo_root
+        .join(".mesh-llm")
+        .join("multipart-gguf")
+        .join(hex_lower(&view_id.finalize()));
+    std::fs::create_dir_all(&view_dir)
+        .with_context(|| format!("create multipart GGUF view {}", view_dir.display()))?;
+
+    let mut view_paths = Vec::with_capacity(sources.len());
+    for (snapshot_path, source) in snapshot_paths.iter().zip(&sources) {
+        let destination = view_dir.join(
+            snapshot_path
+                .file_name()
+                .context("multipart GGUF snapshot path has no filename")?,
+        );
+        match std::fs::hard_link(&source.target, &destination) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "create multipart GGUF view {} -> {}",
+                        destination.display(),
+                        source.target.display()
+                    )
+                });
+            }
+        }
+        ensure_same_regular_file(&source.target, &destination)?;
+        view_paths.push(destination);
+    }
+    Ok(Some(view_paths))
+}
+
+fn ensure_same_regular_file(source: &Path, destination: &Path) -> Result<()> {
+    let source_metadata = std::fs::symlink_metadata(source)
+        .with_context(|| format!("stat Hugging Face GGUF blob {}", source.display()))?;
+    let destination_metadata = std::fs::symlink_metadata(destination)
+        .with_context(|| format!("stat multipart GGUF view {}", destination.display()))?;
+    anyhow::ensure!(
+        source_metadata.is_file()
+            && !source_metadata.file_type().is_symlink()
+            && destination_metadata.is_file()
+            && !destination_metadata.file_type().is_symlink(),
+        "multipart GGUF view must contain regular files"
+    );
+    anyhow::ensure!(
+        same_file::is_same_file(source, destination).with_context(|| {
+            format!(
+                "compare multipart GGUF view {} with Hugging Face blob {}",
+                destination.display(),
+                source.display()
+            )
+        })?,
+        "multipart GGUF view does not reference its verified Hugging Face blob: {}",
+        destination.display()
+    );
+    Ok(())
+}
 
 #[derive(Serialize)]
 struct ContentAddressedGgufManifest<'a> {
@@ -54,11 +199,26 @@ pub(super) fn validate_source_set(model_path: &Path) -> Result<()> {
     let validate_file = |path: &Path| -> Result<()> {
         let metadata = std::fs::symlink_metadata(path)
             .with_context(|| format!("stat content-addressed GGUF source {}", path.display()))?;
+        let managed_hf_snapshot_blob = if metadata.file_type().is_symlink() {
+            managed_hf_snapshot_blob(path)?
+        } else {
+            None
+        };
         anyhow::ensure!(
-            metadata.is_file() && !metadata.file_type().is_symlink(),
+            metadata.is_file() || managed_hf_snapshot_blob.is_some(),
             "content-addressed GGUF source must be a non-symlink file: {}",
             path.display()
         );
+        if let Some(source) = managed_hf_snapshot_blob {
+            let target_metadata = std::fs::symlink_metadata(&source.target).with_context(|| {
+                format!("stat Hugging Face GGUF blob {}", source.target.display())
+            })?;
+            anyhow::ensure!(
+                target_metadata.is_file() && !target_metadata.file_type().is_symlink(),
+                "Hugging Face GGUF snapshot link must resolve to a regular file: {}",
+                path.display()
+            );
+        }
         anyhow::ensure!(
             path.to_str().is_some(),
             "content-addressed GGUF source path must be valid UTF-8: {}",
@@ -308,6 +468,25 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn identity_rejects_user_supplied_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("model-target.gguf");
+        let link = dir.path().join("model.gguf");
+        write_test_metadata_gguf(&target, 4096);
+        symlink(&target, &link).unwrap();
+
+        let error = synthetic_content_addressed_gguf_package("logical/model", &link)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("non-symlink file"));
+        assert!(error.contains("model.gguf"));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn split_rejects_symlinked_secondary_shard() {
         use std::os::unix::fs::symlink;
 
@@ -325,6 +504,77 @@ mod tests {
 
         assert!(error.contains("non-symlink file"));
         assert!(error.contains("00002-of-00002"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn split_accepts_hugging_face_snapshot_links_and_builds_regular_named_view() {
+        use std::os::unix::fs::symlink;
+
+        let cache = tempfile::tempdir().unwrap();
+        let repo = cache.path().join("models--example--model");
+        let blobs = repo.join("blobs");
+        let snapshot = repo.join("snapshots").join("revision");
+        std::fs::create_dir_all(&blobs).unwrap();
+        std::fs::create_dir_all(&snapshot).unwrap();
+
+        let first_blob = blobs.join("first-blob");
+        let second_blob = blobs.join("second-blob");
+        write_test_metadata_gguf(&first_blob, 4096);
+        write_test_metadata_gguf(&second_blob, 4096);
+
+        let first = snapshot.join("model-00001-of-00002.gguf");
+        let second = snapshot.join("model-00002-of-00002.gguf");
+        symlink(Path::new("../../blobs/first-blob"), &first).unwrap();
+        symlink(Path::new("../../blobs/second-blob"), &second).unwrap();
+
+        validate_source_set(&first).unwrap();
+        let source_paths = super::super::direct_gguf_source_paths(&first).unwrap();
+
+        assert_eq!(
+            source_paths
+                .iter()
+                .filter_map(|path| path.file_name())
+                .collect::<Vec<_>>(),
+            vec![first.file_name().unwrap(), second.file_name().unwrap()]
+        );
+        assert!(source_paths.iter().all(|path| {
+            let metadata = std::fs::symlink_metadata(path).unwrap();
+            metadata.is_file() && !metadata.file_type().is_symlink()
+        }));
+        assert!(same_file::is_same_file(&first_blob, &source_paths[0]).unwrap());
+        assert!(same_file::is_same_file(&second_blob, &source_paths[1]).unwrap());
+
+        let reused = super::super::direct_gguf_source_paths(&first).unwrap();
+        assert_eq!(reused, source_paths);
+
+        std::fs::remove_file(&source_paths[1]).unwrap();
+        std::fs::write(&source_paths[1], b"tampered").unwrap();
+        let error = super::super::direct_gguf_source_paths(&first)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("does not reference its verified Hugging Face blob"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hugging_face_snapshot_link_rejects_blob_store_escape() {
+        use std::os::unix::fs::symlink;
+
+        let cache = tempfile::tempdir().unwrap();
+        let repo = cache.path().join("models--example--model");
+        let snapshot = repo.join("snapshots").join("revision");
+        std::fs::create_dir_all(repo.join("blobs")).unwrap();
+        std::fs::create_dir_all(&snapshot).unwrap();
+
+        let outside = cache.path().join("outside.gguf");
+        let model = snapshot.join("model.gguf");
+        write_test_metadata_gguf(&outside, 4096);
+        symlink(&outside, &model).unwrap();
+
+        let error = validate_source_set(&model).unwrap_err().to_string();
+
+        assert!(error.contains("escapes its blob store"), "{error}");
     }
 
     // APFS rejects invalid UTF-8 path bytes at creation time; Linux permits

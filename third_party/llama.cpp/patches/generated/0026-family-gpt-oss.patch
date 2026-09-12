@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/openai-moe.cpp b/src/models/openai-moe.cpp
-index c91bae1c35c6d5578d6c7340decc8286b17b8b2e..8688e88f7372dde945d0899e1b923f3058e8bdc7 100644
+index c9f9b677d06e9af2a4820e4dfb5d068b671b7206..a3d3c28940402c6b6a7f8f1342670370a6359266 100644
 --- a/src/models/openai-moe.cpp
 +++ b/src/models/openai-moe.cpp
 @@ -65,16 +65,23 @@ llama_model_openai_moe::graph::graph(const llama_model & model, const llm_graph_

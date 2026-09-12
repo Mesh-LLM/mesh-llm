@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/exaone4.cpp b/src/models/exaone4.cpp
-index a06819a67caad4817154a11e64cfe5c093a1c253..a7fe2fd7d4a5303947ad03f5947cfa1a8484dac9 100644
+index 9ba978956dc82223850bc9ca958d01c16b75d1ea..a2cecfb27da4180dbbffc94213e75e1bdaed5fac 100644
 --- a/src/models/exaone4.cpp
 +++ b/src/models/exaone4.cpp
-@@ -94,7 +94,12 @@ llama_model_exaone4::graph<iswa>::graph(const llama_model & model, const llm_gra
+@@ -91,7 +91,12 @@ llama_model_exaone4::graph<iswa>::graph(const llama_model & model, const llm_gra
      ggml_tensor * cur;
      ggml_tensor * inpL;
  
@@ -26,7 +26,7 @@ index a06819a67caad4817154a11e64cfe5c093a1c253..a7fe2fd7d4a5303947ad03f5947cfa1a
  
      // inp_pos - contains the positions
      ggml_tensor * inp_pos = build_inp_pos();
-@@ -107,9 +112,11 @@ llama_model_exaone4::graph<iswa>::graph(const llama_model & model, const llm_gra
+@@ -104,9 +109,11 @@ llama_model_exaone4::graph<iswa>::graph(const llama_model & model, const llm_gra
      } else {
          inp_attn = build_attn_inp_kv();
      }
@@ -40,7 +40,7 @@ index a06819a67caad4817154a11e64cfe5c093a1c253..a7fe2fd7d4a5303947ad03f5947cfa1a
          ggml_tensor * inpSA = inpL;
  
          // use RoPE for SWA layers or non-SWA models
-@@ -145,7 +152,7 @@ llama_model_exaone4::graph<iswa>::graph(const llama_model & model, const llm_gra
+@@ -142,7 +149,7 @@ llama_model_exaone4::graph<iswa>::graph(const llama_model & model, const llm_gra
                      Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
              cb(cur, "attn_out", il);
          }
@@ -49,7 +49,7 @@ index a06819a67caad4817154a11e64cfe5c093a1c253..a7fe2fd7d4a5303947ad03f5947cfa1a
              cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
-@@ -173,7 +180,15 @@ llama_model_exaone4::graph<iswa>::graph(const llama_model & model, const llm_gra
+@@ -170,7 +177,15 @@ llama_model_exaone4::graph<iswa>::graph(const llama_model & model, const llm_gra
  
          // input for next layer
          inpL = cur;

@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/deepseek2.cpp b/src/models/deepseek2.cpp
-index e0e537e00558206998265aaac5607116c2db8f5d..fc0d90cb099e0293e62f6a66db32fbc9703c8726 100644
+index deca865279782278c9ac12e5da3382de74cf9944..56ef72df398bfac800ae0960c64110701323abdd 100644
 --- a/src/models/deepseek2.cpp
 +++ b/src/models/deepseek2.cpp
-@@ -451,7 +451,12 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
+@@ -446,7 +446,12 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
      ggml_tensor * inpL;
  
      // {n_embd, n_tokens}
@@ -26,7 +26,7 @@ index e0e537e00558206998265aaac5607116c2db8f5d..fc0d90cb099e0293e62f6a66db32fbc9
  
      // (optional) temperature tuning - used by mistral-large
      ggml_tensor * inp_attn_scale = nullptr;
-@@ -465,9 +470,11 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
+@@ -460,9 +465,11 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
      auto * inp_attn_kv = !is_mla ? build_attn_inp_kv() : nullptr;
      auto * inp_attn_k  =  is_mla ? build_attn_inp_k()  : nullptr;
  
@@ -40,7 +40,7 @@ index e0e537e00558206998265aaac5607116c2db8f5d..fc0d90cb099e0293e62f6a66db32fbc9
          ggml_tensor * inpSA = inpL;
  
          // norm
-@@ -647,7 +654,7 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
+@@ -633,7 +640,7 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
                              Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
              }
          }
@@ -49,7 +49,7 @@ index e0e537e00558206998265aaac5607116c2db8f5d..fc0d90cb099e0293e62f6a66db32fbc9
              cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
-@@ -702,7 +709,15 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
+@@ -688,7 +695,15 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
  
          // input for next layer
          inpL = cur;

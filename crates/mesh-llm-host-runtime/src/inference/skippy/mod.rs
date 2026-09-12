@@ -64,10 +64,11 @@ pub(crate) use local_source::{
 #[cfg(test)]
 pub(crate) use materialization::resolve_package_v2_stage_to_local;
 pub use materialization::{
-    configure_materialized_stage_cache, is_layer_package_ref, materialized_stage_cache_dir,
-    materialized_stages_for_sources, prune_unpinned_materialized_stages,
-    remove_materialized_stages_for_sources, resolve_hf_package_to_local,
-    resolve_package_v2_full_model_to_local, resolve_stage_load_package,
+    configure_materialized_stage_cache, download_package_v2_to_local, is_layer_package_ref,
+    materialized_stage_cache_dir, materialized_stages_for_sources,
+    prune_unpinned_materialized_stages, remove_materialized_stages_for_sources,
+    resolve_hf_package_to_local, resolve_package_v2_full_model_to_local,
+    resolve_stage_load_package,
 };
 #[cfg(test)]
 pub(crate) use package::write_test_package_v2_fixture;
@@ -81,20 +82,18 @@ pub(crate) use package::{
 };
 pub(crate) use resolver::{
     ResolvedEmbeddedOpenAiArgs, ResolvedSkippyConfig, SkippyConfigResolveRequest,
-    resolve_skippy_config_for_selector,
+    effective_safety_margin_bytes, resolve_skippy_config_for_selector,
 };
 pub(crate) use skippy_server::OpenAiGuardrailsStatus as SkippyOpenAiGuardrailsStatus;
 pub(crate) use stage::admitted_resident_tensor_names;
 #[cfg(test)]
 pub(crate) use stage::test_stage_admission;
 pub(crate) use stage::{
-    LayerRange, SourceModelKind, StageCancelPrepareRequest, StageControlCommand,
-    StageControlHandle, StageControlRequest, StageControlResponse, StageCoordinatorClaim,
-    StageCoordinatorClaimAck, StageInventoryRequest, StageLayerInventory, StageLoadRequest,
-    StageLoadRuntimeSettings, StagePackagePrefetcher, StagePeerDescriptor, StagePreparationState,
-    StagePreparationStatus, StagePrepareAcceptedResponse, StagePrepareRequest, StageReadyResponse,
-    StageRuntimeState, StageStatusAck, StageStatusFilter, StageStatusSnapshot, StageStopRequest,
-    StageTopologyStageDescriptor, spawn_stage_control_loop, stage_load_timeout,
+    LayerRange, SourceModelKind, StageControlCommand, StageControlHandle, StageControlRequest,
+    StageControlResponse, StageCoordinatorClaim, StageCoordinatorClaimAck, StageInventoryRequest,
+    StageLayerInventory, StageLoadRequest, StageLoadRuntimeSettings, StagePeerDescriptor,
+    StageReadyResponse, StageRuntimeState, StageStatusFilter, StageStatusSnapshot,
+    StageStopRequest, StageTopologyStageDescriptor, spawn_stage_control_loop, stage_load_timeout,
 };
 #[cfg(test)]
 pub(crate) use topology::{StageTopologyParticipant, plan_package_identity_topology};

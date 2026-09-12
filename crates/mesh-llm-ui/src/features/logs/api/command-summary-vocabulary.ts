@@ -20,6 +20,7 @@ export const STATIC_SUMMARY_TOKENS: ReadonlySet<string> = new Set([
   'validate',
   'doctor',
   'split',
+  'network',
   'skills',
   'install',
   'plugins',

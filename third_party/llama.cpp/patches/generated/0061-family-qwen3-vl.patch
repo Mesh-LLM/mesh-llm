@@ -75,7 +75,7 @@ index 44e6a68154a0e559f129b5ce555d367714fbfcd5..b8534ac477f262ab5a78ad1e841e4dd7
      cur = inpL;
  
 diff --git a/src/models/qwen3vlmoe.cpp b/src/models/qwen3vlmoe.cpp
-index 7c41592f772713a80f27495586085bd8767eab30..68607ae6f621a0826a2555f28c3e8bf922a3e64f 100644
+index e7a81e32cf586d78aa61f78996bd61ff81d7eac3..e1fe395957a593ec7f0bfbfef08b1fabdafc6042 100644
 --- a/src/models/qwen3vlmoe.cpp
 +++ b/src/models/qwen3vlmoe.cpp
 @@ -73,7 +73,12 @@ llama_model_qwen3vlmoe::graph::graph(const llama_model & model, const llm_graph_

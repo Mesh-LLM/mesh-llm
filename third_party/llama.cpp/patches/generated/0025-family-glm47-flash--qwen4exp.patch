@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/glm-dsa.cpp b/src/models/glm-dsa.cpp
-index 000b95cdc946f3fb640ede0be09923da1e9fe93f..636dcdad9dd37bd4b7c5d926120a61c3b7f73344 100644
+index a7b71f616989e254c42b90d7a925bf32e47c277a..6cbd8873031b5c893c35ee10a4562afeaefe0368 100644
 --- a/src/models/glm-dsa.cpp
 +++ b/src/models/glm-dsa.cpp
-@@ -240,19 +240,26 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
+@@ -234,19 +234,26 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
      ggml_tensor * inpL;
  
      // {n_embd, n_tokens}
@@ -42,7 +42,7 @@ index 000b95cdc946f3fb640ede0be09923da1e9fe93f..636dcdad9dd37bd4b7c5d926120a61c3
          ggml_tensor * inpSA = inpL;
  
          // norm
-@@ -455,7 +462,7 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
+@@ -449,7 +456,7 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
          }
          // when unmasked nextn embeddings are requested, t_h_nextn must keep all rows,
          // so the early output masking has to be skipped (it is applied after the final norm instead)
@@ -51,7 +51,7 @@ index 000b95cdc946f3fb640ede0be09923da1e9fe93f..636dcdad9dd37bd4b7c5d926120a61c3
              cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
-@@ -513,7 +520,15 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
+@@ -507,7 +514,15 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
  
          // input for next layer
          inpL = cur;

@@ -121,7 +121,7 @@ index 585f3614174160bc547bcea00918abc5c407f33a..6c3ff60d70bc26099bb92bcbc226172c
      cur = inpL;
  
 diff --git a/src/models/bailingmoe.cpp b/src/models/bailingmoe.cpp
-index 7faf73c835b64d7387ca77ea11b645074967b8a5..8304cd7bed0c277493fc916b79d3e69d454c287a 100644
+index 9d1073ae148708849874b3d5d46027e5058da082..5b3f6fb07c88be721a1758fca14b68d071a8cb57 100644
 --- a/src/models/bailingmoe.cpp
 +++ b/src/models/bailingmoe.cpp
 @@ -63,16 +63,23 @@ llama_model_bailingmoe::graph::graph(const llama_model & model, const llm_graph_
@@ -177,10 +177,10 @@ index 7faf73c835b64d7387ca77ea11b645074967b8a5..8304cd7bed0c277493fc916b79d3e69d
      cur = inpL;
  
 diff --git a/src/models/bailingmoe2.cpp b/src/models/bailingmoe2.cpp
-index 5000e9c6db896427ef73560cb0e8eae8575a7cdf..11fbc9af8337c561bf65b7b9919c0c456fa88403 100644
+index 24fc4e0226b4d3380786a3e0428673373d016154..ab2e16e6e5522ffbc94151c52ac9f86609c25fd1 100644
 --- a/src/models/bailingmoe2.cpp
 +++ b/src/models/bailingmoe2.cpp
-@@ -99,16 +99,23 @@ llama_model_bailingmoe2::graph::graph(const llama_model & model, const llm_graph
+@@ -96,16 +96,23 @@ llama_model_bailingmoe2::graph::graph(const llama_model & model, const llm_graph
      ggml_tensor * cur;
      ggml_tensor * inpL;
  
@@ -207,7 +207,7 @@ index 5000e9c6db896427ef73560cb0e8eae8575a7cdf..11fbc9af8337c561bf65b7b9919c0c45
          ggml_tensor * inpSA = inpL;
  
          // norm
-@@ -141,7 +148,7 @@ llama_model_bailingmoe2::graph::graph(const llama_model & model, const llm_graph
+@@ -138,7 +145,7 @@ llama_model_bailingmoe2::graph::graph(const llama_model & model, const llm_graph
                      Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
          }
  
@@ -216,7 +216,7 @@ index 5000e9c6db896427ef73560cb0e8eae8575a7cdf..11fbc9af8337c561bf65b7b9919c0c45
              cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
-@@ -195,7 +202,15 @@ llama_model_bailingmoe2::graph::graph(const llama_model & model, const llm_graph
+@@ -192,7 +199,15 @@ llama_model_bailingmoe2::graph::graph(const llama_model & model, const llm_graph
  
          // input for next layer
          inpL = cur;
@@ -233,7 +233,7 @@ index 5000e9c6db896427ef73560cb0e8eae8575a7cdf..11fbc9af8337c561bf65b7b9919c0c45
      cur = inpL;
  
 diff --git a/src/models/bert.cpp b/src/models/bert.cpp
-index 53ce29f23caec1b312129f7a8a65fdec47b17f5f..bbbb5b4eeab3563701386ab6cfe8ee817100cda8 100644
+index ca0281d306b157d4d1e0f1d882ee6f986b4f1ec5..093984fa0f76d063d9f556d156290f671d5d28b6 100644
 --- a/src/models/bert.cpp
 +++ b/src/models/bert.cpp
 @@ -91,27 +91,34 @@ llama_model_bert::graph::graph(const llama_model & model, const llm_graph_params
@@ -460,10 +460,10 @@ index 750f57a394e3ed6d0bf62b8833b644db17454376..7f48c9520a40f8ec6bae954e05db9510
      cur = inpL;
  
 diff --git a/src/models/cohere2moe.cpp b/src/models/cohere2moe.cpp
-index 3acb7e77af8083d87da4c36725c48d5c0981c48f..dd3a8f3ac750df3056f5ab7e95bb1f90d14fc248 100644
+index 5e02cd56e71d2a63fb2b34f9aa78fb3ed5576f5b..2bf25c593c3439028d89858167a8c0f93d81ad0f 100644
 --- a/src/models/cohere2moe.cpp
 +++ b/src/models/cohere2moe.cpp
-@@ -166,14 +166,21 @@ llama_model_cohere2moe::graph::graph(const llama_model & model, const llm_graph_
+@@ -163,14 +163,21 @@ llama_model_cohere2moe::graph::graph(const llama_model & model, const llm_graph_
      const llm_norm_type cohere2moe_norm_type = hparams.f_norm_rms_eps == 0.0f ? LLM_NORM : LLM_NORM_RMS;
      const float f_logit_scale = hparams.f_logit_scale;
      ggml_tensor * cur;
@@ -488,7 +488,7 @@ index 3acb7e77af8083d87da4c36725c48d5c0981c48f..dd3a8f3ac750df3056f5ab7e95bb1f90
          const bool is_swa = hparams.is_swa(il);
          // Dense-prefix full-attention layers use RoPE; later layers follow the SWA pattern.
          const bool force_rope = static_cast<uint32_t>(il) < hparams.n_layer_dense_lead;
-@@ -213,7 +220,7 @@ llama_model_cohere2moe::graph::graph(const llama_model & model, const llm_graph_
+@@ -210,7 +217,7 @@ llama_model_cohere2moe::graph::graph(const llama_model & model, const llm_graph_
                      1.0f / sqrtf(float(n_embd_head)), il);
          }
  
@@ -497,7 +497,7 @@ index 3acb7e77af8083d87da4c36725c48d5c0981c48f..dd3a8f3ac750df3056f5ab7e95bb1f90
              cur     = ggml_get_rows(ctx0, cur, inp_out_ids);
              inpL    = ggml_get_rows(ctx0, inpL, inp_out_ids);
              ffn_inp = ggml_get_rows(ctx0, ffn_inp, inp_out_ids);
-@@ -269,7 +276,15 @@ llama_model_cohere2moe::graph::graph(const llama_model & model, const llm_graph_
+@@ -266,7 +273,15 @@ llama_model_cohere2moe::graph::graph(const llama_model & model, const llm_graph_
          cb(cur, "l_out", il);
  
          inpL = cur;
@@ -689,7 +689,7 @@ index cdfcf29e02f57e6d384f6ce990f39d52fb999cb8..1c353c15375bccf2d9036d19f6efac64
  
      cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
 diff --git a/src/models/deepseek.cpp b/src/models/deepseek.cpp
-index f52ec9518b6c27e0e78dd93793fa5ed72d52b664..870ef731fca46093917e23d79a70fac9422e4f7f 100644
+index a47a9c3dafcafb1ca62ed749ed979caa6322cca1..e441b3506dff18ceed7a710c11f6279604387227 100644
 --- a/src/models/deepseek.cpp
 +++ b/src/models/deepseek.cpp
 @@ -81,7 +81,12 @@ llama_model_deepseek::graph::graph(const llama_model & model, const llm_graph_pa
@@ -746,10 +746,10 @@ index f52ec9518b6c27e0e78dd93793fa5ed72d52b664..870ef731fca46093917e23d79a70fac9
  
      cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
 diff --git a/src/models/deepseek4.cpp b/src/models/deepseek4.cpp
-index fc816e2aeb433a4abc377def84325dce6a0f1efe..6dd84bff1ee1955d9fea3dea237c9abd97a36086 100644
+index 6bf9d34449426504cea436531118eb9b13941f20..8efb9a7eef8e929cabbcb1e99d10c0a4a42d2900 100644
 --- a/src/models/deepseek4.cpp
 +++ b/src/models/deepseek4.cpp
-@@ -1220,19 +1220,35 @@ llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_p
+@@ -1224,19 +1224,35 @@ llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_p
      llm_graph_context(params) {
      ggml_tensor * cur;
  
@@ -790,7 +790,7 @@ index fc816e2aeb433a4abc377def84325dce6a0f1efe..6dd84bff1ee1955d9fea3dea237c9abd
          if ((size_t) il < cparams.embeddings_layer_inp.size() && cparams.embeddings_layer_inp[il]) {
              res->t_layer_inp[il] = dsv4_hc_mean(ctx0, inpL);
              cb(res->t_layer_inp[il], "layer_inp", il);
-@@ -1313,8 +1329,17 @@ llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_p
+@@ -1324,8 +1340,17 @@ llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_p
          inpL = build_hc_post(cur, residual, post, comb, il);
          inpL = build_cvec(inpL, il);
          cb(inpL, "l_last", il);
@@ -809,10 +809,10 @@ index fc816e2aeb433a4abc377def84325dce6a0f1efe..6dd84bff1ee1955d9fea3dea237c9abd
          res->t_layer_inp[n_layer] = dsv4_hc_mean(ctx0, inpL);
          cb(res->t_layer_inp[n_layer], "layer_inp", n_layer);
 diff --git a/src/models/dots3note.cpp b/src/models/dots3note.cpp
-index 00a008c2c9e79003366564d5a01be6e243699f09..030c3d759bbeca82089e35bbf1382acf360b20da 100644
+index 0991c488e468e61f65964a62e8833e9c64a5ab0c..59085c511b43180cdc09b801d0881b921c5b2547 100644
 --- a/src/models/dots3note.cpp
 +++ b/src/models/dots3note.cpp
-@@ -169,15 +169,22 @@ llama_model_dots3note::graph::graph(const llama_model & model, const llm_graph_p
+@@ -165,15 +165,22 @@ llama_model_dots3note::graph::graph(const llama_model & model, const llm_graph_p
      ggml_tensor * cur;
      ggml_tensor * inpL;
  
@@ -838,7 +838,7 @@ index 00a008c2c9e79003366564d5a01be6e243699f09..030c3d759bbeca82089e35bbf1382acf
          ggml_tensor * inpSA = inpL;
  
          const bool is_swa = hparams.is_swa(il);
-@@ -407,7 +414,7 @@ llama_model_dots3note::graph::graph(const llama_model & model, const llm_graph_p
+@@ -403,7 +410,7 @@ llama_model_dots3note::graph::graph(const llama_model & model, const llm_graph_p
              }
          }
  
@@ -847,7 +847,7 @@ index 00a008c2c9e79003366564d5a01be6e243699f09..030c3d759bbeca82089e35bbf1382acf
              cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
-@@ -462,7 +469,15 @@ llama_model_dots3note::graph::graph(const llama_model & model, const llm_graph_p
+@@ -458,7 +465,15 @@ llama_model_dots3note::graph::graph(const llama_model & model, const llm_graph_p
          cb(cur, "l_out", il);
  
          inpL = cur;
@@ -974,10 +974,10 @@ index 0948d7de656f1cac68c3ab48248c3bab4b1a302f..aa8b5604c1210dd1a9de8a485de5a035
  
      cur = build_norm(cur,
 diff --git a/src/models/exaone-moe.cpp b/src/models/exaone-moe.cpp
-index 5aed9379400c398cccf364fc962d35d292dd53dd..459080a4a75fb2c5f0caeb4a65b0d5367b75eb19 100644
+index 976ee050adcdbbf28790b0443732985cf28495bb..d66fc77bb4ed7d3f4b16b60be7fba180fabdee75 100644
 --- a/src/models/exaone-moe.cpp
 +++ b/src/models/exaone-moe.cpp
-@@ -120,16 +120,23 @@ llama_model_exaone_moe::graph::graph(const llama_model & model, const llm_graph_
+@@ -117,16 +117,23 @@ llama_model_exaone_moe::graph::graph(const llama_model & model, const llm_graph_
      ggml_tensor * cur;
      ggml_tensor * inpL;
  
@@ -1004,7 +1004,7 @@ index 5aed9379400c398cccf364fc962d35d292dd53dd..459080a4a75fb2c5f0caeb4a65b0d536
          ggml_tensor * inpSA = inpL;
  
          // use RoPE for SWA layers
-@@ -168,7 +175,7 @@ llama_model_exaone_moe::graph::graph(const llama_model & model, const llm_graph_
+@@ -165,7 +172,7 @@ llama_model_exaone_moe::graph::graph(const llama_model & model, const llm_graph_
                  Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
              cb(cur, "attn_out", il);
          }
@@ -1013,7 +1013,7 @@ index 5aed9379400c398cccf364fc962d35d292dd53dd..459080a4a75fb2c5f0caeb4a65b0d536
              cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
-@@ -225,7 +232,15 @@ llama_model_exaone_moe::graph::graph(const llama_model & model, const llm_graph_
+@@ -222,7 +229,15 @@ llama_model_exaone_moe::graph::graph(const llama_model & model, const llm_graph_
  
          // input for next layer
          inpL = cur;
@@ -1208,7 +1208,7 @@ index 45afbccc1210f973038d4455c43a166d98312a3b..d1c331d393a80d117966930bf296cfca
      cur = build_norm(inpL,
              model.output_norm,
 diff --git a/src/models/grok.cpp b/src/models/grok.cpp
-index 42f38af672438149dcdac7380436d1e8691515ef..3260d0d5b4b1b7b655d9b151b9dc9d57540cfe23 100644
+index cb6afc3a70b504e8be9657400ca7bc6947594084..f3542291d3e75aa4f4a5c0d3f0ff56d74bbb2704 100644
 --- a/src/models/grok.cpp
 +++ b/src/models/grok.cpp
 @@ -92,16 +92,23 @@ llama_model_grok::graph::graph(const llama_model & model, const llm_graph_params
@@ -1264,7 +1264,7 @@ index 42f38af672438149dcdac7380436d1e8691515ef..3260d0d5b4b1b7b655d9b151b9dc9d57
  
      cur = build_norm(cur,
 diff --git a/src/models/hunyuan-moe.cpp b/src/models/hunyuan-moe.cpp
-index 4d55f5e7f3170dac75f3d1317c714e6657067f57..08ec1f81f521ab6a61ff318e830c7edd2aae5956 100644
+index cedc3b53eba429f775dbf25e3c95692e7e64faa9..352caa0465b8e7c67af58987f73b43b338204609 100644
 --- a/src/models/hunyuan-moe.cpp
 +++ b/src/models/hunyuan-moe.cpp
 @@ -62,7 +62,12 @@ llama_model_hunyuan_moe::graph::graph(const llama_model & model, const llm_graph
@@ -1320,8 +1320,72 @@ index 4d55f5e7f3170dac75f3d1317c714e6657067f57..08ec1f81f521ab6a61ff318e830c7edd
      cur = inpL;
  
      cur = build_norm(cur,
+diff --git a/src/models/hy-v4.cpp b/src/models/hy-v4.cpp
+index ee41787ba3e59d86dd7e660d63b1fc60e12a50fb..b8ec8ed772ef65631aee64252e2f0efa2262e8de 100644
+--- a/src/models/hy-v4.cpp
++++ b/src/models/hy-v4.cpp
+@@ -504,21 +504,37 @@ llama_model_hy_v4::graph::graph(const llama_model & model, const llm_graph_param
+ 
+     const bool is_dsa = hparams.indexer_top_k > 0;
+ 
+-    ggml_tensor * inp = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = build_inputs.filter;
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
++    ggml_tensor * inp = (!stage_filtered || il_start == 0) ? build_inp_embd(model.tok_embd) : nullptr;
+     ggml_tensor * inp_pos = build_inp_pos();
+     llm_graph_input_attn_k     * inp_attn     = is_dsa ? nullptr : build_attn_inp_k();
+     llm_graph_input_attn_k_dsa * inp_attn_dsa = is_dsa ? build_attn_inp_k_dsa() : nullptr;
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+     // top-k of the last "full" indexer layer, reused by the following "shared" layers
+     ggml_tensor * last_top_k = nullptr;
+ 
+     // expand the single embedding into hc parallel residual streams
+-    ggml_tensor * inpL = ggml_reshape_3d(ctx0, inp, n_embd, 1, n_tokens);
+-    inpL = ggml_repeat_4d(ctx0, inpL, n_embd, hc, n_tokens, 1);
++    ggml_tensor * inpL = stage_filtered && il_start > 0 ? nullptr : ggml_reshape_3d(ctx0, inp, n_embd, 1, n_tokens);
++    if (stage_filtered && il_start > 0) {
++        auto stage_inp = std::make_unique<llm_graph_input_hyperconnection>(n_embd, hc);
++        stage_inp->values = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_embd, hc, n_tokens);
++        cb(stage_inp->values, "hc_stage_input", -1);
++        ggml_set_input(stage_inp->values);
++        inpL = stage_inp->values;
++        res->t_skippy_activation_input = inpL;
++        res->add_input(std::move(stage_inp));
++    }
++    inpL = stage_filtered && il_start > 0 ? inpL : ggml_repeat_4d(ctx0, inpL, n_embd, hc, n_tokens, 1);
+     cb(inpL, "hc_init", -1);
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
++        begin_block(inpL, il);
++
+         ggml_tensor * residual = inpL;
+         ggml_tensor * post = nullptr;
+ 
+@@ -577,7 +593,16 @@ llama_model_hy_v4::graph::graph(const llama_model & model, const llm_graph_param
+ 
+         inpL = build_hc_post(cur, residual, post, il);
+         cb(inpL, "l_out", il);
++        end_block(inpL, il);
+     }
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(inpL, "stage_boundary", il_end - 1);
++        res->t_skippy_activation_output = inpL;
++        res->t_embd = inpL;
++        ggml_build_forward_expand(gf, inpL);
++        return;
++    }
++
+ 
+     // prune to the requested output rows once, after all HC streams are done
+     if (inp_out_ids) {
 diff --git a/src/models/inkling.cpp b/src/models/inkling.cpp
-index e9637b4e6ca38ac39a30da075a33642187a7af93..0d0f9d9239df33123418e6d3d4b7d08345ee70af 100644
+index e7a574e5fc1c71f954096e35a06395c61cee0947..a1f3678621b707ffa018bc37ce04baf1a48eb0b5 100644
 --- a/src/models/inkling.cpp
 +++ b/src/models/inkling.cpp
 @@ -622,20 +622,35 @@ llama_model_inkling::graph::graph(const llama_model & model, const llm_graph_par
@@ -1365,7 +1429,7 @@ index e9637b4e6ca38ac39a30da075a33642187a7af93..0d0f9d9239df33123418e6d3d4b7d083
      // Conv states need every layer to see all tokens. Intermediate stages hand off the full
      // activation sequence, and the final stage trims outputs only after its last local layer.
 diff --git a/src/models/llada-moe.cpp b/src/models/llada-moe.cpp
-index 2ae893864472cdb21fb8f47687f2203bc0b5669b..cba61135ffa515efe4be39521588bbd9ada5bb0c 100644
+index 0ee9ce1bec5fde2e542cb69fcb9d8e9e85155906..563550b9f43e12e1697089f99ccdb1095fafa574 100644
 --- a/src/models/llada-moe.cpp
 +++ b/src/models/llada-moe.cpp
 @@ -60,16 +60,23 @@ llama_model_llada_moe::graph::graph(const llama_model & model, const llm_graph_p
@@ -1421,10 +1485,10 @@ index 2ae893864472cdb21fb8f47687f2203bc0b5669b..cba61135ffa515efe4be39521588bbd9
  
      cur = build_norm(cur,
 diff --git a/src/models/llada.cpp b/src/models/llada.cpp
-index 87d4259f9a7477f5bb04c33688750c8743308b71..4e461f746b97c851d477ccfb7dcb836e70f92e74 100644
+index ae3d6925c136177c39640fca0e7399e7af426f5f..f8356a2d11d3b4e6fa3cb7328f218b68a91781ba 100644
 --- a/src/models/llada.cpp
 +++ b/src/models/llada.cpp
-@@ -78,7 +78,12 @@ llama_model_llada::graph::graph(const llama_model & model, const llm_graph_param
+@@ -73,7 +73,12 @@ llama_model_llada::graph::graph(const llama_model & model, const llm_graph_param
      ggml_tensor * cur;
      ggml_tensor * inpL;
  
@@ -1438,7 +1502,7 @@ index 87d4259f9a7477f5bb04c33688750c8743308b71..4e461f746b97c851d477ccfb7dcb836e
  
      // inp_pos - contains the positions
      ggml_tensor * inp_pos = build_inp_pos();
-@@ -86,9 +91,11 @@ llama_model_llada::graph::graph(const llama_model & model, const llm_graph_param
+@@ -81,9 +86,11 @@ llama_model_llada::graph::graph(const llama_model & model, const llm_graph_param
      // Non-causal attention for diffusion
      auto * inp_attn = build_attn_inp_no_cache();
  
@@ -1452,7 +1516,7 @@ index 87d4259f9a7477f5bb04c33688750c8743308b71..4e461f746b97c851d477ccfb7dcb836e
          ggml_tensor * inpSA = inpL;
  
          // norm
-@@ -115,7 +122,7 @@ llama_model_llada::graph::graph(const llama_model & model, const llm_graph_param
+@@ -110,7 +117,7 @@ llama_model_llada::graph::graph(const llama_model & model, const llm_graph_param
                      model.layers[il].wo, NULL, model.layers[il].wo_s,
                      Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
          }
@@ -1461,7 +1525,7 @@ index 87d4259f9a7477f5bb04c33688750c8743308b71..4e461f746b97c851d477ccfb7dcb836e
              cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
-@@ -140,7 +147,15 @@ llama_model_llada::graph::graph(const llama_model & model, const llm_graph_param
+@@ -135,7 +142,15 @@ llama_model_llada::graph::graph(const llama_model & model, const llm_graph_param
  
          // input for next layer
          inpL = cur;
@@ -1478,7 +1542,7 @@ index 87d4259f9a7477f5bb04c33688750c8743308b71..4e461f746b97c851d477ccfb7dcb836e
  
      cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
 diff --git a/src/models/llama4.cpp b/src/models/llama4.cpp
-index 7194c72a585097bd5e8cfc4b5e51614f691e4723..629400e9e122d360a3fd5fdb43b5caaee032ce14 100644
+index 8a812beffac4b3b7702c1ccb71b3ae426d34c76e..a07452e9d29b7e4703699195196815325840885d 100644
 --- a/src/models/llama4.cpp
 +++ b/src/models/llama4.cpp
 @@ -113,14 +113,29 @@ llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_grap
@@ -1553,10 +1617,10 @@ index 7194c72a585097bd5e8cfc4b5e51614f691e4723..629400e9e122d360a3fd5fdb43b5caae
  
      cur = build_norm(cur,
 diff --git a/src/models/mimo2.cpp b/src/models/mimo2.cpp
-index d50e186cce929d0f6bf898f1a5babb57fc656ccb..10d601883b394ae0b47a3b0e201eeefd96ca7391 100644
+index 8772319f4611abde0bf51a55ada4b633decff7b9..d8a659d1b7c0c2f6fb120414ed4afb078acd3de3 100644
 --- a/src/models/mimo2.cpp
 +++ b/src/models/mimo2.cpp
-@@ -95,17 +95,24 @@ llama_model_mimo2::graph::graph(const llama_model & model, const llm_graph_param
+@@ -92,17 +92,24 @@ llama_model_mimo2::graph::graph(const llama_model & model, const llm_graph_param
      ggml_tensor * cur;
      ggml_tensor * inpL;
  
@@ -1584,7 +1648,7 @@ index d50e186cce929d0f6bf898f1a5babb57fc656ccb..10d601883b394ae0b47a3b0e201eeefd
          ggml_tensor * inpSA = inpL;
  
          uint32_t n_head_l    = hparams.n_head(il);
-@@ -229,7 +236,15 @@ llama_model_mimo2::graph::graph(const llama_model & model, const llm_graph_param
+@@ -226,7 +233,15 @@ llama_model_mimo2::graph::graph(const llama_model & model, const llm_graph_param
  
          // input for next layer
          inpL = cur;
@@ -1672,7 +1736,7 @@ index 361114acc327296f8b8a16b7d9ba741fe732ec32..192e13544c5ca1bcb90ec26a3f2b3257
  
      cur = build_norm(cur,
 diff --git a/src/models/minimax-m2.cpp b/src/models/minimax-m2.cpp
-index 86a8ae2b1d91efd4ca36ef177ed847995bcb5734..2158c5994505e1ed4019eea0d67565bc743aaa1d 100644
+index 7a22af036bc74e6609719fd2c04e2c6395241b8e..6fa93481f6f553db996d26ab5a64612d0064c95a 100644
 --- a/src/models/minimax-m2.cpp
 +++ b/src/models/minimax-m2.cpp
 @@ -53,13 +53,20 @@ llama_model_minimax_m2::graph::graph(const llama_model & model, const llm_graph_
@@ -1699,7 +1763,7 @@ index 86a8ae2b1d91efd4ca36ef177ed847995bcb5734..2158c5994505e1ed4019eea0d67565bc
          res->t_layer_inp[il] = inpL;
  
          ggml_tensor * inpSA = inpL;
-@@ -114,7 +121,7 @@ llama_model_minimax_m2::graph::graph(const llama_model & model, const llm_graph_
+@@ -113,7 +120,7 @@ llama_model_minimax_m2::graph::graph(const llama_model & model, const llm_graph_
                      Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
          }
  
@@ -1708,7 +1772,7 @@ index 86a8ae2b1d91efd4ca36ef177ed847995bcb5734..2158c5994505e1ed4019eea0d67565bc
              cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
-@@ -148,7 +155,15 @@ llama_model_minimax_m2::graph::graph(const llama_model & model, const llm_graph_
+@@ -147,7 +154,15 @@ llama_model_minimax_m2::graph::graph(const llama_model & model, const llm_graph_
  
          // input for next layer
          inpL = cur;
@@ -1725,7 +1789,7 @@ index 86a8ae2b1d91efd4ca36ef177ed847995bcb5734..2158c5994505e1ed4019eea0d67565bc
      cur = inpL;
  
 diff --git a/src/models/minimax-m3.cpp b/src/models/minimax-m3.cpp
-index 85b228238eca4184a9d508a6a38081ef6e1f0c4d..d7ea83af28d440f637f53ded0db5f70fa93442c8 100644
+index 89c7e2810788c321acf29836042ecd52200962d6..de413aec4a6888ac0e52d6b61f1825ce4482d4e6 100644
 --- a/src/models/minimax-m3.cpp
 +++ b/src/models/minimax-m3.cpp
 @@ -212,7 +212,12 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
@@ -2066,7 +2130,7 @@ index 9f7a2ba60efb8af5f4e521e22ed42a1be054a19e..88cfbccd436bc39dd691bdc861d379ee
  
      cur = build_norm(cur,
 diff --git a/src/models/olmoe.cpp b/src/models/olmoe.cpp
-index 1e2baeb207ff8ab1e6f48be4f9e91c56c157340c..b7edcba1a024689b0c90cb515258193b0240734f 100644
+index 11c53f3f4c9c785a50dc85d16f8893c06b61eb53..9ccb787abca157ee570c567c00f9c2da96577afb 100644
 --- a/src/models/olmoe.cpp
 +++ b/src/models/olmoe.cpp
 @@ -59,16 +59,23 @@ llama_model_olmoe::graph::graph(const llama_model & model, const llm_graph_param
@@ -2096,7 +2160,7 @@ index 1e2baeb207ff8ab1e6f48be4f9e91c56c157340c..b7edcba1a024689b0c90cb515258193b
          ggml_tensor * inpSA = inpL;
  
          // norm
-@@ -121,7 +128,7 @@ llama_model_olmoe::graph::graph(const llama_model & model, const llm_graph_param
+@@ -120,7 +127,7 @@ llama_model_olmoe::graph::graph(const llama_model & model, const llm_graph_param
                      model.layers[il].wo, NULL, model.layers[il].wo_s,
                      Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
          }
@@ -2105,7 +2169,7 @@ index 1e2baeb207ff8ab1e6f48be4f9e91c56c157340c..b7edcba1a024689b0c90cb515258193b
              cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
-@@ -154,7 +161,15 @@ llama_model_olmoe::graph::graph(const llama_model & model, const llm_graph_param
+@@ -153,7 +160,15 @@ llama_model_olmoe::graph::graph(const llama_model & model, const llm_graph_param
  
          // input for next layer
          inpL = cur;
@@ -2736,7 +2800,7 @@ index a46c358fa68ae45a2e6c9c023422b74abde4be67..557fb98b52dca3b0cd5c784ee6588326
  
      cur = build_norm(cur,
 diff --git a/src/models/rnd1.cpp b/src/models/rnd1.cpp
-index fc276ce591bfd14a381993fa3088c8b1d31616ac..f3842c8815b942242d5280fc4196d048b5164623 100644
+index 553a757302994ab1c7bb59856b6ffac2ea422347..7a8a345d56ec387227045d46d4b34e5547cad789 100644
 --- a/src/models/rnd1.cpp
 +++ b/src/models/rnd1.cpp
 @@ -71,7 +71,12 @@ llama_model_rnd1::graph::graph(const llama_model & model, const llm_graph_params
@@ -2850,7 +2914,7 @@ index 57de881a091f251702879f01342a34e82305822b..734cf9bb92f80102a869a6e24ef30252
  
      cur = build_norm(cur,
 diff --git a/src/models/smallthinker.cpp b/src/models/smallthinker.cpp
-index a8e3d957f1f0f8ce921c879670359edae91f8a7e..d2a0365636d3d0addccdc9398cb2bd4796bb14e7 100644
+index 680ffb8fda37680385bb7dcc9bcc9607adc4b800..a5bc20ebba4860702d7d3ffab78e55921bd76260 100644
 --- a/src/models/smallthinker.cpp
 +++ b/src/models/smallthinker.cpp
 @@ -83,7 +83,12 @@ llama_model_smallthinker::graph<iswa>::graph(const llama_model & model, const ll
@@ -2906,6 +2970,60 @@ index a8e3d957f1f0f8ce921c879670359edae91f8a7e..d2a0365636d3d0addccdc9398cb2bd47
      cur = inpL;
  
      cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
+diff --git a/src/models/spark2-5.cpp b/src/models/spark2-5.cpp
+index 107448777c5cf2d973f5be56d435644168cb7a80..d894970e5198855f3a6ceb57580beba31bbffb25 100644
+--- a/src/models/spark2-5.cpp
++++ b/src/models/spark2-5.cpp
+@@ -59,14 +59,21 @@ llama_model_spark2_5::graph::graph(const llama_model & model, const llm_graph_pa
+     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
+     GGML_ASSERT(hparams.swa_type == LLAMA_SWA_TYPE_STANDARD);
+ 
+-    ggml_tensor * inpL = build_inp_embd(model.tok_embd);
++    const skippy_graph_filter & stage_filter = build_inputs.filter;
++    const bool stage_filtered = stage_filter.enabled;
++    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
++    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
++
++    ggml_tensor * inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
+     ggml_tensor * inp_pos = build_inp_pos();
+     auto * inp_attn = build_attn_inp_kv_iswa();
+-    ggml_tensor * inp_out_ids = build_inp_out_ids();
++    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
+     const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
+ 
+-    for (int il = 0; il < n_layer; ++il) {
++    for (int il = il_start; il < il_end; ++il) {
++        begin_block(inpL, il);
++
+         ggml_tensor * inpSA = inpL;
+         ggml_tensor * cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
+         cb(cur, "attn_norm", il);
+@@ -108,7 +115,7 @@ llama_model_spark2_5::graph::graph(const llama_model & model, const llm_graph_pa
+         cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
+         cb(cur, "attn_out_proj", il);
+ 
+-        if (il == n_layer - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids) {
+             cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+         }
+@@ -132,7 +139,15 @@ llama_model_spark2_5::graph::graph(const llama_model & model, const llm_graph_pa
+         cb(cur, "l_out", il);
+ 
+         inpL = cur;
++        end_block(inpL, il);
+     }
++    if (stage_filtered && !stage_filter.include_output) {
++        cb(inpL, "stage_boundary", il_end - 1);
++        res->t_embd = inpL;
++        ggml_build_forward_expand(gf, inpL);
++        return;
++    }
++
+ 
+     ggml_tensor * cur = build_norm(inpL, model.output_norm, nullptr, LLM_NORM_RMS, -1);
+     cb(cur, "result_norm", -1);
 diff --git a/src/models/starcoder.cpp b/src/models/starcoder.cpp
 index f73a88fd4e9041fa1eb0aa328cd0ddebda1aabac..6596b6f7284e319a2a4e74f1b1d85ce49d95e1e1 100644
 --- a/src/models/starcoder.cpp
@@ -2968,10 +3086,10 @@ index f73a88fd4e9041fa1eb0aa328cd0ddebda1aabac..6596b6f7284e319a2a4e74f1b1d85ce4
              model.output_norm,
              model.output_norm_b,
 diff --git a/src/models/step35.cpp b/src/models/step35.cpp
-index 5b1d902581e68e9947e2b752427aaedee595c8d0..60d1d8a0e1e86111fe3fd09168876720250b818f 100644
+index 946a3696000f1175d7b2780e15308d349cb3d339..ff812bf693a106e378b426f965cd7400a22dc3b5 100644
 --- a/src/models/step35.cpp
 +++ b/src/models/step35.cpp
-@@ -196,13 +196,20 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
+@@ -192,13 +192,20 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
      ggml_tensor * cur;
      ggml_tensor * inpL;
  
@@ -2995,7 +3113,7 @@ index 5b1d902581e68e9947e2b752427aaedee595c8d0..60d1d8a0e1e86111fe3fd09168876720
          ggml_tensor * inpSA = inpL;
  
          const uint32_t n_head_l    = hparams.n_head(il);
-@@ -289,7 +296,7 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
+@@ -287,7 +294,7 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
              cb(cur, "attn_proj", il);
          }
  
@@ -3004,7 +3122,7 @@ index 5b1d902581e68e9947e2b752427aaedee595c8d0..60d1d8a0e1e86111fe3fd09168876720
              cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
-@@ -344,7 +351,15 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
+@@ -342,7 +349,15 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
  
          // input for next layer
          inpL = cur;
