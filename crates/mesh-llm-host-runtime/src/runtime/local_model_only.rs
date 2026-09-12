@@ -483,7 +483,9 @@ mod tests {
         };
         #[cfg(feature = "dynamic-native-runtime")]
         {
-            let _ = crate::system::native_runtime::load_local_native_runtime_for_embedded_serving();
+            let _ = crate::system::native_runtime::load_local_native_runtime_for_embedded_serving(
+                &mesh_llm_native_runtime::RuntimeSelection::Recommended,
+            );
             if !skippy_runtime::native_runtime_loaded() {
                 eprintln!(
                     "skipping kv_disabled_model_serves: no local native runtime bundle discovered (run `just build` first)"
