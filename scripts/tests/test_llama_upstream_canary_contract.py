@@ -104,12 +104,11 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("  workflow_dispatch:", workflow)
         self.assertNotIn("\n  push:", workflow)
 
-    def test_new_canary_supersedes_a_stale_run(self) -> None:
+    def test_new_canary_queues_behind_active_runner_work(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn(
-            "concurrency:\n      group: llama-upstream-canary-runner\n      cancel-in-progress: true",
-            workflow,
-        )
+        self.assertEqual(2, workflow.count("group: llama-upstream-canary-runner"))
+        self.assertEqual(2, workflow.count("cancel-in-progress: false"))
+        self.assertNotIn("cancel-in-progress: true", workflow)
         publisher = workflow[workflow.index("  publish-certified-canary:") : workflow.index("  alert-consecutive-failures:")]
         self.assertNotIn("concurrency:", publisher)
 
@@ -172,7 +171,8 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("timeout-minutes: 720", battery)
 
         upload = _step_block(workflow, "Upload supported-families battery evidence")
-        self.assertIn("if: ${{ !cancelled()", upload)
+        self.assertIn("success() || failure() || cancelled()", upload)
+        self.assertNotIn("always()", upload)
         self.assertIn("actions/upload-artifact@", upload)
         self.assertIn("target/family-battery/", upload)
         self.assertIn("retention-days: 14", upload)
@@ -302,6 +302,8 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("scripts/llama-canary-agent-repair.sh", changed)
 
         handoff = _step_block(workflow, "Upload changed-pin agent candidate")
+        self.assertIn("!cancelled()", handoff)
+        self.assertNotIn("always()", handoff)
         self.assertIn("steps.changed_canary.outcome == 'success'", handoff)
         self.assertIn("steps.changed_canary.outputs.candidate_bundle", handoff)
         self.assertNotIn("CANARY_REPAIR_TOKEN", handoff)
@@ -340,6 +342,8 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn('if [[ "$CHANGED_CANARY_OUTCOME" != "success" || "$CANDIDATE_UPLOAD_OUTCOME" != "success" ]]', report)
 
         upload = _step_block(workflow, "Upload changed-pin canary evidence")
+        self.assertIn("success() || failure() || cancelled()", upload)
+        self.assertNotIn("always()", upload)
         self.assertIn("llama-canary-state-${{ github.run_id }}-${{ github.run_attempt }}", upload)
         self.assertIn("llama-canary-changed-pin-${{ github.run_id }}-${{ github.run_attempt }}", upload)
         self.assertNotIn("name: llama-family-battery-", upload)

@@ -1068,9 +1068,7 @@ fn unit_for_path(rendered: &str) -> Option<&'static str> {
         "parallel" | "cache_idle_slots" => Some("slots"),
         "safety_margin_gb" => Some("GB"),
         "cache_ram_mib" | "fit_target_mib" => Some("MiB"),
-        "lifecycle_startup_timeout_ms"
-        | "lifecycle_readiness_interval_ms"
-        | "lifecycle_health_interval_ms" => Some("ms"),
+        "lifecycle_startup_timeout_ms" | "lifecycle_health_interval_ms" => Some("ms"),
         _ => None,
     }
 }

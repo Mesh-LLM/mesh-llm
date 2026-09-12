@@ -215,32 +215,6 @@ pub(super) fn stage_control_request_to_proto(
                 ) as i32,
             })
         }
-        crate::inference::skippy::StageControlRequest::Prepare(prepare) => {
-            anyhow::ensure!(
-                !prepare.load.local_source_required
-                    && !crate::inference::skippy::is_content_addressed_gguf_ref(
-                        &prepare.load.package_ref
-                    ),
-                "local-required stage load cannot use the legacy Prepare command"
-            );
-            Command::PrepareStage(skippy_stage_proto::PrepareStage {
-                load_stage: Some(stage_load_to_proto(prepare.load)),
-                coordinator_id: prepare.coordinator_id.map(|id| id.as_bytes().to_vec()),
-            })
-        }
-        crate::inference::skippy::StageControlRequest::CancelPrepare(cancel) => {
-            Command::CancelPrepareStage(skippy_stage_proto::CancelPrepareStage {
-                topology_id: cancel.topology_id,
-                run_id: cancel.run_id,
-                stage_id: cancel.stage_id,
-                shutdown_generation: cancel.shutdown_generation,
-            })
-        }
-        crate::inference::skippy::StageControlRequest::StatusUpdate(status) => {
-            Command::StageStatusUpdate(skippy_stage_proto::StageStatusUpdate {
-                status: Some(stage_preparation_status_to_proto(status)),
-            })
-        }
     };
 
     let frame = skippy_stage_proto::StageControlRequest {
@@ -288,7 +262,7 @@ pub(super) fn stage_load_to_proto(
         bind_addr: load.bind_addr,
         ctx_size: load.ctx_size,
         lane_count: load.lane_count,
-        continuous_batching: Some(load.continuous_batching),
+        continuous_batching: load.continuous_batching,
         n_batch: load.n_batch,
         n_ubatch: load.n_ubatch,
         n_gpu_layers: load.n_gpu_layers,
@@ -468,39 +442,6 @@ pub(super) fn stage_control_request_from_proto(
                 },
             ))
         }
-        Command::PrepareStage(prepare) => {
-            let load = prepare
-                .load_stage
-                .ok_or_else(|| anyhow::anyhow!("prepare stage missing load_stage"))?;
-            Ok(crate::inference::skippy::StageControlRequest::Prepare(
-                crate::inference::skippy::StagePrepareRequest {
-                    load: stage_load_from_proto(load)?,
-                    coordinator_id: prepare
-                        .coordinator_id
-                        .map(endpoint_id_from_bytes)
-                        .transpose()
-                        .context("invalid prepare stage coordinator_id")?,
-                },
-            ))
-        }
-        Command::CancelPrepareStage(cancel) => Ok(
-            crate::inference::skippy::StageControlRequest::CancelPrepare(
-                crate::inference::skippy::StageCancelPrepareRequest {
-                    topology_id: cancel.topology_id,
-                    run_id: cancel.run_id,
-                    stage_id: cancel.stage_id,
-                    shutdown_generation: cancel.shutdown_generation,
-                },
-            ),
-        ),
-        Command::StageStatusUpdate(update) => {
-            let status = update
-                .status
-                .ok_or_else(|| anyhow::anyhow!("stage status update missing status"))?;
-            Ok(crate::inference::skippy::StageControlRequest::StatusUpdate(
-                stage_preparation_status_from_proto(status)?,
-            ))
-        }
     }
 }
 
@@ -564,7 +505,7 @@ pub(super) fn stage_load_from_proto(
         } else {
             load.lane_count
         },
-        continuous_batching: load.continuous_batching.unwrap_or(true),
+        continuous_batching: load.continuous_batching,
         n_batch: load.n_batch,
         n_ubatch: load.n_ubatch,
         n_gpu_layers: load.n_gpu_layers,
@@ -583,7 +524,7 @@ pub(super) fn stage_load_from_proto(
             .transpose()
             .context("invalid stage load coordinator_id")?,
         lease_until_unix_ms: load.lease_until_unix_ms,
-        load_mode: stage_load_mode_from_proto(load.load_mode),
+        load_mode: stage_load_mode_from_proto(load.load_mode)?,
         upstream: load.upstream.map(stage_peer_from_proto).transpose()?,
         downstream: load.downstream.map(stage_peer_from_proto).transpose()?,
     })
@@ -679,17 +620,19 @@ pub(super) fn stage_peer_from_proto(
     })
 }
 
-pub(super) fn stage_load_mode_from_proto(value: i32) -> skippy_protocol::LoadMode {
-    match skippy_stage_proto::StageLoadMode::try_from(value)
-        .unwrap_or(skippy_stage_proto::StageLoadMode::Unspecified)
-    {
-        skippy_stage_proto::StageLoadMode::Unspecified
-        | skippy_stage_proto::StageLoadMode::RuntimeSlice => {
-            skippy_protocol::LoadMode::RuntimeSlice
+pub(super) fn stage_load_mode_from_proto(value: i32) -> anyhow::Result<skippy_protocol::LoadMode> {
+    match skippy_stage_proto::StageLoadMode::try_from(value) {
+        Ok(skippy_stage_proto::StageLoadMode::RuntimeSlice) => {
+            Ok(skippy_protocol::LoadMode::RuntimeSlice)
         }
-        skippy_stage_proto::StageLoadMode::LayerPackage => skippy_protocol::LoadMode::LayerPackage,
-        skippy_stage_proto::StageLoadMode::ArtifactSlice => {
-            skippy_protocol::LoadMode::ArtifactSlice
+        Ok(skippy_stage_proto::StageLoadMode::LayerPackage) => {
+            Ok(skippy_protocol::LoadMode::LayerPackage)
+        }
+        Ok(skippy_stage_proto::StageLoadMode::ArtifactSlice) => {
+            Ok(skippy_protocol::LoadMode::ArtifactSlice)
+        }
+        Ok(skippy_stage_proto::StageLoadMode::Unspecified) | Err(_) => {
+            anyhow::bail!("unsupported generation-9 stage load mode {value}")
         }
     }
 }
@@ -729,7 +672,7 @@ fn stage_activation_codec_from_proto(
         Ok(skippy_stage_proto::StageActivationCodec::S8RowF32RneV1) => {
             Ok(skippy_protocol::StageActivationCodec::S8RowF32RneV1)
         }
-        _ => anyhow::bail!("unsupported generation-8 activation codec {value}"),
+        _ => anyhow::bail!("unsupported generation-9 activation codec {value}"),
     }
 }
 
@@ -750,9 +693,8 @@ fn stage_activation_codec_policy_from_proto(
     value: i32,
 ) -> anyhow::Result<skippy_protocol::StageActivationCodecPolicy> {
     match skippy_stage_proto::StageActivationCodecPolicy::try_from(value) {
-        // Legacy peer that never sent the policy field.
         Ok(skippy_stage_proto::StageActivationCodecPolicy::Unspecified) => {
-            Ok(skippy_protocol::StageActivationCodecPolicy::Fixed)
+            anyhow::bail!("generation-9 activation codec policy must be explicit")
         }
         Ok(skippy_stage_proto::StageActivationCodecPolicy::FixedV1) => {
             Ok(skippy_protocol::StageActivationCodecPolicy::Fixed)
@@ -760,7 +702,7 @@ fn stage_activation_codec_policy_from_proto(
         Ok(skippy_stage_proto::StageActivationCodecPolicy::AutoLosslessV1) => {
             Ok(skippy_protocol::StageActivationCodecPolicy::AutoLosslessV1)
         }
-        _ => anyhow::bail!("unsupported generation-8 activation codec policy {value}"),
+        _ => anyhow::bail!("unsupported generation-9 activation codec policy {value}"),
     }
 }
 
@@ -834,42 +776,11 @@ pub(super) fn stage_control_unavailable_response(
                     ready_ranges: Vec::new(),
                     available_ranges: Vec::new(),
                     missing_ranges: Vec::new(),
-                    preparing_ranges: Vec::new(),
                     source_model_path: None,
                     source_model_bytes: None,
                     source_model_sha256: None,
                     content_addressed_local_source: None,
                     source_model_kind: crate::inference::skippy::SourceModelKind::Unknown,
-                },
-            );
-        }
-        crate::inference::skippy::StageControlRequest::Prepare(prepare) => {
-            return crate::inference::skippy::StageControlResponse::PrepareAccepted(
-                crate::inference::skippy::StagePrepareAcceptedResponse {
-                    accepted: false,
-                    status: stage_preparation_status_from_load(
-                        &prepare.load,
-                        crate::inference::skippy::StagePreparationState::Failed,
-                        Some("stage control is not available".to_string()),
-                    ),
-                    error: Some("stage control is not available".to_string()),
-                },
-            );
-        }
-        crate::inference::skippy::StageControlRequest::CancelPrepare(cancel) => {
-            return crate::inference::skippy::StageControlResponse::PreparationStatus(
-                stage_preparation_status_from_cancel(
-                    cancel,
-                    crate::inference::skippy::StagePreparationState::Failed,
-                    Some("stage control is not available".to_string()),
-                ),
-            );
-        }
-        crate::inference::skippy::StageControlRequest::StatusUpdate(_) => {
-            return crate::inference::skippy::StageControlResponse::StatusAck(
-                crate::inference::skippy::StageStatusAck {
-                    accepted: false,
-                    error: Some("stage control is not available".to_string()),
                 },
             );
         }
@@ -931,68 +842,6 @@ pub(crate) fn stage_status_from_load(
     }
 }
 
-pub(super) fn stage_preparation_status_from_load(
-    load: &crate::inference::skippy::StageLoadRequest,
-    state: crate::inference::skippy::StagePreparationState,
-    error: Option<String>,
-) -> crate::inference::skippy::StagePreparationStatus {
-    crate::inference::skippy::StagePreparationStatus {
-        topology_id: load.topology_id.clone(),
-        run_id: load.run_id.clone(),
-        model_id: load.model_id.clone(),
-        backend: load.backend.clone(),
-        package_ref: load.package_ref.clone(),
-        manifest_sha256: load.manifest_sha256.clone(),
-        stage_id: load.stage_id.clone(),
-        stage_index: load.stage_index,
-        layer_start: load.layer_start,
-        layer_end: load.layer_end,
-        admission: Some(load.admission.clone()),
-        activation_codec: load.activation_codec,
-        activation_codec_policy: load.activation_codec_policy,
-        state,
-        bytes_done: None,
-        bytes_total: None,
-        bind_addr: None,
-        error,
-        shutdown_generation: load.shutdown_generation,
-        coordinator_term: load.coordinator_term,
-        coordinator_id: load.coordinator_id,
-        lease_until_unix_ms: load.lease_until_unix_ms,
-    }
-}
-
-pub(super) fn stage_preparation_status_from_cancel(
-    cancel: crate::inference::skippy::StageCancelPrepareRequest,
-    state: crate::inference::skippy::StagePreparationState,
-    error: Option<String>,
-) -> crate::inference::skippy::StagePreparationStatus {
-    crate::inference::skippy::StagePreparationStatus {
-        topology_id: cancel.topology_id,
-        run_id: cancel.run_id,
-        model_id: String::new(),
-        backend: "skippy".to_string(),
-        package_ref: String::new(),
-        manifest_sha256: String::new(),
-        stage_id: cancel.stage_id,
-        stage_index: 0,
-        layer_start: 0,
-        layer_end: 0,
-        admission: None,
-        activation_codec: skippy_protocol::StageActivationCodec::default(),
-        activation_codec_policy: Default::default(),
-        state,
-        bytes_done: None,
-        bytes_total: None,
-        bind_addr: None,
-        error,
-        shutdown_generation: cancel.shutdown_generation,
-        coordinator_term: 0,
-        coordinator_id: None,
-        lease_until_unix_ms: 0,
-    }
-}
-
 pub(super) fn stage_control_response_to_proto(
     response: crate::inference::skippy::StageControlResponse,
 ) -> skippy_stage_proto::StageControlResponse {
@@ -1020,22 +869,6 @@ pub(super) fn stage_control_response_to_proto(
         }
         crate::inference::skippy::StageControlResponse::Inventory(inventory) => {
             Response::LayerInventory(layer_inventory_to_proto(inventory))
-        }
-        crate::inference::skippy::StageControlResponse::PrepareAccepted(accepted) => {
-            Response::PrepareStageAccepted(skippy_stage_proto::PrepareStageAccepted {
-                accepted: accepted.accepted,
-                status: Some(stage_preparation_status_to_proto(accepted.status)),
-                error: accepted.error,
-            })
-        }
-        crate::inference::skippy::StageControlResponse::PreparationStatus(status) => {
-            Response::StagePreparationStatus(stage_preparation_status_to_proto(status))
-        }
-        crate::inference::skippy::StageControlResponse::StatusAck(ack) => {
-            Response::StageStatusAck(skippy_stage_proto::StageStatusAck {
-                accepted: ack.accepted,
-                error: ack.error,
-            })
         }
     };
 
@@ -1094,33 +927,6 @@ pub(super) fn stage_control_response_from_proto(
                 layer_inventory_from_proto(inventory)?,
             ))
         }
-        Response::PrepareStageAccepted(accepted) => {
-            let status = accepted
-                .status
-                .ok_or_else(|| anyhow::anyhow!("prepare stage accepted missing status"))?;
-            Ok(
-                crate::inference::skippy::StageControlResponse::PrepareAccepted(
-                    crate::inference::skippy::StagePrepareAcceptedResponse {
-                        accepted: accepted.accepted,
-                        status: stage_preparation_status_from_proto(status)?,
-                        error: accepted.error,
-                    },
-                ),
-            )
-        }
-        Response::StagePreparationStatus(status) => Ok(
-            crate::inference::skippy::StageControlResponse::PreparationStatus(
-                stage_preparation_status_from_proto(status)?,
-            ),
-        ),
-        Response::StageStatusAck(ack) => {
-            Ok(crate::inference::skippy::StageControlResponse::StatusAck(
-                crate::inference::skippy::StageStatusAck {
-                    accepted: ack.accepted,
-                    error: ack.error,
-                },
-            ))
-        }
     }
 }
 
@@ -1146,11 +952,6 @@ pub(super) fn layer_inventory_to_proto(
             .missing_ranges
             .into_iter()
             .map(layer_range_to_proto)
-            .collect(),
-        preparing_ranges: inventory
-            .preparing_ranges
-            .into_iter()
-            .map(stage_preparation_status_to_proto)
             .collect(),
         source_model_path: inventory.source_model_path,
         source_model_bytes: inventory.source_model_bytes,
@@ -1183,11 +984,6 @@ pub(super) fn layer_inventory_from_proto(
             .into_iter()
             .map(layer_range_from_proto)
             .collect(),
-        preparing_ranges: inventory
-            .preparing_ranges
-            .into_iter()
-            .map(stage_preparation_status_from_proto)
-            .collect::<anyhow::Result<Vec<_>>>()?,
         source_model_path: inventory.source_model_path,
         source_model_bytes: inventory.source_model_bytes,
         source_model_sha256: inventory.source_model_sha256,
@@ -1210,7 +1006,9 @@ fn source_resolution_policy_from_proto(value: i32) -> anyhow::Result<bool> {
     match skippy_stage_proto::SourceResolutionPolicy::try_from(value) {
         Ok(skippy_stage_proto::SourceResolutionPolicy::Fallback) => Ok(false),
         Ok(skippy_stage_proto::SourceResolutionPolicy::LocalRequired) => Ok(true),
-        Err(_) => anyhow::bail!("unsupported stage source resolution policy {value}"),
+        Ok(skippy_stage_proto::SourceResolutionPolicy::Unspecified) | Err(_) => {
+            anyhow::bail!("unsupported generation-9 stage source resolution policy {value}")
+        }
     }
 }
 
@@ -1270,100 +1068,6 @@ pub(super) fn source_model_kind_from_proto(
             crate::inference::skippy::SourceModelKind::SplitGguf
         }
     }
-}
-
-pub(super) fn stage_preparation_status_to_proto(
-    status: crate::inference::skippy::StagePreparationStatus,
-) -> skippy_stage_proto::StagePreparationStatus {
-    use skippy_stage_proto::stage_preparation_status::AdmissionState;
-    let admission_state = Some(match status.admission {
-        Some(descriptor) => AdmissionState::Admitted(skippy_stage_proto::StageAdmissionAdmitted {
-            descriptor: Some(descriptor.into()),
-        }),
-        None => AdmissionState::Idle(skippy_stage_proto::StageAdmissionIdle {}),
-    });
-    skippy_stage_proto::StagePreparationStatus {
-        topology_id: status.topology_id,
-        run_id: status.run_id,
-        model_id: status.model_id,
-        backend: status.backend,
-        package_ref: status.package_ref,
-        manifest_sha256: status.manifest_sha256,
-        stage_id: status.stage_id,
-        stage_index: status.stage_index,
-        layer_start: status.layer_start,
-        layer_end: status.layer_end,
-        state: stage_preparation_state_to_proto(status.state) as i32,
-        bytes_done: status.bytes_done,
-        bytes_total: status.bytes_total,
-        bind_addr: status.bind_addr,
-        error: status.error,
-        shutdown_generation: status.shutdown_generation,
-        coordinator_term: status.coordinator_term,
-        coordinator_id: status.coordinator_id.map(|id| id.to_string()),
-        lease_until_unix_ms: status.lease_until_unix_ms,
-        admission_state,
-        activation_codec: stage_activation_codec_to_proto(status.activation_codec) as i32,
-        activation_codec_policy: stage_activation_codec_policy_to_proto(
-            status.activation_codec_policy,
-        ) as i32,
-    }
-}
-
-pub(super) fn stage_preparation_status_from_proto(
-    status: skippy_stage_proto::StagePreparationStatus,
-) -> anyhow::Result<crate::inference::skippy::StagePreparationStatus> {
-    use skippy_stage_proto::stage_preparation_status::AdmissionState;
-    let coordinator_id = status.coordinator_id.and_then(|id| match id.parse() {
-        Ok(id) => Some(id),
-        Err(error) => {
-            tracing::warn!(
-                coordinator_id = %id,
-                error = %error,
-                "invalid stage preparation coordinator_id"
-            );
-            None
-        }
-    });
-    let admission = match status.admission_state {
-        Some(AdmissionState::Idle(_)) => None,
-        Some(AdmissionState::Admitted(admitted)) => Some(
-            admitted
-                .descriptor
-                .ok_or_else(|| anyhow::anyhow!("admitted stage preparation missing descriptor"))?
-                .try_into()
-                .map_err(|error| {
-                    anyhow::anyhow!("invalid stage preparation admission descriptor: {error}")
-                })?,
-        ),
-        None => return Err(anyhow::anyhow!("stage preparation missing admission state")),
-    };
-    Ok(crate::inference::skippy::StagePreparationStatus {
-        topology_id: status.topology_id,
-        run_id: status.run_id,
-        model_id: status.model_id,
-        backend: status.backend,
-        package_ref: status.package_ref,
-        manifest_sha256: status.manifest_sha256,
-        stage_id: status.stage_id,
-        stage_index: status.stage_index,
-        layer_start: status.layer_start,
-        layer_end: status.layer_end,
-        admission,
-        activation_codec: stage_activation_codec_from_proto(status.activation_codec)?,
-        activation_codec_policy: stage_activation_codec_policy_from_proto(
-            status.activation_codec_policy,
-        )?,
-        state: stage_preparation_state_from_proto(status.state),
-        bytes_done: status.bytes_done,
-        bytes_total: status.bytes_total,
-        bind_addr: status.bind_addr,
-        error: status.error,
-        shutdown_generation: status.shutdown_generation,
-        coordinator_term: status.coordinator_term,
-        coordinator_id,
-        lease_until_unix_ms: status.lease_until_unix_ms,
-    })
 }
 
 pub(super) fn stage_status_to_proto(
@@ -1618,113 +1322,14 @@ pub(super) fn stage_runtime_state_to_proto(
     }
 }
 
-pub(super) fn stage_preparation_state_from_proto(
-    value: i32,
-) -> crate::inference::skippy::StagePreparationState {
-    match skippy_stage_proto::StagePreparationState::try_from(value)
-        .unwrap_or(skippy_stage_proto::StagePreparationState::Unspecified)
-    {
-        skippy_stage_proto::StagePreparationState::Assigned
-        | skippy_stage_proto::StagePreparationState::Unspecified => {
-            crate::inference::skippy::StagePreparationState::Assigned
-        }
-        skippy_stage_proto::StagePreparationState::Downloading => {
-            crate::inference::skippy::StagePreparationState::Downloading
-        }
-        skippy_stage_proto::StagePreparationState::Available => {
-            crate::inference::skippy::StagePreparationState::Available
-        }
-        skippy_stage_proto::StagePreparationState::Resolving => {
-            crate::inference::skippy::StagePreparationState::Resolving
-        }
-        skippy_stage_proto::StagePreparationState::Loading => {
-            crate::inference::skippy::StagePreparationState::Loading
-        }
-        skippy_stage_proto::StagePreparationState::Ready => {
-            crate::inference::skippy::StagePreparationState::Ready
-        }
-        skippy_stage_proto::StagePreparationState::Failed => {
-            crate::inference::skippy::StagePreparationState::Failed
-        }
-        skippy_stage_proto::StagePreparationState::Cancelled => {
-            crate::inference::skippy::StagePreparationState::Cancelled
-        }
-    }
-}
-
-pub(super) fn stage_preparation_state_to_proto(
-    state: crate::inference::skippy::StagePreparationState,
-) -> skippy_stage_proto::StagePreparationState {
-    match state {
-        crate::inference::skippy::StagePreparationState::Assigned => {
-            skippy_stage_proto::StagePreparationState::Assigned
-        }
-        crate::inference::skippy::StagePreparationState::Downloading => {
-            skippy_stage_proto::StagePreparationState::Downloading
-        }
-        crate::inference::skippy::StagePreparationState::Available => {
-            skippy_stage_proto::StagePreparationState::Available
-        }
-        crate::inference::skippy::StagePreparationState::Resolving => {
-            skippy_stage_proto::StagePreparationState::Resolving
-        }
-        crate::inference::skippy::StagePreparationState::Loading => {
-            skippy_stage_proto::StagePreparationState::Loading
-        }
-        crate::inference::skippy::StagePreparationState::Ready => {
-            skippy_stage_proto::StagePreparationState::Ready
-        }
-        crate::inference::skippy::StagePreparationState::Failed => {
-            skippy_stage_proto::StagePreparationState::Failed
-        }
-        crate::inference::skippy::StagePreparationState::Cancelled => {
-            skippy_stage_proto::StagePreparationState::Cancelled
-        }
-    }
-}
 #[cfg(test)]
 mod tests {
     use super::*;
     use prost::Message;
 
-    #[derive(Clone, PartialEq, Message)]
-    struct LegacyLoadStage {}
-
-    #[derive(Clone, PartialEq, Message)]
-    struct CompatLoadStage {
-        #[prost(message, optional, tag = "43")]
-        runtime_settings: Option<CompatRuntimeSettings>,
-    }
-
-    #[derive(Clone, PartialEq, Message)]
-    struct CompatRuntimeSettings {
-        #[prost(bool, optional, tag = "1")]
-        repack: Option<bool>,
-        #[prost(bool, optional, tag = "2")]
-        op_offload: Option<bool>,
-        #[prost(bool, optional, tag = "3")]
-        no_host_buffer: Option<bool>,
-        #[prost(bool, optional, tag = "4")]
-        check_tensors: Option<bool>,
-        #[prost(bool, optional, tag = "5")]
-        direct_io: Option<bool>,
-        #[prost(uint32, optional, tag = "6")]
-        main_gpu: Option<u32>,
-        #[prost(int32, optional, tag = "7")]
-        split_mode: Option<i32>,
-        #[prost(bool, optional, tag = "8")]
-        kv_offload: Option<bool>,
-        #[prost(bool, optional, tag = "9")]
-        kv_unified: Option<bool>,
-        #[prost(bool, optional, tag = "10")]
-        swa_full: Option<bool>,
-        #[prost(uint32, optional, tag = "11")]
-        cache_idle_slots: Option<u32>,
-    }
-
     #[test]
     fn stage_load_wire_round_trip_preserves_runtime_controls() {
-        let settings = CompatRuntimeSettings {
+        let settings = skippy_stage_proto::StageLoadRuntimeSettings {
             repack: Some(true),
             op_offload: Some(false),
             no_host_buffer: Some(true),
@@ -1736,30 +1341,21 @@ mod tests {
             kv_unified: Some(true),
             swa_full: Some(false),
             cache_idle_slots: Some(3),
+            activation_codec_policy: skippy_stage_proto::StageActivationCodecPolicy::FixedV1 as i32,
         };
         let load = skippy_stage_proto::LoadStage {
             admission: Some(crate::inference::skippy::test_stage_admission(0, 1).into()),
             activation_codec: skippy_stage_proto::StageActivationCodec::F16RneV1 as i32,
-            activation_codec_policy: Default::default(),
+            activation_codec_policy: skippy_stage_proto::StageActivationCodecPolicy::FixedV1 as i32,
+            source_resolution_policy: skippy_stage_proto::SourceResolutionPolicy::Fallback as i32,
+            load_mode: skippy_stage_proto::StageLoadMode::RuntimeSlice as i32,
+            runtime_settings: Some(settings),
             ..Default::default()
         };
-        let mut encoded = load.encode_to_vec();
-        CompatLoadStage {
-            runtime_settings: Some(settings.clone()),
-        }
-        .encode(&mut encoded)
-        .expect("compat runtime settings encode");
-
-        let legacy = LegacyLoadStage::decode(encoded.as_slice())
-            .expect("legacy schema ignores additive runtime settings");
-        assert!(legacy.encode_to_vec().is_empty());
-
-        let decoded = skippy_stage_proto::LoadStage::decode(encoded.as_slice())
+        let decoded = skippy_stage_proto::LoadStage::decode(load.encode_to_vec().as_slice())
             .expect("production load stage decode");
         let request = stage_load_from_proto(decoded).expect("domain load request");
-        let reencoded = stage_load_to_proto(request).encode_to_vec();
-        let observed = CompatLoadStage::decode(reencoded.as_slice())
-            .expect("compat runtime settings decode")
+        let observed = stage_load_to_proto(request)
             .runtime_settings
             .expect("runtime settings must survive production round trip");
 

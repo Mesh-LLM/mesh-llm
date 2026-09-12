@@ -24,11 +24,10 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-pub(super) const MIN_STAGE_SOURCE_PREPARE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-const STAGE_SOURCE_PREPARE_ALLOWANCE: Duration = Duration::from_secs(10 * 60);
+pub(super) const MIN_STAGE_SOURCE_LOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const STAGE_SOURCE_LOAD_ALLOWANCE: Duration = Duration::from_secs(10 * 60);
 const STAGE_SOURCE_MIN_BYTES_PER_SEC: u64 = 16 * 1024 * 1024;
 const DEFAULT_STAGE_STARTUP_TIMEOUT: Duration = Duration::from_secs(15 * 60);
-const DEFAULT_STAGE_READINESS_INTERVAL: Duration = Duration::from_secs(2);
 pub(super) const DEFAULT_STAGE_HEALTH_INTERVAL: Duration = Duration::from_secs(30);
 
 pub(super) async fn await_stage_startup<F, T>(
@@ -39,10 +38,6 @@ where
     F: Future<Output = T>,
 {
     tokio::time::timeout(timeout, future).await
-}
-
-pub(super) async fn wait_for_stage_readiness_poll(interval: Duration) {
-    tokio::time::sleep(interval).await;
 }
 
 pub(super) fn stage_health_ticks(interval: Duration) -> tokio::time::Interval {
@@ -108,13 +103,11 @@ pub(super) struct SplitGenerationLoadSettings<'a> {
     pub(super) embedded_openai: skippy::ResolvedEmbeddedOpenAiArgs,
     pub(super) load_mode: LoadMode,
     pub(super) startup_timeout: Duration,
-    pub(super) readiness_interval: Duration,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct StageLifecycleIntervals {
     pub(super) startup_timeout: Duration,
-    pub(super) readiness_interval: Duration,
     pub(super) health_interval: Duration,
 }
 
@@ -133,12 +126,6 @@ pub(super) fn configured_stage_lifecycle_intervals(
                 .and_then(|config| config.lifecycle_startup_timeout_ms)
                 .or_else(|| defaults.and_then(|config| config.lifecycle_startup_timeout_ms))
                 .unwrap_or(DEFAULT_STAGE_STARTUP_TIMEOUT.as_millis() as u64),
-        ),
-        readiness_interval: Duration::from_millis(
-            model
-                .and_then(|config| config.lifecycle_readiness_interval_ms)
-                .or_else(|| defaults.and_then(|config| config.lifecycle_readiness_interval_ms))
-                .unwrap_or(DEFAULT_STAGE_READINESS_INTERVAL.as_millis() as u64),
         ),
         health_interval: Duration::from_millis(
             model
@@ -525,23 +512,6 @@ pub(super) async fn load_downstream_split_runtime_stages(
                 "stage {} no longer has the exact local GGUF content required by this topology",
                 stage.stage_id
             );
-        } else {
-            prepare_split_stage(spec.node, stage.node_id, load.clone()).await?;
-            wait_for_split_stage_source(
-                spec.node,
-                stage.node_id,
-                &load,
-                stage_source_prepare_timeout(spec.package, stage),
-                settings.readiness_interval,
-            )
-            .await
-            .with_context(|| {
-                format!(
-                    "prepare split stage {} on {}",
-                    stage.stage_id,
-                    stage.node_id.fmt_short()
-                )
-            })?;
         }
         if load.local_source_required {
             ensure_peer_supports_strict_local_load(spec.node, stage.node_id, &load.stage_id)
@@ -552,7 +522,14 @@ pub(super) async fn load_downstream_split_runtime_stages(
         } else {
             skippy::StageControlRequest::Load(load.clone())
         };
-        let response = await_stage_startup(settings.startup_timeout, async {
+        let startup_timeout = if load.local_source_required {
+            settings.startup_timeout
+        } else {
+            settings
+                .startup_timeout
+                .max(stage_source_load_timeout(spec.package, stage))
+        };
+        let response = await_stage_startup(startup_timeout, async {
             if stage.node_id == spec.node.id() {
                 spec.node.send_local_stage_control(load_request).await
             } else {
@@ -651,7 +628,7 @@ fn validate_activation_edge(
     Ok(())
 }
 
-pub(super) fn stage_source_prepare_timeout(
+pub(super) fn stage_source_load_timeout(
     package: &skippy::SkippyPackageIdentity,
     stage: &RuntimeSliceStagePlan,
 ) -> Duration {
@@ -673,8 +650,8 @@ pub(super) fn stage_source_prepare_timeout(
     };
     let transfer_secs = assigned_bytes.div_ceil(STAGE_SOURCE_MIN_BYTES_PER_SEC);
     Duration::from_secs(transfer_secs)
-        .saturating_add(STAGE_SOURCE_PREPARE_ALLOWANCE)
-        .max(MIN_STAGE_SOURCE_PREPARE_TIMEOUT)
+        .saturating_add(STAGE_SOURCE_LOAD_ALLOWANCE)
+        .max(MIN_STAGE_SOURCE_LOAD_TIMEOUT)
 }
 
 pub(super) fn split_runtime_stage_load_request(
@@ -890,7 +867,6 @@ pub(super) async fn split_generation_load_settings<'a>(
         embedded_openai,
         load_mode,
         startup_timeout: lifecycle.startup_timeout,
-        readiness_interval: lifecycle.readiness_interval,
     })
 }
 
@@ -1154,87 +1130,6 @@ pub(super) fn stage_load_model_path(
     }
 }
 
-pub(super) async fn prepare_split_stage(
-    node: &mesh::Node,
-    stage_node_id: iroh::EndpointId,
-    load: skippy::StageLoadRequest,
-) -> Result<()> {
-    let prepare = skippy::StagePrepareRequest {
-        load,
-        coordinator_id: Some(node.id()),
-    };
-    let prepare_stage_id = prepare.load.stage_id.clone();
-    let response = if stage_node_id == node.id() {
-        node.send_local_stage_control(skippy::StageControlRequest::Prepare(prepare))
-            .await
-    } else {
-        node.send_stage_control(stage_node_id, skippy::StageControlRequest::Prepare(prepare))
-            .await
-    }
-    .with_context(|| stage_control_unreachable_message(&prepare_stage_id, stage_node_id))?;
-    let skippy::StageControlResponse::PrepareAccepted(accepted) = response else {
-        anyhow::bail!(
-            "{}",
-            stage_control_unreachable_message(&prepare_stage_id, stage_node_id)
-        );
-    };
-    anyhow::ensure!(
-        accepted.accepted,
-        "{}",
-        stage_source_prepare_failed_message(
-            &accepted.status.stage_id,
-            &accepted
-                .error
-                .unwrap_or_else(|| "unknown error".to_string())
-        )
-    );
-    Ok(())
-}
-
-pub(super) async fn wait_for_split_stage_source(
-    node: &mesh::Node,
-    stage_node_id: iroh::EndpointId,
-    load: &skippy::StageLoadRequest,
-    timeout: Duration,
-    readiness_interval: Duration,
-) -> Result<()> {
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        let inventory = query_stage_inventory(node, stage_node_id, load)
-            .await
-            .with_context(|| stage_control_unreachable_message(&load.stage_id, stage_node_id))?;
-        if split_stage_source_is_ready(&inventory, load) {
-            tracing::info!(
-                topology_id = %load.topology_id,
-                run_id = %load.run_id,
-                stage_id = %load.stage_id,
-                node = %stage_node_id.fmt_short(),
-                "split stage source is available; loading runtime"
-            );
-            return Ok(());
-        }
-        if let Some(failed) = inventory.preparing_ranges.iter().find(|status| {
-            status.stage_id == load.stage_id
-                && matches!(status.state, skippy::StagePreparationState::Failed)
-        }) {
-            anyhow::bail!(
-                "{}",
-                stage_source_prepare_failed_message(
-                    &load.stage_id,
-                    failed.error.as_deref().unwrap_or("unknown error")
-                )
-            );
-        }
-        if tokio::time::Instant::now() >= deadline {
-            anyhow::bail!(
-                "{}",
-                stage_source_prepare_timeout_message(&load.stage_id, timeout)
-            );
-        }
-        wait_for_stage_readiness_poll(readiness_interval).await;
-    }
-}
-
 pub(super) fn stage_control_unreachable_message(
     stage_id: &str,
     stage_node_id: iroh::EndpointId,
@@ -1243,16 +1138,6 @@ pub(super) fn stage_control_unreachable_message(
         "stage_control_unreachable: inventory/control request failed for stage {} on {}",
         stage_id,
         stage_node_id.fmt_short()
-    )
-}
-
-pub(super) fn stage_source_prepare_failed_message(stage_id: &str, error: &str) -> String {
-    format!("stage_source_prepare_failed: stage {stage_id} source prepare failed: {error}")
-}
-
-pub(super) fn stage_source_prepare_timeout_message(stage_id: &str, timeout: Duration) -> String {
-    format!(
-        "stage_source_prepare_timeout: timed out waiting for stage {stage_id} source availability after {timeout:?}"
     )
 }
 

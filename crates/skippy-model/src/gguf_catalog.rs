@@ -140,21 +140,10 @@ fn read_gguf_catalog_with_mode(
     }
     let tensor_table_end = reader.position()?;
     let data_start = align_to(tensor_table_end, alignment).context("GGUF data offset overflow")?;
-    if tensors.is_empty() {
-        // A descriptor-only GGUF (zero tensors) is a legal metadata carrier:
-        // split models commonly ship a first shard holding only model
-        // metadata, and nothing requires its table end to be aligned or the
-        // file to extend past it.
-        ensure!(
-            tensor_table_end <= artifact_bytes,
-            "GGUF metadata table ends beyond the artifact"
-        );
-    } else {
-        ensure!(
-            data_start <= artifact_bytes,
-            "GGUF tensor data starts beyond the artifact"
-        );
-    }
+    ensure!(
+        data_start <= artifact_bytes,
+        "GGUF tensor data starts beyond the artifact"
+    );
 
     let mut names = std::collections::BTreeSet::new();
     for tensor in &mut tensors {
@@ -476,31 +465,6 @@ mod tests {
         let error = read_gguf_catalog(&path).unwrap_err();
         assert!(error.to_string().contains("starts beyond the artifact"));
         fs::remove_file(path).unwrap();
-    }
-
-    #[test]
-    fn reads_descriptor_only_shard_with_unaligned_table_end() {
-        let path = temp_path("descriptor-only");
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(GGUF_MAGIC);
-        bytes.extend_from_slice(&3_u32.to_le_bytes());
-        bytes.extend_from_slice(&0_u64.to_le_bytes()); // zero tensors
-        bytes.extend_from_slice(&2_u64.to_le_bytes()); // two metadata keys
-        write_string(&mut bytes, "general.architecture");
-        bytes.extend_from_slice(&GGUF_TYPE_STRING.to_le_bytes());
-        write_string(&mut bytes, "inkling");
-        write_string(&mut bytes, "inkling.block_count");
-        bytes.extend_from_slice(&GGUF_TYPE_UINT32.to_le_bytes());
-        bytes.extend_from_slice(&66_u32.to_le_bytes());
-        // File ends immediately after the metadata table, unaligned.
-        fs::write(&path, bytes).unwrap();
-
-        let catalog = read_gguf_catalog(&path).unwrap();
-        assert_eq!(catalog.tensors.len(), 0);
-        assert_eq!(catalog.metadata["inkling.block_count"], Value::from(66));
-        // data_start is still the aligned offset a payload-bearing companion
-        // shard would use; the file simply ends before it.
-        assert!(catalog.data_start > catalog.artifact_bytes);
     }
 
     #[test]

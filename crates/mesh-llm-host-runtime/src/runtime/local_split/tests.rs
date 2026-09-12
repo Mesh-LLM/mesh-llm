@@ -30,7 +30,6 @@ fn lifecycle_config() -> plugin::MeshConfig {
         r#"
 [defaults.skippy]
 lifecycle_startup_timeout_ms = 25
-lifecycle_readiness_interval_ms = 40
 lifecycle_health_interval_ms = 70
 
 [[models]]
@@ -38,7 +37,6 @@ model = "test/model"
 
 [models.skippy]
 lifecycle_startup_timeout_ms = 75
-lifecycle_readiness_interval_ms = 125
 lifecycle_health_interval_ms = 5000
 "#,
     )
@@ -103,16 +101,6 @@ async fn configured_startup_timeout_drives_real_timeout_deadline() {
 
     assert!(result.is_err());
     assert_eq!(started.elapsed(), Duration::from_millis(75));
-}
-
-#[tokio::test(start_paused = true)]
-async fn configured_readiness_interval_drives_real_poll_sleep() {
-    let intervals = configured_stage_lifecycle_intervals(&lifecycle_config(), Some("test/model"));
-    let started = tokio::time::Instant::now();
-
-    wait_for_stage_readiness_poll(intervals.readiness_interval).await;
-
-    assert_eq!(started.elapsed(), Duration::from_millis(125));
 }
 
 #[tokio::test(start_paused = true)]
@@ -276,7 +264,6 @@ fn staged_lifecycle_intervals_use_model_over_defaults() {
         r#"
 [defaults.skippy]
 lifecycle_startup_timeout_ms = 90000
-lifecycle_readiness_interval_ms = 250
 lifecycle_health_interval_ms = 30000
 
 [[models]]
@@ -284,7 +271,6 @@ model = "test/model"
 
 [models.skippy]
 lifecycle_startup_timeout_ms = 120000
-lifecycle_readiness_interval_ms = 125
 lifecycle_health_interval_ms = 5000
 "#,
     )
@@ -294,10 +280,8 @@ lifecycle_health_interval_ms = 5000
     let defaults = configured_stage_lifecycle_intervals(&config, None);
 
     assert_eq!(configured.startup_timeout, Duration::from_secs(120));
-    assert_eq!(configured.readiness_interval, Duration::from_millis(125));
     assert_eq!(configured.health_interval, Duration::from_secs(5));
     assert_eq!(defaults.startup_timeout, Duration::from_secs(90));
-    assert_eq!(defaults.readiness_interval, Duration::from_millis(250));
     assert_eq!(defaults.health_interval, Duration::from_secs(30));
 }
 
@@ -501,7 +485,6 @@ fn split_inventory_package_signal_counts_cached_and_missing_ranges() {
             layer_start: 6,
             layer_end: 10,
         }],
-        preparing_ranges: Vec::new(),
         source_model_path: None,
         source_model_bytes: None,
         source_model_sha256: None,
@@ -656,9 +639,9 @@ fn split_package_signal_still_requires_transfer_for_missing_local_package() {
 }
 
 #[test]
-fn layer_package_stage_source_waits_for_exact_prepare_availability() {
+fn layer_package_stage_source_accepts_inventory_availability() {
     let load = stage_load_request(LoadMode::LayerPackage);
-    let mut inventory = skippy::StageLayerInventory {
+    let inventory = skippy::StageLayerInventory {
         model_id: load.model_id.clone(),
         package_ref: load.package_ref.clone(),
         manifest_sha256: load.manifest_sha256.clone(),
@@ -669,7 +652,6 @@ fn layer_package_stage_source_waits_for_exact_prepare_availability() {
             layer_end: 36,
         }],
         missing_ranges: Vec::new(),
-        preparing_ranges: Vec::new(),
         source_model_path: Some(
             "/cache/models--meshllm--Qwen3-8B-Q4_K_M-layers/snapshots/main".to_string(),
         ),
@@ -678,12 +660,6 @@ fn layer_package_stage_source_waits_for_exact_prepare_availability() {
         content_addressed_local_source: None,
         source_model_kind: skippy::SourceModelKind::LayerPackage,
     };
-
-    assert!(!split_stage_source_is_ready(&inventory, &load));
-
-    inventory
-        .preparing_ranges
-        .push(test_preparation_status_from_load(&load));
 
     assert!(split_stage_source_is_ready(&inventory, &load));
 }
@@ -702,7 +678,6 @@ fn runtime_slice_stage_source_accepts_inventory_availability() {
             layer_end: 36,
         }],
         missing_ranges: Vec::new(),
-        preparing_ranges: Vec::new(),
         source_model_path: Some("/models/qwen.gguf".to_string()),
         source_model_bytes: Some(4_900_000_000),
         source_model_sha256: None,
@@ -728,7 +703,6 @@ fn remote_package_v2_runtime_slice_accepts_inventory_availability() {
             layer_end: 36,
         }],
         missing_ranges: Vec::new(),
-        preparing_ranges: Vec::new(),
         source_model_path: Some("/cache/package-v2/model-metadata.gguf".to_string()),
         source_model_bytes: Some(4_900_000_000),
         source_model_sha256: None,
@@ -754,7 +728,6 @@ fn split_inventory_package_signal_treats_unknown_inventory_as_missing_package() 
         ready_ranges: Vec::new(),
         available_ranges: Vec::new(),
         missing_ranges: Vec::new(),
-        preparing_ranges: Vec::new(),
         source_model_path: None,
         source_model_bytes: None,
         source_model_sha256: None,
@@ -789,7 +762,6 @@ fn split_inventory_package_signal_result_classifies_empty_inventory() {
         ready_ranges: Vec::new(),
         available_ranges: Vec::new(),
         missing_ranges: Vec::new(),
-        preparing_ranges: Vec::new(),
         source_model_path: None,
         source_model_bytes: None,
         source_model_sha256: None,
@@ -821,7 +793,6 @@ fn split_inventory_package_signal_result_classifies_manifest_mismatch() {
             layer_end: 10,
         }],
         missing_ranges: Vec::new(),
-        preparing_ranges: Vec::new(),
         source_model_path: Some("/cache/layer-package".to_string()),
         source_model_bytes: Some(1_000),
         source_model_sha256: None,
@@ -864,7 +835,6 @@ fn split_inventory_package_signal_result_requires_transfer_for_partial_package()
             layer_start: 4,
             layer_end: 10,
         }],
-        preparing_ranges: Vec::new(),
         source_model_path: Some("/cache/layer-package".to_string()),
         source_model_bytes: Some(1_000),
         source_model_sha256: None,
@@ -884,19 +854,12 @@ fn split_inventory_package_signal_result_requires_transfer_for_partial_package()
 #[test]
 fn split_startup_error_messages_include_specific_blocker_tokens() {
     let control = stage_control_unreachable_message("stage-1", make_id(2));
-    let failed = stage_source_prepare_failed_message("stage-1", "package missing");
-    let timeout = stage_source_prepare_timeout_message("stage-1", Duration::from_secs(30));
-
     assert!(control.contains("stage_control_unreachable"));
     assert!(control.contains(&make_id(2).fmt_short().to_string()));
-    assert!(failed.contains("stage_source_prepare_failed"));
-    assert!(failed.contains("package missing"));
-    assert!(timeout.contains("stage_source_prepare_timeout"));
-    assert!(timeout.contains("30s"));
 }
 
 #[test]
-fn stage_source_prepare_timeout_scales_with_assigned_package_bytes() {
+fn stage_source_load_timeout_scales_with_assigned_package_bytes() {
     let package = skippy::SkippyPackageIdentity {
         source_model_bytes: 975_000_000_000,
         layer_count: 66,
@@ -928,10 +891,10 @@ fn stage_source_prepare_timeout_scales_with_assigned_package_bytes() {
         parameter_bytes: 0,
     };
 
-    let small_timeout = stage_source_prepare_timeout(&package, &small_stage);
-    let large_timeout = stage_source_prepare_timeout(&package, &large_stage);
+    let small_timeout = stage_source_load_timeout(&package, &small_stage);
+    let large_timeout = stage_source_load_timeout(&package, &large_stage);
 
-    assert!(small_timeout > MIN_STAGE_SOURCE_PREPARE_TIMEOUT);
+    assert!(small_timeout > MIN_STAGE_SOURCE_LOAD_TIMEOUT);
     assert!(large_timeout > small_timeout);
     assert!(large_timeout > Duration::from_secs(6 * 60 * 60));
 }
@@ -1020,7 +983,7 @@ fn runtime_model_planning_bytes_rejects_legacy_layer_package() {
 }
 
 #[tokio::test]
-async fn generation8_split_accepts_direct_gguf_without_package_v2() {
+async fn generation9_split_accepts_direct_gguf_without_package_v2() {
     let root = tempfile::tempdir().unwrap();
     let gguf = root.path().join("model.gguf");
     write_fake_gguf_model(&gguf);
@@ -1036,7 +999,7 @@ async fn generation8_split_accepts_direct_gguf_without_package_v2() {
 }
 
 #[tokio::test]
-async fn generation8_local_direct_gguf_identity_ignores_worker_path() {
+async fn generation9_local_direct_gguf_identity_ignores_worker_path() {
     let first_root = tempfile::tempdir().unwrap();
     let second_root = tempfile::tempdir().unwrap();
     let first = first_root.path().join("first.gguf");
@@ -1445,42 +1408,21 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
     node.set_stage_control_sender(control_tx).await;
 
     let requests = Arc::new(StdMutex::new(Vec::new()));
-    let preparations = Arc::new(StdMutex::new(Vec::<skippy::StagePreparationStatus>::new()));
     let captured_requests = Arc::clone(&requests);
-    let captured_preparations = Arc::clone(&preparations);
     tokio::spawn(async move {
         while let Some(command) = control_rx.recv().await {
-            captured_requests
-                .lock()
-                .unwrap()
-                .push(command.request.clone());
-            let response = match &command.request {
-                skippy::StageControlRequest::Prepare(prepare) => {
-                    let status = test_preparation_status_from_load(&prepare.load);
-                    captured_preparations.lock().unwrap().push(status.clone());
-                    Ok(skippy::StageControlResponse::PrepareAccepted(
-                        skippy::StagePrepareAcceptedResponse {
-                            accepted: true,
-                            status,
-                            error: None,
-                        },
-                    ))
+            let (request, resp) = match command {
+                skippy::StageControlCommand::Execute { request, resp } => (request, resp),
+                skippy::StageControlCommand::ValidateLoad { resp, .. } => {
+                    let _ = resp.send(None);
+                    continue;
                 }
-                skippy::StageControlRequest::Inventory(inventory) => {
-                    let mut response = test_inventory_from_request(inventory);
-                    response.preparing_ranges = captured_preparations
-                        .lock()
-                        .unwrap()
-                        .iter()
-                        .filter(|status| {
-                            status.model_id == inventory.model_id
-                                && status.package_ref == inventory.package_ref
-                                && status.manifest_sha256 == inventory.manifest_sha256
-                        })
-                        .cloned()
-                        .collect();
-                    Ok(skippy::StageControlResponse::Inventory(response))
-                }
+            };
+            captured_requests.lock().unwrap().push(request.clone());
+            let response = match &request {
+                skippy::StageControlRequest::Inventory(inventory) => Ok(
+                    skippy::StageControlResponse::Inventory(test_inventory_from_request(inventory)),
+                ),
                 skippy::StageControlRequest::Claim(claim) => Ok(
                     skippy::StageControlResponse::ClaimAccepted(skippy::StageCoordinatorClaimAck {
                         accepted: true,
@@ -1507,7 +1449,7 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
                 )),
                 other => panic!("unexpected stage control request: {other:?}"),
             };
-            let _ = command.resp.send(response);
+            let _ = resp.send(response);
         }
     });
 

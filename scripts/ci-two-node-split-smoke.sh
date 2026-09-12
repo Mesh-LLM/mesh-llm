@@ -230,7 +230,7 @@ prepare_split_package() {
         return 0
     fi
     [[ -f "$source" ]] || {
-        echo "Generation-8 split smoke input must be a package-v2 directory or local GGUF: $source" >&2
+        echo "Generation-9 split smoke input must be a package-v2 directory or local GGUF: $source" >&2
         return 1
     }
 
