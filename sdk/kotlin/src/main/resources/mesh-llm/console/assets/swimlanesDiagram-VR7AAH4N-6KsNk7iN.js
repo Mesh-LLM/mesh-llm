@@ -1,0 +1,8 @@
+import{n as e}from"./chunk-Y2CYZVJY-DsF7k-Jl.js";import"./src-DxOwobQW.js";import"./chunk-DU6HZSFF-J5XHr97T.js";import"./chunk-75Z2AOVW-K2gB-CTp.js";import"./chunk-PWAF6VOD-C5m3LBrD.js";import"./chunk-GMAD6QVW-BE5-JV1i.js";import"./chunk-P2QGCYS3-D2-UhmaH.js";import"./chunk-4HAMMTFA-CXUf2naB.js";import"./chunk-GVQU2GXP-D9j0zbf-.js";import"./chunk-OSK3NFVY-BZfhQycL.js";import"./chunk-F27PBJKO-ByuqPVie.js";import"./chunk-XXDRQBXY-reuJc-iO.js";import"./chunk-POPQ4Y6H-Cr4_Ub3Z.js";import"./chunk-L3NEJ4N5-0KzTWrbD.js";import{r as t,t as n}from"./chunk-SHT3W25Y-B11Qxb8L.js";import"./mermaid.core-CZQ9fV-y.js";var r=n({defaultLayout:`swimlane`,styles:e(e=>`${t(e)}
+  .swimlane.cluster rect {
+    stroke: ${e.clusterBorder} !important;
+  }
+  [data-look="neo"].cluster rect {
+    filter: none;
+  }
+`,`getStyles`)});export{r as diagram};
