@@ -62,6 +62,29 @@ class PublishCratesScriptTests(unittest.TestCase):
             link_modes = fixture.read_log("cargo-link-mode.log").splitlines()
             self.assertTrue(link_modes)
             self.assertEqual(set(link_modes), {"dynamic"})
+            build_dirs = fixture.read_log("cargo-build-dir.log").splitlines()
+            self.assertTrue(build_dirs)
+            self.assertEqual(len(set(build_dirs)), 1)
+            self.assertTrue(Path(build_dirs[0]).is_dir())
+
+    def test_publish_verification_honors_explicit_llama_build_dir(self) -> None:
+        with PublishCratesFixture() as fixture:
+            fixture.write_curl_statuses({})
+            fixture.write_fake_cargo()
+            fixture.write_fake_sleep()
+            fixture.write_fake_date()
+            explicit_build_dir = fixture.tmp_path / "prepared-native"
+
+            result = fixture.run(
+                ["--dry-run", "--allow-dirty"],
+                env={"LLAMA_STAGE_BUILD_DIR": str(explicit_build_dir)},
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            build_dirs = fixture.read_log("cargo-build-dir.log").splitlines()
+            self.assertTrue(build_dirs)
+            self.assertEqual(set(build_dirs), {str(explicit_build_dir)})
+            self.assertTrue(explicit_build_dir.is_dir())
 
     def test_retries_cargo_publish_429_then_continues_chain(self) -> None:
         with PublishCratesFixture() as fixture:
@@ -313,6 +336,7 @@ for arg in "$@"; do
 done
 echo "$*" >> "{self.tmp_path}/cargo.log"
 echo "${{LLAMA_STAGE_LINK_MODE:-}}" >> "{self.tmp_path}/cargo-link-mode.log"
+echo "${{LLAMA_STAGE_BUILD_DIR:-}}" >> "{self.tmp_path}/cargo-build-dir.log"
 case "$crate" in
 {self._cargo_case_arms(fail_cases, failure_path)}
 esac

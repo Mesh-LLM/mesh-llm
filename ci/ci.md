@@ -129,6 +129,15 @@ main.
 
 ### Release source and version ownership
 
+If crates.io accepts only a prefix of the stable package chain,
+`resume-crates-release.yml` resumes publication from the existing immutable
+release tag. The operator supplies both the stable tag and its exact peeled
+commit SHA. The workflow runs only from the default branch, verifies those two
+identities against the remote tag and checkout, and uses the trusted
+default-branch `publish-crates.sh` controller against the tagged source. Cargo
+continues past immutable versions that are already uploaded; the workflow does
+not move or recreate the release tag.
+
 Release efficiency TODOs:
 
 - [x] Link the CUDA package tool with the selected build-time driver library.

@@ -22,6 +22,7 @@ Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 | `ci.yml` | `workflow_call` only | Temporary inert shim for the former main ingress filename; pending protected-main runner-contract update; no push trigger or dispatch |
 | `ci-control.yml` (`CI · Manual Full`) | dispatch on default branch | Explicit operator-only full plan, bounded lane dispatch and correlated diagnostic checks |
 | `release.yml` | dispatch on the default branch | Canonical version synchronization, release-only signing, assets, publication, post-publish release-notes regrouping, and a preflighted downstream `mesh-packaging` dispatch |
+| `resume-crates-release.yml` (`Release · Resume crates.io`) | dispatch on the default branch | Exact-tag, exact-SHA recovery for a partially published stable crates.io chain; uses the immutable release source and the trusted default-branch publisher script |
 | `website-pages.yml` | main website paths, dispatch | Public website deployment |
 | `pr_cleanup.yml` | PR close, dispatch | Positively matched cleanup only |
 | `pr_auto_assign.yml` | PR lifecycle | Metadata only |
