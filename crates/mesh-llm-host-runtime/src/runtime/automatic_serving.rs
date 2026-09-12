@@ -212,6 +212,8 @@ async fn contribute(
         let request = node.request_automatic_model(key.clone());
         node.regossip().await;
         if !settle_contribution(node, !options.join.is_empty(), &key).await {
+            drop(request);
+            node.regossip().await;
             return Ok(());
         }
         let result = submit_load(node, candidate).await;

@@ -56,10 +56,7 @@ pub(crate) use load::{
     run_auto_load_runtime_model, supervised_discard_runtime_model, supervised_launch_runtime_model,
     supervised_register_runtime_model, supervised_resolve_runtime_model,
 };
-pub(crate) use unload::{
-    run_auto_handle_runtime_exit, run_auto_unload_runtime_model,
-    unregister_local_source_policy_if_unused,
-};
+pub(crate) use unload::{run_auto_handle_runtime_exit, run_auto_unload_runtime_model};
 
 // Re-export reconciliation module's public API for callers in parent scope
 pub(crate) use reconciliation::{

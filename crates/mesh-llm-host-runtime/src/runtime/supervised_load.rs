@@ -268,11 +268,6 @@ pub(super) async fn run_auto_handle_supervised_load_resolved(
     ) {
         Ok(reservation) => reservation,
         Err(error) => {
-            crate::runtime::model_lifecycle::unregister_local_source_policy_if_unused(
-                ctx,
-                &resolution.runtime_model_name,
-                &resolution.profile,
-            );
             finish_supervised_load_failure(ctx, &request, format!("{error:#}"));
             return;
         }
