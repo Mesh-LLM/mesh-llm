@@ -110,7 +110,7 @@ mod tests {
         let mode = EmbeddedMeshNodeMode::SharedEndpoint {
             address: "http://localhost:11434".to_string(),
         };
-        prepare_embedded_native_runtime(&mode).unwrap();
+        prepare_embedded_native_runtime(&mode, None).unwrap();
         ensure_embedded_native_runtime_ready(&mode, false, requirement()).unwrap();
     }
 

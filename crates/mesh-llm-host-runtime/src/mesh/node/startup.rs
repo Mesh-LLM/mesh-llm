@@ -306,7 +306,7 @@ mod zero_capacity_tests {
             ..crate::plugin::MeshConfig::default()
         };
 
-        let snapshot = advertised_hardware_for_start(&config, &NodeRole::Worker, Some(0.0), false);
+        let snapshot = advertised_hardware_for_start(&config, &NodeRole::Worker, Some(0.0), true);
 
         assert_eq!(snapshot.vram_bytes, 0);
         assert_eq!(snapshot.local_runtime_capacity_bytes, 0);

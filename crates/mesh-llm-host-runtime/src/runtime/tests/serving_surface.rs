@@ -163,6 +163,7 @@ async fn build_run_auto_console_state(
     let resolved_plugins = plugin::ResolvedPlugins {
         externals: vec![],
         inactive: vec![],
+        shared_endpoint: None,
     };
     let (mesh_tx, _mesh_rx) = tokio::sync::mpsc::channel(1);
     let plugin_manager = plugin::PluginManager::start(
