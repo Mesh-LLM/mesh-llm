@@ -106,21 +106,44 @@ pub(super) struct RuntimeResourcePlan {
     pub(super) breakdown: Option<RuntimeResourcePlanBreakdown>,
 }
 
-/// The measured-vs-charged picture at plan time. All byte fields are the
-/// planner's *charges* (estimates), not runtime measurements — the point of
-/// carrying them is to compare against the measured KV/compute buffer sizes
-/// llama.cpp reports at context init (forwarded as structured
-/// `buffer_mib`/`backend_device` native log events by `skippy-runtime`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RuntimeResourcePlanSource {
+    ExplicitOverride,
+    StaticEstimate,
+    MeasuredFootprint,
+}
+
+impl RuntimeResourcePlanSource {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::ExplicitOverride => "explicit_override",
+            Self::StaticEstimate => "static_estimate",
+            Self::MeasuredFootprint => "measured_footprint",
+        }
+    }
+}
+
+/// The accounting selected at plan time. Static plans carry metadata-derived
+/// estimates; measured plans carry the prior compatible load's native KV rate
+/// and lane-scaled compute charge.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct RuntimeResourcePlanBreakdown {
     pub(super) vram_bytes: u64,
     pub(super) model_bytes: u64,
-    /// KV budget after the 85% utilization tax (`usable_kv_cache_budget`).
+    /// KV budget selected by the active planner. Static planning applies the
+    /// 85% utilization tax; measured planning applies its utilization target
+    /// and then subtracts the lane-scaled measured compute charge.
     pub(super) kv_budget_bytes: u64,
     /// Planned KV allocation: context_length x kv_bytes_per_token.
     pub(super) planned_kv_bytes: u64,
     /// Per-token KV cost used by the plan (layer-fraction scaled).
     pub(super) kv_bytes_per_token: u64,
+    /// Compute charge held outside `kv_budget_bytes` by the selected planner.
+    pub(super) compute_charge_bytes: u64,
+    pub(super) planning_source: RuntimeResourcePlanSource,
+    /// `Some(false)` means a valid measured footprint proved that even the
+    /// minimum context cannot fit. Static and explicit plans use `None`.
+    pub(super) measured_fit: Option<bool>,
     pub(super) slots: usize,
     pub(super) context_length: u32,
     /// True when slots came from the flat auto default rather than an
@@ -183,14 +206,10 @@ pub(super) struct MeasuredBufferFootprint {
 pub(super) fn plan_runtime_resources(input: RuntimeResourcePlanInput<'_>) -> RuntimeResourcePlan {
     let context_auto = input.ctx_size_override.is_none();
     let slots_auto = input.parallel_override.is_none();
-    let context_length = input
-        .ctx_size_override
-        .unwrap_or_else(|| planned_context_length(&input));
     let slots = input
         .parallel_override
         .unwrap_or_else(planned_parallel_slots);
-
-    let kv_bytes_per_token = input
+    let estimated_kv_bytes_per_token = input
         .metadata
         .and_then(|metadata| {
             input
@@ -199,7 +218,47 @@ pub(super) fn plan_runtime_resources(input: RuntimeResourcePlanInput<'_>) -> Run
                 .map(|bytes| scale_by_layer_fraction(bytes, &input))
         })
         .unwrap_or(0);
-    let kv_budget_bytes = usable_kv_cache_budget(input.vram_bytes, input.model_bytes);
+    let estimated_kv_budget = usable_kv_cache_budget(input.vram_bytes, input.model_bytes);
+    let estimated_compute_charge = input
+        .vram_bytes
+        .saturating_sub(input.model_bytes)
+        .saturating_sub(estimated_kv_budget);
+
+    let (
+        context_length,
+        kv_budget_bytes,
+        kv_bytes_per_token,
+        compute_charge_bytes,
+        planning_source,
+        measured_fit,
+    ) = if let Some(context_length) = input.ctx_size_override {
+        (
+            context_length,
+            estimated_kv_budget,
+            estimated_kv_bytes_per_token,
+            estimated_compute_charge,
+            RuntimeResourcePlanSource::ExplicitOverride,
+            None,
+        )
+    } else if let Some(measured) = measured_context_plan(&input, slots) {
+        (
+            measured.context_length,
+            measured.kv_budget_bytes,
+            measured.kv_bytes_per_token,
+            measured.compute_charge_bytes,
+            RuntimeResourcePlanSource::MeasuredFootprint,
+            Some(measured.fits),
+        )
+    } else {
+        (
+            planned_context_length(&input),
+            estimated_kv_budget,
+            estimated_kv_bytes_per_token,
+            estimated_compute_charge,
+            RuntimeResourcePlanSource::StaticEstimate,
+            None,
+        )
+    };
     let planned_kv_bytes = kv_bytes_per_token.saturating_mul(u64::from(context_length));
 
     RuntimeResourcePlan {
@@ -211,6 +270,9 @@ pub(super) fn plan_runtime_resources(input: RuntimeResourcePlanInput<'_>) -> Run
             kv_budget_bytes,
             planned_kv_bytes,
             kv_bytes_per_token,
+            compute_charge_bytes,
+            planning_source,
+            measured_fit,
             slots,
             context_length,
             slots_auto,
@@ -220,9 +282,6 @@ pub(super) fn plan_runtime_resources(input: RuntimeResourcePlanInput<'_>) -> Run
 }
 
 fn planned_context_length(input: &RuntimeResourcePlanInput<'_>) -> u32 {
-    if let Some(planned) = planned_context_length_budget_driven(input) {
-        return planned;
-    }
     let fallback_context = fallback_context_length(input);
     let Some(metadata) = input.metadata else {
         return fallback_context;
@@ -333,15 +392,13 @@ fn usable_kv_cache_budget(vram_bytes: u64, model_bytes: u64) -> u64 {
 /// exists (after model open) and the `sched_reserve` buffer lines have been
 /// parsed.
 ///
-/// `charged_compute_reserve_bytes` is the compute-buffer proxy the planner
-/// actually held back: the 15% slice of post-weight space implied by
-/// [`usable_kv_cache_budget`]'s 85% numerator. `measured_*` are what
-/// llama.cpp allocated. The gap between the charged proxy and the measured
-/// sizes is the memory Step-2's budget-driven planner can spend, and the
-/// residual is what a re-plan with actual free memory would see.
+/// `charged_compute_reserve_bytes` is the compute charge the selected planner
+/// actually held outside its KV budget. `measured_*` are what llama.cpp
+/// allocated, and the residual is what a re-plan with actual free memory would
+/// see.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct MemoryPlanReconciliation {
-    /// Post-weight space the 85% KV tax held back as a compute-buffer proxy.
+    /// Compute charge held outside the KV budget by the selected planner.
     pub(super) charged_compute_reserve_bytes: u64,
     /// Measured compute buffer(s) at context init, if any were observed.
     pub(super) measured_compute_bytes: Option<u64>,
@@ -356,15 +413,17 @@ pub(super) fn reconcile_memory_plan_with_measurements(
     breakdown: &RuntimeResourcePlanBreakdown,
     measured: Option<skippy_runtime::MeasuredNativeBuffers>,
 ) -> MemoryPlanReconciliation {
-    let charged_compute_reserve_bytes = breakdown
-        .vram_bytes
-        .saturating_sub(breakdown.model_bytes)
-        .saturating_sub(breakdown.kv_budget_bytes);
+    let charged_compute_reserve_bytes = breakdown.compute_charge_bytes;
+    let host_memory_observed = measured.is_some_and(|measurement| measurement.host_memory_observed);
     let mib_to_bytes = |mib: Option<f64>| mib.map(|mib| (mib * 1024.0 * 1024.0).round() as u64);
     let measured_compute_bytes = mib_to_bytes(measured.and_then(|m| m.compute_mib));
     let measured_kv_bytes = mib_to_bytes(measured.and_then(|m| m.kv_mib));
-    let residual_free_bytes = match (measured_compute_bytes, measured_kv_bytes) {
-        (Some(compute), Some(kv)) => Some(
+    let residual_free_bytes = match (
+        host_memory_observed,
+        measured_compute_bytes,
+        measured_kv_bytes,
+    ) {
+        (false, Some(compute), Some(kv)) => Some(
             breakdown
                 .vram_bytes
                 .saturating_sub(breakdown.model_bytes)
@@ -426,12 +485,25 @@ const DEFAULT_UTILIZATION_TARGET_DENOMINATOR: u64 = 100;
 /// kv_bytes / measured_ctx`, and the deepest affordable context is
 /// `budget / kv_bytes_per_token_measured`.
 ///
-/// Returns `None` when the measurement cannot support the model (zero
-/// context, or a KV per-token cost of zero), letting the static tax ladder
-/// answer instead. Compute buffers do not scale linearly with context
-/// (ubatch/graph shape dominates), so the measured value is charged as-is,
-/// unchanged from the probe context.
-fn planned_context_length_budget_driven(input: &RuntimeResourcePlanInput<'_>) -> Option<u32> {
+/// Returns `None` only when the measurement is structurally unusable (zero
+/// context, KV, or lanes), letting the static tax ladder answer instead. A
+/// valid measurement that cannot fit the minimum context returns an explicit
+/// `fits = false` plan so the caller fails closed. Compute buffers do not scale
+/// linearly with context (ubatch/graph shape dominates), so the measured value
+/// is charged as-is apart from the measured-to-requested lane ratio.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MeasuredContextPlan {
+    context_length: u32,
+    kv_budget_bytes: u64,
+    kv_bytes_per_token: u64,
+    compute_charge_bytes: u64,
+    fits: bool,
+}
+
+fn measured_context_plan(
+    input: &RuntimeResourcePlanInput<'_>,
+    resolved_lanes: usize,
+) -> Option<MeasuredContextPlan> {
     let measured = input.measured_buffers?;
     if measured.context_length == 0 || measured.kv_bytes == 0 || measured.lane_count == 0 {
         return None;
@@ -452,28 +524,29 @@ fn planned_context_length_budget_driven(input: &RuntimeResourcePlanInput<'_>) ->
     // while the unified KV pool is lane-invariant. Linear-through-origin
     // slightly overestimates when scaling up (~2-3% at 4→8 on measured data),
     // which is the conservative direction; scaling down is symmetric.
-    let resolved_lanes = input
-        .parallel_override
-        .map(|slots| slots.max(1) as u64)
-        .unwrap_or_else(|| planned_parallel_slots() as u64);
-    let lane_ratio_num = u128::from(resolved_lanes);
+    let lane_ratio_num = u128::from(resolved_lanes.max(1) as u64);
     let lane_ratio_den = u128::from(measured.lane_count);
     let compute_charge = u128::from(measured.compute_bytes) * lane_ratio_num / lane_ratio_den;
     let budget = utilised.saturating_sub(compute_charge);
-    let kv_per_token = u128::from(measured.kv_bytes) / u128::from(measured.context_length);
+    let measured_context = u128::from(measured.context_length);
+    let kv_per_token = u128::from(measured.kv_bytes).div_ceil(measured_context);
     if kv_per_token == 0 {
         return None;
     }
     let max_affordable = (budget / kv_per_token).min(u128::from(u32::MAX)) as u32;
-    if max_affordable == 0 {
-        return None;
-    }
-    let planned = max_affordable.min(native_context);
     let minimum = MIN_AUTO_CONTEXT_LENGTH.min(native_context);
-    Some(if planned < minimum {
-        minimum
+    let fits = max_affordable >= minimum;
+    let context_length = if fits {
+        snap_context_length_down(max_affordable.min(native_context)).max(minimum)
     } else {
-        snap_context_length_down(planned).max(minimum)
+        minimum
+    };
+    Some(MeasuredContextPlan {
+        context_length,
+        kv_budget_bytes: budget.min(u128::from(u64::MAX)) as u64,
+        kv_bytes_per_token: kv_per_token.min(u128::from(u64::MAX)) as u64,
+        compute_charge_bytes: compute_charge.min(u128::from(u64::MAX)) as u64,
+        fits,
     })
 }
 
@@ -876,6 +949,15 @@ mod tests {
             }),
         });
         assert_eq!(plan.context_length, 65_536);
+        let measured_breakdown = plan.breakdown.expect("measured planner breakdown");
+        assert_eq!(
+            measured_breakdown.planning_source,
+            RuntimeResourcePlanSource::MeasuredFootprint
+        );
+        assert_eq!(measured_breakdown.kv_bytes_per_token, 131_072);
+        assert_eq!(measured_breakdown.compute_charge_bytes, 512 * 1024 * 1024);
+        assert_eq!(measured_breakdown.measured_fit, Some(true));
+        assert_eq!(measured_breakdown.planned_kv_bytes, 65_536 * 131_072);
 
         // Tight node where the ladder's estimate binds: 5 GiB free, the q8
         // estimate (65,536 B/tok for these dims) caps the ladder at 65_536,
@@ -951,15 +1033,6 @@ mod tests {
                 context_length: 16_384,
                 lane_count: 0,
             },
-            // Compute larger than the whole utilized budget saturates the
-            // budget to zero; the ladder answers rather than planning an
-            // empty context.
-            MeasuredBufferFootprint {
-                compute_bytes: u64::MAX,
-                kv_bytes: 2 * 1024 * 1024 * 1024,
-                context_length: 16_384,
-                lane_count: 4,
-            },
         ] {
             let degraded = plan_runtime_resources(RuntimeResourcePlanInput {
                 measured_buffers: Some(unusable),
@@ -967,6 +1040,35 @@ mod tests {
             });
             assert_eq!(degraded.context_length, ladder);
         }
+    }
+
+    #[test]
+    fn budget_driven_context_reports_exhausted_measurement_without_fallback() {
+        let metadata = gqa_metadata(131_072);
+        let plan = plan_runtime_resources(RuntimeResourcePlanInput {
+            ctx_size_override: None,
+            parallel_override: None,
+            model_bytes: 5 * 1024 * 1024 * 1024,
+            vram_bytes: 6 * 1024 * 1024 * 1024,
+            metadata: Some(&metadata),
+            kv_cache_quant: GgufKvCacheQuant::Q8_0,
+            local_layer_fraction: None,
+            planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
+            measured_buffers: Some(MeasuredBufferFootprint {
+                compute_bytes: 1024 * 1024 * 1024,
+                kv_bytes: 2 * 1024 * 1024 * 1024,
+                context_length: 16_384,
+                lane_count: 4,
+            }),
+        });
+        let breakdown = plan.breakdown.expect("planner breakdown");
+        assert_eq!(
+            breakdown.planning_source,
+            RuntimeResourcePlanSource::MeasuredFootprint
+        );
+        assert_eq!(breakdown.measured_fit, Some(false));
+        assert_eq!(plan.context_length, MIN_AUTO_CONTEXT_LENGTH);
+        assert!(breakdown.planned_kv_bytes > breakdown.kv_budget_bytes);
     }
 
     #[test]
@@ -1018,6 +1120,9 @@ mod tests {
             kv_budget_bytes: (13 * 1024 * 1024 * 1024) * 85 / 100,
             planned_kv_bytes: 2 * 1024 * 1024 * 1024,
             kv_bytes_per_token: 131_072,
+            compute_charge_bytes: (13 * 1024 * 1024 * 1024) - (13 * 1024 * 1024 * 1024) * 85 / 100,
+            planning_source: RuntimeResourcePlanSource::StaticEstimate,
+            measured_fit: None,
             slots: 4,
             context_length: 16_384,
             slots_auto: true,
@@ -1044,6 +1149,7 @@ mod tests {
         let measured = skippy_runtime::MeasuredNativeBuffers {
             compute_mib: Some(512.0),
             kv_mib: Some(2048.0),
+            host_memory_observed: false,
         };
         let reconciled = reconcile_memory_plan_with_measurements(&breakdown, Some(measured));
         assert_eq!(reconciled.measured_compute_bytes, Some(512 * 1024 * 1024));
@@ -1056,5 +1162,14 @@ mod tests {
             reconciled.charged_compute_reserve_bytes,
             unmeasured.charged_compute_reserve_bytes
         );
+
+        let host_offloaded = reconcile_memory_plan_with_measurements(
+            &breakdown,
+            Some(skippy_runtime::MeasuredNativeBuffers {
+                host_memory_observed: true,
+                ..measured
+            }),
+        );
+        assert_eq!(host_offloaded.residual_free_bytes, None);
     }
 }

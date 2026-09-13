@@ -15,34 +15,54 @@ pub(super) enum MemoryPlanStartPath {
 /// that produced them. The model key, context length, and lane count are
 /// written together after model open so later planning cannot combine state
 /// from two different starts.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct MemoryPlanMeasurementKey(String);
+
+impl MemoryPlanMeasurementKey {
+    pub(super) fn new(value: String) -> Self {
+        Self(value)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct MeasuredPlanSnapshot {
-    model_bytes: u64,
-    context_length: u32,
-    lane_count: u32,
+    key: MemoryPlanMeasurementKey,
+    footprint: MeasuredBufferFootprint,
 }
 
 static MEASURED_PLAN_SNAPSHOT: Mutex<Option<MeasuredPlanSnapshot>> = Mutex::new(None);
 
-/// Return native buffer measurements only when they belong to this model.
-pub(super) fn measured_buffers_footprint(model_bytes: u64) -> Option<MeasuredBufferFootprint> {
-    let measured = skippy_runtime::measured_native_buffers()?;
-    let snapshot = (*MEASURED_PLAN_SNAPSHOT.lock().ok()?)?;
-    if snapshot.model_bytes != model_bytes || snapshot.context_length == 0 {
+fn completed_measurement_snapshot(
+    key: &MemoryPlanMeasurementKey,
+    breakdown: &RuntimeResourcePlanBreakdown,
+    measured: Option<skippy_runtime::MeasuredNativeBuffers>,
+) -> Option<MeasuredPlanSnapshot> {
+    let measured = measured?;
+    if measured.host_memory_observed {
         return None;
     }
-    let compute_bytes = measured.compute_mib.map(mib_to_bytes)?;
-    let kv_bytes = measured.kv_mib.map(mib_to_bytes)?;
-    Some(MeasuredBufferFootprint {
-        compute_bytes,
-        kv_bytes,
-        context_length: snapshot.context_length,
-        lane_count: snapshot.lane_count,
+    let mib_to_bytes = |mib: f64| (mib * 1024.0 * 1024.0).round() as u64;
+    Some(MeasuredPlanSnapshot {
+        key: key.clone(),
+        footprint: MeasuredBufferFootprint {
+            compute_bytes: mib_to_bytes(measured.compute_mib?),
+            kv_bytes: mib_to_bytes(measured.kv_mib?),
+            context_length: breakdown.context_length,
+            lane_count: breakdown.slots as u32,
+        },
     })
 }
 
-fn mib_to_bytes(mib: f64) -> u64 {
-    (mib * 1024.0 * 1024.0).round() as u64
+/// Return a completed native buffer measurement only when its model identity,
+/// capacity pool, and allocation-affecting configuration all match.
+pub(super) fn measured_buffers_footprint(
+    key: &MemoryPlanMeasurementKey,
+) -> Option<MeasuredBufferFootprint> {
+    let snapshot = MEASURED_PLAN_SNAPSHOT.lock().ok()?.clone()?;
+    if snapshot.key != *key || snapshot.footprint.context_length == 0 {
+        return None;
+    }
+    Some(snapshot.footprint)
 }
 
 /// Emit the structured plan-time estimate while preserving the package-v2
@@ -68,6 +88,10 @@ pub(super) fn emit_memory_plan_resolved(
                 memory_plan.kv_budget_bytes = breakdown.kv_budget_bytes,
                 memory_plan.planned_kv_bytes = breakdown.planned_kv_bytes,
                 memory_plan.kv_bytes_per_token = breakdown.kv_bytes_per_token,
+                memory_plan.compute_charge_bytes = breakdown.compute_charge_bytes,
+                memory_plan.planning_source = breakdown.planning_source.as_str(),
+                memory_plan.measured_fit = breakdown.measured_fit.unwrap_or(true),
+                memory_plan.measured_fit_available = breakdown.measured_fit.is_some(),
                 memory_plan.context_length = breakdown.context_length,
                 memory_plan.slots = breakdown.slots,
                 memory_plan.slots_source = slots_source,
@@ -88,24 +112,26 @@ fn plan_value_source(automatic: bool) -> &'static str {
 }
 
 /// Reconcile a resolved plan against the native buffers captured during open.
-pub(super) fn emit_measured_memory_reconciliation(model_name: &str, plan: &RuntimeResourcePlan) {
+pub(super) fn emit_measured_memory_reconciliation(
+    model_name: &str,
+    measurement_key: &MemoryPlanMeasurementKey,
+    plan: &RuntimeResourcePlan,
+) {
     let Some(breakdown) = plan.breakdown.as_ref() else {
         return;
     };
     let measured = skippy_runtime::measured_native_buffers();
     let reconciliation = reconcile_memory_plan_with_measurements(breakdown, measured);
-    if (reconciliation.measured_compute_bytes.is_some()
-        || reconciliation.measured_kv_bytes.is_some())
-        && let Ok(mut snapshot) = MEASURED_PLAN_SNAPSHOT.lock()
-    {
-        *snapshot = Some(MeasuredPlanSnapshot {
-            model_bytes: breakdown.model_bytes,
-            context_length: breakdown.context_length,
-            lane_count: breakdown.slots as u32,
-        });
+    if let Ok(mut snapshot) = MEASURED_PLAN_SNAPSHOT.lock() {
+        *snapshot = completed_measurement_snapshot(measurement_key, breakdown, measured);
     }
     let memory_plan_measured =
         measured.is_some_and(|m| m.compute_mib.is_some() || m.kv_mib.is_some());
+    let measurement_reusable = measured.is_some_and(|measurement| {
+        !measurement.host_memory_observed
+            && measurement.compute_mib.is_some()
+            && measurement.kv_mib.is_some()
+    });
     tracing::info!(
         model = model_name,
         memory_plan.measured_available = memory_plan_measured,
@@ -114,51 +140,120 @@ pub(super) fn emit_measured_memory_reconciliation(model_name: &str, plan: &Runti
         memory_plan.measured_kv_bytes = reconciliation.measured_kv_bytes.unwrap_or(0),
         memory_plan.residual_free_bytes = reconciliation.residual_free_bytes.unwrap_or(0),
         memory_plan.measured_residual_available = reconciliation.residual_free_bytes.is_some(),
+        memory_plan.measurement_reusable = measurement_reusable,
         "memory plan reconciled with measured native buffers"
     );
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{MEASURED_PLAN_SNAPSHOT, MeasuredPlanSnapshot, measured_buffers_footprint};
+    use super::{
+        MEASURED_PLAN_SNAPSHOT, MeasuredPlanSnapshot, MemoryPlanMeasurementKey,
+        completed_measurement_snapshot, measured_buffers_footprint,
+    };
+    use crate::runtime::context_planning::{
+        MeasuredBufferFootprint, RuntimeResourcePlanBreakdown, RuntimeResourcePlanSource,
+    };
 
     #[test]
     fn measured_footprint_reads_one_coherent_plan_snapshot() {
         let mut snapshot = MEASURED_PLAN_SNAPSHOT.lock().unwrap();
         *snapshot = None;
         drop(snapshot);
-        assert!(measured_buffers_footprint(1000).is_none());
+        let first_key = MemoryPlanMeasurementKey::new("first".to_string());
+        let second_key = MemoryPlanMeasurementKey::new("second".to_string());
+        assert!(measured_buffers_footprint(&first_key).is_none());
 
         snapshot = MEASURED_PLAN_SNAPSHOT.lock().unwrap();
         *snapshot = Some(MeasuredPlanSnapshot {
-            model_bytes: 2000,
-            context_length: 32768,
-            lane_count: 4,
+            key: second_key,
+            footprint: MeasuredBufferFootprint {
+                compute_bytes: 10,
+                kv_bytes: 20,
+                context_length: 32768,
+                lane_count: 4,
+            },
         });
         drop(snapshot);
-        assert!(measured_buffers_footprint(1000).is_none());
+        assert!(measured_buffers_footprint(&first_key).is_none());
 
         snapshot = MEASURED_PLAN_SNAPSHOT.lock().unwrap();
         *snapshot = Some(MeasuredPlanSnapshot {
-            model_bytes: 1000,
-            context_length: 8192,
-            lane_count: 2,
+            key: first_key.clone(),
+            footprint: MeasuredBufferFootprint {
+                compute_bytes: 30,
+                kv_bytes: 40,
+                context_length: 8192,
+                lane_count: 2,
+            },
         });
         drop(snapshot);
-        if let Some(footprint) = measured_buffers_footprint(1000) {
-            assert_eq!(footprint.context_length, 8192);
-            assert_eq!(footprint.lane_count, 2);
-        }
+        let footprint = measured_buffers_footprint(&first_key).expect("matching snapshot");
+        assert_eq!(footprint.compute_bytes, 30);
+        assert_eq!(footprint.kv_bytes, 40);
+        assert_eq!(footprint.context_length, 8192);
+        assert_eq!(footprint.lane_count, 2);
 
         snapshot = MEASURED_PLAN_SNAPSHOT.lock().unwrap();
         *snapshot = Some(MeasuredPlanSnapshot {
-            model_bytes: 1000,
-            context_length: 0,
-            lane_count: 4,
+            key: first_key.clone(),
+            footprint: MeasuredBufferFootprint {
+                compute_bytes: 30,
+                kv_bytes: 40,
+                context_length: 0,
+                lane_count: 4,
+            },
         });
         drop(snapshot);
-        assert!(measured_buffers_footprint(1000).is_none());
+        assert!(measured_buffers_footprint(&first_key).is_none());
 
         *MEASURED_PLAN_SNAPSHOT.lock().unwrap() = None;
+    }
+
+    #[test]
+    fn completed_snapshot_rejects_host_offload_and_incomplete_measurements() {
+        let key = MemoryPlanMeasurementKey::new("config".to_string());
+        let breakdown = RuntimeResourcePlanBreakdown {
+            vram_bytes: 10_000,
+            model_bytes: 2_000,
+            kv_budget_bytes: 6_000,
+            planned_kv_bytes: 4_000,
+            kv_bytes_per_token: 4,
+            compute_charge_bytes: 2_000,
+            planning_source: RuntimeResourcePlanSource::StaticEstimate,
+            measured_fit: None,
+            slots: 4,
+            context_length: 1_000,
+            slots_auto: true,
+            context_auto: true,
+        };
+        let measured = skippy_runtime::MeasuredNativeBuffers {
+            compute_mib: Some(1.0),
+            kv_mib: Some(2.0),
+            host_memory_observed: false,
+        };
+        assert!(completed_measurement_snapshot(&key, &breakdown, Some(measured)).is_some());
+        assert!(
+            completed_measurement_snapshot(
+                &key,
+                &breakdown,
+                Some(skippy_runtime::MeasuredNativeBuffers {
+                    host_memory_observed: true,
+                    ..measured
+                })
+            )
+            .is_none()
+        );
+        assert!(
+            completed_measurement_snapshot(
+                &key,
+                &breakdown,
+                Some(skippy_runtime::MeasuredNativeBuffers {
+                    kv_mib: None,
+                    ..measured
+                })
+            )
+            .is_none()
+        );
     }
 }

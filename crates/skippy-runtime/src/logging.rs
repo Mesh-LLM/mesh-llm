@@ -106,6 +106,9 @@ impl ProgressTracker {
 pub struct MeasuredNativeBuffers {
     pub compute_mib: Option<f64>,
     pub kv_mib: Option<f64>,
+    /// A CPU-resident compute or KV allocation was observed, so the device
+    /// footprint is incomplete for a capacity pool that includes host RAM.
+    pub host_memory_observed: bool,
 }
 
 /// Snapshot of the measured native buffer sizes observed so far in this
@@ -227,6 +230,7 @@ struct NativeLogAggregator {
     /// charged against a VRAM budget.
     measured_compute_mib: BTreeMap<String, f64>,
     measured_kv_mib: BTreeMap<String, f64>,
+    host_memory_observed: bool,
 }
 
 fn native_log_file() -> &'static Mutex<Option<LineWriter<File>>> {
@@ -276,6 +280,7 @@ impl NativeLogAggregator {
         MeasuredNativeBuffers {
             compute_mib,
             kv_mib,
+            host_memory_observed: self.host_memory_observed,
         }
     }
 
@@ -301,6 +306,7 @@ impl NativeLogAggregator {
         // model's HWM against another's budget would be wrong both directions.
         self.measured_compute_mib.clear();
         self.measured_kv_mib.clear();
+        self.host_memory_observed = false;
     }
 
     fn process_line(&mut self, line: &str) -> Vec<NativeLogEvent> {
@@ -404,12 +410,21 @@ impl NativeLogAggregator {
     /// skipped: the snapshot feeds VRAM planning, and a CPU-resident buffer
     /// larger than the accelerator's must not be charged against VRAM.
     fn record_measured_buffer_size(&mut self, line: &str) {
-        if !line.contains("buffer size") || line.to_ascii_uppercase().contains("CPU") {
+        if !line.contains("buffer size") {
             return;
         }
         let Some(device) = buffer_size_device(line) else {
             return;
         };
+        let is_compute = line.contains("compute buffer size");
+        let is_kv = line.contains("KV buffer size");
+        if !is_compute && !is_kv {
+            return;
+        }
+        if device == "CPU" || device.starts_with("CPU_") {
+            self.host_memory_observed = true;
+            return;
+        }
         let Some(mib) = parse_buffer_size_mib(line) else {
             return;
         };
@@ -418,12 +433,10 @@ impl NativeLogAggregator {
         if is_host_pinned_device_name(&device) {
             return;
         }
-        let field = if line.contains("compute buffer size") {
+        let field = if is_compute {
             &mut self.measured_compute_mib
-        } else if line.contains("KV buffer size") {
-            &mut self.measured_kv_mib
         } else {
-            return;
+            &mut self.measured_kv_mib
         };
         // One line per device per reserve: keep the high-water mark within a
         // device (larger of repeated reserves) so a smaller re-reserve on the
@@ -1280,6 +1293,7 @@ mod tests {
             MeasuredNativeBuffers {
                 compute_mib: Some(579.83),
                 kv_mib: Some(1088.00),
+                host_memory_observed: false,
             }
         );
 
@@ -1292,11 +1306,12 @@ mod tests {
             MeasuredNativeBuffers {
                 compute_mib: Some(579.83),
                 kv_mib: Some(1088.00),
+                host_memory_observed: false,
             }
         );
 
-        // CPU-offloaded buffers must stay excluded even when larger: the
-        // planner charges accelerator memory, not system RAM.
+        // CPU-offloaded buffers stay excluded from device totals, but make the
+        // device-only snapshot ineligible for reuse against a mixed pool.
         aggregator.process_line("load_tensors: CPU_Mapped model buffer size =  2048.00 MiB");
         aggregator.process_line("llama_kv_cache:        CPU KV buffer size =  4096.00 MiB");
         aggregator.process_line("llama_kv_cache:        CPU compute buffer size =  8192.00 MiB");
@@ -1305,6 +1320,7 @@ mod tests {
             MeasuredNativeBuffers {
                 compute_mib: Some(579.83),
                 kv_mib: Some(1088.00),
+                host_memory_observed: true,
             }
         );
 
@@ -1315,6 +1331,7 @@ mod tests {
             MeasuredNativeBuffers {
                 compute_mib: Some(579.83),
                 kv_mib: Some(1088.00),
+                host_memory_observed: true,
             }
         );
 
@@ -1325,6 +1342,7 @@ mod tests {
             MeasuredNativeBuffers {
                 compute_mib: None,
                 kv_mib: None,
+                host_memory_observed: false,
             }
         );
     }
@@ -1345,6 +1363,7 @@ mod tests {
             MeasuredNativeBuffers {
                 compute_mib: Some(1088.00),
                 kv_mib: Some(1088.00),
+                host_memory_observed: false,
             }
         );
     }
@@ -1362,6 +1381,7 @@ mod tests {
             MeasuredNativeBuffers {
                 compute_mib: Some(400.00),
                 kv_mib: None,
+                host_memory_observed: false,
             }
         );
     }
@@ -1389,6 +1409,7 @@ mod tests {
             MeasuredNativeBuffers {
                 compute_mib: None,
                 kv_mib: None,
+                host_memory_observed: false,
             }
         );
         aggregator.process_line("llama_kv_cache:        CUDA0 KV buffer size =  1088.00 MiB");
@@ -1397,6 +1418,7 @@ mod tests {
             MeasuredNativeBuffers {
                 compute_mib: None,
                 kv_mib: Some(1088.00),
+                host_memory_observed: false,
             }
         );
     }
