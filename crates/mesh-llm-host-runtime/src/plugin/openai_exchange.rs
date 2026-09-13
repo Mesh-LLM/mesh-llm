@@ -302,6 +302,16 @@ pub use canonical_digest::request_body_digest;
 #[async_trait]
 pub trait OpenAiExchangeChannel: Send + Sync + 'static {
     async fn publish(&self, event: &OpenAiExchangeEnvelope);
+
+    /// Whether anything is actually listening on [`OPENAI_EXCHANGE_CHANNEL`]
+    /// right now. Lets a caller skip the work that only exists to build an
+    /// event (canonicalizing and hashing a request body, cloning a
+    /// served-model descriptor) before finding out `publish` had nowhere to
+    /// send it. Defaults to `true` — a test double with no subscriber
+    /// concept (e.g. a recording channel) should behave as it always has.
+    async fn has_subscriber(&self) -> bool {
+        true
+    }
 }
 
 #[async_trait]
@@ -325,6 +335,11 @@ impl OpenAiExchangeChannel for PluginManager {
         {
             tracing::warn!(%error, "failed to publish openai exchange event to plugins");
         }
+    }
+
+    async fn has_subscriber(&self) -> bool {
+        self.any_plugin_declares_mesh_channel(OPENAI_EXCHANGE_CHANNEL)
+            .await
     }
 }
 

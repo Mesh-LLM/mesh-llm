@@ -802,15 +802,22 @@ async fn try_route_plugin_model(
             // narrow route fact path 1's `ChatExchangeRoute` carries. Mint
             // the exchange id here, at admission, so it can pair this
             // effective event with its terminal event below even when
-            // concurrent raw-proxy requests share the same model.
-            let exchange_id = uuid::Uuid::new_v4().to_string();
-            plugin_manager
-                .publish(&OpenAiExchangeEnvelope::effective(
-                    exchange_id.clone(),
-                    OpenAiExchangeDispatchPath::RawProxy,
-                    model_name,
-                ))
-                .await;
+            // concurrent raw-proxy requests share the same model. Skipped
+            // entirely (no id, no publish) when nobody declares
+            // `openai.exchange.v1` — nothing downstream would ever see it.
+            let exchange_id = if plugin_manager.has_subscriber().await {
+                let exchange_id = uuid::Uuid::new_v4().to_string();
+                plugin_manager
+                    .publish(&OpenAiExchangeEnvelope::effective(
+                        exchange_id.clone(),
+                        OpenAiExchangeDispatchPath::RawProxy,
+                        model_name,
+                    ))
+                    .await;
+                Some(exchange_id)
+            } else {
+                None
+            };
             let outcome = proxy::route_http_endpoint_request(
                 ctx.node,
                 Some(model_name),
@@ -838,6 +845,9 @@ async fn try_route_plugin_model(
                 )
             } else {
                 outcome
+            };
+            let Some(exchange_id) = exchange_id else {
+                return final_outcome;
             };
             // Bind the real request body digest when the parsed body is already
             // available (this path holds `request` by shared ref, so it does not
@@ -938,9 +948,16 @@ async fn route_request(
         // canonical digest of the real request body, so one sealed capsule can
         // hold real model identity + real usage + real hardware + what was asked
         // together. Tokenize requests are not chat exchanges, so they are not
-        // announced. `plugin_manager` is `None` when no plugin is loaded, in
-        // which case there is no subscriber and nothing to publish.
-        let announce = (!request.is_tokenize_request())
+        // announced. `plugin_manager` is `None` when no plugin is loaded, and
+        // even with one loaded nothing may declare `openai.exchange.v1` — in
+        // either case there is no subscriber, so skip minting an exchange id
+        // and, below, the body digest and served-model provenance lookup
+        // that only exist to build an event nobody would receive.
+        let has_subscriber = match ctx.plugin_manager {
+            Some(plugin_manager) => plugin_manager.has_subscriber().await,
+            None => false,
+        };
+        let announce = (!request.is_tokenize_request() && has_subscriber)
             .then_some(ctx.plugin_manager)
             .flatten()
             .map(|plugin_manager| (plugin_manager, uuid::Uuid::new_v4().to_string()));
