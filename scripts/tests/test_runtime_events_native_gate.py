@@ -343,6 +343,13 @@ class LinuxRuntimeSliceTests(unittest.TestCase):
         manifest = json.loads((ROOT / "ci/llama-canary/family-certified.json").read_text())
         self.assertEqual(83, len(manifest["models"]))
         self.assertTrue(all("cadences" not in model for model in manifest["models"]))
+        manifest = yaml.safe_load((ROOT / step["with"]["model_manifest"]).read_text())
+        artifact = next(
+            artifact
+            for artifact in manifest["artifacts"]
+            if artifact["id"] == step["with"]["model_artifact_id"]
+        )
+        self.assertTrue({"pull-request", "main"}.issubset(artifact["cadences"]))
 
     def test_evidence_is_uploaded_even_when_the_gate_fails(self) -> None:
         """The evidence file is how a failure is diagnosed, so it must
