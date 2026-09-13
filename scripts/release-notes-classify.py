@@ -274,7 +274,8 @@ def main():
         sys.exit("error: no PR entries found in the release body")
     commits = read_commits(args.range, args.repo_root)
     if args.links:
-        commits.update(load_links(args.links))
+        for pr, record in load_links(args.links).items():
+            commits.setdefault(pr, record)
     plan, unclassified = build_plan(prs, commits, args.version, args.date)
 
     with open(args.out, "w", encoding="utf-8") as handle:

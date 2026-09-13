@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import yaml
 
@@ -922,6 +923,52 @@ class LinkTest(unittest.TestCase):
         self.assertEqual(unclassified, 0)
         internal = [pr for group in plan["internal"]["groups"] for pr in group["prs"]]
         self.assertEqual(internal, [1733])
+
+    def test_classifier_preserves_suffix_metadata_when_links_overlap(self):
+        body = self.body_file(entry(10), entry(11))
+        links = self.dir / "links.json"
+        links.write_text(json.dumps({
+            "10": {"subject": "feat: API-linked subject", "trailers": {}},
+            "11": {"subject": "fix: linked only", "trailers": {}},
+        }), encoding="utf-8")
+        output = self.dir / "plan.json"
+        args = ["classify", "--body", str(body), "--range", "base..HEAD",
+                "--version", "1.0.0", "--date", "2026-01-01",
+                "--links", str(links), "--out", str(output)]
+        for trailers, expected in [({}, "Fixed"),
+                                   ({"release-notes": "Security"}, "Security")]:
+            with self.subTest(trailers=trailers):
+                commits = {10: {"subject": "fix: suffix record (#10)",
+                                "trailers": trailers}}
+                with mock.patch.object(sys, "argv", args), mock.patch.object(
+                    CLASSIFY, "read_commits", return_value=commits
+                ):
+                    self.assertEqual(CLASSIFY.main(), 0)
+                plan = json.loads(output.read_text(encoding="utf-8"))
+                sections = {section["title"]: section["prs"]
+                            for section in plan["sections"]}
+                self.assertIn(10, sections[expected])
+                self.assertIn(11, sections["Fixed"])
+                self.assertNotIn("Added", sections)
+
+    def test_timeout_stops_resolution_and_recovery_api_calls(self):
+        commits = [commit("a", "fix: suffixless"),
+                   commit("b", "fix: another suffixless"),
+                   commit("c", "fix: known PR (#10)")]
+        gh = LINK.Gh()
+        with mock.patch.object(
+            LINK.subprocess, "run",
+            side_effect=subprocess.TimeoutExpired(["gh", "api"], 30),
+        ) as run:
+            self.assertEqual(LINK.resolve_pull_requests(commits, "o/r", gh), 0)
+            self.assertEqual(LINK.recover_entries(commits, [], "o/r", gh), ({}, []))
+            run.assert_called_once()
+        self.assertEqual(commits[2]["pr"], 10)
+        self.assertEqual(gh.failures, 1)
+        self.assertTrue(gh.exhausted)
+        body = self.body_file(entry(99))
+        lines, _, insert_at = LINK.read_body(body)
+        self.assertEqual(LINK.augment(lines, insert_at, {}, []), body.read_text())
 
     def test_the_api_budget_bounds_a_large_release(self):
         commits = [commit(str(n), f"chore: a change {n}") for n in range(5)]

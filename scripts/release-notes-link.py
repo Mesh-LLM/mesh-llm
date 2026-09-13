@@ -47,7 +47,7 @@ DEFAULT_API_BUDGET = 200
 
 
 class Gh:
-    """Best-effort `gh` caller with a call budget and a per-call timeout."""
+    """Best-effort `gh` caller that stops after its budget or first timeout."""
 
     def __init__(self, budget=DEFAULT_API_BUDGET, timeout=30):
         self.remaining = budget
@@ -77,6 +77,8 @@ class Gh:
             )
             return json.loads(result.stdout)
         except (OSError, ValueError, subprocess.SubprocessError) as error:
+            if isinstance(error, subprocess.TimeoutExpired):
+                self.remaining = 0
             self.failures += 1
             print(f"release-notes-link: gh {' '.join(args)} failed: {error}", file=sys.stderr)
             return None
