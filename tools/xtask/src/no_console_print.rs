@@ -7,6 +7,8 @@ use std::path::Path;
 
 use crate::command::{DynResult, write_json_file};
 
+mod scope;
+
 const ALLOWLIST_RELATIVE_PATH: &str = "tools/xtask/data/console_print_allowlist.json";
 const REGEN_FLAG: &str = "--regen";
 const REGEN_COMMAND: &str = "cargo run -p xtask -- repo-consistency no-console-print --regen";
@@ -159,8 +161,8 @@ fn advance_to_next_line(lines: &[&str], line_index: &mut usize) -> bool {
 }
 
 /// Collects relative paths (slash separated, deterministic order) of every
-/// `.rs` file under `crates/`, excluding `build.rs` where print macros are a
-/// cargo directive mechanism rather than product console output. Paths carry
+/// product `.rs` file under `crates/`, using the explicit scope rules in
+/// `scope`. Build scripts use print macros for Cargo directives. Paths carry
 /// the `crates/` prefix so they stay stable as repo-relative allowlist keys.
 fn collect_rs_files(crates_dir: &Path) -> std::io::Result<Vec<String>> {
     let mut files = Vec::new();
@@ -185,7 +187,10 @@ fn collect_rs_files_recursive(
         } else if name == "build.rs" || !name.ends_with(".rs") {
             continue;
         } else {
-            out.push(format!("{prefix}{name}"));
+            let path = format!("{prefix}{name}");
+            if scope::is_product_source(&path) {
+                out.push(path);
+            }
         }
     }
     Ok(())
@@ -227,7 +232,7 @@ pub(crate) fn check_no_console_prints(repo_root: &Path) -> DynResult<()> {
     for file in &files {
         seen.insert(file.as_str());
         let source = read_source(repo_root, file)?;
-        let hits = find_console_prints(&source);
+        let hits = find_console_prints(&scope::without_test_modules(&source));
         if hits.is_empty() && !allowed.contains_key(file.as_str()) {
             continue;
         }
@@ -318,9 +323,10 @@ fn claim_approved_occurrences(
 
 /// Entry point for `xtask repo-consistency no-console-print [--regen]`. The
 /// plain invocation gates CI; `--regen` rewrites the ratchet from the current
-/// tree and always succeeds so the reduced baseline can be committed.
+/// tree after validating the product scope so the reduced baseline can be committed.
 pub(crate) fn check_no_console_print_command(rest: &[String]) -> DynResult<()> {
     let repo_root = crate::repo_consistency::repo_root()?;
+    scope::check_exempt_crates(&repo_root)?;
     if rest.iter().any(|arg| arg == REGEN_FLAG) {
         regenerate_allowlist(&repo_root)?;
     } else {
@@ -342,7 +348,7 @@ fn regenerate_allowlist(repo_root: &Path) -> DynResult<()> {
     for file in &files {
         let source = fs::read_to_string(repo_root.join(file))
             .map_err(|error| format!("failed to read {file}: {error}"))?;
-        let hits = find_console_prints(&source);
+        let hits = find_console_prints(&scope::without_test_modules(&source));
         if !hits.is_empty() {
             allowed.insert(
                 file.clone(),
@@ -602,6 +608,43 @@ lines */ !(x);
             "{error}"
         );
         assert!(error.contains("stale allowlist entry"), "{error}");
+    }
+
+    #[test]
+    fn regeneration_and_gate_share_product_scope() {
+        let repo_root = temp_repo_with_files(&[
+            (
+                "crates/demo/src/lib.rs",
+                "#[cfg(test)] mod t { fn f() { print!(\"test\"); } }\nfn f() { println!(\"product\"); }\n",
+            ),
+            (
+                "crates/demo/tests/integration.rs",
+                "fn f() { println!(\"test\"); }",
+            ),
+            (
+                "crates/demo/src/bin/tool.rs",
+                "fn main() { println!(\"tool\"); }",
+            ),
+            (
+                "crates/skippy-bench/src/lib.rs",
+                "fn f() { println!(\"bench\"); }",
+            ),
+        ]);
+        regenerate_allowlist(&repo_root).unwrap();
+        let allowed: BTreeMap<String, Vec<AllowedOccurrence>> = serde_json::from_str(
+            &fs::read_to_string(repo_root.join(ALLOWLIST_RELATIVE_PATH)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(allowed.len(), 1);
+        assert_eq!(allowed["crates/demo/src/lib.rs"].len(), 1);
+        assert_eq!(allowed["crates/demo/src/lib.rs"][0].line, 2);
+        check_no_console_prints(&repo_root).unwrap();
+        fs::write(
+            repo_root.join("crates/demo/src/lib.rs"),
+            "fn f() { eprintln!(\"new\"); }",
+        )
+        .unwrap();
+        assert!(check_no_console_prints(&repo_root).is_err());
     }
 
     fn temp_repo_with_files(files: &[(&str, &str)]) -> std::path::PathBuf {

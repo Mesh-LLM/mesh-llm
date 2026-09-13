@@ -27,7 +27,7 @@ publish-crates:
     just with-lld cargo run -p xtask -- repo-consistency publish-crates
 
 # Ratchet on println!/eprintln!/print!/eprint! in Rust files under crates/
-# (including crate test targets; build.rs is skipped): every occurrence must be
+# (excluding tests, non-product crates, helper bins and build.rs): each hit must be
 # explicitly listed in tools/xtask/data/console_print_allowlist.json.
 no-console-print:
     cargo run -p xtask -- repo-consistency no-console-print

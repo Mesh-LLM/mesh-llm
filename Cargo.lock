@@ -9561,9 +9561,11 @@ dependencies = [
  "getrandom 0.3.4",
  "hex",
  "mesh-llm-release-footer",
+ "proc-macro2",
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "syn 2.0.119",
 ]
 
 [[package]]
