@@ -84,6 +84,7 @@ class GateScriptBehaviorTests(unittest.TestCase):
         bundle: str | None = None,
         model: str | None = None,
         evidence_seed: str | None = None,
+        relative_paths: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         stub_bin = root / "stub-bin"
         stub_bin.mkdir(exist_ok=True)
@@ -103,6 +104,10 @@ class GateScriptBehaviorTests(unittest.TestCase):
         evidence = root / "evidence.txt"
         if evidence_seed is not None:
             evidence.write_text(evidence_seed, encoding="utf-8")
+        if relative_paths:
+            bundle = os.path.relpath(bundle, root)
+            model = os.path.relpath(model, root)
+            evidence = Path(os.path.relpath(evidence, root))
 
         return subprocess.run(
             [
@@ -118,6 +123,7 @@ class GateScriptBehaviorTests(unittest.TestCase):
             capture_output=True,
             text=True,
             check=False,
+            cwd=root,
             env={
                 **os.environ,
                 "PATH": f"{stub_bin}{os.pathsep}{os.environ['PATH']}",
@@ -141,6 +147,27 @@ class GateScriptBehaviorTests(unittest.TestCase):
             result = self.run_gate(Path(directory), cargo_body=self.EXECUTES)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("executed", result.stdout)
+
+    def test_relative_paths_survive_cargo_changing_to_the_crate_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            crate = root / "crate"
+            crate.mkdir()
+            result = self.run_gate(
+                root,
+                relative_paths=True,
+                cargo_body=(
+                    "#!/usr/bin/env bash\n"
+                    "set -euo pipefail\n"
+                    f'cd "{crate}"\n'
+                    'test -d "$MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR"\n'
+                    'test -s "$MESH_LLM_RUNTIME_EVENTS_MODEL"\n'
+                    'printf "executed\\n" >> "$MESH_LLM_RUNTIME_EVENTS_EVIDENCE_FILE"\n'
+                ),
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual((root / "evidence.txt").read_text(), "executed\n")
+            self.assertFalse((crate / "evidence.txt").exists())
 
     def test_a_blocked_gate_fails_even_though_the_test_exits_zero(self) -> None:
         """The whole reason the script checks the marker.
