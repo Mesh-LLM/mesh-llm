@@ -451,10 +451,14 @@ fn redact_key_in_json(text: &str, key: &str) -> String {
     result
 }
 
-/// Sanitize a file path for logging: replace private home directory prefix with `~/`.
+/// Sanitize a file path for logging: replace the private home directory prefix
+/// with `~`, keeping the platform separator that follows it.
+///
+/// The home directory comes from `dirs::home_dir()`, as everywhere else in this
+/// crate. Reading `HOME` directly redacted nothing on Windows, where that
+/// variable is not set and the home lives behind the known-folder API.
 pub fn sanitize_path(path: &std::path::Path) -> String {
-    use std::env;
-    if let Some(home) = env::var_os("HOME") {
+    if let Some(home) = dirs::home_dir() {
         let home_str = home.to_string_lossy();
         return path.to_string_lossy().replace(&*home_str, "~");
     }
@@ -482,8 +486,7 @@ pub fn hash_value(input: &str) -> String {
 
 /// Remove private directory prefixes from a string containing paths.
 pub fn sanitize_paths_in_text(text: &str) -> String {
-    use std::env;
-    if let Some(home) = env::var_os("HOME") {
+    if let Some(home) = dirs::home_dir() {
         let home_str = home.to_string_lossy().to_string();
         text.replace(&home_str, "~")
             .replace("/private/var/", "/var/")
@@ -889,7 +892,8 @@ mod redaction_corpus_tests {
         let home = dirs::home_dir().expect("test runner has a home directory");
         let test_path = home.join("some/deep/path/file.log");
         let sanitized = sanitize_path(&test_path);
-        assert!(sanitized.starts_with("~/"));
+        let expected_prefix = format!("~{}", std::path::MAIN_SEPARATOR);
+        assert!(sanitized.starts_with(&expected_prefix));
         assert!(!sanitized.contains(&home.display().to_string()));
     }
 
@@ -906,7 +910,9 @@ mod redaction_corpus_tests {
         let home = dirs::home_dir().expect("test runner has a home directory");
         let text = format!("Error in {}", home.join("mesh-llm/logs/app.log").display());
         let sanitized = sanitize_paths_in_text(&text);
-        assert!(sanitized.contains("~/mesh-llm"));
+        let expected = format!("~{}mesh-llm", std::path::MAIN_SEPARATOR);
+        assert!(sanitized.contains(&expected));
+        assert!(!sanitized.contains(&home.display().to_string()));
     }
 
     #[test]
