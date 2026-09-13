@@ -824,3 +824,19 @@ Runtime exclusion evidence: run `34272984200/1`, source
 `1f4545616e98db715e37c57e1196cbdc975a010e`, observed zero reuse in all three
 verified warm samples. Full-cohort timing remains inconclusive because pairs 1/2
 had different CPUs. See [retained evidence](../../../../ci/runtime-seed-evidence/34272984200-1/README.md).
+
+## Console-print product scope
+
+`just no-console-print` keeps exact file/line/macro approvals for product
+sources. Its scope excludes test paths, parsed `#[cfg(test)]` modules,
+examples, benches, auxiliary `src/bin/` targets and the explicit
+`NON_PRODUCT_CRATES` list in `tools/xtask/src/no_console_print/scope.rs`.
+Build scripts remain excluded because their output contains Cargo directives.
+`mesh-llm/src/main.rs` and `mesh-client` remain in scope.
+
+The gate checks Cargo metadata on every invocation and rejects an exempt crate
+that becomes a transitive normal dependency of `mesh-llm`, including optional
+and platform-specific dependencies. Tests cover that guard and the scope rules.
+The Quality workflow still invokes the same `just no-console-print` gate.
+Direct stdout/stderr handle detection and deletion of the remaining product
+ratchet belong to later stages of issue #1763.
