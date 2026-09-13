@@ -386,12 +386,23 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("Verify split certification roster", workflow)
         self.assertIn("generate-split-certified.py --check", workflow)
         self.assertIn("steps.split_roster.outcome == 'success'", workflow)
-        repair = wrapper[wrapper.index("repair_candidate_until_green()") :]
+        gates = wrapper[
+            wrapper.index("run_candidate_gates()") : wrapper.index(
+                "write_split_certification_roster()"
+            )
+        ]
         self.assertLess(
-            repair.index("write_split_certification_roster"),
-            repair.index("run_candidate_gates"),
+            gates.index("run_prepare"),
+            gates.index("write_split_certification_roster"),
         )
+        self.assertLess(
+            gates.index("write_split_certification_roster"),
+            gates.index("validate_agent_manifest_changes"),
+        )
+        repair = wrapper[wrapper.index("repair_candidate_until_green()") :]
+        self.assertIn("run_candidate_gates refresh", repair)
         verify = wrapper[wrapper.rindex("load_candidate_bundle") :]
+        self.assertIn("if ! run_candidate_gates; then", verify)
         self.assertLess(
             verify.index("check_split_certification_roster"),
             verify.index("finalize_certified_tree"),

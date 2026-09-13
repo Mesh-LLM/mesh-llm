@@ -416,11 +416,22 @@ run_certification() {
 }
 
 run_candidate_gates() {
+  local roster_mode="${1:-verify}"
+  if [[ "$roster_mode" != "verify" && "$roster_mode" != "refresh" ]]; then
+    echo "invalid candidate-gate roster mode: $roster_mode" >&2
+    return 2
+  fi
   : > "$PREPARE_LOG"
   : > "$MANIFEST_POLICY_LOG"
   : > "$BUILD_LOG"
   : > "$CERTIFY_LOG"
   run_prepare || return 1
+  if [[ "$roster_mode" == "refresh" ]]; then
+    # Preparation writes the candidate upstream pin. Generate only after that
+    # transition so the roster recipe matches the runtime about to be built.
+    # Independent verification uses the default read-only mode below.
+    write_split_certification_roster || return 1
+  fi
   validate_agent_manifest_changes || return 1
   run_full_build || return 1
   run_certification
@@ -443,11 +454,7 @@ repair_candidate_until_green() {
   while remaining_repair_seconds >/dev/null; do
     agent_session_step "$prompt" || return 1
     assert_agent_control_unchanged || return 1
-    # The new native recipe cannot exercise split smoke against a roster tied
-    # to the prior recipe. The trusted wrapper overwrites this derived file
-    # before every gate; only a fully passing tree is later snapshotted.
-    write_split_certification_roster || return 1
-    if run_candidate_gates; then
+    if run_candidate_gates refresh; then
       assert_agent_control_unchanged || return 1
       validate_agent_manifest_changes || return 1
       return 0
