@@ -77,6 +77,17 @@ fn contains_unsafe_integer(value: &serde_json::Value) -> bool {
 /// Replace every JSON float with its exact decimal-string form via
 /// [`float_repr`] (mirrors the Python reference's `_stringify_floats`, which
 /// stringifies via `repr(float)`).
+///
+/// This is a property of the digest context, not a bug this function
+/// introduces: once a float and its stringified form are both JSON strings,
+/// JCS can no longer tell them apart, so `{"temperature": 0.7}` and
+/// `{"temperature": "0.7"}` digest identically. It is inherited unchanged
+/// from `agent_action_capsule.canonical`/`capsule_sidecar.digest_json`, the
+/// same reference [`request_body_digest`] ports. The current declaration
+/// point acknowledging this collision (rather than callers discovering it
+/// silently) is the `x-mesh-poc-v1` PoC-only extension block in
+/// `capsule-emit-mesh`'s `capsule_sidecar.py`; registering it as a real
+/// profile-level property is a separate spec-lane item.
 fn stringify_floats(value: &serde_json::Value) -> serde_json::Value {
     use serde_json::Value;
     match value {
