@@ -52,12 +52,12 @@ pub(in crate::binary_transport) fn configure_prediction_return_stream(
     match prediction_return_sinks.take_wait(request_id, session_id, Duration::from_millis(250)) {
         Ok(Some(stream)) => {
             prediction_return_streams.insert((request_id, session_id), stream);
-            eprintln!("direct prediction return using upstream-opened sink");
+            tracing::debug!("direct prediction return using upstream-opened sink");
             return;
         }
         Ok(None) => {}
         Err(error) => {
-            eprintln!("direct prediction return sink lookup failed: {error:#}");
+            tracing::warn!("direct prediction return sink lookup failed: {error:#}");
         }
     }
 
@@ -72,7 +72,7 @@ pub(in crate::binary_transport) fn configure_prediction_return_stream(
             prediction_return_streams.insert((request_id, session_id), stream);
         }
         Err(error) => {
-            eprintln!(
+            tracing::warn!(
                 "direct prediction return unavailable; falling back to upstream reply: {error:#}"
             );
         }
