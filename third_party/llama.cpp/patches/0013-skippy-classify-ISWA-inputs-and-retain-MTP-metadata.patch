@@ -1,4 +1,4 @@
-From 2c4eff70ed5060815e05ba60a5971eb5fe85c272 Mon Sep 17 00:00:00 2001
+From 07e70ac388ea3fe5cab5f557b856e95aad5ad0ae Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 7 Sep 2026 22:39:32 +1000
 Subject: [PATCH 13/23] skippy: classify ISWA inputs and retain MTP metadata
@@ -13,10 +13,10 @@ Subject: [PATCH 13/23] skippy: classify ISWA inputs and retain MTP metadata
  6 files changed, 128 insertions(+), 3 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 8bd1bd8ad..6884aff48 100644
+index 40912866f..d89193b1d 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -262,6 +262,42 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -283,6 +283,42 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_noalloc_graph_planning_qwen3 PROPERTIES
          FIXTURES_REQUIRED skippy-noalloc-qwen3-fixture)
  

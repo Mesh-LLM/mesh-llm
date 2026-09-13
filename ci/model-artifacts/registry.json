@@ -85,12 +85,12 @@
         "skippy-ci-smoke"
       ],
       "cadences": [
+        "pull-request",
+        "main",
         "llama-bump",
         "manual-full",
         "nightly",
-        "manual",
-        "pull-request",
-        "main"
+        "manual"
       ],
       "capability_tags": [
         "dense",
@@ -1897,7 +1897,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 397805248
+          "estimated_model_bytes": 391859712
         },
         "notes": "expansion: dense qwen2 arch coverage"
       }
@@ -1940,7 +1940,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 561444928
+          "estimated_model_bytes": 548823040
         },
         "notes": "expansion: bloom arch coverage"
       }
@@ -1983,7 +1983,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 1495245728
+          "estimated_model_bytes": 1489203200
         },
         "notes": "expansion: dense gemma arch coverage"
       }
@@ -2026,7 +2026,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 806058240
+          "estimated_model_bytes": 799525120
         },
         "notes": "expansion: dense gemma3 arch coverage"
       }
@@ -2069,7 +2069,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 1789239136
+          "estimated_model_bytes": 1787432960
         },
         "notes": "expansion: dense phi2 arch coverage"
       }
@@ -2112,7 +2112,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 1848976448
+          "estimated_model_bytes": 1847230464
         },
         "notes": "expansion: dense starcoder2 arch coverage"
       }
@@ -2155,7 +2155,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 1031442432
+          "estimated_model_bytes": 1027883008
         },
         "notes": "expansion: dense stablelm arch coverage"
       }
@@ -2198,7 +2198,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 935515296
+          "estimated_model_bytes": 931962880
         },
         "notes": "expansion: dense olmo2 arch coverage"
       }
@@ -2241,7 +2241,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 812437792
+          "estimated_model_bytes": 808230016
         },
         "notes": "expansion: dense exaone4 arch coverage"
       }
@@ -2284,7 +2284,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 2469791584
+          "estimated_model_bytes": 2468069280
         },
         "notes": "expansion: dense minicpm3 arch coverage"
       }
@@ -2327,7 +2327,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 2697387072
+          "estimated_model_bytes": 2691047424
         },
         "notes": "expansion: dense nemotron arch coverage (distinct from nemotron_h_moe row)"
       }
@@ -2370,7 +2370,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 2916301824
+          "estimated_model_bytes": 2908474660
         },
         "notes": "expansion: arcee/AFM arch coverage"
       }
@@ -2413,7 +2413,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 4390524128
+          "estimated_model_bytes": 4388741120
         },
         "notes": "expansion: mpt arch coverage"
       }
@@ -2456,7 +2456,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 5057885568
+          "estimated_model_bytes": 5049991424
         },
         "notes": "expansion: apertus arch coverage"
       }
@@ -2499,7 +2499,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 6166574944
+          "estimated_model_bytes": 6157238272
         },
         "notes": "expansion: glm4/chatglm arch coverage (distinct from existing glm4 row arch chatglm: replaces it only if identical family label is rejected)"
       }
@@ -2542,7 +2542,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 15823053440
+          "estimated_model_bytes": 15815687168
         },
         "notes": "downloaded AFMoE architecture coverage"
       }
@@ -2585,7 +2585,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 5117561504
+          "estimated_model_bytes": 5111586816
         },
         "notes": "ARWKV recurrent architecture coverage"
       }
@@ -2630,7 +2630,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 15803475200
+          "estimated_model_bytes": 15796958848
         },
         "notes": "hybrid three-recurrent-to-one-attention boundary sweep"
       }
@@ -2673,7 +2673,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 4274466400
+          "estimated_model_bytes": 4272308224
         },
         "notes": "downloaded Chameleon architecture coverage"
       }
@@ -2717,7 +2717,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 16131110560
+          "estimated_model_bytes": 16125871104
         },
         "notes": "compact four-layer DeepSeek 3.2 architecture probe"
       }
@@ -2760,7 +2760,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 10896057440
+          "estimated_model_bytes": 10890804124
         },
         "notes": "DeepSeek V4 Flash dflash path with four hyper-connection streams"
       }
@@ -2803,7 +2803,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 14302555328
+          "estimated_model_bytes": 14296595968
         },
         "notes": "downloaded dots1 MoE architecture coverage"
       }
@@ -2846,7 +2846,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 240645504
+          "estimated_model_bytes": 238262272
         },
         "notes": "small ERNIE 4.5 dense architecture probe"
       }
@@ -2889,7 +2889,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 13245833216
+          "estimated_model_bytes": 13243429632
         },
         "notes": "downloaded ERNIE 4.5 MoE architecture coverage"
       }
@@ -2932,7 +2932,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 4237063328
+          "estimated_model_bytes": 4230498240
         },
         "notes": "text-only Gemma 3n architecture coverage"
       }
@@ -2975,7 +2975,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 5335285728
+          "estimated_model_bytes": 5319465128
         },
         "notes": "Gemma 4 text and projector lanes",
         "mmproj_artifact": {
@@ -3030,7 +3030,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 251938176
+          "estimated_model_bytes": 236152848
         },
         "notes": "compact Gemma 4 assistant architecture probe"
       }
@@ -3073,7 +3073,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 13135032320
+          "estimated_model_bytes": 13133230080
         },
         "notes": "downloaded GPT-NeoX architecture coverage"
       }
@@ -3117,7 +3117,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 6047918368
+          "estimated_model_bytes": 6044351680
         },
         "notes": "Granite sliding-window MoE architecture coverage"
       }
@@ -3160,7 +3160,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 821847360
+          "estimated_model_bytes": 820107736
         },
         "notes": "downloaded Granite MoE architecture coverage"
       }
@@ -3203,7 +3203,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 8428497696
+          "estimated_model_bytes": 8424888320
         },
         "notes": "Granite Switch adapter-router architecture coverage"
       }
@@ -3246,7 +3246,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 20167310304
+          "estimated_model_bytes": 20161329152
         },
         "notes": "downloaded GroveMoE architecture coverage"
       }
@@ -3289,7 +3289,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 1133084864
+          "estimated_model_bytes": 1127990304
         },
         "notes": "downloaded Hunyuan dense architecture coverage"
       }
@@ -3332,7 +3332,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 18236703520
+          "estimated_model_bytes": 18231574016
         },
         "notes": "downloaded Tencent HY v3 MoE architecture coverage"
       }
@@ -3375,7 +3375,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 8967115424
+          "estimated_model_bytes": 8962816000
         },
         "notes": "downloaded Jais architecture coverage"
       }
@@ -3418,7 +3418,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 5104022560
+          "estimated_model_bytes": 5097211392
         },
         "notes": "gated Jais 2 artifact with locally verified immutable digest"
       }
@@ -3463,7 +3463,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 784318432
+          "estimated_model_bytes": 777396384
         },
         "notes": "compact hybrid three-recurrent-to-one-attention boundary sweep"
       }
@@ -3509,7 +3509,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 5138197824
+          "estimated_model_bytes": 5129959168
         },
         "notes": "LFM2 MoE hybrid recurrent boundary sweep"
       }
@@ -3552,7 +3552,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 672108288
+          "estimated_model_bytes": 666155520
         },
         "notes": "downloaded Maincoder architecture coverage"
       }
@@ -3596,7 +3596,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 8071294784
+          "estimated_model_bytes": 8067705856
         },
         "notes": "Mellum MoE sliding-window architecture coverage"
       }
@@ -3639,7 +3639,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 4965526048
+          "estimated_model_bytes": 4963831552
         },
         "notes": "downloaded MiniCPM 4.1 architecture coverage"
       }
@@ -3683,7 +3683,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 1631210720
+          "estimated_model_bytes": 1618131968
         },
         "notes": "Muse Glimmer dflash text and projector lanes",
         "mmproj_artifact": {

@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/gemma3n.cpp b/src/models/gemma3n.cpp
-index ea616db3ba3c233a28eaf675ecf8bdb0cb4250ad..a7debd13568f12c3e91f17c1454a9d4c637cdee2 100644
+index bb628203aaaf584a386b42a615668df9681ccaaa..e7bedbc18661faca4676d4d96b7b6ce06b5d2764 100644
 --- a/src/models/gemma3n.cpp
 +++ b/src/models/gemma3n.cpp
 @@ -98,10 +98,27 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
@@ -47,7 +47,7 @@ index ea616db3ba3c233a28eaf675ecf8bdb0cb4250ad..a7debd13568f12c3e91f17c1454a9d4c
      auto * inp_attn = build_attn_inp_kv_iswa();
  
 -    ggml_tensor * inp_per_layer = build_inp_per_layer();
-+    ggml_tensor * inp_per_layer_proj = stage_filtered && il_start > 0 ? ggml_view_2d_slice(ctx0, inpL, i_altup_act) : inpL;
++    ggml_tensor * inp_per_layer_proj = stage_filtered && il_start > 0 ? gemma3n_view_2d_slice(ctx0, inpL, i_altup_act) : inpL;
 +    ggml_tensor * inp_per_layer_sideband = nullptr;
 +    ggml_tensor * inp_stage_tokens = nullptr;
 +    const skippy_activation_tokens & activation_tokens = build_inputs.activation_tokens;
@@ -111,7 +111,7 @@ index ea616db3ba3c233a28eaf675ecf8bdb0cb4250ad..a7debd13568f12c3e91f17c1454a9d4c
 +        cb(stage_boundary, "stage_boundary_cont", il_end - 1);
 +        res->t_skippy_gemma3n_altup = stage_boundary;
 +        res->t_skippy_activation_output = stage_boundary;
-+        res->t_embd = ggml_view_2d_slice(ctx0, stage_boundary, i_altup_act);
++        res->t_embd = gemma3n_view_2d_slice(ctx0, stage_boundary, i_altup_act);
 +        ggml_build_forward_expand(gf, stage_boundary);
 +        return;
      }

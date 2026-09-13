@@ -117,7 +117,7 @@ class LiveMatrixScriptTests(unittest.TestCase):
             smoke_mock = tmp / "smoke-mock.sh"
             smoke_mock.write_text(
                 "#!/usr/bin/env bash\n"
-                'printf "smoke ran with model %s payload-kind %s\\n" "$MESH_TWO_NODE_SPLIT_MODEL" "$MESH_TWO_NODE_SPLIT_EXPECTED_EXACT_PAYLOAD_KIND"\n'
+                'printf "smoke ran with model %s payload-kind %s ctx-size %s\\n" "$MESH_TWO_NODE_SPLIT_MODEL" "$MESH_TWO_NODE_SPLIT_EXPECTED_EXACT_PAYLOAD_KIND" "$MESH_TWO_NODE_SPLIT_CTX_SIZE"\n'
             )
             smoke_mock.chmod(0o755)
 
@@ -171,7 +171,9 @@ class LiveMatrixScriptTests(unittest.TestCase):
             self.assertIn("live matrix passed: 1/1 rows", result.stdout)
             # The mocked smoke received the package dir and payload kind.
             smoke_log = (tmp / "evidence" / "live-matrix" / "mockfamily" / "two-node-split.log")
-            self.assertIn("payload-kind kv-recurrent", smoke_log.read_text())
+            self.assertIn(
+                "payload-kind kv-recurrent ctx-size 4096", smoke_log.read_text()
+            )
 
     def test_one_mocked_row_sha_mismatch_fails_closed(self):
         """A pinned sha mismatch must fail the matrix beyond dry-run."""
@@ -245,7 +247,7 @@ class LiveMatrixScriptTests(unittest.TestCase):
 
         payload = b"symlinked-gguf-bytes-for-matrix-row"
         blob = hashlib.sha256(payload).hexdigest()
-        forms = ["path={}", "path: {}", "{}"]
+        forms = ["path={}", "path: {}", "  path: {}", "{}"]
         for form in forms:
             with self.subTest(form=form.split("{}")[0].strip() or "bare"):
                 with tempfile.TemporaryDirectory() as tmp_name:
