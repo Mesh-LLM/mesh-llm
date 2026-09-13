@@ -845,3 +845,8 @@ The CPU native runtime-event gate selects `family-qwen3-dense` from the
 `skippy-ci-smoke` manifest for both `pull-request` and `main` cadences. The
 canonical artifact registry explicitly permits both uses, and the workflow
 contract test resolves its selected model through the real manifest resolver.
+
+The gate resolves bundle, model and evidence paths against the caller's working
+directory before invoking Cargo. Cargo starts the integration test in its crate
+directory; absolute paths keep its evidence writer and the wrapper's execution
+check on the same file.
