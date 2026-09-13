@@ -563,3 +563,179 @@ async fn test_api_proxy_passes_through_native_base64_audio() {
     proxy_handle.abort();
     let _ = upstream_handle.await;
 }
+
+/// A malformed JSON body on a JSON inference route is a client error.
+///
+/// Before this, the parse failure was swallowed into `Option::None`
+/// (`request_parse.rs`: both the metadata parse and the forwarding rewrite use
+/// `.ok()`), so a syntactically broken body arrived at routing looking exactly
+/// like one that merely named no model — and then surfaced as a misleading
+/// 503 routing failure. This drives it through the real HTTP boundary.
+#[tokio::test]
+async fn test_api_proxy_rejects_malformed_json_with_bad_request() {
+    let (port, _upstream_rx, upstream_handle) = spawn_capturing_upstream(r#"{"ok":true}"#).await;
+    let (proxy_addr, proxy_handle) =
+        spawn_api_proxy_test_harness(local_targets(&[("test", port)])).await;
+
+    // Valid-looking request that is not valid JSON: a trailing comma.
+    let body = r#"{"model":"test","messages":[{"role":"user","content":"hi"}],}"#;
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
+
+    let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+
+    assert!(
+        response.starts_with("HTTP/1.1 400 Bad Request"),
+        "malformed JSON must not surface as a routing failure: {response}"
+    );
+    assert!(
+        response.contains("not valid JSON"),
+        "the response should say what was wrong with the request: {response}"
+    );
+    assert!(
+        !response.starts_with("HTTP/1.1 503"),
+        "503 misattributes a client error to mesh capacity: {response}"
+    );
+
+    proxy_handle.abort();
+    upstream_handle.abort();
+}
+
+/// The same rejection on the other JSON inference routes, so the contract is
+/// consistent rather than chat-only.
+#[tokio::test]
+async fn test_api_proxy_rejects_malformed_json_on_other_inference_routes() {
+    for path in ["/v1/completions", "/v1/responses", "/v1/embeddings?trace=1"] {
+        let (port, _upstream_rx, upstream_handle) =
+            spawn_capturing_upstream(r#"{"ok":true}"#).await;
+        let (proxy_addr, proxy_handle) =
+            spawn_api_proxy_test_harness(local_targets(&[("test", port)])).await;
+
+        let body = "{not json at all";
+        let request = format!(
+            "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+
+        let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+        assert!(
+            response.starts_with("HTTP/1.1 400 Bad Request"),
+            "{path} should reject malformed JSON: {response}"
+        );
+
+        proxy_handle.abort();
+        upstream_handle.abort();
+    }
+}
+
+/// The narrow-contract guard. A **valid** JSON body that omits `model` must
+/// keep auto-routing exactly as before — the fix rejects unparseable bodies,
+/// not bodies that decline to name a model.
+#[tokio::test]
+async fn test_api_proxy_still_auto_routes_valid_json_without_a_model_field() {
+    let (port, upstream_rx, upstream_handle) = spawn_capturing_upstream(r#"{"ok":true}"#).await;
+    let (proxy_addr, proxy_handle) =
+        spawn_api_proxy_test_harness(local_targets(&[("test", port)])).await;
+
+    let body = json!({
+        "messages": [{"role": "user", "content": "no model field, please auto-route"}],
+    })
+    .to_string();
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
+
+    let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+    let raw = String::from_utf8(upstream_rx.await.unwrap()).unwrap();
+
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK"),
+        "a model-less valid request must still auto-route: {response}"
+    );
+    assert!(raw.contains("no model field, please auto-route"));
+
+    proxy_handle.abort();
+    let _ = upstream_handle.await;
+}
+
+/// An empty body is not a JSON syntax error, and must not become one.
+#[tokio::test]
+async fn test_api_proxy_does_not_reject_an_empty_body_as_malformed_json() {
+    let (port, _upstream_rx, upstream_handle) = spawn_capturing_upstream(r#"{"ok":true}"#).await;
+    let (proxy_addr, proxy_handle) =
+        spawn_api_proxy_test_harness(local_targets(&[("test", port)])).await;
+
+    let request = "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n".to_string();
+    let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+
+    assert!(
+        !response.contains("not valid JSON"),
+        "an empty body is not a JSON parse failure: {response}"
+    );
+
+    proxy_handle.abort();
+    upstream_handle.abort();
+}
+
+/// Binary/non-JSON routes are untouched. `/api/objects` carries raw uploads
+/// through this same reader, so widening the JSON requirement past the
+/// inference allowlist would break it.
+#[tokio::test]
+async fn test_api_proxy_does_not_require_json_on_non_inference_routes() {
+    let (port, _upstream_rx, upstream_handle) = spawn_capturing_upstream(r#"{"ok":true}"#).await;
+    let (proxy_addr, proxy_handle) =
+        spawn_api_proxy_test_harness(local_targets(&[("test", port)])).await;
+
+    let body = "\x00\x01\x02not json";
+    let request = format!(
+        "POST /api/objects HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
+
+    let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+
+    assert!(
+        !response.contains("not valid JSON"),
+        "a binary upload route must not be rejected for failing to be JSON: {response}"
+    );
+
+    proxy_handle.abort();
+    upstream_handle.abort();
+}
+
+/// The exact reported symptom, pinned: with no local target for the named
+/// model, a malformed body used to fall through to the "no route" path and
+/// return 503 Service Unavailable — blaming mesh capacity for a client error.
+/// It is now 400 regardless of whether any target exists.
+#[tokio::test]
+async fn test_api_proxy_malformed_json_is_400_not_503_when_no_target_exists() {
+    let (proxy_addr, proxy_handle) =
+        spawn_api_proxy_test_harness(election::ModelTargets::default()).await;
+
+    let body = r#"{"model":"test","messages":[{"role":"user","content":"hi"}],}"#;
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
+
+    let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+
+    assert!(
+        response.starts_with("HTTP/1.1 400 Bad Request"),
+        "expected a client error, got: {response}"
+    );
+    assert!(
+        !response.contains("503"),
+        "the misleading routing failure must be gone: {response}"
+    );
+
+    proxy_handle.abort();
+}

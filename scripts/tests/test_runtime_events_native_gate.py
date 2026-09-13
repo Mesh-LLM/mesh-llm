@@ -14,8 +14,10 @@ marker itself, and the lane runs the script.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -82,6 +84,7 @@ class GateScriptBehaviorTests(unittest.TestCase):
         bundle: str | None = None,
         model: str | None = None,
         evidence_seed: str | None = None,
+        relative_paths: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         stub_bin = root / "stub-bin"
         stub_bin.mkdir(exist_ok=True)
@@ -101,6 +104,10 @@ class GateScriptBehaviorTests(unittest.TestCase):
         evidence = root / "evidence.txt"
         if evidence_seed is not None:
             evidence.write_text(evidence_seed, encoding="utf-8")
+        if relative_paths:
+            bundle = os.path.relpath(bundle, root)
+            model = os.path.relpath(model, root)
+            evidence = Path(os.path.relpath(evidence, root))
 
         return subprocess.run(
             [
@@ -116,6 +123,7 @@ class GateScriptBehaviorTests(unittest.TestCase):
             capture_output=True,
             text=True,
             check=False,
+            cwd=root,
             env={
                 **os.environ,
                 "PATH": f"{stub_bin}{os.pathsep}{os.environ['PATH']}",
@@ -139,6 +147,27 @@ class GateScriptBehaviorTests(unittest.TestCase):
             result = self.run_gate(Path(directory), cargo_body=self.EXECUTES)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("executed", result.stdout)
+
+    def test_relative_paths_survive_cargo_changing_to_the_crate_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            crate = root / "crate"
+            crate.mkdir()
+            result = self.run_gate(
+                root,
+                relative_paths=True,
+                cargo_body=(
+                    "#!/usr/bin/env bash\n"
+                    "set -euo pipefail\n"
+                    f'cd "{crate}"\n'
+                    'test -d "$MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR"\n'
+                    'test -s "$MESH_LLM_RUNTIME_EVENTS_MODEL"\n'
+                    'printf "executed\\n" >> "$MESH_LLM_RUNTIME_EVENTS_EVIDENCE_FILE"\n'
+                ),
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual((root / "evidence.txt").read_text(), "executed\n")
+            self.assertFalse((crate / "evidence.txt").exists())
 
     def test_a_blocked_gate_fails_even_though_the_test_exits_zero(self) -> None:
         """The whole reason the script checks the marker.
@@ -274,6 +303,36 @@ class LinuxRuntimeSliceTests(unittest.TestCase):
             "ci/model-artifacts/manifests/skippy-ci-smoke.json",
         )
         self.assertEqual(step["with"]["model_artifact_id"], "family-qwen3-dense")
+
+    def test_the_gate_model_resolves_at_every_workflow_cadence(self) -> None:
+        inputs = self.steps["Restore runtime-event gate model"]["with"]
+        self.assertEqual(
+            inputs["model_cadence"],
+            "${{ (inputs.original_event_name == 'pull_request' || "
+            "inputs.original_event_name == 'pull_request_target') && "
+            "'pull-request' || 'main' }}",
+        )
+        for cadence in ("pull-request", "main"):
+            with self.subTest(cadence=cadence):
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(ROOT / "scripts" / "resolve-test-model-manifest.py"),
+                        str(ROOT / inputs["model_manifest"]),
+                        "--artifact-id", inputs["model_artifact_id"],
+                        "--cadence", cadence,
+                        "--require-single-file",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                artifact = json.loads(result.stdout)
+                self.assertEqual(artifact["artifact_id"], inputs["model_artifact_id"])
+                self.assertEqual(json.loads(artifact["files_json"]), [artifact["file"]])
+                self.assertRegex(artifact["sha256"], r"^[0-9a-f]{64}$")
+                self.assertGreater(int(artifact["size_bytes"]), 0)
 
     def test_evidence_is_uploaded_even_when_the_gate_fails(self) -> None:
         """The evidence file is how a failure is diagnosed, so it must
