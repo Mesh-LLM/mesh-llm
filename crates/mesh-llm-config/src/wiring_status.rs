@@ -1202,6 +1202,13 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         behavior: WiringBehavior::None,
     },
     WiringEntry {
+        path: "speculative.ngram_fallback",
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
+    },
+    WiringEntry {
         path: "speculative.extension_max_tokens",
         status: WiringStatus::Wired,
         owner: "n/a",

@@ -62,7 +62,7 @@ pub(super) fn resolve_speculative_config(
         global_config.and_then(|config| config.strategy.as_deref()),
         Some("auto"),
     );
-    let (strategy, native_mtp_enabled) = resolve_native_mtp_strategy(
+    let (strategy, mut native_mtp_enabled) = resolve_native_mtp_strategy(
         strategy,
         auto_defaults_enabled,
         supports_native_mtp,
@@ -122,8 +122,11 @@ pub(super) fn resolve_speculative_config(
         resolved_draft_max_tokens(native_mtp_enabled, draft_max_tokens);
     validate_draft_min_max(draft_min_tokens, effective_draft_max_tokens)
         .map_err(anyhow::Error::msg)?;
-    if native_mtp_enabled && draft_model_path.is_some() {
+    let native_mtp_sidecar_disabled = if native_mtp_enabled && draft_model_path.is_some() {
+        native_mtp_enabled =
+            resolve_native_mtp_sidecar(&mut draft_model_path, pairing_fault.as_str(), model_path)?;
         mode = "disabled".to_string();
+        !native_mtp_enabled
     } else if mode == "draft" || (mode == "auto" && draft_model_path.is_some()) {
         resolve_draft_speculative_mode(
             &mut mode,
@@ -132,19 +135,28 @@ pub(super) fn resolve_speculative_config(
             pairing_fault.as_str(),
             model_path,
         )?;
+        false
     } else {
         mode = "disabled".to_string();
         draft_model_path = None;
-    }
-    let decode = resolve_decode_config(DecodeResolutionInput {
-        requested_strategy: &strategy,
+        false
+    };
+    let decode_strategy = if native_mtp_sidecar_disabled {
+        "disabled"
+    } else {
+        strategy.as_str()
+    };
+    let mut decode = resolve_decode_config(DecodeResolutionInput {
+        requested_strategy: decode_strategy,
         native_mtp_enabled,
         draft_max_tokens: effective_draft_max_tokens,
         draft_min_tokens,
         model_config,
         global_config,
         package_generation,
+        has_draft_model: mode == "draft" && draft_model_path.is_some(),
     })?;
+    decode.requested_strategy.clone_from(&strategy);
     // A standalone N-gram plan (no native MTP, no draft model) runs in the
     // legacy `ngram` mode so the embedded frontend derives its window from the
     // proposer's proposal limit.
@@ -219,6 +231,7 @@ struct DecodeResolutionInput<'a> {
     model_config: Option<&'a SpeculativeConfig>,
     global_config: Option<&'a SpeculativeConfig>,
     package_generation: Option<&'a PackageGenerationInfo>,
+    has_draft_model: bool,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -477,6 +490,39 @@ fn resolve_decode_config(input: DecodeResolutionInput<'_>) -> Result<Speculative
     if config.verify_window.min_tokens > config.verify_window.max_tokens {
         bail!("skippy speculative verify window requires min_tokens <= max_tokens");
     }
+    let ngram_fallback = pick_string(
+        input
+            .model_config
+            .and_then(|value| value.ngram_fallback.as_deref()),
+        input
+            .global_config
+            .and_then(|value| value.ngram_fallback.as_deref()),
+        None,
+    );
+    config.ngram_fallback_draft = match ngram_fallback {
+        "draft" => {
+            if config.ngram.is_none() {
+                bail!("skippy speculative ngram_fallback = \"draft\" requires an N-gram strategy");
+            }
+            // Both of these would otherwise start cleanly and never take the
+            // fallback path: the operator gets baseline behaviour and a
+            // telemetry counter stuck at zero, indistinguishable from a
+            // proposer that simply never missed.
+            if !input.has_draft_model {
+                bail!(
+                    "skippy speculative ngram_fallback = \"draft\" requires speculative.draft_model"
+                );
+            }
+            if config.verify_window.pipeline_depth <= 1 {
+                bail!(
+                    "skippy speculative ngram_fallback = \"draft\" requires verify_window_pipeline_depth > 1; the classic serial draft loop is authoritative at depth 1"
+                );
+            }
+            true
+        }
+        "none" | "" => false,
+        other => bail!("skippy speculative ngram_fallback must be draft or none, got {other}"),
+    };
     config.validate()?;
     Ok(config)
 }
@@ -572,6 +618,7 @@ fn package_decode_config(
         ngram,
         extension,
         verify_window,
+        ngram_fallback_draft: false,
         ..SpeculativeDecodeConfig::default()
     }))
 }
@@ -777,6 +824,28 @@ fn resolve_draft_speculative_mode(
         }
     }
     Ok(())
+}
+
+fn resolve_native_mtp_sidecar(
+    draft_model_path: &mut Option<PathBuf>,
+    pairing_fault: &str,
+    model_path: &Path,
+) -> Result<bool> {
+    let draft_path = draft_model_path
+        .as_ref()
+        .expect("native MTP sidecar path is present");
+    let Some(reason) = incompatible_draft_pair_reason(model_path, draft_path) else {
+        return Ok(true);
+    };
+    match pairing_fault {
+        "warn_disable" => {
+            *draft_model_path = None;
+            Ok(false)
+        }
+        "fail_open" => Ok(true),
+        "fail_closed" => bail!("skippy incompatible native MTP sidecar pairing: {reason}"),
+        _ => unreachable!(),
+    }
 }
 
 fn package_generation_or_direct_default_supports_native_mtp(

@@ -1071,6 +1071,109 @@ draft_min_tokens = 0
 }
 
 #[test]
+fn incompatible_native_mtp_sidecar_warn_disable_turns_native_mtp_off() {
+    let draft_file = temp_model_file_with_architecture_and_tensor_names(
+        "qwen2",
+        &["blk.10.nextn.eh_proj.weight"],
+        None,
+    );
+    let mesh_config = parse_config(&format!(
+        r#"
+[defaults.speculative]
+strategy = "mtp"
+draft_model_path = {}
+pairing_fault = "warn_disable"
+"#,
+        toml_path(draft_file.path())
+    ));
+    let model_file = temp_model_file();
+
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "model",
+        model_path: model_file.path(),
+        model_bytes: 4 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+        compact_meta: None,
+    })
+    .expect("warn_disable should reject only the incompatible sidecar");
+
+    assert!(!resolved.speculative.native_mtp_enabled);
+    assert!(resolved.speculative.draft_model_path.is_none());
+    assert!(!resolved.speculative.decode.native_mtp.enabled);
+    assert_eq!(resolved.speculative.decode.effective_strategy, "disabled");
+}
+
+#[test]
+fn incompatible_native_mtp_sidecar_fail_closed_rejects_before_launch() {
+    let draft_file = temp_model_file_with_architecture_and_tensor_names(
+        "qwen2",
+        &["blk.10.nextn.eh_proj.weight"],
+        None,
+    );
+    let mesh_config = parse_config(&format!(
+        r#"
+[defaults.speculative]
+strategy = "mtp"
+draft_model_path = {}
+pairing_fault = "fail_closed"
+"#,
+        toml_path(draft_file.path())
+    ));
+    let model_file = temp_model_file();
+
+    let error = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "model",
+        model_path: model_file.path(),
+        model_bytes: 4 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+        compact_meta: None,
+    })
+    .expect_err("fail_closed must reject an incompatible native MTP sidecar")
+    .to_string();
+
+    assert!(error.contains("incompatible native MTP sidecar pairing"));
+}
+
+#[test]
+fn native_mtp_sidecar_does_not_satisfy_ngram_draft_fallback() {
+    let sidecar = temp_model_file_with_tensor_names(&["blk.10.nextn.eh_proj.weight"], None);
+    let mesh_config = parse_config(&format!(
+        r#"
+[defaults.speculative]
+strategy = "mtp"
+draft_model_path = {}
+ngram_min = 2
+ngram_max = 4
+ngram_fallback = "draft"
+verify_window_pipeline_depth = 2
+"#,
+        toml_path(sidecar.path())
+    ));
+    let model_file = temp_model_file();
+
+    let error = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "model",
+        model_path: model_file.path(),
+        model_bytes: 4 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+        compact_meta: None,
+    })
+    .expect_err("native MTP sidecars must not enable draft fallback")
+    .to_string();
+
+    assert!(error.contains("requires speculative.draft_model"));
+}
+
+#[test]
 fn speculative_default_false_disables_auto_native_mtp_for_direct_gguf() {
     let mesh_config = parse_config(
         r#"
