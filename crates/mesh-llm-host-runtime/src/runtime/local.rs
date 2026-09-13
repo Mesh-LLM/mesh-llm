@@ -449,6 +449,35 @@ pub(super) async fn set_advertised_model_context(
     node.regossip().await;
 }
 
+/// Record the SHA-256 of the served GGUF's file bytes on this model's served
+/// descriptor. `None` when the file could not be hashed (unreadable) -- left
+/// absent, never fabricated. This never touches `identity_hash` (the
+/// reference-string hash) -- the two are different facts and neither
+/// replaces the other.
+///
+/// Nothing in this crate's `openai.exchange.v1` terminal event
+/// (`OpenAiExchangeEnvelope`, `plugin/openai_exchange.rs`) reads this field
+/// yet -- it carries only `exchange_id`/`model`/`status`/capsule-marker
+/// fields today, not a served-model identity block. A `ServingProvenance`
+/// terminal-event block that does thread a served digest through exists, but
+/// only on fork-only demo/ledger-UI lineage (`feat/serving-provenance` and
+/// descendants), never merged to `origin/main` and absent from this branch.
+/// It also deliberately never crosses the mesh gossip wire (see
+/// `protocol/convert.rs`'s `descriptor_identity_to_proto`, which drops it on
+/// purpose: a peer could never verify a hash of bytes only this node can
+/// read). So today this is Record-only: the digest lands on this node's own
+/// served-model descriptor and nothing else -- neither an exchange a peer or
+/// plugin observes, nor a peer's gossip view -- reads it.
+pub(super) async fn set_local_model_weights_digest(
+    node: &mesh::Node,
+    model_name: &str,
+    generation: u64,
+    weights_digest: Option<String>,
+) -> bool {
+    node.set_served_model_weights_digest_for_generation(model_name, generation, weights_digest)
+        .await
+}
+
 pub(super) async fn withdraw_advertised_model(node: &mesh::Node, model_name: &str, profile: &str) {
     let mut hosted_models = node.hosted_models().await;
     let public_id = if profile.is_empty() {
@@ -485,9 +514,51 @@ pub(super) async fn add_serving_assignment(
     if let Some(descriptor) =
         mesh::infer_local_served_model_descriptor(model_name, model_name == primary_model_name)
     {
-        node.upsert_served_model_descriptor(descriptor).await;
+        node.update_served_model_descriptor(model_name, move |existing| {
+            let mut descriptor = descriptor;
+            carry_forward_weights_digest(
+                &mut descriptor,
+                existing.and_then(|existing| existing.identity.weights_digest),
+            );
+            descriptor
+        })
+        .await;
     }
     node.regossip().await;
+}
+
+/// `upsert_served_model_descriptor` replaces any existing descriptor for a
+/// model wholesale (`Node::upsert_served_model_descriptor`). A
+/// freshly-inferred descriptor has no knowledge of a `weights_digest`
+/// `set_local_model_weights_digest` may have already recorded on some other
+/// startup path -- carry it forward here rather than letting a descriptor
+/// that never touched the digest silently clobber it back to `None`. A
+/// no-op when the new descriptor already carries its own digest.
+fn carry_forward_weights_digest(
+    descriptor: &mut mesh::ServedModelDescriptor,
+    existing_digest: Option<String>,
+) {
+    if descriptor.identity.weights_digest.is_none() {
+        descriptor.identity.weights_digest = existing_digest;
+    }
+}
+
+/// TOCTOU narrowing for `weights_digest` (CodeRabbit, `runtime/local.rs:625`):
+/// `before` is the file's (size, mtime) captured before the digest hash and
+/// before `start_local_openai_model` was called; `after` is the same
+/// fingerprint taken once that call has already returned `Ok` -- meaning
+/// whatever read the native loader performed to actually serve the file has
+/// already happened. The digest is trustworthy only if the file was stable
+/// across that whole window: unreadable-now, or any change in size or
+/// mtime, means a replacement could have raced the load, so the digest must
+/// be dropped rather than published as fact. A replacement that preserves
+/// both size AND mtime exactly is a documented blind spot (the digest
+/// cache's own key has the same one) and is not detected by this check.
+fn weights_digest_toctou_recheck_passes(
+    before: Option<(u64, u128)>,
+    after: Option<(u64, u128)>,
+) -> bool {
+    after.is_some() && after == before
 }
 
 pub(super) async fn set_runtime_verified_served_model_capabilities(
@@ -496,18 +567,15 @@ pub(super) async fn set_runtime_verified_served_model_capabilities(
     model_name: &str,
     capabilities: models::ModelCapabilities,
 ) {
-    let existing = node
-        .served_model_descriptors()
-        .await
-        .into_iter()
-        .find(|descriptor| descriptor.identity.model_name == model_name);
-    let descriptor = runtime_verified_served_model_descriptor(
-        existing,
-        primary_model_name,
-        model_name,
-        capabilities,
-    );
-    node.upsert_served_model_descriptor(descriptor).await;
+    node.update_served_model_descriptor(model_name, |existing| {
+        runtime_verified_served_model_descriptor(
+            existing,
+            primary_model_name,
+            model_name,
+            capabilities,
+        )
+    })
+    .await;
 }
 
 pub(super) fn runtime_verified_served_model_descriptor(
@@ -578,6 +646,36 @@ pub(super) async fn start_runtime_local_model(
             .await?;
         }
     }
+    // Start hashing the GGUF's file bytes now, at load -- the one place this
+    // node opens the file for serving -- but detached: a large GGUF's hash
+    // can take minutes (Qwen3.8 UD-IQ2_XXS is ~612 GiB, ~5 minutes at
+    // 2 GB/s), and the node can serve perfectly well while the digest is
+    // still `None`. Awaiting this inline would add that whole cost to every
+    // cold start; detaching it lets model startup and the hash run
+    // concurrently, and the descriptor is updated once the hash completes
+    // (see below, after `start_result` resolves). Cached by (path, size,
+    // mtime) and persisted to a sidecar record, so a model already hashed
+    // for this exact file state costs nothing on a later restart. A
+    // layer-package reference or any other non-file path fails the stat and
+    // yields `None` -- honest absence, never a fabricated digest.
+    let model_path_for_digest = spec.model_path.to_path_buf();
+    let weights_digest_before_state =
+        tokio::task::spawn_blocking(move || mesh::file_fingerprint(&model_path_for_digest))
+            .await
+            .unwrap_or(None);
+    let model_path_for_digest = spec.model_path.to_path_buf();
+    let weights_digest_handle = tokio::spawn(async move {
+        tokio::task::spawn_blocking(move || mesh::weights_digest_for_file(&model_path_for_digest))
+            .await
+            .unwrap_or_else(|join_err| {
+                tracing::warn!(
+                    error = %join_err,
+                    "weights digest thread panicked; treating as unreadable"
+                );
+                None
+            })
+    });
+
     let local_capacity_bytes = spec
         .capacity_budget_bytes
         .or_else(|| spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()))
@@ -585,7 +683,7 @@ pub(super) async fn start_runtime_local_model(
     let http_bind_addr = ([127, 0, 0, 1], alloc_local_port().await?).into();
     let hook_policy =
         Some(skippy::MeshAutoHookPolicy::new(spec.node.clone()) as Arc<dyn OpenAiHookPolicy>);
-    start_local_openai_model(
+    let start_result = start_local_openai_model(
         LocalOpenAiModelStartSpec {
             mesh_config: spec.mesh_config,
             config_model_id: spec.config_model_id,
@@ -612,7 +710,81 @@ pub(super) async fn start_runtime_local_model(
         },
         runtime_model_name,
     )
-    .await
+    .await;
+
+    // Commit the weights digest onto the served-model descriptor only after
+    // local startup has actually succeeded. `gossip.rs` includes
+    // served_model_descriptors in every announcement, so upserting this
+    // before start_local_openai_model resolves would let a failed start
+    // (capacity check, model load, HTTP bind) advertise a digest for a model
+    // that never started serving. On failure the hash task is left detached
+    // rather than aborted: it still populates the persisted cache for a
+    // later retry, it just never touches the descriptor.
+    if start_result.is_ok() {
+        let generation = spec
+            .node
+            .begin_served_model_generation(runtime_model_name)
+            .await;
+        let node = spec.node.clone();
+        let runtime_model_name = runtime_model_name.to_string();
+        let model_path_for_recheck = spec.model_path.to_path_buf();
+        tokio::spawn(async move {
+            let weights_digest = weights_digest_handle.await.unwrap_or_else(|join_err| {
+                tracing::warn!(
+                    error = %join_err,
+                    "weights digest task panicked; treating as unreadable"
+                );
+                None
+            });
+            // TOCTOU narrowing (CodeRabbit, runtime/local.rs:625): the digest
+            // above was read via an independent `File::open`, entirely
+            // separate from whatever read `StageModel::open` performed to
+            // actually serve this file (verified: the native loader never
+            // returns loaded bytes across the FFI boundary, so there is no
+            // API to derive the digest from that same load -- see
+            // `mesh::weights_digest_for_file`'s module doc). This does not
+            // close that gap, but it bounds it: `weights_digest_before_state`
+            // was captured before this async fn even called
+            // `start_local_openai_model`, and by this point that call has
+            // already returned `Ok` -- so it has already performed whatever
+            // read it is going to perform. If the file's (size, mtime) here
+            // still match what was captured before, the file was stable for
+            // the entire window that could contain the native loader's read;
+            // if they don't, a replacement could have raced it, so the
+            // digest is dropped rather than published as fact. A replacement
+            // that preserves both size AND mtime exactly is the same
+            // documented blind spot the digest cache's own key already has,
+            // and remains undetected here too.
+            let weights_digest = weights_digest.and_then(|digest| {
+                let after_state = mesh::file_fingerprint(&model_path_for_recheck);
+                if weights_digest_toctou_recheck_passes(weights_digest_before_state, after_state) {
+                    Some(digest)
+                } else {
+                    tracing::warn!(
+                        path = %model_path_for_recheck.display(),
+                        "model file's (size, mtime) changed between hashing and start finishing; discarding weights_digest"
+                    );
+                    None
+                }
+            });
+            if !set_local_model_weights_digest(
+                &node,
+                &runtime_model_name,
+                generation,
+                weights_digest,
+            )
+            .await
+            {
+                tracing::debug!(
+                    model = %runtime_model_name,
+                    generation,
+                    "discarding weights_digest for a model generation that is no longer active"
+                );
+            }
+        });
+    }
+
+    start_result
 }
 
 pub(super) async fn start_local_openai_model(
@@ -1030,7 +1202,15 @@ pub(super) fn local_process_snapshot(
 
 #[cfg(test)]
 mod tests {
-    use super::unix_nanos_to_unix_ms;
+    use super::{
+        LocalRuntimeModelStartSpec, RuntimeResourcePlanningProfile, openai_guardrail_policy_handle,
+        unix_nanos_to_unix_ms,
+    };
+    use crate::inference::skippy;
+    use crate::mesh;
+    use crate::plugin;
+    use crate::runtime::survey;
+    use skippy_protocol::FlashAttentionType;
 
     #[test]
     fn unix_nanos_to_unix_ms_converts_a_real_capture_time() {
@@ -1046,5 +1226,299 @@ mod tests {
         // epoch". Callers must not project 1970 as a success timestamp.
         assert_eq!(unix_nanos_to_unix_ms(0), None);
         assert_eq!(unix_nanos_to_unix_ms(-1), None);
+    }
+
+    /// Branch 1: a descriptor already exists for the model; the digest is
+    /// recorded on the existing entry (overwrite path).
+    #[tokio::test]
+    async fn set_local_model_weights_digest_overwrites_existing_descriptor() {
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+            .await
+            .unwrap();
+        let model_name = "test-model-overwrite";
+
+        // Pre-seed a descriptor so the function takes the overwrite branch.
+        node.upsert_served_model_descriptor(mesh::ServedModelDescriptor {
+            identity: mesh::ServedModelIdentity {
+                model_name: model_name.to_string(),
+                source_kind: mesh::ModelSourceKind::LocalGguf,
+                local_file_name: Some(format!("{model_name}.gguf")),
+                ..Default::default()
+            },
+            capabilities_known: false,
+            capabilities: crate::models::ModelCapabilities::default(),
+            topology: None,
+            metadata: None,
+        })
+        .await;
+
+        let generation = node.begin_served_model_generation(model_name).await;
+        assert!(
+            super::set_local_model_weights_digest(
+                &node,
+                model_name,
+                generation,
+                Some("sha256:abc123deadbeef".to_string()),
+            )
+            .await
+        );
+
+        let descriptors = node.served_model_descriptors().await;
+        let descriptor = descriptors
+            .iter()
+            .find(|d| d.identity.model_name == model_name)
+            .expect("descriptor must exist after set_local_model_weights_digest");
+        assert_eq!(
+            descriptor.identity.weights_digest.as_deref(),
+            Some("sha256:abc123deadbeef"),
+            "weights_digest must be recorded on the existing descriptor"
+        );
+    }
+
+    /// Branch 2: no descriptor exists for the model; the function synthesizes
+    /// a minimal one and records the digest on it.
+    #[tokio::test]
+    async fn set_local_model_weights_digest_synthesizes_descriptor_when_absent() {
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+            .await
+            .unwrap();
+        let model_name = "test-model-synthesize";
+
+        // Confirm no pre-existing descriptor for this name.
+        let before = node.served_model_descriptors().await;
+        assert!(
+            before.iter().all(|d| d.identity.model_name != model_name),
+            "test setup: no descriptor should exist yet"
+        );
+
+        let generation = node.begin_served_model_generation(model_name).await;
+        assert!(
+            super::set_local_model_weights_digest(
+                &node,
+                model_name,
+                generation,
+                Some("sha256:xyz789feedface".to_string()),
+            )
+            .await
+        );
+
+        let descriptors = node.served_model_descriptors().await;
+        let descriptor = descriptors
+            .iter()
+            .find(|d| d.identity.model_name == model_name)
+            .expect("synthesized descriptor must exist after set_local_model_weights_digest");
+        assert_eq!(
+            descriptor.identity.weights_digest.as_deref(),
+            Some("sha256:xyz789feedface"),
+            "weights_digest must be present on the synthesized descriptor"
+        );
+    }
+
+    /// A descriptor synthesized by `set_local_model_weights_digest` (branch 2
+    /// above) carries a digest but has no other real identity fields. If a
+    /// later real-descriptor registration path (`add_serving_assignment`)
+    /// unconditionally upserted its own freshly-inferred descriptor, it would
+    /// silently clobber that digest back to `None` -- `carry_forward_weights_digest`
+    /// exists to prevent exactly that.
+    #[test]
+    fn carry_forward_weights_digest_preserves_existing_when_new_descriptor_has_none() {
+        let mut descriptor = mesh::ServedModelDescriptor::default();
+        super::carry_forward_weights_digest(&mut descriptor, Some("sha256:carried".to_string()));
+        assert_eq!(
+            descriptor.identity.weights_digest.as_deref(),
+            Some("sha256:carried")
+        );
+    }
+
+    /// A descriptor that already has its own freshly-inferred digest must
+    /// win over whatever was previously recorded -- carrying forward is only
+    /// a fallback for the "new descriptor knows nothing about it" case.
+    #[test]
+    fn carry_forward_weights_digest_does_not_override_a_freshly_inferred_digest() {
+        let mut descriptor = mesh::ServedModelDescriptor {
+            identity: mesh::ServedModelIdentity {
+                weights_digest: Some("sha256:fresh".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        super::carry_forward_weights_digest(&mut descriptor, Some("sha256:stale".to_string()));
+        assert_eq!(
+            descriptor.identity.weights_digest.as_deref(),
+            Some("sha256:fresh")
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_generation_cannot_restore_a_removed_descriptor() {
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+            .await
+            .unwrap();
+        let model_name = "test-model-removed-before-digest";
+        let generation = node.begin_served_model_generation(model_name).await;
+        node.remove_served_model_descriptor(model_name).await;
+
+        assert!(
+            !super::set_local_model_weights_digest(
+                &node,
+                model_name,
+                generation,
+                Some("sha256:stale".to_string()),
+            )
+            .await
+        );
+        assert!(
+            node.served_model_descriptors()
+                .await
+                .iter()
+                .all(|descriptor| descriptor.identity.model_name != model_name)
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_generation_cannot_overwrite_a_replacement_descriptor() {
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+            .await
+            .unwrap();
+        let model_name = "test-model-replaced-before-digest";
+        let old_generation = node.begin_served_model_generation(model_name).await;
+        let current_generation = node.begin_served_model_generation(model_name).await;
+
+        assert!(
+            !super::set_local_model_weights_digest(
+                &node,
+                model_name,
+                old_generation,
+                Some("sha256:stale".to_string()),
+            )
+            .await
+        );
+        assert!(
+            super::set_local_model_weights_digest(
+                &node,
+                model_name,
+                current_generation,
+                Some("sha256:current".to_string()),
+            )
+            .await
+        );
+        let descriptor = node
+            .served_model_descriptors()
+            .await
+            .into_iter()
+            .find(|descriptor| descriptor.identity.model_name == model_name)
+            .unwrap();
+        assert_eq!(
+            descriptor.identity.weights_digest.as_deref(),
+            Some("sha256:current")
+        );
+    }
+
+    /// TOCTOU narrowing (CodeRabbit, `runtime/local.rs:625`): the file's
+    /// (size, mtime) is unchanged across the window from hashing to the
+    /// model finishing its load -- the digest is trustworthy.
+    #[test]
+    fn toctou_recheck_passes_when_file_state_is_unchanged() {
+        assert!(super::weights_digest_toctou_recheck_passes(
+            Some((100, 1)),
+            Some((100, 1))
+        ));
+    }
+
+    /// A size or mtime change between hashing and the model finishing its
+    /// load means a replacement could have raced the load -- the digest
+    /// must be dropped, never published as fact for bytes that might not
+    /// have been the ones actually served.
+    #[test]
+    fn toctou_recheck_fails_when_file_size_or_mtime_changed() {
+        assert!(!super::weights_digest_toctou_recheck_passes(
+            Some((100, 1)),
+            Some((200, 1))
+        ));
+        assert!(!super::weights_digest_toctou_recheck_passes(
+            Some((100, 1)),
+            Some((100, 2))
+        ));
+    }
+
+    /// A file that became unreadable by the time the model finished loading
+    /// is at least as suspicious as a changed (size, mtime) -- never treated
+    /// as "unchanged" just because there is nothing to compare against.
+    #[test]
+    fn toctou_recheck_fails_when_file_became_unreadable() {
+        assert!(!super::weights_digest_toctou_recheck_passes(
+            Some((100, 1)),
+            None
+        ));
+    }
+
+    /// A failed `start_runtime_local_model` must not leave behind a
+    /// served-model descriptor advertising a weights digest -- `gossip.rs`
+    /// includes `served_model_descriptors` in every announcement, so a
+    /// descriptor committed before the model actually started serving would
+    /// let a failed launch advertise a digest for a model no one is serving.
+    /// The capacity budget is set far below the real on-disk file size so
+    /// `start_local_openai_model`'s own vram-fit check fails fast, exercising
+    /// the full function without needing a real skippy/native model load.
+    #[tokio::test]
+    async fn failed_local_model_start_leaves_no_served_model_descriptor() {
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+            .await
+            .unwrap();
+        let model_name = "test-model-failed-start";
+
+        let dir = std::env::temp_dir().join(format!(
+            "weights-digest-start-fail-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("mk temp dir");
+        let model_path = dir.join("oversized.gguf");
+        std::fs::write(&model_path, vec![0_u8; 10_000_000]).expect("write temp model file");
+
+        let mesh_config = plugin::MeshConfig::default();
+        let spec = LocalRuntimeModelStartSpec {
+            node: &node,
+            mesh_config: &mesh_config,
+            config_model_id: None,
+            runtime_profile: "",
+            model_path: &model_path,
+            preindexed_split_package: None,
+            model_bytes: 10_000_000,
+            mmproj_override: None,
+            ctx_size_override: None,
+            pinned_gpu: None,
+            device_override: None,
+            capacity_budget_bytes: Some(1),
+            cache_type_k_override: None,
+            cache_type_v_override: None,
+            n_batch_override: None,
+            n_ubatch_override: None,
+            flash_attention_override: FlashAttentionType::Auto,
+            parallel_override: None,
+            local_source_required: false,
+            split_topology_lock: None,
+            planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
+            openai_guardrail_policy: openai_guardrail_policy_handle(
+                openai_frontend::GuardrailMode::Disabled,
+            ),
+            skippy_telemetry: skippy::SkippyTelemetryOptions::off(),
+            survey_telemetry: survey::SurveyTelemetry::disabled(),
+        };
+
+        let result = super::start_runtime_local_model(spec, model_name).await;
+        assert!(
+            result.is_err(),
+            "test setup: an undersized capacity budget must fail the start"
+        );
+
+        let descriptors = node.served_model_descriptors().await;
+        assert!(
+            descriptors
+                .iter()
+                .all(|descriptor| descriptor.identity.model_name != model_name),
+            "a failed local model start must not leave a served-model descriptor behind"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
