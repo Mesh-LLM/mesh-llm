@@ -331,6 +331,12 @@ jobs:
           FAMILY_BATTERY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: scripts/skippy-family-battery.sh --skip-build --plan "${{ steps.family_plan.outputs.plan_path }}"
 
+      - name: Verify split certification roster
+        id: split_roster
+        if: steps.battery.outcome == 'success'
+        continue-on-error: true
+        run: python3 scripts/generate-split-certified.py --check
+
       - name: Upload supported-families battery evidence
         if: ${{ steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' && (success() || failure() || cancelled()) }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -359,6 +365,7 @@ jobs:
           steps.prepare.outcome == 'success'
           && steps.sha.outputs.cadence == 'manual-full'
           && steps.battery.outcome == 'success'
+          && steps.split_roster.outcome == 'success'
           && steps.parity_validate.outcome == 'success'
           && steps.live_matrix.outcome == 'success'
           && steps.family_patch.outcome == 'success'
@@ -378,6 +385,7 @@ jobs:
           steps.prepare.outcome == 'success'
           && steps.sha.outputs.cadence == 'nightly'
           && steps.battery.outcome == 'success'
+          && steps.split_roster.outcome == 'success'
           && steps.parity_validate.outcome == 'success'
           && steps.live_matrix.outcome == 'success'
           && steps.family_patch.outcome == 'success'
@@ -396,6 +404,7 @@ jobs:
           steps.sha.outputs.changed != 'true'
           && steps.sha.outputs.certify == 'true'
           && (steps.battery.outcome == 'failure'
+              || steps.split_roster.outcome == 'failure'
               || steps.parity_validate.outcome == 'failure'
               || steps.live_matrix.outcome == 'failure'
               || steps.family_patch.outcome == 'failure')

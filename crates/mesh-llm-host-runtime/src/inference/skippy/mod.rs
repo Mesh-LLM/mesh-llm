@@ -13,6 +13,7 @@ pub(crate) mod metal_pipeline_cache;
 mod package;
 mod resolver;
 pub(crate) mod runtime_events;
+mod split_certification;
 mod stage;
 mod topology;
 
@@ -86,6 +87,7 @@ pub(crate) use resolver::{
     effective_safety_margin_bytes, resolve_skippy_config_for_selector,
 };
 pub(crate) use skippy_server::OpenAiGuardrailsStatus as SkippyOpenAiGuardrailsStatus;
+pub(crate) use split_certification::{require_split_certification, split_certification_label};
 pub(crate) use stage::admitted_resident_tensor_names;
 #[cfg(test)]
 pub(crate) use stage::test_stage_admission;

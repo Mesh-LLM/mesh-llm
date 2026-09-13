@@ -426,6 +426,14 @@ run_candidate_gates() {
   run_certification
 }
 
+write_split_certification_roster() {
+  python3 scripts/generate-split-certified.py
+}
+
+check_split_certification_roster() {
+  python3 scripts/generate-split-certified.py --check
+}
+
 repair_candidate_until_green() {
   local prompt
   REPAIR_DEADLINE_AT="$(( $(date +%s) + AGENT_TIMEOUT_SECONDS ))"
@@ -435,6 +443,10 @@ repair_candidate_until_green() {
   while remaining_repair_seconds >/dev/null; do
     agent_session_step "$prompt" || return 1
     assert_agent_control_unchanged || return 1
+    # The new native recipe cannot exercise split smoke against a roster tied
+    # to the prior recipe. The trusted wrapper overwrites this derived file
+    # before every gate; only a fully passing tree is later snapshotted.
+    write_split_certification_roster || return 1
     if run_candidate_gates; then
       assert_agent_control_unchanged || return 1
       validate_agent_manifest_changes || return 1
@@ -529,4 +541,5 @@ if ! run_candidate_gates; then
   echo "final canary verification failed; no canary branch or pull request was published" >&2
   exit 1
 fi
+check_split_certification_roster
 finalize_certified_tree

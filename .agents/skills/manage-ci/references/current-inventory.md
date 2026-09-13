@@ -119,7 +119,7 @@ rewriter check because `GITHUB_ENV` state does not cross job boundaries. The
 wrapper owns the exact upstream selector, validates the prepared-upstream stamp,
 runs the patched llama.cpp/native-test and Rust build gates, and completes the
 full supported-family certification using new native-build and family-evidence
-directories. Only the passing bundle is uploaded as a one-day certified
+directories. Before each changed-pin candidate gate, the trusted wrapper regenerates the exact-artifact split certification roster for the candidate recipe. Only a complete battery pass is snapshotted; the independent verifier and unchanged-pin canary reject a roster that is stale for the llama pin, Skippy ABI, or ordered patch queue. Only the passing bundle is uploaded as a one-day certified
 artifact. A separate success-gated job on a fresh
 GitHub-hosted runner receives the `CANARY_REPAIR_TOKEN`, validates the bundle,
 pushes the unique
