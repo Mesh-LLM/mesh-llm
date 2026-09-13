@@ -15,3 +15,4 @@ mod response_quality;
 mod routing_rank;
 mod tool_call_ids;
 pub(crate) mod transport;
+mod workload_routing;

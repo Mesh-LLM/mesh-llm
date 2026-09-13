@@ -13,7 +13,63 @@ pub const FEATURE_INKLING_MTP_MM: u64 = 1 << 27;
 pub const FEATURE_ITERATION_BATCH: u64 = 1 << 28;
 pub const FEATURE_ACTIVATION_BOUNDARY: u64 = 1 << 29;
 pub const FEATURE_MODEL_SOURCE: u64 = 1 << 30;
+pub const FEATURE_NON_CHAT_WORKLOADS: u64 = 1 << 31;
 pub const MODEL_TENSOR_SOURCE_V1_ABI_VERSION: u32 = 1;
+pub const WORKLOAD_INFO_V1_ABI_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(i32)]
+pub enum WorkloadKind {
+    #[default]
+    CausalGeneration = 0,
+    Embedding = 1,
+    Rerank = 2,
+    EncoderDecoder = 3,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(i32)]
+pub enum WorkloadPooling {
+    Unspecified = -1,
+    #[default]
+    None = 0,
+    Mean = 1,
+    Cls = 2,
+    Last = 3,
+    Rank = 4,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct WorkloadInfoV1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub kind: WorkloadKind,
+    pub pooling: WorkloadPooling,
+    pub output_dimensions: u32,
+    pub classifier_outputs: u32,
+    pub has_encoder: bool,
+    pub has_decoder: bool,
+    pub full_model_only: bool,
+    pub reserved0: u8,
+}
+
+impl Default for WorkloadInfoV1 {
+    fn default() -> Self {
+        Self {
+            abi_version: WORKLOAD_INFO_V1_ABI_VERSION,
+            struct_size: std::mem::size_of::<Self>() as u32,
+            kind: WorkloadKind::default(),
+            pooling: WorkloadPooling::default(),
+            output_dimensions: 0,
+            classifier_outputs: 0,
+            has_encoder: false,
+            has_decoder: false,
+            full_model_only: true,
+            reserved0: 0,
+        }
+    }
+}
 
 pub type ModelReadTensorF32Callback = Option<
     unsafe extern "C" fn(

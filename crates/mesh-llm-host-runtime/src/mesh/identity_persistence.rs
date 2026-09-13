@@ -249,7 +249,7 @@ pub(crate) async fn load_or_create_key() -> Result<SecretKey> {
 pub fn default_node_key_path() -> Result<std::path::PathBuf> {
     #[cfg(test)]
     if std::env::var_os("MESH_LLM_TEST_HOME").is_some()
-        && !std::env::var_os("MESH_LLM_NODE_KEY_PATH").is_some_and(|path| !path.is_empty())
+        && std::env::var_os("MESH_LLM_NODE_KEY_PATH").is_none_or(|path| path.is_empty())
     {
         return Ok(identity_home_dir().join(".mesh-llm").join("key"));
     }

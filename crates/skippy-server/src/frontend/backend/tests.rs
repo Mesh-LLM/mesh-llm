@@ -5,6 +5,7 @@ use crate::frontend::admission::GenerationTokenBudget;
 use crate::frontend::generation::ADMISSION_STARVATION_BOUND_TURNS;
 use crate::frontend::generation::OpenAiBackendMode;
 use crate::frontend::iteration_scheduler::IterationScheduler;
+use crate::frontend::prefill::PrefillChunkPolicy;
 use crate::runtime_state::RuntimeState;
 use futures_util::StreamExt;
 use openai_frontend::ChatCompletionChunk;
@@ -1243,6 +1244,75 @@ fn hooks_test_backend(hook_policy: Option<Arc<dyn OpenAiHookPolicy>>) -> StageOp
         linear_proposal_ingress: None,
         kv: None,
         iteration_scheduler,
+    }
+}
+
+fn embedded_non_chat_test_mode(config: skippy_protocol::StageConfig) -> OpenAiBackendMode {
+    OpenAiBackendMode::EmbeddedStageZero {
+        config,
+        prefill_chunk_policy: PrefillChunkPolicy::Fixed { chunk_size: 64 },
+        activation_width: 0,
+        downstream_wire_condition: crate::binary_transport::WireCondition::new(0.0, None)
+            .expect("unconditioned test wire"),
+        prefill_reply_credit_limit: 0,
+        lane_pool: None,
+        prediction_returns: None,
+    }
+}
+
+#[test]
+fn embedded_stage_zero_admits_unsplit_local_non_chat_topology() {
+    let mut backend = hooks_test_backend(None);
+    backend.mode = embedded_non_chat_test_mode(backend.config.clone());
+
+    assert!(backend.has_unsplit_full_model_topology());
+}
+
+#[test]
+fn non_chat_topology_guard_rejects_staged_and_filtered_models() {
+    let mut backend = hooks_test_backend(None);
+    let full_config = backend.config.clone();
+    let mut cases = Vec::new();
+
+    let mut downstream = full_config.clone();
+    downstream.downstream = Some(skippy_protocol::PeerConfig {
+        stage_id: "stage-1".to_string(),
+        stage_index: 1,
+        endpoint: "127.0.0.1:0".to_string(),
+    });
+    cases.push(downstream);
+
+    let mut upstream = full_config.clone();
+    upstream.upstream = Some(skippy_protocol::PeerConfig {
+        stage_id: "stage-previous".to_string(),
+        stage_index: 0,
+        endpoint: "127.0.0.1:0".to_string(),
+    });
+    cases.push(upstream);
+
+    let mut filtered = full_config.clone();
+    filtered.filter_tensors_on_load = true;
+    cases.push(filtered);
+
+    let mut partial = full_config.clone();
+    partial.layer_start = 1;
+    cases.push(partial);
+
+    let mut non_first_stage = full_config.clone();
+    non_first_stage.stage_index = 1;
+    cases.push(non_first_stage);
+
+    let mut empty = full_config.clone();
+    empty.layer_end = 0;
+    cases.push(empty);
+
+    for config in cases {
+        backend.mode = embedded_non_chat_test_mode(config.clone());
+        assert!(!backend.has_unsplit_full_model_topology(), "{config:?}");
+        backend.mode = OpenAiBackendMode::LocalRuntime;
+        backend.config = config;
+        assert!(!backend.has_unsplit_full_model_topology());
+        backend.config = full_config.clone();
     }
 }
 

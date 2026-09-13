@@ -56,6 +56,7 @@ pub(super) async fn eligible_remote_hosts(
     required_tokens: Option<u32>,
     hosts: Vec<iroh::EndpointId>,
 ) -> Vec<iroh::EndpointId> {
+    let hosts = super::workload_admission::eligible_remote_hosts(node, model, &hosts).await;
     let Some(required_tokens) = required_tokens else {
         return hosts;
     };

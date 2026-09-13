@@ -4425,13 +4425,13 @@
       "macro_name": "eprintln!"
     },
     {
-      "line": 310,
+      "line": 270,
       "macro_name": "eprintln!"
     }
   ],
   "crates/skippy-server/src/http.rs": [
     {
-      "line": 216,
+      "line": 223,
       "macro_name": "println!"
     }
   ],
@@ -4443,27 +4443,27 @@
   ],
   "crates/skippy-server/src/runtime_state.rs": [
     {
-      "line": 777,
+      "line": 834,
       "macro_name": "eprintln!"
     },
     {
-      "line": 916,
+      "line": 973,
       "macro_name": "eprintln!"
     },
     {
-      "line": 958,
+      "line": 1015,
       "macro_name": "eprintln!"
     },
     {
-      "line": 995,
+      "line": 1052,
       "macro_name": "eprintln!"
     },
     {
-      "line": 999,
+      "line": 1056,
       "macro_name": "eprintln!"
     },
     {
-      "line": 1004,
+      "line": 1061,
       "macro_name": "eprintln!"
     }
   ]

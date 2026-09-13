@@ -53,6 +53,21 @@
           "tensor-ownership",
           "stage-load"
         ]
+      },
+      "workload-smoke": {
+        "status": "provisional",
+        "oracle": "none",
+        "required_lanes": [
+          "class-specific-smoke"
+        ]
+      },
+      "workload-oracle": {
+        "status": "certified",
+        "oracle": "local-monolithic",
+        "required_lanes": [
+          "class-specific-smoke",
+          "class-specific-oracle"
+        ]
       }
     },
     "cadences": [
@@ -108,6 +123,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "cadences": [
           "llama-bump",
@@ -160,6 +176,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "cadences": [
           "llama-bump",
@@ -208,6 +225,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 47,
@@ -251,6 +269,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 40,
@@ -301,6 +320,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 46,
@@ -348,6 +368,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "cadences": [
           "llama-bump",
@@ -396,6 +417,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -439,6 +461,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 48,
@@ -482,6 +505,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -532,6 +556,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "cadences": [
           "llama-bump",
@@ -581,6 +606,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 28,
@@ -626,6 +652,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 27,
@@ -672,6 +699,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 48,
@@ -727,6 +755,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 48,
@@ -774,6 +803,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 52,
@@ -818,6 +848,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -861,6 +892,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 64,
@@ -904,6 +936,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -947,6 +980,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -994,6 +1028,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "cadences": [
           "llama-bump",
@@ -1042,6 +1077,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "cadences": [
           "llama-bump",
@@ -1089,6 +1125,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 40,
@@ -1133,6 +1170,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 16,
@@ -1179,6 +1217,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 16,
@@ -1234,6 +1273,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 40,
@@ -1278,6 +1318,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 28,
@@ -1334,6 +1375,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 36,
@@ -1390,6 +1432,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 26,
@@ -1433,6 +1476,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -1476,6 +1520,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 40,
@@ -1519,6 +1564,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -1562,6 +1608,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -1605,6 +1652,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 40,
@@ -1648,6 +1696,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -1691,6 +1740,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 36,
@@ -1884,6 +1934,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -1927,6 +1978,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -1970,6 +2022,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 18,
@@ -2013,6 +2066,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 26,
@@ -2056,6 +2110,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -2099,6 +2154,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 30,
@@ -2142,6 +2198,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -2185,6 +2242,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 16,
@@ -2228,6 +2286,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 30,
@@ -2271,6 +2330,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 62,
@@ -2314,6 +2374,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -2357,6 +2418,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 36,
@@ -2400,6 +2462,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -2443,6 +2506,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -2486,6 +2550,7 @@
         ]
       },
       "certification": {
+        "class": "causal_generation",
         "profile": "full",
         "execution": {
           "trunk_layers": 40,
@@ -2542,7 +2607,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 15823053440
         },
-        "notes": "downloaded AFMoE architecture coverage"
+        "notes": "downloaded AFMoE architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -2585,7 +2651,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 5117561504
         },
-        "notes": "ARWKV recurrent architecture coverage"
+        "notes": "ARWKV recurrent architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -2630,7 +2697,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 15803475200
         },
-        "notes": "hybrid three-recurrent-to-one-attention boundary sweep"
+        "notes": "hybrid three-recurrent-to-one-attention boundary sweep",
+        "class": "causal_generation"
       }
     },
     {
@@ -2673,7 +2741,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 4274466400
         },
-        "notes": "downloaded Chameleon architecture coverage"
+        "notes": "downloaded Chameleon architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -2717,7 +2786,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 16131110560
         },
-        "notes": "compact four-layer DeepSeek 3.2 architecture probe"
+        "notes": "compact four-layer DeepSeek 3.2 architecture probe",
+        "class": "causal_generation"
       }
     },
     {
@@ -2760,7 +2830,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 10896057440
         },
-        "notes": "DeepSeek V4 Flash dflash path with four hyper-connection streams"
+        "notes": "DeepSeek V4 Flash dflash path with four hyper-connection streams",
+        "class": "causal_generation"
       }
     },
     {
@@ -2803,7 +2874,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 14302555328
         },
-        "notes": "downloaded dots1 MoE architecture coverage"
+        "notes": "downloaded dots1 MoE architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -2846,7 +2918,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 240645504
         },
-        "notes": "small ERNIE 4.5 dense architecture probe"
+        "notes": "small ERNIE 4.5 dense architecture probe",
+        "class": "causal_generation"
       }
     },
     {
@@ -2889,7 +2962,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 13245833216
         },
-        "notes": "downloaded ERNIE 4.5 MoE architecture coverage"
+        "notes": "downloaded ERNIE 4.5 MoE architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -2932,7 +3006,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 4237063328
         },
-        "notes": "text-only Gemma 3n architecture coverage"
+        "notes": "text-only Gemma 3n architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -2987,7 +3062,8 @@
               "sha256": "debad39ab9c1152ab67695a674fb35e8375b2320c57bfd5075835d3ccb16c7db"
             }
           ]
-        }
+        },
+        "class": "causal_generation"
       }
     },
     {
@@ -3030,7 +3106,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 251938176
         },
-        "notes": "compact Gemma 4 assistant architecture probe"
+        "notes": "compact Gemma 4 assistant architecture probe",
+        "class": "causal_generation"
       }
     },
     {
@@ -3073,7 +3150,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 13135032320
         },
-        "notes": "downloaded GPT-NeoX architecture coverage"
+        "notes": "downloaded GPT-NeoX architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -3117,7 +3195,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 6047918368
         },
-        "notes": "Granite sliding-window MoE architecture coverage"
+        "notes": "Granite sliding-window MoE architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -3160,7 +3239,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 821847360
         },
-        "notes": "downloaded Granite MoE architecture coverage"
+        "notes": "downloaded Granite MoE architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -3203,7 +3283,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 8428497696
         },
-        "notes": "Granite Switch adapter-router architecture coverage"
+        "notes": "Granite Switch adapter-router architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -3246,7 +3327,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 20167310304
         },
-        "notes": "downloaded GroveMoE architecture coverage"
+        "notes": "downloaded GroveMoE architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -3289,7 +3371,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 1133084864
         },
-        "notes": "downloaded Hunyuan dense architecture coverage"
+        "notes": "downloaded Hunyuan dense architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -3332,7 +3415,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 18236703520
         },
-        "notes": "downloaded Tencent HY v3 MoE architecture coverage"
+        "notes": "downloaded Tencent HY v3 MoE architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -3375,7 +3459,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 8967115424
         },
-        "notes": "downloaded Jais architecture coverage"
+        "notes": "downloaded Jais architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -3418,7 +3503,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 5104022560
         },
-        "notes": "gated Jais 2 artifact with locally verified immutable digest"
+        "notes": "gated Jais 2 artifact with locally verified immutable digest",
+        "class": "causal_generation"
       }
     },
     {
@@ -3463,7 +3549,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 784318432
         },
-        "notes": "compact hybrid three-recurrent-to-one-attention boundary sweep"
+        "notes": "compact hybrid three-recurrent-to-one-attention boundary sweep",
+        "class": "causal_generation"
       }
     },
     {
@@ -3509,7 +3596,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 5138197824
         },
-        "notes": "LFM2 MoE hybrid recurrent boundary sweep"
+        "notes": "LFM2 MoE hybrid recurrent boundary sweep",
+        "class": "causal_generation"
       }
     },
     {
@@ -3552,7 +3640,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 672108288
         },
-        "notes": "downloaded Maincoder architecture coverage"
+        "notes": "downloaded Maincoder architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -3596,7 +3685,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 8071294784
         },
-        "notes": "Mellum MoE sliding-window architecture coverage"
+        "notes": "Mellum MoE sliding-window architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -3639,7 +3729,8 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 4965526048
         },
-        "notes": "downloaded MiniCPM 4.1 architecture coverage"
+        "notes": "downloaded MiniCPM 4.1 architecture coverage",
+        "class": "causal_generation"
       }
     },
     {
@@ -3695,7 +3786,8 @@
               "sha256": "c2e08b8bd13ca60b59ffdcb79b969b354b1edda9b9198047d10621adc11591bb"
             }
           ]
-        }
+        },
+        "class": "causal_generation"
       }
     },
     {
@@ -3912,6 +4004,357 @@
         "MXFP4_MOE"
       ],
       "notes": "SafeTensors direct-load fixture used across every supported load-time quantization."
+    },
+    {
+      "id": "family-nomic-bert-embedding",
+      "family": "nomic-bert-embedding",
+      "suites": [
+        "llama-family-certification"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full"
+      ],
+      "capability_tags": [
+        "gguf",
+        "embedding"
+      ],
+      "artifact": {
+        "repo": "nomic-ai/nomic-embed-text-v1.5-GGUF",
+        "revision": "0188c9bf409793f810680a5a431e7b899c46104c",
+        "selector": "Q8_0",
+        "files": [
+          {
+            "path": "nomic-embed-text-v1.5.Q8_0.gguf",
+            "size_bytes": 146146432,
+            "sha256": "3e24342164b3d94991ba9692fdc0dd08e3fd7362e0aacc396a9a5c54a544c3b7"
+          }
+        ]
+      },
+      "certification": {
+        "class": "embedding",
+        "profile": "workload-oracle",
+        "cadences": [
+          "llama-bump",
+          "manual-full"
+        ],
+        "execution": {
+          "trunk_layers": 12,
+          "mtp_layers": 0,
+          "activation_width": 768,
+          "boundary_sweep_period": 0,
+          "speculative_policy": "disabled"
+        },
+        "resources": {
+          "runner_role": "family-certify",
+          "cache_policy": "immutable-local",
+          "estimated_model_bytes": 145389792
+        },
+        "notes": "Local full-model embedding, HTTP and official SDK smoke, and pinned CPU monolithic batch/single-vector parity; staged tensor filtering is intentionally unsupported",
+        "evidence": {
+          "fixture": "scripts/workload_fixtures.py#EMBEDDING_INPUTS",
+          "comparison": "batch and individual vectors within 1e-4 coordinate error and 0.99999 cosine"
+        }
+      }
+    },
+    {
+      "id": "family-jina-bert-v2-rerank",
+      "family": "jina-bert-v2-rerank",
+      "suites": [
+        "llama-family-certification"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full"
+      ],
+      "capability_tags": [
+        "gguf",
+        "rerank"
+      ],
+      "artifact": {
+        "repo": "ggml-org/jina-reranker-v1-turbo-en-GGUF",
+        "revision": "607d8664c787e517e5d6e339d21f680f9002c931",
+        "selector": "F16",
+        "files": [
+          {
+            "path": "Jina-Bert-Implementation-38M-F16.gguf",
+            "size_bytes": 76971168,
+            "sha256": "71abc010bb3dce97812ee971509a5cb6ff6f6b8cfffd8480129242f605521fca"
+          }
+        ]
+      },
+      "certification": {
+        "class": "rerank",
+        "profile": "workload-oracle",
+        "cadences": [
+          "llama-bump",
+          "manual-full"
+        ],
+        "execution": {
+          "trunk_layers": 6,
+          "mtp_layers": 0,
+          "activation_width": 384,
+          "boundary_sweep_period": 0,
+          "speculative_policy": "disabled"
+        },
+        "resources": {
+          "runner_role": "family-certify",
+          "cache_policy": "immutable-local",
+          "estimated_model_bytes": 75293188
+        },
+        "notes": "Local full-model cross-encoder rerank and HTTP smoke with pinned CPU monolithic score/order parity; staged tensor filtering is intentionally unsupported",
+        "evidence": {
+          "fixture": "scripts/workload_fixtures.py#RERANK_DOCUMENTS",
+          "comparison": "scores within 1e-4 and identical document order"
+        }
+      }
+    },
+    {
+      "id": "family-t5-encoder-decoder",
+      "family": "t5-encoder-decoder",
+      "suites": [
+        "llama-family-certification"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full"
+      ],
+      "capability_tags": [
+        "gguf",
+        "encoder_decoder"
+      ],
+      "artifact": {
+        "repo": "Felladrin/gguf-flan-t5-small",
+        "revision": "d71c51f67519edd3154527c2d8f20288bdde9705",
+        "selector": "Q8_0",
+        "files": [
+          {
+            "path": "flan-t5-small.Q8_0.gguf",
+            "size_bytes": 113709824,
+            "sha256": "f7f769c360b1ba830b10dd3b7e7d146dbcc4d487962be7dd806d7d52e0a9c2f0"
+          }
+        ]
+      },
+      "certification": {
+        "class": "encoder_decoder",
+        "profile": "workload-oracle",
+        "cadences": [
+          "llama-bump",
+          "manual-full"
+        ],
+        "execution": {
+          "trunk_layers": 8,
+          "mtp_layers": 0,
+          "activation_width": 512,
+          "boundary_sweep_period": 0,
+          "speculative_policy": "disabled"
+        },
+        "resources": {
+          "runner_role": "family-certify",
+          "cache_policy": "immutable-local",
+          "estimated_model_bytes": 112678400
+        },
+        "notes": "Local full-model encoder-decoder generation and HTTP smoke with pinned CPU monolithic completion text parity; cross-attention staging is intentionally unsupported",
+        "evidence": {
+          "fixture": "scripts/workload_fixtures.py#ENCODER_DECODER_PROMPT",
+          "comparison": "identical normalized greedy text from pinned llama-completion"
+        }
+      }
+    },
+    {
+      "id": "family-paddleocr",
+      "family": "paddleocr",
+      "suites": [
+        "llama-family-certification"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full"
+      ],
+      "capability_tags": [
+        "gguf",
+        "ocr"
+      ],
+      "artifact": {
+        "repo": "PaddlePaddle/PaddleOCR-VL-1.6-GGUF",
+        "revision": "511b09642bb324401f15f97cc23bc67e8f0a291d",
+        "selector": "BF16",
+        "files": [
+          {
+            "path": "PaddleOCR-VL-1.6-GGUF.gguf",
+            "size_bytes": 935769056,
+            "sha256": "f3ae46ec885050acf4b3d31944431e1fd90d50664fb09126af4a3c050ba14ee8"
+          }
+        ]
+      },
+      "certification": {
+        "class": "ocr",
+        "profile": "workload-oracle",
+        "cadences": [
+          "llama-bump",
+          "manual-full"
+        ],
+        "execution": {
+          "trunk_layers": 18,
+          "mtp_layers": 0,
+          "activation_width": 1024,
+          "boundary_sweep_period": 0,
+          "speculative_policy": "disabled"
+        },
+        "resources": {
+          "runner_role": "family-certify",
+          "cache_policy": "immutable-local",
+          "estimated_model_bytes": 933384192,
+          "startup_timeout_secs": 900
+        },
+        "notes": "Local full-model OCR and HTTP smoke with the pinned PaddleOCR projector and mandatory generated-image monolithic parity; projector and trunk remain colocated",
+        "evidence": {
+          "fixture": "scripts/generate-ocr-oracle-fixture.py#MESH 42",
+          "comparison": "normalized monolithic text parity plus independent MESH 42 label"
+        },
+        "mmproj_artifact": {
+          "repo": "PaddlePaddle/PaddleOCR-VL-1.6-GGUF",
+          "revision": "511b09642bb324401f15f97cc23bc67e8f0a291d",
+          "selector": "BF16",
+          "files": [
+            {
+              "path": "PaddleOCR-VL-1.6-GGUF-mmproj.gguf",
+              "size_bytes": 881770560,
+              "sha256": "204d757d7610d9b3faab10d506d69e5b244e32bf765e2bab2d0167e65e0a058a"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "family-qwen3tts",
+      "family": "qwen3tts",
+      "suites": [
+        "llama-family-certification"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full"
+      ],
+      "capability_tags": [
+        "gguf",
+        "speech_synthesis"
+      ],
+      "artifact": {
+        "repo": "ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF",
+        "revision": "ca27d74bc954b73dadab5b71ca265d87fc861a7c",
+        "selector": "Q8_0",
+        "files": [
+          {
+            "path": "Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf",
+            "size_bytes": 1847874400,
+            "sha256": "ac7931aeb2e7aad1a6ed6602d353a5679c9d096b18ce8204ac730a8408d572e1"
+          }
+        ]
+      },
+      "certification": {
+        "class": "speech_synthesis",
+        "profile": "workload-oracle",
+        "cadences": [
+          "llama-bump",
+          "manual-full"
+        ],
+        "execution": {
+          "trunk_layers": 28,
+          "mtp_layers": 0,
+          "activation_width": 2048,
+          "boundary_sweep_period": 0,
+          "speculative_policy": "disabled"
+        },
+        "resources": {
+          "runner_role": "family-certify",
+          "cache_policy": "immutable-local",
+          "estimated_model_bytes": 1841844224,
+          "startup_timeout_secs": 600
+        },
+        "notes": "Local full-model speech-synthesis and HTTP WAV smoke with deterministic pinned monolithic PCM parity; distributed staging is intentionally unsupported",
+        "evidence": {
+          "fixture": "scripts/skippy-tts-oracle.py#PROMPT",
+          "comparison": "fixed-seed PCM format and length; RMS error at most 2 percent and waveform cosine at least 0.9995"
+        },
+        "mmproj_artifact": {
+          "repo": "ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF",
+          "revision": "ca27d74bc954b73dadab5b71ca265d87fc861a7c",
+          "selector": "Q8_0",
+          "files": [
+            {
+              "path": "mmproj-Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf",
+              "size_bytes": 446422912,
+              "sha256": "6fd65188839bcd6ecc91b277ad471e22a0edfada4699a0fe82f1165c18cfcce2"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "family-ultravox",
+      "family": "ultravox",
+      "suites": [
+        "llama-family-certification"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full"
+      ],
+      "capability_tags": [
+        "gguf",
+        "speech_recognition"
+      ],
+      "artifact": {
+        "repo": "ggml-org/ultravox-v0_5-llama-3_2-1b-GGUF",
+        "revision": "5390c7c41cbd6f261f7f205fc0c5ae61bbdca650",
+        "selector": "Q8_0",
+        "files": [
+          {
+            "path": "Llama-3.2-1B-Instruct-Q8_0.gguf",
+            "size_bytes": 1321083008,
+            "sha256": "432f310a77f4650a88d0fd59ecdd7cebed8d684bafea53cbff0473542964f0c3"
+          }
+        ]
+      },
+      "certification": {
+        "class": "speech_recognition",
+        "profile": "workload-oracle",
+        "cadences": [
+          "llama-bump",
+          "manual-full"
+        ],
+        "execution": {
+          "trunk_layers": 16,
+          "mtp_layers": 0,
+          "activation_width": 2048,
+          "boundary_sweep_period": 0,
+          "speculative_policy": "disabled"
+        },
+        "resources": {
+          "runner_role": "family-certify",
+          "cache_policy": "immutable-local",
+          "estimated_model_bytes": 1313251456,
+          "startup_timeout_secs": 600
+        },
+        "notes": "Local full-model audio-to-text and HTTP smoke with the pinned Ultravox projector and monolithic transcript parity; unlabeled WAV does not establish transcription accuracy",
+        "evidence": {
+          "fixture": "ci/llama-canary/fixtures/audio-smoke.wav",
+          "comparison": "identical normalized transcript against pinned llama-server; fixture is unlabeled"
+        },
+        "mmproj_artifact": {
+          "repo": "ggml-org/ultravox-v0_5-llama-3_2-1b-GGUF",
+          "revision": "5390c7c41cbd6f261f7f205fc0c5ae61bbdca650",
+          "selector": "F16",
+          "files": [
+            {
+              "path": "mmproj-ultravox-v0_5-llama-3_2-1b-f16.gguf",
+              "size_bytes": 1371123616,
+              "sha256": "b34dde1835752949d6b960528269af93c92fec91c61ea0534fcc73f96c1ed8b2"
+            }
+          ]
+        }
+      }
     }
   ]
 }

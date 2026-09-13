@@ -15,6 +15,7 @@ use crate::network::affinity::{
 use crate::network::openai::auto_route;
 use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::response_quality::ResponseQualityFailure;
+use crate::network::openai::workload_routing;
 use crate::network::router;
 use std::time::{Duration, Instant};
 
@@ -29,9 +30,7 @@ pub(crate) use super::response::{
     send_400_observed, send_503_observed, send_error_observed, send_json_ok_with_headers,
     send_json_with_status_and_headers_observed, send_models_list_with_descriptors,
 };
-pub(crate) use super::routing_rank::{
-    capabilities_for_model, descriptor_metadata_for_model, request_budget_tokens_from_parts,
-};
+pub(crate) use super::routing_rank::{capabilities_for_model, request_budget_tokens_from_parts};
 
 use super::response::{
     CacheCostObservation, ResponseRetryPolicy, RouteAttemptLoggingContext, RouteAttemptResult,
@@ -172,11 +171,12 @@ pub(crate) async fn reject_legacy_lifecycle_request(
     )
 }
 
-/// Generation context is a property of decode requests, not capability RPCs.
-/// A tokenizer request may carry a megabyte of source text while using no
-/// target KV context at all.
+/// Generation context cannot be estimated from every request body's byte size.
+/// Tokenizer requests use no target KV context, and multipart audio bodies
+/// contain encoded media rather than text tokens. The audio backend performs
+/// the authoritative media/context validation after routing.
 pub(crate) fn request_context_budget(request: &BufferedHttpRequest) -> Option<u32> {
-    if request.is_tokenize_request() {
+    if request.is_tokenize_request() || request.is_audio_upload_request() {
         None
     } else {
         request_budget_tokens_from_parts(request.body_len_bytes, request.completion_tokens)
@@ -186,6 +186,7 @@ pub(crate) fn request_context_budget(request: &BufferedHttpRequest) -> Option<u3
 enum AutoModelResolution {
     Model(Option<String>),
     UnsupportedMedia,
+    UnsupportedWorkload,
 }
 
 enum MeshTargetResolution {
@@ -206,6 +207,7 @@ struct MeshRequestPlan {
 
 enum MeshRequestFailure {
     UnsupportedMedia,
+    UnsupportedWorkload,
     ModelUnavailable(String),
     NoHostsAvailable,
 }
@@ -508,7 +510,21 @@ async fn build_mesh_request_plan(
         AutoModelResolution::UnsupportedMedia => {
             return Err(MeshRequestFailure::UnsupportedMedia);
         }
+        AutoModelResolution::UnsupportedWorkload => {
+            return Err(MeshRequestFailure::UnsupportedWorkload);
+        }
     };
+    if let Some(model) = effective_model.as_deref()
+        && let Some(workload) = workload_routing::request_workload_class(&request.client_path)
+        && !workload_routing::model_satisfies_request_workload(
+            model,
+            workload,
+            &request.client_path,
+            &descriptors,
+        )
+    {
+        return Err(MeshRequestFailure::UnsupportedWorkload);
+    }
     rewrite_effective_model(request, effective_model.as_deref());
     if is_auto_request {
         inject_mesh_hooks_flag(&mut request.raw, true);
@@ -524,6 +540,16 @@ async fn build_mesh_request_plan(
         }
         MeshTargetResolution::NoHostsAvailable => return Err(MeshRequestFailure::NoHostsAvailable),
     };
+
+    let resolved_hosts = if let Some(model) = effective_model.as_deref() {
+        workload_routing::eligible_remote_hosts(node, model, &request.client_path, &resolved_hosts)
+            .await
+    } else {
+        resolved_hosts
+    };
+    if resolved_hosts.is_empty() {
+        return Err(MeshRequestFailure::UnsupportedWorkload);
+    }
 
     let mut prepared = prepare_mesh_targets(
         request,
@@ -571,7 +597,7 @@ fn prepare_mesh_targets(
     if !request.is_tokenize_request() && effective_model.is_some() && !target_hosts.is_empty() {
         request.ensure_body_json();
     }
-    let body_json = request.body_json.as_ref();
+    let body_json = workload_routing::affinity_body(request);
     effective_model
         .map(|name| prepare_remote_targets_for_request(name, target_hosts, body_json, affinity))
         .unwrap_or(PreparedTargets {
@@ -651,6 +677,15 @@ async fn handle_mesh_request_failure(
 ) {
     let mut tcp_stream = Some(tcp_stream);
     match failure {
+        MeshRequestFailure::UnsupportedWorkload => {
+            let _ = send_error_observed(
+                tcp_stream.take().unwrap(),
+                422,
+                "no serving target advertises support for the requested workload endpoint",
+                route_observer,
+            )
+            .await;
+        }
         MeshRequestFailure::UnsupportedMedia => {
             let _ = send_error_observed(
                 tcp_stream.take().unwrap(),
@@ -1015,6 +1050,9 @@ fn terminal_outcome_for_mesh_request_failure(
     failure: &MeshRequestFailure,
 ) -> crate::logging::TerminalOutcome {
     match failure {
+        MeshRequestFailure::UnsupportedWorkload => {
+            crate::logging::TerminalOutcome::Rejected(Some("unsupported_workload".into()))
+        }
         MeshRequestFailure::UnsupportedMedia => {
             crate::logging::TerminalOutcome::Rejected(Some("unsupported_media".into()))
         }
@@ -1123,7 +1161,7 @@ fn auto_session_key_for_request(
     request: &mut BufferedHttpRequest,
     is_auto_request: bool,
 ) -> Option<u64> {
-    if !is_auto_request {
+    if !is_auto_request || !workload_routing::supports_generation_affinity(&request.client_path) {
         return None;
     }
     request.ensure_body_json();
@@ -1159,34 +1197,30 @@ async fn resolve_auto_model_request(args: AutoModelRequestArgs<'_>) -> AutoModel
         return AutoModelResolution::Model(None);
     }
     request.ensure_body_json();
-    let Some(body_json) = request.body_json.as_ref() else {
+    if request.body_json.is_none() && !workload_routing::is_audio_upload_path(&request.client_path)
+    {
         return AutoModelResolution::Model(None);
-    };
-    let media = router::media_requirements(body_json);
-    // Build candidates with observed throughput so pick_model_classified
-    // can weight by locally-measured tok/s where samples exist.
-    let routing_metrics = node.routing_metrics();
-    let with_caps: Vec<router::RoutingCandidate<'_>> = served
-        .iter()
-        .map(|name| {
-            let caps = capabilities_for_model(name, descriptors);
-            let (tps_hint, throughput_samples) = routing_metrics
-                .tps_for_model(name)
-                .map(|(tps, samples)| (Some(tps), samples))
-                .unwrap_or((None, 0));
-            router::RoutingCandidate {
-                name: name.as_str(),
-                caps,
-                parameter_count_b: descriptor_metadata_for_model(name, descriptors)
-                    .and_then(|metadata| metadata.parameter_count_b),
-                tps_hint,
-                throughput_samples,
-            }
-        })
-        .collect();
+    }
+    let empty_body = serde_json::Value::Null;
+    let body_json = request.body_json.as_ref().unwrap_or(&empty_body);
+    let media = workload_routing::request_media(&request.client_path, request.body_json.as_ref());
+    let with_caps =
+        workload_routing::routing_candidates(node, served, &request.client_path, descriptors);
+    if with_caps.is_empty()
+        && workload_routing::request_workload_class(&request.client_path).is_some()
+    {
+        return AutoModelResolution::UnsupportedWorkload;
+    }
     let available = router::filter_media_compatible_candidates(&with_caps, &media);
     let ready_models = if let Some(available) = available.as_ref() {
-        auto_route::ready_remote_models(node, required_tokens, available, affinity).await
+        auto_route::ready_remote_models(
+            node,
+            required_tokens,
+            &request.client_path,
+            available,
+            affinity,
+        )
+        .await
     } else {
         Vec::new()
     };
@@ -1200,7 +1234,12 @@ async fn resolve_auto_model_request(args: AutoModelRequestArgs<'_>) -> AutoModel
     )
     .await
     {
-        return AutoModelResolution::Model(Some(model));
+        if with_caps.iter().any(|candidate| candidate.name == model) {
+            return AutoModelResolution::Model(Some(model));
+        }
+        if let Some(key) = auto_session_key {
+            affinity.forget_auto_model(key);
+        }
     }
 
     let Some(available) = available else {

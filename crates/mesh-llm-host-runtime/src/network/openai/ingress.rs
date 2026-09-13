@@ -7,6 +7,9 @@ use crate::network::openai::auto_route;
 use crate::network::openai::automatic;
 use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::transport as proxy;
+use crate::network::openai::workload_routing::{
+    self, is_audio_upload_path, model_satisfies_request_workload, request_workload_class,
+};
 use crate::network::router;
 use crate::plugin::openai_exchange::{
     OpenAiExchangeChannel, OpenAiExchangeDispatchPath, OpenAiExchangeEnvelope,
@@ -33,6 +36,13 @@ enum AutoRouteResolution {
         classification: Option<router::Classification>,
     },
     MediaUnsupported,
+    WorkloadUnsupported(mesh::ModelWorkloadClass),
+}
+
+#[derive(Debug)]
+enum AutoRouteRejection {
+    MediaUnsupported,
+    WorkloadUnsupported(mesh::ModelWorkloadClass),
 }
 
 struct IngressRouteContext<'a> {
@@ -223,6 +233,7 @@ async fn resolve_auto_routed_model(
     required_tokens: Option<u32>,
     affinity: &affinity::AffinityRouter,
 ) -> AutoRouteResolution {
+    let requested_workload = request_workload_class(&request.client_path);
     // An explicitly named model routes to itself. The automatic directive (in
     // either spelling) resolves here, so `mesh` reaches the same
     // media-capability filter and readiness/affinity selection as `auto` —
@@ -231,6 +242,11 @@ async fn resolve_auto_routed_model(
     if let Some(model) = request.model_name.as_deref()
         && !automatic::is_directive(model)
     {
+        if let Some(workload) = requested_workload
+            && !model_satisfies_request_workload(model, workload, &request.client_path, descriptors)
+        {
+            return AutoRouteResolution::WorkloadUnsupported(workload);
+        }
         return AutoRouteResolution::Continue {
             effective_model: request.model_name.clone(),
             classification: None,
@@ -238,22 +254,28 @@ async fn resolve_auto_routed_model(
     }
 
     request.ensure_body_json();
-    let Some(body_json) = request.body_json.as_ref() else {
+    let body_json = request.body_json.as_ref();
+    if body_json.is_none() && requested_workload.is_none() {
         return AutoRouteResolution::Continue {
             effective_model: None,
             classification: None,
         };
-    };
+    }
 
     automatic::warn_if_deprecated_alias(request.model_name.as_deref());
 
-    let mode = automatic::serving_mode(automatic::AutomaticRequest {
-        model: request.model_name.as_deref(),
-        // The forwarded path: `/v1/responses` has already been normalised onto
-        // chat completions by this point, so it stays committee-eligible.
-        path: &request.path,
-        body: body_json,
-    });
+    let mode = body_json.map_or(
+        automatic::ServingMode::SingleModel(automatic::SingleModelReason::NonChatRequest),
+        |body| {
+            automatic::serving_mode(automatic::AutomaticRequest {
+                model: request.model_name.as_deref(),
+                // The forwarded path: `/v1/responses` has already been normalised onto
+                // chat completions by this point, so it stays committee-eligible.
+                path: &request.path,
+                body,
+            })
+        },
+    );
     match mode {
         // Committee mode keeps the directive as the effective model so the MoA
         // gateway picks the request up.
@@ -271,36 +293,41 @@ async fn resolve_auto_routed_model(
         ),
     }
 
-    let classification = router::classify(body_json);
-    let media = router::media_requirements(body_json);
+    let classification = body_json.map_or_else(
+        || router::Classification {
+            category: router::Category::Chat,
+            complexity: router::Complexity::Quick,
+            needs_tools: false,
+            has_media_inputs: is_audio_upload_path(&request.client_path),
+        },
+        router::classify,
+    );
+    let media = workload_routing::request_media(&request.client_path, body_json);
     let available_models =
         collect_available_models_for_auto_route(node, targets, plugin_manager).await;
-    let metrics = node.routing_metrics();
-    let available: Vec<router::RoutingCandidate<'_>> = available_models
-        .iter()
-        .map(|name| {
-            let caps = proxy::capabilities_for_model(name, descriptors);
-            let (tps_hint, throughput_samples) = metrics
-                .tps_for_model(name)
-                .map(|(t, s)| (Some(t), s))
-                .unwrap_or((None, 0));
-            router::RoutingCandidate {
-                name: name.as_str(),
-                caps,
-                parameter_count_b: proxy::descriptor_metadata_for_model(name, descriptors)
-                    .and_then(|metadata| metadata.parameter_count_b),
-                tps_hint,
-                throughput_samples,
-            }
-        })
-        .collect();
+    let available = workload_routing::routing_candidates(
+        node,
+        &available_models,
+        &request.client_path,
+        descriptors,
+    );
+    if available.is_empty()
+        && let Some(workload) = requested_workload
+    {
+        return AutoRouteResolution::WorkloadUnsupported(workload);
+    }
     let Some(available) = router::filter_media_compatible_candidates(&available, &media) else {
-        proxy::release_request_objects(node, &request.request_object_request_ids).await;
         return AutoRouteResolution::MediaUnsupported;
     };
-    let available =
-        auto_route_pool_for_ready_models(node, targets, required_tokens, &available, affinity)
-            .await;
+    let available = auto_route_pool_for_ready_models(
+        node,
+        targets,
+        required_tokens,
+        &request.client_path,
+        &available,
+        affinity,
+    )
+    .await;
 
     let effective_model = router::pick_model_classified(&classification, &available).map(|name| {
         tracing::info!(
@@ -322,6 +349,7 @@ async fn auto_route_pool_for_ready_models<'a>(
     node: &mesh::Node,
     targets: &election::ModelTargets,
     required_tokens: Option<u32>,
+    request_path: &str,
     available: &[router::RoutingCandidate<'a>],
     affinity: &affinity::AffinityRouter,
 ) -> Vec<router::RoutingCandidate<'a>> {
@@ -332,6 +360,7 @@ async fn auto_route_pool_for_ready_models<'a>(
             targets,
             candidate.name,
             required_tokens,
+            request_path,
             affinity,
         )
         .await
@@ -347,14 +376,17 @@ async fn auto_route_model_has_ready_ingress_target(
     targets: &election::ModelTargets,
     model: &str,
     required_tokens: Option<u32>,
+    request_path: &str,
     affinity: &affinity::AffinityRouter,
 ) -> bool {
-    let local_candidates = targets.candidates(model);
+    let local_candidates =
+        workload_routing::ingress_candidates(node, model, request_path, targets).await;
     if contains_routable_candidate(&local_candidates) {
         return auto_route::model_has_eligible_target(
             node,
             model,
             required_tokens,
+            request_path,
             &local_candidates,
             affinity,
         )
@@ -372,6 +404,7 @@ async fn auto_route_model_has_ready_ingress_target(
             node,
             model,
             required_tokens,
+            request_path,
             &remote_candidates,
             affinity,
         )
@@ -813,7 +846,7 @@ async fn prepare_auto_route_decision(
     request: &mut proxy::BufferedHttpRequest,
     ctx: &IngressRouteContext<'_>,
     descriptors: &[crate::mesh::ServedModelDescriptor],
-) -> Result<AutoRouteDecision, ()> {
+) -> Result<AutoRouteDecision, AutoRouteRejection> {
     let required_tokens = proxy::request_context_budget(request);
     match resolve_auto_routed_model(
         ctx.node,
@@ -840,8 +873,28 @@ async fn prepare_auto_route_decision(
                 required_tokens,
             })
         }
-        AutoRouteResolution::MediaUnsupported => Err(()),
+        AutoRouteResolution::MediaUnsupported => Err(AutoRouteRejection::MediaUnsupported),
+        AutoRouteResolution::WorkloadUnsupported(workload) => {
+            Err(AutoRouteRejection::WorkloadUnsupported(workload))
+        }
     }
+}
+
+async fn send_workload_unsupported(
+    tcp_stream: ClientStream,
+    workload: mesh::ModelWorkloadClass,
+    path: &str,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> proxy::RouteDispatchOutcome {
+    let message = if is_audio_upload_path(path) {
+        "no served model advertises support for this audio-to-text endpoint".to_string()
+    } else {
+        format!("no served model advertises the required {workload:?} workload")
+    };
+    response_outcome(
+        422,
+        proxy::send_error_observed(tcp_stream, 422, &message, route_observer).await,
+    )
 }
 
 async fn send_media_unsupported(
@@ -858,6 +911,25 @@ async fn send_media_unsupported(
         )
         .await,
     )
+}
+
+async fn send_auto_route_rejection(
+    tcp_stream: ClientStream,
+    rejection: AutoRouteRejection,
+    node: &mesh::Node,
+    request_object_request_ids: &[String],
+    path: &str,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> proxy::RouteDispatchOutcome {
+    proxy::release_request_objects(node, request_object_request_ids).await;
+    match rejection {
+        AutoRouteRejection::MediaUnsupported => {
+            send_media_unsupported(tcp_stream, route_observer).await
+        }
+        AutoRouteRejection::WorkloadUnsupported(workload) => {
+            send_workload_unsupported(tcp_stream, workload, path, route_observer).await
+        }
+    }
 }
 
 fn callable_models_with_local_served(
@@ -1089,8 +1161,16 @@ async fn handle_buffered_api_request(
 
     let decision = match prepare_auto_route_decision(&mut request, &ctx.route, &descriptors).await {
         Ok(decision) => decision,
-        Err(()) => {
-            let outcome = send_media_unsupported(tcp_stream, lifecycle.route_observer()).await;
+        Err(rejection) => {
+            let outcome = send_auto_route_rejection(
+                tcp_stream,
+                rejection,
+                ctx.route.node,
+                &request.request_object_request_ids,
+                &request.client_path,
+                lifecycle.route_observer(),
+            )
+            .await;
             lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
             return;
         }
@@ -1355,6 +1435,14 @@ mod durable_artifacts;
 #[cfg(test)]
 #[path = "ingress_tests/automatic_routing.rs"]
 mod automatic_routing;
+
+#[cfg(test)]
+#[path = "ingress_tests/audio_workloads.rs"]
+mod audio_workloads;
+
+#[cfg(test)]
+#[path = "ingress_tests/request_object_cleanup.rs"]
+mod request_object_cleanup;
 
 #[cfg(test)]
 #[path = "ingress_tests/tests.rs"]

@@ -30,6 +30,10 @@ LEGACY_TARGETS = {
     "test-skippy-recurrent-state-roundtrip",
     "test-skippy-verify-checkpoint-retirement",
 }
+NON_CHAT_TARGETS = {
+    "test-skippy-rerank-template",
+    "test-skippy-sampling-suppress",
+}
 
 
 class LlamaNativeFullReplayTests(unittest.TestCase):
@@ -156,8 +160,10 @@ class LlamaNativeFullReplayTests(unittest.TestCase):
 
         self.assertIn("-DLLAMA_BUILD_TESTS=OFF", configure["args"])
         self.assertIn("-DLLAMA_STAGE_BUILD_TESTS=OFF", configure["args"])
+        self.assertIn("-DGGML_METAL=OFF", configure["args"])
         self.assertTrue(PRIVATE_TARGETS.isdisjoint(build["args"]))
         self.assertTrue(LEGACY_TARGETS.isdisjoint(build["args"]))
+        self.assertTrue(NON_CHAT_TARGETS.isdisjoint(build["args"]))
         self.assertFalse(any(call["tool"] == "ctest" for call in trace))
 
     def test_full_replay_builds_and_runs_only_skippy_gates(self) -> None:
@@ -172,6 +178,7 @@ class LlamaNativeFullReplayTests(unittest.TestCase):
         self.assertIn("-DLLAMA_BUILD_SERVER=OFF", configure["args"])
         self.assertTrue(PRIVATE_TARGETS.issubset(build["args"]))
         self.assertTrue(LEGACY_TARGETS.issubset(build["args"]))
+        self.assertTrue(NON_CHAT_TARGETS.issubset(build["args"]))
         self.assertNotIn("test-llama-archs", build["args"])
         self.assertEqual(
             [fixture[:4] for fixture in fixtures],

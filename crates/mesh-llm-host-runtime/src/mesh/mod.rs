@@ -6,9 +6,10 @@
 //! latency-sensitive `skippy-stage/2` ALPN.
 
 pub use mesh_llm_types::mesh::{
-    ModelDemand, ModelRuntimeDescriptor, ModelSourceKind, ServedModelDescriptor,
-    ServedModelIdentity, ServedModelMetadata, infer_available_model_descriptors,
-    infer_local_served_model_descriptor, infer_served_model_descriptors,
+    ModelDemand, ModelRuntimeDescriptor, ModelSourceKind, ModelWorkloadClass,
+    ServedModelDescriptor, ServedModelIdentity, ServedModelMetadata,
+    infer_available_model_descriptors, infer_local_served_model_descriptor,
+    infer_served_model_descriptors,
 };
 
 use anyhow::{Context, Result};
@@ -90,7 +91,7 @@ mod heartbeat;
 mod host_role_claims;
 mod identity_persistence;
 mod lan_bootstrap;
-mod model_identity;
+pub(crate) mod model_identity;
 mod node;
 mod node_identity;
 mod node_requirements;

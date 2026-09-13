@@ -344,6 +344,7 @@ pub(super) async fn load_split_runtime_generation_inner(
             context_length: spec.ctx_size,
             slots: spec.slots,
             capabilities,
+            workload_class: mesh::ModelWorkloadClass::CausalGeneration,
             inner: LocalRuntimeBackendHandle::Skippy {
                 model: handle,
                 http,

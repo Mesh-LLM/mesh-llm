@@ -117,6 +117,49 @@ pub(super) fn unsupported_code(error: OpenAiError) -> Option<String> {
     error.body().error.code
 }
 
+pub(super) fn local_openai_backend(
+    config: StageConfig,
+    model_id: impl Into<String>,
+) -> Result<StageOpenAiBackend> {
+    let runtime = load_runtime(&config)?.context("load local test runtime")?;
+    let ctx_size = usize::try_from(config.ctx_size).unwrap_or(usize::MAX);
+    let telemetry = Telemetry::new(
+        None,
+        1,
+        config.clone(),
+        crate::telemetry::TelemetryLevel::Off,
+    );
+    let iteration_scheduler =
+        IterationScheduler::new(runtime.clone(), &config, 1, true, telemetry.clone())?;
+    Ok(StageOpenAiBackend {
+        runtime,
+        telemetry,
+        config,
+        model_id: model_id.into(),
+        default_max_tokens: 16,
+        request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+        ctx_size,
+        mode: OpenAiBackendMode::LocalRuntime,
+        draft: None,
+        speculative_window: 0,
+        adaptive_speculative_window: false,
+        ngram_max: 0,
+        speculative: SpeculativeDecodeConfig::default(),
+        generation_limit: Arc::new(GenerationConcurrencyController::fixed(1)),
+        generation_queue_depth: Arc::new(AtomicUsize::new(0)),
+        generation_queue_limit: 1,
+        generation_admission_timeout: Duration::from_secs(10),
+        generation_service_estimator: Arc::new(GenerationServiceEstimator::new(1)),
+        generation_session_locks: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
+        generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
+        hook_policy: None,
+        generation_receipt: None,
+        linear_proposal_ingress: None,
+        kv: None,
+        iteration_scheduler,
+    })
+}
+
 pub(super) fn test_request_defaults() -> EmbeddedOpenAiRequestDefaults {
     EmbeddedOpenAiRequestDefaults {
         stop: Some(vec!["</stop>".to_string()]),

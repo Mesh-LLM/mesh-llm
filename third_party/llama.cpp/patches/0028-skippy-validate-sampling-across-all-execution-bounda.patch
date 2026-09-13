@@ -1,0 +1,303 @@
+From 2e57a2a5ec0bc3e7b5f1d633e5f541e67919b5ed Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sat, 12 Sep 2026 18:24:13 -0700
+Subject: [PATCH] skippy: validate sampling across all execution boundaries
+
+---
+ src/skippy/execution-batch.cpp          | 15 ++++++++---
+ src/skippy/execution-single.cpp         | 36 +++++++++++++++++--------
+ src/skippy/sampling_internal.h          |  3 +++
+ src/skippy/sampling_vocab.cpp           | 11 ++++++++
+ src/skippy/session.cpp                  |  9 ++-----
+ src/skippy/speculative_decoding.cpp     | 27 ++++++++++++++-----
+ src/skippy/verification.cpp             |  9 +++----
+ tests/test-skippy-sampling-suppress.cpp | 21 +++++++++++++++
+ 8 files changed, 98 insertions(+), 33 deletions(-)
+
+diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
+index b66e25499..bf7cc1ecb 100644
+--- a/src/skippy/execution-batch.cpp
++++ b/src/skippy/execution-batch.cpp
+@@ -340,11 +340,14 @@ enum skippy_status skippy_iteration_batch_sampled(
+             // the sparse-row translation internally.
+             const int32_t logits_index =
+                     static_cast<int32_t>(request_offsets[request_index + 1] - 1);
+-            out_sampled_request_indexes[sampled_output_index] = request_index;
+-            out_predicted_tokens[sampled_output_index] = skippy_sample_token_ith(
++            const skippy_status sample_status = skippy_store_sampled_token(skippy_sample_token_ith(
+                     request.session,
+                     request.sampling,
+-                    logits_index);
++                    logits_index), &out_predicted_tokens[sampled_output_index], out_error);
++            if (sample_status != SKIPPY_STATUS_OK) {
++                return sample_status;
++            }
++            out_sampled_request_indexes[sampled_output_index] = request_index;
+             sampled_output_index += 1;
+         }
+ 
+@@ -680,7 +683,11 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+         }
+         if (request_logits) {
+             const skippy_sampling_config * request_sampling = sampling != nullptr ? sampling[i] : nullptr;
+-            out_predicted_tokens[i] = skippy_sample_token_ith(session, request_sampling, i);
++            const skippy_status sample_status = skippy_store_sampled_token(
++                    skippy_sample_token_ith(session, request_sampling, i), &out_predicted_tokens[i], out_error);
++            if (sample_status != SKIPPY_STATUS_OK) {
++                return sample_status;
++            }
+         } else {
+             out_predicted_tokens[i] = -1;
+         }
+diff --git a/src/skippy/execution-single.cpp b/src/skippy/execution-single.cpp
+index 357222c13..967a6b1ed 100644
+--- a/src/skippy/execution-single.cpp
++++ b/src/skippy/execution-single.cpp
+@@ -119,7 +119,8 @@ enum skippy_status skippy_decode_step_sampled(
+     }
+ 
+     if (out_predicted_token != nullptr) {
+-        *out_predicted_token = skippy_sample_token(session, sampling);
++        return skippy_store_sampled_token(
++                skippy_sample_token(session, sampling), out_predicted_token, out_error);
+     }
+ 
+     return skippy_success(out_error);
+@@ -233,7 +234,11 @@ enum skippy_status skippy_decode_batch_sampled(
+         session->n_past += 1;
+         skippy_record_tokens(session, &token_ids[i], 1);
+         const skippy_sampling_config * request_sampling = sampling != nullptr ? sampling[i] : nullptr;
+-        out_predicted_tokens[i] = skippy_sample_token_ith(session, request_sampling, i);
++        const skippy_status sample_status = skippy_store_sampled_token(
++                skippy_sample_token_ith(session, request_sampling, i), &out_predicted_tokens[i], out_error);
++        if (sample_status != SKIPPY_STATUS_OK) {
++            return sample_status;
++        }
+     }
+ 
+     return skippy_success(out_error);
+@@ -281,12 +286,11 @@ enum skippy_status skippy_verify_tokens(
+     if (status == SKIPPY_STATUS_OK) {
+         const int32_t n_tokens = static_cast<int32_t>(token_count);
+         for (int32_t i = 0; i < n_tokens; ++i) {
+-            output_tokens[i] = skippy_greedy_sample_ith(session, i);
+-            if (output_tokens[i] == LLAMA_TOKEN_NULL) {
++            status = skippy_store_sampled_token(
++                    skippy_greedy_sample_ith(session, i), &output_tokens[i], out_error);
++            if (status != SKIPPY_STATUS_OK) {
+                 *out_token_count = 0;
+-                skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
+-                        "verification produced no eligible token after vocabulary suppression");
+-                return SKIPPY_STATUS_RUNTIME_ERROR;
++                return status;
+             }
+         }
+     }
+@@ -370,9 +374,12 @@ static enum skippy_status skippy_prefill_chunk_frame_impl(
+         return status;
+     }
+ 
+-    if (out_predicted_token != nullptr) {
+-        *out_predicted_token = session->stage_model->config.include_output ?
+-                skippy_sample_token(session, sampling) : -1;
++    if (out_predicted_token != nullptr && session->stage_model->config.include_output) {
++        status = skippy_store_sampled_token(
++                skippy_sample_token(session, sampling), out_predicted_token, out_error);
++        if (status != SKIPPY_STATUS_OK) {
++            return status;
++        }
+     }
+ 
+     return skippy_copy_output_activation_frame(
+@@ -564,7 +571,14 @@ enum skippy_status skippy_decode_step_frame_sampled(
+     }
+ 
+     if (out_predicted_token != nullptr) {
+-        *out_predicted_token = session->stage_model->config.include_output ? skippy_sample_token(session, sampling) : -1;
++        *out_predicted_token = -1;
++        if (session->stage_model->config.include_output) {
++            status = skippy_store_sampled_token(
++                    skippy_sample_token(session, sampling), out_predicted_token, out_error);
++            if (status != SKIPPY_STATUS_OK) {
++                return status;
++            }
++        }
+     }
+ 
+     return skippy_copy_output_activation_frame(
+diff --git a/src/skippy/sampling_internal.h b/src/skippy/sampling_internal.h
+index 4e60b256c..0c4e54724 100644
+--- a/src/skippy/sampling_internal.h
++++ b/src/skippy/sampling_internal.h
+@@ -39,6 +39,9 @@ llama_token skippy_greedy_sample_allowed_logits(
+         int32_t suppress_token_count,
+         bool ignore_eog);
+ llama_token skippy_greedy_sample_ith(skippy_session * session, int32_t index);
++// Keep exhausted sampling out of public outputs and subsequent decode inputs.
++enum skippy_status skippy_store_sampled_token(
++        llama_token token, llama_token * output, skippy_error ** out_error);
+ llama_sampler * skippy_build_sampling_chain(skippy_session * session, const skippy_sampling_config * sampling);
+ std::vector<llama_logit_bias> skippy_add_vocab_suppress_token_biases(
+         std::vector<llama_logit_bias> biases,
+diff --git a/src/skippy/sampling_vocab.cpp b/src/skippy/sampling_vocab.cpp
+index 1242ed105..baf83db44 100644
+--- a/src/skippy/sampling_vocab.cpp
++++ b/src/skippy/sampling_vocab.cpp
+@@ -1,4 +1,5 @@
+ #include "skippy/sampling_internal.h"
++#include "skippy/errors.h"
+ 
+ #include "llama.h"
+ 
+@@ -8,6 +9,16 @@
+ #include <limits>
+ #include <vector>
+ 
++enum skippy_status skippy_store_sampled_token(
++        llama_token token, llama_token * output, skippy_error ** out_error) {
++    if (token < 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "sampling produced no allowed token");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    *output = token;
++    return skippy_success(out_error);
++}
++
+ std::vector<llama_logit_bias> skippy_add_vocab_suppress_token_biases(
+         std::vector<llama_logit_bias> biases,
+         const llama_token * suppress_tokens,
+diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
+index 50af78cb8..51d873866 100644
+--- a/src/skippy/session.cpp
++++ b/src/skippy/session.cpp
+@@ -259,13 +259,8 @@ enum skippy_status skippy_session_sample_current(
+         skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session and out_predicted_token are required");
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
+-    *out_predicted_token = skippy_sample_token(session, sampling);
+-    if (*out_predicted_token == LLAMA_TOKEN_NULL) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
+-                "sampling produced no eligible token after vocabulary suppression");
+-        return SKIPPY_STATUS_RUNTIME_ERROR;
+-    }
+-    return skippy_success(out_error);
++    return skippy_store_sampled_token(
++            skippy_sample_token(session, sampling), out_predicted_token, out_error);
+ }
+ 
+ enum skippy_status skippy_session_configure_chat_sampling(
+diff --git a/src/skippy/speculative_decoding.cpp b/src/skippy/speculative_decoding.cpp
+index b28ef9096..321852e87 100644
+--- a/src/skippy/speculative_decoding.cpp
++++ b/src/skippy/speculative_decoding.cpp
+@@ -295,8 +295,16 @@ enum skippy_status skippy_mtp_sync_target_inputs(
+             for (int32_t out_i = 0; out_i + 1 < n_decode; ++out_i) {
+                 batch.token[out_i] = batch.token[out_i + 1];
+             }
+-            batch.token[n_decode - 1] = skippy_greedy_sample_context(
+-                    llama_get_model(mtp_ctx), mtp_ctx, -1);
++            const skippy_status sample_status = skippy_store_sampled_token(
++                    skippy_greedy_sample_context(llama_get_model(mtp_ctx), mtp_ctx, -1),
++                    &batch.token[n_decode - 1], out_error);
++            if (sample_status != SKIPPY_STATUS_OK) {
++                skippy_mtp_clear_session_state(session);
++                std::free(batch.token);
++                batch.token = nullptr;
++                llama_batch_free(batch);
++                return sample_status;
++            }
+         }
+         if (batch.token != nullptr) {
+             std::free(batch.token);
+@@ -460,8 +468,13 @@ enum skippy_status skippy_mtp_propose_next(
+             }
+ 
+             token = skippy_greedy_sample_context(llama_get_model(mtp_ctx), mtp_ctx, -1);
+-            if (token == LLAMA_TOKEN_NULL) {
+-                break;
++            const skippy_status sample_status = skippy_store_sampled_token(token, &token, out_error);
++            if (sample_status != SKIPPY_STATUS_OK) {
++                skippy_mtp_clear_session_state(session);
++                std::free(batch.token);
++                batch.token = nullptr;
++                llama_batch_free(batch);
++                return sample_status;
+             }
+             if (out_mtp_draft != nullptr) {
+                 out_mtp_draft->token_ids[token_count] = token;
+@@ -523,8 +536,10 @@ enum skippy_status skippy_mtp_propose_next(
+             }
+ 
+             token = skippy_greedy_sample_context(llama_get_model(mtp_ctx), mtp_ctx, -1);
+-            if (token == LLAMA_TOKEN_NULL) {
+-                break;
++            const skippy_status sample_status = skippy_store_sampled_token(token, &token, out_error);
++            if (sample_status != SKIPPY_STATUS_OK) {
++                skippy_mtp_clear_session_state(session);
++                return sample_status;
+             }
+             if (out_mtp_draft != nullptr) {
+                 out_mtp_draft->token_ids[token_count] = token;
+diff --git a/src/skippy/verification.cpp b/src/skippy/verification.cpp
+index c14e7a0a3..09a8a2012 100644
+--- a/src/skippy/verification.cpp
++++ b/src/skippy/verification.cpp
+@@ -229,12 +229,11 @@ enum skippy_status skippy_verify_tokens_frame_sampled(
+         for (size_t i = 0; i < token_count; ++i) {
+             skippy_record_tokens(session, &token_ids[i], 1);
+             const int32_t logits_index = static_cast<int32_t>(i);
+-            output_tokens[i] = skippy_sample_token_ith(session, sampling, logits_index);
+-            if (output_tokens[i] == LLAMA_TOKEN_NULL) {
++            status = skippy_store_sampled_token(
++                    skippy_sample_token_ith(session, sampling, logits_index), &output_tokens[i], out_error);
++            if (status != SKIPPY_STATUS_OK) {
+                 *out_token_count = 0;
+-                skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
+-                        "sampled verification produced no eligible token after vocabulary suppression");
+-                return SKIPPY_STATUS_RUNTIME_ERROR;
++                return status;
+             }
+             if (stop_after_first_mismatch && i + 1 < token_count && output_tokens[i] != token_ids[i + 1]) {
+                 // Later rows are conditioned on a rejected token and are not
+diff --git a/tests/test-skippy-sampling-suppress.cpp b/tests/test-skippy-sampling-suppress.cpp
+index 4cf702bef..3f797cbe8 100644
+--- a/tests/test-skippy-sampling-suppress.cpp
++++ b/tests/test-skippy-sampling-suppress.cpp
+@@ -4,6 +4,7 @@
+ 
+ #include <cmath>
+ #include <cstdio>
++#include <cstring>
+ #include <vector>
+ 
+ static bool suppressed(const llama_logit_bias & bias) {
+@@ -60,6 +61,26 @@ int main() {
+         return 4;
+     }
+ 
++    llama_token output = 42;
++    skippy_error * error = nullptr;
++    const llama_token exhausted = skippy_greedy_sample_allowed_logits(
++            logits, nullptr, 5, all_tokens, 5, false);
++    if (skippy_store_sampled_token(exhausted, &output, &error) != SKIPPY_STATUS_RUNTIME_ERROR ||
++            output != 42 || error == nullptr ||
++            std::strstr(error->message, "no allowed token") == nullptr) {
++        std::fprintf(stderr, "exhausted sampling leaked into the output buffer\n");
++        skippy_error_free(error);
++        return 6;
++    }
++    skippy_error_free(error);
++    error = nullptr;
++    if (skippy_store_sampled_token(0, &output, &error) != SKIPPY_STATUS_OK ||
++            output != 0 || error != nullptr) {
++        std::fprintf(stderr, "valid token zero was rejected\n");
++        skippy_error_free(error);
++        return 7;
++    }
++
+     merged = skippy_add_vocab_suppress_token_biases(caller_biases, nullptr, 0);
+     if (merged.size() != caller_biases.size()) {
+         std::fprintf(stderr, "models without suppress tokens lost caller logit biases\n");
+-- 
+2.54.0 (Apple Git-157)
+

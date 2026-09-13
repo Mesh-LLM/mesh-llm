@@ -15,6 +15,15 @@ use std::sync::Arc;
 pub(super) type RuntimeInstanceRegistry =
     Arc<tokio::sync::Mutex<HashMap<String, BTreeMap<String, Option<u32>>>>>;
 
+pub(super) struct RuntimeModelRegistration<'a> {
+    pub primary_model_name: &'a str,
+    pub model_name: &'a str,
+    pub instance_id: &'a str,
+    pub context_length: Option<u32>,
+    pub capabilities: models::ModelCapabilities,
+    pub workload_class: mesh::ModelWorkloadClass,
+}
+
 pub(super) fn next_runtime_instance_id(next_sequence: &mut u64) -> String {
     let instance_id = format!("runtime-{}", *next_sequence);
     *next_sequence = next_sequence.saturating_add(1);
@@ -67,12 +76,16 @@ pub(super) fn reserve_runtime_capacity_for_model(
 pub(super) async fn register_runtime_instance(
     registry: &RuntimeInstanceRegistry,
     node: &mesh::Node,
-    primary_model_name: &str,
-    model_name: &str,
-    instance_id: &str,
-    context_length: Option<u32>,
-    capabilities: models::ModelCapabilities,
+    registration: RuntimeModelRegistration<'_>,
 ) {
+    let RuntimeModelRegistration {
+        primary_model_name,
+        model_name,
+        instance_id,
+        context_length,
+        capabilities,
+        workload_class,
+    } = registration;
     let (was_empty, context_changed, next_context) = {
         let mut guard = registry.lock().await;
         let instances = guard.entry(model_name.to_string()).or_default();
@@ -93,6 +106,7 @@ pub(super) async fn register_runtime_instance(
             primary_model_name,
             model_name,
             capabilities,
+            workload_class,
         )
         .await;
         advertise_model_ready(node, primary_model_name, model_name, "").await;

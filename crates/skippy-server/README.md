@@ -142,8 +142,9 @@ deadline handling.
   macOS interface-scoped socket option. In a multi-NIC lab, set `bind_addr` to
   the private LAN address, such as `192.168.0.x:19031`, so both inbound serving
   and outbound stage-to-stage traffic are pinned to that interface.
-- `serve-openai` exposes `/v1/models`, `/v1/chat/completions`, and
-  `/v1/completions` using the shared `openai-frontend` crate for a local
+- `serve-openai` exposes model discovery, chat/completions, Responses,
+  embeddings, rerank, and audio endpoints using the shared `openai-frontend`
+  crate for a local
   final/single-stage config with no downstream peer. Split serving uses
   embedded stage-0 OpenAI serving from `serve-binary --openai-bind-addr` because
   generation-7 prediction returns flow directly from the final stage to stage 0.

@@ -321,6 +321,8 @@ pub struct ServedModelMetadata {
     pub expert_count: ::core::option::Option<u32>,
     #[prost(uint32, optional, tag = "12")]
     pub active_expert_count: ::core::option::Option<u32>,
+    #[prost(enumeration = "ModelWorkloadClass", optional, tag = "13")]
+    pub workload_class: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ServedModelIdentity {
@@ -979,6 +981,44 @@ impl ModelSourceKind {
             "MODEL_SOURCE_KIND_LOCAL_GGUF" => Some(Self::LocalGguf),
             "MODEL_SOURCE_KIND_DIRECT_URL" => Some(Self::DirectUrl),
             "MODEL_SOURCE_KIND_UNKNOWN" => Some(Self::Unknown),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ModelWorkloadClass {
+    Unspecified = 0,
+    CausalGeneration = 1,
+    Embedding = 2,
+    Rerank = 3,
+    EncoderDecoder = 4,
+    SpeechSynthesis = 5,
+}
+impl ModelWorkloadClass {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "MODEL_WORKLOAD_CLASS_UNSPECIFIED",
+            Self::CausalGeneration => "MODEL_WORKLOAD_CLASS_CAUSAL_GENERATION",
+            Self::Embedding => "MODEL_WORKLOAD_CLASS_EMBEDDING",
+            Self::Rerank => "MODEL_WORKLOAD_CLASS_RERANK",
+            Self::EncoderDecoder => "MODEL_WORKLOAD_CLASS_ENCODER_DECODER",
+            Self::SpeechSynthesis => "MODEL_WORKLOAD_CLASS_SPEECH_SYNTHESIS",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "MODEL_WORKLOAD_CLASS_UNSPECIFIED" => Some(Self::Unspecified),
+            "MODEL_WORKLOAD_CLASS_CAUSAL_GENERATION" => Some(Self::CausalGeneration),
+            "MODEL_WORKLOAD_CLASS_EMBEDDING" => Some(Self::Embedding),
+            "MODEL_WORKLOAD_CLASS_RERANK" => Some(Self::Rerank),
+            "MODEL_WORKLOAD_CLASS_ENCODER_DECODER" => Some(Self::EncoderDecoder),
+            "MODEL_WORKLOAD_CLASS_SPEECH_SYNTHESIS" => Some(Self::SpeechSynthesis),
             _ => None,
         }
     }

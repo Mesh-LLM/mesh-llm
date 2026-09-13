@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use axum::Router;
 use openai_frontend::{OpenAiBackend, OpenAiFrontendConfig, OpenAiLifecycleObserver};
 use skippy_protocol::{StageConfig, StageTopology};
-use skippy_runtime::{ActivationBoundaryDesc, MtpSource};
+use skippy_runtime::{ActivationBoundaryDesc, MtpSource, WorkloadInfo};
 use tokio::{sync::oneshot, task::JoinHandle};
 
 use crate::{
@@ -129,6 +129,23 @@ impl SkippyRuntimeHandle {
             .lock()
             .expect("runtime lock poisoned")
             .output_activation_boundary()
+    }
+
+    /// Returns the runtime-probed workload contract for the loaded model.
+    pub fn workload_info(&self) -> Result<WorkloadInfo> {
+        self.runtime
+            .lock()
+            .expect("runtime lock poisoned")
+            .workload_info()
+    }
+
+    /// True only when the loaded multimodal projector exposes llama.cpp's
+    /// audio-generation helper contract.
+    pub fn supports_speech_synthesis(&self) -> bool {
+        self.runtime
+            .lock()
+            .expect("runtime lock poisoned")
+            .supports_speech_synthesis()
     }
 
     /// Assemble a ready handle around an already-loaded runtime.

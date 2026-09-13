@@ -6,10 +6,10 @@ use super::{
     DASHBOARD_CONTEXT_USAGE_REFRESH_INTERVAL, DashboardContextUsage, InitialPromptMode,
     InstanceLifecycleRecord, InstanceLifecycleState, LocalRuntimeModelHandle,
     LocalRuntimeModelStartSpec, OpenAiGuardrailPolicyHandle, RuntimeCapacityLedger,
-    RuntimeCapacityReservation, RuntimeInstanceRegistry, RuntimeOperationalEvent,
-    RuntimeResourcePlanningProfile, SPLIT_STANDBY_RETRY_INTERVAL, SplitCoordinatorAck,
-    SplitCoordinatorEvent, SplitRuntimeReason, SplitRuntimeStart, StartupPinnedGpuTarget,
-    StartupRuntimePlan, add_runtime_local_target, local_process_payload,
+    RuntimeCapacityReservation, RuntimeInstanceRegistry, RuntimeModelRegistration,
+    RuntimeOperationalEvent, RuntimeResourcePlanningProfile, SPLIT_STANDBY_RETRY_INTERVAL,
+    SplitCoordinatorAck, SplitCoordinatorEvent, SplitRuntimeReason, SplitRuntimeStart,
+    StartupPinnedGpuTarget, StartupRuntimePlan, add_runtime_local_target, local_process_payload,
     publish_runtime_llama_slots, publish_runtime_llama_unavailable,
     record_runtime_operational_event, record_runtime_operational_event_with_context,
     refresh_dashboard_context_usage, register_runtime_instance, remove_dashboard_context_usage,
@@ -487,11 +487,14 @@ pub(super) async fn startup_register_loaded_runtime(
     register_runtime_instance(
         ctx.runtime_instance_registry,
         ctx.node,
-        ctx.primary_model_name,
-        loaded_name,
-        ctx.instance_id,
-        Some(handle.context_length),
-        handle.capabilities,
+        RuntimeModelRegistration {
+            primary_model_name: ctx.primary_model_name,
+            model_name: loaded_name,
+            instance_id: ctx.instance_id,
+            context_length: Some(handle.context_length),
+            capabilities: handle.capabilities,
+            workload_class: handle.workload_class,
+        },
     )
     .await;
     let payload = local_process_payload(

@@ -388,9 +388,16 @@ run_full_build() {
     || return 1
   run_verification_logged "Skippy smoke tests" "$BUILD_LOG" \
     scripts/skippy-ci-smoke.sh || return 1
+  run_verification_logged "pinned CPU workload oracles and candidate" "$BUILD_LOG" \
+    just skippy-workload-oracles-build "${LLAMA_STAGE_BUILD_DIR:?}-workloads" || return 1
 }
 
 run_certification() {
+  local setting
+  local workload_env=()
+  while IFS= read -r setting; do
+    workload_env+=("$setting")
+  done < <(bash scripts/skippy-workload-oracles-build.sh --print-env "${LLAMA_STAGE_BUILD_DIR:?}-workloads")
   : > "$CERTIFY_LOG"
   echo "trusted candidate gate: certify" | tee -a "$CERTIFY_LOG"
   run_verification_logged "parity manifest validation" "$CERTIFY_LOG" \
@@ -412,6 +419,7 @@ run_certification() {
     scripts/skippy-canary-live-matrix.sh --prepare || return 1
   run_verification_logged "full supported-family certification" "$CERTIFY_LOG" env \
     FAMILY_BATTERY_RUN_ID="$FAMILY_BATTERY_RUN_ID" \
+    "${workload_env[@]}" \
     scripts/skippy-family-battery.sh --skip-build --plan "$PLAN_PATH"
 }
 

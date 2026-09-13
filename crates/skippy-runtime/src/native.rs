@@ -18,6 +18,72 @@ use crate::{
     RuntimeEvent, Status,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelWorkload {
+    CausalGeneration,
+    Embedding,
+    Rerank,
+    EncoderDecoder,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PoolingType {
+    Unspecified,
+    None,
+    Mean,
+    Cls,
+    Last,
+    Rank,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkloadInfo {
+    pub kind: ModelWorkload,
+    pub pooling: PoolingType,
+    pub output_dimensions: u32,
+    pub classifier_outputs: u32,
+    pub has_encoder: bool,
+    pub has_decoder: bool,
+    pub full_model_only: bool,
+}
+
+impl TryFrom<skippy_ffi::WorkloadInfoV1> for WorkloadInfo {
+    type Error = anyhow::Error;
+
+    fn try_from(raw: skippy_ffi::WorkloadInfoV1) -> Result<Self> {
+        if raw.abi_version != skippy_ffi::WORKLOAD_INFO_V1_ABI_VERSION
+            || raw.struct_size != std::mem::size_of::<skippy_ffi::WorkloadInfoV1>() as u32
+        {
+            return Err(anyhow!(
+                "native workload descriptor uses an incompatible ABI"
+            ));
+        }
+        let kind = match raw.kind {
+            skippy_ffi::WorkloadKind::CausalGeneration => ModelWorkload::CausalGeneration,
+            skippy_ffi::WorkloadKind::Embedding => ModelWorkload::Embedding,
+            skippy_ffi::WorkloadKind::Rerank => ModelWorkload::Rerank,
+            skippy_ffi::WorkloadKind::EncoderDecoder => ModelWorkload::EncoderDecoder,
+        };
+        let pooling = match raw.pooling {
+            skippy_ffi::WorkloadPooling::Unspecified => PoolingType::Unspecified,
+            skippy_ffi::WorkloadPooling::None => PoolingType::None,
+            skippy_ffi::WorkloadPooling::Mean => PoolingType::Mean,
+            skippy_ffi::WorkloadPooling::Cls => PoolingType::Cls,
+            skippy_ffi::WorkloadPooling::Last => PoolingType::Last,
+            skippy_ffi::WorkloadPooling::Rank => PoolingType::Rank,
+        };
+        Ok(Self {
+            kind,
+            pooling,
+            output_dimensions: raw.output_dimensions,
+            classifier_outputs: raw.classifier_outputs,
+            has_encoder: raw.has_encoder,
+            has_decoder: raw.has_decoder,
+            full_model_only: raw.full_model_only,
+        })
+    }
+}
+
 pub struct StageModel {
     inner: Arc<StageModelInner>,
     pub(crate) media: Option<MediaProjector>,
@@ -104,6 +170,17 @@ impl StageModel {
         let present =
             unsafe { skippy_ffi::skippy_model_input_activation_boundary(self.inner.raw, &mut raw) };
         present.then(|| raw.into())
+    }
+
+    /// Read the loaded model's ABI-validated workload, pooling, and output dimensions.
+    pub fn workload_info(&self) -> Result<WorkloadInfo> {
+        let mut raw = skippy_ffi::WorkloadInfoV1::default();
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_model_workload_info_v1(self.inner.raw, &mut raw, &mut error)
+        };
+        ensure_ok(status, error)?;
+        raw.try_into()
     }
 
     fn from_opened_raw(
@@ -960,10 +1037,65 @@ impl Drop for StageModel {
 #[cfg(test)]
 mod output_capacity_tests {
     use super::{
-        ModelStateKind, OPTIMISTIC_OUTPUT_HEADROOM, capability_from_state_probes,
-        classify_model_state, optimistic_chat_metadata_capacity, optimistic_chat_parse_capacity,
-        optimistic_chat_prompt_capacity, optimistic_token_capacity,
+        ModelStateKind, ModelWorkload, OPTIMISTIC_OUTPUT_HEADROOM, PoolingType, WorkloadInfo,
+        capability_from_state_probes, classify_model_state, optimistic_chat_metadata_capacity,
+        optimistic_chat_parse_capacity, optimistic_chat_prompt_capacity, optimistic_token_capacity,
     };
+
+    #[test]
+    fn workload_descriptor_converts_all_native_classes_and_pooling_modes() {
+        let cases = [
+            (
+                skippy_ffi::WorkloadKind::CausalGeneration,
+                ModelWorkload::CausalGeneration,
+            ),
+            (
+                skippy_ffi::WorkloadKind::Embedding,
+                ModelWorkload::Embedding,
+            ),
+            (skippy_ffi::WorkloadKind::Rerank, ModelWorkload::Rerank),
+            (
+                skippy_ffi::WorkloadKind::EncoderDecoder,
+                ModelWorkload::EncoderDecoder,
+            ),
+        ];
+        for (raw_kind, expected_kind) in cases {
+            let converted = WorkloadInfo::try_from(skippy_ffi::WorkloadInfoV1 {
+                kind: raw_kind,
+                pooling: skippy_ffi::WorkloadPooling::Mean,
+                output_dimensions: 768,
+                classifier_outputs: 2,
+                has_encoder: true,
+                has_decoder: false,
+                full_model_only: true,
+                ..Default::default()
+            })
+            .expect("valid workload descriptor");
+
+            assert_eq!(converted.kind, expected_kind);
+            assert_eq!(converted.pooling, PoolingType::Mean);
+            assert_eq!(converted.output_dimensions, 768);
+            assert_eq!(converted.classifier_outputs, 2);
+            assert!(converted.has_encoder);
+            assert!(!converted.has_decoder);
+            assert!(converted.full_model_only);
+        }
+    }
+
+    #[test]
+    fn workload_descriptor_rejects_incompatible_layout_versions() {
+        let invalid_version = skippy_ffi::WorkloadInfoV1 {
+            abi_version: skippy_ffi::WORKLOAD_INFO_V1_ABI_VERSION + 1,
+            ..Default::default()
+        };
+        assert!(WorkloadInfo::try_from(invalid_version).is_err());
+
+        let invalid_size = skippy_ffi::WorkloadInfoV1 {
+            struct_size: 0,
+            ..Default::default()
+        };
+        assert!(WorkloadInfo::try_from(invalid_size).is_err());
+    }
 
     #[test]
     fn loaded_model_flags_classify_state_without_family_names() {

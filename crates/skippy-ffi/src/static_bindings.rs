@@ -4,14 +4,19 @@ use crate::{
     ActivationBoundaryDesc, ActivationDesc, BackendDevice, Error, GenerationSignalWindow,
     IterationRequest, KvPageDesc, LlamaLogCallback, LlamaModelQuantizeParams, Model, ModelInfo,
     ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos,
-    MtmdHelperBitmapWrapper, MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType,
-    MtmdInputChunks, MtmdInputText, NativeMtpDraft, NgramCache, Opaque, RuntimeConfig,
-    SamplingConfig, Session, SlicePlan, StagePlan, StagePlanDescV1, StagePlanProfileDescV1,
-    StagePlanStateDescV1, StagePlanStringRefV1, StagePlanValueDescV1, StagePlanValueKind,
-    StagePlanner, StagePlannerConfigV1, Status, TensorInfo, TokenSignal,
+    MtmdGenAudioInfo, MtmdHelperBitmapWrapper, MtmdHelperGenAudio, MtmdHelperGenAudioInput,
+    MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
+    NativeMtpDraft, NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session, SlicePlan,
+    StagePlan, StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStringRefV1,
+    StagePlanValueDescV1, StagePlanValueKind, StagePlanner, StagePlannerConfigV1, Status,
+    TensorInfo, TokenSignal, WorkloadInfoV1,
 };
 
 unsafe extern "C" {
+    pub fn llama_get_embeddings_ith(ctx: *mut Opaque, index: i32) -> *mut f32;
+
+    pub fn llama_set_embeddings(ctx: *mut Opaque, embeddings: bool);
+
     pub fn llama_log_set(log_callback: LlamaLogCallback, user_data: *mut c_void);
 
     pub fn ggml_log_set(log_callback: LlamaLogCallback, user_data: *mut c_void);
@@ -123,6 +128,12 @@ unsafe extern "C" {
         out_desc: *mut ActivationBoundaryDesc,
     ) -> bool;
 
+    pub fn skippy_model_workload_info_v1(
+        model: *const Model,
+        out_info: *mut WorkloadInfoV1,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
     pub fn skippy_session_create(
         model: *mut Model,
         out_session: *mut *mut Session,
@@ -174,6 +185,33 @@ unsafe extern "C" {
         sampling: *const SamplingConfig,
         metadata_json: *const c_char,
         prompt_token_count: u64,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_session_embed(
+        session: *mut Session,
+        token_ids: *const i32,
+        token_count: usize,
+        output: *mut f32,
+        output_capacity: usize,
+        out_dimensions: *mut usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_session_rerank(
+        session: *mut Session,
+        query: *const c_char,
+        document: *const c_char,
+        out_score: *mut f32,
+        out_token_count: *mut usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_session_encode_prompt(
+        session: *mut Session,
+        token_ids: *const i32,
+        token_count: usize,
+        out_decoder_start_token: *mut i32,
         out_error: *mut *mut Error,
     ) -> Status;
 
@@ -710,6 +748,40 @@ unsafe extern "C" {
     pub fn mtmd_helper_log_set(log_callback: LlamaLogCallback, user_data: *mut c_void);
 
     pub fn mtmd_context_params_default() -> MtmdContextParams;
+
+    pub fn mtmd_gen_audio_get_info(ctx: *const MtmdContext) -> MtmdGenAudioInfo;
+
+    pub fn mtmd_helper_gen_audio_init(
+        lctx: *mut Opaque,
+        mctx: *mut MtmdContext,
+    ) -> *mut MtmdHelperGenAudio;
+
+    pub fn mtmd_helper_gen_audio_free(ctx: *mut MtmdHelperGenAudio);
+
+    pub fn mtmd_helper_gen_audio_reset(ctx: *mut MtmdHelperGenAudio);
+
+    pub fn mtmd_helper_gen_audio_set_input(
+        ctx: *mut MtmdHelperGenAudio,
+        input: *const MtmdHelperGenAudioInput,
+    ) -> i32;
+
+    pub fn mtmd_helper_gen_audio_step_prompt(ctx: *mut MtmdHelperGenAudio, n_batch: i32) -> i32;
+
+    pub fn mtmd_helper_gen_audio_step_gen(
+        ctx: *mut MtmdHelperGenAudio,
+        sampled: i32,
+        h_state_in: *const f32,
+        h_state_out: *mut *const f32,
+        out_stop: *mut bool,
+    ) -> i32;
+
+    pub fn mtmd_helper_gen_audio_get_output(
+        ctx: *mut MtmdHelperGenAudio,
+        out_sample_rate: *mut i32,
+        out_data: *mut *const c_char,
+        out_data_len: *mut usize,
+        out_n_samples: *mut i64,
+    ) -> i32;
 
     pub fn mtmd_init_from_file(
         mmproj_fname: *const c_char,

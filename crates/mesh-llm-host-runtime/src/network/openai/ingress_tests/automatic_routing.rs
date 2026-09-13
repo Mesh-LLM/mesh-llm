@@ -15,6 +15,35 @@ use super::super::ingress::{
     AutoRouteResolution, prepare_cache_routing_body, resolve_auto_routed_model,
 };
 
+#[tokio::test]
+async fn auto_readiness_uses_remote_embedding_despite_local_causal_copy() {
+    let model = "shared-workload-model";
+    let (node, targets) = node_serving(&[model]).await;
+    node.set_served_model_descriptors(vec![workload_descriptor(
+        model,
+        mesh::ModelWorkloadClass::CausalGeneration,
+    )])
+    .await;
+    let peer_id = iroh::SecretKey::generate().public();
+    let mut peer = peer_serving(peer_id, model, false);
+    peer.served_model_descriptors = vec![workload_descriptor(
+        model,
+        mesh::ModelWorkloadClass::Embedding,
+    )];
+    node.insert_test_peer(peer).await;
+    assert!(
+        super::super::ingress::auto_route_model_has_ready_ingress_target(
+            &node,
+            &targets,
+            model,
+            None,
+            "/v1/embeddings",
+            &affinity::AffinityRouter::new()
+        )
+        .await
+    );
+}
+
 /// A served model with the given capabilities, ready for the media filter.
 fn descriptor(model: &str, vision: bool, audio: bool) -> mesh::ServedModelDescriptor {
     use crate::models::CapabilityLevel;
@@ -40,6 +69,32 @@ fn descriptor(model: &str, vision: bool, audio: bool) -> mesh::ServedModelDescri
             ..Default::default()
         },
         ..Default::default()
+    }
+}
+
+fn workload_descriptor(
+    model: &str,
+    workload_class: mesh::ModelWorkloadClass,
+) -> mesh::ServedModelDescriptor {
+    mesh::ServedModelDescriptor {
+        metadata: Some(mesh::ServedModelMetadata {
+            workload_class: Some(workload_class),
+            ..Default::default()
+        }),
+        ..descriptor(model, false, false)
+    }
+}
+
+fn audio_workload_descriptor(
+    model: &str,
+    workload_class: mesh::ModelWorkloadClass,
+) -> mesh::ServedModelDescriptor {
+    mesh::ServedModelDescriptor {
+        metadata: Some(mesh::ServedModelMetadata {
+            workload_class: Some(workload_class),
+            ..Default::default()
+        }),
+        ..descriptor(model, false, true)
     }
 }
 
@@ -145,6 +200,268 @@ async fn resolve(
     .await
 }
 
+async fn resolve_path(
+    path: &str,
+    model: Option<&str>,
+    body: &serde_json::Value,
+    node: &mesh::Node,
+    targets: &election::ModelTargets,
+    descriptors: &[mesh::ServedModelDescriptor],
+) -> AutoRouteResolution {
+    let mut request = request_with_body(model, body);
+    request.path = path.to_string();
+    request.client_path = path.to_string();
+    let affinity = affinity::AffinityRouter::new();
+    resolve_auto_routed_model(
+        node,
+        &mut request,
+        targets,
+        None,
+        descriptors,
+        None,
+        &affinity,
+    )
+    .await
+}
+
+#[test]
+fn endpoint_paths_map_to_their_required_workload_classes() {
+    assert_eq!(
+        super::super::ingress::request_workload_class("/v1/embeddings?trace=1"),
+        Some(mesh::ModelWorkloadClass::Embedding)
+    );
+    assert_eq!(
+        super::super::ingress::request_workload_class("/v1/rerank"),
+        Some(mesh::ModelWorkloadClass::Rerank)
+    );
+    assert_eq!(
+        super::super::ingress::request_workload_class("/v1/audio/speech"),
+        Some(mesh::ModelWorkloadClass::SpeechSynthesis)
+    );
+    assert_eq!(
+        super::super::ingress::request_workload_class("/v1/audio/transcriptions"),
+        Some(mesh::ModelWorkloadClass::CausalGeneration)
+    );
+    assert_eq!(
+        super::super::ingress::request_workload_class("/v1/audio/translations?trace=1"),
+        Some(mesh::ModelWorkloadClass::CausalGeneration)
+    );
+}
+
+#[tokio::test]
+async fn audio_upload_routes_only_to_an_advertised_audio_workload() {
+    let (node, targets) =
+        node_serving(&["legacy-audio", "chat-only", "tts", "audio-to-text"]).await;
+    let descriptors = vec![
+        descriptor("legacy-audio", false, true),
+        workload_descriptor("chat-only", mesh::ModelWorkloadClass::CausalGeneration),
+        audio_workload_descriptor("tts", mesh::ModelWorkloadClass::SpeechSynthesis),
+        audio_workload_descriptor("audio-to-text", mesh::ModelWorkloadClass::CausalGeneration),
+    ];
+    for path in ["/v1/audio/transcriptions", "/v1/audio/translations?trace=1"] {
+        for requested_model in [automatic::DIRECTIVE, "audio-to-text"] {
+            let body = serde_json::json!({ "model": requested_model });
+            let resolution = resolve_path(
+                path,
+                Some(requested_model),
+                &body,
+                &node,
+                &targets,
+                &descriptors,
+            )
+            .await;
+            match resolution {
+                AutoRouteResolution::Continue {
+                    effective_model, ..
+                } => assert_eq!(effective_model.as_deref(), Some("audio-to-text")),
+                AutoRouteResolution::WorkloadUnsupported(workload) => {
+                    panic!("advertised audio-to-text model was rejected for {workload:?}")
+                }
+                AutoRouteResolution::MediaUnsupported => {
+                    panic!("advertised audio-to-text model was rejected for media")
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn audio_upload_rejects_legacy_audio_for_explicit_and_auto_routing() {
+    let (node, targets) = node_serving(&["legacy-audio"]).await;
+    let descriptors = vec![descriptor("legacy-audio", false, true)];
+
+    for path in ["/v1/audio/transcriptions", "/v1/audio/translations"] {
+        for requested_model in ["legacy-audio", automatic::DIRECTIVE] {
+            let body = serde_json::json!({ "model": requested_model });
+            let resolution = resolve_path(
+                path,
+                Some(requested_model),
+                &body,
+                &node,
+                &targets,
+                &descriptors,
+            )
+            .await;
+            assert!(matches!(
+                resolution,
+                AutoRouteResolution::WorkloadUnsupported(
+                    mesh::ModelWorkloadClass::CausalGeneration
+                )
+            ));
+        }
+    }
+}
+
+#[tokio::test]
+async fn audio_upload_requires_runtime_verified_audio_capability() {
+    let (node, targets) = node_serving(&["unverified-audio", "text-only"]).await;
+    let mut unverified = audio_workload_descriptor(
+        "unverified-audio",
+        mesh::ModelWorkloadClass::CausalGeneration,
+    );
+    unverified.capabilities_known = false;
+    let descriptors = vec![
+        unverified,
+        workload_descriptor("text-only", mesh::ModelWorkloadClass::CausalGeneration),
+    ];
+    let body = serde_json::json!({ "model": automatic::DIRECTIVE });
+
+    let resolution = resolve_path(
+        "/v1/audio/transcriptions",
+        Some(automatic::DIRECTIVE),
+        &body,
+        &node,
+        &targets,
+        &descriptors,
+    )
+    .await;
+    assert!(matches!(
+        resolution,
+        AutoRouteResolution::WorkloadUnsupported(mesh::ModelWorkloadClass::CausalGeneration)
+    ));
+}
+
+#[tokio::test]
+async fn legacy_chat_audio_remains_routable() {
+    let (node, targets) = node_serving(&["legacy-audio"]).await;
+    let descriptors = vec![descriptor("legacy-audio", false, true)];
+    let body = serde_json::json!({
+        "model": automatic::DIRECTIVE,
+        "messages": [{
+            "role": "user",
+            "content": [{
+                "type": "input_audio",
+                "input_audio": { "data": "AA==", "format": "wav" },
+            }],
+        }],
+    });
+
+    let resolution = resolve_path(
+        "/v1/chat/completions",
+        Some(automatic::DIRECTIVE),
+        &body,
+        &node,
+        &targets,
+        &descriptors,
+    )
+    .await;
+    match resolution {
+        AutoRouteResolution::Continue {
+            effective_model, ..
+        } => assert_eq!(effective_model.as_deref(), Some("legacy-audio")),
+        AutoRouteResolution::WorkloadUnsupported(workload) => {
+            panic!("legacy chat-audio was rejected for {workload:?}")
+        }
+        AutoRouteResolution::MediaUnsupported => panic!("legacy model advertises audio input"),
+    }
+}
+
+#[tokio::test]
+async fn embedding_auto_route_selects_only_an_embedding_model() {
+    let (node, targets) = node_serving(&["chat-model", "embed-model"]).await;
+    let descriptors = vec![
+        workload_descriptor("chat-model", mesh::ModelWorkloadClass::CausalGeneration),
+        workload_descriptor("embed-model", mesh::ModelWorkloadClass::Embedding),
+    ];
+    let body = serde_json::json!({
+        "model": automatic::DIRECTIVE,
+        "input": ["alpha", "beta"],
+    });
+
+    let resolution = resolve_path(
+        "/v1/embeddings",
+        Some(automatic::DIRECTIVE),
+        &body,
+        &node,
+        &targets,
+        &descriptors,
+    )
+    .await;
+
+    match resolution {
+        AutoRouteResolution::Continue {
+            effective_model, ..
+        } => assert_eq!(effective_model.as_deref(), Some("embed-model")),
+        AutoRouteResolution::WorkloadUnsupported(workload) => {
+            panic!("embedding model was advertised but {workload:?} was rejected")
+        }
+        AutoRouteResolution::MediaUnsupported => panic!("embedding request has no media"),
+    }
+}
+
+#[tokio::test]
+async fn non_chat_auto_route_fails_closed_for_legacy_descriptors() {
+    let (node, targets) = node_serving(&["legacy-chat-model"]).await;
+    let descriptors = vec![descriptor("legacy-chat-model", false, false)];
+    let body = serde_json::json!({
+        "model": automatic::DIRECTIVE,
+        "input": "alpha",
+    });
+
+    let resolution = resolve_path(
+        "/v1/embeddings",
+        Some(automatic::DIRECTIVE),
+        &body,
+        &node,
+        &targets,
+        &descriptors,
+    )
+    .await;
+
+    assert!(matches!(
+        resolution,
+        AutoRouteResolution::WorkloadUnsupported(mesh::ModelWorkloadClass::Embedding)
+    ));
+}
+
+#[tokio::test]
+async fn explicitly_named_model_must_advertise_the_endpoint_workload() {
+    let (node, targets) = node_serving(&["chat-model"]).await;
+    let descriptors = vec![workload_descriptor(
+        "chat-model",
+        mesh::ModelWorkloadClass::CausalGeneration,
+    )];
+    let body = serde_json::json!({
+        "model": "chat-model",
+        "input": "alpha",
+    });
+
+    let resolution = resolve_path(
+        "/v1/embeddings",
+        Some("chat-model"),
+        &body,
+        &node,
+        &targets,
+        &descriptors,
+    )
+    .await;
+
+    assert!(matches!(
+        resolution,
+        AutoRouteResolution::WorkloadUnsupported(mesh::ModelWorkloadClass::Embedding)
+    ));
+}
+
 #[tokio::test]
 async fn plain_text_directive_stays_on_the_committee() {
     let (node, targets) = node_serving(&["vision-model", "text-model"]).await;
@@ -167,6 +484,9 @@ async fn plain_text_directive_stays_on_the_committee() {
         AutoRouteResolution::Continue {
             effective_model, ..
         } => assert_eq!(effective_model.as_deref(), Some(automatic::DIRECTIVE)),
+        AutoRouteResolution::WorkloadUnsupported(workload) => {
+            panic!("generation request unexpectedly rejected for {workload:?}")
+        }
         AutoRouteResolution::MediaUnsupported => panic!("text request is not a media failure"),
     }
 }
@@ -199,6 +519,9 @@ async fn image_request_resolves_to_a_vision_capable_model() {
             Some("vision-model"),
             "an image request must resolve to the vision-capable model, not the directive"
         ),
+        AutoRouteResolution::WorkloadUnsupported(workload) => {
+            panic!("generation request unexpectedly rejected for {workload:?}")
+        }
         AutoRouteResolution::MediaUnsupported => {
             panic!("a vision-capable model is served, so this must not fail")
         }
@@ -252,6 +575,9 @@ async fn deprecated_alias_behaves_exactly_like_the_directive() {
         AutoRouteResolution::Continue {
             effective_model, ..
         } => assert_eq!(effective_model.as_deref(), Some(automatic::DIRECTIVE)),
+        AutoRouteResolution::WorkloadUnsupported(workload) => {
+            panic!("generation request unexpectedly rejected for {workload:?}")
+        }
         AutoRouteResolution::MediaUnsupported => panic!("text request is not a media failure"),
     }
 }
@@ -292,6 +618,9 @@ async fn streaming_directive_resolves_to_a_single_model() {
                 "must resolve to a served model, got {model}"
             );
         }
+        AutoRouteResolution::WorkloadUnsupported(workload) => {
+            panic!("generation request unexpectedly rejected for {workload:?}")
+        }
         AutoRouteResolution::MediaUnsupported => panic!("no media in this request"),
     }
 }
@@ -317,6 +646,9 @@ async fn model_less_request_resolves_to_a_single_model() {
                 automatic::DIRECTIVE,
                 "a model-less request must not silently convene a committee"
             );
+        }
+        AutoRouteResolution::WorkloadUnsupported(workload) => {
+            panic!("generation request unexpectedly rejected for {workload:?}")
         }
         AutoRouteResolution::MediaUnsupported => panic!("no media in this request"),
     }
@@ -443,6 +775,9 @@ async fn image_request_selects_a_vision_model_served_only_by_a_peer() {
             Some("remote-vision-model"),
             "the only vision-capable model is on the peer and must still be chosen"
         ),
+        AutoRouteResolution::WorkloadUnsupported(workload) => {
+            panic!("generation request unexpectedly rejected for {workload:?}")
+        }
         AutoRouteResolution::MediaUnsupported => {
             panic!("a peer serves a vision model, so this must not be refused")
         }
@@ -472,6 +807,9 @@ async fn text_request_still_convenes_a_committee_across_two_nodes() {
         AutoRouteResolution::Continue {
             effective_model, ..
         } => assert_eq!(effective_model.as_deref(), Some(automatic::DIRECTIVE)),
+        AutoRouteResolution::WorkloadUnsupported(workload) => {
+            panic!("generation request unexpectedly rejected for {workload:?}")
+        }
         AutoRouteResolution::MediaUnsupported => panic!("text request is not a media failure"),
     }
 }
@@ -526,6 +864,9 @@ async fn an_explicitly_named_model_is_never_reinterpreted() {
         AutoRouteResolution::Continue {
             effective_model, ..
         } => assert_eq!(effective_model.as_deref(), Some("text-model")),
+        AutoRouteResolution::WorkloadUnsupported(workload) => {
+            panic!("generation request unexpectedly rejected for {workload:?}")
+        }
         AutoRouteResolution::MediaUnsupported => panic!("explicit routing is untouched"),
     }
 }
@@ -675,6 +1016,9 @@ async fn a_non_chat_endpoint_resolves_to_a_single_model() {
                 automatic::DIRECTIVE,
                 "a non-chat request must not convene a committee it cannot fan out"
             );
+        }
+        AutoRouteResolution::WorkloadUnsupported(workload) => {
+            panic!("generation request unexpectedly rejected for {workload:?}")
         }
         AutoRouteResolution::MediaUnsupported => panic!("no media in this request"),
     }

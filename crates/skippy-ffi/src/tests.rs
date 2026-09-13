@@ -4,7 +4,8 @@ use crate::{
     ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, ActivationBoundaryDesc,
     StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStateKind,
     StagePlanStringRefV1, StagePlanValueDescV1, StagePlannerConfigV1, StagePlannerProfileV1,
-    StagePlannerTensorV1, runtime_abi_supported,
+    StagePlannerTensorV1, WORKLOAD_INFO_V1_ABI_VERSION, WorkloadInfoV1, WorkloadKind,
+    WorkloadPooling, runtime_abi_supported,
 };
 
 #[cfg(target_pointer_width = "64")]
@@ -22,6 +23,32 @@ const fn version(major: u32, minor: u32, patch: u32) -> AbiVersion {
         minor,
         patch,
     }
+}
+
+#[test]
+fn workload_descriptor_matches_native_layout_and_discriminants() {
+    assert_eq!(WORKLOAD_INFO_V1_ABI_VERSION, 1);
+    assert_eq!(size_of::<WorkloadInfoV1>(), 28);
+    assert_eq!(offset_of!(WorkloadInfoV1, abi_version), 0);
+    assert_eq!(offset_of!(WorkloadInfoV1, struct_size), 4);
+    assert_eq!(offset_of!(WorkloadInfoV1, kind), 8);
+    assert_eq!(offset_of!(WorkloadInfoV1, pooling), 12);
+    assert_eq!(offset_of!(WorkloadInfoV1, output_dimensions), 16);
+    assert_eq!(offset_of!(WorkloadInfoV1, classifier_outputs), 20);
+    assert_eq!(offset_of!(WorkloadInfoV1, has_encoder), 24);
+    assert_eq!(offset_of!(WorkloadInfoV1, has_decoder), 25);
+    assert_eq!(offset_of!(WorkloadInfoV1, full_model_only), 26);
+    assert_eq!(offset_of!(WorkloadInfoV1, reserved0), 27);
+    assert_eq!(WorkloadKind::CausalGeneration as i32, 0);
+    assert_eq!(WorkloadKind::Embedding as i32, 1);
+    assert_eq!(WorkloadKind::Rerank as i32, 2);
+    assert_eq!(WorkloadKind::EncoderDecoder as i32, 3);
+    assert_eq!(WorkloadPooling::Unspecified as i32, -1);
+    assert_eq!(WorkloadPooling::None as i32, 0);
+    assert_eq!(WorkloadPooling::Mean as i32, 1);
+    assert_eq!(WorkloadPooling::Cls as i32, 2);
+    assert_eq!(WorkloadPooling::Last as i32, 3);
+    assert_eq!(WorkloadPooling::Rank as i32, 4);
 }
 
 #[test]

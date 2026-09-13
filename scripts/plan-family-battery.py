@@ -24,7 +24,16 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "ci" / "llama-canary" / "family-certified.json"
 CORE_LANES = ("single-step", "chain", "state-handoff")
-PROFILE_NAMES = ("full", "package-oracle", "graph-only")
+MODEL_CLASS_LANES = {
+    "causal_generation": CORE_LANES,
+    "embedding": ("embedding-smoke", "embedding-oracle"),
+    "rerank": ("rerank-smoke", "rerank-oracle"),
+    "encoder_decoder": ("encoder-decoder-smoke", "encoder-decoder-oracle"),
+    "ocr": ("ocr-smoke", "ocr-oracle"),
+    "speech_synthesis": ("speech-synthesis-smoke", "speech-synthesis-oracle"),
+    "speech_recognition": ("speech-recognition-smoke", "speech-recognition-oracle"),
+}
+PROFILE_NAMES = ("full", "package-oracle", "graph-only", "workload-smoke", "workload-oracle")
 CERTIFIED_PROFILES = ("full", "package-oracle")
 CERTIFICATION_STATUSES = ("certified", "provisional")
 ORACLE_KINDS = ("local-monolithic", "independent-trace", "none")
@@ -281,7 +290,9 @@ def _validate_policy(value: object) -> dict[str, Any]:
 
     profiles = _object(policy.get("profiles"), "policy.profiles")
     if set(profiles) != set(PROFILE_NAMES):
-        raise PlanError("policy.profiles must define full, package-oracle, and graph-only")
+        raise PlanError(
+            "policy.profiles must define full, package-oracle, graph-only, workload-smoke, and workload-oracle"
+        )
     normalized: dict[str, Any] = {}
     for name in PROFILE_NAMES:
         profile = _object(profiles[name], f"policy.profiles.{name}")
@@ -303,8 +314,19 @@ def _validate_policy(value: object) -> dict[str, Any]:
                 raise PlanError(
                     f"certified profile {name} must require exactly the three core lanes"
                 )
+        elif name == "workload-oracle":
+            if status != "certified" or oracle != "local-monolithic" or tuple(lanes) != (
+                "class-specific-smoke", "class-specific-oracle"
+            ):
+                raise PlanError("workload-oracle requires certified local-monolithic smoke and oracle lanes")
         elif status != "provisional" or oracle != "none":
-            raise PlanError("graph-only must remain provisional and oracle-free")
+            raise PlanError(f"{name} must remain provisional and oracle-free")
+        elif name == "graph-only" and tuple(lanes) != (
+            "graph-parse", "tensor-ownership", "stage-load"
+        ):
+            raise PlanError("graph-only must require exactly the three graph lanes")
+        elif name == "workload-smoke" and tuple(lanes) != ("class-specific-smoke",):
+            raise PlanError("workload-smoke must require exactly the class-specific smoke lane")
         normalized[name] = {
             "status": status,
             "oracle": oracle,
@@ -329,6 +351,7 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
             model,
             {
                 "family",
+                "class",
                 "profile",
                 "cadences",
                 "artifact",
@@ -337,6 +360,7 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
                 "execution",
                 "resources",
                 "notes",
+                "evidence",
             },
             field,
         )
@@ -346,7 +370,28 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
         if family in seen:
             raise PlanError(f"duplicate family: {family}")
         seen.add(family)
+        model_class = _enum(
+            model.get("class"),
+            f"{field}.class",
+            tuple(MODEL_CLASS_LANES),
+        )
         profile = _enum(model.get("profile"), f"{field}.profile", PROFILE_NAMES)
+        if model_class != "causal_generation" and profile not in ("workload-smoke", "workload-oracle"):
+            raise PlanError(
+                f"{field}.class {model_class} requires a class-specific workload profile"
+            )
+        if model_class == "causal_generation" and profile in ("workload-smoke", "workload-oracle"):
+            raise PlanError(f"{field}.class causal_generation cannot use workload profiles")
+        evidence = None
+        if profile == "workload-oracle":
+            evidence = _object(model.get("evidence"), f"{field}.evidence")
+            _exact_keys(evidence, {"fixture", "comparison"}, f"{field}.evidence")
+            evidence = {
+                "fixture": _string(evidence.get("fixture"), f"{field}.evidence.fixture"),
+                "comparison": _string(evidence.get("comparison"), f"{field}.evidence.comparison"),
+            }
+        elif "evidence" in model:
+            raise PlanError(f"{field}.evidence requires workload-oracle")
         cadences = _string_list(model.get("cadences"), f"{field}.cadences")
         if not cadences or any(item not in policy["cadences"] for item in cadences):
             raise PlanError(f"{field}.cadences contains an unsupported cadence")
@@ -359,6 +404,13 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
             mmproj = _artifact(model["mmproj_artifact"], f"{field}.mmproj_artifact")
         if mmproj is not None and len(mmproj["files"]) != 1:
             raise PlanError(f"{field}.mmproj_artifact.files must name exactly one projector GGUF")
+        projector_classes = {"ocr", "speech_synthesis", "speech_recognition"}
+        if model_class in projector_classes and mmproj is None:
+            raise PlanError(f"{field}.class {model_class} requires an mmproj_artifact")
+        if model_class != "causal_generation" and len(artifact["files"]) != 1:
+            raise PlanError(
+                f"{field}.class {model_class} requires exactly one target GGUF"
+            )
 
         execution = _object(model.get("execution"), f"{field}.execution")
         _exact_keys(
@@ -395,6 +447,15 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
             f"{field}.execution.speculative_policy",
             SPECULATIVE_POLICIES,
         )
+        if model_class != "causal_generation":
+            if mtp_layers != 0 or sweep_period != 0:
+                raise PlanError(
+                    f"{field}.class {model_class} must not request split or MTP certification"
+                )
+            if speculative_policy != "disabled":
+                raise PlanError(
+                    f"{field}.class {model_class} must disable speculative decoding"
+                )
 
         resources = _object(model.get("resources"), f"{field}.resources")
         _exact_keys(
@@ -435,10 +496,15 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
         models.append(
             {
                 "family": family,
+                "class": model_class,
                 "profile": profile,
                 "certification_status": profile_policy["status"],
                 "oracle": profile_policy["oracle"],
-                "certification_lanes": profile_policy["required_lanes"],
+                "certification_lanes": (
+                    profile_policy["required_lanes"]
+                    if model_class == "causal_generation"
+                    else list(MODEL_CLASS_LANES[model_class][:1 if profile == "workload-smoke" else 2])
+                ),
                 "cadences": cadences,
                 "artifact": artifact,
                 "draft_artifact": draft,
@@ -458,6 +524,7 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
                     "startup_timeout_secs": startup_timeout_secs,
                 },
                 "notes": notes,
+                **({"evidence": evidence} if evidence is not None else {}),
                 "manifest_index": index,
             }
         )
@@ -631,6 +698,10 @@ def build_plan(
         "manifest": manifest_source,
         "manifest_sha256": manifest_sha256,
         "required_certification_lanes": list(CORE_LANES),
+        "model_class_lanes": {
+            model_class: list(lanes) for model_class, lanes in MODEL_CLASS_LANES.items()
+        },
+        "requested_families": families or None,
         "selected_cadence": cadence or None,
         "selected_family_count": len(models),
         "selected_models": models,
@@ -657,11 +728,55 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--check-cache", action="store_true")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--github-output", type=Path)
+    parser.add_argument("--verify-plan", type=Path, help="recompute and verify an existing policy plan")
+    parser.add_argument(
+        "--inspect-gguf",
+        type=Path,
+        help="print the canonical layer count and activation width for one GGUF",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
+    if args.inspect_gguf is not None:
+        dimensions = _gguf_dimensions(args.inspect_gguf)
+        if dimensions is None:
+            raise PlanError(
+                f"GGUF has no positive *.block_count and *.embedding_length metadata: {args.inspect_gguf}"
+            )
+        layer_count, activation_width = dimensions
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "layer_count": layer_count,
+                    "activation_width": activation_width,
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        return 0
+    if args.verify_plan is not None:
+        supplied = _object(json.loads(args.verify_plan.read_text(encoding="utf-8")), "plan")
+        requested_families = supplied.get("requested_families")
+        if requested_families is not None and not isinstance(requested_families, str):
+            raise PlanError("plan.requested_families must be a string or null")
+        selected_cadence = supplied.get("selected_cadence")
+        if selected_cadence is not None and selected_cadence not in CADENCES:
+            raise PlanError("plan.selected_cadence is unsupported")
+        shards = supplied.get("shards")
+        if not isinstance(shards, list) or not shards:
+            raise PlanError("plan.shards must be a nonempty list")
+        expected = build_plan(
+            args.manifest,
+            families=requested_families or "",
+            cadence=selected_cadence or "",
+            shard_count=len(shards),
+        )
+        if supplied != expected:
+            raise PlanError("policy plan differs from the canonical manifest and selection")
+        return 0
     cache_root = args.cache_root
     if args.check_cache and cache_root is None:
         env_cache = os.environ.get("HF_CACHE") or os.environ.get("HF_HOME")

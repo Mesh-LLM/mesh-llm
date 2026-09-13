@@ -11,7 +11,7 @@ pub(super) use super::{
 pub(super) use crate::binary_transport::WireCondition;
 pub(super) use crate::kv_integration::PrefillKvIdentity;
 pub(super) use crate::kv_integration::{KvStageIntegration, proactive_eviction_attrs};
-pub(super) use crate::runtime_state::load_runtime;
+pub(super) use crate::runtime_state::{load_runtime, reject_unsupported_staged_workload};
 pub(super) use crate::telemetry::Telemetry;
 pub(super) use anyhow::{Context as _, Result, anyhow, bail};
 pub(super) use async_trait::async_trait;
@@ -27,8 +27,8 @@ pub(super) use openai_frontend::{
 pub(super) use serde_json::{Value, json};
 pub(super) use skippy_metrics::attr as attr_key;
 pub(super) use skippy_protocol::{
-    LoadMode, MessageBase, PeerConfig, SCHEMA_VERSION, StageConfig, StageKvCacheConfig,
-    StageKvCacheMode, StageKvCachePayload,
+    LoadMode, MessageBase, PeerConfig, SCHEMA_VERSION, StageConfig, StageDevice,
+    StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
     binary::{LLAMA_TOKEN_NULL, StageReplyStats, WireMessageKind, write_stage_message},
 };
 pub(super) use skippy_runtime::{
@@ -52,9 +52,11 @@ mod draft_runtime;
 mod generation;
 mod guardrails;
 mod multimodal;
+mod non_chat;
 mod prefill;
 mod prefix_cache;
 mod prompting;
 mod request;
 mod support;
+mod tts_oracle;
 mod wire_messages;

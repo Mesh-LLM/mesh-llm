@@ -1,3 +1,5 @@
+//! Public routing names derived from served identity and the loaded catalog.
+
 use super::*;
 
 pub(crate) fn infer_remote_served_descriptors(
@@ -207,6 +209,57 @@ pub(crate) fn identity_hash_for(input: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
     hex::encode(hasher.finalize())
+}
+
+pub(crate) fn public_model_id_from_identity(identity: &ServedModelIdentity) -> Option<String> {
+    match identity.source_kind {
+        ModelSourceKind::HuggingFace => identity
+            .repository
+            .as_deref()
+            .map(|repo| {
+                let selector = identity
+                    .artifact
+                    .as_deref()
+                    .and_then(model_ref::quant_selector_from_gguf_file)
+                    .or_else(|| identity.artifact.clone());
+                model_ref::format_model_ref(repo, identity.revision.as_deref(), selector.as_deref())
+            })
+            .or_else(|| {
+                identity
+                    .canonical_ref
+                    .as_deref()
+                    .and_then(|model_ref| model_ref::ModelRef::parse(model_ref).ok())
+                    .map(|model_ref| model_ref.display_id())
+            }),
+        ModelSourceKind::Catalog => identity
+            .canonical_ref
+            .as_deref()
+            .and_then(|model_ref| model_ref::ModelRef::parse(model_ref).ok())
+            .map(|model_ref| model_ref.display_id()),
+        ModelSourceKind::LocalGguf | ModelSourceKind::DirectUrl | ModelSourceKind::Unknown => None,
+    }
+}
+
+pub(crate) fn canonical_demand_model_ref(model: &str) -> String {
+    if let Ok(model_ref) = model_ref::ModelRef::parse(model) {
+        return model_ref.display_id();
+    }
+    crate::models::find_loaded_remote_catalog_model_exact(model)
+        .map(|remote_model| crate::models::remote_catalog_model_ref(&remote_model))
+        .unwrap_or_else(|| model.to_string())
+}
+
+/// Match exactly the same public alias that peer HTTP discovery advertises.
+/// Do not infer identity from similar basenames or borrow another peer's facts.
+pub(crate) fn descriptor_matches_routable_name(
+    descriptor: &ServedModelDescriptor,
+    name: &str,
+) -> bool {
+    let identity = &descriptor.identity;
+    identity.model_name == name
+        || public_model_id_from_identity(identity)
+            .unwrap_or_else(|| canonical_demand_model_ref(&identity.model_name))
+            == name
 }
 
 #[cfg(test)]

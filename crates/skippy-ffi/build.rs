@@ -167,24 +167,33 @@ fn main() {
     println!("cargo:rustc-link-lib=static=llama-common-base");
     println!("cargo:rustc-link-lib=static=llama");
     println!("cargo:rustc-link-lib=static=ggml");
-    let has_cuda = static_archive_exists(
+    let has_cuda = configured_backend_archive(
         &build_dir,
+        &cmake_cache,
+        backend == "cuda",
+        "GGML_CUDA",
         "ggml/src/ggml-cuda/libggml-cuda.a",
         "ggml/src/ggml-cuda/ggml-cuda.lib",
     );
     if has_cuda {
         println!("cargo:rustc-link-lib=static=ggml-cuda");
     }
-    let has_hip = static_archive_exists(
+    let has_hip = configured_backend_archive(
         &build_dir,
+        &cmake_cache,
+        backend == "rocm" || backend == "hip",
+        "GGML_HIP",
         "ggml/src/ggml-hip/libggml-hip.a",
         "ggml/src/ggml-hip/ggml-hip.lib",
     );
     if has_hip {
         println!("cargo:rustc-link-lib=static=ggml-hip");
     }
-    let has_vulkan = static_archive_exists(
+    let has_vulkan = configured_backend_archive(
         &build_dir,
+        &cmake_cache,
+        backend == "vulkan",
+        "GGML_VULKAN",
         "ggml/src/ggml-vulkan/libggml-vulkan.a",
         "ggml/src/ggml-vulkan/ggml-vulkan.lib",
     );
@@ -192,18 +201,24 @@ fn main() {
         println!("cargo:rustc-link-lib=static=ggml-vulkan");
     }
     println!("cargo:rustc-link-lib=static=ggml-cpu");
-    if static_archive_exists(
-        &build_dir,
-        "ggml/src/ggml-blas/libggml-blas.a",
-        "ggml/src/ggml-blas/ggml-blas.lib",
-    ) {
+    if cmake_bool_enabled(&cmake_cache, "GGML_BLAS")
+        && static_archive_exists(
+            &build_dir,
+            "ggml/src/ggml-blas/libggml-blas.a",
+            "ggml/src/ggml-blas/ggml-blas.lib",
+        )
+    {
         println!("cargo:rustc-link-lib=static=ggml-blas");
     }
-    if static_archive_exists(
+    let has_metal = configured_backend_archive(
         &build_dir,
+        &cmake_cache,
+        backend == "metal",
+        "GGML_METAL",
         "ggml/src/ggml-metal/libggml-metal.a",
         "ggml/src/ggml-metal/ggml-metal.lib",
-    ) {
+    );
+    if has_metal {
         println!("cargo:rustc-link-lib=static=ggml-metal");
     }
     println!("cargo:rustc-link-lib=static=ggml-base");
@@ -212,11 +227,7 @@ fn main() {
         link_apple_openmp_libs(&cmake_cache);
         println!("cargo:rustc-link-lib=c++");
         println!("cargo:rustc-link-lib=framework=Accelerate");
-        if static_archive_exists(
-            &build_dir,
-            "ggml/src/ggml-metal/libggml-metal.a",
-            "ggml/src/ggml-metal/ggml-metal.lib",
-        ) {
+        if has_metal {
             println!("cargo:rustc-link-lib=framework=Foundation");
             println!("cargo:rustc-link-lib=framework=Metal");
             println!("cargo:rustc-link-lib=framework=MetalKit");
@@ -432,6 +443,43 @@ fn static_archive_exists(
     msvc_archive: &str,
 ) -> bool {
     build_dir.join(unix_archive).exists() || build_dir.join(msvc_archive).exists()
+}
+
+fn cmake_bool_enabled(cache: &std::path::Path, key: &str) -> bool {
+    let Ok(contents) = std::fs::read_to_string(cache) else {
+        return false;
+    };
+    cmake_cache_bool(&contents, key)
+}
+
+fn configured_backend_archive(
+    build_dir: &std::path::Path,
+    cmake_cache: &std::path::Path,
+    selected_backend: bool,
+    cmake_key: &str,
+    unix_archive: &str,
+    msvc_archive: &str,
+) -> bool {
+    let configured = cmake_bool_enabled(cmake_cache, cmake_key);
+    if !selected_backend {
+        assert!(
+            !configured,
+            "staged backend mismatch: {cmake_key}=ON in {} but LLAMA_STAGE_BACKEND does not select it",
+            cmake_cache.display()
+        );
+        return false;
+    }
+    assert!(
+        configured,
+        "selected backend requires {cmake_key}=ON in {}",
+        cmake_cache.display()
+    );
+    assert!(
+        static_archive_exists(build_dir, unix_archive, msvc_archive),
+        "selected backend archive is missing from {}",
+        build_dir.display()
+    );
+    true
 }
 
 fn link_linux_cuda_libs(cmake_cache: &std::path::Path) {
@@ -688,6 +736,6 @@ fn cmake_cache_value(cache: &str, key: &str) -> Option<String> {
 
 fn cmake_cache_bool(cache: &str, key: &str) -> bool {
     cmake_cache_value(cache, key)
-        .map(|value| matches!(value.as_str(), "ON" | "TRUE" | "1"))
+        .map(|value| matches!(value.trim(), "ON" | "TRUE" | "1"))
         .unwrap_or(false)
 }

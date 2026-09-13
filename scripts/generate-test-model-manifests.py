@@ -25,6 +25,15 @@ MANIFEST_DIR = ROOT / "ci" / "model-artifacts" / "manifests"
 SHA_RE = re.compile(r"^[0-9a-f]{40,64}$")
 HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+FAMILY_WORKLOAD_CLASSES = {
+    "causal_generation",
+    "embedding",
+    "rerank",
+    "encoder_decoder",
+    "ocr",
+    "speech_synthesis",
+    "speech_recognition",
+}
 
 SUITE_OUTPUTS = {
     "product-smoke": MANIFEST_DIR / "product-smoke.json",
@@ -130,9 +139,9 @@ def _validate_registry(raw: Any) -> dict[str, Any]:
     if policy.get("cadences") != ["llama-bump", "manual-full", "nightly", "rotating"]:
         raise RegistryError("registry.family_policy.cadences must preserve family cadence order")
     profiles = _object(policy.get("profiles"), "registry.family_policy.profiles")
-    expected_profiles = {"full", "package-oracle", "graph-only"}
+    expected_profiles = {"full", "package-oracle", "graph-only", "workload-smoke", "workload-oracle"}
     if set(profiles) != expected_profiles:
-        raise RegistryError("registry.family_policy.profiles must contain the three family profiles")
+        raise RegistryError("registry.family_policy.profiles must contain the five family profiles")
     for profile_name, profile in profiles.items():
         profile = _object(profile, f"registry.family_policy.profiles.{profile_name}")
         _exact_keys(profile, {"status", "oracle", "required_lanes"}, f"profile {profile_name}")
@@ -175,12 +184,24 @@ def _validate_registry(raw: Any) -> dict[str, Any]:
             certification = _object(row.get("certification"), f"{field}.certification")
             _exact_keys(
                 certification,
-                {"profile", "cadences", "execution", "resources", "notes", "draft_artifact", "mmproj_artifact"},
+                {"class", "profile", "cadences", "execution", "resources", "notes", "evidence", "draft_artifact", "mmproj_artifact"},
                 f"{field}.certification",
             )
+            workload_class = _string(
+                certification.get("class"), f"{field}.certification.class"
+            )
+            if workload_class not in FAMILY_WORKLOAD_CLASSES:
+                raise RegistryError(f"{field}.certification.class is not a workload class")
             profile = _string(certification.get("profile"), f"{field}.certification.profile")
             if profile not in profiles:
                 raise RegistryError(f"{field}.certification.profile is not a family profile")
+            if profile == "workload-oracle":
+                evidence = _object(certification.get("evidence"), f"{field}.certification.evidence")
+                _exact_keys(evidence, {"fixture", "comparison"}, f"{field}.certification.evidence")
+                _string(evidence.get("fixture"), f"{field}.certification.evidence.fixture")
+                _string(evidence.get("comparison"), f"{field}.certification.evidence.comparison")
+            elif "evidence" in certification:
+                raise RegistryError(f"{field}.certification.evidence requires workload-oracle")
             if "cadences" in certification:
                 certification_cadences = _string_list(
                     certification["cadences"], f"{field}.certification.cadences"
@@ -231,6 +252,7 @@ def _family_manifest(registry: dict[str, Any]) -> dict[str, Any]:
         certification = row["certification"]
         model: dict[str, Any] = {
             "family": row["family"],
+            "class": certification["class"],
             "profile": certification["profile"],
             "cadences": certification.get("cadences", row["cadences"]),
             "artifact": _family_artifact(row["artifact"]),
@@ -238,6 +260,8 @@ def _family_manifest(registry: dict[str, Any]) -> dict[str, Any]:
         for optional in ("draft_artifact", "mmproj_artifact"):
             if optional in certification:
                 model[optional] = _family_artifact(certification[optional])
+        if "evidence" in certification:
+            model["evidence"] = certification["evidence"]
         model.update(
             execution=certification["execution"],
             resources=certification["resources"],
@@ -322,6 +346,7 @@ def _dump_family(value: dict[str, Any]) -> bytes:
             [
                 "    {",
                 f'      "family": {compact(model["family"])},',
+                f'      "class": {compact(model["class"])},',
                 f'      "profile": {compact(model["profile"])},',
                 f'      "cadences": {compact(model["cadences"])},',
                 f'      "artifact": {compact(model["artifact"])},',
@@ -330,6 +355,8 @@ def _dump_family(value: dict[str, Any]) -> bytes:
         for optional in ("draft_artifact", "mmproj_artifact"):
             if optional in model:
                 lines.append(f'      {compact(optional)}: {compact(model[optional])},')
+        if "evidence" in model:
+            lines.append(f'      "evidence": {compact(model["evidence"])},')
         lines.extend(
             [
                 f'      "execution": {compact(model["execution"])},',

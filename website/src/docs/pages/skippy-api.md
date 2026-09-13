@@ -9,7 +9,7 @@ description: Generated reference for the capability-oriented Skippy C ABI.
 
 This reference is generated from the patched llama.cpp public headers. It documents the native C ABI used by Skippy's Rust FFI layer and staged runtime. The ABI is experimental and versioned for lockstep native/Rust builds.
 
-Current generated surface: **15 headers** and **92 exported functions**.
+Current generated surface: **16 headers** and **96 exported functions**.
 
 ## Quick navigation
 
@@ -173,6 +173,15 @@ Current generated surface: **15 headers** and **92 exported functions**.
         <a href="#skippy-fn-skippy-parse-chat-response-json"><code>skippy_parse_chat_response_json</code></a>
       </div>
     </section>
+    <section class="skippy-api-index__group">
+      <a class="skippy-api-index__group-title" href="#skippy-header-workloads-h"><code>workloads.h</code><span>4 functions</span></a>
+      <div class="skippy-api-index__functions">
+        <a href="#skippy-fn-skippy-model-workload-info-v1"><code>skippy_model_workload_info_v1</code></a>
+        <a href="#skippy-fn-skippy-session-embed"><code>skippy_session_embed</code></a>
+        <a href="#skippy-fn-skippy-session-rerank"><code>skippy_session_rerank</code></a>
+        <a href="#skippy-fn-skippy-session-encode-prompt"><code>skippy_session_encode_prompt</code></a>
+      </div>
+    </section>
   </div>
 </div>
 
@@ -204,6 +213,7 @@ Capability consumers can include a narrower header:
 | `include/skippy/stage_plan.h` | Metadata-only construction and inspection of guarded stage plans. |
 | `include/skippy/state.h` | Moves KV, recurrent, checkpoint, and resident-prefix state. |
 | `include/skippy/tokenization.h` | Token, detokenization, chat-template, and chat-response helpers. |
+| `include/skippy/workloads.h` | Full-model embedding, reranking, and encoder-decoder execution. These operations deliberately reject filtered stage models. Their explicit workload descriptor lets callers fail closed instead of inferring support from a model name or architecture family. |
 
 <a id="skippy-abi-conventions"></a>
 ## ABI conventions
@@ -1565,13 +1575,75 @@ SKIPPY_COMMON_API enum skippy_status skippy_parse_chat_response_json(
 
 <a class="skippy-api-backlink" href="#skippy-function-index">↩ Back to function index</a>
 
+<a id="skippy-header-workloads-h"></a>
+### `workloads.h`
+
+<a id="skippy-fn-skippy-model-workload-info-v1"></a>
+#### `skippy_model_workload_info_v1`
+
+Describes the workload implemented by an opened model.
+
+```cpp
+LLAMA_API enum skippy_status skippy_model_workload_info_v1(
+        const struct skippy_model * model,
+        struct skippy_workload_info_v1 * out_info,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-session-embed"></a>
+#### `skippy_session_embed`
+
+Computes one normalized embedding for a tokenized input.
+
+```cpp
+LLAMA_API enum skippy_status skippy_session_embed(
+        struct skippy_session * session,
+        const llama_token * token_ids,
+        size_t token_count,
+        float * output,
+        size_t output_capacity,
+        size_t * out_dimensions,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-session-rerank"></a>
+#### `skippy_session_rerank`
+
+Computes one scalar relevance score for a query-document pair.
+
+```cpp
+LLAMA_API enum skippy_status skippy_session_rerank(
+        struct skippy_session * session,
+        const char * query,
+        const char * document,
+        float * out_score,
+        size_t * out_token_count,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-session-encode-prompt"></a>
+#### `skippy_session_encode_prompt`
+
+Encodes an encoder-decoder prompt and returns its first decoder token.
+
+```cpp
+LLAMA_API enum skippy_status skippy_session_encode_prompt(
+        struct skippy_session * session,
+        const llama_token * token_ids,
+        size_t token_count,
+        llama_token * out_decoder_start_token,
+        struct skippy_error ** out_error);
+```
+
+<a class="skippy-api-backlink" href="#skippy-function-index">↩ Back to function index</a>
+
 <a id="skippy-native-declarations"></a>
 ## Native declarations
 
 The headers also define the following enums, structs, opaque handles, and ABI constants:
 
 - `activation.h`: `skippy_activation_dtype`, `skippy_activation_layout`, `skippy_activation_boundary_desc`, `skippy_activation_desc`, `SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION = 1`, `SKIPPY_ACTIVATION_SIDEBAND_TOKEN_IDS = (UINT64_C(1) << 0)`, `SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST = (UINT64_C(1) << 0)`, `SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP = (UINT64_C(1) << 1)`, `SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD = (UINT64_C(1) << 2)`, `SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K = (UINT64_C(1) << 3)`
-- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 53`
+- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 54`
 - `devices.h`: `skippy_backend_device_type`, `skippy_backend_device_cap`, `skippy_backend_device`
 - `events.h`: `skippy_runtime_event_v1`, `skippy_runtime_event_reporter_v1`, `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION = 1`
 - `execution.h`: `skippy_iteration_request`
@@ -1583,5 +1655,6 @@ The headers also define the following enums, structs, opaque handles, and ABI co
 - `speculative_decoding.h`: `skippy_ngram_cache`, `skippy_native_mtp_draft`, `SKIPPY_NATIVE_MTP_MAX_DRAFT_TOKENS = 8`
 - `stage_plan.h`: `skippy_stage_planner`, `skippy_stage_plan`, `skippy_stage_plan_string_ref_v1`, `skippy_stage_planner_tensor_v1`, `skippy_stage_planner_profile_v1`, `skippy_stage_planner_config_v1`, `skippy_stage_plan_value_kind`, `skippy_stage_plan_state_kind`, `skippy_stage_plan_state_access`, `skippy_stage_plan_desc_v1`, `skippy_stage_plan_profile_desc_v1`, `skippy_stage_plan_value_desc_v1`, `skippy_stage_plan_state_desc_v1`, `SKIPPY_STAGE_PLANNER_CONFIG_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLANNER_TENSOR_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLANNER_PROFILE_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_PROFILE_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_VALUE_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_STATE_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_MAX_DIMS = 4`
 - `state.h`: `skippy_kv_page_flag`, `skippy_kv_page_codec`, `skippy_kv_page_component_role`, `skippy_kv_page_component_desc`, `skippy_kv_page_desc`
+- `workloads.h`: `skippy_model`, `skippy_session`, `skippy_workload_kind`, `skippy_workload_pooling`, `skippy_workload_info_v1`, `SKIPPY_WORKLOAD_INFO_V1_ABI_VERSION = 1`
 
 Source directory: `include/skippy/`. Regenerate this page after changing any public header or exported function.

@@ -1,0 +1,89 @@
+From 22034e0315c8a3654849cde0119251ca96c60e46 Mon Sep 17 00:00:00 2001
+From: scama
+ <a1860575018c4680d5669dd7bc3bd356b478bccb8d42e194df46304a5e25f49a@meshllm.communities.buzz.xyz>
+Date: Sun, 13 Sep 2026 10:45:49 +1000
+Subject: [PATCH] fix(skippy): reject exhausted vocab sampling
+
+---
+ src/skippy/execution-single.cpp     | 6 ++++++
+ src/skippy/session.cpp              | 5 +++++
+ src/skippy/speculative_decoding.cpp | 6 ++++++
+ src/skippy/verification.cpp         | 6 ++++++
+ 4 files changed, 23 insertions(+)
+
+diff --git a/src/skippy/execution-single.cpp b/src/skippy/execution-single.cpp
+index c0153bf77..357222c13 100644
+--- a/src/skippy/execution-single.cpp
++++ b/src/skippy/execution-single.cpp
+@@ -282,6 +282,12 @@ enum skippy_status skippy_verify_tokens(
+         const int32_t n_tokens = static_cast<int32_t>(token_count);
+         for (int32_t i = 0; i < n_tokens; ++i) {
+             output_tokens[i] = skippy_greedy_sample_ith(session, i);
++            if (output_tokens[i] == LLAMA_TOKEN_NULL) {
++                *out_token_count = 0;
++                skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
++                        "verification produced no eligible token after vocabulary suppression");
++                return SKIPPY_STATUS_RUNTIME_ERROR;
++            }
+         }
+     }
+     return status;
+diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
+index 45f2e98c0..50af78cb8 100644
+--- a/src/skippy/session.cpp
++++ b/src/skippy/session.cpp
+@@ -260,6 +260,11 @@ enum skippy_status skippy_session_sample_current(
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
+     *out_predicted_token = skippy_sample_token(session, sampling);
++    if (*out_predicted_token == LLAMA_TOKEN_NULL) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
++                "sampling produced no eligible token after vocabulary suppression");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
+     return skippy_success(out_error);
+ }
+ 
+diff --git a/src/skippy/speculative_decoding.cpp b/src/skippy/speculative_decoding.cpp
+index 88b3ba0a0..b28ef9096 100644
+--- a/src/skippy/speculative_decoding.cpp
++++ b/src/skippy/speculative_decoding.cpp
+@@ -460,6 +460,9 @@ enum skippy_status skippy_mtp_propose_next(
+             }
+ 
+             token = skippy_greedy_sample_context(llama_get_model(mtp_ctx), mtp_ctx, -1);
++            if (token == LLAMA_TOKEN_NULL) {
++                break;
++            }
+             if (out_mtp_draft != nullptr) {
+                 out_mtp_draft->token_ids[token_count] = token;
+             }
+@@ -520,6 +523,9 @@ enum skippy_status skippy_mtp_propose_next(
+             }
+ 
+             token = skippy_greedy_sample_context(llama_get_model(mtp_ctx), mtp_ctx, -1);
++            if (token == LLAMA_TOKEN_NULL) {
++                break;
++            }
+             if (out_mtp_draft != nullptr) {
+                 out_mtp_draft->token_ids[token_count] = token;
+             }
+diff --git a/src/skippy/verification.cpp b/src/skippy/verification.cpp
+index b91d87021..c14e7a0a3 100644
+--- a/src/skippy/verification.cpp
++++ b/src/skippy/verification.cpp
+@@ -230,6 +230,12 @@ enum skippy_status skippy_verify_tokens_frame_sampled(
+             skippy_record_tokens(session, &token_ids[i], 1);
+             const int32_t logits_index = static_cast<int32_t>(i);
+             output_tokens[i] = skippy_sample_token_ith(session, sampling, logits_index);
++            if (output_tokens[i] == LLAMA_TOKEN_NULL) {
++                *out_token_count = 0;
++                skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
++                        "sampled verification produced no eligible token after vocabulary suppression");
++                return SKIPPY_STATUS_RUNTIME_ERROR;
++            }
+             if (stop_after_first_mismatch && i + 1 < token_count && output_tokens[i] != token_ids[i + 1]) {
+                 // Later rows are conditioned on a rejected token and are not
+                 // authoritative predictions. Stop advancing the sampler and
+-- 
+2.54.0 (Apple Git-157)

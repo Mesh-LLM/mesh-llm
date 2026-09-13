@@ -28,11 +28,12 @@ use std::{
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use openai_frontend::{
+    AudioResponse, AudioSpeechRequest, AudioTranscriptionRequest, AudioTranscriptionResponse,
     ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream, CompactingOpenAiBackend,
-    CompactionConfig, CompletionRequest, CompletionResponse, CompletionStream,
-    GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy, GuardrailPolicyHandle,
+    CompactionConfig, CompletionRequest, CompletionResponse, CompletionStream, EmbeddingResponse,
+    EmbeddingsRequest, GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy, GuardrailPolicyHandle,
     GuardrailTelemetrySink, ModelObject, OpenAiBackend, OpenAiHookPolicy, OpenAiRequestContext,
-    OpenAiResult,
+    OpenAiResult, RerankRequest, RerankResponse,
 };
 use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig, StageDevice, StageKvCacheConfig};
 use skippy_runtime::{ModelInfo, MtpSource};
@@ -639,6 +640,26 @@ impl SkippyModelHandle {
         self.runtime.output_activation_boundary()
     }
 
+    pub(crate) fn workload_class(&self) -> Result<crate::mesh::ModelWorkloadClass> {
+        if self.runtime.supports_speech_synthesis() {
+            return Ok(crate::mesh::ModelWorkloadClass::SpeechSynthesis);
+        }
+        let workload = self
+            .runtime
+            .workload_info()
+            .context("read loaded model workload contract")?;
+        Ok(match workload.kind {
+            skippy_runtime::ModelWorkload::CausalGeneration => {
+                crate::mesh::ModelWorkloadClass::CausalGeneration
+            }
+            skippy_runtime::ModelWorkload::Embedding => crate::mesh::ModelWorkloadClass::Embedding,
+            skippy_runtime::ModelWorkload::Rerank => crate::mesh::ModelWorkloadClass::Rerank,
+            skippy_runtime::ModelWorkload::EncoderDecoder => {
+                crate::mesh::ModelWorkloadClass::EncoderDecoder
+            }
+        })
+    }
+
     fn resolved_mtp_source(
         native_mtp_enabled: bool,
         native_mtp_draft_model_path: Option<&Path>,
@@ -1185,6 +1206,46 @@ impl OpenAiBackend for SkippyModelHandle {
         context: OpenAiRequestContext,
     ) -> OpenAiResult<CompletionStream> {
         self.backend.completion_stream(request, context).await
+    }
+
+    async fn embeddings(
+        &self,
+        request: EmbeddingsRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<EmbeddingResponse> {
+        self.backend.embeddings(request, context).await
+    }
+
+    async fn rerank(
+        &self,
+        request: RerankRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<RerankResponse> {
+        self.backend.rerank(request, context).await
+    }
+
+    async fn audio_speech(
+        &self,
+        request: AudioSpeechRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<AudioResponse> {
+        self.backend.audio_speech(request, context).await
+    }
+
+    async fn audio_transcription(
+        &self,
+        request: AudioTranscriptionRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        self.backend.audio_transcription(request, context).await
+    }
+
+    async fn audio_translation(
+        &self,
+        request: AudioTranscriptionRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        self.backend.audio_translation(request, context).await
     }
 }
 

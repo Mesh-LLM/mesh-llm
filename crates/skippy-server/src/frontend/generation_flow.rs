@@ -1,3 +1,4 @@
+mod encoder_decoder;
 mod text_generation;
 
 use crate::binary_transport::forwarded_stage_message_timed;

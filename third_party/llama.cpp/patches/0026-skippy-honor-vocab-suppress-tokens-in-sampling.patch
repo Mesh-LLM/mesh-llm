@@ -1,0 +1,348 @@
+From 0c66f101778b066262384f8adb30a066fae0e5e2 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sat, 12 Sep 2026 04:07:46 -0700
+Subject: [PATCH] skippy: honor vocab suppress tokens in sampling
+
+---
+ src/CMakeLists.txt                      |  1 +
+ src/skippy/sampling.cpp                 | 78 ++++++++++++-------------
+ src/skippy/sampling_internal.h          | 13 +++++
+ src/skippy/sampling_vocab.cpp           | 63 ++++++++++++++++++++
+ tests/CMakeLists.txt                    |  1 +
+ tests/test-skippy-sampling-suppress.cpp | 69 ++++++++++++++++++++++
+ 6 files changed, 186 insertions(+), 39 deletions(-)
+ create mode 100644 src/skippy/sampling_vocab.cpp
+ create mode 100644 tests/test-skippy-sampling-suppress.cpp
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index bfc60ceb5..2aac07d2a 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -60,6 +60,7 @@ add_library(llama
+             skippy/model_package.cpp
+             skippy/package_tensor_binding.cpp
+             skippy/sampling.cpp
++            skippy/sampling_vocab.cpp
+             skippy/stage_slice_plan.cpp
+             skippy/stage_plan.cpp
+             skippy/state.cpp
+diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
+index 8c87bbe07..a900f28ce 100644
+--- a/src/skippy/sampling.cpp
++++ b/src/skippy/sampling.cpp
+@@ -170,6 +170,8 @@ static llama_token skippy_greedy_sample_context_with_eog_policy(
+     }
+     const llama_vocab * vocab = llama_model_get_vocab(model);
+     const int32_t n_vocab = llama_vocab_n_tokens(vocab);
++    int32_t suppress_token_count = 0;
++    const llama_token * suppress_tokens = llama_vocab_get_suppress_tokens(vocab, &suppress_token_count);
+     llama_synchronize(ctx);
+     const float * logits = llama_get_logits_ith(ctx, index);
+     if (logits == nullptr) {
+@@ -187,24 +189,17 @@ static llama_token skippy_greedy_sample_context_with_eog_policy(
+             &accelerated_best_logit,
+             &best_index,
+             static_cast<vDSP_Length>(n_vocab));
+-    if (!ignore_eog || !llama_vocab_is_eog(vocab, static_cast<llama_token>(best_index))) {
++    const bool accelerated_suppressed = suppress_tokens != nullptr && suppress_token_count > 0 &&
++            std::find(suppress_tokens, suppress_tokens + suppress_token_count,
++                    static_cast<llama_token>(best_index)) != suppress_tokens + suppress_token_count;
++    if (!accelerated_suppressed &&
++            (!ignore_eog || !llama_vocab_is_eog(vocab, static_cast<llama_token>(best_index)))) {
+         return static_cast<llama_token>(best_index);
+     }
+ #endif
+ 
+-    llama_token best = 0;
+-    float best_logit = -std::numeric_limits<float>::infinity();
+-    for (int32_t token = 0; token < n_vocab; ++token) {
+-        if (ignore_eog && llama_vocab_is_eog(vocab, token)) {
+-            continue;
+-        }
+-        if (logits[token] > best_logit) {
+-            best_logit = logits[token];
+-            best = token;
+-        }
+-    }
+-
+-    return best;
++    return skippy_greedy_sample_allowed_logits(
++            logits, vocab, n_vocab, suppress_tokens, suppress_token_count, ignore_eog);
+ }
+ 
+ llama_token skippy_greedy_sample_context(
+@@ -480,29 +475,35 @@ bool skippy_reset_reusable_sampling(skippy_session * session) {
+ static std::vector<llama_logit_bias> skippy_sampling_logit_biases(
+         skippy_session * session,
+         const skippy_sampling_config * sampling) {
+-    const uint32_t count = std::min<uint32_t>(sampling->logit_bias_count, SKIPPY_MAX_LOGIT_BIAS);
+-    std::vector<llama_logit_bias> biases(sampling->logit_bias, sampling->logit_bias + count);
+-    const bool ignore_eos = sampling->ignore_eos != 0 ||
+-            (sampling->flags & SKIPPY_SAMPLING_FLAG_IGNORE_EOS) != 0;
+-    if (!ignore_eos) {
+-        return biases;
+-    }
++    std::vector<llama_logit_bias> biases;
++    if (sampling != nullptr) {
++        const uint32_t count = std::min<uint32_t>(sampling->logit_bias_count, SKIPPY_MAX_LOGIT_BIAS);
++        biases.assign(sampling->logit_bias, sampling->logit_bias + count);
++    }
++    const bool ignore_eos = sampling != nullptr &&
++            (sampling->ignore_eos != 0 ||
++                    (sampling->flags & SKIPPY_SAMPLING_FLAG_IGNORE_EOS) != 0);
+     const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
+-    const int32_t token_count = llama_vocab_n_tokens(vocab);
+-    for (llama_token token = 0; token < token_count; ++token) {
+-        if (!llama_vocab_is_eog(vocab, token)) {
+-            continue;
+-        }
+-        const auto found = std::find_if(biases.begin(), biases.end(), [token](const llama_logit_bias & bias) {
+-            return bias.token == token;
+-        });
+-        if (found == biases.end()) {
+-            biases.push_back({token, -INFINITY});
+-        } else {
+-            found->bias = -INFINITY;
++    if (ignore_eos) {
++        const int32_t token_count = llama_vocab_n_tokens(vocab);
++        for (llama_token token = 0; token < token_count; ++token) {
++            if (!llama_vocab_is_eog(vocab, token)) {
++                continue;
++            }
++            const auto found = std::find_if(biases.begin(), biases.end(), [token](const llama_logit_bias & bias) {
++                return bias.token == token;
++            });
++            if (found == biases.end()) {
++                biases.push_back({token, -INFINITY});
++            } else {
++                found->bias = -INFINITY;
++            }
+         }
+     }
+-    return biases;
++    int32_t suppress_token_count = 0;
++    const llama_token * suppress_tokens = llama_vocab_get_suppress_tokens(vocab, &suppress_token_count);
++    return skippy_add_vocab_suppress_token_biases(
++            std::move(biases), suppress_tokens, suppress_token_count);
+ }
+ 
+ static std::vector<std::string> skippy_dry_sequence_breaker_storage(
+@@ -607,11 +608,6 @@ llama_sampler * skippy_build_sampling_chain(
+         return nullptr;
+     }
+ 
+-    if (skippy_sampling_is_greedy_equivalent(sampling)) {
+-        llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
+-        return sampler;
+-    }
+-
+     const std::vector<llama_logit_bias> logit_biases =
+             skippy_sampling_logit_biases(session, sampling);
+     if (!logit_biases.empty()) {
+@@ -623,6 +619,10 @@ llama_sampler * skippy_build_sampling_chain(
+                         static_cast<int32_t>(logit_biases.size()),
+                         logit_biases.data()));
+     }
++    if (skippy_sampling_is_greedy_equivalent(sampling)) {
++        llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
++        return sampler;
++    }
+     const uint32_t seed = sampling->seed == 0 ? LLAMA_DEFAULT_SEED : sampling->seed;
+     const float repeat_penalty = sampling->repeat_penalty == 0.0f
+             ? 1.0f
+diff --git a/src/skippy/sampling_internal.h b/src/skippy/sampling_internal.h
+index 9f819704f..4e60b256c 100644
+--- a/src/skippy/sampling_internal.h
++++ b/src/skippy/sampling_internal.h
+@@ -8,10 +8,12 @@
+ 
+ #include <cstddef>
+ #include <cstdint>
++#include <vector>
+ 
+ struct llama_context;
+ struct llama_model;
+ struct llama_sampler;
++struct llama_vocab;
+ struct skippy_session;
+ 
+ void skippy_record_tokens(skippy_session * session, const llama_token * token_ids, size_t token_count);
+@@ -29,8 +31,19 @@ enum skippy_status skippy_verify_token_batch(
+         size_t token_count,
+         skippy_error ** out_error);
+ llama_token skippy_greedy_sample_context(const llama_model * model, llama_context * ctx, int32_t index);
++llama_token skippy_greedy_sample_allowed_logits(
++        const float * logits,
++        const llama_vocab * vocab,
++        int32_t n_vocab,
++        const llama_token * suppress_tokens,
++        int32_t suppress_token_count,
++        bool ignore_eog);
+ llama_token skippy_greedy_sample_ith(skippy_session * session, int32_t index);
+ llama_sampler * skippy_build_sampling_chain(skippy_session * session, const skippy_sampling_config * sampling);
++std::vector<llama_logit_bias> skippy_add_vocab_suppress_token_biases(
++        std::vector<llama_logit_bias> biases,
++        const llama_token * suppress_tokens,
++        int32_t suppress_token_count);
+ void skippy_refresh_backend_sampling(skippy_session * session, const skippy_sampling_config * sampling);
+ bool skippy_reuse_plain_chat_sampling(
+         skippy_session * session,
+diff --git a/src/skippy/sampling_vocab.cpp b/src/skippy/sampling_vocab.cpp
+new file mode 100644
+index 000000000..1242ed105
+--- /dev/null
++++ b/src/skippy/sampling_vocab.cpp
+@@ -0,0 +1,63 @@
++#include "skippy/sampling_internal.h"
++
++#include "llama.h"
++
++#include <algorithm>
++#include <cmath>
++#include <cstdint>
++#include <limits>
++#include <vector>
++
++std::vector<llama_logit_bias> skippy_add_vocab_suppress_token_biases(
++        std::vector<llama_logit_bias> biases,
++        const llama_token * suppress_tokens,
++        int32_t suppress_token_count) {
++    if (suppress_tokens == nullptr || suppress_token_count <= 0) {
++        return biases;
++    }
++    const llama_token * suppress_end = suppress_tokens + suppress_token_count;
++    biases.erase(std::remove_if(biases.begin(), biases.end(), [=](const llama_logit_bias & bias) {
++        return std::find(suppress_tokens, suppress_end, bias.token) != suppress_end;
++    }), biases.end());
++    biases.reserve(biases.size() + suppress_token_count);
++    for (const llama_token * token = suppress_tokens; token != suppress_end; ++token) {
++        biases.push_back({*token, -INFINITY});
++    }
++    return biases;
++}
++
++llama_token skippy_greedy_sample_allowed_logits(
++        const float * logits,
++        const llama_vocab * vocab,
++        int32_t n_vocab,
++        const llama_token * suppress_tokens,
++        int32_t suppress_token_count,
++        bool ignore_eog) {
++    if (logits == nullptr || n_vocab <= 0) {
++        return LLAMA_TOKEN_NULL;
++    }
++    std::vector<uint8_t> suppressed;
++    if (suppress_tokens != nullptr && suppress_token_count > 0) {
++        suppressed.resize(static_cast<size_t>(n_vocab), 0);
++        for (int32_t i = 0; i < suppress_token_count; ++i) {
++            const llama_token token = suppress_tokens[i];
++            if (token >= 0 && token < n_vocab) {
++                suppressed[static_cast<size_t>(token)] = 1;
++            }
++        }
++    }
++
++    llama_token best = LLAMA_TOKEN_NULL;
++    float best_logit = -std::numeric_limits<float>::infinity();
++    for (llama_token token = 0; token < n_vocab; ++token) {
++        if ((!suppressed.empty() && suppressed[static_cast<size_t>(token)] != 0) ||
++                (ignore_eog && vocab != nullptr && llama_vocab_is_eog(vocab, token))) {
++            continue;
++        }
++        if (best == LLAMA_TOKEN_NULL || logits[token] > best_logit) {
++            best_logit = logits[token];
++            best = token;
++        }
++    }
++    return best;
++}
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index dc52da145..2b2aae216 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -153,6 +153,7 @@ llama_build(test-save-load-state.cpp)
+ llama_build_and_test(test-skippy-rerank-template.cpp)
+ 
+ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
++    llama_build_and_test(test-skippy-sampling-suppress.cpp)
+     llama_build_and_test(test-skippy-kv-page-export.cpp)
+     llama_build_and_test(test-skippy-verify-checkpoint-retirement.cpp)
+     llama_build_and_test(test-skippy-kv-cells-contiguous.cpp)
+diff --git a/tests/test-skippy-sampling-suppress.cpp b/tests/test-skippy-sampling-suppress.cpp
+new file mode 100644
+index 000000000..4cf702bef
+--- /dev/null
++++ b/tests/test-skippy-sampling-suppress.cpp
+@@ -0,0 +1,69 @@
++#include "../src/skippy/sampling_internal.h"
++
++#include "llama.h"
++
++#include <cmath>
++#include <cstdio>
++#include <vector>
++
++static bool suppressed(const llama_logit_bias & bias) {
++    return std::isinf(bias.bias) && std::signbit(bias.bias);
++}
++
++int main() {
++    const llama_token suppress_tokens[] = {2, 3};
++    const std::vector<llama_logit_bias> caller_biases = {
++        {2, 100.0f},
++        {4, -1.0f},
++        {2, 50.0f},
++    };
++    auto merged = skippy_add_vocab_suppress_token_biases(
++            caller_biases, suppress_tokens, 2);
++    if (merged.size() != 3 || merged[0].token != 4 || merged[0].bias != -1.0f ||
++            merged[1].token != 2 || !suppressed(merged[1]) ||
++            merged[2].token != 3 || !suppressed(merged[2])) {
++        std::fprintf(stderr, "vocab suppress tokens did not override caller logit biases\n");
++        return 1;
++    }
++
++    llama_token_data candidates[] = {
++        {0, 1.0f, 0.0f},
++        {1, 2.0f, 0.0f},
++        {2, 100.0f, 0.0f},
++        {3, 50.0f, 0.0f},
++        {4, 4.0f, 0.0f},
++    };
++    llama_token_data_array view = {candidates, 5, -1, false};
++    llama_sampler * chain = llama_sampler_chain_init(llama_sampler_chain_default_params());
++    llama_sampler_chain_add(chain, llama_sampler_init_logit_bias(5, merged.size(), merged.data()));
++    llama_sampler_chain_add(chain, llama_sampler_init_greedy());
++    llama_sampler_apply(chain, &view);
++    llama_sampler_free(chain);
++    if (!std::isinf(candidates[2].logit) || !std::signbit(candidates[2].logit) ||
++            !std::isinf(candidates[3].logit) || !std::signbit(candidates[3].logit) ||
++            candidates[4].logit != 3.0f || view.selected != 4) {
++        std::fprintf(stderr, "vocab suppression did not reach the sampling chain\n");
++        return 2;
++    }
++
++    const float logits[] = {1.0f, 2.0f, 100.0f, 50.0f, 4.0f};
++    if (skippy_greedy_sample_allowed_logits(logits, nullptr, 5, suppress_tokens, 2, false) != 4 ||
++            skippy_greedy_sample_allowed_logits(logits, nullptr, 5, nullptr, 0, false) != 2) {
++        std::fprintf(stderr, "greedy fast path ignored vocab suppression\n");
++        return 3;
++    }
++    const llama_token all_tokens[] = {0, 1, 2, 3, 4};
++    const llama_token invalid_token[] = {99};
++    if (skippy_greedy_sample_allowed_logits(logits, nullptr, 5, all_tokens, 5, false) != LLAMA_TOKEN_NULL ||
++            skippy_greedy_sample_allowed_logits(logits, nullptr, 5, invalid_token, 1, false) != 2) {
++        std::fprintf(stderr, "greedy fast path mishandled exhausted or invalid suppression\n");
++        return 4;
++    }
++
++    merged = skippy_add_vocab_suppress_token_biases(caller_biases, nullptr, 0);
++    if (merged.size() != caller_biases.size()) {
++        std::fprintf(stderr, "models without suppress tokens lost caller logit biases\n");
++        return 5;
++    }
++    return 0;
++}
+-- 
+2.54.0 (Apple Git-157)
+

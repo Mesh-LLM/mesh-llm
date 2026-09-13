@@ -13,6 +13,7 @@ LLAMA_LINK_MODE="${LLAMA_STAGE_LINK_MODE:-${SKIPPY_LLAMA_LINK_MODE:-static}}"
 LLAMA_STAGE_BUILD_TESTS="${LLAMA_STAGE_BUILD_TESTS:-OFF}"
 LLAMA_STAGE_FULL_REPLAY="${LLAMA_STAGE_FULL_REPLAY:-OFF}"
 LLAMA_STAGE_UPSTREAM_TESTS="${LLAMA_STAGE_UPSTREAM_TESTS:-OFF}"
+LLAMA_STAGE_WORKLOAD_ORACLE="${LLAMA_STAGE_WORKLOAD_ORACLE:-OFF}"
 LLAMA_BUILD_TESTS=OFF
 LLAMA_BUILD_SERVER=OFF
 if [[ "$LLAMA_STAGE_FULL_REPLAY" == "ON" || "$LLAMA_STAGE_UPSTREAM_TESTS" == "ON" ]]; then
@@ -22,6 +23,9 @@ fi
 if [[ "$LLAMA_STAGE_UPSTREAM_TESTS" == "ON" ]]; then
   # Upstream test-chat compiles server headers and requires their complete
   # multimodal include/link closure.
+  LLAMA_BUILD_SERVER=ON
+fi
+if [[ "$LLAMA_STAGE_WORKLOAD_ORACLE" == "ON" ]]; then
   LLAMA_BUILD_SERVER=ON
 fi
 PRINT_BUILD_DIR=0
@@ -151,9 +155,15 @@ required_dynamic_libraries_exist() {
 
 required_outputs_exist() {
   if [[ "$LLAMA_LINK_MODE" == "dynamic" ]]; then
-    required_dynamic_libraries_exist
+    required_dynamic_libraries_exist || return 1
   else
-    required_static_archives_exist
+    required_static_archives_exist || return 1
+  fi
+  if [[ "$LLAMA_STAGE_WORKLOAD_ORACLE" == "ON" ]]; then
+    [[ -x "$LLAMA_BUILD_DIR/bin/llama-server" &&
+       -x "$LLAMA_BUILD_DIR/bin/llama-cli" &&
+       -x "$LLAMA_BUILD_DIR/bin/llama-completion" &&
+       -x "$LLAMA_BUILD_DIR/bin/llama-tts" ]] || return 1
   fi
 }
 
@@ -220,6 +230,14 @@ CMAKE_ARGS=(
   # platforms.
   -DMTMD_VIDEO=OFF
 )
+if [[ "$LLAMA_STAGE_WORKLOAD_ORACLE" == "ON" ]]; then
+  CMAKE_ARGS+=(-DLLAMA_BUILD_COMMON=ON -DLLAMA_BUILD_TOOLS=ON)
+fi
+if [[ "$LLAMA_BACKEND" == "cpu" ]]; then
+  # macOS defaults Metal to ON even when the selected backend is CPU. Match
+  # the backend contract for both the embedded runtime and its test oracle.
+  CMAKE_ARGS+=(-DGGML_METAL=OFF)
+fi
 
 # Static ABI inputs cross job and runner boundaries. Normalize compiler-
 # embedded source/build paths so the archived link closure does not retain a
@@ -379,6 +397,10 @@ fi
 cmake "${CMAKE_ARGS[@]}"
 
 BUILD_TARGETS=(llama llama-common mtmd)
+if [[ "$LLAMA_STAGE_WORKLOAD_ORACLE" == "ON" ]]; then
+  # Test-only full-model references. They are never packaged beside the host.
+  BUILD_TARGETS+=(llama-server llama-cli llama-completion llama-tts)
+fi
 if [[ "$LLAMA_STAGE_BUILD_TESTS" == "ON" ]]; then
   BUILD_TARGETS+=(
     skippy-graph-build-inputs
@@ -397,6 +419,8 @@ if [[ "$LLAMA_STAGE_FULL_REPLAY" == "ON" ]]; then
     test-skippy-kv-page-export
     test-skippy-model-loader-accounting
     test-skippy-recurrent-state-roundtrip
+    test-skippy-rerank-template
+    test-skippy-sampling-suppress
     test-skippy-verify-checkpoint-retirement
   )
 fi

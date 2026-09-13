@@ -11,9 +11,10 @@ use skippy_runtime::{
     DecodeFrameBatchRequest, FlashAttentionType as RuntimeFlashAttentionType,
     GenerationSignalWindow, GlmDsaPolicy as RuntimeGlmDsaPolicy, IterationBatchOutput,
     IterationBatchPhase, IterationBatchRequest, MediaInput, MediaPrefill, MediaPrefillFrame,
-    ModelStateKind, MtpSource, NativeMtpDraft, RuntimeConfig, RuntimeKvPage, RuntimeKvPageDesc,
-    RuntimeLoadMode, SamplingConfig, SplitMode as RuntimeSplitMode, StageModel, StageSession,
-    TokenSignal, parse_cache_type,
+    ModelStateKind, ModelWorkload, MtpSource, NativeMtpDraft, RuntimeConfig, RuntimeKvPage,
+    RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig, SpeechAudio, SpeechSynthesisConfig,
+    SplitMode as RuntimeSplitMode, StageModel, StageSession, TokenSignal, WorkloadInfo,
+    parse_cache_type,
 };
 
 mod frame_operations;
@@ -140,6 +141,44 @@ struct ResidentLanePrefix {
 }
 
 impl RuntimeState {
+    pub fn workload_info(&self) -> Result<WorkloadInfo> {
+        self.model.workload_info()
+    }
+
+    pub fn embed(
+        &mut self,
+        session_id: &str,
+        token_ids: &[i32],
+        dimensions: usize,
+    ) -> Result<Vec<f32>> {
+        let embedding = self.session(session_id)?.embed(token_ids, dimensions)?;
+        self.session_token_counts.insert(
+            session_id.to_string(),
+            u64::try_from(token_ids.len()).context("embedding token count exceeds u64")?,
+        );
+        Ok(embedding)
+    }
+
+    pub fn rerank(
+        &mut self,
+        session_id: &str,
+        query: &str,
+        document: &str,
+    ) -> Result<(f32, usize)> {
+        let result = self.session(session_id)?.rerank(query, document)?;
+        self.session_token_counts.insert(
+            session_id.to_string(),
+            u64::try_from(result.1).context("rerank token count exceeds u64")?,
+        );
+        Ok(result)
+    }
+
+    pub fn encode_prompt(&mut self, session_id: &str, token_ids: &[i32]) -> Result<i32> {
+        let decoder_start = self.session(session_id)?.encode_prompt(token_ids)?;
+        self.session_token_counts.insert(session_id.to_string(), 0);
+        Ok(decoder_start)
+    }
+
     pub fn input_activation_boundary(&self) -> Option<ActivationBoundaryDesc> {
         self.model.input_activation_boundary()
     }
@@ -261,8 +300,15 @@ pub fn load_runtime_with_overrides(
             open_stage_model(model_path, &runtime_config)?
         }
     };
+    Ok(Some(runtime_from_loaded_model(config, model)?))
+}
 
-    Ok(Some(Arc::new(Mutex::new(RuntimeState {
+fn runtime_from_loaded_model(
+    config: &StageConfig,
+    model: StageModel,
+) -> Result<Arc<Mutex<RuntimeState>>> {
+    reject_unsupported_staged_workload(config, &model)?;
+    Ok(Arc::new(Mutex::new(RuntimeState {
         model,
         layer_start: config.layer_start,
         layer_end: config.layer_end,
@@ -277,7 +323,7 @@ pub fn load_runtime_with_overrides(
         session_resident_prefixes: BTreeMap::new(),
         #[cfg(test)]
         modelless_for_test: false,
-    }))))
+    })))
 }
 
 pub fn load_runtime_with_overrides_and_open_events(
@@ -309,23 +355,34 @@ pub fn load_runtime_with_overrides_and_open_events(
             open_stage_model_with_events(model_path, &runtime_config, model_open_event_reporter)?
         }
     };
+    Ok(Some(runtime_from_loaded_model(config, model)?))
+}
 
-    Ok(Some(Arc::new(Mutex::new(RuntimeState {
-        model,
-        layer_start: config.layer_start,
-        layer_end: config.layer_end,
-        lane_count: config.lane_count,
-        ctx_size: config.ctx_size,
-        next_lane_index: 0,
-        free_lane_indices: Vec::new(),
-        sessions: BTreeMap::new(),
-        idle_sessions: Vec::new(),
-        max_idle_sessions: max_idle_sessions_from_stage_config(config),
-        session_token_counts: BTreeMap::new(),
-        session_resident_prefixes: BTreeMap::new(),
-        #[cfg(test)]
-        modelless_for_test: false,
-    }))))
+pub(crate) fn reject_unsupported_staged_workload(
+    config: &StageConfig,
+    model: &StageModel,
+) -> Result<()> {
+    if !config.filter_tensors_on_load {
+        return Ok(());
+    }
+    if model.supports_speech_synthesis() {
+        anyhow::bail!(
+            "unsupported staged workload speech_synthesis: audio generation requires an unsplit full model"
+        );
+    }
+    let workload = model.workload_info()?.kind;
+    if workload != ModelWorkload::CausalGeneration {
+        anyhow::bail!(
+            "unsupported staged workload {}: non-chat execution requires an unsplit full model",
+            match workload {
+                ModelWorkload::CausalGeneration => unreachable!(),
+                ModelWorkload::Embedding => "embedding",
+                ModelWorkload::Rerank => "rerank",
+                ModelWorkload::EncoderDecoder => "encoder_decoder",
+            }
+        );
+    }
+    Ok(())
 }
 
 /// Translates `model_fit.cache_idle_slots` into the idle-session-pool bound.

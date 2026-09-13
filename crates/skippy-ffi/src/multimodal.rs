@@ -22,6 +22,48 @@ pub struct MtmdHelperVideo {
     _private: [u8; 0],
 }
 
+#[repr(C)]
+pub struct MtmdHelperGenAudio {
+    _private: [u8; 0],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum MtmdGenAudioType {
+    None = 0,
+    Qwen3Tts = 1,
+    PocketTts = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct MtmdGenAudioInfo {
+    pub audio_type: MtmdGenAudioType,
+    pub sample_rate: i32,
+    pub model_variant: *const c_char,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum MtmdHelperGenAudioOutputType {
+    Pcm = 0,
+    Wav = 1,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct MtmdHelperGenAudioInput {
+    pub seq_id: i32,
+    pub prompt: *const c_char,
+    pub prompt_len: usize,
+    pub speaker_ref: *mut MtmdBitmap,
+    pub lang: *const c_char,
+    pub top_k: i32,
+    pub top_p: f32,
+    pub seed: u32,
+    pub out_type: MtmdHelperGenAudioOutputType,
+}
+
 /// Mirrors llama.cpp's `mtmd_helper_bitmap_wrapper`: the decoded bitmap plus
 /// an optional video context (non-null only for video inputs, which own the
 /// frame storage the bitmap points into).

@@ -65,7 +65,7 @@ impl crate::network::metrics::RoutingTelemetrySink for PromptShapeSink {
     }
 }
 
-fn test_peer_serving_model(peer_id: iroh::EndpointId, model: &str) -> mesh::PeerInfo {
+pub(super) fn test_peer_serving_model(peer_id: iroh::EndpointId, model: &str) -> mesh::PeerInfo {
     mesh::PeerInfo {
         id: peer_id,
         addr: iroh::EndpointAddr {
@@ -338,6 +338,55 @@ async fn remote_tokenizer_plan_routes_identity_model_without_context_rejection()
     Ok(())
 }
 
+#[tokio::test]
+async fn remote_audio_upload_ignores_encoded_bytes_as_context_tokens() -> Result<()> {
+    let model = "acme/audio-model:Q4_K_M";
+    let peer_id = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+    let node = test_node_with_remote_models(&[(model, peer_id)]).await;
+    let mut peer = test_peer_serving_model(peer_id, model);
+    peer.served_model_runtime = vec![mesh::ModelRuntimeDescriptor {
+        model_name: model.to_owned(),
+        identity_hash: None,
+        context_length: Some(8_192),
+        ready: true,
+    }];
+    node.insert_test_peer(peer).await;
+
+    for path in [
+        "/v1/audio/transcriptions",
+        "/v1/audio/translations?verbose=1",
+    ] {
+        let mut request = large_tokenize_request(model);
+        request.path = path.to_owned();
+        request.client_path = path.to_owned();
+        request.body_len_bytes = 1_048_576;
+        let mistaken_text_budget =
+            request_budget_tokens_from_parts(request.body_len_bytes, request.completion_tokens);
+        assert!(mistaken_text_budget.is_some_and(|tokens| tokens > 8_192));
+        assert_eq!(request_context_budget(&request), None);
+
+        let ranked = order_remote_hosts_by_context(
+            &node,
+            model,
+            request_context_budget(&request),
+            std::slice::from_ref(&peer_id),
+        )
+        .await;
+        assert_eq!(
+            ranked,
+            vec![peer_id],
+            "encoded audio must not reject {path}"
+        );
+    }
+
+    let mut text_request = large_tokenize_request(model);
+    text_request.path = "/v1/chat/completions".to_owned();
+    text_request.client_path = text_request.path.clone();
+    text_request.body_len_bytes = 1_048_576;
+    assert!(request_context_budget(&text_request).is_some());
+    Ok(())
+}
+
 #[test]
 fn tokenizer_effective_model_cannot_override_authoritative_identity() {
     let model = "acme/code-model:Q4_K_M";
@@ -451,7 +500,9 @@ async fn cached_auto_model_stays_sticky_when_no_ready_remote_model_exists() -> R
         router::RoutingCandidate::unscored(cached_model, caps),
         router::RoutingCandidate::unscored(alternate_model, caps),
     ];
-    let ready_models = auto_route::ready_remote_models(&node, None, &available, &affinity).await;
+    let ready_models =
+        auto_route::ready_remote_models(&node, None, "/v1/chat/completions", &available, &affinity)
+            .await;
     assert!(ready_models.is_empty());
 
     let cached = lookup_cached_auto_model(

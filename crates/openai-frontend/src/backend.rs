@@ -11,11 +11,16 @@ use futures_core::Stream;
 use tokio::sync::Notify;
 
 use crate::{
+    audio::{
+        AudioResponse, AudioSpeechRequest, AudioTranscriptionRequest, AudioTranscriptionResponse,
+    },
     chat::{ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse},
     completions::{CompletionChunk, CompletionRequest, CompletionResponse},
+    embeddings::{EmbeddingResponse, EmbeddingsRequest},
     errors::OpenAiError,
     lifecycle::RequestId,
     models::ModelObject,
+    rerank::{RerankRequest, RerankResponse},
 };
 
 pub type ChatCompletionStream =
@@ -182,6 +187,61 @@ pub trait OpenAiBackend: Send + Sync + 'static {
     ) -> OpenAiResult<CompletionStream> {
         Err(OpenAiError::unsupported(
             "/v1/completions streaming is not supported by this backend",
+        ))
+    }
+
+    /// Embed text or token batches. The default rejects unsupported backends.
+    async fn embeddings(
+        &self,
+        _request: EmbeddingsRequest,
+        _context: OpenAiRequestContext,
+    ) -> OpenAiResult<EmbeddingResponse> {
+        Err(OpenAiError::unsupported(
+            "/v1/embeddings is not supported by this backend",
+        ))
+    }
+
+    /// Rank documents against a query, preserving their original indexes.
+    async fn rerank(
+        &self,
+        _request: RerankRequest,
+        _context: OpenAiRequestContext,
+    ) -> OpenAiResult<RerankResponse> {
+        Err(OpenAiError::unsupported(
+            "/v1/rerank is not supported by this backend",
+        ))
+    }
+
+    /// Synthesize binary audio; unsupported codecs and voices must return errors.
+    async fn audio_speech(
+        &self,
+        _request: AudioSpeechRequest,
+        _context: OpenAiRequestContext,
+    ) -> OpenAiResult<AudioResponse> {
+        Err(OpenAiError::unsupported(
+            "/v1/audio/speech is not supported by this backend",
+        ))
+    }
+
+    /// Transcribe uploaded audio in its source language using the request context.
+    async fn audio_transcription(
+        &self,
+        _request: AudioTranscriptionRequest,
+        _context: OpenAiRequestContext,
+    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        Err(OpenAiError::unsupported(
+            "/v1/audio/transcriptions is not supported by this backend",
+        ))
+    }
+
+    /// Translate uploaded audio into English; unsupported backends fail explicitly.
+    async fn audio_translation(
+        &self,
+        _request: AudioTranscriptionRequest,
+        _context: OpenAiRequestContext,
+    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        Err(OpenAiError::unsupported(
+            "/v1/audio/translations is not supported by this backend",
         ))
     }
 }

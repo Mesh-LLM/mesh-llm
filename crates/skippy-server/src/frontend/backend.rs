@@ -16,6 +16,7 @@ use crate::frontend::generation::GenerationSessionLockEntry;
 use crate::frontend::generation::GenerationStream;
 use crate::frontend::generation::GenerationStreamEvent;
 use crate::frontend::generation::GenerationTokenLimit;
+use crate::frontend::generation::OpenAiBackendMode;
 use crate::frontend::generation::OpenAiCacheHints;
 use crate::frontend::generation::OpenAiGenerationIds;
 use crate::frontend::generation::PhaseTimer;
@@ -35,7 +36,7 @@ use crate::frontend::generation::template_exposes_reasoning;
 use crate::frontend::request::{
     apply_chat_request_defaults, apply_completion_request_defaults, chat_sampling_config,
     chat_template_options, completion_sampling_config, ensure_chat_runtime_features_supported,
-    ensure_completion_runtime_features_supported,
+    ensure_completion_runtime_features_supported, sampling_config,
 };
 use crate::runtime_state::RuntimeSessionStats;
 use crate::telemetry::Telemetry;
@@ -44,6 +45,11 @@ use crate::telemetry::now_unix_nanos;
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use futures_util::stream;
+use openai_frontend::AudioFormat;
+use openai_frontend::AudioResponse;
+use openai_frontend::AudioSpeechRequest;
+use openai_frontend::AudioTranscriptionRequest;
+use openai_frontend::AudioTranscriptionResponse;
 use openai_frontend::ChatCompletionOutcome;
 use openai_frontend::ChatCompletionRequest;
 use openai_frontend::ChatCompletionResponse;
@@ -52,11 +58,18 @@ use openai_frontend::ChatExchangeRoute;
 use openai_frontend::CompletionRequest;
 use openai_frontend::CompletionResponse;
 use openai_frontend::CompletionStream;
+use openai_frontend::Embedding;
+use openai_frontend::EmbeddingInput;
+use openai_frontend::EmbeddingResponse;
+use openai_frontend::EmbeddingsRequest;
 use openai_frontend::ModelObject;
 use openai_frontend::OpenAiBackend;
 use openai_frontend::OpenAiError;
 use openai_frontend::OpenAiRequestContext;
 use openai_frontend::OpenAiResult;
+use openai_frontend::RerankRequest;
+use openai_frontend::RerankResponse;
+use openai_frontend::RerankResult;
 use openai_frontend::TerminalGuard;
 use openai_frontend::TerminalGuardedChatStream;
 use openai_frontend::apply_chat_hook_outcome;
@@ -65,7 +78,10 @@ use openai_frontend::chat_mesh_hooks_enabled;
 use serde_json::Value;
 use serde_json::json;
 use skippy_metrics::attr as attr_key;
-use skippy_runtime::SamplingConfig;
+use skippy_runtime::{
+    MediaInput, ModelWorkload, SamplingConfig, SpeechOutputFormat, SpeechSynthesisConfig,
+    WorkloadInfo,
+};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -80,6 +96,8 @@ use tokio::sync::TryAcquireError;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::task;
+
+mod non_chat;
 
 fn request_cancelled_error() -> OpenAiError {
     OpenAiError::cancelled("request cancelled")
@@ -1107,6 +1125,198 @@ impl OpenAiBackend for StageOpenAiBackend {
         Ok(Box::pin(stream.map(move |event| {
             generation_event_to_completion_chunk(event, &model)
         })))
+    }
+
+    async fn embeddings(
+        &self,
+        request: EmbeddingsRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<EmbeddingResponse> {
+        self.ensure_model(&request.model)?;
+        let info = self.ensure_local_workload(ModelWorkload::Embedding)?;
+        let expected_dimensions = non_chat::embedding_output_dimensions(info.output_dimensions)?;
+        if request
+            .dimensions
+            .is_some_and(|requested| requested != expected_dimensions)
+        {
+            return Err(OpenAiError::unsupported(format!(
+                "model exposes {expected_dimensions} embedding dimensions; dimensionality reduction is not supported"
+            )));
+        }
+
+        let model = request.model.clone();
+        let encoding_format = request.encoding_format.clone();
+        let backend = self.clone();
+        let token_inputs = task::spawn_blocking(move || backend.prepare_embedding_inputs(request))
+            .await
+            .map_err(|error| {
+                OpenAiError::backend(format!("embedding tokenization task failed: {error}"))
+            })??;
+        let prompt_tokens = token_inputs.iter().map(Vec::len).sum::<usize>();
+        let max_input_tokens = token_inputs.iter().map(Vec::len).max().unwrap_or_default();
+        let ids = generation_ids(OpenAiCacheHints::default(), None, &context);
+        let cancellation = context.cancellation_token();
+        let embeddings = self
+            .run_local_workload(
+                context,
+                ids,
+                max_input_tokens,
+                move |runtime, session_id| {
+                    non_chat::collect_workload_batch(
+                        token_inputs.iter().enumerate(),
+                        &cancellation,
+                        |(index, tokens)| {
+                            runtime
+                                .embed(session_id, tokens, expected_dimensions)
+                                .map(|values| Embedding { values, index })
+                        },
+                    )
+                },
+            )
+            .await?;
+        Ok(EmbeddingResponse::from_embeddings(
+            model,
+            embeddings,
+            u32::try_from(prompt_tokens).unwrap_or(u32::MAX),
+            &encoding_format,
+        ))
+    }
+
+    async fn rerank(
+        &self,
+        request: RerankRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<RerankResponse> {
+        self.ensure_model(&request.model)?;
+        self.ensure_local_workload(ModelWorkload::Rerank)?;
+        let prompt_tokens_estimate = non_chat::rerank_prompt_tokens_estimate(&request)?;
+        let ids = generation_ids(OpenAiCacheHints::default(), None, &context);
+        let cancellation = context.cancellation_token();
+        let query = request.query.clone();
+        let documents = request.documents.clone();
+        let mut scored = self
+            .run_local_workload(
+                context,
+                ids,
+                prompt_tokens_estimate,
+                move |runtime, session_id| {
+                    non_chat::collect_workload_batch(
+                        documents.iter().enumerate(),
+                        &cancellation,
+                        |(index, document)| {
+                            let (relevance_score, token_count) =
+                                runtime.rerank(session_id, &query, document.text()?)?;
+                            Ok((index, relevance_score, token_count))
+                        },
+                    )
+                },
+            )
+            .await?;
+        let prompt_tokens = scored.iter().map(|(_, _, count)| count).sum::<usize>();
+        scored.sort_by(|left, right| right.1.total_cmp(&left.1).then(left.0.cmp(&right.0)));
+        scored.truncate(request.top_n.unwrap_or(scored.len()).min(scored.len()));
+        let results = scored
+            .into_iter()
+            .map(|(index, relevance_score, _)| RerankResult {
+                index,
+                relevance_score,
+                document: request
+                    .return_documents
+                    .then(|| request.documents[index].clone()),
+            })
+            .collect();
+        Ok(RerankResponse {
+            id: format!("rerank-{}", uuid::Uuid::new_v4().simple()),
+            results,
+            usage: openai_frontend::Usage {
+                prompt_tokens: u32::try_from(prompt_tokens).unwrap_or(u32::MAX),
+                completion_tokens: 0,
+                total_tokens: u32::try_from(prompt_tokens).unwrap_or(u32::MAX),
+                ..openai_frontend::Usage::default()
+            },
+        })
+    }
+
+    async fn audio_speech(
+        &self,
+        request: AudioSpeechRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<AudioResponse> {
+        self.ensure_model(&request.model)?;
+        if !self.has_unsplit_full_model_topology() {
+            return Err(OpenAiError::unsupported(
+                "speech synthesis currently requires an unsplit local runtime",
+            ));
+        }
+        if (request.speed - 1.0).abs() > f32::EPSILON {
+            return Err(OpenAiError::unsupported(
+                "speech speed control is not supported by the native model",
+            ));
+        }
+        non_chat::validate_speech_voice(&request.voice)?;
+        let output_format = match request.response_format {
+            AudioFormat::Wav => SpeechOutputFormat::Wav,
+            AudioFormat::Pcm => SpeechOutputFormat::PcmS16Le,
+            _ => {
+                return Err(OpenAiError::unsupported(
+                    "native speech synthesis currently supports wav and pcm output",
+                ));
+            }
+        };
+        {
+            let runtime = self
+                .runtime
+                .lock()
+                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
+            if runtime.input_activation_boundary().is_some()
+                || runtime.output_activation_boundary().is_some()
+                || !runtime.supports_speech_synthesis()
+            {
+                return Err(OpenAiError::unsupported(
+                    "model does not expose full-model speech synthesis",
+                ));
+            }
+        }
+        let content_type = request.response_format.content_type().to_string();
+        let prompt_tokens_estimate = request.input.len().div_ceil(3).max(1);
+        let ids = generation_ids(OpenAiCacheHints::default(), None, &context);
+        let cancellation = context.clone();
+        let config = SpeechSynthesisConfig {
+            prompt: request.input,
+            language: None,
+            top_k: 20,
+            top_p: 0.8,
+            seed: u32::MAX,
+            output_format,
+            max_frames: 512,
+        };
+        let audio = self
+            .run_local_workload(
+                context,
+                ids,
+                prompt_tokens_estimate,
+                move |runtime, session_id| {
+                    runtime.synthesize_speech(session_id, &config, || cancellation.is_cancelled())
+                },
+            )
+            .await?;
+        AudioResponse::new(audio.bytes, content_type)
+    }
+
+    async fn audio_transcription(
+        &self,
+        request: AudioTranscriptionRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        self.audio_to_text(request, false, context).await
+    }
+
+    async fn audio_translation(
+        &self,
+        request: AudioTranscriptionRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        self.audio_to_text(request, true, context).await
     }
 }
 

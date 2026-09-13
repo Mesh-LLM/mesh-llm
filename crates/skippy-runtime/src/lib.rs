@@ -39,7 +39,8 @@ pub use logging::{
     set_filtered_native_logs_enabled, suppress_native_logs, unregister_filtered_native_logs,
     write_native_log_note,
 };
-pub use native::{StageModel, StageModelReader};
+pub use media::{SpeechAudio, SpeechOutputFormat, SpeechSynthesisConfig};
+pub use native::{ModelWorkload, PoolingType, StageModel, StageModelReader, WorkloadInfo};
 pub use native_mtp::NativeMtpDraft;
 pub use ngram::{Cache as NgramCache, NGRAM_CACHE_MAX_NGRAM};
 pub use runtime_events::{

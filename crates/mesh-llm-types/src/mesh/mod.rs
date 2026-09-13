@@ -50,8 +50,32 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// The primary inference contract exposed by a loaded model runtime.
+///
+/// This is deliberately separate from multimodal capabilities: a causal model
+/// can accept image or audio inputs, while an embedding or reranking model has
+/// a different output contract even when its input is text-only.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelWorkloadClass {
+    CausalGeneration,
+    Embedding,
+    Rerank,
+    EncoderDecoder,
+    SpeechSynthesis,
+    /// Explicit metadata from a newer peer that this node cannot interpret.
+    /// Unlike absent legacy metadata, this never authorizes inference.
+    #[serde(other)]
+    Unknown,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ServedModelMetadata {
+    /// `None` is the mixed-version representation for nodes that predate
+    /// workload advertisement. Callers must not treat it as evidence that a
+    /// non-chat endpoint is supported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workload_class: Option<ModelWorkloadClass>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub architecture: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -80,7 +104,8 @@ pub struct ServedModelMetadata {
 
 impl ServedModelMetadata {
     pub fn is_empty(&self) -> bool {
-        self.architecture.is_none()
+        self.workload_class.is_none()
+            && self.architecture.is_none()
             && self.parameter_size.is_none()
             && self.parameter_count_b.is_none()
             && self.quant.is_none()

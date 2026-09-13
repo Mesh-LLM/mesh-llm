@@ -1,0 +1,55 @@
+From 6a85b4d44ea932a6ed644e5931b05a746066cec6 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sat, 12 Sep 2026 01:36:02 -0700
+Subject: [PATCH 25/25] skippy: configure non-chat model loading
+
+---
+ src/skippy/model_loading.cpp | 23 +++++++++++++++++++++--
+ 1 file changed, 21 insertions(+), 2 deletions(-)
+
+diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
+index 13dc3d8ee..ed859029d 100644
+--- a/src/skippy/model_loading.cpp
++++ b/src/skippy/model_loading.cpp
+@@ -564,9 +564,19 @@ enum skippy_status skippy_finish_model_open(
+         }
+     }
+ 
+-    const uint32_t lane_count = config != nullptr && config->lane_count > 0
++    const bool encoder_decoder = llama_model_has_encoder(model) && llama_model_has_decoder(model);
++    const bool classifier_workload = model->cls != nullptr || model->cls_out != nullptr;
++    const bool embedding_workload = !encoder_decoder &&
++            (classifier_workload ||
++             (llama_model_has_encoder(model) ||
++              (model->hparams.pooling_type != LLAMA_POOLING_TYPE_NONE &&
++               model->hparams.pooling_type != LLAMA_POOLING_TYPE_UNSPECIFIED)));
++    const uint32_t configured_lane_count = config != nullptr && config->lane_count > 0
+         ? static_cast<uint32_t>(config->lane_count)
+         : 1;
++    // Encoder output is context-global in llama.cpp. Until that state can be
++    // isolated per sequence, serialize encoder-decoder work on one lane.
++    const uint32_t lane_count = encoder_decoder ? 1 : configured_lane_count;
+     uint32_t context_size_per_lane = 0;
+     uint32_t context_size_total = 0;
+     if (!skippy_context_capacity(config, lane_count, context_size_per_lane, context_size_total)) {
+@@ -606,7 +616,16 @@ enum skippy_status skippy_finish_model_open(
+     params.type_k = config != nullptr && config->cache_type_k > 0 ? static_cast<ggml_type>(config->cache_type_k) : GGML_TYPE_F16;
+     params.type_v = config != nullptr && config->cache_type_v > 0 ? static_cast<ggml_type>(config->cache_type_v) : GGML_TYPE_F16;
+     params.flash_attn_type = config != nullptr ? static_cast<llama_flash_attn_type>(config->flash_attn_type) : LLAMA_FLASH_ATTN_TYPE_AUTO;
+-    params.embeddings = config != nullptr && config->filter_tensors_on_load && !config->include_output;
++    if (classifier_workload) {
++        params.pooling_type = LLAMA_POOLING_TYPE_RANK;
++    }
++    params.embeddings = embedding_workload ||
++            (config != nullptr && config->filter_tensors_on_load && !config->include_output);
++    if (embedding_workload) {
++        // Non-causal embedding graphs must fit their logical batch in one
++        // physical batch, matching llama-embedding's runtime contract.
++        params.n_ubatch = params.n_batch;
++    }
+     const bool glm_dsa_op_timing_enabled = skippy_glm_dsa_op_timing_enabled();
+     const bool glm_dsa_tensor_trace_enabled = skippy_glm_dsa_tensor_trace_enabled();
+     if (model->arch == LLM_ARCH_GLM_DSA && (glm_dsa_op_timing_enabled || glm_dsa_tensor_trace_enabled)) {
+-- 
+2.54.0 (Apple Git-157)
+

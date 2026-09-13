@@ -4,6 +4,9 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::{
+    audio::{
+        AudioResponse, AudioSpeechRequest, AudioTranscriptionRequest, AudioTranscriptionResponse,
+    },
     backend::{
         ChatCompletionStream, CompletionStream, OpenAiBackend, OpenAiRequestContext, OpenAiResult,
     },
@@ -12,7 +15,9 @@ use crate::{
         ChatMessage, MessageContent, MessageContentPart, capsule_id_is_valid,
     },
     completions::{CompletionRequest, CompletionResponse},
+    embeddings::{EmbeddingResponse, EmbeddingsRequest},
     models::ModelObject,
+    rerank::{RerankRequest, RerankResponse},
 };
 
 pub const MESH_HOOKS_FIELD: &str = "mesh_hooks";
@@ -377,7 +382,7 @@ impl Drop for TerminalGuard {
 /// - A chunk carrying an error fires [`ChatCompletionOutcome::Error`]
 ///   immediately — matching the non-streaming path, which never waits for a
 ///   graceful end once the backend has already reported failure.
-/// - Both fire via [`TerminalGuard::fire_detached`], since neither can
+/// - Both fire via `TerminalGuard::fire_detached`, since neither can
 ///   `.await` inside `poll_next`.
 /// - Dropping this wrapper before either of the above happens — an outer
 ///   timeout, or the client disconnecting mid-stream — drops the
@@ -608,6 +613,46 @@ impl OpenAiBackend for HookedOpenAiBackend {
         context: OpenAiRequestContext,
     ) -> OpenAiResult<CompletionStream> {
         self.backend.completion_stream(request, context).await
+    }
+
+    async fn embeddings(
+        &self,
+        request: EmbeddingsRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<EmbeddingResponse> {
+        self.backend.embeddings(request, context).await
+    }
+
+    async fn rerank(
+        &self,
+        request: RerankRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<RerankResponse> {
+        self.backend.rerank(request, context).await
+    }
+
+    async fn audio_speech(
+        &self,
+        request: AudioSpeechRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<AudioResponse> {
+        self.backend.audio_speech(request, context).await
+    }
+
+    async fn audio_transcription(
+        &self,
+        request: AudioTranscriptionRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        self.backend.audio_transcription(request, context).await
+    }
+
+    async fn audio_translation(
+        &self,
+        request: AudioTranscriptionRequest,
+        context: OpenAiRequestContext,
+    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        self.backend.audio_translation(request, context).await
     }
 }
 

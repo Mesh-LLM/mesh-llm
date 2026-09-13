@@ -836,6 +836,7 @@ fn runtime_verified_served_model_descriptor_preserves_identity_and_updates_capab
         "Qwen3VL-2B-Instruct-Q4_K_M",
         "Qwen3VL-2B-Instruct-Q4_K_M",
         capabilities,
+        mesh::ModelWorkloadClass::CausalGeneration,
     );
 
     assert_eq!(
@@ -858,6 +859,7 @@ fn runtime_verified_served_model_descriptor_builds_fallback_identity() {
         "Primary",
         "Runtime",
         models::ModelCapabilities::default(),
+        mesh::ModelWorkloadClass::Embedding,
     );
 
     assert_eq!(descriptor.identity.model_name, "Runtime");

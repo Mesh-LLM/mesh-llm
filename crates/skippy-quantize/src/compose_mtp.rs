@@ -235,44 +235,34 @@ fn per_layer_suffix(key: &str) -> Option<&'static str> {
 
 fn extend_array_kv(kv: &mut GgufKv, mtp_kv: &[GgufKv], layer_count: usize) -> Result<()> {
     match kv {
-        GgufKv::ArrayU32 { key, value } => {
-            if value.len() == layer_count {
-                let mtp_value = mtp_layer_integer(mtp_kv, key);
-                let fallback = u64::from(value[value.len() - 1]);
-                value.push(
-                    u32::try_from(mtp_value.unwrap_or(fallback))
-                        .context("per-layer array entry overflows uint32")?,
-                );
-            }
+        GgufKv::ArrayU32 { key, value } if value.len() == layer_count && !value.is_empty() => {
+            let mtp_value = mtp_layer_integer(mtp_kv, key);
+            let fallback = u64::from(value[value.len() - 1]);
+            value.push(
+                u32::try_from(mtp_value.unwrap_or(fallback))
+                    .context("per-layer array entry overflows uint32")?,
+            );
         }
-        GgufKv::ArrayI32 { key, value } => {
-            if value.len() == layer_count {
-                let mtp_value = mtp_layer_integer(mtp_kv, key);
-                let fallback = u64::try_from(i64::from(value[value.len() - 1]))
-                    .context("negative per-layer array entry")?;
-                value.push(
-                    i32::try_from(mtp_value.unwrap_or(fallback))
-                        .context("per-layer array entry overflows int32")?,
-                );
-            }
+        GgufKv::ArrayI32 { key, value } if value.len() == layer_count && !value.is_empty() => {
+            let mtp_value = mtp_layer_integer(mtp_kv, key);
+            let fallback = u64::try_from(i64::from(value[value.len() - 1]))
+                .context("negative per-layer array entry")?;
+            value.push(
+                i32::try_from(mtp_value.unwrap_or(fallback))
+                    .context("per-layer array entry overflows int32")?,
+            );
         }
-        GgufKv::ArrayF32 { value, .. } => {
-            if value.len() == layer_count && !value.is_empty() {
-                let last = value[value.len() - 1];
-                value.push(last);
-            }
+        GgufKv::ArrayF32 { value, .. } if value.len() == layer_count && !value.is_empty() => {
+            let last = value[value.len() - 1];
+            value.push(last);
         }
-        GgufKv::ArrayBool { value, .. } => {
-            if value.len() == layer_count && !value.is_empty() {
-                let last = value[value.len() - 1];
-                value.push(last);
-            }
+        GgufKv::ArrayBool { value, .. } if value.len() == layer_count && !value.is_empty() => {
+            let last = value[value.len() - 1];
+            value.push(last);
         }
-        GgufKv::ArrayString { value, .. } => {
-            if value.len() == layer_count && !value.is_empty() {
-                let last = value[value.len() - 1].clone();
-                value.push(last);
-            }
+        GgufKv::ArrayString { value, .. } if value.len() == layer_count && !value.is_empty() => {
+            let last = value[value.len() - 1].clone();
+            value.push(last);
         }
         // Typed-array variants cover only u32/i32/f32/bool/string; other
         // element widths (e.g. the u16 `attention.head_count` the Nemotron

@@ -7,8 +7,15 @@ use std::{
 use axum::{
     Json, Router,
     body::Body,
-    extract::{DefaultBodyLimit, Extension, State, rejection::JsonRejection},
-    http::{HeaderMap, HeaderValue, Method, Request, StatusCode, Uri, header::HeaderName},
+    extract::{
+        DefaultBodyLimit, Extension, Multipart, State,
+        multipart::{MultipartError, MultipartRejection},
+        rejection::JsonRejection,
+    },
+    http::{
+        HeaderMap, HeaderValue, Method, Request, StatusCode, Uri,
+        header::{self, HeaderName},
+    },
     middleware::{self, Next},
     response::{IntoResponse, Response, sse::Event},
     routing::{get, post},
@@ -19,11 +26,15 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::{
+    audio::{
+        AudioResponse, AudioSpeechRequest, AudioTranscriptionRequest, AudioTranscriptionResponse,
+    },
     backend::{OpenAiBackend, OpenAiRequestContext, OpenAiResult, SharedBackend},
     backend_lifecycle::{call_backend, call_backend_with_context},
     chat::{CapsuleMarker, ChatCompletionChunk, ChatCompletionRequest},
     common::{AgentSessionIdentity, AgentSessionSource, Usage},
     completions::CompletionRequest,
+    embeddings::{EmbeddingResponse, EmbeddingsRequest},
     errors::OpenAiError,
     lifecycle::{
         CLIENT_NONCE_HEADER, CLIENT_NONCE_ORIGIN_HEADER, OpenAiBackendOperation,
@@ -33,6 +44,7 @@ use crate::{
     },
     models::ModelsResponse,
     request_lifecycle::RequestLifecycle,
+    rerank::{RerankRequest, RerankResponse},
     responses::{
         ResponseAdapterMode, ResponseSseState, chunk_delta_text, normalize_openai_compat_request,
         responses_stream_completed_event_with_sequence, responses_stream_content_part_added_event,
@@ -50,6 +62,7 @@ use crate::{
 
 const AGENT_SESSION_HEADER_ENV: &str = "MESH_AGENT_SESSION_HEADER";
 const BACKEND_TIMEOUT_SECS_ENV: &str = "MESH_OPENAI_BACKEND_TIMEOUT_SECS";
+const MAX_AUDIO_MULTIPART_BODY_BYTES: usize = 64 * 1024 * 1024 + 1024 * 1024;
 
 /// Backend timeout override, in whole seconds. `0` disables the timeout.
 ///
@@ -255,6 +268,17 @@ pub fn router_for_with_config(
         .route("/healthz", get(health))
         .route("/readyz", get(ready))
         .route("/v1/models", get(models))
+        .route("/v1/embeddings", post(embeddings))
+        .route("/v1/rerank", post(rerank))
+        .route("/v1/audio/speech", post(audio_speech))
+        .route(
+            "/v1/audio/transcriptions",
+            post(audio_transcriptions).layer(DefaultBodyLimit::max(MAX_AUDIO_MULTIPART_BODY_BYTES)),
+        )
+        .route(
+            "/v1/audio/translations",
+            post(audio_translations).layer(DefaultBodyLimit::max(MAX_AUDIO_MULTIPART_BODY_BYTES)),
+        )
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/completions", post(completions))
         .route("/v1/responses", post(responses))
@@ -310,6 +334,241 @@ async fn models(
         object: "list",
         data,
     }))
+}
+
+/// Validate embedding input and preserve cancellation, usage, and lifecycle identity.
+async fn embeddings(
+    State(state): State<FrontendState>,
+    Extension(context): Extension<OpenAiLifecycleContext>,
+    payload: Result<Json<EmbeddingsRequest>, JsonRejection>,
+) -> Result<Response, OpenAiError> {
+    let Json(request) = json_payload(payload)?;
+    request.validate()?;
+    let backend_context = OpenAiRequestContext::with_request_id(context.request_id);
+    let response: EmbeddingResponse = call_backend_with_context(
+        state.config.lifecycle_observer.clone(),
+        &context,
+        OpenAiBackendOperation::Embeddings,
+        "embeddings",
+        state.config.backend_timeout,
+        &backend_context,
+        state.backend.embeddings(request, backend_context.clone()),
+    )
+    .await?;
+    state.response_completed(
+        &context,
+        OpenAiBackendOperation::Embeddings,
+        &response.usage,
+    );
+    let usage = response.usage.clone();
+    Ok(json_response_with_usage(response, &usage))
+}
+
+/// Validate query/documents before invoking the context-bound rerank backend.
+async fn rerank(
+    State(state): State<FrontendState>,
+    Extension(context): Extension<OpenAiLifecycleContext>,
+    payload: Result<Json<RerankRequest>, JsonRejection>,
+) -> Result<Response, OpenAiError> {
+    let Json(request) = json_payload(payload)?;
+    request.validate()?;
+    let backend_context = OpenAiRequestContext::with_request_id(context.request_id);
+    let response: RerankResponse = call_backend_with_context(
+        state.config.lifecycle_observer.clone(),
+        &context,
+        OpenAiBackendOperation::Rerank,
+        "rerank",
+        state.config.backend_timeout,
+        &backend_context,
+        state.backend.rerank(request, backend_context.clone()),
+    )
+    .await?;
+    state.response_completed(&context, OpenAiBackendOperation::Rerank, &response.usage);
+    let usage = response.usage.clone();
+    Ok(json_response_with_usage(response, &usage))
+}
+
+/// Dispatch validated speech input and return binary audio without JSON wrapping.
+async fn audio_speech(
+    State(state): State<FrontendState>,
+    Extension(context): Extension<OpenAiLifecycleContext>,
+    payload: Result<Json<AudioSpeechRequest>, JsonRejection>,
+) -> Result<Response, OpenAiError> {
+    let Json(request) = json_payload(payload)?;
+    request.validate()?;
+    let backend_context = OpenAiRequestContext::with_request_id(context.request_id);
+    let response = call_backend_with_context(
+        state.config.lifecycle_observer.clone(),
+        &context,
+        OpenAiBackendOperation::AudioSpeech,
+        "audio_speech",
+        state.config.backend_timeout,
+        &backend_context,
+        state.backend.audio_speech(request, backend_context.clone()),
+    )
+    .await?;
+    audio_response(response)
+}
+
+/// Validate the backend media type before placing audio bytes in the response.
+fn audio_response(audio: AudioResponse) -> Result<Response, OpenAiError> {
+    let content_type = HeaderValue::from_str(&audio.content_type)
+        .map_err(|_| OpenAiError::backend("audio backend returned an invalid content type"))?;
+    let mut response = Response::new(Body::from(audio.bytes));
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, content_type);
+    Ok(response)
+}
+
+/// Handle source-language transcription through the shared multipart path.
+async fn audio_transcriptions(
+    State(state): State<FrontendState>,
+    Extension(context): Extension<OpenAiLifecycleContext>,
+    multipart: Result<Multipart, MultipartRejection>,
+) -> Result<Response, OpenAiError> {
+    audio_text_request(state, context, multipart_payload(multipart)?, false).await
+}
+
+/// Select English translation without changing the multipart upload contract.
+async fn audio_translations(
+    State(state): State<FrontendState>,
+    Extension(context): Extension<OpenAiLifecycleContext>,
+    multipart: Result<Multipart, MultipartRejection>,
+) -> Result<Response, OpenAiError> {
+    audio_text_request(state, context, multipart_payload(multipart)?, true).await
+}
+
+/// Convert extractor rejection into the frontend's structured invalid-request error.
+fn multipart_payload(multipart: Result<Multipart, MultipartRejection>) -> OpenAiResult<Multipart> {
+    multipart.map_err(|error| {
+        OpenAiError::invalid_request(format!("invalid multipart request: {error}"))
+    })
+}
+
+/// Preserve payload-too-large status when a bounded multipart field cannot be read.
+fn multipart_error(error: MultipartError, field: &str) -> OpenAiError {
+    if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        OpenAiError::payload_too_large(format!("{field} is too large: {error}"))
+    } else {
+        OpenAiError::invalid_request(format!("invalid {field}: {error}"))
+    }
+}
+
+/// Share upload validation and cancellation while retaining endpoint-specific dispatch.
+async fn audio_text_request(
+    state: FrontendState,
+    context: OpenAiLifecycleContext,
+    multipart: Multipart,
+    translate: bool,
+) -> Result<Response, OpenAiError> {
+    let request = parse_audio_multipart(multipart).await?;
+    request.validate()?;
+    let response_format = request.response_format.clone();
+    let backend_context = OpenAiRequestContext::with_request_id(context.request_id);
+    let operation = if translate {
+        OpenAiBackendOperation::AudioTranslation
+    } else {
+        OpenAiBackendOperation::AudioTranscription
+    };
+    let response: AudioTranscriptionResponse = call_backend_with_context(
+        state.config.lifecycle_observer.clone(),
+        &context,
+        operation,
+        if translate {
+            "audio_translation"
+        } else {
+            "audio_transcription"
+        },
+        state.config.backend_timeout,
+        &backend_context,
+        if translate {
+            state
+                .backend
+                .audio_translation(request, backend_context.clone())
+        } else {
+            state
+                .backend
+                .audio_transcription(request, backend_context.clone())
+        },
+    )
+    .await?;
+    if response_format == "text" {
+        Ok((
+            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            response.text,
+        )
+            .into_response())
+    } else {
+        Ok(Json(response).into_response())
+    }
+}
+
+/// Decode a bounded audio upload, rejecting duplicate recognized fields consistently.
+async fn parse_audio_multipart(
+    mut multipart: Multipart,
+) -> OpenAiResult<AudioTranscriptionRequest> {
+    let mut model = None;
+    let mut file = None;
+    let mut filename = None;
+    let mut language = None;
+    let mut prompt = None;
+    let mut response_format = None;
+    let mut temperature = None;
+    let mut seen_fields = std::collections::HashSet::new();
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|error| multipart_error(error, "multipart body"))?
+    {
+        let name = field.name().unwrap_or_default().to_string();
+        if matches!(
+            name.as_str(),
+            "model" | "file" | "language" | "prompt" | "response_format" | "temperature"
+        ) && !seen_fields.insert(name.clone())
+        {
+            return Err(OpenAiError::invalid_request(format!(
+                "duplicate multipart {name} field"
+            )));
+        }
+        if name == "file" {
+            filename = field.file_name().map(str::to_owned);
+            let bytes = field
+                .bytes()
+                .await
+                .map_err(|error| multipart_error(error, "audio file field"))?;
+            file = Some(bytes.to_vec());
+            continue;
+        }
+        let value = field
+            .text()
+            .await
+            .map_err(|error| multipart_error(error, "multipart text field"))?;
+        match name.as_str() {
+            "model" => model = Some(value),
+            "language" => language = Some(value),
+            "prompt" => prompt = Some(value),
+            "response_format" => response_format = Some(value),
+            "temperature" => {
+                temperature =
+                    Some(value.parse::<f32>().map_err(|_| {
+                        OpenAiError::invalid_request("temperature must be a number")
+                    })?);
+            }
+            _ => {}
+        }
+    }
+
+    Ok(AudioTranscriptionRequest {
+        model: model.ok_or_else(|| OpenAiError::invalid_request("model field is required"))?,
+        file: file.ok_or_else(|| OpenAiError::invalid_request("file field is required"))?,
+        filename,
+        language,
+        prompt,
+        response_format: response_format.unwrap_or_else(|| "json".to_string()),
+        temperature,
+    })
 }
 
 async fn chat_completions(
@@ -974,6 +1233,11 @@ fn lifecycle_route(uri: &Uri) -> OpenAiFrontendRoute {
         "/healthz" => OpenAiFrontendRoute::Healthz,
         "/readyz" => OpenAiFrontendRoute::Readyz,
         "/v1/models" => OpenAiFrontendRoute::Models,
+        "/v1/embeddings" => OpenAiFrontendRoute::Embeddings,
+        "/v1/rerank" => OpenAiFrontendRoute::Rerank,
+        "/v1/audio/speech" => OpenAiFrontendRoute::AudioSpeech,
+        "/v1/audio/transcriptions" => OpenAiFrontendRoute::AudioTranscriptions,
+        "/v1/audio/translations" => OpenAiFrontendRoute::AudioTranslations,
         "/v1/chat/completions" => OpenAiFrontendRoute::ChatCompletions,
         "/v1/completions" => OpenAiFrontendRoute::Completions,
         "/v1/responses" => OpenAiFrontendRoute::Responses,

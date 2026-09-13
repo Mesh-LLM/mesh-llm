@@ -3,13 +3,15 @@ set -euo pipefail
 
 # Supported-families certification battery (issue #1434; tiers dropped 2026-08-25).
 #
-# Every row of the single manifest gets core certification: single-step,
-# chain, and state-handoff lanes. Models with MTP/NextN tensors require the
-# native draft sideband and verify it against the target in the correctness
-# lanes. Dense rows run them at the first, midpoint, and last interior cuts.
-# Hybrid/recurrent rows (sweep_period > 0) run a boundary sweep — one
-# representative split layer for every cut offset modulo the family's
-# interleaving period.
+# Causal-generation rows get core split certification: single-step, chain,
+# and state-handoff lanes. Certified non-chat rows get class-specific smoke
+# and independent local-monolithic oracle lanes through the Skippy runtime;
+# these classes deliberately fail closed if asked to stage. Models with
+# MTP/NextN tensors require the native draft sideband and verify it against the
+# target in the correctness lanes. Dense causal rows run them at the first,
+# midpoint, and last interior cuts. Hybrid/recurrent rows (sweep_period > 0)
+# run a boundary sweep — one representative split layer for every cut offset
+# modulo the family's interleaving period.
 #
 # Models are NEVER cached through GitHub Actions cache. The family-certify
 # runner ships a large pre-warmed, read-only HF cache. When HF_CACHE is set,
@@ -121,9 +123,11 @@ require_cmd() {
   }
 }
 
-require_cmd hf
 require_cmd jq
 require_cmd python3
+if (( DRY_RUN == 0 )); then
+  require_cmd hf
+fi
 if [[ ! -x "$PLANNER" ]]; then
   echo "family battery planner is not executable: $PLANNER" >&2
   exit 1
@@ -157,9 +161,12 @@ if [[ -n "$FAMILY_FILTER" && ! "$FAMILY_FILTER" =~ ^[a-zA-Z0-9._-]+(,[a-zA-Z0-9.
 fi
 
 mkdir -p "$MODEL_SCAN_DIR" "$PREFLIGHT_DIR" "$CERT_DIR"
+if [[ -n "${SKIPPY_WORKLOAD_PRODUCER_MANIFEST:-}" ]]; then
+  cp "$SKIPPY_WORKLOAD_PRODUCER_MANIFEST" "$ARTIFACT_DIR/workload-producer.json"
+fi
 : > "$RESULTS_JSONL"
 printf 'family\tmodel_id\tsource_revision\tmodel_path\tmtp_layers\n' > "$NATIVE_MTP_MODELS_TSV"
-printf 'family|repo|source_revision|file|selector|sweep_period|layer_end|notes|target_path|draft_repo|draft_revision|draft_file|draft_path|native_mtp|model_size_bytes|mtp_layers|activation_width|startup_timeout_secs|mmproj_repo|mmproj_revision|mmproj_file|mmproj_path\n' > "$RESOLVED_MANIFEST"
+printf 'family|class|repo|source_revision|file|selector|sweep_period|layer_end|notes|target_path|draft_repo|draft_revision|draft_file|draft_path|native_mtp|model_size_bytes|mtp_layers|activation_width|startup_timeout_secs|lane_csv|mmproj_repo|mmproj_revision|mmproj_file|mmproj_path\n' > "$RESOLVED_MANIFEST"
 
 prepare_policy_plan() {
   local plan_args=(
@@ -188,6 +195,7 @@ prepare_policy_plan() {
     "${plan_args[@]}"
   fi
 
+  "$PLANNER" --manifest "$MANIFEST" --verify-plan "$POLICY_PLAN_COPY"
   python3 - "$MANIFEST" "$POLICY_PLAN_COPY" "$SHARD_INDEX" <<'PY'
 import hashlib
 import json
@@ -198,12 +206,23 @@ manifest_path, plan_path, shard_index = sys.argv[1:]
 manifest_sha = hashlib.sha256(Path(manifest_path).read_bytes()).hexdigest()
 plan = json.loads(Path(plan_path).read_text(encoding="utf-8"))
 core = ["single-step", "chain", "state-handoff"]
+class_lanes = {
+    "causal_generation": core,
+    "embedding": ["embedding-smoke", "embedding-oracle"],
+    "rerank": ["rerank-smoke", "rerank-oracle"],
+    "encoder_decoder": ["encoder-decoder-smoke", "encoder-decoder-oracle"],
+    "ocr": ["ocr-smoke", "ocr-oracle"],
+    "speech_synthesis": ["speech-synthesis-smoke", "speech-synthesis-oracle"],
+    "speech_recognition": ["speech-recognition-smoke", "speech-recognition-oracle"],
+}
 if plan.get("schema_version") != 1:
     raise SystemExit("policy plan has an unsupported schema_version")
 if plan.get("manifest_sha256") != manifest_sha:
     raise SystemExit("policy plan does not match the checked-in manifest bytes")
 if plan.get("required_certification_lanes") != core:
     raise SystemExit("policy plan does not preserve the three-lane certification contract")
+if plan.get("model_class_lanes") != class_lanes:
+    raise SystemExit("policy plan does not preserve the model-class lane contract")
 if not plan.get("selected_models"):
     raise SystemExit("policy plan selected no models")
 if shard_index:
@@ -358,6 +377,7 @@ scan_model() {
   MODEL_SIZE_BYTES=0
   MODEL_MTP_LAYERS=""
   MODEL_LAYER_COUNT=0
+  MODEL_ACTIVATION_WIDTH=0
 
   if (( DRY_RUN == 1 )); then
     echo "$BIN_DIR/skippy-model-package inspect '$target' > '$scan_json'"
@@ -376,7 +396,19 @@ scan_model() {
   fi
 
   MODEL_SIZE_BYTES="$(jq '[.tensors[].byte_size] | add // 0' "$scan_json")"
-  MODEL_LAYER_COUNT="$(jq '[.tensors[] | select(.layer_index != null) | .layer_index] | unique | length' "$scan_json")"
+  local dimensions
+  if ! dimensions="$("$PLANNER" --inspect-gguf "$target")"; then
+    jq -n \
+      --arg family "$family" \
+      --arg model_id "$model_id" \
+      --arg target "$target" \
+      '{family:$family,model_id:$model_id,target_model:$target,exit_code:1,outcomes:[{name:"model-metadata",status:"fail",outcome:"model-invalid",note:"could not read canonical GGUF dimensions"}]}' \
+      >> "$RESULTS_JSONL"
+    FAILURES+=("$family(metadata)")
+    return 1
+  fi
+  MODEL_LAYER_COUNT="$(jq -r '.layer_count' <<<"$dimensions")"
+  MODEL_ACTIVATION_WIDTH="$(jq -r '.activation_width' <<<"$dimensions")"
   MODEL_MTP_LAYERS="$(jq -r '
     [.tensors[]
       | select(.layer_index != null)
@@ -400,14 +432,22 @@ scan_model() {
 
 preflight_environment() {
   local model_root="${HF_HOME:-$(dirname "$PREFLIGHT_FIRST_TARGET")}"
-  python3 - "$ARTIFACT_DIR" "$model_root" "$MIN_FREE_GIB" "$PREFLIGHT_DIR/environment.json" <<'PY'
+  local port_mode="full" needs_oracle_server=0
+  if ! jq -e '[.selected_models[].class] | any(. == "causal_generation")' "$POLICY_PLAN_COPY" >/dev/null; then
+    port_mode="workload"
+    if jq -e '[.selected_models[].class] | any(. == "embedding" or . == "rerank" or . == "ocr" or . == "speech_recognition")' "$POLICY_PLAN_COPY" >/dev/null; then
+      needs_oracle_server=1
+    fi
+  fi
+  python3 - "$ARTIFACT_DIR" "$model_root" "$MIN_FREE_GIB" "$PREFLIGHT_ONLY" "$PREFLIGHT_DIR/environment.json" \
+    "$port_mode" "${SKIPPY_WORKLOAD_OPENAI_PORT:-19337}" "${SKIPPY_WORKLOAD_ORACLE_PORT:-19338}" "$needs_oracle_server" <<'PY'
 import json
 import shutil
 import socket
 import sys
 from pathlib import Path
 
-artifact_root, model_root, minimum_gib, output = sys.argv[1:]
+artifact_root, model_root, minimum_gib, preflight_only, output, port_mode, candidate_port, oracle_port, needs_oracle_server = sys.argv[1:]
 minimum_bytes = int(minimum_gib) * 1024**3
 filesystems = []
 for label, path_text in (("artifacts", artifact_root), ("models", model_root)):
@@ -426,20 +466,32 @@ for label, path_text in (("artifacts", artifact_root), ("models", model_root)):
     )
 
 busy_ports = []
-for port in range(19000, 20032):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        sock.settimeout(0.01)
-        if sock.connect_ex(("127.0.0.1", port)) == 0:
+ports = list(range(19000, 20032)) if port_mode == "full" else [int(candidate_port)]
+if port_mode == "workload" and needs_oracle_server == "1":
+    ports.append(int(oracle_port))
+if any(port < 1 or port > 65535 for port in ports) or len(ports) != len(set(ports)):
+    raise SystemExit("invalid or conflicting workload certification ports")
+if preflight_only == "0":
+    for port in ports:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.settimeout(0.01)
+            if sock.connect_ex(("127.0.0.1", port)) == 0:
+                busy_ports.append(port)
+        except OSError:
             busy_ports.append(port)
-    except OSError:
-        busy_ports.append(port)
-    finally:
-        sock.close()
+        finally:
+            sock.close()
 
 report = {
     "filesystems": filesystems,
-    "port_range": {"start": 19000, "end": 20031, "busy": busy_ports},
+    "port_range": {
+        "start": min(ports),
+        "end": max(ports),
+        "ports_checked": ports if port_mode == "workload" else None,
+        "checked": preflight_only == "0",
+        "busy": busy_ports,
+    },
 }
 Path(output).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 if any(not item["sufficient"] for item in filesystems) or busy_ports:
@@ -549,13 +601,17 @@ preflight_manifest() {
     return 1
   fi
 
-  while IFS='|' read -r family profile repo source_revision file selector sweep_period layer_end activation_width notes draft_repo draft_revision draft_file expected_model_bytes startup_timeout_override expected_mtp_layers lane_csv _speculative_policy mmproj_repo mmproj_revision mmproj_file; do
-    if [[ "$profile" != "full" ]]; then
-      echo "the local monolithic battery cannot execute profile $profile for $family" >&2
+  while IFS='|' read -r family model_class profile repo source_revision file selector sweep_period layer_end activation_width notes draft_repo draft_revision draft_file expected_model_bytes startup_timeout_override expected_mtp_layers lane_csv _speculative_policy mmproj_repo mmproj_revision mmproj_file; do
+    if [[ "$model_class" == "causal_generation" && "$profile" != "full" ]] ||
+       [[ "$model_class" != "causal_generation" && "$profile" != "workload-smoke" && "$profile" != "workload-oracle" ]]; then
+      echo "the family battery cannot execute profile $profile for $model_class family $family" >&2
       exit 1
     fi
-    if [[ "$lane_csv" != "single-step,chain,state-handoff" ]]; then
-      echo "certified family $family does not preserve the three-lane contract" >&2
+    local expected_lane_csv
+    expected_lane_csv="$(jq -r --arg model_class "$model_class" --arg profile "$profile" \
+      '.model_class_lanes[$model_class] | if $profile == "workload-smoke" then .[:1] else . end | join(",")' "$plan")"
+    if [[ -z "$expected_lane_csv" || "$lane_csv" != "$expected_lane_csv" ]]; then
+      echo "family $family does not preserve the $model_class lane contract" >&2
       exit 1
     fi
 
@@ -592,6 +648,13 @@ preflight_manifest() {
         FAILURES+=("$family(layer-range)")
         PREFLIGHT_FAILURE_COUNT=$((PREFLIGHT_FAILURE_COUNT + 1))
         record_preflight_outcome "model-preflight" "$family" "$model_id" "fail" "model-invalid" "planned runtime range $layer_end does not match scanned layer count $MODEL_LAYER_COUNT"
+        continue
+      fi
+      if (( MODEL_ACTIVATION_WIDTH != activation_width )); then
+        echo "policy/runtime activation-width mismatch for $family: planned $activation_width, scanned $MODEL_ACTIVATION_WIDTH" >&2
+        FAILURES+=("$family(activation-width)")
+        PREFLIGHT_FAILURE_COUNT=$((PREFLIGHT_FAILURE_COUNT + 1))
+        record_preflight_outcome "model-preflight" "$family" "$model_id" "fail" "model-invalid" "planned activation width $activation_width does not match GGUF metadata $MODEL_ACTIVATION_WIDTH"
         continue
       fi
       if (( actual_mtp_layers != expected_mtp_layers )); then
@@ -635,9 +698,9 @@ preflight_manifest() {
         mmproj_path="<hf-cache>/$mmproj_repo/$mmproj_file"
       fi
     fi
-    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
-      "$family" "$repo" "$source_revision" "$file" "$selector" "$sweep_period" "$layer_end" "$notes" "$target" \
-      "$draft_repo" "$draft_revision" "$draft_file" "$draft" "$MODEL_HAS_MTP" "$MODEL_SIZE_BYTES" "$MODEL_MTP_LAYERS" "$activation_width" "$startup_timeout" \
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+      "$family" "$model_class" "$repo" "$source_revision" "$file" "$selector" "$sweep_period" "$layer_end" "$notes" "$target" \
+      "$draft_repo" "$draft_revision" "$draft_file" "$draft" "$MODEL_HAS_MTP" "$MODEL_SIZE_BYTES" "$MODEL_MTP_LAYERS" "$activation_width" "$startup_timeout" "$lane_csv" \
       "$mmproj_repo" "$mmproj_revision" "$mmproj_file" "$mmproj_path" \
       >> "$RESOLVED_MANIFEST"
     if (( DRY_RUN == 0 )); then
@@ -656,6 +719,7 @@ preflight_manifest() {
       | select(.family as $family | $selected | index($family))
       | [
           .family,
+          .class,
           .profile,
           .artifact.repo,
           .artifact.revision,
@@ -709,19 +773,31 @@ preflight_manifest() {
     return 1
   fi
   if ! preflight_environment; then
-    record_preflight_outcome "environment-preflight" "battery" "environment" "fail" "harness" "insufficient disk headroom or occupied certification ports; see preflight/environment.json"
+    local environment_failure_note="insufficient disk headroom; see preflight/environment.json"
+    if (( PREFLIGHT_ONLY == 0 )); then
+      environment_failure_note="insufficient disk headroom or occupied certification ports; see preflight/environment.json"
+    fi
+    record_preflight_outcome "environment-preflight" "battery" "environment" "fail" "harness" "$environment_failure_note"
     PREFLIGHT_FAILURE_COUNT=$((PREFLIGHT_FAILURE_COUNT + 1))
     return 1
   fi
-  record_preflight_outcome "environment-preflight" "battery" "environment" "pass" "pass" "disk headroom and certification port range validated"
+  local environment_note="disk headroom validated; certification ports not checked in preflight-only mode"
+  if (( PREFLIGHT_ONLY == 0 )); then
+    environment_note="disk headroom and certification port range validated"
+  fi
+  record_preflight_outcome "environment-preflight" "battery" "environment" "pass" "pass" "$environment_note"
 
 }
 
 planned_certification_count() {
   local resolved_manifest="$1"
   local planned=0
-  while IFS='|' read -r family _repo _source_revision _file _selector sweep_period layer_end _rest; do
+  while IFS='|' read -r family model_class _repo _source_revision _file _selector sweep_period layer_end _rest; do
     [[ "$family" == "family" ]] && continue
+    if [[ "$model_class" != "causal_generation" ]]; then
+      planned=$((planned + 1))
+      continue
+    fi
     local base_split=$(( layer_end / 2 ))
     local first_split=1
     local last_split=$(( layer_end - 1 ))
@@ -796,11 +872,120 @@ run_mmproj_smoke() {
     >> "$RESULTS_JSONL"
 }
 
+run_workload_certify() {
+  local family="$1" model_class="$2" target="$3" model_id="$4" source_revision="$5"
+  local startup_timeout="$6" model_size_bytes="$7" lane_csv="$8" mmproj="$9"
+  local cert_run_id cert_run_dir exit_code log_path cert_timeout oracle_requested
+  local smoke_lane oracle_lane certified oracle_executable
+  TOTAL=$((TOTAL + 1))
+  cert_timeout="$(cert_timeout_for_startup "$startup_timeout")"
+  cert_run_id="$(printf '%03d-%s-%s' "$TOTAL" "$(slugify "$family")" "$(slugify "$model_class")")"
+  cert_run_dir="$CERT_DIR/$cert_run_id"
+  mkdir -p "$cert_run_dir"
+  log_path="$cert_run_dir/workload-certification.log"
+  smoke_lane="${lane_csv%%,*}"
+  oracle_lane=""
+  certified=0
+  if [[ "$lane_csv" == *,* ]]; then
+    oracle_lane="${lane_csv#*,}"
+    certified=1
+  fi
+  local command=(
+    "$ROOT/scripts/skippy-workload-certify.sh"
+    --class "$model_class"
+    --lane "$smoke_lane"
+    --model-path "$target"
+    --model-id "$model_id"
+    --work-dir "$cert_run_dir"
+    --startup-timeout-secs "$startup_timeout"
+    --skip-build
+  )
+  if [[ -n "$mmproj" ]]; then
+    command+=(--projector-path "$mmproj")
+  fi
+  oracle_requested=0
+  oracle_executable=""
+  if [[ -n "${SKIPPY_WORKLOAD_ORACLE_SERVER:-}" ]] &&
+     [[ "$model_class" =~ ^(embedding|rerank|ocr|speech_recognition)$ ]]; then
+    command+=(--oracle-server "$SKIPPY_WORKLOAD_ORACLE_SERVER")
+    oracle_requested=1
+    oracle_executable="$SKIPPY_WORKLOAD_ORACLE_SERVER"
+  fi
+  if [[ -n "${SKIPPY_WORKLOAD_ORACLE_COMPLETION:-}" ]] &&
+     [[ "$model_class" == "encoder_decoder" ]]; then
+    command+=(--oracle-completion "$SKIPPY_WORKLOAD_ORACLE_COMPLETION")
+    oracle_requested=1
+    oracle_executable="$SKIPPY_WORKLOAD_ORACLE_COMPLETION"
+  fi
+  if [[ -n "${SKIPPY_WORKLOAD_ORACLE_TTS:-}" ]] &&
+     [[ "$model_class" == "speech_synthesis" ]]; then
+    command+=(--oracle-tts "$SKIPPY_WORKLOAD_ORACLE_TTS")
+    oracle_requested=1
+    oracle_executable="$SKIPPY_WORKLOAD_ORACLE_TTS"
+  fi
+  if (( certified == 1 )); then
+    command+=(--require-oracle)
+  fi
+  echo "==> workload certification: family=$family class=$model_class lanes=$lane_csv model=$(basename "$target")"
+  if (( DRY_RUN == 1 )); then
+    printf '%q ' "${command[@]}"
+    printf '\n'
+    return 0
+  fi
+  exit_code=0
+  if (( certified == 1 && oracle_requested != 1 )); then
+    echo "certified workload $family ($model_class) requires a class-appropriate local-monolithic oracle executable" | tee "$log_path" >&2
+    exit_code=1
+  else
+    "$ROOT/scripts/run-command-with-timeout.py" \
+      --seconds "$cert_timeout" \
+      --label "workload certification $family ($model_class)" \
+      -- "${command[@]}" >"$log_path" 2>&1 || exit_code=$?
+  fi
+  if (( certified == 1 && exit_code == 0 )); then
+    local verify_command=(python3 "$ROOT/scripts/verify-workload-oracle-evidence.py" \
+      --evidence "$cert_run_dir/workload-oracle-evidence.json" \
+      --class "$model_class" --smoke-lane "$smoke_lane" --oracle-lane "$oracle_lane" \
+      --model-id "$model_id" --model-path "$target" \
+      --candidate-executable "${SKIPPY_WORKLOAD_CANDIDATE_BIN_DIR:-$ROOT/target/debug}/skippy-server" \
+      --oracle-executable "$oracle_executable" \
+      --pinned-patch-sha "$(python3 "$ROOT/scripts/llama-oracle-source.py")")
+    if [[ -n "$mmproj" ]]; then
+      verify_command+=(--projector-path "$mmproj")
+    fi
+    "${verify_command[@]}" >>"$log_path" 2>&1 || exit_code=$?
+  fi
+  jq -n \
+    --arg family "$family" \
+    --arg model_id "$model_id" \
+    --arg source_revision "$source_revision" \
+    --arg workload_class "$model_class" \
+    --arg smoke_lane "$smoke_lane" \
+    --arg oracle_lane "$oracle_lane" \
+    --arg log "$log_path" \
+    --argjson model_size_bytes "$model_size_bytes" \
+    --argjson startup_timeout_secs "$startup_timeout" \
+    --argjson certification_timeout_secs "$cert_timeout" \
+    --argjson exit_code "$exit_code" \
+    --argjson oracle_requested "$oracle_requested" \
+    '{family:$family,model_id:$model_id,source_revision:$source_revision,workload_class:$workload_class,certification_status:(if $oracle_lane != "" then "certified" else "provisional" end),oracle:(if $oracle_lane != "" and $exit_code == 0 then "local-monolithic" else "none" end),model_size_bytes:$model_size_bytes,startup_timeout_secs:$startup_timeout_secs,certification_timeout_secs:$certification_timeout_secs,exit_code:$exit_code,outcomes:([{name:$smoke_lane,status:(if $exit_code == 0 then "pass" else "fail" end),outcome:(if $exit_code == 0 then "smoke-pass" elif $exit_code == 124 then "timeout" else "harness" end),exit_code:$exit_code,log:$log}] + (if $oracle_lane == "" then [] else [{name:$oracle_lane,status:(if $exit_code == 0 then "pass" else "fail" end),outcome:(if $exit_code == 0 then "oracle-pass" elif $exit_code == 124 then "timeout" else "harness" end),exit_code:$exit_code,log:$log}] end))}' \
+    >> "$RESULTS_JSONL"
+  if (( exit_code != 0 )); then
+    FAILURES+=("$family@$model_class")
+    CERT_FAILURE_COUNT=$((CERT_FAILURE_COUNT + 1))
+  fi
+}
+
 run_resolved_manifest() {
   local resolved_manifest="$1"
-  while IFS='|' read -r family repo source_revision file selector sweep_period layer_end _notes target _draft_repo _draft_revision _draft_file _draft native_mtp model_size_bytes _mtp_layers activation_width startup_timeout mmproj_repo mmproj_revision mmproj_file mmproj_path; do
+  while IFS='|' read -r family model_class repo source_revision file selector sweep_period layer_end _notes target _draft_repo _draft_revision _draft_file _draft native_mtp model_size_bytes _mtp_layers activation_width startup_timeout lane_csv mmproj_repo mmproj_revision mmproj_file mmproj_path; do
     [[ "$family" == "family" ]] && continue
     local model_id="$repo:$selector"
+
+    if [[ "$model_class" != "causal_generation" ]]; then
+      run_workload_certify "$family" "$model_class" "$target" "$model_id" "$source_revision" "$startup_timeout" "$model_size_bytes" "$lane_csv" "$mmproj_path"
+      continue
+    fi
 
     # Dense families exercise both endpoint ownership cases plus an ordinary
     # interior handoff. Collapse duplicates for tiny models.
@@ -841,7 +1026,7 @@ if ! preflight_manifest "$POLICY_PLAN_COPY"; then
   echo "family battery preflight failed; no certification lane was started" >&2
 elif (( PREFLIGHT_ONLY == 0 )); then
   EXPECTED_TOTAL="$(planned_certification_count "$RESOLVED_MANIFEST")"
-  EXPECTED_MM_SMOKE_TOTAL="$(tail -n +2 "$RESOLVED_MANIFEST" | awk -F'|' '$19 != "" { count += 1 } END { print count + 0 }')"
+  EXPECTED_MM_SMOKE_TOTAL="$(tail -n +2 "$RESOLVED_MANIFEST" | awk -F'|' '$2 == "causal_generation" && $21 != "" { count += 1 } END { print count + 0 }')"
   run_resolved_manifest "$RESOLVED_MANIFEST"
   if (( TOTAL != EXPECTED_TOTAL )); then
     echo "executed $TOTAL certifications but validated plan requires $EXPECTED_TOTAL" >&2
@@ -854,7 +1039,7 @@ elif (( PREFLIGHT_ONLY == 0 )); then
     CERT_FAILURE_COUNT=$((CERT_FAILURE_COUNT + 1))
   fi
   if (( DRY_RUN == 0 )); then
-    actual_result_count="$(jq -s '[.[] | select(.split_layer != null)] | length' "$RESULTS_JSONL")"
+    actual_result_count="$(jq -s '[.[] | select(.split_layer != null or .workload_class != null)] | length' "$RESULTS_JSONL")"
     if (( actual_result_count != EXPECTED_TOTAL )); then
       echo "recorded $actual_result_count certification results but validated plan requires $EXPECTED_TOTAL" >&2
       FAILURES+=("battery(result-reconciliation)")
@@ -866,8 +1051,8 @@ fi
 echo
 if (( DRY_RUN == 0 )); then
   jq -sr '
-    ["family","split_layer","lane","status","outcome","exit_code"],
-    (.[] as $row | $row.outcomes[] | [$row.family,($row.split_layer // ""),.name,.status,.outcome,.exit_code])
+    ["family","class","split_layer","lane","status","outcome","exit_code"],
+    (.[] as $row | $row.outcomes[] | [$row.family,($row.workload_class // "causal_generation"),($row.split_layer // ""),.name,.status,.outcome,.exit_code])
     | @tsv
   ' "$RESULTS_JSONL" > "$SUMMARY_TSV"
   {
@@ -880,6 +1065,9 @@ if (( DRY_RUN == 0 )); then
     fi
     echo "- Certifications: $TOTAL"
     echo "- Planned certifications: $EXPECTED_TOTAL"
+    echo "- Certified-profile families: $(jq '[.selected_models[] | select(.certification_status == "certified")] | length' "$POLICY_PLAN_COPY")"
+    echo "- Provisional workload-smoke families: $(jq '[.selected_models[] | select(.profile == "workload-smoke")] | length' "$POLICY_PLAN_COPY")"
+    echo "- Certified non-chat workloads require separate smoke and explicit local-monolithic oracle evidence."
     echo "- Multimodal smokes: $MM_SMOKE_TOTAL (planned: $EXPECTED_MM_SMOKE_TOTAL; failures: $MM_SMOKE_FAILURE_COUNT)"
     echo "- Native MTP models: $(( $(wc -l < "$NATIVE_MTP_MODELS_TSV") - 1 ))"
     echo "- Preflight failures: $PREFLIGHT_FAILURE_COUNT"
@@ -905,6 +1093,8 @@ fi
 
 if (( PREFLIGHT_ONLY == 1 )); then
   echo "family battery preflight complete: $PREFLIGHT_FAILURE_COUNT failures"
+elif (( DRY_RUN == 1 )); then
+  echo "family battery dry run complete: $TOTAL certifications planned; no lanes executed"
 else
   echo "family battery complete: $((TOTAL - CERT_FAILURE_COUNT))/$TOTAL certifications passed"
 fi
