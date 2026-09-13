@@ -49,6 +49,11 @@ on:
         required: false
         default: ''
         type: string
+      allow_uncertified_split:
+        description: Explicitly allow ephemeral package-v2 smoke fixtures that are outside the release certification roster.
+        required: false
+        default: false
+        type: boolean
       kv_recurrent_model_url:
         description: Optional second (recurrent) model the KV caching smoke downloads for its second leg.
         required: false
@@ -92,6 +97,7 @@ on:
 env:
   MESH_LLM_SMOKE_CONTEXT_SIZE: ${{ inputs.model_context_size }}
   MESH_TWO_NODE_SPLIT_EXPECTED_EXACT_PAYLOAD_KIND: ${{ inputs.expected_exact_payload_kind }}
+  MESH_TWO_NODE_SPLIT_ALLOW_UNCERTIFIED: ${{ inputs.allow_uncertified_split && '1' || '0' }}
   MESH_TWO_NODE_SPLIT_RECURRENT_MODEL_FILE: ${{ inputs.kv_recurrent_model_file }}
   MESH_TWO_NODE_SPLIT_RECURRENT_CTX_SIZE: ${{ inputs.kv_recurrent_context_size }}
   MESH_TWO_NODE_SPLIT_RECURRENT_EXPECTED_EXACT_PAYLOAD_KIND: ${{ inputs.kv_recurrent_expected_exact_payload_kind }}

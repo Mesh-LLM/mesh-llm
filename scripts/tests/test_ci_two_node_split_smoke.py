@@ -247,6 +247,35 @@ fi
             self.assertIn("--source-revision", invocation)
             self.assertIn(f"verify-package-v2 {package_dir}", invocation)
 
+    def test_uncertified_override_is_explicit_and_bounded(self) -> None:
+        script = SMOKE_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn(
+            'ALLOW_UNCERTIFIED_SPLIT="${MESH_TWO_NODE_SPLIT_ALLOW_UNCERTIFIED:-0}"',
+            script,
+        )
+        self.assertIn(
+            'if [[ "$ALLOW_UNCERTIFIED_SPLIT" == "1" ]]; then',
+            script,
+        )
+        self.assertIn('args+=(--allow-uncertified-split)', script)
+        self.assertIn(
+            "MESH_TWO_NODE_SPLIT_ALLOW_UNCERTIFIED must be 0 or 1", script
+        )
+
+        workflow = (ROOT / ".github/workflows/scripted-binary-smoke.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("allow_uncertified_split:", workflow)
+        self.assertIn(
+            "MESH_TWO_NODE_SPLIT_ALLOW_UNCERTIFIED: ${{ inputs.allow_uncertified_split && '1' || '0' }}",
+            workflow,
+        )
+
+        caller = (
+            ROOT / ".github/workflows/ci-linux-product-smoke-slice.yml"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(caller.count("allow_uncertified_split: true"), 2)
+
     def test_existing_package_v2_is_passed_through(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             package_dir = Path(directory) / "package"
