@@ -189,6 +189,33 @@ async fn publish_raw_proxy_terminal(
     channel.publish(&envelope).await;
 }
 
+/// Path 2's own "effective request" moment: the plugin/endpoint is resolved
+/// and dispatch is about to happen. There is no typed `ChatCompletionRequest`
+/// on this path (see the #1331 design note), so the envelope carries only
+/// the model — the same narrow route fact path 1's `ChatExchangeRoute`
+/// carries. Mints the exchange id here, at admission, so it can pair this
+/// effective event with its terminal event even when concurrent raw-proxy
+/// requests share the same model. Returns `None` — no id minted, no publish
+/// — when nobody declares `openai.exchange.v1`: nothing downstream would
+/// ever see it.
+async fn mint_and_publish_effective_raw_proxy(
+    plugin_manager: &crate::plugin::PluginManager,
+    model_name: &str,
+) -> Option<String> {
+    if !plugin_manager.has_subscriber().await {
+        return None;
+    }
+    let exchange_id = uuid::Uuid::new_v4().to_string();
+    plugin_manager
+        .publish(&OpenAiExchangeEnvelope::effective(
+            exchange_id.clone(),
+            OpenAiExchangeDispatchPath::RawProxy,
+            model_name,
+        ))
+        .await;
+    Some(exchange_id)
+}
+
 enum AutoRouteResolution {
     Continue {
         effective_model: Option<String>,
@@ -797,29 +824,8 @@ async fn try_route_plugin_model(
         .await
     {
         Ok(Some(endpoint)) => {
-            // Path 2's own "effective request" moment: the plugin/endpoint
-            // is resolved and dispatch is about to happen. There is no typed
-            // `ChatCompletionRequest` on this path (see the #1331 design
-            // note), so the envelope carries only the model — the same
-            // narrow route fact path 1's `ChatExchangeRoute` carries. Mint
-            // the exchange id here, at admission, so it can pair this
-            // effective event with its terminal event below even when
-            // concurrent raw-proxy requests share the same model. Skipped
-            // entirely (no id, no publish) when nobody declares
-            // `openai.exchange.v1` — nothing downstream would ever see it.
-            let exchange_id = if plugin_manager.has_subscriber().await {
-                let exchange_id = uuid::Uuid::new_v4().to_string();
-                plugin_manager
-                    .publish(&OpenAiExchangeEnvelope::effective(
-                        exchange_id.clone(),
-                        OpenAiExchangeDispatchPath::RawProxy,
-                        model_name,
-                    ))
-                    .await;
-                Some(exchange_id)
-            } else {
-                None
-            };
+            let exchange_id =
+                mint_and_publish_effective_raw_proxy(plugin_manager, model_name).await;
             let outcome = proxy::route_http_endpoint_request(
                 ctx.node,
                 Some(model_name),
