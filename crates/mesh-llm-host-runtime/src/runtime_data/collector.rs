@@ -29,8 +29,8 @@ use super::{
     RuntimeLlamaRuntimeSnapshot, RuntimeLlamaSlotItem, RuntimeLlamaSlotsSnapshot,
 };
 use crate::api::status::{
-    LatencySource, LocalInstance, MeshModelPayload, NodeState, PeerPayload, WakeableNode,
-    WakeableNodeState, build_gpus, build_ownership_payload,
+    LatencySource, LocalInstance, MemoryPayload, MeshModelPayload, NodeState, PeerPayload,
+    WakeableNode, WakeableNodeState, build_gpus, build_ownership_payload,
 };
 use crate::mesh;
 use crate::models::LocalModelInventorySnapshot;
@@ -353,6 +353,7 @@ impl RuntimeDataCollector {
         HardwareViewSnapshot {
             my_hostname: input.my_hostname,
             my_is_soc: input.my_is_soc,
+            my_memory: MemoryPayload::from(input.memory),
             my_vram_gb: input.my_vram_gb,
             model_size_gb: input.model_size_gb,
             gpus: build_gpus(
@@ -1122,6 +1123,7 @@ fn build_peer_payload(peer: &mesh::PeerInfo) -> PeerPayload {
             .map(|id| id.fmt_short().to_string()),
         hostname: peer.hostname.clone(),
         is_soc: peer.is_soc,
+        memory: peer.memory.map(MemoryPayload::from),
         gpus: build_gpus(
             peer.gpu_name.as_deref(),
             peer.gpu_vram.as_deref(),

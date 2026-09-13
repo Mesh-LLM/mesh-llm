@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Deterministic llama.cpp canary state machine for changed upstream pins.
+# Developer-style llama.cpp canary harness for changed upstream pins.
 #
-# Usage: llama-canary-agent-repair.sh [upstream-sha]
-#
-# The wrapper owns prepare -> build -> certify -> publish. An agent may repair
-# a failed phase, but it never decides whether a gate passed and never receives
-# repository-write credentials. Every agent edit sends the candidate back
-# through prepare and the complete build before another certification attempt.
-# The branch and PR appear once, after success or a bounded terminal failure.
+# One agent session owns the complete pin/patch/test task. The trusted wrapper
+# runs deterministic gates after every coding turn and returns failures to that
+# same session. A separate job repeats the gates before creating the certified
+# bundle. GitHub credentials and publication live in a later workflow step, so
+# an agent or verification failure cannot publish a branch or pull request.
 
 # The persistent Apple Silicon runner service can be launched by an x86_64
-# parent under Rosetta. Re-enter the complete state machine as arm64 before it
-# configures or executes any native build artifact.
+# parent under Rosetta. Re-enter the complete harness as arm64 before it
+# configures or executes native build artifacts.
 if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "x86_64" ]] \
     && [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" == "1" ]]; then
   exec arch -arm64 "${BASH_SOURCE[0]}" "$@"
 fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TRUSTED_ROOT="$ROOT"
+HARNESS_MODE="${CANARY_HARNESS_MODE:-repair}"
 UPSTREAM_SHA="${1:-${UPSTREAM_SHA_INPUT:-latest}}"
 if [[ "$UPSTREAM_SHA" == "latest" || -z "$UPSTREAM_SHA" ]]; then
   UPSTREAM_SHA="$(git ls-remote https://github.com/ggml-org/llama.cpp.git master | awk '{print $1}')"
@@ -34,204 +34,115 @@ cd "$ROOT"
 OLD_SHA="$(tr -d '[:space:]' < third_party/llama.cpp/upstream.txt)"
 PIN_FILE="$ROOT/third_party/llama.cpp/upstream.txt"
 AGENT_MODEL="${CANARY_AGENT_MODEL:-zai-coding-plan/glm-5.3-flash}"
-MAX_REPAIR_TURNS="${CANARY_REPAIR_MAX_TURNS:-2}"
-REPAIR_BUDGET_SECONDS="${CANARY_REPAIR_BUDGET_SECONDS:-41400}"
-PUBLISH_RESERVE_SECONDS="${CANARY_PUBLISH_RESERVE_SECONDS:-1800}"
-REPAIR_TURN_TIMEOUT_SECONDS="${CANARY_REPAIR_TURN_TIMEOUT_SECONDS:-3600}"
-REPAIR_TOTAL_BUDGET_SECONDS="${CANARY_REPAIR_TOTAL_BUDGET_SECONDS:-5400}"
+AGENT_TIMEOUT_SECONDS="${CANARY_AGENT_TIMEOUT_SECONDS:-27000}"
+VERIFICATION_TIMEOUT_SECONDS="${CANARY_VERIFICATION_TIMEOUT_SECONDS:-14400}"
 RUN_ID="${GITHUB_RUN_ID:-manual-$(date +%s)}"
 RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT:-1}"
 RUN_KEY="${RUN_ID}-${RUN_ATTEMPT}"
 BRANCH="llama-canary/repair-${RUN_KEY}-${UPSTREAM_SHA:0:10}"
+VERIFY_ROOT="/tmp/mesh-llm-canary-verify-${RUN_KEY}"
 STATE_DIR="$ROOT/.deps/llama-canary-state-${RUN_KEY}"
 TARGET_SHA_FILE="$ROOT/.deps/llama-canary-target-sha"
+AGENT_LOG="$STATE_DIR/agent.log"
 PREPARE_LOG="$STATE_DIR/prepare.log"
 BUILD_LOG="$STATE_DIR/build.log"
 CERTIFY_LOG="$STATE_DIR/certify.log"
+MANIFEST_POLICY_LOG="$STATE_DIR/manifest-policy.log"
 PR_BODY="$STATE_DIR/pr-body.md"
 UPSTREAM_SUMMARY="$STATE_DIR/upstream-summary.md"
-GIT_ASKPASS_SCRIPT="$STATE_DIR/git-askpass.sh"
+BUNDLE="$STATE_DIR/candidate.bundle"
+EVIDENCE_DIR="$STATE_DIR/verification-evidence"
 FAMILY_BATTERY_RUN_ID="${FAMILY_BATTERY_RUN_ID:-${RUN_KEY}}"
 PLAN_PATH="$ROOT/target/family-battery/$FAMILY_BATTERY_RUN_ID/policy-plan.json"
-STARTED_AT="$(date +%s)"
-DEADLINE_AT="$((STARTED_AT + REPAIR_BUDGET_SECONDS))"
-PUBLISHED_SHA=""
+BASE_HEAD="$(git rev-parse HEAD)"
+BASE_REF="$(git symbolic-ref -q HEAD || true)"
+CANDIDATE_BASE_HEAD="$BASE_HEAD"
+GIT_CONFIG_FINGERPRINT="$(git config --list --show-origin | shasum -a 256 | awk '{print $1}')"
 CERTIFIED_SHA=""
-FAILED_PHASE=""
-PREPARE_REPAIR_TURNS=0
-BUILD_REPAIR_TURNS=0
-CERTIFY_REPAIR_TURNS=0
-AGENT_REPAIR_SECONDS_USED=0
+VERIFICATION_TREE=""
+VERIFICATION_DEADLINE_AT=0
+REPAIR_DEADLINE_AT=0
+AGENT_SESSION_ID=""
 
-if [[ ! "$MAX_REPAIR_TURNS" =~ ^[0-9]+$ ]]; then
-  echo "CANARY_REPAIR_MAX_TURNS must be a non-negative integer" >&2
+if [[ "$HARNESS_MODE" != "repair" && "$HARNESS_MODE" != "verify" ]]; then
+  echo "CANARY_HARNESS_MODE must be repair or verify" >&2
   exit 1
 fi
-if [[ ! "$REPAIR_BUDGET_SECONDS" =~ ^[0-9]+$ || ! "$PUBLISH_RESERVE_SECONDS" =~ ^[0-9]+$ ]] \
-    || (( REPAIR_BUDGET_SECONDS <= PUBLISH_RESERVE_SECONDS )); then
-  echo "the canary budget must be numeric and exceed the publication reserve" >&2
-  exit 1
-fi
-if [[ ! "$REPAIR_TURN_TIMEOUT_SECONDS" =~ ^[0-9]+$ \
-    || ! "$REPAIR_TOTAL_BUDGET_SECONDS" =~ ^[0-9]+$ ]] \
-    || (( REPAIR_TURN_TIMEOUT_SECONDS <= 0 || REPAIR_TOTAL_BUDGET_SECONDS <= 0 )); then
-  echo "the repair turn timeout and total repair budget must be positive integers" >&2
-  exit 1
-fi
-for required_name in LLAMA_STAGE_BUILD_DIR HF_CACHE GITHUB_REPOSITORY; do
+
+for timeout_name in AGENT_TIMEOUT_SECONDS VERIFICATION_TIMEOUT_SECONDS; do
+  if [[ ! "${!timeout_name}" =~ ^[0-9]+$ ]] || (( ${!timeout_name} <= 0 )); then
+    echo "$timeout_name must be a positive integer" >&2
+    exit 1
+  fi
+done
+for required_name in LLAMA_STAGE_BUILD_DIR HF_CACHE; do
   if [[ -z "${!required_name:-}" ]]; then
     echo "${required_name} is not set; cannot run the changed-pin canary" >&2
     exit 1
   fi
 done
-if [[ -z "${CANARY_REPAIR_TOKEN:-}" ]]; then
-  echo "CANARY_REPAIR_TOKEN is not set; cannot publish the terminal canary PR" >&2
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "changed-pin canary requires a clean trusted-main checkout" >&2
   exit 1
 fi
-
-mkdir -p "$STATE_DIR" "$(dirname "$PLAN_PATH")"
-rm -f "$PREPARE_LOG" "$BUILD_LOG" "$CERTIFY_LOG" "$PR_BODY" "$UPSTREAM_SUMMARY"
-printf '%s\n' "$UPSTREAM_SHA" > "$TARGET_SHA_FILE"
-cat > "$GIT_ASKPASS_SCRIPT" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-case "${1:-}" in
-  Username*) printf '%s\n' 'x-access-token' ;;
-  Password*) printf '%s\n' "${CANARY_REPAIR_TOKEN:?}" ;;
-  *) exit 1 ;;
-esac
-EOF
-chmod 700 "$GIT_ASKPASS_SCRIPT"
-
-if ! command -v opencode >/dev/null 2>&1; then
+if [[ -z "$(git config user.name)" || -z "$(git config user.email)" ]]; then
+  echo "git user.name and user.email must be configured before canary repair" >&2
+  exit 1
+fi
+if [[ "$HARNESS_MODE" == "repair" ]] && ! command -v opencode >/dev/null 2>&1; then
   echo "opencode CLI not found on runner; install opencode-ai on the family-certify image" >&2
   exit 1
 fi
-if [[ -z "${OPENCODE_API_KEY:-}" && -z "${NEMOTRON_API_KEY:-}" ]]; then
+if [[ "$HARNESS_MODE" == "repair" \
+    && -z "${OPENCODE_API_KEY:-}" && -z "${NEMOTRON_API_KEY:-}" ]]; then
   if [[ ! -s "${HOME}/.local/share/opencode/auth.json" ]] \
       && ! opencode auth list 2>/dev/null | grep -Eq '[1-9][0-9]* credentials'; then
     echo "no agent credentials: set OPENCODE_API_KEY/NEMOTRON_API_KEY or run 'opencode auth login' on the runner" >&2
     exit 1
   fi
 fi
-gh_repair() {
-  GH_TOKEN="$CANARY_REPAIR_TOKEN" "$@"
+
+mkdir -p "$STATE_DIR" "$(dirname "$PLAN_PATH")"
+rm -f "$AGENT_LOG" "$PREPARE_LOG" "$BUILD_LOG" "$CERTIFY_LOG" \
+  "$MANIFEST_POLICY_LOG" \
+  "$PR_BODY" "$UPSTREAM_SUMMARY" "$BUNDLE"
+rm -rf "$EVIDENCE_DIR"
+printf '%s\n' "$UPSTREAM_SHA" > "$TARGET_SHA_FILE"
+
+# Persistent runners retain nested llama.cpp worktree registrations and /tmp
+# checkouts. Remove only the known canary scratch state before the agent starts.
+git -C "$ROOT/.deps/llama.cpp" worktree prune >/dev/null 2>&1 || true
+rm -rf /tmp/llama-old-pin /tmp/llama-repair /tmp/llama-repair-* 2>/dev/null || true
+
+run_for() {
+  local label="$1" seconds="$2"
+  shift 2
+  python3 scripts/run-command-with-timeout.py \
+    --seconds "$seconds" --label "$label" -- "$@"
 }
 
-check_repair_token_permissions() {
-  local login default_branch head_sha probe_branch probe_ref
-  login="$(gh_repair gh api user --jq .login 2>/dev/null)" || {
-    echo "preflight: CANARY_REPAIR_TOKEN does not authenticate" >&2
-    return 1
-  }
-  default_branch="$(gh_repair gh api "repos/${GITHUB_REPOSITORY:?}" --jq .default_branch 2>/dev/null)"
-  head_sha="$(gh_repair gh api "repos/${GITHUB_REPOSITORY:?}/branches/${default_branch}" --jq .commit.sha 2>/dev/null)"
-  probe_branch="canary-repair-token-preflight-${RUN_KEY}"
-  probe_ref="refs/heads/${probe_branch}"
-  if ! gh_repair gh api --method POST "repos/${GITHUB_REPOSITORY:?}/git/refs" \
-      -f ref="$probe_ref" -f sha="$head_sha" >/dev/null 2>&1; then
-    echo "preflight: identity '${login}' cannot write refs on ${GITHUB_REPOSITORY}; CANARY_REPAIR_TOKEN needs Contents: Read and write" >&2
-    return 1
-  fi
-  if ! gh_repair gh api --method DELETE \
-      "repos/${GITHUB_REPOSITORY:?}/git/refs/heads%2F${probe_branch}" >/dev/null 2>&1; then
-    echo "preflight: WARNING: could not delete temporary ref ${probe_ref}" >&2
-  fi
-  echo "preflight: repair token identity '${login}' verified read+write on ${GITHUB_REPOSITORY}"
-}
-
-redact_token() {
-  python3 -c 'import os, sys; token = os.environ["CANARY_REPAIR_TOKEN"]; sys.stdout.write(sys.stdin.read().replace(token, "***redacted***"))'
-}
-
-remaining_work_seconds() {
+remaining_verification_seconds() {
   local remaining
-  remaining="$((DEADLINE_AT - $(date +%s) - PUBLISH_RESERVE_SECONDS))"
+  remaining="$((VERIFICATION_DEADLINE_AT - $(date +%s)))"
   (( remaining > 0 )) || return 1
   printf '%s\n' "$remaining"
 }
 
 remaining_repair_seconds() {
   local remaining
-  remaining="$((REPAIR_TOTAL_BUDGET_SECONDS - AGENT_REPAIR_SECONDS_USED))"
+  remaining="$((REPAIR_DEADLINE_AT - $(date +%s)))"
   (( remaining > 0 )) || return 1
   printf '%s\n' "$remaining"
 }
 
-run_bounded() {
-  local label="$1" seconds
-  shift
-  if ! seconds="$(remaining_work_seconds)"; then
-    echo "$label cannot start: internal canary deadline reached; publication reserve is active" >&2
-    return 124
-  fi
-  python3 scripts/run-command-with-timeout.py \
-    --seconds "$seconds" --label "$label" -- "$@"
-}
-
-run_bounded_for() {
-  local label="$1" maximum_seconds="$2" seconds
+run_verification_logged() {
+  local label="$1" log="$2" seconds
   shift 2
-  if ! seconds="$(remaining_work_seconds)"; then
-    echo "$label cannot start: internal canary deadline reached; publication reserve is active" >&2
+  if ! seconds="$(remaining_verification_seconds)"; then
+    echo "$label cannot start: final verification budget exhausted" | tee -a "$log" >&2
     return 124
   fi
-  if (( maximum_seconds < seconds )); then
-    seconds="$maximum_seconds"
-  fi
-  python3 scripts/run-command-with-timeout.py \
-    --seconds "$seconds" --label "$label" -- "$@"
-}
-
-run_logged() {
-  local label="$1" log="$2"
-  shift 2
-  run_bounded "$label" "$@" > >(tee -a "$log") 2>&1
-}
-
-check_repair_token_permissions
-
-# Persistent runners retain nested llama.cpp worktree registrations and /tmp
-# checkouts. Remove only the known canary scratch state before agent turns.
-git -C "$ROOT/.deps/llama.cpp" worktree prune >/dev/null 2>&1 || true
-rm -rf /tmp/llama-old-pin /tmp/llama-repair /tmp/llama-repair-* 2>/dev/null || true
-
-agent_turn() {
-  local prompt="$1" started finished elapsed heartbeat_pid repair_remaining status
-  if ! repair_remaining="$(remaining_repair_seconds)"; then
-    echo "agent repair cannot start: ${REPAIR_TOTAL_BUDGET_SECONDS}s aggregate repair budget exhausted" >&2
-    return 124
-  fi
-  if (( REPAIR_TURN_TIMEOUT_SECONDS < repair_remaining )); then
-    repair_remaining="$REPAIR_TURN_TIMEOUT_SECONDS"
-  fi
-  started="$(date +%s)"
-  set -m
-  # shellcheck disable=SC2016
-  env -i PATH="$PATH" bash -c '
-    ROOT="$1"
-    started="$2"
-    while sleep 600; do
-      newest="$(find "$ROOT/.deps/llama.cpp" -type f -newer "$ROOT/third_party/llama.cpp/upstream.txt" -print -quit 2>/dev/null || true)"
-      printf "heartbeat: agent repair running for %dm; recent worktree activity: %s\n" \
-        "$(( ($(date +%s) - started) / 60 ))" "${newest:-none observed yet}"
-    done
-  ' heartbeat "$ROOT" "$started" &
-  heartbeat_pid=$!
-  set +m
-  set +e
-  run_bounded_for "agent repair turn" "$repair_remaining" env \
-    -u GH_TOKEN -u GITHUB_TOKEN -u CANARY_REPAIR_TOKEN \
-    opencode run --auto --model "$AGENT_MODEL" "$prompt"
-  status=$?
-  finished="$(date +%s)"
-  elapsed="$((finished - started))"
-  AGENT_REPAIR_SECONDS_USED="$((AGENT_REPAIR_SECONDS_USED + elapsed))"
-  set -e
-  kill -- "-$heartbeat_pid" 2>/dev/null || kill "$heartbeat_pid" 2>/dev/null || true
-  wait "$heartbeat_pid" 2>/dev/null || true
-  echo "agent repair turn used ${elapsed}s; aggregate ${AGENT_REPAIR_SECONDS_USED}s/${REPAIR_TOTAL_BUDGET_SECONDS}s"
-  return "$status"
+  run_for "$label" "$seconds" "$@" > >(tee -a "$log") 2>&1
 }
 
 write_repair_pin() {
@@ -247,13 +158,207 @@ verify_repair_pin() {
   fi
 }
 
+agent_prompt() {
+  printf 'Complete the llama.cpp upstream update to %s as one developer task in this checkout.
+
+The trusted harness has already written third_party/llama.cpp/upstream.txt to the exact target and recorded it in .deps/llama-canary-target-sha. Read ci/llama-canary/agent-repair-prompt.md and every repository skill it names, then own the work end to end: reproduce the queue failure, deliberately rebase or regenerate the owned patches, fix any generated-family rewriter or Rust ABI fallout, and run the canonical prepare, build, smoke, live-matrix, and full supported-family certification commands. Inspect each failure and keep iterating until every required command passes.
+
+Do not weaken, skip, or narrow a gate. Do not edit the workflow, this wrapper, its publisher, the agent runbook, or their contract tests. Do not create or switch branches, commit, push, open a pull request, or use GitHub credentials. Leave the completed changes in this working tree. The harness will independently rerun the entire verification sequence and only a green exact tree can be published.' \
+    "$UPSTREAM_SHA"
+}
+
+agent_session_step() {
+  local prompt="$1" started heartbeat_pid status seconds
+  local -a opencode_args
+  if ! seconds="$(remaining_repair_seconds)"; then
+    echo "agent developer task cannot continue: repair budget exhausted" >&2
+    return 124
+  fi
+  started="$(date +%s)"
+  set -m
+  # shellcheck disable=SC2016
+  env -i PATH="$PATH" bash -c '
+    root="$1"
+    started="$2"
+    while sleep 600; do
+      newest="$(find "$root/.deps/llama.cpp" -type f -newer "$root/third_party/llama.cpp/upstream.txt" -print -quit 2>/dev/null || true)"
+      printf "heartbeat: agent task running for %dm; recent llama.cpp activity: %s\n" \
+        "$(( ($(date +%s) - started) / 60 ))" "${newest:-none observed yet}"
+    done
+  ' heartbeat "$ROOT" "$started" &
+  heartbeat_pid=$!
+  set +m
+  set +e
+  opencode_args=(run --auto --format json --model "$AGENT_MODEL" --dir "$ROOT")
+  if [[ -n "$AGENT_SESSION_ID" ]]; then
+    opencode_args+=(--session "$AGENT_SESSION_ID")
+  fi
+  run_for "agent developer task" "$seconds" env \
+    -u GH_TOKEN -u GITHUB_TOKEN -u CANARY_REPAIR_TOKEN \
+    opencode "${opencode_args[@]}" "$prompt" \
+    > >(tee -a "$AGENT_LOG") 2>&1
+  status=$?
+  set -e
+  kill -- "-$heartbeat_pid" 2>/dev/null || kill "$heartbeat_pid" 2>/dev/null || true
+  wait "$heartbeat_pid" 2>/dev/null || true
+  if (( status == 0 )) && [[ -z "$AGENT_SESSION_ID" ]]; then
+    AGENT_SESSION_ID="$(python3 - "$AGENT_LOG" <<'PY'
+import json
+import sys
+
+for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    session = event.get("sessionID")
+    if isinstance(session, str) and session:
+        print(session)
+        break
+PY
+)"
+    if [[ -z "$AGENT_SESSION_ID" ]]; then
+      echo "agent developer task did not emit an OpenCode session ID" >&2
+      return 1
+    fi
+  fi
+  return "$status"
+}
+
+assert_agent_control_unchanged() {
+  local changed_path
+  if [[ "$(git rev-parse HEAD)" != "$BASE_HEAD" ]]; then
+    echo "agent created commits; the harness requires uncommitted candidate changes" >&2
+    return 1
+  fi
+  if [[ "$(git symbolic-ref -q HEAD || true)" != "$BASE_REF" ]]; then
+    echo "agent switched branches; refusing to verify the candidate" >&2
+    return 1
+  fi
+  if [[ "$(git config --list --show-origin | shasum -a 256 | awk '{print $1}')" != "$GIT_CONFIG_FINGERPRINT" ]]; then
+    echo "agent changed Git configuration; refusing to materialize the candidate" >&2
+    return 1
+  fi
+  changed_path="$(
+    git status --porcelain=v1 --untracked-files=all -- \
+      .github .agents scripts .gitattributes ci/ci.md ci/llama-canary/agent-repair-prompt.md \
+      | head -n 1
+  )"
+  if [[ -n "$changed_path" ]]; then
+    echo "agent modified protected CI or verification file: $changed_path" >&2
+    return 1
+  fi
+}
+
+validate_agent_manifest_changes() {
+  : > "$MANIFEST_POLICY_LOG"
+  python3 scripts/validate-llama-canary-agent-manifests.py \
+    --base-ref "$CANDIDATE_BASE_HEAD" \
+    --llama-src "$ROOT/.deps/llama.cpp" \
+    > >(tee -a "$MANIFEST_POLICY_LOG") 2>&1
+}
+
+agent_feedback_prompt() {
+  printf 'The trusted harness tested the current working tree and it is still red. Continue the same developer task in this session. Read the current failure logs at:\n\n- %s\n- %s\n- %s\n- %s\n\nFix the actual source or narrowly permitted manifest data, then rerun the affected command and keep going until the complete canonical path is green. Do not report completion while any required gate is red. The same control-file, Git, credential, and publication restrictions still apply.' \
+    "$PREPARE_LOG" "$MANIFEST_POLICY_LOG" "$BUILD_LOG" "$CERTIFY_LOG"
+}
+
+snapshot_candidate_tree() {
+  assert_agent_control_unchanged || return 1
+  verify_repair_pin || return 1
+  validate_agent_manifest_changes || return 1
+  git add -A
+  if git diff --cached --quiet; then
+    echo "agent produced no candidate changes to verify" >&2
+    return 1
+  fi
+  VERIFICATION_TREE="$(git write-tree)"
+  CERTIFIED_SHA="$(
+    printf '%s\n\n%s\n' \
+      "fix(llama): certify upstream ${UPSTREAM_SHA:0:10}" \
+      "A single agent completed the upstream repair and the trusted harness independently passed the full changed-pin verification." \
+      | git commit-tree "$VERIFICATION_TREE" -p "$BASE_HEAD"
+  )"
+}
+
+write_candidate_bundle() {
+  git -c core.hooksPath=/dev/null branch "$BRANCH" "$CERTIFIED_SHA"
+  git bundle create "$BUNDLE" "$BRANCH" "^${BASE_HEAD}"
+  git bundle verify "$BUNDLE" >/dev/null
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    {
+      echo "branch=$BRANCH"
+      echo "head=$CERTIFIED_SHA"
+      echo "candidate_bundle=$BUNDLE"
+    } >> "$GITHUB_OUTPUT"
+  fi
+  echo "agent candidate bundle: branch=$BRANCH head=$CERTIFIED_SHA"
+}
+
+load_candidate_bundle() {
+  local input_bundle expected_head bundle_head
+  input_bundle="${CANARY_INPUT_BUNDLE:?CANARY_INPUT_BUNDLE is required in verify mode}"
+  expected_head="${CANARY_CANDIDATE_SHA:?CANARY_CANDIDATE_SHA is required in verify mode}"
+  if [[ ! "$expected_head" =~ ^[0-9a-f]{40}$ || ! -s "$input_bundle" ]]; then
+    echo "verification requires a non-empty candidate bundle and 40-hex head" >&2
+    return 1
+  fi
+  git bundle verify "$input_bundle" >/dev/null
+  bundle_head="$(git bundle list-heads "$input_bundle" "refs/heads/${BRANCH}" | awk '{print $1}')"
+  if [[ "$bundle_head" != "$expected_head" ]]; then
+    echo "candidate bundle head does not match the repair job output" >&2
+    return 1
+  fi
+  git fetch "$input_bundle" "refs/heads/${BRANCH}"
+  CERTIFIED_SHA="$expected_head"
+  CANDIDATE_BASE_HEAD="$(git rev-parse "${CERTIFIED_SHA}^")"
+  VERIFICATION_TREE="$(git rev-parse "${CERTIFIED_SHA}^{tree}")"
+}
+
+cleanup_verification_worktree() {
+  local source
+  if [[ -d "$VERIFY_ROOT" ]]; then
+    mkdir -p "$EVIDENCE_DIR"
+    for source in \
+        "$VERIFY_ROOT/target/family-battery/$FAMILY_BATTERY_RUN_ID" \
+        "$VERIFY_ROOT/target/skippy-stage-rewriter-check"; do
+      if [[ -e "$source" ]]; then
+        cp -R "$source" "$EVIDENCE_DIR/" || true
+      fi
+    done
+  fi
+  git -c core.hooksPath=/dev/null -C "$TRUSTED_ROOT" \
+    worktree remove --force "$VERIFY_ROOT" >/dev/null 2>&1 || true
+}
+
+materialize_verification_tree() {
+  cleanup_verification_worktree
+  git -c core.hooksPath=/dev/null -C "$TRUSTED_ROOT" worktree prune
+  git -c core.hooksPath=/dev/null -C "$TRUSTED_ROOT" \
+    worktree add --detach "$VERIFY_ROOT" "$CERTIFIED_SHA"
+  ROOT="$VERIFY_ROOT"
+  PIN_FILE="$ROOT/third_party/llama.cpp/upstream.txt"
+  FAMILY_BATTERY_RUN_ID="${RUN_KEY}-verification"
+  PLAN_PATH="$ROOT/target/family-battery/$FAMILY_BATTERY_RUN_ID/policy-plan.json"
+  LLAMA_STAGE_BUILD_DIR="${LLAMA_STAGE_BUILD_DIR}-verification-${RUN_KEY}"
+  LLAMA_BUILD_DIR="$LLAMA_STAGE_BUILD_DIR"
+  export LLAMA_BUILD_DIR LLAMA_STAGE_BUILD_DIR FAMILY_BATTERY_RUN_ID
+  rm -rf "$LLAMA_STAGE_BUILD_DIR" \
+    "$ROOT/.deps/llama.cpp" \
+    "$ROOT/target/family-battery/$FAMILY_BATTERY_RUN_ID" \
+    "$ROOT/target/skippy-stage-rewriter-check"
+  mkdir -p "$(dirname "$PLAN_PATH")"
+  cd "$ROOT"
+  verify_repair_pin
+}
+
 run_prepare() {
   local prepared_upstream
   : > "$PREPARE_LOG"
-  echo "state-machine phase: prepare" | tee -a "$PREPARE_LOG"
+  echo "trusted candidate gate: prepare" | tee -a "$PREPARE_LOG"
   write_repair_pin >>"$PREPARE_LOG" 2>&1 || return 1
   verify_repair_pin >>"$PREPARE_LOG" 2>&1 || return 1
-  run_logged "apply llama.cpp patch queue" "$PREPARE_LOG" \
+  run_verification_logged "apply llama.cpp patch queue" "$PREPARE_LOG" \
     scripts/prepare-llama.sh pinned || return 1
   prepared_upstream="$(tr -d '[:space:]' < "$ROOT/.deps/llama.cpp/.mesh-llm-upstream-sha")"
   if [[ "$prepared_upstream" != "$UPSTREAM_SHA" ]]; then
@@ -265,8 +370,8 @@ run_prepare() {
 run_full_build() {
   local archive arches
   : > "$BUILD_LOG"
-  echo "state-machine phase: build" | tee -a "$BUILD_LOG"
-  run_logged "complete patched llama.cpp build" "$BUILD_LOG" env \
+  echo "trusted candidate gate: build" | tee -a "$BUILD_LOG"
+  run_verification_logged "complete patched llama.cpp build" "$BUILD_LOG" env \
     LLAMA_STAGE_UPSTREAM_TESTS=ON uv run --no-project --with jinja2==3.1.6 -- \
     arch -arm64 bash scripts/build-llama.sh -DCMAKE_OSX_ARCHITECTURES=arm64 \
     || return 1
@@ -276,24 +381,22 @@ run_full_build() {
     echo "candidate native archive must be arm64, got: ${arches:-missing}" | tee -a "$BUILD_LOG" >&2
     return 1
   fi
-  run_logged "generated model-family patch check" "$BUILD_LOG" \
+  run_verification_logged "generated model-family patch check" "$BUILD_LOG" \
     scripts/check-skippy-generated-family-patch.sh || return 1
-  run_logged "stage runtime crate build" "$BUILD_LOG" \
+  run_verification_logged "stage runtime crate build" "$BUILD_LOG" \
     cargo build -p skippy-runtime -p skippy-server -p skippy-model-package -p skippy-correctness \
     || return 1
-  if [[ "${LLAMA_UPSTREAM_CANARY_SMOKE:-1}" != "0" \
-      && "${LLAMA_UPSTREAM_CANARY_SMOKE:-1}" != "false" ]]; then
-    run_logged "Skippy smoke tests" "$BUILD_LOG" scripts/skippy-ci-smoke.sh || return 1
-  fi
+  run_verification_logged "Skippy smoke tests" "$BUILD_LOG" \
+    scripts/skippy-ci-smoke.sh || return 1
 }
 
 run_certification() {
   : > "$CERTIFY_LOG"
-  echo "state-machine phase: certify" | tee -a "$CERTIFY_LOG"
-  run_logged "parity manifest validation" "$CERTIFY_LOG" \
+  echo "trusted candidate gate: certify" | tee -a "$CERTIFY_LOG"
+  run_verification_logged "parity manifest validation" "$CERTIFY_LOG" \
     python3 scripts/skippy-llama-parity.py --llama-src .deps/llama.cpp validate \
     || return 1
-  run_logged "full family certification plan" "$CERTIFY_LOG" \
+  run_verification_logged "full family certification plan" "$CERTIFY_LOG" \
     python3 scripts/plan-family-battery.py \
       --manifest ci/llama-canary/family-certified.json \
       --cadence llama-bump \
@@ -302,89 +405,50 @@ run_certification() {
       --cache-root "$HF_CACHE" \
       --output "$PLAN_PATH" \
     || return 1
-  if [[ "${LLAMA_UPSTREAM_CANARY_SMOKE:-1}" != "0" \
-      && "${LLAMA_UPSTREAM_CANARY_SMOKE:-1}" != "false" ]]; then
-    run_logged "live package-v2 matrix" "$CERTIFY_LOG" env \
-      FAMILY_BATTERY_RUN_ID="$FAMILY_BATTERY_RUN_ID" \
-      SKIPPY_CANARY_LIVE_MATRIX_BACKEND="${SKIPPY_CANARY_LIVE_MATRIX_BACKEND:-metal}" \
-      SKIPPY_CANARY_LIVE_MATRIX_ROOT="$ROOT/target/family-battery/$FAMILY_BATTERY_RUN_ID" \
-      scripts/skippy-canary-live-matrix.sh --prepare || return 1
-  fi
-  run_logged "full supported-family certification" "$CERTIFY_LOG" env \
+  run_verification_logged "live package-v2 matrix" "$CERTIFY_LOG" env \
+    FAMILY_BATTERY_RUN_ID="$FAMILY_BATTERY_RUN_ID" \
+    SKIPPY_CANARY_LIVE_MATRIX_BACKEND="${SKIPPY_CANARY_LIVE_MATRIX_BACKEND:-metal}" \
+    SKIPPY_CANARY_LIVE_MATRIX_ROOT="$ROOT/target/family-battery/$FAMILY_BATTERY_RUN_ID" \
+    scripts/skippy-canary-live-matrix.sh --prepare || return 1
+  run_verification_logged "full supported-family certification" "$CERTIFY_LOG" env \
     FAMILY_BATTERY_RUN_ID="$FAMILY_BATTERY_RUN_ID" \
     scripts/skippy-family-battery.sh --skip-build --plan "$PLAN_PATH"
 }
 
-phase_log() {
-  case "$1" in
-    prepare) printf '%s\n' "$PREPARE_LOG" ;;
-    build) printf '%s\n' "$BUILD_LOG" ;;
-    certify) printf '%s\n' "$CERTIFY_LOG" ;;
-  esac
+run_candidate_gates() {
+  : > "$PREPARE_LOG"
+  : > "$MANIFEST_POLICY_LOG"
+  : > "$BUILD_LOG"
+  : > "$CERTIFY_LOG"
+  run_prepare || return 1
+  validate_agent_manifest_changes || return 1
+  run_full_build || return 1
+  run_certification
 }
 
-phase_turns() {
-  case "$1" in
-    prepare) printf '%s\n' "$PREPARE_REPAIR_TURNS" ;;
-    build) printf '%s\n' "$BUILD_REPAIR_TURNS" ;;
-    certify) printf '%s\n' "$CERTIFY_REPAIR_TURNS" ;;
-  esac
-}
+repair_candidate_until_green() {
+  local prompt
+  REPAIR_DEADLINE_AT="$(( $(date +%s) + AGENT_TIMEOUT_SECONDS ))"
+  VERIFICATION_DEADLINE_AT="$REPAIR_DEADLINE_AT"
+  prompt="$(agent_prompt)"
 
-increment_phase_turns() {
-  case "$1" in
-    prepare) PREPARE_REPAIR_TURNS=$((PREPARE_REPAIR_TURNS + 1)) ;;
-    build) BUILD_REPAIR_TURNS=$((BUILD_REPAIR_TURNS + 1)) ;;
-    certify) CERTIFY_REPAIR_TURNS=$((CERTIFY_REPAIR_TURNS + 1)) ;;
-  esac
-}
-
-repair_prompt() {
-  local phase="$1" log turn
-  log="$(phase_log "$phase")"
-  turn="$(( $(phase_turns "$phase") + 1 ))"
-  printf 'The llama.cpp canary %s phase failed at upstream %s (repair turn %s of %s for this phase).
-
-Read ci/llama-canary/agent-repair-prompt.md and the repository instructions it names. Follow that runbook for this wrapper-owned prepare -> build -> certify -> publish state machine. Fix the root cause minimally. Do not weaken, skip, or narrow any gate. Use focused checks while repairing; the deterministic wrapper will restart at prepare, run the complete build, and run the full supported-family certification before it can publish success. Leave changes local. Do not push, open a PR, or use GitHub credentials.
-
-Failure evidence (tail):
-
-%s' "$phase" "$UPSTREAM_SHA" "$turn" "$MAX_REPAIR_TURNS" \
-    "$(tail -n 100 "$log" 2>/dev/null || echo '(no phase output captured)')"
-}
-
-current_pr() {
-  gh_repair gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number' 2>/dev/null || true
-}
-
-commit_terminal_tree() {
-  local outcome="$1"
-  git checkout -B "$BRANCH"
-  git add -A
-  if ! git diff --cached --quiet; then
-    if [[ "$outcome" == "certified" ]]; then
-      git commit -m "fix(llama): certify upstream ${UPSTREAM_SHA:0:10}" \
-        -m "Prepare, build, and run the full supported-family certification through the deterministic canary state machine."
-    else
-      git commit -m "fix(llama): preserve failed canary at ${UPSTREAM_SHA:0:10}" \
-        -m "Preserve the bounded terminal state from the ${FAILED_PHASE} phase for human diagnosis."
+  while remaining_repair_seconds >/dev/null; do
+    agent_session_step "$prompt" || return 1
+    assert_agent_control_unchanged || return 1
+    if run_candidate_gates; then
+      assert_agent_control_unchanged || return 1
+      validate_agent_manifest_changes || return 1
+      return 0
     fi
-  fi
-}
-
-publish_terminal_branch() {
-  local outcome="$1"
-  commit_terminal_tree "$outcome"
-  PUBLISHED_SHA="$(git rev-parse HEAD)"
-  if [[ "$outcome" == "certified" ]]; then
-    CERTIFIED_SHA="$PUBLISHED_SHA"
-  fi
-  if ! GIT_ASKPASS="$GIT_ASKPASS_SCRIPT" GIT_TERMINAL_PROMPT=0 \
-      git push "https://github.com/${GITHUB_REPOSITORY}.git" \
-      "HEAD:refs/heads/${BRANCH}" 2> >(redact_token >&2); then
-    echo "ERROR: could not push ${BRANCH}; the identity behind CANARY_REPAIR_TOKEN needs Contents and pull-request write access" >&2
-    return 1
-  fi
+    if ! remaining_repair_seconds >/dev/null; then
+      echo "candidate remains red and the repair budget is exhausted" >&2
+      return 124
+    fi
+    echo "candidate gates remain red; returning their logs to the same agent session"
+    prompt="$(agent_feedback_prompt)"
+  done
+  echo "candidate remains red and the repair budget is exhausted" >&2
+  return 124
 }
 
 write_upstream_summary() {
@@ -402,131 +466,67 @@ write_upstream_summary() {
 }
 
 write_pr_body() {
-  local outcome="$1"
   write_upstream_summary
   {
-    echo "Automated llama.cpp upstream canary for \`${UPSTREAM_SHA}\`."
+    echo "Automated llama.cpp upstream update for \`${UPSTREAM_SHA}\`."
     echo
     echo "- Previous pin: \`${OLD_SHA}\`"
     echo "- Candidate pin: \`${UPSTREAM_SHA}\`"
     echo "- Workflow run: \`${RUN_KEY}\`"
-    echo "- Terminal commit: \`${PUBLISHED_SHA}\`"
-    echo "- Repair turns: prepare=${PREPARE_REPAIR_TURNS}, build=${BUILD_REPAIR_TURNS}, certify=${CERTIFY_REPAIR_TURNS}"
-    echo "- Agent repair wall time: ${AGENT_REPAIR_SECONDS_USED}s / ${REPAIR_TOTAL_BUDGET_SECONDS}s"
+    echo "- Certified commit: \`${CERTIFIED_SHA}\`"
     echo
-    if [[ "$outcome" == "certified" ]]; then
-      echo "The wrapper applied the complete patch queue, completed the patched llama.cpp and Rust build gates, and passed the full supported-family certification on this exact commit."
-    else
-      echo "This draft preserves a bounded terminal failure in the **${FAILED_PHASE}** phase. It is not certified and is not eligible to merge until the failing gate is repaired and the complete state machine passes."
-    fi
-    echo
-    echo "State machine: \`prepare -> build -> certify -> publish\`. Agent turns may edit local files, while the wrapper owns every gate and all GitHub mutations."
+    echo "One agent completed the pin and patch-queue task. The trusted harness then independently passed prepare, the complete patched llama.cpp and Rust build, Skippy smoke tests, the live package-v2 matrix, and the full supported-family certification on this exact commit."
     echo
     cat "$UPSTREAM_SUMMARY"
   } > "$PR_BODY"
 }
 
-ensure_pr() {
-  local outcome="$1" pr title created
-  local -a create_args
-  pr="$(current_pr)"
-  if [[ -n "$pr" ]]; then
-    gh_repair gh pr edit "$pr" --body-file "$PR_BODY" >/dev/null
-    printf '%s\n' "$pr"
-    return 0
-  fi
-  if [[ "$outcome" == "certified" ]]; then
-    title="fix(llama): certify upstream ${UPSTREAM_SHA:0:10}"
-    create_args=()
-  else
-    title="draft(llama): failed canary at ${UPSTREAM_SHA:0:10}"
-    create_args=(--draft)
-  fi
-  if ! created="$(gh_repair gh pr create --base main --head "$BRANCH" "${create_args[@]}" \
-      --title "$title" --body-file "$PR_BODY" 2> >(redact_token >&2))"; then
-    echo "ERROR: could not create the terminal canary PR for ${BRANCH}" >&2
+finalize_certified_tree() {
+  verify_repair_pin || return 1
+  if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+    echo "verified checkout changed tracked files during final verification" >&2
     return 1
   fi
-  if ! pr="$(printf '%s\n' "$created" | grep -oE '[0-9]+$')"; then
-    echo "ERROR: terminal canary PR creation returned no PR number for ${BRANCH}" >&2
+  if [[ "$(git rev-parse "${CERTIFIED_SHA}^{tree}")" != "$VERIFICATION_TREE" ]]; then
+    echo "certified commit tree changed after final verification" >&2
     return 1
   fi
-  printf '%s\n' "$pr"
+  write_pr_body
+  git -c core.hooksPath=/dev/null -C "$TRUSTED_ROOT" \
+    branch -f "$BRANCH" "$CERTIFIED_SHA"
+  git -C "$TRUSTED_ROOT" bundle create "$BUNDLE" "$BRANCH" "^${BASE_HEAD}"
+  git -C "$TRUSTED_ROOT" bundle verify "$BUNDLE" >/dev/null
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    {
+      echo "branch=$BRANCH"
+      echo "head=$CERTIFIED_SHA"
+      echo "pr_body=$PR_BODY"
+      echo "candidate_bundle=$BUNDLE"
+    } >> "$GITHUB_OUTPUT"
+  fi
+  echo "certified local canary commit: branch=$BRANCH head=$CERTIFIED_SHA"
 }
 
-verify_pr_head() {
-  local expected="$1" pr remote_head attempt
-  pr="$(current_pr)"
-  [[ -n "$pr" ]] || { echo "terminal canary PR was not created" >&2; return 1; }
-  for attempt in 1 2 3; do
-    remote_head="$(gh_repair gh pr view "$pr" --json headRefOid --jq .headRefOid 2>/dev/null || true)"
-    [[ "$remote_head" == "$expected" ]] && return 0
-    sleep "$attempt"
-  done
-  echo "canary PR #${pr} head (${remote_head:-none}) does not match published commit ${expected}" >&2
-  return 1
-}
-
-report_terminal() {
-  local outcome="$1" pr comment
-  publish_terminal_branch "$outcome"
-  write_pr_body "$outcome"
-  pr="$(ensure_pr "$outcome")"
-  verify_pr_head "$PUBLISHED_SHA"
-  if [[ "$outcome" == "certified" ]]; then
-    comment="**Certified terminal state.** The exact PR head \`${CERTIFIED_SHA}\` passed prepare, the complete build, and the full supported-family certification."
-  else
-    comment="**Uncertified terminal state.** The internal deadline or repair-turn limit stopped the \`${FAILED_PHASE}\` phase. This draft preserves the final attempted bytes and must not merge until the complete state machine passes."
-  fi
-  gh_repair gh pr comment "$pr" --body "$comment" >/dev/null 2>&1 || true
-  echo "terminal canary PR #${pr}: ${outcome}; branch=${BRANCH}; head=${PUBLISHED_SHA}"
-}
-
-phase="prepare"
-while true; do
-  phase_status=0
-  # A function called on the left side of `||` inherits disabled errexit.
-  # Every fallible phase command therefore has an explicit `|| return 1`;
-  # the final command's status is the function status. This is load-bearing.
-  case "$phase" in
-    prepare)
-      run_prepare || phase_status=$?
-      [[ "$phase_status" -ne 0 ]] || { phase="build"; continue; }
-      ;;
-    build)
-      run_full_build || phase_status=$?
-      [[ "$phase_status" -ne 0 ]] || { phase="certify"; continue; }
-      ;;
-    certify)
-      run_certification || phase_status=$?
-      if [[ "$phase_status" -eq 0 ]]; then
-        report_terminal certified
-        exit 0
-      fi
-      ;;
-  esac
-
-  FAILED_PHASE="$phase"
-  if ! remaining_work_seconds >/dev/null; then
-    echo "internal canary deadline reached after ${phase} failure; reserving time for terminal publication" >&2
-    report_terminal failed
+if [[ "$HARNESS_MODE" == "repair" ]]; then
+  write_repair_pin
+  verify_repair_pin
+  echo "starting one agent developer session with a ${AGENT_TIMEOUT_SECONDS}s repair-and-test budget..."
+  if ! repair_candidate_until_green; then
+    echo "agent task failed or timed out; no canary branch or pull request was published" >&2
     exit 1
   fi
-  if (( $(phase_turns "$phase") >= MAX_REPAIR_TURNS )); then
-    echo "${phase} exhausted ${MAX_REPAIR_TURNS} repair turns" >&2
-    report_terminal failed
-    exit 1
-  fi
-  if ! remaining_repair_seconds >/dev/null; then
-    echo "agent repair exhausted its ${REPAIR_TOTAL_BUDGET_SECONDS}s aggregate budget" >&2
-    report_terminal failed
-    exit 1
-  fi
+  snapshot_candidate_tree
+  write_candidate_bundle
+  exit 0
+fi
 
-  prompt="$(repair_prompt "$phase")"
-  increment_phase_turns "$phase"
-  agent_turn "$prompt" || echo "warning: agent repair turn exited non-zero; wrapper will retry the gates" >&2
-  # Any agent edit may affect the selected pin or patch queue. Restore the
-  # deterministic pin and restart at the first invalidated gate.
-  phase="prepare"
-done
+load_candidate_bundle
+trap cleanup_verification_worktree EXIT
+materialize_verification_tree
+VERIFICATION_DEADLINE_AT="$(( $(date +%s) + VERIFICATION_TIMEOUT_SECONDS ))"
+echo "starting one independent ${VERIFICATION_TIMEOUT_SECONDS}s verification pass..."
+if ! run_candidate_gates; then
+  echo "final canary verification failed; no canary branch or pull request was published" >&2
+  exit 1
+fi
+finalize_certified_tree

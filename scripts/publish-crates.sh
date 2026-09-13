@@ -4,14 +4,17 @@ set -euo pipefail
 
 usage() {
     cat >&2 <<'USAGE'
-usage: scripts/publish-crates.sh [--dry-run] [--allow-dirty] [--sleep-seconds N]
+usage: scripts/publish-crates.sh [--dry-run] [--allow-dirty] [--resume] [--sleep-seconds N]
 
 Publishes the crates.io package chain in dependency order. Use --dry-run for
 local and CI validation without uploading packages. --allow-dirty is accepted
 only with --dry-run so local pre-commit validation can include uncommitted
 manifest changes; real publishing always requires Cargo's clean-tree check.
+--resume skips only versions that crates.io confirms are already published;
+unknown registry responses fall back to Cargo's normal publish behavior.
 
 Environment:
+  LLAMA_STAGE_BUILD_DIR                 Existing directory used while Cargo verifies packaged crates
   CRATES_IO_PUBLISH_MAX_ATTEMPTS        Real-publish retry attempts for crates.io 429s (default: 6)
   CRATES_IO_PUBLISH_RETRY_BASE_SECONDS Fallback retry base when crates.io gives no timestamp (default: 60)
   CRATES_IO_PUBLISH_RETRY_MAX_SECONDS  Fallback retry cap when crates.io gives no timestamp (default: 900)
@@ -46,6 +49,7 @@ require_nonnegative_int() {
 
 dry_run=0
 allow_dirty=0
+resume=0
 sleep_seconds=""
 
 while [[ $# -gt 0 ]]; do
@@ -56,6 +60,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --allow-dirty)
             allow_dirty=1
+            shift
+            ;;
+        --resume)
+            resume=1
             shift
             ;;
         --sleep-seconds)
@@ -82,6 +90,11 @@ if [[ "$allow_dirty" -eq 1 && "$dry_run" -eq 0 ]]; then
     exit 1
 fi
 
+if [[ "$resume" -eq 1 && "$dry_run" -eq 1 ]]; then
+    echo "--resume is only supported for real publishing" >&2
+    exit 1
+fi
+
 if [[ -z "$sleep_seconds" ]]; then
     if [[ "$dry_run" -eq 1 ]]; then
         sleep_seconds=0
@@ -93,11 +106,13 @@ fi
 max_attempts="${CRATES_IO_PUBLISH_MAX_ATTEMPTS:-6}"
 retry_base_seconds="${CRATES_IO_PUBLISH_RETRY_BASE_SECONDS:-60}"
 retry_max_seconds="${CRATES_IO_PUBLISH_RETRY_MAX_SECONDS:-900}"
+native_verify_build_dir="${LLAMA_STAGE_BUILD_DIR:-$PWD/target/publish-crates-native-verify}"
 
 require_nonnegative_int CRATES_IO_PUBLISH_SETTLE_SECONDS "$sleep_seconds"
 require_positive_int CRATES_IO_PUBLISH_MAX_ATTEMPTS "$max_attempts"
 require_positive_int CRATES_IO_PUBLISH_RETRY_BASE_SECONDS "$retry_base_seconds"
 require_positive_int CRATES_IO_PUBLISH_RETRY_MAX_SECONDS "$retry_max_seconds"
+mkdir -p "$native_verify_build_dir"
 
 if [[ "$dry_run" -eq 0 && -z "${CARGO_REGISTRY_TOKEN:-}" ]]; then
     echo "CARGO_REGISTRY_TOKEN is required for real crates.io publishing" >&2
@@ -131,6 +146,7 @@ registry_version_status() {
         curl \
             --silent \
             --show-error \
+            --user-agent "mesh-llm-publish-crates/${workspace_version} (https://github.com/Mesh-LLM/mesh-llm)" \
             --output /dev/null \
             --write-out '%{http_code}' \
             "https://crates.io/api/v1/crates/${crate}/${workspace_version}" \
@@ -237,7 +253,11 @@ run_cargo_publish_once() {
     # repository-only patched llama.cpp build inputs are intentionally absent.
     # Verify the Rust package surface through skippy-ffi's dynamic link mode;
     # this does not change the uploaded crate contents or feature defaults.
-    if output="$(LLAMA_STAGE_LINK_MODE=dynamic cargo "${args[@]}" 2>&1)"; then
+    if output="$(
+        LLAMA_STAGE_LINK_MODE=dynamic \
+            LLAMA_STAGE_BUILD_DIR="$native_verify_build_dir" \
+            cargo "${args[@]}" 2>&1
+    )"; then
         last_publish_output="$output"
         print_publish_output "$output"
         return 0
@@ -385,6 +405,7 @@ publish_crates=(
     mesh-llm-log-store
     mesh-llm-build-info
     mesh-llm-release-footer
+    mesh-llm-native-runtime
     mesh-llm-config
     mesh-llm-ui
     mesh-llm-console-server
@@ -394,7 +415,6 @@ publish_crates=(
     model-package
     mesh-llm-node
     mesh-llm-api-server
-    mesh-llm-native-runtime
     mesh-llm-hardware-profile
     skippy-runtime
     skippy-scheduler
@@ -417,6 +437,10 @@ fi
 for index in "${!publish_crates[@]}"; do
     crate="${publish_crates[$index]}"
     if [[ "$dry_run" -eq 1 ]] && should_skip_initial_dry_run "$crate"; then
+        continue
+    fi
+    if [[ "$resume" -eq 1 ]] && crate_version_published "$crate"; then
+        log "[$((index + 1))/${#publish_crates[@]}] ${crate}@${workspace_version} already published; skipping"
         continue
     fi
     publish_crate_with_retry "$crate" "$((index + 1))" "${#publish_crates[@]}"

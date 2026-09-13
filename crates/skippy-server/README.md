@@ -17,7 +17,7 @@ the first stage.
 The full request/reply path is tip-to-tip: token IDs enter at the driver-facing
 tip, and activations flow through the stage chain. Generation 7 introduced
 direct prediction return from the final/readout tip to the driver-facing stage.
-Generation 8 retains that path and adds mandatory canonical stage-admission
+Generation 9 retains that path and requires mandatory canonical stage-admission
 descriptors with exact participant echo before topology publication. Middle-out
 is the prefill optimization inside that path, where internal boundary
 activations are handed downstream while local compute advances.
@@ -115,7 +115,7 @@ Rosetta vocabulary or control identities. The loaded backend accepts only
 lossless inputs it can preserve; unsupported controls, invalid UTF-8, interior
 NULs, identity mismatches, and limit violations return explicit errors rather
 than being decoded with replacement semantics. Native-serving plugins receive
-the same capability and inventory during activation and must prepare outside
+the same capability and inventory during activation and must complete setup outside
 the proposal deadline.
 
 The `/v1/tokenize` route is retained only as an explicit compatibility and
@@ -126,11 +126,11 @@ deadline handling.
 ## Notes
 
 - `serve-binary` is the tuned binary stage-to-stage path.
-- `serve-binary` participates in the breaking generation-8 stage protocol.
-  Stage compatibility requires the complete `stage-generation-8` control,
+- `serve-binary` participates in the breaking generation-9 stage protocol.
+  Stage compatibility requires the complete `stage-generation-9` control,
   status-list, strict-content-identity, and stage-admission bundle. Older peers,
   including generation 7 peers, are rejected during split planning rather than
-  being mixed into a generation-8 topology.
+  being mixed into a generation-9 topology.
 - `serve-binary` accepts upstream protocol connections concurrently. Model
   execution remains serialized by the per-process runtime lock, but readiness,
   abandoned, or broken connections do not monopolize the listener and block the

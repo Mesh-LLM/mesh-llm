@@ -75,6 +75,8 @@ pub(crate) fn elapsed_ms_u64(duration: std::time::Duration) -> u64 {
     duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
 
+mod advertisement;
+mod announcements;
 mod artifact_transfer_io;
 mod cache_affinity_gossip;
 mod capacity;
@@ -132,10 +134,11 @@ use stage_artifacts::*;
 use stage_transport::*;
 use stun::*;
 
+pub(crate) use advertisement::AdvertisedCandidate;
+pub use announcements::backfill_legacy_descriptors;
 pub use capacity::AdvertisedMemory;
 pub use connections::{QuicBindSelection, RelayConfig, RelayPolicy};
 pub(crate) use connectivity::MeshConnectivitySnapshot;
-pub use gossip::backfill_legacy_descriptors;
 #[expect(
     unused_imports,
     reason = "public compatibility re-export for existing mesh identity callers"
@@ -145,6 +148,11 @@ pub use identity_persistence::{
     load_node_key_from_path, mark_was_public, save_last_mesh_id, save_node_key_to_path,
     was_previously_public,
 };
+#[expect(
+    unused_imports,
+    reason = "test-only home resolver used by environment-isolated identity tests"
+)]
+pub(crate) use identity_persistence::{identity_home_dir, identity_state_dir};
 #[expect(
     unused_imports,
     reason = "public compatibility re-export for existing mesh node callers"
@@ -180,7 +188,7 @@ pub use stage_transport::{
 pub(crate) use stage_transport_bridge::{StageTransportBridge, StageTransportBridgeLabel};
 
 #[cfg(test)]
-use gossip::{apply_transitive_ann, peer_meaningfully_changed};
+use announcements::{apply_transitive_ann, peer_meaningfully_changed};
 #[cfg(test)]
 use heartbeat::heartbeat_failure_policy_for_peer;
 pub(crate) use heartbeat::resolve_peer_down;

@@ -13,6 +13,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "build-release.sh"
 HOST_SCRIPT = ROOT / "scripts" / "build-host.sh"
+LLD_LIB = ROOT / "scripts" / "lib" / "lld.sh"
 
 
 class BuildReleaseScriptTests(unittest.TestCase):
@@ -72,6 +73,21 @@ class BuildReleaseScriptTests(unittest.TestCase):
     def test_release_profile_stamps_the_plain_version(self) -> None:
         self.assertEqual(self.run_build_host_with_profile("release"), "0.68.0")
 
+    def stage_linker_probe(self, scripts_dir: Path, bin_dir: Path) -> None:
+        """build-host.sh sources scripts/lib/lld.sh and probes the linker
+        with `cc`; stage the lib beside the copied script and a `cc` that
+        always links so the probe never depends on the host toolchain."""
+        lib_dir = scripts_dir / "lib"
+        lib_dir.mkdir(exist_ok=True)
+        shutil.copy(LLD_LIB, lib_dir / "lld.sh")
+        self.write_executable(
+            bin_dir / "cc",
+            """
+            #!/usr/bin/env bash
+            exit 0
+            """,
+        )
+
     def run_build_host_with_profile(self, profile: str) -> str:
         """Returns MESH_LLM_BUILD_VERSION as seen by `cargo build`."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -84,6 +100,7 @@ class BuildReleaseScriptTests(unittest.TestCase):
             copied_host_script = scripts_dir / "build-host.sh"
             shutil.copy(HOST_SCRIPT, copied_host_script)
             copied_host_script.chmod(copied_host_script.stat().st_mode | stat.S_IXUSR)
+            self.stage_linker_probe(scripts_dir, bin_dir)
 
             self.write_executable(
                 scripts_dir / "build-ui.sh",
@@ -175,6 +192,7 @@ class BuildReleaseScriptTests(unittest.TestCase):
             copied_host_script.chmod(
                 copied_host_script.stat().st_mode | stat.S_IXUSR
             )
+            self.stage_linker_probe(scripts_dir, bin_dir)
 
             self.write_executable(
                 scripts_dir / "build-ui.sh",

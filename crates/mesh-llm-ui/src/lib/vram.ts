@@ -177,3 +177,61 @@ export function meshCapacityInputFromStatus(status: VramStatusLike): VramMeshInp
     }))
   }
 }
+
+/** The itemized capacity a node advertises, as `/api/status` reports it (bytes). */
+export type MemoryBreakdownInput = {
+  total_bytes: number
+  reserved_bytes: number
+  platform_reserve_bytes?: number
+  configured_reserve_bytes: number
+  usable_bytes: number
+  system_ram_bytes?: number
+  ram_offload_bytes: number
+}
+
+/** The same breakdown in decimal GB, ready to display. */
+export type MemoryBreakdownGB = {
+  totalGB: number
+  reservedGB: number
+  platformReserveGB: number
+  configuredReserveGB: number
+  usableGB: number
+  systemRamGB: number | null
+  ramOffloadGB: number
+}
+
+function finiteNonNegative(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+}
+
+function decimalGBOrZero(bytes: number | null | undefined): number {
+  return (finiteNonNegative(bytes) ?? 0) / DECIMAL_GB_BYTES
+}
+
+/**
+ * The advertised breakdown in decimal GB, or null when the node sent none or
+ * the block is unusable. Zero reserves are real values, not gaps; only the
+ * optional system RAM stays null when it was not reported. Totals do not go
+ * through here: they keep `nodeAdvertisedVramGB`.
+ */
+export function memoryBreakdownGB(memory: MemoryBreakdownInput | null | undefined): MemoryBreakdownGB | null {
+  if (!memory) return null
+  if (finiteNonNegative(memory.total_bytes) == null || finiteNonNegative(memory.usable_bytes) == null) return null
+  const systemRam = finiteNonNegative(memory.system_ram_bytes)
+  return {
+    totalGB: decimalGBOrZero(memory.total_bytes),
+    reservedGB: decimalGBOrZero(memory.reserved_bytes),
+    platformReserveGB: decimalGBOrZero(memory.platform_reserve_bytes),
+    configuredReserveGB: decimalGBOrZero(memory.configured_reserve_bytes),
+    usableGB: decimalGBOrZero(memory.usable_bytes),
+    systemRamGB: systemRam == null ? null : systemRam / DECIMAL_GB_BYTES,
+    ramOffloadGB: decimalGBOrZero(memory.ram_offload_bytes)
+  }
+}
+
+/** Exact decimal GB with one decimal, for itemized values that are not capacity classes. */
+export function formatDecimalVramGB(valueGB: number | null | undefined): string {
+  const value = finiteNonNegative(valueGB)
+  if (value == null) return 'Unknown'
+  return `${value.toFixed(1)} GB`
+}

@@ -22,6 +22,7 @@ pub(super) fn is_static_summary_token(token: &str) -> bool {
             | "validate"
             | "doctor"
             | "split"
+            | "network"
             | "skills"
             | "install"
             | "plugins"
