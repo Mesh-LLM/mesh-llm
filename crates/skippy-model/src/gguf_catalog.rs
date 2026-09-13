@@ -549,6 +549,11 @@ mod tests {
         assert_eq!(catalog.tensors.len(), 1);
         assert_eq!(catalog.tensors[0].name, "weight");
         assert!(read_gguf_catalog(&path).is_err());
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn reads_descriptor_only_shard_with_unaligned_table_end() {
         let path = temp_path("descriptor-only");
         let mut bytes = Vec::new();
