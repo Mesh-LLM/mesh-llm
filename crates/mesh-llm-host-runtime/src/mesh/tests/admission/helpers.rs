@@ -374,6 +374,9 @@ pub(super) async fn configure_requirement_node(
     Ok(())
 }
 
+/// Builds a `PeerAnnouncement` fixture carrying the given genesis policy hash
+/// and (optionally) a release attestation, for mesh-requirements admission
+/// tests.
 pub(super) fn requirement_peer_announcement(
     sender_seed: u8,
     policy: &crate::MeshGenesisPolicy,
@@ -428,5 +431,6 @@ pub(super) fn requirement_peer_announcement(
         latency_age_ms: None,
         latency_observer_id: None,
         inference_admission_state: None,
+        claimed_log_head: None,
     }
 }

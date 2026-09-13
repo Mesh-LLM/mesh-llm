@@ -357,6 +357,9 @@ fn relay_reconnect_controller_applies_cooldown_after_attempt_and_prunes_gone_pee
     );
 }
 
+/// Builds a minimal `PeerAnnouncement` fixture at the given address, for
+/// peer-state tests that don't care about the rest of the announcement's
+/// fields.
 fn peer_state_test_announcement(addr: EndpointAddr) -> super::PeerAnnouncement {
     super::PeerAnnouncement {
         addr,
@@ -403,6 +406,7 @@ fn peer_state_test_announcement(addr: EndpointAddr) -> super::PeerAnnouncement {
         latency_age_ms: None,
         latency_observer_id: None,
         inference_admission_state: None,
+        claimed_log_head: None,
     }
 }
 
@@ -921,6 +925,8 @@ fn control_frame_rejects_oversize_or_bad_generation() {
     );
 }
 
+/// Proves a gossip-frame round trip preserves locally scanned model metadata
+/// fields on the announcement.
 #[test]
 fn gossip_frame_roundtrip_preserves_scanned_model_metadata() {
     use crate::proto::node::{CompactModelMetadata, ExpertsSummary};
@@ -1029,6 +1035,7 @@ fn gossip_frame_roundtrip_preserves_scanned_model_metadata() {
         latency_age_ms: None,
         latency_observer_id: None,
         inference_admission_state: None,
+        claimed_log_head: None,
     };
 
     let proto_pa = local_ann_to_proto_ann(&local_ann);
@@ -1306,6 +1313,8 @@ fn gossip_rejects_sender_id_mismatch_or_invalid_endpoint_len() {
     );
 }
 
+/// Proves a transitively gossiped update refreshes a peer's metadata fields
+/// in place, without dropping unrelated state.
 #[test]
 fn transitive_peer_update_refreshes_metadata_fields() {
     use crate::proto::node::CompactModelMetadata;
@@ -1391,6 +1400,7 @@ fn transitive_peer_update_refreshes_metadata_fields() {
         latency_age_ms: None,
         latency_observer_id: None,
         inference_admission_state: None,
+        claimed_log_head: None,
     };
 
     apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee));
@@ -1418,6 +1428,8 @@ fn transitive_peer_update_refreshes_metadata_fields() {
     assert!(existing.available_model_sizes.is_empty());
 }
 
+/// Proves merging a transitively gossiped peer update never discards a
+/// richer, already-known direct address in favor of a sparser one.
 #[test]
 fn transitive_peer_merge_preserves_richer_direct_address() {
     use iroh::TransportAddr;
@@ -1485,6 +1497,7 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         latency_age_ms: None,
         latency_observer_id: None,
         inference_admission_state: None,
+        claimed_log_head: None,
     };
 
     apply_transitive_ann(&mut existing, &weak_addr, &ann, make_test_endpoint_id(0xee));
@@ -1553,6 +1566,7 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         latency_age_ms: None,
         latency_observer_id: None,
         inference_admission_state: None,
+        claimed_log_head: None,
     };
     apply_transitive_ann(
         &mut existing,
