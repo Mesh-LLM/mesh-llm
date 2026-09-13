@@ -2,7 +2,7 @@
   "schema_version": 1,
   "manifest_kind": "test-model-artifacts",
   "suite": "product-smoke",
-  "registry_sha256": "0fb272556fa31f2ab91d06c8265af82aa531c2001dbcbe6c3af3dab941140b3c",
+  "registry_sha256": "dcdc8545709e3d3578ad00ca773b9a9b0dcfae9558155a9014230bcf0e575b1f",
   "artifacts": [
     {
       "id": "smollm2-q8-inference",

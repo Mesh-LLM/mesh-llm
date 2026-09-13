@@ -14,6 +14,7 @@ marker itself, and the lane runs the script.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import tempfile
@@ -267,21 +268,22 @@ class LinuxRuntimeSliceTests(unittest.TestCase):
             self.steps["Prepare immutable Linux native runtime"]["id"], "native_runtime"
         )
 
-    def test_the_gate_selects_the_correctness_fixture(self) -> None:
+    def test_the_gate_selects_one_artifact_from_the_shared_manifest(self) -> None:
         step = self.steps["Restore runtime-event gate model"]
         self.assertEqual(
             step["with"]["model_manifest"],
-            "ci/model-artifacts/manifests/skippy-correctness.json",
+            "ci/model-artifacts/manifests/skippy-ci-smoke.json",
         )
-        self.assertEqual(step["with"]["model_artifact_id"], "qwen3-q8-correctness")
+        self.assertEqual(step["with"]["model_artifact_id"], "family-qwen3-dense")
 
     def test_gate_model_resolves_at_every_workflow_cadence(self) -> None:
+        """Resolve the model inputs used by the protected main workflow."""
         inputs = self.steps["Restore runtime-event gate model"]["with"]
         self.assertEqual(
             inputs["model_cadence"],
             "${{ (inputs.original_event_name == 'pull_request' || "
             "inputs.original_event_name == 'pull_request_target') && 'pull-request' "
-            "|| inputs.original_event_name == 'push' && 'main' || 'manual' }}",
+            "|| 'main' }}",
         )
         action = yaml.safe_load(
             (ROOT / ".github/actions/restore-test-model/action.yml").read_text()
@@ -315,6 +317,12 @@ class LinuxRuntimeSliceTests(unittest.TestCase):
                 self.assertTrue(resolved["file"].endswith(".gguf"))
                 self.assertEqual(len(resolved["sha256"]), 64)
                 self.assertGreater(int(resolved["size_bytes"]), 0)
+
+    def test_gate_cadences_do_not_expand_family_certification(self) -> None:
+        """Ordinary CI may load Qwen without scheduling family certification."""
+        manifest = json.loads((ROOT / "ci/llama-canary/family-certified.json").read_text())
+        model = next(row for row in manifest["models"] if row["family"] == "qwen3-dense")
+        self.assertEqual(model["cadences"], ["llama-bump", "manual-full", "nightly"])
 
     def test_evidence_is_uploaded_even_when_the_gate_fails(self) -> None:
         """The evidence file is how a failure is diagnosed, so it must
