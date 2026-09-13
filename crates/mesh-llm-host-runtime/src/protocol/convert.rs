@@ -329,11 +329,16 @@ fn local_model_metadata_to_proto(
 
 fn proto_model_metadata_to_local(
     metadata: &crate::proto::node::ServedModelMetadata,
-) -> crate::mesh::ServedModelMetadata {
-    crate::mesh::ServedModelMetadata {
-        workload_class: metadata
-            .workload_class
-            .and_then(proto_workload_class_to_local),
+) -> Option<crate::mesh::ServedModelMetadata> {
+    let workload_class = match metadata.workload_class {
+        Some(value) => {
+            crate::proto::node::ModelWorkloadClass::try_from(value).ok()?;
+            proto_workload_class_to_local(value)
+        }
+        None => None,
+    };
+    Some(crate::mesh::ServedModelMetadata {
+        workload_class,
         architecture: metadata.architecture.clone(),
         parameter_size: metadata.parameter_size.clone(),
         parameter_count_b: metadata.parameter_count_b,
@@ -346,7 +351,7 @@ fn proto_model_metadata_to_local(
         kv_head_count: metadata.kv_head_count,
         expert_count: metadata.expert_count,
         active_expert_count: metadata.active_expert_count,
-    }
+    })
 }
 
 fn local_workload_class_to_proto(workload: crate::mesh::ModelWorkloadClass) -> i32 {
@@ -554,8 +559,8 @@ fn proto_gpu_info_to_legacy_fields(gpus: &[crate::proto::node::GpuInfo]) -> Lega
 }
 
 /// Returns `true` when a proto descriptor carries a non-empty model name.
-/// Descriptors without a valid identity are discarded so a partial list
-/// cannot suppress the legacy-identity backfill fallback.
+/// Descriptors without a valid identity are discarded. A non-empty descriptor
+/// list is authoritative, so invalid entries never regain legacy semantics.
 fn proto_descriptor_has_valid_identity(
     descriptor: &crate::proto::node::ServedModelDescriptor,
 ) -> bool {
@@ -1050,8 +1055,14 @@ pub(crate) fn proto_ann_to_local(
             let descriptors: Vec<_> =
                 pa.served_model_descriptors
                     .iter()
-                    .filter(|descriptor| proto_descriptor_has_valid_identity(descriptor))
-                    .map(|descriptor| {
+                    .filter_map(|descriptor| {
+                        if !proto_descriptor_has_valid_identity(descriptor) {
+                            return None;
+                        }
+                        let metadata = match descriptor.metadata.as_ref() {
+                            Some(metadata) => Some(proto_model_metadata_to_local(metadata)?),
+                            None => None,
+                        };
                         let capabilities = descriptor
                             .capabilities
                             .as_ref()
@@ -1064,7 +1075,7 @@ pub(crate) fn proto_ann_to_local(
                                 moe: caps.moe,
                             })
                             .unwrap_or_default();
-                        crate::mesh::ServedModelDescriptor {
+                        Some(crate::mesh::ServedModelDescriptor {
                             identity: descriptor
                                 .identity
                                 .as_ref()
@@ -1092,22 +1103,11 @@ pub(crate) fn proto_ann_to_local(
                                     }),
                                 }
                             }),
-                            metadata: descriptor
-                                .metadata
-                                .as_ref()
-                                .map(proto_model_metadata_to_local),
-                        }
+                            metadata,
+                        })
                     })
                     .collect();
-            if descriptors.is_empty() {
-                // All descriptors were invalid — fall back to legacy identity list.
-                pa.served_model_identities
-                    .iter()
-                    .map(legacy_descriptor_from_identity)
-                    .collect()
-            } else {
-                descriptors
-            }
+            descriptors
         } else {
             pa.served_model_identities
                 .iter()
@@ -1399,7 +1399,7 @@ mod tests {
             };
 
             let proto = local_model_metadata_to_proto(&local);
-            let restored = proto_model_metadata_to_local(&proto);
+            let restored = proto_model_metadata_to_local(&proto).expect("known workload class");
 
             assert_eq!(restored.workload_class, Some(workload));
             assert_eq!(restored.architecture.as_deref(), Some("test"));
@@ -1407,19 +1407,54 @@ mod tests {
     }
 
     #[test]
-    fn absent_or_unknown_proto_workload_class_is_legacy_compatible() {
+    fn absent_proto_workload_class_is_legacy_compatible_but_unknown_is_rejected() {
         let absent = crate::proto::node::ServedModelMetadata::default();
-        assert_eq!(proto_model_metadata_to_local(&absent).workload_class, None);
+        assert_eq!(
+            proto_model_metadata_to_local(&absent)
+                .expect("absent workload is legacy-compatible")
+                .workload_class,
+            None
+        );
+        let unspecified = crate::proto::node::ServedModelMetadata {
+            workload_class: Some(crate::proto::node::ModelWorkloadClass::Unspecified as i32),
+            ..Default::default()
+        };
+        assert_eq!(
+            proto_model_metadata_to_local(&unspecified)
+                .expect("explicit unspecified workload is legacy-compatible")
+                .workload_class,
+            None
+        );
 
         let unknown = crate::proto::node::ServedModelMetadata {
             workload_class: Some(9_999),
             ..Default::default()
         };
-        assert_eq!(
-            proto_model_metadata_to_local(&unknown).workload_class,
-            None,
-            "newer workload enum values must be ignored by older conversion code"
-        );
+        assert!(proto_model_metadata_to_local(&unknown).is_none());
+    }
+
+    #[test]
+    fn unknown_descriptor_workload_class_does_not_fall_back_to_legacy_identity() {
+        let identity = crate::proto::node::ServedModelIdentity {
+            model_name: "future-workload".to_string(),
+            ..Default::default()
+        };
+        let proto = crate::proto::node::PeerAnnouncement {
+            endpoint_id: vec![1; 32],
+            served_model_identities: vec![identity.clone()],
+            served_model_descriptors: vec![crate::proto::node::ServedModelDescriptor {
+                identity: Some(identity),
+                metadata: Some(crate::proto::node::ServedModelMetadata {
+                    workload_class: Some(9_999),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let (_, announcement) = proto_ann_to_local(&proto).expect("announcement should decode");
+        assert!(announcement.served_model_descriptors.is_empty());
     }
 
     #[test]

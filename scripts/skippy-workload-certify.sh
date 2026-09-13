@@ -13,12 +13,14 @@ ORACLE_SERVER=""
 ORACLE_COMPLETION=""
 ORACLE_TTS=""
 ORACLE_REQUIRED=0
+STARTUP_TIMEOUT_SECS=180
 
 usage() {
   cat >&2 <<'EOF'
 usage: scripts/skippy-workload-certify.sh --class CLASS --lane LANE
   --model-path PATH --model-id ID --work-dir PATH [--projector-path PATH]
   [--oracle-server PATH] [--oracle-completion PATH] [--oracle-tts PATH]
+  [--startup-timeout-secs SECONDS]
   [--require-oracle]  # fail closed unless the class-appropriate oracle is selected
   [--skip-build]  # oracle runs require a prebuilt SKIPPY_WORKLOAD_PRODUCER_MANIFEST
 EOF
@@ -35,6 +37,7 @@ while (( $# > 0 )); do
     --oracle-server) ORACLE_SERVER="$2"; shift ;;
     --oracle-completion) ORACLE_COMPLETION="$2"; shift ;;
     --oracle-tts) ORACLE_TTS="$2"; shift ;;
+    --startup-timeout-secs) STARTUP_TIMEOUT_SECS="$2"; shift ;;
     --require-oracle) ORACLE_REQUIRED=1 ;;
     --skip-build) SKIP_BUILD=1 ;;
     -h|--help) usage; exit 0 ;;
@@ -42,6 +45,11 @@ while (( $# > 0 )); do
   esac
   shift
 done
+
+if [[ ! "$STARTUP_TIMEOUT_SECS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "--startup-timeout-secs must be a positive integer" >&2
+  exit 1
+fi
 
 case "$MODEL_CLASS" in
   embedding) EXPECTED_LANE="embedding-smoke" ;;
@@ -262,7 +270,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for _ in {1..180}; do
+for (( attempt = 0; attempt < STARTUP_TIMEOUT_SECS; attempt++ )); do
   if ! kill -0 "$SERVER_PID" >/dev/null 2>&1; then
     echo "$MODEL_CLASS OpenAI server exited early" >&2
     sed -n '1,240p' "$SERVER_LOG" >&2
@@ -301,7 +309,7 @@ if [[ -n "$ORACLE_SERVER" ]]; then
   ORACLE_LOG="$WORK_DIR/workload-monolithic-oracle-server.log"
   "$ORACLE_SERVER" "${ORACLE_ARGS[@]}" >"$ORACLE_LOG" 2>&1 &
   ORACLE_PID="$!"
-  for _ in {1..180}; do
+  for (( attempt = 0; attempt < STARTUP_TIMEOUT_SECS; attempt++ )); do
     if ! kill -0 "$ORACLE_PID" >/dev/null 2>&1; then
       echo "$MODEL_CLASS monolithic oracle server exited early" >&2
       tail -80 "$ORACLE_LOG" >&2
@@ -376,11 +384,11 @@ fi
 
 if [[ "$MODEL_CLASS" == "embedding" ]]; then
   SDK_PYTHON="${SKIPPY_WORKLOAD_SDK_PYTHON:-python3}"
-  if "$SDK_PYTHON" -c 'import openai' >/dev/null 2>&1; then
-    "$SDK_PYTHON" "$ROOT/scripts/ci-openai-embeddings-smoke.py" \
-      --base-url "http://127.0.0.1:$PORT/v1" \
-      --model "$MODEL_ID"
-  else
-    echo "official openai-python SDK smoke skipped: package unavailable to $SDK_PYTHON" >&2
-  fi
+  "$SDK_PYTHON" -c 'import openai' >/dev/null 2>&1 || {
+    echo "official openai-python SDK smoke requires the openai package in $SDK_PYTHON" >&2
+    exit 1
+  }
+  "$SDK_PYTHON" "$ROOT/scripts/ci-openai-embeddings-smoke.py" \
+    --base-url "http://127.0.0.1:$PORT/v1" \
+    --model "$MODEL_ID"
 fi

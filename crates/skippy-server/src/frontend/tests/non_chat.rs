@@ -190,6 +190,7 @@ async fn certify_embedding(backend: &StageOpenAiBackend) -> Result<()> {
         .await?;
     assert_eq!(first.object, "list");
     assert_eq!(first.data.len(), 2);
+    assert_eq!(first.data.len(), second.data.len());
     assert!(first.usage.prompt_tokens > 0);
     for (left, right) in first.data.iter().zip(&second.data) {
         let (EmbeddingOutput::Float(left), EmbeddingOutput::Float(right)) =
@@ -223,6 +224,7 @@ async fn certify_rerank(backend: &StageOpenAiBackend) -> Result<()> {
         .await?;
     let second = backend.rerank(request, OpenAiRequestContext::new()).await?;
     assert_eq!(first.results.len(), 2);
+    assert_eq!(first.results.len(), second.results.len());
     assert!(first.usage.prompt_tokens > 0);
     for (left, right) in first.results.iter().zip(&second.results) {
         assert_eq!(left.index, right.index);

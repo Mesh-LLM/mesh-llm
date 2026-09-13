@@ -29,6 +29,8 @@ def sha256(path: Path) -> str:
 
 
 def verify(args: argparse.Namespace) -> None:
+    if args.model_class in {"ocr", "speech_synthesis", "speech_recognition"} and args.projector_path is None:
+        raise ValueError(f"{args.model_class} oracle evidence requires a projector path")
     evidence = json.loads(args.evidence.read_text(encoding="utf-8"))
     if not isinstance(evidence, dict):
         raise ValueError("oracle evidence must be an object")

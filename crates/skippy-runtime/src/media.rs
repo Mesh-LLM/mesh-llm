@@ -193,9 +193,16 @@ impl StageModel {
                 free_error(error);
             }
         }
+        struct EmbeddingsGuard(*mut skippy_ffi::Opaque);
+        impl Drop for EmbeddingsGuard {
+            fn drop(&mut self) {
+                unsafe { skippy_ffi::llama_set_embeddings(self.0, false) };
+            }
+        }
 
         session.reset()?;
         unsafe { skippy_ffi::llama_set_embeddings(lctx, true) };
+        let _embeddings = EmbeddingsGuard(lctx);
         let mut guard_error = ptr::null_mut();
         let status = unsafe {
             skippy_ffi::skippy_session_begin_external_decode(session.raw, &mut guard_error)
@@ -257,6 +264,7 @@ impl StageModel {
             return Err(anyhow!("speech backbone did not produce a hidden state"));
         }
         let mut generated_frames = 0usize;
+        let mut stopped = false;
         while generated_frames < config.max_frames {
             if cancellation_requested() {
                 return Err(anyhow!("speech synthesis cancelled"));
@@ -278,11 +286,18 @@ impl StageModel {
                 ));
             }
             if stop || next_hidden_state.is_null() {
+                stopped = true;
                 break;
             }
             generated_frames += 1;
             hidden_state = next_hidden_state;
             sampled = session.sample_current(Some(&sampling))?;
+        }
+        if !stopped {
+            return Err(anyhow!(
+                "speech synthesis exceeded the configured {} frame limit",
+                config.max_frames
+            ));
         }
 
         let mut sample_rate = 0_i32;
@@ -874,9 +889,11 @@ mod tests {
             .collect::<Vec<_>>();
 
         let converted = pcm_f32_to_s16le(&bytes).expect("aligned native PCM");
-        let actual = converted
-            .chunks_exact(2)
-            .map(|sample| i16::from_le_bytes(sample.try_into().unwrap()))
+        let (converted_samples, remainder) = converted.as_chunks::<2>();
+        assert!(remainder.is_empty());
+        let actual = converted_samples
+            .iter()
+            .map(|sample| i16::from_le_bytes(*sample))
             .collect::<Vec<_>>();
 
         assert_eq!(

@@ -4,9 +4,10 @@ set -euo pipefail
 # Supported-families certification battery (issue #1434; tiers dropped 2026-08-25).
 #
 # Causal-generation rows get core split certification: single-step, chain,
-# and state-handoff lanes. Non-chat rows get one provisional class-specific
-# smoke lane through the Skippy runtime and OpenAI-compatible frontend;
-# these classes deliberately fail closed if asked to stage. Models with
+# and state-handoff lanes. Non-chat rows get a certified class-specific smoke
+# lane through the Skippy runtime and OpenAI-compatible frontend plus an
+# independent local-monolithic oracle lane. These classes deliberately fail
+# closed if asked to stage. Models with
 # MTP/NextN tensors require the native draft sideband and verify it against the
 # target in the correctness lanes. Dense causal rows run them at the first,
 # midpoint, and last interior cuts. Hybrid/recurrent rows (sweep_period > 0)
@@ -897,6 +898,7 @@ run_workload_certify() {
     --model-path "$target"
     --model-id "$model_id"
     --work-dir "$cert_run_dir"
+    --startup-timeout-secs "$startup_timeout"
     --skip-build
   )
   if [[ -n "$mmproj" ]]; then
@@ -923,11 +925,17 @@ run_workload_certify() {
     oracle_executable="$SKIPPY_WORKLOAD_ORACLE_TTS"
   fi
   if (( certified == 1 )); then
+    command+=(--require-oracle)
+    if (( DRY_RUN == 1 )); then
+      echo "==> workload certification: family=$family class=$model_class lanes=$lane_csv model=$(basename "$target")"
+      printf '%q ' "${command[@]}"
+      printf '\n'
+      return 0
+    fi
     if (( oracle_requested != 1 )); then
       echo "certified workload $family ($model_class) requires a class-appropriate local-monolithic oracle executable" >&2
       exit 1
     fi
-    command+=(--require-oracle)
   fi
   echo "==> workload certification: family=$family class=$model_class lanes=$lane_csv model=$(basename "$target")"
   if (( DRY_RUN == 1 )); then

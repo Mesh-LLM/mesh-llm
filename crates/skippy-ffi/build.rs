@@ -453,7 +453,7 @@ fn cmake_bool_enabled(cache: &std::path::Path, key: &str) -> bool {
     contents
         .lines()
         .find_map(|line| line.strip_prefix(&prefix))
-        .is_some_and(|value| matches!(value, "ON" | "TRUE" | "1"))
+        .is_some_and(|value| matches!(value.trim(), "ON" | "TRUE" | "1"))
 }
 
 fn configured_backend_archive(
@@ -465,6 +465,11 @@ fn configured_backend_archive(
     msvc_archive: &str,
 ) -> bool {
     if !selected_backend {
+        assert!(
+            !cmake_bool_enabled(cmake_cache, cmake_key),
+            "unselected backend requires {cmake_key}=OFF in {}",
+            cmake_cache.display()
+        );
         return false;
     }
     assert!(

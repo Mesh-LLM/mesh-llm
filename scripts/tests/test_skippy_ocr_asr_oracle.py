@@ -46,8 +46,10 @@ class MultimodalOracleTests(unittest.TestCase):
         self.assertIn("mesh 42", oracle.compare_text("MESH 42", "Mesh 42.", "MESH 42"))
         with self.assertRaisesRegex(RuntimeError, "differs from monolithic"):
             oracle.compare_text("MESH 42", "MESH 43", "MESH 42")
-        with self.assertRaisesRegex(RuntimeError, "misses independently known"):
+        with self.assertRaisesRegex(RuntimeError, "does not exactly match independently known"):
             oracle.compare_text("unrelated", "Unrelated.", "MESH 42")
+        with self.assertRaisesRegex(RuntimeError, "does not exactly match independently known"):
+            oracle.compare_text("MESH 42 extra", "Mesh 42 extra.", "MESH 42")
 
     def test_asr_unlabeled_fixture_does_not_claim_accuracy(self):
         detail = oracle.compare_text("The mesh is ready.", "the mesh is ready", None)

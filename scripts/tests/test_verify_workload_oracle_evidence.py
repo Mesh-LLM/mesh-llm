@@ -109,6 +109,47 @@ class WorkloadOracleEvidenceTests(unittest.TestCase):
         self.assertEqual(1, result.returncode)
         self.assertIn("lacks an explicit comparator pass", result.stderr)
 
+    def test_writer_rejects_lane_without_smoke_suffix(self) -> None:
+        comparison_log = Path(self.temp_dir.name) / "comparison.txt"
+        comparison_log.write_text(self.body["comparison"] + "\n", encoding="utf-8")
+        result = subprocess.run(
+            [
+                "python3", str(WRITER), "--output", str(self.evidence),
+                "--comparison-log", str(comparison_log), "--class", "embedding",
+                "--smoke-lane", "embedding-smoke-extra", "--model-id", "fixture",
+                "--model-sha256", sha256(self.model),
+                "--candidate-executable", str(self.candidate),
+                "--oracle-executable", str(self.oracle),
+                "--pinned-patch-sha", "a" * 40, "--work-dir", self.temp_dir.name,
+            ],
+            cwd=ROOT, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(1, result.returncode)
+        self.assertIn("must end with '-smoke'", result.stderr)
+
+    def test_projector_workload_requires_projector_identity(self) -> None:
+        self.body.update({
+            "class": "ocr",
+            "smoke_lane": "ocr-smoke",
+            "oracle_lane": "ocr-oracle",
+            "comparison": "ocr local-monolithic oracle passed: exact text",
+        })
+        self.evidence.write_text(json.dumps(self.body), encoding="utf-8")
+        result = subprocess.run(
+            [
+                "python3", str(VERIFIER), "--evidence", str(self.evidence),
+                "--class", "ocr", "--smoke-lane", "ocr-smoke",
+                "--oracle-lane", "ocr-oracle", "--model-id", "fixture",
+                "--model-path", str(self.model),
+                "--candidate-executable", str(self.candidate),
+                "--oracle-executable", str(self.oracle),
+                "--pinned-patch-sha", "a" * 40,
+            ],
+            cwd=ROOT, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(1, result.returncode)
+        self.assertIn("requires a projector path", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

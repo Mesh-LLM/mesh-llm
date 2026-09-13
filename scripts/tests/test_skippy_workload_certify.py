@@ -29,7 +29,18 @@ class WorkloadCertifyContractTests(unittest.TestCase):
         self.assertIn("--oracle-server PATH", result.stderr)
         self.assertIn("--oracle-completion PATH", result.stderr)
         self.assertIn("--oracle-tts PATH", result.stderr)
+        self.assertIn("--startup-timeout-secs SECONDS", result.stderr)
         self.assertIn("--require-oracle", result.stderr)
+
+    def test_startup_timeout_must_be_positive(self) -> None:
+        result = self._run("--startup-timeout-secs", "0")
+        self.assertEqual(1, result.returncode)
+        self.assertIn("must be a positive integer", result.stderr)
+
+    def test_embedding_sdk_smoke_cannot_be_skipped(self) -> None:
+        runner = RUNNER.read_text(encoding="utf-8")
+        self.assertIn("official openai-python SDK smoke requires", runner)
+        self.assertNotIn("SDK smoke skipped", runner)
 
     def test_certified_mode_rejects_missing_oracle_before_build(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
