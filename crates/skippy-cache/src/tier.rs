@@ -17,8 +17,11 @@ use crate::l3::{
     HandoffManifest, HandoffSegmentRef, HandoffSegmentStore, MANIFEST_VERSION, PayloadGeometry,
     SegmentCodecIdentity, StoreLimits, StoreUsage, segment_digest,
 };
-use crate::manager::{L3ActivitySnapshot, L3CacheManager, L3EffectiveStatus};
+use crate::manager::{
+    BenefitRestoreObservation, L3ActivitySnapshot, L3CacheManager, L3EffectiveStatus,
+};
 use crate::payload::{ExactStatePayload, ExactStatePayloadKind};
+use crate::policy::{CostSample, EntryKey, SegmentId};
 
 /// Everything the status contract needs from the tier, in one read.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -54,6 +57,20 @@ pub fn l3_namespace_key(namespace: &str) -> String {
     hasher.update(b"l3-namespace-key-v1");
     hasher.update(namespace.as_bytes());
     format!("blake3:{}", hasher.finalize().to_hex())
+}
+
+fn benefit_entry_key(namespace: &str, token_ids: &[i32]) -> EntryKey {
+    let digest = blake3::hash(l3_prefix_key(namespace, token_ids).as_bytes());
+    u64::from_le_bytes(digest.as_bytes()[..8].try_into().expect("eight-byte key"))
+}
+
+fn benefit_segment_id(digest: &str) -> SegmentId {
+    let digest = blake3::hash(digest.as_bytes());
+    u64::from_le_bytes(
+        digest.as_bytes()[..8]
+            .try_into()
+            .expect("eight-byte segment id"),
+    )
 }
 
 /// A located entry: the cheap index-probe result, addressing exactly one
@@ -210,6 +227,66 @@ impl L3Tier {
         self.manager.activity_snapshot()
     }
 
+    /// Whether this prefix has an in-memory probation/admission history.
+    /// Callers use this to re-export an L1 hit only when the hit can promote
+    /// a probationary entry into durable storage.
+    pub fn benefit_tracks_prefix(&self, namespace: &str, token_ids: &[i32]) -> bool {
+        self.manager
+            .benefit_tracks(benefit_entry_key(namespace, token_ids))
+    }
+
+    /// Build a comparable serving cost once this stage has observed at least
+    /// one real L3 restore. Until then callers fall back to LRU write-through.
+    pub fn benefit_candidate_cost(&self, cold_prefill_cost: Option<f64>) -> Option<CostSample> {
+        self.manager
+            .benefit_candidate_cost(&self.state_identity, cold_prefill_cost)
+    }
+
+    /// Feed an executed durable restore into both the stage restore-cost EWMA
+    /// and the per-entry reuse history.
+    pub fn benefit_observe_l3_restore(
+        &self,
+        namespace: &str,
+        token_ids: &[i32],
+        location: &L3Location,
+        cold_prefill_cost: Option<f64>,
+        restore_cost: f64,
+    ) {
+        let Ok(manifest) = self.store().load_manifest(&location.manifest_key) else {
+            return;
+        };
+        let shared = manifest
+            .segments
+            .iter()
+            .map(|segment| (benefit_segment_id(&segment.digest), segment.bytes))
+            .collect();
+        self.manager
+            .benefit_observe_restore(BenefitRestoreObservation {
+                state_identity: self.state_identity.clone(),
+                key: benefit_entry_key(namespace, token_ids),
+                manifest: location.manifest_key.clone(),
+                exclusive_bytes: 0,
+                shared,
+                cold_prefill_cost,
+                restore_cost,
+            });
+    }
+
+    /// Record an L1 recurrence for a probationary durable candidate. `true`
+    /// means the caller should enqueue its existing RAM payload for L3.
+    pub fn benefit_observe_memory_hit(
+        &self,
+        namespace: &str,
+        token_ids: &[i32],
+        cold_prefill_cost: Option<f64>,
+    ) -> bool {
+        self.manager.benefit_observe_memory_hit(
+            &self.state_identity,
+            benefit_entry_key(namespace, token_ids),
+            cold_prefill_cost,
+        )
+    }
+
     /// The full status snapshot. One pass over the manifests; safe to call
     /// while serving, since it takes no lock a request path holds.
     pub fn status(&self) -> Result<L3Status> {
@@ -243,8 +320,25 @@ impl L3Tier {
         kv_desc_json: Option<String>,
         geometry: Option<&PayloadGeometry>,
     ) -> Result<String> {
+        self.spill_with_cost(namespace, token_ids, payload, kv_desc_json, geometry, None)?
+            .context("LRU fallback unexpectedly declined an L3 spill")
+    }
+
+    /// Offer a serving-path spill to benefit admission. A measured cost keeps
+    /// a first-seen entry in RAM probation and returns `None`; recurrence can
+    /// promote it. Missing measurements preserve the established LRU
+    /// write-through behavior.
+    pub fn spill_with_cost(
+        &self,
+        namespace: &str,
+        token_ids: &[i32],
+        payload: &ExactStatePayload,
+        kv_desc_json: Option<String>,
+        geometry: Option<&PayloadGeometry>,
+        cost: Option<CostSample>,
+    ) -> Result<Option<String>> {
         let _operation = self.manager.operation_guard();
-        let result = self.spill_inner(namespace, token_ids, payload, kv_desc_json, geometry);
+        let result = self.spill_inner(namespace, token_ids, payload, kv_desc_json, geometry, cost);
         if let Err(error) = &result {
             self.manager.activity_counters().record_error(error);
         }
@@ -258,7 +352,8 @@ impl L3Tier {
         payload: &ExactStatePayload,
         kv_desc_json: Option<String>,
         geometry: Option<&PayloadGeometry>,
-    ) -> Result<String> {
+        cost: Option<CostSample>,
+    ) -> Result<Option<String>> {
         if payload.byte_len() == 0 {
             bail!(
                 "refusing to spill an empty exact-state payload: no state component was exported"
@@ -404,6 +499,40 @@ impl L3Tier {
                 Ok(&wire[start..end])
             })
             .collect::<Result<Vec<_>>>()?;
+        manifest.segments = cuts
+            .iter()
+            .zip(&segment_slices)
+            .enumerate()
+            .map(|(index, (cut, bytes))| HandoffSegmentRef {
+                index: index as u32,
+                offset: cut.offset,
+                bytes: cut.len,
+                digest: segment_digest(bytes),
+                codec_identity: Some(cut.representation.identity(cut.len)),
+                meta_json: (!cut.label.is_empty()).then(|| cut.label.clone()),
+            })
+            .collect();
+        let exclusive_bytes = serde_json::to_vec(&manifest)
+            .map(|bytes| bytes.len() as u64)
+            .unwrap_or_default();
+        let benefit_key = benefit_entry_key(namespace, token_ids);
+        let shared = manifest
+            .segments
+            .iter()
+            .map(|segment| (benefit_segment_id(&segment.digest), segment.bytes))
+            .collect::<Vec<_>>();
+        if !self
+            .manager
+            .benefit_should_persist(benefit_key, exclusive_bytes, shared, cost)
+        {
+            return Ok(None);
+        }
+        if !self.manager.benefit_prepare_write(
+            benefit_key,
+            (wire.len() as u64).saturating_add(exclusive_bytes),
+        )? {
+            return Ok(None);
+        }
         let stored_segments = match self.store().try_put_segments(&segment_slices) {
             Ok(Ok(stored)) => stored,
             Ok(Err(refusal)) => {
@@ -420,18 +549,10 @@ impl L3Tier {
         // these segments are unreferenced, and an eviction triggered by
         // another writer would collect them mid-build.
         let mut held = Vec::with_capacity(stored_segments.len());
-        for ((index, cut), stored) in cuts.into_iter().enumerate().zip(stored_segments) {
+        for stored in stored_segments {
             if stored.put.new {
                 new_bytes = new_bytes.saturating_add(stored.put.bytes);
             }
-            manifest.segments.push(HandoffSegmentRef {
-                index: index as u32,
-                offset: cut.offset,
-                bytes: cut.len,
-                digest: stored.digest.clone(),
-                codec_identity: Some(cut.representation.identity(cut.len)),
-                meta_json: (!cut.label.is_empty()).then_some(cut.label),
-            });
             held.push(stored);
         }
         // Pin before publishing the manifest so another stage cannot evict
@@ -471,7 +592,9 @@ impl L3Tier {
             .bytes_written
             .fetch_add(new_bytes, Ordering::Relaxed);
         self.manager.record_successful_write();
-        Ok(payload_digest)
+        self.manager
+            .benefit_record_manifest(benefit_key, payload_digest.clone());
+        Ok(Some(payload_digest))
     }
 
     /// Locate the longest recorded prefix of the query, mirroring the radix
@@ -771,6 +894,63 @@ mod tests {
         assert_eq!(identity.class, crate::l3::CodecClass::Exact);
         assert_eq!(identity.decoded_len, segment.bytes);
         assert_eq!(identity.calibration_digest, None);
+    }
+
+    #[test]
+    fn measured_candidates_wait_in_probation_until_reused() {
+        let tier = tier("benefit-probation", "blake3:benefit");
+        let seed_tokens = tokens(4);
+        let seed_payload = ExactStatePayload::full_state(vec![7; 128]);
+        let seed = tier
+            .spill("ns", &seed_tokens, &seed_payload, None, None)
+            .expect("seed LRU spill");
+        let seed_location = tier
+            .locate_longest("ns", &seed_tokens, 8)
+            .expect("seed locate")
+            .expect("seed location");
+        assert_eq!(seed_location.manifest_key, seed);
+        tier.benefit_observe_l3_restore("ns", &seed_tokens, &seed_location, Some(400.0), 100.0);
+
+        let candidate_tokens = tokens(8);
+        let candidate_payload = ExactStatePayload::full_state(vec![9; 256]);
+        let cost = tier.benefit_candidate_cost(Some(400.0));
+        assert!(
+            tier.spill_with_cost(
+                "ns",
+                &candidate_tokens,
+                &candidate_payload,
+                None,
+                None,
+                cost,
+            )
+            .expect("first offer")
+            .is_none()
+        );
+        assert!(tier.benefit_tracks_prefix("ns", &candidate_tokens));
+        assert!(
+            tier.spill_with_cost(
+                "ns",
+                &candidate_tokens,
+                &candidate_payload,
+                None,
+                None,
+                cost,
+            )
+            .expect("first reuse")
+            .is_none()
+        );
+        let admitted = tier
+            .spill_with_cost(
+                "ns",
+                &candidate_tokens,
+                &candidate_payload,
+                None,
+                None,
+                cost,
+            )
+            .expect("second reuse")
+            .expect("candidate promoted");
+        assert!(tier.store().load_manifest(&admitted).is_ok());
     }
 
     #[test]

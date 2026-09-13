@@ -239,6 +239,9 @@ pub(crate) struct PendingExactStateRecord {
     /// Durable manifest digest to mirror into L2 on this worker job. `None`
     /// leaves the payload out of L2.
     pub(crate) l2_promotion_digest: Option<String>,
+    /// Measured cold-versus-restore cost for L3 benefit admission. Missing
+    /// telemetry preserves the established LRU write-through behavior.
+    pub(crate) l3_cost: Option<skippy_cache::policy::CostSample>,
 }
 
 #[derive(Debug)]
@@ -1172,6 +1175,7 @@ mod exact_state_record_queue_tests {
             l3_fill_claim: None,
             write_through_l3: true,
             l2_promotion_digest: None,
+            l3_cost: None,
         }
     }
 

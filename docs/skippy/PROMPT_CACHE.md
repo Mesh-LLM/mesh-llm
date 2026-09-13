@@ -89,6 +89,20 @@ resident byte counts, logical bytes, entries, segments, hits, misses, inserts,
 evictions, and admission refusals. Exact-hit telemetry identifies the restore
 source as `l2` and includes fill time and whether the L1 rewarm was queued.
 
+## Durable admission
+
+After a stage has measured an L3 restore, local OpenAI serving uses that
+restore-cost EWMA with the generation service estimator's cold-prefill cost.
+New entries remain in L1 probation and reach L3 after two observed reuses.
+Admission scores reuse probability and saved prefill time per exclusive and
+fractionally shared byte. Under disk pressure, the shared node manager removes
+the lowest-benefit inactive manifests first and preserves active pins. Before
+the first usable timing sample, or on serving paths without one, the existing
+reference-aware LRU write-through remains the safe fallback.
+
+The L3 activity status reports `benefit_probation`, `benefit_persist`,
+`benefit_lru_fallback`, and `benefit_evictions` counters.
+
 ## mesh-llm Defaults
 
 mesh-llm wires Skippy prefix cache through family policy. For supported model

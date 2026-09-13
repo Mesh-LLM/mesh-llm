@@ -15,6 +15,10 @@ use serde::Serialize;
 
 use crate::{
     l3::{HandoffSegmentStore, StoreLimits, StoreReconciliation, StoreUsage, WriteRefusal},
+    policy::{
+        AdmissionDecisionKind, BenefitPolicy, CostSample, EntryKey, PolicyConfig, PolicyEntryState,
+        SegmentId,
+    },
     tier::L3Tier,
 };
 
@@ -32,6 +36,10 @@ pub(crate) struct L3Activity {
     pub(crate) geometry_rejected: AtomicU64,
     pub(crate) bytes_read: AtomicU64,
     pub(crate) bytes_written: AtomicU64,
+    pub(crate) benefit_probation: AtomicU64,
+    pub(crate) benefit_persist: AtomicU64,
+    pub(crate) benefit_lru_fallback: AtomicU64,
+    pub(crate) benefit_evictions: AtomicU64,
     last_error: Mutex<Option<String>>,
 }
 
@@ -53,6 +61,10 @@ impl L3Activity {
             corrupt_entries: usage.map_or(0, |usage| usage.quarantined_objects),
             bytes_read: self.bytes_read.load(Ordering::Relaxed),
             bytes_written: self.bytes_written.load(Ordering::Relaxed),
+            benefit_probation: self.benefit_probation.load(Ordering::Relaxed),
+            benefit_persist: self.benefit_persist.load(Ordering::Relaxed),
+            benefit_lru_fallback: self.benefit_lru_fallback.load(Ordering::Relaxed),
+            benefit_evictions: self.benefit_evictions.load(Ordering::Relaxed),
             geometry_rejected: self.geometry_rejected.load(Ordering::Relaxed),
             last_error: self
                 .last_error
@@ -74,6 +86,10 @@ pub struct L3ActivitySnapshot {
     pub corrupt_entries: u64,
     pub bytes_read: u64,
     pub bytes_written: u64,
+    pub benefit_probation: u64,
+    pub benefit_persist: u64,
+    pub benefit_lru_fallback: u64,
+    pub benefit_evictions: u64,
     pub geometry_rejected: u64,
     pub last_error: Option<String>,
 }
@@ -134,6 +150,34 @@ struct L3ManagerInner {
     transitions: Mutex<VecDeque<L3StateTransition>>,
     operations: RwLock<()>,
     reconciliation: StoreReconciliation,
+    benefit_admission: Mutex<L3BenefitAdmission>,
+}
+
+#[derive(Debug)]
+struct L3BenefitAdmission {
+    policy: BenefitPolicy,
+    manifests: BTreeMap<EntryKey, String>,
+    restore_cost_ewma: BTreeMap<String, f64>,
+}
+
+pub(crate) struct BenefitRestoreObservation {
+    pub(crate) state_identity: String,
+    pub(crate) key: EntryKey,
+    pub(crate) manifest: String,
+    pub(crate) exclusive_bytes: u64,
+    pub(crate) shared: Vec<(SegmentId, u64)>,
+    pub(crate) cold_prefill_cost: Option<f64>,
+    pub(crate) restore_cost: f64,
+}
+
+impl Default for L3BenefitAdmission {
+    fn default() -> Self {
+        Self {
+            policy: BenefitPolicy::new(PolicyConfig::default()),
+            manifests: BTreeMap::new(),
+            restore_cost_ewma: BTreeMap::new(),
+        }
+    }
 }
 
 /// The single physical owner of a node-local L3 root.
@@ -185,9 +229,233 @@ impl L3CacheManager {
             transitions: Mutex::new(VecDeque::new()),
             operations: RwLock::new(()),
             reconciliation,
+            benefit_admission: Mutex::new(L3BenefitAdmission::default()),
         });
         managers.insert(root, Arc::downgrade(&inner));
         Ok(Self { inner })
+    }
+
+    pub(crate) fn benefit_tracks(&self, key: EntryKey) -> bool {
+        self.inner
+            .benefit_admission
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .policy
+            .entry(key)
+            .is_some()
+    }
+
+    /// Observe a candidate or recurrence. `None` deliberately selects the
+    /// existing LRU write-through path: timing coverage is allowed to be
+    /// sparse without making durable caching disappear.
+    pub(crate) fn benefit_should_persist(
+        &self,
+        key: EntryKey,
+        exclusive_bytes: u64,
+        shared: Vec<(SegmentId, u64)>,
+        cost: Option<CostSample>,
+    ) -> bool {
+        let Some(cost) = cost.filter(CostSample::is_valid) else {
+            self.inner
+                .activity
+                .benefit_lru_fallback
+                .fetch_add(1, Ordering::Relaxed);
+            return true;
+        };
+        let mut state = self
+            .inner
+            .benefit_admission
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.policy.entry(key).is_some() {
+            let decision = state.policy.record_hit(key, cost);
+            let persist = decision.is_some_and(|decision| {
+                matches!(
+                    decision.kind,
+                    AdmissionDecisionKind::Promote | AdmissionDecisionKind::AdmitPersist
+                )
+            }) || state
+                .policy
+                .entry(key)
+                .is_some_and(|entry| entry.state == PolicyEntryState::Admitted);
+            self.inner
+                .activity
+                .benefit_persist
+                .fetch_add(u64::from(persist), Ordering::Relaxed);
+            return persist;
+        }
+        let decision = state
+            .policy
+            .consider_admission(key, exclusive_bytes, shared, cost, &[]);
+        let persist = matches!(decision.kind, AdmissionDecisionKind::AdmitPersist);
+        if persist {
+            self.inner
+                .activity
+                .benefit_persist
+                .fetch_add(1, Ordering::Relaxed);
+        } else if matches!(decision.kind, AdmissionDecisionKind::AdmitProbation) {
+            self.inner
+                .activity
+                .benefit_probation
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        persist
+    }
+
+    pub(crate) fn benefit_candidate_cost(
+        &self,
+        state_identity: &str,
+        cold_prefill_cost: Option<f64>,
+    ) -> Option<CostSample> {
+        let cold_prefill_cost =
+            cold_prefill_cost.filter(|cost| cost.is_finite() && *cost >= 0.0)?;
+        let state = self
+            .inner
+            .benefit_admission
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let restore_cost = *state.restore_cost_ewma.get(state_identity)?;
+        Some(CostSample {
+            cold_prefill_cost,
+            restore_cost,
+        })
+    }
+
+    pub(crate) fn benefit_observe_restore(&self, observation: BenefitRestoreObservation) {
+        let Some(cold_prefill_cost) = observation
+            .cold_prefill_cost
+            .filter(|cost| cost.is_finite() && *cost >= 0.0)
+        else {
+            return;
+        };
+        if !observation.restore_cost.is_finite() || observation.restore_cost < 0.0 {
+            return;
+        }
+        let cost = CostSample {
+            cold_prefill_cost,
+            restore_cost: observation.restore_cost,
+        };
+        let mut state = self
+            .inner
+            .benefit_admission
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state
+            .restore_cost_ewma
+            .entry(observation.state_identity)
+            .and_modify(|estimate| *estimate = *estimate * 0.8 + observation.restore_cost * 0.2)
+            .or_insert(observation.restore_cost);
+        if state.policy.entry(observation.key).is_none() {
+            let decision = state.policy.consider_admission(
+                observation.key,
+                observation.exclusive_bytes,
+                observation.shared,
+                cost,
+                &[],
+            );
+            if !matches!(decision.kind, AdmissionDecisionKind::Reject) {
+                state
+                    .manifests
+                    .insert(observation.key, observation.manifest);
+            }
+        }
+        let _ = state.policy.record_hit(observation.key, cost);
+    }
+
+    pub(crate) fn benefit_observe_memory_hit(
+        &self,
+        state_identity: &str,
+        key: EntryKey,
+        cold_prefill_cost: Option<f64>,
+    ) -> bool {
+        let Some(cost) = self.benefit_candidate_cost(state_identity, cold_prefill_cost) else {
+            return false;
+        };
+        let mut state = self
+            .inner
+            .benefit_admission
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let already_persisted = state.manifests.contains_key(&key);
+        state.policy.record_hit(key, cost).is_some_and(|decision| {
+            matches!(decision.kind, AdmissionDecisionKind::Promote) && !already_persisted
+        })
+    }
+
+    pub(crate) fn benefit_prepare_write(
+        &self,
+        candidate: EntryKey,
+        growth_bytes: u64,
+    ) -> Result<bool> {
+        let usage = self.inner.store.usage()?.used_bytes;
+        let budget = self.inner.store.limits().budget_bytes;
+        if budget == 0 {
+            return Ok(true);
+        }
+        let bytes_to_free = usage.saturating_add(growth_bytes).saturating_sub(budget);
+        if bytes_to_free == 0 {
+            return Ok(true);
+        }
+        let mut state = self
+            .inner
+            .benefit_admission
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.policy.observe_pressure(usage as f64 / budget as f64);
+        let mut pinned = state
+            .manifests
+            .iter()
+            .filter_map(|(key, manifest)| self.inner.store.is_pinned(manifest).then_some(*key))
+            .collect::<Vec<_>>();
+        pinned.extend(
+            state
+                .policy
+                .entries
+                .keys()
+                .filter(|key| **key != candidate && !state.manifests.contains_key(key))
+                .copied(),
+        );
+        let victims = state
+            .policy
+            .choose_victims(bytes_to_free, &pinned)
+            .into_iter()
+            .filter_map(|(key, verdict)| {
+                matches!(verdict, crate::policy::EvictionVerdict::Evict).then_some(key)
+            })
+            .collect::<Vec<_>>();
+        if victims.contains(&candidate) {
+            let _ = state.policy.remove(candidate, &pinned);
+            return Ok(false);
+        }
+        let manifests = victims
+            .iter()
+            .filter_map(|key| state.manifests.get(key).cloned())
+            .collect::<Vec<_>>();
+        let removed = self.inner.store.evict_manifest_keys(&manifests)?;
+        self.inner
+            .activity
+            .benefit_evictions
+            .fetch_add(removed.len() as u64, Ordering::Relaxed);
+        for key in victims {
+            if state
+                .manifests
+                .get(&key)
+                .is_some_and(|manifest| removed.contains(manifest))
+            {
+                state.manifests.remove(&key);
+                let _ = state.policy.remove(key, &pinned);
+            }
+        }
+        Ok(true)
+    }
+
+    pub(crate) fn benefit_record_manifest(&self, key: EntryKey, manifest: String) {
+        self.inner
+            .benefit_admission
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .manifests
+            .insert(key, manifest);
     }
 
     pub fn tier(&self, state_identity: String, segment_bytes: usize) -> L3Tier {

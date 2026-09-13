@@ -1571,12 +1571,47 @@ impl HandoffSegmentStore {
         }
     }
 
-    fn is_pinned(&self, payload_digest: &str) -> bool {
+    pub(crate) fn is_pinned(&self, payload_digest: &str) -> bool {
         self.pins
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(payload_digest)
             .is_some_and(|count| *count > 0)
+    }
+
+    /// Remove the requested inactive manifests and collect physical objects
+    /// that become unreferenced. Missing and pinned keys are skipped. This is
+    /// the commit side of an external eviction policy; the store's own LRU
+    /// reservation remains the hard-budget fallback.
+    pub(crate) fn evict_manifest_keys(&self, keys: &[String]) -> Result<Vec<String>> {
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.invalidate_usage();
+        let mut removed = Vec::new();
+        for key in keys {
+            if self.is_pinned(key) {
+                continue;
+            }
+            let path = self.manifest_path(key);
+            match fs::remove_file(&path) {
+                Ok(()) => {
+                    self.packed.remove_manifest_index(key)?;
+                    self.evicted_manifests.fetch_add(1, Ordering::Relaxed);
+                    removed.push(key.clone());
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("failed to evict selected manifest {key}"));
+                }
+            }
+        }
+        if !removed.is_empty() {
+            self.remove_dangling_prefix_links()?;
+            self.collect_unreferenced_segments()?;
+        }
+        Ok(removed)
     }
 
     /// What the store holds right now, for the status contract.

@@ -239,6 +239,7 @@ pub struct RemovalOutcome {
 
 /// The policy engine. Owns per-entry statistics and the shared-segment ledger;
 /// the caller drives it from cache events.
+#[derive(Debug)]
 pub struct BenefitPolicy {
     pub(crate) config: PolicyConfig,
     pub(crate) entries: BTreeMap<EntryKey, PolicyEntry>,

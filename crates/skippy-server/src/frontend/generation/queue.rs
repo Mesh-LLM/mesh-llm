@@ -453,6 +453,14 @@ impl GenerationServiceEstimator {
         predicted_wait_ms_for_state(&state, self.concurrency.load(Ordering::Acquire))
     }
 
+    pub(in crate::frontend) fn estimated_prefill_ms(&self, tokens: usize) -> Option<f64> {
+        let state = self.state.lock().ok()?;
+        state
+            .prefill_ms_per_token_ewma
+            .map(|per_token| per_token * tokens as f64)
+            .filter(|cost| cost.is_finite() && *cost >= 0.0)
+    }
+
     pub(in crate::frontend) fn set_concurrency(&self, concurrency: usize) {
         self.concurrency
             .store(concurrency.max(1), Ordering::Release);
@@ -949,5 +957,13 @@ mod service_estimator_tests {
     fn conservative_rate_uses_the_slower_p95_sample() {
         let samples = VecDeque::from([1.0, 1.0, 1.0, 10.0]);
         assert_eq!(conservative_ms_per_token(Some(1.5), &samples), Some(10.0));
+    }
+
+    #[test]
+    fn prefill_estimate_uses_observed_stage_rate() {
+        let estimator = GenerationServiceEstimator::new(1);
+        assert_eq!(estimator.estimated_prefill_ms(128), None);
+        estimator.observe_completed(GenerationAdmissionWork::new(100, 0), 25.0, 0.0);
+        assert_eq!(estimator.estimated_prefill_ms(40), Some(10.0));
     }
 }

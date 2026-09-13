@@ -155,6 +155,8 @@ The status payload reports:
   `filesystem_available_bytes`, `minimum_free_bytes`, `manifests`,
   `unique_segments`, `evicted_manifests`, and `quarantined_objects`.
 - `activity`, `reconciliation` (see below), and `inventory` (per-model entries).
+  Activity includes benefit-admission probation, persistence, LRU-fallback,
+  and policy-selected eviction counters.
 
 At **startup**, any resolution warnings (deprecated legacy vars, zero auto
 budget, unavailable store) are emitted as `Warning` events in the node log.

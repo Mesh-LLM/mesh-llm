@@ -580,12 +580,13 @@ fn store_exact_radix_record(
             .kv_desc
             .as_ref()
             .and_then(|desc| kv_page_geometry(desc, pending.payload.byte_len()));
-        let spill = l3.spill(
+        let spill = l3.spill_with_cost(
             &pending.namespace,
             &pending.token_ids,
             &pending.payload,
             kv_desc_json,
             geometry.as_ref(),
+            pending.l3_cost,
         );
         emit_l3_state_transitions(l3);
         if let Err(error) = spill {
@@ -871,6 +872,7 @@ mod tests {
             l3_fill_claim: None,
             write_through_l3: true,
             l2_promotion_digest: None,
+            l3_cost: None,
         }
     }
 

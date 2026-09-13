@@ -42,14 +42,33 @@ fn preflight_native_kv_location(
 }
 
 impl KvStageIntegration {
+    pub(crate) fn l3_benefit_cost(
+        &self,
+        cold_prefill_cost: Option<f64>,
+    ) -> Option<skippy_cache::policy::CostSample> {
+        self.l3
+            .as_ref()
+            .and_then(|l3| l3.benefit_candidate_cost(cold_prefill_cost))
+    }
+
     pub fn restore_exact_state(
         &self,
         runtime: &mut RuntimeState,
         session_id: &str,
         identities: &[PrefillKvIdentity],
     ) -> Result<Option<ExactStateRestore>> {
+        self.restore_exact_state_with_cold_cost(runtime, session_id, identities, None)
+    }
+
+    pub fn restore_exact_state_with_cold_cost(
+        &self,
+        runtime: &mut RuntimeState,
+        session_id: &str,
+        identities: &[PrefillKvIdentity],
+        cold_prefill_cost: Option<f64>,
+    ) -> Result<Option<ExactStateRestore>> {
         runtime.restore_transaction(session_id, |runtime| {
-            self.restore_exact_state_inner(runtime, session_id, identities)
+            self.restore_exact_state_inner(runtime, session_id, identities, cold_prefill_cost)
         })
     }
 
@@ -58,6 +77,7 @@ impl KvStageIntegration {
         runtime: &mut RuntimeState,
         session_id: &str,
         identities: &[PrefillKvIdentity],
+        cold_prefill_cost: Option<f64>,
     ) -> Result<Option<ExactStateRestore>> {
         if !self.should_lookup() || self.exact_state_payload().is_none() {
             return Ok(None);
@@ -91,9 +111,13 @@ impl KvStageIntegration {
                 // The durable tiers may still hold this prefix.
                 // Runs inside the restore transaction, so a failed import
                 // rolls the lane back exactly as a radix restore would.
-                if let Some(restored) =
-                    self.restore_from_l3(runtime, session_id, identity, lookup_started)?
-                {
+                if let Some(restored) = self.restore_from_l3(
+                    runtime,
+                    session_id,
+                    identity,
+                    lookup_started,
+                    cold_prefill_cost,
+                )? {
                     return Ok(Some(restored));
                 }
                 continue;
@@ -242,8 +266,41 @@ impl KvStageIntegration {
                 drop(lease);
                 continue;
             }
+            let promote_to_l3 = self.l3.as_ref().is_some_and(|l3| {
+                l3.benefit_observe_memory_hit(
+                    &identity.namespace,
+                    &lookup.stored_tokens,
+                    cold_prefill_cost,
+                )
+            });
+            let page_id = lookup.value.page_id.clone();
+            let promotion_payload = promote_to_l3.then(|| lookup.value.payload.clone());
+            let promotion_extra = promote_to_l3.then(|| lookup.value.extra.clone());
+            let stored_tokens = lookup.stored_tokens.clone();
+            drop(lease);
+            let promotion_enqueued = if let (Some(payload), Some(extra)) =
+                (promotion_payload, promotion_extra)
+                && self.try_begin_record(&page_id)
+            {
+                matches!(
+                    self.enqueue_exact_state_record(PendingExactStateRecord {
+                        page_id: page_id.clone(),
+                        payload,
+                        extra,
+                        namespace: identity.namespace.clone(),
+                        token_ids: stored_tokens,
+                        l3_fill_claim: None,
+                        write_through_l3: true,
+                        l2_promotion_digest: None,
+                        l3_cost: None,
+                    }),
+                    ExactStateRecordAdmission::Queued
+                )
+            } else {
+                false
+            };
             let restored = ExactStateRestore {
-                page_id: lookup.value.page_id,
+                page_id,
                 token_count: token_count as usize,
                 payload_kind: lookup.value.payload.kind(),
                 logical_bytes: lookup.logical_bytes,
@@ -256,9 +313,8 @@ impl KvStageIntegration {
                 recurrent_import_ms,
                 source: "radix",
                 fill_ms: 0.0,
-                rewarm_enqueued: false,
+                rewarm_enqueued: promotion_enqueued,
             };
-            drop(lease);
             return Ok(Some(restored));
         }
         Ok(None)
@@ -293,6 +349,16 @@ impl KvStageIntegration {
         session_id: &str,
         identity: &PrefillKvIdentity,
     ) -> Result<Option<ExactStateRecord>> {
+        self.record_exact_state_with_cost(runtime, session_id, identity, None)
+    }
+
+    pub fn record_exact_state_with_cost(
+        &self,
+        runtime: &mut RuntimeState,
+        session_id: &str,
+        identity: &PrefillKvIdentity,
+        l3_cost: Option<skippy_cache::policy::CostSample>,
+    ) -> Result<Option<ExactStateRecord>> {
         let Some(exact_state_payload) = self.exact_state_payload() else {
             return Ok(None);
         };
@@ -320,7 +386,12 @@ impl KvStageIntegration {
                     return Err(error);
                 }
             };
-        if already_recorded {
+        let probation_recurrence = already_recorded
+            && l3_cost.is_some()
+            && self.l3.as_ref().is_some_and(|l3| {
+                l3.benefit_tracks_prefix(&identity.namespace, &identity.token_ids)
+            });
+        if already_recorded && !probation_recurrence {
             self.finish_record(&identity.page_id);
             return Ok(None);
         }
@@ -397,6 +468,7 @@ impl KvStageIntegration {
             l3_fill_claim: None,
             write_through_l3: true,
             l2_promotion_digest: None,
+            l3_cost,
         }) {
             ExactStateRecordAdmission::Queued => {
                 // Recording owns the radix/blob locks while it hashes a potentially
@@ -447,6 +519,7 @@ impl KvStageIntegration {
         session_id: &str,
         identity: &PrefillKvIdentity,
         lookup_started: Instant,
+        cold_prefill_cost: Option<f64>,
     ) -> Result<Option<ExactStateRestore>> {
         const MAX_PREFIX_PROBES: usize = 64;
         let Some(l3) = &self.l3 else {
@@ -485,8 +558,15 @@ impl KvStageIntegration {
                 return Ok(None);
             }
         }
-        let outcome =
-            self.fill_and_import(runtime, session_id, identity, lookup_started, l3, &location);
+        let outcome = self.fill_and_import(
+            runtime,
+            session_id,
+            identity,
+            lookup_started,
+            l3,
+            &location,
+            cold_prefill_cost,
+        );
         // On success the claim travels with the re-warm record and the worker
         // releases it once the entry is radix-resident. On any other outcome
         // release it here.
@@ -500,6 +580,7 @@ impl KvStageIntegration {
         outcome
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn fill_and_import(
         &self,
         runtime: &mut RuntimeState,
@@ -508,6 +589,7 @@ impl KvStageIntegration {
         lookup_started: Instant,
         l3: &std::sync::Arc<skippy_cache::L3Tier>,
         location: &skippy_cache::L3Location,
+        cold_prefill_cost: Option<f64>,
     ) -> Result<Option<ExactStateRestore>> {
         // Native page capability is checked from manifest metadata before the
         // tier reads any segment bytes. Runtime ABI, platform and numerical
@@ -619,6 +701,14 @@ impl KvStageIntegration {
         }
         let logical_bytes = fill.payload.byte_len();
         let payload_kind = fill.payload.kind();
+        let restore_cost = lookup_started.elapsed().as_secs_f64() * 1_000.0;
+        l3.benefit_observe_l3_restore(
+            &identity.namespace,
+            &identity.token_ids[..token_count as usize],
+            location,
+            cold_prefill_cost,
+            restore_cost,
+        );
         // Re-warm the RAM tier off the request path. A drop is fine: the
         // disk copy stays authoritative. The fill claim rides along so the
         // worker releases it only once the entry is radix-resident.
@@ -635,6 +725,7 @@ impl KvStageIntegration {
             l3_fill_claim: Some(l3_fill_claim_key(l3, location)),
             write_through_l3: false,
             l2_promotion_digest,
+            l3_cost: None,
         });
         let rewarm_enqueued = matches!(admission, ExactStateRecordAdmission::Queued);
         Ok(Some(ExactStateRestore {

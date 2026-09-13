@@ -328,6 +328,7 @@ impl KvStageIntegration {
                     l3_fill_claim: None,
                     write_through_l3: false,
                     l2_promotion_digest: None,
+                    l3_cost: None,
                 }),
                 ExactStateRecordAdmission::Queued
             );
