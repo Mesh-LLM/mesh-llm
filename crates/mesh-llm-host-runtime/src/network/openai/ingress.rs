@@ -145,7 +145,7 @@ fn outcome_was_served(outcome: &proxy::RouteDispatchOutcome) -> bool {
 /// leaving the model-identity half open.
 async fn publish_raw_proxy_terminal(
     node: &mesh::Node,
-    plugin_manager: &crate::plugin::PluginManager,
+    channel: &dyn OpenAiExchangeChannel,
     exchange_id: &str,
     model_name: &str,
     final_outcome: &proxy::RouteDispatchOutcome,
@@ -184,7 +184,7 @@ async fn publish_raw_proxy_terminal(
     if let Some(digest) = request_digest {
         envelope = envelope.with_request_digest(digest.to_string());
     }
-    plugin_manager.publish(&envelope).await;
+    channel.publish(&envelope).await;
 }
 
 enum AutoRouteResolution {
@@ -997,7 +997,7 @@ async fn route_request(
         if let Some((plugin_manager, exchange_id)) = announce.as_ref() {
             publish_raw_proxy_terminal(
                 ctx.node,
-                plugin_manager,
+                *plugin_manager,
                 exchange_id,
                 model_name,
                 &outcome,
