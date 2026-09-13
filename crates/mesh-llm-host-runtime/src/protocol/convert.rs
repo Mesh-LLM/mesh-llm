@@ -633,6 +633,9 @@ fn local_throughput_hint_to_proto(
         model_name: hint.model_name.clone(),
         avg_tokens_per_second_milli: hint.avg_tokens_per_second_milli,
         throughput_samples: hint.throughput_samples,
+        observed_stage_us_per_layer: hint.observed_stage_us_per_layer,
+        stage_timing_samples: hint.stage_timing_samples,
+        stage_timing_age_ms: hint.stage_timing_age_ms,
     }
 }
 
@@ -643,6 +646,9 @@ fn proto_throughput_hint_to_local(
         model_name: hint.model_name.clone(),
         avg_tokens_per_second_milli: hint.avg_tokens_per_second_milli,
         throughput_samples: hint.throughput_samples,
+        observed_stage_us_per_layer: hint.observed_stage_us_per_layer,
+        stage_timing_samples: hint.stage_timing_samples,
+        stage_timing_age_ms: hint.stage_timing_age_ms,
     }
 }
 
