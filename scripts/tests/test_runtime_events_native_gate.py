@@ -48,6 +48,15 @@ class GateScriptTests(unittest.TestCase):
         `executed` marker behind, and the check above would read it."""
         self.assertIn(': >"$EVIDENCE_FILE"', self.script)
 
+    def test_the_evidence_path_is_absolute_before_cargo_runs(self) -> None:
+        """Cargo may run a package test from the package directory. The
+        wrapper and test must therefore share an absolute marker path."""
+        self.assertIn('EVIDENCE_DIR="$(cd "$(dirname "$EVIDENCE_FILE")"', self.script)
+        self.assertIn(
+            'EVIDENCE_FILE="$EVIDENCE_DIR/$(basename "$EVIDENCE_FILE")"',
+            self.script,
+        )
+
     def test_it_sets_every_prerequisite_the_gate_requires(self) -> None:
         for variable in (
             "MESH_LLM_RUNTIME_EVENTS_NATIVE_TEST=1",
@@ -141,6 +150,51 @@ class GateScriptBehaviorTests(unittest.TestCase):
             result = self.run_gate(Path(directory), cargo_body=self.EXECUTES)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("executed", result.stdout)
+
+    def test_a_relative_evidence_path_survives_a_test_cwd_change(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            nested = root / "nested"
+            nested.mkdir()
+            stub_bin = root / "stub-bin"
+            stub_bin.mkdir()
+            cargo = stub_bin / "cargo"
+            cargo.write_text(
+                "#!/usr/bin/env bash\n"
+                f'cd "{nested}"\n'
+                'printf \'executed\\n\' >> "$MESH_LLM_RUNTIME_EVENTS_EVIDENCE_FILE"\n',
+                encoding="utf-8",
+            )
+            cargo.chmod(0o755)
+            bundle = root / "bundle"
+            bundle.mkdir()
+            model = root / "model.gguf"
+            model.write_bytes(b"stub model")
+
+            result = subprocess.run(
+                [
+                    "bash",
+                    str(SCRIPT),
+                    "--bundle-dir",
+                    str(bundle),
+                    "--model",
+                    str(model),
+                    "--evidence",
+                    "evidence.txt",
+                ],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=False,
+                env={
+                    **os.environ,
+                    "PATH": f"{stub_bin}{os.pathsep}{os.environ['PATH']}",
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual((root / "evidence.txt").read_text(), "executed\n")
+            self.assertFalse((nested / "evidence.txt").exists())
 
     def test_a_blocked_gate_fails_even_though_the_test_exits_zero(self) -> None:
         """The whole reason the script checks the marker.
