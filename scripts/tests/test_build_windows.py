@@ -39,6 +39,23 @@ class BuildWindowsScriptTests(unittest.TestCase):
         self.assertIn('dynamic-native-runtime', script)
         self.assertNotIn("[switch]$AbiOnly", script)
 
+    def test_windows_cuda_sccache_requires_explicit_opt_in(self):
+        script = SCRIPT.read_text()
+        self.assertIn(
+            '$env:MESH_LLM_WINDOWS_CUDA_SCCACHE -eq "1"',
+            script,
+        )
+        self.assertIn(
+            'if (Test-CudaSccache) {\n'
+            '                $cmakeArgs += "-DCMAKE_CUDA_COMPILER_LAUNCHER=',
+            script,
+        )
+        self.assertNotIn(
+            'if (Test-Sccache) {\n'
+            '                $cmakeArgs += "-DCMAKE_CUDA_COMPILER_LAUNCHER=',
+            script,
+        )
+
     def test_windows_runtime_slice_uses_verified_cache_and_composer(self):
         runtime = RUNTIME.read_text()
         product = PRODUCT.read_text()
