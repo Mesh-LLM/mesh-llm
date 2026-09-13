@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use mesh_llm_plugin_manager::SkillAgent;
+use std::io::Write;
 use std::process::{Command, Stdio};
 
 use crate::skills::install_skills_for_agent;
@@ -171,7 +172,8 @@ fn write_goose_mcp_config_to_path(path: &std::path::Path, mcp_url: &str) -> Resu
     let mut config = read_goose_config(path)?;
     merge_goose_mcp_config(&mut config, mcp_url, path)?;
     std::fs::write(path, serde_yaml::to_string(&config)?)?;
-    eprintln!("✅ Wrote mesh MCP extension to {}", path.display());
+    let mut err = mesh_llm_events::console_err();
+    writeln!(err, "✅ Wrote mesh MCP extension to {}", path.display())?;
     Ok(())
 }
 
@@ -388,7 +390,8 @@ fn pi_missing_binary_guidance(model_arg: &str) -> Vec<String> {
 
 fn cleanup_mesh_child(mesh_child: &mut Option<std::process::Child>) {
     if let Some(child) = mesh_child {
-        eprintln!("🧹 Stopping mesh-llm node we started...");
+        let mut err = mesh_llm_events::console_err();
+        let _ = writeln!(err, "🧹 Stopping mesh-llm node we started...");
         let _ = child.kill();
         let _ = child.wait();
     }
@@ -400,11 +403,15 @@ async fn check_mesh(
     port: u16,
     model: &Option<String>,
 ) -> Result<(Vec<String>, String, Option<std::process::Child>)> {
+    let mut err = mesh_llm_events::console_err();
     let url = format!("http://127.0.0.1:{port}/v1/models");
 
     let mut child: Option<std::process::Child> = None;
     if client.get(&url).send().await.is_err() {
-        eprintln!("🚀 No mesh-llm on port {port}; starting background auto-join node");
+        writeln!(
+            err,
+            "🚀 No mesh-llm on port {port}; starting background auto-join node"
+        )?;
         let exe = std::env::current_exe().unwrap_or_else(|_| "mesh-llm".into());
         child = Some(
             std::process::Command::new(&exe)
@@ -434,10 +441,11 @@ async fn check_mesh(
         }
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
         if attempt % 5 == 4 {
-            eprintln!(
+            writeln!(
+                err,
                 "⏳ Waiting for mesh/models... ({:.0}s)",
                 (attempt + 1) as f64 * 3.0
-            );
+            )?;
         }
     }
 
@@ -453,8 +461,8 @@ async fn check_mesh(
     }
 
     let chosen = choose_requested_or_agent_model(&models, model, &mut child)?;
-    eprintln!("   Models: {}", models.join(", "));
-    eprintln!("   Using: {chosen}");
+    writeln!(err, "   Models: {}", models.join(", "))?;
+    writeln!(err, "   Using: {chosen}")?;
     Ok((models, chosen, child))
 }
 
@@ -539,8 +547,9 @@ async fn fetch_mesh_models(
         choose_agent_model(&models)
     };
 
-    eprintln!("   Models: {}", models.join(", "));
-    eprintln!("   Using: {chosen}");
+    let mut err = mesh_llm_events::console_err();
+    writeln!(err, "   Models: {}", models.join(", "))?;
+    writeln!(err, "   Using: {chosen}")?;
 
     Ok((models, chosen))
 }
@@ -579,13 +588,15 @@ pub async fn run_goose(model: Option<String>, port: u16) -> Result<()> {
 
     let provider_path = goose_config_dir.join("mesh.json");
     std::fs::write(&provider_path, serde_json::to_string_pretty(&provider)?)?;
-    eprintln!("✅ Wrote {}", provider_path.display());
+    let mut err = mesh_llm_events::console_err();
+    writeln!(err, "✅ Wrote {}", provider_path.display())?;
     write_goose_mcp_config(DEFAULT_MESH_MCP_URL)?;
     install_skills_for_agent(SkillAgent::Goose);
 
     let goose_app = std::path::Path::new("/Applications/Goose.app");
     if goose_app.exists() {
-        eprintln!("🪿 Launching Goose.app...");
+        writeln!(err, "🪿 Launching Goose.app...")?;
+        let _ = err.flush();
         std::process::Command::new("open")
             .arg("-a")
             .arg(goose_app)
@@ -593,12 +604,14 @@ pub async fn run_goose(model: Option<String>, port: u16) -> Result<()> {
             .env("GOOSE_MODEL", &chosen)
             .spawn()?;
         if mesh_child.is_some() {
-            eprintln!(
+            writeln!(
+                err,
                 "ℹ️  mesh-llm node running in background (kill manually or use `mesh-llm stop`)"
-            );
+            )?;
         }
     } else {
-        eprintln!("🪿 Launching goose session...");
+        writeln!(err, "🪿 Launching goose session...")?;
+        let _ = err.flush();
         let mut command = Command::new("goose");
         command
             .arg("session")
@@ -608,15 +621,21 @@ pub async fn run_goose(model: Option<String>, port: u16) -> Result<()> {
         let status = command.status();
         match status {
             Ok(s) if s.success() => {}
-            Ok(s) => eprintln!("goose exited with {s}"),
+            Ok(s) => writeln!(err, "goose exited with {s}")?,
             Err(_) => {
-                eprintln!("goose not found. Install: https://github.com/block/goose");
-                eprintln!("Or run manually:");
-                eprintln!("  GOOSE_PROVIDER=mesh GOOSE_MODEL={chosen} goose session");
+                writeln!(
+                    err,
+                    "goose not found. Install: https://github.com/block/goose"
+                )?;
+                writeln!(err, "Or run manually:")?;
+                writeln!(
+                    err,
+                    "  GOOSE_PROVIDER=mesh GOOSE_MODEL={chosen} goose session"
+                )?;
             }
         }
         if let Some(ref mut c) = mesh_child {
-            eprintln!("🧹 Stopping mesh-llm node we started...");
+            writeln!(err, "🧹 Stopping mesh-llm node we started...")?;
             let _ = c.kill();
             let _ = c.wait();
         }
@@ -661,7 +680,9 @@ pub async fn run_claude(model: Option<String>, port: u16) -> Result<()> {
     let mcp_config_json = mesh_mcp_claude_config_json(DEFAULT_MESH_MCP_URL)?;
     install_skills_for_agent(SkillAgent::Claude);
 
-    eprintln!("🚀 Launching Claude Code with {chosen} → {base_url}\n");
+    let mut err = mesh_llm_events::console_err();
+    writeln!(err, "🚀 Launching Claude Code with {chosen} → {base_url}\n")?;
+    let _ = err.flush();
     let mut command = Command::new("claude");
     command.args([
         "--model",
@@ -675,15 +696,21 @@ pub async fn run_claude(model: Option<String>, port: u16) -> Result<()> {
     let status = command.status();
     match status {
         Ok(s) if s.success() => {}
-        Ok(s) => eprintln!("claude exited with {s}"),
+        Ok(s) => writeln!(err, "claude exited with {s}")?,
         Err(_) => {
-            eprintln!("claude not found. Install: https://docs.anthropic.com/en/docs/claude-code");
-            eprintln!("Or run manually:");
-            eprintln!("  ANTHROPIC_BASE_URL={base_url} ANTHROPIC_API_KEY= claude --model {chosen}");
+            writeln!(
+                err,
+                "claude not found. Install: https://docs.anthropic.com/en/docs/claude-code"
+            )?;
+            writeln!(err, "Or run manually:")?;
+            writeln!(
+                err,
+                "  ANTHROPIC_BASE_URL={base_url} ANTHROPIC_API_KEY= claude --model {chosen}"
+            )?;
         }
     }
     if let Some(ref mut c) = mesh_child {
-        eprintln!("🧹 Stopping mesh-llm node we started...");
+        writeln!(err, "🧹 Stopping mesh-llm node we started...")?;
         let _ = c.kill();
         let _ = c.wait();
     }
@@ -843,11 +870,13 @@ fn write_pi_config_to_path_with_limits(
     merge_provider(&mut config, "providers", "mesh", provider, models_path)?;
 
     std::fs::write(models_path, serde_json::to_string_pretty(&config)?)?;
-    eprintln!(
+    let mut err = mesh_llm_events::console_err();
+    writeln!(
+        err,
         "✅ Wrote mesh provider to {} ({} models)",
         models_path.display(),
         model_names.len()
-    );
+    )?;
 
     Ok(())
 }
@@ -908,17 +937,19 @@ fn run_pi_with_mesh(
     }
 
     let model_arg = format!("mesh/{chosen}");
-    eprintln!("🚀 Launching pi with {chosen} → {base_url}\n");
+    let mut err = mesh_llm_events::console_err();
+    writeln!(err, "🚀 Launching pi with {chosen} → {base_url}\n")?;
+    let _ = err.flush();
     let mut command = Command::new("pi");
     command.args(["--model", &model_arg]);
     configure_interactive_stdio(&mut command);
     let status = command.status();
     match status {
         Ok(s) if s.success() => {}
-        Ok(s) => eprintln!("pi exited with {s}"),
+        Ok(s) => writeln!(err, "pi exited with {s}")?,
         Err(_) => {
             for line in pi_missing_binary_guidance(&model_arg) {
-                eprintln!("{line}");
+                writeln!(err, "{line}")?;
             }
         }
     }
@@ -959,21 +990,24 @@ pub async fn run_opencode(model: Option<String>, host: &str, write: bool) -> Res
                     &context_lengths,
                 );
 
-                eprintln!(
+                let mut err = mesh_llm_events::console_err();
+                writeln!(
+                    err,
                     "🚀 Launching OpenCode with {} → {}\n",
                     chosen, target.api_base_url
-                );
+                )?;
+                let _ = err.flush();
                 install_skills_for_agent(SkillAgent::Opencode);
                 let mut command = Command::new("opencode");
                 configure_opencode_launch_command(&mut command, &spec);
                 let status = command.status();
                 match status {
                     Ok(s) if s.success() => {}
-                    Ok(s) => eprintln!("opencode exited with {s}"),
+                    Ok(s) => writeln!(err, "opencode exited with {s}")?,
                     Err(_) => {
                         for line in opencode_missing_binary_guidance(&chosen, &target.input, &spec)
                         {
-                            eprintln!("{line}");
+                            writeln!(err, "{line}")?;
                         }
                     }
                 }
@@ -1134,11 +1168,13 @@ async fn write_opencode_config_to_path(
     let formatted_json = serde_json::to_string_pretty(&merged_config)?;
     std::fs::write(config_path, &formatted_json)?;
 
-    eprintln!(
+    let mut err = mesh_llm_events::console_err();
+    writeln!(
+        err,
         "✅ Wrote {} ({} models)",
         config_path.display(),
         model_names.len()
-    );
+    )?;
 
     Ok(())
 }
