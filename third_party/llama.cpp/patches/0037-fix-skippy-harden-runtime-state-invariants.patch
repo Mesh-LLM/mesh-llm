@@ -1,6 +1,6 @@
-From 893d500f125937d3eeb9da276c6a78884ed9e54a Mon Sep 17 00:00:00 2001
+From ecbdfd2b11f24391633e4bc5a85bd2306897bdeb Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
-Date: Mon, 14 Sep 2026 08:41:38 +1000
+Date: Mon, 14 Sep 2026 08:55:41 +1000
 Subject: [PATCH] fix(skippy): harden runtime state invariants
 
 ---
@@ -11,11 +11,11 @@ Subject: [PATCH] fix(skippy): harden runtime state invariants
  src/skippy/events.cpp                         | 19 +++++-
  src/skippy/execution-batch.cpp                | 51 ++++++++++++--
  src/skippy/model_package.cpp                  | 23 +++++++
- src/skippy/session.cpp                        | 20 +++---
+ src/skippy/session.cpp                        | 18 +++--
  src/skippy/state.cpp                          | 10 ++-
  .../tests/renamed_multishard_planning.cpp     | 10 +++
  src/skippy/tests/runtime_events.cpp           | 36 ++++++++++
- 11 files changed, 227 insertions(+), 34 deletions(-)
+ 11 files changed, 226 insertions(+), 33 deletions(-)
 
 diff --git a/include/skippy/events.h b/include/skippy/events.h
 index a99d7307a..2e0aa446f 100644
@@ -446,7 +446,7 @@ index 6df18689e..5c14f9599 100644
  
      std::vector<skippy_source_tensor> selected;
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
-index e3b8b5716..fe9b419c2 100644
+index e3b8b5716..27e6614ea 100644
 --- a/src/skippy/session.cpp
 +++ b/src/skippy/session.cpp
 @@ -162,19 +162,23 @@ enum skippy_status skippy_session_create(
@@ -480,15 +480,6 @@ index e3b8b5716..fe9b419c2 100644
      return skippy_success(out_error);
  }
  
-@@ -308,7 +312,7 @@ enum skippy_status skippy_session_configure_chat_sampling(
-             return out_error != nullptr && *out_error != nullptr ? (*out_error)->status : SKIPPY_STATUS_RUNTIME_ERROR;
-         }
-         skippy_refresh_backend_sampling(session, sampling);
--    } catch (const std::exception & e) {
-+    } catch (const std::exception &) {
-         skippy_clear_chat_sampling(session);
-         return skippy_success(out_error);
-     } catch (...) {
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
 index 620ee3578..8e91d5086 100644
 --- a/src/skippy/state.cpp
