@@ -929,11 +929,32 @@ fn exchange_usage_from_outcome_extracts_real_counts_and_omits_otherwise() {
     };
     let usage = exchange_usage_from_outcome(&with_usage).expect("real usage present");
     assert_eq!(usage.prompt_tokens, 42);
+    assert_eq!(usage.cached_prompt_tokens, None);
     assert_eq!(usage.completion_tokens, 6);
     assert_eq!(usage.total_tokens, 48);
 
-    // total derived when the backend omitted it.
-    let derived = proxy::RouteDispatchOutcome::RespondedWithUsage {
+    // A backend total that disagrees with prompt+completion (e.g. reasoning
+    // tokens folded into `total`) must ride through as reported — never
+    // silently replaced by a derived sum.
+    let disagreeing_total = proxy::RouteDispatchOutcome::RespondedWithUsage {
+        status_code: 200,
+        usage: TokenUsage {
+            prompt_tokens: Some(10),
+            cached_prompt_tokens: None,
+            completion_tokens: Some(5),
+            total_tokens: Some(23),
+        },
+    };
+    assert_eq!(
+        exchange_usage_from_outcome(&disagreeing_total)
+            .expect("real total present")
+            .total_tokens,
+        23
+    );
+
+    // The backend omitted `total_tokens` — never derive it (prompt+completion
+    // is not necessarily the real total), so this yields None entirely.
+    let missing_total = proxy::RouteDispatchOutcome::RespondedWithUsage {
         status_code: 200,
         usage: TokenUsage {
             prompt_tokens: Some(10),
@@ -942,11 +963,36 @@ fn exchange_usage_from_outcome_extracts_real_counts_and_omits_otherwise() {
             total_tokens: None,
         },
     };
+    assert!(exchange_usage_from_outcome(&missing_total).is_none());
+
+    // A backend reporting prompt but not completion (or vice versa) must
+    // never surface a fabricated zero for the missing count.
+    let missing_completion = proxy::RouteDispatchOutcome::RespondedWithUsage {
+        status_code: 200,
+        usage: TokenUsage {
+            prompt_tokens: Some(42),
+            cached_prompt_tokens: None,
+            completion_tokens: None,
+            total_tokens: Some(42),
+        },
+    };
+    assert!(exchange_usage_from_outcome(&missing_completion).is_none());
+
+    // The real cached-token count rides through when the backend reports it.
+    let with_cache = proxy::RouteDispatchOutcome::RespondedWithUsage {
+        status_code: 200,
+        usage: TokenUsage {
+            prompt_tokens: Some(42),
+            cached_prompt_tokens: Some(30),
+            completion_tokens: Some(6),
+            total_tokens: Some(48),
+        },
+    };
     assert_eq!(
-        exchange_usage_from_outcome(&derived)
-            .expect("derives total")
-            .total_tokens,
-        15
+        exchange_usage_from_outcome(&with_cache)
+            .expect("real usage present")
+            .cached_prompt_tokens,
+        Some(30)
     );
 
     // A status-only response, an error, and a wholly-empty usage object all

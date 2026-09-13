@@ -146,6 +146,8 @@ pub struct ServingProvenance {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ExchangeUsage {
     pub prompt_tokens: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_prompt_tokens: Option<u64>,
     pub completion_tokens: u64,
     pub total_tokens: u64,
 }
@@ -1025,12 +1027,14 @@ mod tests {
         )
         .with_usage(ExchangeUsage {
             prompt_tokens: 42,
+            cached_prompt_tokens: Some(10),
             completion_tokens: 6,
             total_tokens: 48,
         });
 
         let value = serde_json::to_value(&envelope).expect("serialize");
         assert_eq!(value["usage"]["prompt_tokens"], 42);
+        assert_eq!(value["usage"]["cached_prompt_tokens"], 10);
         assert_eq!(value["usage"]["completion_tokens"], 6);
         assert_eq!(value["usage"]["total_tokens"], 48);
     }

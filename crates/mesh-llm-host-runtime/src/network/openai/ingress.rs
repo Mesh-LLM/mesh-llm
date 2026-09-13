@@ -77,26 +77,31 @@ async fn serving_provenance_for_model(node: &mesh::Node, model_name: &str) -> Se
 /// yields `None`, so the terminal envelope omits `usage` rather than reporting
 /// fabricated zeros.
 fn exchange_usage_from_outcome(outcome: &proxy::RouteDispatchOutcome) -> Option<ExchangeUsage> {
-    match outcome {
-        proxy::RouteDispatchOutcome::RespondedWithUsage { usage, .. } => {
-            let prompt_tokens = usage.prompt_tokens.unwrap_or(0);
-            let completion_tokens = usage.completion_tokens.unwrap_or(0);
-            let total_tokens = usage
-                .total_tokens
-                .unwrap_or_else(|| prompt_tokens.saturating_add(completion_tokens));
-            // Guard against a usage object present but wholly empty: if the
-            // backend reported neither a prompt nor a completion count, we know
-            // nothing real, so omit rather than emit an all-zero record.
-            (usage.prompt_tokens.is_some() || usage.completion_tokens.is_some()).then_some(
-                ExchangeUsage {
-                    prompt_tokens,
-                    completion_tokens,
-                    total_tokens,
-                },
-            )
-        }
-        _ => None,
-    }
+    let proxy::RouteDispatchOutcome::RespondedWithUsage { usage, .. } = outcome else {
+        return None;
+    };
+    // All three or none: a backend that reports two counts but not the
+    // third has told us something is missing, and this mirrors the
+    // invariant `mesh_llm_events::logging::events::TokenUsage::from_counts`
+    // already documents elsewhere -- "missing, overflowing, or internally
+    // inconsistent usage must not be estimated." Never a derived total (a
+    // backend's real total can legitimately disagree with
+    // prompt+completion, e.g. reasoning tokens folded into `total`), and
+    // never a zero standing in for an absent count. `cached_prompt_tokens`
+    // rides along when the backend reported it -- for billing
+    // reconciliation, dropping it is usually the difference between a right
+    // and a wrong number.
+    let (Some(prompt_tokens), Some(completion_tokens), Some(total_tokens)) =
+        (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens)
+    else {
+        return None;
+    };
+    Some(ExchangeUsage {
+        prompt_tokens,
+        cached_prompt_tokens: usage.cached_prompt_tokens,
+        completion_tokens,
+        total_tokens,
+    })
 }
 
 /// Whether a dispatch outcome actually means inference ran and a response
