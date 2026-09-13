@@ -110,7 +110,7 @@ pub(super) fn apply_runtime_controls_behavior(setting: &mut ConfigSettingSchema,
         "runtime.activity.response" | "runtime.activity.advertisement" => {
             set_static_options(setting)
         }
-        "runtime.kv_cache.disk.mode" => set_static_options(setting),
+        "runtime.kv_cache.disk.mode" | "runtime.kv_cache.disk.codec" => set_static_options(setting),
         "runtime.kv_cache.disk.directory" => {
             set_text_format(setting, ConfigTextFormat::Path);
             push_non_empty_constraint(setting);

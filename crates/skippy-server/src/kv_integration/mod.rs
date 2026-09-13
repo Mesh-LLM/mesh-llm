@@ -192,6 +192,9 @@ pub struct KvStageIntegration {
     /// Durable L3 floor under the radix cache: exact-state records write
     /// through to it on the worker, and radix misses fill back from it.
     pub(crate) l3: Option<Arc<skippy_cache::L3Tier>>,
+    /// Whether this stage passed the backend and dtype gate for serving-path
+    /// CacheGen writes. Exposed in status so an opt-in fallback is visible.
+    pub(crate) cachegen_serving_enabled: bool,
     /// Manifest keys with an L3 fill in flight. Concurrent misses on one
     /// stored prefix must not each read it from disk: the loser prefills
     /// normally while the winner re-warms the radix for everyone.
@@ -984,6 +987,10 @@ impl KvStageIntegration {
                 json!(l2.admission_rejects),
             ),
             ("skippy.kv.l2.refused_bytes", json!(l2.refused_bytes)),
+            (
+                "skippy.kv.l3.cachegen_enabled",
+                json!(self.cachegen_serving_enabled),
+            ),
             (
                 "skippy.kv.output_token_entries",
                 json!(output_token_entries),

@@ -26,8 +26,8 @@ pub use admission::{
 pub use config::{
     ActivationDType, ActivationDescriptor, ActivationLayout, FlashAttentionType, GlmDsaPolicy,
     LoadMode, PeerConfig, SplitMode, StageActivationCodec, StageActivationCodecPolicy, StageConfig,
-    StageDevice, StageIdentity, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
-    StageTopology, StageTopologyEntry,
+    StageDevice, StageIdentity, StageKvCacheCodec, StageKvCacheConfig, StageKvCacheMode,
+    StageKvCachePayload, StageTopology, StageTopologyEntry,
 };
 pub use messages::{
     AckMessage, DecodeTokenMessage, ErrorMessage, FinalPrefillChunkMessage, MessageBase,

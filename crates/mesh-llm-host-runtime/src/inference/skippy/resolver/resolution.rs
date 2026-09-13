@@ -22,6 +22,7 @@ use super::types::{
 use crate::plugin::{
     BoolOrAuto, ModelConfigDefaults, ModelConfigEntry, ModelFitConfig, ThroughputConfig,
 };
+use mesh_llm_config::KvDiskCodec;
 
 #[cfg(test)]
 pub(crate) fn resolve_skippy_config(
@@ -276,6 +277,10 @@ fn resolve_model_fit_config(
     if l2_max_bytes > 0 && matches!(prefix_cache, ResolvedStageKvCache::Disabled) {
         anyhow::bail!("model_fit.cache_ram_mib requires prefix caching to be enabled");
     }
+    let kv_cache_codec = match context.request.mesh_config.runtime.kv_cache.disk.codec {
+        KvDiskCodec::Native => skippy_protocol::StageKvCacheCodec::Native,
+        KvDiskCodec::CacheGen => skippy_protocol::StageKvCacheCodec::CacheGen,
+    };
 
     Ok(ResolvedModelFitConfig {
         ctx_size,
@@ -286,6 +291,7 @@ fn resolve_model_fit_config(
         kv_cache_policy: kv.effective_policy,
         prefix_cache,
         l2_max_bytes,
+        kv_cache_codec,
         kv_offload,
         kv_offload_resolved,
         kv_unified,

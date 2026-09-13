@@ -37,6 +37,7 @@ pub(crate) use error::ensure_ok;
 pub use gguf_writer::{
     ModelInfo, SlicePlan, write_gguf_from_parts, write_gguf_metadata_from_parts,
 };
+pub use kv_pages::{decode_cachegen_kv_page, encode_cachegen_kv_page};
 pub use logging::{
     LLAMA_LOG_LEVEL_DEBUG, MeasuredNativeBuffers, NativeLogEvent, NativeLogParserMode,
     NativeLogParserPolicy, configure_native_log_parser, disable_verbose_native_logs,

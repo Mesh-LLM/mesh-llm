@@ -515,6 +515,7 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
     runtime::KV_CACHE_DISK_DIRECTORY,
     runtime::KV_CACHE_DISK_BUDGET_MIB,
     runtime::KV_CACHE_DISK_MINIMUM_FREE_MIB,
+    runtime::KV_CACHE_DISK_CODEC,
     WiringEntry {
         path: "runtime.model_target_demand_upgrade_min_requests",
         status: WiringStatus::Wired,

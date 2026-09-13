@@ -1,11 +1,113 @@
 use std::ptr;
 
 use anyhow::{Result, ensure};
-use skippy_cache::cachegen::archive::{RecordKind, ValidatedArchive, validate_archive};
+use skippy_cache::cachegen::archive::{
+    CacheGenArchive, ComponentLayout, PageLayout, RecordKind, ValidatedArchive, ValueType,
+    decode_page, encode_page, validate_archive,
+};
 use skippy_ffi::{CacheGenRecordV1, KvPageDesc as RawKvPageDesc};
 
 use crate::error::{ensure_ok, free_error};
 use crate::session::StageSession;
+use crate::{
+    GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, KV_PAGE_FLAG_V_TRANSPOSED,
+};
+
+/// Encode one complete runtime KV page into the portable CacheGen archive
+/// consumed directly by the native device import ABI.
+pub fn encode_cachegen_kv_page(desc: &RuntimeKvPageDesc, raw: &[u8]) -> Result<CacheGenArchive> {
+    desc.validate_payload(raw.len())?;
+    encode_page(&cachegen_page_layout(desc)?, raw)
+}
+
+/// Scalar oracle used by correctness tooling. Serving restores call the
+/// native device importer and never materialize this decoded allocation.
+pub fn decode_cachegen_kv_page(desc: &RuntimeKvPageDesc, archive: &[u8]) -> Result<Vec<u8>> {
+    let raw_len = usize::try_from(desc.payload_bytes)?;
+    desc.validate_payload(raw_len)?;
+    decode_page(archive, raw_len)
+}
+
+fn cachegen_page_layout(desc: &RuntimeKvPageDesc) -> Result<PageLayout> {
+    let components = if desc.component_count == 0 {
+        vec![cachegen_component_layout(
+            desc.token_count,
+            desc.layer_count,
+            desc.k_type,
+            desc.v_type,
+            desc.k_row_bytes,
+            desc.v_row_bytes,
+            desc.v_element_bytes,
+            desc.k_idx_row_bytes,
+            0,
+            desc.payload_bytes,
+            desc.flags,
+        )?]
+    } else {
+        desc.components
+            .iter()
+            .take(desc.component_count as usize)
+            .map(|component| {
+                cachegen_component_layout(
+                    component.token_count,
+                    component.layer_count,
+                    component.k_type,
+                    component.v_type,
+                    component.k_row_bytes,
+                    component.v_row_bytes,
+                    component.v_element_bytes,
+                    component.k_idx_row_bytes,
+                    component.payload_offset,
+                    component.payload_bytes,
+                    component.flags,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?
+    };
+    Ok(PageLayout {
+        payload_bytes: desc.payload_bytes,
+        components,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cachegen_component_layout(
+    token_count: u64,
+    layer_count: u32,
+    k_type: u32,
+    v_type: u32,
+    k_row_bytes: u32,
+    v_row_bytes: u32,
+    v_element_bytes: u32,
+    k_idx_row_bytes: u32,
+    payload_offset: u64,
+    payload_bytes: u64,
+    flags: u64,
+) -> Result<ComponentLayout> {
+    Ok(ComponentLayout {
+        token_count,
+        layer_count,
+        k_type: cachegen_value_type(k_type)?,
+        v_type: cachegen_value_type(v_type)?,
+        k_row_bytes,
+        v_row_bytes,
+        v_element_bytes,
+        k_idx_row_bytes,
+        payload_offset,
+        payload_bytes,
+        v_transposed: flags & KV_PAGE_FLAG_V_TRANSPOSED != 0,
+    })
+}
+
+fn cachegen_value_type(value: u32) -> Result<ValueType> {
+    match value {
+        GGML_TYPE_F32 => Ok(ValueType::F32),
+        GGML_TYPE_F16 => Ok(ValueType::F16),
+        GGML_TYPE_Q8_0 => Ok(ValueType::Q8_0),
+        GGML_TYPE_Q4_0 => Ok(ValueType::Q4_0),
+        _ => anyhow::bail!("CacheGen does not support runtime K/V type {value}"),
+    }
+}
 
 fn cachegen_records(validated: &ValidatedArchive<'_>) -> Result<Vec<CacheGenRecordV1>> {
     validated

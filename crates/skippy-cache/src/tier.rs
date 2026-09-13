@@ -14,8 +14,8 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 use crate::l3::{
-    HandoffManifest, HandoffSegmentRef, HandoffSegmentStore, MANIFEST_VERSION, PayloadGeometry,
-    SegmentCodecIdentity, StoreLimits, StoreUsage, segment_digest,
+    HandoffManifest, HandoffSegmentRef, HandoffSegmentStore, MANIFEST_VERSION, PayloadCodec,
+    PayloadGeometry, SegmentCodecIdentity, StoreLimits, StoreUsage, segment_digest,
 };
 use crate::manager::{
     BenefitRestoreObservation, L3ActivitySnapshot, L3CacheManager, L3EffectiveStatus,
@@ -90,6 +90,8 @@ pub struct L3Location {
     pub kv_desc_json: Option<String>,
     pub kv_bytes: u64,
     pub native_kv_passthrough: bool,
+    pub cachegen_kv: bool,
+    pub kv_decoded_bytes: u64,
 }
 
 /// A successful fill from the tier.
@@ -101,6 +103,24 @@ pub struct L3Fill {
     pub token_count: u64,
     pub kv_desc_json: Option<String>,
     pub payload_bytes: u64,
+    pub cachegen_kv: bool,
+    pub kv_decoded_bytes: u64,
+}
+
+/// Encoded KV component supplied by the serving worker. The calibration
+/// digest binds the archive's lossy numerical representation in the manifest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CacheGenKvPayload {
+    pub archive: Vec<u8>,
+    pub decoded_len: u64,
+    pub calibration_digest: String,
+}
+
+struct SpillOptions<'a> {
+    kv_desc_json: Option<String>,
+    geometry: Option<&'a PayloadGeometry>,
+    cost: Option<CostSample>,
+    cachegen: Option<CacheGenKvPayload>,
 }
 
 pub struct L3Tier {
@@ -110,17 +130,25 @@ pub struct L3Tier {
     segment_bytes: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum SegmentRepresentation {
     Raw,
     NativeKvPage,
+    CacheGenKv {
+        decoded_len: u64,
+        calibration_digest: String,
+    },
 }
 
 impl SegmentRepresentation {
-    fn identity(self, encoded_len: u64) -> SegmentCodecIdentity {
+    fn identity(&self, encoded_len: u64) -> SegmentCodecIdentity {
         match self {
             Self::Raw => SegmentCodecIdentity::raw(encoded_len),
             Self::NativeKvPage => SegmentCodecIdentity::native_kv_page(encoded_len),
+            Self::CacheGenKv {
+                decoded_len,
+                calibration_digest,
+            } => SegmentCodecIdentity::cachegen_archive(*decoded_len, calibration_digest.clone()),
         }
     }
 }
@@ -147,7 +175,7 @@ fn append_fixed_cuts(
             offset: *offset,
             len,
             label: String::new(),
-            representation,
+            representation: representation.clone(),
         });
         *offset = offset.saturating_add(len);
         remaining -= len;
@@ -338,7 +366,46 @@ impl L3Tier {
         cost: Option<CostSample>,
     ) -> Result<Option<String>> {
         let _operation = self.manager.operation_guard();
-        let result = self.spill_inner(namespace, token_ids, payload, kv_desc_json, geometry, cost);
+        let result = self.spill_inner(
+            namespace,
+            token_ids,
+            payload,
+            SpillOptions {
+                kv_desc_json,
+                geometry,
+                cost,
+                cachegen: None,
+            },
+        );
+        if let Err(error) = &result {
+            self.manager.activity_counters().record_error(error);
+        }
+        result
+    }
+
+    /// Persist a CacheGen archive plus the payload's exact recurrent tail.
+    /// The archive is already encoded on the background serving worker.
+    pub fn spill_cachegen_with_cost(
+        &self,
+        namespace: &str,
+        token_ids: &[i32],
+        payload: &ExactStatePayload,
+        kv_desc_json: String,
+        cachegen: CacheGenKvPayload,
+        cost: Option<CostSample>,
+    ) -> Result<Option<String>> {
+        let _operation = self.manager.operation_guard();
+        let result = self.spill_inner(
+            namespace,
+            token_ids,
+            payload,
+            SpillOptions {
+                kv_desc_json: Some(kv_desc_json),
+                geometry: None,
+                cost,
+                cachegen: Some(cachegen),
+            },
+        );
         if let Err(error) = &result {
             self.manager.activity_counters().record_error(error);
         }
@@ -350,17 +417,21 @@ impl L3Tier {
         namespace: &str,
         token_ids: &[i32],
         payload: &ExactStatePayload,
-        kv_desc_json: Option<String>,
-        geometry: Option<&PayloadGeometry>,
-        cost: Option<CostSample>,
+        options: SpillOptions<'_>,
     ) -> Result<Option<String>> {
+        let SpillOptions {
+            kv_desc_json,
+            geometry,
+            cost,
+            mut cachegen,
+        } = options;
         if payload.byte_len() == 0 {
             bail!(
                 "refusing to spill an empty exact-state payload: no state component was exported"
             );
         }
         let token_count = token_ids.len() as u64;
-        let (kv, recurrent): (Vec<u8>, Vec<u8>) = match payload.kind() {
+        let (mut kv, recurrent): (Vec<u8>, Vec<u8>) = match payload.kind() {
             ExactStatePayloadKind::FullState => (
                 payload
                     .full_state_bytes_timed()
@@ -395,6 +466,25 @@ impl L3Tier {
             ),
         };
 
+        let kv_decoded_bytes = kv.len() as u64;
+        if let Some(cachegen) = cachegen.as_mut() {
+            if payload.kind() != ExactStatePayloadKind::KvRecurrent
+                || cachegen.archive.is_empty()
+                || cachegen.decoded_len != kv_decoded_bytes
+                || cachegen.calibration_digest.is_empty()
+                || kv_desc_json.as_deref().is_none_or(str::is_empty)
+            {
+                bail!(
+                    "invalid CacheGen spill: archive, descriptor, and decoded KV length are required"
+                );
+            }
+            let decoded_len = usize::try_from(cachegen.decoded_len)
+                .context("CacheGen decoded KV length exceeds usize")?;
+            crate::cachegen::archive::validate_archive(&cachegen.archive, decoded_len)
+                .context("invalid CacheGen archive supplied for L3 spill")?;
+            kv = std::mem::take(&mut cachegen.archive);
+        }
+
         // For full-state and recurrent-only exactly one component is populated,
         // and KV states reach gigabytes: concatenating would peak at twice the
         // payload for no benefit. Only a genuine composite needs the copy.
@@ -419,8 +509,14 @@ impl L3Tier {
         manifest.total_bytes = wire.len() as u64;
         manifest.payload_digest = payload_digest.clone();
         manifest.kv_bytes = kv_bytes;
+        manifest.kv_decoded_bytes = kv_decoded_bytes;
         manifest.recurrent_bytes = recurrent_bytes;
-        let native_kv_passthrough = payload.kind() == ExactStatePayloadKind::KvRecurrent
+        let cachegen_kv = cachegen.is_some();
+        if cachegen_kv {
+            manifest.codec = Some(PayloadCodec::cachegen_kv_envelope());
+        }
+        let native_kv_passthrough = !cachegen_kv
+            && payload.kind() == ExactStatePayloadKind::KvRecurrent
             && kv_bytes > 0
             && kv_desc_json
                 .as_deref()
@@ -432,18 +528,21 @@ impl L3Tier {
         // geometry that does not describe these exact bytes is ignored rather
         // than trusted: mis-cutting would still reassemble, but silently write
         // the whole payload again every turn.
-        let geometry = geometry.filter(|geometry| {
-            let geometry_kv_bytes = geometry.total_bytes().saturating_sub(geometry.tail_bytes);
-            let matches = geometry.matches(wire.len() as u64)
-                && (!native_kv_passthrough || geometry_kv_bytes == kv_bytes);
-            if !matches {
-                self.manager
-                    .activity_counters()
-                    .geometry_rejected
-                    .fetch_add(1, Ordering::Relaxed);
-            }
-            matches
-        });
+        let geometry = (!cachegen_kv)
+            .then_some(geometry)
+            .flatten()
+            .filter(|geometry| {
+                let geometry_kv_bytes = geometry.total_bytes().saturating_sub(geometry.tail_bytes);
+                let matches = geometry.matches(wire.len() as u64)
+                    && (!native_kv_passthrough || geometry_kv_bytes == kv_bytes);
+                if !matches {
+                    self.manager
+                        .activity_counters()
+                        .geometry_rejected
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                matches
+            });
         let cuts = match geometry {
             Some(geometry) => geometry
                 .plan(self.segment_bytes as u64)
@@ -462,7 +561,25 @@ impl L3Tier {
             None => {
                 let mut cuts = Vec::new();
                 let mut offset = 0u64;
-                if native_kv_passthrough {
+                if let Some(cachegen) = cachegen.as_ref() {
+                    cuts.push(SegmentCut {
+                        offset: 0,
+                        len: kv_bytes,
+                        representation: SegmentRepresentation::CacheGenKv {
+                            decoded_len: cachegen.decoded_len,
+                            calibration_digest: cachegen.calibration_digest.clone(),
+                        },
+                        label: "cachegen-kv-archive".to_string(),
+                    });
+                    offset = kv_bytes;
+                    append_fixed_cuts(
+                        &mut cuts,
+                        &mut offset,
+                        recurrent_bytes,
+                        self.segment_bytes as u64,
+                        SegmentRepresentation::Raw,
+                    );
+                } else if native_kv_passthrough {
                     append_fixed_cuts(
                         &mut cuts,
                         &mut offset,
@@ -666,6 +783,7 @@ impl L3Tier {
                 );
             }
             let native_kv_passthrough = manifest.uses_native_kv_passthrough();
+            let cachegen_kv = manifest.uses_cachegen_kv();
             return Ok(Some(L3Location {
                 namespace_key,
                 prefix_key,
@@ -674,6 +792,8 @@ impl L3Tier {
                 kv_desc_json: manifest.kv_desc_json.clone(),
                 kv_bytes: manifest.kv_bytes,
                 native_kv_passthrough,
+                cachegen_kv,
+                kv_decoded_bytes: manifest.kv_decoded_bytes,
             }));
         }
         Ok(None)
@@ -741,11 +861,14 @@ impl L3Tier {
             }
             other => bail!("L3 manifest holds unknown payload kind {other}"),
         };
+        let cachegen_kv = manifest.uses_cachegen_kv();
         Ok(L3Fill {
             payload,
             token_count: manifest.token_count,
             kv_desc_json: manifest.kv_desc_json,
             payload_bytes,
+            cachegen_kv,
+            kv_decoded_bytes: manifest.kv_decoded_bytes,
         })
     }
 
@@ -785,6 +908,7 @@ impl L3Tier {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cachegen::archive::{ComponentLayout, PageLayout, ValueType, encode_page};
     use crate::l3::{
         CODEC_NATIVE_KV_PAGE, CODEC_NATIVE_KV_PAGE_VERSION, GeometryBlock, GeometryKind,
     };
@@ -993,6 +1117,101 @@ mod tests {
                 "{name} bytes changed during the storage round trip"
             );
         }
+    }
+
+    #[test]
+    fn cachegen_archive_and_exact_recurrent_tail_round_trip_as_typed_envelope() {
+        let tier = tier("cachegen-envelope", "blake3:cachegen");
+        let rows = 4u64;
+        let raw = (0..16u32)
+            .flat_map(|value| (value as f32 / 11.0).to_le_bytes())
+            .collect::<Vec<_>>();
+        let layout = PageLayout {
+            payload_bytes: raw.len() as u64,
+            components: vec![ComponentLayout {
+                token_count: rows,
+                layer_count: 1,
+                k_type: ValueType::F32,
+                v_type: ValueType::F32,
+                k_row_bytes: 8,
+                v_row_bytes: 8,
+                v_element_bytes: 4,
+                k_idx_row_bytes: 0,
+                payload_offset: 0,
+                payload_bytes: raw.len() as u64,
+                v_transposed: false,
+            }],
+        };
+        let archive = encode_page(&layout, &raw).expect("encode CacheGen page");
+        let recurrent = vec![9u8; 17];
+        let desc = runtime_kv_desc(0, rows, raw.len() as u64);
+        let digest = tier
+            .spill_cachegen_with_cost(
+                "ns",
+                &tokens(rows as usize),
+                &ExactStatePayload::kv_recurrent(raw.clone(), recurrent.clone()),
+                desc.clone(),
+                CacheGenKvPayload {
+                    calibration_digest: segment_digest(&archive.bytes),
+                    decoded_len: raw.len() as u64,
+                    archive: archive.bytes.clone(),
+                },
+                None,
+            )
+            .expect("spill CacheGen")
+            .expect("LRU write-through");
+        let manifest = tier.store().load_manifest(&digest).expect("manifest");
+        assert!(manifest.uses_cachegen_kv());
+        assert!(!manifest.uses_native_kv_passthrough());
+        assert_eq!(manifest.codec, Some(PayloadCodec::cachegen_kv_envelope()));
+        assert_eq!(manifest.kv_decoded_bytes, raw.len() as u64);
+        assert_eq!(manifest.kv_bytes, archive.bytes.len() as u64);
+
+        let location = tier
+            .locate_longest("ns", &tokens(rows as usize), 8)
+            .expect("locate")
+            .expect("location");
+        assert!(location.cachegen_kv);
+        let fill = tier.load(&location).expect("load");
+        assert!(fill.cachegen_kv);
+        assert_eq!(fill.kv_decoded_bytes, raw.len() as u64);
+        assert_eq!(
+            fill.payload.kv_bytes().unwrap().unwrap().as_ref(),
+            archive.bytes.as_slice()
+        );
+        assert_eq!(
+            fill.payload.recurrent_state_bytes().unwrap().as_ref(),
+            recurrent
+        );
+
+        let mut mismatched = manifest;
+        mismatched.kv_decoded_bytes += 4;
+        assert!(
+            tier.store().assemble(&mismatched).is_err(),
+            "CacheGen identity must match the envelope's decoded KV length"
+        );
+    }
+
+    #[test]
+    fn cachegen_spill_rejects_a_malformed_archive_before_persisting() {
+        let tier = tier("cachegen-invalid-archive", "blake3:cachegen");
+        let raw = vec![0u8; 64];
+        let error = tier
+            .spill_cachegen_with_cost(
+                "ns",
+                &tokens(4),
+                &ExactStatePayload::kv_recurrent(raw.clone(), Vec::new()),
+                runtime_kv_desc(0, 4, raw.len() as u64),
+                CacheGenKvPayload {
+                    archive: vec![1, 2, 3, 4],
+                    decoded_len: raw.len() as u64,
+                    calibration_digest: "blake3:invalid".to_string(),
+                },
+                None,
+            )
+            .expect_err("malformed CacheGen bytes must not enter L3");
+        assert!(error.to_string().contains("invalid CacheGen archive"));
+        assert!(tier.store().list_manifests().unwrap().is_empty());
     }
 
     #[test]

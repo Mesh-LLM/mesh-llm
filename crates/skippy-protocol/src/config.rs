@@ -329,6 +329,18 @@ pub enum StageKvCachePayload {
     FullState,
 }
 
+/// Durable KV representation used below the in-process exact-state cache.
+/// CacheGen is opt-in until every backend/dtype combination clears its
+/// hardware quality and latency gate.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StageKvCacheCodec {
+    #[default]
+    Native,
+    #[serde(rename = "cachegen")]
+    CacheGen,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct StageKvCacheConfig {
     #[serde(default = "default_kv_cache_mode")]
@@ -343,6 +355,8 @@ pub struct StageKvCacheConfig {
     /// Zero keeps L2 disabled.
     #[serde(default)]
     pub l2_max_bytes: u64,
+    #[serde(default)]
+    pub codec: StageKvCacheCodec,
     #[serde(default = "default_kv_cache_min_tokens")]
     pub min_tokens: u64,
     #[serde(default = "default_kv_cache_shared_stride_tokens")]

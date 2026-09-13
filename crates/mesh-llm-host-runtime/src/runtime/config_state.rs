@@ -325,7 +325,7 @@ fn logging_dynamic_limits_changed(old: &LoggingConfig, new: &LoggingConfig) -> b
 }
 
 fn kv_disk_changes_require_restart(old: &KvDiskTierConfig, new: &KvDiskTierConfig) -> bool {
-    old.mode != new.mode || old.directory != new.directory
+    old.mode != new.mode || old.directory != new.directory || old.codec != new.codec
 }
 
 fn kv_disk_dynamic_limits_changed(old: &KvDiskTierConfig, new: &KvDiskTierConfig) -> bool {

@@ -195,6 +195,15 @@ pub enum KvDiskTierMode {
     Fixed,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum KvDiskCodec {
+    #[default]
+    Native,
+    #[serde(rename = "cachegen")]
+    CacheGen,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct RuntimeKvCacheConfig {
     #[serde(default)]
@@ -213,6 +222,10 @@ pub struct KvDiskTierConfig {
     pub budget_mib: Option<u64>,
     #[serde(default)]
     pub minimum_free_mib: Option<u64>,
+    /// KV representation persisted in the disk tier. CacheGen remains an
+    /// explicit opt-in while backend/dtype qualification is incomplete.
+    #[serde(default)]
+    pub codec: KvDiskCodec,
 }
 
 impl KvDiskTierConfig {

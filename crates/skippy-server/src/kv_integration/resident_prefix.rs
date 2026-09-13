@@ -825,6 +825,7 @@ mod proactive_eviction_tests {
                 max_entries: 4,
                 max_bytes: 0,
                 l2_max_bytes: 0,
+                codec: skippy_protocol::StageKvCacheCodec::Native,
                 min_tokens: 1,
                 shared_prefix_stride_tokens: 1,
                 shared_prefix_record_limit: 1,

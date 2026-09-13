@@ -1,5 +1,5 @@
 use super::*;
-use mesh_llm_config::{KvDiskTierConfig, KvDiskTierMode};
+use mesh_llm_config::{KvDiskCodec, KvDiskTierConfig, KvDiskTierMode};
 use std::path::PathBuf;
 
 fn disk_config() -> KvDiskTierConfig {
@@ -8,6 +8,7 @@ fn disk_config() -> KvDiskTierConfig {
         directory: Some(PathBuf::from("/var/lib/mesh-llm/kv-cache")),
         budget_mib: Some(32 * 1024),
         minimum_free_mib: Some(16 * 1024),
+        codec: Default::default(),
     }
 }
 
@@ -22,6 +23,10 @@ fn disk_mode_and_directory_changes_require_restart() {
     let mut directory = old.clone();
     directory.directory = Some(PathBuf::from("/var/lib/mesh-llm/other-cache"));
     assert!(kv_disk_changes_require_restart(&old, &directory));
+
+    let mut codec = old.clone();
+    codec.codec = KvDiskCodec::CacheGen;
+    assert!(kv_disk_changes_require_restart(&old, &codec));
 }
 
 #[test]

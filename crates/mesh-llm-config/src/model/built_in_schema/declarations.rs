@@ -133,6 +133,11 @@ fn build_built_in_config_schema() -> ConfigSchema {
             ConfigValueSchema::Integer,
             true,
         ),
+        kv_disk_setting(
+            "runtime.kv_cache.disk.codec",
+            string_enum(["native", "cachegen"]),
+            false,
+        ),
         runtime_setting(
             "runtime.model_target_demand_upgrade_min_requests",
             ConfigValueSchema::Integer,

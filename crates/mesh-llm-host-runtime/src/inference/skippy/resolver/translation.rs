@@ -480,6 +480,7 @@ impl ResolvedSkippyConfig {
                 max_entries: 0,
                 max_bytes: 0,
                 l2_max_bytes: 0,
+                codec: skippy_protocol::StageKvCacheCodec::Native,
                 min_tokens: 0,
                 shared_prefix_stride_tokens: 0,
                 shared_prefix_record_limit: 0,
@@ -491,6 +492,7 @@ impl ResolvedSkippyConfig {
                     max_entries: 128,
                     max_bytes: 0,
                     l2_max_bytes: 0,
+                    codec: skippy_protocol::StageKvCacheCodec::Native,
                     min_tokens: 256,
                     shared_prefix_stride_tokens: 128,
                     shared_prefix_record_limit: 2,
@@ -522,6 +524,7 @@ impl ResolvedSkippyConfig {
         }
         if let Some(cache) = resolved.as_mut() {
             cache.l2_max_bytes = self.model_fit.l2_max_bytes;
+            cache.codec = self.model_fit.kv_cache_codec;
         }
         Ok(resolved)
     }

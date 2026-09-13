@@ -171,6 +171,7 @@ For an automatically sized cache:
 mode = "auto"
 directory = "/var/lib/mesh-llm/kv-cache"
 minimum_free_mib = 16384
+codec = "native"
 ```
 
 For a fixed 32 GiB cap:
@@ -181,6 +182,7 @@ mode = "fixed"
 directory = "/var/lib/mesh-llm/kv-cache"
 budget_mib = 32768
 minimum_free_mib = 16384
+codec = "cachegen"
 ```
 
 The directory must be absolute. If omitted, it is
@@ -207,6 +209,11 @@ each field.
 Invalid disk settings stop startup with a configuration error. Once a valid
 configuration is running, storage trouble fails open: Mesh logs the problem
 and serves the request with cold prefill.
+
+`codec = "native"` is the default. The opt-in `cachegen` codec currently
+activates only for the measured Metal F32/F32, F32/F16, and F16/F32 KV layouts;
+other backends and layouts persist exact native pages. CacheGen archives are
+encoded on the cache worker and restored directly into the native runtime.
 
 ## Inspect and maintain the disk cache
 

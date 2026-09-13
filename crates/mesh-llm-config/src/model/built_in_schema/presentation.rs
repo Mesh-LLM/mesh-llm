@@ -167,6 +167,18 @@ fn kv_disk_presentation(rendered: &str) -> Option<SettingPresentation> {
             .unit("MiB")
             .hint("number"),
         ),
+        "runtime.kv_cache.disk.codec" => Some(
+            sp(
+                "Disk cache codec",
+                "Persist native KV pages or qualified CacheGen archives. CacheGen currently activates only for validated Metal cache types.",
+                PROMPT_CACHE_CATEGORY,
+                50,
+            )
+            .choices(&[
+                ("native", "Native", "Persist exact native KV pages."),
+                ("cachegen", "CacheGen", "Use CacheGen for qualified Metal KV layouts."),
+            ]),
+        ),
         _ => None,
     }
 }

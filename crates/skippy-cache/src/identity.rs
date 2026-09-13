@@ -1,4 +1,4 @@
-use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig};
+use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig, StageKvCacheCodec};
 
 pub const NATIVE_KV_RUNTIME_ABI_VERSION: &str = "stage-abi-0.1.52/native-kv-page-v3";
 pub const NATIVE_KV_DTYPE: &str = "ggml-native-kv";
@@ -263,6 +263,16 @@ pub fn exact_state_identity_for_stage(config: &StageConfig, payload_kind: &str) 
     hasher.update(&config.lane_count.to_le_bytes());
     hasher.update(b"payload:");
     hasher.update(payload_kind.as_bytes());
+    // Native remains byte-for-byte compatible with the pre-selector identity.
+    // Opt-in lossy storage gets a distinct namespace so disabling CacheGen can
+    // never restore an archive written by an earlier process.
+    if config
+        .kv_cache
+        .as_ref()
+        .is_some_and(|cache| cache.codec == StageKvCacheCodec::CacheGen)
+    {
+        hasher.update(b"lossy-disk-codec:cachegen-kv-envelope-v1/cachegen-v1");
+    }
     format!("blake3:{}", hasher.finalize().to_hex())
 }
 
@@ -966,6 +976,38 @@ mod identity_stability_tests {
             prefix_identity(&first, 0, &tokens).page_id,
             prefix_identity(&second, 0, &tokens).page_id,
             "a restart must not invalidate cached prefixes"
+        );
+    }
+
+    #[test]
+    fn cachegen_uses_a_distinct_exact_state_identity() {
+        let native = config_with_topology("topology-a");
+        let cachegen = StageConfig {
+            kv_cache: Some(skippy_protocol::StageKvCacheConfig {
+                mode: skippy_protocol::StageKvCacheMode::LookupRecord,
+                payload: skippy_protocol::StageKvCachePayload::KvRecurrent,
+                max_entries: 64,
+                max_bytes: 0,
+                l2_max_bytes: 0,
+                codec: StageKvCacheCodec::CacheGen,
+                min_tokens: 64,
+                shared_prefix_stride_tokens: 128,
+                shared_prefix_record_limit: 2,
+            }),
+            ..native.clone()
+        };
+        let mut explicit_native = cachegen.clone();
+        explicit_native.kv_cache.as_mut().unwrap().codec = StageKvCacheCodec::Native;
+
+        assert_ne!(
+            exact_state_identity_for_stage(&native, "kv-recurrent"),
+            exact_state_identity_for_stage(&cachegen, "kv-recurrent"),
+            "opting out of CacheGen must make earlier lossy entries unreachable"
+        );
+        assert_eq!(
+            exact_state_identity_for_stage(&native, "kv-recurrent"),
+            exact_state_identity_for_stage(&explicit_native, "kv-recurrent"),
+            "the default native codec must preserve existing durable identities"
         );
     }
 

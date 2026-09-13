@@ -7,12 +7,9 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use skippy_cache::cachegen::archive::{
-    CacheGenArchive, ComponentLayout, PageLayout, ValueType, decode_page, encode_page,
-};
 use skippy_runtime::{
-    GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, KV_PAGE_FLAG_V_TRANSPOSED,
-    RuntimeKvPageDesc, StageModel, StageSession, TokenSignal,
+    GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, RuntimeKvPageDesc, StageModel,
+    StageSession, TokenSignal, decode_cachegen_kv_page, encode_cachegen_kv_page,
 };
 
 use crate::report::CacheGenGateReport;
@@ -51,7 +48,7 @@ pub(in crate::runner) fn run_cachegen_gate(
     kv_desc.validate_payload(kv.len())?;
 
     let encode_started = Instant::now();
-    let archive = encode_kv_archive(kv_desc, kv)?;
+    let archive = encode_cachegen_kv_page(kv_desc, kv)?;
     let encode_ms = elapsed_ms(encode_started);
     let native_storage_bytes = kv.len().saturating_add(recurrent.len());
     let cachegen_storage_bytes = archive.bytes.len().saturating_add(recurrent.len());
@@ -61,7 +58,7 @@ pub(in crate::runner) fn run_cachegen_gate(
     // but never feed its multi-gigabyte output into the measured restore. The
     // accelerated path must consume the persisted archive directly or fail.
     let scalar_oracle_decode_started = Instant::now();
-    let scalar_oracle = decode_kv_archive(kv_desc, &persisted.cachegen_archive)?;
+    let scalar_oracle = decode_cachegen_kv_page(kv_desc, &persisted.cachegen_archive)?;
     let scalar_oracle_decode_ms = elapsed_ms(scalar_oracle_decode_started);
     black_box(&scalar_oracle);
     drop(scalar_oracle);
@@ -311,98 +308,6 @@ fn compare_cachegen_continuation(
     })
 }
 
-fn encode_kv_archive(desc: &RuntimeKvPageDesc, raw: &[u8]) -> Result<CacheGenArchive> {
-    desc.validate_payload(raw.len())?;
-    encode_page(&page_layout(desc)?, raw)
-}
-
-fn decode_kv_archive(desc: &RuntimeKvPageDesc, archive: &[u8]) -> Result<Vec<u8>> {
-    let raw_len = usize::try_from(desc.payload_bytes).context("descriptor length exceeds usize")?;
-    desc.validate_payload(raw_len)?;
-    decode_page(archive, raw_len)
-}
-
-fn page_layout(desc: &RuntimeKvPageDesc) -> Result<PageLayout> {
-    let components = if desc.component_count == 0 {
-        vec![component_layout(
-            desc.token_count,
-            desc.layer_count,
-            desc.k_type,
-            desc.v_type,
-            desc.k_row_bytes,
-            desc.v_row_bytes,
-            desc.v_element_bytes,
-            desc.k_idx_row_bytes,
-            0,
-            desc.payload_bytes,
-            desc.flags,
-        )?]
-    } else {
-        desc.components
-            .iter()
-            .take(desc.component_count as usize)
-            .map(|component| {
-                component_layout(
-                    component.token_count,
-                    component.layer_count,
-                    component.k_type,
-                    component.v_type,
-                    component.k_row_bytes,
-                    component.v_row_bytes,
-                    component.v_element_bytes,
-                    component.k_idx_row_bytes,
-                    component.payload_offset,
-                    component.payload_bytes,
-                    component.flags,
-                )
-            })
-            .collect::<Result<Vec<_>>>()?
-    };
-    Ok(PageLayout {
-        payload_bytes: desc.payload_bytes,
-        components,
-    })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn component_layout(
-    token_count: u64,
-    layer_count: u32,
-    k_type: u32,
-    v_type: u32,
-    k_row_bytes: u32,
-    v_row_bytes: u32,
-    v_element_bytes: u32,
-    k_idx_row_bytes: u32,
-    payload_offset: u64,
-    payload_bytes: u64,
-    flags: u64,
-) -> Result<ComponentLayout> {
-    Ok(ComponentLayout {
-        token_count,
-        layer_count,
-        k_type: cachegen_value_type(k_type)?,
-        v_type: cachegen_value_type(v_type)?,
-        k_row_bytes,
-        v_row_bytes,
-        v_element_bytes,
-        k_idx_row_bytes,
-        payload_offset,
-        payload_bytes,
-        v_transposed: flags & KV_PAGE_FLAG_V_TRANSPOSED != 0,
-    })
-}
-
-fn cachegen_value_type(value: u32) -> Result<ValueType> {
-    match value {
-        GGML_TYPE_F32 => Ok(ValueType::F32),
-        GGML_TYPE_F16 => Ok(ValueType::F16),
-        GGML_TYPE_Q8_0 => Ok(ValueType::Q8_0),
-        GGML_TYPE_Q4_0 => Ok(ValueType::Q4_0),
-        _ => bail!("CacheGen gate does not support runtime K/V type {value}"),
-    }
-}
-
 fn cache_type_name(value: u32) -> Result<&'static str> {
     match value {
         GGML_TYPE_F32 => Ok("f32"),
@@ -522,6 +427,7 @@ fn max_or_zero(values: &[f64]) -> f64 {
 mod tests {
     use super::*;
     use skippy_cache::cachegen::lmcache::MAX_TOKENS_PER_CHUNK;
+    use skippy_runtime::KV_PAGE_FLAG_V_TRANSPOSED;
 
     fn f16_bytes(values: usize) -> Vec<u8> {
         (0..values)
@@ -562,8 +468,8 @@ mod tests {
     fn archive_roundtrip_preserves_geometry_and_length() {
         let desc = descriptor(0);
         let raw = f16_bytes(48);
-        let archive = encode_kv_archive(&desc, &raw).expect("encode");
-        let decoded = decode_kv_archive(&desc, &archive.bytes).expect("decode");
+        let archive = encode_cachegen_kv_page(&desc, &raw).expect("encode");
+        let decoded = decode_cachegen_kv_page(&desc, &archive.bytes).expect("decode");
         assert_eq!(decoded.len(), raw.len());
         assert_eq!(archive.tile_count, 4);
         assert_ne!(decoded, raw, "fixture must exercise lossy quantization");
@@ -573,8 +479,8 @@ mod tests {
     fn transposed_v_layout_is_restored_before_native_import() {
         let desc = descriptor(KV_PAGE_FLAG_V_TRANSPOSED);
         let raw = f16_bytes(48);
-        let archive = encode_kv_archive(&desc, &raw).expect("encode");
-        let decoded = decode_kv_archive(&desc, &archive.bytes).expect("decode");
+        let archive = encode_cachegen_kv_page(&desc, &raw).expect("encode");
+        let decoded = decode_cachegen_kv_page(&desc, &archive.bytes).expect("decode");
         assert_eq!(decoded.len(), raw.len());
         assert_eq!(archive.tile_count, 4);
     }
@@ -584,7 +490,7 @@ mod tests {
         let mut desc = descriptor(0);
         desc.payload_bytes += 2;
         let raw = f16_bytes(49);
-        assert!(encode_kv_archive(&desc, &raw).is_err());
+        assert!(encode_cachegen_kv_page(&desc, &raw).is_err());
     }
 
     #[test]
@@ -592,8 +498,8 @@ mod tests {
         let token_count = MAX_TOKENS_PER_CHUNK as u64 + 4;
         let desc = descriptor_with_tokens(KV_PAGE_FLAG_V_TRANSPOSED, token_count);
         let raw = f16_bytes(desc.payload_bytes as usize / 2);
-        let archive = encode_kv_archive(&desc, &raw).expect("encode");
-        let decoded = decode_kv_archive(&desc, &archive.bytes).expect("decode");
+        let archive = encode_cachegen_kv_page(&desc, &raw).expect("encode");
+        let decoded = decode_cachegen_kv_page(&desc, &archive.bytes).expect("decode");
         assert_eq!(decoded.len(), raw.len());
         assert_eq!(archive.tile_count, 8);
     }
