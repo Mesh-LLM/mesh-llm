@@ -88,6 +88,8 @@
         "llama-bump",
         "manual-full",
         "nightly",
+        "pull-request",
+        "main",
         "manual"
       ],
       "capability_tags": [

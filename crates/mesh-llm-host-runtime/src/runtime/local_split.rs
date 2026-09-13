@@ -544,7 +544,7 @@ fn realize_split_stage_admissions(
     } else {
         anyhow::ensure!(
             model_path.is_file(),
-            "generation-9 direct-GGUF split source must be a local file: {}",
+            "generation-10 direct-GGUF split source must be a local file: {}",
             model_path.display()
         );
         super::stage_admission::realize_direct_gguf_stage_admissions(
@@ -556,7 +556,7 @@ fn realize_split_stage_admissions(
             "skippy-backend:auto:v1",
         )
     }
-    .context("realize and admit generation-9 native stage chain")
+    .context("realize and admit generation-10 native stage chain")
 }
 
 async fn elect_split_start_coordinator(

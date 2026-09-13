@@ -40,13 +40,14 @@ activation links and then crossed three reply links before stage 0 could emit
 the token. On a topology with a fixed 10 ms delay per inter-stage hop, the reply
 chain alone makes the hot path six hops, or about 60 ms before compute.
 
-## Generation 7 Direct Prediction Return and Verify Retirement
+## Generation 10 Stage Admission and Verify Retirement
 
-Generation 7 introduced direct prediction return. Generation 9 is the current
+Generation 7 introduced direct prediction return, and generation 9 added
+canonical stage-admission descriptors. Generation 10 is the current
 compatibility-breaking cutover: a peer is stage compatible only when it
-advertises both `skippy-stage/2` and the complete `stage-generation-9` bundle.
-Every load carries a canonical admission descriptor. The ready response echoes
-that descriptor exactly before topology publication.
+advertises both `skippy-stage/2` and the complete `stage-generation-10` bundle.
+Every load carries a canonical admission descriptor, and the ready response
+echoes it exactly before topology publication.
 Prediction-bearing messages return directly from the final/readout stage to the
 driver-facing stage. Intermediate stages
 continue to forward activations and may handle cold-path control acknowledgments,
@@ -81,6 +82,37 @@ flowchart LR
 With the same four stages and 10 ms inter-stage delay, the no-spec decode hot
 path becomes `S0 -> S1 -> S2 -> S3 -> S0`: four hops, or about 40 ms before
 compute. That removes two serialized reply hops from every generated token.
+
+## Stale Verify-Window Discard
+
+Generation 10 adds the `DiscardStaleWindows` control frame (wire kind 23),
+which makes this generation compatibility-breaking: a pre-generation-10
+peer rejects the kind outright and drops the request connection.
+
+Run-ahead admission dispatches verify windows before their predecessors are
+verified, so a rejection strands every window queued behind the divergence.
+Those windows are already on the wire. The coordinator sends one discard
+naming a contiguous `[min_window_id, max_window_id]` range for the request,
+and it travels the same ordered path as the windows it cancels, so it is
+read after them.
+
+The handling rule differs by position in the chain, and this is the
+non-obvious part:
+
+- **Middle stages forward the frame and still execute the stale windows.**
+  A stage that is not the final stage owns KV state its downstream neighbour
+  depends on; skipping its forward pass would desynchronize the chain. It
+  passes the discard along so the frame reaches the stage that can act on it.
+- **The final/readout stage skips the named windows.** It is the only stage
+  whose output is thrown away by a discard, so skipping there is what
+  actually saves the work — the expensive readout and the direct prediction
+  return back to stage 0.
+
+The receiving stage records the range the moment it parses the frame, ahead
+of executing the backlog queued in front of it, which is what lets the skip
+take effect before the stale tail runs. See `INBOUND_LOOKAHEAD_BYTES` for
+the case where a wide-frame backlog outruns that read-ahead and the tail
+executes anyway.
 
 ## Relative Sizes
 

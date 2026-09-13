@@ -10,7 +10,7 @@ use crate::binary_transport::{
     AsyncForwarder, BinaryStageExecutionOptions, forwarded_stage_message,
     forwarded_stage_message_timed, run_binary_stage_message, write_stage_message_conditioned,
 };
-use crate::frontend::embedded_execution::VerifyRetirement;
+use crate::frontend::embedded_execution::{StaleWindowDiscard, VerifyRetirement};
 use crate::frontend::generation_receipt::GenerationLifecycleState;
 use crate::frontend::request::wire_sampling_config;
 use crate::frontend::speculative::{
@@ -31,7 +31,7 @@ use crate::frontend::{
     },
     prefill::{
         PrefillChunkObservation, drain_embedded_prefill_replies, drain_one_embedded_prefill_reply,
-        representative_prefill_compute_sample,
+        prefill_chunk_end, representative_prefill_compute_sample,
     },
 };
 use crate::telemetry::now_unix_nanos;
@@ -40,28 +40,12 @@ use lifecycle::{
     compose_target_predictions, decode_uses_context_sideband, direct_prediction_return_path,
     mark_epoch_stale, open_upstream_prediction_return, pipelined_window_layout,
     queued_active_tokens, refill_pipeline_ngram_candidates, speculation_after_prefix_restore,
+    stale_window_id_range,
 };
 use openai_frontend::{OpenAiError, OpenAiResult};
 use prefix_restore::EmbeddedPrefixRestore;
 use serde_json::json;
 use skippy_protocol::binary::{StageReplyStats, WireReplyKind, recv_reply};
-
-fn prefill_chunk_end(
-    pos_start: usize,
-    chunk_size: usize,
-    prefill_token_count: usize,
-    exact_checkpoint_boundary: Option<usize>,
-) -> usize {
-    let mut end = pos_start
-        .saturating_add(chunk_size)
-        .min(prefill_token_count);
-    if let Some(boundary) = exact_checkpoint_boundary
-        && pos_start < boundary
-    {
-        end = end.min(boundary);
-    }
-    end
-}
 
 impl StageOpenAiBackend {
     pub(super) fn generate_embedded_stage_zero_tokens(
@@ -841,7 +825,15 @@ impl StageOpenAiBackend {
                 _ => None,
             };
             let mut verify_window_scheduler = VerifyWindowScheduler::new(
-                VerifyWindowPipelineConfig::new(effective_speculative.verify_window.pipeline_depth),
+                if effective_speculative.verify_window.runahead_max_tokens > 0 {
+                    VerifyWindowPipelineConfig::with_runahead(
+                        effective_speculative.verify_window.runahead_max_tokens,
+                    )
+                } else {
+                    VerifyWindowPipelineConfig::new(
+                        effective_speculative.verify_window.pipeline_depth,
+                    )
+                },
             );
             let composite_sidecar_enabled =
                 native_mtp_options.ngram_hybrid && draft_guard.is_none();
@@ -1042,6 +1034,12 @@ impl StageOpenAiBackend {
                             && verify_window_scheduler.in_flight_len() < pipeline_in_flight_limit
                             && decoded_tokens + queued_active_tokens(&pipelined_windows)
                                 < request.max_tokens as usize
+                            // A window may need one budget token for its
+                            // epoch-start boundary on top of the proposals,
+                            // so wait for a retirement rather than plan a
+                            // chunk the budget cannot fit.
+                            && (verify_window_scheduler.in_flight_len() == 0
+                                || verify_window_scheduler.admissible_window_tokens() > 1)
                         {
                             let refill_threshold = chunk_width;
                             if pipeline.candidate_len() < refill_threshold {
@@ -1063,7 +1061,14 @@ impl StageOpenAiBackend {
                             if !pipeline.has_remaining_candidates() {
                                 break;
                             }
-                            let Some(planned) = pipeline.next_chunk(chunk_width) else {
+                            let budget_chunk_width = chunk_width
+                                .min(
+                                    verify_window_scheduler
+                                        .admissible_window_tokens()
+                                        .saturating_sub(1),
+                                )
+                                .max(1);
+                            let Some(planned) = pipeline.next_chunk(budget_chunk_width) else {
                                 break;
                             };
                             let proposal_tokens = planned.proposal_tokens().to_vec();
@@ -1078,8 +1083,11 @@ impl StageOpenAiBackend {
                                 current,
                                 &proposal_tokens,
                             );
-                            let window = verify_window_scheduler
-                                .open(layout.pos_start, layout.decode_step)?;
+                            let window = verify_window_scheduler.open(
+                                layout.pos_start,
+                                layout.decode_step,
+                                layout.input_tokens.len(),
+                            )?;
                             let input_tokens = layout.input_tokens;
                             let message =
                                 embedded_verify_window_message(VerifyWindowMessageArgs {
@@ -1324,6 +1332,22 @@ impl StageOpenAiBackend {
                             let stale_count =
                                 mark_epoch_stale(&mut pipelined_windows, pipeline_epoch);
                             verify_window_scheduler.mark_recovery_epoch(stale_count);
+                            if verify_window_scheduler.is_runahead()
+                                && let Some((min_id, max_id)) =
+                                    stale_window_id_range(&pipelined_windows, pipeline_epoch)
+                            {
+                                self.discard_stale_windows(
+                                    &request,
+                                    downstream,
+                                    verify_window_forwarder.as_mut(),
+                                    StaleWindowDiscard {
+                                        request_id,
+                                        session_id,
+                                        min_window_id: min_id,
+                                        max_window_id: max_id,
+                                    },
+                                )?;
+                            }
                             let pipeline = pipelined.take().expect("pipeline retained");
                             if ngram_sidecar_controller.observe_tail_outcome(
                                 pipeline.proposal(),
@@ -1888,6 +1912,31 @@ impl StageOpenAiBackend {
             if !pipelined_windows.is_empty() {
                 let stale_count = mark_epoch_stale(&mut pipelined_windows, pipeline_epoch);
                 verify_window_scheduler.mark_stale(stale_count);
+                if verify_window_scheduler.is_runahead()
+                    && let Some((min_id, max_id)) =
+                        stale_window_id_range(&pipelined_windows, pipeline_epoch)
+                {
+                    self.discard_stale_windows(
+                        &request,
+                        downstream,
+                        verify_window_forwarder.as_mut(),
+                        StaleWindowDiscard {
+                            request_id,
+                            session_id,
+                            min_window_id: min_id,
+                            max_window_id: max_id,
+                        },
+                    )?;
+                    // Teardown discard: the request is ending and the lane
+                    // goes back for reuse, so the discard must be fully on
+                    // the wire before anything else writes to this socket.
+                    // The mid-generation discard above deliberately does not
+                    // wait, because everything behind it is queued on the
+                    // same forwarder and stays ordered.
+                    if let Some(forwarder) = verify_window_forwarder.as_mut() {
+                        forwarder.flush().map_err(openai_backend_error)?;
+                    }
+                }
                 while let Some(stale) = pipelined_windows.pop_front() {
                     let stale_drain_timer = PhaseTimer::start();
                     let stale_reply = self.complete_dispatched_stage_message_direct(
@@ -1966,23 +2015,5 @@ impl StageOpenAiBackend {
         self.finish_embedded_generation_session(&request, lane_pool, lane, &result, &session_key)?;
         result?;
         Ok(cache_stats)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::prefill_chunk_end;
-
-    #[test]
-    fn exact_checkpoint_splits_prefill_at_the_native_state_boundary() {
-        assert_eq!(prefill_chunk_end(0, 1024, 1400, Some(768)), 768);
-        assert_eq!(prefill_chunk_end(768, 1024, 1400, Some(768)), 1400);
-    }
-
-    #[test]
-    fn exact_checkpoint_preserves_earlier_adaptive_chunks() {
-        assert_eq!(prefill_chunk_end(0, 256, 1400, Some(768)), 256);
-        assert_eq!(prefill_chunk_end(256, 256, 1400, Some(768)), 512);
-        assert_eq!(prefill_chunk_end(512, 512, 1400, Some(768)), 768);
     }
 }

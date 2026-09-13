@@ -82,6 +82,7 @@ class GateScriptBehaviorTests(unittest.TestCase):
         bundle: str | None = None,
         model: str | None = None,
         evidence_seed: str | None = None,
+        relative_evidence: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         stub_bin = root / "stub-bin"
         stub_bin.mkdir(exist_ok=True)
@@ -101,6 +102,7 @@ class GateScriptBehaviorTests(unittest.TestCase):
         evidence = root / "evidence.txt"
         if evidence_seed is not None:
             evidence.write_text(evidence_seed, encoding="utf-8")
+        evidence_argument = evidence.name if relative_evidence else str(evidence)
 
         return subprocess.run(
             [
@@ -111,7 +113,7 @@ class GateScriptBehaviorTests(unittest.TestCase):
                 "--model",
                 model,
                 "--evidence",
-                str(evidence),
+                evidence_argument,
             ],
             capture_output=True,
             text=True,
@@ -120,6 +122,7 @@ class GateScriptBehaviorTests(unittest.TestCase):
                 **os.environ,
                 "PATH": f"{stub_bin}{os.pathsep}{os.environ['PATH']}",
             },
+            cwd=root,
         )
 
     EXECUTES = (
@@ -139,6 +142,27 @@ class GateScriptBehaviorTests(unittest.TestCase):
             result = self.run_gate(Path(directory), cargo_body=self.EXECUTES)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("executed", result.stdout)
+
+    def test_relative_evidence_path_survives_cargo_working_directory_change(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            captured = root / "evidence-path.txt"
+            result = self.run_gate(
+                root,
+                cargo_body=(
+                    "#!/usr/bin/env bash\n"
+                    f'printf \'%s\\n\' "$MESH_LLM_RUNTIME_EVENTS_EVIDENCE_FILE" '
+                    f"> {captured}\n"
+                    "cd /\n"
+                    'printf \'executed\\n\' '
+                    '>> "$MESH_LLM_RUNTIME_EVENTS_EVIDENCE_FILE"\n'
+                ),
+                relative_evidence=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            evidence_path = Path(captured.read_text(encoding="utf-8").strip())
+            self.assertTrue(evidence_path.is_absolute())
+            self.assertEqual(evidence_path.resolve(), (root / "evidence.txt").resolve())
 
     def test_a_blocked_gate_fails_even_though_the_test_exits_zero(self) -> None:
         """The whole reason the script checks the marker.
@@ -274,6 +298,17 @@ class LinuxRuntimeSliceTests(unittest.TestCase):
             "ci/model-artifacts/manifests/skippy-ci-smoke.json",
         )
         self.assertEqual(step["with"]["model_artifact_id"], "family-qwen3-dense")
+
+    def test_the_gate_model_is_authorized_for_pr_and_main_ci(self) -> None:
+        manifest = yaml.safe_load(
+            (ROOT / "ci/model-artifacts/manifests/skippy-ci-smoke.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        artifact = next(
+            row for row in manifest["artifacts"] if row["id"] == "family-qwen3-dense"
+        )
+        self.assertTrue({"pull-request", "main"}.issubset(artifact["cadences"]))
 
     def test_evidence_is_uploaded_even_when_the_gate_fails(self) -> None:
         """The evidence file is how a failure is diagnosed, so it must

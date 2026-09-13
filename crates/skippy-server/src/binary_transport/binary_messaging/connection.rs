@@ -4,7 +4,7 @@ use super::control_messages::{
     handle_generation_control, handle_prefix_cache_control, handle_session_control, handle_stop,
     handle_verify_retirement,
 };
-use super::message_receive::{next_connection_session_id, receive_next_message};
+use super::message_receive::{next_connection_session_id, spawn_message_reader};
 use super::reply::reply_window_for_message;
 use super::reply::send_stage_reply;
 use super::session_lifecycle::{align_session_to_target, record_session_auto_align};
@@ -12,6 +12,7 @@ use super::session_tracker::{
     ConnectionSessionOwnership, ConnectionSessionTracker, combine_connection_and_cleanup_results,
     release_tracked_connection_sessions,
 };
+use super::stale_discard::StaleDiscardRegistry;
 use super::summary::BinaryMessageObservation;
 use super::summary::BinaryRequestSummary;
 use super::telemetry::UpstreamReplyWriteSpan;
@@ -90,7 +91,7 @@ pub(super) fn handle_binary_connection(
     native_mtp_enabled: bool,
     prediction_return_sinks: &PredictionReturnSinks,
     session_ownership: Arc<ConnectionSessionOwnership>,
-    worker_control: &ConnectionWorkerControl,
+    worker_control: Arc<ConnectionWorkerControl>,
     first_message: StageWireMessage,
 ) -> Result<()> {
     let mut session_tracker =
@@ -144,7 +145,7 @@ fn handle_binary_connection_messages(
     downstream_connect_timeout_secs: u64,
     native_mtp_enabled: bool,
     prediction_return_sinks: &PredictionReturnSinks,
-    worker_control: &ConnectionWorkerControl,
+    worker_control: Arc<ConnectionWorkerControl>,
     first_message: StageWireMessage,
     session_tracker: &mut ConnectionSessionTracker,
 ) -> Result<()> {
@@ -156,6 +157,16 @@ fn handle_binary_connection_messages(
     let mut request_summary = BinaryRequestSummary::default();
     let mut prediction_return_streams: BTreeMap<(u64, u64), TcpStream> = BTreeMap::new();
     let mut next_message = Some(first_message);
+    let discard_registry = Arc::new(StaleDiscardRegistry::default());
+    let inbound_reader = spawn_message_reader(
+        upstream,
+        input_activation_width,
+        config.activation_codec,
+        config.activation_codec_policy,
+        max_inflight.max(1),
+        discard_registry.clone(),
+        worker_control,
+    )?;
     let mut async_forwarder = if async_prefill_forward || max_inflight > 1 {
         downstream
             .as_ref()
@@ -171,11 +182,7 @@ fn handle_binary_connection_messages(
     loop {
         let recv_start_unix_nanos = now_unix_nanos() as u64;
         let recv_started = Instant::now();
-        let Some(mut message) = receive_next_message(
-            upstream,
-            worker_control,
-            input_activation_width,
-            config,
+        let Some(mut message) = inbound_reader.next(
             next_message.take(),
             pending_prefill_replies,
             request_summary.message_count,
@@ -220,6 +227,27 @@ fn handle_binary_connection_messages(
                 &mut prediction_return_streams,
                 prediction_return_sinks,
             )?;
+            continue;
+        }
+
+        if message.kind.is_stale_window_discard() {
+            // The reader thread already recorded the range; middle stages
+            // forward it so downstream stages can skip their buffered stale
+            // windows too. No reply is expected.
+            if let Some(downstream) = downstream.as_mut() {
+                if let Some(forwarder) = async_forwarder.as_mut() {
+                    forwarder
+                        .send(message, downstream_wire_condition, BTreeMap::new())
+                        .context("forward stale window discard downstream")?;
+                } else {
+                    write_stage_message_conditioned(
+                        &mut *downstream,
+                        &message,
+                        downstream_wire_condition,
+                    )
+                    .context("forward stale window discard downstream")?;
+                }
+            }
             continue;
         }
 
@@ -307,6 +335,38 @@ fn handle_binary_connection_messages(
             bail!("binary stage state does not match message kind");
         }
 
+        if message.kind == WireMessageKind::VerifyWindow
+            && downstream.is_none()
+            && discard_registry.is_discarded(
+                message.request_id,
+                message.session_id,
+                message.state.seq_id,
+            )
+        {
+            // A discard raced ahead of this buffered stale window: answer with
+            // an empty prediction set instead of executing it. The driver's
+            // stale drain only uses the window id for FIFO bookkeeping.
+            let reply = StageReply {
+                kind: WireReplyKind::PredictedTokens,
+                predicted: message.state.current_token,
+                predicted_tokens: Vec::new(),
+                native_mtp_draft: None,
+                window: reply_window_for_message(&message),
+                stats: StageReplyStats::default(),
+            };
+            if let Some(return_stream) =
+                prediction_return_streams.get_mut(&(message.request_id, message.session_id))
+            {
+                direct_return::send_direct_prediction_return(return_stream, reply)
+                    .context("send discarded verify window reply")?;
+            } else {
+                send_stage_reply(&mut *upstream, reply)
+                    .context("send discarded verify window reply")?;
+            }
+            request_summary.message_count += 1;
+            continue;
+        }
+
         let requires_predicted = message.kind.requires_predicted_reply();
         let early_prefill_ack = message.kind.is_prefill() && !requires_predicted;
         let mut upstream_reply_start_unix_nanos = None;
@@ -352,9 +412,8 @@ fn handle_binary_connection_messages(
             let lookup_kv = kv.cloned();
             let lookup_telemetry = telemetry.clone();
             let lookup_session_key = session_key.clone();
-            let lookup_message = message.clone();
             let lookup_token_ids = token_ids.clone();
-            let (auto_align, lookup_result) = iteration_scheduler
+            let (returned_message, auto_align, lookup_result) = iteration_scheduler
                 .execute_runtime("binary-prefix-lookup", move |runtime| {
                     let auto_align = align_session_to_target(
                         runtime,
@@ -363,21 +422,20 @@ fn handle_binary_connection_messages(
                         align_target,
                     )
                     .map_err(|error| openai_frontend::OpenAiError::backend(format!("{error:#}")))?;
-                    Ok((
-                        auto_align,
-                        maybe_lookup_binary_prefill(
-                            &lookup_config,
-                            runtime,
-                            lookup_kv.as_ref(),
-                            &lookup_telemetry,
-                            &lookup_session_key,
-                            &lookup_message,
-                            &lookup_token_ids,
-                            output_activation_width,
-                        ),
-                    ))
+                    let lookup_result = maybe_lookup_binary_prefill(
+                        &lookup_config,
+                        runtime,
+                        lookup_kv.as_ref(),
+                        &lookup_telemetry,
+                        &lookup_session_key,
+                        &message,
+                        &lookup_token_ids,
+                        output_activation_width,
+                    );
+                    Ok((message, auto_align, lookup_result))
                 })
                 .map_err(|error| anyhow::anyhow!(format!("{error:#}")))?;
+            message = returned_message;
             session_auto_align_count = auto_align.count;
             session_auto_align_ms = auto_align.elapsed_ms;
             session_auto_align_trimmed_tokens = auto_align.trimmed_tokens;
@@ -496,12 +554,23 @@ fn handle_binary_connection_messages(
                     let sample_prefill_final =
                         message.kind == WireMessageKind::PrefillFinalEmbd && downstream.is_none();
                     let scheduler_session_key = session_key.clone();
-                    let scheduler_message = message.clone();
                     let scheduler_token_ids = executable_token_ids.to_vec();
                     let scheduler_kv = kv.cloned();
                     let scheduler_telemetry = telemetry.clone();
                     let align_in_compute = !lookup_needed;
                     let collect_session_stats = telemetry.is_debug_enabled();
+                    let execute_context = format!(
+                        "execute scheduler-owned binary stage message \
+                         kind={:?} pos_start={} token_count={} tokens={} \
+                         executable_tokens={} activation_bytes={}",
+                        message.kind,
+                        message.pos_start,
+                        message.token_count,
+                        message.tokens.len(),
+                        executable_token_ids.len(),
+                        input_activation_bytes,
+                    );
+                    let scheduler_message = message;
                     let outcome = iteration_scheduler
                         .execute_runtime_timed("binary-stage-execute", move |runtime| {
                             let auto_align = if align_in_compute {
@@ -552,6 +621,7 @@ fn handle_binary_connection_messages(
                             let sessions_after =
                                 collect_session_stats.then(|| runtime.session_stats());
                             Ok((
+                                scheduler_message,
                                 auto_align,
                                 sessions_before,
                                 sessions_after,
@@ -560,24 +630,19 @@ fn handle_binary_connection_messages(
                             ))
                         })
                         .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
-                        .with_context(|| {
-                            format!(
-                                "execute scheduler-owned binary stage message \
-                                 kind={:?} pos_start={} token_count={} tokens={} \
-                                 executable_tokens={} activation_bytes={}",
-                                message.kind,
-                                message.pos_start,
-                                message.token_count,
-                                message.tokens.len(),
-                                executable_token_ids.len(),
-                                input_activation_bytes,
-                            )
-                        })?;
+                        .with_context(|| execute_context)?;
                     runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
                     runtime_lock_hold_ms = outcome.runtime_lock_hold_ms;
                     runtime_lock_acquires = 1;
-                    let (auto_align, sessions_before, sessions_after, eviction, result) =
-                        outcome.value;
+                    let (
+                        returned_message,
+                        auto_align,
+                        sessions_before,
+                        sessions_after,
+                        eviction,
+                        result,
+                    ) = outcome.value;
+                    message = returned_message;
                     if align_in_compute {
                         session_auto_align_count = auto_align.count;
                         session_auto_align_ms = auto_align.elapsed_ms;

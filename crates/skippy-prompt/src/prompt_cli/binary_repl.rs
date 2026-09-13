@@ -13,12 +13,22 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
     let tokenizer_path = materialized_tokenizer
         .as_deref()
         .unwrap_or(requested_tokenizer_path);
+    let tokenizer_layer_start = tokenizer_layer_start(&args, materialized_tokenizer.is_some());
+    let tokenizer_layer_end = tokenizer_layer_end(&args, materialized_tokenizer.is_some());
+    let tokenizer_load_mode = tokenizer_load_mode(&args, materialized_tokenizer.is_some());
+    let tokenizer_resident_tensor_names = resident_tensor_names_for_direct_load(
+        tokenizer_path,
+        tokenizer_load_mode,
+        tokenizer_layer_start,
+        tokenizer_layer_end,
+        args.ctx_size,
+    )?;
     let tokenizer = StageModel::open(
         tokenizer_path,
         &RuntimeConfig {
             stage_index: 0,
-            layer_start: tokenizer_layer_start(&args, materialized_tokenizer.is_some()),
-            layer_end: tokenizer_layer_end(&args, materialized_tokenizer.is_some()),
+            layer_start: tokenizer_layer_start,
+            layer_end: tokenizer_layer_end,
             ctx_size: args.ctx_size,
             lane_count: 1,
             n_batch: None,
@@ -39,7 +49,7 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
             cache_type_k: GGML_TYPE_F16,
             cache_type_v: GGML_TYPE_F16,
             flash_attn_type: skippy_runtime::FlashAttentionType::Auto,
-            load_mode: tokenizer_load_mode(&args, materialized_tokenizer.is_some()),
+            load_mode: tokenizer_load_mode,
             projector_path: None,
             projector_use_gpu: None,
             media_marker: None,
@@ -51,7 +61,7 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
             include_output: false,
             mtp_source: MtpSource::Disabled,
             filter_tensors_on_load: true,
-            resident_tensor_names: Vec::new(),
+            resident_tensor_names: tokenizer_resident_tensor_names,
             checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
             checkpoint_imatrix: None,
             checkpoint_imatrix_sha256: None,
@@ -80,6 +90,13 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
             .as_deref()
             .is_some_and(|path| path != args.model_path.as_path())
     {
+        let resident_tensor_names = resident_tensor_names_for_direct_load(
+            &args.model_path,
+            RuntimeLoadMode::RuntimeSlice,
+            0,
+            1,
+            args.ctx_size,
+        )?;
         let model = StageModel::open(
             &args.model_path,
             &RuntimeConfig {
@@ -118,7 +135,7 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
                 include_output: false,
                 mtp_source: MtpSource::Disabled,
                 filter_tensors_on_load: true,
-                resident_tensor_names: Vec::new(),
+                resident_tensor_names,
                 checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
                 checkpoint_imatrix: None,
                 checkpoint_imatrix_sha256: None,
@@ -361,6 +378,40 @@ fn tokenizer_load_mode(args: &BinaryReplArgs, materialized_package: bool) -> Run
         RuntimeLoadMode::ArtifactSlice
     } else {
         args.tokenizer_load_mode.into()
+    }
+}
+
+fn resident_tensor_names_for_direct_load(
+    model_path: &Path,
+    load_mode: RuntimeLoadMode,
+    layer_start: u32,
+    layer_end: u32,
+    ctx_size: u32,
+) -> Result<Vec<String>> {
+    match load_mode {
+        RuntimeLoadMode::RuntimeSlice => plan_gguf_stage_resident_tensor_names(
+            model_path,
+            &[(layer_start, layer_end)],
+            ctx_size,
+            1,
+        )
+        .context("derive tokenizer resident tensor closure")?
+        .into_iter()
+        .next()
+        .context("tokenizer resident tensor plan is empty"),
+        RuntimeLoadMode::ArtifactSlice | RuntimeLoadMode::LayerPackage => {
+            let mut names = ModelInfo::open(model_path)
+                .with_context(|| format!("open tokenizer tensor inventory {}", model_path.display()))?
+                .tensors()
+                .context("read tokenizer tensor inventory")?
+                .into_iter()
+                .map(|tensor| tensor.name)
+                .collect::<Vec<_>>();
+            names.sort();
+            names.dedup();
+            anyhow::ensure!(!names.is_empty(), "tokenizer tensor inventory is empty");
+            Ok(names)
+        }
     }
 }
 

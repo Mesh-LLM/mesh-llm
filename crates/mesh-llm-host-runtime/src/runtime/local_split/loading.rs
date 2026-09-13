@@ -1339,7 +1339,7 @@ mod activation_boundary_tests {
     #[test]
     fn missing_graph_boundary_is_not_reconstructed_from_manifest_width() {
         let error = required_boundary(None, "stage-1", "input")
-            .expect_err("generation 7 requires graph-observed boundary descriptors");
+            .expect_err("generation 10 requires graph-observed boundary descriptors");
         assert!(
             error
                 .to_string()
