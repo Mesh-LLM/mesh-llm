@@ -91,9 +91,11 @@ fn exchange_usage_from_outcome(outcome: &proxy::RouteDispatchOutcome) -> Option<
     // rides along when the backend reported it -- for billing
     // reconciliation, dropping it is usually the difference between a right
     // and a wrong number.
-    let (Some(prompt_tokens), Some(completion_tokens), Some(total_tokens)) =
-        (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens)
-    else {
+    let (Some(prompt_tokens), Some(completion_tokens), Some(total_tokens)) = (
+        usage.prompt_tokens,
+        usage.completion_tokens,
+        usage.total_tokens,
+    ) else {
         return None;
     };
     Some(ExchangeUsage {

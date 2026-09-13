@@ -148,7 +148,10 @@ fn float_repr(f: f64) -> String {
         (trimmed.to_string(), exponent)
     } else {
         let leading_zeros = frac_part.chars().take_while(|c| *c == '0').count();
-        (frac_part[leading_zeros..].to_string(), -(leading_zeros as i32) - 1)
+        (
+            frac_part[leading_zeros..].to_string(),
+            -(leading_zeros as i32) - 1,
+        )
     };
     if (-4..16).contains(&exponent) {
         // Fixed notation: the source string already places the digits
