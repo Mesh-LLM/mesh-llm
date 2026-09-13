@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::io::Write;
 use std::sync::LazyLock;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -106,17 +107,21 @@ pub fn huggingface_repo_url(url: &str) -> Option<String> {
 }
 
 pub fn list_models() {
-    eprintln!("Available models:");
-    eprintln!();
+    let _ = writeln!(std::io::stderr(), "Available models:");
+    let _ = writeln!(std::io::stderr());
     for m in MODEL_CATALOG.iter() {
         let draft_info = if let Some(d) = m.draft.as_deref() {
             format!(" (draft: {})", d)
         } else {
             String::new()
         };
-        eprintln!(
+        let _ = writeln!(
+            std::io::stderr(),
             "  {:40} {:>6}  {}{}",
-            m.name, m.size, m.description, draft_info
+            m.name,
+            m.size,
+            m.description,
+            draft_info
         );
     }
 }
