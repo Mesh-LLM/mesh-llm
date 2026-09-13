@@ -5,6 +5,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize},
         mpsc::{SyncSender, TrySendError},
     },
+    thread::JoinHandle,
 };
 
 use anyhow::{Result, bail};
@@ -150,7 +151,13 @@ pub(crate) struct ExactStateByteLimits {
 #[derive(Clone)]
 pub struct KvStageIntegration {
     pub(crate) mode: StageKvMode,
+    /// The in-process cache representation. Dense models keep native resident
+    /// KV here even when a durable tier is configured, so enabling disk does
+    /// not replace the fast warm path with serialized state import.
     pub(crate) payload: StagePrefixCachePayload,
+    /// Exportable representation written to and restored from L3. This is
+    /// separate from `payload` because resident KV is native and borrow-only.
+    pub(crate) durable_payload: Option<StagePrefixCachePayload>,
     pub(crate) correctness_mode: bool,
     pub(crate) trust_local_writes: bool,
     pub(crate) checkpoint_policy: SparseCheckpointPolicy,
@@ -163,7 +170,7 @@ pub struct KvStageIntegration {
     pub(crate) exact_blobs: Arc<Mutex<CacheBlobStore>>,
     pub(crate) exact_max_entries: usize,
     pub(crate) exact_byte_limits: ExactStateByteLimits,
-    pub(crate) exact_state_record_tx: SyncSender<PendingExactStateRecord>,
+    pub(crate) exact_state_record_worker: Arc<ExactStateRecordWorker>,
     pub(crate) exact_state_records_queued: Arc<AtomicU64>,
     pub(crate) exact_state_records_dropped: Arc<AtomicU64>,
     pub(crate) exact_state_records_pending: Arc<AtomicUsize>,
@@ -173,6 +180,23 @@ pub struct KvStageIntegration {
     pub(crate) output_tokens: Arc<Mutex<output_tokens::OutputTokenCache>>,
     pub(crate) split_prefill_tokens: Arc<Mutex<BTreeMap<String, Vec<i32>>>>,
     pub(crate) kv_lifecycle_observer: Option<Arc<dyn KvLifecycleObserver>>,
+    /// Payload bytes held by records queued for the worker but not yet
+    /// stored. The queue is bounded in bytes, not entries: an entry bound
+    /// lets one multi-GiB export sit next to another and doubles the RAM the
+    /// cache can pin behind a request.
+    pub(crate) exact_state_record_queue_bytes: Arc<AtomicU64>,
+    /// Durable L3 floor under the radix cache: exact-state records write
+    /// through to it on the worker, and radix misses fill back from it.
+    pub(crate) l3: Option<Arc<skippy_cache::L3Tier>>,
+    /// Manifest keys with an L3 fill in flight. Concurrent misses on one
+    /// stored prefix must not each read it from disk: the loser prefills
+    /// normally while the winner re-warms the radix for everyone.
+    pub(crate) inflight_fills: Arc<Mutex<BTreeSet<String>>>,
+    /// The model has attention KV but no recurrent memory, so an exact-state
+    /// entry legitimately carries an empty recurrent snapshot. Restores set
+    /// the position directly instead of importing one. Never true for a
+    /// recurrent family, where an empty snapshot is corruption.
+    pub(crate) dense_without_recurrent: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -183,7 +207,15 @@ pub enum StagePrefixCachePayload {
     FullState,
 }
 
-pub(crate) const EXACT_STATE_RECORD_CAPACITY: usize = 1;
+/// Entry backstop on the record queue. The binding limit is
+/// [`EXACT_STATE_RECORD_QUEUE_BYTES`]; this only caps bookkeeping.
+pub(crate) const EXACT_STATE_RECORD_CAPACITY: usize = 8;
+
+/// Payload bytes the record queue may hold. A record that does not fit is
+/// dropped, never delayed: recording is optional and inference is not. One
+/// record larger than the whole bound is still admitted when the queue is
+/// empty, or large models could never record at all.
+pub(crate) const EXACT_STATE_RECORD_QUEUE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 #[derive(Debug)]
 pub(crate) struct PendingExactStateRecord {
@@ -192,6 +224,54 @@ pub(crate) struct PendingExactStateRecord {
     pub(crate) extra: ExactStateExtra,
     pub(crate) namespace: String,
     pub(crate) token_ids: Vec<i32>,
+    /// When this record re-warms the radix after an L3 fill, the fill's
+    /// claim key. The worker releases it only once the radix insert lands,
+    /// so requests arriving during the asynchronous re-warm prefill normally
+    /// instead of duplicating the disk read.
+    pub(crate) l3_fill_claim: Option<String>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ExactStateRecordWorker {
+    sender: Mutex<Option<SyncSender<PendingExactStateRecord>>>,
+    task: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl ExactStateRecordWorker {
+    pub(crate) fn new(sender: SyncSender<PendingExactStateRecord>, task: JoinHandle<()>) -> Self {
+        Self {
+            sender: Mutex::new(Some(sender)),
+            task: Mutex::new(Some(task)),
+        }
+    }
+
+    fn with_sender<T>(
+        &self,
+        use_sender: impl FnOnce(Option<&SyncSender<PendingExactStateRecord>>) -> T,
+    ) -> T {
+        let sender = self
+            .sender
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        use_sender(sender.as_ref())
+    }
+}
+
+impl Drop for ExactStateRecordWorker {
+    fn drop(&mut self) {
+        self.sender
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(task) = self
+            .task
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            let _ = task.join();
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -306,20 +386,34 @@ pub(crate) enum ExactStateRecordAdmission {
     WorkerStopped,
 }
 
-fn has_exact_state_record_capacity(pending_count: &AtomicUsize) -> bool {
+fn has_exact_state_record_capacity(
+    pending_count: &AtomicUsize,
+    queue_bytes: &AtomicU64,
+    queue_bytes_cap: u64,
+) -> bool {
     pending_count.load(std::sync::atomic::Ordering::Acquire) < EXACT_STATE_RECORD_CAPACITY
+        && queue_bytes.load(std::sync::atomic::Ordering::Acquire) < queue_bytes_cap
+}
+
+/// Whether `bytes` more may join a queue already holding `held` bytes under
+/// `cap`. A single record over the cap is admitted only into an empty queue.
+fn record_fits_queue(held: u64, bytes: u64, cap: u64) -> bool {
+    held == 0 || held.saturating_add(bytes) <= cap
 }
 
 fn finish_exact_state_record(
     inflight_records: &Mutex<BTreeSet<String>>,
     pending_count: &AtomicUsize,
+    queue_bytes: &AtomicU64,
     page_id: &str,
+    bytes: u64,
 ) {
     inflight_records
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .remove(page_id);
     pending_count.fetch_sub(1, std::sync::atomic::Ordering::Release);
+    queue_bytes.fetch_sub(bytes, std::sync::atomic::Ordering::Release);
 }
 
 /// Shared bookkeeping handles for the exact-state-record background worker,
@@ -331,6 +425,7 @@ struct ExactStateWorkerHandles<'a> {
     inflight_records: &'a Mutex<BTreeSet<String>>,
     dropped: &'a AtomicU64,
     pending_count: &'a AtomicUsize,
+    queue_bytes: &'a AtomicU64,
     worker_healthy: &'a AtomicBool,
     worker_panics: &'a AtomicU64,
 }
@@ -347,6 +442,7 @@ fn run_exact_state_record_job(
         }
     };
     let page_id = pending.page_id.clone();
+    let bytes = pending.payload.byte_len();
     if !handles
         .worker_healthy
         .load(std::sync::atomic::Ordering::Acquire)
@@ -355,7 +451,13 @@ fn run_exact_state_record_job(
             .dropped
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         notify(KvLifecycleEvent::ExactStateRecordFailed);
-        finish_exact_state_record(handles.inflight_records, handles.pending_count, &page_id);
+        finish_exact_state_record(
+            handles.inflight_records,
+            handles.pending_count,
+            handles.queue_bytes,
+            &page_id,
+            bytes,
+        );
         return;
     }
 
@@ -380,15 +482,24 @@ fn run_exact_state_record_job(
             notify(KvLifecycleEvent::ExactStateRecordFailed);
         }
     }
-    finish_exact_state_record(handles.inflight_records, handles.pending_count, &page_id);
+    finish_exact_state_record(
+        handles.inflight_records,
+        handles.pending_count,
+        handles.queue_bytes,
+        &page_id,
+        bytes,
+    );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn enqueue_exact_state_record(
     sender: &SyncSender<PendingExactStateRecord>,
     inflight_records: &Mutex<BTreeSet<String>>,
     queued: &AtomicU64,
     dropped: &AtomicU64,
     pending_count: &AtomicUsize,
+    queue_bytes: &AtomicU64,
+    queue_bytes_cap: u64,
     worker_healthy: &AtomicBool,
     pending: PendingExactStateRecord,
 ) -> ExactStateRecordAdmission {
@@ -400,6 +511,19 @@ fn enqueue_exact_state_record(
         dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return ExactStateRecordAdmission::WorkerStopped;
     }
+    let bytes = pending.payload.byte_len();
+    // Claim the bytes before the send so two producers cannot both see room.
+    // Released on every non-queued path below, and by the worker on finish.
+    let held = queue_bytes.fetch_add(bytes, std::sync::atomic::Ordering::AcqRel);
+    if !record_fits_queue(held, bytes, queue_bytes_cap) {
+        queue_bytes.fetch_sub(bytes, std::sync::atomic::Ordering::Release);
+        inflight_records
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&pending.page_id);
+        dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return ExactStateRecordAdmission::DroppedFull;
+    }
     pending_count.fetch_add(1, std::sync::atomic::Ordering::Release);
     match sender.try_send(pending) {
         Ok(()) => {
@@ -408,6 +532,7 @@ fn enqueue_exact_state_record(
         }
         Err(TrySendError::Full(pending)) => {
             pending_count.fetch_sub(1, std::sync::atomic::Ordering::Release);
+            queue_bytes.fetch_sub(bytes, std::sync::atomic::Ordering::Release);
             inflight_records
                 .lock()
                 .expect("kv inflight record lock poisoned")
@@ -417,6 +542,7 @@ fn enqueue_exact_state_record(
         }
         Err(TrySendError::Disconnected(pending)) => {
             pending_count.fetch_sub(1, std::sync::atomic::Ordering::Release);
+            queue_bytes.fetch_sub(bytes, std::sync::atomic::Ordering::Release);
             inflight_records
                 .lock()
                 .expect("kv inflight record lock poisoned")
@@ -473,7 +599,16 @@ impl KvStageIntegration {
     }
 
     pub(crate) fn payload_is_exact_state(&self) -> bool {
-        self.payload.is_exact_state()
+        self.exact_state_payload().is_some()
+    }
+
+    pub(crate) fn exact_state_payload(&self) -> Option<StagePrefixCachePayload> {
+        self.payload
+            .is_exact_state()
+            .then_some(self.payload)
+            .or(self
+                .durable_payload
+                .filter(|payload| payload.is_exact_state()))
     }
 
     pub fn should_lookup(&self) -> bool {
@@ -529,22 +664,48 @@ impl KvStageIntegration {
     pub(crate) fn has_exact_state_record_capacity(&self) -> bool {
         self.exact_state_record_worker_healthy
             .load(std::sync::atomic::Ordering::Acquire)
-            && has_exact_state_record_capacity(&self.exact_state_records_pending)
+            && has_exact_state_record_capacity(
+                &self.exact_state_records_pending,
+                &self.exact_state_record_queue_bytes,
+                EXACT_STATE_RECORD_QUEUE_BYTES,
+            )
+    }
+
+    /// Payload bytes waiting for the worker: the status contract's
+    /// `write_queue_bytes`.
+    pub fn exact_state_record_queue_bytes(&self) -> u64 {
+        self.exact_state_record_queue_bytes
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// The durable tier, when one is open.
+    pub fn l3(&self) -> Option<&Arc<skippy_cache::L3Tier>> {
+        self.l3.as_ref()
     }
 
     pub(crate) fn enqueue_exact_state_record(
         &self,
         pending: PendingExactStateRecord,
     ) -> ExactStateRecordAdmission {
-        let admission = enqueue_exact_state_record(
-            &self.exact_state_record_tx,
-            &self.inflight_records,
-            &self.exact_state_records_queued,
-            &self.exact_state_records_dropped,
-            &self.exact_state_records_pending,
-            &self.exact_state_record_worker_healthy,
-            pending,
-        );
+        let admission = self.exact_state_record_worker.with_sender(|sender| {
+            let Some(sender) = sender else {
+                self.finish_record(&pending.page_id);
+                self.exact_state_records_dropped
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return ExactStateRecordAdmission::WorkerStopped;
+            };
+            enqueue_exact_state_record(
+                sender,
+                &self.inflight_records,
+                &self.exact_state_records_queued,
+                &self.exact_state_records_dropped,
+                &self.exact_state_records_pending,
+                &self.exact_state_record_queue_bytes,
+                EXACT_STATE_RECORD_QUEUE_BYTES,
+                &self.exact_state_record_worker_healthy,
+                pending,
+            )
+        });
         if matches!(
             admission,
             ExactStateRecordAdmission::DroppedFull | ExactStateRecordAdmission::WorkerStopped
@@ -958,8 +1119,9 @@ mod exact_state_record_queue_tests {
 
     use super::{
         BTreeSet, EXACT_STATE_RECORD_CAPACITY, ExactStateExtra, ExactStateRecordAdmission,
-        ExactStateWorkerHandles, KvLifecycleEvent, KvLifecycleObserver, PendingExactStateRecord,
-        enqueue_exact_state_record, has_exact_state_record_capacity, run_exact_state_record_job,
+        ExactStateRecordWorker, ExactStateWorkerHandles, KvLifecycleEvent, KvLifecycleObserver,
+        PendingExactStateRecord, enqueue_exact_state_record, has_exact_state_record_capacity,
+        run_exact_state_record_job,
     };
 
     struct RecordingObserver(Arc<Mutex<Vec<KvLifecycleEvent>>>);
@@ -977,16 +1139,173 @@ mod exact_state_record_queue_tests {
             extra: ExactStateExtra::default(),
             namespace: "test".to_string(),
             token_ids: vec![1],
+            l3_fill_claim: None,
         }
+    }
+
+    fn pending_with_bytes(page_id: &str, bytes: usize) -> PendingExactStateRecord {
+        PendingExactStateRecord {
+            payload: ExactStatePayload::full_state(vec![1; bytes]),
+            ..pending(page_id)
+        }
+    }
+
+    const CAP: u64 = 1024;
+
+    #[test]
+    fn final_worker_owner_drains_queued_records_before_drop_returns() {
+        let (sender, receiver) = sync_channel(2);
+        let completed = Arc::new(AtomicUsize::new(0));
+        let worker_completed = completed.clone();
+        let task = std::thread::spawn(move || {
+            while receiver.recv().is_ok() {
+                worker_completed.fetch_add(1, Ordering::Release);
+            }
+        });
+        let worker = Arc::new(ExactStateRecordWorker::new(sender, task));
+        worker.with_sender(|sender| sender.unwrap().send(pending("latest")).unwrap());
+
+        drop(worker);
+
+        assert_eq!(completed.load(Ordering::Acquire), 1);
     }
 
     #[test]
     fn pending_capacity_signal_rejects_work_before_export() {
         let pending_count = AtomicUsize::new(0);
-        assert!(has_exact_state_record_capacity(&pending_count));
+        let queue_bytes = AtomicU64::new(0);
+        assert!(has_exact_state_record_capacity(
+            &pending_count,
+            &queue_bytes,
+            CAP
+        ));
 
         pending_count.store(EXACT_STATE_RECORD_CAPACITY, Ordering::Release);
-        assert!(!has_exact_state_record_capacity(&pending_count));
+        assert!(!has_exact_state_record_capacity(
+            &pending_count,
+            &queue_bytes,
+            CAP
+        ));
+
+        pending_count.store(0, Ordering::Release);
+        queue_bytes.store(CAP, Ordering::Release);
+        assert!(
+            !has_exact_state_record_capacity(&pending_count, &queue_bytes, CAP),
+            "a byte-full queue must refuse before the export is paid for"
+        );
+    }
+
+    #[test]
+    fn queue_is_bounded_in_bytes_not_entries() {
+        let (sender, _receiver) = sync_channel(EXACT_STATE_RECORD_CAPACITY);
+        let inflight = Mutex::new(BTreeSet::from(["a".to_string(), "b".to_string()]));
+        let queued = AtomicU64::new(0);
+        let dropped = AtomicU64::new(0);
+        let pending_count = AtomicUsize::new(0);
+        let queue_bytes = AtomicU64::new(0);
+        let worker_healthy = AtomicBool::new(true);
+
+        assert_eq!(
+            enqueue_exact_state_record(
+                &sender,
+                &inflight,
+                &queued,
+                &dropped,
+                &pending_count,
+                &queue_bytes,
+                CAP,
+                &worker_healthy,
+                pending_with_bytes("a", 700),
+            ),
+            ExactStateRecordAdmission::Queued
+        );
+        assert_eq!(queue_bytes.load(Ordering::Relaxed), 700);
+
+        // Plenty of entry slots left; the bytes are what is full.
+        assert_eq!(
+            enqueue_exact_state_record(
+                &sender,
+                &inflight,
+                &queued,
+                &dropped,
+                &pending_count,
+                &queue_bytes,
+                CAP,
+                &worker_healthy,
+                pending_with_bytes("b", 700),
+            ),
+            ExactStateRecordAdmission::DroppedFull
+        );
+        assert_eq!(
+            queue_bytes.load(Ordering::Relaxed),
+            700,
+            "a dropped record left bytes claimed"
+        );
+        assert!(!inflight.lock().unwrap().contains("b"));
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
+        assert_eq!(pending_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn one_oversized_record_is_admitted_into_an_empty_queue() {
+        let (sender, _receiver) = sync_channel(EXACT_STATE_RECORD_CAPACITY);
+        let inflight = Mutex::new(BTreeSet::from(["huge".to_string()]));
+        let queued = AtomicU64::new(0);
+        let dropped = AtomicU64::new(0);
+        let pending_count = AtomicUsize::new(0);
+        let queue_bytes = AtomicU64::new(0);
+        let worker_healthy = AtomicBool::new(true);
+
+        assert_eq!(
+            enqueue_exact_state_record(
+                &sender,
+                &inflight,
+                &queued,
+                &dropped,
+                &pending_count,
+                &queue_bytes,
+                CAP,
+                &worker_healthy,
+                pending_with_bytes("huge", 4096),
+            ),
+            ExactStateRecordAdmission::Queued,
+            "a large model could never record if one export over the cap were refused"
+        );
+        assert_eq!(queue_bytes.load(Ordering::Relaxed), 4096);
+        assert!(!has_exact_state_record_capacity(
+            &pending_count,
+            &queue_bytes,
+            CAP
+        ));
+    }
+
+    #[test]
+    fn finishing_a_record_releases_its_bytes() {
+        let inflight = Mutex::new(BTreeSet::from(["done".to_string()]));
+        let dropped = AtomicU64::new(0);
+        let pending_count = AtomicUsize::new(1);
+        let queue_bytes = AtomicU64::new(300);
+        let worker_healthy = AtomicBool::new(true);
+        let worker_panics = AtomicU64::new(0);
+
+        run_exact_state_record_job(
+            ExactStateWorkerHandles {
+                inflight_records: &inflight,
+                dropped: &dropped,
+                pending_count: &pending_count,
+                queue_bytes: &queue_bytes,
+                worker_healthy: &worker_healthy,
+                worker_panics: &worker_panics,
+            },
+            None,
+            pending_with_bytes("done", 300),
+            |_| Ok(()),
+        );
+
+        assert_eq!(queue_bytes.load(Ordering::Relaxed), 0);
+        assert_eq!(pending_count.load(Ordering::Relaxed), 0);
+        assert!(inflight.lock().unwrap().is_empty());
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
     }
 
     #[test]
@@ -997,6 +1316,7 @@ mod exact_state_record_queue_tests {
         let queued = AtomicU64::new(0);
         let dropped = AtomicU64::new(0);
         let pending_count = AtomicUsize::new(0);
+        let queue_bytes = AtomicU64::new(0);
         let worker_healthy = AtomicBool::new(true);
 
         assert_eq!(
@@ -1006,6 +1326,8 @@ mod exact_state_record_queue_tests {
                 &queued,
                 &dropped,
                 &pending_count,
+                &queue_bytes,
+                CAP,
                 &worker_healthy,
                 pending("dropped"),
             ),
@@ -1025,6 +1347,7 @@ mod exact_state_record_queue_tests {
         let queued = AtomicU64::new(0);
         let dropped = AtomicU64::new(0);
         let pending_count = AtomicUsize::new(0);
+        let queue_bytes = AtomicU64::new(0);
         let worker_healthy = AtomicBool::new(true);
 
         assert_eq!(
@@ -1034,6 +1357,8 @@ mod exact_state_record_queue_tests {
                 &queued,
                 &dropped,
                 &pending_count,
+                &queue_bytes,
+                CAP,
                 &worker_healthy,
                 pending("orphaned"),
             ),
@@ -1053,6 +1378,7 @@ mod exact_state_record_queue_tests {
         let dropped = AtomicU64::new(0);
         let pending_count = Arc::new(AtomicUsize::new(0));
         let worker_pending_count = pending_count.clone();
+        let queue_bytes = AtomicU64::new(0);
         let worker_healthy = AtomicBool::new(true);
 
         assert_eq!(
@@ -1062,6 +1388,8 @@ mod exact_state_record_queue_tests {
                 &queued,
                 &dropped,
                 &pending_count,
+                &queue_bytes,
+                CAP,
                 &worker_healthy,
                 pending("page"),
             ),
@@ -1088,6 +1416,7 @@ mod exact_state_record_queue_tests {
         let inflight = Mutex::new(BTreeSet::from(["written".to_string()]));
         let dropped = AtomicU64::new(0);
         let pending_count = AtomicUsize::new(1);
+        let queue_bytes = AtomicU64::new(1);
         let worker_healthy = AtomicBool::new(true);
         let worker_panics = AtomicU64::new(0);
         let events: Arc<Mutex<Vec<KvLifecycleEvent>>> = Arc::default();
@@ -1098,6 +1427,7 @@ mod exact_state_record_queue_tests {
                 inflight_records: &inflight,
                 dropped: &dropped,
                 pending_count: &pending_count,
+                queue_bytes: &queue_bytes,
                 worker_healthy: &worker_healthy,
                 worker_panics: &worker_panics,
             },
@@ -1118,6 +1448,7 @@ mod exact_state_record_queue_tests {
         let inflight = Mutex::new(BTreeSet::from(["broken".to_string()]));
         let dropped = AtomicU64::new(0);
         let pending_count = AtomicUsize::new(1);
+        let queue_bytes = AtomicU64::new(1);
         let worker_healthy = AtomicBool::new(true);
         let worker_panics = AtomicU64::new(0);
         let events: Arc<Mutex<Vec<KvLifecycleEvent>>> = Arc::default();
@@ -1128,6 +1459,7 @@ mod exact_state_record_queue_tests {
                 inflight_records: &inflight,
                 dropped: &dropped,
                 pending_count: &pending_count,
+                queue_bytes: &queue_bytes,
                 worker_healthy: &worker_healthy,
                 worker_panics: &worker_panics,
             },
@@ -1150,6 +1482,7 @@ mod exact_state_record_queue_tests {
         let queued = AtomicU64::new(0);
         let dropped = AtomicU64::new(0);
         let pending_count = AtomicUsize::new(1);
+        let queue_bytes = AtomicU64::new(1);
         let worker_healthy = AtomicBool::new(true);
         let worker_panics = AtomicU64::new(0);
 
@@ -1158,6 +1491,7 @@ mod exact_state_record_queue_tests {
                 inflight_records: &inflight,
                 dropped: &dropped,
                 pending_count: &pending_count,
+                queue_bytes: &queue_bytes,
                 worker_healthy: &worker_healthy,
                 worker_panics: &worker_panics,
             },
@@ -1180,6 +1514,8 @@ mod exact_state_record_queue_tests {
                 &queued,
                 &dropped,
                 &pending_count,
+                &queue_bytes,
+                CAP,
                 &worker_healthy,
                 pending("later"),
             ),

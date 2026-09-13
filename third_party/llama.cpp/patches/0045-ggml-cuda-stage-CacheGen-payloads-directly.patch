@@ -1,0 +1,115 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: scama <a1860575018c4680d5669dd7bc3bd356b478bccb8d42e194df46304a5e25f49a@meshllm.communities.buzz.xyz>
+Date: Sat, 12 Sep 2026 08:45:00 +1000
+Subject: [PATCH] ggml-cuda: stage CacheGen payloads directly
+
+---
+ ggml/src/ggml-cuda/ggml-cuda.cu | 36 +++++++++++++++++++++++++-----------
+ 1 file changed, 25 insertions(+), 11 deletions(-)
+
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index ccfda8a9d..d32175261 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -5671,6 +5671,12 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
+ 
+ #if !defined(GGML_USE_MUSA)
+ 
++struct ggml_cuda_cachegen_payload_copy {
++    const uint8_t * source = nullptr;
++    uint32_t destination_offset = 0;
++    uint32_t bytes = 0;
++};
++
+ struct ggml_cuda_cachegen_staged_job {
+     int physical_device = -1;
+     uint8_t * dst = nullptr;
+@@ -5678,7 +5684,8 @@ struct ggml_cuda_cachegen_staged_job {
+     uint32_t element_bytes = 0;
+     uint64_t token_stride = 0;
+     uint64_t channel_stride = 0;
+-    std::vector<uint8_t> payload;
++    size_t payload_bytes = 0;
++    std::vector<ggml_cuda_cachegen_payload_copy> payload_copies;
+     std::vector<ggml_cuda_cachegen_tile> tiles;
+     std::vector<uint32_t> prefixes;
+     std::vector<uint32_t> cells;
+@@ -5811,24 +5818,23 @@ static bool ggml_cuda_cachegen_decode(
+                 return ggml_cuda_cachegen_error(error, error_capacity, "CUDA/HIP CacheGen tile geometry overflows");
+             }
+             staged.tiles.reserve(job->tile_count);
++            staged.payload_copies.reserve(job->tile_count);
+             for (size_t tile_index = 0; tile_index < job->tile_count; ++tile_index) {
+                 const struct ggml_backend_cachegen_tile * tile = &job->tiles[tile_index];
+                 if (tile->payload == nullptr || tile->payload_bytes < 16 || tile->payload_bytes > UINT32_MAX ||
+                         tile->token_count == 0 || tile->token_count > 256 || tile->token_offset > job->cell_count ||
+                         tile->token_count > job->cell_count - tile->token_offset ||
+-                        staged.payload.size() > UINT32_MAX - 3 ||
++                        staged.payload_bytes > UINT32_MAX - 3 ||
+                         staged.prefixes.size() > UINT32_MAX - (static_cast<size_t>(job->channels) + 1)) {
+                     return ggml_cuda_cachegen_error(
+                         error, error_capacity, "CUDA/HIP CacheGen tile exceeds bounded geometry");
+                 }
+ 
+-                const size_t aligned_payload_size = (staged.payload.size() + 3) & ~size_t(3);
++                const size_t aligned_payload_size = (staged.payload_bytes + 3) & ~size_t(3);
+                 if (tile->payload_bytes > UINT32_MAX - aligned_payload_size) {
+                     return ggml_cuda_cachegen_error(
+                         error, error_capacity, "CUDA/HIP CacheGen payload offsets overflow");
+                 }
+-                staged.payload.resize(aligned_payload_size, 0);
+-
+                 const uint8_t * payload = static_cast<const uint8_t *>(tile->payload);
+                 const bool packed = memcmp(payload, "LCG2", 4) == 0;
+                 const uint32_t bins = payload[4];
+@@ -5845,7 +5851,7 @@ static bool ggml_cuda_cachegen_decode(
+                         error, error_capacity, "CUDA/HIP CacheGen tile header is inconsistent");
+                 }
+                 const ggml_cuda_cachegen_tile encoded_tile = {
+-                    static_cast<uint32_t>(staged.payload.size()),
++                    static_cast<uint32_t>(aligned_payload_size),
+                     static_cast<uint32_t>(staged.prefixes.size()),
+                     tile->token_offset,
+                     tile->token_count,
+@@ -5893,7 +5899,12 @@ static bool ggml_cuda_cachegen_decode(
+                     }
+                 }
+                 staged.tiles.push_back(encoded_tile);
+-                staged.payload.insert(staged.payload.end(), payload, payload + tile->payload_bytes);
++                staged.payload_copies.push_back({
++                    payload,
++                    static_cast<uint32_t>(aligned_payload_size),
++                    static_cast<uint32_t>(tile->payload_bytes),
++                });
++                staged.payload_bytes = aligned_payload_size + tile->payload_bytes;
+             }
+         }
+     } catch (const std::bad_alloc &) {
+@@ -5925,7 +5936,7 @@ static bool ggml_cuda_cachegen_decode(
+                 return fail((operation), status); \
+             } \
+         } while (0)
+-        GGML_CACHEGEN_CUDA_CALL(cudaMalloc(reinterpret_cast<void **>(&job.payload_device), job.payload.size()),
++        GGML_CACHEGEN_CUDA_CALL(cudaMalloc(reinterpret_cast<void **>(&job.payload_device), job.payload_bytes),
+                                 "CUDA/HIP CacheGen payload allocation failed");
+         GGML_CACHEGEN_CUDA_CALL(cudaMalloc(reinterpret_cast<void **>(&job.tiles_device),
+                                            job.tiles.size() * sizeof(ggml_cuda_cachegen_tile)),
+@@ -5936,9 +5947,12 @@ static bool ggml_cuda_cachegen_decode(
+         GGML_CACHEGEN_CUDA_CALL(cudaMalloc(reinterpret_cast<void **>(&job.cells_device),
+                                            job.cells.size() * sizeof(uint32_t)),
+                                 "CUDA/HIP CacheGen cell allocation failed");
+-        GGML_CACHEGEN_CUDA_CALL(cudaMemcpyAsync(job.payload_device, job.payload.data(), job.payload.size(),
+-                                                cudaMemcpyHostToDevice, cudaStreamPerThread),
+-                                "CUDA/HIP CacheGen payload upload failed");
++        for (const ggml_cuda_cachegen_payload_copy & copy : job.payload_copies) {
++            GGML_CACHEGEN_CUDA_CALL(
++                cudaMemcpyAsync(job.payload_device + copy.destination_offset, copy.source, copy.bytes,
++                                cudaMemcpyHostToDevice, cudaStreamPerThread),
++                "CUDA/HIP CacheGen payload upload failed");
++        }
+         GGML_CACHEGEN_CUDA_CALL(cudaMemcpyAsync(job.tiles_device, job.tiles.data(),
+                                                 job.tiles.size() * sizeof(ggml_cuda_cachegen_tile),
+                                                 cudaMemcpyHostToDevice, cudaStreamPerThread),
+-- 
+2.51.0
+

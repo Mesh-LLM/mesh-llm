@@ -689,6 +689,7 @@ impl ResolvedEmbeddedOpenAiArgs {
             linear_proposal_ingress: None,
             kv_lifecycle_observer: None,
             openai_guardrails: None,
+            l3_manager: crate::runtime::kv_disk_config::node_kv_disk_manager(),
         }
     }
 }

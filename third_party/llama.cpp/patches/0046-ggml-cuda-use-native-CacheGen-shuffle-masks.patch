@@ -1,0 +1,49 @@
+From ca99c017af46be9b6cd07411ac0be33d9799d5ca Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sat, 12 Sep 2026 11:49:37 +1000
+Subject: [PATCH] ggml-cuda: use native CacheGen shuffle masks
+
+---
+ ggml/src/ggml-cuda/cachegen.cu | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/ggml/src/ggml-cuda/cachegen.cu b/ggml/src/ggml-cuda/cachegen.cu
+index 685dc586a..ab959eae3 100644
+--- a/ggml/src/ggml-cuda/cachegen.cu
++++ b/ggml/src/ggml-cuda/cachegen.cu
+@@ -124,7 +124,7 @@ static __global__ void cachegen_decode(
+             float amax = fabsf(decoded_f);
+ #pragma unroll
+             for (uint32_t mask = 16; mask > 0; mask >>= 1) {
+-                amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, mask, 32));
++                amax = fmaxf(amax, __shfl_xor_sync(__activemask(), amax, mask, 32));
+             }
+             const float scale = amax / 127.0f;
+             if (lane == 0) {
+@@ -138,19 +138,19 @@ static __global__ void cachegen_decode(
+             float amax = fabsf(decoded_f);
+ #pragma unroll
+             for (uint32_t mask = 16; mask > 0; mask >>= 1) {
+-                amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, mask, 32));
++                amax = fmaxf(amax, __shfl_xor_sync(__activemask(), amax, mask, 32));
+             }
+             uint32_t winner = fabsf(decoded_f) == amax ? lane : 32;
+ #pragma unroll
+             for (uint32_t mask = 16; mask > 0; mask >>= 1) {
+-                winner = min(winner, __shfl_xor_sync(0xFFFFFFFF, winner, mask, 32));
++                winner = min(winner, __shfl_xor_sync(__activemask(), winner, mask, 32));
+             }
+-            const float signed_max = __shfl_sync(0xFFFFFFFF, decoded_f, winner, 32);
++            const float signed_max = __shfl_sync(__activemask(), decoded_f, winner, 32);
+             const float scale      = signed_max / -8.0f;
+             if (lane == 0) {
+                 *reinterpret_cast<half *>(dst + destination) = __float2half(scale);
+             }
+-            const float high_value = __shfl_down_sync(0xFFFFFFFF, decoded_f, 16, 32);
++            const float high_value = __shfl_down_sync(__activemask(), decoded_f, 16, 32);
+             if (lane < 16) {
+                 const float inverse = scale == 0.0f ? 0.0f : 1.0f / scale;
+                 const int low = max(0, min(15, int(decoded_f * inverse + 8.5f)));
+-- 
+2.54.0 (Apple Git-157)
+

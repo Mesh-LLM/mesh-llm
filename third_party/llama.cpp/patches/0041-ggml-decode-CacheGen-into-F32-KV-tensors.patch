@@ -1,0 +1,559 @@
+From 980d2df45910b4d07138a863811911c1a2d8f6d0 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Fri, 11 Sep 2026 18:22:56 +1000
+Subject: [PATCH] ggml: decode CacheGen into F32 KV tensors
+
+Replace the F16-specific backend hook with a typed decoder and write the entropy-decoded half values directly into F16 or F32 resident layouts.
+
+Assisted-by: scama
+---
+ ggml/include/ggml-backend.h                |  6 +--
+ ggml/src/ggml-cuda/cachegen.cu             | 18 +++++---
+ ggml/src/ggml-cuda/cachegen.cuh            |  3 +-
+ ggml/src/ggml-cuda/ggml-cuda.cu            | 28 +++++++------
+ ggml/src/ggml-metal/ggml-metal-device.h    |  2 +-
+ ggml/src/ggml-metal/ggml-metal-device.m    | 18 +++++---
+ ggml/src/ggml-metal/ggml-metal.cpp         |  4 +-
+ ggml/src/ggml-metal/kernels/cachegen.metal | 21 ++++++----
+ include/skippy/state.h                     |  2 +
+ src/llama-kv-cache.cpp                     | 49 +++++++++++++---------
+ tests/test-skippy-cachegen-metal.cpp       | 32 ++++++++++----
+ 11 files changed, 117 insertions(+), 66 deletions(-)
+
+diff --git a/ggml/include/ggml-backend.h b/ggml/include/ggml-backend.h
+index e2460fcda..2256fecbc 100644
+--- a/ggml/include/ggml-backend.h
++++ b/ggml/include/ggml-backend.h
+@@ -224,9 +224,9 @@ extern "C" {
+     };
+     typedef struct ggml_backend_feature * (*ggml_backend_get_features_t)(ggml_backend_reg_t reg);
+ 
+-    // Optional backend entry point for decoding validated CacheGen F16 tiles
++    // Optional backend entry point for decoding validated CacheGen tiles
+     // directly into resident tensors. Callers resolve
+-    // `ggml_backend_cachegen_decode_f16` through get_proc_address.
++    // `ggml_backend_cachegen_decode` through get_proc_address.
+     struct ggml_backend_cachegen_tile {
+         const void * payload;
+         size_t payload_bytes;
+@@ -245,7 +245,7 @@ extern "C" {
+         uint64_t channel_stride;
+     };
+ 
+-    typedef bool (*ggml_backend_cachegen_decode_f16_t)(
++    typedef bool (*ggml_backend_cachegen_decode_t)(
+             const struct ggml_backend_cachegen_job * jobs,
+             size_t job_count,
+             char * error,
+diff --git a/ggml/src/ggml-cuda/cachegen.cu b/ggml/src/ggml-cuda/cachegen.cu
+index e8460cc99..cc51a634c 100644
+--- a/ggml/src/ggml-cuda/cachegen.cu
++++ b/ggml/src/ggml-cuda/cachegen.cu
+@@ -43,7 +43,7 @@ static __device__ __forceinline__ uint32_t cachegen_find_symbol(
+     return first - 1;
+ }
+ 
+-static __global__ void cachegen_decode_f16(
++static __global__ void cachegen_decode(
+         const uint8_t * payload,
+         const ggml_cuda_cachegen_tile * tiles,
+         const uint32_t * prefixes,
+@@ -52,7 +52,8 @@ static __global__ void cachegen_decode_f16(
+         uint32_t channels,
+         uint32_t tile_count,
+         uint64_t token_stride,
+-        uint64_t channel_stride) {
++        uint64_t channel_stride,
++        uint32_t element_bytes) {
+     const uint32_t channel    = blockIdx.x * blockDim.x + threadIdx.x;
+     const uint32_t tile_index = blockIdx.y;
+     if (channel >= channels || tile_index >= tile_count) {
+@@ -92,7 +93,11 @@ static __global__ void cachegen_decode_f16(
+         const half decoded     = __float2half(normalized * maxes[row]);
+         const uint64_t destination =
+             uint64_t(cells[tile.token_offset + row]) * token_stride + uint64_t(channel) * channel_stride;
+-        *reinterpret_cast<half *>(dst + destination) = decoded;
++        if (element_bytes == sizeof(float)) {
++            *reinterpret_cast<float *>(dst + destination) = __half2float(decoded);
++        } else {
++            *reinterpret_cast<half *>(dst + destination) = decoded;
++        }
+ 
+         if (row + 1 == tile.rows) {
+             break;
+@@ -118,7 +123,7 @@ static __global__ void cachegen_decode_f16(
+     }
+ }
+ 
+-cudaError_t ggml_cuda_cachegen_decode_f16_launch(
++cudaError_t ggml_cuda_cachegen_decode_launch(
+         const uint8_t * payload,
+         const ggml_cuda_cachegen_tile * tiles,
+         const uint32_t * prefixes,
+@@ -128,12 +133,13 @@ cudaError_t ggml_cuda_cachegen_decode_f16_launch(
+         uint32_t tile_count,
+         uint64_t token_stride,
+         uint64_t channel_stride,
++        uint32_t element_bytes,
+         cudaStream_t stream) {
+     constexpr uint32_t block_size = 64;
+     const dim3 block(block_size, 1, 1);
+     const dim3 grid((channels + block_size - 1) / block_size, tile_count, 1);
+-    cachegen_decode_f16<<<grid, block, 0, stream>>>(
+-        payload, tiles, prefixes, cells, dst, channels, tile_count, token_stride, channel_stride);
++    cachegen_decode<<<grid, block, 0, stream>>>(
++        payload, tiles, prefixes, cells, dst, channels, tile_count, token_stride, channel_stride, element_bytes);
+     return cudaGetLastError();
+ }
+ 
+diff --git a/ggml/src/ggml-cuda/cachegen.cuh b/ggml/src/ggml-cuda/cachegen.cuh
+index d6d216675..7118c9aa9 100644
+--- a/ggml/src/ggml-cuda/cachegen.cuh
++++ b/ggml/src/ggml-cuda/cachegen.cuh
+@@ -11,7 +11,7 @@ struct ggml_cuda_cachegen_tile {
+     uint32_t rows;
+ };
+ 
+-cudaError_t ggml_cuda_cachegen_decode_f16_launch(
++cudaError_t ggml_cuda_cachegen_decode_launch(
+         const uint8_t * payload,
+         const ggml_cuda_cachegen_tile * tiles,
+         const uint32_t * prefixes,
+@@ -21,6 +21,7 @@ cudaError_t ggml_cuda_cachegen_decode_f16_launch(
+         uint32_t tile_count,
+         uint64_t token_stride,
+         uint64_t channel_stride,
++        uint32_t element_bytes,
+         cudaStream_t stream);
+ 
+ #endif // !defined(GGML_USE_MUSA)
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index e955c4394..3288653f5 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -5675,6 +5675,7 @@ struct ggml_cuda_cachegen_staged_job {
+     int physical_device = -1;
+     uint8_t * dst = nullptr;
+     uint32_t channels = 0;
++    uint32_t element_bytes = 0;
+     uint64_t token_stride = 0;
+     uint64_t channel_stride = 0;
+     std::vector<uint8_t> payload;
+@@ -5749,7 +5750,7 @@ static cudaError_t ggml_cuda_cachegen_release(std::vector<ggml_cuda_cachegen_sta
+     return first_error;
+ }
+ 
+-static bool ggml_cuda_cachegen_decode_f16(
++static bool ggml_cuda_cachegen_decode(
+         const struct ggml_backend_cachegen_job * jobs,
+         size_t job_count,
+         char * error,
+@@ -5769,8 +5770,10 @@ static bool ggml_cuda_cachegen_decode_f16(
+                     job->cells == nullptr || job->cell_count == 0 || job->cell_count > UINT32_MAX ||
+                     job->cell_count > SIZE_MAX / sizeof(uint32_t) || job->channels == 0 ||
+                     job->channels == UINT32_MAX ||
+-                    job->dst->type != GGML_TYPE_F16 || job->token_stride == 0 || job->channel_stride == 0 ||
+-                    job->token_stride % sizeof(uint16_t) != 0 || job->channel_stride % sizeof(uint16_t) != 0) {
++                    (job->dst->type != GGML_TYPE_F16 && job->dst->type != GGML_TYPE_F32) ||
++                    job->token_stride == 0 || job->channel_stride == 0 ||
++                    job->token_stride % ggml_type_size(job->dst->type) != 0 ||
++                    job->channel_stride % ggml_type_size(job->dst->type) != 0) {
+                 return ggml_cuda_cachegen_error(error, error_capacity, "invalid CUDA/HIP CacheGen job");
+             }
+ 
+@@ -5780,6 +5783,7 @@ static bool ggml_cuda_cachegen_decode_f16(
+             staged.physical_device = ggml_cuda_get_physical_device(buffer_context->device);
+             staged.dst = static_cast<uint8_t *>(job->dst->data);
+             staged.channels = job->channels;
++            staged.element_bytes = ggml_type_size(job->dst->type);
+             staged.token_stride = job->token_stride;
+             staged.channel_stride = job->channel_stride;
+             staged.cells.assign(job->cells, job->cells + job->cell_count);
+@@ -5789,10 +5793,10 @@ static bool ggml_cuda_cachegen_decode_f16(
+                 max_cell = std::max(max_cell, static_cast<uint64_t>(cell));
+             }
+             const uint64_t max_channel = static_cast<uint64_t>(job->channels) - 1;
+-            if (max_cell > (UINT64_MAX - sizeof(uint16_t)) / job->token_stride ||
+-                    max_channel > (UINT64_MAX - max_cell * job->token_stride - sizeof(uint16_t)) /
++            if (max_cell > (UINT64_MAX - staged.element_bytes) / job->token_stride ||
++                    max_channel > (UINT64_MAX - max_cell * job->token_stride - staged.element_bytes) /
+                         job->channel_stride ||
+-                    max_cell * job->token_stride + max_channel * job->channel_stride + sizeof(uint16_t) >
++                    max_cell * job->token_stride + max_channel * job->channel_stride + staged.element_bytes >
+                         ggml_nbytes(job->dst)) {
+                 return ggml_cuda_cachegen_error(
+                     error, error_capacity, "CUDA/HIP CacheGen destination geometry is out of bounds");
+@@ -5917,10 +5921,10 @@ static bool ggml_cuda_cachegen_decode_f16(
+                                                 cudaMemcpyHostToDevice, cudaStreamPerThread),
+                                 "CUDA/HIP CacheGen cell upload failed");
+         GGML_CACHEGEN_CUDA_CALL(
+-            ggml_cuda_cachegen_decode_f16_launch(job.payload_device, job.tiles_device, job.prefixes_device,
+-                                                 job.cells_device, job.dst, job.channels,
+-                                                 static_cast<uint32_t>(job.tiles.size()), job.token_stride,
+-                                                 job.channel_stride, cudaStreamPerThread),
++            ggml_cuda_cachegen_decode_launch(job.payload_device, job.tiles_device, job.prefixes_device,
++                                             job.cells_device, job.dst, job.channels,
++                                             static_cast<uint32_t>(job.tiles.size()), job.token_stride,
++                                             job.channel_stride, job.element_bytes, cudaStreamPerThread),
+             "CUDA/HIP CacheGen kernel launch failed");
+ #undef GGML_CACHEGEN_CUDA_CALL
+     }
+@@ -5964,8 +5968,8 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+         return (void *)ggml_backend_cuda_get_features;
+     }
+ #if !defined(GGML_USE_MUSA)
+-    if (strcmp(name, "ggml_backend_cachegen_decode_f16") == 0) {
+-        return (void *)ggml_cuda_cachegen_decode_f16;
++    if (strcmp(name, "ggml_backend_cachegen_decode") == 0) {
++        return (void *)ggml_cuda_cachegen_decode;
+     }
+ #endif // !defined(GGML_USE_MUSA)
+     return nullptr;
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.h b/ggml/src/ggml-metal/ggml-metal-device.h
+index 22e4fb436..0a2cf000c 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.h
++++ b/ggml/src/ggml-metal/ggml-metal-device.h
+@@ -351,7 +351,7 @@ void   ggml_metal_buffer_clear        (ggml_metal_buffer_t buf, uint8_t value);
+ //
+ struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, const struct ggml_tensor * t);
+ 
+-bool ggml_metal_cachegen_decode_f16(
++bool ggml_metal_cachegen_decode(
+         const struct ggml_backend_cachegen_job * jobs,
+         size_t job_count,
+         char * error,
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
+index d05b7c32c..d4ae1f475 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.m
++++ b/ggml/src/ggml-metal/ggml-metal-device.m
+@@ -2654,6 +2654,7 @@ struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, co
+ struct ggml_metal_cachegen_params {
+     uint32_t channels;
+     uint32_t tile_count;
++    uint32_t element_bytes;
+     uint64_t token_stride;
+     uint64_t channel_stride;
+ };
+@@ -2665,7 +2666,7 @@ static bool ggml_metal_cachegen_error(char * error, size_t capacity, const char
+     return false;
+ }
+ 
+-bool ggml_metal_cachegen_decode_f16(
++bool ggml_metal_cachegen_decode(
+         const struct ggml_backend_cachegen_job * jobs,
+         size_t job_count,
+         char * error,
+@@ -2683,7 +2684,10 @@ bool ggml_metal_cachegen_decode_f16(
+             const struct ggml_backend_cachegen_job * job = &jobs[job_index];
+             if (job->dst == NULL || job->dst->buffer == NULL || job->tiles == NULL || job->tile_count == 0 ||
+                     job->tile_count > UINT32_MAX || job->cells == NULL || job->cell_count == 0 || job->channels == 0 ||
+-                    job->dst->type != GGML_TYPE_F16 || job->token_stride == 0 || job->channel_stride == 0 ||
++                    (job->dst->type != GGML_TYPE_F16 && job->dst->type != GGML_TYPE_F32) ||
++                    job->token_stride == 0 || job->channel_stride == 0 ||
++                    job->token_stride % ggml_type_size(job->dst->type) != 0 ||
++                    job->channel_stride % ggml_type_size(job->dst->type) != 0 ||
+                     job->cell_count > SIZE_MAX / sizeof(uint32_t)) {
+                 [temporary_buffers release];
+                 return ggml_metal_cachegen_error(error, error_capacity, "invalid Metal CacheGen job");
+@@ -2693,9 +2697,10 @@ bool ggml_metal_cachegen_decode_f16(
+                 max_cell = MAX(max_cell, job->cells[cell_index]);
+             }
+             const uint64_t max_channel = (uint64_t) job->channels - 1;
+-            if (max_cell > (UINT64_MAX - sizeof(uint16_t)) / job->token_stride ||
+-                    max_channel > (UINT64_MAX - max_cell * job->token_stride - sizeof(uint16_t)) / job->channel_stride ||
+-                    max_cell * job->token_stride + max_channel * job->channel_stride + sizeof(uint16_t) > ggml_nbytes(job->dst)) {
++            const uint64_t element_bytes = ggml_type_size(job->dst->type);
++            if (max_cell > (UINT64_MAX - element_bytes) / job->token_stride ||
++                    max_channel > (UINT64_MAX - max_cell * job->token_stride - element_bytes) / job->channel_stride ||
++                    max_cell * job->token_stride + max_channel * job->channel_stride + element_bytes > ggml_nbytes(job->dst)) {
+                 [temporary_buffers release];
+                 return ggml_metal_cachegen_error(error, error_capacity, "Metal CacheGen destination geometry is out of bounds");
+             }
+@@ -2820,7 +2825,7 @@ bool ggml_metal_cachegen_decode_f16(
+ 
+             const struct ggml_metal_pipeline_with_params pipeline =
+                 ggml_metal_library_compile_pipeline(device->library,
+-                    "kernel_cachegen_decode_f16", "kernel_cachegen_decode_f16", NULL);
++                    "kernel_cachegen_decode", "kernel_cachegen_decode", NULL);
+             if (pipeline.pipeline == NULL) {
+                 [encoder endEncoding];
+                 [temporary_buffers release];
+@@ -2835,6 +2840,7 @@ bool ggml_metal_cachegen_decode_f16(
+             const struct ggml_metal_cachegen_params params = {
+                 job->channels,
+                 (uint32_t) job->tile_count,
++                (uint32_t) element_bytes,
+                 job->token_stride,
+                 job->channel_stride,
+             };
+diff --git a/ggml/src/ggml-metal/ggml-metal.cpp b/ggml/src/ggml-metal/ggml-metal.cpp
+index 6bec83efd..a1c190a82 100644
+--- a/ggml/src/ggml-metal/ggml-metal.cpp
++++ b/ggml/src/ggml-metal/ggml-metal.cpp
+@@ -910,8 +910,8 @@ static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const
+     if (strcmp(name, "ggml_backend_get_features") == 0) {
+         return (void *)ggml_backend_metal_get_features;
+     }
+-    if (strcmp(name, "ggml_backend_cachegen_decode_f16") == 0) {
+-        return (void *)ggml_metal_cachegen_decode_f16;
++    if (strcmp(name, "ggml_backend_cachegen_decode") == 0) {
++        return (void *)ggml_metal_cachegen_decode;
+     }
+     if (strcmp(name, "ggml_backend_metal_tuning_set_fa_vec_override") == 0) {
+         return (void *)ggml_backend_metal_tuning_set_fa_vec_override;
+diff --git a/ggml/src/ggml-metal/kernels/cachegen.metal b/ggml/src/ggml-metal/kernels/cachegen.metal
+index 22592c070..e426f7993 100644
+--- a/ggml/src/ggml-metal/kernels/cachegen.metal
++++ b/ggml/src/ggml-metal/kernels/cachegen.metal
+@@ -10,6 +10,7 @@ struct cachegen_tile {
+ struct cachegen_params {
+     uint  channels;
+     uint  tile_count;
++    uint  element_bytes;
+     ulong token_stride;
+     ulong channel_stride;
+ };
+@@ -52,13 +53,13 @@ static inline uint cachegen_find_symbol(const device ushort * cdf, ushort count)
+     return first - 1;
+ }
+ 
+-kernel void kernel_cachegen_decode_f16(const device uchar *         payload [[buffer(0)]],
+-                                       const device cachegen_tile * tiles [[buffer(1)]],
+-                                       const device uint *          prefixes [[buffer(2)]],
+-                                       const device uint *          cells [[buffer(3)]],
+-                                       device uchar *               dst [[buffer(4)]],
+-                                       constant cachegen_params &   params [[buffer(5)]],
+-                                       uint2                        gid [[thread_position_in_grid]]) {
++kernel void kernel_cachegen_decode(const device uchar *         payload [[buffer(0)]],
++                                   const device cachegen_tile * tiles [[buffer(1)]],
++                                   const device uint *          prefixes [[buffer(2)]],
++                                   const device uint *          cells [[buffer(3)]],
++                                   device uchar *               dst [[buffer(4)]],
++                                   constant cachegen_params &   params [[buffer(5)]],
++                                   uint2                        gid [[thread_position_in_grid]]) {
+     const uint channel    = gid.x;
+     const uint tile_index = gid.y;
+     if (channel >= params.channels || tile_index >= params.tile_count) {
+@@ -98,7 +99,11 @@ kernel void kernel_cachegen_decode_f16(const device uchar *         payload [[bu
+         const half  decoded    = half(normalized * maxes[row]);
+         const ulong destination =
+             ulong(cells[tile.token_offset + row]) * params.token_stride + ulong(channel) * params.channel_stride;
+-        *reinterpret_cast<device half *>(dst + destination) = decoded;
++        if (params.element_bytes == sizeof(float)) {
++            *reinterpret_cast<device float *>(dst + destination) = float(decoded);
++        } else {
++            *reinterpret_cast<device half *>(dst + destination) = decoded;
++        }
+ 
+         if (row + 1 == tile.rows) {
+             break;
+diff --git a/include/skippy/state.h b/include/skippy/state.h
+index 7504e573c..9c78b3698 100644
+--- a/include/skippy/state.h
++++ b/include/skippy/state.h
+@@ -33,6 +33,8 @@ enum skippy_cachegen_record_kind {
+     SKIPPY_CACHEGEN_RECORD_F16            = 0,
+     SKIPPY_CACHEGEN_RECORD_EXACT          = 1,
+     SKIPPY_CACHEGEN_RECORD_F16_TRANSPOSED = 2,
++    SKIPPY_CACHEGEN_RECORD_F32            = 3,
++    SKIPPY_CACHEGEN_RECORD_F32_TRANSPOSED = 4,
+ };
+ 
+ /** @brief Describes one validated CacheGen record and its logical page destination. */
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index dfd00139b..0671fb296 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -1970,17 +1970,18 @@ static uint32_t skippy_cachegen_read_u32(const uint8_t * bytes) {
+ static bool skippy_cachegen_validate_segment(const skippy_cachegen_record_v1 & record,
+                                              size_t                            expected_rows,
+                                              size_t                            expected_channels,
++                                             size_t                            output_element_bytes,
+                                              std::string &                     error) {
+     constexpr size_t header_bytes = 16;
+     constexpr size_t cdf_entries  = 33;
+     constexpr size_t max_rows     = 256;
+     const auto *     payload      = static_cast<const uint8_t *>(record.payload);
+     if (record.abi_version != SKIPPY_CACHEGEN_RECORD_V1_ABI_VERSION || record.reserved0 != 0 ||
+-        record.element_bytes != 2 || payload == nullptr || record.payload_bytes < header_bytes ||
++        record.element_bytes != output_element_bytes || payload == nullptr || record.payload_bytes < header_bytes ||
+         record.decoded_bytes == 0 || record.token_count != expected_rows || expected_rows == 0 ||
+         expected_rows > max_rows || expected_channels == 0 ||
+         expected_channels > std::numeric_limits<uint32_t>::max()) {
+-        error = "invalid CacheGen F16 record descriptor";
++        error = "invalid CacheGen record descriptor";
+         return false;
+     }
+     if (std::memcmp(payload, "LCG1", 4) != 0 || payload[5] != 0 || (payload[4] != 16 && payload[4] != 32) ||
+@@ -1990,8 +1991,8 @@ static bool skippy_cachegen_validate_segment(const skippy_cachegen_record_v1 & r
+         return false;
+     }
+     if (expected_rows > std::numeric_limits<size_t>::max() / expected_channels ||
+-        expected_rows * expected_channels > std::numeric_limits<size_t>::max() / 2 ||
+-        record.decoded_bytes != expected_rows * expected_channels * 2) {
++        expected_rows * expected_channels > std::numeric_limits<size_t>::max() / output_element_bytes ||
++        record.decoded_bytes != expected_rows * expected_channels * output_element_bytes) {
+         error = "CacheGen record decoded geometry is inconsistent";
+         return false;
+     }
+@@ -2086,8 +2087,12 @@ bool llama_kv_cache::stage_import_cachegen_kv_page(llama_seq_id
+     if (!stage_import_kv_page(seq_id, desc, &validation_sentinel, desc.payload_bytes, error, true)) {
+         return false;
+     }
+-    if (records == nullptr || record_count == 0 || desc.k_type != GGML_TYPE_F16 || desc.v_type != GGML_TYPE_F16) {
+-        error = "CacheGen import requires non-empty F16 K/V records";
++    const auto cachegen_type_supported = [](uint32_t type) {
++        return type == GGML_TYPE_F16 || type == GGML_TYPE_F32;
++    };
++    if (records == nullptr || record_count == 0 || !cachegen_type_supported(desc.k_type) ||
++        !cachegen_type_supported(desc.v_type)) {
++        error = "CacheGen import requires non-empty F16 or F32 K/V records";
+         return false;
+     }
+ 
+@@ -2104,12 +2109,17 @@ bool llama_kv_cache::stage_import_cachegen_kv_page(llama_seq_id
+     size_t                                   logical_offset = output_base;
+     std::vector<skippy_cachegen_job_storage> storage;
+     storage.reserve(selected.size() * 2);
+-    auto consume_tiles = [&](ggml_tensor * dst, size_t row_bytes, bool transposed) -> bool {
++    auto consume_tiles = [&](ggml_tensor * dst, size_t row_bytes, size_t element_bytes, bool transposed) -> bool {
++        if (element_bytes == 0 || row_bytes % element_bytes != 0 ||
++            (element_bytes != sizeof(uint16_t) && element_bytes != sizeof(float))) {
++            error = "CacheGen destination element geometry is invalid";
++            return false;
++        }
+         skippy_cachegen_job_storage entry;
+         entry.dst             = dst;
+-        entry.token_stride    = transposed ? desc.v_element_bytes : row_bytes;
+-        entry.channel_stride  = transposed ? static_cast<uint64_t>(v_cells[strm].size()) * desc.v_element_bytes : 2;
+-        const size_t channels = row_bytes / 2;
++        entry.token_stride    = transposed ? element_bytes : row_bytes;
++        entry.channel_stride  = transposed ? static_cast<uint64_t>(v_cells[strm].size()) * element_bytes : element_bytes;
++        const size_t channels = row_bytes / element_bytes;
+         entry.channels        = static_cast<uint32_t>(channels);
+         size_t token_offset   = 0;
+         while (token_offset < desc.token_count) {
+@@ -2119,13 +2129,14 @@ bool llama_kv_cache::stage_import_cachegen_kv_page(llama_seq_id
+             }
+             const auto &   record = records[record_index++];
+             const size_t   rows   = static_cast<size_t>(record.token_count);
+-            const uint32_t expected_kind =
+-                transposed ? SKIPPY_CACHEGEN_RECORD_F16_TRANSPOSED : SKIPPY_CACHEGEN_RECORD_F16;
++            const uint32_t expected_kind = element_bytes == sizeof(float) ?
++                (transposed ? SKIPPY_CACHEGEN_RECORD_F32_TRANSPOSED : SKIPPY_CACHEGEN_RECORD_F32) :
++                (transposed ? SKIPPY_CACHEGEN_RECORD_F16_TRANSPOSED : SKIPPY_CACHEGEN_RECORD_F16);
+             if (record.kind != expected_kind || rows == 0 || rows > desc.token_count - token_offset ||
+                 record.output_offset != logical_offset + (transposed ? 0 : token_offset * row_bytes) ||
+                 record.token_start != (transposed ? token_offset : 0) ||
+                 record.total_tokens != (transposed ? desc.token_count : 0) ||
+-                !skippy_cachegen_validate_segment(record, rows, channels, error)) {
++                !skippy_cachegen_validate_segment(record, rows, channels, element_bytes, error)) {
+                 if (error.empty()) {
+                     error = "CacheGen record order or destination geometry is invalid";
+                 }
+@@ -2141,14 +2152,14 @@ bool llama_kv_cache::stage_import_cachegen_kv_page(llama_seq_id
+     };
+ 
+     for (const auto * layer : selected) {
+-        if (!consume_tiles(layer->k_stream[strm], desc.k_row_bytes, false)) {
++        if (!consume_tiles(layer->k_stream[strm], desc.k_row_bytes, ggml_type_size(layer->k_stream[strm]->type), false)) {
+             return false;
+         }
+     }
+     for (const auto * layer : selected) {
+         const size_t v_row_bytes =
+             v_trans ? static_cast<size_t>(hparams.n_embd_v_gqa(layer->il)) * desc.v_element_bytes : desc.v_row_bytes;
+-        if (!consume_tiles(layer->v_stream[strm], v_row_bytes, v_trans)) {
++        if (!consume_tiles(layer->v_stream[strm], v_row_bytes, ggml_type_size(layer->v_stream[strm]->type), v_trans)) {
+             return false;
+         }
+     }
+@@ -2182,7 +2193,7 @@ bool llama_kv_cache::stage_import_cachegen_kv_page(llama_seq_id
+         return false;
+     }
+ 
+-    ggml_backend_cachegen_decode_f16_t decode = nullptr;
++    ggml_backend_cachegen_decode_t decode = nullptr;
+     for (const auto & entry : storage) {
+         if (entry.dst == nullptr || entry.dst->buffer == nullptr) {
+             error = "CacheGen destination tensor has no backend buffer";
+@@ -2193,12 +2204,12 @@ bool llama_kv_cache::stage_import_cachegen_kv_page(llama_seq_id
+         const auto reg       = device == nullptr ? nullptr : ggml_backend_dev_backend_reg(device);
+         auto       candidate = reg == nullptr ?
+                                    nullptr :
+-                                   reinterpret_cast<ggml_backend_cachegen_decode_f16_t>(
+-                                       ggml_backend_reg_get_proc_address(reg, "ggml_backend_cachegen_decode_f16"));
++                                   reinterpret_cast<ggml_backend_cachegen_decode_t>(
++                                       ggml_backend_reg_get_proc_address(reg, "ggml_backend_cachegen_decode"));
+         if (candidate == nullptr || (decode != nullptr && candidate != decode)) {
+             invalid_argument = false;
+             unsupported      = true;
+-            error            = "resident KV backend does not provide CacheGen F16 decode";
++            error            = "resident KV backend does not provide typed CacheGen decode";
+             return false;
+         }
+         decode = candidate;
+diff --git a/tests/test-skippy-cachegen-metal.cpp b/tests/test-skippy-cachegen-metal.cpp
+index f300b18b0..dac796d25 100644
+--- a/tests/test-skippy-cachegen-metal.cpp
++++ b/tests/test-skippy-cachegen-metal.cpp
+@@ -146,8 +146,8 @@ int main() {
+     }
+     ggml_tensor * row_major16 = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, channels, capacity);
+     ggml_tensor * transposed16 = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, capacity, channels);
+-    ggml_tensor * row_major32 = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, channels, capacity);
+-    ggml_tensor * transposed32 = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, capacity, channels);
++    ggml_tensor * row_major32 = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, channels, capacity);
++    ggml_tensor * transposed32 = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, capacity, channels);
+     constexpr uint32_t multi_capacity = rows * 2 + 5;
+     ggml_tensor * multi_tile = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, channels, multi_capacity);
+     ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+@@ -180,14 +180,14 @@ int main() {
+     const ggml_backend_cachegen_job jobs[] = {
+         { row_major16, &tile16, 1, cells.data(), cells.size(), channels, channels * 2, 2 },
+         { transposed16, &tile16, 1, cells.data(), cells.size(), channels, 2, capacity * 2 },
+-        { row_major32, &tile32, 1, cells.data(), cells.size(), channels, channels * 2, 2 },
+-        { transposed32, &tile32, 1, cells.data(), cells.size(), channels, 2, capacity * 2 },
++        { row_major32, &tile32, 1, cells.data(), cells.size(), channels, channels * 4, 4 },
++        { transposed32, &tile32, 1, cells.data(), cells.size(), channels, 4, capacity * 4 },
+         { multi_tile, multi_tiles, 2, multi_cells.data(), multi_cells.size(), channels, channels * 2, 2 },
+     };
+     ggml_backend_dev_t device = ggml_backend_get_device(backend);
+-    auto decode = reinterpret_cast<ggml_backend_cachegen_decode_f16_t>(
++    auto decode = reinterpret_cast<ggml_backend_cachegen_decode_t>(
+         ggml_backend_reg_get_proc_address(
+-            ggml_backend_dev_backend_reg(device), "ggml_backend_cachegen_decode_f16"));
++            ggml_backend_dev_backend_reg(device), "ggml_backend_cachegen_decode"));
+     if (decode == nullptr) {
+         return finish(4);
+     }
+@@ -228,8 +228,24 @@ int main() {
+     if (const int status = check_fixture(row_major16, transposed16, expected16, 6)) {
+         return finish(status);
+     }
+-    if (const int status = check_fixture(row_major32, transposed32, expected32, 7)) {
+-        return finish(status);
++    std::vector<float> expected32_f32(rows * channels);
++    for (size_t i = 0; i < expected32_f32.size(); ++i) {
++        uint16_t bits;
++        std::memcpy(&bits, expected32 + i * sizeof(bits), sizeof(bits));
++        expected32_f32[i] = ggml_fp16_to_fp32(bits);
++    }
++    std::vector<float> row32(ggml_nelements(row_major32));
++    std::vector<float> transposed32_values(ggml_nelements(transposed32));
++    ggml_backend_tensor_get(row_major32, row32.data(), 0, ggml_nbytes(row_major32));
++    ggml_backend_tensor_get(transposed32, transposed32_values.data(), 0, ggml_nbytes(transposed32));
++    for (uint32_t row = 0; row < rows; ++row) {
++        for (uint32_t channel = 0; channel < channels; ++channel) {
++            const float expected = expected32_f32[static_cast<size_t>(row) * channels + channel];
++            if (row32[static_cast<size_t>(cells[row]) * channels + channel] != expected ||
++                    transposed32_values[cells[row] + static_cast<size_t>(channel) * capacity] != expected) {
++                return finish(7);
++            }
++        }
+     }
+     std::vector<uint8_t> multi_bytes(ggml_nbytes(multi_tile));
+     ggml_backend_tensor_get(multi_tile, multi_bytes.data(), 0, multi_bytes.size());
+-- 
+2.54.0 (Apple Git-157)
+

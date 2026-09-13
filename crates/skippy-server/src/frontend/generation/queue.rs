@@ -804,10 +804,11 @@ pub(in crate::frontend) fn prewarm_generation_sessions(
     event_name: &'static str,
 ) -> Result<()> {
     let timer = PhaseTimer::start();
-    let sessions = runtime
+    let mut runtime = runtime
         .lock()
-        .map_err(|_| anyhow!("runtime lock poisoned"))?
-        .prewarm_idle_sessions(generation_concurrency)?;
+        .map_err(|_| anyhow!("runtime lock poisoned"))?;
+    let generation_graph_warmed = runtime.warmup_generation_graph()?;
+    let sessions = runtime.prewarm_idle_sessions(generation_concurrency)?;
     let mut attrs = lifecycle_attrs(config);
     attrs.insert(
         "llama_stage.generation_concurrency".to_string(),
@@ -824,6 +825,10 @@ pub(in crate::frontend) fn prewarm_generation_sessions(
     attrs.insert(
         "llama_stage.runtime_sessions_idle".to_string(),
         json!(sessions.idle_sessions),
+    );
+    attrs.insert(
+        "llama_stage.generation_graph_warmed".to_string(),
+        json!(generation_graph_warmed),
     );
     attrs.insert(
         "llama_stage.elapsed_ms".to_string(),

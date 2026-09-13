@@ -682,7 +682,7 @@ new file mode 100644
 index 000000000..1a1bb0ca5
 --- /dev/null
 +++ b/src/skippy/tests/hardware_application_probe.cpp
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,76 @@
 +#include "skippy/model_load_config_internal.h"
 +#include "skippy/runtime.h"
 +
@@ -698,6 +698,10 @@ index 000000000..1a1bb0ca5
 +int main() {
 +    skippy_runtime_config config = skippy_runtime_config_default();
 +    bool passed = true;
++    passed &= require(config.cache_type_k == GGML_TYPE_F16,
++            "default K cache type must be F16");
++    passed &= require(config.cache_type_v == GGML_TYPE_F16,
++            "default V cache type must be F16");
 +    passed &= require(config.kv_offload == SKIPPY_TRISTATE_AUTO,
 +            "default kv_offload must preserve the derived default");
 +    passed &= require(config.kv_unified == SKIPPY_TRISTATE_AUTO,
@@ -736,6 +740,14 @@ index 000000000..1a1bb0ca5
 +    config.op_offload = SKIPPY_TRISTATE_AUTO;
 +    skippy_apply_context_hardware_config(&config, context_params);
 +    passed &= require(context_params.op_offload, "auto op_offload must preserve the derived default");
++
++    config.cache_type_k = GGML_TYPE_F32;
++    config.cache_type_v = GGML_TYPE_F32;
++    skippy_apply_context_hardware_config(&config, context_params);
++    passed &= require(context_params.type_k == GGML_TYPE_F32,
++            "explicit F32 K cache type must not fall back to F16");
++    passed &= require(context_params.type_v == GGML_TYPE_F32,
++            "explicit F32 V cache type must not fall back to F16");
 +
 +    config.op_offload = SKIPPY_TRISTATE_FALSE;
 +    skippy_apply_context_hardware_config(&config, context_params);
@@ -3786,4 +3798,3 @@ index 000000000..380cf4976
 +}
 -- 
 2.55.0
-

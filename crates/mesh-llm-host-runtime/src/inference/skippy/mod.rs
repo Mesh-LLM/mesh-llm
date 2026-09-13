@@ -591,6 +591,7 @@ fn embedded_openai_args_from(
         linear_proposal_ingress: serving_hooks.linear_proposal_ingress(),
         kv_lifecycle_observer: serving_hooks.kv_lifecycle_observer(),
         openai_guardrails: None,
+        l3_manager: crate::runtime::kv_disk_config::node_kv_disk_manager(),
     })
 }
 
