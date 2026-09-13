@@ -678,6 +678,7 @@ mod tests {
             ArtifactHook { command: None },
             explicit(&source),
             false,
+            None,
         )
         .unwrap();
         package

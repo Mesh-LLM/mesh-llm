@@ -37,6 +37,7 @@ fn write(source: &Path, out: &Path, resume: bool) -> Result<()> {
         ArtifactHook { command: None },
         explicit(source),
         resume,
+        None,
     )
 }
 
@@ -374,6 +375,7 @@ fn refuses_transform_hooks_and_existing_completion_marker() {
         },
         explicit(&source),
         false,
+        None,
     );
     assert!(
         result
@@ -405,6 +407,7 @@ fn verified_resume_and_projector_sidecar_round_trip() {
         ArtifactHook { command: None },
         explicit(&source),
         true,
+        None,
     )
     .unwrap();
     let manifest = read_manifest(&out);
@@ -447,6 +450,7 @@ fn upload_hook_can_delete_verified_copies_without_losing_inventory() {
         ArtifactHook { command: None },
         explicit(&source),
         false,
+        None,
     )
     .unwrap();
     let manifest: PackageManifest =
@@ -480,6 +484,7 @@ fn successful_artifact_hook_may_leave_verified_copies_for_rechecking() {
         ArtifactHook { command: None },
         explicit(&source),
         false,
+        None,
     )
     .unwrap();
     let manifest = read_manifest(&out);
@@ -533,4 +538,65 @@ fn hook_verification_treats_deleted_artifact_as_unchanged() {
     // path.exists()) -> opening it fails ENOENT, which must read as unchanged.
     fs::remove_file(&gone).unwrap();
     super::verify_hook_result(&record, &gone, &hook).unwrap();
+}
+
+#[test]
+fn oversized_layer_splits_into_verified_part_artifacts_end_to_end() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("model.gguf");
+    fixture(
+        &source,
+        &[
+            tensor("blk.0.attn_q.weight", 0),
+            tensor("blk.0.attn_k.weight", 32),
+            tensor("blk.0.attn_v.weight", 64),
+            tensor("unknown-global", 96),
+        ],
+        None,
+    );
+    let out = temp.path().join("package");
+    // 16-byte fixture tensors: a 17-byte budget forces the 48-byte layer to
+    // split into ceil(48/17)=3 single-tensor parts, each under budget.
+    write_package(
+        source.display().to_string(),
+        out.clone(),
+        Vec::new(),
+        ArtifactHook { command: None },
+        ArtifactHook { command: None },
+        explicit(&source),
+        false,
+        Some(17),
+    )
+    .unwrap();
+    let manifest = read_manifest(&out);
+    manifest.validate().unwrap();
+    let paths: Vec<&str> = manifest
+        .artifact_catalog
+        .entries
+        .iter()
+        .map(|artifact| artifact.path.as_str())
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "shared/metadata.gguf",
+            "shared/common.gguf",
+            "layers/layer-00000-part00.gguf",
+            "layers/layer-00000-part01.gguf",
+            "layers/layer-00000-part02.gguf",
+        ]
+    );
+    // Split-layer tensors keep their layer ordinal and resolve through the
+    // carrier to their physical part artifacts.
+    for tensor in &manifest.tensor_catalog.entries {
+        if tensor.layer_ordinal.is_some() {
+            assert_eq!(tensor.layer_ordinal, Some(0));
+            let TensorStorage::Owned { artifact_id, .. } = &tensor.storage else {
+                panic!("part tensors own storage");
+            };
+            assert!(artifact_id.starts_with("layer-00000-part"));
+        }
+    }
+    // The independent verifier accepts part artifacts and their paths.
+    crate::verify_v2::verify_package(&out, &source, None, &[]).unwrap();
 }

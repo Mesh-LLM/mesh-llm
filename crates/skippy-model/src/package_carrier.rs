@@ -199,9 +199,14 @@ fn u64_array(metadata: &BTreeMap<String, Value>, key: &str) -> Result<Vec<u64>> 
 }
 
 fn layer_ordinal(artifact: &Artifact) -> Option<u32> {
-    artifact
+    let stem = artifact
         .path
-        .strip_prefix("layers/layer-")
-        .and_then(|value| value.strip_suffix(".gguf"))
-        .and_then(|value| value.parse().ok())
+        .strip_prefix("layers/layer-")?
+        .strip_suffix(".gguf")?;
+    // Oversized layers are split into byte-balanced part artifacts
+    // (`layer-00042-part01`); every part still belongs to the layer ordinal.
+    stem.split_once("-part")
+        .map_or(stem, |(ordinal, _)| ordinal)
+        .parse()
+        .ok()
 }

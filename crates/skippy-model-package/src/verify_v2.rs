@@ -170,9 +170,13 @@ pub(crate) fn verify_package(
 }
 
 fn layer_ordinal_from_artifact_path(path: &str) -> Option<u32> {
-    path.strip_prefix("layers/layer-")
-        .and_then(|value| value.strip_suffix(".gguf"))
-        .and_then(|value| value.parse().ok())
+    let stem = path.strip_prefix("layers/layer-")?.strip_suffix(".gguf")?;
+    // Oversized layers are split into byte-balanced part artifacts
+    // (`layer-00042-part01`); every part still belongs to the layer ordinal.
+    stem.split_once("-part")
+        .map_or(stem, |(ordinal, _)| ordinal)
+        .parse()
+        .ok()
 }
 
 fn source_tensor_locations(
