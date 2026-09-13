@@ -250,7 +250,7 @@ fi
     def test_uncertified_override_is_explicit_and_bounded(self) -> None:
         script = SMOKE_SCRIPT.read_text(encoding="utf-8")
         self.assertIn(
-            'ALLOW_UNCERTIFIED_SPLIT="${MESH_TWO_NODE_SPLIT_ALLOW_UNCERTIFIED:-0}"',
+            'ALLOW_UNCERTIFIED_SPLIT="${MESH_TWO_NODE_SPLIT_ALLOW_UNCERTIFIED:-$AUTO_ALLOW_UNCERTIFIED_SPLIT}"',
             script,
         )
         self.assertIn(
@@ -270,6 +270,53 @@ fi
             "scripts/ci-two-node-split-smoke.sh"
         )
         self.assertEqual(caller.count(override_command), 2)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw_gguf = root / "fixture-Q4_K_M.gguf"
+            raw_gguf.write_bytes(b"fixture")
+            package = root / "package"
+            package.mkdir()
+            (package / "model-package.json").write_text(
+                '{"schema_version":2}\n', encoding="utf-8"
+            )
+            missing_binary = root / "missing-mesh-llm"
+
+            def observed_override(
+                model: Path, explicit: str | None = None
+            ) -> subprocess.CompletedProcess[str]:
+                env = {**os.environ}
+                env.pop("MESH_TWO_NODE_SPLIT_ALLOW_UNCERTIFIED", None)
+                if explicit is not None:
+                    env["MESH_TWO_NODE_SPLIT_ALLOW_UNCERTIFIED"] = explicit
+                return subprocess.run(
+                    [
+                        "bash",
+                        str(SMOKE_SCRIPT),
+                        str(missing_binary),
+                        "/bin",
+                        str(model),
+                    ],
+                    cwd=ROOT,
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+
+            generated = observed_override(raw_gguf)
+            self.assertNotEqual(generated.returncode, 0)
+            self.assertIn("uncertified split override: 1", generated.stdout)
+
+            existing = observed_override(package)
+            self.assertNotEqual(existing.returncode, 0)
+            self.assertIn("uncertified split override: 0", existing.stdout)
+
+            explicit_fail_closed = observed_override(raw_gguf, "0")
+            self.assertNotEqual(explicit_fail_closed.returncode, 0)
+            self.assertIn(
+                "uncertified split override: 0", explicit_fail_closed.stdout
+            )
 
     def test_existing_package_v2_is_passed_through(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
