@@ -7,7 +7,6 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size};
 use mesh_llm_events::{ConsoleSessionMode, OutputSink, TuiControlFlow, TuiEvent, TuiKeyEvent};
 use std::fmt;
 use std::io::BufRead;
-#[cfg(test)]
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
@@ -172,6 +171,7 @@ fn spawn_line_handler_with_runtime(
     output_sink: Arc<dyn OutputSink>,
     initial_prompt_mode: InitialPromptMode,
 ) {
+    let mut console = mesh_llm_events::console_err();
     if matches!(initial_prompt_mode, InitialPromptMode::Immediate) {
         let _ = output_sink.write_ready_prompt();
     }
@@ -209,7 +209,7 @@ fn spawn_line_handler_with_runtime(
             match line_rx.recv().await {
                 Some(Ok(line)) => match parse_command(&line) {
                     Some(InteractiveCommand::Help) => {
-                        eprintln!("{HELP_TEXT}");
+                        let _ = writeln!(console, "{HELP_TEXT}");
                     }
                     Some(InteractiveCommand::Quit) => {
                         if control_tx
@@ -223,7 +223,11 @@ fn spawn_line_handler_with_runtime(
                         break;
                     }
                     Some(InteractiveCommand::Info) => {
-                        eprintln!("{}", console_state.status_snapshot_string().await);
+                        let _ = writeln!(
+                            console,
+                            "{}",
+                            console_state.status_snapshot_string().await
+                        );
                     }
                     None => {}
                 },

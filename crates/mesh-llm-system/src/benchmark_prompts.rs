@@ -79,6 +79,7 @@ struct DatasetSplit {
 }
 
 pub async fn import_prompt_corpus(args: ImportPromptsArgs) -> Result<()> {
+    let mut err = mesh_llm_events::console_err();
     if args.limit == 0 {
         bail!("--limit must be at least 1");
     }
@@ -125,12 +126,13 @@ pub async fn import_prompt_corpus(args: ImportPromptsArgs) -> Result<()> {
     writer.flush().context("Flush prompt corpus")?;
 
     let summary = summarize_prompts(&prompts, &args.output);
-    eprintln!(
+    writeln!(
+        err,
         "📝 Imported {} prompts from {} to {}",
         summary.prompt_count,
         source_spec.dataset,
         args.output.display()
-    );
+    )?;
     Ok(())
 }
 

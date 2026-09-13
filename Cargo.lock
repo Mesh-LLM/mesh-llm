@@ -4117,6 +4117,7 @@ dependencies = [
  "tar",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -4157,6 +4158,7 @@ dependencies = [
  "libc",
  "libloading",
  "mesh-llm-build-info",
+ "mesh-llm-events",
  "mesh-llm-gpu-bench",
  "mesh-llm-native-runtime",
  "mesh-llm-release-footer",
@@ -4240,6 +4242,7 @@ dependencies = [
  "mesh-native-serving-plugin-api",
  "skippy-server",
  "skippy-tokenizer",
+ "tracing",
 ]
 
 [[package]]

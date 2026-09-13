@@ -11,6 +11,7 @@ use model_artifact::{ModelArtifactFile, select_primary_artifact_file};
 use serde::Deserialize;
 use std::cmp::Ordering;
 use std::collections::HashSet;
+use std::io::Write;
 // std imports kept minimal; filesystem ops via std::fs::read_dir used in helper
 use std::path::{Path, PathBuf};
 #[cfg(test)]
@@ -195,6 +196,7 @@ async fn download_exact_ref_with_progress_direct(
     progress: bool,
     direct: bool,
 ) -> Result<catalog::HfDownload> {
+    let mut err = mesh_llm_events::console_err();
     let input = canonicalize_model_ref_input(input).await?;
     match parse_exact_model_ref(&input)? {
         ExactModelRef::Catalog(model) => download_remote_catalog_model(&model, progress).await,
@@ -212,7 +214,7 @@ async fn download_exact_ref_with_progress_direct(
                 )
             {
                 if progress {
-                    eprintln!("ℹ Using repackaged model from catalog: {}", model.name);
+                    writeln!(err, "ℹ Using repackaged model from catalog: {}", model.name)?;
                 }
                 return download_remote_catalog_model(&model, progress).await;
             }
@@ -233,6 +235,7 @@ pub async fn resolve_model_spec(input: &Path) -> Result<PathBuf> {
 }
 
 pub async fn resolve_model_spec_with_progress(input: &Path, progress: bool) -> Result<PathBuf> {
+    let mut err = mesh_llm_events::console_err();
     let raw = input.to_string_lossy();
 
     if raw.starts_with("hf://") {
@@ -265,7 +268,7 @@ pub async fn resolve_model_spec_with_progress(input: &Path, progress: bool) -> R
         .context("join remote catalog resolve task")?
         {
             if progress {
-                eprintln!("📥 Found in remote catalog: {}", hf_ref.name);
+                writeln!(err, "📥 Found in remote catalog: {}", hf_ref.name)?;
             }
             return catalog::download_hf_repo_file_with_progress_label(
                 &hf_ref.repo,
