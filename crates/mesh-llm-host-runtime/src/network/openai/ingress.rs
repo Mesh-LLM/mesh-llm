@@ -125,12 +125,26 @@ fn outcome_was_served(outcome: &proxy::RouteDispatchOutcome) -> bool {
 /// `X-Capsule-Id` marker exists on this path (it never runs through
 /// `openai-frontend`'s `OpenAiHookPolicy`, the only place a marker is minted),
 /// so nonce/nonce_source are `None`.
+///
+/// `served_locally` distinguishes the host-served path (this node's own
+/// weights, via `route_model_request`) from the plugin-served path (a plugin
+/// endpoint that may proxy anywhere, including a third-party service). The
+/// whole `serving_provenance` block — not just the hardware fields — is
+/// attached only when `served_locally` is true: a plugin endpoint can return
+/// 200 for an exchange this node's GPU/VRAM/hostname never touched, and the
+/// model-name-keyed descriptor lookup itself is a second, independent source
+/// of staleness (the descriptor list and the routing target table update on
+/// separate schedules, so a teardown window can hand a plugin-served exchange
+/// this node's own served-model quant/architecture/identity_hash). Omitting
+/// the whole block on the plugin path closes both windows at once rather than
+/// leaving the model-identity half open.
 async fn publish_raw_proxy_terminal(
     node: &mesh::Node,
     plugin_manager: &crate::plugin::PluginManager,
     exchange_id: &str,
     model_name: &str,
     final_outcome: &proxy::RouteDispatchOutcome,
+    served_locally: bool,
     request_digest: Option<&str>,
 ) {
     let mut envelope = OpenAiExchangeEnvelope::terminal(
@@ -144,8 +158,9 @@ async fn publish_raw_proxy_terminal(
     // Nothing was served on a 503 / `Failed` / `Dropped` outcome, so there is
     // no hardware or model identity to report — and no reason to pay the
     // `served_model_descriptors()` lock for a lookup whose result would be
-    // thrown away.
-    if outcome_was_served(final_outcome) {
+    // thrown away. On the plugin-served path, skip it regardless of outcome:
+    // see the `served_locally` doc above.
+    if served_locally && outcome_was_served(final_outcome) {
         let provenance = serving_provenance_for_model(node, model_name).await;
         envelope = envelope.with_serving_provenance(provenance);
     }
@@ -831,6 +846,7 @@ async fn try_route_plugin_model(
                 &exchange_id,
                 model_name,
                 &final_outcome,
+                false, // plugin-served: never this node's own hardware/weights
                 request_digest.as_deref(),
             )
             .await;
@@ -963,6 +979,7 @@ async fn route_request(
                 exchange_id,
                 model_name,
                 &outcome,
+                true, // host-served: this node's own weights and hardware survey
                 request_digest.as_deref(),
             )
             .await;
