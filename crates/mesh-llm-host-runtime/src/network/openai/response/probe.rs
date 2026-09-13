@@ -146,6 +146,36 @@ pub(in crate::network::openai::response) struct ResponseProbe {
     pub(in crate::network::openai::response) retryable_context_overflow: bool,
 }
 
+/// The rung-ladder response-leg header a SERVED node's own frontend stamps
+/// on its response (`openai-frontend::router::X_CAPSULE_ID_HEADER`). On a
+/// `RemoteMesh` dispatch this node did not serve the exchange, so any value
+/// here is the PEER's own header, relayed byte-for-byte — see
+/// `peer_response_header_value` and `ingress.rs`'s remote-mesh routing.
+pub(in crate::network::openai::response) const PEER_CAPSULE_ID_HEADER: &str = "x-capsule-id";
+
+/// Case-insensitive lookup of a single response header's value, scanning
+/// only the already-buffered, untouched header block the peer/upstream sent
+/// (`probe.buffered[..probe.header_end]`) — i.e. before any relay/adapter
+/// rewrite runs. Returns the first occurrence; `None` when absent or the
+/// header block fails to parse.
+pub(in crate::network::openai::response) fn peer_response_header_value(
+    buf: &[u8],
+    header_end: usize,
+    name: &str,
+) -> Option<String> {
+    let mut headers_buf = [httparse::EMPTY_HEADER; MAX_HEADERS];
+    let mut response = httparse::Response::new(&mut headers_buf);
+    if response.parse(&buf[..header_end.min(buf.len())]).is_err() {
+        return None;
+    }
+    response
+        .headers
+        .iter()
+        .find(|header| header.name.eq_ignore_ascii_case(name))
+        .and_then(|header| std::str::from_utf8(header.value).ok())
+        .map(|value| value.trim().to_string())
+}
+
 /// Remote first-byte timeout: 5 minutes. This covers the full round trip
 /// through the QUIC tunnel including remote prefill. Concurrent requests
 /// on a loaded host can legitimately take minutes. A truly dead QUIC
@@ -537,6 +567,38 @@ mod tests {
             String::from_utf8_lossy(&buf).contains("x-mesh-served-by: ab12\r\n"),
             "CR/LF in the value must not let it smuggle extra header lines: {}",
             String::from_utf8_lossy(&buf)
+        );
+    }
+
+    #[test]
+    fn peer_response_header_value_reads_case_insensitively() {
+        let header = b"HTTP/1.1 200 OK\r\nX-Capsule-Id: cap-123\r\nContent-Length: 0\r\n\r\n";
+        assert_eq!(
+            peer_response_header_value(header, header.len(), "x-capsule-id"),
+            Some("cap-123".to_string())
+        );
+    }
+
+    #[test]
+    fn peer_response_header_value_absent_is_none() {
+        let header = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+        assert_eq!(
+            peer_response_header_value(header, header.len(), PEER_CAPSULE_ID_HEADER),
+            None
+        );
+    }
+
+    /// The header value is recorded verbatim regardless of whether it is
+    /// genuinely the peer's own id or something else entirely — this layer
+    /// performs no verification, only observation (see
+    /// `CapsuleIdProvenance::PeerAsserted`).
+    #[test]
+    fn peer_response_header_value_never_validates_the_value() {
+        let header =
+            b"HTTP/1.1 200 OK\r\nX-Capsule-Id: not-a-real-capsule-id\r\nContent-Length: 0\r\n\r\n";
+        assert_eq!(
+            peer_response_header_value(header, header.len(), PEER_CAPSULE_ID_HEADER),
+            Some("not-a-real-capsule-id".to_string())
         );
     }
 

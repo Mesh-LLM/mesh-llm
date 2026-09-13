@@ -163,6 +163,25 @@ pub struct ExchangeUsage {
     pub total_tokens: u64,
 }
 
+/// How a terminal envelope's `capsule_id` was obtained.
+///
+/// `SelfMinted` is the capsule_id this node minted for its own served
+/// response — the same value already written into the client's response as
+/// `X-Capsule-Id`. `PeerAsserted` (via
+/// [`OpenAiExchangeEnvelope::terminal_remote_mesh`]) is a value this node
+/// merely OBSERVED on a peer's raw response header while routing (not
+/// serving) the exchange. `X-Capsule-Id` is an unauthenticated,
+/// relay-injectable header — a `PeerAsserted` value is never elevated to
+/// verified here. It becomes verified only when a puller dereferences it via
+/// a later out-of-band fetch and the fetched capsule's digest matches; that check lives in
+/// the puller, not at this producer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapsuleIdProvenance {
+    SelfMinted,
+    PeerAsserted,
+}
+
 /// The wire shape both dispatch paths publish on [`OPENAI_EXCHANGE_CHANNEL`].
 /// Deliberately independent of `openai_frontend`'s typed request/response —
 /// the raw-proxy path never has one — so one shape covers both paths without
@@ -185,6 +204,10 @@ pub struct OpenAiExchangeEnvelope {
     /// the client's response as `X-Capsule-Id`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capsule_id: Option<String>,
+    /// How `capsule_id` was obtained — see [`CapsuleIdProvenance`]. `None`
+    /// exactly when `capsule_id` is `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capsule_id_provenance: Option<CapsuleIdProvenance>,
     /// The nonce the marker is correlated against, so a plugin observing
     /// this event knows what a later client ack must sign over.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -248,6 +271,7 @@ impl OpenAiExchangeEnvelope {
             model: model.into(),
             status: None,
             capsule_id: None,
+            capsule_id_provenance: None,
             nonce: None,
             nonce_source: None,
             serving_provenance: None,
@@ -271,6 +295,7 @@ impl OpenAiExchangeEnvelope {
             model: model.into(),
             status,
             capsule_id: marker.as_ref().map(|marker| marker.capsule_id.clone()),
+            capsule_id_provenance: marker.as_ref().map(|_| CapsuleIdProvenance::SelfMinted),
             nonce: marker.as_ref().map(|marker| marker.nonce.clone()),
             nonce_source,
             serving_provenance: None,
@@ -342,6 +367,7 @@ impl OpenAiExchangeEnvelope {
             model: model.into(),
             status: None,
             capsule_id: None,
+            capsule_id_provenance: None,
             nonce,
             nonce_source,
             serving_provenance: None,
@@ -357,9 +383,15 @@ impl OpenAiExchangeEnvelope {
     /// node minted together with the nonce that capsule is correlated
     /// against, a routing node mints nothing here: `nonce` is the same
     /// client-contributed value forwarded to the peer unchanged (present
-    /// only when the request already carries a stabilized nonce). No peer
-    /// response header is read back on this path, so `capsule_id` stays
-    /// absent, same as the plugin-served terminal event.
+    /// only when the request already carries a stabilized nonce), and
+    /// `peer_capsule_id` is the peer's own `X-Capsule-Id` response header,
+    /// read back off the raw-proxy return. That value is always recorded as
+    /// [`CapsuleIdProvenance::PeerAsserted`] — see its doc for why it is
+    /// never elevated to verified here. `X-Capsule-Id` is an unauthenticated,
+    /// relay-injectable header, so this producer does not attempt to
+    /// distinguish a genuine peer value from an injected one; it can't, over
+    /// an unauthenticated header. It never invents a value: `None` when the
+    /// peer's response carried no such header.
     ///
     /// **`nonce_source` asymmetry:** same as [`Self::effective_remote_mesh`]
     /// — node A reports `SidecarGeneratedFallback` when it minted the nonce;
@@ -378,14 +410,19 @@ impl OpenAiExchangeEnvelope {
         status: Option<u16>,
         nonce: Option<String>,
         nonce_source: Option<ClientNonceSource>,
+        peer_capsule_id: Option<String>,
     ) -> Self {
+        let capsule_id_provenance = peer_capsule_id
+            .as_ref()
+            .map(|_| CapsuleIdProvenance::PeerAsserted);
         Self {
             exchange_id: exchange_id.into(),
             dispatch_path: OpenAiExchangeDispatchPath::RemoteMesh,
             phase: OpenAiExchangePhase::Terminal,
             model: model.into(),
             status,
-            capsule_id: None,
+            capsule_id: peer_capsule_id,
+            capsule_id_provenance,
             nonce,
             nonce_source,
             serving_provenance: None,
@@ -1087,6 +1124,7 @@ mod tests {
                 Some(200),
                 nonce.clone(),
                 nonce_source,
+                None,
             ))
             .await;
 
@@ -1112,6 +1150,98 @@ mod tests {
         assert_eq!(events[1].nonce, nonce);
         assert_eq!(events[1].nonce_source, nonce_source);
         assert!(events[1].capsule_id.is_none());
+        assert!(events[1].capsule_id_provenance.is_none());
+    }
+
+    /// A `RemoteMesh` terminal envelope
+    /// carries the peer's `X-Capsule-Id` as `capsule_id`, always labeled
+    /// `PeerAsserted` — never `SelfMinted` (this node minted nothing), and
+    /// never silently upgraded to verified.
+    #[tokio::test]
+    async fn terminal_remote_mesh_labels_a_peer_capsule_id_as_peer_asserted() {
+        let envelope = OpenAiExchangeEnvelope::terminal_remote_mesh(
+            "exch-rm-cap",
+            "hermes-2-pro-mistral-7b",
+            Some(200),
+            Some("6d7d8d2e-3f4a-4b5c-8d9e-0a1b2c3d4e5f".to_string()),
+            Some(ClientNonceSource::ClientSupplied),
+            Some("capsule-peer-1".to_string()),
+        );
+        assert_eq!(
+            envelope.dispatch_path,
+            OpenAiExchangeDispatchPath::RemoteMesh
+        );
+        assert_eq!(envelope.capsule_id.as_deref(), Some("capsule-peer-1"));
+        assert_eq!(
+            envelope.capsule_id_provenance,
+            Some(CapsuleIdProvenance::PeerAsserted)
+        );
+        let value = serde_json::to_value(&envelope).expect("serialize");
+        assert_eq!(value["capsule_id_provenance"], "peer_asserted");
+    }
+
+    /// Mutant: the peer's response carried no `X-Capsule-Id` header —
+    /// `capsule_id` and its provenance both stay honestly absent, never
+    /// invented.
+    #[tokio::test]
+    async fn terminal_remote_mesh_without_a_peer_capsule_id_omits_both_fields() {
+        let envelope = OpenAiExchangeEnvelope::terminal_remote_mesh(
+            "exch-rm-cap-2",
+            "hermes-2-pro-mistral-7b",
+            Some(200),
+            None,
+            None,
+            None,
+        );
+        assert!(envelope.capsule_id.is_none());
+        assert!(envelope.capsule_id_provenance.is_none());
+        let value = serde_json::to_value(&envelope).expect("serialize");
+        assert!(value.get("capsule_id").is_none());
+        assert!(value.get("capsule_id_provenance").is_none());
+    }
+
+    /// Mutant: a substitute/injected `X-Capsule-Id` is still recorded — this
+    /// producer does not attempt to distinguish a genuine peer value from an
+    /// injected one (it cannot, over an unauthenticated header) — but it is
+    /// NEVER sealed as anything other than `PeerAsserted`. Would-be
+    /// verification is out of scope here by design (see the puller).
+    #[tokio::test]
+    async fn terminal_remote_mesh_records_an_injected_value_as_peer_asserted_never_verified() {
+        let envelope = OpenAiExchangeEnvelope::terminal_remote_mesh(
+            "exch-rm-cap-3",
+            "hermes-2-pro-mistral-7b",
+            Some(200),
+            None,
+            None,
+            Some("injected-not-really-the-peers".to_string()),
+        );
+        assert_eq!(
+            envelope.capsule_id.as_deref(),
+            Some("injected-not-really-the-peers")
+        );
+        assert_eq!(
+            envelope.capsule_id_provenance,
+            Some(CapsuleIdProvenance::PeerAsserted)
+        );
+    }
+
+    /// A `RemoteMesh` terminal envelope mints no marker of its own: a
+    /// self-minted capsule_id (`SelfMinted`) can never appear on this
+    /// dispatch path.
+    #[tokio::test]
+    async fn terminal_remote_mesh_never_produces_self_minted_provenance() {
+        let envelope = OpenAiExchangeEnvelope::terminal_remote_mesh(
+            "exch-rm-cap-4",
+            "m",
+            Some(200),
+            Some("nonce-1".to_string()),
+            Some(ClientNonceSource::ClientSupplied),
+            Some("capsule-peer-2".to_string()),
+        );
+        assert_ne!(
+            envelope.capsule_id_provenance,
+            Some(CapsuleIdProvenance::SelfMinted)
+        );
     }
 
     /// Verifies the envelope constructor shape for the RawProxy effective +
