@@ -33,6 +33,8 @@ TODO = "// TODO: Audit that the environment access only happens in single-thread
 AUDITED_FILES = (
     "crates/skippy-protocol/build.rs",
     "crates/mesh-llm-plugin/build.rs",
+    "crates/mesh-llm-config/src/env_overrides.rs",
+    "crates/mesh-llm-host-runtime/src/plugin/config/tests.rs",
     "crates/mesh-llm-host-runtime/src/capture.rs",
     "crates/mesh-llm-host-runtime/src/mesh/identity_persistence.rs",
     "crates/mesh-llm-host-runtime/src/mesh/public_identity_tests.rs",
@@ -101,6 +103,11 @@ SERIAL_ATTR_RE = re.compile(r"^\s*#\[(?:serial|serial_test::serial)\]\s*$")
 # verified as serial tests. Listing the helpers prevents a production function
 # from passing merely because a nearby comment contains the text `#[serial]`.
 SERIAL_TEST_HELPERS = {
+    "crates/mesh-llm-config/src/env_overrides.rs": {
+        "drop",
+        "set",
+        "with_env_override_for_test",
+    },
     "crates/mesh-llm-host-runtime/src/capture.rs": {"drop"},
     "crates/mesh-llm-host-runtime/src/mesh/identity_persistence.rs": {"drop", "set"},
     "crates/mesh-llm-host-runtime/src/mesh/public_identity_tests.rs": {"drop", "set_home"},

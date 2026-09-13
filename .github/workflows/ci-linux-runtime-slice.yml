@@ -140,11 +140,44 @@ jobs:
           allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
           allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
       - name: Prepare immutable Linux native runtime
+        id: native_runtime
         uses: ./.github/actions/prepare-native-runtime-input
         with:
           backend: ${{ matrix.runtime.backend }}
           target: ${{ matrix.runtime.target }}
           output_dir: runtime-input
+      # The native runtime-event gate is the only test that exercises the
+      # reporter against actual native code. It is env-gated so an ordinary
+      # `cargo test` never touches a native symbol, which also meant nothing
+      # in CI ever ran it. This is the one lane that already has a freshly
+      # built native runtime, so it is the cheapest place to run it: CPU
+      # only, because the reporter is backend-independent and a second
+      # backend would buy a duplicate of the same evidence.
+      - name: Restore runtime-event gate model
+        id: gate_model
+        if: ${{ matrix.runtime.backend == 'cpu' }}
+        uses: ./.github/actions/restore-test-model
+        with:
+          model_manifest: ci/model-artifacts/manifests/skippy-ci-smoke.json
+          model_artifact_id: family-qwen3-dense
+          model_cadence: ${{ (inputs.original_event_name == 'pull_request' || inputs.original_event_name == 'pull_request_target') && 'pull-request' || 'main' }}
+          model_cache_scope: runtime-events-native-gate-model
+          save_model_cache: ${{ github.ref == 'refs/heads/main' && inputs.original_event_name != 'pull_request' && inputs.original_event_name != 'pull_request_target' }}
+      - name: Run native runtime-event gate
+        if: ${{ matrix.runtime.backend == 'cpu' }}
+        run: |
+          scripts/ci-runtime-events-native-gate.sh \
+            --bundle-dir "$(dirname "${{ steps.native_runtime.outputs.runtime_dir }}")" \
+            --model "${{ steps.gate_model.outputs.model_path }}" \
+            --evidence runtime-events-native-evidence.txt
+      - name: Upload native runtime-event gate evidence
+        if: ${{ !cancelled() && matrix.runtime.backend == 'cpu' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: runtime-events-native-evidence-linux-${{ matrix.runtime.architecture }}
+          path: runtime-events-native-evidence.txt
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload immutable Linux runtime input
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
