@@ -423,7 +423,9 @@ async fn publish_raw_proxy_terminal_on_the_plugin_served_path_omits_the_whole_bl
 /// A served 2xx outcome for a model this node has no served-model descriptor
 /// for (a routing-table/descriptor-list staleness window) still reports the
 /// real hardware survey, but every model-identity field stays `None` rather
-/// than borrowing another model's descriptor.
+/// than borrowing another model's descriptor. The node DOES have a
+/// descriptor registered — just for a different model — so this actually
+/// exercises the name match rather than an incidentally-empty list.
 #[tokio::test]
 async fn publish_raw_proxy_terminal_omits_model_identity_on_a_descriptor_miss() {
     let mut node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
@@ -435,7 +437,21 @@ async fn publish_raw_proxy_terminal_omits_model_identity_on_a_descriptor_miss() 
         total_bytes: 16_000_000_000,
         ..Default::default()
     };
-    // No served-model descriptor registered for "test-model" at all.
+    // A descriptor IS registered, but for a different model than the one
+    // being served — must not be borrowed for "test-model".
+    node.set_served_model_descriptors(vec![mesh::ServedModelDescriptor {
+        identity: mesh::ServedModelIdentity {
+            model_name: "other-model".to_string(),
+            identity_hash: Some("other-hash".to_string()),
+            ..Default::default()
+        },
+        metadata: Some(mesh::ServedModelMetadata {
+            quant: Some("Q8_0".to_string()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }])
+    .await;
     let channel = RecordingChannel::default();
     let outcome = proxy::RouteDispatchOutcome::Responded(200);
 
