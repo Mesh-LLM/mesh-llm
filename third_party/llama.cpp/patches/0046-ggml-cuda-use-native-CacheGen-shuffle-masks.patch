@@ -1,11 +1,12 @@
-From ca99c017af46be9b6cd07411ac0be33d9799d5ca Mon Sep 17 00:00:00 2001
+From 2014cb675af3629ff1bb6d61ef7885bc32b12ed2 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 12 Sep 2026 11:49:37 +1000
 Subject: [PATCH] ggml-cuda: use native CacheGen shuffle masks
 
 ---
- ggml/src/ggml-cuda/cachegen.cu | 18 +++++++++++++-----
- 1 file changed, 13 insertions(+), 5 deletions(-)
+ ggml/src/ggml-cuda/cachegen.cu   | 18 +++++++++++++-----
+ ggml/src/ggml-cuda/vendors/hip.h |  1 +
+ 2 files changed, 14 insertions(+), 5 deletions(-)
 
 diff --git a/ggml/src/ggml-cuda/cachegen.cu b/ggml/src/ggml-cuda/cachegen.cu
 index 685dc586a..394c1d45e 100644
@@ -64,5 +65,18 @@ index 685dc586a..394c1d45e 100644
 +#undef GGML_CACHEGEN_ACTIVE_MASK
 +
  #endif // !defined(GGML_USE_MUSA)
+diff --git a/ggml/src/ggml-cuda/vendors/hip.h b/ggml/src/ggml-cuda/vendors/hip.h
+index 2fc0fe9fd..d842ad754 100644
+--- a/ggml/src/ggml-cuda/vendors/hip.h
++++ b/ggml/src/ggml-cuda/vendors/hip.h
+@@ -30,6 +30,7 @@
+ #define CU_MEM_ACCESS_FLAGS_PROT_READWRITE hipMemAccessFlagsProtReadWrite
+ #define CU_CHECK(fn) {hipError_t err = fn; if(err != hipSuccess) { GGML_ABORT("HipVMM Failure: %s\n", hipGetErrorString(err)); }}
+ #define __shfl_sync(mask, var, laneMask, width) __shfl(var, laneMask, width)
++#define __shfl_down_sync(mask, var, delta, width) __shfl_down(var, delta, width)
+ #define __shfl_up_sync(mask, var, laneMask, width) __shfl_up(var, laneMask, width)
+ #define __shfl_xor_sync(mask, var, laneMask, width) __shfl_xor(var, laneMask, width)
+ #define __all_sync(mask, var) __all(var)
 -- 
 2.54.0 (Apple Git-157)
+
