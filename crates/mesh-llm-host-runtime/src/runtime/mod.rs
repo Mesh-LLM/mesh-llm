@@ -12,6 +12,7 @@ mod instance_lifecycle;
 mod interactive;
 pub(crate) mod kv_disk_config;
 mod local;
+mod local_memory_plan;
 mod local_model_only;
 mod local_package;
 mod local_split;
