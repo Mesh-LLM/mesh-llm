@@ -30,7 +30,7 @@ use crate::frontend::{
     },
     prefill::{
         PrefillChunkObservation, drain_embedded_prefill_replies, drain_one_embedded_prefill_reply,
-        representative_prefill_compute_sample,
+        prefill_chunk_end, representative_prefill_compute_sample,
     },
 };
 use crate::telemetry::now_unix_nanos;
@@ -45,23 +45,6 @@ use openai_frontend::{OpenAiError, OpenAiResult};
 use prefix_restore::EmbeddedPrefixRestore;
 use serde_json::json;
 use skippy_protocol::binary::{StageReplyStats, WireReplyKind, recv_reply};
-
-fn prefill_chunk_end(
-    pos_start: usize,
-    chunk_size: usize,
-    prefill_token_count: usize,
-    exact_checkpoint_boundary: Option<usize>,
-) -> usize {
-    let mut end = pos_start
-        .saturating_add(chunk_size)
-        .min(prefill_token_count);
-    if let Some(boundary) = exact_checkpoint_boundary
-        && pos_start < boundary
-    {
-        end = end.min(boundary);
-    }
-    end
-}
 
 impl StageOpenAiBackend {
     pub(super) fn generate_embedded_stage_zero_tokens(
@@ -2006,23 +1989,5 @@ impl StageOpenAiBackend {
         self.finish_embedded_generation_session(&request, lane_pool, lane, &result, &session_key)?;
         result?;
         Ok(cache_stats)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::prefill_chunk_end;
-
-    #[test]
-    fn exact_checkpoint_splits_prefill_at_the_native_state_boundary() {
-        assert_eq!(prefill_chunk_end(0, 1024, 1400, Some(768)), 768);
-        assert_eq!(prefill_chunk_end(768, 1024, 1400, Some(768)), 1400);
-    }
-
-    #[test]
-    fn exact_checkpoint_preserves_earlier_adaptive_chunks() {
-        assert_eq!(prefill_chunk_end(0, 256, 1400, Some(768)), 256);
-        assert_eq!(prefill_chunk_end(256, 256, 1400, Some(768)), 512);
-        assert_eq!(prefill_chunk_end(512, 512, 1400, Some(768)), 768);
     }
 }

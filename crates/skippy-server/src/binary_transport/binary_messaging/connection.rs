@@ -412,9 +412,8 @@ fn handle_binary_connection_messages(
             let lookup_kv = kv.cloned();
             let lookup_telemetry = telemetry.clone();
             let lookup_session_key = session_key.clone();
-            let lookup_message = message.clone();
             let lookup_token_ids = token_ids.clone();
-            let (auto_align, lookup_result) = iteration_scheduler
+            let (returned_message, auto_align, lookup_result) = iteration_scheduler
                 .execute_runtime("binary-prefix-lookup", move |runtime| {
                     let auto_align = align_session_to_target(
                         runtime,
@@ -423,21 +422,20 @@ fn handle_binary_connection_messages(
                         align_target,
                     )
                     .map_err(|error| openai_frontend::OpenAiError::backend(format!("{error:#}")))?;
-                    Ok((
-                        auto_align,
-                        maybe_lookup_binary_prefill(
-                            &lookup_config,
-                            runtime,
-                            lookup_kv.as_ref(),
-                            &lookup_telemetry,
-                            &lookup_session_key,
-                            &lookup_message,
-                            &lookup_token_ids,
-                            output_activation_width,
-                        ),
-                    ))
+                    let lookup_result = maybe_lookup_binary_prefill(
+                        &lookup_config,
+                        runtime,
+                        lookup_kv.as_ref(),
+                        &lookup_telemetry,
+                        &lookup_session_key,
+                        &message,
+                        &lookup_token_ids,
+                        output_activation_width,
+                    );
+                    Ok((message, auto_align, lookup_result))
                 })
                 .map_err(|error| anyhow::anyhow!(format!("{error:#}")))?;
+            message = returned_message;
             session_auto_align_count = auto_align.count;
             session_auto_align_ms = auto_align.elapsed_ms;
             session_auto_align_trimmed_tokens = auto_align.trimmed_tokens;
@@ -556,12 +554,23 @@ fn handle_binary_connection_messages(
                     let sample_prefill_final =
                         message.kind == WireMessageKind::PrefillFinalEmbd && downstream.is_none();
                     let scheduler_session_key = session_key.clone();
-                    let scheduler_message = message.clone();
                     let scheduler_token_ids = executable_token_ids.to_vec();
                     let scheduler_kv = kv.cloned();
                     let scheduler_telemetry = telemetry.clone();
                     let align_in_compute = !lookup_needed;
                     let collect_session_stats = telemetry.is_debug_enabled();
+                    let execute_context = format!(
+                        "execute scheduler-owned binary stage message \
+                         kind={:?} pos_start={} token_count={} tokens={} \
+                         executable_tokens={} activation_bytes={}",
+                        message.kind,
+                        message.pos_start,
+                        message.token_count,
+                        message.tokens.len(),
+                        executable_token_ids.len(),
+                        input_activation_bytes,
+                    );
+                    let scheduler_message = message;
                     let outcome = iteration_scheduler
                         .execute_runtime_timed("binary-stage-execute", move |runtime| {
                             let auto_align = if align_in_compute {
@@ -612,6 +621,7 @@ fn handle_binary_connection_messages(
                             let sessions_after =
                                 collect_session_stats.then(|| runtime.session_stats());
                             Ok((
+                                scheduler_message,
                                 auto_align,
                                 sessions_before,
                                 sessions_after,
@@ -620,24 +630,19 @@ fn handle_binary_connection_messages(
                             ))
                         })
                         .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
-                        .with_context(|| {
-                            format!(
-                                "execute scheduler-owned binary stage message \
-                                 kind={:?} pos_start={} token_count={} tokens={} \
-                                 executable_tokens={} activation_bytes={}",
-                                message.kind,
-                                message.pos_start,
-                                message.token_count,
-                                message.tokens.len(),
-                                executable_token_ids.len(),
-                                input_activation_bytes,
-                            )
-                        })?;
+                        .with_context(|| execute_context)?;
                     runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
                     runtime_lock_hold_ms = outcome.runtime_lock_hold_ms;
                     runtime_lock_acquires = 1;
-                    let (auto_align, sessions_before, sessions_after, eviction, result) =
-                        outcome.value;
+                    let (
+                        returned_message,
+                        auto_align,
+                        sessions_before,
+                        sessions_after,
+                        eviction,
+                        result,
+                    ) = outcome.value;
+                    message = returned_message;
                     if align_in_compute {
                         session_auto_align_count = auto_align.count;
                         session_auto_align_ms = auto_align.elapsed_ms;
