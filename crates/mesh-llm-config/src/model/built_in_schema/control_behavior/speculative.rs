@@ -74,7 +74,8 @@ pub(super) fn apply_speculative_behavior(
         | "verify_window_min_tokens"
         | "verify_window_max_tokens"
         | "verify_window_pipeline_depth"
-        | "verify_window_runahead_tokens" => {}
+        | "verify_window_runahead_tokens"
+        | "ngram_fallback" => {}
         _ => {}
     }
 }

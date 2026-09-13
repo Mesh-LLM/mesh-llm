@@ -258,6 +258,7 @@ configuration should use typed per-model `topology`; explicit `--model` and
 | `speculative.ngram_min`<br>`speculative.ngram_max` | integer | required for a direct N-gram plan; `0 < min <= max` | both | model reload | wired | none |
 | `speculative.ngram_proposer` | enum | `cache` (default), `suffix` | both | model reload | wired | none |
 | `speculative.ngram_max_proposal_tokens` | integer | N-gram maximum | both | model reload | wired | none |
+| `speculative.ngram_fallback` | string | `none` (default), `draft`; `draft` requires an N-gram proposer, a configured draft model, and pipeline depth greater than one | both | model reload | wired | none |
 | `speculative.extension_max_tokens` | integer | N-gram output budget | both | model reload | wired (requires native MTP plus an N-gram proposer) | none |
 | `speculative.native_mtp_reject_cooldown_tokens`<br>`speculative.native_mtp_suppress_cooldown_drafts`<br>`speculative.native_mtp_suppress_cooldown_draft_limit` | integer / boolean | runtime defaults | both | model reload | wired | none |
 | `speculative.verify_window_min_tokens`<br>`speculative.verify_window_max_tokens`<br>`speculative.verify_window_pipeline_depth` | integer | package policy or runtime defaults; `min <= max` | both | model reload | wired | none |
