@@ -378,6 +378,36 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertNotIn("post_green", wrapper)
         self.assertNotIn("post-green", wrapper)
 
+    def test_trusted_canary_owns_split_roster_promotion(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        wrapper = (ROOT / "scripts" / "llama-canary-agent-repair.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Verify split certification roster", workflow)
+        self.assertIn("generate-split-certified.py --check", workflow)
+        self.assertIn("steps.split_roster.outcome == 'success'", workflow)
+        gates = wrapper[
+            wrapper.index("run_candidate_gates()") : wrapper.index(
+                "write_split_certification_roster()"
+            )
+        ]
+        self.assertLess(
+            gates.index("run_prepare"),
+            gates.index("write_split_certification_roster"),
+        )
+        self.assertLess(
+            gates.index("write_split_certification_roster"),
+            gates.index("validate_agent_manifest_changes"),
+        )
+        repair = wrapper[wrapper.index("repair_candidate_until_green()") :]
+        self.assertIn("run_candidate_gates refresh", repair)
+        verify = wrapper[wrapper.rindex("load_candidate_bundle") :]
+        self.assertIn("if ! run_candidate_gates; then", verify)
+        self.assertLess(
+            verify.index("check_split_certification_roster"),
+            verify.index("finalize_certified_tree"),
+        )
+
     def test_family_results_have_typed_failure_outcomes(self) -> None:
         certify = FAMILY_CERTIFY.read_text(encoding="utf-8")
         classifier = FAMILY_OUTCOME.read_text(encoding="utf-8")
