@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use anyhow::Result;
 
 pub(crate) async fn dispatch_download_command(name: Option<&str>, draft: bool) -> Result<()> {
@@ -25,20 +27,22 @@ pub(crate) async fn dispatch_download_command(name: Option<&str>, draft: bool) -
                     mesh_llm_host_runtime::command_support::models::download_model_ref_with_progress_details(&draft_ref, true)
                         .await?;
                 } else {
-                    eprintln!("⚠ No draft model available for {}", query);
+                    let mut err = mesh_llm_events::console_err();
+                    writeln!(err, "⚠ No draft model available for {}", query)?;
                 }
             }
         }
         None => {
             mesh_llm_host_runtime::command_support::models::remote_catalog::ensure_catalog()?;
-            eprintln!("Available models:");
-            eprintln!();
+            let mut err = mesh_llm_events::console_err();
+            writeln!(err, "Available models:")?;
+            writeln!(err)?;
             for model in
                 mesh_llm_host_runtime::command_support::models::remote_catalog::loaded_models()?
             {
                 let size = model.size.as_deref().unwrap_or("?");
                 let description = model.description.as_deref().unwrap_or("");
-                eprintln!("  {:40} {:>6}  {}", model.name, size, description);
+                writeln!(err, "  {:40} {:>6}  {}", model.name, size, description)?;
             }
         }
     }

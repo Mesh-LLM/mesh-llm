@@ -21,7 +21,10 @@ use mesh_llm_plugin_manager::{
     InstalledPluginValueKind, InstalledPluginValueSchema, PluginStore, default_store_root,
 };
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::{
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 #[derive(Clone, Debug)]
 struct ConfigFileValidation {
@@ -357,7 +360,8 @@ fn handle_validation_result(
 ) -> Result<()> {
     let report = ConfigValidateReport::from_diagnostics(path, diagnostics);
     if json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
+        let mut out = mesh_llm_events::machine_out();
+        writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
     } else {
         print_human_report(&report);
     }
@@ -372,22 +376,25 @@ fn handle_validation_result(
 fn print_validation_load_error(path: Option<&Path>, err: &anyhow::Error, json: bool) -> Result<()> {
     let report = ConfigValidateReport::from_error(path.map(Path::to_path_buf), err.to_string());
     if json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
+        let mut out = mesh_llm_events::machine_out();
+        writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
         return Ok(());
     }
 
     let path = report.path.as_deref().unwrap_or("<unresolved>");
-    println!("Config invalid: {path}");
-    println!("  error: {err}");
+    let mut out = mesh_llm_events::console_out();
+    writeln!(out, "Config invalid: {path}")?;
+    writeln!(out, "  error: {err}")?;
     Ok(())
 }
 
 fn print_human_report(report: &ConfigValidateReport) {
     let path = report.path.as_deref().unwrap_or("<unresolved>");
+    let mut out = mesh_llm_events::console_out();
     if report.ok {
-        println!("Config valid: {path}");
+        let _ = writeln!(out, "Config valid: {path}");
     } else {
-        println!("Config invalid: {path}");
+        let _ = writeln!(out, "Config invalid: {path}");
     }
 
     for diagnostic in &report.diagnostics {
@@ -401,7 +408,9 @@ fn print_human_diagnostic(diagnostic: &ConfigDiagnosticPayload) {
         .as_deref()
         .map(|path| format!(" at {path}"))
         .unwrap_or_default();
-    println!(
+    let mut out = mesh_llm_events::console_out();
+    let _ = writeln!(
+        out,
         "  {} {:?}{}: {}",
         severity_label(diagnostic.severity),
         diagnostic.code,
@@ -409,7 +418,7 @@ fn print_human_diagnostic(diagnostic: &ConfigDiagnosticPayload) {
         diagnostic.message
     );
     if let Some(help) = diagnostic.help.as_deref() {
-        println!("    help: {help}");
+        let _ = writeln!(out, "    help: {help}");
     }
 }
 
