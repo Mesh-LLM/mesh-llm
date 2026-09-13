@@ -10,6 +10,7 @@ use crate::mesh::{self, ModelWorkloadClass, ServedModelDescriptor};
 #[cfg(test)]
 mod tests;
 
+/// Accept causal chat or legacy metadata, not standalone encoder-decoder support.
 pub(super) fn descriptor_supports_committee(descriptor: &ServedModelDescriptor) -> bool {
     matches!(
         descriptor
@@ -20,6 +21,7 @@ pub(super) fn descriptor_supports_committee(descriptor: &ServedModelDescriptor) 
     )
 }
 
+/// Resolve model aliases before deciding whether any descriptor admits chat roles.
 pub(super) fn model_supports_committee(model: &str, descriptors: &[ServedModelDescriptor]) -> bool {
     let mut matching = descriptors
         .iter()
@@ -46,6 +48,9 @@ pub(super) async fn eligible_targets(
                 InferenceTarget::Local(_) => local.as_slice(),
                 InferenceTarget::Remote(id) => {
                     let Some(peer) = state.peers.get(id) else {
+                        // A committee reserves work on known members. Unlike
+                        // direct legacy routing, a vanished peer only shrinks
+                        // the pool; it must not receive a committee role.
                         return false;
                     };
                     peer.served_model_descriptors.as_slice()
@@ -58,6 +63,7 @@ pub(super) async fn eligible_targets(
         .collect()
 }
 
+/// Apply committee admission to each known peer without borrowing another's class.
 pub(super) async fn eligible_remote_hosts(
     node: &mesh::Node,
     model: &str,

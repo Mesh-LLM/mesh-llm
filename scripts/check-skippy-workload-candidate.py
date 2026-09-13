@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def file_hash(path: Path) -> str:
+    """Hash artifact bytes incrementally without loading model-sized files in memory."""
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
@@ -22,7 +23,9 @@ def file_hash(path: Path) -> str:
 
 
 def source_identity(root: Path = ROOT) -> dict[str, str]:
+    """Bind the checkout head and all nonignored source changes to one identity."""
     def git(*args: str) -> bytes:
+        """Read repository state without changing the checkout or index."""
         return subprocess.check_output(["git", "-C", str(root), *args])
 
     digest = hashlib.sha256(git("diff", "--binary", "HEAD", "--"))
@@ -36,6 +39,7 @@ def source_identity(root: Path = ROOT) -> dict[str, str]:
 
 
 def producer_files(binary: Path, build_dir: Path, test_binary: Path) -> dict[str, Path]:
+    """Enumerate the candidate, native stamp, tools, and independent oracle closure."""
     return {
         "candidate": binary,
         "test_binary": test_binary,
@@ -47,6 +51,7 @@ def producer_files(binary: Path, build_dir: Path, test_binary: Path) -> dict[str
 
 
 def write_producer(output: Path, binary: Path, build_dir: Path, test_binary: Path, source_snapshot: Path) -> None:
+    """Write evidence only if source stayed unchanged throughout the producer build."""
     source = source_identity()
     if source != json.loads(source_snapshot.read_text(encoding="utf-8")):
         raise RuntimeError("repository source changed while building workload producers")
@@ -62,6 +67,7 @@ def write_producer(output: Path, binary: Path, build_dir: Path, test_binary: Pat
 
 
 def verify_producer(manifest: Path, binary: Path, build_dir: Path) -> None:
+    """Reject stale source, replaced executables, or a mismatched native test closure."""
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     if payload.get("schema_version") != 1 or payload.get("source") != source_identity():
         raise RuntimeError("workload producer does not match the current repository head and worktree")
@@ -75,6 +81,7 @@ def verify_producer(manifest: Path, binary: Path, build_dir: Path) -> None:
 
 
 def check_candidate(binary: Path, build_dir: Path) -> None:
+    """Require an executable newer than its stamped, statically linked native ABI."""
     stamp = build_dir / ".mesh-llm-build-stamp"
     if not binary.is_file() or not os.access(binary, os.X_OK):
         raise RuntimeError(f"candidate executable is missing: {binary}")
@@ -88,6 +95,7 @@ def check_candidate(binary: Path, build_dir: Path) -> None:
 
 
 def main() -> None:
+    """Dispatch source snapshots, producer creation, or read-only identity checks."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidate-binary", type=Path)
     parser.add_argument("--native-build-dir", type=Path)

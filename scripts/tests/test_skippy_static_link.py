@@ -104,12 +104,26 @@ class SkippyStaticLinkTests(unittest.TestCase):
     def test_unselected_backend_cache_mismatch_fails_closed(self) -> None:
         result = self._run("cpu", {"GGML_CUDA": "ON"})
         self.assertNotEqual(0, result.returncode)
-        self.assertIn("unselected backend requires GGML_CUDA=OFF", result.stderr)
+        self.assertIn("staged backend mismatch: GGML_CUDA=ON", result.stderr)
 
     def test_crlf_cache_values_are_recognized(self) -> None:
         result = self._run_with_newline("metal", {"GGML_METAL": "ON"}, "\r\n")
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("cargo:rustc-link-lib=static=ggml-metal", result.stdout)
+
+    def test_enabled_staged_accelerator_requires_matching_selected_backend(self) -> None:
+        for key in ("GGML_CUDA", "GGML_HIP", "GGML_VULKAN", "GGML_METAL"):
+            with self.subTest(key=key):
+                result = self._run("cpu", {key: "ON"})
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(f"staged backend mismatch: {key}=ON", result.stderr)
+
+    def test_cache_boolean_accepts_crlf_and_surrounding_whitespace(self) -> None:
+        for value in ("ON\r", " TRUE \r", " 1 "):
+            with self.subTest(value=value):
+                result = self._run("metal", {"GGML_METAL": value})
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertIn("cargo:rustc-link-lib=static=ggml-metal", result.stdout)
 
 
 if __name__ == "__main__":

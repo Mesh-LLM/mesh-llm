@@ -32,6 +32,7 @@ NON_TRANSCRIPT_PREFIXES = (
 
 
 def normalized_text(value: object, source: str) -> str:
+    """Normalize Unicode, case, and punctuation while rejecting empty output."""
     if not isinstance(value, str):
         raise RuntimeError(f"{source} returned no text")
     normalized = unicodedata.normalize("NFKC", value).casefold()
@@ -42,6 +43,7 @@ def normalized_text(value: object, source: str) -> str:
 
 
 def transcription_text(value: object, source: str) -> str:
+    """Remove only known presentation labels and reject refusals masquerading as ASR."""
     text = normalized_text(value, source)
     # The two frontends add different presentational labels around the same
     # transcript. Strip only these exact known prefixes, never content words.
@@ -56,6 +58,7 @@ def transcription_text(value: object, source: str) -> str:
 
 def compare_text(candidate: object, reference: object, expected: str | None,
                  *, transcript: bool = False) -> str:
+    """Require exact normalized parity and, when provided, the independent fixture label."""
     normalizer = transcription_text if transcript else normalized_text
     candidate_text = normalizer(candidate, "candidate")
     reference_text = normalizer(reference, "monolithic reference")

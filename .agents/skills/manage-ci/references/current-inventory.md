@@ -47,15 +47,17 @@ default-branch content only on the persistent self-hosted `family-certify`
 runner group (tools come from the runner image; no GitHub Actions model
 caching). Before native compilation,
 `scripts/plan-family-battery.py` validates the versioned JSON family policy,
-the three core parity lanes for certified causal rows, one class-specific
-smoke lane and one local-monolithic oracle lane for each of the six
-registry-generated non-chat rows
+the three core parity lanes for certified causal rows, a class-specific
+smoke plus independent local-monolithic oracle pair for each of the six registry-generated non-chat rows
 (`embedding`, `rerank`, `encoder_decoder`, `ocr`, `speech_synthesis`, and
 `speech_recognition`): respectively `embedding-smoke`,
 `rerank-smoke`, `encoder-decoder-smoke`, `ocr-smoke`,
-`speech-synthesis-smoke`, and `speech-recognition-smoke`, paired with the
-corresponding `*-oracle` lane. These certified pairs exercise local full-model
-and HTTP behavior and require an independent equivalence oracle. It also
+`speech-synthesis-smoke`, and `speech-recognition-smoke`, each paired with its
+`-oracle` lane. These lanes exercise local full-model and HTTP behavior and
+independent equivalence. Workload readiness uses the planned per-model deadline
+for both servers; embedding certification requires the official Python SDK smoke.
+Dry-run planning needs no oracle tools; a missing execution prerequisite records
+failed lanes and does not discard later family results. It also
 checks every exact artifact revision/file in the immutable local cache. It
 reads only GGUF metadata headers, requires each artifact to have at least one
 metadata-bearing shard, and requires every shard that carries `*.block_count` and

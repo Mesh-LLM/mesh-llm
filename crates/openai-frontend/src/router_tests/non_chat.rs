@@ -1,6 +1,68 @@
 use super::*;
 
 #[tokio::test]
+async fn audio_upload_rejects_each_duplicate_field() {
+    let boundary = "duplicate-audio-field";
+    for path in ["/v1/audio/transcriptions", "/v1/audio/translations"] {
+        for (field, value) in [
+            ("model", "audio-model"),
+            ("file", "WAVE"),
+            ("language", "en"),
+            ("prompt", "words"),
+            ("response_format", "json"),
+            ("temperature", "0"),
+        ] {
+            let part = format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"\r\n\r\n{value}\r\n"
+            );
+            let mut body = part.repeat(2).into_bytes();
+            body.extend_from_slice(&audio_multipart(boundary, "json"));
+            let response = post_audio_multipart(path, boundary, body).await;
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "{path}: {field}"
+            );
+            let body = response_body_json(response).await;
+            assert_eq!(
+                body["error"]["message"],
+                format!("duplicate multipart {field} field")
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn audio_upload_enforces_temperature_range_at_both_endpoints() {
+    let boundary = "audio-temperature";
+    for path in ["/v1/audio/transcriptions", "/v1/audio/translations"] {
+        for (value, accepted) in [
+            ("0", true),
+            ("1", true),
+            ("0.5", true),
+            ("1.1", false),
+            ("-0.1", false),
+            ("NaN", false),
+            ("inf", false),
+            ("-inf", false),
+        ] {
+            let mut body = format!("--{boundary}\r\nContent-Disposition: form-data; name=\"temperature\"\r\n\r\n{value}\r\n").into_bytes();
+            body.extend_from_slice(&audio_multipart(boundary, "json"));
+            let response = post_audio_multipart(path, boundary, body).await;
+            assert_eq!(
+                response.status(),
+                if accepted {
+                    StatusCode::OK
+                } else {
+                    StatusCode::BAD_REQUEST
+                },
+                "{path}: {value}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn embeddings_route_preserves_batch_order_and_usage() {
     let response = post_json(
         "/v1/embeddings",

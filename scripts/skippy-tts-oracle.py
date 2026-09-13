@@ -26,7 +26,9 @@ PROMPT = "The mesh is ready."
 SEED = 7
 TOP_K = 20
 TOP_P = 0.8
-MAX_FRAMES = 32
+# Compare complete utterances; a short frame cap would only compare two
+# identically truncated clips and is now rejected by the candidate runtime.
+MAX_FRAMES = 512
 CONTEXT_SIZE = 2048
 MAX_RELATIVE_RMS_ERROR = 0.02
 MIN_WAVEFORM_COSINE = 0.9995
@@ -34,6 +36,7 @@ TEST_NAME = "frontend::tests::tts_oracle::deterministic_tts_candidate_when_fixtu
 
 
 def require_pinned_cpu_oracle(oracle_cli: Path) -> str:
+    """Verify the CPU reference build options and return its prepared patch identity."""
     if (
         oracle_cli.name != "llama-tts"
         or not oracle_cli.is_file()
@@ -61,6 +64,7 @@ def require_pinned_cpu_oracle(oracle_cli: Path) -> str:
 
 
 def require_candidate_cpu_static_build(build_dir: Path, patched_sha: str) -> None:
+    """Require the candidate's static CPU ABI to match the independent reference."""
     stamp_path = build_dir / ".mesh-llm-build-stamp"
     if not stamp_path.is_file():
         raise RuntimeError("TTS candidate lacks a pinned static CPU build stamp")
@@ -78,6 +82,7 @@ def require_candidate_cpu_static_build(build_dir: Path, patched_sha: str) -> Non
 
 
 def run_logged(command: list[str], log_path: Path, *, env: dict[str, str] | None = None) -> None:
+    """Bound one oracle process and retain its combined output on success or failure."""
     with log_path.open("w", encoding="utf-8") as log:
         try:
             result = subprocess.run(
@@ -97,6 +102,7 @@ def run_logged(command: list[str], log_path: Path, *, env: dict[str, str] | None
 
 
 def read_pcm16_wav(path: Path) -> tuple[int, int, array]:
+    """Decode nonempty PCM16 WAV data with explicit format and endian validation."""
     try:
         with wave.open(str(path), "rb") as audio:
             sample_rate = audio.getframerate()
@@ -116,6 +122,7 @@ def read_pcm16_wav(path: Path) -> tuple[int, int, array]:
 
 
 def compare_wavs(candidate_path: Path, oracle_path: Path) -> dict[str, float | int]:
+    """Check exact audio dimensions and bounded, nonsilent waveform disagreement."""
     candidate_rate, candidate_channels, candidate = read_pcm16_wav(candidate_path)
     oracle_rate, oracle_channels, oracle = read_pcm16_wav(oracle_path)
     if candidate_rate != oracle_rate or candidate_channels != oracle_channels:
@@ -153,6 +160,7 @@ def compare_wavs(candidate_path: Path, oracle_path: Path) -> dict[str, float | i
 
 
 def sha256(path: Path) -> str:
+    """Stream an artifact digest for identity-bound certification evidence."""
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -161,6 +169,7 @@ def sha256(path: Path) -> str:
 
 
 def candidate_test_command(env: dict[str, str]) -> list[str]:
+    """Select the verified prebuilt test binary or the explicit local test fallback."""
     manifest = env.get("SKIPPY_WORKLOAD_PRODUCER_MANIFEST")
     if not manifest:
         return ["cargo", "test", "--manifest-path", str(ROOT / "Cargo.toml"),
@@ -184,6 +193,7 @@ def candidate_test_command(env: dict[str, str]) -> list[str]:
 
 
 def run_oracle(args: argparse.Namespace) -> dict[str, object]:
+    """Generate both deterministic utterances and bind measured PCM parity to inputs."""
     oracle_cli = Path(args.oracle_cli).resolve()
     model_path = Path(args.model_path).resolve()
     projector_path = Path(args.projector_path).resolve()
@@ -266,6 +276,7 @@ def run_oracle(args: argparse.Namespace) -> dict[str, object]:
 
 
 def main() -> None:
+    """Run the selected TTS comparison and persist its measured evidence."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--oracle-cli", required=True)
     parser.add_argument("--model-path", required=True)

@@ -17,6 +17,7 @@ pub enum EmbeddingInput {
 }
 
 impl EmbeddingInput {
+    /// Count independent inputs; a single token array is one input, not a batch.
     pub fn len(&self) -> usize {
         match self {
             Self::Text(_) | Self::Tokens(_) => 1,
@@ -25,6 +26,7 @@ impl EmbeddingInput {
         }
     }
 
+    /// Reject empty batches and empty members in text or pre-tokenized input.
     pub fn is_empty(&self) -> bool {
         match self {
             Self::Text(value) => value.is_empty(),
@@ -34,6 +36,7 @@ impl EmbeddingInput {
         }
     }
 
+    /// Detect negative token IDs without applying tokenizer rules to text input.
     fn contains_invalid_token(&self) -> bool {
         match self {
             Self::Text(_) | Self::Texts(_) => false,
@@ -55,11 +58,13 @@ pub struct EmbeddingsRequest {
     pub user: Option<String>,
 }
 
+/// Preserve the endpoint's default numeric-vector response representation.
 fn default_encoding_format() -> String {
     DEFAULT_ENCODING_FORMAT.to_string()
 }
 
 impl EmbeddingsRequest {
+    /// Validate batch content, output encoding, and optional positive dimensions.
     pub fn validate(&self) -> OpenAiResult<()> {
         if self.model.trim().is_empty() {
             return Err(OpenAiError::invalid_request("model must not be empty"));
@@ -117,6 +122,8 @@ pub struct EmbeddingResponse {
 }
 
 impl EmbeddingResponse {
+    /// Preserve input indexes and encode vectors with the already-validated format.
+    /// Embedding usage contains prompt tokens only; this endpoint generates none.
     pub fn from_embeddings(
         model: String,
         embeddings: Vec<Embedding>,
@@ -149,6 +156,7 @@ impl EmbeddingResponse {
     }
 }
 
+/// Encode little-endian IEEE-754 samples, independent of the host byte order.
 fn encode_f32_base64(values: &[f32]) -> String {
     let mut bytes = Vec::with_capacity(std::mem::size_of_val(values));
     for value in values {

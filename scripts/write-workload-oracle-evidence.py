@@ -11,6 +11,7 @@ import sys
 
 
 def sha256(path: Path) -> str:
+    """Hash a model sidecar or executable without buffering the whole artifact."""
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -19,8 +20,9 @@ def sha256(path: Path) -> str:
 
 
 def write_evidence(args: argparse.Namespace) -> None:
+    """Bind an observed comparator pass to its lane and executable identities."""
     if not args.smoke_lane.endswith("-smoke"):
-        raise ValueError("smoke lane must end with '-smoke'")
+        raise ValueError(f"smoke lane must end with '-smoke': {args.smoke_lane}")
     lines = [
         line.strip()
         for line in args.comparison_log.read_text(encoding="utf-8").splitlines()
@@ -34,7 +36,7 @@ def write_evidence(args: argparse.Namespace) -> None:
         "status": "pass",
         "class": args.model_class,
         "smoke_lane": args.smoke_lane,
-        "oracle_lane": args.smoke_lane.removesuffix("-smoke") + "-oracle",
+        "oracle_lane": f"{args.smoke_lane.removesuffix('-smoke')}-oracle",
         "model_id": args.model_id,
         "model_sha256": args.model_sha256,
         "projector_sha256": sha256(args.projector_path) if args.projector_path else None,
@@ -55,6 +57,7 @@ def write_evidence(args: argparse.Namespace) -> None:
 
 
 def main() -> int:
+    """Persist a verified comparator result, returning failure for incomplete evidence."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--comparison-log", required=True, type=Path)

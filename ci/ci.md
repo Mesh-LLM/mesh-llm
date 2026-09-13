@@ -72,6 +72,14 @@ not rebuild under `--skip-build`. Model/projector cache integrity is still
 checked before execution, and populating the read-only lab cache remains an
 external runner operation.
 
+Every certified non-chat row requires both its smoke and independent oracle
+lane. Dry runs print these commands without requiring provisioned oracle
+binaries; an executable run records missing-oracle failures and continues to
+the remaining rows. Each row's planned startup deadline applies separately to
+the candidate and reference HTTP servers. Embedding certification also requires
+the official local-endpoint Python SDK smoke; a missing SDK is a failure, not
+a skipped passing check.
+
 The
 competitive benchmark can optionally download exact-cohort history from
 `MESH_PERFORMANCE_HISTORY_DATASET`, validate the checked-in schema, report

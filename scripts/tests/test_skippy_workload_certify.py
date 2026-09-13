@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import subprocess
 import tempfile
 import unittest
@@ -31,6 +32,28 @@ class WorkloadCertifyContractTests(unittest.TestCase):
         self.assertIn("--oracle-tts PATH", result.stderr)
         self.assertIn("--startup-timeout-secs SECONDS", result.stderr)
         self.assertIn("--require-oracle", result.stderr)
+        self.assertIn("--startup-timeout-secs", result.stderr)
+
+    def test_startup_deadline_rejects_invalid_values_before_execution(self) -> None:
+        for value in ("0", "-1", "1.5", "01", "86401", "abc"):
+            with self.subTest(value=value):
+                result = self._run("--startup-timeout-secs", value)
+                self.assertEqual(1, result.returncode)
+                self.assertIn("must be a positive integer", result.stderr)
+
+    def test_missing_embedding_sdk_fails_before_model_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model = Path(temp_dir) / "model.gguf"
+            model.touch()
+            result = subprocess.run(
+                [str(RUNNER), "--class", "embedding", "--lane", "embedding-smoke",
+                 "--model-path", str(model), "--model-id", "fixture", "--work-dir", temp_dir,
+                 "--skip-build"], cwd=ROOT, text=True, capture_output=True, check=False,
+                env={**os.environ, "SKIPPY_WORKLOAD_SDK_PYTHON": str(Path(temp_dir) / "missing-python")},
+            )
+            self.assertEqual(1, result.returncode)
+            self.assertIn("official openai-python SDK smoke requires", result.stderr)
+            self.assertFalse((Path(temp_dir) / "workload-oracle-evidence.json").exists())
 
     def test_startup_timeout_must_be_positive(self) -> None:
         result = self._run("--startup-timeout-secs", "0")

@@ -2,6 +2,7 @@ use anyhow::{Context, Result, bail};
 
 use super::{CRLF, CRLF_HEADER_TERMINATOR, MAX_HEADER_BYTES};
 
+/// Extract an HTTP form boundary only if it satisfies the bounded ASCII grammar.
 pub(super) fn multipart_boundary(content_type: &str) -> Option<&str> {
     let mut parts = content_type.split(';');
     if !parts
@@ -25,6 +26,7 @@ pub(super) fn multipart_boundary(content_type: &str) -> Option<&str> {
     valid.then_some(boundary)
 }
 
+/// Find a nonempty byte marker without decoding the surrounding media payload.
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     (!needle.is_empty())
         .then(|| {
@@ -35,6 +37,7 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .flatten()
 }
 
+/// Ignore marker-like file bytes unless followed by a valid delimiter suffix.
 fn find_multipart_boundary(body: &[u8], marker: &[u8], from: usize) -> Option<usize> {
     let mut cursor = from;
     while let Some(offset) = find_subslice(&body[cursor..], marker) {
@@ -48,6 +51,7 @@ fn find_multipart_boundary(body: &[u8], marker: &[u8], from: usize) -> Option<us
     None
 }
 
+/// Split parameters outside quoted strings and reject unterminated escaping.
 fn disposition_parameters(value: &str) -> Result<Vec<&str>> {
     let mut parameters = Vec::new();
     let mut start = 0;
@@ -75,6 +79,7 @@ fn disposition_parameters(value: &str) -> Result<Vec<&str>> {
     Ok(parameters)
 }
 
+/// Identify the model field without mistaking quoted filename text for its name.
 pub(super) fn multipart_part_is_model(headers: &str) -> Result<bool> {
     let mut disposition = None;
     for line in headers.split("\r\n") {
@@ -120,6 +125,7 @@ pub(super) fn multipart_part_is_model(headers: &str) -> Result<bool> {
     Ok(field_name == Some("model"))
 }
 
+/// Locate the unique model field while validating framing and bounded part headers.
 pub(super) fn multipart_model_value_range(
     content_type: &str,
     body: &[u8],
@@ -171,6 +177,7 @@ pub(super) fn multipart_model_value_range(
     }
 }
 
+/// Read the routed model as bounded UTF-8, leaving all uploaded file bytes intact.
 pub(super) fn multipart_model_field(content_type: &str, body: &[u8]) -> Result<Option<String>> {
     let Some(range) = multipart_model_value_range(content_type, body)? else {
         return Ok(None);

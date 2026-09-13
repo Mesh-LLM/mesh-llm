@@ -75,7 +75,10 @@ flowchart TB
     R --> C
 ```
 
-The backend boundary is intentionally small:
+The backend boundary below is a partial generation example. The complete
+[`OpenAiBackend` trait](src/backend.rs) also defines `embeddings`, `rerank`,
+`audio_speech`, `audio_transcription`, and `audio_translation`; override their
+default unsupported responses to serve the corresponding non-chat endpoints.
 
 ```rust
 #[async_trait]
@@ -84,6 +87,7 @@ pub trait OpenAiBackend {
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
+        context: OpenAiRequestContext,
     ) -> OpenAiResult<ChatCompletionResponse>;
     async fn chat_completion_stream(
         &self,
@@ -93,6 +97,7 @@ pub trait OpenAiBackend {
     async fn completion(
         &self,
         request: CompletionRequest,
+        context: OpenAiRequestContext,
     ) -> OpenAiResult<CompletionResponse>;
     async fn completion_stream(
         &self,

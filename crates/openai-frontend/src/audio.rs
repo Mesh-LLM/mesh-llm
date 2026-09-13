@@ -17,6 +17,7 @@ pub enum AudioFormat {
 }
 
 impl AudioFormat {
+    /// Return the media type corresponding to the requested audio wire encoding.
     pub const fn content_type(self) -> &'static str {
         match self {
             Self::Mp3 => "audio/mpeg",
@@ -40,11 +41,13 @@ pub struct AudioSpeechRequest {
     pub speed: f32,
 }
 
+/// Omitted speed retains the model's unscaled playback rate.
 fn default_speed() -> f32 {
     1.0
 }
 
 impl AudioSpeechRequest {
+    /// Validate required inputs and the finite OpenAI playback-speed range.
     pub fn validate(&self) -> OpenAiResult<()> {
         if self.model.trim().is_empty() || self.input.is_empty() || self.voice.trim().is_empty() {
             return Err(OpenAiError::invalid_request(
@@ -67,6 +70,7 @@ pub struct AudioResponse {
 }
 
 impl AudioResponse {
+    /// Reject empty backend output before constructing a binary HTTP response.
     pub fn new(bytes: Vec<u8>, content_type: impl Into<String>) -> OpenAiResult<Self> {
         if bytes.is_empty() {
             return Err(OpenAiError::backend(
@@ -94,6 +98,7 @@ pub struct AudioTranscriptionRequest {
 impl AudioTranscriptionRequest {
     pub const MAX_FILE_BYTES: usize = MAX_AUDIO_BYTES;
 
+    /// Enforce upload size, output format, and the finite `[0, 1]` temperature range.
     pub fn validate(&self) -> OpenAiResult<()> {
         if self.model.trim().is_empty() {
             return Err(OpenAiError::invalid_request("model must not be empty"));

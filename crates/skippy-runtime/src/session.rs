@@ -87,6 +87,7 @@ impl StageSession {
         Ok(())
     }
 
+    /// Produce one native pooled vector with a positive, caller-verified dimension.
     pub fn embed(&mut self, token_ids: &[i32], dimensions: usize) -> Result<Vec<f32>> {
         if dimensions == 0 {
             return Err(anyhow!("embedding dimensions must be greater than zero"));
@@ -115,6 +116,7 @@ impl StageSession {
         Ok(output)
     }
 
+    /// Score a query/document pair and return the native template's consumed tokens.
     pub fn rerank(&mut self, query: &str, document: &str) -> Result<(f32, usize)> {
         let query = CString::new(query).context("rerank query contains an interior NUL byte")?;
         let document =
@@ -137,6 +139,7 @@ impl StageSession {
         Ok((score, token_count))
     }
 
+    /// Encode source tokens and reset decoder position, returning its first input token.
     pub fn encode_prompt(&mut self, token_ids: &[i32]) -> Result<i32> {
         let mut decoder_start_token = 0_i32;
         let mut error = ptr::null_mut();

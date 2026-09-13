@@ -172,6 +172,7 @@ impl StageModel {
         present.then(|| raw.into())
     }
 
+    /// Read the loaded model's ABI-validated workload, pooling, and output dimensions.
     pub fn workload_info(&self) -> Result<WorkloadInfo> {
         let mut raw = skippy_ffi::WorkloadInfoV1::default();
         let mut error = ptr::null_mut();

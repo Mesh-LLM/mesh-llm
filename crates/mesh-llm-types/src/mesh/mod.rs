@@ -63,6 +63,10 @@ pub enum ModelWorkloadClass {
     Rerank,
     EncoderDecoder,
     SpeechSynthesis,
+    /// Explicit metadata from a newer peer that this node cannot interpret.
+    /// Unlike absent legacy metadata, this never authorizes inference.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]

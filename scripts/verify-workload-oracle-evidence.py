@@ -21,6 +21,7 @@ ORACLE_EXECUTABLE = {
 
 
 def sha256(path: Path) -> str:
+    """Hash independently supplied artifact bytes for comparison with evidence."""
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -29,7 +30,8 @@ def sha256(path: Path) -> str:
 
 
 def verify(args: argparse.Namespace) -> None:
-    if args.model_class in {"ocr", "speech_synthesis", "speech_recognition"} and args.projector_path is None:
+    """Reject missing prerequisites or evidence not bound to these exact inputs."""
+    if args.model_class in {"ocr", "speech_synthesis", "speech_recognition"} and not args.projector_path:
         raise ValueError(f"{args.model_class} oracle evidence requires a projector path")
     evidence = json.loads(args.evidence.read_text(encoding="utf-8"))
     if not isinstance(evidence, dict):
@@ -62,6 +64,7 @@ def verify(args: argparse.Namespace) -> None:
 
 
 def main() -> int:
+    """Return success only when the recorded comparator pass matches this run."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--evidence", required=True, type=Path)
     parser.add_argument("--class", dest="model_class", required=True, choices=ORACLE_EXECUTABLE)

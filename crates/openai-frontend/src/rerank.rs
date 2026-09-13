@@ -10,6 +10,7 @@ pub enum RerankDocument {
 }
 
 impl RerankDocument {
+    /// Borrow plain text or a document object's required string `text` field.
     pub fn text(&self) -> OpenAiResult<&str> {
         match self {
             Self::Text(text) => Ok(text),
@@ -37,6 +38,7 @@ pub struct RerankRequest {
 }
 
 impl RerankRequest {
+    /// Validate every document before admission, including optional top-N bounds.
     pub fn validate(&self) -> OpenAiResult<()> {
         if self.model.trim().is_empty() {
             return Err(OpenAiError::invalid_request("model must not be empty"));

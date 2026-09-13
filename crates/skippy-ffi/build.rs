@@ -449,11 +449,7 @@ fn cmake_bool_enabled(cache: &std::path::Path, key: &str) -> bool {
     let Ok(contents) = std::fs::read_to_string(cache) else {
         return false;
     };
-    let prefix = format!("{key}:BOOL=");
-    contents
-        .lines()
-        .find_map(|line| line.strip_prefix(&prefix))
-        .is_some_and(|value| matches!(value.trim(), "ON" | "TRUE" | "1"))
+    cmake_cache_bool(&contents, key)
 }
 
 fn configured_backend_archive(
@@ -464,16 +460,17 @@ fn configured_backend_archive(
     unix_archive: &str,
     msvc_archive: &str,
 ) -> bool {
+    let configured = cmake_bool_enabled(cmake_cache, cmake_key);
     if !selected_backend {
         assert!(
-            !cmake_bool_enabled(cmake_cache, cmake_key),
-            "unselected backend requires {cmake_key}=OFF in {}",
+            !configured,
+            "staged backend mismatch: {cmake_key}=ON in {} but LLAMA_STAGE_BACKEND does not select it",
             cmake_cache.display()
         );
         return false;
     }
     assert!(
-        cmake_bool_enabled(cmake_cache, cmake_key),
+        configured,
         "selected backend requires {cmake_key}=ON in {}",
         cmake_cache.display()
     );
@@ -739,6 +736,6 @@ fn cmake_cache_value(cache: &str, key: &str) -> Option<String> {
 
 fn cmake_cache_bool(cache: &str, key: &str) -> bool {
     cmake_cache_value(cache, key)
-        .map(|value| matches!(value.as_str(), "ON" | "TRUE" | "1"))
+        .map(|value| matches!(value.trim(), "ON" | "TRUE" | "1"))
         .unwrap_or(false)
 }

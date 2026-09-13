@@ -1,5 +1,42 @@
 use super::*;
 
+#[test]
+fn unknown_workloads_never_inherit_legacy_admission() {
+    let metadata: mesh::ServedModelMetadata = serde_json::from_value(serde_json::json!({
+        "workload_class": "future_non_chat_contract"
+    }))
+    .unwrap();
+    assert_eq!(metadata.workload_class, Some(ModelWorkloadClass::Unknown));
+    let descriptors = [mesh::ServedModelDescriptor {
+        metadata: Some(metadata),
+        ..local_gguf_descriptor("future")
+    }];
+    for path in [
+        "/v1/chat/completions",
+        "/v1/completions",
+        "/v1/responses",
+        "/v1/embeddings",
+        "/v1/rerank",
+        "/v1/audio/speech",
+        "/v1/audio/transcriptions",
+        "/v1/audio/translations",
+    ] {
+        assert!(
+            !model_satisfies_request_workload(
+                "future",
+                request_workload_class(path).unwrap(),
+                path,
+                &descriptors
+            ),
+            "{path}"
+        );
+    }
+    let relayed = serde_json::to_value(&descriptors[0].metadata).unwrap();
+    assert_eq!(relayed["workload_class"], "unknown");
+    let absent: mesh::ServedModelMetadata = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert_eq!(absent.workload_class, None);
+}
+
 fn local_gguf_descriptor(model_name: &str) -> ServedModelDescriptor {
     ServedModelDescriptor {
         identity: mesh::ServedModelIdentity {

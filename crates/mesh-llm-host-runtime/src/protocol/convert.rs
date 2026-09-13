@@ -329,16 +329,13 @@ fn local_model_metadata_to_proto(
 
 fn proto_model_metadata_to_local(
     metadata: &crate::proto::node::ServedModelMetadata,
-) -> Option<crate::mesh::ServedModelMetadata> {
-    let workload_class = match metadata.workload_class {
-        Some(value) => {
-            crate::proto::node::ModelWorkloadClass::try_from(value).ok()?;
-            proto_workload_class_to_local(value)
-        }
-        None => None,
-    };
-    Some(crate::mesh::ServedModelMetadata {
-        workload_class,
+) -> crate::mesh::ServedModelMetadata {
+    crate::mesh::ServedModelMetadata {
+        // Keep an explicit unknown descriptor: dropping it can re-enable the
+        // legacy model-name fallback elsewhere in routing and gossip.
+        workload_class: metadata
+            .workload_class
+            .and_then(proto_workload_class_to_local),
         architecture: metadata.architecture.clone(),
         parameter_size: metadata.parameter_size.clone(),
         parameter_count_b: metadata.parameter_count_b,
@@ -351,7 +348,7 @@ fn proto_model_metadata_to_local(
         kv_head_count: metadata.kv_head_count,
         expert_count: metadata.expert_count,
         active_expert_count: metadata.active_expert_count,
-    })
+    }
 }
 
 fn local_workload_class_to_proto(workload: crate::mesh::ModelWorkloadClass) -> i32 {
@@ -364,6 +361,9 @@ fn local_workload_class_to_proto(workload: crate::mesh::ModelWorkloadClass) -> i
         Local::Rerank => Proto::Rerank as i32,
         Local::EncoderDecoder => Proto::EncoderDecoder as i32,
         Local::SpeechSynthesis => Proto::SpeechSynthesis as i32,
+        // Preserve explicit denial when relaying metadata. Zero is the legacy
+        // unspecified value and must not erase an unknown workload.
+        Local::Unknown => -1,
     }
 }
 
@@ -371,13 +371,14 @@ fn proto_workload_class_to_local(value: i32) -> Option<crate::mesh::ModelWorkloa
     use crate::mesh::ModelWorkloadClass as Local;
     use crate::proto::node::ModelWorkloadClass as Proto;
 
-    match Proto::try_from(value).ok()? {
-        Proto::Unspecified => None,
-        Proto::CausalGeneration => Some(Local::CausalGeneration),
-        Proto::Embedding => Some(Local::Embedding),
-        Proto::Rerank => Some(Local::Rerank),
-        Proto::EncoderDecoder => Some(Local::EncoderDecoder),
-        Proto::SpeechSynthesis => Some(Local::SpeechSynthesis),
+    match Proto::try_from(value) {
+        Ok(Proto::CausalGeneration) => Some(Local::CausalGeneration),
+        Ok(Proto::Embedding) => Some(Local::Embedding),
+        Ok(Proto::Rerank) => Some(Local::Rerank),
+        Ok(Proto::EncoderDecoder) => Some(Local::EncoderDecoder),
+        Ok(Proto::SpeechSynthesis) => Some(Local::SpeechSynthesis),
+        Ok(Proto::Unspecified) => None,
+        Err(_) => Some(Local::Unknown),
     }
 }
 
@@ -1059,10 +1060,10 @@ pub(crate) fn proto_ann_to_local(
                         if !proto_descriptor_has_valid_identity(descriptor) {
                             return None;
                         }
-                        let metadata = match descriptor.metadata.as_ref() {
-                            Some(metadata) => Some(proto_model_metadata_to_local(metadata)?),
-                            None => None,
-                        };
+                        let metadata = descriptor
+                            .metadata
+                            .as_ref()
+                            .map(proto_model_metadata_to_local);
                         let capabilities = descriptor
                             .capabilities
                             .as_ref()
@@ -1391,6 +1392,7 @@ mod tests {
             crate::mesh::ModelWorkloadClass::Rerank,
             crate::mesh::ModelWorkloadClass::EncoderDecoder,
             crate::mesh::ModelWorkloadClass::SpeechSynthesis,
+            crate::mesh::ModelWorkloadClass::Unknown,
         ] {
             let local = crate::mesh::ServedModelMetadata {
                 workload_class: Some(workload),
@@ -1399,7 +1401,7 @@ mod tests {
             };
 
             let proto = local_model_metadata_to_proto(&local);
-            let restored = proto_model_metadata_to_local(&proto).expect("known workload class");
+            let restored = proto_model_metadata_to_local(&proto);
 
             assert_eq!(restored.workload_class, Some(workload));
             assert_eq!(restored.architecture.as_deref(), Some("test"));
@@ -1409,20 +1411,13 @@ mod tests {
     #[test]
     fn absent_proto_workload_class_is_legacy_compatible_but_unknown_is_rejected() {
         let absent = crate::proto::node::ServedModelMetadata::default();
-        assert_eq!(
-            proto_model_metadata_to_local(&absent)
-                .expect("absent workload is legacy-compatible")
-                .workload_class,
-            None
-        );
+        assert_eq!(proto_model_metadata_to_local(&absent).workload_class, None);
         let unspecified = crate::proto::node::ServedModelMetadata {
             workload_class: Some(crate::proto::node::ModelWorkloadClass::Unspecified as i32),
             ..Default::default()
         };
         assert_eq!(
-            proto_model_metadata_to_local(&unspecified)
-                .expect("explicit unspecified workload is legacy-compatible")
-                .workload_class,
+            proto_model_metadata_to_local(&unspecified).workload_class,
             None
         );
 
@@ -1430,7 +1425,16 @@ mod tests {
             workload_class: Some(9_999),
             ..Default::default()
         };
-        assert!(proto_model_metadata_to_local(&unknown).is_none());
+        let local = proto_model_metadata_to_local(&unknown);
+        assert_eq!(
+            local.workload_class,
+            Some(crate::mesh::ModelWorkloadClass::Unknown)
+        );
+        let relayed = local_model_metadata_to_proto(&local);
+        assert_eq!(
+            proto_model_metadata_to_local(&relayed).workload_class,
+            local.workload_class
+        );
     }
 
     #[test]
@@ -1454,7 +1458,15 @@ mod tests {
         };
 
         let (_, announcement) = proto_ann_to_local(&proto).expect("announcement should decode");
-        assert!(announcement.served_model_descriptors.is_empty());
+        assert_eq!(announcement.served_model_descriptors.len(), 1);
+        assert_eq!(
+            announcement.served_model_descriptors[0]
+                .metadata
+                .as_ref()
+                .unwrap()
+                .workload_class,
+            Some(crate::mesh::ModelWorkloadClass::Unknown)
+        );
     }
 
     #[test]

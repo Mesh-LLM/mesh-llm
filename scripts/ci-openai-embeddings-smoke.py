@@ -8,8 +8,11 @@ import base64
 import math
 import struct
 
+from workload_fixtures import EMBEDDING_INPUTS
+
 
 def main() -> None:
+    """Check batched numeric and base64 vectors through the official Python SDK."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--model", required=True)
@@ -23,10 +26,7 @@ def main() -> None:
         ) from exc
 
     client = OpenAI(api_key="mesh-llm-ci", base_url=args.base_url)
-    inputs = [
-        "search_query: distributed inference",
-        "search_document: GPUs collaborate over a mesh",
-    ]
+    inputs = list(EMBEDDING_INPUTS)
     response = client.embeddings.create(
         model=args.model,
         input=inputs,

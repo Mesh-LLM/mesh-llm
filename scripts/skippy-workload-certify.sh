@@ -20,8 +20,8 @@ usage() {
 usage: scripts/skippy-workload-certify.sh --class CLASS --lane LANE
   --model-path PATH --model-id ID --work-dir PATH [--projector-path PATH]
   [--oracle-server PATH] [--oracle-completion PATH] [--oracle-tts PATH]
-  [--startup-timeout-secs SECONDS]
   [--require-oracle]  # fail closed unless the class-appropriate oracle is selected
+  [--startup-timeout-secs SECONDS]  # per-server readiness deadline (default: 180)
   [--skip-build]  # oracle runs require a prebuilt SKIPPY_WORKLOAD_PRODUCER_MANIFEST
 EOF
 }
@@ -37,8 +37,8 @@ while (( $# > 0 )); do
     --oracle-server) ORACLE_SERVER="$2"; shift ;;
     --oracle-completion) ORACLE_COMPLETION="$2"; shift ;;
     --oracle-tts) ORACLE_TTS="$2"; shift ;;
-    --startup-timeout-secs) STARTUP_TIMEOUT_SECS="$2"; shift ;;
     --require-oracle) ORACLE_REQUIRED=1 ;;
+    --startup-timeout-secs) STARTUP_TIMEOUT_SECS="$2"; shift ;;
     --skip-build) SKIP_BUILD=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage; exit 1 ;;
@@ -46,8 +46,8 @@ while (( $# > 0 )); do
   shift
 done
 
-if [[ ! "$STARTUP_TIMEOUT_SECS" =~ ^[1-9][0-9]*$ ]]; then
-  echo "--startup-timeout-secs must be a positive integer" >&2
+if [[ ! "$STARTUP_TIMEOUT_SECS" =~ ^[1-9][0-9]{0,4}$ ]] || (( STARTUP_TIMEOUT_SECS > 86400 )); then
+  echo "--startup-timeout-secs must be a positive integer between 1 and 86400 seconds" >&2
   exit 1
 fi
 
@@ -140,6 +140,12 @@ if [[ -n "$ORACLE_TTS" ]]; then
     exit 1
   fi
   require_pinned_cpu_oracle "$ORACLE_TTS" llama-tts 'cmake-arg=-DLLAMA_BUILD_TOOLS=ON'
+fi
+
+SDK_PYTHON="${SKIPPY_WORKLOAD_SDK_PYTHON:-python3}"
+if [[ "$MODEL_CLASS" == "embedding" ]] && ! "$SDK_PYTHON" -c 'import openai' >/dev/null 2>&1; then
+  echo "official openai-python SDK smoke requires the openai package in $SDK_PYTHON" >&2
+  exit 1
 fi
 
 mkdir -p "$WORK_DIR"
@@ -270,20 +276,28 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for (( attempt = 0; attempt < STARTUP_TIMEOUT_SECS; attempt++ )); do
-  if ! kill -0 "$SERVER_PID" >/dev/null 2>&1; then
-    echo "$MODEL_CLASS OpenAI server exited early" >&2
-    sed -n '1,240p' "$SERVER_LOG" >&2
-    exit 1
-  fi
-  if curl -fsS --max-time 1 "http://127.0.0.1:$PORT/v1/models" 2>/dev/null \
-    | jq -e --arg model "$MODEL_ID" '.data[]? | select(.id == $model)' >/dev/null 2>&1; then
-    break
-  fi
-  sleep 1
-done
-curl -fsS --max-time 2 "http://127.0.0.1:$PORT/v1/models" \
-  | jq -e --arg model "$MODEL_ID" '.data[]? | select(.id == $model)' >/dev/null
+# Both processes receive the same planned wall-clock startup budget, including
+# time spent probing the endpoint. An early exit retains the owning log.
+wait_for_workload_server() {
+  local pid="$1" port="$2" log="$3" label="$4"
+  local deadline=$((SECONDS + STARTUP_TIMEOUT_SECS))
+  while (( SECONDS < deadline )); do
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      echo "$MODEL_CLASS $label exited early" >&2
+      tail -80 "$log" >&2
+      return 1
+    fi
+    if curl -fsS --max-time 1 "http://127.0.0.1:$port/v1/models" 2>/dev/null \
+      | jq -e --arg model "$MODEL_ID" '.data[]? | select(.id == $model)' >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "$MODEL_CLASS $label was not ready within $STARTUP_TIMEOUT_SECS seconds" >&2
+  tail -80 "$log" >&2
+  return 1
+}
+wait_for_workload_server "$SERVER_PID" "$PORT" "$SERVER_LOG" "OpenAI server"
 python3 "$ROOT/scripts/ci-openai-workload-smoke.py" \
   --base-url "http://127.0.0.1:$PORT/v1" \
   --model "$MODEL_ID" \
@@ -309,20 +323,7 @@ if [[ -n "$ORACLE_SERVER" ]]; then
   ORACLE_LOG="$WORK_DIR/workload-monolithic-oracle-server.log"
   "$ORACLE_SERVER" "${ORACLE_ARGS[@]}" >"$ORACLE_LOG" 2>&1 &
   ORACLE_PID="$!"
-  for (( attempt = 0; attempt < STARTUP_TIMEOUT_SECS; attempt++ )); do
-    if ! kill -0 "$ORACLE_PID" >/dev/null 2>&1; then
-      echo "$MODEL_CLASS monolithic oracle server exited early" >&2
-      tail -80 "$ORACLE_LOG" >&2
-      exit 1
-    fi
-    if curl -fsS --max-time 1 "http://127.0.0.1:$ORACLE_PORT/v1/models" 2>/dev/null \
-      | jq -e --arg model "$MODEL_ID" '.data[]? | select(.id == $model)' >/dev/null 2>&1; then
-      break
-    fi
-    sleep 1
-  done
-  curl -fsS --max-time 2 "http://127.0.0.1:$ORACLE_PORT/v1/models" \
-    | jq -e --arg model "$MODEL_ID" '.data[]? | select(.id == $model)' >/dev/null
+  wait_for_workload_server "$ORACLE_PID" "$ORACLE_PORT" "$ORACLE_LOG" "monolithic oracle server"
   if [[ "$MODEL_CLASS" =~ ^(ocr|speech_recognition)$ ]]; then
     ORACLE_MEDIA_PATH="$MEDIA_PATH"
     if [[ "$MODEL_CLASS" == "ocr" ]]; then
@@ -363,6 +364,12 @@ if [[ -n "$ORACLE_TTS" ]]; then
     --work-dir "$WORK_DIR" | tee "$COMPARISON_LOG"
 fi
 
+if [[ "$MODEL_CLASS" == "embedding" ]]; then
+  "$SDK_PYTHON" "$ROOT/scripts/ci-openai-embeddings-smoke.py" \
+    --base-url "http://127.0.0.1:$PORT/v1" \
+    --model "$MODEL_ID"
+fi
+
 if [[ -n "$ORACLE_SERVER" || -n "$ORACLE_COMPLETION" || -n "$ORACLE_TTS" ]]; then
   ORACLE_EXECUTABLE="${ORACLE_SERVER:-${ORACLE_COMPLETION:-$ORACLE_TTS}}"
   evidence_command=(python3 "$ROOT/scripts/write-workload-oracle-evidence.py"
@@ -380,15 +387,4 @@ if [[ -n "$ORACLE_SERVER" || -n "$ORACLE_COMPLETION" || -n "$ORACLE_TTS" ]]; the
     evidence_command+=(--projector-path "$PROJECTOR_PATH")
   fi
   "${evidence_command[@]}"
-fi
-
-if [[ "$MODEL_CLASS" == "embedding" ]]; then
-  SDK_PYTHON="${SKIPPY_WORKLOAD_SDK_PYTHON:-python3}"
-  "$SDK_PYTHON" -c 'import openai' >/dev/null 2>&1 || {
-    echo "official openai-python SDK smoke requires the openai package in $SDK_PYTHON" >&2
-    exit 1
-  }
-  "$SDK_PYTHON" "$ROOT/scripts/ci-openai-embeddings-smoke.py" \
-    --base-url "http://127.0.0.1:$PORT/v1" \
-    --model "$MODEL_ID"
 fi

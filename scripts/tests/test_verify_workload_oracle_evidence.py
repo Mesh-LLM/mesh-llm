@@ -44,28 +44,29 @@ class WorkloadOracleEvidenceTests(unittest.TestCase):
             "comparison": "embedding local-monolithic oracle passed: max_abs_delta=0, min_cosine=1",
         }
 
-    def run_verifier(self) -> subprocess.CompletedProcess[str]:
+    def run_verifier(self, model_class: str = "embedding", *extra: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [
                 "python3", str(VERIFIER), "--evidence", str(self.evidence),
-                "--class", "embedding", "--smoke-lane", "embedding-smoke",
+                "--class", model_class, "--smoke-lane", "embedding-smoke",
                 "--oracle-lane", "embedding-oracle", "--model-id", "fixture",
                 "--model-path", str(self.model),
                 "--candidate-executable", str(self.candidate),
                 "--oracle-executable", str(self.oracle),
                 "--pinned-patch-sha", "a" * 40,
+                *extra,
             ],
             cwd=ROOT, text=True, capture_output=True, check=False,
         )
 
-    def run_writer(self, comparison: str) -> subprocess.CompletedProcess[str]:
+    def run_writer(self, comparison: str, lane: str = "embedding-smoke") -> subprocess.CompletedProcess[str]:
         comparison_log = Path(self.temp_dir.name) / "comparison.txt"
         comparison_log.write_text(comparison + "\n", encoding="utf-8")
         return subprocess.run(
             [
                 "python3", str(WRITER), "--output", str(self.evidence),
                 "--comparison-log", str(comparison_log), "--class", "embedding",
-                "--smoke-lane", "embedding-smoke", "--model-id", "fixture",
+                "--smoke-lane", lane, "--model-id", "fixture",
                 "--model-sha256", sha256(self.model),
                 "--candidate-executable", str(self.candidate),
                 "--oracle-executable", str(self.oracle),
@@ -84,6 +85,39 @@ class WorkloadOracleEvidenceTests(unittest.TestCase):
         written = self.run_writer("embedding OpenAI HTTP smoke passed")
         self.assertEqual(1, written.returncode)
         self.assertFalse(self.evidence.exists())
+
+    def test_writer_rejects_missing_suffix_and_replaces_only_final_suffix(self) -> None:
+        for lane in ("embedding", "embedding-smoke-extra", "embedding-oracle"):
+            with self.subTest(lane=lane):
+                result = self.run_writer(self.body["comparison"], lane)
+                self.assertEqual(1, result.returncode)
+                self.assertIn("must end with '-smoke'", result.stderr)
+                self.assertFalse(self.evidence.exists())
+        result = self.run_writer(self.body["comparison"], "fixture-smoke-embedding-smoke")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("fixture-smoke-embedding-oracle", json.loads(self.evidence.read_text())["oracle_lane"])
+
+    def test_projector_classes_require_independently_supplied_projector(self) -> None:
+        for model_class in ("ocr", "speech_synthesis", "speech_recognition"):
+            with self.subTest(model_class=model_class):
+                self.body["class"] = model_class
+                self.evidence.write_text(json.dumps(self.body), encoding="utf-8")
+                result = self.run_verifier(model_class)
+                self.assertEqual(1, result.returncode)
+                self.assertIn("requires a projector path", result.stderr)
+
+    def test_projector_digest_is_verified_against_local_bytes(self) -> None:
+        projector = Path(self.temp_dir.name) / "projector.gguf"
+        projector.write_bytes(b"projector")
+        self.body.update({"class": "ocr", "projector_sha256": sha256(projector),
+                          "comparison": "ocr local-monolithic oracle passed: exact text"})
+        self.evidence.write_text(json.dumps(self.body), encoding="utf-8")
+        result = self.run_verifier("ocr", "--projector-path", str(projector))
+        self.assertEqual(0, result.returncode, result.stderr)
+        projector.write_bytes(b"different projector")
+        result = self.run_verifier("ocr", "--projector-path", str(projector))
+        self.assertEqual(1, result.returncode)
+        self.assertIn("projector_sha256 does not match", result.stderr)
 
     def test_matching_explicit_evidence_is_accepted(self) -> None:
         self.evidence.write_text(json.dumps(self.body), encoding="utf-8")

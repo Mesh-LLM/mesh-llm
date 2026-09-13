@@ -13,12 +13,14 @@ use crate::{
     MediaPrefillFrame, SamplingConfig,
 };
 
+/// Audio encoding returned by the native speech generator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpeechOutputFormat {
     Wav,
     PcmS16Le,
 }
 
+/// Full-model speech inputs and deterministic sampling controls.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpeechSynthesisConfig {
     pub prompt: String,
@@ -30,12 +32,26 @@ pub struct SpeechSynthesisConfig {
     pub max_frames: usize,
 }
 
+/// Complete generated audio and its native frame count. Reaching the configured
+/// frame limit returns an error instead of this response.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpeechAudio {
     pub bytes: Vec<u8>,
     pub sample_rate: u32,
     pub sample_count: u64,
     pub generated_frames: usize,
+}
+
+/// Restore the session's generation mode on every speech exit, including
+/// failures before the external-decode guard can be acquired.
+struct SpeechEmbeddingsGuard(*mut skippy_ffi::Opaque);
+
+impl Drop for SpeechEmbeddingsGuard {
+    fn drop(&mut self) {
+        // SAFETY: the borrowed StageSession outlives this guard and owns the
+        // context; speech generation holds exclusive access to the session.
+        unsafe { skippy_ffi::llama_set_embeddings(self.0, false) };
+    }
 }
 
 pub(crate) struct MediaProjector {
@@ -142,6 +158,8 @@ impl StageModel {
         })
     }
 
+    /// Generate bounded audio while restoring the session's normal decode mode
+    /// on success, cancellation, and native failure. Sessions remain exclusive.
     pub fn synthesize_speech(
         &self,
         session: &mut StageSession,
@@ -152,7 +170,8 @@ impl StageModel {
             .media
             .as_ref()
             .ok_or_else(|| anyhow!("speech synthesis requires a configured projector"))?;
-        if !self.supports_speech_synthesis() {
+        let info = unsafe { skippy_ffi::mtmd_gen_audio_get_info(projector.raw) };
+        if info.audio_type == skippy_ffi::MtmdGenAudioType::None {
             return Err(anyhow!(
                 "configured projector does not support speech synthesis"
             ));
@@ -193,16 +212,9 @@ impl StageModel {
                 free_error(error);
             }
         }
-        struct EmbeddingsGuard(*mut skippy_ffi::Opaque);
-        impl Drop for EmbeddingsGuard {
-            fn drop(&mut self) {
-                unsafe { skippy_ffi::llama_set_embeddings(self.0, false) };
-            }
-        }
-
         session.reset()?;
         unsafe { skippy_ffi::llama_set_embeddings(lctx, true) };
-        let _embeddings = EmbeddingsGuard(lctx);
+        let _embeddings_mode = SpeechEmbeddingsGuard(lctx);
         let mut guard_error = ptr::null_mut();
         let status = unsafe {
             skippy_ffi::skippy_session_begin_external_decode(session.raw, &mut guard_error)
@@ -907,3 +919,7 @@ mod tests {
         assert!(pcm_f32_to_s16le(&[0, 1, 2]).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "media/speech_session_tests.rs"]
+mod speech_session_tests;

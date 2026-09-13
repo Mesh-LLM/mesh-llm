@@ -45,6 +45,7 @@ def request_json(base_url: str, path: str, payload: dict[str, object]) -> dict:
 
 
 def vectors(response: dict, expected_count: int) -> list[list[float]]:
+    """Validate exact embedding cardinality, indexes, and finite nonempty vectors."""
     rows = response.get("data")
     if not isinstance(rows, list) or len(rows) != expected_count:
         raise RuntimeError("embedding oracle response has the wrong batch size")
@@ -62,6 +63,7 @@ def vectors(response: dict, expected_count: int) -> list[list[float]]:
 
 
 def compare_embeddings(candidate: dict, reference: dict, expected_count: int = len(EMBEDDING_INPUTS)) -> str:
+    """Require equal dimensions and bounded numeric disagreement for every input."""
     candidate_vectors = vectors(candidate, expected_count)
     reference_vectors = vectors(reference, expected_count)
     max_delta = 0.0
@@ -94,6 +96,7 @@ def compare_embeddings(candidate: dict, reference: dict, expected_count: int = l
 
 
 def run_embedding_oracle(candidate_url: str, oracle_url: str, model: str) -> str:
+    """Compare the shared text fixture in both batched and single-input execution."""
     payload = {"model": model, "input": list(EMBEDDING_INPUTS), "encoding_format": "float"}
     candidate = request_json(candidate_url, "/embeddings", payload)
     reference = request_json(oracle_url, "/embeddings", payload)
@@ -118,6 +121,7 @@ def run_embedding_oracle(candidate_url: str, oracle_url: str, model: str) -> str
 
 
 def indexed_scores(response: dict) -> dict[int, float]:
+    """Reject missing, duplicate, or invalid rerank document indexes and scores."""
     rows = response.get("results")
     if not isinstance(rows, list) or len(rows) != len(RERANK_DOCUMENTS):
         raise RuntimeError("rerank oracle response has the wrong document count")
@@ -136,6 +140,7 @@ def indexed_scores(response: dict) -> dict[int, float]:
 
 
 def compare_rerank(candidate: dict, reference: dict) -> str:
+    """Require matching relevance order and bounded score differences per document."""
     candidate_scores = indexed_scores(candidate)
     reference_scores = indexed_scores(reference)
     max_delta = max(
@@ -154,6 +159,7 @@ def compare_rerank(candidate: dict, reference: dict) -> str:
 
 
 def completion_text(response: dict) -> str:
+    """Extract exactly one nonempty completion and normalize only its whitespace."""
     choices = response.get("choices")
     if not isinstance(choices, list) or len(choices) != 1:
         raise RuntimeError("encoder-decoder oracle response has invalid choices")
@@ -164,6 +170,7 @@ def completion_text(response: dict) -> str:
 
 
 def compare_encoder_decoder(candidate: dict, reference: dict) -> str:
+    """Require exact normalized completion parity with the independent reference."""
     candidate_text = completion_text(candidate)
     reference_text = completion_text(reference)
     if candidate_text != reference_text:

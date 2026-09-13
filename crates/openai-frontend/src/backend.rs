@@ -190,6 +190,7 @@ pub trait OpenAiBackend: Send + Sync + 'static {
         ))
     }
 
+    /// Embed text or token batches. The default rejects unsupported backends.
     async fn embeddings(
         &self,
         _request: EmbeddingsRequest,
@@ -200,6 +201,7 @@ pub trait OpenAiBackend: Send + Sync + 'static {
         ))
     }
 
+    /// Rank documents against a query, preserving their original indexes.
     async fn rerank(
         &self,
         _request: RerankRequest,
@@ -210,6 +212,7 @@ pub trait OpenAiBackend: Send + Sync + 'static {
         ))
     }
 
+    /// Synthesize binary audio; unsupported codecs and voices must return errors.
     async fn audio_speech(
         &self,
         _request: AudioSpeechRequest,
@@ -220,6 +223,7 @@ pub trait OpenAiBackend: Send + Sync + 'static {
         ))
     }
 
+    /// Transcribe uploaded audio in its source language using the request context.
     async fn audio_transcription(
         &self,
         _request: AudioTranscriptionRequest,
@@ -230,6 +234,7 @@ pub trait OpenAiBackend: Send + Sync + 'static {
         ))
     }
 
+    /// Translate uploaded audio into English; unsupported backends fail explicitly.
     async fn audio_translation(
         &self,
         _request: AudioTranscriptionRequest,

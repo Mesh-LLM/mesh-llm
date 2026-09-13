@@ -12,6 +12,7 @@ use crate::mesh::{self, ModelWorkloadClass, ServedModelDescriptor};
 #[cfg(test)]
 mod tests;
 
+/// Recognize binary audio-to-text endpoints independently of query parameters.
 pub(super) fn is_audio_upload_path(path: &str) -> bool {
     matches!(
         path.split('?').next().unwrap_or(path),
@@ -19,6 +20,7 @@ pub(super) fn is_audio_upload_path(path: &str) -> bool {
     )
 }
 
+/// Map inference endpoints to native workloads; control paths impose no class.
 pub(super) fn request_workload_class(path: &str) -> Option<ModelWorkloadClass> {
     match path.split('?').next().unwrap_or(path) {
         "/v1/chat/completions"
@@ -42,6 +44,7 @@ pub(super) fn supports_generation_affinity(path: &str) -> bool {
     )
 }
 
+/// Expose identity hints only for endpoints whose generation state is reusable.
 pub(super) fn affinity_body(
     request: &super::request_parse::BufferedHttpRequest,
 ) -> Option<&serde_json::Value> {
@@ -74,11 +77,13 @@ pub(super) async fn ingress_candidates(
     eligible_targets(node, model, path, &remote).await
 }
 
+/// Preserve absent legacy chat metadata, but never authorize an unknown class.
 fn class_is_compatible(
     requested: ModelWorkloadClass,
     advertised: Option<ModelWorkloadClass>,
 ) -> bool {
     match (requested, advertised) {
+        (ModelWorkloadClass::Unknown, _) | (_, Some(ModelWorkloadClass::Unknown)) => false,
         (ModelWorkloadClass::CausalGeneration, None) => true,
         (
             ModelWorkloadClass::CausalGeneration,
@@ -89,6 +94,7 @@ fn class_is_compatible(
     }
 }
 
+/// Check discoverability across matching descriptors, not target eligibility.
 pub(super) fn model_satisfies_workload_class(
     model: &str,
     requested: ModelWorkloadClass,
@@ -112,6 +118,7 @@ pub(super) fn model_satisfies_workload_class(
     })
 }
 
+/// Require verified audio and a known generation class on the same descriptor.
 fn descriptor_supports_audio_upload(descriptor: &ServedModelDescriptor) -> bool {
     descriptor.capabilities_known
         && descriptor.capabilities.supports_audio_runtime()
@@ -124,6 +131,7 @@ fn descriptor_supports_audio_upload(descriptor: &ServedModelDescriptor) -> bool 
         )
 }
 
+/// Apply endpoint-specific admission, including stricter audio upload metadata.
 pub(super) fn model_satisfies_request_workload(
     model: &str,
     workload: ModelWorkloadClass,
@@ -140,6 +148,7 @@ pub(super) fn model_satisfies_request_workload(
     }
 }
 
+/// Select one matching descriptor that independently supports the endpoint.
 pub(super) fn descriptor_for_request<'a>(
     model: &str,
     path: &str,
@@ -158,6 +167,7 @@ pub(super) fn descriptor_for_request<'a>(
     })
 }
 
+/// Infer binary upload requirements without interpreting file bytes as JSON.
 pub(super) fn request_media(
     path: &str,
     body: Option<&serde_json::Value>,
@@ -212,6 +222,7 @@ pub(super) fn routing_candidates<'a>(
         .collect()
 }
 
+/// Filter each candidate against its own advertisement before routing decisions.
 pub(super) async fn eligible_targets(
     node: &mesh::Node,
     model: &str,
@@ -240,6 +251,7 @@ pub(super) async fn eligible_targets(
         .collect()
 }
 
+/// Restrict peer IDs using the same per-target workload policy as local ingress.
 pub(super) async fn eligible_remote_hosts(
     node: &mesh::Node,
     model: &str,

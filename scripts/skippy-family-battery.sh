@@ -4,10 +4,9 @@ set -euo pipefail
 # Supported-families certification battery (issue #1434; tiers dropped 2026-08-25).
 #
 # Causal-generation rows get core split certification: single-step, chain,
-# and state-handoff lanes. Non-chat rows get a certified class-specific smoke
-# lane through the Skippy runtime and OpenAI-compatible frontend plus an
-# independent local-monolithic oracle lane. These classes deliberately fail
-# closed if asked to stage. Models with
+# and state-handoff lanes. Certified non-chat rows get class-specific smoke
+# and independent local-monolithic oracle lanes through the Skippy runtime;
+# these classes deliberately fail closed if asked to stage. Models with
 # MTP/NextN tensors require the native draft sideband and verify it against the
 # target in the correctness lanes. Dense causal rows run them at the first,
 # midpoint, and last interior cuts. Hybrid/recurrent rows (sweep_period > 0)
@@ -926,16 +925,6 @@ run_workload_certify() {
   fi
   if (( certified == 1 )); then
     command+=(--require-oracle)
-    if (( DRY_RUN == 1 )); then
-      echo "==> workload certification: family=$family class=$model_class lanes=$lane_csv model=$(basename "$target")"
-      printf '%q ' "${command[@]}"
-      printf '\n'
-      return 0
-    fi
-    if (( oracle_requested != 1 )); then
-      echo "certified workload $family ($model_class) requires a class-appropriate local-monolithic oracle executable" >&2
-      exit 1
-    fi
   fi
   echo "==> workload certification: family=$family class=$model_class lanes=$lane_csv model=$(basename "$target")"
   if (( DRY_RUN == 1 )); then
@@ -944,10 +933,15 @@ run_workload_certify() {
     return 0
   fi
   exit_code=0
-  "$ROOT/scripts/run-command-with-timeout.py" \
-    --seconds "$cert_timeout" \
-    --label "workload certification $family ($model_class)" \
-    -- "${command[@]}" >"$log_path" 2>&1 || exit_code=$?
+  if (( certified == 1 && oracle_requested != 1 )); then
+    echo "certified workload $family ($model_class) requires a class-appropriate local-monolithic oracle executable" | tee "$log_path" >&2
+    exit_code=1
+  else
+    "$ROOT/scripts/run-command-with-timeout.py" \
+      --seconds "$cert_timeout" \
+      --label "workload certification $family ($model_class)" \
+      -- "${command[@]}" >"$log_path" 2>&1 || exit_code=$?
+  fi
   if (( certified == 1 && exit_code == 0 )); then
     local verify_command=(python3 "$ROOT/scripts/verify-workload-oracle-evidence.py" \
       --evidence "$cert_run_dir/workload-oracle-evidence.json" \

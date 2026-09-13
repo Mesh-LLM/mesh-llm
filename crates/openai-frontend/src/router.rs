@@ -336,6 +336,7 @@ async fn models(
     }))
 }
 
+/// Validate embedding input and preserve cancellation, usage, and lifecycle identity.
 async fn embeddings(
     State(state): State<FrontendState>,
     Extension(context): Extension<OpenAiLifecycleContext>,
@@ -363,6 +364,7 @@ async fn embeddings(
     Ok(json_response_with_usage(response, &usage))
 }
 
+/// Validate query/documents before invoking the context-bound rerank backend.
 async fn rerank(
     State(state): State<FrontendState>,
     Extension(context): Extension<OpenAiLifecycleContext>,
@@ -386,6 +388,7 @@ async fn rerank(
     Ok(json_response_with_usage(response, &usage))
 }
 
+/// Dispatch validated speech input and return binary audio without JSON wrapping.
 async fn audio_speech(
     State(state): State<FrontendState>,
     Extension(context): Extension<OpenAiLifecycleContext>,
@@ -407,6 +410,7 @@ async fn audio_speech(
     audio_response(response)
 }
 
+/// Validate the backend media type before placing audio bytes in the response.
 fn audio_response(audio: AudioResponse) -> Result<Response, OpenAiError> {
     let content_type = HeaderValue::from_str(&audio.content_type)
         .map_err(|_| OpenAiError::backend("audio backend returned an invalid content type"))?;
@@ -417,6 +421,7 @@ fn audio_response(audio: AudioResponse) -> Result<Response, OpenAiError> {
     Ok(response)
 }
 
+/// Handle source-language transcription through the shared multipart path.
 async fn audio_transcriptions(
     State(state): State<FrontendState>,
     Extension(context): Extension<OpenAiLifecycleContext>,
@@ -425,6 +430,7 @@ async fn audio_transcriptions(
     audio_text_request(state, context, multipart_payload(multipart)?, false).await
 }
 
+/// Select English translation without changing the multipart upload contract.
 async fn audio_translations(
     State(state): State<FrontendState>,
     Extension(context): Extension<OpenAiLifecycleContext>,
@@ -433,12 +439,14 @@ async fn audio_translations(
     audio_text_request(state, context, multipart_payload(multipart)?, true).await
 }
 
+/// Convert extractor rejection into the frontend's structured invalid-request error.
 fn multipart_payload(multipart: Result<Multipart, MultipartRejection>) -> OpenAiResult<Multipart> {
     multipart.map_err(|error| {
         OpenAiError::invalid_request(format!("invalid multipart request: {error}"))
     })
 }
 
+/// Preserve payload-too-large status when a bounded multipart field cannot be read.
 fn multipart_error(error: MultipartError, field: &str) -> OpenAiError {
     if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
         OpenAiError::payload_too_large(format!("{field} is too large: {error}"))
@@ -447,6 +455,7 @@ fn multipart_error(error: MultipartError, field: &str) -> OpenAiError {
     }
 }
 
+/// Share upload validation and cancellation while retaining endpoint-specific dispatch.
 async fn audio_text_request(
     state: FrontendState,
     context: OpenAiLifecycleContext,
@@ -495,6 +504,7 @@ async fn audio_text_request(
     }
 }
 
+/// Decode a bounded audio upload, rejecting duplicate recognized fields consistently.
 async fn parse_audio_multipart(
     mut multipart: Multipart,
 ) -> OpenAiResult<AudioTranscriptionRequest> {
@@ -505,6 +515,7 @@ async fn parse_audio_multipart(
     let mut prompt = None;
     let mut response_format = None;
     let mut temperature = None;
+    let mut seen_fields = std::collections::HashSet::new();
 
     while let Some(field) = multipart
         .next_field()
@@ -512,6 +523,15 @@ async fn parse_audio_multipart(
         .map_err(|error| multipart_error(error, "multipart body"))?
     {
         let name = field.name().unwrap_or_default().to_string();
+        if matches!(
+            name.as_str(),
+            "model" | "file" | "language" | "prompt" | "response_format" | "temperature"
+        ) && !seen_fields.insert(name.clone())
+        {
+            return Err(OpenAiError::invalid_request(format!(
+                "duplicate multipart {name} field"
+            )));
+        }
         if name == "file" {
             filename = field.file_name().map(str::to_owned);
             let bytes = field
@@ -520,11 +540,6 @@ async fn parse_audio_multipart(
                 .map_err(|error| multipart_error(error, "audio file field"))?;
             file = Some(bytes.to_vec());
             continue;
-        }
-        if name == "model" && model.is_some() {
-            return Err(OpenAiError::invalid_request(
-                "duplicate multipart model field",
-            ));
         }
         let value = field
             .text()

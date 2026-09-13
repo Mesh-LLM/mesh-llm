@@ -1134,8 +1134,7 @@ impl OpenAiBackend for StageOpenAiBackend {
     ) -> OpenAiResult<EmbeddingResponse> {
         self.ensure_model(&request.model)?;
         let info = self.ensure_local_workload(ModelWorkload::Embedding)?;
-        let expected_dimensions = usize::try_from(info.output_dimensions)
-            .map_err(|_| OpenAiError::backend("embedding dimensions exceed usize"))?;
+        let expected_dimensions = non_chat::embedding_output_dimensions(info.output_dimensions)?;
         if request
             .dimensions
             .is_some_and(|requested| requested != expected_dimensions)
@@ -1190,19 +1189,7 @@ impl OpenAiBackend for StageOpenAiBackend {
     ) -> OpenAiResult<RerankResponse> {
         self.ensure_model(&request.model)?;
         self.ensure_local_workload(ModelWorkload::Rerank)?;
-        let prompt_tokens_estimate = request
-            .documents
-            .iter()
-            .filter_map(|document| document.text().ok())
-            .map(|document| {
-                request
-                    .query
-                    .len()
-                    .saturating_add(document.len())
-                    .div_ceil(3)
-            })
-            .max()
-            .unwrap_or(1);
+        let prompt_tokens_estimate = non_chat::rerank_prompt_tokens_estimate(&request)?;
         let ids = generation_ids(OpenAiCacheHints::default(), None, &context);
         let cancellation = context.cancellation_token();
         let query = request.query.clone();

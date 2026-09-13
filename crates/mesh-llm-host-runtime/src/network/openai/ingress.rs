@@ -317,7 +317,6 @@ async fn resolve_auto_routed_model(
         return AutoRouteResolution::WorkloadUnsupported(workload);
     }
     let Some(available) = router::filter_media_compatible_candidates(&available, &media) else {
-        proxy::release_request_objects(node, &request.request_object_request_ids).await;
         return AutoRouteResolution::MediaUnsupported;
     };
     let available = auto_route_pool_for_ready_models(
@@ -922,12 +921,12 @@ async fn send_auto_route_rejection(
     path: &str,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> proxy::RouteDispatchOutcome {
+    proxy::release_request_objects(node, request_object_request_ids).await;
     match rejection {
         AutoRouteRejection::MediaUnsupported => {
             send_media_unsupported(tcp_stream, route_observer).await
         }
         AutoRouteRejection::WorkloadUnsupported(workload) => {
-            proxy::release_request_objects(node, request_object_request_ids).await;
             send_workload_unsupported(tcp_stream, workload, path, route_observer).await
         }
     }
@@ -1440,6 +1439,10 @@ mod automatic_routing;
 #[cfg(test)]
 #[path = "ingress_tests/audio_workloads.rs"]
 mod audio_workloads;
+
+#[cfg(test)]
+#[path = "ingress_tests/request_object_cleanup.rs"]
+mod request_object_cleanup;
 
 #[cfg(test)]
 #[path = "ingress_tests/tests.rs"]

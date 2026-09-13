@@ -1,5 +1,31 @@
 use super::*;
 
+/// Reject an invalid model descriptor before allocating any embedding sessions.
+pub(super) fn embedding_output_dimensions(dimensions: u32) -> OpenAiResult<usize> {
+    if dimensions == 0 {
+        return Err(OpenAiError::backend(
+            "model did not report an embedding output dimension",
+        ));
+    }
+    usize::try_from(dimensions)
+        .map_err(|_| OpenAiError::backend("embedding dimensions exceed usize"))
+}
+
+/// Validate the same documents that execution consumes before estimating admission.
+pub(super) fn rerank_prompt_tokens_estimate(request: &RerankRequest) -> OpenAiResult<usize> {
+    request.validate()?;
+    request
+        .documents
+        .iter()
+        .map(|document| {
+            document
+                .text()
+                .map(|text| request.query.len().saturating_add(text.len()).div_ceil(3))
+        })
+        .try_fold(1, |estimate, next| next.map(|tokens| estimate.max(tokens)))
+}
+
+/// Stop a native batch between items when its owning HTTP request is cancelled.
 pub(super) fn collect_workload_batch<I, T, F>(
     items: I,
     cancellation: &openai_frontend::CancellationToken,
@@ -21,6 +47,7 @@ where
     Ok(results)
 }
 
+/// Preserve structured frontend errors while adding context to native failures.
 fn workload_error(error: anyhow::Error) -> OpenAiError {
     if let Some(openai_error) = error.downcast_ref::<OpenAiError>() {
         return openai_error.clone();
@@ -28,6 +55,7 @@ fn workload_error(error: anyhow::Error) -> OpenAiError {
     OpenAiError::backend(format!("workload execution failed: {error:#}"))
 }
 
+/// Accept only the implemented default speaker; do not reinterpret voice as language.
 pub(super) fn validate_speech_voice(voice: &str) -> OpenAiResult<()> {
     if voice == "default" {
         Ok(())
@@ -40,6 +68,7 @@ pub(super) fn validate_speech_voice(voice: &str) -> OpenAiResult<()> {
 }
 
 impl StageOpenAiBackend {
+    /// Recognize complete local models in both standalone and embedded serving modes.
     pub(in crate::frontend) fn has_unsplit_full_model_topology(&self) -> bool {
         fn is_unsplit(config: &skippy_protocol::StageConfig) -> bool {
             config.stage_index == 0
@@ -60,6 +89,7 @@ impl StageOpenAiBackend {
             }
     }
 
+    /// Run audio transcription or English translation through a full-model projector.
     pub(super) async fn audio_to_text(
         &self,
         request: AudioTranscriptionRequest,
@@ -128,6 +158,7 @@ impl StageOpenAiBackend {
         })
     }
 
+    /// Reject split execution and mismatched native workload descriptors before work.
     pub(in crate::frontend) fn ensure_local_workload(
         &self,
         expected: ModelWorkload,
@@ -160,6 +191,7 @@ impl StageOpenAiBackend {
         Ok(info)
     }
 
+    /// Tokenize text batches with the loaded vocabulary, preserving supplied token IDs.
     pub(super) fn prepare_embedding_inputs(
         &self,
         request: EmbeddingsRequest,
@@ -188,6 +220,7 @@ impl StageOpenAiBackend {
         }
     }
 
+    /// Execute admitted blocking work with cancellation, slot ownership, and cleanup.
     pub(super) async fn run_local_workload<T, F>(
         &self,
         context: OpenAiRequestContext,
@@ -308,6 +341,31 @@ fn audio_text_user_message(instruction: String) -> openai_frontend::ChatMessage 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn invalid_embedding_dimensions_are_rejected_at_admission() {
+        assert!(
+            super::embedding_output_dimensions(0)
+                .unwrap_err()
+                .body()
+                .error
+                .message
+                .contains("did not report")
+        );
+        assert_eq!(super::embedding_output_dimensions(768).unwrap(), 768);
+    }
+
+    #[test]
+    fn rerank_estimate_rejects_invalid_documents_before_workload_admission() {
+        let mut request: openai_frontend::RerankRequest =
+            serde_json::from_value(serde_json::json!({
+                "model": "rank", "query": "query", "documents": ["text", {"title": "no text"}]
+            }))
+            .unwrap();
+        assert!(super::rerank_prompt_tokens_estimate(&request).is_err());
+        request.documents.pop();
+        assert_eq!(super::rerank_prompt_tokens_estimate(&request).unwrap(), 3);
+    }
+
     use super::{
         audio_text_instruction, audio_text_user_message, audio_transcript_text,
         collect_workload_batch, validate_speech_voice, workload_error,

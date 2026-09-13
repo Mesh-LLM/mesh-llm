@@ -4,6 +4,18 @@ use super::*;
 use crate::inference::election::ModelTargets;
 use crate::network::affinity::AffinityRouter;
 
+#[test]
+fn explicit_unknown_workload_is_not_a_legacy_committee_member() {
+    let peer = classified_peer(1, ModelWorkloadClass::Unknown);
+    assert!(!descriptor_supports_committee(
+        &peer.served_model_descriptors[0]
+    ));
+    assert!(!model_supports_committee(
+        BIG_MODELS[0].name,
+        &peer.served_model_descriptors
+    ));
+}
+
 fn classified_peer(seed: u32, class: ModelWorkloadClass) -> mesh::PeerInfo {
     let mut peer = fleet_peer(seed, BIG_MODELS[0]);
     peer.served_model_descriptors[0]
