@@ -296,7 +296,10 @@ fn apply_endpoint_probe(
             state: "degraded".into(),
             available: true,
             detail: probe.detail,
-            models: Vec::new(),
+            // Keep routable models for the same grace period as availability.
+            models: previous
+                .map(|state| state.record.models.clone())
+                .unwrap_or_default(),
         }
     } else {
         EndpointHealthRecord {
@@ -545,6 +548,7 @@ mod tests {
         assert_eq!(degraded.record.state, "degraded");
         assert!(degraded.record.available);
         assert_eq!(degraded.consecutive_failures, 1);
+        assert_eq!(degraded.record.models, healthy.record.models);
 
         let unhealthy = apply_endpoint_probe(
             Some(&degraded),
@@ -559,6 +563,7 @@ mod tests {
         assert_eq!(unhealthy.record.state, "unhealthy");
         assert!(!unhealthy.record.available);
         assert_eq!(unhealthy.consecutive_failures, 2);
+        assert!(unhealthy.record.models.is_empty());
     }
 
     #[test]
@@ -663,6 +668,68 @@ mod tests {
         assert_eq!(second.models, vec!["lemonade-recovered".to_string()]);
         assert_eq!(requests.load(Ordering::SeqCst), 2);
 
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn plugin_endpoint_preserves_models_until_withdrawal_and_refreshes_on_recovery() {
+        let (address, handle, requests) = spawn_fake_models_server(vec![
+            ("200 OK", r#"{"data":[{"id":"ollama-model"}]}"#),
+            ("503 Service Unavailable", r#"{"error":"temporary"}"#),
+            ("503 Service Unavailable", r#"{"error":"still down"}"#),
+            ("200 OK", r#"{"data":[{"id":"replacement-model"}]}"#),
+        ])
+        .await;
+        let endpoint = proto::EndpointManifest {
+            endpoint_id: "ollama".into(),
+            kind: proto::EndpointKind::Inference as i32,
+            transport_kind: proto::EndpointTransportKind::EndpointTransportHttp as i32,
+            protocol: Some("openai_compatible".into()),
+            address: Some(address),
+            args: Vec::new(),
+            namespace: None,
+            supports_streaming: true,
+            managed_by_plugin: false,
+        };
+        let summary = running_summary();
+        let now = Instant::now();
+        let healthy = endpoint_health_for_summary(&summary, &endpoint, None, now).await;
+        assert!(healthy.record.available);
+        assert_eq!(healthy.record.models, ["ollama-model"]);
+
+        let degraded = endpoint_health_for_summary(
+            &summary,
+            &endpoint,
+            Some(&healthy),
+            now + Duration::from_secs(15),
+        )
+        .await;
+        assert_eq!(degraded.record.state, "degraded");
+        assert!(degraded.record.available);
+        assert_eq!(degraded.record.models, ["ollama-model"]);
+        assert_eq!(degraded.consecutive_failures, 1);
+
+        let withdrawn = endpoint_health_for_summary(
+            &summary,
+            &endpoint,
+            Some(&degraded),
+            now + Duration::from_secs(30),
+        )
+        .await;
+        assert!(!withdrawn.record.available);
+        assert!(withdrawn.record.models.is_empty());
+
+        let recovered = endpoint_health_for_summary(
+            &summary,
+            &endpoint,
+            Some(&withdrawn),
+            now + Duration::from_secs(45),
+        )
+        .await;
+        assert!(recovered.record.available);
+        assert_eq!(recovered.record.models, ["replacement-model"]);
+        assert_eq!(recovered.consecutive_failures, 0);
+        assert_eq!(requests.load(Ordering::SeqCst), 4);
         handle.await.unwrap();
     }
 
