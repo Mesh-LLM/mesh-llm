@@ -74,6 +74,11 @@ if [[ ! -s "$MODEL_PATH" ]]; then
 fi
 
 mkdir -p "$(dirname "$EVIDENCE_FILE")"
+# Cargo may run integration-test binaries from a package directory. Resolve
+# the caller's evidence path before invoking it so both the test and this
+# wrapper always refer to the same file.
+EVIDENCE_DIR="$(cd "$(dirname "$EVIDENCE_FILE")" && pwd)"
+EVIDENCE_FILE="$EVIDENCE_DIR/$(basename "$EVIDENCE_FILE")"
 # Start from an empty file so the assertion below reads THIS run's markers,
 # never a previous run's left behind by a warm workspace.
 : >"$EVIDENCE_FILE"
