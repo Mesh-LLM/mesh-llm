@@ -604,6 +604,12 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
                 json.dumps(policy) + "\n", encoding="utf-8"
             )
             env = os.environ.copy()
+            for key in (
+                "SKIPPY_WORKLOAD_ORACLE_SERVER",
+                "SKIPPY_WORKLOAD_ORACLE_COMPLETION",
+                "SKIPPY_WORKLOAD_ORACLE_TTS",
+            ):
+                env.pop(key, None)
             env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
             return subprocess.run(
                 [
@@ -640,6 +646,20 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
                     "--require-lanes --skip-build --skip-speculative"
                 )
             )
+
+    def test_workload_dry_run_needs_no_oracle_and_forwards_startup_deadline(self) -> None:
+        model = self._model()
+        model.update({
+            "class": "embedding",
+            "profile": "workload-oracle",
+            "evidence": {"fixture": "fixture", "comparison": "fixture"},
+        })
+        model["execution"]["speculative_policy"] = "disabled"
+        model["resources"]["startup_timeout_secs"] = 600
+        result = self._dry_run("--skip-build", models=[model])
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("--startup-timeout-secs 600", result.stdout)
+        self.assertIn("--require-oracle", result.stdout)
 
     def test_family_battery_has_no_activation_wire_dtype_switches(self) -> None:
         script = BATTERY.read_text(encoding="utf-8")

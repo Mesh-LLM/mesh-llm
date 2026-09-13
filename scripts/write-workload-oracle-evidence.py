@@ -19,6 +19,8 @@ def sha256(path: Path) -> str:
 
 
 def write_evidence(args: argparse.Namespace) -> None:
+    if not args.smoke_lane.endswith("-smoke"):
+        raise ValueError("smoke lane must end with '-smoke'")
     lines = [
         line.strip()
         for line in args.comparison_log.read_text(encoding="utf-8").splitlines()
@@ -32,7 +34,7 @@ def write_evidence(args: argparse.Namespace) -> None:
         "status": "pass",
         "class": args.model_class,
         "smoke_lane": args.smoke_lane,
-        "oracle_lane": args.smoke_lane.replace("-smoke", "-oracle"),
+        "oracle_lane": args.smoke_lane.removesuffix("-smoke") + "-oracle",
         "model_id": args.model_id,
         "model_sha256": args.model_sha256,
         "projector_sha256": sha256(args.projector_path) if args.projector_path else None,

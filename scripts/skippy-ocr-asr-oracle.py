@@ -66,12 +66,12 @@ def compare_text(candidate: object, reference: object, expected: str | None,
         )
     if expected is not None:
         expected_text = normalized_text(expected, "fixture label")
-        if expected_text not in candidate_text:
+        if expected_text != candidate_text:
             raise RuntimeError(
-                "output misses independently known fixture text: "
+                "output does not exactly match independently known fixture text: "
                 f"expected={expected_text!r}, actual={candidate_text!r}"
             )
-        return f"identical normalized text containing {expected_text!r}"
+        return f"identical normalized text exactly matching {expected_text!r}"
     return "identical normalized text; unlabeled fixture, no accuracy claim"
 
 

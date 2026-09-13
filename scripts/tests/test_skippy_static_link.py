@@ -43,6 +43,11 @@ class SkippyStaticLinkTests(unittest.TestCase):
             raise RuntimeError(f"build script fixture failed: {result.stderr}")
 
     def _run(self, backend: str, flags: dict[str, str]) -> subprocess.CompletedProcess[str]:
+        return self._run_with_newline(backend, flags, "\n")
+
+    def _run_with_newline(
+        self, backend: str, flags: dict[str, str], newline: str
+    ) -> subprocess.CompletedProcess[str]:
         fixture = tempfile.TemporaryDirectory()
         self.addCleanup(fixture.cleanup)
         build_dir = Path(fixture.name) / "native"
@@ -51,8 +56,9 @@ class SkippyStaticLinkTests(unittest.TestCase):
             archive.parent.mkdir(parents=True, exist_ok=True)
             archive.touch()
         (build_dir / "CMakeCache.txt").write_text(
-            "".join(f"{key}:BOOL={value}\n" for key, value in flags.items()),
+            "".join(f"{key}:BOOL={value}{newline}" for key, value in flags.items()),
             encoding="utf-8",
+            newline="",
         )
         env = {
             key: value for key, value in os.environ.items()
@@ -94,6 +100,16 @@ class SkippyStaticLinkTests(unittest.TestCase):
         result = self._run("metal", {"GGML_METAL": "OFF"})
         self.assertNotEqual(0, result.returncode)
         self.assertIn("selected backend requires GGML_METAL=ON", result.stderr)
+
+    def test_unselected_backend_cache_mismatch_fails_closed(self) -> None:
+        result = self._run("cpu", {"GGML_CUDA": "ON"})
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("unselected backend requires GGML_CUDA=OFF", result.stderr)
+
+    def test_crlf_cache_values_are_recognized(self) -> None:
+        result = self._run_with_newline("metal", {"GGML_METAL": "ON"}, "\r\n")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("cargo:rustc-link-lib=static=ggml-metal", result.stdout)
 
 
 if __name__ == "__main__":

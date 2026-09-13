@@ -114,10 +114,10 @@ impl AudioTranscriptionRequest {
         }
         if self
             .temperature
-            .is_some_and(|value| !value.is_finite() || value < 0.0)
+            .is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value))
         {
             return Err(OpenAiError::invalid_request(
-                "temperature must be a finite non-negative value",
+                "temperature must be a finite value between 0.0 and 1.0",
             ));
         }
         Ok(())
@@ -127,4 +127,31 @@ impl AudioTranscriptionRequest {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct AudioTranscriptionResponse {
     pub text: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn transcription(temperature: Option<f32>) -> AudioTranscriptionRequest {
+        AudioTranscriptionRequest {
+            model: "fixture".to_string(),
+            file: vec![1],
+            filename: None,
+            language: None,
+            prompt: None,
+            response_format: "json".to_string(),
+            temperature,
+        }
+    }
+
+    #[test]
+    fn transcription_temperature_is_bounded_to_openai_range() {
+        for temperature in [None, Some(0.0), Some(0.5), Some(1.0)] {
+            assert!(transcription(temperature).validate().is_ok());
+        }
+        for temperature in [Some(-0.1), Some(1.1), Some(f32::NAN), Some(f32::INFINITY)] {
+            assert!(transcription(temperature).validate().is_err());
+        }
+    }
 }

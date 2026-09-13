@@ -914,6 +914,25 @@ async fn send_media_unsupported(
     )
 }
 
+async fn send_auto_route_rejection(
+    tcp_stream: ClientStream,
+    rejection: AutoRouteRejection,
+    node: &mesh::Node,
+    request_object_request_ids: &[String],
+    path: &str,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> proxy::RouteDispatchOutcome {
+    match rejection {
+        AutoRouteRejection::MediaUnsupported => {
+            send_media_unsupported(tcp_stream, route_observer).await
+        }
+        AutoRouteRejection::WorkloadUnsupported(workload) => {
+            proxy::release_request_objects(node, request_object_request_ids).await;
+            send_workload_unsupported(tcp_stream, workload, path, route_observer).await
+        }
+    }
+}
+
 fn callable_models_with_local_served(
     targets: &election::ModelTargets,
     local_models: Vec<String>,
@@ -1143,15 +1162,12 @@ async fn handle_buffered_api_request(
 
     let decision = match prepare_auto_route_decision(&mut request, &ctx.route, &descriptors).await {
         Ok(decision) => decision,
-        Err(AutoRouteRejection::MediaUnsupported) => {
-            let outcome = send_media_unsupported(tcp_stream, lifecycle.route_observer()).await;
-            lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
-            return;
-        }
-        Err(AutoRouteRejection::WorkloadUnsupported(workload)) => {
-            let outcome = send_workload_unsupported(
+        Err(rejection) => {
+            let outcome = send_auto_route_rejection(
                 tcp_stream,
-                workload,
+                rejection,
+                ctx.route.node,
+                &request.request_object_request_ids,
                 &request.client_path,
                 lifecycle.route_observer(),
             )
