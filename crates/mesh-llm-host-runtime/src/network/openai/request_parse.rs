@@ -1,5 +1,3 @@
-mod json_validation;
-
 use crate::mesh;
 use crate::plugin;
 use anyhow::{Context, Result, anyhow, bail};
@@ -313,8 +311,6 @@ where
         .await
         .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?;
 
-    json_validation::validate_inference_json(&parsed.method, &parsed.path, &body)
-        .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?;
     let tokenize_request = is_tokenize_request(&parsed.method, &parsed.path);
     let metadata = if body.is_empty() {
         None

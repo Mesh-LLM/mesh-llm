@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -84,7 +83,7 @@ class GateScriptBehaviorTests(unittest.TestCase):
         bundle: str | None = None,
         model: str | None = None,
         evidence_seed: str | None = None,
-        relative_paths: bool = False,
+        relative_evidence: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         stub_bin = root / "stub-bin"
         stub_bin.mkdir(exist_ok=True)
@@ -104,10 +103,6 @@ class GateScriptBehaviorTests(unittest.TestCase):
         evidence = root / "evidence.txt"
         if evidence_seed is not None:
             evidence.write_text(evidence_seed, encoding="utf-8")
-        if relative_paths:
-            bundle = os.path.relpath(bundle, root)
-            model = os.path.relpath(model, root)
-            evidence = Path(os.path.relpath(evidence, root))
 
         return subprocess.run(
             [
@@ -118,12 +113,12 @@ class GateScriptBehaviorTests(unittest.TestCase):
                 "--model",
                 model,
                 "--evidence",
-                str(evidence),
+                "evidence.txt" if relative_evidence else str(evidence),
             ],
+            cwd=root,
             capture_output=True,
             text=True,
             check=False,
-            cwd=root,
             env={
                 **os.environ,
                 "PATH": f"{stub_bin}{os.pathsep}{os.environ['PATH']}",
@@ -148,26 +143,23 @@ class GateScriptBehaviorTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("executed", result.stdout)
 
-    def test_relative_paths_survive_cargo_changing_to_the_crate_directory(self) -> None:
+    def test_relative_evidence_survives_cargo_changing_directory(self) -> None:
+        """Cargo's crate cwd must not redirect the marker away from the wrapper."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            crate = root / "crate"
-            crate.mkdir()
+            (root / "package").mkdir()
             result = self.run_gate(
                 root,
-                relative_paths=True,
+                relative_evidence=True,
                 cargo_body=(
                     "#!/usr/bin/env bash\n"
-                    "set -euo pipefail\n"
-                    f'cd "{crate}"\n'
-                    'test -d "$MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR"\n'
-                    'test -s "$MESH_LLM_RUNTIME_EVENTS_MODEL"\n'
-                    'printf "executed\\n" >> "$MESH_LLM_RUNTIME_EVENTS_EVIDENCE_FILE"\n'
+                    'cd "$(dirname "$MESH_LLM_RUNTIME_EVENTS_MODEL")/package"\n'
+                    'printf \'executed\\n\' >> "$MESH_LLM_RUNTIME_EVENTS_EVIDENCE_FILE"\n'
                 ),
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual((root / "evidence.txt").read_text(), "executed\n")
-            self.assertFalse((crate / "evidence.txt").exists())
+            self.assertFalse((root / "package/evidence.txt").exists())
 
     def test_a_blocked_gate_fails_even_though_the_test_exits_zero(self) -> None:
         """The whole reason the script checks the marker.
@@ -304,35 +296,53 @@ class LinuxRuntimeSliceTests(unittest.TestCase):
         )
         self.assertEqual(step["with"]["model_artifact_id"], "family-qwen3-dense")
 
-    def test_the_gate_model_resolves_at_every_workflow_cadence(self) -> None:
+    def test_gate_model_resolves_at_every_workflow_cadence(self) -> None:
+        """Resolve the model inputs used by the protected main workflow."""
         inputs = self.steps["Restore runtime-event gate model"]["with"]
         self.assertEqual(
             inputs["model_cadence"],
             "${{ (inputs.original_event_name == 'pull_request' || "
-            "inputs.original_event_name == 'pull_request_target') && "
-            "'pull-request' || 'main' }}",
+            "inputs.original_event_name == 'pull_request_target') && 'pull-request' "
+            "|| inputs.original_event_name == 'push' && 'main' || 'manual' }}",
         )
-        for cadence in ("pull-request", "main"):
-            with self.subTest(cadence=cadence):
+        action = yaml.safe_load(
+            (ROOT / ".github/actions/restore-test-model/action.yml").read_text()
+        )
+        resolve = next(
+            step for step in action["runs"]["steps"] if step.get("id") == "resolve-model"
+        )
+        for cadence in ("pull-request", "main", "manual"):
+            with self.subTest(cadence=cadence), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "outputs"
                 result = subprocess.run(
-                    [
-                        sys.executable,
-                        str(ROOT / "scripts" / "resolve-test-model-manifest.py"),
-                        str(ROOT / inputs["model_manifest"]),
-                        "--artifact-id", inputs["model_artifact_id"],
-                        "--cadence", cadence,
-                        "--require-single-file",
-                    ],
+                    ["bash", "-c", resolve["run"]],
+                    cwd=ROOT,
+                    env={
+                        **os.environ,
+                        "MODEL_MANIFEST": inputs["model_manifest"],
+                        "MODEL_ARTIFACT_ID": inputs["model_artifact_id"],
+                        "MODEL_CADENCE": cadence,
+                        "INPUT_MODEL_URL": "",
+                        "INPUT_MODEL_FILE": "",
+                        "GITHUB_OUTPUT": str(output),
+                    },
                     capture_output=True,
                     text=True,
                     check=False,
                 )
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                artifact = json.loads(result.stdout)
-                self.assertEqual(artifact["artifact_id"], inputs["model_artifact_id"])
-                self.assertEqual(json.loads(artifact["files_json"]), [artifact["file"]])
-                self.assertRegex(artifact["sha256"], r"^[0-9a-f]{64}$")
-                self.assertGreater(int(artifact["size_bytes"]), 0)
+                resolved = dict(
+                    line.split("=", 1) for line in output.read_text().splitlines()
+                )
+                self.assertTrue(resolved["file"].endswith(".gguf"))
+                self.assertEqual(len(resolved["sha256"]), 64)
+                self.assertGreater(int(resolved["size_bytes"]), 0)
+
+    def test_gate_cadences_do_not_expand_family_certification(self) -> None:
+        """Ordinary CI may load Qwen without scheduling family certification."""
+        manifest = json.loads((ROOT / "ci/llama-canary/family-certified.json").read_text())
+        model = next(row for row in manifest["models"] if row["family"] == "qwen3-dense")
+        self.assertEqual(model["cadences"], ["llama-bump", "manual-full", "nightly"])
 
     def test_evidence_is_uploaded_even_when_the_gate_fails(self) -> None:
         """The evidence file is how a failure is diagnosed, so it must

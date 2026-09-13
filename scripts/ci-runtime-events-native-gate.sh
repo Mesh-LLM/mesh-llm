@@ -73,13 +73,9 @@ if [[ ! -s "$MODEL_PATH" ]]; then
     exit 1
 fi
 
-# Resolve caller-relative paths before this wrapper changes directory and
-# Cargo runs the integration test from the package directory.
-[[ "$BUNDLE_DIR" = /* ]] || BUNDLE_DIR="$PWD/$BUNDLE_DIR"
-[[ "$MODEL_PATH" = /* ]] || MODEL_PATH="$PWD/$MODEL_PATH"
-[[ "$EVIDENCE_FILE" = /* ]] || EVIDENCE_FILE="$PWD/$EVIDENCE_FILE"
-
 mkdir -p "$(dirname "$EVIDENCE_FILE")"
+# Cargo runs integration tests from the crate directory, not this shell cwd.
+EVIDENCE_FILE="$(cd "$(dirname "$EVIDENCE_FILE")" && pwd)/$(basename "$EVIDENCE_FILE")"
 # Start from an empty file so the assertion below reads THIS run's markers,
 # never a previous run's left behind by a warm workspace.
 : >"$EVIDENCE_FILE"

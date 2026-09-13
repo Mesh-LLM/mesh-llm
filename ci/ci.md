@@ -373,10 +373,11 @@ runtime producers are not duplicated.
   producers selected by backend rows. The Linux CPU row additionally runs the
   native runtime-event gate
   (`scripts/ci-runtime-events-native-gate.sh`) against the runtime it just
-  built and the registry-pinned `family-qwen3-dense` model from
-  `skippy-ci-smoke.json`, authorized at both `pull-request` and `main` cadences,
-  and uploads its evidence file. Family certification retains its separate
-  cadence list. That gate is
+  built and the `family-qwen3-dense` fixture from `skippy-ci-smoke.json`,
+  authorized for pull-request, main, and manual cadences, and uploads its
+  evidence file. Model cadence authorization lives in the checked-out registry,
+  so PRs using the protected main workflow consume the same fix. The separate
+  family-certification cadence remains unchanged. That gate is
   env-gated so an ordinary `cargo test` never touches a native symbol, which
   is why it needs a lane of its own; this is the only lane that already has a
   freshly built native runtime. CPU only — the reporter is
