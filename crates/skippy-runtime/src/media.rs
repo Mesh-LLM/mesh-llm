@@ -851,8 +851,10 @@ fn pcm_f32_to_s16le(bytes: &[u8]) -> Result<Vec<u8>> {
         return Err(anyhow!("native PCM payload is not aligned to f32 samples"));
     }
     let mut output = Vec::with_capacity(bytes.len() / 2);
-    for sample in bytes.chunks_exact(4) {
-        let sample = f32::from_ne_bytes(sample.try_into().expect("four-byte PCM sample"));
+    let (samples, remainder) = bytes.as_chunks::<4>();
+    debug_assert!(remainder.is_empty());
+    for sample in samples {
+        let sample = f32::from_ne_bytes(*sample);
         let quantized = (sample.clamp(-1.0, 1.0) * f32::from(i16::MAX)).round() as i16;
         output.extend_from_slice(&quantized.to_le_bytes());
     }
