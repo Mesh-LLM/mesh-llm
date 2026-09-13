@@ -2112,3 +2112,62 @@ async fn route_missing_local_model_excluding_self_blocks_local_plugin_fallback()
         "expected 409, got {outcome:?}"
     );
 }
+
+/// A served-model descriptor that resolved a real load-time weights digest
+/// rides `ServingProvenance.weights_digest` unchanged.
+#[tokio::test]
+async fn serving_provenance_carries_weights_digest_when_descriptor_has_one() {
+    let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
+        .await
+        .expect("test node");
+    node.upsert_served_model_descriptor(mesh::ServedModelDescriptor {
+        identity: mesh::ServedModelIdentity {
+            model_name: "local/digested-model".to_string(),
+            weights_digest: Some("sha256:abc123".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .await;
+
+    let provenance = serving_provenance_for_model(&node, "local/digested-model").await;
+
+    assert_eq!(provenance.weights_digest.as_deref(), Some("sha256:abc123"));
+}
+
+/// A served-model descriptor that never resolved a weights digest (still
+/// hashing, or the file could not be read) omits the field -- never a
+/// fabricated or zeroed digest standing in for "unknown."
+#[tokio::test]
+async fn serving_provenance_omits_weights_digest_when_descriptor_has_none() {
+    let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
+        .await
+        .expect("test node");
+    node.upsert_served_model_descriptor(mesh::ServedModelDescriptor {
+        identity: mesh::ServedModelIdentity {
+            model_name: "local/undigested-model".to_string(),
+            weights_digest: None,
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .await;
+
+    let provenance = serving_provenance_for_model(&node, "local/undigested-model").await;
+
+    assert!(provenance.weights_digest.is_none());
+}
+
+/// A model with no served descriptor at all (peer-served, or not yet
+/// described) must not default `weights_digest` to any value -- the same
+/// real-or-omitted contract every other provenance field already carries.
+#[tokio::test]
+async fn serving_provenance_omits_weights_digest_when_no_descriptor_matches() {
+    let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
+        .await
+        .expect("test node");
+
+    let provenance = serving_provenance_for_model(&node, "unknown/model").await;
+
+    assert!(provenance.weights_digest.is_none());
+}
