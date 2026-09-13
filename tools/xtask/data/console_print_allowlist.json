@@ -4405,7 +4405,7 @@
   ],
   "crates/skippy-server/src/frontend/embedded_generation/lifecycle.rs": [
     {
-      "line": 159,
+      "line": 201,
       "macro_name": "eprintln!"
     }
   ],

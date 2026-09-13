@@ -1,5 +1,4 @@
 use std::collections::VecDeque;
-
 mod fused_decode;
 mod lifecycle;
 mod prefix_restore;
@@ -11,7 +10,6 @@ use crate::binary_transport::{
     forwarded_stage_message_timed, run_binary_stage_message, write_stage_message_conditioned,
 };
 use crate::frontend::embedded_execution::{StaleWindowDiscard, VerifyRetirement};
-use crate::frontend::generation_receipt::GenerationLifecycleState;
 use crate::frontend::request::wire_sampling_config;
 use crate::frontend::speculative::{
     OpenAiSpeculativeStats, classify_verify_window_with_threshold, propose_configured_ngram_tokens,
@@ -36,9 +34,10 @@ use crate::frontend::{
 };
 use crate::telemetry::now_unix_nanos;
 use lifecycle::{
-    DirectPredictionReturnPath, EmbeddedDecodeSummary, PipelinedCompositeWindow, can_seed_pipeline,
-    compose_target_predictions, decode_uses_context_sideband, direct_prediction_return_path,
-    mark_epoch_stale, open_upstream_prediction_return, pipelined_window_layout,
+    DirectPredictionReturnPath, EmbeddedDecodeSummary, PipelinedCompositeWindow,
+    begin_generation_lifecycle, can_seed_pipeline, compose_target_predictions,
+    decode_uses_context_sideband, direct_prediction_return_path, finish_generation_lifecycle,
+    lifecycle_on_token, mark_epoch_stale, open_upstream_prediction_return, pipelined_window_layout,
     queued_active_tokens, refill_pipeline_ngram_candidates, speculation_after_prefix_restore,
     stale_window_id_range,
 };
@@ -68,27 +67,11 @@ impl StageOpenAiBackend {
         let mut lane = lane_pool.checkout(request.ids)?;
         let direct_prediction_return_opened = open_upstream_prediction_return(&request);
         let mut cache_stats = GenerationCacheStats::default();
-        let mut lifecycle = GenerationLifecycleState::new(
-            self.generation_lifecycle.as_ref(),
-            request.ids.request_id,
-            request.ids.session_id,
-            request.ids.agent_session_id.clone(),
-            request.ids.frontend_request_id,
-            request.prompt_token_ids,
-        );
-        let request_started_at = request.ids.request_started_at;
+        let mut lifecycle = begin_generation_lifecycle(self, &request);
         let mut lifecycle_cancelled = false;
 
         let result = (|| {
-            let mut downstream_on_token = on_token;
-            let mut on_token = |token_id| {
-                lifecycle.commit(token_id, request_started_at.elapsed());
-                let control = downstream_on_token(token_id)?;
-                if control == TokenControl::Stop {
-                    lifecycle.mark_callback_stop();
-                }
-                Ok(control)
-            };
+            let mut on_token = lifecycle_on_token(&mut lifecycle, &request, on_token);
             let downstream = &mut lane.stream;
             let prefill_token_count = request.prompt_token_ids.len().saturating_sub(1);
             let prefill_timer = PhaseTimer::start();
@@ -2008,10 +1991,7 @@ impl StageOpenAiBackend {
             Ok(())
         })();
 
-        if lifecycle_cancelled {
-            lifecycle.mark_cancelled();
-        }
-        lifecycle.finish(result.is_ok());
+        finish_generation_lifecycle(lifecycle, lifecycle_cancelled, result.is_ok());
         self.finish_embedded_generation_session(&request, lane_pool, lane, &result, &session_key)?;
         result?;
         Ok(cache_stats)
