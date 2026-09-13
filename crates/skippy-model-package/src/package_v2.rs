@@ -1,11 +1,12 @@
 //! Source-complete v2 creation. Shards are physical containers, not stage owners.
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, ensure};
+use skippy_model::gguf_catalog::read_gguf_metadata_catalog;
 use skippy_model::package_carrier::resolve_package_carrier;
 use skippy_package_format::{
     Artifact, ArtifactCatalog, PACKAGE_SCHEMA_VERSION, PackageManifest, Sidecar, SidecarKind,
@@ -52,7 +53,6 @@ pub(crate) fn write_package(
         "output already contains model-package.json; use a new directory for v2 creation"
     );
     let mut progress = PackageProgress::new(planned.len() + projectors.len() + 2);
-    let no_hook = ArtifactHook { command: None };
     let source_tensors = source_tensors_by_name(&inventory)?;
     let common_names = planned
         .iter()
@@ -60,6 +60,16 @@ pub(crate) fn write_package(
         .map(|artifact| artifact.tensor_names.iter().cloned().collect())
         .unwrap_or_default();
     let mut catalog = Vec::with_capacity(source_tensors.len());
+    let no_hook = ArtifactHook { command: None };
+    // Payload artifacts may be uploaded and locally deleted by their hook as
+    // soon as they are verified, so the metadata carrier cannot depend on the
+    // full parts surviving until the end. Each artifact's header — everything
+    // before its aligned data start — fully determines its descriptor table and
+    // tensor offsets, so a header-only stub of each part carries the same
+    // locators while occupying kilobytes instead of the full payload.
+    let headers_dir = out_dir.join(".headers");
+    fs::create_dir_all(&headers_dir)?;
+    let mut header_stubs = Vec::with_capacity(planned.len());
     for (stage_index, artifact_plan) in planned.iter().enumerate() {
         progress.start_step(&artifact_plan.path)?;
         let (artifact, mut tensors) = emit_payload_artifact(
@@ -73,6 +83,13 @@ pub(crate) fn write_package(
             &no_hook,
             resume_existing_artifacts,
         )?;
+        let path = out_dir.join(&artifact.path);
+        // Capture the header stub before the upload hook can delete the part.
+        let header = header_stub_path(&headers_dir, &artifact.id);
+        write_header_stub(&path, &header, artifact.byte_size)?;
+        header_stubs.push(header);
+        run_artifact_hook(&artifact_hook, &path, &artifact.path)?;
+        verify_hook_result(&artifact, &path, &artifact_hook)?;
         progress.finish_step(&format!(
             "{} {}",
             artifact.path,
@@ -100,7 +117,7 @@ pub(crate) fn write_package(
         &inventory,
         &manifest,
         &out_dir,
-        &no_hook,
+        &header_stubs,
         resume_existing_artifacts,
     )?;
     progress.finish_step(&format!(
@@ -122,10 +139,23 @@ pub(crate) fn write_package(
         resolved.tensor_catalog == manifest.tensor_catalog,
         "metadata carrier tensor inventory differs from the independently verified payloads"
     );
-    for artifact in &manifest.artifact_catalog.entries {
-        let path = out_dir.join(&artifact.path);
-        run_artifact_hook(&artifact_hook, &path, &artifact.path)?;
-        verify_hook_result(artifact, &path, &artifact_hook)?;
+    // The carrier is fully verified against the manifest while it is still on
+    // disk; only then does the optional artifact hook run.
+    let carrier_path = out_dir.join("shared/metadata.gguf");
+    run_artifact_hook(&artifact_hook, &carrier_path, "shared/metadata.gguf")?;
+    verify_hook_result(
+        manifest
+            .artifact_catalog
+            .entries
+            .first()
+            .expect("carrier entry"),
+        &carrier_path,
+        &artifact_hook,
+    )?;
+    // Header stubs are an internal working set; the published package root
+    // contains only the manifest and its catalogued artifacts.
+    if !header_stubs.is_empty() {
+        let _ = fs::remove_dir_all(&headers_dir);
     }
     for (index, projector) in projectors.iter().enumerate() {
         let artifact = copy_projector(projector, index, &out_dir, resume_existing_artifacts)?;
@@ -137,7 +167,7 @@ pub(crate) fn write_package(
         )?;
         if artifact_hook.command.is_some() && out_dir.join(&artifact.path).exists() {
             ensure!(
-                file_sha256(&out_dir.join(&artifact.path))? == artifact.sha256,
+                artifact_unchanged_on_disk(&artifact, &out_dir.join(&artifact.path))?,
                 "projector changed after artifact hook"
             );
         }
@@ -280,9 +310,9 @@ fn source_tensors_by_name(inventory: &SourceInventory) -> Result<BTreeMap<String
 fn emit_metadata_artifact(
     source: &ModelSource,
     inventory: &SourceInventory,
-    manifest: &PackageManifest,
+    _manifest: &PackageManifest,
     out_dir: &Path,
-    artifact_hook: &ArtifactHook,
+    header_stubs: &[PathBuf],
     resume: bool,
 ) -> Result<Artifact> {
     let relative = "shared/metadata.gguf";
@@ -290,25 +320,12 @@ fn emit_metadata_artifact(
     create_parent_dir(&path)?;
     ensure_not_source_file(source, &path)?;
     if !path.exists() {
-        let sidecars = manifest
-            .sidecars
-            .iter()
-            .map(|sidecar| sidecar.artifact_id.as_str())
-            .collect::<BTreeSet<_>>();
-        let mut payloads = manifest
-            .artifact_catalog
-            .entries
-            .iter()
-            .filter(|artifact| {
-                artifact.id != manifest.source_model.metadata_artifact_id
-                    && !sidecars.contains(artifact.id.as_str())
-            })
-            .collect::<Vec<_>>();
-        payloads.sort_by(|left, right| left.id.cmp(&right.id));
-        let payload_paths = payloads
-            .iter()
-            .map(|artifact| out_dir.join(&artifact.path))
-            .collect::<Vec<_>>();
+        // Payload parts may already be uploaded and deleted; the header-only
+        // stubs carry the exact descriptor tables and locators of the full
+        // parts, so the carrier is built from them instead. Stub order must
+        // match the id-sorted payload artifacts the carrier locators index.
+        let mut payload_paths: Vec<&Path> = header_stubs.iter().map(PathBuf::as_path).collect();
+        payload_paths.sort();
         write_gguf_metadata_from_parts(&payload_paths, &path)
             .with_context(|| format!("write GGUF metadata carrier {}", path.display()))?;
     } else {
@@ -339,8 +356,6 @@ fn emit_metadata_artifact(
         "metadata carrier descriptor table differs from independent source inventory"
     );
     let artifact = artifact_record("metadata", relative, &path)?;
-    run_artifact_hook(artifact_hook, &path, relative)?;
-    verify_hook_result(&artifact, &path, artifact_hook)?;
     Ok(artifact)
 }
 
@@ -449,6 +464,42 @@ fn emit_payload_artifact(
     Ok((artifact, bound))
 }
 
+/// Path of the header-only stub kept for artifact `id` while its full payload
+/// may be uploaded and deleted by its hook.
+fn header_stub_path(headers_dir: &Path, artifact_id: &str) -> PathBuf {
+    let safe_id = artifact_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
+        .collect::<String>();
+    headers_dir.join(format!("{safe_id}.gguf"))
+}
+
+/// Copy the header of the verified artifact at `path` — every byte before its
+/// aligned tensor data start — to `header`. The stub re-opens as a legal
+/// descriptor-only GGUF whose tensor offsets equal the full artifact's, which
+/// is what the metadata carrier records.
+fn write_header_stub(path: &Path, header: &Path, byte_size: u64) -> Result<()> {
+    let catalog = read_gguf_metadata_catalog(path)?;
+    ensure!(
+        catalog.data_start <= byte_size && catalog.data_start <= catalog.artifact_bytes,
+        "artifact {} header extends beyond its recorded size",
+        path.display()
+    );
+    let length = usize::try_from(catalog.data_start)
+        .with_context(|| format!("artifact {} header length overflows usize", path.display()))?;
+    let input =
+        File::open(path).with_context(|| format!("open verified artifact {}", path.display()))?;
+    let mut output =
+        File::create(header).with_context(|| format!("create header stub {}", header.display()))?;
+    io::copy(
+        &mut input.take(u64::try_from(length).context("header length to u64")?),
+        &mut output,
+    )
+    .with_context(|| format!("copy header stub {}", header.display()))?;
+    output.sync_all()?;
+    Ok(())
+}
+
 fn stage_plan(planned: &PlannedArtifact, stage_index: usize, layer_count: u32) -> StagePlan {
     let (layer_start, layer_end, includes_embeddings, includes_output) = match planned.kind {
         PlannedArtifactKind::Common => (0, 0, false, false),
@@ -495,13 +546,39 @@ fn ensure_not_source_file(source: &ModelSource, path: &Path) -> Result<()> {
 fn verify_hook_result(artifact: &Artifact, path: &Path, hook: &ArtifactHook) -> Result<()> {
     if hook.command.is_some() && path.exists() {
         ensure!(
-            fs::metadata(path)?.len() == artifact.byte_size
-                && file_sha256(path)? == artifact.sha256,
+            artifact_unchanged_on_disk(artifact, path)?,
             "artifact {:?} changed after artifact hook",
             artifact.id
         );
     }
     Ok(())
+}
+
+/// Whether the on-disk artifact still matches its record.
+///
+/// A hook may retain or remove the artifact. A FUSE bucket mount can keep
+/// reporting a freshly unlinked file as present via a stale attr cache, so a
+/// file that can no longer be opened counts as unchanged rather than corrupted.
+/// Only a file that opens but differs (the hook mutated it) fails.
+fn artifact_unchanged_on_disk(artifact: &Artifact, path: &Path) -> Result<bool> {
+    let probe =
+        || -> Result<bool> {
+            Ok(fs::metadata(path)?.len() == artifact.byte_size
+                && file_sha256(path)? == artifact.sha256)
+        };
+    match probe() {
+        Ok(same) => Ok(same),
+        Err(err) if is_not_found(&err) => Ok(true),
+        Err(err) => Err(err),
+    }
+}
+
+fn is_not_found(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+    })
 }
 
 fn copy_artifact(source: &Path, output: &Path, resume: bool) -> Result<()> {

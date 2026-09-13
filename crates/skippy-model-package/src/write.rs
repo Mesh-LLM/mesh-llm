@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use model_artifact::ModelArtifactFile;
 use model_ref::split_gguf_shard_info;
 use serde::Serialize;
-use skippy_runtime::{ModelInfo, TensorInfo, write_gguf_from_parts};
+use skippy_runtime::{ModelInfo, TensorInfo, write_gguf_from_parts_consuming};
 
 use crate::hash::file_sha256;
 use crate::plan::{
@@ -352,7 +352,7 @@ fn write_sharded_stage_artifact(source: &ModelSource, stage: &StagePlan, out: &P
             })?;
             parts.push(part_path);
         }
-        write_gguf_from_parts(&parts, out)
+        write_gguf_from_parts_consuming(&parts, out)
             .with_context(|| format!("merge split-GGUF shard slices into {}", out.display()))
     })();
 

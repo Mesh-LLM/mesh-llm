@@ -167,6 +167,29 @@ pub fn write_gguf_from_parts(
     input_paths: &[impl AsRef<Path>],
     output_path: impl AsRef<Path>,
 ) -> Result<()> {
+    write_gguf_from_parts_impl(input_paths, output_path, false)
+}
+
+/// Materialize GGUF parts into one file, unlinking each input part as soon as
+/// its tensors have been absorbed into the output.
+///
+/// Use this only when the inputs are scratch files owned by the caller. The
+/// per-artifact staging peak drops from parts-plus-output to roughly one
+/// output file, which keeps sharded splits inside ephemeral-storage budgets
+/// such as the HF Jobs 50G container limit. Bench materialization reads
+/// published package files and must keep using [`write_gguf_from_parts`].
+pub fn write_gguf_from_parts_consuming(
+    input_paths: &[impl AsRef<Path>],
+    output_path: impl AsRef<Path>,
+) -> Result<()> {
+    write_gguf_from_parts_impl(input_paths, output_path, true)
+}
+
+fn write_gguf_from_parts_impl(
+    input_paths: &[impl AsRef<Path>],
+    output_path: impl AsRef<Path>,
+    consume_inputs: bool,
+) -> Result<()> {
     if input_paths.is_empty() {
         return Err(anyhow!("at least one GGUF part path is required"));
     }
@@ -182,12 +205,21 @@ pub fn write_gguf_from_parts(
     let output_path = path_to_cstring(output_path.as_ref(), "output path")?;
     let mut error = ptr::null_mut();
     let status = unsafe {
-        skippy_ffi::skippy_write_gguf_from_parts(
-            input_ptrs.as_ptr(),
-            input_ptrs.len(),
-            output_path.as_ptr(),
-            &mut error,
-        )
+        if consume_inputs {
+            skippy_ffi::skippy_write_gguf_from_parts_consuming(
+                input_ptrs.as_ptr(),
+                input_ptrs.len(),
+                output_path.as_ptr(),
+                &mut error,
+            )
+        } else {
+            skippy_ffi::skippy_write_gguf_from_parts(
+                input_ptrs.as_ptr(),
+                input_ptrs.len(),
+                output_path.as_ptr(),
+                &mut error,
+            )
+        }
     };
     ensure_ok(status, error)
 }

@@ -1001,7 +1001,12 @@ pub(crate) fn direct_gguf_planning_manifest_from_identity(
         let native = skippy_runtime::ModelInfo::open(path)
             .with_context(|| format!("open direct GGUF metadata {}", path.display()))?
             .tensors()
-            .with_context(|| format!("read direct GGUF tensors {}", path.display()))?;
+            .with_context(|| format!("read direct GGUF tensors {}", path.display()))?
+            .into_iter()
+            // Zero-element placeholders are skipped by the GGUF catalog
+            // reader; drop them from the native side so counts agree.
+            .filter(|tensor| tensor.element_count > 0)
+            .collect::<Vec<_>>();
         let shard_tensors = direct_planning_tensor_catalog(&directory, &native, &artifact_id)?;
         total_tensors = total_tensors
             .checked_add(shard_tensors.entries.len())

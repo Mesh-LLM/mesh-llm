@@ -3337,127 +3337,119 @@
   ],
   "crates/model-package/src/bin/queue-unsloth-layer-packages.rs": [
     {
-      "line": 154,
+      "line": 156,
       "macro_name": "println!"
     },
     {
-      "line": 159,
+      "line": 161,
       "macro_name": "println!"
     },
     {
-      "line": 160,
+      "line": 162,
       "macro_name": "println!"
     },
     {
-      "line": 164,
+      "line": 166,
       "macro_name": "println!"
     },
     {
-      "line": 168,
+      "line": 170,
       "macro_name": "println!"
     },
     {
-      "line": 191,
+      "line": 193,
       "macro_name": "println!"
     },
     {
-      "line": 211,
+      "line": 213,
       "macro_name": "println!"
     },
     {
-      "line": 220,
+      "line": 226,
       "macro_name": "println!"
     },
     {
-      "line": 227,
+      "line": 244,
       "macro_name": "println!"
     },
     {
-      "line": 234,
+      "line": 278,
       "macro_name": "println!"
     },
     {
-      "line": 241,
+      "line": 292,
       "macro_name": "println!"
     },
     {
-      "line": 264,
+      "line": 301,
       "macro_name": "println!"
     },
     {
-      "line": 298,
+      "line": 437,
       "macro_name": "println!"
     },
     {
-      "line": 312,
-      "macro_name": "println!"
-    },
-    {
-      "line": 321,
-      "macro_name": "println!"
-    },
-    {
-      "line": 448,
-      "macro_name": "println!"
-    },
-    {
-      "line": 476,
+      "line": 467,
       "macro_name": "eprintln!"
     },
     {
-      "line": 484,
+      "line": 475,
       "macro_name": "eprintln!"
     },
     {
-      "line": 488,
+      "line": 479,
       "macro_name": "eprintln!"
     },
     {
-      "line": 492,
+      "line": 483,
       "macro_name": "eprintln!"
     },
     {
-      "line": 510,
+      "line": 501,
       "macro_name": "println!"
     },
     {
-      "line": 525,
+      "line": 516,
       "macro_name": "println!"
     },
     {
-      "line": 545,
+      "line": 536,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 540,
       "macro_name": "eprintln!"
     },
     {
       "line": 549,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 558,
       "macro_name": "println!"
     },
     {
-      "line": 583,
+      "line": 574,
       "macro_name": "println!"
     },
     {
-      "line": 677,
+      "line": 672,
       "macro_name": "eprintln!"
     },
     {
-      "line": 681,
+      "line": 679,
       "macro_name": "eprintln!"
     },
     {
-      "line": 698,
+      "line": 683,
       "macro_name": "eprintln!"
     },
     {
-      "line": 713,
+      "line": 700,
       "macro_name": "eprintln!"
     },
     {
-      "line": 728,
+      "line": 715,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 730,
       "macro_name": "eprintln!"
     }
   ],
@@ -3757,7 +3749,7 @@
   ],
   "crates/skippy-model-package/src/package_v2.rs": [
     {
-      "line": 169,
+      "line": 199,
       "macro_name": "println!"
     }
   ],
