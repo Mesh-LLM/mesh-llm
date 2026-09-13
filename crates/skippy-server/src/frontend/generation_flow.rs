@@ -2,6 +2,7 @@ mod text_generation;
 
 use crate::binary_transport::forwarded_stage_message_timed;
 use crate::binary_transport::write_stage_message_conditioned;
+use crate::frontend::GenerationStart;
 use crate::frontend::generation::GeneratedText;
 use crate::frontend::generation::GenerationCacheStats;
 use crate::frontend::generation::GenerationTokenLimit;
@@ -14,6 +15,8 @@ use crate::frontend::generation::StageOpenAiBackend;
 use crate::frontend::generation::TextGenerationCollector;
 use crate::frontend::generation::TokenControl;
 use crate::frontend::generation::emulation_generation_active;
+use crate::frontend::generation_commit_batcher::GenerationCommitBatcher;
+use crate::frontend::generation_receipt::GenerationLifecycleState;
 use crate::frontend::generation_receipt::complete_generation_before_cleanup;
 use crate::frontend::local_generation::LocalGenerationReceiptFinalization;
 use crate::frontend::request::wire_sampling_config;
@@ -25,7 +28,6 @@ use crate::frontend::wire_messages::ReusableDecodeMessage;
 use crate::frontend::wire_messages::ReusableDecodeMessageArgs;
 use crate::frontend::wire_messages::generation_config_message;
 use crate::frontend::wire_messages::multimodal_prefill_message;
-use crate::frontend::{GenerationCommit, GenerationStart};
 use crate::kv_integration::proactive_eviction_attrs;
 use anyhow::anyhow;
 use openai_frontend::ChatCompletionRequest;
@@ -140,6 +142,20 @@ impl StageOpenAiBackend {
             .map(|_| self.tokenize(&prompt.text))
             .transpose()?
             .map(Arc::<[i32]>::from);
+        let lifecycle_prompt_token_ids = self
+            .generation_lifecycle
+            .as_ref()
+            .map(|_| self.tokenize(&prompt.text))
+            .transpose()?
+            .unwrap_or_default();
+        let mut lifecycle = GenerationLifecycleState::new(
+            self.generation_lifecycle.as_ref(),
+            ids.request_id,
+            ids.session_id,
+            ids.agent_session_id.clone(),
+            ids.frontend_request_id,
+            &lifecycle_prompt_token_ids,
+        );
         let stop_value_storage =
             generation_stop_values(stop, prompt.chat_parse_metadata.as_deref());
         let stop_values = stop_value_storage
@@ -318,11 +334,21 @@ impl StageOpenAiBackend {
                         session_id: ids.session_id,
                         agent_session_id: ids.agent_session_id.clone(),
                         prompt_token_ids: Arc::clone(prompt_token_ids),
+                        frontend_request_id: ids.frontend_request_id,
                     });
                     receipt_started = true;
                 }
 
                 let decode_timer = PhaseTimer::start();
+                // Batches canonical tokens to the progress cadence instead
+                // of submitting one observation per decoded token. Holds the
+                // receipt config for its whole life so an early `?` return
+                // out of this loop still flushes.
+                let mut commit_batcher = GenerationCommitBatcher::new(
+                    self.generation_receipt.as_ref(),
+                    ids.request_id,
+                    ids.session_id,
+                );
                 let mut decoded_tokens = 0usize;
                 let mut current = prefill.first_token;
                 let mut runtime_lock_wait_ms = 0.0;
@@ -358,18 +384,13 @@ impl StageOpenAiBackend {
                     if let Some(observation) = receipt_observation.as_mut() {
                         observation.record_token(current, ids.request_started_at.elapsed());
                     }
-                    if let Some(config) = self.generation_receipt.as_ref() {
-                        config.committed(GenerationCommit {
-                            request_id: ids.request_id,
-                            session_id: ids.session_id,
-                            generated_token_count: decoded_tokens.saturating_add(1),
-                            token_ids: vec![current].into_boxed_slice(),
-                        });
-                    }
+                    commit_batcher.commit(current, ids.request_started_at.elapsed());
+                    lifecycle.commit(current, ids.request_started_at.elapsed());
                     if collector.push_token(current)? == TokenControl::Stop {
                         if let Some(observation) = receipt_observation.as_mut() {
                             observation.mark_callback_stop();
                         }
+                        lifecycle.mark_callback_stop();
                         decoded_tokens += 1;
                         break;
                     }
@@ -451,6 +472,10 @@ impl StageOpenAiBackend {
                         .insert("llama_stage.message_kind".to_string(), json!("DecodeToken"));
                     self.emit_openai_phase("stage.openai_decode_token", token_timer, token_attrs);
                 }
+                // Before any terminal, so the final partial batch publishes
+                // ahead of `finished`/`abort` rather than being rejected as
+                // settled behind it.
+                commit_batcher.flush();
                 let mut attrs = self.openai_attrs(&ids);
                 attrs.insert(
                     "llama_stage.decode_token_count".to_string(),
@@ -496,10 +521,13 @@ impl StageOpenAiBackend {
             },
         );
         let generation_succeeded = result.is_ok();
+        if receipt_cancelled {
+            lifecycle.mark_cancelled();
+        }
         complete_generation_before_cleanup(
             result,
             || {
-                if receipt_started {
+                let receipt_result = if receipt_started {
                     self.finalize_generation_receipt(
                         LocalGenerationReceiptFinalization {
                             session_label: &session_id,
@@ -510,12 +538,15 @@ impl StageOpenAiBackend {
                             observation: receipt_observation,
                             cancelled: receipt_cancelled,
                             model_generation_elapsed: receipt_model_generation_elapsed,
+                            frontend_request_id: ids.frontend_request_id,
                         },
                         generation_succeeded,
                     )
                 } else {
                     Ok(())
-                }
+                };
+                lifecycle.finish(generation_succeeded);
+                receipt_result
             },
             || session_cleanup.cleanup(),
         )?;
@@ -547,7 +578,21 @@ impl StageOpenAiBackend {
             .map(|_| self.tokenize(&request.prompt.text))
             .transpose()?
             .map(Arc::<[i32]>::from);
+        let lifecycle_prompt_token_ids = self
+            .generation_lifecycle
+            .as_ref()
+            .map(|_| self.tokenize(&request.prompt.text))
+            .transpose()?
+            .unwrap_or_default();
         let mut lane = request.lane_pool.checkout(&request.ids)?;
+        let mut lifecycle = GenerationLifecycleState::new(
+            self.generation_lifecycle.as_ref(),
+            request.ids.request_id,
+            request.ids.session_id,
+            request.ids.agent_session_id.clone(),
+            request.ids.frontend_request_id,
+            &lifecycle_prompt_token_ids,
+        );
         if let (Some(config), Some(prompt_token_ids)) = (
             self.generation_receipt.as_ref(),
             receipt_prompt_token_ids.as_ref(),
@@ -557,6 +602,7 @@ impl StageOpenAiBackend {
                 session_id,
                 agent_session_id: request.ids.agent_session_id.clone(),
                 prompt_token_ids: Arc::clone(prompt_token_ids),
+                frontend_request_id: request.ids.frontend_request_id,
             });
         }
 
@@ -757,6 +803,13 @@ impl StageOpenAiBackend {
             );
 
             let decode_timer = PhaseTimer::start();
+            // See the batcher in the streaming loop above: progress-cadence
+            // commits instead of one observation per decoded token.
+            let mut commit_batcher = GenerationCommitBatcher::new(
+                self.generation_receipt.as_ref(),
+                request_id,
+                session_id,
+            );
             let mut decoded_tokens = 0usize;
             let mut current = reply.predicted;
             let mut decode_stage0_compute_ms = 0.0;
@@ -789,18 +842,13 @@ impl StageOpenAiBackend {
                 if let Some(observation) = receipt_observation.as_mut() {
                     observation.record_token(current, request.ids.request_started_at.elapsed());
                 }
-                if let Some(config) = self.generation_receipt.as_ref() {
-                    config.committed(GenerationCommit {
-                        request_id,
-                        session_id,
-                        generated_token_count: decoded_tokens.saturating_add(1),
-                        token_ids: vec![current].into_boxed_slice(),
-                    });
-                }
+                commit_batcher.commit(current, request.ids.request_started_at.elapsed());
+                lifecycle.commit(current, request.ids.request_started_at.elapsed());
                 if collector.push_token(current)? == TokenControl::Stop {
                     if let Some(observation) = receipt_observation.as_mut() {
                         observation.mark_callback_stop();
                     }
+                    lifecycle.mark_callback_stop();
                     decoded_tokens += 1;
                     break;
                 }
@@ -906,6 +954,8 @@ impl StageOpenAiBackend {
                 }
             }
 
+            // Before any terminal -- see the streaming loop's flush above.
+            commit_batcher.flush();
             let mut decode_attrs = self.openai_attrs(&request.ids);
             decode_attrs.insert(
                 "llama_stage.decode_token_count".to_string(),
@@ -957,6 +1007,10 @@ impl StageOpenAiBackend {
         })();
 
         let generation_succeeded = result.is_ok();
+        if receipt_cancelled {
+            lifecycle.mark_cancelled();
+        }
+        lifecycle.finish(generation_succeeded);
         let receipt_result = self.finalize_generation_receipt(
             LocalGenerationReceiptFinalization {
                 session_label: &session_key,
@@ -967,6 +1021,7 @@ impl StageOpenAiBackend {
                 observation: receipt_observation,
                 cancelled: receipt_cancelled,
                 model_generation_elapsed: receipt_model_generation_elapsed,
+                frontend_request_id: request.ids.frontend_request_id,
             },
             generation_succeeded,
         );
