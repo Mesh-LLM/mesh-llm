@@ -840,3 +840,8 @@ and platform-specific dependencies. Tests cover that guard and the scope rules.
 The Quality workflow still invokes the same `just no-console-print` gate.
 Direct stdout/stderr handle detection and deletion of the remaining product
 ratchet belong to later stages of issue #1763.
+
+The CPU native runtime-event gate selects `family-qwen3-dense` from the
+`skippy-ci-smoke` manifest for both `pull-request` and `main` cadences. The
+canonical artifact registry explicitly permits both uses, and the workflow
+contract test resolves its selected model through the real manifest resolver.
