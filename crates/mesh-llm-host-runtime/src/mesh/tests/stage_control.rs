@@ -150,7 +150,7 @@ async fn stage_control_bundle_gate_rejects_legacy_peer() -> Result<()> {
     assert!(
         error
             .to_string()
-            .contains("does not advertise the required generation-9 control bundle"),
+            .contains("does not advertise the required generation-10 control bundle"),
         "unexpected error: {error:#}"
     );
 

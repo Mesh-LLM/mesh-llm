@@ -21,7 +21,7 @@ use skippy_package_format::{PackageManifest, Sidecar};
 /// The planned admission expectations for one stage.
 ///
 /// This is carried by the planner on `RuntimeSliceStagePlan` from planning
-/// time and mirrored into the generation-9 control protocol descriptor.
+/// time and mirrored into the generation-10 control protocol descriptor.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlannedStageAdmission {
     /// Content-derived package identity (`sha256:...`).
@@ -465,7 +465,7 @@ fn realize_native_stage_chain_from_manifest(
 }
 
 /// Realize, package-resolve, and admit every stage before a topology can be
-/// published. Returned descriptors are canonical generation-9 wire values.
+/// published. Returned descriptors are canonical generation-10 wire values.
 pub fn realize_stage_admissions(
     package_dir: &Path,
     ranges: &[(u32, u32)],
