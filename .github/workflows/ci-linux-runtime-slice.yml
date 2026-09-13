@@ -158,9 +158,9 @@ jobs:
         if: ${{ matrix.runtime.backend == 'cpu' }}
         uses: ./.github/actions/restore-test-model
         with:
-          model_manifest: ci/model-artifacts/manifests/skippy-ci-smoke.json
-          model_artifact_id: family-qwen3-dense
-          model_cadence: ${{ (inputs.original_event_name == 'pull_request' || inputs.original_event_name == 'pull_request_target') && 'pull-request' || 'main' }}
+          model_manifest: ci/model-artifacts/manifests/skippy-correctness.json
+          model_artifact_id: qwen3-q8-correctness
+          model_cadence: ${{ (inputs.original_event_name == 'pull_request' || inputs.original_event_name == 'pull_request_target') && 'pull-request' || inputs.original_event_name == 'push' && 'main' || 'manual' }}
           model_cache_scope: runtime-events-native-gate-model
           save_model_cache: ${{ github.ref == 'refs/heads/main' && inputs.original_event_name != 'pull_request' && inputs.original_event_name != 'pull_request_target' }}
       - name: Run native runtime-event gate

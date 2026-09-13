@@ -373,7 +373,9 @@ runtime producers are not duplicated.
   producers selected by backend rows. The Linux CPU row additionally runs the
   native runtime-event gate
   (`scripts/ci-runtime-events-native-gate.sh`) against the runtime it just
-  built and a real model, and uploads its evidence file. That gate is
+  built and the `qwen3-q8-correctness` fixture from `skippy-correctness.json`,
+  authorized for pull-request, main, and manual cadences, and uploads its
+  evidence file. That gate is
   env-gated so an ordinary `cargo test` never touches a native symbol, which
   is why it needs a lane of its own; this is the only lane that already has a
   freshly built native runtime. CPU only — the reporter is

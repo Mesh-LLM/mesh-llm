@@ -267,13 +267,54 @@ class LinuxRuntimeSliceTests(unittest.TestCase):
             self.steps["Prepare immutable Linux native runtime"]["id"], "native_runtime"
         )
 
-    def test_the_gate_selects_one_artifact_from_the_shared_manifest(self) -> None:
+    def test_the_gate_selects_the_correctness_fixture(self) -> None:
         step = self.steps["Restore runtime-event gate model"]
         self.assertEqual(
             step["with"]["model_manifest"],
-            "ci/model-artifacts/manifests/skippy-ci-smoke.json",
+            "ci/model-artifacts/manifests/skippy-correctness.json",
         )
-        self.assertEqual(step["with"]["model_artifact_id"], "family-qwen3-dense")
+        self.assertEqual(step["with"]["model_artifact_id"], "qwen3-q8-correctness")
+
+    def test_gate_model_resolves_at_every_workflow_cadence(self) -> None:
+        inputs = self.steps["Restore runtime-event gate model"]["with"]
+        self.assertEqual(
+            inputs["model_cadence"],
+            "${{ (inputs.original_event_name == 'pull_request' || "
+            "inputs.original_event_name == 'pull_request_target') && 'pull-request' "
+            "|| inputs.original_event_name == 'push' && 'main' || 'manual' }}",
+        )
+        action = yaml.safe_load(
+            (ROOT / ".github/actions/restore-test-model/action.yml").read_text()
+        )
+        resolve = next(
+            step for step in action["runs"]["steps"] if step.get("id") == "resolve-model"
+        )
+        for cadence in ("pull-request", "main", "manual"):
+            with self.subTest(cadence=cadence), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "outputs"
+                result = subprocess.run(
+                    ["bash", "-c", resolve["run"]],
+                    cwd=ROOT,
+                    env={
+                        **os.environ,
+                        "MODEL_MANIFEST": inputs["model_manifest"],
+                        "MODEL_ARTIFACT_ID": inputs["model_artifact_id"],
+                        "MODEL_CADENCE": cadence,
+                        "INPUT_MODEL_URL": "",
+                        "INPUT_MODEL_FILE": "",
+                        "GITHUB_OUTPUT": str(output),
+                    },
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                resolved = dict(
+                    line.split("=", 1) for line in output.read_text().splitlines()
+                )
+                self.assertTrue(resolved["file"].endswith(".gguf"))
+                self.assertEqual(len(resolved["sha256"]), 64)
+                self.assertGreater(int(resolved["size_bytes"]), 0)
 
     def test_evidence_is_uploaded_even_when_the_gate_fails(self) -> None:
         """The evidence file is how a failure is diagnosed, so it must
