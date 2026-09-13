@@ -33,7 +33,7 @@ fn main() {
     let root = crate_dir.join("../..");
     let upstream_path = root.join("third_party/llama.cpp/upstream.txt");
     let patch_dir = root.join("third_party/llama.cpp/patches");
-    if !upstream_path.is_file() || !patch_dir.is_dir() {
+    if !upstream_path.is_file() && !patch_dir.is_dir() {
         // crates.io packages cannot contain files outside this crate. The
         // repository CI validates the source recipe before packaging; a
         // packaged crate retains the exact recipe embedded in its roster.
@@ -42,6 +42,10 @@ fn main() {
         println!("cargo:rustc-env=MESH_SKIPPY_PATCH_QUEUE_SHA256={patch_digest}");
         return;
     }
+    assert!(
+        upstream_path.is_file() && patch_dir.is_dir(),
+        "llama.cpp recipe is incomplete: both the upstream pin and patch directory are required",
+    );
     println!("cargo:rerun-if-changed={}", upstream_path.display());
     println!("cargo:rerun-if-changed={}", patch_dir.display());
 

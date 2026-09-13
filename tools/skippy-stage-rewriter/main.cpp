@@ -800,7 +800,8 @@ viewSliceHelper(const CompoundStmt *constructor_body, const SourceManager &sm) {
           callee->getNumParams() != 3) {
         return true;
       }
-      if (callee->getStorageClass() != clang::SC_Static) {
+      if (callee->getStorageClass() != clang::SC_Static ||
+          !callee->getDeclContext()->isFileContext()) {
         return true;
       }
       const FunctionDecl *definition = nullptr;
