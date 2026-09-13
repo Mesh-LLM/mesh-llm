@@ -6,6 +6,7 @@ mod decode_scheduler;
 mod embedded_execution;
 mod embedded_generation;
 mod generation;
+mod generation_commit_batcher;
 mod generation_flow;
 mod generation_receipt;
 mod guardrails;
@@ -45,7 +46,8 @@ pub(crate) use self::generation::{
     serve_embedded_openai_with_scheduler,
 };
 pub use self::generation_receipt::{
-    GenerationAbort, GenerationCommit, GenerationLifecycleIngress, GenerationLifecycleObservation,
+    CompositeGenerationLifecycleIngress, GenerationAbort, GenerationCommit, GenerationCompletion,
+    GenerationLifecycleConfig, GenerationLifecycleIngress, GenerationLifecycleObservation,
     GenerationReceipt, GenerationReceiptConfig, GenerationReceiptSink, GenerationStart,
     GenerationStateDigest, GenerationTermination, generation_token_id_digest,
 };

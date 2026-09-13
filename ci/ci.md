@@ -370,7 +370,15 @@ runtime producers are not duplicated.
 - `ci-{linux,macos,windows}-host-slice.yml` — one platform-pure neutral host
   producer consuming that lane's immutable UI distribution.
 - `ci-{linux,macos,windows}-runtime-slice.yml` — platform-pure native runtime
-  producers selected by backend rows.
+  producers selected by backend rows. The Linux CPU row additionally runs the
+  native runtime-event gate
+  (`scripts/ci-runtime-events-native-gate.sh`) against the runtime it just
+  built and a real model, and uploads its evidence file. That gate is
+  env-gated so an ordinary `cargo test` never touches a native symbol, which
+  is why it needs a lane of its own; this is the only lane that already has a
+  freshly built native runtime. CPU only — the reporter is
+  backend-independent, so another backend would buy a duplicate of the same
+  evidence.
 - `ci-{linux,macos,windows}-product-slice.yml` — composition-only consumers
   that join only their matching immutable host and runtime artifacts.
 - `ci-platform-checks-slice.yml` — macOS portable/unit, Windows portable, and
