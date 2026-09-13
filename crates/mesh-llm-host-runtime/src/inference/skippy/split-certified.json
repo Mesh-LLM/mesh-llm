@@ -237,6 +237,21 @@
       "source_model_sha256": "6195511a1bf402b1ab3ec3631347f310b4085774a17a0c6e673ea8988cc0a9fc"
     },
     {
+      "family": "glm-dsa",
+      "repo": "unsloth/GLM-5.2-GGUF",
+      "revision": "abc55e72527792c6e77069c99b4cb7de16fa9f23",
+      "files": [
+        "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00001-of-00006.gguf",
+        "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00002-of-00006.gguf",
+        "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00003-of-00006.gguf",
+        "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00004-of-00006.gguf",
+        "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00005-of-00006.gguf",
+        "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00006-of-00006.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "3eba52420f5d095448bb35bdd9a3fcc295ad363832a74b3d8442af904d71877c"
+    },
+    {
       "family": "glm4",
       "repo": "bartowski/glm-4-9b-chat-GGUF",
       "revision": "74a33eafa149550a60bff0fdafcdd34caa6df9f0",
@@ -528,6 +543,17 @@
       "source_model_sha256": "2086900d9374d7a12388b6a44f7d34afcf5817abcba7983dc733d38c5003e2ea"
     },
     {
+      "family": "mimo2",
+      "repo": "bartowski/MiMo-V2.5-GGUF",
+      "revision": "e528cbf4b6197dd642b393acc069fb1cd529e085",
+      "files": [
+        "MiMo-V2.5-IQ1_S/MiMo-V2.5-IQ1_S-00001-of-00002.gguf",
+        "MiMo-V2.5-IQ1_S/MiMo-V2.5-IQ1_S-00002-of-00002.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "910e131f23983f4ce00de602aa1203a20412fcbec52e97aa32a55107e272bfd6"
+    },
+    {
       "family": "minicpm",
       "repo": "openbmb/MiniCPM4.1-8B-GGUF",
       "revision": "ebb834d0ad9acfa98bd16bc963ec51be5f7e08c1",
@@ -548,6 +574,19 @@
       "source_model_sha256": "64913247e927414ecf47fd3e9ea8e3f0c9acae293f583dfa7e24b8872e20fa4c"
     },
     {
+      "family": "minimax-m3",
+      "repo": "unsloth/MiniMax-M3-GGUF",
+      "revision": "a31ac6425155f773fdde697421c3b8cf42083ecf",
+      "files": [
+        "UD-IQ1_M/MiniMax-M3-UD-IQ1_M-00001-of-00004.gguf",
+        "UD-IQ1_M/MiniMax-M3-UD-IQ1_M-00002-of-00004.gguf",
+        "UD-IQ1_M/MiniMax-M3-UD-IQ1_M-00003-of-00004.gguf",
+        "UD-IQ1_M/MiniMax-M3-UD-IQ1_M-00004-of-00004.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "40cc866789dca7ca89a269a01fedf6f73c91c545acb2cf1969a0055cc3d884dd"
+    },
+    {
       "family": "mistral-small",
       "repo": "unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF",
       "revision": "b750ec2299225e492f1bd27cab88a0a595fa848f",
@@ -556,6 +595,16 @@
       ],
       "package_kind": "content-addressed-direct-gguf",
       "source_model_sha256": "a3cc56310807ed0d145eaf9f018ccda9ae7ad8edb41ec870aa2454b0d4700b3c"
+    },
+    {
+      "family": "mistral4",
+      "repo": "unsloth/Mistral-Small-4-119B-2603-GGUF",
+      "revision": "bd93c721735aa32c035c0f19e738cb3371fd56ff",
+      "files": [
+        "Mistral-Small-4-119B-2603-UD-IQ2_XXS.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "82a676844e27065abe36cf9292603b6e2484a23ca5665a6d8a0bc62ac478beb3"
     },
     {
       "family": "mpt",
@@ -718,6 +767,26 @@
       "source_model_sha256": "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517"
     },
     {
+      "family": "qwen35moe",
+      "repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
+      "revision": "a483e9e6cbd595906af30beda3187c2663a1118c",
+      "files": [
+        "Qwen3.6-35B-A3B-UD-IQ2_XXS.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "2e8f5f705355c56311432d0a8a5d14a696dbb7e4b197d05c75ba805fc1857bef"
+    },
+    {
+      "family": "qwen3vlmoe",
+      "repo": "Qwen/Qwen3-VL-30B-A3B-Instruct-GGUF",
+      "revision": "f54435e6cc31258f04b0969105c3f6badb197931",
+      "files": [
+        "Qwen3VL-30B-A3B-Instruct-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "87bb374d849f80ebdfabb304189fac9e0bd35a0f74506e6a59c51b206cbe863b"
+    },
+    {
       "family": "qwen4exp",
       "repo": "unsloth/Qwen3.8-Flash-Next-GGUF",
       "revision": "c8b5954a88c2775c546b92593eda40ea041d3176",
@@ -760,6 +829,16 @@
       "source_model_sha256": "8334b850b7bd46238c16b0c550df2138f0889bf433809008cc17a8b05761863e"
     },
     {
+      "family": "spark2-5",
+      "repo": "XHToken/Spark-X2.5-4B-GGUF",
+      "revision": "d313463f1ff7dc29db20193fddc4ad8386d16261",
+      "files": [
+        "Spark-X2.5-4B-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "adfcfa19a4ed6a5985da8bf565fe15f8e1a7e131d79bae2d19d48d1c40109428"
+    },
+    {
       "family": "stablelm",
       "repo": "second-state/stablelm-2-zephyr-1.6b-GGUF",
       "revision": "6da77f49f48f36f1a01753ca27ba531bde13b861",
@@ -778,6 +857,16 @@
       ],
       "package_kind": "content-addressed-direct-gguf",
       "source_model_sha256": "d8fb39287a463549b80d97473b0a7595c3a5a6da3ae2604ca33906a1a43f7175"
+    },
+    {
+      "family": "step35",
+      "repo": "bartowski/stepfun-ai_Step-3.5-Flash-GGUF",
+      "revision": "a2943ef56a0a240bdfb9a2feee97a775f612476d",
+      "files": [
+        "stepfun-ai_Step-3.5-Flash-IQ1_S.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "69a6683e8e427c17170aaa55c8ac1160d7b24c18aa2a60ea11e3f5810c3ebb97"
     }
   ]
 }

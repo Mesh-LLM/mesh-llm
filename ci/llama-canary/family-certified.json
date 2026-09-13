@@ -718,6 +718,79 @@
       "execution": {"trunk_layers": 5, "mtp_layers": 0, "activation_width": 6656, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
       "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 1618131968},
       "notes": "Muse Glimmer dflash text and projector lanes"
+    },
+    {
+      "family": "qwen35moe",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "unsloth/Qwen3.6-35B-A3B-GGUF", "revision": "a483e9e6cbd595906af30beda3187c2663a1118c", "files": ["Qwen3.6-35B-A3B-UD-IQ2_XXS.gguf"], "file_integrity": {"Qwen3.6-35B-A3B-UD-IQ2_XXS.gguf": {"size_bytes": 10756586464, "blob_id": "2e8f5f705355c56311432d0a8a5d14a696dbb7e4b197d05c75ba805fc1857bef"}}, "selector": "UD-IQ2_XXS"},
+      "execution": {"trunk_layers": 40, "mtp_layers": 0, "activation_width": 2048, "boundary_sweep_period": 4, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 10745596416},
+      "notes": "Qwen3.6 MoE gated-delta-net family with a four-layer full-attention interval"
+    },
+    {
+      "family": "qwen3vlmoe",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "Qwen/Qwen3-VL-30B-A3B-Instruct-GGUF", "revision": "f54435e6cc31258f04b0969105c3f6badb197931", "files": ["Qwen3VL-30B-A3B-Instruct-Q4_K_M.gguf"], "file_integrity": {"Qwen3VL-30B-A3B-Instruct-Q4_K_M.gguf": {"size_bytes": 18556687168, "blob_id": "87bb374d849f80ebdfabb304189fac9e0bd35a0f74506e6a59c51b206cbe863b"}}, "selector": "Q4_K_M"},
+      "mmproj_artifact": {"repo": "Qwen/Qwen3-VL-30B-A3B-Instruct-GGUF", "revision": "f54435e6cc31258f04b0969105c3f6badb197931", "files": ["mmproj-Qwen3VL-30B-A3B-Instruct-Q8_0.gguf"], "file_integrity": {"mmproj-Qwen3VL-30B-A3B-Instruct-Q8_0.gguf": {"size_bytes": 712148928, "blob_id": "82a9966edfdbc1b18a27fd90af96d50cbf111a51484f6290e946dccf461c8150"}}, "selector": "Q8_0"},
+      "execution": {"trunk_layers": 48, "mtp_layers": 0, "activation_width": 2048, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 18550716416, "startup_timeout_secs": 900},
+      "notes": "Qwen3 VL MoE text and real-projector split certification"
+    },
+    {
+      "family": "mistral4",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "unsloth/Mistral-Small-4-119B-2603-GGUF", "revision": "bd93c721735aa32c035c0f19e738cb3371fd56ff", "files": ["Mistral-Small-4-119B-2603-UD-IQ2_XXS.gguf"], "file_integrity": {"Mistral-Small-4-119B-2603-UD-IQ2_XXS.gguf": {"size_bytes": 34924187328, "blob_id": "82a676844e27065abe36cf9292603b6e2484a23ca5665a6d8a0bc62ac478beb3"}}, "selector": "UD-IQ2_XXS"},
+      "execution": {"trunk_layers": 36, "mtp_layers": 0, "activation_width": 4096, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 34916274176},
+      "notes": "Mistral Small 4 MoE and MLA architecture coverage"
+    },
+    {
+      "family": "glm-dsa",
+      "profile": "full",
+      "cadences": ["manual-full"],
+      "artifact": {"repo": "unsloth/GLM-5.2-GGUF", "revision": "abc55e72527792c6e77069c99b4cb7de16fa9f23", "files": ["UD-IQ1_S/GLM-5.2-UD-IQ1_S-00001-of-00006.gguf", "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00002-of-00006.gguf", "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00003-of-00006.gguf", "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00004-of-00006.gguf", "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00005-of-00006.gguf", "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00006-of-00006.gguf"], "file_integrity": {"UD-IQ1_S/GLM-5.2-UD-IQ1_S-00001-of-00006.gguf": {"size_bytes": 9423744, "blob_id": "46b6148389219ae45167cb8124fbb18ef7d432daf619b4faf9e06ea80d3f4777"}, "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00002-of-00006.gguf": {"size_bytes": 49208128256, "blob_id": "f2180207285e04fcaa5b8c53ba6e77ad5cc58666b6e7c6b04a5eded3fe8bef09"}, "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00003-of-00006.gguf": {"size_bytes": 49684417024, "blob_id": "b1c0c5a302cc8d5d9ea0bcd4467c01db72c26839f820f7e882079582ea0a8d2b"}, "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00004-of-00006.gguf": {"size_bytes": 49396052864, "blob_id": "a6a42da6975e29f89866dcde2956e9e50e6ea26635fb5063b74f3973f4f863b6"}, "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00005-of-00006.gguf": {"size_bytes": 49246275936, "blob_id": "a4a9851a50db533f21ef824e5d8038f04e6782e7d602d18e5fdd6643f68ccccb"}, "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00006-of-00006.gguf": {"size_bytes": 19171063136, "blob_id": "3b767f55df64e0432d52fcf1a14eb47a1ef3bbc91339e2ae220f38602237d7d7"}}, "selector": "UD-IQ1_S"},
+      "execution": {"trunk_layers": 78, "mtp_layers": 1, "activation_width": 6144, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 216705819648},
+      "notes": "GLM 5.2 DSA MoE with MLA, sparse indexer attention, and one native NextN head"
+    },
+    {
+      "family": "step35",
+      "profile": "full",
+      "cadences": ["manual-full"],
+      "artifact": {"repo": "bartowski/stepfun-ai_Step-3.5-Flash-GGUF", "revision": "a2943ef56a0a240bdfb9a2feee97a775f612476d", "files": ["stepfun-ai_Step-3.5-Flash-IQ1_S.gguf"], "file_integrity": {"stepfun-ai_Step-3.5-Flash-IQ1_S.gguf": {"size_bytes": 41301534944, "blob_id": "69a6683e8e427c17170aaa55c8ac1160d7b24c18aa2a60ea11e3f5810c3ebb97"}}, "selector": "IQ1_S"},
+      "execution": {"trunk_layers": 45, "mtp_layers": 0, "activation_width": 4096, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 41296256512},
+      "notes": "Step 3.5 Flash MoE with three leading dense blocks and mixed attention windows"
+    },
+    {
+      "family": "mimo2",
+      "profile": "full",
+      "cadences": ["manual-full"],
+      "artifact": {"repo": "bartowski/MiMo-V2.5-GGUF", "revision": "e528cbf4b6197dd642b393acc069fb1cd529e085", "files": ["MiMo-V2.5-IQ1_S/MiMo-V2.5-IQ1_S-00001-of-00002.gguf", "MiMo-V2.5-IQ1_S/MiMo-V2.5-IQ1_S-00002-of-00002.gguf"], "file_integrity": {"MiMo-V2.5-IQ1_S/MiMo-V2.5-IQ1_S-00001-of-00002.gguf": {"size_bytes": 39894774368, "blob_id": "a4f597f6dd9369240cf12d0b4a8c118e0659bf123b4290e042a6f334c2182520"}, "MiMo-V2.5-IQ1_S/MiMo-V2.5-IQ1_S-00002-of-00002.gguf": {"size_bytes": 24622278784, "blob_id": "50b56e1aabb935f7505b7aea37883957489509bb56c34a575c90496754ad593f"}}, "selector": "IQ1_S"},
+      "execution": {"trunk_layers": 48, "mtp_layers": 3, "activation_width": 4096, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 64511067648},
+      "notes": "MiMo V2.5 MoE with three native NextN heads"
+    },
+    {
+      "family": "minimax-m3",
+      "profile": "full",
+      "cadences": ["manual-full"],
+      "artifact": {"repo": "unsloth/MiniMax-M3-GGUF", "revision": "a31ac6425155f773fdde697421c3b8cf42083ecf", "files": ["UD-IQ1_M/MiniMax-M3-UD-IQ1_M-00001-of-00004.gguf", "UD-IQ1_M/MiniMax-M3-UD-IQ1_M-00002-of-00004.gguf", "UD-IQ1_M/MiniMax-M3-UD-IQ1_M-00003-of-00004.gguf", "UD-IQ1_M/MiniMax-M3-UD-IQ1_M-00004-of-00004.gguf"], "file_integrity": {"UD-IQ1_M/MiniMax-M3-UD-IQ1_M-00001-of-00004.gguf": {"size_bytes": 8243104, "blob_id": "b1c2b41d5078f43c2229c790f86266c68ce5d6d23f05c93085951a30acaca998"}, "UD-IQ1_M/MiniMax-M3-UD-IQ1_M-00002-of-00004.gguf": {"size_bytes": 49165334304, "blob_id": "fee0653b3aaaf3f41f0e15c297550995149c4a448b7c7b6d056a6cc227fee3bc"}, "UD-IQ1_M/MiniMax-M3-UD-IQ1_M-00003-of-00004.gguf": {"size_bytes": 49782135840, "blob_id": "c3253c3f5f7d99ab7a6855ce8d1ed870b3630e08cf509dc4606fb5bfdf447f36"}, "UD-IQ1_M/MiniMax-M3-UD-IQ1_M-00004-of-00004.gguf": {"size_bytes": 29461567904, "blob_id": "ac01e73d8d7e829f0627a7a82bb253725f15312f5fec0d00b98ae7e168baafbb"}}, "selector": "UD-IQ1_M"},
+      "execution": {"trunk_layers": 60, "mtp_layers": 0, "activation_width": 6144, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 128408977920},
+      "notes": "MiniMax M3 MoE with three leading dense blocks and sparse-attention state"
+    },
+    {
+      "family": "spark2-5",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "XHToken/Spark-X2.5-4B-GGUF", "revision": "d313463f1ff7dc29db20193fddc4ad8386d16261", "files": ["Spark-X2.5-4B-Q4_K_M.gguf"], "file_integrity": {"Spark-X2.5-4B-Q4_K_M.gguf": {"size_bytes": 2600224352, "blob_id": "adfcfa19a4ed6a5985da8bf565fe15f8e1a7e131d79bae2d19d48d1c40109428"}}, "selector": "Q4_K_M"},
+      "execution": {"trunk_layers": 36, "mtp_layers": 0, "activation_width": 2560, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 2594836480},
+      "notes": "Spark X2.5 dense mixed-window attention architecture coverage"
     }
   ]
 }
