@@ -52,13 +52,27 @@ fn create_cache_repo_file(
 
 #[tokio::test]
 async fn resolve_model_identifier_rejects_filesystem_paths() {
-    let err = resolve_model_identifier("/tmp/model.gguf")
-        .await
-        .unwrap_err();
-    assert!(
-        err.to_string()
-            .contains("does not support filesystem paths")
-    );
+    // Every shape here is a filesystem path on some platform and a valid
+    // model stem on none, so each is rejected the same way everywhere.
+    // `/tmp/model.gguf` is the one that mattered: Windows does not consider
+    // it absolute, so it used to fall through to the Hugging Face branch and
+    // fail with a message about model stems instead.
+    for input in [
+        "/tmp/model.gguf",
+        "/home/user/model.gguf",
+        "C:\\models\\model.gguf",
+        "\\\\server\\share\\model.gguf",
+        "./model.gguf",
+        "../model.gguf",
+        "~/model.gguf",
+    ] {
+        let err = resolve_model_identifier(input).await.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("does not support filesystem paths"),
+            "{input} should be rejected as a path, got: {err}"
+        );
+    }
 }
 
 #[tokio::test]
