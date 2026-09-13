@@ -97,7 +97,7 @@ fn read_installed_runtime_lenient(path: &Path) -> Option<InstalledNativeRuntime>
     let manifest = match NativeRuntimeManifest::read_from_dir(path) {
         Ok(manifest) => manifest,
         Err(error) => {
-            eprintln!(
+            tracing::warn!(
                 "warning: skipping malformed native runtime {}: {error:#}",
                 path.display()
             );
@@ -268,7 +268,7 @@ fn append_runtime_dir(
                     .with_context(|| format!("validate native runtime {}", runtime_dir.display()));
             }
             InvalidManifestPolicy::WarnAndSkip => {
-                eprintln!(
+                tracing::warn!(
                     "warning: skipping malformed native runtime {}: {error:#}",
                     runtime_dir.display()
                 );

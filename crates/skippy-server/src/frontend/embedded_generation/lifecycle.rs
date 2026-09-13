@@ -198,7 +198,7 @@ pub(super) fn open_upstream_prediction_return(request: &EmbeddedStageZeroGenerat
             true
         }
         Err(error) => {
-            eprintln!("direct prediction return upstream-opened sink unavailable: {error:#}");
+            tracing::warn!("direct prediction return upstream-opened sink unavailable: {error:#}");
             false
         }
     }

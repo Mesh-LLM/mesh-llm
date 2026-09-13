@@ -328,7 +328,7 @@ impl PersistentStageLanePool {
         let stream = self
             .connect_lane_once(lane_id, connect_timeout, ready_timeout)
             .inspect_err(|error| {
-            eprintln!(
+            tracing::warn!(
                 "openai downstream lane handshake failed: stage_id={} lane_id={lane_id}: {error:#}",
                 self.config.stage_id,
             );
@@ -368,7 +368,7 @@ impl PersistentStageLanePool {
             .ok_or_else(|| anyhow!("embedded stage0 has no downstream"))?;
         let local_addr = stream.local_addr().ok();
         let peer_addr = stream.peer_addr().ok();
-        eprintln!(
+        tracing::debug!(
             "openai downstream lane waiting ready: stage_id={} lane_id={lane_id} local={local_addr:?} peer={peer_addr:?}",
             self.config.stage_id
         );
@@ -376,7 +376,7 @@ impl PersistentStageLanePool {
             .context("send persistent downstream lane client ready hello")?;
         receive_persistent_lane_ready(&mut stream, ready_timeout)?;
         configure_persistent_lane_io_deadlines(&stream)?;
-        eprintln!(
+        tracing::debug!(
             "openai downstream lane received ready: stage_id={} lane_id={lane_id} local={local_addr:?} peer={peer_addr:?}",
             self.config.stage_id
         );
