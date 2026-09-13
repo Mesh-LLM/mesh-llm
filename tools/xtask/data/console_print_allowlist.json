@@ -4425,19 +4425,23 @@
   ],
   "crates/skippy-runtime/tests/runtime_events_native.rs": [
     {
-      "line": 45,
+      "line": 49,
       "macro_name": "println!"
     },
     {
-      "line": 52,
+      "line": 59,
       "macro_name": "println!"
     },
     {
-      "line": 66,
+      "line": 76,
       "macro_name": "println!"
     },
     {
-      "line": 73,
+      "line": 80,
+      "macro_name": "println!"
+    },
+    {
+      "line": 88,
       "macro_name": "println!"
     }
   ],
