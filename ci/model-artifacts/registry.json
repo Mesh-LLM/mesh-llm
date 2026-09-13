@@ -85,6 +85,8 @@
         "skippy-ci-smoke"
       ],
       "cadences": [
+        "pull-request",
+        "main",
         "llama-bump",
         "manual-full",
         "nightly",

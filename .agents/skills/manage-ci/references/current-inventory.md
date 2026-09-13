@@ -571,6 +571,8 @@ fail-open policy.
   integrity, family capability tags, and allowed suite/cadence membership.
   `scripts/generate-test-model-manifests.py` owns the family battery and
   suite-specific projections; CI contract tests reject stale projections.
+  `family-qwen3-dense` permits PR and main use by the Linux CPU native
+  runtime-event gate. Its family-certification cadences remain unchanged.
 - `restore-test-model`: the single implementation of model resolve, cache,
   download, and verify. Resolves generated suite manifests, uses exact
   digest-bearing cache keys, and stream-verifies size and SHA-256 before use.
