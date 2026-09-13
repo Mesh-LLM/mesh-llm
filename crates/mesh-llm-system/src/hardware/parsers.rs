@@ -402,6 +402,41 @@ pub fn parse_windows_video_controller_json(output: &str) -> Vec<(String, u64)> {
     }
 }
 
+/// Parse the display-class registry dump -> `(driver_desc, memory_size_bytes)`.
+///
+/// `Win32_VideoController.AdapterRAM` is a 32-bit field, so any adapter with
+/// more than 4 GB reports the same saturated 4293918720 there. The display
+/// class key carries the real figure as a 64-bit
+/// `HardwareInformation.qwMemorySize`, which is what this reads.
+#[cfg(any(target_os = "windows", test))]
+pub fn parse_windows_adapter_memory_json(output: &str) -> Vec<(String, u64)> {
+    fn parse_u64(value: &Value) -> Option<u64> {
+        match value {
+            Value::Number(n) => n.as_u64(),
+            Value::String(s) => s.trim().parse::<u64>().ok(),
+            _ => None,
+        }
+    }
+
+    fn parse_entry(value: &Value) -> Option<(String, u64)> {
+        let name = value.get("Name")?.as_str()?.trim();
+        if name.is_empty() {
+            return None;
+        }
+        Some((name.to_string(), value.get("Bytes").and_then(parse_u64)?))
+    }
+
+    let Ok(value) = serde_json::from_str::<Value>(output) else {
+        return Vec::new();
+    };
+
+    match value {
+        Value::Array(values) => values.iter().filter_map(parse_entry).collect(),
+        Value::Object(_) => parse_entry(&value).into_iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// Parse `TotalPhysicalMemory` output from PowerShell/CIM.
 #[cfg(any(target_os = "windows", test))]
 pub fn parse_windows_total_physical_memory(output: &str) -> Option<u64> {

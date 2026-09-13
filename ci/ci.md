@@ -26,25 +26,35 @@ and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 | `nightly-stability.yml` / `nightly-stability-run.yml` | daily schedule, dispatch / reusable | GitHub-hosted live-endpoint evidence. The general stability and KV tool-loop/prefix-reuse harnesses run independently, upload both evidence sets, and preserve either failure. The reusable workflow accepts no runner label. |
 | `nightly-kv-coverage.yml` | daily schedule, dispatch | Trusted-`main`, read-only, GitHub-hosted expansion of deterministic radix lease/eviction and blob-ownership state machines. Seed/step budgets and the exact source SHA are uploaded; no secrets or privileged runner are used. |
 | `agentic-replay-nightly.yml` | daily schedule, trusted-main dispatch | Opt-in coding-agent replay benchmark on the persistent macOS `micstudio` runner. The fixed `[self-hosted, X64, macOS, family-certify, agentic-replay]` selector is backed by a fail-closed `RUNNER_NAME=micstudio` check; both manual and scheduled execution check out trusted `main`. It resolves exact model and trajectory revisions from the pre-warmed Hugging Face cache, verifies their SHA-256 digests, uploads immutable evidence, publishes cohort-matched history, gates configured regressions, and may open a repair PR without executing pull-request content on the persistent runner. |
-| `llama-upstream-canary.yml` | daily schedule, dispatch | Trusted default-branch llama.cpp bump certification on the self-hosted `family-certify` runner. It never runs as ordinary push or PR CI. A new run supersedes the older sentinel so stale work cannot monopolize the runner. `scripts/plan-family-battery.py` validates the generated `ci/llama-canary/family-certified.json` policy (sourced from `ci/model-artifacts/registry.json`) and every file's exact immutable cache blob identity and byte size before native compilation. Each target/draft artifact must have at least one metadata-bearing GGUF shard; every shard that carries architecture dimensions must match the declared runtime range and activation width, including Qwen4's `hyper_connection.count * embedding_length` boundary. Optional `mmproj_artifact` rows pin a projector GGUF sidecar (exact blob identity, exempt from trunk-dimension checks), and each family that pins one runs an additional multimodal smoke lane after its core lanes: the real-projector + deterministic-image harness in `crates/skippy-server/src/frontend/tests/multimodal.rs` (local monolithic and split stages) via `SKIPPY_MM_*`, reconciled against the plan like every other lane. It emits deterministic bounded matrix shards and records the plan with evidence. The current single-runner workflow consumes one selected-family shard and builds the certification binaries once. Changed pins always run the complete `llama-bump` cohort. Before any lane starts, the battery verifies shard/tensor scans, declared runtime/MTP layer counts, model bytes, disk headroom and certification ports. Native MTP/NextN heads remain part of the single target model; the battery does not reopen the model as a separate draft. Those rows require native draft sidebands in staged single-step and chain correctness, where each proposed token is verified against the target. Every certified profile must retain strict `single-step`, `chain`, and `state-handoff` parity. Filtered correctness stages derive their exact resident tensor names from the native stage graph planner, including GGUFs with non-finite metadata values. Single-step and chain exercise the sole shipping raw-f32 activation wire and any mismatch is a hard failure. Planned families, sweep cuts, and multimodal smokes are reconciled exactly against executed lanes and recorded results. Declared per-model or model-size-derived startup deadlines, complete-certification wall-clock limits and typed lane outcomes are recorded, and immutable plans/model manifests/preflight evidence/certification logs upload even on failure. Manual dispatch can force this certification when the upstream SHA is unchanged. Persistent-runner execution is always a read-only checkout of trusted `main`. Changed pins give one agent the complete developer task: repair or regenerate the queue, address ABI fallout, and iterate through every canonical gate. The agent runs for at most 450 minutes without GitHub credentials. After it exits successfully, the repair job snapshots the candidate as an unreachable local commit and uploads a thin candidate bundle. A separate self-hosted verification job and checkout download that bundle, materialize its commit in a fresh detached worktree, and independently run one ordered `prepare -> build -> certify` pass with a 240-minute budget and new native-build and family-evidence directories. Only the exact passing commit is exported as the certified bundle. A separate success-gated job on a fresh GitHub-hosted runner receives the repair token, validates the one-day bundle artifact, pushes a run-specific branch, and opens a normal exact-head PR as its final external mutation. Agent or verification failures retain logs and create no branch or PR. Successful publication leaves the canary green; changed pins are never pushed directly to `main`. Unchanged scheduled and forced certifications remain read-only and do not invoke the agent. Runner requires `HF_CACHE=/Users/lab/models/huggingface`, verifies its `hub` directory, exports `HF_HOME` and `HF_HUB_CACHE` from that root, and stays offline on the NFS-backed cache (`HF_HUB_OFFLINE=1`; no `flock`, so the runner never downloads). |
+| `llama-upstream-canary.yml` | daily schedule, dispatch | Trusted default-branch llama.cpp bump certification on the self-hosted `family-certify` runner. It never runs as ordinary push or PR CI. Canary runs share a non-cancelling concurrency group, so a scheduled run queues behind active manual or scheduled work instead of discarding the candidate workspace. `scripts/plan-family-battery.py` validates the generated `ci/llama-canary/family-certified.json` policy (sourced from `ci/model-artifacts/registry.json`) and every file's exact immutable cache blob identity and byte size before native compilation. Each target/draft artifact must have at least one metadata-bearing GGUF shard; every shard that carries architecture dimensions must match the declared runtime range and activation width, including Qwen4's `hyper_connection.count * embedding_length` boundary. Optional `mmproj_artifact` rows pin a projector GGUF sidecar (exact blob identity, exempt from trunk-dimension checks), and each family that pins one runs an additional multimodal smoke lane after its core lanes: the real-projector + deterministic-image harness in `crates/skippy-server/src/frontend/tests/multimodal.rs` (local monolithic and split stages) via `SKIPPY_MM_*`, reconciled against the plan like every other lane. It emits deterministic bounded matrix shards and records the plan with evidence. The current single-runner workflow consumes one selected-family shard and builds the certification binaries once. Changed pins always run the complete `llama-bump` cohort. Before any lane starts, the battery verifies shard/tensor scans, declared runtime/MTP layer counts, model bytes, disk headroom and certification ports. Native MTP/NextN heads remain part of the single target model; the battery does not reopen the model as a separate draft. Those rows require native draft sidebands in staged single-step and chain correctness, where each proposed token is verified against the target. Every certified profile must retain strict `single-step`, `chain`, and `state-handoff` parity. Filtered correctness stages derive their exact resident tensor names from the native stage graph planner, including GGUFs with non-finite metadata values. Single-step and chain exercise the sole shipping raw-f32 activation wire and any mismatch is a hard failure. Planned families, sweep cuts, and multimodal smokes are reconciled exactly against executed lanes and recorded results. Declared per-model or model-size-derived startup deadlines, complete-certification wall-clock limits and typed lane outcomes are recorded, and immutable plans/model manifests/preflight evidence/certification logs upload even on failure or cancellation. Manual dispatch can force this certification when the upstream SHA is unchanged. Persistent-runner execution is always a read-only checkout of trusted `main`. Changed pins give one agent session the complete developer task: repair or regenerate the queue, address ABI fallout, and iterate through every canonical gate. The shared repair-and-test deadline is 450 minutes and the agent has no GitHub credentials. A zero exit from the coding process only yields control to the trusted wrapper; the wrapper runs the full candidate gates and returns current failure logs to the same session until those gates pass or the deadline expires. Existing certification and parity rows remain immutable. The agent may only correct `resources.estimated_model_bytes`, which the immutable GGUF scan rechecks, and append classification-only parity rows for source files missing from the manifest; those rows cannot add artifact or certification authority. Only a green repair pass is snapshotted as an unreachable local commit and uploaded as a thin candidate bundle. A separate self-hosted verification job and checkout download that bundle, materialize its commit in a fresh detached worktree, and independently run one ordered `prepare -> manifest-policy -> build -> certify` pass with a 240-minute budget and new native-build and family-evidence directories. Only the exact passing commit is exported as the certified bundle. A separate success-gated job on a fresh GitHub-hosted runner receives the repair token, validates the one-day bundle artifact, pushes a run-specific branch, and opens a normal exact-head PR as its final external mutation. Agent or verification failures retain logs and create no branch or PR. Successful publication leaves the canary green; changed pins are never pushed directly to `main`. Unchanged scheduled and forced certifications remain read-only and do not invoke the agent. Runner requires `HF_CACHE=/Users/lab/models/huggingface`, verifies its `hub` directory, exports `HF_HOME` and `HF_HUB_CACHE` from that root, and stays offline on the NFS-backed cache (`HF_HUB_OFFLINE=1`; no `flock`, so the runner never downloads). |
 
 The changed-pin canary wrapper owns the target-pin transition: it writes the
 sole upstream selector, `third_party/llama.cpp/upstream.txt`, before the agent
 starts. The agent cannot change that selector or the harness control files.
-After the agent finishes, its job snapshots the candidate as an unreachable
-commit and uploads a thin bundle. A separate self-hosted verification job and
+The wrapper retains one OpenCode session, runs the ordered candidate gates
+after each response, and returns the exact failure logs to that session while
+the shared deadline remains. A narrow trusted policy permits only scanned
+tensor-byte corrections in the fixed certification roster and additive,
+classification-only rows for newly observed llama.cpp model sources; each new
+row is limited to `llama_model`, `family`, `status`, and optional `notes` or
+`unsupported_reason` metadata, with no artifact selectors, revisions, integrity
+records, execution settings, or model pins. After the
+repair gates pass, the job snapshots the candidate as an unreachable commit and
+uploads a thin bundle. A separate self-hosted verification job and
 checkout materialize that commit in a fresh detached worktree, prepare through
 the checked-in `pinned` selector, verify the prepared-upstream stamp, and execute
-the complete build and certification sequence with new native-build and
-family-evidence directories. The verifier resolves and exports its own Homebrew
+the complete manifest-policy, build, and certification sequence with new
+native-build and family-evidence directories. The verifier resolves and exports its own Homebrew
 LLVM prefix before the generated-family rewriter check because job environment
 files are not shared with the repair job. Only that passing commit is exported
 as the certified bundle. A later job on a fresh GitHub-hosted runner validates
 it, uses an environment-sourced askpass helper so the repair PAT never appears
 in the push URL or process arguments, pushes without force, and opens a ready
 PR as its final external mutation. If either the agent or trusted verification
-fails, only the distinct
-`llama-canary-changed-pin-*` evidence artifact is retained.
+fails, the distinct `llama-canary-changed-pin-*` evidence artifact is retained.
+Evidence uploads explicitly admit success, failure, or cancellation so an
+operator cancellation still preserves the available repair and verification
+logs without making publication or status-reporting steps resist cancellation.
 
 Scheduled coverage details: an unchanged-pin llama canary uses the bounded
 `nightly` cadence (Qwen3 dense, Falcon-H1, Qwen3Next, and Mamba). Changed pins
@@ -128,6 +138,18 @@ lane calls. Remove it after the updated runner contract is active on protected
 main.
 
 ### Release source and version ownership
+
+If crates.io accepts only a prefix of the stable package chain,
+`resume-crates-release.yml` resumes publication from the existing immutable
+release tag. The operator supplies both the stable tag and its exact peeled
+commit SHA. The workflow runs only from the default branch, verifies those two
+identities against the remote tag and checkout, and uses the trusted
+default-branch `publish-crates.sh` controller against the tagged source. Resume
+mode skips versions that crates.io confirms are already published and falls
+back to Cargo for unknown registry responses. Cargo verification links against
+the checksummed CPU runtime libraries from that same GitHub release, preserving
+isolated binary-crate verification without rebuilding native inputs. The
+workflow does not move or recreate the release tag.
 
 Release efficiency TODOs:
 
@@ -506,6 +528,16 @@ then composes exact producer bytes without compiling or substituting inputs.
 Smoke and SDK consumers download those artifacts and never rebuild a missing
 producer. PR and smoke artifacts retain for one day; caches are acceleration,
 not correctness contracts.
+
+Linux CPU composition readiness runs the composed host's `runtime list
+--available --json` through the shared SDK runtime reader
+(`ci-prepare-native-runtime.sh`) with fallback building disabled. This protects
+that CLI/consumer boundary without selecting full SDK suites for every runtime
+change or requiring accelerator drivers on composition workers.
+`test_ci_sdk_json_consumer.py` checks the original #1675 changed paths select
+this product and its producers, and that invalid CLI JSON blocks publication.
+The protected workflow checks out candidate source before invoking the existing
+composition action; no catalog or workflow-definition change is needed.
 
 Non-Windows native runtime artifacts include the checksum-bound
 `skippy-model-package` tool under `tools/`. Split-serving smoke consumers use

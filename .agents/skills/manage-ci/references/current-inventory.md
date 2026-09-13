@@ -22,6 +22,7 @@ Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 | `ci.yml` | `workflow_call` only | Temporary inert shim for the former main ingress filename; pending protected-main runner-contract update; no push trigger or dispatch |
 | `ci-control.yml` (`CI · Manual Full`) | dispatch on default branch | Explicit operator-only full plan, bounded lane dispatch and correlated diagnostic checks |
 | `release.yml` | dispatch on the default branch | Canonical version synchronization, release-only signing, assets, publication, post-publish release-notes regrouping, and a preflighted downstream `mesh-packaging` dispatch |
+| `resume-crates-release.yml` (`Release · Resume crates.io`) | dispatch on the default branch | Exact-tag, exact-SHA recovery for a partially published stable crates.io chain; uses the immutable release source and the trusted default-branch publisher script |
 | `website-pages.yml` | main website paths, dispatch | Public website deployment |
 | `pr_cleanup.yml` | PR close, dispatch | Positively matched cleanup only |
 | `pr_auto_assign.yml` | PR lifecycle | Metadata only |
@@ -39,8 +40,9 @@ for a much larger deterministic radix/blob ownership corpus. It uses the
 pinned `public cpu` image, has no secrets, records exact seed/step budgets and
 source SHA, and uploads the reproducible failure log.
 `llama-upstream-canary.yml` runs only on its daily schedule or an explicit
-manual dispatch; it is not ordinary push or PR CI. One fixed concurrency group
-lets a new canary supersede stale in-progress work. It executes trusted
+manual dispatch; it is not ordinary push or PR CI. One fixed non-cancelling
+concurrency group queues each run behind active work on the persistent runner.
+It executes trusted
 default-branch content only on the persistent self-hosted `family-certify`
 runner group (tools come from the runner image; no GitHub Actions model
 caching). Before native compilation,
@@ -88,20 +90,29 @@ evidence, and logs are uploaded for 14 days even when the battery fails. Stage
 readiness uses a declared per-model override or a model-size-derived deadline,
 each complete certification has
 a portable process-group wall-clock limit, and the workflow's outer battery
-ceiling is 12 hours. For a changed pin, one non-interactive `opencode` agent
+ceiling is 12 hours. For a changed pin, one non-interactive `opencode` session
 (`CANARY_AGENT_MODEL`, default `zai-coding-plan/glm-5.3-flash`, overridable
 through `LLAMA_CANARY_AGENT_MODEL`) receives the complete developer task:
 repair or regenerate the patch queue, address ABI fallout, and iterate through
-the canonical prepare, build, smoke, live-matrix, and family-certification
-commands. The agent has a 450-minute ceiling and no GitHub credentials. It may
-leave only uncommitted candidate changes and cannot alter `.github/`,
-`.agents/`, `scripts/`, `ci/ci.md`, or its runbook. Those paths form the fixed
-verification boundary.
+the canonical prepare, manifest-policy, build, smoke, live-matrix, and
+family-certification commands. The agent and trusted candidate checks share a
+450-minute deadline and the agent has no GitHub credentials. Ending one coding
+response is not success: the wrapper runs the candidate gates and returns their
+logs to the same OpenCode session until they pass or the deadline expires. The
+agent may leave only uncommitted candidate changes and cannot alter `.github/`,
+`.agents/`, `scripts/`, `ci/ci.md`, or its runbook. Existing certification and
+parity rows remain immutable. The only manifest edits admitted by the trusted
+policy are scanned `resources.estimated_model_bytes` corrections and appended
+classification-only rows for source files absent from the parity manifest;
+new rows contain only `llama_model`, `family`, `status`, and optional `notes` or
+`unsupported_reason` classification metadata and cannot add artifact selectors,
+source revisions, integrity records, execution settings, model pins, or other
+artifact authority. Those controls form the fixed verification boundary.
 
 The repair job snapshots the agent result as an unreachable commit and uploads
 a thin candidate bundle. A separate self-hosted verification job and checkout
 download that bundle, materialize its commit in a fresh detached worktree, and
-run one ordered `prepare -> build -> certify` pass with a 240-minute budget. The
+run one ordered `prepare -> manifest-policy -> build -> certify` pass with a 240-minute budget. The
 verification job independently resolves the installed Homebrew LLVM prefix and
 exports `SKIPPY_REWRITER_LLVM_PREFIX` before invoking the generated-family
 rewriter check because `GITHUB_ENV` state does not cross job boundaries. The
@@ -116,7 +127,10 @@ pushes the unique
 askpass helper, and opens a normal PR bound to that exact commit. That publisher
 is outside the cancellable self-hosted runner concurrency group, and PR
 creation is its final external mutation. Any agent or verification failure
-uploads evidence and publishes no branch or PR. A green
+publishes no branch or PR. Repair, verification, and unchanged-pin family
+evidence uploads explicitly admit success, failure, or cancellation so
+available logs survive operator cancellation while publication and reporting
+steps remain cancellation-sensitive. A green
 publication leaves the canary green; changed pins are never pushed directly to
 `main`. Changed-pin evidence uses its own `llama-canary-changed-pin-*` artifact
 namespace. A GitHub-hosted metadata-only job with Actions-read and Issues-write
@@ -548,6 +562,11 @@ fail-open policy.
   a reliable import-library path for the tool.
 - `prepare-static-abi-input`: portable static ABI archive.
 - `compose-product-input`: exact host/runtime verification and composition.
+  Linux CPU readiness also feeds the composed host's real `runtime list
+  --available --json` output through `ci-prepare-native-runtime.sh`, the shared
+  SDK reader, with fallback building disabled. This covers CLI JSON changes
+  even when full SDK rows are unselected; accelerator compatibility is not
+  required on driverless composition workers.
 - `ci/model-artifacts/registry.json`: canonical immutable model identities,
   integrity, family capability tags, and allowed suite/cadence membership.
   `scripts/generate-test-model-manifests.py` owns the family battery and

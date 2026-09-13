@@ -27,7 +27,9 @@ jobs:
   latest-upstream:
     concurrency:
       group: llama-upstream-canary-runner
-      cancel-in-progress: true
+      # A scheduled run queues behind an active manual repair instead of
+      # discarding hours of agent and native-build work on the persistent runner.
+      cancel-in-progress: false
     runs-on: [self-hosted, family-certify]
     timeout-minutes: 780
     outputs:
@@ -185,7 +187,7 @@ jobs:
           retention-days: 1
 
       - name: Upload changed-pin canary evidence
-        if: ${{ !cancelled() && steps.sha.outputs.changed == 'true' }}
+        if: ${{ steps.sha.outputs.changed == 'true' && (success() || failure() || cancelled()) }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: llama-canary-changed-pin-${{ github.run_id }}-${{ github.run_attempt }}
@@ -330,7 +332,7 @@ jobs:
         run: scripts/skippy-family-battery.sh --skip-build --plan "${{ steps.family_plan.outputs.plan_path }}"
 
       - name: Upload supported-families battery evidence
-        if: ${{ !cancelled() && steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' }}
+        if: ${{ steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' && (success() || failure() || cancelled()) }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: llama-family-battery-${{ github.run_id }}-${{ github.run_attempt }}
@@ -411,7 +413,7 @@ jobs:
     if: ${{ needs.latest-upstream.outputs.candidate_ready == 'true' }}
     concurrency:
       group: llama-upstream-canary-runner
-      cancel-in-progress: true
+      cancel-in-progress: false
     runs-on: [self-hosted, family-certify]
     timeout-minutes: 270
     outputs:
@@ -485,7 +487,7 @@ jobs:
           retention-days: 1
 
       - name: Upload changed-pin verification evidence
-        if: ${{ !cancelled() }}
+        if: ${{ success() || failure() || cancelled() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: llama-canary-verification-${{ github.run_id }}-${{ github.run_attempt }}

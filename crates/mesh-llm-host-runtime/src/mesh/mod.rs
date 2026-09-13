@@ -76,6 +76,7 @@ pub(crate) fn elapsed_ms_u64(duration: std::time::Duration) -> u64 {
 }
 
 mod advertisement;
+mod announcements;
 mod artifact_transfer_io;
 mod cache_affinity_gossip;
 mod capacity;
@@ -134,10 +135,10 @@ use stage_transport::*;
 use stun::*;
 
 pub(crate) use advertisement::AdvertisedCandidate;
+pub use announcements::backfill_legacy_descriptors;
 pub use capacity::AdvertisedMemory;
 pub use connections::{QuicBindSelection, RelayConfig, RelayPolicy};
 pub(crate) use connectivity::MeshConnectivitySnapshot;
-pub use gossip::backfill_legacy_descriptors;
 #[expect(
     unused_imports,
     reason = "public compatibility re-export for existing mesh identity callers"
@@ -187,7 +188,7 @@ pub use stage_transport::{
 pub(crate) use stage_transport_bridge::{StageTransportBridge, StageTransportBridgeLabel};
 
 #[cfg(test)]
-use gossip::{apply_transitive_ann, peer_meaningfully_changed};
+use announcements::{apply_transitive_ann, peer_meaningfully_changed};
 #[cfg(test)]
 use heartbeat::heartbeat_failure_policy_for_peer;
 pub(crate) use heartbeat::resolve_peer_down;
