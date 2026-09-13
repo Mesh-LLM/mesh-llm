@@ -25,14 +25,25 @@ use tokio::sync::{mpsc, oneshot};
 
 struct HomeEnvGuard {
     original_home: Option<std::ffi::OsString>,
+    original_test_home: Option<std::ffi::OsString>,
 }
 
 impl HomeEnvGuard {
     fn set(home: &std::path::Path) -> Self {
         let original_home = std::env::var_os("HOME");
-        // SAFETY: callers use `#[serial]`, and Drop restores the previous value.
-        unsafe { std::env::set_var("HOME", home) };
-        Self { original_home }
+        let original_test_home = std::env::var_os("MESH_LLM_TEST_HOME");
+        // SAFETY: callers use `#[serial]`, and Drop restores the previous values.
+        unsafe {
+            std::env::set_var("HOME", home);
+            // SAFETY: callers use `#[serial]`, and Drop restores the previous values.
+            // `dirs::home_dir()` ignores HOME on Windows, so the identity paths would
+            // resolve to the real home without this.
+            std::env::set_var("MESH_LLM_TEST_HOME", home);
+        };
+        Self {
+            original_home,
+            original_test_home,
+        }
     }
 }
 
@@ -43,6 +54,12 @@ impl Drop for HomeEnvGuard {
             Some(home) => unsafe { std::env::set_var("HOME", home) },
             // SAFETY: callers use `#[serial]`, and HOME was originally unset.
             None => unsafe { std::env::remove_var("HOME") },
+        }
+        match &self.original_test_home {
+            // SAFETY: callers use `#[serial]`, and this restores the saved value.
+            Some(home) => unsafe { std::env::set_var("MESH_LLM_TEST_HOME", home) },
+            // SAFETY: callers use `#[serial]`, and the variable was originally unset.
+            None => unsafe { std::env::remove_var("MESH_LLM_TEST_HOME") },
         }
     }
 }
