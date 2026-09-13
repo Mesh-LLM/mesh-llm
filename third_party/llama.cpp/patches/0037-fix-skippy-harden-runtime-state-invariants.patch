@@ -1,6 +1,6 @@
-From 2912e9ecd5eeaeb9eece5551a40d423dee07396e Mon Sep 17 00:00:00 2001
+From ecbdfd2b11f24391633e4bc5a85bd2306897bdeb Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
-Date: Mon, 14 Sep 2026 08:08:23 +1000
+Date: Mon, 14 Sep 2026 08:55:41 +1000
 Subject: [PATCH] fix(skippy): harden runtime state invariants
 
 ---
@@ -11,11 +11,11 @@ Subject: [PATCH] fix(skippy): harden runtime state invariants
  src/skippy/events.cpp                         | 19 +++++-
  src/skippy/execution-batch.cpp                | 51 ++++++++++++--
  src/skippy/model_package.cpp                  | 23 +++++++
- src/skippy/session.cpp                        | 24 ++++---
+ src/skippy/session.cpp                        | 18 +++--
  src/skippy/state.cpp                          | 10 ++-
  .../tests/renamed_multishard_planning.cpp     | 10 +++
  src/skippy/tests/runtime_events.cpp           | 36 ++++++++++
- 11 files changed, 230 insertions(+), 35 deletions(-)
+ 11 files changed, 226 insertions(+), 33 deletions(-)
 
 diff --git a/include/skippy/events.h b/include/skippy/events.h
 index a99d7307a..2e0aa446f 100644
@@ -446,7 +446,7 @@ index 6df18689e..5c14f9599 100644
  
      std::vector<skippy_source_tensor> selected;
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
-index e3b8b5716..ab44c1265 100644
+index e3b8b5716..27e6614ea 100644
 --- a/src/skippy/session.cpp
 +++ b/src/skippy/session.cpp
 @@ -162,19 +162,23 @@ enum skippy_status skippy_session_create(
@@ -480,21 +480,6 @@ index e3b8b5716..ab44c1265 100644
      return skippy_success(out_error);
  }
  
-@@ -310,10 +314,12 @@ enum skippy_status skippy_session_configure_chat_sampling(
-         skippy_refresh_backend_sampling(session, sampling);
-     } catch (const std::exception & e) {
-         skippy_clear_chat_sampling(session);
--        return skippy_success(out_error);
-+        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, e.what());
-+        return SKIPPY_STATUS_RUNTIME_ERROR;
-     } catch (...) {
-         skippy_clear_chat_sampling(session);
--        return skippy_success(out_error);
-+        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "unexpected failure while configuring chat sampling");
-+        return SKIPPY_STATUS_RUNTIME_ERROR;
-     }
-     return skippy_success(out_error);
- }
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
 index 620ee3578..8e91d5086 100644
 --- a/src/skippy/state.cpp
