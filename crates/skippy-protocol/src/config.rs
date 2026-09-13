@@ -339,6 +339,10 @@ pub struct StageKvCacheConfig {
     pub max_entries: usize,
     #[serde(default)]
     pub max_bytes: u64,
+    /// Hard byte budget for the opt-in host-RAM L2 exact-state tier.
+    /// Zero keeps L2 disabled.
+    #[serde(default)]
+    pub l2_max_bytes: u64,
     #[serde(default = "default_kv_cache_min_tokens")]
     pub min_tokens: u64,
     #[serde(default = "default_kv_cache_shared_stride_tokens")]

@@ -54,6 +54,7 @@ impl FamilyPolicy {
             payload: StageKvCachePayload::Auto,
             max_entries: bounded_entries,
             max_bytes,
+            l2_max_bytes: 0,
             min_tokens,
             shared_prefix_stride_tokens: 128,
             shared_prefix_record_limit: derive_shared_prefix_record_limit(bounded_entries),

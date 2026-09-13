@@ -74,6 +74,7 @@ pub(crate) struct ResolvedModelFitConfig {
     pub(crate) cache_type_v: String,
     pub(crate) kv_cache_policy: String,
     pub(crate) prefix_cache: ResolvedStageKvCache,
+    pub(crate) l2_max_bytes: u64,
     pub(crate) kv_offload: String,
     /// Parsed `kv_offload` for the native tri-state control. `None` covers
     /// both "auto" and any value that did not parse to a bool.

@@ -342,7 +342,7 @@ fn model_fit_settings(
         ),
         basic_setting(&format!("{prefix}.kv_offload"), bool_or_auto_schema()),
         basic_setting(&format!("{prefix}.kv_unified"), bool_or_auto_schema()),
-        unwired_setting(
+        basic_setting(
             &format!("{prefix}.cache_ram_mib"),
             ConfigValueSchema::Integer,
         ),

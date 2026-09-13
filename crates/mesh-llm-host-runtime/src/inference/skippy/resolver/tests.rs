@@ -2033,6 +2033,7 @@ fn staged_controls_propagate_into_stage_config_and_embedded_openai_args() {
         r#"
 [defaults.model_fit]
 prompt_cache = true
+cache_ram_mib = 64
 
 [defaults.model_fit.prefix_cache]
 enabled = true
@@ -2080,6 +2081,7 @@ draft_max_tokens = 8
     assert_eq!(kv_cache.shared_prefix_stride_tokens, 48);
     assert_eq!(kv_cache.shared_prefix_record_limit, 3);
     assert_eq!(kv_cache.payload, StageKvCachePayload::ResidentKv);
+    assert_eq!(kv_cache.l2_max_bytes, 64 * 1024 * 1024);
 
     let openai = resolved
         .to_embedded_openai_args(4096, true)

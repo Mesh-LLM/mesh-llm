@@ -143,7 +143,7 @@ for the activity policy and privacy boundary.
 | `model_fit.kv_cache_policy` | enum | `balanced` (default), `auto`, `quality`, `saver`; expands into cache dtypes | both | model reload | wired | none |
 | `model_fit.kv_offload` | bool-or-`auto` | `auto` | both | model reload | wired | none |
 | `model_fit.kv_unified` | bool-or-`auto` | `auto` | both | model reload | wired (recurrent/hybrid architectures still force this true natively) | none |
-| `model_fit.cache_ram_mib` | integer | unset (no cap) | both | model reload | unwired (any positive value fails at model load) | none |
+| `model_fit.cache_ram_mib` | integer | `0`/unset = host-RAM L2 disabled | both | model reload | wired; requires prefix caching and active L3 | none |
 | `model_fit.cache_idle_slots` | integer | unset uses the runtime lane count; `0` drops every reset lane, positive values cap retained idle sessions | both | model reload | wired | none |
 | `model_fit.prompt_cache` | bool-or-`auto` | `auto` | both | model reload | wired | none |
 | `model_fit.prefix_cache.enabled` | boolean | unset uses family defaults; `false` disables | both | model reload | wired | none |

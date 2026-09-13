@@ -68,6 +68,27 @@ limit. Both limits are reported on
 `stage.openai_generation_summary` as `skippy.exact_cache.max_bytes` and
 `skippy.exact_cache.hard_max_bytes`.
 
+## Host-RAM L2 Cache
+
+Set `model_fit.cache_ram_mib` to a positive MiB value to enable the bounded
+host-RAM exact-state tier for that model. The default value, `0`, leaves L2
+disabled. Prefix caching and the node-local L3 cache must also be enabled.
+
+Exact-state lookup proceeds from the in-process radix cache (L1), to host RAM
+(L2), then to the node-local disk cache (L3). L3 remains authoritative: the
+server locates the current durable manifest before serving an L2 mirror and
+requires the mirror digest to match it. The cache worker promotes an L3 fill
+on its second hit within ten minutes, or on the first hit for prefixes of at
+least 4,096 tokens. Payloads larger than 64 MiB stay out of L2. A verified L2
+hit restores the request immediately and queues the same payload to rewarm L1.
+Rewarm records do not rewrite an existing L3 entry. Unloading the stage drops
+its L2 tier.
+
+`stage.openai_generation_summary` reports `skippy.kv.l2.enabled`, budget and
+resident byte counts, logical bytes, entries, segments, hits, misses, inserts,
+evictions, and admission refusals. Exact-hit telemetry identifies the restore
+source as `l2` and includes fill time and whether the L1 rewarm was queued.
+
 ## mesh-llm Defaults
 
 mesh-llm wires Skippy prefix cache through family policy. For supported model

@@ -41,7 +41,7 @@ impl StageOpenAiBackend {
                     "skippy.exact_cache.source".to_string(),
                     json!(restored.source),
                 );
-                if restored.source == "l3" {
+                if restored.source != "radix" {
                     attrs.insert(
                         "skippy.exact_cache.fill_ms".to_string(),
                         json!(restored.fill_ms),

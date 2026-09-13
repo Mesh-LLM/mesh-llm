@@ -4251,19 +4251,19 @@
   ],
   "crates/skippy-prompt/src/prompt_cli/stage_config.rs": [
     {
-      "line": 358,
+      "line": 360,
       "macro_name": "eprintln!"
     },
     {
-      "line": 398,
+      "line": 400,
       "macro_name": "eprintln!"
     },
     {
-      "line": 464,
+      "line": 466,
       "macro_name": "eprintln!"
     },
     {
-      "line": 478,
+      "line": 480,
       "macro_name": "eprint!"
     }
   ],

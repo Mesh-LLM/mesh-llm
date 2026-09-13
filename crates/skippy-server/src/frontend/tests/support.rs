@@ -47,6 +47,7 @@ pub(super) fn prefix_cache_test_config() -> StageConfig {
             payload: StageKvCachePayload::ResidentKv,
             max_entries: 8,
             max_bytes: 0,
+            l2_max_bytes: 0,
             min_tokens: 256,
             shared_prefix_stride_tokens: 128,
             shared_prefix_record_limit: 2,

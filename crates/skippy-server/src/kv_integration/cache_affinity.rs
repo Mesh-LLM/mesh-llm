@@ -109,6 +109,7 @@ mod tests {
                 payload: StageKvCachePayload::ResidentKv,
                 max_entries: 8,
                 max_bytes: 0,
+                l2_max_bytes: 0,
                 min_tokens: 64,
                 shared_prefix_stride_tokens: 32,
                 shared_prefix_record_limit: 2,

@@ -68,9 +68,6 @@ pub(super) fn reject_unsupported_model_fit_controls(
     let Some(config) = config else {
         return Ok(());
     };
-    if config.cache_ram_mib.unwrap_or(0) > 0 {
-        bail!("skippy model_fit.cache_ram_mib is not supported by the pinned runtime");
-    }
     if config.keep_tokens.unwrap_or(0) > 0 {
         bail!("skippy model_fit.keep_tokens is not supported by the pinned runtime");
     }

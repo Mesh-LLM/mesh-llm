@@ -468,7 +468,7 @@ kv_cache_policy  = "balanced"    # macro preset: auto quality balanced saver
                                  # explicit cache_type_k/v always wins over preset
 kv_offload       = "auto"        # bool or "auto" — KV residency / offload policy
 kv_unified       = "auto"        # bool or "auto" — unified KV layout (schema-reserved)
-cache_ram_mib    = 0             # byte cap for KV cache in MiB; 0 = no cap (schema-reserved)
+cache_ram_mib    = 0             # host-RAM L2 budget in MiB; 0 = disabled; requires L3
 cache_idle_slots = 0             # idle slot retention count (schema-reserved)
 prompt_cache     = "auto"        # bool or "auto" — reuse previous prompt KV
 swa_full         = false         # sliding-window attention (model-family specific)

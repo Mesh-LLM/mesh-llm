@@ -37,9 +37,8 @@
 //!   `CacheBytes` is a block-backed view over the shared segment storages,
 //!   contiguous in the single-segment case.
 //!
-//! This first slice is a standalone store with no wiring into the request
-//! path; the benchmark harness drives it directly. L2 promotion/demotion
-//! policy and server integration land in a later slice.
+//! `skippy-server` wires this tier as a bounded mirror of repeated or
+//! high-value L3 fills. An L2 hit rewarms L1.
 use std::{
     collections::HashMap,
     ops::Range,
@@ -49,10 +48,14 @@ use std::{
     },
 };
 
-use crate::payload::{CacheBytes, ExactStatePayloadKind};
-use crate::{HandoffManifest, segment_digest};
 #[cfg(test)]
-use crate::{HandoffSegmentRef, MANIFEST_VERSION, PayloadCodec, SegmentCodecIdentity};
+use crate::PayloadCodec;
+use crate::payload::{CacheBytes, ExactStatePayload, ExactStatePayloadKind};
+use crate::{
+    HandoffManifest, HandoffSegmentRef, MANIFEST_VERSION, SegmentCodecIdentity, segment_digest,
+};
+
+const DIRECT_SEGMENT_BYTES: usize = 1024 * 1024;
 
 /// Where an entry came from, for telemetry and promotion policy later.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +120,9 @@ pub struct L2Layout {
     pub total_bytes: u64,
     pub kv_bytes: u64,
     pub recurrent_bytes: u64,
+    /// Opaque serialized runtime KV-page descriptor. The serving layer
+    /// validates this before importing the payload.
+    pub kv_desc_json: Option<String>,
     /// `(segment digest, byte range within the assembled wire)` per
     /// manifest segment, in manifest order. Ranges concatenate to
     /// `0..total_bytes` exactly as the L3 manifest tiles them.
@@ -148,6 +154,10 @@ impl ExactStatePayloadMirror {
             | Self::RecurrentOnly { layout }
             | Self::KvRecurrent { layout } => layout.total_bytes,
         }
+    }
+
+    pub fn kv_desc_json(&self) -> Option<&str> {
+        self.layout().kv_desc_json.as_deref()
     }
 
     /// Build a mirror from a captured L3 manifest. Callers must verify the
@@ -199,6 +209,7 @@ impl ExactStatePayloadMirror {
             total_bytes: manifest.total_bytes,
             kv_bytes: manifest.kv_bytes,
             recurrent_bytes: manifest.recurrent_bytes,
+            kv_desc_json: manifest.kv_desc_json.clone(),
             segments,
         };
         Ok(match kind {
@@ -574,6 +585,33 @@ fn validate_layout<'a>(
     }
     Ok(validated)
 }
+
+fn payload_wire(payload: &ExactStatePayload) -> Result<(Vec<u8>, u64, u64), L2InsertRefusal> {
+    let malformed = |error: anyhow::Error| L2InsertRefusal::MalformedManifest(error.to_string());
+    match payload {
+        ExactStatePayload::FullState { bytes } => {
+            let wire = bytes.as_cow().map_err(malformed)?.into_owned();
+            let kv_bytes = wire.len() as u64;
+            Ok((wire, kv_bytes, 0))
+        }
+        ExactStatePayload::RecurrentOnly { recurrent } => {
+            let wire = recurrent.as_cow().map_err(malformed)?.into_owned();
+            let recurrent_bytes = wire.len() as u64;
+            Ok((wire, 0, recurrent_bytes))
+        }
+        ExactStatePayload::KvRecurrent { kv, recurrent } => {
+            let kv = kv.as_cow().map_err(malformed)?;
+            let recurrent = recurrent.as_cow().map_err(malformed)?;
+            let kv_bytes = kv.len() as u64;
+            let recurrent_bytes = recurrent.len() as u64;
+            let mut wire = Vec::with_capacity(kv.len().saturating_add(recurrent.len()));
+            wire.extend_from_slice(kv.as_ref());
+            wire.extend_from_slice(recurrent.as_ref());
+            Ok((wire, kv_bytes, recurrent_bytes))
+        }
+    }
+}
+
 impl L2Tier {
     pub fn new(budget_bytes: u64) -> Self {
         Self {
@@ -585,6 +623,64 @@ impl L2Tier {
 
     pub fn budget_bytes(&self) -> u64 {
         self.budget_bytes
+    }
+
+    /// Admit an exact-state payload restored from the authoritative L3 tier.
+    ///
+    /// The payload is cut into stable one-MiB content chunks. This preserves
+    /// immutable sharing between related entries while keeping all hashing
+    /// and copying on the existing cache worker rather than the request path.
+    pub fn admit_payload(
+        &self,
+        cache_key: String,
+        token_count: u64,
+        expected_payload_digest: &str,
+        payload: &ExactStatePayload,
+        kv_desc_json: Option<String>,
+        origin: L2Origin,
+    ) -> Result<Vec<L2Eviction>, L2InsertRefusal> {
+        let (wire, kv_bytes, recurrent_bytes) = payload_wire(payload)?;
+        let payload_digest = segment_digest(&wire);
+        if payload_digest != expected_payload_digest {
+            self.stats.admission_rejects.fetch_add(1, Ordering::Relaxed);
+            return Err(L2InsertRefusal::DigestMismatch {
+                expected: expected_payload_digest.to_string(),
+                actual: payload_digest,
+            });
+        }
+        let mut manifest = HandoffManifest::new(String::new(), payload.kind().to_string());
+        manifest.version = MANIFEST_VERSION;
+        manifest.total_bytes = wire.len() as u64;
+        manifest.payload_digest = expected_payload_digest.to_string();
+        manifest.kv_bytes = kv_bytes;
+        manifest.recurrent_bytes = recurrent_bytes;
+        manifest.kv_desc_json = kv_desc_json;
+        manifest.token_count = token_count;
+        manifest.segments = wire
+            .chunks(DIRECT_SEGMENT_BYTES)
+            .enumerate()
+            .scan(0u64, |offset, (index, bytes)| {
+                let start = *offset;
+                *offset = offset.saturating_add(bytes.len() as u64);
+                Some(HandoffSegmentRef {
+                    index: index as u32,
+                    offset: start,
+                    bytes: bytes.len() as u64,
+                    digest: segment_digest(bytes),
+                    codec_identity: Some(SegmentCodecIdentity::raw(bytes.len() as u64)),
+                    meta_json: None,
+                })
+            })
+            .collect();
+        let mirror = ExactStatePayloadMirror::from_manifest(&manifest)?;
+        self.admit(
+            cache_key,
+            token_count,
+            expected_payload_digest.to_string(),
+            &wire,
+            mirror,
+            origin,
+        )
     }
 
     /// Admit an assembled entry.
@@ -980,6 +1076,62 @@ impl L2Tier {
         bytes
     }
 
+    /// Remove every entry that mirrors one durable payload digest.
+    pub fn remove_by_digest(&self, payload_digest: &str) -> Vec<L2Eviction> {
+        let mut inner = self.inner.lock().expect("L2 map lock poisoned");
+        let keys = inner
+            .map
+            .iter()
+            .filter(|(_, entry)| entry.payload_digest == payload_digest)
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        let mut evictions = Vec::with_capacity(keys.len());
+        for key in keys {
+            let Some(removed) = inner.map.remove(&key) else {
+                continue;
+            };
+            let mut retained = 0u64;
+            for digest in removed.payload.segment_digests() {
+                if inner
+                    .map
+                    .values()
+                    .any(|other| other.payload.segment_digests().contains(&digest))
+                {
+                    retained = retained.saturating_add(
+                        inner
+                            .segments
+                            .get(digest)
+                            .map(|handle| handle.bytes.len() as u64)
+                            .unwrap_or(0),
+                    );
+                }
+            }
+            Self::recompute_all_charges(&mut inner);
+            let before = inner.bytes;
+            self.release_entry_segments(&mut inner, &removed, &[]);
+            evictions.push(L2Eviction {
+                cache_key: key,
+                freed_bytes: before.saturating_sub(inner.bytes),
+                retained_bytes: retained,
+            });
+        }
+        evictions
+    }
+
+    /// Evict least-recently-used entries until physical usage is at or below
+    /// `target_bytes`. Targets above the configured budget are clamped.
+    pub fn shrink_to(&self, target_bytes: u64) -> Vec<L2Eviction> {
+        let mut inner = self.inner.lock().expect("L2 map lock poisoned");
+        let mut journal = AdmitJournal::default();
+        self.evict_to_limit(
+            &mut inner,
+            target_bytes.min(self.budget_bytes),
+            "",
+            &[],
+            &mut journal,
+        )
+    }
+
     pub fn len(&self) -> usize {
         self.inner.lock().expect("L2 map lock poisoned").map.len()
     }
@@ -1214,6 +1366,7 @@ mod tests {
                 total_bytes: len,
                 kv_bytes: len,
                 recurrent_bytes: 0,
+                kv_desc_json: None,
                 segments: vec![(segment_digest(w), 0..len)],
             },
         }
@@ -1241,6 +1394,7 @@ mod tests {
                 total_bytes: len,
                 kv_bytes: len,
                 recurrent_bytes: 0,
+                kv_desc_json: None,
                 segments,
             },
         }
@@ -1278,6 +1432,94 @@ mod tests {
         );
         let (bytes, _) = payload.full_state_bytes_timed().expect("full state");
         assert_eq!(bytes.as_ref(), &w[..], "served bytes must equal the wire");
+    }
+
+    #[test]
+    fn admit_payload_round_trips_composite_state_and_descriptor() {
+        let tier = L2Tier::new(1 << 20);
+        let k = key("ns", &[1, 2, 3]);
+        let kv = vec![1, 2, 3, 4];
+        let recurrent = vec![5, 6, 7];
+        let descriptor = r#"{"token_start":0,"token_count":3}"#.to_string();
+        let expected_digest = segment_digest(&[kv.as_slice(), recurrent.as_slice()].concat());
+
+        tier.admit_payload(
+            k.clone(),
+            3,
+            &expected_digest,
+            &ExactStatePayload::kv_recurrent(kv.clone(), recurrent.clone()),
+            Some(descriptor.clone()),
+            L2Origin::Direct,
+        )
+        .expect("direct payload admission must fit");
+
+        let hit = tier.get(&k).expect("admitted payload must hit");
+        assert_eq!(hit.payload.kv_desc_json(), Some(descriptor.as_str()));
+        let payload = hit.to_payload();
+        assert_eq!(
+            payload
+                .kv_bytes()
+                .expect("read KV bytes")
+                .expect("composite payload has KV")
+                .as_ref(),
+            kv.as_slice()
+        );
+        assert_eq!(
+            payload
+                .recurrent_state_bytes()
+                .expect("read recurrent bytes")
+                .as_ref(),
+            recurrent.as_slice()
+        );
+    }
+
+    #[test]
+    fn admit_payload_round_trips_full_state() {
+        let tier = L2Tier::new(1 << 20);
+        let k = key("ns", &[9]);
+        let bytes = vec![7; 128];
+        let expected_digest = segment_digest(&bytes);
+
+        tier.admit_payload(
+            k.clone(),
+            1,
+            &expected_digest,
+            &ExactStatePayload::full_state(bytes.clone()),
+            None,
+            L2Origin::Direct,
+        )
+        .expect("full-state admission must fit");
+
+        let payload = tier
+            .get(&k)
+            .expect("admitted payload must hit")
+            .to_payload();
+        assert_eq!(
+            payload
+                .full_state_bytes_timed()
+                .expect("read full state")
+                .0
+                .as_ref(),
+            bytes.as_slice()
+        );
+    }
+
+    #[test]
+    fn direct_payload_admission_requires_the_durable_digest() {
+        let tier = L2Tier::new(1 << 20);
+        let payload = ExactStatePayload::full_state(vec![7; 128]);
+        let error = tier
+            .admit_payload(
+                key("ns", &[9]),
+                1,
+                &segment_digest(b"different"),
+                &payload,
+                None,
+                L2Origin::FromL3,
+            )
+            .expect_err("mismatched durable identity must be refused");
+        assert!(matches!(error, L2InsertRefusal::DigestMismatch { .. }));
+        assert!(tier.is_empty());
     }
 
     #[test]
@@ -1857,6 +2099,65 @@ mod tests {
     }
 
     #[test]
+    fn remove_by_digest_drops_only_matching_mirrors() {
+        let tier = L2Tier::new(1 << 20);
+        let (shared, shared_digest) = wire(64, 8);
+        let (other, other_digest) = wire(64, 9);
+        for tokens in [&[1][..], &[2][..]] {
+            tier.admit(
+                key("ns", tokens),
+                1,
+                shared_digest.clone(),
+                &shared,
+                single_segment_mirror(&shared),
+                L2Origin::FromL3,
+            )
+            .expect("shared mirror fits");
+        }
+        let other_key = key("ns", &[3]);
+        tier.admit(
+            other_key.clone(),
+            1,
+            other_digest,
+            &other,
+            single_segment_mirror(&other),
+            L2Origin::FromL3,
+        )
+        .expect("other mirror fits");
+
+        let removed = tier.remove_by_digest(&shared_digest);
+        assert_eq!(removed.len(), 2);
+        assert_eq!(tier.len(), 1);
+        assert!(tier.get(&other_key).is_some());
+    }
+
+    #[test]
+    fn shrink_to_evicts_lru_until_the_target_is_met() {
+        let tier = L2Tier::new(256);
+        let mut keys = Vec::new();
+        for i in 0..3i32 {
+            let (bytes, digest) = wire(64, i as u8 + 1);
+            let cache_key = key("ns", &[i]);
+            tier.admit(
+                cache_key.clone(),
+                1,
+                digest,
+                &bytes,
+                single_segment_mirror(&bytes),
+                L2Origin::FromL3,
+            )
+            .expect("entry fits");
+            keys.push(cache_key);
+        }
+        assert!(tier.get(&keys[0]).is_some(), "first entry becomes hottest");
+
+        let evicted = tier.shrink_to(128);
+        assert_eq!(evicted.len(), 1);
+        assert_eq!(evicted[0].cache_key, keys[1]);
+        assert_eq!(tier.stats().bytes, 128);
+    }
+
+    #[test]
     fn identical_wire_same_key_readmit_keeps_its_own_segments() {
         // The original failure: re-admitting an identical wire at the same
         // key classified the existing pool segments as shared, released the
@@ -1947,6 +2248,7 @@ mod tests {
                 total_bytes: total,
                 kv_bytes: total,
                 recurrent_bytes: 0,
+                kv_desc_json: None,
                 segments: grown_segments,
             },
         };
@@ -2031,6 +2333,7 @@ mod tests {
                 total_bytes: 120,
                 kv_bytes: 120,
                 recurrent_bytes: 0,
+                kv_desc_json: None,
                 segments: vec![(segment_digest(&x), 0..60), (segment_digest(&y), 60..120)],
             },
         };
@@ -2138,6 +2441,7 @@ mod tests {
                 total_bytes: 32,
                 kv_bytes: 32,
                 recurrent_bytes: 0,
+                kv_desc_json: None,
                 segments: vec![
                     (segment_digest(&seg), 0..16),
                     (segment_digest(&seg), 16..32),
@@ -2287,6 +2591,7 @@ mod tests {
                 total_bytes: 64,
                 kv_bytes: 64,
                 recurrent_bytes: 0,
+                kv_desc_json: None,
                 segments: vec![(x_digest.clone(), 0..32), (x_digest, 32..64)],
             },
         };
@@ -2346,6 +2651,7 @@ mod tests {
                 total_bytes: 48,
                 kv_bytes: 48,
                 recurrent_bytes: 0,
+                kv_desc_json: None,
                 segments: vec![(stolen, 0..24), (segment_digest(&w2[24..]), 24..48)],
             },
         };

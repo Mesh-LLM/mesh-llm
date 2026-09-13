@@ -113,6 +113,13 @@
       }
     },
     {
+      "canonical_path": "defaults.model_fit.cache_ram_mib",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
       "canonical_path": "defaults.model_fit.cache_type_k",
       "support": "supported",
       "source": {

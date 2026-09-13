@@ -17,7 +17,7 @@ use super::types::{
     BUILTIN_BATCH, BUILTIN_CTX_SIZE, BUILTIN_PARALLEL, BUILTIN_PREFILL_CHUNK_SIZE,
     BUILTIN_SAFETY_MARGIN_GB, BUILTIN_UBATCH, ResolvedHardwareConfig, ResolvedModelFitConfig,
     ResolvedMultimodalConfig, ResolvedSkippyConfig, ResolvedSkippyExecutionConfig,
-    ResolvedThroughputConfig, SkippyConfigResolveRequest,
+    ResolvedStageKvCache, ResolvedThroughputConfig, SkippyConfigResolveRequest,
 };
 use crate::plugin::{
     BoolOrAuto, ModelConfigDefaults, ModelConfigEntry, ModelFitConfig, ThroughputConfig,
@@ -266,6 +266,16 @@ fn resolve_model_fit_config(
         .or(context.global_model_fit.and_then(|fit| fit.flash_attention))
         .unwrap_or_else(|| effective_flash_attention(&cache_type_v));
     let prefix_cache = resolve_prefix_cache(context.model_fit, context.global_model_fit)?;
+    let l2_max_bytes = pick_owned(
+        context.model_fit.and_then(|fit| fit.cache_ram_mib),
+        context.global_model_fit.and_then(|fit| fit.cache_ram_mib),
+    )
+    .unwrap_or(0)
+    .checked_mul(1024 * 1024)
+    .ok_or_else(|| anyhow::anyhow!("model_fit.cache_ram_mib exceeds the byte range"))?;
+    if l2_max_bytes > 0 && matches!(prefix_cache, ResolvedStageKvCache::Disabled) {
+        anyhow::bail!("model_fit.cache_ram_mib requires prefix caching to be enabled");
+    }
 
     Ok(ResolvedModelFitConfig {
         ctx_size,
@@ -275,6 +285,7 @@ fn resolve_model_fit_config(
         cache_type_v,
         kv_cache_policy: kv.effective_policy,
         prefix_cache,
+        l2_max_bytes,
         kv_offload,
         kv_offload_resolved,
         kv_unified,

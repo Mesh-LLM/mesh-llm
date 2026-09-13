@@ -88,7 +88,7 @@ impl KvStageIntegration {
                 (lookup, entries)
             };
             let Some(lookup) = lookup else {
-                // Radix miss: the durable tier may still hold this prefix.
+                // The durable tiers may still hold this prefix.
                 // Runs inside the restore transaction, so a failed import
                 // rolls the lane back exactly as a radix restore would.
                 if let Some(restored) =
@@ -395,6 +395,8 @@ impl KvStageIntegration {
             namespace: identity.namespace.clone(),
             token_ids: identity.token_ids.clone(),
             l3_fill_claim: None,
+            write_through_l3: true,
+            l2_promotion_digest: None,
         }) {
             ExactStateRecordAdmission::Queued => {
                 // Recording owns the radix/blob locks while it hashes a potentially
@@ -462,6 +464,13 @@ impl KvStageIntegration {
                 // recorded the reason for the status surface.
                 Ok(None) | Err(_) => return Ok(None),
             };
+        // L3 remains the authority for L2: locate and validate the current
+        // manifest identity before a host-RAM mirror may serve the request.
+        if let Some(restored) =
+            self.restore_from_l2(runtime, session_id, identity, &location, lookup_started)?
+        {
+            return Ok(Some(restored));
+        }
         // Segment and manifest digests intentionally deduplicate bytes across
         // numerical states. A fill claim must not: one state's fill cannot
         // warm another state's radix namespace, even when their payload bytes
@@ -511,8 +520,14 @@ impl KvStageIntegration {
         // A load failure (corrupt segment, now quarantined) is a miss, not a
         // request failure. Import failures below do propagate: the transaction
         // rolls the lane back and the caller falls back to cold prefill.
-        let Ok(fill) = l3.load(location) else {
-            return Ok(None);
+        let fill = match l3.load(location) {
+            Ok(fill) => fill,
+            Err(_) => {
+                if let Some(l2) = &self.l2 {
+                    l2.invalidate_digest(&location.manifest_key);
+                }
+                return Ok(None);
+            }
         };
         if fill.payload.byte_len() == 0 {
             return Ok(None);
@@ -607,6 +622,10 @@ impl KvStageIntegration {
         // Re-warm the RAM tier off the request path. A drop is fine: the
         // disk copy stays authoritative. The fill claim rides along so the
         // worker releases it only once the entry is radix-resident.
+        let l2_promotion_digest = self.l2.as_ref().and_then(|l2| {
+            l2.consider_l3_fill(&location.manifest_key, token_count, fill.payload.byte_len())
+                .then(|| location.manifest_key.clone())
+        });
         let admission = self.enqueue_exact_state_record(PendingExactStateRecord {
             page_id: identity.page_id.clone(),
             payload: fill.payload,
@@ -614,6 +633,8 @@ impl KvStageIntegration {
             namespace: identity.namespace.clone(),
             token_ids: identity.token_ids[..token_count as usize].to_vec(),
             l3_fill_claim: Some(l3_fill_claim_key(l3, location)),
+            write_through_l3: false,
+            l2_promotion_digest,
         });
         let rewarm_enqueued = matches!(admission, ExactStateRecordAdmission::Queued);
         Ok(Some(ExactStateRestore {

@@ -27,6 +27,7 @@ mod cache_affinity;
 mod config;
 mod exact_state;
 mod identity;
+mod l2_serving;
 pub mod lifecycle;
 mod model_capability;
 mod output_tokens;
@@ -185,6 +186,9 @@ pub struct KvStageIntegration {
     /// lets one multi-GiB export sit next to another and doubles the RAM the
     /// cache can pin behind a request.
     pub(crate) exact_state_record_queue_bytes: Arc<AtomicU64>,
+    /// Optional bounded host-RAM tier. Qualified L3 fills enter L2; an L2 hit
+    /// promotes back into L1 through the existing worker.
+    pub(crate) l2: Option<l2_serving::StageL2>,
     /// Durable L3 floor under the radix cache: exact-state records write
     /// through to it on the worker, and radix misses fill back from it.
     pub(crate) l3: Option<Arc<skippy_cache::L3Tier>>,
@@ -229,6 +233,12 @@ pub(crate) struct PendingExactStateRecord {
     /// so requests arriving during the asynchronous re-warm prefill normally
     /// instead of duplicating the disk read.
     pub(crate) l3_fill_claim: Option<String>,
+    /// Only freshly exported request state writes through. Tier fills that
+    /// merely re-warm L1 must not rewrite their existing durable entry.
+    pub(crate) write_through_l3: bool,
+    /// Durable manifest digest to mirror into L2 on this worker job. `None`
+    /// leaves the payload out of L2.
+    pub(crate) l2_promotion_digest: Option<String>,
 }
 
 #[derive(Debug)]
@@ -793,6 +803,11 @@ impl KvStageIntegration {
             Err(std::sync::TryLockError::WouldBlock) => None,
         };
         let radix = radix_stats.unwrap_or_default();
+        let l2 = self
+            .l2
+            .as_ref()
+            .map(|tier| tier.stats())
+            .unwrap_or_default();
         let activations = self
             .activations
             .lock()
@@ -951,6 +966,21 @@ impl KvStageIntegration {
                 "skippy.exact_cache.max_entries",
                 json!(self.exact_max_entries),
             ),
+            ("skippy.kv.l2.enabled", json!(self.l2.is_some())),
+            ("skippy.kv.l2.budget_bytes", json!(l2.budget_bytes)),
+            ("skippy.kv.l2.bytes", json!(l2.bytes)),
+            ("skippy.kv.l2.logical_bytes", json!(l2.logical_bytes)),
+            ("skippy.kv.l2.entries", json!(l2.entries)),
+            ("skippy.kv.l2.segments", json!(l2.segments)),
+            ("skippy.kv.l2.hits", json!(l2.hits)),
+            ("skippy.kv.l2.misses", json!(l2.misses)),
+            ("skippy.kv.l2.inserts", json!(l2.inserts)),
+            ("skippy.kv.l2.evictions", json!(l2.evictions)),
+            (
+                "skippy.kv.l2.admission_rejects",
+                json!(l2.admission_rejects),
+            ),
+            ("skippy.kv.l2.refused_bytes", json!(l2.refused_bytes)),
             (
                 "skippy.kv.output_token_entries",
                 json!(output_token_entries),
@@ -1140,6 +1170,8 @@ mod exact_state_record_queue_tests {
             namespace: "test".to_string(),
             token_ids: vec![1],
             l3_fill_claim: None,
+            write_through_l3: true,
+            l2_promotion_digest: None,
         }
     }
 

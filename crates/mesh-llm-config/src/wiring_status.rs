@@ -622,10 +622,10 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
     },
     WiringEntry {
         path: "model_fit.cache_ram_mib",
-        status: WiringStatus::Unwired,
-        owner: "PR2",
-        reason: "Any positive value fails at model load",
-        behavior: WiringBehavior::BailsDownstream,
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
     },
     WiringEntry {
         path: "model_fit.cache_idle_slots",

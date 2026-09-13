@@ -147,6 +147,7 @@ fn recurrent_test_backend(
             payload: StageKvCachePayload::KvRecurrent,
             max_entries: 8,
             max_bytes: 0,
+            l2_max_bytes: 0,
             min_tokens: 1,
             shared_prefix_stride_tokens: 1,
             shared_prefix_record_limit: 0,

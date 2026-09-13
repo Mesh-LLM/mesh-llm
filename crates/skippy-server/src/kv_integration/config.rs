@@ -133,7 +133,16 @@ impl KvStageIntegration {
             return Ok(None);
         }
         let l3_manager = manager()?;
-        let durable_payload = l3_manager.as_ref().map(|_| {
+        if cache_config.l2_max_bytes > 0 && l3_manager.is_none() {
+            let _ = mesh_llm_events::emit_event(OutputEvent::Warning {
+                message: "Skippy L2 host-RAM cache disabled for this model stage".to_string(),
+                context: Some(format!(
+                    "stage_id={} model_id={} reason=L2 requires an active L3 cache",
+                    config.stage_id, config.model_id
+                )),
+            });
+        }
+        let durable_payload = l3_manager.is_some().then(|| {
             if payload == StagePrefixCachePayload::ResidentKv && dense_without_recurrent {
                 // Resident KV stays the in-process fast path. Dense families
                 // export KV pages with an empty recurrent snapshot for L3;
@@ -147,6 +156,17 @@ impl KvStageIntegration {
             .zip(durable_payload)
             .map(|(manager, payload)| l3_tier_for_manager(config, payload, manager))
             .transpose()?;
+        let l2 = l3
+            .as_ref()
+            .filter(|_| cache_config.l2_max_bytes > 0)
+            .and(durable_payload)
+            .map(|payload| {
+                super::l2_serving::StageL2::new(
+                    cache_config.l2_max_bytes,
+                    numerical_model_identity_for_stage(config),
+                    exact_state_identity_for_stage(config, l3_payload_kind(payload)),
+                )
+            });
         // FullState is architecture-neutral: the native runtime serializes the
         // complete session state for both dense and recurrent model families.
         if matches!(model_capability, ModelKvCapability::KnownRecurrent) {
@@ -178,6 +198,7 @@ impl KvStageIntegration {
         let worker_radix = radix.clone();
         let worker_exact_blobs = exact_blobs.clone();
         let worker_l3 = l3.clone();
+        let worker_l2 = l2.clone();
         let inflight_records: Arc<Mutex<BTreeSet<String>>> = l3.as_ref().map_or_else(
             || Arc::new(Mutex::new(BTreeSet::new())),
             |tier| tier.manager().record_claims(tier.state_identity()),
@@ -222,6 +243,7 @@ impl KvStageIntegration {
                                 &worker_exact_blobs,
                                 exact_max_entries,
                                 exact_byte_limits,
+                                worker_l2.as_ref(),
                                 worker_l3.as_deref(),
                                 pending,
                             )
@@ -280,6 +302,7 @@ impl KvStageIntegration {
             split_prefill_tokens: Arc::new(Mutex::new(BTreeMap::new())),
             kv_lifecycle_observer: observer,
             exact_state_record_queue_bytes,
+            l2,
             l3,
             inflight_fills,
             dense_without_recurrent,
@@ -535,6 +558,7 @@ fn store_exact_radix_record(
     blobs: &Mutex<CacheBlobStore>,
     max_entries: usize,
     limits: ExactStateByteLimits,
+    l2: Option<&super::l2_serving::StageL2>,
     l3: Option<&L3Tier>,
     pending: PendingExactStateRecord,
 ) -> Result<()> {
@@ -543,7 +567,9 @@ fn store_exact_radix_record(
     // or failing disk must not fail the in-memory record. The refusal reason
     // lands in the tier's status; one warning per process keeps a full disk
     // from flooding the log.
-    if let Some(l3) = l3 {
+    if pending.write_through_l3
+        && let Some(l3) = l3
+    {
         let kv_desc_json = pending
             .extra
             .kv_desc
@@ -572,6 +598,15 @@ fn store_exact_radix_record(
                 });
             }
         }
+    }
+    if let (Some(l2), Some(payload_digest)) = (l2, pending.l2_promotion_digest.as_deref()) {
+        let _ = l2.promote(
+            &pending.namespace,
+            &pending.token_ids,
+            payload_digest,
+            &pending.payload,
+            &pending.extra,
+        );
     }
     let logical_bytes = pending.payload.byte_len();
     let (payload, _) = pending.payload.dedupe_into(
@@ -785,6 +820,7 @@ fn effective_cache_config(config: &StageConfig) -> Option<StageKvCacheConfig> {
         payload,
         max_entries,
         max_bytes,
+        l2_max_bytes: 0,
         min_tokens,
         shared_prefix_stride_tokens,
         shared_prefix_record_limit,
@@ -833,6 +869,8 @@ mod tests {
             namespace: "model".to_string(),
             token_ids: tokens.to_vec(),
             l3_fill_claim: None,
+            write_through_l3: true,
+            l2_promotion_digest: None,
         }
     }
 
@@ -847,6 +885,7 @@ mod tests {
             1,
             limits(0, 0),
             None,
+            None,
             pending("first", &[1, 2], b"aaaabbbb"),
         )
         .unwrap();
@@ -855,6 +894,7 @@ mod tests {
             &blobs,
             1,
             limits(0, 0),
+            None,
             None,
             pending("second", &[1, 3], b"aaaacccc"),
         )
@@ -876,6 +916,28 @@ mod tests {
     }
 
     #[test]
+    fn selected_l3_fill_promotes_to_l2_on_the_record_worker_path() {
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4));
+        let l2 = super::super::l2_serving::StageL2::new(
+            1 << 20,
+            "model-identity".to_string(),
+            "state-identity".to_string(),
+        );
+        let bytes = b"filled-state";
+        let mut record = pending("filled", &[1, 2], bytes);
+        record.write_through_l3 = false;
+        record.l2_promotion_digest = Some(skippy_cache::segment_digest(bytes));
+
+        store_exact_radix_record(&radix, &blobs, 1, limits(0, 0), Some(&l2), None, record).unwrap();
+
+        let stats = l2.stats();
+        assert_eq!(stats.entries, 1);
+        assert_eq!(stats.inserts, 1);
+        assert_eq!(stats.logical_bytes, bytes.len() as u64);
+    }
+
+    #[test]
     fn invalid_exact_radix_key_releases_deduped_payload() {
         let radix = Mutex::new(UnifiedRadixCache::new());
         let blobs = Mutex::new(CacheBlobStore::new(4));
@@ -885,6 +947,7 @@ mod tests {
             &blobs,
             1,
             limits(0, 0),
+            None,
             None,
             pending("empty", &[], b"aaaabbbb"),
         )
@@ -914,6 +977,7 @@ mod tests {
             &blobs,
             1,
             limits(0, 0),
+            None,
             Some(&tier),
             pending("first", &[1, 2], b"first-exact-state"),
         )
@@ -923,6 +987,7 @@ mod tests {
             &blobs,
             1,
             limits(0, 0),
+            None,
             Some(&tier),
             pending("second", &[1, 3], b"second-exact-state"),
         )
@@ -1076,6 +1141,7 @@ mod tests {
                 8,
                 limits(4, 1024),
                 None,
+                None,
                 pending(page_id, &tokens, bytes),
             )
             .unwrap();
@@ -1107,6 +1173,7 @@ mod tests {
                 2,
                 limits(4, 1_024),
                 None,
+                None,
                 pending(page_id, &tokens, bytes),
             )
             .unwrap();
@@ -1135,6 +1202,7 @@ mod tests {
                 8,
                 limits(4, 8),
                 None,
+                None,
                 pending(page_id, &tokens, bytes),
             )
             .unwrap();
@@ -1160,6 +1228,7 @@ mod tests {
             &blobs,
             8,
             limits(2, 4),
+            None,
             None,
             pending("checkpoint", &[1, 2], b"aaaabbbb"),
         )
@@ -1403,6 +1472,58 @@ mod tests {
     }
 
     #[test]
+    fn cache_ram_budget_enables_stage_l2_with_disk_authority() {
+        let mut config = enabled_auto_config("future/model");
+        config
+            .kv_cache
+            .as_mut()
+            .expect("enabled cache config")
+            .l2_max_bytes = 64 * 1024 * 1024;
+        let root = tempfile::tempdir().unwrap();
+        let manager = L3CacheManager::acquire(root.path(), StoreLimits::new(1 << 30, 0)).unwrap();
+
+        let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
+            &config,
+            Some(ModelStateKind::Dense),
+            Some(manager),
+            None,
+        )
+        .unwrap()
+        .expect("prefix cache should remain enabled");
+
+        assert!(kv.l2.is_some());
+        assert!(kv.l3.is_some());
+        let attrs = kv.attrs().into_iter().collect::<BTreeMap<_, _>>();
+        assert_eq!(attrs["skippy.kv.l2.enabled"], serde_json::json!(true));
+        assert_eq!(
+            attrs["skippy.kv.l2.budget_bytes"],
+            serde_json::json!(64 * 1024 * 1024u64)
+        );
+    }
+
+    #[test]
+    fn cache_ram_budget_does_not_create_an_authority_free_l2() {
+        let mut config = enabled_auto_config("future/model");
+        config
+            .kv_cache
+            .as_mut()
+            .expect("enabled cache config")
+            .l2_max_bytes = 64 * 1024 * 1024;
+
+        let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
+            &config,
+            Some(ModelStateKind::Dense),
+            None,
+            None,
+        )
+        .unwrap()
+        .expect("L1 prefix cache should remain enabled");
+
+        assert!(kv.l2.is_none());
+        assert!(kv.l3.is_none());
+    }
+
+    #[test]
     fn parses_cache_mode_and_payload_aliases() {
         assert_eq!(
             parse_cache_mode("lookup_record"),
@@ -1483,6 +1604,7 @@ mod tests {
             payload: StageKvCachePayload::Auto,
             max_entries: 512,
             max_bytes: 0,
+            l2_max_bytes: 0,
             min_tokens: 1,
             shared_prefix_stride_tokens: 1,
             shared_prefix_record_limit: 1,
