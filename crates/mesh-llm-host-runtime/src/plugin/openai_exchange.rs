@@ -1414,6 +1414,49 @@ mod tests {
         );
     }
 
+    /// [mesh-B6-up-disclosure-jcs-float-rust] A real llama.cpp `timings` block,
+    /// shared (as identical literal JSON text) with a future browser-JCS parity
+    /// test in `mesh-llm-ui`'s `canonical.ts` port — keep the two in sync
+    /// character-for-character if either changes.
+    const LLAMA_CPP_TIMINGS_FIXTURE: &str = r#"{"id":"chatcmpl-mesh-1","object":"chat.completion","created":1700000000,"model":"llama-3.2-3b-instruct","choices":[{"index":0,"message":{"role":"assistant","content":"hi there"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15},"timings":{"prompt_n":10,"prompt_ms":123.456,"prompt_per_token_ms":12.3456,"prompt_per_second":81.0,"predicted_n":5,"predicted_ms":234.567,"predicted_per_token_ms":46.9134,"predicted_per_second":21.3169}}"#;
+
+    /// [mesh-B6-up-disclosure-jcs-float-rust] A real llama.cpp `timings` block
+    /// is full of non-integer floats (`prompt_ms`, `predicted_per_second`,
+    /// ...), including `prompt_per_second: 81.0` — a WHOLE-NUMBER float, which
+    /// exercises the case a naive fix could get wrong (JSON `81.0` and `81`
+    /// both parse to the same f64; only the source token's `.` tells
+    /// `stringify_floats`'s `is_f64()` check to take the float branch and
+    /// stringify to `"81.0"`, not `"81"`). Pins `response`'s digest so a
+    /// browser-side JCS port can be asserted equal to it on the SAME fixture
+    /// text.
+    #[test]
+    fn response_digest_over_real_llama_cpp_timings_floats() {
+        let body = LLAMA_CPP_TIMINGS_FIXTURE.as_bytes();
+        let digests = ExchangeOutputDigests::from_response_body(body);
+        let response_hex = hex::encode(digests.response.expect("response digest present"));
+        assert_eq!(
+            response_hex, "310c30eaf2fd8af96968a4b9bce21c5ae0232a731956c93f270e8d249bd21b27",
+            "response digest over a real llama.cpp timings block (see doc comment)"
+        );
+    }
+
+    /// [mesh-B6-up-disclosure-jcs-float-rust] No-regression companion: an
+    /// integer-only response body (no floats at all) digests unaffected by the
+    /// whole-number-float stringification above. Deliberately asymmetric with
+    /// the fixture above — reverting the `stringify_floats` whole-number fix
+    /// must turn the timings-fixture test red while leaving this one green,
+    /// since it has no floats to mis-stringify.
+    #[test]
+    fn response_digest_over_integer_only_body_unchanged() {
+        let body = br#"{"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}"#;
+        let digests = ExchangeOutputDigests::from_response_body(body);
+        let response_hex = hex::encode(digests.response.expect("response digest present"));
+        assert_eq!(
+            response_hex, "660e8a56afa6b1cdf4b088c0c42be7f6af958b28492b7583d6676a684dbe5bd7",
+            "response digest over an integer-only body (see doc comment)"
+        );
+    }
+
     /// Same non-normalization property, one level down: two tool_calls arrays
     /// differing only by an explicit `null` field inside one element vs that
     /// field being omitted must produce different `tool_calls` digests.
