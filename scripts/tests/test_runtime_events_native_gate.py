@@ -275,6 +275,17 @@ class LinuxRuntimeSliceTests(unittest.TestCase):
         )
         self.assertEqual(step["with"]["model_artifact_id"], "family-qwen3-dense")
 
+    def test_the_gate_model_is_authorized_for_pr_and_main_ci(self) -> None:
+        manifest = yaml.safe_load(
+            (ROOT / "ci/model-artifacts/manifests/skippy-ci-smoke.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        artifact = next(
+            row for row in manifest["artifacts"] if row["id"] == "family-qwen3-dense"
+        )
+        self.assertTrue({"pull-request", "main"}.issubset(artifact["cadences"]))
+
     def test_evidence_is_uploaded_even_when_the_gate_fails(self) -> None:
         """The evidence file is how a failure is diagnosed, so it must
         survive one."""
