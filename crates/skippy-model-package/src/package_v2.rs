@@ -26,8 +26,9 @@ use crate::write::{ModelSource, create_parent_dir, write_json_file, write_stage_
 
 mod layout;
 
-use layout::{PlannedArtifact, PlannedArtifactKind, plan_artifacts};
+use layout::{PlannedArtifact, PlannedArtifactKind, plan_artifacts_with_budget};
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn write_package(
     model: String,
     out_dir: PathBuf,
@@ -36,6 +37,7 @@ pub(crate) fn write_package(
     artifact_transform: ArtifactHook,
     explicit: ExplicitSourceIdentity,
     resume_existing_artifacts: bool,
+    max_artifact_bytes: Option<u64>,
 ) -> Result<()> {
     ensure!(
         artifact_transform.command.is_none(),
@@ -45,7 +47,8 @@ pub(crate) fn write_package(
     let inventory = SourceInventory::read(&input)?;
     let source = ModelSource::open(&input.model_path)?;
     ensure_native_inventory_matches(&inventory, &source)?;
-    let planned = plan_artifacts(&source.tensors)?;
+    let budget = max_artifact_bytes.unwrap_or(layout::DEFAULT_MAX_ARTIFACT_BYTES);
+    let planned = plan_artifacts_with_budget(&source.tensors, budget)?;
     let mut manifest = manifest_from_source(&input, &inventory)?;
     fs::create_dir_all(&out_dir)?;
     ensure!(
@@ -75,6 +78,7 @@ pub(crate) fn write_package(
         let (artifact, mut tensors) = emit_payload_artifact(
             &source,
             &source_tensors,
+            &inventory,
             artifact_plan,
             &common_names,
             inventory.layer_count,
@@ -380,6 +384,7 @@ fn metadata_descriptors_match(
 fn emit_payload_artifact(
     source: &ModelSource,
     source_tensors: &BTreeMap<String, TensorLocation>,
+    inventory: &SourceInventory,
     planned: &PlannedArtifact,
     common_names: &BTreeSet<String>,
     layer_count: u32,
@@ -391,8 +396,12 @@ fn emit_payload_artifact(
     let path = out_dir.join(&planned.path);
     ensure_not_source_file(source, &path)?;
     if !path.exists() {
-        let stage = stage_plan(planned, stage_index, layer_count);
-        write_stage_artifact(source, &stage, &path)?;
+        if planned.is_part() {
+            crate::part_writer::write_part(inventory, &planned.tensor_names, &path)?;
+        } else {
+            let stage = stage_plan(planned, stage_index, layer_count);
+            write_stage_artifact(source, &stage, &path)?;
+        }
     } else {
         ensure!(
             resume,
@@ -418,12 +427,23 @@ fn emit_payload_artifact(
             )
         })
         .collect::<BTreeMap<_, _>>();
-    let expected_physical = planned
-        .tensor_names
-        .iter()
-        .chain(common_names)
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
+    let expected_physical = if planned.is_part() {
+        // Part artifacts are written by the Rust part writer and hold exactly
+        // their planned tensors; unlike native stage slices they carry no
+        // duplicated common tensors.
+        planned
+            .tensor_names
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>()
+    } else {
+        planned
+            .tensor_names
+            .iter()
+            .chain(common_names)
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>()
+    };
     ensure!(
         emitted_by_name
             .keys()
