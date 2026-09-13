@@ -459,8 +459,13 @@ fn redact_key_in_json(text: &str, key: &str) -> String {
 /// variable is not set and the home lives behind the known-folder API.
 pub fn sanitize_path(path: &std::path::Path) -> String {
     if let Some(home) = dirs::home_dir() {
-        let home_str = home.to_string_lossy();
-        return path.to_string_lossy().replace(&*home_str, "~");
+        return match path.strip_prefix(&home) {
+            Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+            Ok(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
+            // A sibling such as `<home>-backup` only shares a string prefix and
+            // must stay intact, so it is returned unchanged rather than mangled.
+            Err(_) => path.to_string_lossy().to_string(),
+        };
     }
 
     // Fallback: just show the last 3 components.
@@ -488,12 +493,39 @@ pub fn hash_value(input: &str) -> String {
 pub fn sanitize_paths_in_text(text: &str) -> String {
     if let Some(home) = dirs::home_dir() {
         let home_str = home.to_string_lossy().to_string();
-        text.replace(&home_str, "~")
+        replace_home_prefix(text, &home_str)
             .replace("/private/var/", "/var/")
             .replace("/private/tmp/", "/tmp/")
     } else {
         text.to_string()
     }
+}
+
+/// Replace `home` with `~` only where a path boundary follows it.
+///
+/// A plain string replacement also rewrites siblings that merely share the
+/// prefix: with a home of `C:\Users\alice`, `C:\Users\alice-backup\log.txt`
+/// would become `~-backup\log.txt`.
+fn replace_home_prefix(text: &str, home: &str) -> String {
+    if home.is_empty() {
+        return text.to_string();
+    }
+
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(home) {
+        let (before, tail) = rest.split_at(at);
+        let after = &tail[home.len()..];
+        out.push_str(before);
+        if after.is_empty() || after.starts_with(['/', '\\']) {
+            out.push('~');
+        } else {
+            out.push_str(home);
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -895,6 +927,25 @@ mod redaction_corpus_tests {
         let expected_prefix = format!("~{}", std::path::MAIN_SEPARATOR);
         assert!(sanitized.starts_with(&expected_prefix));
         assert!(!sanitized.contains(&home.display().to_string()));
+    }
+
+    #[test]
+    fn sibling_of_the_home_directory_is_left_alone() {
+        let home = dirs::home_dir().expect("test runner has a home directory");
+        let sibling =
+            std::path::PathBuf::from(format!("{}-backup", home.display())).join("log.txt");
+
+        let sanitized = sanitize_path(&sibling);
+        assert_eq!(sanitized, sibling.display().to_string());
+
+        let text = format!("Error in {}", sibling.display());
+        assert_eq!(sanitize_paths_in_text(&text), text);
+    }
+
+    #[test]
+    fn the_home_directory_itself_collapses_to_a_tilde() {
+        let home = dirs::home_dir().expect("test runner has a home directory");
+        assert_eq!(sanitize_path(&home), "~");
     }
 
     #[test]
