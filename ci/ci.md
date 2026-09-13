@@ -374,6 +374,7 @@ runtime producers are not duplicated.
   native runtime-event gate
   (`scripts/ci-runtime-events-native-gate.sh`) with the registry-pinned
   `family-qwen3-dense` fixture authorized for both PR and main cadences,
+  and an absolute evidence path shared with Cargo's crate-local test process,
   against the runtime it just
   built and a real model, and uploads its evidence file. That gate is
   env-gated so an ordinary `cargo test` never touches a native symbol, which
