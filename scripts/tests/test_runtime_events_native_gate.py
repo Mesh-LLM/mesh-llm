@@ -14,6 +14,7 @@ marker itself, and the lane runs the script.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import tempfile
@@ -25,6 +26,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "ci-runtime-events-native-gate.sh"
 SLICE = ROOT / ".github" / "workflows" / "ci-linux-runtime-slice.yml"
+MODEL_MANIFEST = ROOT / "ci" / "model-artifacts" / "manifests" / "skippy-ci-smoke.json"
 
 
 class GateScriptTests(unittest.TestCase):
@@ -274,6 +276,14 @@ class LinuxRuntimeSliceTests(unittest.TestCase):
             "ci/model-artifacts/manifests/skippy-ci-smoke.json",
         )
         self.assertEqual(step["with"]["model_artifact_id"], "family-qwen3-dense")
+
+    def test_the_selected_gate_model_allows_ci_cadences(self) -> None:
+        manifest = json.loads(MODEL_MANIFEST.read_text(encoding="utf-8"))
+        artifact_id = self.steps["Restore runtime-event gate model"]["with"][
+            "model_artifact_id"
+        ]
+        artifact = next(row for row in manifest["artifacts"] if row["id"] == artifact_id)
+        self.assertTrue({"pull-request", "main"}.issubset(artifact["cadences"]))
 
     def test_evidence_is_uploaded_even_when_the_gate_fails(self) -> None:
         """The evidence file is how a failure is diagnosed, so it must
