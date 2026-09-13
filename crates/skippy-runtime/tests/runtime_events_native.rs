@@ -74,7 +74,6 @@ fn runtime_events_native_gate() {
 #[cfg(feature = "dynamic-native-runtime")]
 fn run_real_native_gate(evidence_path: Option<PathBuf>) {
     let evidence_path = evidence_path.unwrap_or_else(|| {
-        println!("BLOCKED: {EVIDENCE_FILE_ENV} unset");
         panic!("{GATE_ENV}=1 requires {EVIDENCE_FILE_ENV} to name the evidence file")
     });
     let bundle_dir = env::var(BUNDLE_DIR_ENV).unwrap_or_else(|_| {

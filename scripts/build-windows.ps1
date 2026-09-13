@@ -315,13 +315,6 @@ function Test-Sccache {
     return $compilerCacheBin -and ((Split-Path -Leaf $compilerCacheBin).ToLowerInvariant() -like "sccache*")
 }
 
-function Test-CudaSccache {
-    # The current Windows sccache cannot parse llama.cpp's quoted
-    # GGML_CUDA_FA_QUANTS NVCC definition. Keep C/C++ and Rust caching, but
-    # require an explicit opt-in before routing CUDA compilation through it.
-    return (Test-Sccache) -and $env:MESH_LLM_WINDOWS_CUDA_SCCACHE -eq "1"
-}
-
 function Reset-SccacheStats {
     if (-not (Test-Sccache)) {
         return
@@ -426,7 +419,7 @@ function Assert-RequiredSccacheUsage {
     if ($env:MESH_LLM_REQUIRE_SCCACHE_HITS -eq "1" -and -not (Test-SccacheStatsContainHits $Stats)) {
         throw "MESH_LLM_REQUIRE_SCCACHE_HITS=1 but sccache did not record any cache hits."
     }
-    if ($BackendName -eq "cuda" -and (Test-CudaSccache) -and -not (Test-SccacheStatsContainCuda $Stats)) {
+    if ($BackendName -eq "cuda" -and -not (Test-SccacheStatsContainCuda $Stats)) {
         throw "MESH_LLM_REQUIRE_SCCACHE=1 but sccache did not record CUDA compile hits or misses."
     }
 }
@@ -533,7 +526,7 @@ function Invoke-CmakeBuild {
     try {
         Invoke-NativeCommand "cmake" $arguments
     } catch {
-        if ($backendName -ne "cuda" -or -not (Test-CudaSccache) -or $env:MESH_LLM_RETRY_SCCACHE_CUDA_BUILD -eq "0") {
+        if ($backendName -ne "cuda" -or -not (Test-Sccache) -or $env:MESH_LLM_RETRY_SCCACHE_CUDA_BUILD -eq "0") {
             throw
         }
 
@@ -1175,7 +1168,7 @@ Invoke-InRepo {
     switch ($backendName) {
         "cuda" {
             $cmakeArgs += "-DGGML_CUDA=ON"
-            if (Test-CudaSccache) {
+            if (Test-Sccache) {
                 $cmakeArgs += "-DCMAKE_CUDA_COMPILER_LAUNCHER=$(ConvertTo-CmakePath $compilerCacheBin)"
             }
             if ($CudaArch) {
@@ -1214,7 +1207,7 @@ Invoke-InRepo {
 
     $parallelJobs = if ($env:MESH_LLM_WINDOWS_BUILD_JOBS) {
         [int]$env:MESH_LLM_WINDOWS_BUILD_JOBS
-    } elseif ($backendName -eq "cuda") {
+    } elseif ($backendName -eq "cuda" -and (Test-Sccache)) {
         [Math]::Min([Environment]::ProcessorCount, 2)
     } else {
         [Environment]::ProcessorCount

@@ -1,5 +1,5 @@
 {
-  "full_patch_sha256": "f0807ab8cb22355c8852c1810e2c0b924bef545857ad84ac062c2e7a731423af",
+  "full_patch_sha256": "788f7c724d259e52d93841bf1a5f65edc52c4df412ef4c6143daa5e0899aafc1",
   "generator_version": "0.3.0",
   "schema_version": 1,
   "shards": [
@@ -700,7 +700,7 @@
     {
       "families": [],
       "file": "0069-family-unmapped.patch",
-      "sha256": "0fd7f8857c17781c2753838b4ff5ec50f0f4c249a3683a999b172bd6b2a47810",
+      "sha256": "ca37ec4c0d7b93996d4c7713ab0e9d6661ce73365cc841a7ef78b58850aa3faa",
       "sources": [
         "src/models/arctic.cpp",
         "src/models/baichuan.cpp",
