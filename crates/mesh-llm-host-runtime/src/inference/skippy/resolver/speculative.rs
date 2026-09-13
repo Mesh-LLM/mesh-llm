@@ -62,7 +62,7 @@ pub(super) fn resolve_speculative_config(
         global_config.and_then(|config| config.strategy.as_deref()),
         Some("auto"),
     );
-    let (strategy, native_mtp_enabled) = resolve_native_mtp_strategy(
+    let (strategy, mut native_mtp_enabled) = resolve_native_mtp_strategy(
         strategy,
         auto_defaults_enabled,
         supports_native_mtp,
@@ -122,8 +122,11 @@ pub(super) fn resolve_speculative_config(
         resolved_draft_max_tokens(native_mtp_enabled, draft_max_tokens);
     validate_draft_min_max(draft_min_tokens, effective_draft_max_tokens)
         .map_err(anyhow::Error::msg)?;
-    if native_mtp_enabled && draft_model_path.is_some() {
+    let native_mtp_sidecar_disabled = if native_mtp_enabled && draft_model_path.is_some() {
+        native_mtp_enabled =
+            resolve_native_mtp_sidecar(&mut draft_model_path, pairing_fault.as_str(), model_path)?;
         mode = "disabled".to_string();
+        !native_mtp_enabled
     } else if mode == "draft" || (mode == "auto" && draft_model_path.is_some()) {
         resolve_draft_speculative_mode(
             &mut mode,
@@ -132,20 +135,28 @@ pub(super) fn resolve_speculative_config(
             pairing_fault.as_str(),
             model_path,
         )?;
+        false
     } else {
         mode = "disabled".to_string();
         draft_model_path = None;
-    }
-    let decode = resolve_decode_config(DecodeResolutionInput {
-        requested_strategy: &strategy,
+        false
+    };
+    let decode_strategy = if native_mtp_sidecar_disabled {
+        "disabled"
+    } else {
+        strategy.as_str()
+    };
+    let mut decode = resolve_decode_config(DecodeResolutionInput {
+        requested_strategy: decode_strategy,
         native_mtp_enabled,
         draft_max_tokens: effective_draft_max_tokens,
         draft_min_tokens,
         model_config,
         global_config,
         package_generation,
-        has_draft_model: draft_model_path.is_some(),
+        has_draft_model: mode == "draft" && draft_model_path.is_some(),
     })?;
+    decode.requested_strategy.clone_from(&strategy);
     // A standalone N-gram plan (no native MTP, no draft model) runs in the
     // legacy `ngram` mode so the embedded frontend derives its window from the
     // proposer's proposal limit.
@@ -813,6 +824,28 @@ fn resolve_draft_speculative_mode(
         }
     }
     Ok(())
+}
+
+fn resolve_native_mtp_sidecar(
+    draft_model_path: &mut Option<PathBuf>,
+    pairing_fault: &str,
+    model_path: &Path,
+) -> Result<bool> {
+    let draft_path = draft_model_path
+        .as_ref()
+        .expect("native MTP sidecar path is present");
+    let Some(reason) = incompatible_draft_pair_reason(model_path, draft_path) else {
+        return Ok(true);
+    };
+    match pairing_fault {
+        "warn_disable" => {
+            *draft_model_path = None;
+            Ok(false)
+        }
+        "fail_open" => Ok(true),
+        "fail_closed" => bail!("skippy incompatible native MTP sidecar pairing: {reason}"),
+        _ => unreachable!(),
+    }
 }
 
 fn package_generation_or_direct_default_supports_native_mtp(

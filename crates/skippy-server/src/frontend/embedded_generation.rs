@@ -63,6 +63,18 @@ fn prefill_chunk_end(
     end
 }
 
+fn draft_fallback_budget(
+    proposal_limit: usize,
+    draft_window: usize,
+    remaining_tokens: usize,
+) -> Option<usize> {
+    let budget = proposal_limit
+        .max(2)
+        .min(draft_window)
+        .min(remaining_tokens);
+    (budget >= 2).then_some(budget)
+}
+
 impl StageOpenAiBackend {
     pub(super) fn generate_embedded_stage_zero_tokens(
         &self,
@@ -941,6 +953,7 @@ impl StageOpenAiBackend {
                         // window; below that, fall through to the serial path
                         // rather than overshoot the budget by a token.
                         && native_mtp_remaining >= 2
+                        && draft_guard.as_deref().is_some_and(|draft| draft.window >= 2)
                     {
                         let fallback_timer = PhaseTimer::start();
                         let draft = draft_guard
@@ -963,11 +976,12 @@ impl StageOpenAiBackend {
                             .map_err(openai_backend_error)?;
                         // The floor must not lift the budget back over the
                         // remaining window, so it is applied before the cap.
-                        let budget = native_mtp_options
-                            .ngram_max_proposal_tokens
-                            .min(draft.window.max(1))
-                            .max(2)
-                            .min(native_mtp_remaining);
+                        let budget = draft_fallback_budget(
+                            native_mtp_options.ngram_max_proposal_tokens,
+                            draft.window,
+                            native_mtp_remaining,
+                        )
+                        .expect("fallback guards require a two-token budget");
                         let draft_tokens = draft
                             .propose(propose_from, budget)
                             .map_err(openai_backend_error)?;
@@ -2093,7 +2107,7 @@ impl StageOpenAiBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::prefill_chunk_end;
+    use super::{draft_fallback_budget, prefill_chunk_end};
 
     #[test]
     fn exact_checkpoint_splits_prefill_at_the_native_state_boundary() {
@@ -2106,5 +2120,13 @@ mod tests {
         assert_eq!(prefill_chunk_end(0, 256, 1400, Some(768)), 256);
         assert_eq!(prefill_chunk_end(256, 256, 1400, Some(768)), 512);
         assert_eq!(prefill_chunk_end(512, 512, 1400, Some(768)), 768);
+    }
+
+    #[test]
+    fn draft_fallback_budget_never_exceeds_the_draft_window() {
+        assert_eq!(draft_fallback_budget(8, 1, 8), None);
+        assert_eq!(draft_fallback_budget(8, 2, 8), Some(2));
+        assert_eq!(draft_fallback_budget(1, 4, 8), Some(2));
+        assert_eq!(draft_fallback_budget(8, 4, 3), Some(3));
     }
 }

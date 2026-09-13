@@ -37,7 +37,7 @@ pub(super) fn temp_model_file_with_tensor_names(
     temp_model_file_with_architecture_and_tensor_names("llama", tensor_names, nextn_predict_layers)
 }
 
-fn temp_model_file_with_architecture_and_tensor_names(
+pub(super) fn temp_model_file_with_architecture_and_tensor_names(
     architecture: &str,
     tensor_names: &[&str],
     nextn_predict_layers: Option<u32>,

@@ -208,8 +208,13 @@ impl SpeculativeDecodeConfig {
                 "verify window requires 0 < min_tokens <= max_tokens and 0 < pipeline_depth <= {MAX_VERIFY_WINDOW_PIPELINE_DEPTH}"
             );
         }
-        if self.ngram_fallback_draft && self.ngram.is_none() {
-            bail!("ngram_fallback_draft requires an N-gram proposer to fall back from");
+        if self.ngram_fallback_draft {
+            if self.ngram.is_none() {
+                bail!("ngram_fallback_draft requires an N-gram proposer to fall back from");
+            }
+            if self.verify_window.pipeline_depth <= 1 {
+                bail!("ngram_fallback_draft requires verify window pipeline_depth > 1");
+            }
         }
         if !(0.0..=1.0).contains(&self.draft_acceptance_threshold)
             || !(0.0..=1.0).contains(&self.draft_split_probability)
@@ -455,6 +460,26 @@ mod standalone_speculative_config_tests {
                 .to_string()
                 .contains("requires native MTP and an extension policy")
         );
+    }
+
+    #[test]
+    fn draft_fallback_requires_a_pipelined_verify_window() {
+        let config = SpeculativeDecodeConfig {
+            ngram: Some(NgramProposalConfig {
+                kind: NgramProposerKind::Cache,
+                min_ngram: 2,
+                max_ngram: 4,
+                max_proposal_tokens: 4,
+            }),
+            ngram_fallback_draft: true,
+            ..SpeculativeDecodeConfig::default()
+        };
+
+        let error = config
+            .validate()
+            .expect_err("draft fallback cannot execute at pipeline depth one");
+
+        assert!(error.to_string().contains("pipeline_depth > 1"));
     }
 
     #[test]
