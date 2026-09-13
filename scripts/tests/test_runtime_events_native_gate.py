@@ -14,8 +14,10 @@ marker itself, and the lane runs the script.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -274,6 +276,36 @@ class LinuxRuntimeSliceTests(unittest.TestCase):
             "ci/model-artifacts/manifests/skippy-ci-smoke.json",
         )
         self.assertEqual(step["with"]["model_artifact_id"], "family-qwen3-dense")
+
+    def test_the_gate_model_resolves_at_every_workflow_cadence(self) -> None:
+        inputs = self.steps["Restore runtime-event gate model"]["with"]
+        self.assertEqual(
+            inputs["model_cadence"],
+            "${{ (inputs.original_event_name == 'pull_request' || "
+            "inputs.original_event_name == 'pull_request_target') && "
+            "'pull-request' || 'main' }}",
+        )
+        for cadence in ("pull-request", "main"):
+            with self.subTest(cadence=cadence):
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(ROOT / "scripts" / "resolve-test-model-manifest.py"),
+                        str(ROOT / inputs["model_manifest"]),
+                        "--artifact-id", inputs["model_artifact_id"],
+                        "--cadence", cadence,
+                        "--require-single-file",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                artifact = json.loads(result.stdout)
+                self.assertEqual(artifact["artifact_id"], inputs["model_artifact_id"])
+                self.assertEqual(json.loads(artifact["files_json"]), [artifact["file"]])
+                self.assertRegex(artifact["sha256"], r"^[0-9a-f]{64}$")
+                self.assertGreater(int(artifact["size_bytes"]), 0)
 
     def test_evidence_is_uploaded_even_when_the_gate_fails(self) -> None:
         """The evidence file is how a failure is diagnosed, so it must
