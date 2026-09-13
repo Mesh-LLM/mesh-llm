@@ -99,6 +99,23 @@ fn exchange_usage_from_outcome(outcome: &proxy::RouteDispatchOutcome) -> Option<
     }
 }
 
+/// Whether a dispatch outcome actually means inference ran and a response
+/// body was returned to the client — the only case `ServingProvenance`'s
+/// contract ("what ran, at what fidelity, on whose hardware") can honestly
+/// describe. A 503/`Failed`/`Dropped` outcome served nothing, so attaching
+/// provenance there would be exactly the fabrication the envelope promises
+/// never to do.
+fn outcome_was_served(outcome: &proxy::RouteDispatchOutcome) -> bool {
+    matches!(
+        outcome,
+        proxy::RouteDispatchOutcome::Responded(200..=299)
+            | proxy::RouteDispatchOutcome::RespondedWithUsage {
+                status_code: 200..=299,
+                ..
+            }
+    )
+}
+
 /// Publish the raw-proxy path's terminal event for a served exchange, enriched
 /// with the serving provenance the host resolved from the node (what ran / at
 /// what fidelity / on whose hardware), the real token usage the dispatch
@@ -116,7 +133,6 @@ async fn publish_raw_proxy_terminal(
     final_outcome: &proxy::RouteDispatchOutcome,
     request_digest: Option<&str>,
 ) {
-    let provenance = serving_provenance_for_model(node, model_name).await;
     let mut envelope = OpenAiExchangeEnvelope::terminal(
         exchange_id.to_string(),
         OpenAiExchangeDispatchPath::RawProxy,
@@ -124,8 +140,15 @@ async fn publish_raw_proxy_terminal(
         plugin_route_status(final_outcome),
         None,
         None,
-    )
-    .with_serving_provenance(provenance);
+    );
+    // Nothing was served on a 503 / `Failed` / `Dropped` outcome, so there is
+    // no hardware or model identity to report — and no reason to pay the
+    // `served_model_descriptors()` lock for a lookup whose result would be
+    // thrown away.
+    if outcome_was_served(final_outcome) {
+        let provenance = serving_provenance_for_model(node, model_name).await;
+        envelope = envelope.with_serving_provenance(provenance);
+    }
     // The host-served (real-weights) branch reaches this via
     // `route_model_request`, whose outcome carries the served backend's own
     // `usage` object. Attach it so a downstream plugin can seal the REAL token

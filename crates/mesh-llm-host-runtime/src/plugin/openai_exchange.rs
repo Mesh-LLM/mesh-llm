@@ -181,9 +181,12 @@ pub struct OpenAiExchangeEnvelope {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nonce_source: Option<ClientNonceSource>,
     /// What ran, at what fidelity, on whose hardware — see [`ServingProvenance`].
-    /// Present on a `Terminal` envelope for a served exchange; `None` on
-    /// effective-request envelopes and on terminal envelopes where nothing was
-    /// served (a denial/error before dispatch).
+    /// Present on a `Terminal` envelope only when the dispatch outcome was an
+    /// actual 2xx response (`Responded`/`RespondedWithUsage`); `None` on
+    /// effective-request envelopes and on any non-2xx terminal envelope (a
+    /// denial/error before dispatch, a 503, or a dropped/failed connection) —
+    /// those served nothing, so there is nothing this field can honestly
+    /// report.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub serving_provenance: Option<ServingProvenance>,
     /// The real token usage the served backend reported for this exchange (see
