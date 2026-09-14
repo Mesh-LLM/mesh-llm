@@ -157,7 +157,7 @@ val buildNativeLibs by tasks.registering {
                     "--release",
                     "-p", "mesh-llm-ffi",
                     "--no-default-features",
-                    "--features", "host,embedded-runtime"
+                    "--features", "embedded-runtime"
                 )
             }
 
