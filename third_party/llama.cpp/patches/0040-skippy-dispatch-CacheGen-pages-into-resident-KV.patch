@@ -1,7 +1,7 @@
-From 562610033432885cdbae80b4fe7d038f2e070ae1 Mon Sep 17 00:00:00 2001
+From bfc5a09290e9700011525698cee33cf28369d4c2 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 11 Sep 2026 16:42:03 +1000
-Subject: [PATCH] skippy: dispatch CacheGen pages into resident KV
+Subject: [PATCH 40/50] skippy: dispatch CacheGen pages into resident KV
 
 Assisted-by: scama
 ---
@@ -50,10 +50,10 @@ index cc3f8cd36..e2460fcda 100644
      // Backend registry
      //
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index a7d65f23f..dfd00139b 100644
+index a20892114..05c681fe0 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
-@@ -1958,6 +1958,344 @@ bool llama_kv_cache::stage_import_kv_page(
+@@ -1984,6 +1984,344 @@ bool llama_kv_cache::stage_import_kv_page(
      return src == static_cast<const char *>(input) + input_bytes;
  }
  
@@ -429,7 +429,7 @@ index 8368e0ee2..ba95e63dc 100644
      // graph_build API
      //
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
-index af3a56601..dc2203735 100644
+index 4e1c64349..bd69a3770 100644
 --- a/src/skippy/state.cpp
 +++ b/src/skippy/state.cpp
 @@ -657,27 +657,100 @@ enum skippy_status skippy_import_kv_page(

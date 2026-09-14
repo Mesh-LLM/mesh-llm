@@ -1,7 +1,7 @@
-From c95fb1f1001f0e7bce75676e4a6dc3b82b430d14 Mon Sep 17 00:00:00 2001
+From 0cdb0f1be47bc93dbedd86c2aa683f519edc45fb Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 11 Sep 2026 16:02:47 +1000
-Subject: [PATCH] skippy: expose CacheGen backend capability
+Subject: [PATCH 39/50] skippy: expose CacheGen backend capability
 
 Advertise the compressed-page contract and return an explicit unsupported status until a resident backend decoder is available.
 
@@ -12,10 +12,10 @@ Assisted-by: scama
  2 files changed, 25 insertions(+), 1 deletion(-)
 
 diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
-index ec2b47444..2a0b1b097 100644
+index 7227dfc48..eca3def02 100644
 --- a/src/skippy/abi.cpp
 +++ b/src/skippy/abi.cpp
-@@ -46,7 +46,8 @@ uint64_t skippy_abi_features(void) {
+@@ -45,7 +45,8 @@ uint64_t skippy_abi_features(void) {
             SKIPPY_FEATURE_KV_EVENTS |
             SKIPPY_FEATURE_DEVICE_EVENTS |
             SKIPPY_FEATURE_DIAGNOSTIC_EVENTS |
@@ -26,7 +26,7 @@ index ec2b47444..2a0b1b097 100644
  
  void skippy_error_free(struct skippy_error * error) {
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
-index 620ee3578..af3a56601 100644
+index 8e91d5086..4e1c64349 100644
 --- a/src/skippy/state.cpp
 +++ b/src/skippy/state.cpp
 @@ -657,6 +657,29 @@ enum skippy_status skippy_import_kv_page(
@@ -61,3 +61,4 @@ index 620ee3578..af3a56601 100644
          uint64_t token_start,
 -- 
 2.54.0 (Apple Git-157)
+

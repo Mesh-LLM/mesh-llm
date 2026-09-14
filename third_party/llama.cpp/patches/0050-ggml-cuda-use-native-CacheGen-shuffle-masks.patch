@@ -1,7 +1,7 @@
-From 2014cb675af3629ff1bb6d61ef7885bc32b12ed2 Mon Sep 17 00:00:00 2001
+From 000f422ab67daeab5beade144d13b574d15aa04e Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 12 Sep 2026 11:49:37 +1000
-Subject: [PATCH] ggml-cuda: use native CacheGen shuffle masks
+Subject: [PATCH 50/50] ggml-cuda: use native CacheGen shuffle masks
 
 ---
  ggml/src/ggml-cuda/cachegen.cu   | 18 +++++++++++++-----

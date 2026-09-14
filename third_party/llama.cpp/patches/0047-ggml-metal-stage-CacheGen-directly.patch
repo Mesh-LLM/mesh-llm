@@ -1,19 +1,21 @@
-From: scama <a1860575018c4680d5669dd7bc3bd356b478bccb8d42e194df46304a5e25f49a@meshllm.local>
-Date: Fri, 12 Sep 2026 01:00:00 +1000
-Subject: [PATCH] ggml-metal: stage CacheGen payloads directly
+From a347b8f31a7446b61c02559145735105949385cd Mon Sep 17 00:00:00 2001
+From: scama
+ <a1860575018c4680d5669dd7bc3bd356b478bccb8d42e194df46304a5e25f49a@meshllm.local>
+Date: Sat, 12 Sep 2026 01:00:00 +1000
+Subject: [PATCH 47/50] ggml-metal: stage CacheGen payloads directly
 
 Avoid building each CacheGen job in NSMutableData and then copying the same
 bytes again into shared Metal buffers. Validate and size the job first, then
 fill its final MTLBuffers directly.
 ---
- ggml/src/ggml-metal/ggml-metal-device.m | 85 ++++++++++++------------
- 1 file changed, 43 insertions(+), 42 deletions(-)
+ ggml/src/ggml-metal/ggml-metal-device.m | 84 ++++++++++++-------------
+ 1 file changed, 42 insertions(+), 42 deletions(-)
 
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
-index 0092c558f..79d40466f 100644
+index 0f7eb1839..da750cf60 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
-@@ -2724,92 +2724,63 @@ bool ggml_metal_cachegen_decode(
+@@ -2741,92 +2741,63 @@ bool ggml_metal_cachegen_decode(
                  }
              }
  
@@ -119,7 +121,7 @@ index 0092c558f..79d40466f 100644
              if (payload_buffer == nil || tile_buffer == nil || prefix_buffer == nil || cell_buffer == nil) {
                  [payload_buffer release];
                  [tile_buffer release];
-@@ -2819,6 +2790,35 @@ bool ggml_metal_cachegen_decode(
+@@ -2836,6 +2807,35 @@ bool ggml_metal_cachegen_decode(
                  [temporary_buffers release];
                  return ggml_metal_cachegen_error(error, error_capacity, "Metal CacheGen staging allocation failed");
              }
@@ -156,4 +158,5 @@ index 0092c558f..79d40466f 100644
              [temporary_buffers addObject:tile_buffer];
              [temporary_buffers addObject:prefix_buffer];
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
+

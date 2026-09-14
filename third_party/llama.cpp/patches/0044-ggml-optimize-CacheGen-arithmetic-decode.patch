@@ -1,7 +1,7 @@
-From c18e4c75324d89f866236ca2fa631c23801a0830 Mon Sep 17 00:00:00 2001
+From a5b5ef5b7983961e33d136117dd3daab77d739d3 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 11 Sep 2026 17:51:30 +1000
-Subject: [PATCH] ggml: optimize CacheGen arithmetic decode
+Subject: [PATCH 44/50] ggml: optimize CacheGen arithmetic decode
 
 Assisted-by: scama
 ---

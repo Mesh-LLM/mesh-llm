@@ -1,7 +1,7 @@
-From 980d2df45910b4d07138a863811911c1a2d8f6d0 Mon Sep 17 00:00:00 2001
+From 8b5e8d04923fd86b78d3265e2e1850d3bc8a8f74 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 11 Sep 2026 18:22:56 +1000
-Subject: [PATCH] ggml: decode CacheGen into F32 KV tensors
+Subject: [PATCH 45/50] ggml: decode CacheGen into F32 KV tensors
 
 Replace the F16-specific backend hook with a typed decoder and write the entropy-decoded half values directly into F16 or F32 resident layouts.
 
@@ -128,10 +128,10 @@ index d6d216675..7118c9aa9 100644
  
  #endif // !defined(GGML_USE_MUSA)
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index e955c4394..3288653f5 100644
+index 1830c5ac0..a5a7c99ca 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -5675,6 +5675,7 @@ struct ggml_cuda_cachegen_staged_job {
+@@ -5677,6 +5677,7 @@ struct ggml_cuda_cachegen_staged_job {
      int physical_device = -1;
      uint8_t * dst = nullptr;
      uint32_t channels = 0;
@@ -139,7 +139,7 @@ index e955c4394..3288653f5 100644
      uint64_t token_stride = 0;
      uint64_t channel_stride = 0;
      std::vector<uint8_t> payload;
-@@ -5749,7 +5750,7 @@ static cudaError_t ggml_cuda_cachegen_release(std::vector<ggml_cuda_cachegen_sta
+@@ -5751,7 +5752,7 @@ static cudaError_t ggml_cuda_cachegen_release(std::vector<ggml_cuda_cachegen_sta
      return first_error;
  }
  
@@ -148,7 +148,7 @@ index e955c4394..3288653f5 100644
          const struct ggml_backend_cachegen_job * jobs,
          size_t job_count,
          char * error,
-@@ -5769,8 +5770,10 @@ static bool ggml_cuda_cachegen_decode_f16(
+@@ -5771,8 +5772,10 @@ static bool ggml_cuda_cachegen_decode_f16(
                      job->cells == nullptr || job->cell_count == 0 || job->cell_count > UINT32_MAX ||
                      job->cell_count > SIZE_MAX / sizeof(uint32_t) || job->channels == 0 ||
                      job->channels == UINT32_MAX ||
@@ -161,7 +161,7 @@ index e955c4394..3288653f5 100644
                  return ggml_cuda_cachegen_error(error, error_capacity, "invalid CUDA/HIP CacheGen job");
              }
  
-@@ -5780,6 +5783,7 @@ static bool ggml_cuda_cachegen_decode_f16(
+@@ -5782,6 +5785,7 @@ static bool ggml_cuda_cachegen_decode_f16(
              staged.physical_device = ggml_cuda_get_physical_device(buffer_context->device);
              staged.dst = static_cast<uint8_t *>(job->dst->data);
              staged.channels = job->channels;
@@ -169,7 +169,7 @@ index e955c4394..3288653f5 100644
              staged.token_stride = job->token_stride;
              staged.channel_stride = job->channel_stride;
              staged.cells.assign(job->cells, job->cells + job->cell_count);
-@@ -5789,10 +5793,10 @@ static bool ggml_cuda_cachegen_decode_f16(
+@@ -5791,10 +5795,10 @@ static bool ggml_cuda_cachegen_decode_f16(
                  max_cell = std::max(max_cell, static_cast<uint64_t>(cell));
              }
              const uint64_t max_channel = static_cast<uint64_t>(job->channels) - 1;
@@ -183,7 +183,7 @@ index e955c4394..3288653f5 100644
                          ggml_nbytes(job->dst)) {
                  return ggml_cuda_cachegen_error(
                      error, error_capacity, "CUDA/HIP CacheGen destination geometry is out of bounds");
-@@ -5917,10 +5921,10 @@ static bool ggml_cuda_cachegen_decode_f16(
+@@ -5919,10 +5923,10 @@ static bool ggml_cuda_cachegen_decode_f16(
                                                  cudaMemcpyHostToDevice, cudaStreamPerThread),
                                  "CUDA/HIP CacheGen cell upload failed");
          GGML_CACHEGEN_CUDA_CALL(
@@ -198,7 +198,7 @@ index e955c4394..3288653f5 100644
              "CUDA/HIP CacheGen kernel launch failed");
  #undef GGML_CACHEGEN_CUDA_CALL
      }
-@@ -5964,8 +5968,8 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+@@ -5966,8 +5970,8 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
          return (void *)ggml_backend_cuda_get_features;
      }
  #if !defined(GGML_USE_MUSA)
@@ -210,10 +210,10 @@ index e955c4394..3288653f5 100644
  #endif // !defined(GGML_USE_MUSA)
      return nullptr;
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.h b/ggml/src/ggml-metal/ggml-metal-device.h
-index 22e4fb436..0a2cf000c 100644
+index bd5848382..6054f28cc 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.h
 +++ b/ggml/src/ggml-metal/ggml-metal-device.h
-@@ -351,7 +351,7 @@ void   ggml_metal_buffer_clear        (ggml_metal_buffer_t buf, uint8_t value);
+@@ -356,7 +356,7 @@ void   ggml_metal_buffer_clear        (ggml_metal_buffer_t buf, uint8_t value);
  //
  struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, const struct ggml_tensor * t);
  
@@ -223,10 +223,10 @@ index 22e4fb436..0a2cf000c 100644
          size_t job_count,
          char * error,
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
-index d05b7c32c..d4ae1f475 100644
+index b1a8c2ae9..7dc37895b 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
-@@ -2654,6 +2654,7 @@ struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, co
+@@ -2671,6 +2671,7 @@ struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, co
  struct ggml_metal_cachegen_params {
      uint32_t channels;
      uint32_t tile_count;
@@ -234,7 +234,7 @@ index d05b7c32c..d4ae1f475 100644
      uint64_t token_stride;
      uint64_t channel_stride;
  };
-@@ -2665,7 +2666,7 @@ static bool ggml_metal_cachegen_error(char * error, size_t capacity, const char
+@@ -2682,7 +2683,7 @@ static bool ggml_metal_cachegen_error(char * error, size_t capacity, const char
      return false;
  }
  
@@ -243,7 +243,7 @@ index d05b7c32c..d4ae1f475 100644
          const struct ggml_backend_cachegen_job * jobs,
          size_t job_count,
          char * error,
-@@ -2683,7 +2684,10 @@ bool ggml_metal_cachegen_decode_f16(
+@@ -2700,7 +2701,10 @@ bool ggml_metal_cachegen_decode_f16(
              const struct ggml_backend_cachegen_job * job = &jobs[job_index];
              if (job->dst == NULL || job->dst->buffer == NULL || job->tiles == NULL || job->tile_count == 0 ||
                      job->tile_count > UINT32_MAX || job->cells == NULL || job->cell_count == 0 || job->channels == 0 ||
@@ -255,7 +255,7 @@ index d05b7c32c..d4ae1f475 100644
                      job->cell_count > SIZE_MAX / sizeof(uint32_t)) {
                  [temporary_buffers release];
                  return ggml_metal_cachegen_error(error, error_capacity, "invalid Metal CacheGen job");
-@@ -2693,9 +2697,10 @@ bool ggml_metal_cachegen_decode_f16(
+@@ -2710,9 +2714,10 @@ bool ggml_metal_cachegen_decode_f16(
                  max_cell = MAX(max_cell, job->cells[cell_index]);
              }
              const uint64_t max_channel = (uint64_t) job->channels - 1;
@@ -269,7 +269,7 @@ index d05b7c32c..d4ae1f475 100644
                  [temporary_buffers release];
                  return ggml_metal_cachegen_error(error, error_capacity, "Metal CacheGen destination geometry is out of bounds");
              }
-@@ -2820,7 +2825,7 @@ bool ggml_metal_cachegen_decode_f16(
+@@ -2837,7 +2842,7 @@ bool ggml_metal_cachegen_decode_f16(
  
              const struct ggml_metal_pipeline_with_params pipeline =
                  ggml_metal_library_compile_pipeline(device->library,
@@ -278,7 +278,7 @@ index d05b7c32c..d4ae1f475 100644
              if (pipeline.pipeline == NULL) {
                  [encoder endEncoding];
                  [temporary_buffers release];
-@@ -2835,6 +2840,7 @@ bool ggml_metal_cachegen_decode_f16(
+@@ -2852,6 +2857,7 @@ bool ggml_metal_cachegen_decode_f16(
              const struct ggml_metal_cachegen_params params = {
                  job->channels,
                  (uint32_t) job->tile_count,
@@ -287,10 +287,10 @@ index d05b7c32c..d4ae1f475 100644
                  job->channel_stride,
              };
 diff --git a/ggml/src/ggml-metal/ggml-metal.cpp b/ggml/src/ggml-metal/ggml-metal.cpp
-index 6bec83efd..a1c190a82 100644
+index 10d005482..cd2c135d2 100644
 --- a/ggml/src/ggml-metal/ggml-metal.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal.cpp
-@@ -910,8 +910,8 @@ static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const
+@@ -935,8 +935,8 @@ static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const
      if (strcmp(name, "ggml_backend_get_features") == 0) {
          return (void *)ggml_backend_metal_get_features;
      }
@@ -361,10 +361,10 @@ index 7504e573c..9c78b3698 100644
  
  /** @brief Describes one validated CacheGen record and its logical page destination. */
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index dfd00139b..0671fb296 100644
+index 05c681fe0..38b1b0ab1 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
-@@ -1970,17 +1970,18 @@ static uint32_t skippy_cachegen_read_u32(const uint8_t * bytes) {
+@@ -1996,17 +1996,18 @@ static uint32_t skippy_cachegen_read_u32(const uint8_t * bytes) {
  static bool skippy_cachegen_validate_segment(const skippy_cachegen_record_v1 & record,
                                               size_t                            expected_rows,
                                               size_t                            expected_channels,
@@ -385,7 +385,7 @@ index dfd00139b..0671fb296 100644
          return false;
      }
      if (std::memcmp(payload, "LCG1", 4) != 0 || payload[5] != 0 || (payload[4] != 16 && payload[4] != 32) ||
-@@ -1990,8 +1991,8 @@ static bool skippy_cachegen_validate_segment(const skippy_cachegen_record_v1 & r
+@@ -2016,8 +2017,8 @@ static bool skippy_cachegen_validate_segment(const skippy_cachegen_record_v1 & r
          return false;
      }
      if (expected_rows > std::numeric_limits<size_t>::max() / expected_channels ||
@@ -396,7 +396,7 @@ index dfd00139b..0671fb296 100644
          error = "CacheGen record decoded geometry is inconsistent";
          return false;
      }
-@@ -2086,8 +2087,12 @@ bool llama_kv_cache::stage_import_cachegen_kv_page(llama_seq_id
+@@ -2112,8 +2113,12 @@ bool llama_kv_cache::stage_import_cachegen_kv_page(llama_seq_id
      if (!stage_import_kv_page(seq_id, desc, &validation_sentinel, desc.payload_bytes, error, true)) {
          return false;
      }
@@ -411,7 +411,7 @@ index dfd00139b..0671fb296 100644
          return false;
      }
  
-@@ -2104,12 +2109,17 @@ bool llama_kv_cache::stage_import_cachegen_kv_page(llama_seq_id
+@@ -2130,12 +2135,17 @@ bool llama_kv_cache::stage_import_cachegen_kv_page(llama_seq_id
      size_t                                   logical_offset = output_base;
      std::vector<skippy_cachegen_job_storage> storage;
      storage.reserve(selected.size() * 2);
@@ -433,7 +433,7 @@ index dfd00139b..0671fb296 100644
          entry.channels        = static_cast<uint32_t>(channels);
          size_t token_offset   = 0;
          while (token_offset < desc.token_count) {
-@@ -2119,13 +2129,14 @@ bool llama_kv_cache::stage_import_cachegen_kv_page(llama_seq_id
+@@ -2145,13 +2155,14 @@ bool llama_kv_cache::stage_import_cachegen_kv_page(llama_seq_id
              }
              const auto &   record = records[record_index++];
              const size_t   rows   = static_cast<size_t>(record.token_count);
@@ -451,7 +451,7 @@ index dfd00139b..0671fb296 100644
                  if (error.empty()) {
                      error = "CacheGen record order or destination geometry is invalid";
                  }
-@@ -2141,14 +2152,14 @@ bool llama_kv_cache::stage_import_cachegen_kv_page(llama_seq_id
+@@ -2167,14 +2178,14 @@ bool llama_kv_cache::stage_import_cachegen_kv_page(llama_seq_id
      };
  
      for (const auto * layer : selected) {
@@ -468,7 +468,7 @@ index dfd00139b..0671fb296 100644
              return false;
          }
      }
-@@ -2182,7 +2193,7 @@ bool llama_kv_cache::stage_import_cachegen_kv_page(llama_seq_id
+@@ -2208,7 +2219,7 @@ bool llama_kv_cache::stage_import_cachegen_kv_page(llama_seq_id
          return false;
      }
  
@@ -477,7 +477,7 @@ index dfd00139b..0671fb296 100644
      for (const auto & entry : storage) {
          if (entry.dst == nullptr || entry.dst->buffer == nullptr) {
              error = "CacheGen destination tensor has no backend buffer";
-@@ -2193,12 +2204,12 @@ bool llama_kv_cache::stage_import_cachegen_kv_page(llama_seq_id
+@@ -2219,12 +2230,12 @@ bool llama_kv_cache::stage_import_cachegen_kv_page(llama_seq_id
          const auto reg       = device == nullptr ? nullptr : ggml_backend_dev_backend_reg(device);
          auto       candidate = reg == nullptr ?
                                     nullptr :

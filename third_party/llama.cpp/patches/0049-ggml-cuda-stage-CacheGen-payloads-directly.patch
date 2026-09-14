@@ -1,17 +1,18 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: scama <a1860575018c4680d5669dd7bc3bd356b478bccb8d42e194df46304a5e25f49a@meshllm.communities.buzz.xyz>
+From 44481189f0473e079d70bf157d6cd14f9c6c9194 Mon Sep 17 00:00:00 2001
+From: scama
+ <a1860575018c4680d5669dd7bc3bd356b478bccb8d42e194df46304a5e25f49a@meshllm.communities.buzz.xyz>
 Date: Sat, 12 Sep 2026 08:45:00 +1000
-Subject: [PATCH] ggml-cuda: stage CacheGen payloads directly
+Subject: [PATCH 49/50] ggml-cuda: stage CacheGen payloads directly
 
 ---
- ggml/src/ggml-cuda/ggml-cuda.cu | 36 +++++++++++++++++++++++++-----------
+ ggml/src/ggml-cuda/ggml-cuda.cu | 36 +++++++++++++++++++++++----------
  1 file changed, 25 insertions(+), 11 deletions(-)
 
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index ccfda8a9d..d32175261 100644
+index e72a09eb6..fc9883acc 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -5671,6 +5671,12 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
+@@ -5673,6 +5673,12 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
  
  #if !defined(GGML_USE_MUSA)
  
@@ -24,7 +25,7 @@ index ccfda8a9d..d32175261 100644
  struct ggml_cuda_cachegen_staged_job {
      int physical_device = -1;
      uint8_t * dst = nullptr;
-@@ -5678,7 +5684,8 @@ struct ggml_cuda_cachegen_staged_job {
+@@ -5680,7 +5686,8 @@ struct ggml_cuda_cachegen_staged_job {
      uint32_t element_bytes = 0;
      uint64_t token_stride = 0;
      uint64_t channel_stride = 0;
@@ -34,7 +35,7 @@ index ccfda8a9d..d32175261 100644
      std::vector<ggml_cuda_cachegen_tile> tiles;
      std::vector<uint32_t> prefixes;
      std::vector<uint32_t> cells;
-@@ -5811,24 +5818,23 @@ static bool ggml_cuda_cachegen_decode(
+@@ -5813,24 +5820,23 @@ static bool ggml_cuda_cachegen_decode(
                  return ggml_cuda_cachegen_error(error, error_capacity, "CUDA/HIP CacheGen tile geometry overflows");
              }
              staged.tiles.reserve(job->tile_count);
@@ -62,7 +63,7 @@ index ccfda8a9d..d32175261 100644
                  const uint8_t * payload = static_cast<const uint8_t *>(tile->payload);
                  const bool packed = memcmp(payload, "LCG2", 4) == 0;
                  const uint32_t bins = payload[4];
-@@ -5845,7 +5851,7 @@ static bool ggml_cuda_cachegen_decode(
+@@ -5847,7 +5853,7 @@ static bool ggml_cuda_cachegen_decode(
                          error, error_capacity, "CUDA/HIP CacheGen tile header is inconsistent");
                  }
                  const ggml_cuda_cachegen_tile encoded_tile = {
@@ -71,7 +72,7 @@ index ccfda8a9d..d32175261 100644
                      static_cast<uint32_t>(staged.prefixes.size()),
                      tile->token_offset,
                      tile->token_count,
-@@ -5893,7 +5899,12 @@ static bool ggml_cuda_cachegen_decode(
+@@ -5895,7 +5901,12 @@ static bool ggml_cuda_cachegen_decode(
                      }
                  }
                  staged.tiles.push_back(encoded_tile);
@@ -85,7 +86,7 @@ index ccfda8a9d..d32175261 100644
              }
          }
      } catch (const std::bad_alloc &) {
-@@ -5925,7 +5936,7 @@ static bool ggml_cuda_cachegen_decode(
+@@ -5927,7 +5938,7 @@ static bool ggml_cuda_cachegen_decode(
                  return fail((operation), status); \
              } \
          } while (0)
@@ -94,7 +95,7 @@ index ccfda8a9d..d32175261 100644
                                  "CUDA/HIP CacheGen payload allocation failed");
          GGML_CACHEGEN_CUDA_CALL(cudaMalloc(reinterpret_cast<void **>(&job.tiles_device),
                                             job.tiles.size() * sizeof(ggml_cuda_cachegen_tile)),
-@@ -5936,9 +5947,12 @@ static bool ggml_cuda_cachegen_decode(
+@@ -5938,9 +5949,12 @@ static bool ggml_cuda_cachegen_decode(
          GGML_CACHEGEN_CUDA_CALL(cudaMalloc(reinterpret_cast<void **>(&job.cells_device),
                                             job.cells.size() * sizeof(uint32_t)),
                                  "CUDA/HIP CacheGen cell allocation failed");
@@ -111,5 +112,5 @@ index ccfda8a9d..d32175261 100644
                                                  job.tiles.size() * sizeof(ggml_cuda_cachegen_tile),
                                                  cudaMemcpyHostToDevice, cudaStreamPerThread),
 -- 
-2.51.0
+2.54.0 (Apple Git-157)
 

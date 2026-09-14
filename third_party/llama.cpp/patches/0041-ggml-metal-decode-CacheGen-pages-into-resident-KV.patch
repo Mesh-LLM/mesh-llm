@@ -1,7 +1,7 @@
-From 32d3370571b5b73f136e29f2b1c05bb137493954 Mon Sep 17 00:00:00 2001
+From 24cd07b947867a3e511941de4ce53836b9c7d0f1 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 11 Sep 2026 16:42:09 +1000
-Subject: [PATCH] ggml-metal: decode CacheGen pages into resident KV
+Subject: [PATCH 41/50] ggml-metal: decode CacheGen pages into resident KV
 
 Assisted-by: scama
 ---
@@ -17,10 +17,10 @@ Assisted-by: scama
  create mode 100644 tests/test-skippy-cachegen-metal.cpp
 
 diff --git a/ggml/src/ggml-metal/CMakeLists.txt b/ggml/src/ggml-metal/CMakeLists.txt
-index a661e710a..208c8e888 100644
+index e7afdb695..e886ce822 100644
 --- a/ggml/src/ggml-metal/CMakeLists.txt
 +++ b/ggml/src/ggml-metal/CMakeLists.txt
-@@ -30,6 +30,7 @@ set(METALLIB_KERNELS_DEQUANTIZE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/dequantize.
+@@ -31,6 +31,7 @@ set(METALLIB_KERNELS_DEQUANTIZE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/dequantize.
  set(METALLIB_KERNELS_QUANTIZE   "${CMAKE_CURRENT_SOURCE_DIR}/kernels/quantize.h")
  
  set(METALLIB_KERNEL_SOURCES
@@ -29,7 +29,7 @@ index a661e710a..208c8e888 100644
      kernels/mul_mv.metal
      kernels/mul_mm.metal
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.h b/ggml/src/ggml-metal/ggml-metal-device.h
-index 31fc07d44..22e4fb436 100644
+index ced33aadf..bd5848382 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.h
 +++ b/ggml/src/ggml-metal/ggml-metal-device.h
 @@ -1,6 +1,7 @@
@@ -40,7 +40,7 @@ index 31fc07d44..22e4fb436 100644
  
  #ifdef __cplusplus
  extern "C" {
-@@ -350,6 +351,12 @@ void   ggml_metal_buffer_clear        (ggml_metal_buffer_t buf, uint8_t value);
+@@ -355,6 +356,12 @@ void   ggml_metal_buffer_clear        (ggml_metal_buffer_t buf, uint8_t value);
  //
  struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, const struct ggml_tensor * t);
  
@@ -54,10 +54,10 @@ index 31fc07d44..22e4fb436 100644
  }
  #endif
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
-index d6775211e..c6e22a863 100644
+index 3c03d8670..09f00b75e 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
-@@ -11,6 +11,7 @@
+@@ -12,6 +12,7 @@
  
  #include <stdatomic.h>
  #include <limits.h>
@@ -65,7 +65,7 @@ index d6775211e..c6e22a863 100644
  
  #ifndef TARGET_OS_VISION
  #define TARGET_OS_VISION 0
-@@ -110,6 +111,7 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
+@@ -111,6 +112,7 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
  //   X(suffix, name): name is both the kernels/<name>.metal basename and the
  //   ggml_metallib_<name>_{start,end} embed-symbol stem.
  #define GGML_METAL_LIBS \
@@ -73,7 +73,7 @@ index d6775211e..c6e22a863 100644
      X(FA,              fa)             \
      X(MUL_MV,          mul_mv)         \
      X(MUL_MM,          mul_mm)         \
-@@ -2641,3 +2643,209 @@ struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, co
+@@ -2658,3 +2660,209 @@ struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, co
  
      return res;
  }
@@ -284,10 +284,10 @@ index d6775211e..c6e22a863 100644
 +    return true;
 +}
 diff --git a/ggml/src/ggml-metal/ggml-metal.cpp b/ggml/src/ggml-metal/ggml-metal.cpp
-index 3bd6abd06..6bec83efd 100644
+index 4cbec8645..10d005482 100644
 --- a/ggml/src/ggml-metal/ggml-metal.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal.cpp
-@@ -910,6 +910,9 @@ static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const
+@@ -935,6 +935,9 @@ static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const
      if (strcmp(name, "ggml_backend_get_features") == 0) {
          return (void *)ggml_backend_metal_get_features;
      }
@@ -402,11 +402,11 @@ index 000000000..82684a71e
 +    }
 +}
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 5a45037bb..4f57384ca 100644
+index 69dbf219f..dc30b99a2 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -279,6 +279,10 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
-     set_tests_properties(test-save-load-state PROPERTIES FIXTURES_REQUIRED generate-models)
+@@ -281,6 +281,10 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+     llama_build(test-fusion.cpp)
  endif()
  
 +if (GGML_METAL)

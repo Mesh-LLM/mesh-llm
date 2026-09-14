@@ -1,7 +1,7 @@
-From 9253c686456c6f90182cd49094c96ec1cb9291c3 Mon Sep 17 00:00:00 2001
+From 7e8c8fb1571509c24b970cfcf172521051fa4d44 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 12 Sep 2026 05:42:09 +1000
-Subject: [PATCH] ggml: decode packed CacheGen symbols on device
+Subject: [PATCH 48/50] ggml: decode packed CacheGen symbols on device
 
 ---
  ggml/src/ggml-cuda/cachegen.cu             | 52 ++++++++++----
@@ -93,10 +93,10 @@ index fa5683788..685dc586a 100644
          const uint64_t cdf_high = symbol == 31 ? 65536ull : cdf[symbol + 1];
          high = low - 1 + uint32_t((span * cdf_high) >> 16);
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index b68649ec4..ccfda8a9d 100644
+index 819deb14c..e72a09eb6 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -5814,7 +5814,7 @@ static bool ggml_cuda_cachegen_decode(
+@@ -5816,7 +5816,7 @@ static bool ggml_cuda_cachegen_decode(
              for (size_t tile_index = 0; tile_index < job->tile_count; ++tile_index) {
                  const struct ggml_backend_cachegen_tile * tile = &job->tiles[tile_index];
                  if (tile->payload == nullptr || tile->payload_bytes < 16 || tile->payload_bytes > UINT32_MAX ||
@@ -105,7 +105,7 @@ index b68649ec4..ccfda8a9d 100644
                          tile->token_count > job->cell_count - tile->token_offset ||
                          staged.payload.size() > UINT32_MAX - 3 ||
                          staged.prefixes.size() > UINT32_MAX - (static_cast<size_t>(job->channels) + 1)) {
-@@ -5830,41 +5830,67 @@ static bool ggml_cuda_cachegen_decode(
+@@ -5832,41 +5832,67 @@ static bool ggml_cuda_cachegen_decode(
                  staged.payload.resize(aligned_payload_size, 0);
  
                  const uint8_t * payload = static_cast<const uint8_t *>(tile->payload);
@@ -198,10 +198,10 @@ index b68649ec4..ccfda8a9d 100644
                  staged.tiles.push_back(encoded_tile);
                  staged.payload.insert(staged.payload.end(), payload, payload + tile->payload_bytes);
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
-index 79d40466f..2a38e0d4b 100644
+index da750cf60..3d10a182c 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
-@@ -2686,6 +2686,7 @@ bool ggml_metal_cachegen_decode(
+@@ -2703,6 +2703,7 @@ bool ggml_metal_cachegen_decode(
                  (job->dst->type == GGML_TYPE_Q8_0 || job->dst->type == GGML_TYPE_Q4_0);
              if (job->dst == NULL || job->dst->buffer == NULL || job->tiles == NULL || job->tile_count == 0 ||
                      job->tile_count > UINT32_MAX || job->cells == NULL || job->cell_count == 0 || job->channels == 0 ||
@@ -209,7 +209,7 @@ index 79d40466f..2a38e0d4b 100644
                      (job->dst->type != GGML_TYPE_F16 && job->dst->type != GGML_TYPE_F32 &&
                       job->dst->type != GGML_TYPE_Q8_0 && job->dst->type != GGML_TYPE_Q4_0) ||
                      (quantized && job->channels % 32 != 0) ||
-@@ -2729,6 +2730,7 @@ bool ggml_metal_cachegen_decode(
+@@ -2746,6 +2747,7 @@ bool ggml_metal_cachegen_decode(
              for (size_t tile_index = 0; tile_index < job->tile_count; ++tile_index) {
                  const struct ggml_backend_cachegen_tile * tile = &job->tiles[tile_index];
                  if (tile->payload == NULL || tile->payload_bytes < 16 || tile->token_count == 0 ||
@@ -217,7 +217,7 @@ index 79d40466f..2a38e0d4b 100644
                          tile->token_offset > job->cell_count || tile->token_count > job->cell_count - tile->token_offset ||
                          staged_payload_bytes > UINT32_MAX - 3 ||
                          staged_prefix_count > UINT32_MAX - ((size_t) job->channels + 1)) {
-@@ -2743,34 +2745,60 @@ bool ggml_metal_cachegen_decode(
+@@ -2760,34 +2762,60 @@ bool ggml_metal_cachegen_decode(
                      return ggml_metal_cachegen_error(error, error_capacity, "Metal CacheGen payload offsets overflow");
                  }
                  const uint8_t * payload = (const uint8_t *) tile->payload;
@@ -298,7 +298,7 @@ index 79d40466f..2a38e0d4b 100644
              }
  
              id<MTLBuffer> payload_buffer = [device->mtl_device newBufferWithLength:staged_payload_bytes
-@@ -2808,14 +2836,16 @@ bool ggml_metal_cachegen_decode(
+@@ -2825,14 +2853,16 @@ bool ggml_metal_cachegen_decode(
                      tile->token_count,
                  };
                  const uint8_t * payload = (const uint8_t *) tile->payload;
@@ -404,10 +404,10 @@ index 18c0a0fb4..728899e4b 100644
          const ulong cdf_high = symbol == 31 ? 65536ul : cdf[symbol + 1];
          high                 = low - 1 + uint((span * cdf_high) >> 16);
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 215076924..dad99f62a 100644
+index e6888f096..43e2539b0 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
-@@ -1985,7 +1985,11 @@ static bool skippy_cachegen_validate_segment(const skippy_cachegen_record_v1 & r
+@@ -2011,7 +2011,11 @@ static bool skippy_cachegen_validate_segment(const skippy_cachegen_record_v1 & r
          error = "invalid CacheGen record descriptor";
          return false;
      }
@@ -420,7 +420,7 @@ index 215076924..dad99f62a 100644
          skippy_cachegen_read_u16(payload + 6) != expected_rows ||
          skippy_cachegen_read_u32(payload + 8) != expected_channels) {
          error = "CacheGen record disagrees with its segment header";
-@@ -1998,6 +2002,35 @@ static bool skippy_cachegen_validate_segment(const skippy_cachegen_record_v1 & r
+@@ -2024,6 +2028,35 @@ static bool skippy_cachegen_validate_segment(const skippy_cachegen_record_v1 & r
          return false;
      }
      const size_t max_bytes = expected_rows * sizeof(float);
@@ -456,7 +456,7 @@ index 215076924..dad99f62a 100644
      if (expected_channels > std::numeric_limits<size_t>::max() / (cdf_entries * sizeof(uint16_t)) ||
          expected_channels > std::numeric_limits<size_t>::max() / sizeof(uint16_t)) {
          error = "CacheGen segment metadata overflows";
-@@ -2014,20 +2047,10 @@ static bool skippy_cachegen_validate_segment(const skippy_cachegen_record_v1 & r
+@@ -2040,20 +2073,10 @@ static bool skippy_cachegen_validate_segment(const skippy_cachegen_record_v1 & r
      const size_t cdf_offset    = header_bytes + max_bytes;
      const size_t length_offset = cdf_offset + cdf_bytes;
      const size_t stream_offset = length_offset + length_bytes;

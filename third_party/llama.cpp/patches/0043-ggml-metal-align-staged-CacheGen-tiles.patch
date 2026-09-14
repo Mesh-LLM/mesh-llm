@@ -1,7 +1,7 @@
-From 717bca3cc3cc9ef8272cb37c63c7c700ab567009 Mon Sep 17 00:00:00 2001
+From 90e967661980eaf7008d17b1582ed1939d05a2f1 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 11 Sep 2026 17:43:11 +1000
-Subject: [PATCH] ggml-metal: align staged CacheGen tiles
+Subject: [PATCH 43/50] ggml-metal: align staged CacheGen tiles
 
 Assisted-by: scama
 ---
@@ -10,10 +10,10 @@ Assisted-by: scama
  2 files changed, 39 insertions(+), 3 deletions(-)
 
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
-index c6e22a863..d05b7c32c 100644
+index 09f00b75e..b1a8c2ae9 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
-@@ -2721,7 +2721,7 @@ bool ggml_metal_cachegen_decode_f16(
+@@ -2738,7 +2738,7 @@ bool ggml_metal_cachegen_decode_f16(
                  const struct ggml_backend_cachegen_tile * tile = &job->tiles[tile_index];
                  if (tile->payload == NULL || tile->payload_bytes < 16 || tile->token_count == 0 ||
                          tile->token_offset > job->cell_count || tile->token_count > job->cell_count - tile->token_offset ||
@@ -22,7 +22,7 @@ index c6e22a863..d05b7c32c 100644
                          prefix_data.length / sizeof(uint32_t) > UINT32_MAX - ((size_t) job->channels + 1)) {
                      [payload_data release];
                      [tile_data release];
-@@ -2730,6 +2730,17 @@ bool ggml_metal_cachegen_decode_f16(
+@@ -2747,6 +2747,17 @@ bool ggml_metal_cachegen_decode_f16(
                      [temporary_buffers release];
                      return ggml_metal_cachegen_error(error, error_capacity, "Metal CacheGen tile exceeds bounded geometry");
                  }
@@ -40,7 +40,7 @@ index c6e22a863..d05b7c32c 100644
                  const uint8_t * payload = (const uint8_t *) tile->payload;
                  const size_t lengths_offset = 16 + (size_t) tile->token_count * sizeof(float) +
                      (size_t) job->channels * 33 * sizeof(uint16_t);
-@@ -2743,7 +2754,7 @@ bool ggml_metal_cachegen_decode_f16(
+@@ -2760,7 +2771,7 @@ bool ggml_metal_cachegen_decode_f16(
                      return ggml_metal_cachegen_error(error, error_capacity, "Metal CacheGen tile metadata is truncated");
                  }
                  struct ggml_metal_cachegen_tile encoded_tile = {

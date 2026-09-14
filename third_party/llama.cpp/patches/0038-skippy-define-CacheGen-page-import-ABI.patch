@@ -1,7 +1,7 @@
-From 216d925e721653b7134b46c175e679cc5d0f2eeb Mon Sep 17 00:00:00 2001
+From 7e1830a5596e6b2a15a98f6bb6a950edf6b9f862 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 11 Sep 2026 16:02:11 +1000
-Subject: [PATCH] skippy: define CacheGen page import ABI
+Subject: [PATCH 38/50] skippy: define CacheGen page import ABI
 
 Expose validated record descriptors for direct decode into resident KV storage.
 
@@ -12,7 +12,7 @@ Assisted-by: scama
  2 files changed, 34 insertions(+), 1 deletion(-)
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 65cfa2ce8..be996397a 100644
+index 22a116414..ffef99c77 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
@@ -24,13 +24,12 @@ index 65cfa2ce8..be996397a 100644
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
-@@ -104,6 +104,8 @@ enum skippy_feature {
- #define SKIPPY_FEATURE_DEVICE_EVENTS          ((uint64_t)1 << 34)
+@@ -105,6 +105,8 @@ enum skippy_feature {
  #define SKIPPY_FEATURE_DIAGNOSTIC_EVENTS      ((uint64_t)1 << 35)
  #define SKIPPY_FEATURE_UNLOAD_EVENTS          ((uint64_t)1 << 36)
-+
-+#define SKIPPY_FEATURE_CACHEGEN_KV_PAGE (UINT64_C(1) << 37)
  
++#define SKIPPY_FEATURE_CACHEGEN_KV_PAGE (UINT64_C(1) << 37)
++
  enum skippy_status {
      SKIPPY_STATUS_OK                      = 0,
      SKIPPY_STATUS_ERROR                   = 1,
@@ -85,3 +84,4 @@ index aa698c124..7504e573c 100644
          struct skippy_session * session,
 -- 
 2.54.0 (Apple Git-157)
+

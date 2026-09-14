@@ -1,7 +1,7 @@
-From 3391262f8620a3d1a7ddb6a174e75e0c6129c804 Mon Sep 17 00:00:00 2001
+From 62b87b9c385e333765835739e38eead150a47dae Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 11 Sep 2026 16:58:10 +1000
-Subject: [PATCH] ggml-cuda: decode CacheGen pages into resident KV
+Subject: [PATCH 42/50] ggml-cuda: decode CacheGen pages into resident KV
 
 Share the F16 decoder across CUDA and HIP, batch launches before synchronization, and write directly into the allocated Skippy cell layout.
 
@@ -164,7 +164,7 @@ index 000000000..d6d216675
 +
 +#endif // !defined(GGML_USE_MUSA)
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 38bd4c9a0..e955c4394 100644
+index a23417926..1830c5ac0 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
 @@ -10,6 +10,7 @@
@@ -183,7 +183,7 @@ index 38bd4c9a0..e955c4394 100644
  #include <cstdarg>
  #include <cstdio>
  #include <cstdlib>
-@@ -5667,6 +5669,280 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
+@@ -5669,6 +5671,280 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
      GGML_UNUSED(reg);
  }
  
@@ -464,7 +464,7 @@ index 38bd4c9a0..e955c4394 100644
  static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
      GGML_UNUSED(reg);
      if (strcmp(name, "ggml_backend_comm_init") == 0) {
-@@ -5687,6 +5963,11 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+@@ -5689,6 +5965,11 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
      if (strcmp(name, "ggml_backend_get_features") == 0) {
          return (void *)ggml_backend_cuda_get_features;
      }
