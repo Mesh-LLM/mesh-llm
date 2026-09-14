@@ -296,7 +296,7 @@ mod tests {
             continuous_batching: true,
             n_batch: None,
             n_ubatch: None,
-            kv_cache: KvCachePolicy::for_model_size(0),
+            kv_cache: KvCachePolicy::safe_default(),
             flash_attn_type: FlashAttentionType::Auto,
             kv_offload: None,
             kv_unified: None,

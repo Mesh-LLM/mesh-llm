@@ -82,12 +82,20 @@ pub(crate) fn verify_package(
         .iter()
         .map(|sidecar| sidecar.artifact_id.as_str())
         .collect::<BTreeSet<_>>();
+    let publisher_metadata_ids = manifest
+        .publisher_metadata
+        .iter()
+        .map(|metadata| metadata.artifact_id.as_str())
+        .collect::<BTreeSet<_>>();
     let mut written = BTreeMap::new();
     let mut written_layer_ordinals = BTreeMap::new();
     let mut used = BTreeSet::new();
     used.insert(metadata_artifact_id.clone());
     for artifact in &manifest.artifact_catalog.entries {
-        if artifact.id == metadata_artifact_id || sidecar_ids.contains(artifact.id.as_str()) {
+        if artifact.id == metadata_artifact_id
+            || sidecar_ids.contains(artifact.id.as_str())
+            || publisher_metadata_ids.contains(artifact.id.as_str())
+        {
             continue;
         }
         used.insert(artifact.id.clone());
@@ -155,6 +163,12 @@ pub(crate) fn verify_package(
         );
     }
     verify_projectors(&manifest, &projectors, &artifacts, &mut used)?;
+    for metadata in &manifest.publisher_metadata {
+        ensure!(
+            used.insert(metadata.artifact_id.clone()),
+            "publisher metadata artifact cannot also have another package role"
+        );
+    }
     ensure!(
         used.len() == artifacts.len(),
         "artifact catalog contains unaccounted artifacts"

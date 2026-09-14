@@ -195,6 +195,7 @@ pub(crate) fn split_certification_label(
         activation_width: 0,
         tensor_count: 0,
         generation: None,
+        publisher_defaults: None,
     };
     Some(
         if certified_family(&package).ok().flatten().is_some() {
@@ -223,6 +224,7 @@ mod tests {
             activation_width: 1,
             tensor_count: 1,
             generation: None,
+            publisher_defaults: None,
         }
     }
 

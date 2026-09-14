@@ -29,6 +29,64 @@ fn resolve_qwen_config_with_request_defaults(
     .expect("qwen config should resolve")
 }
 
+fn publisher_q8_defaults() -> skippy_package_format::PublisherModelDefaults {
+    skippy_package_format::PublisherModelDefaults {
+        compute_dtype: Some(skippy_package_format::PublisherDtypeDeclaration {
+            dtype: skippy_package_format::PublisherDtype::Bf16,
+            artifact_id: "publisher-config-json".to_string(),
+            json_path: "/torch_dtype".to_string(),
+        }),
+        kv_cache_dtype: Some(skippy_package_format::PublisherDtypeDeclaration {
+            dtype: skippy_package_format::PublisherDtype::Q8_0,
+            artifact_id: "publisher-hf-quant-config-json".to_string(),
+            json_path: "/kv_cache_quant_algo".to_string(),
+        }),
+    }
+}
+
+fn publisher_default_request(mesh_config: &MeshConfig) -> SkippyConfigResolveRequest<'_> {
+    SkippyConfigResolveRequest {
+        mesh_config,
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path: Path::new("/models/qwen.gguf"),
+        model_bytes: 100 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+        compact_meta: None,
+    }
+}
+
+#[test]
+fn publisher_kv_default_is_used_below_explicit_user_override() {
+    let defaults = publisher_q8_defaults();
+    let automatic = resolve_skippy_config_for_selector_with_publisher_defaults(
+        publisher_default_request(&MeshConfig::default()),
+        None,
+        Some(&defaults),
+    )
+    .unwrap();
+    assert_eq!(automatic.model_fit.cache_type_k, "q8_0");
+    assert_eq!(automatic.model_fit.cache_type_v, "q8_0");
+    assert_eq!(automatic.model_fit.kv_cache_policy, "publisher");
+
+    let explicit_config = parse_config(
+        r#"
+[defaults.model_fit]
+cache_type_k = "f16"
+cache_type_v = "f16"
+"#,
+    );
+    let explicit = resolve_skippy_config_for_selector_with_publisher_defaults(
+        publisher_default_request(&explicit_config),
+        None,
+        Some(&defaults),
+    )
+    .unwrap();
+    assert_eq!(explicit.model_fit.cache_type_k, "f16");
+    assert_eq!(explicit.model_fit.cache_type_v, "f16");
+}
+
 fn assert_request_override_keeps_load_time_config(
     without_request: &ResolvedSkippyConfig,
     with_request: &ResolvedSkippyConfig,
@@ -1837,7 +1895,7 @@ fn oversized_chat_template_file_is_rejected_before_runtime_startup() {
 }
 
 #[test]
-fn inkling_family_defaults_to_q4_kv() {
+fn model_family_and_weight_size_do_not_quantize_live_kv() {
     let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
         mesh_config: &MeshConfig::default(),
         model_id: "meshllm/inkling-UD-Q2_K_XL-layers",
@@ -1850,16 +1908,12 @@ fn inkling_family_defaults_to_q4_kv() {
     })
     .unwrap();
 
-    assert_eq!(resolved.model_fit.cache_type_k, "q4_0");
-    assert_eq!(resolved.model_fit.cache_type_v, "q4_0");
+    assert_eq!(resolved.model_fit.cache_type_k, "f16");
+    assert_eq!(resolved.model_fit.cache_type_v, "f16");
 }
 
-/// The family q4_0 default must be guarded against the model's own metadata:
-/// an Inkling variant with per-head widths not divisible by the q4_0 block
-/// size (32) cannot load quantised KV, so the resolver must degrade the
-/// default to f16 rather than fail the context build.
 #[test]
-fn inkling_family_kv_default_degrades_to_f16_for_incompatible_meta() {
+fn safe_f16_default_remains_f16_for_incompatible_quantized_kv_meta() {
     let compact_meta = crate::models::gguf::GgufCompactMeta {
         architecture: "inkling".to_string(),
         context_length: 65_536,

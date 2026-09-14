@@ -36,9 +36,8 @@ pub(crate) struct SkippyConfigResolveRequest<'a> {
     pub(crate) request_defaults: Option<&'a RequestDefaultsConfig>,
     pub(crate) package_generation: Option<&'a PackageGenerationInfo>,
     /// GGUF metadata for the model being resolved, when available. Used to
-    /// guard the size-tiered KV cache default against quantised-KV load
-    /// incompatibilities (Flash Attention / block alignment). `None` leaves the
-    /// default unguarded — the pre-existing behaviour.
+    /// guard publisher-declared quantised K/V against native load constraints
+    /// such as Flash Attention and block alignment.
     pub(crate) compact_meta: Option<&'a crate::models::gguf::GgufCompactMeta>,
 }
 

@@ -692,12 +692,12 @@ pub(super) async fn start_local_openai_model(
         .flatten()
     };
 
-    // Guard the size-tiered default against quantised-KV load incompatibilities
-    // (Flash Attention off, or a head_dim not divisible by the block size) so
-    // planning and the load agree and the context build does not fail. Explicit
-    // user overrides below are never guarded — they must fail loudly.
-    let kv_cache = skippy::KvCachePolicy::for_model_size(total_model_bytes)
-        .guarded_for_model(compact_meta.as_ref());
+    let kv_cache = skippy::KvCachePolicy::from_publisher_defaults(
+        package
+            .as_ref()
+            .and_then(|package| package.publisher_defaults.as_ref()),
+    )
+    .guarded_for_model(compact_meta.as_ref());
     let effective_cache_type_k = spec
         .cache_type_k_override
         .unwrap_or(kv_cache.cache_type_k());
@@ -708,7 +708,7 @@ pub(super) async fn start_local_openai_model(
         effective_cache_type_k,
         effective_cache_type_v,
     )
-    .unwrap_or(models::gguf::GgufKvCacheQuant::Q8_0);
+    .unwrap_or(models::gguf::GgufKvCacheQuant::F16);
     let measurement_key = MemoryPlanMeasurementKey::new(format!(
         "model={runtime_model_name:?};path={:?};bytes={local_model_bytes};capacity={my_vram};config={:?};config_model={:?};device={:?};pinned_gpu={:?};cache_k={effective_cache_type_k:?};cache_v={effective_cache_type_v:?};batch={:?};ubatch={:?};flash={:?}",
         spec.model_path,

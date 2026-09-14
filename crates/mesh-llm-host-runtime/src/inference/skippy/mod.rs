@@ -51,9 +51,7 @@ use skippy_server::{
 pub use certification::{
     CertificationGateStatus, SkippyCertificationRequest, certify_layer_package,
 };
-pub(crate) use family_policy::{
-    family_policy_for_compact_meta, family_policy_for_model_path, family_policy_for_stage_config,
-};
+pub(crate) use family_policy::{family_policy_for_model_path, family_policy_for_stage_config};
 pub(crate) use hooks::MeshAutoHookPolicy;
 pub(crate) use kv_cache::KvCachePolicy;
 #[cfg(test)]
@@ -85,6 +83,7 @@ pub(crate) use package::{
 pub(crate) use resolver::{
     ResolvedEmbeddedOpenAiArgs, ResolvedSkippyConfig, SkippyConfigResolveRequest,
     effective_safety_margin_bytes, resolve_skippy_config_for_selector,
+    resolve_skippy_config_for_selector_with_publisher_defaults,
 };
 pub(crate) use skippy_server::OpenAiGuardrailsStatus as SkippyOpenAiGuardrailsStatus;
 pub(crate) use split_certification::{require_split_certification, split_certification_label};
@@ -1546,6 +1545,7 @@ mod tests {
             activation_width: 4096,
             tensor_count: 100,
             generation: None,
+            publisher_defaults: None,
         }
     }
 
