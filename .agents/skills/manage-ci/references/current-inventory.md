@@ -57,9 +57,8 @@ shard, and requires every shard that carries `*.block_count` and
 before compilation; Qwen4 experimental artifacts derive their wider boundary
 from `hyper_connection.count * embedding_length`. It emits
 deterministic bounded GitHub matrix shards; the current one-runner topology consumes one
-selected-family shard while retaining the plan as evidence. Changed llama.cpp pins
-always run the complete `llama-bump` family cohort; non-bump runs retain their
-cadence-owned cohort. The workflow requires `HF_CACHE` to be exactly
+selected-family shard while retaining the plan as evidence. Every scheduled,
+changed-pin, or forced certification consumes the same complete family roster. The workflow requires `HF_CACHE` to be exactly
 `/Users/lab/models/huggingface`, requires its `hub` directory, and exports
 `HF_HOME` and `HF_HUB_CACHE` from that canonical root for every later step.
 The runner's `.env` exports `HF_CACHE` pointing at that pre-warmed cache on the lab NFS models
@@ -69,19 +68,18 @@ local disk and moves each repo to NFS). On Apple Silicon, the wrapper and
 generated-family rewriter re-exec as native arm64 before creating build state;
 the rewriter discards a CMake cache for any other architecture. Correctness
 lanes derive filtered-load resident tensor names from the native stage graph
-planner, including GGUFs with non-finite metadata values. The workflow builds its four
+planner, including GGUFs with non-finite metadata values. The workflow builds its five
 certification binaries before the manifest lanes; the family battery builds
 them once itself unless `--skip-build` is selected, in which case it verifies
-that every binary already exists. A scheduled unchanged pin selects the four
-`nightly` cache-mechanism sentinels (Qwen3 dense, Falcon-H1, Qwen3Next, and
-Mamba). A changed pin selects `llama-bump`; a manual dispatch may set
-`force_certify` to select `manual-full`. Both latter cadences retain the full
-family battery. Before any certification starts, every selected GGUF is resolved
+that every binary already exists. Before any certification starts, every GGUF is resolved
 directly by the immutable snapshot SHA checked into
 `ci/llama-canary/family-certified.json`. The runtime preflight records the
 revisions, verifies all shard/tensor scans and declared runtime/MTP layer
-counts/model bytes, disk
-headroom and certification ports. Native MTP/NextN heads remain part of the
+counts/model bytes, then uses the production topology capability rules to
+classify every interior boundary and select accepted balanced two-stage and
+three-stage cuts. Each model runs one consolidated live certification and
+shares one unloaded monolithic token oracle between its single-step and chain
+lanes. Preflight also checks disk headroom and certification ports. Native MTP/NextN heads remain part of the
 single target model; the battery never reopens that model as a separate draft.
 Those rows require native draft sidebands in staged single-step and chain
 correctness, where each proposed token is verified against the target. The
@@ -98,9 +96,10 @@ ceiling is 12 hours. For a changed pin, one non-interactive named Goose session
 `LLAMA_CANARY_GOOSE_PROVIDER`/`LLAMA_CANARY_GOOSE_MODEL`) receives the
 complete developer task:
 repair or regenerate the patch queue, address ABI fallout, and iterate through
-the canonical prepare, manifest-policy, build, smoke, live-matrix, and
-family-certification commands. The agent and trusted candidate checks share a
-450-minute deadline and the agent has no GitHub credentials. Ending one coding
+the canonical prepare, manifest-policy, build, smoke, and family-certification
+commands. The repair loop has an 11.5-hour deadline and independent verification
+has a 12-hour deadline while the complete roster runtime is measured. The agent
+has no GitHub credentials. Ending one coding
 response is not success: the wrapper runs the candidate gates and returns their
 logs to the same Goose session until they pass or the deadline expires. The
 repair and independent-verifier checkouts configure the same repository-local
@@ -119,7 +118,7 @@ artifact authority. Those controls form the fixed verification boundary.
 The repair job snapshots the agent result as an unreachable commit and uploads
 a thin candidate bundle. A separate self-hosted verification job and checkout
 download that bundle, materialize its commit in a fresh detached worktree, and
-run one ordered `prepare -> manifest-policy -> build -> certify` pass with a 240-minute budget. The
+run one ordered `prepare -> manifest-policy -> build -> certify` pass with a 12-hour budget while the complete roster runtime is measured. The
 verification job independently resolves the installed Homebrew LLVM prefix and
 exports `SKIPPY_REWRITER_LLVM_PREFIX` before invoking the generated-family
 rewriter check because `GITHUB_ENV` state does not cross job boundaries. The
@@ -575,12 +574,12 @@ fail-open policy.
   even when full SDK rows are unselected; accelerator compatibility is not
   required on driverless composition workers.
 - `ci/model-artifacts/registry.json`: canonical immutable model identities,
-  integrity, family capability tags, and allowed suite/cadence membership.
+  integrity, family capability tags, and allowed general suite/cadence membership.
   `scripts/generate-test-model-manifests.py` owns the family battery and
   suite-specific projections; CI contract tests reject stale projections.
 - The Linux CPU runtime-event gate consumes `family-qwen3-dense` from
-  `skippy-ci-smoke.json` at pull-request, main, or manual cadence. Its
-  family-certification cadences remain unchanged. The gate resolves its
+  `skippy-ci-smoke.json` at pull-request, main, or manual cadence. The family
+  battery has one complete roster without cadence filtering. The gate resolves its
   evidence output to an absolute path before Cargo starts, so the crate-local
   test writer and lane check use the same file.
 - `restore-test-model`: the single implementation of model resolve, cache,

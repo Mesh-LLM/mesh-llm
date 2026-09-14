@@ -339,11 +339,10 @@ class LinuxRuntimeSliceTests(unittest.TestCase):
                 self.assertEqual(len(resolved["sha256"]), 64)
                 self.assertGreater(int(resolved["size_bytes"]), 0)
 
-    def test_gate_cadences_do_not_expand_family_certification(self) -> None:
-        """Ordinary CI may load Qwen without scheduling family certification."""
+    def test_family_certification_has_one_complete_model_list(self) -> None:
         manifest = json.loads((ROOT / "ci/llama-canary/family-certified.json").read_text())
-        model = next(row for row in manifest["models"] if row["family"] == "qwen3-dense")
-        self.assertEqual(model["cadences"], ["llama-bump", "manual-full", "nightly"])
+        self.assertEqual(81, len(manifest["models"]))
+        self.assertTrue(all("cadences" not in model for model in manifest["models"]))
 
     def test_evidence_is_uploaded_even_when_the_gate_fails(self) -> None:
         """The evidence file is how a failure is diagnosed, so it must

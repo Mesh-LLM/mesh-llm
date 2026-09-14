@@ -57,11 +57,11 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
 
     def test_agent_and_final_verification_have_explicit_budgets(self) -> None:
         self.assertIn(
-            'AGENT_TIMEOUT_SECONDS="${CANARY_AGENT_TIMEOUT_SECONDS:-27000}"',
+            'AGENT_TIMEOUT_SECONDS="${CANARY_AGENT_TIMEOUT_SECONDS:-41400}"',
             self.wrapper,
         )
         self.assertIn(
-            'VERIFICATION_TIMEOUT_SECONDS="${CANARY_VERIFICATION_TIMEOUT_SECONDS:-14400}"',
+            'VERIFICATION_TIMEOUT_SECONDS="${CANARY_VERIFICATION_TIMEOUT_SECONDS:-43200}"',
             self.wrapper,
         )
         self.assertIn('run_for "agent developer task" "$seconds"', self.wrapper)
@@ -120,9 +120,9 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
             self.wrapper.index("run_certification() {") : self.wrapper.index("write_upstream_summary() {")
         ]
         self.assertIn("skippy-llama-parity.py --llama-src .deps/llama.cpp validate", certify)
-        self.assertIn("--cadence llama-bump", certify)
+        self.assertNotIn("--cadence", certify)
         self.assertNotIn("--families", certify)
-        self.assertIn("scripts/skippy-canary-live-matrix.sh --prepare", certify)
+        self.assertNotIn("skippy-canary-live-matrix", certify)
         self.assertIn("scripts/skippy-family-battery.sh --skip-build --plan", certify)
 
     def test_agent_has_no_github_credentials_or_publication_authority(self) -> None:
@@ -270,7 +270,7 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
             self.wrapper.index("run_certification() {") : self.wrapper.index("write_upstream_summary() {")
         ]
         self.assertIn("scripts/skippy-ci-smoke.sh", build)
-        self.assertIn("scripts/skippy-canary-live-matrix.sh --prepare", certify)
+        self.assertNotIn("skippy-canary-live-matrix", certify)
         self.assertNotIn("LLAMA_UPSTREAM_CANARY_SMOKE", build + certify)
 
     def test_agent_runbook_describes_complete_developer_task(self) -> None:

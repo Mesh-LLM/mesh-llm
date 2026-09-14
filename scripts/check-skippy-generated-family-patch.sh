@@ -117,6 +117,11 @@ python3 "$ROOT/scripts/generate-skippy-family-patch.py" \
   --family-manifest "$FAMILY_MANIFEST" \
   "${EXTRA_ARGS[@]}"
 
+python3 "$ROOT/scripts/verify-skippy-family-generator-coverage.py" \
+  --manifest "$FAMILY_MANIFEST" \
+  --family-map "$FAMILY_SOURCE_MAP" \
+  --report "$FIRST_REPORT"
+
 TRANSFORMED_TREE_TARGETS=(
   llama
   skippy-graph-build-inputs

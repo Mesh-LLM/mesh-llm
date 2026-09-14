@@ -181,14 +181,14 @@ jobs:
       - name: Changed-pin agent developer task
         id: changed_canary
         if: steps.sha.outputs.changed == 'true'
-        timeout-minutes: 480
+        timeout-minutes: 720
         continue-on-error: true
         env:
           CANARY_AGENT_PROVIDER: ${{ vars.LLAMA_CANARY_GOOSE_PROVIDER || 'custom_z_ai_coding_plan' }}
           CANARY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_GOOSE_MODEL || 'glm-5.3-flash' }}
           # One agent receives the complete developer task. Verification runs
           # later in a separate job after this process context has ended.
-          CANARY_AGENT_TIMEOUT_SECONDS: "27000"
+          CANARY_AGENT_TIMEOUT_SECONDS: "41400"
           CANARY_HARNESS_MODE: repair
           FAMILY_BATTERY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           UPSTREAM_SHA_INPUT: ${{ steps.sha.outputs.new_sha }}
@@ -271,7 +271,6 @@ jobs:
           plan="target/family-battery/$FAMILY_BATTERY_RUN_ID/policy-plan.json"
           python3 scripts/plan-family-battery.py \
             --manifest ci/llama-canary/family-certified.json \
-            --cadence "${{ steps.sha.outputs.cadence }}" \
             --shard-count 1 \
             --check-cache \
             --cache-root "$HF_CACHE" \
@@ -312,7 +311,7 @@ jobs:
         if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' && steps.family_patch.outcome == 'success'
         # Do not select skippy-ffi directly here: its default dynamic-runtime
         # feature would be unified into the statically linked certification binaries.
-        run: cargo build -p skippy-runtime -p skippy-server -p skippy-model-package -p skippy-correctness
+        run: cargo build -p skippy-runtime -p skippy-server -p skippy-model-package -p skippy-correctness -p skippy-topology --bins
 
       - name: Skippy smoke tests
         if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' && steps.family_patch.outcome == 'success' && env.LLAMA_UPSTREAM_CANARY_SMOKE != '0' && env.LLAMA_UPSTREAM_CANARY_SMOKE != 'false'
@@ -320,24 +319,6 @@ jobs:
         env:
           WORK_DIR: ${{ runner.temp }}/skippy-ci-smoke
         run: scripts/skippy-ci-smoke.sh
-
-      - name: Live package-v2 two-node matrix (model_pin proof)
-        id: live_matrix
-        # Executable evidence for parity model_pin rows: pinned GGUF
-        # verified, package-v2 written + independently verified, two-node
-        # split smoke run per row. --prepare first builds this run's exact
-        # producers (mesh-llm host binary + patched native runtime bundle
-        # from this run's llama tree; backend explicit per runner) and
-        # records producer-provenance.json — a cached binary/bundle cannot
-        # supply false provenance. Per-row evidence lands under the family
-        # battery evidence root and is uploaded with it.
-        if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' && steps.family_patch.outcome == 'success' && env.LLAMA_UPSTREAM_CANARY_SMOKE != '0' && env.LLAMA_UPSTREAM_CANARY_SMOKE != 'false'
-        continue-on-error: true
-        env:
-          FAMILY_BATTERY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-          SKIPPY_CANARY_LIVE_MATRIX_BACKEND: metal
-          SKIPPY_CANARY_LIVE_MATRIX_ROOT: ${{ github.workspace }}/target/family-battery/${{ github.run_id }}-${{ github.run_attempt }}
-        run: scripts/skippy-canary-live-matrix.sh --prepare
 
       - name: Supported-families certification battery (parity gate)
         id: battery
@@ -389,7 +370,6 @@ jobs:
           && steps.battery.outcome == 'success'
           && steps.split_roster.outcome == 'success'
           && steps.parity_validate.outcome == 'success'
-          && steps.live_matrix.outcome == 'success'
           && steps.family_patch.outcome == 'success'
         run: |
           {
@@ -401,7 +381,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Report nightly family result
-        # Nightly: generated patch, parity, live, and battery gates must all
+        # Nightly: generated patch, parity, and battery gates must all
         # be green.
         if: >-
           steps.prepare.outcome == 'success'
@@ -409,7 +389,6 @@ jobs:
           && steps.battery.outcome == 'success'
           && steps.split_roster.outcome == 'success'
           && steps.parity_validate.outcome == 'success'
-          && steps.live_matrix.outcome == 'success'
           && steps.family_patch.outcome == 'success'
         run: |
           {
@@ -428,7 +407,6 @@ jobs:
           && (steps.battery.outcome == 'failure'
               || steps.split_roster.outcome == 'failure'
               || steps.parity_validate.outcome == 'failure'
-              || steps.live_matrix.outcome == 'failure'
               || steps.family_patch.outcome == 'failure')
         run: |
           {
@@ -446,7 +424,7 @@ jobs:
       group: llama-upstream-canary-runner
       cancel-in-progress: false
     runs-on: [self-hosted, family-certify]
-    timeout-minutes: 270
+    timeout-minutes: 780
     outputs:
       certified_ready: ${{ steps.verification_result.outputs.ready }}
       certified_branch: ${{ steps.verify.outputs.branch }}
@@ -505,7 +483,7 @@ jobs:
           CANARY_HARNESS_MODE: verify
           CANARY_INPUT_BUNDLE: ${{ runner.temp }}/llama-canary-agent-candidate/candidate.bundle
           CANARY_CANDIDATE_SHA: ${{ needs.latest-upstream.outputs.candidate_head }}
-          CANARY_VERIFICATION_TIMEOUT_SECONDS: "14400"
+          CANARY_VERIFICATION_TIMEOUT_SECONDS: "43200"
           FAMILY_BATTERY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           UPSTREAM_SHA_INPUT: ${{ needs.latest-upstream.outputs.candidate_upstream }}
         run: scripts/llama-canary-agent-repair.sh

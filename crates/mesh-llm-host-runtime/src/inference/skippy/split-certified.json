@@ -107,16 +107,6 @@
       "source_model_sha256": "a7587dc5291aab8ce6d806c1046a169c499fb39008d4188acbca223fd6ad686d"
     },
     {
-      "family": "deepseek4",
-      "repo": "huihui-ai/Huihui-DeepSeek-V4-Flash-0731-abliterated-GGUF",
-      "revision": "a8dfba9c1e43bdf324ee2c7787ed01c70975ffb4",
-      "files": [
-        "dspark-abliterated/dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf"
-      ],
-      "package_kind": "content-addressed-direct-gguf",
-      "source_model_sha256": "6575853d1c3736c160101bc7cd117c8edd39ca847cfdf2273d9a344108edfaf8"
-    },
-    {
       "family": "dots1",
       "repo": "Robertp423/dots.llm1.test-Q6_K-GGUF",
       "revision": "a0404996541e6505cad00b7e3bfa4c7447f4f501",
@@ -225,31 +215,6 @@
       ],
       "package_kind": "content-addressed-direct-gguf",
       "source_model_sha256": "d0027dd3a9128d9323e9f282c8bf010a8526c46477584535991dc1a869b56e96"
-    },
-    {
-      "family": "gemma4-assistant",
-      "repo": "RachidAR/gemma-4-26B-A4B-it-qat-assistant-q4_0-gguf",
-      "revision": "64fc324e6829824a37518f5a7c8841ac9a559d5b",
-      "files": [
-        "gemma-4-26b-A4B-it-assistant-Q4_0-q4emb.gguf"
-      ],
-      "package_kind": "content-addressed-direct-gguf",
-      "source_model_sha256": "6195511a1bf402b1ab3ec3631347f310b4085774a17a0c6e673ea8988cc0a9fc"
-    },
-    {
-      "family": "glm-dsa",
-      "repo": "unsloth/GLM-5.2-GGUF",
-      "revision": "abc55e72527792c6e77069c99b4cb7de16fa9f23",
-      "files": [
-        "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00001-of-00006.gguf",
-        "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00002-of-00006.gguf",
-        "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00003-of-00006.gguf",
-        "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00004-of-00006.gguf",
-        "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00005-of-00006.gguf",
-        "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00006-of-00006.gguf"
-      ],
-      "package_kind": "content-addressed-direct-gguf",
-      "source_model_sha256": "3eba52420f5d095448bb35bdd9a3fcc295ad363832a74b3d8442af904d71877c"
     },
     {
       "family": "glm4",
@@ -615,16 +580,6 @@
       ],
       "package_kind": "content-addressed-direct-gguf",
       "source_model_sha256": "bfc1cf1333d60dd8f4c9ea97652ebdb984501c389d22cebc02b564f45c68d628"
-    },
-    {
-      "family": "muse-glimmer",
-      "repo": "Blackfrost-AI/Muse-Glimmer-30B-Abliterated-GGUF",
-      "revision": "83e7dc723f5515704adc8767dfeb279de3df914d",
-      "files": [
-        "dflash-Muse-Glimmer-30B-Abliterated-Q4_K_M.gguf"
-      ],
-      "package_kind": "content-addressed-direct-gguf",
-      "source_model_sha256": "1b58b92b670d20b49d06a9a1210e4bf5350696bb8f7b4931769b7000d0456eda"
     },
     {
       "family": "nemotron",

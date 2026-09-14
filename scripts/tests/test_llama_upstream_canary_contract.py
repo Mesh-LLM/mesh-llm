@@ -140,7 +140,7 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
 
         family_plan = _step_block(workflow, "Plan and verify family certification cache")
         self.assertIn("python3 scripts/plan-family-battery.py", family_plan)
-        self.assertIn('--cadence "${{ steps.sha.outputs.cadence }}"', family_plan)
+        self.assertNotIn("--cadence", family_plan)
         self.assertIn("--check-cache", family_plan)
         self.assertIn('--cache-root "$HF_CACHE"', family_plan)
         self.assertIn('--github-output "$GITHUB_OUTPUT"', family_plan)
@@ -304,13 +304,13 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertNotIn("Detect existing changed-pin canary PR", workflow)
         changed = _step_block(workflow, "Changed-pin agent developer task")
         self.assertIn("steps.sha.outputs.changed == 'true'", changed)
-        self.assertIn("timeout-minutes: 480", changed)
+        self.assertIn("timeout-minutes: 720", changed)
         self.assertIn("continue-on-error: true", changed)
         self.assertIn("LLAMA_CANARY_GOOSE_PROVIDER", changed)
         self.assertIn("custom_z_ai_coding_plan", changed)
         self.assertIn("LLAMA_CANARY_GOOSE_MODEL", changed)
         self.assertIn("glm-5.3-flash", changed)
-        self.assertIn('CANARY_AGENT_TIMEOUT_SECONDS: "27000"', changed)
+        self.assertIn('CANARY_AGENT_TIMEOUT_SECONDS: "41400"', changed)
         self.assertIn("CANARY_HARNESS_MODE: repair", changed)
         self.assertNotIn("CANARY_REPAIR_TOKEN:", changed)
         self.assertIn("UPSTREAM_SHA_INPUT:", changed)
@@ -327,7 +327,7 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("needs: latest-upstream", verifier)
         self.assertIn("runs-on: [self-hosted, family-certify]", verifier)
         self.assertIn("CANARY_HARNESS_MODE: verify", verifier)
-        self.assertIn('CANARY_VERIFICATION_TIMEOUT_SECONDS: "14400"', verifier)
+        self.assertIn('CANARY_VERIFICATION_TIMEOUT_SECONDS: "43200"', verifier)
         self.assertIn("actions/download-artifact@", verifier)
         self.assertIn("Upload independently certified candidate", verifier)
         self.assertIn("Configure verifier LLVM", verifier)
@@ -609,8 +609,7 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
                             "stage-load",
                         ],
                     },
-                },
-                "cadences": ["llama-bump", "manual-full", "nightly", "rotating"],
+                }
             },
             "models": [model],
         }
@@ -620,7 +619,6 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
         return {
             "family": "test-family",
             "profile": "full",
-            "cadences": ["llama-bump", "manual-full"],
             "artifact": {
                 "repo": "org/model",
                 "revision": revision,
@@ -634,7 +632,6 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
                 "trunk_layers": 6,
                 "mtp_layers": 0,
                 "activation_width": 1024,
-                "boundary_sweep_period": 0,
                 "speculative_policy": "mtp-if-present",
             },
             "resources": {
@@ -690,11 +687,8 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
             for line in result.stdout.splitlines()
             if line.startswith(str(FAMILY_CERTIFY) + " ")
         ]
-        self.assertEqual(3, len(commands))
-        self.assertEqual(
-            ["3", "1", "5"],
-            [command.split("--split-layer ", 1)[1].split()[0] for command in commands],
-        )
+        self.assertEqual(1, len(commands))
+        self.assertIn("--split-layer", commands[0])
         for command in commands:
             self.assertTrue(
                 command.strip().endswith(
@@ -720,9 +714,9 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
             for line in result.stdout.splitlines()
             if line.startswith(str(FAMILY_CERTIFY) + " ")
         ]
-        self.assertEqual(6, len(commands))
+        self.assertEqual(2, len(commands))
         self.assertIn("--family test-family", commands[0])
-        self.assertIn("--family second-family", commands[3])
+        self.assertIn("--family second-family", commands[1])
 
     def test_family_filter_limits_the_resolved_dry_run(self) -> None:
         selected = self._dry_run("--families", "test-family")
@@ -765,7 +759,7 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
         self.assertIn("SKIPPY_MM_PROJECTOR=", smokes[0])
         self.assertIn("frontend::tests::multimodal", smokes[0])
         self.assertIn("--test-threads=1", smokes[0])
-        self.assertIn("family battery complete: 3/3", with_mmproj.stdout)
+        self.assertIn("family battery complete: 1/1", with_mmproj.stdout)
 
     def test_mmproj_failure_is_accounted_separately_from_core_certification(self) -> None:
         script = BATTERY.read_text(encoding="utf-8")
@@ -855,9 +849,18 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
             for name in ("hf", "skippy-model-package"):
                 path = bin_dir / name
                 path.chmod(path.stat().st_mode | stat.S_IXUSR)
-            for name in ("skippy-correctness", "skippy-server"):
+            topology = bin_dir / "skippy-topology-plan"
+            topology.write_text(
+                "#!/bin/sh\n"
+                "cat <<'JSON'\n"
+                '{"boundaries":[{"layer":1,"decision":"accepted"},{"layer":2,"decision":"accepted"},{"layer":3,"decision":"accepted"},{"layer":4,"decision":"accepted"},{"layer":5,"decision":"accepted"}],"two_stage_splits":[3],"three_stage_splits":[2,4]}\n'
+                "JSON\n",
+                encoding="utf-8",
+            )
+            for name in ("skippy-correctness", "skippy-server", "skippy-topology-plan"):
                 path = bin_dir / name
-                path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                if not path.exists():
+                    path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
                 path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
             model_policy = self._model(revision)
@@ -875,7 +878,6 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
                 "trunk_layers": 5,
                 "mtp_layers": 1,
                 "activation_width": 1024,
-                "boundary_sweep_period": 0,
                 "speculative_policy": "mtp-if-present",
             }
             manifest = temp / "manifest.json"

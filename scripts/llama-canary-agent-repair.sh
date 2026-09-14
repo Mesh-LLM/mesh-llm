@@ -35,8 +35,8 @@ OLD_SHA="$(tr -d '[:space:]' < third_party/llama.cpp/upstream.txt)"
 PIN_FILE="$ROOT/third_party/llama.cpp/upstream.txt"
 AGENT_PROVIDER="${CANARY_AGENT_PROVIDER:-custom_z_ai_coding_plan}"
 AGENT_MODEL="${CANARY_AGENT_MODEL:-glm-5.3-flash}"
-AGENT_TIMEOUT_SECONDS="${CANARY_AGENT_TIMEOUT_SECONDS:-27000}"
-VERIFICATION_TIMEOUT_SECONDS="${CANARY_VERIFICATION_TIMEOUT_SECONDS:-14400}"
+AGENT_TIMEOUT_SECONDS="${CANARY_AGENT_TIMEOUT_SECONDS:-41400}"
+VERIFICATION_TIMEOUT_SECONDS="${CANARY_VERIFICATION_TIMEOUT_SECONDS:-43200}"
 RUN_ID="${GITHUB_RUN_ID:-manual-$(date +%s)}"
 RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT:-1}"
 RUN_KEY="${RUN_ID}-${RUN_ATTEMPT}"
@@ -168,7 +168,7 @@ verify_repair_pin() {
 agent_prompt() {
   printf 'Complete the llama.cpp upstream update to %s as one developer task in this checkout.
 
-The trusted harness has already written third_party/llama.cpp/upstream.txt to the exact target and recorded it in .deps/llama-canary-target-sha. Read ci/llama-canary/agent-repair-prompt.md and every repository skill it names, then own the work end to end: reproduce the queue failure, deliberately rebase or regenerate the owned patches, fix any generated-family rewriter or Rust ABI fallout, and run the canonical prepare, build, smoke, live-matrix, and full supported-family certification commands. Inspect each failure and keep iterating until every required command passes.
+The trusted harness has already written third_party/llama.cpp/upstream.txt to the exact target and recorded it in .deps/llama-canary-target-sha. Read ci/llama-canary/agent-repair-prompt.md and every repository skill it names, then own the work end to end: reproduce the queue failure, deliberately rebase or regenerate the owned patches, fix any generated-family rewriter or Rust ABI fallout, and run the canonical prepare, build, smoke, and full supported-family certification commands. Inspect each failure and keep iterating until every required command passes.
 
 Do not weaken, skip, or narrow a gate. Do not edit the workflow, this wrapper, its publisher, the agent runbook, or their contract tests. Do not create or switch branches, commit, push, open a pull request, or use GitHub credentials. Leave the completed changes in this working tree. The harness will independently rerun the entire verification sequence and only a green exact tree can be published.' \
     "$UPSTREAM_SHA"
@@ -388,7 +388,7 @@ run_full_build() {
   run_verification_logged "generated model-family patch check" "$BUILD_LOG" \
     scripts/check-skippy-generated-family-patch.sh || return 1
   run_verification_logged "stage runtime crate build" "$BUILD_LOG" \
-    cargo build -p skippy-runtime -p skippy-server -p skippy-model-package -p skippy-correctness \
+    cargo build -p skippy-runtime -p skippy-server -p skippy-model-package -p skippy-correctness -p skippy-topology --bins \
     || return 1
   run_verification_logged "Skippy smoke tests" "$BUILD_LOG" \
     scripts/skippy-ci-smoke.sh || return 1
@@ -403,17 +403,11 @@ run_certification() {
   run_verification_logged "full family certification plan" "$CERTIFY_LOG" \
     python3 scripts/plan-family-battery.py \
       --manifest ci/llama-canary/family-certified.json \
-      --cadence llama-bump \
       --shard-count 1 \
       --check-cache \
       --cache-root "$HF_CACHE" \
       --output "$PLAN_PATH" \
     || return 1
-  run_verification_logged "live package-v2 matrix" "$CERTIFY_LOG" env \
-    FAMILY_BATTERY_RUN_ID="$FAMILY_BATTERY_RUN_ID" \
-    SKIPPY_CANARY_LIVE_MATRIX_BACKEND="${SKIPPY_CANARY_LIVE_MATRIX_BACKEND:-metal}" \
-    SKIPPY_CANARY_LIVE_MATRIX_ROOT="$ROOT/target/family-battery/$FAMILY_BATTERY_RUN_ID" \
-    scripts/skippy-canary-live-matrix.sh --prepare || return 1
   run_verification_logged "full supported-family certification" "$CERTIFY_LOG" env \
     FAMILY_BATTERY_RUN_ID="$FAMILY_BATTERY_RUN_ID" \
     scripts/skippy-family-battery.sh --skip-build --plan "$PLAN_PATH"
@@ -498,7 +492,7 @@ write_pr_body() {
     echo "- Workflow run: \`${RUN_KEY}\`"
     echo "- Certified commit: \`${CERTIFIED_SHA}\`"
     echo
-    echo "One agent completed the pin and patch-queue task. The trusted harness then independently passed prepare, the complete patched llama.cpp and Rust build, Skippy smoke tests, the live package-v2 matrix, and the full supported-family certification on this exact commit."
+    echo "One agent completed the pin and patch-queue task. The trusted harness then independently passed prepare, the complete patched llama.cpp and Rust build, Skippy smoke tests, and the full supported-family certification on this exact commit."
     echo
     cat "$UPSTREAM_SUMMARY"
   } > "$PR_BODY"

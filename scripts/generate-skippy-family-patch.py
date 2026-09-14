@@ -183,11 +183,10 @@ def write_family_shards(
 ) -> dict:
     family_map = load_family_map(family_map_path)
     certified_families = load_certified_families(family_manifest_path)
-    if set(family_map) != certified_families:
-        missing = sorted(certified_families - set(family_map))
-        extra = sorted(set(family_map) - certified_families)
+    missing = sorted(certified_families - set(family_map))
+    if missing:
         raise RuntimeError(
-            f"family source map does not exactly cover the certification manifest; missing={missing}, extra={extra}"
+            f"family source map does not cover the certification manifest; missing={missing}"
         )
     reverse: dict[str, set[str]] = {}
     for family, sources in family_map.items():

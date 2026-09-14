@@ -54,13 +54,7 @@
           "stage-load"
         ]
       }
-    },
-    "cadences": [
-      "llama-bump",
-      "manual-full",
-      "nightly",
-      "rotating"
-    ]
+    }
   },
   "unverified_consumers": [
     {
@@ -111,16 +105,10 @@
       },
       "certification": {
         "profile": "full",
-        "cadences": [
-          "llama-bump",
-          "manual-full",
-          "nightly"
-        ],
         "execution": {
           "trunk_layers": 28,
           "mtp_layers": 0,
           "activation_width": 1024,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -163,15 +151,10 @@
       },
       "certification": {
         "profile": "full",
-        "cadences": [
-          "llama-bump",
-          "manual-full"
-        ],
         "execution": {
           "trunk_layers": 16,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -215,7 +198,6 @@
           "trunk_layers": 47,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -258,7 +240,6 @@
           "trunk_layers": 40,
           "mtp_layers": 0,
           "activation_width": 4096,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -308,7 +289,6 @@
           "trunk_layers": 46,
           "mtp_layers": 1,
           "activation_width": 4096,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -351,15 +331,10 @@
       },
       "certification": {
         "profile": "full",
-        "cadences": [
-          "llama-bump",
-          "manual-full"
-        ],
         "execution": {
           "trunk_layers": 27,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -403,7 +378,6 @@
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 2880,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -446,7 +420,6 @@
           "trunk_layers": 48,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -489,7 +462,6 @@
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -535,16 +507,10 @@
       },
       "certification": {
         "profile": "full",
-        "cadences": [
-          "llama-bump",
-          "manual-full",
-          "nightly"
-        ],
         "execution": {
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 4,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -588,7 +554,6 @@
           "trunk_layers": 28,
           "mtp_layers": 0,
           "activation_width": 2560,
-          "boundary_sweep_period": 6,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -633,7 +598,6 @@
           "trunk_layers": 27,
           "mtp_layers": 0,
           "activation_width": 2304,
-          "boundary_sweep_period": 4,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -679,7 +643,6 @@
           "trunk_layers": 48,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 4,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -734,7 +697,6 @@
           "trunk_layers": 48,
           "mtp_layers": 0,
           "activation_width": 10240,
-          "boundary_sweep_period": 4,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -781,7 +743,6 @@
           "trunk_layers": 52,
           "mtp_layers": 1,
           "activation_width": 2688,
-          "boundary_sweep_period": 2,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -825,7 +786,6 @@
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 768,
-          "boundary_sweep_period": 2,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -868,7 +828,6 @@
           "trunk_layers": 64,
           "mtp_layers": 0,
           "activation_width": 4096,
-          "boundary_sweep_period": 2,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -911,7 +870,6 @@
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 1,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -954,7 +912,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 2560,
-          "boundary_sweep_period": 1,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -997,15 +954,10 @@
       },
       "certification": {
         "profile": "full",
-        "cadences": [
-          "llama-bump",
-          "manual-full"
-        ],
         "execution": {
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 768,
-          "boundary_sweep_period": 3,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1045,15 +997,10 @@
       },
       "certification": {
         "profile": "full",
-        "cadences": [
-          "llama-bump",
-          "manual-full"
-        ],
         "execution": {
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 1024,
-          "boundary_sweep_period": 4,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1096,7 +1043,6 @@
           "trunk_layers": 40,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1140,7 +1086,6 @@
           "trunk_layers": 16,
           "mtp_layers": 0,
           "activation_width": 1024,
-          "boundary_sweep_period": 2,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1186,7 +1131,6 @@
           "trunk_layers": 16,
           "mtp_layers": 0,
           "activation_width": 1024,
-          "boundary_sweep_period": 2,
           "speculative_policy": "mtp-if-present"
         },
         "mmproj_artifact": {
@@ -1241,7 +1185,6 @@
           "trunk_layers": 40,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1285,7 +1228,6 @@
           "trunk_layers": 28,
           "mtp_layers": 0,
           "activation_width": 1536,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1341,7 +1283,6 @@
           "trunk_layers": 36,
           "mtp_layers": 0,
           "activation_width": 4096,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1397,7 +1338,6 @@
           "trunk_layers": 26,
           "mtp_layers": 0,
           "activation_width": 2304,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1440,7 +1380,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 3072,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1483,7 +1422,6 @@
           "trunk_layers": 40,
           "mtp_layers": 0,
           "activation_width": 5120,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1526,7 +1464,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 4544,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1569,7 +1506,6 @@
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1612,7 +1548,6 @@
           "trunk_layers": 40,
           "mtp_layers": 0,
           "activation_width": 5120,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1655,7 +1590,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 4096,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1698,7 +1632,6 @@
           "trunk_layers": 36,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1891,7 +1824,6 @@
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 896,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -1934,7 +1866,6 @@
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 1024,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -1977,7 +1908,6 @@
           "trunk_layers": 18,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2020,7 +1950,6 @@
           "trunk_layers": 26,
           "mtp_layers": 0,
           "activation_width": 1152,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2063,7 +1992,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 2560,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2106,7 +2034,6 @@
           "trunk_layers": 30,
           "mtp_layers": 0,
           "activation_width": 3072,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2149,7 +2076,6 @@
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2192,7 +2118,6 @@
           "trunk_layers": 16,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2235,7 +2160,6 @@
           "trunk_layers": 30,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2278,7 +2202,6 @@
           "trunk_layers": 62,
           "mtp_layers": 0,
           "activation_width": 2560,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2321,7 +2244,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 3072,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2364,7 +2286,6 @@
           "trunk_layers": 36,
           "mtp_layers": 0,
           "activation_width": 2560,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2407,7 +2328,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 4096,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2450,7 +2370,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 4096,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2493,7 +2412,6 @@
           "trunk_layers": 40,
           "mtp_layers": 0,
           "activation_width": 4096,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2536,7 +2454,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -2579,7 +2496,6 @@
           "trunk_layers": 28,
           "mtp_layers": 0,
           "activation_width": 3584,
-          "boundary_sweep_period": 1,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -2624,7 +2540,6 @@
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 1536,
-          "boundary_sweep_period": 4,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -2667,7 +2582,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 4096,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -2711,7 +2625,6 @@
           "trunk_layers": 4,
           "mtp_layers": 0,
           "activation_width": 7168,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -2720,49 +2633,6 @@
           "estimated_model_bytes": 16125871104
         },
         "notes": "compact four-layer DeepSeek 3.2 architecture probe"
-      }
-    },
-    {
-      "id": "family-deepseek4",
-      "family": "deepseek4",
-      "suites": [
-        "llama-family-certification"
-      ],
-      "cadences": [
-        "llama-bump",
-        "manual-full"
-      ],
-      "capability_tags": [
-        "gguf",
-        "moe"
-      ],
-      "artifact": {
-        "repo": "huihui-ai/Huihui-DeepSeek-V4-Flash-0731-abliterated-GGUF",
-        "revision": "a8dfba9c1e43bdf324ee2c7787ed01c70975ffb4",
-        "selector": "Q8_0",
-        "files": [
-          {
-            "path": "dspark-abliterated/dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf",
-            "size_bytes": 10896057440,
-            "sha256": "6575853d1c3736c160101bc7cd117c8edd39ca847cfdf2273d9a344108edfaf8"
-          }
-        ]
-      },
-      "certification": {
-        "profile": "full",
-        "execution": {
-          "trunk_layers": 3,
-          "mtp_layers": 0,
-          "activation_width": 16384,
-          "boundary_sweep_period": 0,
-          "speculative_policy": "mtp-if-present"
-        },
-        "resources": {
-          "runner_role": "family-certify",
-          "cache_policy": "immutable-local",
-          "estimated_model_bytes": 10890804124
-        },
-        "notes": "DeepSeek V4 Flash dflash path with four hyper-connection streams"
       }
     },
     {
@@ -2797,7 +2667,6 @@
           "trunk_layers": 27,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -2840,7 +2709,6 @@
           "trunk_layers": 18,
           "mtp_layers": 0,
           "activation_width": 1024,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -2883,7 +2751,6 @@
           "trunk_layers": 28,
           "mtp_layers": 0,
           "activation_width": 2560,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -2926,7 +2793,6 @@
           "trunk_layers": 35,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -2969,7 +2835,6 @@
           "trunk_layers": 42,
           "mtp_layers": 0,
           "activation_width": 2560,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -2990,49 +2855,6 @@
             }
           ]
         }
-      }
-    },
-    {
-      "id": "family-gemma4-assistant",
-      "family": "gemma4-assistant",
-      "suites": [
-        "llama-family-certification"
-      ],
-      "cadences": [
-        "llama-bump",
-        "manual-full"
-      ],
-      "capability_tags": [
-        "dense",
-        "gguf"
-      ],
-      "artifact": {
-        "repo": "RachidAR/gemma-4-26B-A4B-it-qat-assistant-q4_0-gguf",
-        "revision": "64fc324e6829824a37518f5a7c8841ac9a559d5b",
-        "selector": "Q4_0",
-        "files": [
-          {
-            "path": "gemma-4-26b-A4B-it-assistant-Q4_0-q4emb.gguf",
-            "size_bytes": 251938176,
-            "sha256": "6195511a1bf402b1ab3ec3631347f310b4085774a17a0c6e673ea8988cc0a9fc"
-          }
-        ]
-      },
-      "certification": {
-        "profile": "full",
-        "execution": {
-          "trunk_layers": 4,
-          "mtp_layers": 0,
-          "activation_width": 1024,
-          "boundary_sweep_period": 0,
-          "speculative_policy": "mtp-if-present"
-        },
-        "resources": {
-          "runner_role": "family-certify",
-          "cache_policy": "immutable-local",
-          "estimated_model_bytes": 236152848
-        },
-        "notes": "compact Gemma 4 assistant architecture probe"
       }
     },
     {
@@ -3067,7 +2889,6 @@
           "trunk_layers": 44,
           "mtp_layers": 0,
           "activation_width": 6144,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3111,7 +2932,6 @@
           "trunk_layers": 28,
           "mtp_layers": 0,
           "activation_width": 1280,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3154,7 +2974,6 @@
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 1024,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3197,7 +3016,6 @@
           "trunk_layers": 40,
           "mtp_layers": 0,
           "activation_width": 2560,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3240,7 +3058,6 @@
           "trunk_layers": 48,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3283,7 +3100,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3326,7 +3142,6 @@
           "trunk_layers": 48,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3369,7 +3184,6 @@
           "trunk_layers": 40,
           "mtp_layers": 0,
           "activation_width": 5120,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3412,7 +3226,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 3328,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3457,7 +3270,6 @@
           "trunk_layers": 8,
           "mtp_layers": 0,
           "activation_width": 1024,
-          "boundary_sweep_period": 4,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3503,7 +3315,6 @@
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 4,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3546,7 +3357,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 1536,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3590,7 +3400,6 @@
           "trunk_layers": 28,
           "mtp_layers": 0,
           "activation_width": 2304,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3633,7 +3442,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 4096,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3642,62 +3450,6 @@
           "estimated_model_bytes": 4963831552
         },
         "notes": "downloaded MiniCPM 4.1 architecture coverage"
-      }
-    },
-    {
-      "id": "family-muse-glimmer",
-      "family": "muse-glimmer",
-      "suites": [
-        "llama-family-certification"
-      ],
-      "cadences": [
-        "llama-bump",
-        "manual-full"
-      ],
-      "capability_tags": [
-        "gguf",
-        "moe",
-        "multimodal"
-      ],
-      "artifact": {
-        "repo": "Blackfrost-AI/Muse-Glimmer-30B-Abliterated-GGUF",
-        "revision": "83e7dc723f5515704adc8767dfeb279de3df914d",
-        "selector": "Q4_K_M",
-        "files": [
-          {
-            "path": "dflash-Muse-Glimmer-30B-Abliterated-Q4_K_M.gguf",
-            "size_bytes": 1631210720,
-            "sha256": "1b58b92b670d20b49d06a9a1210e4bf5350696bb8f7b4931769b7000d0456eda"
-          }
-        ]
-      },
-      "certification": {
-        "profile": "full",
-        "execution": {
-          "trunk_layers": 5,
-          "mtp_layers": 0,
-          "activation_width": 6656,
-          "boundary_sweep_period": 0,
-          "speculative_policy": "mtp-if-present"
-        },
-        "resources": {
-          "runner_role": "family-certify",
-          "cache_policy": "immutable-local",
-          "estimated_model_bytes": 1618131968
-        },
-        "notes": "Muse Glimmer dflash text and projector lanes",
-        "mmproj_artifact": {
-          "repo": "Blackfrost-AI/Muse-Glimmer-30B-Abliterated-GGUF",
-          "revision": "83e7dc723f5515704adc8767dfeb279de3df914d",
-          "selector": "F16",
-          "files": [
-            {
-              "path": "mmproj-Muse-Glimmer-30B-Abliterated-F16.gguf",
-              "size_bytes": 3847367616,
-              "sha256": "c2e08b8bd13ca60b59ffdcb79b969b354b1edda9b9198047d10621adc11591bb"
-            }
-          ]
-        }
       }
     },
     {
@@ -3734,7 +3486,6 @@
           "trunk_layers": 40,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 4,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3779,7 +3530,6 @@
           "trunk_layers": 48,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3836,7 +3586,6 @@
           "trunk_layers": 36,
           "mtp_layers": 0,
           "activation_width": 4096,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3845,76 +3594,6 @@
           "estimated_model_bytes": 34916274176
         },
         "notes": "Mistral Small 4 MoE and MLA architecture coverage"
-      }
-    },
-    {
-      "id": "family-glm-dsa",
-      "family": "glm-dsa",
-      "suites": [
-        "llama-family-certification"
-      ],
-      "cadences": [
-        "manual-full"
-      ],
-      "capability_tags": [
-        "gguf",
-        "mla",
-        "moe",
-        "mtp",
-        "multipart"
-      ],
-      "artifact": {
-        "repo": "unsloth/GLM-5.2-GGUF",
-        "revision": "abc55e72527792c6e77069c99b4cb7de16fa9f23",
-        "selector": "UD-IQ1_S",
-        "files": [
-          {
-            "path": "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00001-of-00006.gguf",
-            "size_bytes": 9423744,
-            "sha256": "46b6148389219ae45167cb8124fbb18ef7d432daf619b4faf9e06ea80d3f4777"
-          },
-          {
-            "path": "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00002-of-00006.gguf",
-            "size_bytes": 49208128256,
-            "sha256": "f2180207285e04fcaa5b8c53ba6e77ad5cc58666b6e7c6b04a5eded3fe8bef09"
-          },
-          {
-            "path": "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00003-of-00006.gguf",
-            "size_bytes": 49684417024,
-            "sha256": "b1c0c5a302cc8d5d9ea0bcd4467c01db72c26839f820f7e882079582ea0a8d2b"
-          },
-          {
-            "path": "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00004-of-00006.gguf",
-            "size_bytes": 49396052864,
-            "sha256": "a6a42da6975e29f89866dcde2956e9e50e6ea26635fb5063b74f3973f4f863b6"
-          },
-          {
-            "path": "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00005-of-00006.gguf",
-            "size_bytes": 49246275936,
-            "sha256": "a4a9851a50db533f21ef824e5d8038f04e6782e7d602d18e5fdd6643f68ccccb"
-          },
-          {
-            "path": "UD-IQ1_S/GLM-5.2-UD-IQ1_S-00006-of-00006.gguf",
-            "size_bytes": 19171063136,
-            "sha256": "3b767f55df64e0432d52fcf1a14eb47a1ef3bbc91339e2ae220f38602237d7d7"
-          }
-        ]
-      },
-      "certification": {
-        "profile": "full",
-        "execution": {
-          "trunk_layers": 78,
-          "mtp_layers": 1,
-          "activation_width": 6144,
-          "boundary_sweep_period": 0,
-          "speculative_policy": "mtp-if-present"
-        },
-        "resources": {
-          "runner_role": "family-certify",
-          "cache_policy": "immutable-local",
-          "estimated_model_bytes": 216705819648
-        },
-        "notes": "GLM 5.2 DSA MoE with MLA, sparse indexer attention, and one native NextN head"
       }
     },
     {
@@ -3948,7 +3627,6 @@
           "trunk_layers": 45,
           "mtp_layers": 0,
           "activation_width": 4096,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3997,7 +3675,6 @@
           "trunk_layers": 48,
           "mtp_layers": 3,
           "activation_width": 4096,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -4055,7 +3732,6 @@
           "trunk_layers": 60,
           "mtp_layers": 0,
           "activation_width": 6144,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -4098,7 +3774,6 @@
           "trunk_layers": 36,
           "mtp_layers": 0,
           "activation_width": 2560,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
