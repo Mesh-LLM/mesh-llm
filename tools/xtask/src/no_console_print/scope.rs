@@ -25,6 +25,39 @@ const NON_PRODUCT_CRATES: &[&str] = &[
     "metrics-server",
 ];
 
+/// Files that implement the console output facility, and therefore legitimately
+/// hold a terminal handle. Every other product file must route output through
+/// that facility. These are whole-file category rules: a surface either owns
+/// terminal access or it does not, so this list can never grow to excuse one
+/// convenient write inside an ordinary module.
+///
+/// - the sink-aware console writer and the pre-sink CLI lifecycle fallback,
+/// - the inline progress renderers, which paint a transient cursor-addressed
+///   redraw that has no structured representation,
+/// - the TUI's own output manager, fd capture, and terminal backend,
+/// - the runtime's tracing writer, the last-resort path used when event
+///   emission itself fails,
+/// - skippy-server's stderr telemetry sink, whose entire purpose is writing
+///   newline-delimited events to stderr,
+/// - CLI presentation surfaces that render to the user's terminal by design.
+pub(super) const CONSOLE_OUTPUT_OWNERS: &[&str] = &[
+    "crates/mesh-llm-events/src/console.rs",
+    "crates/mesh-llm-events/src/command_lifecycle.rs",
+    "crates/mesh-llm-events/src/terminal_progress.rs",
+    "crates/mesh-llm-tui/src/terminal_progress.rs",
+    "crates/mesh-llm-tui/src/output/console_capture.rs",
+    "crates/mesh-llm-tui/src/output/formatting.rs",
+    "crates/mesh-llm-tui/src/output/terminal_out.rs",
+    "crates/mesh-llm-host-runtime/src/runtime/tracing_writer.rs",
+    "crates/skippy-server/src/telemetry.rs",
+    "crates/mesh-llm-cli/src/pager.rs",
+    "crates/mesh-llm-commands/src/gpus/tune_runner.rs",
+];
+
+pub(super) fn owns_console_output(path: &str) -> bool {
+    CONSOLE_OUTPUT_OWNERS.contains(&path)
+}
+
 pub(super) fn is_product_source(path: &str) -> bool {
     let parts: Vec<_> = path.split('/').collect();
     if parts.len() < 3 || parts[0] != "crates" {

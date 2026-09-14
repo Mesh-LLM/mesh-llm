@@ -26,9 +26,9 @@ ci-crate-lists:
 publish-crates:
     just with-lld cargo run -p xtask -- repo-consistency publish-crates
 
-# Ratchet on println!/eprintln!/print!/eprint! in Rust files under crates/
-# (excluding tests, non-product crates, helper bins and build.rs): each hit must be
-# explicitly listed in tools/xtask/data/console_print_allowlist.json.
+# Gate on println!/eprintln!/print!/eprint! and direct io::stdout()/io::stderr()
+# handles in Rust files under crates/ (excluding tests, non-product crates, helper
+# bins and build.rs). There is no allowlist: route output through mesh-llm-events.
 no-console-print:
     cargo run -p xtask -- repo-consistency no-console-print
 
