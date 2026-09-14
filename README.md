@@ -395,3 +395,11 @@ are proven. Hardware-qualified GPU tests remain on dedicated runners.
 Mesh LLM is experimental distributed-systems software. When you report bugs,
 include the command you ran, platform/backend flavor, `/api/status` output if
 available, and whether the node was private, published, or joined with `--auto`.
+
+## Support
+
+<a href="https://spiral.xyz">
+  <img alt="Spiral" src="https://spiral.xyz/images/spiral-logo.svg" width="128">
+</a>
+
+The Mesh LLM project thanks [spiral.xyz](https://spiral.xyz) for their support.
