@@ -22,6 +22,7 @@ and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 | `main_windows.yml` (`Main · Windows`) | push to `main` | Plans and calls the same-commit Windows lane |
 | `ci.yml` | `workflow_call` only | Temporary inert compatibility for the former main ingress filename, pending the protected-main runner-contract update |
 | `ci-control.yml` (`CI · Manual Full`) | `workflow_dispatch` on `main` | Explicit operator-only full plan, detached lane dispatch, and correlated diagnostic checks |
+| `release.yml` | `workflow_dispatch` on `main`; exact `hotfix/v0.76.2-autoupdate` exception for `v0.76.2` | Synchronizes the version on the verified dispatch ref, builds and verifies the release graph, then publishes the immutable tag and downstream packages |
 | `ci-*-lane.yml` | `workflow_call`, `workflow_dispatch` | Composable Quality, Website, Linux, macOS and Windows graphs |
 | `nightly-stability.yml` / `nightly-stability-run.yml` | daily schedule, dispatch / reusable | GitHub-hosted live-endpoint evidence. The general stability and KV tool-loop/prefix-reuse harnesses run independently, upload both evidence sets, and preserve either failure. The reusable workflow accepts no runner label. |
 | `nightly-kv-coverage.yml` | daily schedule, dispatch | Trusted-`main`, read-only, GitHub-hosted expansion of deterministic radix lease/eviction and blob-ownership state machines. Seed/step budgets and the exact source SHA are uploaded; no secrets or privileged runner are used. |
@@ -155,9 +156,12 @@ Release efficiency TODOs:
 `scripts/release-version.sh` is the single owner of the tracked release-version
 surface. On a non-canary `release.yml` dispatch, the metadata job applies that
 script, creates a linear release-source commit when needed, and fast-forwards
-`main` before the build graph begins. `just release` only performs local
-preflight, dispatches that workflow, and waits for its result. Canary dispatches
-do not mutate `main` or publish.
+the verified dispatch ref before the build graph begins. The ordinary ref is
+`main`. The emergency `v0.76.2` updater release may instead use only the exact
+`refs/heads/hotfix/v0.76.2-autoupdate` ref; its version commit returns to that
+branch and never updates `main`. `just release` remains the normal default-branch
+preflight and dispatcher. Canary dispatches do not mutate the dispatch ref or
+publish.
 
 Release calls the existing UI producer once with the immutable source SHA and
 release tag. It prepares that version, builds the TypeScript console in release
@@ -218,9 +222,9 @@ flowchart TD
     UI["GitHub Actions UI"] --> DISPATCH
     DISPATCH --> META["Resolve version and highest prior stable notes tag"]
     META --> PATH{"Canary?"}
-    PATH -- "canary dispatch" --> CANARY["Use dispatch SHA<br/>do not update main"]
+    PATH -- "canary dispatch" --> CANARY["Use dispatch SHA<br/>do not update dispatch ref"]
     PATH -- "non-canary dispatch" --> BUMP["Run release-version.sh"]
-    BUMP --> VERSION_COMMIT["Commit tracked version surface<br/>fast-forward main"]
+    BUMP --> VERSION_COMMIT["Commit tracked version surface<br/>fast-forward verified dispatch ref"]
     CANARY --> BUILD["Build, compose, and smoke artifact matrix"]
     VERSION_COMMIT --> BUILD
     BUILD --> PUBLISHABLE{"Canary?"}

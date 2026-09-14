@@ -385,6 +385,17 @@ checked-in expiry are the maintainer-controlled approval boundary.
 - Validate with the narrowest safe workflow. A run is not successful until all
   required jobs reach a terminal successful conclusion; state expected skips.
 
+### Emergency v0.76.2 release ref
+
+- The updater hotfix for `v0.76.2` may be dispatched only from the exact
+  `refs/heads/hotfix/v0.76.2-autoupdate` ref. The workflow must commit its
+  generated release-version update back to that same ref and must not update
+  `main`. Keep the ordinary `refs/heads/main` release path unchanged and do not
+  replace the exact hotfix ref with a prefix, pattern, input, or arbitrary ref.
+- This exception is scoped to the `v0.76.2` emergency release. Remove it from
+  the workflow and CI documentation when the hotfix release is complete or
+  before reusing the branch for any other version.
+
 ## Validation contract
 
 For every workflow or local-action edit:

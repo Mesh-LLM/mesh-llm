@@ -6,18 +6,22 @@ Releases are normally cut by running the **Release** workflow
 (`.github/workflows/release.yml`) from the GitHub Actions UI via
 `workflow_dispatch` with the version input (for example `v0.31.0`). The
 dispatched workflow uses `scripts/release-version.sh` as the single version
-authority, commits the complete tracked version update to `main`, and only then
-starts the release build. It later generates and patches the SwiftPM manifest,
-packages SDK console assets, creates and pushes the release tag, builds all
-platform bundles, publishes the GitHub release, and asks GitHub to generate the
-release notes against the highest stable SemVer tag below the target. RC tags
+authority, commits the complete tracked version update to the verified dispatch
+ref, and only then starts the release build. The ordinary ref is `main`. The
+emergency `v0.76.2` updater release may use only the exact
+`hotfix/v0.76.2-autoupdate` branch and writes that version commit back to the
+branch without updating `main`. It later generates and patches the SwiftPM
+manifest, packages SDK console assets, creates and pushes the release tag,
+builds all platform bundles, publishes the GitHub release, and asks GitHub to
+generate the release notes against the highest stable SemVer tag below the
+target. RC tags
 are never selected as the comparison base, so every RC includes all changes
 since the previous stable release, and the final release repeats that complete
 range plus any post-RC changes. The `just release <version>` recipe performs
 local preflight and
 dispatches this same workflow; it does not maintain a second version-bump path.
-Canary dispatches build the requested version without changing `main` or
-publishing. After a complete
+Canary dispatches build the requested version without changing the dispatch ref
+or publishing. After a complete
 stable, non-canary release with the full GPU matrix succeeds, it dispatches
 `Mesh-LLM/mesh-packaging` to package the verified release archives, publish the
 native package release assets, publish the supported GHCR image matrix, and
@@ -30,7 +34,8 @@ dispatch the full packaging matrix.
 Do not use GitHub's bare **Draft a new release** form as an alternate release
 path. It bypasses the verified artifact graph. The Release workflow is the only
 supported GitHub release publisher; use the Actions UI or `just release` to
-dispatch it from `main`.
+dispatch it from `main`, except for the exact `v0.76.2` hotfix branch described
+above.
 
 The sections below document the underlying steps, workflow debugging, and local
 bundle validation.

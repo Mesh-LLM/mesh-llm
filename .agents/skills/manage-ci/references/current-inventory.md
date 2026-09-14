@@ -21,7 +21,7 @@ Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 | `main_windows.yml` (`Main · Windows`) | push to `main` | Exhaustive main planning plus the same-commit reusable Windows lane |
 | `ci.yml` | `workflow_call` only | Temporary inert shim for the former main ingress filename; pending protected-main runner-contract update; no push trigger or dispatch |
 | `ci-control.yml` (`CI · Manual Full`) | dispatch on default branch | Explicit operator-only full plan, bounded lane dispatch and correlated diagnostic checks |
-| `release.yml` | dispatch on the default branch | Canonical version synchronization, release-only signing, assets, publication, post-publish release-notes regrouping, and a preflighted downstream `mesh-packaging` dispatch |
+| `release.yml` | dispatch on the default branch; exact `hotfix/v0.76.2-autoupdate` exception for `v0.76.2` | Canonical version synchronization on the dispatch ref, release-only signing, assets, publication, post-publish release-notes regrouping, and a preflighted downstream `mesh-packaging` dispatch |
 | `website-pages.yml` | main website paths, dispatch | Public website deployment |
 | `pr_cleanup.yml` | PR close, dispatch | Positively matched cleanup only |
 | `pr_auto_assign.yml` | PR lifecycle | Metadata only |
@@ -127,9 +127,13 @@ the repair agent.
 
 For a non-canary manual dispatch, `release.yml` runs the checked-in
 `scripts/release-version.sh`, creates one linear release-source commit when the
-tracked version surface changes, and fast-forwards `main` before any release
-build starts. `just release` is a preflight and synchronous dispatcher for that
-same workflow. Canary dispatches never update `main` or publish. The publish job
+tracked version surface changes, and fast-forwards the verified dispatch ref
+before any release build starts. The normal ref is `main`; the emergency
+`v0.76.2` updater release alone may use the exact
+`hotfix/v0.76.2-autoupdate` branch and writes its version commit back to that
+branch without updating `main`. `just release` is a preflight and synchronous
+dispatcher for the normal default-branch path. Canary dispatches never update
+the dispatch ref or publish. The publish job
 creates only the release-specific tag commit
 for generated Swift/SDK resources and enables GitHub-generated release notes.
 The comparison base is the highest stable `vMAJOR.MINOR.PATCH` tag below the

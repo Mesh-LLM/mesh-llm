@@ -41,6 +41,8 @@ permissions:
 
 env:
   CACHE_NAMESPACE: mesh-llm
+  RELEASE_HOTFIX_REF: refs/heads/hotfix/v0.76.2-autoupdate
+  RELEASE_HOTFIX_VERSION: v0.76.2
   SCCACHE_DIR: ${{ github.workspace }}/../.sccache
   SCCACHE_GHA_ENABLED: "true"
   SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
@@ -76,11 +78,24 @@ jobs:
     steps:
       - name: Require the trusted release ref
         shell: bash
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "Manual releases must be dispatched from refs/heads/main, not $GITHUB_REF." >&2
-            exit 1
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            case "$GITHUB_REF" in
+              refs/heads/main) ;;
+              "$RELEASE_HOTFIX_REF")
+                if [[ "v${DISPATCH_VERSION#v}" != "$RELEASE_HOTFIX_VERSION" ]]; then
+                  echo "$RELEASE_HOTFIX_REF may release only $RELEASE_HOTFIX_VERSION, not $DISPATCH_VERSION." >&2
+                  exit 1
+                fi
+                ;;
+              *)
+                echo "Manual releases must be dispatched from refs/heads/main or the exact $RELEASE_HOTFIX_REF ref, not $GITHUB_REF." >&2
+                exit 1
+                ;;
+            esac
           fi
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -152,6 +167,7 @@ jobs:
         run: |
           set -euo pipefail
           source_sha="$GITHUB_SHA"
+          source_ref="$GITHUB_REF"
 
           if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
             scripts/release-version.sh "$RELEASE_TAG"
@@ -162,7 +178,7 @@ jobs:
               exit 1
             fi
           elif [[ "$CANARY" == "true" ]]; then
-            echo "Canary release: leaving main unchanged."
+            echo "Canary release: leaving the dispatch ref unchanged."
           else
             scripts/release-version.sh "$RELEASE_TAG"
             cargo fmt --all -- --check
@@ -182,7 +198,7 @@ jobs:
             fi
             source_sha="$(git rev-parse HEAD)"
             release_remote="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-            git push "$release_remote" "$source_sha:refs/heads/main"
+            git push "$release_remote" "$source_sha:$source_ref"
           fi
 
           release_notes_base="$(

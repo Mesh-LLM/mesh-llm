@@ -178,9 +178,20 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
             metadata,
         )
         self.assertIn(
-            '"$GITHUB_REF" != "refs/heads/main"',
+            "RELEASE_HOTFIX_REF: refs/heads/hotfix/v0.76.2-autoupdate",
+            workflow,
+        )
+        self.assertIn(
+            "RELEASE_HOTFIX_VERSION: v0.76.2",
+            workflow,
+        )
+        self.assertIn(
+            '"$RELEASE_HOTFIX_REF")',
             metadata,
         )
+        self.assertIn('"v${DISPATCH_VERSION#v}"', metadata)
+        self.assertIn('"$RELEASE_HOTFIX_VERSION"', metadata)
+        self.assertNotIn("refs/heads/hotfix/*", metadata)
         self.assertIn(
             'git merge-base --is-ancestor "$GITHUB_SHA" '
             "refs/remotes/origin/main",
@@ -211,9 +222,16 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
             metadata,
         )
         self.assertIn('scripts/release-version.sh "$RELEASE_TAG"', metadata)
-        self.assertIn("Canary release: leaving main unchanged", metadata)
         self.assertIn(
-            'git push "$release_remote" "$source_sha:refs/heads/main"',
+            "Canary release: leaving the dispatch ref unchanged",
+            metadata,
+        )
+        self.assertIn(
+            'source_ref="$GITHUB_REF"',
+            metadata,
+        )
+        self.assertIn(
+            'git push "$release_remote" "$source_sha:$source_ref"',
             metadata,
         )
         self.assertIn(
@@ -244,7 +262,7 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
         whitespace_check = metadata.index("git diff --check", format_check)
         stage_release_source = metadata.index("git add --update", whitespace_check)
         push_release_source = metadata.index(
-            'git push "$release_remote" "$source_sha:refs/heads/main"',
+            'git push "$release_remote" "$source_sha:$source_ref"',
         )
         self.assertLess(manual_version_update, format_check)
         self.assertLess(format_check, whitespace_check)
