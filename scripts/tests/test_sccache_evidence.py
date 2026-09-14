@@ -39,7 +39,7 @@ SEED_WARMER = ROOT / ".github" / "workflows" / "cache-warm-sccache.yml"
 SEED_KEY_PATTERN = re.compile(
     r"mesh-llm-sccache-seed-[^\n]+-\$\{\{ hashFiles\('"
     r"Cargo\.lock', '\.github/cache-version\.txt', '\.cargo/config\.toml', "
-    r"'scripts/cargo-linker', 'scripts/lib/lld\.sh', 'Justfile', 'just/\*\*'\) \}\}"
+    r"'scripts/cargo-linker', 'scripts/cargo-linker-linux-\*', 'scripts/lib/lld\.sh', 'Justfile', 'just/\*\*'\) \}\}"
 )
 SEED_IMAGE = (
     "ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:"
@@ -529,7 +529,7 @@ class SccacheEvidenceTests(unittest.TestCase):
             "'Cargo.lock'",
             "'.github/cache-version.txt'",
             "'.cargo/config.toml'",
-            "'scripts/cargo-linker'",
+            "'scripts/cargo-linker', 'scripts/cargo-linker-linux-*'",
             "'scripts/lib/lld.sh'",
             "'**/Cargo.toml'",
             "'scripts/ci-rust-sdk-smoke.sh'",

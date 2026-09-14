@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import unittest
 
 
@@ -18,9 +19,13 @@ class BuildAcceleratorDefaultsTests(unittest.TestCase):
                 'LLAMA_STAGE_USE_SCCACHE: "0"',
                 "LLAMA_STAGE_USE_SCCACHE: '0'",
                 "fuse-ld=lld",
+                "-C linker=",
+                "-Clinker=",
             ):
                 if forbidden in text:
                     findings.append(f"{path.relative_to(ROOT)}: {forbidden}")
+            if re.search(r"CARGO_TARGET_[A-Z0-9_]+_LINKER", text):
+                findings.append(f"{path.relative_to(ROOT)}: target linker environment override")
         self.assertEqual(findings, [])
 
     def test_linux_and_windows_release_paths_keep_sccache_enabled(self) -> None:
@@ -65,6 +70,8 @@ class BuildAcceleratorDefaultsTests(unittest.TestCase):
         self.assertIn("xcrun --show-sdk-build-version", unix)
         self.assertIn("rust-lld.exe", windows)
         self.assertIn("lld-link.exe", windows)
+        self.assertIn("aarch64-linux-gnu-gcc", unix)
+        self.assertIn("x86_64-linux-gnu-gcc", unix)
 
     def test_developer_bootstrap_pins_sccache_and_installs_linkers(self) -> None:
         unix = (ROOT / "scripts/bootstrap-build-tools").read_text(encoding="utf-8")

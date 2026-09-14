@@ -60,6 +60,34 @@ target_identity() {
     esac
 }
 
+compiler_driver() {
+    local target host
+    target="$(target_identity)"
+    host="$(uname -m)"
+    case "$(uname -s):$target:$host" in
+        Linux:x86_64-unknown-linux-gnu:x86_64|Linux:aarch64-unknown-linux-gnu:aarch64|Linux:aarch64-unknown-linux-gnu:arm64|Darwin:*)
+            printf 'cc\n'
+            ;;
+        Linux:aarch64-unknown-linux-gnu:x86_64)
+            printf 'aarch64-linux-gnu-gcc\n'
+            ;;
+        Linux:x86_64-unknown-linux-gnu:aarch64|Linux:x86_64-unknown-linux-gnu:arm64)
+            printf 'x86_64-linux-gnu-gcc\n'
+            ;;
+        *)
+            printf 'unsupported host/target linker pair: %s -> %s\n' "$host" "$target" >&2
+            return 1
+            ;;
+    esac
+}
+
+compiler="$(compiler_driver)" || exit 1
+if ! command -v "$compiler" >/dev/null 2>&1; then
+    echo "Error: $compiler is required to link target $(target_identity) from host $(uname -m)." >&2
+    exit 1
+fi
+export MESH_LLM_CC="$compiler"
+
 linker_identity() {
     local linker="$1"
     local linker_path=""
@@ -68,8 +96,8 @@ linker_identity() {
         printf 'os=%s\n' "$(uname -s)"
         printf 'machine=%s\n' "$(uname -m)"
         printf 'target=%s\n' "$(target_identity)"
-        printf 'cc=%s\n' "$(command -v cc)"
-        cc --version 2>&1 || true
+        printf 'cc=%s\n' "$(command -v "$compiler")"
+        "$compiler" --version 2>&1 || true
         printf 'linker=%s\n' "$linker_path"
         "$linker_path" --version 2>&1 || true
         printf 'probe-arg=%s\n' "${probe_args[@]}"
@@ -160,6 +188,6 @@ if [[ "${1:-}" == --mesh-probe ]]; then
 fi
 
 if [[ -n "$selected_linker" ]]; then
-    exec cc "-fuse-ld=$selected_linker" "${link_args[@]}"
+    exec "$compiler" "-fuse-ld=$selected_linker" "${link_args[@]}"
 fi
-exec cc "${link_args[@]}"
+exec "$compiler" "${link_args[@]}"

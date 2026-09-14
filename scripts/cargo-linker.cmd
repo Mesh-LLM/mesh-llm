@@ -22,5 +22,6 @@ if "%~1"=="--mesh-probe" (
   exit /b 0
 )
 
+setlocal DisableDelayedExpansion
 "%MESH_LLD%" %*
 exit /b %ERRORLEVEL%

@@ -809,14 +809,15 @@ other historical receipts and CPU seed workload coverage remain unknown.
 See [CI topology](../../../../ci/ci.md#qualified-lean-ui-consumers) for admission
 scope and the required candidate-branch lane execution before merge.
 
-### Existing-seed CPU runtime canary
+### CPU runtime seed canary
 
-`depot-canary.yml` has an isolated manual `runtime-seed` mode with three cold/warm
-pairs on fresh GitHub-hosted CPU jobs. It restores only the admitted main seed,
+`depot-canary.yml` has an isolated default-branch-only manual `runtime-seed` mode
+with three cold/warm pairs on fresh GitHub-hosted CPU jobs. It restores only the
+current image-bound, recipe-bound main seed,
 never saves caches or changes production eligibility, and retains negative or
 inconclusive results. The catalog tracks this qualification restore separately
 from the five production restore-action bindings, including the explicitly
-disabled runtime binding. See [CI topology](../../../../ci/ci.md#existing-seed-cpu-runtime-canary)
+disabled runtime binding. See [CI topology](../../../../ci/ci.md#cpu-runtime-seed-canary)
 for identity, measurements and the completed qualification limits.
 
 Runtime exclusion evidence: run `34272984200/1`, source

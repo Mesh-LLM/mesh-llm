@@ -252,7 +252,7 @@ jobs:
           # carries the boundaries that the action cannot infer: the pinned
           # Linux image, toolchain epoch, test profile/linker recipe, and the
           # workflow/scripts/cache-version inputs that define this smoke lane.
-          prefix-key: ${{ format('{0}-sdk-rust-cargo-v1-{1}-{2}-{3}-image-{4}-{5}-{6}-{7}', env.CACHE_NAMESPACE, runner.os, runner.arch, env.SDK_RUST_TARGET, env.SDK_RUST_IMAGE_DIGEST, env.SDK_RUST_TOOLCHAIN_EPOCH, env.SDK_RUST_PROFILE_LINKER, hashFiles('Cargo.lock', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/lib/lld.sh', '**/Cargo.toml', 'scripts/ci-rust-sdk-smoke.sh', 'scripts/ci-sdk-fixture.sh', 'scripts/ci-prepare-native-runtime.sh', 'scripts/package-sdk-console-assets.sh', 'scripts/check-sdk-contract.sh', 'scripts/verify-sdk-console-assets.sh', '.github/workflows/sdk-smoke.yml')) }}
+          prefix-key: ${{ format('{0}-sdk-rust-cargo-v1-{1}-{2}-{3}-image-{4}-{5}-{6}-{7}', env.CACHE_NAMESPACE, runner.os, runner.arch, env.SDK_RUST_TARGET, env.SDK_RUST_IMAGE_DIGEST, env.SDK_RUST_TOOLCHAIN_EPOCH, env.SDK_RUST_PROFILE_LINKER, hashFiles('Cargo.lock', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', '**/Cargo.toml', 'scripts/ci-rust-sdk-smoke.sh', 'scripts/ci-sdk-fixture.sh', 'scripts/ci-prepare-native-runtime.sh', 'scripts/package-sdk-console-assets.sh', 'scripts/check-sdk-contract.sh', 'scripts/verify-sdk-console-assets.sh', '.github/workflows/sdk-smoke.yml')) }}
           shared-key: ci-sdk-smoke-rust
           save-if: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
 

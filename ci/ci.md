@@ -903,21 +903,24 @@ Protected default-branch PR slices alone can still execute old image definitions
 their success is not candidate-image qualification. Release-tag selection must also
 retain its full-web image and release-only preparation guard.
 
-### Existing-seed CPU runtime canary
+### CPU runtime seed canary
 
-`depot-canary.yml` adds an isolated manual `runtime-seed` mode. Existing audit and
-cache-authority modes retain their behavior. Six fresh GitHub-hosted Ubuntu jobs
-run three cold/warm pairs in the unchanged CPU `8d93…` image, preserving the real
-CPU native build directory and `prepare-native-runtime-input` action. The canary
+`depot-canary.yml` adds an isolated default-branch-only manual `runtime-seed` mode.
+Existing audit and cache-authority modes retain their behavior. Six fresh
+GitHub-hosted Ubuntu jobs run three cold/warm pairs in the current CPU image,
+preserving the real CPU native build directory and `prepare-native-runtime-input`
+action. The canary
 registers its image and seed restore separately from production seed consumers.
 It never saves a cache or changes production eligibility, provider policy or ARC
 placement. The compiler cache remains disk-only and capped at 2 GiB.
 
-The exact main cache is ID `7456497330`, version `6e0f5d94…`, key suffix `9522c1c3…`,
-from trusted publisher run `34230668171` at `a6487dd`. A miss, branch shadow,
-metadata drift, nonfresh outputs, cache error or incomparable host makes evidence
-inconclusive. The warm 1% floor still fails the worker; complete below-floor data
-is retained as a negative qualification result. C/C++ improvements are compared
+The canary accepts only the current image-bound, recipe-bound key emitted by the
+trusted warmer and requires exactly one matching cache on `refs/heads/main`.
+It records and validates the cache ID, version and bounded size returned by GitHub;
+a missing seed, branch shadow, malformed metadata, nonfresh outputs, cache error or
+incomparable host makes evidence inconclusive. The warm 1% floor still fails the
+worker; complete below-floor data is retained as a negative qualification result.
+C/C++ improvements are compared
 against each cold partner separately from assembler and Rust packaging hits.
 Restore-step elapsed, unchanged action elapsed and total measured path are primary
 timings. Optional native-preparation/packaging splits may be derived from timestamped
@@ -925,7 +928,7 @@ job logs at `built patched llama.cpp`; missing markers leave that split unavaila
 No automatic result grants eligibility. The completed qualification below
 retains its negative coverage result and inconclusive full-cohort timing.
 
-The existing CPU seed is deliberately excluded from production runtime restore.
+The prior CPU seed was deliberately excluded from production runtime restore.
 [Run 34272984200/1](https://github.com/Mesh-LLM/mesh-llm/actions/runs/34272984200),
 source `1f4545616e98db715e37c57e1196cbdc975a010e`, completed all six real
 build/package verifications. Every warm sample restored the exact main seed and

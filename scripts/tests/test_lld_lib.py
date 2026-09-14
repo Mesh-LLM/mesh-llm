@@ -78,6 +78,15 @@ class LldProbeTests(unittest.TestCase):
         result = run_with_stub_cc(recording_cc, 'lld_links /opt/x/ld64.lld; printf %s "$LLD_PROBE_OUTPUT"')
         self.assertIn("-fuse-ld=/opt/x/ld64.lld", result.stdout)
 
+    def test_the_probe_uses_the_selected_target_compiler(self) -> None:
+        recording_cc = "#!/bin/sh\necho \"$0 $@\" >&2\nexit 0\n"
+        result = run_with_stub_cc(
+            recording_cc,
+            'cp "$(command -v cc)" "$(dirname "$(command -v cc)")/target-cc"\n'
+            'MESH_LLM_CC=target-cc lld_links lld; printf %s "$LLD_PROBE_OUTPUT"',
+        )
+        self.assertIn("target-cc", result.stdout)
+
     def test_resolve_prints_nothing_and_explains_when_the_probe_fails(self) -> None:
         result = run_with_stub_cc(BROKEN_CC, 'printf "[%s]" "$(resolve_usable_lld)"')
         self.assertEqual(result.stdout.strip(), "[]")
@@ -138,7 +147,9 @@ class CallSiteTests(unittest.TestCase):
     def test_cargo_config_owns_cache_and_platform_linker_drivers(self) -> None:
         config = (ROOT / ".cargo" / "config.toml").read_text(encoding="utf-8")
         self.assertIn('rustc-wrapper = "sccache"', config)
-        self.assertEqual(config.count('linker = "scripts/cargo-linker"'), 4)
+        self.assertEqual(config.count('linker = "scripts/cargo-linker"'), 2)
+        self.assertIn('linker = "scripts/cargo-linker-linux-aarch64"', config)
+        self.assertIn('linker = "scripts/cargo-linker-linux-x86_64"', config)
         self.assertEqual(config.count('linker = "scripts/cargo-linker.cmd"'), 2)
 
 

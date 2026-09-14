@@ -8,10 +8,10 @@ linker = "scripts/cargo-linker"
 linker = "scripts/cargo-linker"
 
 [target.aarch64-unknown-linux-gnu]
-linker = "scripts/cargo-linker"
+linker = "scripts/cargo-linker-linux-aarch64"
 
 [target.x86_64-unknown-linux-gnu]
-linker = "scripts/cargo-linker"
+linker = "scripts/cargo-linker-linux-x86_64"
 
 [target.aarch64-pc-windows-msvc]
 linker = "scripts/cargo-linker.cmd"

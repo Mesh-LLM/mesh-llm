@@ -677,7 +677,7 @@ jobs:
 
   runtime_seed:
     name: CPU runtime seed (${{ matrix.pair }} / ${{ matrix.arm }})
-    if: github.repository == 'Mesh-LLM/mesh-llm' && github.event_name == 'workflow_dispatch' && inputs.mode == 'runtime-seed'
+    if: github.repository == 'Mesh-LLM/mesh-llm' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.mode == 'runtime-seed'
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     permissions:
@@ -722,7 +722,7 @@ jobs:
         id: seed_key
         env:
           GH_TOKEN: ${{ github.token }}
-          CANARY_KEY: mesh-llm-sccache-seed-linux-x86_64-img-f499b79b-epoch-f499b79b-v3-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/lib/lld.sh', 'Justfile', 'just/**') }}
+          CANARY_KEY: mesh-llm-sccache-seed-linux-x86_64-img-f499b79b-epoch-f499b79b-v3-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', 'Justfile', 'just/**') }}
         run: python3 scripts/runtime-seed-canary.py preflight runtime-seed-evidence
       - name: Start restore timer
         run: python3 scripts/runtime-seed-canary.py restore_start runtime-seed-evidence

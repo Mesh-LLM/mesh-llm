@@ -16,10 +16,20 @@ if (Get-Command sccache -ErrorAction SilentlyContinue) {
     $installedVersion = ((& sccache --version) -split '\s+')[-1]
 }
 if ($installedVersion -ne $sccacheVersion) {
-    $env:RUSTC_WRAPPER = ""
-    & cargo install sccache --version $sccacheVersion --locked --force
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to install sccache $sccacheVersion."
+    $hadRustcWrapper = Test-Path Env:RUSTC_WRAPPER
+    $previousRustcWrapper = $env:RUSTC_WRAPPER
+    try {
+        $env:RUSTC_WRAPPER = ""
+        & cargo install sccache --version $sccacheVersion --locked --force
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to install sccache $sccacheVersion."
+        }
+    } finally {
+        if ($hadRustcWrapper) {
+            $env:RUSTC_WRAPPER = $previousRustcWrapper
+        } else {
+            Remove-Item Env:RUSTC_WRAPPER -ErrorAction SilentlyContinue
+        }
     }
 }
 
