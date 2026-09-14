@@ -1153,26 +1153,25 @@ fn rollback_bundle_replace(
     installed: &[String],
     backed_up: &[String],
 ) {
+    // Staged entries can be whole trees (`native-runtimes`). `remove_file`
+    // no-ops on a directory, which would leave the new tree in place and make
+    // the restore rename below fail.
     for relative in installed.iter().rev() {
         let dest = install_dir.join(relative);
-        let _ = std::fs::remove_file(&dest);
+        match std::fs::symlink_metadata(&dest) {
+            Ok(metadata) if metadata.is_dir() => {
+                let _ = std::fs::remove_dir_all(&dest);
+            }
+            Ok(_) => {
+                let _ = std::fs::remove_file(&dest);
+            }
+            Err(_) => {}
+        }
     }
     for relative in backed_up.iter().rev() {
         let backup_path = backup.join(relative);
         let dest = install_dir.join(relative);
         let _ = std::fs::rename(&backup_path, &dest);
-    }
-    // Remove directories the failed install created (deepest first). Restore
-    // above only re-materialises paths that existed before the update, so the
-    // new runtime tree must be pruned here.
-    let mut created_dirs: Vec<&String> = installed
-        .iter()
-        .filter(|relative| install_dir.join(relative).is_dir())
-        .collect();
-    created_dirs.sort();
-    created_dirs.reverse();
-    for relative in created_dirs {
-        let _ = std::fs::remove_dir_all(install_dir.join(relative));
     }
 }
 
@@ -1703,6 +1702,63 @@ mod tests {
         assert!(
             !install_dir.join(NATIVE_RUNTIMES_DIR_NAME).exists(),
             "runtime tree installed by a failed update must be rolled back"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_replace_bundle_files_restores_previous_runtime_tree() {
+        let dir = temp_dir("self-update-runtime-restore");
+        let install_dir = dir.join("install");
+        let extracted = dir.join("extracted");
+        let backup = dir.join("backup");
+        std::fs::create_dir_all(installed_runtime_tree(&install_dir).join("lib")).unwrap();
+        std::fs::create_dir_all(extracted.join("native-runtimes").join("runtime")).unwrap();
+        std::fs::write(install_dir.join(mesh_binary_name()), b"old-binary").unwrap();
+        std::fs::write(
+            installed_runtime_tree(&install_dir)
+                .join("lib")
+                .join("core.dylib"),
+            b"old-runtime",
+        )
+        .unwrap();
+        std::fs::write(extracted.join(mesh_binary_name()), b"new-binary").unwrap();
+        std::fs::write(
+            extracted
+                .join("native-runtimes")
+                .join("runtime")
+                .join("core.dylib"),
+            b"new-runtime",
+        )
+        .unwrap();
+
+        let staged = vec![
+            NATIVE_RUNTIMES_DIR_NAME.to_string(),
+            mesh_binary_name(),
+            "missing.bin".to_string(),
+        ];
+        let err = replace_bundle_files(&install_dir, &extracted, &backup, &staged).unwrap_err();
+
+        assert!(err.to_string().contains("Failed to install"));
+        assert_eq!(
+            std::fs::read(install_dir.join(mesh_binary_name())).unwrap(),
+            b"old-binary"
+        );
+        assert_eq!(
+            std::fs::read(
+                installed_runtime_tree(&install_dir)
+                    .join("lib")
+                    .join("core.dylib")
+            )
+            .unwrap(),
+            b"old-runtime"
+        );
+        assert!(
+            !installed_runtime_tree(&install_dir)
+                .join("core.dylib")
+                .exists(),
+            "the failed update's runtime files must not survive rollback"
         );
         let _ = std::fs::remove_dir_all(dir);
     }
