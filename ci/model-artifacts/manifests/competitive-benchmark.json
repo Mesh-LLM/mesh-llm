@@ -2,7 +2,7 @@
   "schema_version": 1,
   "manifest_kind": "test-model-artifacts",
   "suite": "competitive-benchmark",
-  "registry_sha256": "bea620d33fcefe91bcadb2de42084e78a7d525b163193f3f6816045f556c0eac",
+  "registry_sha256": "793628ccd39762c09844bbbf6da9249b0c916867f6b389d5e9e9ddda94269435",
   "artifacts": [
     {
       "id": "family-llama",

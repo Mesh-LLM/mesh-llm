@@ -745,10 +745,6 @@ fn resolve_execution_config(context: &ResolverContext<'_>) -> ResolvedSkippyExec
             model_skippy.and_then(|skippy| skippy.lifecycle_startup_timeout_ms),
             global_skippy.and_then(|skippy| skippy.lifecycle_startup_timeout_ms),
         ),
-        lifecycle_readiness_interval_ms: pick_owned(
-            model_skippy.and_then(|skippy| skippy.lifecycle_readiness_interval_ms),
-            global_skippy.and_then(|skippy| skippy.lifecycle_readiness_interval_ms),
-        ),
         lifecycle_health_interval_ms: pick_owned(
             model_skippy.and_then(|skippy| skippy.lifecycle_health_interval_ms),
             global_skippy.and_then(|skippy| skippy.lifecycle_health_interval_ms),

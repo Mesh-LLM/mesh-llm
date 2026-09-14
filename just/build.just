@@ -10,10 +10,11 @@ qa-logging-console-e2e:
 with-lld *COMMAND:
     #!/usr/bin/env bash
     set -euo pipefail
-    lld=""
-    case "$(uname -s)" in
-        Linux)
-            if ! command -v ld.lld >/dev/null 2>&1; then
+    source scripts/lib/lld.sh
+    lld="$(find_lld)"
+    if [[ -z "$lld" ]]; then
+        case "$(uname -s)" in
+            Linux)
                 cat >&2 <<'EOF'
     Error: LLVM ld.lld was not found.
 
@@ -27,28 +28,8 @@ with-lld *COMMAND:
 
     The build requires ld.lld to be available on PATH.
     EOF
-                exit 1
-            fi
-            lld="lld"
-            ;;
-        Darwin)
-            if command -v ld64.lld >/dev/null 2>&1; then
-                lld="$(command -v ld64.lld)"
-            elif command -v brew >/dev/null 2>&1; then
-                lld_prefix="$(brew --prefix lld 2>/dev/null || true)"
-                if [[ -n "$lld_prefix" && -x "$lld_prefix/bin/ld64.lld" ]]; then
-                    lld="$lld_prefix/bin/ld64.lld"
-                fi
-            fi
-            if [[ -z "$lld" ]]; then
-                for candidate in /opt/homebrew/opt/lld/bin/ld64.lld /usr/local/opt/lld/bin/ld64.lld; do
-                    if [[ -x "$candidate" ]]; then
-                        lld="$candidate"
-                        break
-                    fi
-                done
-            fi
-            if [[ -z "$lld" ]]; then
+                ;;
+            Darwin)
                 cat >&2 <<'EOF'
     Error: LLVM ld64.lld was not found.
 
@@ -62,15 +43,22 @@ with-lld *COMMAND:
       /opt/homebrew/opt/lld/bin/ld64.lld
       /usr/local/opt/lld/bin/ld64.lld
     EOF
-                exit 1
-            fi
-            ;;
-        *)
-            echo "Unsupported OS for lld linker setup: $(uname -s)" >&2
-            exit 1
-            ;;
-    esac
-    export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=-fuse-ld=$lld"
+                ;;
+            *)
+                echo "Unsupported OS for lld linker setup: $(uname -s)" >&2
+                ;;
+        esac
+        exit 1
+    fi
+    # Installed but unable to link (typically the SDK is newer than lld) is a
+    # slower build, not a broken one: fall back to the platform linker and say
+    # why, rather than fail a build that would otherwise succeed. See
+    # scripts/lib/lld.sh.
+    if lld_links "$lld"; then
+        export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=-fuse-ld=$lld"
+    else
+        report_lld_fallback "$lld"
+    fi
     exec {{ COMMAND }}
 
 [private]

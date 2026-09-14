@@ -635,6 +635,7 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
                 self.assertIn("permissions: {}", required)
 
         expected_slice_jobs = {
+            "commit_convention": "runs-on: ubuntu-24.04",
             "runner_policy": "runs-on: ubuntu-24.04",
             "quality_contracts": "runs-on: ${{ needs.runner_policy.outputs.runner_4 }}",
             "rust_fmt": "runs-on: ${{ needs.runner_policy.outputs.runner_4 }}",
@@ -648,6 +649,7 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
                 self.assertIn(runner_expression, self._job_block(self.workflow, job_name))
 
         for job_name in (
+            "commit_convention",
             "quality_contracts",
             "rust_fmt",
             "rust_clippy",

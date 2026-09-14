@@ -1,7 +1,5 @@
 pub(super) fn is_retryable_split_start_failure(message: &str) -> bool {
-    split_participants_are_still_converging(message)
-        || split_control_transport_failed(message)
-        || split_stage_source_preparation_timed_out(message)
+    split_participants_are_still_converging(message) || split_control_transport_failed(message)
 }
 
 fn split_participants_are_still_converging(message: &str) -> bool {
@@ -14,17 +12,12 @@ fn split_participants_are_still_converging(message: &str) -> bool {
 }
 
 fn split_control_transport_failed(message: &str) -> bool {
-    let is_control_operation = message.contains("load split stage")
-        || message.contains("prepare split stage")
-        || message.contains("stage_control_unreachable");
+    let is_control_operation =
+        message.contains("load split stage") || message.contains("stage_control_unreachable");
     let is_transport_failure = message.contains("connection lost")
         || message.contains("stream finished early")
         || message.contains("timeout waiting for stage control response");
     is_control_operation && is_transport_failure
-}
-
-fn split_stage_source_preparation_timed_out(message: &str) -> bool {
-    message.contains("stage_source_prepare_timeout")
 }
 
 #[cfg(test)]
@@ -81,17 +74,10 @@ mod tests {
             "load split stage stage-1: connection lost: closed"
         ));
         assert!(is_retryable_split_start_failure(
-            "prepare split stage stage-2: stage_control_unreachable: stream finished early"
+            "load split stage stage-2: stage_control_unreachable: stream finished early"
         ));
         assert!(is_retryable_split_start_failure(
             "load split stage stage-3: timeout waiting for stage control response"
-        ));
-    }
-
-    #[test]
-    fn stage_source_preparation_timeout_is_retryable() {
-        assert!(is_retryable_split_start_failure(
-            "prepare split stage stage-1: stage_source_prepare_timeout: timed out waiting for stage source availability after 30m"
         ));
     }
 

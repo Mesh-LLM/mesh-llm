@@ -61,9 +61,9 @@ RECIPES_BY_FILE: Final = {
     "just/mesh-client.just": {"auto", "mesh-client"},
     "just/utilities.just": {
         "cache-cargo-clean", "cache-cargo-metadata", "cache-prune",
-        "cache-prune-dry-run", "cache-status", "clean", "diff",
-        "docker-build-client", "docker-run-client", "llama-summary",
-        "llama-update-pin", "stop", "test", "ui-clean",
+        "cache-prune-dry-run", "cache-status", "check-commits", "clean",
+        "diff", "docker-build-client", "docker-run-client", "hooks-install",
+        "llama-summary", "llama-update-pin", "stop", "test", "ui-clean",
     },
 }
 RECIPE_HEADER: Final = re.compile(r"^([A-Za-z_][\w-]*)(?:\s+[^:]*)?:(?!=)")

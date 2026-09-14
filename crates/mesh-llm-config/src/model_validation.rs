@@ -441,10 +441,6 @@ fn validate_skippy(config: &SkippyConfig, base_path: &str) -> DiagnosticResult {
         &format!("{base_path}.lifecycle_startup_timeout_ms"),
     )?;
     validate_optional_positive_u64(
-        config.lifecycle_readiness_interval_ms,
-        &format!("{base_path}.lifecycle_readiness_interval_ms"),
-    )?;
-    validate_optional_positive_u64(
         config.lifecycle_health_interval_ms,
         &format!("{base_path}.lifecycle_health_interval_ms"),
     )?;

@@ -10,6 +10,7 @@ describe('command summary grammar', () => {
       'mesh-llm load --port 41731 name [REDACTED]',
       'mesh-llm goose --port 41731 --model [REDACTED]',
       'mesh-llm doctor split --json --port 41731 --model-ref [REDACTED]',
+      'mesh-llm doctor network --json --port 41731',
       'mesh-llm gpus run-benchmark --backend cuda --json',
       'mesh-llm runtime guardrails --mode metrics --json --port 41731',
       'mesh-llm runtime bootstrap --json --port 41731',

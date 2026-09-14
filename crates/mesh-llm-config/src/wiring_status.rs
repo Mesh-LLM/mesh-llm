@@ -413,6 +413,13 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         behavior: WiringBehavior::None,
     },
     WiringEntry {
+        path: "runtime.lifecycle_log_parser",
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
+    },
+    WiringEntry {
         path: "runtime.drain_timeout_secs",
         status: WiringStatus::Wired,
         owner: "n/a",
@@ -1028,13 +1035,6 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
     },
     WiringEntry {
         path: "skippy.lifecycle_startup_timeout_ms",
-        status: WiringStatus::Wired,
-        owner: "n/a",
-        reason: "",
-        behavior: WiringBehavior::None,
-    },
-    WiringEntry {
-        path: "skippy.lifecycle_readiness_interval_ms",
         status: WiringStatus::Wired,
         owner: "n/a",
         reason: "",

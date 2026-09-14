@@ -49,6 +49,7 @@ export const TOP_LEVEL_DESCRIPTORS: readonly SummaryDescriptor[] = [
   descriptor(['mesh-llm', 'config', 'validate'], JSON_FLAGS, ['--config-path']),
   descriptor(['mesh-llm', 'doctor'], JSON_FLAGS),
   descriptor(['mesh-llm', 'doctor', 'split'], JSON_FLAGS, ['--model-ref', '--output-dir'], true),
+  descriptor(['mesh-llm', 'doctor', 'network'], JSON_FLAGS, NONE, true),
   descriptor(
     ['mesh-llm', 'skills', 'install'],
     ['--all', '--dry-run', '--force'],

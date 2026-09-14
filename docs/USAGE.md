@@ -563,7 +563,6 @@ binary_stage_transport          = "auto"    # auto on off
 prefill_chunking                = "fixed"   # fixed schedule none
 prefill_chunk_size              = 512       # tokens per prefill chunk
 lifecycle_startup_timeout_ms    = 30000     # stage startup grace period (ms)
-lifecycle_readiness_interval_ms = 250       # readiness poll interval (ms)
 lifecycle_health_interval_ms    = 5000      # health-check interval (ms)
 
 # Staged-only / manual topology (set by planner; override carefully)
@@ -1160,6 +1159,24 @@ mesh-llm models updates Qwen/Qwen3-8B-GGUF
 mesh-llm models cleanup
 mesh-llm models prune
 ```
+
+## Node identity and multiple nodes per machine
+
+By default, the node key lives at `~/.mesh-llm/key`, independent of
+`MESH_LLM_DATA_DIR`, and defines the node's mesh identity. Set
+`MESH_LLM_NODE_KEY_PATH` to select a different active key file. Running two
+node processes that load the same key makes both present the same node id: the
+mesh silently collapses to one node and no peer ever appears. If you run a
+second `mesh-llm serve` on the same machine, give it its own identity first:
+
+- `MESH_LLM_NODE_KEY_PATH=/path/to/second.key` — stable dedicated identity for
+  the second node (recommended; the key file is created on first start).
+- `MESH_LLM_EPHEMERAL_KEY=1` — throwaway in-memory identity for the process's
+  lifetime; the node gets a fresh id on every restart, which discards owner
+  attestation and node certificates.
+
+`mesh-llm serve --join` now rejects an invite token that names the joiner's
+own node id with an explicit error, instead of failing silently.
 
 ## Model storage
 

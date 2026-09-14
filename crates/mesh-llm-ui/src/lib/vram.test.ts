@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   allocatableVramBytes,
+  formatDecimalVramGB,
   formatRatedVramBytes,
   gpuAllocatableVramGB,
   gpuRatedVramGB,
@@ -10,6 +11,7 @@ import {
   meshAdvertisedVramGB,
   isClientPeer,
   meshCapacityInputFromStatus,
+  memoryBreakdownGB,
   nodeAdvertisedVramGB,
   nodeRatedVramGB,
   ratedVramGBFromBytes
@@ -116,5 +118,40 @@ describe('VRAM accounting utilities', () => {
     expect(isClientPeer({ state: 'client' })).toBe(true)
     expect(isClientPeer({ role: 'Client' })).toBe(true)
     expect(isClientPeer({ node_state: 'serving', role: 'Host' })).toBe(false)
+  })
+})
+
+describe('advertised memory breakdown', () => {
+  const memory = {
+    total_bytes: 12_000_000_000,
+    reserved_bytes: 500_000_000,
+    platform_reserve_bytes: 0,
+    configured_reserve_bytes: 2_000_000_000,
+    usable_bytes: 9_500_000_000,
+    system_ram_bytes: 32_000_000_000,
+    ram_offload_bytes: 18_000_000_000
+  }
+
+  it('converts the breakdown to decimal GB and leaves absent system RAM absent', () => {
+    expect(memoryBreakdownGB(memory)).toEqual({
+      totalGB: 12,
+      reservedGB: 0.5,
+      platformReserveGB: 0,
+      configuredReserveGB: 2,
+      usableGB: 9.5,
+      systemRamGB: 32,
+      ramOffloadGB: 18
+    })
+    expect(memoryBreakdownGB({ ...memory, system_ram_bytes: undefined })?.systemRamGB).toBeNull()
+    expect(memoryBreakdownGB({ ...memory, platform_reserve_bytes: undefined })?.platformReserveGB).toBe(0)
+    expect(memoryBreakdownGB({ ...memory, usable_bytes: Number.NaN })).toBeNull()
+    expect(memoryBreakdownGB(null)).toBeNull()
+    expect(memoryBreakdownGB(undefined)).toBeNull()
+  })
+
+  it('formats itemized values with one decimal instead of a capacity class', () => {
+    expect(formatDecimalVramGB(9.5)).toBe('9.5 GB')
+    expect(formatDecimalVramGB(0)).toBe('0.0 GB')
+    expect(formatDecimalVramGB(null)).toBe('Unknown')
   })
 })

@@ -19,6 +19,7 @@ ACTIONS = ROOT / ".github" / "actions"
 COMPOSE_SCRIPT = ROOT / "scripts" / "ci-compose-product-input.sh"
 RELEASE_FOOTER_MANIFEST = ROOT / "crates" / "mesh-llm-release-footer" / "Cargo.toml"
 XTASK_MANIFEST = ROOT / "tools" / "xtask" / "Cargo.toml"
+RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 
 
 class CiArtifactActionTests(unittest.TestCase):
@@ -509,6 +510,28 @@ class CiArtifactActionTests(unittest.TestCase):
         )
         self.assertNotIn("package-native-runtime.sh", action)
         self.assertNotIn("compose-product", action)
+
+    def test_release_stamps_refuse_to_guess_the_source_commit(self) -> None:
+        """A published binary has to say what it was built from (#1596)."""
+        for name in ("prepare-host-input", "prepare-windows-host-input"):
+            action = self.read_action(name)
+            with self.subTest(action=name):
+                self.assertIn("--require-source-commit", action)
+                self.assertIn("--commit", action)
+                self.assertIn("INPUT_COMMIT", action)
+
+    def test_release_workflow_stamps_the_immutable_source_revision(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        attest_steps = workflow.count(
+            "attestation_signing_key_file: ${{ runner.temp }}"
+            "/mesh-release-attestation-private-key.json"
+        )
+        stamped_commits = workflow.count(
+            "commit: ${{ needs.metadata.outputs.source_sha }}"
+        )
+
+        self.assertGreater(attest_steps, 0)
+        self.assertEqual(attest_steps, stamped_commits)
 
     def test_windows_attestation_verifier_stays_native_abi_free(self) -> None:
         xtask = tomllib.loads(XTASK_MANIFEST.read_text(encoding="utf-8"))
@@ -2111,8 +2134,15 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn("scripts/verify-native-runtime-package.sh", action)
         self.assertIn("--check", action)
 
-    def test_smoke_restore_model_is_optional(self) -> None:
-        action = self.read_action("restore-smoke-inputs")
+    def test_test_model_restore_is_optional_and_verified(self) -> None:
+        """The shared model action: resolve, cache, download, verify.
+
+        This used to live inside `restore-smoke-inputs`. It moved out so a
+        lane that needs a model but not a built product artifact -- the
+        native runtime-event gate -- uses the same sequence instead of a
+        second copy of it.
+        """
+        action = self.read_action("restore-test-model")
         model_inputs_present = (
             "steps.resolve-model.outputs.url != '' && "
             "steps.resolve-model.outputs.file != ''"
@@ -2144,6 +2174,53 @@ class CiArtifactActionTests(unittest.TestCase):
             "      id: model-file",
             action,
         )
+
+    def test_test_model_restore_selects_one_artifact_from_a_multi_artifact_manifest(
+        self,
+    ) -> None:
+        """`skippy-ci-smoke.json` holds two artifacts, so the gate has to
+        name the one it wants. Selection must reach BOTH the resolve and
+        the verify call, or verification would check a different file than
+        the one that was downloaded."""
+        action = self.read_action("restore-test-model")
+
+        self.assertIn("model_artifact_id:", action)
+        self.assertIn("MODEL_ARTIFACT_ID: ${{ inputs.model_artifact_id }}", action)
+        self.assertEqual(
+            action.count('artifact_args+=(--artifact-id "$MODEL_ARTIFACT_ID")'), 2
+        )
+        # `--cadence` must stay literal on both invocations: a manifest
+        # consumer declares the cadence it is authorized for, and
+        # `test_model_artifact_registry` verifies that by reading the call
+        # site rather than tracing an array.
+        self.assertEqual(action.count('--cadence "$MODEL_CADENCE"'), 2)
+
+    def test_smoke_restore_delegates_model_restore_to_the_shared_action(self) -> None:
+        """One implementation, not two. A second copy of the
+        resolve/cache/download/verify sequence would drift silently."""
+        action = self.read_action("restore-smoke-inputs")
+
+        self.assertIn("uses: ./.github/actions/restore-test-model", action)
+        self.assertNotIn("actions/cache/restore@", action)
+        self.assertNotIn("scripts/resolve-test-model-manifest.py", action)
+        for forwarded in (
+            "model_url: ${{ inputs.model_url }}",
+            "model_file: ${{ inputs.model_file }}",
+            "model_manifest: ${{ inputs.model_manifest }}",
+            "model_cadence: ${{ inputs.model_cadence }}",
+            "model_cache_scope: ${{ inputs.model_cache_scope }}",
+            "save_model_cache: ${{ inputs.save_model_cache }}",
+        ):
+            self.assertIn(forwarded, action)
+        # The outputs it re-exports must come from the nested action's own
+        # names, not the ones the inlined step used to publish.
+        for exported in (
+            "value: ${{ steps.resolve-model.outputs.model_url }}",
+            "value: ${{ steps.resolve-model.outputs.model_file }}",
+            "value: ${{ steps.resolve-model.outputs.model_sha256 }}",
+            "value: ${{ steps.resolve-model.outputs.model_size_bytes }}",
+        ):
+            self.assertIn(exported, action)
 
     def test_product_action_rejects_destructive_output_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2825,7 +2902,8 @@ class CiArtifactActionTests(unittest.TestCase):
         }
         expected_jobs = {
             "ci-quality-slice.yml": {
-                "runner_policy", "quality_contracts", "rust_fmt", "rust_clippy", "cli_docs_sync", "authority_sentinel",
+                "commit_convention", "runner_policy", "quality_contracts", "rust_fmt", "rust_clippy",
+                "cli_docs_sync", "authority_sentinel",
             },
             "ci-web-slice.yml": {"runner_policy", "ui_quality", "ui_e2e", "website"},
             "ci-ui-artifact-slice.yml": {"runner_policy", "ui_artifact"},

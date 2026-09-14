@@ -320,6 +320,7 @@ struct StampArgs {
     target_triple: Option<String>,
     protocol_min: Option<u32>,
     protocol_max: Option<u32>,
+    require_source_commit: bool,
 }
 
 #[derive(Default)]
@@ -372,6 +373,10 @@ pub(crate) fn stamp_release_attestation(args: &[String]) -> DynResult<()> {
         Some(version) => version,
         None => default_node_version()?,
     };
+    let commit = resolve_commit(parsed.commit);
+    if parsed.require_source_commit {
+        require_source_commit(&commit)?;
+    }
 
     let claims = ReleaseBuildAttestationClaims {
         version: RELEASE_BUILD_ATTESTATION_VERSION,
@@ -379,7 +384,7 @@ pub(crate) fn stamp_release_attestation(args: &[String]) -> DynResult<()> {
         build_id: parsed
             .build_id
             .unwrap_or_else(|| default_build_id(&binary, &artifact_digest)),
-        commit: parsed.commit.unwrap_or_else(default_commit),
+        commit,
         target_triple: parsed.target_triple.unwrap_or_else(default_target_triple),
         supported_protocol_generation_min: parsed.protocol_min,
         supported_protocol_generation_max: parsed.protocol_max,
@@ -552,6 +557,10 @@ fn parse_stamp_args(args: &[String]) -> DynResult<StampArgs> {
     let mut parsed = StampArgs::default();
     let mut iter = args.iter();
     while let Some(flag) = iter.next() {
+        if flag.as_str() == "--require-source-commit" {
+            parsed.require_source_commit = true;
+            continue;
+        }
         let value = iter
             .next()
             .ok_or_else(|| format!("missing value for {flag}"))?;
@@ -642,11 +651,136 @@ fn default_build_id(binary: &Path, artifact_digest: &str) -> String {
     format!("{stem}-{}", digest.get(..12).unwrap_or(digest))
 }
 
-fn default_commit() -> String {
-    std::env::var("GIT_COMMIT").unwrap_or_else(|_| "task8-local".to_string())
+/// Stand-in recorded when nothing can say what a binary was built from.
+/// Only ever correct for a local development build.
+const LOCAL_BUILD_COMMIT: &str = "task8-local";
+
+/// Resolves the source revision to record in the attestation.
+///
+/// Explicit wins, then the environment, then the checkout itself. The
+/// placeholder is last, and `--require-source-commit` rejects it outright,
+/// because a provenance field that silently invents a value is worse than one
+/// that refuses to be written.
+fn resolve_commit(explicit: Option<String>) -> String {
+    explicit
+        .map(|commit| commit.trim().to_string())
+        .filter(|commit| !commit.is_empty())
+        .or_else(|| {
+            std::env::var("GIT_COMMIT")
+                .ok()
+                .map(|commit| commit.trim().to_string())
+                .filter(|commit| !commit.is_empty())
+        })
+        .or_else(head_commit)
+        .unwrap_or_else(|| LOCAL_BUILD_COMMIT.to_string())
+}
+
+fn head_commit() -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let commit = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    is_source_commit(&commit).then_some(commit)
+}
+
+/// A full 40-character lowercase hex object name. Abbreviated names are
+/// rejected too: an attestation is read long after the repository that could
+/// disambiguate one has moved on.
+fn is_source_commit(commit: &str) -> bool {
+    commit.len() == 40
+        && commit
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+}
+
+/// Fails a release stamp that could not establish what it was built from.
+fn require_source_commit(commit: &str) -> DynResult<()> {
+    if is_source_commit(commit) {
+        return Ok(());
+    }
+    Err(format!(
+        "--require-source-commit is set but the resolved commit {commit:?} is not a full 40-character \
+         lowercase hex object name. Pass --commit <sha>, set GIT_COMMIT, or run the stamp inside the \
+         checkout the binary was built from."
+    )
+    .into())
 }
 
 fn default_target_triple() -> String {
     std::env::var("TARGET")
         .unwrap_or_else(|_| format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const REAL_SHA: &str = "a12b535d7c4e1f09b8d3427a66c5e0f19d8a7b34";
+
+    #[test]
+    fn explicit_commit_wins_over_everything_else() {
+        assert_eq!(resolve_commit(Some(REAL_SHA.to_string())), REAL_SHA);
+    }
+
+    #[test]
+    fn blank_explicit_commit_falls_through_rather_than_stamping_an_empty_field() {
+        // An unset workflow input arrives as an empty string, not as an
+        // absent flag, so it has to fall through instead of being recorded.
+        assert_ne!(resolve_commit(Some("   ".to_string())), "   ");
+    }
+
+    #[test]
+    fn release_stamps_reject_the_local_development_placeholder() {
+        let error = require_source_commit(LOCAL_BUILD_COMMIT)
+            .expect_err("a release stamp must refuse the placeholder");
+
+        assert!(error.to_string().contains(LOCAL_BUILD_COMMIT));
+    }
+
+    #[test]
+    fn release_stamps_reject_abbreviated_and_empty_commits() {
+        for candidate in ["", "a12b535", "a12b535d7", "not-a-sha"] {
+            assert!(
+                require_source_commit(candidate).is_err(),
+                "{candidate:?} is not a full object name"
+            );
+        }
+    }
+
+    #[test]
+    fn release_stamps_accept_a_full_lowercase_object_name() {
+        assert!(require_source_commit(REAL_SHA).is_ok());
+    }
+
+    #[test]
+    fn uppercase_object_names_are_rejected_so_the_field_has_one_spelling() {
+        assert!(!is_source_commit(&REAL_SHA.to_ascii_uppercase()));
+    }
+
+    #[test]
+    fn stamp_args_parse_the_release_flag_alongside_valued_flags() {
+        let args: Vec<String> = [
+            "--binary",
+            "target/release/mesh-llm",
+            "--require-source-commit",
+            "--commit",
+            REAL_SHA,
+        ]
+        .iter()
+        .map(|value| (*value).to_string())
+        .collect();
+
+        let parsed = parse_stamp_args(&args).expect("flags parse");
+
+        assert!(parsed.require_source_commit);
+        assert_eq!(parsed.commit.as_deref(), Some(REAL_SHA));
+        assert_eq!(
+            parsed.binary,
+            Some(PathBuf::from("target/release/mesh-llm"))
+        );
+    }
 }

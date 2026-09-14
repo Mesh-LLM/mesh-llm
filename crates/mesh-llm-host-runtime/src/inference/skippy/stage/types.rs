@@ -3,9 +3,15 @@ use skippy_protocol::{FlashAttentionType, LoadMode, SplitMode, StageDevice};
 use tokio::sync::oneshot;
 
 #[derive(Debug)]
-pub(crate) struct StageControlCommand {
-    pub(crate) request: StageControlRequest,
-    pub(crate) resp: oneshot::Sender<Result<StageControlResponse>>,
+pub(crate) enum StageControlCommand {
+    Execute {
+        request: StageControlRequest,
+        resp: oneshot::Sender<Result<StageControlResponse>>,
+    },
+    ValidateLoad {
+        load: StageLoadRequest,
+        resp: oneshot::Sender<Option<String>>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -19,9 +25,6 @@ pub(crate) enum StageControlRequest {
     Stop(StageStopRequest),
     Status(StageStatusFilter),
     Inventory(StageInventoryRequest),
-    Prepare(StagePrepareRequest),
-    CancelPrepare(StageCancelPrepareRequest),
-    StatusUpdate(StagePreparationStatus),
 }
 
 #[derive(Clone, Debug)]
@@ -31,9 +34,6 @@ pub(crate) enum StageControlResponse {
     Ready(StageReadyResponse),
     Status(Vec<StageStatusSnapshot>),
     Inventory(StageLayerInventory),
-    PrepareAccepted(StagePrepareAcceptedResponse),
-    PreparationStatus(StagePreparationStatus),
-    StatusAck(StageStatusAck),
 }
 
 pub(crate) type StageCoordinatorClaim = skippy_coordinator::CoordinatorClaim;
@@ -184,20 +184,6 @@ pub(crate) struct StageInventoryRequest {
     pub(crate) local_source_required: bool,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct StagePrepareRequest {
-    pub(crate) load: StageLoadRequest,
-    pub(crate) coordinator_id: Option<iroh::EndpointId>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct StageCancelPrepareRequest {
-    pub(crate) topology_id: String,
-    pub(crate) run_id: String,
-    pub(crate) stage_id: String,
-    pub(crate) shutdown_generation: u64,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LayerRange {
     pub(crate) layer_start: u32,
@@ -213,7 +199,6 @@ pub(crate) struct StageLayerInventory {
     pub(crate) ready_ranges: Vec<LayerRange>,
     pub(crate) available_ranges: Vec<LayerRange>,
     pub(crate) missing_ranges: Vec<LayerRange>,
-    pub(crate) preparing_ranges: Vec<StagePreparationStatus>,
     pub(crate) source_model_path: Option<String>,
     pub(crate) source_model_bytes: Option<u64>,
     pub(crate) source_model_sha256: Option<String>,
@@ -244,18 +229,6 @@ pub(crate) enum StageRuntimeState {
     Stopping,
     Stopped,
     Failed,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum StagePreparationState {
-    Assigned,
-    Downloading,
-    Available,
-    Resolving,
-    Loading,
-    Ready,
-    Failed,
-    Cancelled,
 }
 
 #[derive(Clone, Debug)]
@@ -301,43 +274,4 @@ pub(crate) struct StageStatusSnapshot {
     pub(crate) coordinator_term: u64,
     pub(crate) coordinator_id: Option<iroh::EndpointId>,
     pub(crate) lease_until_unix_ms: u64,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct StagePreparationStatus {
-    pub(crate) topology_id: String,
-    pub(crate) run_id: String,
-    pub(crate) model_id: String,
-    pub(crate) backend: String,
-    pub(crate) package_ref: String,
-    pub(crate) manifest_sha256: String,
-    pub(crate) stage_id: String,
-    pub(crate) stage_index: u32,
-    pub(crate) layer_start: u32,
-    pub(crate) layer_end: u32,
-    pub(crate) admission: Option<skippy_protocol::StageAdmissionDescriptor>,
-    pub(crate) activation_codec: skippy_protocol::StageActivationCodec,
-    pub(crate) activation_codec_policy: skippy_protocol::StageActivationCodecPolicy,
-    pub(crate) state: StagePreparationState,
-    pub(crate) bytes_done: Option<u64>,
-    pub(crate) bytes_total: Option<u64>,
-    pub(crate) bind_addr: Option<String>,
-    pub(crate) error: Option<String>,
-    pub(crate) shutdown_generation: u64,
-    pub(crate) coordinator_term: u64,
-    pub(crate) coordinator_id: Option<iroh::EndpointId>,
-    pub(crate) lease_until_unix_ms: u64,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct StagePrepareAcceptedResponse {
-    pub(crate) accepted: bool,
-    pub(crate) status: StagePreparationStatus,
-    pub(crate) error: Option<String>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct StageStatusAck {
-    pub(crate) accepted: bool,
-    pub(crate) error: Option<String>,
 }

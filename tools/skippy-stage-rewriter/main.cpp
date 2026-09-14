@@ -164,6 +164,9 @@ struct AltupPrelude {
   std::string width;
   std::string tokens;
   std::string count;
+  // Name of the file-local static view-slice helper the builder uses for its
+  // altup slices. Discovered from the AST by shape, never by upstream naming.
+  std::string slice_helper;
 };
 
 struct PerLayerTokenProjection {
@@ -774,6 +777,59 @@ hyperconnectionPrelude(const CompoundStmt *constructor_body,
   return result;
 }
 
+// Find the file-local static helper the builder uses to view one 2D slice of
+// a 3D activation tensor. The helper is recognized by its shape: a static
+// free function taking (ggml_context *, ggml_tensor *, index) whose body
+// performs a ggml_view_2d. Returns nullopt unless exactly one such helper is
+// referenced, so irregular builders are refused instead of guessed at.
+std::optional<std::string>
+viewSliceHelper(const CompoundStmt *constructor_body, const SourceManager &sm) {
+  std::string found;
+  bool ambiguous = false;
+  class SliceHelperVisitor final : public RecursiveASTVisitor<SliceHelperVisitor> {
+  public:
+    SliceHelperVisitor(const SourceManager &sm, std::string &found,
+                       bool &ambiguous)
+        : sm_(sm), found_(found), ambiguous_(ambiguous) {}
+
+    bool TraverseLambdaExpr(clang::LambdaExpr *) { return true; }
+
+    bool VisitCallExpr(CallExpr *call) {
+      const auto *callee = directCallee(call);
+      if (callee == nullptr || call->getNumArgs() != 3 ||
+          callee->getNumParams() != 3) {
+        return true;
+      }
+      if (callee->getStorageClass() != clang::SC_Static ||
+          !callee->getDeclContext()->isFileContext()) {
+        return true;
+      }
+      const FunctionDecl *definition = nullptr;
+      if (!callee->hasBody(definition) || definition == nullptr ||
+          !containsName(definition->getBody(), "ggml_view_2d")) {
+        return true;
+      }
+      const auto name = callee->getNameAsString();
+      if (found_.empty()) {
+        found_ = name;
+      } else if (found_ != name) {
+        ambiguous_ = true;
+      }
+      return true;
+    }
+
+  private:
+    const SourceManager &sm_;
+    std::string &found_;
+    bool &ambiguous_;
+  } visitor(sm, found, ambiguous);
+  visitor.TraverseStmt(const_cast<CompoundStmt *>(constructor_body));
+  if (ambiguous || found.empty()) {
+    return std::nullopt;
+  }
+  return found;
+}
+
 std::optional<AltupPrelude>
 altupPrelude(const CompoundStmt *constructor_body, const ForStmt *loop,
              llvm::StringRef activation, llvm::StringRef carried,
@@ -852,6 +908,14 @@ altupPrelude(const CompoundStmt *constructor_body, const ForStmt *loop,
   if (result.width.empty() || result.tokens.empty() || result.count.empty()) {
     return std::nullopt;
   }
+  // The altup stage boundary and per-layer projection fallback must slice the
+  // carried activation with the builder's own view helper. Discover its name
+  // from the constructor body; a builder without one is not transformable.
+  const auto slice_helper = viewSliceHelper(constructor_body, sm);
+  if (!slice_helper) {
+    return std::nullopt;
+  }
+  result.slice_helper = *slice_helper;
   return result;
 }
 
@@ -1621,9 +1685,9 @@ public:
         const std::string sideband_indent = indentationAt(
             per_layer_projection->build_statement->getBeginLoc(), sm);
         const std::string projection_fallback =
-            altup ? "stage_filtered && il_start > 0 ? "
-                    "ggml_view_2d_slice(ctx0, " +
-                        *carried + ", i_altup_act) : " + *activation
+            altup ? "stage_filtered && il_start > 0 ? " +
+                        altup->slice_helper + "(ctx0, " + *carried +
+                        ", i_altup_act) : " + *activation
                   : *activation;
         const std::string sideband =
             "ggml_tensor * inp_per_layer_proj = " + projection_fallback +
@@ -2009,9 +2073,8 @@ public:
                     "    res->t_skippy_activation_output = "
                     "stage_boundary;\n" +
                     indent +
-                    "    res->t_embd = ggml_view_2d_slice(ctx0, "
-                    "stage_boundary, "
-                    "i_altup_act);\n" +
+                    "    res->t_embd = " + altup->slice_helper +
+                    "(ctx0, stage_boundary, i_altup_act);\n" +
                     indent +
                     "    ggml_build_forward_expand(gf, stage_boundary);\n" +
                     indent + "    return;\n" + indent + "}\n"

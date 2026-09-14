@@ -1,6 +1,6 @@
 use super::runtime::{native_runtime_command_selection, native_runtime_config_selector};
 use anyhow::{Result, bail};
-use mesh_llm_cli::Command;
+use mesh_llm_cli::{BinaryFlavor, Command};
 use mesh_llm_commands::setup::{SetupCommandArgs, SetupEnvironment, SetupOptions, SetupPlatform};
 use std::io::IsTerminal;
 use std::path::Path;
@@ -8,9 +8,13 @@ use std::path::Path;
 pub(crate) async fn dispatch_setup_command(
     cmd: &Command,
     config_path: Option<&Path>,
+    llama_flavor: Option<BinaryFlavor>,
 ) -> Result<()> {
     let selector = native_runtime_config_selector(config_path)?;
-    let args = setup_command_args(cmd, native_runtime_command_selection(selector.as_ref()))?;
+    let args = setup_command_args(
+        cmd,
+        native_runtime_command_selection(selector.as_ref(), llama_flavor),
+    )?;
     mesh_llm_commands::setup::run_setup_command(args).await
 }
 

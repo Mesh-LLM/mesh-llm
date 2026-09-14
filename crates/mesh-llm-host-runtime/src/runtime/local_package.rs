@@ -153,7 +153,7 @@ pub(super) async fn resolve_split_runtime_package(
         }
         anyhow::ensure!(
             model_path.is_file(),
-            "generation-8 split source must be a package-v2 directory or direct GGUF file: {}",
+            "generation-9 split source must be a package-v2 directory or direct GGUF file: {}",
             model_path.display()
         );
         if local_source_required {
@@ -248,7 +248,7 @@ impl SplitParticipantExclusionReason {
                 "Enable artifact transfer, use an HF-resolvable package, or choose a peer with the package already cached."
             }
             Self::StageInventoryEmpty => {
-                "Wait for stage inventory refresh or prepare the requested package on this peer."
+                "Wait for stage inventory refresh or load the requested package on this peer."
             }
             Self::PackageManifestMismatch => {
                 "Refresh stale layer packages so this peer advertises the requested package manifest."
@@ -360,12 +360,12 @@ impl SplitParticipantPackageSignal {
         self.missing_artifact_bytes == 0
             || (!skippy::is_content_addressed_gguf_ref(&package.package_ref)
                 && artifact_transfer_supported)
-            || package_ref_has_independent_prepare_source(&package.package_ref)
+            || package_ref_has_independent_load_source(&package.package_ref)
     }
 }
 
-pub(super) fn package_ref_has_independent_prepare_source(package_ref: &str) -> bool {
-    // HF layer packages can be resolved by the selected worker during prepare;
+pub(super) fn package_ref_has_independent_load_source(package_ref: &str) -> bool {
+    // HF layer packages can be resolved by the selected worker during load;
     // peer artifact transfer is only an optional cache warm path.
     skippy_runtime::package::is_hf_package_ref(package_ref)
 }
@@ -725,7 +725,6 @@ pub(super) fn split_inventory_has_no_stage_surface(
         && inventory.ready_ranges.is_empty()
         && inventory.available_ranges.is_empty()
         && inventory.missing_ranges.is_empty()
-        && inventory.preparing_ranges.is_empty()
         && inventory.source_model_path.is_none()
         && inventory.source_model_bytes.is_none()
         && matches!(

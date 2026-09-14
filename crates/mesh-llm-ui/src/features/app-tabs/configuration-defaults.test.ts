@@ -192,7 +192,6 @@ describe('CONFIGURATION_DEFAULTS', () => {
         'prefill-chunk-schedule',
         'binary-stage-transport',
         'lifecycle-startup-timeout-ms',
-        'lifecycle-readiness-interval-ms',
         'lifecycle-health-interval-ms'
       ])
     )

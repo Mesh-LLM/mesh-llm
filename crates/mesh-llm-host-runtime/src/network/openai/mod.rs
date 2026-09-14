@@ -1,3 +1,4 @@
+pub(crate) mod accept;
 pub(crate) mod auto_route;
 pub(crate) mod automatic;
 pub(crate) mod client_stream;
@@ -12,5 +13,6 @@ pub(crate) use response::send_503;
 pub(crate) mod response_adapter;
 mod response_quality;
 mod routing_rank;
+pub(crate) mod runtime_events;
 mod tool_call_ids;
 pub(crate) mod transport;

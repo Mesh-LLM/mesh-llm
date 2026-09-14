@@ -1,4 +1,4 @@
-From 129b6a563fbc6a228c3baf0159fd2e1ee1525f54 Mon Sep 17 00:00:00 2001
+From f8be47b3c9ffddc43cd2f9f6b1db9c4d13bb111c Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 7 Sep 2026 06:22:57 +1000
 Subject: [PATCH 03/23] skippy: implement model lifecycle and package loading

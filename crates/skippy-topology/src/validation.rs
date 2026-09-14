@@ -21,6 +21,12 @@ pub enum PlanError {
         stages: usize,
         nodes: usize,
     },
+    InvalidStageCount {
+        stages: usize,
+    },
+    NoAcceptedBalancedSplit {
+        stages: usize,
+    },
     FamilyLayerCountMismatch {
         family_id: String,
         expected: u32,
@@ -52,6 +58,16 @@ impl std::fmt::Display for PlanError {
             Self::NotEnoughNodesForSplits { stages, nodes } => write!(
                 f,
                 "split plan requires {stages} nodes but only {nodes} were provided"
+            ),
+            Self::InvalidStageCount { stages } => {
+                write!(
+                    f,
+                    "balanced split selection requires at least two stages, got {stages}"
+                )
+            }
+            Self::NoAcceptedBalancedSplit { stages } => write!(
+                f,
+                "no product-approved balanced split exists for {stages} stages"
             ),
             Self::FamilyLayerCountMismatch {
                 family_id,

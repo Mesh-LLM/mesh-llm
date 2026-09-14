@@ -154,3 +154,71 @@ fn test_console_session_mode_no_explicit_surface_uses_none() {
 // for `serve --auto`, leaving :9337 unbound while the local model
 // loaded. These tests pin the gate so both client and serve get the
 // bootstrap proxy whenever there is a candidate to tunnel to.
+
+async fn build_run_auto_console_state(
+    options: &RuntimeOptions,
+    role: mesh::NodeRole,
+) -> api::MeshApi {
+    let node = mesh::Node::new_for_tests(role).await.expect("test node");
+    let resolved_plugins = plugin::ResolvedPlugins {
+        externals: vec![],
+        inactive: vec![],
+    };
+    let (mesh_tx, _mesh_rx) = tokio::sync::mpsc::channel(1);
+    let plugin_manager = plugin::PluginManager::start(
+        &resolved_plugins,
+        plugin::PluginHostMode {
+            mesh_visibility: mesh_llm_plugin::MeshVisibility::Private,
+        },
+        mesh_tx,
+    )
+    .await
+    .expect("plugin manager");
+    let affinity_router = affinity::AffinityRouter::default();
+    let (control_tx, _control_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    crate::runtime::serving_surface::setup_run_auto_console_state(
+        crate::runtime::serving_surface::RunAutoConsoleStateContext {
+            options,
+            node: &node,
+            console_enabled: true,
+            model_name: "",
+            model_path: Path::new(""),
+            api_port: 3131,
+            plugin_manager: &plugin_manager,
+            affinity_router: &affinity_router,
+            control_tx: &control_tx,
+            owner_key_path: &None,
+        },
+    )
+    .await
+    .expect("console state setup")
+    .expect("console enabled")
+}
+
+async fn console_status_json(state: &api::MeshApi) -> serde_json::Value {
+    serde_json::from_str(&state.status_snapshot_string().await).expect("status json")
+}
+
+#[tokio::test]
+async fn run_auto_console_state_reports_client_mode_for_client_nodes() {
+    let options = RuntimeOptions {
+        client: true,
+        ..Default::default()
+    };
+    let state = build_run_auto_console_state(&options, mesh::NodeRole::Client).await;
+    let status = console_status_json(&state).await;
+
+    assert_eq!(status["is_client"], serde_json::Value::Bool(true));
+    assert_eq!(status["node_state"], "client");
+}
+
+#[tokio::test]
+async fn run_auto_console_state_keeps_worker_nodes_out_of_client_mode() {
+    let options = RuntimeOptions::default();
+    let state = build_run_auto_console_state(&options, mesh::NodeRole::Worker).await;
+    let status = console_status_json(&state).await;
+
+    assert_eq!(status["is_client"], serde_json::Value::Bool(false));
+    assert_ne!(status["node_state"], "client");
+}

@@ -2,8 +2,8 @@ use super::plugins::PluginDataValue;
 use super::processes::RuntimeProcessSnapshot;
 use crate::api::RuntimeProcessPayload;
 use crate::api::status::{
-    GpuEntry, LocalInstance, MeshModelPayload, NodeState, OwnershipPayload, PeerPayload,
-    WakeableNode,
+    GpuEntry, LocalInstance, MemoryPayload, MeshModelPayload, NodeState, OwnershipPayload,
+    PeerPayload, WakeableNode,
 };
 use crate::crypto::{OwnershipSummary, ReleaseAttestationSummary};
 use crate::mesh::{MeshCatalogEntry, ModelDemand, PeerInfo};
@@ -78,6 +78,8 @@ pub(crate) struct HardwareViewInput {
     pub gpu_compute_tflops_fp16: Option<String>,
     pub my_hostname: Option<String>,
     pub my_is_soc: Option<bool>,
+    /// The itemized capacity this node advertises next to `my_vram_gb`.
+    pub memory: crate::mesh::AdvertisedMemory,
     pub my_vram_gb: f64,
     pub model_size_gb: f64,
     pub first_joined_mesh_ts: Option<u64>,
@@ -87,6 +89,7 @@ pub(crate) struct HardwareViewInput {
 pub(crate) struct HardwareViewSnapshot {
     pub my_hostname: Option<String>,
     pub my_is_soc: Option<bool>,
+    pub my_memory: MemoryPayload,
     pub my_vram_gb: f64,
     pub model_size_gb: f64,
     pub gpus: Vec<GpuEntry>,

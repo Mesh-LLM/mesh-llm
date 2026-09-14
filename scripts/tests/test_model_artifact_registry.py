@@ -71,6 +71,23 @@ class ModelArtifactRegistryTests(unittest.TestCase):
                 with self.subTest(suite=suite, artifact=artifact["id"]):
                     self.assertTrue(required_cadences.issubset(artifact["cadences"]))
 
+    def test_native_event_gate_model_allows_pr_and_main(self) -> None:
+        import yaml
+
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/ci-linux-runtime-slice.yml").read_text()
+        )
+        steps = workflow["jobs"]["linux_runtime"]["steps"]
+        model = next(step["with"] for step in steps if step.get("id") == "gate_model")
+        for cadence in ("pull-request", "main"):
+            with self.subTest(cadence=cadence):
+                subprocess.run(
+                    ["python3", str(RESOLVER), model["model_manifest"],
+                     "--artifact-id", model["model_artifact_id"],
+                     "--cadence", cadence, "--require-single-file"],
+                    cwd=ROOT, check=True, capture_output=True, text=True,
+                )
+
     def test_product_integration_manifest_is_the_pinned_dense_recurrent_pair(self) -> None:
         manifest = json.loads(
             (MANIFESTS / "product-integration-smoke.json").read_text(
@@ -163,8 +180,12 @@ class ModelArtifactRegistryTests(unittest.TestCase):
             )
 
     def test_executable_manifest_consumers_declare_cadence(self) -> None:
+        # Every place that resolves a model from a manifest must say which
+        # cadence it is authorized for. `restore-smoke-inputs` used to
+        # resolve one itself; it now delegates to `restore-test-model`, so
+        # that is where the invocation -- and the cadence -- must be.
         consumers = (
-            ".github/actions/restore-smoke-inputs/action.yml",
+            ".github/actions/restore-test-model/action.yml",
             ".github/actions/restore-product-integration-inputs/action.yml",
             ".github/workflows/ci-rust-tests-slice.yml",
             "scripts/ci-hf-download-smoke.sh",

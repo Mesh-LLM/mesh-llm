@@ -140,11 +140,14 @@ impl Drop for EmbeddedServeHandle {
 pub async fn start_embedded_node(
     mut config: EmbeddedMeshNodeConfig,
 ) -> Result<EmbeddedServeHandle> {
-    embedded_startup::prepare_embedded_native_runtime(&config.mode)?;
     let isolated_config = prepare_isolated_config(&mut config)?;
     let config_snapshot =
         embedded_logging::snapshot_validated_config(config.storage.config_path.as_deref())?;
     config.storage.config_path = Some(embedded_logging::snapshot_path(&config_snapshot));
+    embedded_startup::prepare_embedded_native_runtime(
+        &config.mode,
+        config.storage.config_path.as_deref(),
+    )?;
     drop(isolated_config);
     let (control_tx, control_rx) = tokio::sync::mpsc::unbounded_channel();
     let runtime_options = embedded_runtime_options(&config, Some(control_rx));

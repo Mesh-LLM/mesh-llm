@@ -10,7 +10,6 @@ stage_role = "prefill"
 stage_topology = "manual-smoke-topology"
 binary_stage_transport = "auto"
 lifecycle_startup_timeout_ms = 1000
-lifecycle_readiness_interval_ms = 1000
 lifecycle_health_interval_ms = 1000
 prefill_chunking = "schedule"
 prefill_chunk_size = 64

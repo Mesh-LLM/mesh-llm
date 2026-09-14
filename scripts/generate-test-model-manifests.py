@@ -126,9 +126,7 @@ def _validate_registry(raw: Any) -> dict[str, Any]:
     cadences = _string_list(registry.get("cadences"), "registry.cadences")
     suites = _string_list(registry.get("suites"), "registry.suites")
     policy = _object(registry.get("family_policy"), "registry.family_policy")
-    _exact_keys(policy, {"profiles", "cadences"}, "registry.family_policy")
-    if policy.get("cadences") != ["llama-bump", "manual-full", "nightly", "rotating"]:
-        raise RegistryError("registry.family_policy.cadences must preserve family cadence order")
+    _exact_keys(policy, {"profiles"}, "registry.family_policy")
     profiles = _object(policy.get("profiles"), "registry.family_policy.profiles")
     expected_profiles = {"full", "package-oracle", "graph-only"}
     if set(profiles) != expected_profiles:
@@ -175,20 +173,12 @@ def _validate_registry(raw: Any) -> dict[str, Any]:
             certification = _object(row.get("certification"), f"{field}.certification")
             _exact_keys(
                 certification,
-                {"profile", "cadences", "execution", "resources", "notes", "draft_artifact", "mmproj_artifact"},
+                {"profile", "execution", "resources", "notes", "draft_artifact", "mmproj_artifact"},
                 f"{field}.certification",
             )
             profile = _string(certification.get("profile"), f"{field}.certification.profile")
             if profile not in profiles:
                 raise RegistryError(f"{field}.certification.profile is not a family profile")
-            if "cadences" in certification:
-                certification_cadences = _string_list(
-                    certification["cadences"], f"{field}.certification.cadences"
-                )
-                if any(cadence not in policy["cadences"] for cadence in certification_cadences):
-                    raise RegistryError(
-                        f"{field}.certification.cadences contains a non-family cadence"
-                    )
             _object(certification.get("execution"), f"{field}.certification.execution")
             _object(certification.get("resources"), f"{field}.certification.resources")
             _string(certification.get("notes"), f"{field}.certification.notes")
@@ -232,7 +222,6 @@ def _family_manifest(registry: dict[str, Any]) -> dict[str, Any]:
         model: dict[str, Any] = {
             "family": row["family"],
             "profile": certification["profile"],
-            "cadences": certification.get("cadences", row["cadences"]),
             "artifact": _family_artifact(row["artifact"]),
         }
         for optional in ("draft_artifact", "mmproj_artifact"):
@@ -309,21 +298,13 @@ def _dump_family(value: dict[str, Any]) -> bytes:
                 "      }" + ("," if profile_index + 1 < len(profile_items) else ""),
             ]
         )
-    lines.extend(
-        [
-            "    },",
-            f'    "cadences": {compact(value["policy"]["cadences"])}',
-            "  },",
-            '  "models": [',
-        ]
-    )
+    lines.extend(["    }", "  },", '  "models": ['])
     for model_index, model in enumerate(value["models"]):
         lines.extend(
             [
                 "    {",
                 f'      "family": {compact(model["family"])},',
                 f'      "profile": {compact(model["profile"])},',
-                f'      "cadences": {compact(model["cadences"])},',
                 f'      "artifact": {compact(model["artifact"])},',
             ]
         )

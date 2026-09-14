@@ -22,6 +22,22 @@ export interface GpuInfo {
   mem_bandwidth_gbps?: number
 }
 
+/**
+ * Itemized capacity behind a node's advertised VRAM, in bytes, as the node
+ * announces it on the mesh: total = reserved + platform_reserve +
+ * configured_reserve + usable. System RAM and the RAM-backed share of the
+ * local budget are informational only.
+ */
+export interface MemoryBreakdown {
+  total_bytes: number
+  reserved_bytes: number
+  platform_reserve_bytes?: number
+  configured_reserve_bytes: number
+  usable_bytes: number
+  system_ram_bytes?: number
+  ram_offload_bytes: number
+}
+
 export interface ServingModel {
   name: string
   node_id: string
@@ -101,6 +117,7 @@ export interface PeerInfo {
   models?: string[]
   my_vram_gb?: number
   vram_gb?: number
+  memory?: MemoryBreakdown
   latency_ms?: number
   latency_source?: LatencySource
   latency_age_ms?: number
@@ -155,6 +172,7 @@ export interface StatusPayload {
   models: MeshModelRaw[]
   my_vram_gb: number
   my_is_soc?: boolean
+  my_memory?: MemoryBreakdown
   api_port?: number
   gpus: GpuInfo[]
   serving_models: ServingModelEntry[]

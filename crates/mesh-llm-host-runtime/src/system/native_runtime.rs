@@ -1,5 +1,7 @@
 #[cfg(feature = "dynamic-native-runtime")]
 mod dynamic {
+    use crate::runtime_events::runtime_event_engine;
+    use crate::system::native_runtime_events::{native_family_fact, submit_native_family_fact};
     use crate::system::native_runtime_install::{
         NativeRuntimeInstallOptions, NativeRuntimeInstallOutcome,
     };
@@ -8,6 +10,7 @@ mod dynamic {
         HostRuntimeProfile, InstalledNativeRuntime, NativeRuntimeArtifact, NativeRuntimeCache,
         NativeRuntimeLoadPlan, NativeRuntimeReleaseManifest, RuntimeSelection,
     };
+    use skippy_runtime::RuntimeEvent;
     use std::{future::Future, path::PathBuf};
 
     #[derive(Clone, Debug)]
@@ -62,13 +65,41 @@ mod dynamic {
                 runtime_selection,
             }
         }
+
+        pub(crate) fn from_config(
+            config: mesh_llm_config::NativeRuntimeConfig,
+            llama_flavor: Option<mesh_llm_system::backend::BinaryFlavor>,
+        ) -> Result<Self> {
+            let runtime_selection = RuntimeSelection::parse(
+                llama_flavor
+                    .map(mesh_llm_system::backend::BinaryFlavor::suffix)
+                    .or(config.selection.as_deref()),
+            )?;
+            Ok(match config.mesh_version {
+                Some(mesh_version) => {
+                    Self::explicit(mesh_version, config.skippy_abi, runtime_selection)
+                }
+                None => Self {
+                    runtime_selection,
+                    ..Self::current()
+                },
+            })
+        }
     }
 
-    pub(crate) fn load_local_native_runtime_for_embedded_serving()
-    -> Result<Option<LoadedNativeRuntime>> {
+    pub(crate) fn load_local_native_runtime_for_embedded_serving(
+        runtime_selection: &RuntimeSelection,
+    ) -> Result<Option<LoadedNativeRuntime>> {
         if skippy_runtime::native_runtime_loaded() {
             return Ok(None);
         }
+        // Reserved before any discovery/load work begins. A `?` failure
+        // below drops the guard unresolved, which synthesizes
+        // `RuntimeResolutionFailed`/`terminal_not_delivered` through the
+        // engine's own Drop mechanism -- acceptable here since the actual
+        // failure reason is already captured by the returned `anyhow::Error`
+        // and the tracing/audit surfaces this function's callers already use.
+        let resolution = crate::system::native_runtime_events::NativeRuntimeResolution::begin();
         let cache = default_native_runtime_cache()?;
         let local_runtimes =
             crate::system::native_runtime_install::discover_local_native_runtimes(&[], &cache)?;
@@ -78,9 +109,15 @@ mod dynamic {
             crate::BUILD_VERSION,
             crate::RELEASE_VERSION,
             Some(&crate::system::native_runtime_install::current_skippy_abi_version()),
-            &RuntimeSelection::Recommended,
+            runtime_selection,
         )?
         else {
+            // No compatible plan found at all -- a real
+            // `NativeLibraryUnavailable`/`RuntimeResolutionFailed`, not a
+            // no-op (the earlier `native_runtime_loaded()` check above is
+            // the ONLY genuine "not needed" case in this function, and it
+            // returns before `resolution` is even constructed).
+            resolution.unavailable(mesh_llm_runtime_event_contracts::ReasonCode::MissingArtifact);
             return Ok(None);
         };
         unsafe { skippy_runtime::load_native_runtime_libraries(&plan.libraries) }
@@ -92,6 +129,10 @@ mod dynamic {
                     plan.root.display()
                 )
             })?;
+        resolution.library_loaded();
+        install_runtime_scoped_event_reporter();
+        resolution.initialized();
+        resolution.completed();
         Ok(Some(LoadedNativeRuntime {
             native_runtime_id: plan.native_runtime_id,
             libraries: plan.libraries,
@@ -101,7 +142,8 @@ mod dynamic {
     pub(crate) async fn try_load_installed_native_runtime(
         startup_selection: NativeRuntimeStartupSelection,
     ) -> Result<Option<LoadedNativeRuntime>> {
-        try_load_installed_native_runtime_with(
+        let resolution = crate::system::native_runtime_events::NativeRuntimeResolution::begin();
+        let outcome = try_load_installed_native_runtime_with(
             skippy_runtime::native_runtime_loaded,
             default_native_runtime_cache,
             host_runtime_profile,
@@ -109,11 +151,93 @@ mod dynamic {
             default_install_executor,
             startup_selection,
             |libraries| {
-                unsafe { skippy_runtime::load_native_runtime_libraries(libraries) }
-                    .map_err(anyhow::Error::from)
+                let result = unsafe { skippy_runtime::load_native_runtime_libraries(libraries) }
+                    .map_err(anyhow::Error::from);
+                if result.is_ok() {
+                    install_runtime_scoped_event_reporter();
+                }
+                result
             },
         )
-        .await
+        .await;
+        match &outcome {
+            Ok(Some(_)) => {
+                resolution.initialized();
+                resolution.completed();
+            }
+            Ok(None) => resolution.not_needed(),
+            Err(_) => {
+                resolution.failed(mesh_llm_runtime_event_contracts::ReasonCode::ArtifactIoFailure)
+            }
+        }
+        outcome
+    }
+
+    /// Installs the process-global runtime-scoped event reporter right after
+    /// a native runtime library loads. A no-op on a runtime that doesn't
+    /// advertise the `runtime_event_reporter` family (probed by
+    /// `skippy_runtime::probe_capabilities` internally) — older or
+    /// differently-composed runtimes simply keep operating without this
+    /// reporter, matching the model-open feature-probe fallback contract.
+    fn install_runtime_scoped_event_reporter() {
+        // Task 19's `off` selector: with no engine installed there is
+        // nothing for these records to reach, so the native side is not
+        // asked to produce them at all. Leaving the reporter installed
+        // would leave every native thread still paying for a ring push
+        // whose contents nobody would ever drain, which is exactly the
+        // cost this mode exists to measure the absence of.
+        if mesh_llm_config::event_system_off().unwrap_or(false) {
+            return;
+        }
+        if !skippy_runtime::install_runtime_event_reporter() {
+            return;
+        }
+        // The reporter's callback only copies records into a ring; this is
+        // what moves them into the engine. Registering it here, next to the
+        // install it belongs with, is what lets `runtime_events` stay
+        // unaware that skippy exists.
+        crate::runtime_events::driver::install_pre_drain_ingest(ingest_native_runtime_events);
+    }
+
+    /// The installed callback (D7, `.omo/plans/event-system-fixes.md` task
+    /// 10). Runs on the native worker thread that raised the event: maps it
+    /// to a `RuntimeFact` (`native_family_fact`, a pure function -- no
+    /// I/O, no logging, every byte it allocates becomes part of the
+    /// returned fact) and submits it (`submit_native_family_fact`). Kind
+    /// values 1-5 (`SKIPPY_RUNTIME_EVENT_KIND_MODEL_OPEN_*`) belong to the
+    /// separate per-call model-open reporter and structurally never reach
+    /// this process-global one (`events_internal.h`'s `dispatch()` seam is
+    /// only called by `skippy_emit_{kv,device,diagnostic,unload}_event`/
+    /// `skippy_emit_model_load_event_v2`); `native_family_fact` still
+    /// returns `None` for them defensively rather than assuming that holds
+    /// forever.
+    fn runtime_scoped_native_event_sink(event: &RuntimeEvent) {
+        let Some(fact) = native_family_fact(event) else {
+            return;
+        };
+        let Some(engine) = runtime_event_engine() else {
+            return;
+        };
+        submit_native_family_fact(&engine, fact);
+    }
+
+    /// Move every buffered native record into the engine.
+    ///
+    /// Runs on the driver task, immediately before each drain pass. All the
+    /// work the callback refused to do on a native worker thread happens
+    /// here: expanding the record into an owned event, mapping native
+    /// identifiers to opaque contract identities under the registry lock,
+    /// building the fact, reserving, and submitting.
+    ///
+    /// Bounded per call by the ring's own capacity, so one pass cannot be
+    /// held open indefinitely by a native thread producing faster than the
+    /// driver ticks.
+    fn ingest_native_runtime_events() {
+        let mut records = Vec::new();
+        skippy_runtime::drain_runtime_events(&mut records, skippy_runtime::RECORD_RING_CAPACITY);
+        for record in records {
+            runtime_scoped_native_event_sink(&record.to_event());
+        }
     }
 
     async fn try_load_installed_native_runtime_with<
@@ -1014,6 +1138,297 @@ mod dynamic {
             assert_eq!(
                 startup_install_message(false),
                 "Discovered native runtime bundles take precedence over installed runtimes; attempting one-shot startup install"
+            );
+        }
+
+        #[test]
+        fn cli_llama_flavor_selects_the_current_native_runtime_backend() {
+            let selection = NativeRuntimeStartupSelection::from_config(
+                mesh_llm_config::NativeRuntimeConfig::default(),
+                Some(mesh_llm_system::backend::BinaryFlavor::Vulkan),
+            )
+            .expect("Vulkan CLI flavor should resolve");
+
+            assert_eq!(selection.mesh_version, crate::RELEASE_VERSION);
+            assert_eq!(
+                selection.skippy_abi.as_deref(),
+                Some(crate::system::native_runtime_install::current_skippy_abi_version().as_str())
+            );
+            assert_eq!(
+                selection.runtime_selection,
+                RuntimeSelection::Backend {
+                    kind: mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan,
+                    cuda_toolkit_major: None,
+                }
+            );
+        }
+
+        #[test]
+        fn cli_llama_flavor_overrides_configured_backend_without_changing_version() {
+            let selection = NativeRuntimeStartupSelection::from_config(
+                mesh_llm_config::NativeRuntimeConfig {
+                    mesh_version: Some("0.75.0".to_string()),
+                    skippy_abi: Some("0.1.52".to_string()),
+                    selection: Some("cuda13".to_string()),
+                },
+                Some(mesh_llm_system::backend::BinaryFlavor::Vulkan),
+            )
+            .expect("Vulkan CLI flavor should override the configured backend");
+
+            assert_eq!(selection.mesh_version, "0.75.0");
+            assert_eq!(selection.skippy_abi.as_deref(), Some("0.1.52"));
+            assert_eq!(
+                selection.runtime_selection,
+                RuntimeSelection::Backend {
+                    kind: mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan,
+                    cuda_toolkit_major: None,
+                }
+            );
+        }
+
+        #[test]
+        fn configured_native_runtime_selection_is_used_without_cli_override() {
+            let selection = NativeRuntimeStartupSelection::from_config(
+                mesh_llm_config::NativeRuntimeConfig {
+                    mesh_version: Some("0.75.0".to_string()),
+                    skippy_abi: Some("0.1.52".to_string()),
+                    selection: Some("cuda13".to_string()),
+                },
+                None,
+            )
+            .expect("configured CUDA selection should resolve");
+
+            assert_eq!(
+                selection.runtime_selection,
+                RuntimeSelection::Backend {
+                    kind: mesh_llm_native_runtime::NativeRuntimeBackendKind::Cuda,
+                    cuda_toolkit_major: Some(13),
+                }
+            );
+        }
+
+        // Ported from the duplicate PR branch (jian yang's
+        // jy/native-runtime-flavor-selection): end-to-end startup coverage that
+        // the flavor request survives the full resolver, not just
+        // `from_config`. Regression for the white.local scenario where
+        // `--llama-flavor vulkan` loaded the CUDA runtime because startup
+        // never consulted the flavor.
+        #[tokio::test]
+        async fn vulkan_flavor_loads_vulkan_runtime_over_higher_ranked_cuda() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+            let release_version = crate::RELEASE_VERSION.to_string();
+            let vulkan_id = "meshllm-native-runtime-test-vulkan";
+            let cuda_id = "meshllm-native-runtime-test-cuda";
+            let vulkan_dir = cache.runtime_dir(&release_version, vulkan_id);
+            let cuda_dir = cache.runtime_dir(&release_version, cuda_id);
+            write_runtime_with_backend(&vulkan_dir, Some(&release_version), vulkan_id, |backend| {
+                backend.kind = mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan;
+            });
+            write_runtime_with_backend(&cuda_dir, Some(&release_version), cuda_id, |backend| {
+                backend.kind = mesh_llm_native_runtime::NativeRuntimeBackendKind::Cuda;
+                backend.cuda = Some(mesh_llm_native_runtime::CudaRuntimeRequirements {
+                    toolkit_major: 12,
+                    min_driver: None,
+                    gpu_arches: Vec::new(),
+                });
+            });
+
+            let startup_selection = NativeRuntimeStartupSelection::from_config(
+                mesh_llm_config::NativeRuntimeConfig::default(),
+                Some(mesh_llm_system::backend::BinaryFlavor::Vulkan),
+            )
+            .expect("Vulkan CLI flavor should resolve");
+
+            let install_calls = Arc::new(Mutex::new(0_usize));
+            let runtime = try_load_installed_native_runtime_with(
+                || false,
+                || Ok(cache.clone()),
+                vulkan_capable_profile,
+                test_install_options,
+                {
+                    let install_calls = Arc::clone(&install_calls);
+                    move |_| {
+                        let install_calls = Arc::clone(&install_calls);
+                        async move {
+                            *install_calls.lock().unwrap() += 1;
+                            anyhow::bail!("selection must resolve from the cache")
+                        }
+                    }
+                },
+                startup_selection,
+                |libraries| {
+                    let _ = libraries;
+                    Ok(())
+                },
+            )
+            .await
+            .unwrap()
+            .expect("expected the Vulkan runtime to load");
+
+            assert_eq!(runtime.native_runtime_id, vulkan_id);
+            assert_eq!(
+                runtime.libraries,
+                vec![vulkan_dir.join(test_library_rel_path())]
+            );
+            assert_eq!(*install_calls.lock().unwrap(), 0);
+        }
+
+        #[test]
+        fn recommended_selection_still_prefers_cuda_over_vulkan() {
+            // Guards the premise of the regression above: the recommended
+            // ranking selects CUDA (650) over Vulkan (350), which is exactly
+            // why an ignored flavor loaded CUDA on white.local. If this
+            // ranking ever changes, revisit the regression's expectations.
+            let profile = vulkan_capable_profile();
+            let recommended = mesh_llm_native_runtime::select_native_runtime_from_artifacts(
+                &[
+                    candidate_with_backend("meshllm-native-runtime-test-vulkan", {
+                        let mut backend = NativeRuntimeBackend::cpu();
+                        backend.kind = mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan;
+                        backend
+                    }),
+                    candidate_with_backend("meshllm-native-runtime-test-cuda", {
+                        let mut backend = NativeRuntimeBackend::cpu();
+                        backend.kind = mesh_llm_native_runtime::NativeRuntimeBackendKind::Cuda;
+                        backend.cuda = Some(mesh_llm_native_runtime::CudaRuntimeRequirements {
+                            toolkit_major: 12,
+                            min_driver: None,
+                            gpu_arches: Vec::new(),
+                        });
+                        backend
+                    }),
+                ],
+                &profile,
+                crate::RELEASE_VERSION,
+                None,
+                &RuntimeSelection::Recommended,
+            )
+            .expect("recommended selection");
+            let vulkan = mesh_llm_native_runtime::select_native_runtime_from_artifacts(
+                &[candidate_with_backend(
+                    "meshllm-native-runtime-test-vulkan",
+                    {
+                        let mut backend = NativeRuntimeBackend::cpu();
+                        backend.kind = mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan;
+                        backend
+                    },
+                )],
+                &profile,
+                crate::RELEASE_VERSION,
+                None,
+                &RuntimeSelection::Backend {
+                    kind: mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan,
+                    cuda_toolkit_major: None,
+                },
+            )
+            .expect("vulkan selection");
+
+            assert_eq!(
+                recommended.artifact.id, "meshllm-native-runtime-test-cuda",
+                "recommended ranking must still prefer CUDA"
+            );
+            assert_eq!(
+                vulkan.artifact.id, "meshllm-native-runtime-test-vulkan",
+                "explicit backend selection must choose Vulkan"
+            );
+        }
+
+        fn vulkan_capable_profile() -> HostRuntimeProfile {
+            let mut profile = HostRuntimeProfile::current_without_gpu_probe();
+            profile
+                .available_flavors
+                .insert(mesh_llm_native_runtime::NativeRuntimeBackendKind::Cuda);
+            profile
+                .available_flavors
+                .insert(mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan);
+            profile.cuda = Some(mesh_llm_native_runtime::HostCudaProfile {
+                toolkit_majors: std::collections::BTreeSet::from([12]),
+                driver_max_major: Some(12),
+                driver_version: None,
+                gpu_arches: std::collections::BTreeSet::from(["sm_90".to_string()]),
+            });
+            profile.vulkan = Some(mesh_llm_native_runtime::HostVulkanProfile::default());
+            profile
+        }
+
+        fn write_runtime_with_backend(
+            dir: &Path,
+            version: Option<&str>,
+            id: &str,
+            edit: impl FnOnce(&mut NativeRuntimeBackend),
+        ) {
+            let library_rel_path = test_library_rel_path();
+            fs::create_dir_all(dir.join(library_rel_path.parent().unwrap())).unwrap();
+            fs::write(dir.join(&library_rel_path), b"native runtime").unwrap();
+            let mut backend = NativeRuntimeBackend::cpu();
+            edit(&mut backend);
+            let manifest = NativeRuntimeManifest {
+                runtime: NativeRuntimeArtifact {
+                    id: id.to_string(),
+                    mesh_version: version.map(ToString::to_string),
+                    // Match the ABI the flavor-derived startup selection
+                    // requests so the fixture is loadable in this build.
+                    skippy_abi: crate::system::native_runtime_install::current_skippy_abi_version(),
+                    platform: NativeRuntimePlatform {
+                        os: std::env::consts::OS.to_string(),
+                        arch: std::env::consts::ARCH.to_string(),
+                        target: None,
+                    },
+                    backend,
+                    rank: 0,
+                    libraries: vec![library_rel_path.to_string_lossy().to_string()],
+                    files: Default::default(),
+                    tools: Default::default(),
+                    url: None,
+                    sha256: None,
+                    signature: None,
+                },
+            };
+            manifest.write_to_dir(dir).unwrap();
+        }
+
+        fn candidate_with_backend(
+            id: &str,
+            backend: NativeRuntimeBackend,
+        ) -> mesh_llm_native_runtime::NativeRuntimeArtifact {
+            mesh_llm_native_runtime::NativeRuntimeArtifact {
+                id: id.to_string(),
+                mesh_version: Some(crate::RELEASE_VERSION.to_string()),
+                skippy_abi: crate::system::native_runtime_install::current_skippy_abi_version(),
+                platform: NativeRuntimePlatform {
+                    os: std::env::consts::OS.to_string(),
+                    arch: std::env::consts::ARCH.to_string(),
+                    target: None,
+                },
+                backend,
+                rank: 0,
+                libraries: vec![test_library_rel_path().to_string_lossy().to_string()],
+                files: Default::default(),
+                tools: Default::default(),
+                url: None,
+                sha256: None,
+                signature: None,
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod native_runtime_event_sink_tests {
+        use super::*;
+
+        #[test]
+        fn install_never_panics_without_a_confirmed_native_family() {
+            install_runtime_scoped_event_reporter();
+        }
+
+        #[test]
+        fn the_removed_native_log_note_call_is_not_reachable_from_this_file() {
+            let source = include_str!("native_runtime.rs");
+            let removed_call = ["write_native", "_log_note("].concat();
+            assert!(
+                !source.contains(removed_call.as_str()),
+                "system::native_runtime must not call the D7-era log-note symbol"
             );
         }
     }

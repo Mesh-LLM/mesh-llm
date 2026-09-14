@@ -21,6 +21,7 @@ use crate::validation_support::{
 };
 use crate::*;
 use anyhow::Result;
+use mesh_llm_native_runtime::{NativeRuntimeBackendKind, RuntimeSelection};
 
 pub fn validate_config_diagnostics(config: &MeshConfig) -> Vec<ConfigDiagnostic> {
     let mut diagnostics = Vec::new();
@@ -196,10 +197,10 @@ fn validate_runtime_config(config: &RuntimeConfig) -> Vec<ConfigDiagnostic> {
     let mesh_version = config.native_runtime.mesh_version.as_deref();
     let skippy_abi = config.native_runtime.skippy_abi.as_deref();
     let selection = config.native_runtime.selection.as_deref();
-    if mesh_version.is_none() && (skippy_abi.is_some() || selection.is_some()) {
+    if mesh_version.is_none() && skippy_abi.is_some() {
         diagnostics.push(validation_diagnostic(
             "runtime.native_runtime",
-            "runtime.native_runtime override must set mesh_version when skippy_abi or selection is set",
+            "runtime.native_runtime override must set mesh_version when skippy_abi is set",
         ));
     }
     if matches!(mesh_version, Some(value) if value.trim().is_empty()) {
@@ -218,6 +219,18 @@ fn validate_runtime_config(config: &RuntimeConfig) -> Vec<ConfigDiagnostic> {
         diagnostics.push(validation_diagnostic(
             "runtime.native_runtime.selection",
             "runtime.native_runtime.selection must not be empty",
+        ));
+    } else if selection.is_some_and(|value| match RuntimeSelection::parse(Some(value)) {
+        Ok(RuntimeSelection::Backend {
+            kind: NativeRuntimeBackendKind::Other(_),
+            ..
+        }) => true,
+        Ok(RuntimeSelection::Id(id)) => id.trim().is_empty(),
+        _ => false,
+    }) {
+        diagnostics.push(validation_diagnostic(
+            "runtime.native_runtime.selection",
+            "runtime.native_runtime.selection must be one of recommended, cpu, metal, cuda or cudaNN, rocm, vulkan, exact:<id>, or meshllm-<id>",
         ));
     }
     for (path, value, min, max) in [

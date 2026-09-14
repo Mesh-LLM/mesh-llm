@@ -139,7 +139,15 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         self.assertIn('MESH_LLM_SKIP_UI: "1"', smoke)
         self.assertIn("uses: ./.github/actions/restore-sccache-seed", smoke)
         self.assertEqual(smoke.count("cargo test --locked"), 1)
+        self.assertIn("set -euo pipefail", smoke)
         self.assertIn("--lib --no-run --message-format=json", smoke)
+        self.assertIn('if .reason == "compiler-message" then', smoke)
+        self.assertIn(
+            "(.message.rendered // empty) | stderr | empty",
+            smoke,
+        )
+        self.assertIn('elif .reason == "compiler-artifact" and', smoke)
+        self.assertIn("tail -n 1", smoke)
         self.assertIn(f'test_name="{test_name}"', smoke)
         self.assertIn('grep -Fqx "$test_name: test"', smoke)
         self.assertIn(
@@ -174,8 +182,8 @@ class CiWorkflowArtifactTests(unittest.TestCase):
             product_smoke,
         )
         self.assertIn("inputs.platform == 'linux' && inputs.backend == 'cuda'", product_smoke)
-        self.assertIn("cuda-cudart-12-9", product_smoke)
-        self.assertIn("libcublas-12-9", product_smoke)
+        self.assertNotIn("cuda-cudart-12-9", product_smoke)
+        self.assertNotIn("libcublas-12-9", product_smoke)
 
     def test_product_integration_supports_accelerator_backends(self):
         product_smoke = (WORKFLOWS / "product-integration-smoke.yml").read_text()
@@ -191,6 +199,20 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         self.assertIn("product_integration_rocm:", linux)
         self.assertIn("linux/vulkan) DEVICE=Vulkan0", product_script)
         self.assertIn("linux/rocm) DEVICE=ROCm0", product_script)
+        self.assertIn("verify_artifact_local_cuda_runtime", product_script)
+        self.assertIn("verify-native-runtime-package.sh", product_script)
+        self.assertIn("env -u LD_LIBRARY_PATH", product_script)
+        self.assertIn('"$benchmark" --probe', product_script)
+        self.assertIn('env -u LD_LIBRARY_PATH "$benchmark" --probe', product_script)
+        self.assertIn("CUDA_VISIBLE_DEVICES", product_script)
+        self.assertIn("NVIDIA_VISIBLE_DEVICES", product_script)
+
+        cuda_benchmark = (
+            ROOT
+            / "crates/mesh-llm-gpu-bench/native/cuda/membench-fingerprint.cu"
+        ).read_text()
+        self.assertIn('strcmp(argv[i], "--probe")', cuda_benchmark)
+        self.assertIn("if (probeMode)", cuda_benchmark)
 
     def test_two_node_split_smoke_covers_dense_and_recurrent_models(self):
         workflow = (WORKFLOWS / "product-integration-smoke.yml").read_text()

@@ -23,9 +23,9 @@ use mesh_llm_events::{ModelProgressStatus, OutputEvent, emit_event, interactive_
 #[path = "cache_resolution.rs"]
 mod cache_resolution;
 
-// Stage preparation can be superseded while a blocking HF transfer is still
+// A stage load can be superseded while a blocking HF transfer is still
 // finishing. Serialise package downloads inside one Mesh process so the
-// replacement task reuses the completed cache entry instead of racing the HF
+// replacement load reuses the completed cache entry instead of racing the HF
 // cache's per-blob file lock.
 static LAYER_PACKAGE_DOWNLOAD_LOCK: Mutex<()> = Mutex::new(());
 

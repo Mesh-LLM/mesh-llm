@@ -1,0 +1,1036 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[2]
+SCRIPTS = ROOT / "scripts"
+WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
+GENERATE = SCRIPTS / "release-notes-generate.sh"
+HOOK = ROOT / "scripts" / "hooks" / "commit-msg"
+
+
+def load(name, filename):
+    path = SCRIPTS / filename
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"unable to import {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+CONVENTIONAL = load("conventional_commit", "check-conventional-commit.py")
+CLASSIFY = load("release_notes_classify", "release-notes-classify.py")
+REGROUP = load("release_notes_regroup", "release-notes-regroup.py")
+LINK = load("release_notes_link", "release-notes-link.py")
+
+
+def entry(pr, subject="a change", author="someone"):
+    return f"* {subject} by @{author} in https://github.com/Mesh-LLM/mesh-llm/pull/{pr}"
+
+
+BODY = "\n".join(
+    [
+        "## What's Changed",
+        entry(1, "feat(skippy): add a thing"),
+        entry(2, "fix: repair a thing"),
+        entry(3, "Something without a prefix"),
+        "",
+        "## New Contributors",
+        "* @someone made their first contribution",
+        "",
+        "**Full Changelog**: https://github.com/Mesh-LLM/mesh-llm/compare/v1...v2",
+        "",
+    ]
+)
+
+
+class ConventionalCommitTest(unittest.TestCase):
+    def test_accepts_conventional_subjects(self):
+        for subject in [
+            "fix(skippy): restore recurrent prefix reuse",
+            "feat: expose a tokenizer capability",
+            "chore(deps)!: drop the old runtime",
+            "ci: publish the SDK smoke cache policy",
+        ]:
+            self.assertEqual(CONVENTIONAL.check_subject(subject), [], subject)
+
+    def test_rejects_non_conventional_subjects(self):
+        for subject in [
+            "Fix split serving: stages above layer 0 fail to load",
+            "CI: pin Depot audit to merged policy",
+            "",
+        ]:
+            self.assertTrue(CONVENTIONAL.check_subject(subject), subject)
+
+    def test_rejects_unknown_type(self):
+        problems = CONVENTIONAL.check_subject("task: do a thing")
+        self.assertTrue(any("unknown type" in p or "not Conventional" in p for p in problems))
+
+    def test_rejects_trailing_period_and_leading_capital(self):
+        self.assertTrue(CONVENTIONAL.check_subject("fix: repair the thing."))
+        self.assertTrue(CONVENTIONAL.check_subject("fix: Repair the thing"))
+
+    def test_rejects_overlong_subject(self):
+        problems = CONVENTIONAL.check_subject("fix: " + "x" * CONVENTIONAL.MAX_SUBJECT)
+        self.assertTrue(any("characters" in p for p in problems))
+
+    def test_exempts_git_and_release_authored_subjects(self):
+        for subject in [
+            "Merge branch 'main' into feature",
+            'Revert "fix: repair a thing"',
+            "fixup! fix: repair a thing",
+            "v0.76.0: prepare release source",
+        ]:
+            self.assertEqual(CONVENTIONAL.check_subject(subject), [], subject)
+
+    def test_ignores_squash_merge_pr_suffix(self):
+        self.assertEqual(
+            CONVENTIONAL.check_subject("fix(ui): use advertised capacity (#1746)"), []
+        )
+
+    def test_every_type_maps_to_a_section(self):
+        sections = set(CLASSIFY.SECTION_ORDER) | {"Internal"}
+        for kind, section in CONVENTIONAL.TYPES.items():
+            self.assertIn(section, sections, kind)
+
+    def test_hook_rejects_bad_message(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as handle:
+            handle.write("Bad subject\n")
+            path = handle.name
+        result = subprocess.run([str(HOOK), path], capture_output=True, text=True, cwd=ROOT)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Conventional Commits", result.stderr)
+
+
+class ClassifyTest(unittest.TestCase):
+    def plan_for(self, commits, prs=None):
+        prs = prs or sorted(commits)
+        built = {
+            pr: {"subject": subject, "trailers": trailers}
+            for pr, (subject, trailers) in commits.items()
+        }
+        plan, unclassified = CLASSIFY.build_plan(prs, built, "1.0.0", "2026-01-01")
+        return plan, unclassified
+
+    def sections(self, plan):
+        found = {}
+        for section in plan["sections"]:
+            prs = list(section.get("prs", []))
+            for group in section.get("groups", []):
+                prs += group["prs"]
+            found[section["title"]] = prs
+        return found
+
+    def test_type_drives_the_section(self):
+        plan, _ = self.plan_for(
+            {
+                1: ("feat: add a thing", {}),
+                2: ("fix: repair a thing", {}),
+                3: ("perf: speed a thing up", {}),
+                4: ("security: reject hostile input", {}),
+            }
+        )
+        found = self.sections(plan)
+        self.assertEqual(found["Added"], [1])
+        self.assertEqual(found["Fixed"], [2])
+        self.assertEqual(found["Changed"], [3])
+        self.assertEqual(found["Security"], [4])
+
+    def test_breaking_change_is_changed_not_added(self):
+        plan, _ = self.plan_for({1: ("feat!: replace the subsystem", {})})
+        self.assertEqual(self.sections(plan)["Changed"], [1])
+        plan, _ = self.plan_for(
+            {1: ("feat: replace it", {"breaking change": "the old flag is gone"})}
+        )
+        self.assertEqual(self.sections(plan)["Changed"], [1])
+
+    def test_release_notes_trailer_overrides_the_type(self):
+        plan, _ = self.plan_for(
+            {1: ("fix: redact provider health details", {"release-notes": "Security"})}
+        )
+        self.assertEqual(self.sections(plan)["Security"], [1])
+
+    def test_tooling_scopes_are_internal_whatever_the_type(self):
+        plan, _ = self.plan_for(
+            {
+                1: ("fix(ci): make CUDA checks hermetic", {}),
+                2: ("feat(bench): run a new suite", {}),
+                3: ("fix(skippy): restore prefix reuse", {}),
+            }
+        )
+        internal = [pr for group in plan["internal"]["groups"] for pr in group["prs"]]
+        self.assertEqual(sorted(internal), [1, 2])
+        self.assertEqual(self.sections(plan)["Fixed"], [3])
+
+    def test_non_conventional_entries_are_not_guessed(self):
+        plan, unclassified = self.plan_for(
+            {1: ("Stop persisting KV cache state to disk", {})}
+        )
+        self.assertEqual(unclassified, 1)
+        self.assertEqual(self.sections(plan)["Other changes"], [1])
+
+    def test_missing_commit_is_not_guessed(self):
+        plan, unclassified = CLASSIFY.build_plan([7], {}, "1.0.0", "2026-01-01")
+        self.assertEqual(unclassified, 1)
+        self.assertEqual(self.sections(plan)["Other changes"], [7])
+
+    def test_small_scopes_do_not_earn_subheadings(self):
+        self.assertIsNone(CLASSIFY.subgroups({"skippy": [1, 2], "ui": [3]}))
+        groups = CLASSIFY.subgroups(
+            {"skippy": list(range(10)), "ui": list(range(10, 20)), "cli": [99]}
+        )
+        titles = [group["title"] for group in groups]
+        self.assertEqual(titles, ["skippy", "ui", "Other"])
+
+
+class RegroupTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.body = self.dir / "body.md"
+        self.body.write_text(BODY, encoding="utf-8")
+
+    def render(self, plan):
+        plan_path = self.dir / "plan.json"
+        plan_path.write_text(json.dumps(plan), encoding="utf-8")
+        out = self.dir / "out.md"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "release-notes-regroup.py"),
+                "--body", str(self.body),
+                "--plan", str(plan_path),
+                "--out", str(out),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        return result, out
+
+    def test_preserves_every_pull_request_and_its_credit(self):
+        plan = {
+            "version": "1.0.0",
+            "sections": [{"title": "Added", "prs": [1, 2, 3]}],
+        }
+        result, out = self.render(plan)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rendered = out.read_text(encoding="utf-8")
+        keep = lambda text: [
+            line
+            for line in text.splitlines()
+            if line.startswith("* ") and "/pull/" in line
+        ]
+        original, emitted = keep(BODY), keep(rendered)
+        self.assertEqual(len(original), len(emitted))
+        # The subject may lose its type prefix; the credit tail never changes.
+        credits = lambda lines: sorted(line[line.index(" by @"):] for line in lines)
+        self.assertEqual(credits(original), credits(emitted))
+
+    def test_strips_the_type_prefix_and_sentence_cases_the_subject(self):
+        _, out = self.render(
+            {"version": "1.0.0", "sections": [{"title": "Added", "prs": [1, 2, 3]}]}
+        )
+        rendered = out.read_text(encoding="utf-8")
+        self.assertIn("* Add a thing by @someone", rendered)
+        self.assertIn("* Repair a thing by @someone", rendered)
+        self.assertNotIn("feat(skippy):", rendered)
+        self.assertNotIn("* fix:", rendered)
+
+    def test_leaves_an_unprefixed_subject_exactly_as_written(self):
+        _, out = self.render(
+            {"version": "1.0.0", "sections": [{"title": "Added", "prs": [1, 2, 3]}]}
+        )
+        self.assertIn("* Something without a prefix by @someone", out.read_text(encoding="utf-8"))
+
+    def test_preserves_the_tail(self):
+        _, out = self.render(
+            {"version": "1.0.0", "sections": [{"title": "Added", "prs": [1, 2, 3]}]}
+        )
+        rendered = out.read_text(encoding="utf-8")
+        self.assertIn("## New Contributors", rendered)
+        self.assertIn("**Full Changelog**", rendered)
+
+    def test_refuses_a_plan_that_drops_an_entry(self):
+        result, _ = self.render(
+            {"version": "1.0.0", "sections": [{"title": "Added", "prs": [1, 2]}]}
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("missing from the plan", result.stderr)
+
+    def test_refuses_a_plan_that_duplicates_an_entry(self):
+        result, _ = self.render(
+            {
+                "version": "1.0.0",
+                "sections": [
+                    {"title": "Added", "prs": [1, 2, 3]},
+                    {"title": "Fixed", "prs": [1]},
+                ],
+            }
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("more than one section", result.stderr)
+
+    def test_refuses_a_plan_with_an_unknown_pr(self):
+        result, _ = self.render(
+            {"version": "1.0.0", "sections": [{"title": "Added", "prs": [1, 2, 3, 42]}]}
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("not in the release body", result.stderr)
+
+    def test_internal_section_is_collapsed_with_a_count(self):
+        plan = {
+            "version": "1.0.0",
+            "sections": [{"title": "Added", "prs": [1]}],
+            "internal": {
+                "summary": "internal work",
+                "groups": [{"title": "CI", "prs": [2, 3]}],
+            },
+        }
+        _, out = self.render(plan)
+        rendered = out.read_text(encoding="utf-8")
+        self.assertIn("<details>", rendered)
+        self.assertIn("(2 changes)</summary>", rendered)
+        # GitHub needs a blank line after <summary> to render the Markdown.
+        self.assertIn("</summary>\n\n", rendered)
+
+
+class WorkflowContractTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+        cls.job = cls.workflow["jobs"]["release_notes"]
+        cls.script = GENERATE.read_text(encoding="utf-8")
+
+    def test_runs_after_publish_and_only_for_stable_releases(self):
+        self.assertEqual(self.job["needs"], ["metadata", "publish"])
+        condition = self.job["if"]
+        self.assertIn("needs.publish.result == 'success'", condition)
+        self.assertIn("prerelease != 'true'", condition)
+
+    def test_declares_least_privilege_and_a_timeout(self):
+        self.assertEqual(
+            self.job["permissions"], {"contents": "write", "pull-requests": "read"}
+        )
+        self.assertIn("timeout-minutes", self.job)
+
+    def test_checkout_is_pinned_and_credential_free(self):
+        checkout = self.job["steps"][0]
+        self.assertRegex(checkout["uses"], r"^actions/checkout@[0-9a-f]{40}$")
+        self.assertFalse(checkout["with"]["persist-credentials"])
+        self.assertEqual(checkout["with"]["fetch-depth"], 0)
+
+    def test_publishing_step_owns_the_token(self):
+        step = next(s for s in self.job["steps"] if s.get("id") == "regroup")
+        self.assertEqual(step["env"]["GH_TOKEN"], "${{ secrets.GITHUB_TOKEN }}")
+        self.assertEqual(step["run"].strip(), "scripts/release-notes-generate.sh")
+
+    def test_evidence_is_uploaded_with_a_pinned_action(self):
+        upload = self.job["steps"][-1]
+        self.assertRegex(upload["uses"], r"^actions/upload-artifact@[0-9a-f]{40}$")
+
+    def test_agent_failures_never_fail_the_job(self):
+        # Every agent guard returns rather than exiting, so an unreachable,
+        # unauthenticated, out-of-quota, or wrong agent keeps the job green.
+        for guard in [
+            "AGENT_MODEL unset",
+            "opencode not installed",
+            "no agent credentials",
+            "agent probe failed",
+            "agent review turn failed",
+            "agent produced no plan",
+            "agent plan failed validation",
+        ]:
+            self.assertIn(guard, self.script)
+        agent_block = self.script[self.script.index("agent_reachable()"):]
+        self.assertNotIn("exit 1", agent_block.split("# ── Publish")[0])
+
+    def test_agent_never_receives_publish_credentials(self):
+        self.assertEqual(self.script.count("env -u GH_TOKEN -u GITHUB_TOKEN"), 2)
+
+    def test_deterministic_pass_gates_before_publishing(self):
+        self.assertIn("refusing to publish", self.script)
+        self.assertLess(
+            self.script.index("verify_entries"), self.script.index("gh release edit")
+        )
+
+
+
+class TrailerDenyListTest(unittest.TestCase):
+    def denied(self, line):
+        return CONVENTIONAL.check_trailers([line])
+
+    def test_rejects_agent_attribution_addresses(self):
+        for line in [
+            "Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>",
+            "Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+            "Co-authored-by: CodeRabbit <noreply@coderabbit.ai>",
+        ]:
+            self.assertTrue(self.denied(line), line)
+
+    def test_rejects_relay_identity_domains(self):
+        for line in [
+            "Co-authored-by: scama <a1860575018c46@meshllm.communities.buzz.xyz>",
+            "Co-authored-by: Paul Hogan <5004d00b7537@meshllm.communities.buzz.xyz>",
+        ]:
+            self.assertTrue(self.denied(line), line)
+
+    def test_rejects_bot_accounts(self):
+        self.assertTrue(
+            self.denied(
+                "Co-authored-by: coderabbitai[bot] "
+                "<136622811+coderabbitai[bot]@users.noreply.github.com>"
+            )
+        )
+
+    def test_rejects_model_names_whatever_the_address(self):
+        for name in ["Claude", "ChatGPT", "Sisyphus", "Astra", "Sol", "Luna", "Terra"]:
+            line = f"Co-authored-by: {name} <someone@example.com>"
+            self.assertTrue(self.denied(line), line)
+
+    def test_matches_whole_name_tokens_only(self):
+        # "Sol" is denied; "Solomon" is a person.
+        self.assertEqual(
+            CONVENTIONAL.check_trailers(
+                ["Co-authored-by: Solomon Grundy <solomon@example.com>"]
+            ),
+            [],
+        )
+
+    def test_allows_human_trailers(self):
+        for line in [
+            "Co-authored-by: Real Person <real@example.com>",
+            "Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>",
+            "Reviewed-by: Someone Else <someone@example.com>",
+        ]:
+            self.assertEqual(CONVENTIONAL.check_trailers([line]), [], line)
+
+    def test_ignores_non_trailer_body_lines(self):
+        self.assertEqual(
+            CONVENTIONAL.check_trailers(
+                ["This change was suggested by Claude in review.", "BREAKING CHANGE: x"]
+            ),
+            [],
+        )
+
+    def test_hook_rejects_a_denied_trailer_on_a_valid_subject(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as handle:
+            handle.write(
+                "fix: repair a thing\n\n"
+                "Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>\n"
+            )
+            path = handle.name
+        result = subprocess.run([str(HOOK), path], capture_output=True, text=True, cwd=ROOT)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("agent attribution address", result.stderr)
+
+
+class SubjectNormalizationTest(unittest.TestCase):
+    def subject(self, line):
+        return REGROUP.render_entry(line).split(" by @")[0][2:]
+
+    def entry(self, subject):
+        return f"* {subject} by @x in https://github.com/Mesh-LLM/mesh-llm/pull/1"
+
+    def test_strips_type_scope_and_breaking_marker(self):
+        cases = {
+            "feat(skippy): load SafeTensors checkpoints directly":
+                "Load SafeTensors checkpoints directly",
+            "fix: repair a thing": "Repair a thing",
+            "chore(deps)!: drop the old runtime": "Drop the old runtime",
+            "perf(kv): keep recording off the inference path":
+                "Keep recording off the inference path",
+        }
+        for original, expected in cases.items():
+            self.assertEqual(self.subject(self.entry(original)), expected)
+
+    def test_strips_legacy_and_uppercase_prefixes(self):
+        self.assertEqual(
+            self.subject(self.entry("task: refine logging console UX")),
+            "Refine logging console UX",
+        )
+        self.assertEqual(
+            self.subject(self.entry("CI: pin Depot audit to merged policy")),
+            "Pin Depot audit to merged policy",
+        )
+
+    def test_never_strips_an_unrecognised_word_before_a_colon(self):
+        # "Durable KV prefix cache:" is a sentence, not a type.
+        for subject in [
+            "Durable KV prefix cache: agent prefixes survive eviction",
+            "skippy-quantize: compose-mtp splices an MTP draft",
+            "Fix split serving: stages above layer 0 fail to load",
+        ]:
+            self.assertEqual(self.subject(self.entry(subject)), subject)
+
+    def test_credit_is_never_touched(self):
+        line = (
+            "* feat(ui): render LaTeX by @ndizazzo in "
+            "https://github.com/Mesh-LLM/mesh-llm/pull/1466"
+        )
+        self.assertTrue(
+            REGROUP.render_entry(line).endswith(
+                " by @ndizazzo in https://github.com/Mesh-LLM/mesh-llm/pull/1466"
+            )
+        )
+
+    def test_a_subject_that_is_only_a_prefix_is_left_alone(self):
+        self.assertEqual(self.subject(self.entry("fix:")), "fix:")
+
+class OverrideHardeningTest(unittest.TestCase):
+    def classify(self, subject, trailers):
+        return CLASSIFY.classify({"subject": subject, "trailers": trailers})
+
+    def test_invalid_override_is_not_silently_ignored(self):
+        # A typo must not fall through and land a security fix in Fixed.
+        self.assertEqual(
+            self.classify("fix: redact health details", {"release-notes": "Secuirty"}),
+            (None, None),
+        )
+
+    def test_valid_override_still_wins(self):
+        section, _ = self.classify(
+            "fix: redact health details", {"release-notes": "Security"}
+        )
+        self.assertEqual(section, "Security")
+
+    def test_internal_override_survives_a_non_conventional_subject(self):
+        plan, _ = CLASSIFY.build_plan(
+            [1],
+            {1: {"subject": "Some non-conventional subject",
+                 "trailers": {"release-notes": "Internal"}}},
+            "1.0.0",
+            "2026-01-01",
+        )
+        groups = [g["title"] for g in plan["internal"]["groups"]]
+        self.assertEqual(groups, ["Refactors, docs, and hygiene"])
+
+
+class PlanMetadataTest(unittest.TestCase):
+    """Plan text can be agent-authored, so it must not reach the body unchecked."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.body = self.dir / "body.md"
+        self.body.write_text(BODY, encoding="utf-8")
+
+    def check(self, plan, extra=()):
+        path = self.dir / "plan.json"
+        path.write_text(json.dumps(plan), encoding="utf-8")
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "release-notes-regroup.py"),
+             "--body", str(self.body), "--plan", str(path), "--check", *extra],
+            capture_output=True, text=True,
+        )
+
+    def all_prs(self, **plan):
+        plan.setdefault("sections", [{"title": "Added", "prs": [1, 2, 3]}])
+        return plan
+
+    def test_rejects_an_unknown_section(self):
+        result = self.check(self.all_prs(sections=[{"title": "Sponsors", "prs": [1, 2, 3]}]))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("unknown section", result.stderr)
+
+    def test_rejects_markup_in_a_group_title(self):
+        result = self.check(self.all_prs(sections=[{
+            "title": "Added",
+            "groups": [{"title": "See [click](http://evil.example)", "prs": [1, 2, 3]}],
+        }]))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("not a plain heading", result.stderr)
+
+    def test_rejects_a_multiline_version(self):
+        result = self.check(self.all_prs(version="1.0\n## Injected"))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("not a plain version string", result.stderr)
+
+    def test_rejects_markup_in_the_internal_summary(self):
+        result = self.check(self.all_prs(
+            sections=[{"title": "Added", "prs": [1, 2]}],
+            internal={"summary": "<img src=x onerror=1>",
+                      "groups": [{"title": "CI", "prs": [3]}]},
+        ))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("not a plain heading", result.stderr)
+
+    def test_accepts_an_ordinary_plan(self):
+        result = self.check(self.all_prs(version="0.76.0", date="2026-09-10"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_metadata_from_overrides_plan_authored_version(self):
+        trusted = self.dir / "trusted.json"
+        trusted.write_text(json.dumps({"version": "0.76.0", "date": "2026-09-10"}))
+        result = self.check(
+            self.all_prs(version="9.9.9", date="1999-01-01"),
+            extra=["--metadata-from", str(trusted)],
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class PublishGuardTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.script = GENERATE.read_text(encoding="utf-8")
+
+    def test_publishing_always_requires_explicit_approval(self):
+        self.assertIn('"${RELEASE_NOTES_APPROVED:-}" != "true"', self.script)
+        self.assertLess(
+            self.script.index("RELEASE_NOTES_APPROVED"),
+            self.script.index("gh release edit"),
+        )
+
+    def test_no_implicit_ci_bypass(self):
+        # Any Actions context used to count as approval; a dispatch could then
+        # edit a published release without an explicit signal.
+        self.assertNotIn("GITHUB_ACTIONS", self.script)
+
+    def test_the_release_job_declares_its_own_approval(self):
+        workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+        step = next(
+            s
+            for s in workflow["jobs"]["release_notes"]["steps"]
+            if s.get("id") == "regroup"
+        )
+        self.assertEqual(str(step["env"]["RELEASE_NOTES_APPROVED"]).lower(), "true")
+
+    def test_agent_plan_renders_with_deterministic_metadata(self):
+        self.assertIn("--metadata-from", self.script)
+
+
+class CommitConventionEnforcementTest(unittest.TestCase):
+    """The hook is opt-in per clone, so CI is what actually enforces this."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.slice = yaml.safe_load(
+            (ROOT / ".github" / "workflows" / "ci-quality-slice.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        cls.job = cls.slice["jobs"]["commit_convention"]
+        cls.step = next(
+            s for s in cls.job["steps"] if s.get("name") == "Check commit convention"
+        )
+
+    def test_starts_before_any_other_quality_work(self):
+        # No `needs`, so it does not wait for runner selection or a toolchain.
+        self.assertNotIn("needs", self.job)
+        self.assertEqual(list(self.slice["jobs"])[0], "commit_convention")
+        self.assertLessEqual(self.job["timeout-minutes"], 5)
+
+    def test_only_runs_for_pull_requests(self):
+        self.assertIn("pull_request", self.job["if"])
+
+    def test_validates_the_pr_title_because_squash_uses_it_as_the_subject(self):
+        self.assertEqual(
+            self.step["env"]["PR_TITLE"], "${{ github.event.pull_request.title }}"
+        )
+        self.assertIn('--message "$PR_TITLE"', self.step["run"])
+
+    def test_validates_branch_commit_trailers(self):
+        self.assertIn("--trailers-only", self.step["run"])
+        self.assertIn("/commits", self.step["run"])
+
+    def test_untrusted_text_is_never_interpolated_into_the_shell(self):
+        self.assertNotIn("${{ github.event.pull_request.title }}", self.step["run"])
+        self.assertNotIn("${{ github.event.pull_request.body }}", self.step["run"])
+
+    def test_failure_output_points_at_the_local_hook(self):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS / "check-conventional-commit.py"),
+             "--message", "Not conventional"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("just hooks-install", result.stderr)
+
+    def test_trailers_only_mode_ignores_subject_format(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as handle:
+            handle.write("Some messy WIP subject\n\nCo-authored-by: Real <real@example.com>\n")
+            clean = handle.name
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS / "check-conventional-commit.py"),
+             "--trailers-only", clean],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_trailers_only_mode_still_rejects_a_denied_trailer(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as handle:
+            handle.write("Some messy WIP subject\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n")
+            dirty = handle.name
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS / "check-conventional-commit.py"),
+             "--trailers-only", dirty],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("agent attribution address", result.stderr)
+
+
+class LocalHookActivationTest(unittest.TestCase):
+    """Git cannot activate a committed hook on clone, so builds do it."""
+
+    UNIX = ROOT / "scripts" / "build-development-product.sh"
+    WINDOWS = ROOT / "scripts" / "build-windows.ps1"
+
+    def test_every_platform_build_entry_point_enables_hooks(self):
+        self.assertIn("core.hooksPath scripts/hooks", self.UNIX.read_text(encoding="utf-8"))
+        self.assertIn("core.hooksPath scripts/hooks", self.WINDOWS.read_text(encoding="utf-8"))
+
+    def test_activation_is_skipped_in_ci(self):
+        self.assertIn('[[ -z "${CI:-}" ]] || return 0', self.UNIX.read_text(encoding="utf-8"))
+        self.assertIn("if ($env:CI) { return }", self.WINDOWS.read_text(encoding="utf-8"))
+
+    def test_activation_never_overrides_a_developer_choice(self):
+        unix = self.UNIX.read_text(encoding="utf-8")
+        self.assertIn("--get core.hooksPath", unix)
+        self.assertIn('[[ -z "$current" ]] || return 0', unix)
+        self.assertIn("--get core.hooksPath", self.WINDOWS.read_text(encoding="utf-8"))
+
+    def test_agents_are_told_to_install_the_hook(self):
+        self.assertIn("just hooks-install", (ROOT / "AGENTS.md").read_text(encoding="utf-8"))
+
+
+class EntryParsingEdgeCaseTest(unittest.TestCase):
+    def test_list_splits_on_the_last_credit_delimiter(self):
+        # A PR title may legitimately contain " by @".
+        entry = (
+            "* Document search by @mention support by @ndizazzo in "
+            "https://github.com/Mesh-LLM/mesh-llm/pull/1"
+        )
+        directory = Path(tempfile.mkdtemp())
+        body = directory / "body.md"
+        body.write_text("## What's Changed\n" + entry + "\n", encoding="utf-8")
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS / "release-notes-regroup.py"),
+             "--body", str(body), "--list"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Document search by @mention support", result.stdout)
+
+    def test_render_keeps_a_title_containing_the_delimiter_intact(self):
+        entry = (
+            "* Document search by @mention support by @ndizazzo in "
+            "https://github.com/Mesh-LLM/mesh-llm/pull/1"
+        )
+        self.assertEqual(REGROUP.render_entry(entry), entry)
+
+
+class CalendarDateTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.body = self.dir / "body.md"
+        self.body.write_text(BODY, encoding="utf-8")
+
+    def check(self, value):
+        plan = self.dir / "plan.json"
+        plan.write_text(
+            json.dumps({"date": value, "sections": [{"title": "Added", "prs": [1, 2, 3]}]}),
+            encoding="utf-8",
+        )
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "release-notes-regroup.py"),
+             "--body", str(self.body), "--plan", str(plan), "--check"],
+            capture_output=True, text=True,
+        )
+
+    def test_rejects_a_date_that_cannot_exist(self):
+        for value in ("2026-99-99", "2026-02-30", "2026-13-01"):
+            with self.subTest(date=value):
+                result = self.check(value)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("not a real YYYY-MM-DD date", result.stderr)
+
+    def test_accepts_a_real_date(self):
+        self.assertEqual(self.check("2026-09-10").returncode, 0)
+
+
+class FakeGh:
+    """Stands in for the `gh` CLI; records what the link pass asked for."""
+
+    def __init__(self, pulls=None, details=None, budget=99):
+        self.pulls = pulls or {}
+        self.details = details or {}
+        self.calls = []
+        self.remaining = budget
+        self.exhausted = False
+        self.failures = 0
+
+    def json(self, args):
+        self.calls.append(args)
+        if self.remaining <= 0:
+            self.exhausted = True
+            return None
+        self.remaining -= 1
+        if args[0] == "api":
+            sha = args[1].split("/")[-2]
+            return self.pulls.get(sha)
+        return self.details.get(int(args[2]))
+
+
+def commit(sha, subject, trailers=None):
+    return {"sha": sha, "subject": subject, "trailers": trailers or {}}
+
+
+class LinkTest(unittest.TestCase):
+    """The link pass recovers entries GitHub credited only to a roll-up."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+
+    def body_file(self, *entries):
+        path = self.dir / "body.md"
+        path.write_text(
+            "\n".join(
+                ["## What's Changed", *entries, "", "**Full Changelog**: compare", ""]
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def test_the_suffix_is_authoritative_and_costs_nothing(self):
+        commits = [commit("aaa", "fix: repair a thing (#7)")]
+        gh = FakeGh()
+        self.assertEqual(LINK.resolve_pull_requests(commits, "o/r", gh), 0)
+        self.assertEqual(commits[0]["pr"], 7)
+        self.assertEqual(gh.calls, [])
+
+    def test_a_suffixless_commit_is_linked_through_the_api(self):
+        commits = [commit("aaa", "test(ci): guard selector drift")]
+        gh = FakeGh(pulls={"aaa": [1733]})
+        self.assertEqual(LINK.resolve_pull_requests(commits, "o/r", gh), 1)
+        self.assertEqual(commits[0]["pr"], 1733)
+        self.assertTrue(commits[0]["linked_by_api"])
+
+    def test_a_commit_the_api_cannot_place_is_not_guessed(self):
+        commits = [commit("aaa", "a direct push")]
+        LINK.resolve_pull_requests(commits, "o/r", FakeGh(pulls={}))
+        self.assertIsNone(commits[0]["pr"])
+
+    def test_orphans_are_credited_beneath_the_roll_up_that_carried_them(self):
+        commits = [
+            commit("a", "fix(openai): reject malformed tool definitions (#1761)"),
+            commit("b", "fix(skippy): link Apple OpenMP runtime (#1766)"),
+            commit("c", "fix: address review feedback (#1789)"),
+        ]
+        LINK.resolve_pull_requests(commits, "o/r", FakeGh())
+        gh = FakeGh(
+            details={
+                1761: {"title": "fix(openai): reject malformed tool definitions",
+                       "author": {"login": "i386"}},
+                1766: {"title": "fix(skippy): link Apple OpenMP runtime",
+                       "author": {"login": "i386"}},
+            }
+        )
+        insertions, trailing = LINK.recover_entries(commits, [1789], "o/r", gh)
+        self.assertEqual(trailing, [])
+        self.assertEqual(list(insertions), [1789])
+        self.assertEqual(
+            insertions[1789],
+            [
+                "* fix(openai): reject malformed tool definitions by @i386 in "
+                "https://github.com/o/r/pull/1761",
+                "* fix(skippy): link Apple OpenMP runtime by @i386 in "
+                "https://github.com/o/r/pull/1766",
+            ],
+        )
+
+    def test_an_orphan_with_no_carrier_after_it_is_still_credited(self):
+        commits = [
+            commit("a", "fix: repair a thing (#10)"),
+            commit("b", "fix: repair another (#11)"),
+        ]
+        LINK.resolve_pull_requests(commits, "o/r", FakeGh())
+        gh = FakeGh(details={11: {"title": "fix: repair another",
+                                  "author": {"login": "someone"}}})
+        insertions, trailing = LINK.recover_entries(commits, [10], "o/r", gh)
+        self.assertEqual(insertions, {})
+        self.assertEqual(len(trailing), 1)
+
+    def test_a_pull_request_without_an_author_is_left_uncredited(self):
+        commits = [commit("a", "fix: repair a thing (#10)")]
+        LINK.resolve_pull_requests(commits, "o/r", FakeGh())
+        insertions, trailing = LINK.recover_entries(commits, [], "o/r", FakeGh())
+        self.assertEqual((insertions, trailing), ({}, []))
+
+    def test_a_released_pull_request_is_never_credited_twice(self):
+        commits = [
+            commit("a", "fix: first commit (#10)"),
+            commit("b", "fix: second commit (#10)"),
+        ]
+        LINK.resolve_pull_requests(commits, "o/r", FakeGh())
+        gh = FakeGh(details={10: {"title": "fix: a thing",
+                                  "author": {"login": "someone"}}})
+        _, trailing = LINK.recover_entries(commits, [], "o/r", gh)
+        self.assertEqual(len(trailing), 1)
+
+    def test_augment_splices_beneath_the_carrier_and_keeps_the_tail(self):
+        published = entry(1789, "fix(release): roll up the branch")
+        path = self.body_file(entry(1673, "feat: a thing"), published)
+        lines, credited, insert_at = LINK.read_body(path)
+        self.assertEqual(credited, [1673, 1789])
+        rendered = LINK.augment(lines, insert_at, {1789: ["* recovered"]}, [])
+        self.assertEqual(
+            rendered.splitlines(),
+            [
+                "## What's Changed",
+                entry(1673, "feat: a thing"),
+                published,
+                "* recovered",
+                "",
+                "**Full Changelog**: compare",
+            ],
+        )
+
+    def test_augment_never_drops_a_published_entry(self):
+        path = self.body_file(entry(1), entry(2))
+        lines, credited, insert_at = LINK.read_body(path)
+        rendered = LINK.augment(lines, insert_at, {}, ["* trailing"])
+        for pr in credited:
+            self.assertIn(f"/pull/{pr}", rendered)
+        self.assertIn("* trailing", rendered)
+        self.assertLess(rendered.index("* trailing"), rendered.index("Full Changelog"))
+
+    def test_only_api_linked_records_reach_the_classifier(self):
+        commits = [
+            commit("a", "fix: repair a thing (#10)"),
+            commit("b", "test(ci): guard drift", {"release-notes": "Internal"}),
+        ]
+        LINK.resolve_pull_requests(commits, "o/r", FakeGh(pulls={"b": [1733]}))
+        links = LINK.commit_links(commits)
+        self.assertEqual(list(links), ["1733"])
+        self.assertEqual(links["1733"]["trailers"], {"release-notes": "Internal"})
+
+    def test_a_duplicate_record_keeps_the_first_subject_and_adds_its_trailers(self):
+        commits = [
+            commit("a", "fix(openai): repair a thing", {"release-notes": "Fixed"}),
+            commit("b", "fix(openai): repair it again", {"security": "CVE-1"}),
+        ]
+        LINK.resolve_pull_requests(
+            commits, "o/r", FakeGh(pulls={"a": [1733], "b": [1733]})
+        )
+        links = LINK.commit_links(commits)
+        self.assertEqual(list(links), ["1733"])
+        self.assertEqual(links["1733"]["subject"], "fix(openai): repair a thing")
+        self.assertEqual(
+            links["1733"]["trailers"],
+            {"release-notes": "Fixed", "security": "CVE-1"},
+        )
+
+    def test_a_decisive_trailer_on_a_later_duplicate_reaches_the_classifier(self):
+        commits = [
+            commit("a", "fix(openai): repair a thing"),
+            commit("b", "fix(openai): repair it again", {"security": "CVE-1"}),
+        ]
+        LINK.resolve_pull_requests(
+            commits, "o/r", FakeGh(pulls={"a": [1733], "b": [1733]})
+        )
+        records = {int(pr): record for pr, record in LINK.commit_links(commits).items()}
+        plan, unclassified = CLASSIFY.build_plan([1733], records, "1.0.0", "2026-01-01")
+        self.assertEqual(unclassified, 0)
+        self.assertEqual(
+            [section for section in plan["sections"] if section["title"] == "Security"],
+            [{"title": "Security", "prs": [1733]}],
+        )
+
+    def test_the_classifier_uses_a_linked_record(self):
+        path = self.dir / "links.json"
+        path.write_text(
+            json.dumps({"1733": {"subject": "test(ci): guard drift", "trailers": {}}}),
+            encoding="utf-8",
+        )
+        commits = CLASSIFY.load_links(path)
+        plan, unclassified = CLASSIFY.build_plan([1733], commits, "1.0.0", "2026-01-01")
+        self.assertEqual(unclassified, 0)
+        internal = [pr for group in plan["internal"]["groups"] for pr in group["prs"]]
+        self.assertEqual(internal, [1733])
+
+    def test_classifier_preserves_suffix_metadata_when_links_overlap(self):
+        body = self.body_file(entry(10), entry(11))
+        links = self.dir / "links.json"
+        links.write_text(json.dumps({
+            "10": {"subject": "feat: API-linked subject", "trailers": {}},
+            "11": {"subject": "fix: linked only", "trailers": {}},
+        }), encoding="utf-8")
+        output = self.dir / "plan.json"
+        args = ["classify", "--body", str(body), "--range", "base..HEAD",
+                "--version", "1.0.0", "--date", "2026-01-01",
+                "--links", str(links), "--out", str(output)]
+        for trailers, expected in [({}, "Fixed"),
+                                   ({"release-notes": "Security"}, "Security")]:
+            with self.subTest(trailers=trailers):
+                commits = {10: {"subject": "fix: suffix record (#10)",
+                                "trailers": trailers}}
+                with mock.patch.object(sys, "argv", args), mock.patch.object(
+                    CLASSIFY, "read_commits", return_value=commits
+                ):
+                    self.assertEqual(CLASSIFY.main(), 0)
+                plan = json.loads(output.read_text(encoding="utf-8"))
+                sections = {section["title"]: section["prs"]
+                            for section in plan["sections"]}
+                self.assertIn(10, sections[expected])
+                self.assertIn(11, sections["Fixed"])
+                self.assertNotIn("Added", sections)
+
+    def test_timeout_stops_resolution_and_recovery_api_calls(self):
+        commits = [commit("a", "fix: suffixless"),
+                   commit("b", "fix: another suffixless"),
+                   commit("c", "fix: known PR (#10)")]
+        gh = LINK.Gh()
+        with mock.patch.object(
+            LINK.subprocess, "run",
+            side_effect=subprocess.TimeoutExpired(["gh", "api"], 30),
+        ) as run:
+            self.assertEqual(LINK.resolve_pull_requests(commits, "o/r", gh), 0)
+            self.assertEqual(LINK.recover_entries(commits, [], "o/r", gh), ({}, []))
+            run.assert_called_once()
+        self.assertEqual(commits[2]["pr"], 10)
+        self.assertEqual(gh.failures, 1)
+        self.assertTrue(gh.exhausted)
+        body = self.body_file(entry(99))
+        lines, _, insert_at = LINK.read_body(body)
+        self.assertEqual(LINK.augment(lines, insert_at, {}, []), body.read_text())
+
+    def test_the_api_budget_bounds_a_large_release(self):
+        commits = [commit(str(n), f"chore: a change {n}") for n in range(5)]
+        gh = FakeGh(pulls={str(n): [n] for n in range(5)}, budget=2)
+        self.assertEqual(LINK.resolve_pull_requests(commits, "o/r", gh), 2)
+        self.assertTrue(gh.exhausted)
+
+
+class LinkPassContractTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.script = GENERATE.read_text(encoding="utf-8")
+
+    def test_the_link_pass_runs_before_classification(self):
+        self.assertLess(
+            self.script.index("release-notes-link.py"),
+            self.script.index("release-notes-classify.py"),
+        )
+
+    def test_a_dropped_entry_refuses_to_publish(self):
+        self.assertIn("the link pass dropped a published entry", self.script)
+        self.assertLess(
+            self.script.index("the link pass dropped a published entry"),
+            self.script.index("gh release edit"),
+        )
+
+    def test_the_published_body_is_kept_for_restore(self):
+        self.assertIn("body.github.md", self.script)
+        self.assertIn("--notes-file $WORKDIR/body.github.md", self.script)
+
+
+if __name__ == "__main__":
+    unittest.main()

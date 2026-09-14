@@ -178,6 +178,13 @@ pub(super) const DESCRIPTORS: &[Descriptor] = &[
         true,
         RawKind::None,
     ),
+    descriptor(
+        &["mesh-llm", "doctor", "network"],
+        JSON,
+        NONE,
+        true,
+        RawKind::None,
+    ),
     descriptor_with_conflicts(
         &["mesh-llm", "skills", "install"],
         &["--all", "--dry-run", "--force"],

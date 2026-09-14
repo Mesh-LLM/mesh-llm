@@ -1,5 +1,6 @@
 use super::*;
 use crate::runtime::RuntimeEvent;
+use crate::runtime::model_lifecycle::LoadOperation;
 
 pub(in crate::runtime) struct StartupLoopContext<'a> {
     pub(super) node: &'a mesh::Node,
@@ -26,6 +27,7 @@ pub(in crate::runtime) struct StartupLoopContext<'a> {
     pub(super) flash_attention: FlashAttentionType,
     pub(super) parallel_override: Option<usize>,
     pub(super) local_source_required: bool,
+    pub(super) allow_uncertified_split: bool,
     pub(super) resource_planning_profile: RuntimeResourcePlanningProfile,
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     pub(super) skippy_telemetry: &'a skippy::SkippyTelemetryOptions,
@@ -124,6 +126,7 @@ pub(in crate::runtime) struct StartupLaunchRuntimeContext<'a> {
     pub(super) flash_attention: FlashAttentionType,
     pub(super) parallel_override: Option<usize>,
     pub(super) local_source_required: bool,
+    pub(super) allow_uncertified_split: bool,
     pub(super) split_topology_lock: Option<&'a Path>,
     pub(super) resource_planning_profile: RuntimeResourcePlanningProfile,
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
@@ -263,6 +266,7 @@ pub(in crate::runtime) async fn startup_handle_local_fallback_event(
             flash_attention_override: ctx.flash_attention,
             parallel_override: ctx.parallel_override,
             local_source_required: ctx.local_source_required,
+            allow_uncertified_split: ctx.allow_uncertified_split,
             split_topology_lock: None,
             planning_profile: ctx.resource_planning_profile,
             openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),
@@ -270,6 +274,10 @@ pub(in crate::runtime) async fn startup_handle_local_fallback_event(
             survey_telemetry: ctx.survey_telemetry.clone(),
         },
         ctx.model_ref,
+        // Split-fallback startup loads have no `LoadOperation` reservation
+        // of their own (event-system-fixes deferral D2) -- degrade rather
+        // than fabricate an uncorrelated root.
+        None,
     )
     .await;
 
@@ -529,6 +537,11 @@ pub(in crate::runtime) async fn startup_shutdown_local_model_loop(
 pub(in crate::runtime) async fn startup_local_model_loop(params: StartupLocalModelTask) {
     let runtime_data_producer =
         runtime_data_producer_for_console(params.console_state.as_ref()).await;
+    // Task 9: a cold-start `--model` load is still a load. Reserved before
+    // any inspection/launch work begins, and skipped entirely for
+    // `--split` (split startup is Task 10's stage-topology domain, not
+    // this task's single-node model-loading family).
+    let mut load_op = (!params.split).then(|| LoadOperation::begin(&params.model_ref));
     let Some((prepared, mut load_started)) = run_startup_load_attempt(
         || record_startup_load_started(&params),
         || prepare_startup_local_model_task(&params),
@@ -538,6 +551,9 @@ pub(in crate::runtime) async fn startup_local_model_loop(params: StartupLocalMod
     )
     .await
     else {
+        if let Some(load_op) = load_op.take() {
+            load_op.load_failed(&params.model_ref);
+        }
         return;
     };
     let mut stop_rx = params.stop_rx.clone();
@@ -551,6 +567,9 @@ pub(in crate::runtime) async fn startup_local_model_loop(params: StartupLocalMod
         let Some((launch_handles, launch_started)) =
             launch_startup_local_model_task(&params, &mut stop_rx, &prepared).await
         else {
+            if let Some(load_op) = load_op.take() {
+                load_op.load_failed(&params.model_ref);
+            }
             record_startup_task_failure(&params, "model launch failed", load_started).await;
             return;
         };
@@ -596,6 +615,15 @@ pub(in crate::runtime) async fn startup_local_model_loop(params: StartupLocalMod
             launch_started.elapsed(),
         )
         .await;
+        // Native load already succeeded; Rust serving surfaces (routing,
+        // instance registry, dashboard) were just registered above by
+        // `publish_startup_local_model` -- resolve the loading terminal
+        // and public availability together here, matching the ordering
+        // `finish_runtime_model_load` uses for the mesh `--auto` path.
+        if let Some(load_op) = load_op.take() {
+            let availability = load_op.native_load_completed(&loaded_name);
+            availability.model_available(&loaded_name);
+        }
 
         let mut state = StartupLoopState {
             loaded_name,
@@ -693,6 +721,7 @@ async fn launch_startup_local_model_task(
         flash_attention: params.flash_attention,
         parallel_override: params.parallel_override,
         local_source_required: params.local_source_required,
+        allow_uncertified_split: params.allow_uncertified_split,
         split_topology_lock: params.split_topology_lock.as_deref(),
         resource_planning_profile: params.resource_planning_profile,
         openai_guardrail_policy: params.openai_guardrail_policy.clone(),
@@ -739,6 +768,7 @@ fn startup_loop_context<'a>(
         flash_attention: params.flash_attention,
         parallel_override: params.parallel_override,
         local_source_required: params.local_source_required,
+        allow_uncertified_split: params.allow_uncertified_split,
         resource_planning_profile: params.resource_planning_profile,
         openai_guardrail_policy: params.openai_guardrail_policy.clone(),
         skippy_telemetry: &params.skippy_telemetry,

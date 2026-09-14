@@ -10,7 +10,7 @@ fn stage_load_proto_roundtrip_preserves_source_model_bytes() {
 
 fn assert_encoded_stage_load(proto: &skippy_stage_proto::LoadStage) {
     assert_eq!(proto.source_model_bytes, Some(123_456_789));
-    assert_eq!(proto.continuous_batching, Some(false));
+    assert!(!proto.continuous_batching);
     assert_eq!(proto.mmap, Some(false));
     assert_eq!(proto.mlock, Some(true));
     assert_eq!(proto.projector_use_gpu, Some(false));
@@ -38,18 +38,6 @@ fn assert_decoded_stage_load(decoded: &crate::inference::skippy::StageLoadReques
 }
 
 #[test]
-fn stage_load_proto_missing_continuous_batching_keeps_legacy_enabled_default() {
-    let proto = skippy_stage_proto::LoadStage {
-        admission: Some(crate::inference::skippy::test_stage_admission(0, 1).into()),
-        activation_codec: skippy_stage_proto::StageActivationCodec::F16RneV1 as i32,
-        ..Default::default()
-    };
-    let decoded = stage_load_from_proto(proto).unwrap();
-
-    assert!(decoded.continuous_batching);
-}
-
-#[test]
 fn stage_control_request_timeout_uses_stage_load_floor() {
     let mut load = stage_load_request();
     load.source_model_bytes = None;
@@ -68,19 +56,6 @@ fn stage_control_request_timeout_uses_stage_load_floor() {
         std::time::Duration::from_secs(1360)
     );
 
-    let mut prepare_load = stage_load_request();
-    prepare_load.source_model_bytes = Some(170 * 1024 * 1024 * 1024);
-    assert_eq!(
-        Node::stage_control_request_timeout(
-            &crate::inference::skippy::StageControlRequest::Prepare(
-                crate::inference::skippy::StagePrepareRequest {
-                    load: prepare_load,
-                    coordinator_id: None,
-                },
-            )
-        ),
-        std::time::Duration::from_secs(1360)
-    );
 }
 
 #[test]

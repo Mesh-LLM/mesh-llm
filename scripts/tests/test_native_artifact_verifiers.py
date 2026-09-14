@@ -667,6 +667,164 @@ class NativeArtifactVerifierTests(unittest.TestCase):
                         result.stdout + result.stderr,
                     )
 
+    def write_linux_runtime_artifact(
+        self,
+        root: Path,
+        *,
+        library_glibc: str,
+        tool_glibc: str,
+    ) -> Path:
+        """A Linux runtime package whose library and tool are ELF objects.
+
+        The contents are four magic bytes, not real ELF. What the glibc
+        floor check reads is `readelf -V` output, which
+        `stub_readelf` below supplies per file, so the versions each
+        artifact "needs" are set here rather than compiled in.
+        """
+        architecture = native_architecture()
+        artifact = root / f"meshllm-native-runtime-linux-{architecture}-cpu"
+        library = artifact / "lib" / "libllama.so"
+        tool = artifact / "tools" / "mesh-llm-gpu-bench"
+        library.parent.mkdir(parents=True)
+        tool.parent.mkdir(parents=True)
+        library.write_bytes(b"\x7fELF" + library_glibc.encode())
+        tool.write_bytes(b"\x7fELF" + tool_glibc.encode())
+        tool.chmod(0o755)
+        self.write_manifest(
+            artifact,
+            {
+                "runtime": {
+                    "id": artifact.name,
+                    "mesh_version": "0.75.0",
+                    "skippy_abi": "0.1.32",
+                    "platform": {
+                        "os": "linux",
+                        "arch": architecture,
+                        "target": native_linux_target(),
+                    },
+                    "backend": {"kind": "cpu"},
+                    "libraries": ["lib/libllama.so"],
+                    "files": {"lib/libllama.so": sha256(library)},
+                    "tools": {"tools/mesh-llm-gpu-bench": sha256(tool)},
+                },
+                "build": {
+                    "primary_library": "lib/libllama.so",
+                    "library_sha256": sha256(library),
+                },
+            },
+        )
+        return artifact
+
+    def stub_readelf(self, root: Path) -> Path:
+        """A `readelf` that reports the GLIBC version baked into each file.
+
+        Real ELF objects with a chosen version-needs section would have to
+        be hand-assembled or cross-compiled, and neither tests what is
+        actually in question here: whether the verifier ENUMERATES tools
+        alongside libraries. `readelf` parsing has its own tests in
+        `test_verify_host_dependencies.py`.
+        """
+        bin_dir = root / "stub-bin"
+        bin_dir.mkdir(exist_ok=True)
+        readelf = bin_dir / "readelf"
+        readelf.write_text(
+            "#!/usr/bin/env python3\n"
+            "import sys\n"
+            "path = sys.argv[-1]\n"
+            "flag = sys.argv[1] if len(sys.argv) > 2 else ''\n"
+            "with open(path, 'rb') as handle:\n"
+            "    version = handle.read()[4:].decode('utf-8', 'replace')\n"
+            "if flag == '-V':\n"
+            "    print('Version needs section \\'.gnu.version_r\\' contains 1 entry:')\n"
+            "    print('  000000: Name: libc.so.6  Flags: none  Version: 2')\n"
+            "    print(f'  0x0010:   Name: GLIBC_{version}  Flags: none  Version: 2')\n"
+            "else:\n"
+            "    print(' 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]')\n"
+            "    print(' 0x000000000000001d (RUNPATH)            Library runpath: [$ORIGIN]')\n",
+            encoding="utf-8",
+        )
+        readelf.chmod(0o755)
+        return bin_dir
+
+    def run_verifier_with_stub_readelf(
+        self,
+        artifact: Path,
+        stub_bin: Path,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                bash_executable(),
+                RUNTIME_VERIFIER.as_posix(),
+                artifact.as_posix(),
+            ],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PATH": f"{stub_bin}{os.pathsep}{os.environ['PATH']}"},
+        )
+
+    def test_runtime_rejects_an_over_floor_elf_tool(self) -> None:
+        """A packaged tool above the declared ceiling has to fail the gate.
+
+        The package ships executables as well as libraries:
+        `package-native-runtime.sh` builds the GPU benchmark and
+        `skippy-model-package`, and the host runs the benchmark from
+        `crates/mesh-llm-system/src/benchmark.rs`. Enumerating only
+        `runtime.libraries` let a tool needing a newer glibc than the floor
+        pass here and then fail on a supported host.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stub_bin = self.stub_readelf(root)
+            artifact = self.write_linux_runtime_artifact(
+                root,
+                library_glibc="2.35",
+                tool_glibc="2.99",
+            )
+
+            result = self.run_verifier_with_stub_readelf(artifact, stub_bin)
+
+            output = result.stdout + result.stderr
+            self.assertNotEqual(result.returncode, 0, output)
+            self.assertIn("mesh-llm-gpu-bench", output)
+            self.assertIn("GLIBC_2.99", output)
+
+    def test_runtime_accepts_a_tool_within_the_declared_floor(self) -> None:
+        """The control. Without it the test above would still pass if the
+        verifier rejected every package it was handed."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stub_bin = self.stub_readelf(root)
+            artifact = self.write_linux_runtime_artifact(
+                root,
+                library_glibc="2.35",
+                tool_glibc="2.35",
+            )
+
+            result = self.run_verifier_with_stub_readelf(artifact, stub_bin)
+
+            output = result.stdout + result.stderr
+            self.assertEqual(result.returncode, 0, output)
+            self.assertNotIn("GLIBC", output, output)
+
+    def test_runtime_still_rejects_an_over_floor_library(self) -> None:
+        """Libraries were already covered. Adding tools must not drop them."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stub_bin = self.stub_readelf(root)
+            artifact = self.write_linux_runtime_artifact(
+                root,
+                library_glibc="2.99",
+                tool_glibc="2.35",
+            )
+
+            result = self.run_verifier_with_stub_readelf(artifact, stub_bin)
+
+            output = result.stdout + result.stderr
+            self.assertNotEqual(result.returncode, 0, output)
+            self.assertIn("libllama.so", output)
+
 
 if __name__ == "__main__":
     unittest.main()

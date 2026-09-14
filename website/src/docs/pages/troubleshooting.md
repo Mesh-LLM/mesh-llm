@@ -117,3 +117,14 @@ Then move back to `mesh-llm serve --auto` once the local install and model path 
 
 For a full decision guide, see
 [Runtime Lifecycle](/docs/pages/runtime-lifecycle/).
+
+## External model endpoint setup
+
+For Ollama, vLLM, LM Studio and other OpenAI-compatible servers, follow the
+[provider troubleshooting checklist](/docs/pages/external-model-endpoints/#why-is-the-plugin-healthy-but-my-model-missing).
+Check upstream `/v1/models` before Mesh's model list, then send a completion.
+A healthy adapter does not prove the upstream can generate.
+
+`uses protocol 2, host uses 3` is a host/adapter compatibility error: published
+`openai-endpoint` 0.1.2 cannot start on Mesh 0.76.0. Reinstalling the same release
+will not repair it; use a compatible adapter build.

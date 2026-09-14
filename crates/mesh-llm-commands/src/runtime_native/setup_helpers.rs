@@ -230,6 +230,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn setup_runtime_helper_installs_effective_cli_selected_backend() {
+        let install_calls = Arc::new(Mutex::new(Vec::new()));
+        let install_calls_for_executor = Arc::clone(&install_calls);
+
+        install_and_prune_native_runtime_for_setup_with(
+            SetupNativeRuntimeOptions {
+                skip_runtime: false,
+                requested_runtime: None,
+                manifest_path: None,
+                bundle_dirs: &[],
+                cache_dir: None,
+                configured: NativeRuntimeConfigSelection {
+                    mesh_version: None,
+                    skippy_abi_version: None,
+                    selection: Some("vulkan"),
+                },
+                progress: None,
+            },
+            move |options| {
+                install_calls_for_executor
+                    .lock()
+                    .expect("lock install calls")
+                    .push(options.clone());
+                async move { Ok(fake_install_outcome(CURRENT_MESH_VERSION)) }
+            },
+            |_mesh_version, _cache_dir| {
+                Ok(CachePrunePlan {
+                    remove_dirs: Vec::new(),
+                })
+            },
+        )
+        .await
+        .expect("setup runtime helper should install the CLI-selected backend");
+
+        let calls = install_calls.lock().expect("lock install calls");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].selection,
+            RuntimeSelection::Backend {
+                kind: NativeRuntimeBackendKind::Vulkan,
+                cuda_toolkit_major: None,
+            }
+        );
+    }
+
+    #[tokio::test]
     async fn setup_runtime_helper_skips_install_and_prune() {
         let install_called = AtomicBool::new(false);
         let prune_called = AtomicBool::new(false);

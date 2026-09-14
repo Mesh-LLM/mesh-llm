@@ -39,7 +39,9 @@ impl DraftRunner {
                 include_embeddings: true,
                 include_output: true,
                 mtp_source: MtpSource::Disabled,
-                filter_tensors_on_load: true,
+                // The draft runner uses the whole model; a full-range load
+                // needs no admitted tensor closure.
+                filter_tensors_on_load: false,
                 resident_tensor_names: Vec::new(),
                 checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
                 checkpoint_imatrix: None,

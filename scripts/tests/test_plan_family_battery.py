@@ -113,7 +113,7 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         result = self._run()
         self.assertEqual(0, result.returncode, result.stderr)
         plan = json.loads(result.stdout)
-        self.assertEqual(50, plan["selected_family_count"])
+        self.assertEqual(81, plan["selected_family_count"])
         self.assertEqual(
             ["single-step", "chain", "state-handoff"],
             plan["required_certification_lanes"],
@@ -140,38 +140,14 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         self.assertEqual(600, by_family["qwen3-vl"]["resources"]["startup_timeout_secs"])
         qwen4exp = by_family["qwen4exp"]
         self.assertEqual(10240, qwen4exp["execution"]["activation_width"])
-        self.assertEqual(4, qwen4exp["execution"]["boundary_sweep_period"])
         self.assertEqual(3, len(qwen4exp["artifact"]["files"]))
+        for auxiliary in ("deepseek4", "gemma4-assistant", "muse-glimmer", "glm-dsa"):
+            self.assertNotIn(auxiliary, by_family)
 
-    def test_nightly_cadence_selects_cache_mechanism_sentinels(self) -> None:
+    def test_cadence_selection_is_removed(self) -> None:
         result = self._run(MANIFEST, "--cadence", "nightly")
-        self.assertEqual(0, result.returncode, result.stderr)
-        plan = json.loads(result.stdout)
-        self.assertEqual("nightly", plan["selected_cadence"])
-        self.assertEqual(
-            ["qwen3-dense", "falcon-h1", "qwen3-next", "mamba"],
-            [model["family"] for model in plan["selected_models"]],
-        )
-
-    def test_cadence_and_explicit_family_selection_intersect(self) -> None:
-        result = self._run(
-            MANIFEST,
-            "--cadence",
-            "nightly",
-            "--families",
-            "mamba,qwen3-dense",
-        )
-        self.assertEqual(0, result.returncode, result.stderr)
-        plan = json.loads(result.stdout)
-        self.assertEqual(
-            ["qwen3-dense", "mamba"],
-            [model["family"] for model in plan["selected_models"]],
-        )
-
-    def test_empty_cadence_selection_fails_closed(self) -> None:
-        result = self._run(MANIFEST, "--cadence", "rotating")
         self.assertEqual(2, result.returncode)
-        self.assertIn("family selection produced no models", result.stderr)
+        self.assertIn("unrecognized arguments: --cadence", result.stderr)
 
     def test_mmproj_artifacts_resolve_and_cover_the_vision_families(self) -> None:
         result = self._run()
@@ -183,7 +159,14 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
             if model.get("mmproj_artifact") is not None
         }
         self.assertEqual(
-            {"lfm2-vl", "qwen2-vl", "qwen3-vl"}, set(with_mmproj)
+            {
+                "gemma4",
+                "lfm2-vl",
+                "qwen2-vl",
+                "qwen3-vl",
+                "qwen3vlmoe",
+            },
+            set(with_mmproj),
         )
         for family, mmproj in with_mmproj.items():
             with self.subTest(family=family):
@@ -366,6 +349,32 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("embedding_length_out disagrees", result.stderr)
 
+    def test_cache_gate_derives_dflash_hyper_connected_activation_width(self) -> None:
+        source = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        source["models"] = [copy.deepcopy(source["models"][0])]
+        model = source["models"][0]
+        model["execution"]["trunk_layers"] = 3
+        model["execution"]["activation_width"] = 4096
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manifest = root / "manifest.json"
+            self._materialize_cached_artifact(
+                root,
+                model["artifact"],
+                [3],
+                embedding_length=1024,
+                architecture="dflash",
+                hyper_connection_count=4,
+            )
+            manifest.write_text(json.dumps(source), encoding="utf-8")
+            result = self._run(
+                manifest,
+                "--check-cache",
+                "--cache-root",
+                str(root / "cache"),
+            )
+        self.assertEqual(0, result.returncode, result.stderr)
+
     def test_cache_gate_requires_qwen4exp_hyper_connection_count(self) -> None:
         source = json.loads(MANIFEST.read_text(encoding="utf-8"))
         source["models"] = [copy.deepcopy(source["models"][0])]
@@ -493,8 +502,8 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         families = [
             family for shard in plan["shards"] for family in shard["families"]
         ]
-        self.assertEqual(50, len(families))
-        self.assertEqual(50, len(set(families)))
+        self.assertEqual(81, len(families))
+        self.assertEqual(81, len(set(families)))
         self.assertEqual(4, len(plan["github_matrix"]["include"]))
 
 

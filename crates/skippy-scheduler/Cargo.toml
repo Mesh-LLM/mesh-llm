@@ -12,13 +12,13 @@ categories = ["concurrency", "artificial-intelligence"]
 scheduler-lab = ["skippy-runtime/dynamic-native-runtime"]
 
 [dependencies]
-skippy-runtime = { path = "../skippy-runtime", version = "0.76.0" }
+skippy-runtime = { path = "../skippy-runtime", version = "0.76.1" }
 thiserror = "2"
 
 [dev-dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-skippy-cache = { path = "../skippy-cache", version = "0.76.0" }
+skippy-cache = { path = "../skippy-cache", version = "0.76.1" }
 
 [[bench]]
 name = "scheduler_lab"

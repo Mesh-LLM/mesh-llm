@@ -380,11 +380,11 @@ negative fixtures fail before topology publication.
 
 - Do not block the internal graph design on a wire change.
 - At the atomic v2-only cutover, advance the stage control protocol to
-  generation 8 and require a versioned stage-plan admission descriptor carrying
+  generation 9 and require a versioned stage-plan admission descriptor carrying
   `package_id`, the content-derived native `plan_id`, the exact stage range, strictly
   sorted resident tensor ids, typed sidecars, and all guarded profile/slice
   identities. Generation-7 nodes may remain visible to mesh discovery but
-  cannot join, coordinate, source artifacts for, or receive a generation-8
+  cannot join, coordinate, source artifacts for, or receive a generation-9
   topology. There is no downgrade or v1/direct-GGUF fallback.
 - Keep the current activation and KV data framing unchanged for boundaries
   exactly representable as the existing single raw-F32 activation plus
@@ -407,7 +407,7 @@ negative fixtures fail before topology publication.
   decision.
 
 **Exit gate:** current single-plane activation/KV framing runs unchanged behind
-generation-8 control admission; every participant echoes and verifies the same
+generation-9 control admission; every participant echoes and verifies the same
 package/plan/stage descriptor, multi-plane obligations in the frozen support
 matrix are negotiated correctly before cutover, and other unsupported
 boundaries reject before topology publication.
@@ -833,7 +833,7 @@ The project is complete only when all of the following are true:
 - unsupported models/cuts fail before topology publication with structured
   reasons;
 - planning reads metadata only and does not allocate full-model weights or KV;
-- generation-8 control admission preserves the current single-plane activation
+- generation-9 control admission preserves the current single-plane activation
   and KV framing, and any typed-plane data-protocol generation required by the
   frozen support matrix lands before cutover with explicit compatibility
   evidence;
@@ -907,7 +907,7 @@ Approval is requested for these decisions:
       resident parameter requirements are unioned.
 - [ ] The plan digest covers graph/planner semantics and graph-affecting
       configuration, and every runtime graph is checked against it.
-- [ ] Generation-8 control admission is required for the atomic v2-only
+- [ ] Generation-9 control admission is required for the atomic v2-only
       cutover; existing single-plane activation/KV framing remains unchanged,
       while typed activation planes are a separate negotiated data-protocol
       change that lands before cutover if a frozen baseline obligation requires

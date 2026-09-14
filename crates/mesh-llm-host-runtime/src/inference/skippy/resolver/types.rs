@@ -15,7 +15,8 @@ pub(super) const BUILTIN_PREFILL_ADAPTIVE_START: usize = 64;
 pub(super) const BUILTIN_PREFILL_ADAPTIVE_STEP: usize = 64;
 pub(super) const BUILTIN_PREFILL_ADAPTIVE_MAX: usize = 512;
 pub(super) const BUILTIN_PREFILL_ADAPTIVE_TARGET_MS: f64 = 100.0;
-pub(super) const BUILTIN_SAFETY_MARGIN_GB: f64 = 2.0;
+pub(super) const BUILTIN_SAFETY_MARGIN_GB: f64 =
+    mesh_llm_system::capacity::BUILTIN_SAFETY_MARGIN_GB;
 
 #[derive(Clone, Debug)]
 pub(crate) struct SkippyConfigResolveRequest<'a> {
@@ -116,7 +117,6 @@ pub(crate) struct ResolvedSkippyExecutionConfig {
     pub(crate) prefill_chunk_schedule: Option<String>,
     pub(crate) prefill_controls_explicit: bool,
     pub(crate) lifecycle_startup_timeout_ms: Option<u64>,
-    pub(crate) lifecycle_readiness_interval_ms: Option<u64>,
     pub(crate) lifecycle_health_interval_ms: Option<u64>,
 }
 

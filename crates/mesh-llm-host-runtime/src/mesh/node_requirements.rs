@@ -117,7 +117,7 @@ impl Node {
                 "requirement-aware meshes require an owner identity so the genesis policy and bootstrap token can be signed"
             )
         })?;
-        let path = mesh_genesis_policy_path();
+        let path = mesh_genesis_policy_path()?;
         match std::fs::read(&path) {
             Ok(serialized) => {
                 let existing =

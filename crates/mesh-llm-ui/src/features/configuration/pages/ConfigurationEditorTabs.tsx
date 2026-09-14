@@ -220,8 +220,8 @@ export function ConfigurationEditorTabs({
           screenLabel="Configuration · runtime"
           summaryDescription={
             <>
-              Startup and reconciliation settings that the local process reads from the config file. Native runtime
-              installation and hardware selection are intentionally not presented as switchable UI controls here.
+              Startup and reconciliation settings that the local process reads from the config file. The native runtime
+              backend can be selected here; runtime installation itself is still managed outside this tab.
             </>
           }
           summaryTitle="Runtime settings"

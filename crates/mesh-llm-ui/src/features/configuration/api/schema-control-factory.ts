@@ -173,12 +173,16 @@ export function createSchemaControl(input: CreateSchemaControlInput): Configurat
 
   const runtimeOptions = runtimeChoiceOptions(runtimeControlState)
   if (runtimeOptions.length > 0) {
+    const runtimeValues = new Set(runtimeOptions.map((option) => option.value))
+    const staticOptionsAhead = Array.from(new Set(enumValues(entry.value_schema).map(normalizedChoiceValue)))
+      .filter((value) => !runtimeValues.has(value))
+      .map((value) => choiceOption(value, entry.presentation))
     return {
       kind: 'choice',
       name,
       value: '',
       presentation: 'select',
-      options: [runtimeChoicePlaceholder(entry), ...runtimeOptions]
+      options: [runtimeChoicePlaceholder(entry), ...staticOptionsAhead, ...runtimeOptions]
     }
   }
 

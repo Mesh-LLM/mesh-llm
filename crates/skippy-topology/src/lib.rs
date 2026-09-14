@@ -21,10 +21,10 @@ pub use family_capability::{
     rwkv7_capability,
 };
 pub use planning::{
-    classify_layers, plan_contiguous_with_splits, plan_even_contiguous,
-    plan_package_aware_contiguous, plan_package_aware_contiguous_with_signals,
-    plan_package_aware_contiguous_with_transport, plan_weighted_contiguous,
-    wire_payload_bytes_per_token,
+    classify_layers, plan_balanced_accepted_contiguous, plan_contiguous_with_splits,
+    plan_even_contiguous, plan_package_aware_contiguous,
+    plan_package_aware_contiguous_with_signals, plan_package_aware_contiguous_with_transport,
+    plan_weighted_contiguous, wire_payload_bytes_per_token,
 };
 pub use validation::PlanError;
 

@@ -8,10 +8,11 @@ use mesh_llm_native_runtime::{
 };
 use mesh_llm_runtime_install::{
     CURRENT_MESH_VERSION, NativeRuntimeBundleInstallPolicy, NativeRuntimeDownloadProgressCallback,
-    NativeRuntimeInstallOptions, NativeRuntimeManifestOptions, discover_local_native_runtimes,
-    discover_native_runtime_bundle_dirs, host_runtime_profile, install_native_runtime,
-    load_release_manifest_with_sources, native_runtime_cache,
+    NativeRuntimeInstallOptions, NativeRuntimeManifestOptions, current_skippy_abi_version,
+    discover_local_native_runtimes, discover_native_runtime_bundle_dirs, host_runtime_profile,
+    install_native_runtime, load_release_manifest_with_sources, native_runtime_cache,
 };
+use mesh_llm_system::backend::BinaryFlavor;
 use mesh_llm_tui::terminal_progress::{
     ratio_complete_u64, render_inline_gauge_with_reserved_width,
 };
@@ -77,12 +78,14 @@ pub async fn run_native_runtime_list(
             .await?;
         let profile = host_runtime_profile();
         let cache = native_runtime_cache(cache_dir)?;
-        let mut resolver =
+        let resolver =
             NativeRuntimeResolver::new(mesh_version, profile.clone(), manifest.clone(), cache)
-                .with_bundle_dirs(sources.bundle_dirs.clone());
-        if let Some(skippy_abi_version) = configured.skippy_abi_version {
-            resolver = resolver.with_skippy_abi_version(skippy_abi_version);
-        }
+                .with_bundle_dirs(sources.bundle_dirs.clone())
+                .with_skippy_abi_version(listing_skippy_abi_version(
+                    configured,
+                    mesh_version,
+                    &manifest,
+                ));
         let evaluated = resolver.evaluate(&selection)?;
         let rows = available_runtime_rows(&manifest, &evaluated);
         return formatter.render_available(&rows, &sources);
@@ -90,6 +93,23 @@ pub async fn run_native_runtime_list(
 
     let installed = discover_local_native_runtimes(bundle_dirs, &cache)?;
     formatter.render_installed(&installed, cache.root())
+}
+
+fn listing_skippy_abi_version(
+    configured: NativeRuntimeConfigSelection<'_>,
+    mesh_version: &str,
+    manifest: &NativeRuntimeReleaseManifest,
+) -> String {
+    configured
+        .skippy_abi_version
+        .map(ToString::to_string)
+        .unwrap_or_else(|| {
+            if mesh_version == CURRENT_MESH_VERSION {
+                current_skippy_abi_version()
+            } else {
+                manifest.skippy_abi.clone()
+            }
+        })
 }
 
 fn available_runtime_rows(
@@ -185,11 +205,15 @@ fn cli_native_runtime_install_options(
 }
 
 fn print_configured_selector(configured: NativeRuntimeConfigSelection<'_>, json_output: bool) {
-    if json_output || configured.mesh_version.is_none() {
+    if json_output
+        || (configured.mesh_version.is_none()
+            && configured.skippy_abi_version.is_none()
+            && configured.selection.is_none())
+    {
         return;
     }
     let mesh_version = configured.mesh_version_or_current();
-    eprintln!("🔒 Using native runtime selector from config");
+    eprintln!("🔒 Using native runtime selector");
     eprintln!("   mesh version: {mesh_version}");
     if let Some(skippy_abi_version) = configured.skippy_abi_version {
         eprintln!("   Skippy ABI: {skippy_abi_version}");
@@ -342,14 +366,16 @@ pub fn run_native_runtime_prune(
 pub fn run_native_runtime_doctor(
     mesh_version: Option<&str>,
     skippy_abi_version: Option<&str>,
+    llama_flavor: Option<BinaryFlavor>,
     configured_selection: Option<&str>,
     json_output: bool,
 ) -> Result<()> {
+    let effective_selection = native_runtime_selection(llama_flavor, configured_selection);
     let cache = native_runtime_cache(None)?;
     let profile = host_runtime_profile();
     let installed = discover_local_native_runtimes(&[], &cache)?;
     let selected_mesh_version = mesh_version.unwrap_or(CURRENT_MESH_VERSION);
-    let runtime_selection = RuntimeSelection::parse(configured_selection)?;
+    let runtime_selection = RuntimeSelection::parse(effective_selection)?;
     let selected_version_runtimes = installed
         .iter()
         .filter(|runtime| runtime.mesh_version == selected_mesh_version)
@@ -383,6 +409,7 @@ pub fn run_native_runtime_doctor(
         selected_mesh_version: selected_mesh_version.to_string(),
         configured_skippy_abi: skippy_abi_version.map(ToString::to_string),
         configured_selection: configured_selection.map(ToString::to_string),
+        effective_selection: effective_selection.map(ToString::to_string),
         host: profile,
         cache_path: cache.root().to_path_buf(),
         selected_runtime_id: selected.map(|runtime| runtime.native_runtime_id.clone()),
@@ -404,6 +431,15 @@ pub fn run_native_runtime_doctor(
         );
     }
     Ok(())
+}
+
+pub fn native_runtime_selection(
+    llama_flavor: Option<BinaryFlavor>,
+    configured_selection: Option<&str>,
+) -> Option<&str> {
+    llama_flavor
+        .map(BinaryFlavor::suffix)
+        .or(configured_selection)
 }
 
 fn native_runtime_doctor_readiness(
@@ -490,6 +526,148 @@ mod tests {
         }
         .write_to_dir(path)
         .unwrap();
+    }
+
+    fn test_artifact(
+        runtime_id: &str,
+        mesh_version: &str,
+        skippy_abi: &str,
+    ) -> NativeRuntimeArtifact {
+        NativeRuntimeArtifact {
+            id: runtime_id.to_string(),
+            mesh_version: Some(mesh_version.to_string()),
+            skippy_abi: skippy_abi.to_string(),
+            platform: NativeRuntimePlatform {
+                os: std::env::consts::OS.to_string(),
+                arch: std::env::consts::ARCH.to_string(),
+                target: None,
+            },
+            backend: NativeRuntimeBackend::cpu(),
+            rank: 0,
+            libraries: vec!["lib/libllama.so".to_string()],
+            files: Default::default(),
+            tools: Default::default(),
+            url: None,
+            sha256: None,
+            signature: None,
+        }
+    }
+
+    #[test]
+    fn current_listing_defaults_to_the_build_skippy_abi() {
+        let manifest = NativeRuntimeReleaseManifest {
+            mesh_version: CURRENT_MESH_VERSION.to_string(),
+            skippy_abi: "0.1.44".to_string(),
+            artifacts: Vec::new(),
+        };
+
+        assert_eq!(
+            listing_skippy_abi_version(
+                NativeRuntimeConfigSelection::default(),
+                CURRENT_MESH_VERSION,
+                &manifest,
+            ),
+            current_skippy_abi_version()
+        );
+    }
+
+    #[test]
+    fn explicitly_selected_other_mesh_version_keeps_manifest_abi_default() {
+        let manifest = NativeRuntimeReleaseManifest {
+            mesh_version: "0.75.0".to_string(),
+            skippy_abi: "0.1.44".to_string(),
+            artifacts: Vec::new(),
+        };
+
+        assert_eq!(
+            listing_skippy_abi_version(
+                NativeRuntimeConfigSelection {
+                    mesh_version: Some("0.75.0"),
+                    ..Default::default()
+                },
+                "0.75.0",
+                &manifest,
+            ),
+            "0.1.44"
+        );
+    }
+
+    #[test]
+    fn available_rows_match_same_id_by_mesh_version_and_skippy_abi() {
+        let current_abi = current_skippy_abi_version();
+        let stale_abi = "0.1.44";
+        let runtime_id = "meshllm-runtime-macos-arm64-cpu";
+        let current = test_artifact(runtime_id, CURRENT_MESH_VERSION, &current_abi);
+        let stale = test_artifact(runtime_id, CURRENT_MESH_VERSION, stale_abi);
+        let manifest = NativeRuntimeReleaseManifest {
+            mesh_version: CURRENT_MESH_VERSION.to_string(),
+            skippy_abi: stale_abi.to_string(),
+            artifacts: vec![stale.clone(), current.clone()],
+        };
+        let cache = tempfile::tempdir().unwrap();
+        let evaluated = NativeRuntimeResolver::new(
+            CURRENT_MESH_VERSION,
+            host_runtime_profile(),
+            manifest.clone(),
+            NativeRuntimeCache::new(cache.path()),
+        )
+        .with_skippy_abi_version(current_abi.clone())
+        .evaluate(&RuntimeSelection::Recommended)
+        .unwrap();
+
+        let rows = available_runtime_rows(&manifest, &evaluated);
+        assert_eq!(rows.len(), 2);
+        let current_row = rows
+            .iter()
+            .find(|row| row.skippy_abi == current_abi)
+            .expect("current ABI row should be listed");
+        assert!(current_row.supported);
+        assert!(current_row.rejection_reasons.is_empty());
+
+        let stale_row = rows
+            .iter()
+            .find(|row| row.skippy_abi == stale_abi)
+            .expect("stale ABI row should be listed");
+        assert!(!stale_row.supported);
+        assert!(stale_row.rejection_reasons.iter().any(|reason| matches!(
+            reason,
+            mesh_llm_native_runtime::CandidateRejection::SkippyAbiMismatch { expected, actual }
+                if expected == &current_abi && actual == stale_abi
+        )));
+    }
+
+    #[test]
+    fn doctor_prefers_cli_flavor_over_configured_runtime_selection() {
+        assert_eq!(
+            native_runtime_selection(Some(BinaryFlavor::Vulkan), Some("cuda")),
+            Some("vulkan")
+        );
+    }
+
+    #[test]
+    fn doctor_uses_configured_runtime_selection_without_cli_flavor() {
+        assert_eq!(native_runtime_selection(None, Some("cuda")), Some("cuda"));
+    }
+
+    #[test]
+    fn runtime_install_prefers_cli_flavor_over_configured_backend() {
+        let resolved = resolve_runtime_selection(
+            None,
+            NativeRuntimeConfigSelection {
+                mesh_version: None,
+                skippy_abi_version: None,
+                selection: native_runtime_selection(Some(BinaryFlavor::Vulkan), Some("rocm")),
+            },
+        )
+        .expect("runtime install selection should resolve");
+
+        assert_eq!(
+            resolved.selection,
+            RuntimeSelection::Backend {
+                kind: mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan,
+                cuda_toolkit_major: None,
+            }
+        );
     }
 
     #[test]

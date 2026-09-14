@@ -18,6 +18,10 @@ inputs:
     description: Optional release-attestation public key path used to inspect the stamp.
     required: false
     default: ""
+  commit:
+    description: Source revision recorded in the release attestation. Defaults to the checkout's HEAD.
+    required: false
+    default: ""
 
 outputs:
   binary_path:
@@ -44,6 +48,7 @@ runs:
         INPUT_SKIP_UI: ${{ inputs.skip_ui }}
         INPUT_ATTESTATION_SIGNING_KEY_FILE: ${{ inputs.attestation_signing_key_file }}
         INPUT_ATTESTATION_PUBLIC_KEY_FILE: ${{ inputs.attestation_public_key_file }}
+        INPUT_COMMIT: ${{ inputs.commit }}
       run: |
         $ErrorActionPreference = "Stop"
 
@@ -57,6 +62,7 @@ runs:
 
         $signingKey = "$env:INPUT_ATTESTATION_SIGNING_KEY_FILE".Trim()
         $publicKey = "$env:INPUT_ATTESTATION_PUBLIC_KEY_FILE".Trim()
+        $commit = "$env:INPUT_COMMIT".Trim()
         if ([string]::IsNullOrWhiteSpace($signingKey) -ne [string]::IsNullOrWhiteSpace($publicKey)) {
           throw "both attestation key files are required when release attestation is enabled"
         }
@@ -121,9 +127,15 @@ runs:
             throw "release attestation verifier was not built: $verifier"
           }
 
+          $stampCommitArgs = @()
+          if ($commit) {
+            $stampCommitArgs = @("--commit", $commit)
+          }
           & $verifier release-attestation stamp `
             --binary $binaryPath `
-            --signing-key-file $signingKey
+            --signing-key-file $signingKey `
+            --require-source-commit `
+            @stampCommitArgs
           if ($LASTEXITCODE -ne 0) {
             throw "failed to stamp the Windows release host"
           }

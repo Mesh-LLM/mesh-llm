@@ -490,8 +490,8 @@ Privacy and safety properties:
 - Absolute paths, parent-directory traversal, and symlink escapes outside the managed Hugging Face repo cache are rejected.
 - Transfers are streamed in bounded chunks; the protocol carries an offset, and
   the current client installs only freshly verified complete artifacts.
-- Body reads use an idle timeout so a stalled peer cannot hang stage
-  preparation indefinitely.
+- Body reads use an idle timeout so a stalled peer cannot hang stage loading
+  indefinitely.
 
 ## Out-of-Scope Streams
 

@@ -1499,6 +1499,30 @@ async fn chat_completion_route_accepts_tools_structured_output_and_logprobs() {
 }
 
 #[tokio::test]
+async fn chat_completion_route_rejects_malformed_tools_as_invalid_requests() {
+    for tools in [
+        json!([{"type": "function"}]),
+        json!([{"type": "banana", "function": {"name": "f", "parameters": {}}}]),
+        json!([{"type": "function", "function": "nope"}]),
+    ] {
+        let response = post_json(
+            "/v1/chat/completions",
+            json!({
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": tools
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response_body_json(response).await;
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+        assert_eq!(body["error"]["param"], "tools");
+        assert_eq!(body["error"]["code"], "invalid_value");
+    }
+}
+
+#[tokio::test]
 async fn chat_completion_route_accepts_noop_parity_fields() {
     let response = post_json(
         "/v1/chat/completions",

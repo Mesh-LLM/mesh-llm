@@ -615,3 +615,63 @@ describe('adaptStatusToDashboard', () => {
     expect(peer!.latencyMs).toBe(12.5)
   })
 })
+
+describe('advertised memory in the dashboard adapter', () => {
+  const memory = {
+    total_bytes: 12_000_000_000,
+    reserved_bytes: 500_000_000,
+    platform_reserve_bytes: 0,
+    configured_reserve_bytes: 2_000_000_000,
+    usable_bytes: 9_500_000_000,
+    system_ram_bytes: 32_000_000_000,
+    ram_offload_bytes: 18_000_000_000
+  }
+
+  it('carries the breakdown each node advertises into the node model without touching totals', () => {
+    const dashboard = adaptStatusToDashboard({
+      ...PUBLIC_STATUS_PAYLOAD,
+      my_vram_gb: 9.5,
+      my_memory: memory,
+      peers: [
+        {
+          ...PUBLIC_STATUS_PAYLOAD.peers[0],
+          role: 'Worker',
+          state: 'serving',
+          vram_gb: 37,
+          memory: {
+            ...memory,
+            total_bytes: 40_000_000_000,
+            reserved_bytes: 1_000_000_000,
+            usable_bytes: 37_000_000_000
+          }
+        }
+      ]
+    })
+
+    const [self, worker] = dashboard.peers
+    expect(self.memory).toEqual({
+      totalGB: 12,
+      reservedGB: 0.5,
+      platformReserveGB: 0,
+      configuredReserveGB: 2,
+      usableGB: 9.5,
+      systemRamGB: 32,
+      ramOffloadGB: 18
+    })
+    expect(self.vramGB).toBe(9.5)
+    expect(worker.memory?.totalGB).toBe(40)
+    expect(worker.memory?.usableGB).toBe(37)
+    expect(worker.vramGB).toBe(37)
+  })
+
+  it('leaves the breakdown absent for nodes that did not advertise one', () => {
+    const dashboard = adaptStatusToDashboard({
+      ...PUBLIC_STATUS_PAYLOAD,
+      peers: [{ ...PUBLIC_STATUS_PAYLOAD.peers[0], role: 'Worker', state: 'serving', vram_gb: 39 }]
+    })
+
+    const [self, worker] = dashboard.peers
+    expect(self.memory).toBeUndefined()
+    expect(worker.memory).toBeUndefined()
+  })
+})

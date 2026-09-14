@@ -1,0 +1,13 @@
+# Highest GLIBC symbol version any shipped Linux artifact may require.
+#
+# Read by scripts/verify-host-dependencies.py through --max-glibc. The host,
+# the native runtime libraries, and the executable tools packaged beside them
+# are all checked against it, so the floor is a declared number rather than a
+# side effect of whichever base image the release lane happened to build in.
+#
+# 2.39 is what v0.76.0 actually shipped: the host requires GLIBC_2.39 and the
+# native runtime libraries require GLIBC_2.38, because both are built on
+# Ubuntu 24.04 images. That excludes Ubuntu 22.04 (glibc 2.35), which is
+# mesh-llm#1522. Lowering this number is the real fix for that issue and it
+# means changing the build base image, not editing this file on its own.
+2.39

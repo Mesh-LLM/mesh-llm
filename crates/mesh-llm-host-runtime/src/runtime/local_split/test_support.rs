@@ -979,35 +979,6 @@ pub(super) fn test_stage_status_from_stop(
     }
 }
 
-pub(super) fn test_preparation_status_from_load(
-    load: &skippy::StageLoadRequest,
-) -> skippy::StagePreparationStatus {
-    skippy::StagePreparationStatus {
-        topology_id: load.topology_id.clone(),
-        run_id: load.run_id.clone(),
-        model_id: load.model_id.clone(),
-        backend: load.backend.clone(),
-        package_ref: load.package_ref.clone(),
-        manifest_sha256: load.manifest_sha256.clone(),
-        stage_id: load.stage_id.clone(),
-        stage_index: load.stage_index,
-        layer_start: load.layer_start,
-        layer_end: load.layer_end,
-        admission: Some(load.admission.clone()),
-        activation_codec: load.activation_codec,
-        activation_codec_policy: Default::default(),
-        state: skippy::StagePreparationState::Available,
-        bytes_done: load.source_model_bytes,
-        bytes_total: load.source_model_bytes,
-        bind_addr: None,
-        error: None,
-        shutdown_generation: load.shutdown_generation,
-        coordinator_term: load.coordinator_term,
-        coordinator_id: load.coordinator_id,
-        lease_until_unix_ms: load.lease_until_unix_ms,
-    }
-}
-
 pub(super) fn test_inventory_from_request(
     request: &skippy::StageInventoryRequest,
 ) -> skippy::StageLayerInventory {
@@ -1022,7 +993,6 @@ pub(super) fn test_inventory_from_request(
             layer_end: 40,
         }],
         missing_ranges: Vec::new(),
-        preparing_ranges: Vec::new(),
         source_model_path: Some("/models/qwen.gguf".to_string()),
         source_model_bytes: Some(40_000_000),
         source_model_sha256: None,

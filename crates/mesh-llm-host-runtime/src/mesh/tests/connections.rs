@@ -495,6 +495,46 @@ async fn make_test_node_with_requirements(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn join_rejects_token_naming_own_identity() -> Result<()> {
+    // #1699: two serve processes on one machine silently load the same node
+    // key, so the joiner's token names its own endpoint id. iroh refuses
+    // self-connections, so before the guard this failed opaquely (or looked
+    // like a successful one-node mesh). It must fail loudly instead.
+    let node = make_test_node(super::NodeRole::Worker).await?;
+    node.start_accepting();
+
+    let self_token = node.invite_token().await;
+    let err = node
+        .join(&self_token)
+        .await
+        .expect_err("joining our own invite token must be rejected");
+
+    assert!(
+        err.to_string().contains("own id"),
+        "unexpected error: {err:#}"
+    );
+
+    assert!(
+        node.active_mesh_policy_state().await.is_none(),
+        "a rejected self-token must not install signed mesh policy state"
+    );
+    assert!(
+        node.bootstrap_token.lock().await.is_none(),
+        "a rejected self-token must not install the bootstrap token"
+    );
+
+    let retry_err = node
+        .join_with_retry(&self_token)
+        .await
+        .expect_err("retrying our own invite token must be rejected");
+    assert!(
+        retry_err.to_string().contains("own id"),
+        "unexpected retry error: {retry_err:#}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn host_role_claim_transitions_regossip_to_connected_peer() -> Result<()> {
     let host = make_test_node(super::NodeRole::Worker).await?;
     let peer = make_test_node(super::NodeRole::Worker).await?;

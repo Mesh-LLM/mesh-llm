@@ -15,7 +15,7 @@ The Mesh-LLM organization currently publishes five first-party plugin repositori
 | Plugin | Use it for | Install |
 | --- | --- | --- |
 | [`blackboard`](https://github.com/Mesh-LLM/blackboard) | Share short-lived status, findings, questions, and tips across a mesh. The plugin also ships a Blackboard Agent Skill. | `mesh-llm plugins install blackboard` |
-| [`openai-endpoint`](https://github.com/Mesh-LLM/openai-endpoint) | Add an already-running OpenAI-compatible server such as vLLM, TGI, Ollama, or Lemonade Server. | `mesh-llm plugins install openai-endpoint` |
+| [`openai-endpoint`](https://github.com/Mesh-LLM/openai-endpoint) | Add an already-running OpenAI-compatible server such as Ollama, vLLM, LM Studio, TGI, or Lemonade Server. | `mesh-llm plugins install openai-endpoint` |
 | [`flash-moe`](https://github.com/Mesh-LLM/flash-moe) | Attach a Flash-MoE inference endpoint, or let the plugin supervise a local Flash-MoE process. | `mesh-llm plugins install flash-moe` |
 | [`metrics`](https://github.com/Mesh-LLM/metrics) | Advertise metrics support for mesh-llm telemetry. Configure the OTLP destination in mesh-llm, not in the plugin. | `mesh-llm plugins install metrics` |
 | [`agents`](https://github.com/Mesh-LLM/agents) | Run mesh-native A2A agents and expose their tools through the mesh MCP endpoint. | `mesh-llm plugins install agents` |
@@ -31,7 +31,8 @@ Treat a catalog entry as a discovery aid: read the linked repository, check its 
 
 ## Install a plugin
 
-Install the latest compatible release for the current machine:
+Install the latest release archive for the current machine (platform selection
+is not host/plugin protocol negotiation):
 
 ```bash
 mesh-llm plugins install openai-endpoint
@@ -41,7 +42,7 @@ You can also install directly from a GitHub repository. This is useful when a pl
 
 ```bash
 mesh-llm plugins install Mesh-LLM/openai-endpoint
-mesh-llm plugins install Mesh-LLM/openai-endpoint@0.1.2
+mesh-llm plugins install Mesh-LLM/openai-endpoint@0.1.2 # protocol-2 hosts only
 ```
 
 Use the catalog name, such as `agents`, for catalog installs. Use the fully qualified `owner/repository` form, such as `Mesh-LLM/agents`, only when installing directly from GitHub.
@@ -80,55 +81,25 @@ url = "http://127.0.0.1:8000/v1"
 
 ## External-endpoint-only workflow
 
-Mesh can expose an existing OpenAI-compatible provider without loading any
-local model or adding a placeholder model.
+**Start your provider → install `openai-endpoint` → set its URL → run
+`mesh-llm serve`.** No GGUF, placeholder model, or separate `share` command.
+Use `serve` on the provider machine and `client --join` on a consuming machine.
 
-1. Install the endpoint plugin:
+See [Share Ollama, vLLM or LM Studio](/docs/pages/external-model-endpoints/) for
+the short setup, provider-specific URLs, a completion check and troubleshooting.
 
-   ```bash
-   mesh-llm plugins install openai-endpoint
-   ```
-
-2. Configure on-demand mode when configured local models must not load eagerly,
-   then add the provider:
-
-   ```toml
-   [runtime]
-   mode = "on_demand"
-
-   [[plugin]]
-   name = "openai-endpoint"
-   url = "http://127.0.0.1:8000/v1"
-   ```
-
-3. Start the durable runtime:
-
-   ```bash
-   mesh-llm serve
-   ```
-
-4. Verify the provider's models through Mesh:
-
-   ```bash
-   curl -s http://localhost:9337/v1/models | jq '.data[].id'
-   ```
-
-5. Send a completion using one listed model:
-
-   ```bash
-   curl -s http://localhost:9337/v1/chat/completions \
-     -H 'Content-Type: application/json' \
-     -d '{"model":"<provider-model>","messages":[{"role":"user","content":"Say hello."}]}'
-   ```
-
-Plugin-process health and inference-endpoint health are separate. A connected,
-healthy plugin process can report its configured provider as unavailable; in
-that case inspect the provider URL and `/v1/models` response before reinstalling
-the plugin.
+**Release compatibility:** published adapter 0.1.2 uses plugin protocol 2 and
+cannot initialize on Mesh 0.76.0 (protocol 3), despite installing successfully.
+Use adapter **0.2.0** (protocol 3) for that host. Check the
+[adapter compatibility/build instructions](https://github.com/Mesh-LLM/openai-endpoint/blob/v0.2.0/README.md#compatibility)
+before installing; do not assume “latest” means compatible. Older protocol-2
+hosts must retain a compatible adapter such as 0.1.2 rather than blindly updating.
 
 See [Runtime Lifecycle](/docs/pages/runtime-lifecycle/) for zero-model and
 on-demand behavior, and [OpenAI-Compatible API](/docs/pages/openai-compatible-api/)
 for client semantics.
+
+## Other plugin configurations
 
 For plugins that do not need an endpoint, the name is usually enough:
 

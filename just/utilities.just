@@ -91,3 +91,14 @@ docker-build-client tag="mesh-llm:client":
 # Run the client console image locally
 docker-run-client tag="mesh-llm:client":
     docker run --rm -p 3131:3131 -p 9337:9337 -e APP_MODE=console {{ tag }}
+
+# Install the repository git hooks (Conventional Commits subject validation).
+[unix]
+hooks-install:
+    git config core.hooksPath scripts/hooks
+    @echo "git hooks installed from scripts/hooks (bypass one commit with --no-verify)"
+
+# Validate commit subjects in a range against Conventional Commits v1.0.0.
+[unix]
+check-commits range="origin/main..HEAD":
+    python3 scripts/check-conventional-commit.py --range "{{ range }}"

@@ -149,7 +149,10 @@ export function acceptedValuesForSetting(setting: ConfigurationDefaultsSetting) 
   return Array.from(new Set([...fromSchema, ...fromControl]))
 }
 
-export function resolvedChoiceOptions(setting: ConfigurationDefaultsSetting): readonly ResolvedChoiceOption[] {
+export function resolvedChoiceOptions(
+  setting: ConfigurationDefaultsSetting,
+  currentValue?: string
+): readonly ResolvedChoiceOption[] {
   const fromControl: ResolvedChoiceOption[] =
     setting.control.kind === 'choice'
       ? setting.control.options.map((option) => ({
@@ -160,7 +163,7 @@ export function resolvedChoiceOptions(setting: ConfigurationDefaultsSetting): re
       : acceptedValuesForSetting(setting).map((value) => ({ value, label: value, description: undefined }))
 
   const runtimeOptions = setting.controlState?.options ?? []
-  if (runtimeOptions.length === 0) return fromControl
+  if (runtimeOptions.length === 0) return withStoredValueOption(fromControl, currentValue)
 
   const runtimeByValue = new Map(
     runtimeOptions.map((option) => [normalizedChoiceValue(controlConditionValueString(option.value)), option] as const)
@@ -188,7 +191,19 @@ export function resolvedChoiceOptions(setting: ConfigurationDefaultsSetting): re
     })
   }
 
-  return mergedOptions
+  return withStoredValueOption(mergedOptions, currentValue)
+}
+
+// A stored value with no matching option (e.g. an `exact:<id>`, `meshllm-<id>`, or `cudaNN` native
+// runtime pin, or a GPU device that is no longer present) must stay selectable, or a select control
+// would render no match and silently overwrite the deliberate pin on save. Surface it as a synthetic
+// trailing option so the raw value round-trips.
+function withStoredValueOption(
+  options: readonly ResolvedChoiceOption[],
+  currentValue?: string
+): readonly ResolvedChoiceOption[] {
+  if (!currentValue || options.some((option) => option.value === currentValue)) return options
+  return [...options, { value: currentValue, label: currentValue, description: 'Set in config file' }]
 }
 
 export function getSettingAvailability(setting: ConfigurationDefaultsSetting): SettingAvailabilityState {

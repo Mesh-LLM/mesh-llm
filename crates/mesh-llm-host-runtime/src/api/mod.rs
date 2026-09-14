@@ -10,6 +10,7 @@
 //!   DELETE /api/model-interests/{model_ref} — clear local explicit interest
 //!   GET  /api/model-targets — ranked model targets from explicit interest and demand
 //!   GET  /api/diagnostics/split-readiness — split peer eligibility and operator guidance
+//!   GET  /api/diagnostics/network — advertised direct-connect candidates and per-peer path state
 //!   GET  /api/runtime   — local model state (JSON)
 //!   GET  /api/runtime/llama — local llama.cpp runtime metrics + slots snapshots (JSON)
 //!   GET  /api/runtime/events — SSE stream of llama.cpp runtime metrics + slots snapshots
@@ -51,7 +52,8 @@ mod http;
 mod management_lifecycle;
 mod model_target_capacity;
 mod model_targets;
-mod routes;
+mod network_diagnostics;
+pub(crate) mod routes;
 mod server;
 mod split_readiness;
 mod state;
@@ -70,10 +72,10 @@ pub(crate) use self::status::classify_runtime_error;
 use self::state::ApiInner;
 use self::status::{
     IntentSummary, LifecycleInstancePayload, LoggingStatusPayload, MeshModelPayload,
-    OpenAiGuardrailsPayload, RuntimeCapabilityFlags, RuntimeLlamaPayload, RuntimeProcessesPayload,
-    RuntimeStatusPayload, StatusPayload, build_runtime_processes_payload,
-    build_runtime_stage_payloads, build_runtime_status_payload, derive_daemon_state,
-    runtime_stage_state_label,
+    OpenAiGuardrailsPayload, RUNTIME_EVENTS_CAPABILITY, RuntimeCapabilityFlags,
+    RuntimeLlamaPayload, RuntimeProcessesPayload, RuntimeStatusPayload, StatusPayload,
+    build_runtime_processes_payload, build_runtime_stage_payloads, build_runtime_status_payload,
+    derive_daemon_state, runtime_stage_state_label,
 };
 use crate::mesh;
 use crate::models::append_external_inference_models;
@@ -372,10 +374,6 @@ impl MeshApi {
         self.inner.lock().await.draft_name = Some(name);
     }
 
-    #[expect(
-        dead_code,
-        reason = "retained for embedded callers that toggle client presentation state"
-    )]
     pub async fn set_client(&self, is_client: bool) {
         let mut inner = self.inner.lock().await;
         inner.is_client = is_client;
@@ -557,21 +555,64 @@ impl MeshApi {
     }
 
     async fn runtime_status(&self) -> RuntimeStatusPayload {
-        let (runtime_status, openai_guardrails) = {
+        let (runtime_status, openai_guardrails, node, is_client, plugin_manager) = {
             let inner = self.inner.lock().await;
             (
                 inner.runtime_data_collector.runtime_status_snapshot(),
                 inner.openai_guardrails.clone(),
+                inner.node.clone(),
+                inner.is_client,
+                inner.plugin_manager.clone(),
             )
         };
-        build_runtime_status_payload(
+        let local_processes =
+            runtime_data::runtime_process_payloads(&runtime_status.local_processes);
+        let mut payload = build_runtime_status_payload(
             runtime_status.primary_model.as_deref().unwrap_or_default(),
             runtime_status.primary_backend,
             openai_guardrails,
             runtime_status.is_host,
             runtime_status.llama_ready,
             runtime_status.llama_port,
-            runtime_data::runtime_process_payloads(&runtime_status.local_processes),
+            local_processes.clone(),
+        );
+        // Same derivation `status()` uses for `/api/status`'s
+        // `runtime.capabilities`, so both routes agree on one node state
+        // (review defect D4). `node` was cloned out of the lock above, so
+        // these calls run without holding `self.inner`.
+        let plugin_models = external_inference_models(&plugin_manager).await;
+        let peers = node.peers().await;
+        payload.capabilities = Some(derive_capability_flags(
+            &node,
+            is_client,
+            &local_processes,
+            &plugin_models,
+            &peers,
+        ));
+        payload
+    }
+
+    /// Build only the local model view needed by [`ServingController`]. The
+    /// serving API does not need mesh peers, plugin inference models, or
+    /// activity-policy capability derivation; keeping this path on the
+    /// collector snapshot avoids those network/plugin lookups.
+    async fn runtime_model_status(&self) -> RuntimeStatusPayload {
+        let runtime_status = self
+            .inner
+            .lock()
+            .await
+            .runtime_data_collector
+            .runtime_status_snapshot();
+        let local_processes =
+            runtime_data::runtime_process_payloads(&runtime_status.local_processes);
+        build_runtime_status_payload(
+            runtime_status.primary_model.as_deref().unwrap_or_default(),
+            runtime_status.primary_backend,
+            None,
+            runtime_status.is_host,
+            runtime_status.llama_ready,
+            runtime_status.llama_port,
+            local_processes,
         )
     }
 
@@ -921,48 +962,27 @@ impl MeshApi {
         append_external_inference_models(&mut hosted_models, &plugin_models);
         let peers = node.peers().await;
 
-        let local_serving = local_processes
-            .iter()
-            .any(|process| matches!(process.status.as_str(), "serving" | "ready"));
-        let plugin_ingress = !plugin_models.is_empty();
-        let proxying = plugin_ingress
-            || peers
-                .iter()
-                .any(|peer| !peer.http_routable_models().is_empty());
         let lifecycle_instances = build_lifecycle_instances(&local_processes);
         let has_terminal_failure = lifecycle_instances
             .iter()
             .any(|instance| instance.lifecycle_state == "failed");
-        let accepting_local = node
-            .activity_policy_guard
-            .check_admission(crate::runtime::IngressType::LocalOpenAi)
-            == crate::runtime::AdmissionResult::Allowed;
-        let accepting_remote = node
-            .activity_policy_guard
-            .check_admission(crate::runtime::IngressType::RemoteQuicHttp)
-            == crate::runtime::AdmissionResult::Allowed;
         let intents = node
             .runtime_intents
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
         let intent_summary = summarize_intents(&intents);
+        let capabilities =
+            derive_capability_flags(&node, is_client, &local_processes, &plugin_models, &peers);
         runtime.daemon_state = Some(derive_daemon_state(
             crate::system::backend::runtime_shutting_down(),
             has_terminal_failure,
             node.activity_policy_guard.priority_degraded(),
-            local_serving,
-            proxying,
+            capabilities.local_serving,
+            capabilities.proxying,
             listeners_ready,
         ));
-        runtime.capabilities = Some(derive_capability_flags(
-            is_client,
-            local_serving,
-            proxying,
-            plugin_ingress,
-            accepting_local,
-            accepting_remote,
-        ));
+        runtime.capabilities = Some(capabilities);
         runtime.lifecycle_instances = lifecycle_instances;
         runtime.intent_summary = Some(intent_summary);
 
@@ -1062,13 +1082,28 @@ fn summarize_intents(intents: &[crate::runtime::DesiredRuntimeIntent]) -> Intent
 }
 
 fn derive_capability_flags(
+    node: &mesh::Node,
     is_client: bool,
-    local_serving: bool,
-    proxying: bool,
-    plugin_ingress: bool,
-    accepting_local: bool,
-    accepting_remote: bool,
+    local_processes: &[RuntimeProcessPayload],
+    plugin_models: &[String],
+    peers: &[mesh::PeerInfo],
 ) -> RuntimeCapabilityFlags {
+    let local_serving = local_processes
+        .iter()
+        .any(|process| matches!(process.status.as_str(), "serving" | "ready"));
+    let plugin_ingress = !plugin_models.is_empty();
+    let proxying = plugin_ingress
+        || peers
+            .iter()
+            .any(|peer| !peer.http_routable_models().is_empty());
+    let accepting_local = node
+        .activity_policy_guard
+        .check_admission(crate::runtime::IngressType::LocalOpenAi)
+        == crate::runtime::AdmissionResult::Allowed;
+    let accepting_remote = node
+        .activity_policy_guard
+        .check_admission(crate::runtime::IngressType::RemoteQuicHttp)
+        == crate::runtime::AdmissionResult::Allowed;
     RuntimeCapabilityFlags {
         worker_capable: !is_client,
         local_serving,
@@ -1076,6 +1111,7 @@ fn derive_capability_flags(
         plugin_ingress,
         accepting_local,
         accepting_remote,
+        runtime_events: Some(RUNTIME_EVENTS_CAPABILITY),
     }
 }
 
@@ -1162,7 +1198,7 @@ impl ServingController for MeshApi {
     fn served_models<'a>(&'a self) -> ServingFuture<'a, Vec<ServedModel>> {
         Box::pin(async move {
             Ok(self
-                .runtime_status()
+                .runtime_model_status()
                 .await
                 .models
                 .into_iter()
@@ -1175,7 +1211,7 @@ impl ServingController for MeshApi {
         Box::pin(async move {
             let enabled = self.inner.lock().await.runtime_control.is_some();
             let models = self
-                .runtime_status()
+                .runtime_model_status()
                 .await
                 .models
                 .into_iter()
@@ -1260,6 +1296,7 @@ async fn node_hardware_input(
         gpu_compute_tflops_fp16: node_metric_csv(&node.gpu_compute_tflops_fp16).await,
         my_hostname: node.hostname.clone(),
         my_is_soc: node.is_soc,
+        memory: node.advertised_memory,
         my_vram_gb,
         model_size_gb: model_size_bytes as f64 / 1e9,
         first_joined_mesh_ts: node.first_joined_mesh_ts().await,

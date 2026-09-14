@@ -209,6 +209,15 @@ class MockEventSource implements MockEventSourceInstance {
   }
 }
 
+// Fresh Response per call: a body is single-use and there are now two consumers.
+function runtimeFetch(runtime: () => LlamaRuntimePayload) {
+  return vi.fn(async (input: RequestInfo | URL) =>
+    String(input).includes('/api/status')
+      ? new Response('{}', { status: 200 })
+      : new Response(JSON.stringify(runtime()), { status: 200 })
+  )
+}
+
 describe('NodeDrawer runtime section', () => {
   beforeEach(() => {
     MockEventSource.instances = []
@@ -222,12 +231,16 @@ describe('NodeDrawer runtime section', () => {
   })
 
   it('renders the initial runtime fetch in the self-node drawer', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(INITIAL_RUNTIME), { status: 200 })))
+    vi.stubGlobal(
+      'fetch',
+      runtimeFetch(() => INITIAL_RUNTIME)
+    )
 
     render(<NodeDrawer open node={SELF_NODE} peer={SELF_PEER} onClose={vi.fn()} />)
 
     expect(screen.getByRole('heading', { name: 'Runtime' })).toBeInTheDocument()
-    expect(MockEventSource.instances[0]?.url).toBe(`${env.managementApiUrl}/api/runtime/events`)
+    // Legacy stream opens only after the /api/status v1-capability probe resolves.
+    await waitFor(() => expect(MockEventSource.instances[0]?.url).toBe(`${env.managementApiUrl}/api/runtime/events`))
     expect(await screen.findByText('Metrics • Live')).toBeInTheDocument()
     expect(screen.getByText('Slots • Live')).toBeInTheDocument()
     expect(screen.getByText('1/2 slots busy')).toBeInTheDocument()
@@ -244,12 +257,16 @@ describe('NodeDrawer runtime section', () => {
   })
 
   it('replaces the fetched runtime with SSE payloads', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(INITIAL_RUNTIME), { status: 200 })))
+    vi.stubGlobal(
+      'fetch',
+      runtimeFetch(() => INITIAL_RUNTIME)
+    )
 
     render(<NodeDrawer open node={SELF_NODE} peer={SELF_PEER} onClose={vi.fn()} />)
 
     expect(await screen.findByText('1.00')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '#1 · Available · context n/a' })).toBeInTheDocument()
+    await waitFor(() => expect(MockEventSource.instances).toHaveLength(1))
 
     await act(async () => {
       MockEventSource.instances[0]?.emitMessage(UPDATED_RUNTIME)
@@ -265,24 +282,23 @@ describe('NodeDrawer runtime section', () => {
   })
 
   it('falls back to polling when the runtime stream fails', async () => {
+    let servedRuntime: LlamaRuntimePayload = INITIAL_RUNTIME
     vi.stubGlobal(
       'fetch',
-      vi
-        .fn()
-        .mockResolvedValueOnce(new Response(JSON.stringify(INITIAL_RUNTIME), { status: 200 }))
-        .mockResolvedValueOnce(new Response(JSON.stringify(UPDATED_RUNTIME), { status: 200 }))
+      runtimeFetch(() => servedRuntime)
     )
 
     render(<NodeDrawer open node={SELF_NODE} peer={SELF_PEER} onClose={vi.fn()} />)
 
     expect(await screen.findByText('1.00')).toBeInTheDocument()
+    await waitFor(() => expect(MockEventSource.instances).toHaveLength(1))
+    servedRuntime = UPDATED_RUNTIME
 
     vi.useFakeTimers()
 
     await act(async () => {
       MockEventSource.instances[0]?.emitError()
-      vi.advanceTimersByTime(2_500)
-      await Promise.resolve()
+      await vi.advanceTimersByTimeAsync(2_500)
     })
 
     expect(screen.getByText('2/3 slots busy')).toBeInTheDocument()
@@ -330,5 +346,50 @@ describe('NodeDrawer runtime section', () => {
     expect(screen.getByText('Worker')).toBeInTheDocument()
     expect(screen.getByText('Standby')).toBeInTheDocument()
     expect(screen.queryByText('Client')).not.toBeInTheDocument()
+  })
+})
+
+describe('NodeDrawer advertised memory', () => {
+  const memory = {
+    totalGB: 12,
+    reservedGB: 0.5,
+    platformReserveGB: 0,
+    configuredReserveGB: 2,
+    usableGB: 9.5,
+    systemRamGB: 32,
+    ramOffloadGB: 18
+  }
+
+  it('itemizes the memory a peer advertises', () => {
+    render(<NodeDrawer open node={PEER_NODE} peer={{ ...PEER, vramGB: 9.5, memory }} onClose={() => {}} />)
+
+    expect(screen.getByText('Memory')).toBeInTheDocument()
+    expect(screen.getByText('12.0 GB')).toBeInTheDocument()
+    expect(screen.getAllByText('9.5 GB').length).toBeGreaterThanOrEqual(2)
+    expect(screen.getByText('Driver reserved')).toBeInTheDocument()
+    expect(screen.getByText('Configured reserve')).toBeInTheDocument()
+    expect(screen.getByText('System RAM')).toBeInTheDocument()
+    expect(screen.getByText('RAM-backed local budget')).toBeInTheDocument()
+    expect(screen.queryByText('Platform reserve')).not.toBeInTheDocument()
+  })
+
+  it('shows the platform reserve only when the node reports one', () => {
+    render(
+      <NodeDrawer
+        open
+        node={PEER_NODE}
+        peer={{ ...PEER, vramGB: 55, memory: { ...memory, totalGB: 64, platformReserveGB: 6.4, usableGB: 55 } }}
+        onClose={() => {}}
+      />
+    )
+
+    expect(screen.getByText('Platform reserve')).toBeInTheDocument()
+    expect(screen.getByText('6.4 GB')).toBeInTheDocument()
+  })
+
+  it('renders no memory section for peers without a breakdown', () => {
+    render(<NodeDrawer open node={PEER_NODE} peer={PEER} onClose={() => {}} />)
+
+    expect(screen.queryByText('Configured reserve')).not.toBeInTheDocument()
   })
 })

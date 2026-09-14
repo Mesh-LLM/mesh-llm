@@ -1,7 +1,13 @@
 import { DASHBOARD_HARNESS } from '@/features/app-tabs/data'
 import type { StatusPayload, PeerInfo, ServingModelEntry } from '@/lib/api/types'
 import { isPublicMesh } from '@/lib/api/mesh-visibility'
-import { isClientPeer, meshAdvertisedVramGB, meshCapacityInputFromStatus, nodeAdvertisedVramGB } from '@/lib/vram'
+import {
+  isClientPeer,
+  memoryBreakdownGB,
+  meshAdvertisedVramGB,
+  meshCapacityInputFromStatus,
+  nodeAdvertisedVramGB
+} from '@/lib/vram'
 import type {
   DashboardHarnessData,
   DashboardConnectData,
@@ -150,6 +156,7 @@ function adaptPeer(peer: PeerInfo, fallbackIndex: number): Peer {
     shortId: id.slice(0, 8),
     version: peer.version,
     vramGB: peerVramGb(peer),
+    memory: memoryBreakdownGB(peer.memory) ?? undefined,
     role: resolvePeerRole(peer),
     nodeState,
     toksPerSec: peer.tok_per_sec,
@@ -191,6 +198,7 @@ function adaptSelfPeer(payload: StatusPayload): Peer {
     nodeState: effectiveState,
     version: payload.version,
     vramGB: selfVramGb(payload),
+    memory: memoryBreakdownGB(payload.my_memory) ?? undefined,
     toksPerSec: payload.tok_per_sec,
     firstJoinedMeshTs: payload.first_joined_mesh_ts
   }

@@ -61,6 +61,10 @@ fn build_built_in_config_schema() -> ConfigSchema {
             "runtime.startup_failure_policy",
             string_enum(["best_effort", "fail_fast"]),
         ),
+        startup_runtime_setting(
+            "runtime.lifecycle_log_parser",
+            string_enum(["auto", "enabled", "disabled"]),
+        ),
         runtime_setting("runtime.drain_timeout_secs", ConfigValueSchema::Integer),
         runtime_setting("runtime.drain_timeout_max_secs", ConfigValueSchema::Integer),
         activity_runtime_setting("runtime.activity.enabled", ConfigValueSchema::Boolean),
@@ -107,7 +111,7 @@ fn build_built_in_config_schema() -> ConfigSchema {
         ),
         native_runtime_setting(
             "runtime.native_runtime.selection",
-            ConfigValueSchema::String,
+            one_of([string_enum(["recommended"]), ConfigValueSchema::String]),
         ),
         runtime_setting(
             "runtime.model_target_demand_upgrade_min_requests",
@@ -628,10 +632,6 @@ fn skippy_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         ),
         basic_setting(
             &format!("{prefix}.lifecycle_startup_timeout_ms"),
-            ConfigValueSchema::Integer,
-        ),
-        basic_setting(
-            &format!("{prefix}.lifecycle_readiness_interval_ms"),
             ConfigValueSchema::Integer,
         ),
         basic_setting(

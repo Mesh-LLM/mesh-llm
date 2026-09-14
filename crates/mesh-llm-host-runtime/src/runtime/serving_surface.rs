@@ -1033,6 +1033,9 @@ pub(super) async fn setup_run_auto_console_state(
             ctx.options.max_clients,
         )
         .await;
+    if ctx.options.client {
+        console_state.set_client(true).await;
+    }
     Ok(Some(console_state))
 }
 
@@ -1226,6 +1229,7 @@ pub(super) async fn spawn_run_auto_additional_model_tasks(ctx: RunAutoAdditional
                 &ctx.config.gpu,
             ),
             local_source_required: extra_model.local_source_required,
+            allow_uncertified_split: ctx.options.allow_uncertified_split,
             split_topology_lock: ctx.options.split_topology_lock.clone(),
             resource_planning_profile: runtime_resource_planning_profile(ctx.options),
             openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),

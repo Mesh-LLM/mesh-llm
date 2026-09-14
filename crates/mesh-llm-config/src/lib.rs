@@ -1,5 +1,6 @@
 mod authoring;
 mod diagnostic;
+mod env_overrides;
 mod hardware_validation;
 mod model;
 mod model_validation;
@@ -19,6 +20,15 @@ pub use authoring::{
     ConfigEditor, ConfigSchemaBuilder, ConfigSettingSchemaBuilder, LocalServingNodeConfig,
     ModelConfigEditor, ModelDefaultsEditor, PluginConfigEditor, built_in_config_schema,
 };
+pub use env_overrides::{
+    CONFIG_OVERRIDE_ENV_NAMES, ConfigValueSource, EventSystemTrialMode,
+    LifecycleLogParserSelection, MESH_LLM_BENCHMARK_TUNE_TRIAL_ENV, MESH_LLM_CONFIG_ENV,
+    MESH_LLM_EVENT_SYSTEM_TRIAL_MODE_ENV, MESH_LLM_LIFECYCLE_LOG_PARSER_ENV, apply_env_overrides,
+    benchmark_tune_trial_enabled, event_system_off,
+    event_system_progress_diagnostic_bypass_enabled, event_system_trial_mode,
+    resolve_benchmark_tune_trial_gate, resolve_event_system_trial_mode,
+    resolve_lifecycle_log_parser_override, with_env_override_for_test,
+};
 pub use model::*;
 pub use plugin_validation::control_behavior::{
     PluginConditionOperator, PluginConditionValue, PluginConditionalDisable, PluginConflictRule,
@@ -31,7 +41,10 @@ pub use plugin_validation::{
     PluginSettingConstraint, PluginSettingSchema, PluginValueKind, PluginValueSchema,
     SUPPORTED_PLUGIN_CONFIG_SCHEMA_VERSION,
 };
-pub use store::{ConfigStore, config_path, config_to_toml, load_config, parse_config_toml};
+pub use store::{
+    ConfigStore, config_path, config_to_toml, load_config, parse_config_toml,
+    parse_config_toml_structural,
+};
 pub use validate::{
     ConfigDiagnostic, ConfigDiagnosticCode, ConfigDiagnosticSchemaSource, ConfigDiagnosticSeverity,
     ConfigDiagnosticSource, alias_diagnostic, built_in_support_diagnostic,
@@ -48,13 +61,83 @@ pub use wiring_validation::wiring_manifest_diagnostics;
 #[cfg(test)]
 mod tests {
     use super::{
-        ConfigStore, GpuAssignment, LocalServingNodeConfig, MeshConfig, SpeculativeConfig,
-        built_in_config_schema, canonicalize_built_in_config_identifier, parse_config_toml,
-        validate_config,
+        ConfigStore, ConfigValueSource, GpuAssignment, LifecycleLogParserMode,
+        LocalServingNodeConfig, MeshConfig, SpeculativeConfig, built_in_config_schema,
+        canonicalize_built_in_config_identifier, parse_config_toml,
+        resolve_lifecycle_log_parser_override, validate_config,
     };
     use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn lifecycle_log_parser_defaults_to_auto() {
+        let config = parse_config_toml("").expect("empty config should parse");
+
+        assert_eq!(
+            config.runtime.lifecycle_log_parser,
+            LifecycleLogParserMode::Auto
+        );
+        assert_eq!(
+            config.runtime.lifecycle_log_parser_source,
+            ConfigValueSource::Default
+        );
+    }
+
+    #[test]
+    fn lifecycle_log_parser_tracks_explicit_toml_source() {
+        let config = parse_config_toml("[runtime]\nlifecycle_log_parser = \"disabled\"\n")
+            .expect("closed enum should parse");
+
+        assert_eq!(
+            config.runtime.lifecycle_log_parser,
+            LifecycleLogParserMode::Disabled
+        );
+        assert_eq!(
+            config.runtime.lifecycle_log_parser_source,
+            ConfigValueSource::Config
+        );
+    }
+
+    #[test]
+    fn lifecycle_log_parser_env_override_has_highest_precedence() {
+        let selection = resolve_lifecycle_log_parser_override(
+            LifecycleLogParserMode::Disabled,
+            ConfigValueSource::Config,
+            Some(std::ffi::OsStr::new("enabled")),
+        )
+        .expect("valid environment override should parse");
+
+        assert_eq!(selection.mode, LifecycleLogParserMode::Enabled);
+        assert_eq!(selection.source, ConfigValueSource::Env);
+    }
+
+    #[test]
+    fn lifecycle_log_parser_without_env_preserves_default_source() {
+        let selection = resolve_lifecycle_log_parser_override(
+            LifecycleLogParserMode::Auto,
+            ConfigValueSource::Default,
+            None,
+        )
+        .expect("absent environment override should preserve selection");
+
+        assert_eq!(selection.mode, LifecycleLogParserMode::Auto);
+        assert_eq!(selection.source, ConfigValueSource::Default);
+    }
+
+    #[test]
+    fn lifecycle_log_parser_rejects_invalid_environment_override_without_value_echo() {
+        let error = resolve_lifecycle_log_parser_override(
+            LifecycleLogParserMode::Auto,
+            ConfigValueSource::Default,
+            Some(std::ffi::OsStr::new("secret-invalid-value")),
+        )
+        .expect_err("invalid environment override must fail closed");
+
+        let message = error.to_string();
+        assert!(message.contains("MESH_LLM_LIFECYCLE_LOG_PARSER"));
+        assert!(!message.contains("secret-invalid-value"));
+    }
 
     #[test]
     fn config_store_loads_missing_file_as_default() {
@@ -176,20 +259,86 @@ mesh_version = "0.68.0"
         )
         .expect("mesh-version-only native runtime selector should parse");
 
-        let err = parse_config_toml(
+        let config = parse_config_toml(
             r#"
 [runtime.native_runtime]
 selection = "cuda12"
 "#,
         )
-        .expect_err("partial native runtime selector should fail validation");
+        .expect("selection-only native runtime selector should parse");
+
+        assert_eq!(config.runtime.native_runtime.mesh_version, None);
+        assert_eq!(
+            config.runtime.native_runtime.selection.as_deref(),
+            Some("cuda12")
+        );
+    }
+
+    #[test]
+    fn native_runtime_override_rejects_abi_without_mesh_version() {
+        let err = parse_config_toml(
+            r#"
+[runtime.native_runtime]
+skippy_abi = "0.1.25"
+"#,
+        )
+        .expect_err("ABI-only native runtime selector should fail validation");
 
         assert!(
             err.to_string().contains(
-                "runtime.native_runtime override must set mesh_version when skippy_abi or selection is set"
+                "runtime.native_runtime override must set mesh_version when skippy_abi is set"
             ),
             "unexpected validation error: {err}"
         );
+    }
+
+    #[test]
+    fn native_runtime_override_rejects_unknown_backend_selection() {
+        let err = parse_config_toml(
+            r#"
+[runtime.native_runtime]
+selection = "vulcan"
+"#,
+        )
+        .expect_err("unknown native runtime backend should fail validation");
+
+        assert!(
+            err.to_string().contains(
+                "runtime.native_runtime.selection must be one of recommended, cpu, metal, cuda or cudaNN, rocm, vulkan, exact:<id>, or meshllm-<id>"
+            ),
+            "unexpected validation error: {err}"
+        );
+    }
+
+    #[test]
+    fn native_runtime_override_accepts_cuda_major_and_exact_id_selections() {
+        for selection in [
+            "cuda12",
+            "exact:meshllm-native-runtime-linux-x86_64-cuda12",
+            "meshllm-native-runtime-linux-x86_64-vulkan",
+        ] {
+            parse_config_toml(&format!(
+                "[runtime.native_runtime]\nselection = \"{selection}\"\n"
+            ))
+            .unwrap_or_else(|error| panic!("selection {selection} should parse: {error}"));
+        }
+    }
+
+    #[test]
+    fn native_runtime_override_rejects_empty_exact_id_selections() {
+        for selection in ["exact:", "exact:   "] {
+            let error = parse_config_toml(&format!(
+                "[runtime.native_runtime]\nselection = \"{selection}\"\n"
+            ))
+            .expect_err("empty exact runtime selection should fail validation");
+
+            assert!(
+                error.to_string().contains(
+                    "runtime.native_runtime.selection must be one of recommended, cpu, metal, cuda or cudaNN, rocm, vulkan, exact:<id>, or meshllm-<id>"
+                ),
+                "unexpected validation error for {selection:?}: {error}"
+            );
+        }
     }
 
     #[test]
@@ -789,6 +938,7 @@ gpu_id = "pci:0000:65:00.0"
         let ignored = [
             "extra",
             "gpu_id_from_legacy_shim",
+            "lifecycle_log_parser_source",
             "models",
             "plugins",
             "settings",

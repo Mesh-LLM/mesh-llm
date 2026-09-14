@@ -32,7 +32,7 @@ Each packaged runtime directory contains `manifest.json`:
 {
   "runtime": {
     "id": "meshllm-native-runtime-linux-x86_64-cuda13-sm120",
-    "mesh_version": "0.76.0",
+    "mesh_version": "0.76.1",
     "skippy_abi": "0.1.25",
     "platform": {
       "os": "linux",
@@ -48,7 +48,12 @@ Each packaged runtime directory contains `manifest.json`:
       }
     },
     "rank": 0,
-    "libraries": ["lib/libllama.so"]
+    "libraries": [
+      "lib/libcudart.so.13",
+      "lib/libcublasLt.so.13",
+      "lib/libcublas.so.13",
+      "lib/libllama.so"
+    ]
   }
 }
 ```
@@ -78,7 +83,11 @@ Important fields:
 - `platform`: OS/arch/optional Rust target triple.
 - `backend`: structured backend requirements.
 - `rank`: optional rank adjustment. Higher compatible ranks win.
-- `libraries`: runtime-relative load-order library paths.
+- `libraries`: runtime-relative load-order library paths. Linux CUDA manifests
+  list the redistributable toolkit closure before `libllama.so`; the NVIDIA
+  driver library (`libcuda.so.1`) remains host-owned. Redistributed NVIDIA
+  objects remain byte-for-byte unchanged and the artifact includes the CUDA
+  distribution license under `licenses/`.
 - `url` and `sha256`: populated in release manifests for downloads.
 
 ## Release Manifest
@@ -87,18 +96,18 @@ Release jobs publish `native-runtimes.json`:
 
 ```json
 {
-  "mesh_version": "0.76.0",
+  "mesh_version": "0.76.1",
   "skippy_abi": "0.1.25",
   "artifacts": [
     {
       "id": "meshllm-native-runtime-linux-x86_64-cpu",
-      "mesh_version": "0.76.0",
+      "mesh_version": "0.76.1",
       "skippy_abi": "0.1.25",
       "platform": { "os": "linux", "arch": "x86_64" },
       "backend": { "kind": "cpu" },
       "rank": 0,
       "libraries": ["lib/libllama.so"],
-      "url": "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.76.0/meshllm-native-runtime-linux-x86_64-cpu.tar.gz",
+      "url": "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.76.1/meshllm-native-runtime-linux-x86_64-cpu.tar.gz",
       "sha256": "2f1c..."
     }
   ]
@@ -150,14 +159,16 @@ explicit environment overrides for CI/release testing, including
 - `driver_max_major` — the newest CUDA the installed driver supports, from
   `nvidia-smi`. This is an upper bound only.
 
-Linux native runtimes link `libcudart`/`libcublas` without bundling them, so
-they can only load when a matching toolkit major is installed. Windows runtimes
-ship their own copies and are self contained, so they are accepted on any driver
-new enough to run them.
+Linux CUDA native runtimes bundle the redistributable `libcudart`, `libcublas`,
+`libcublasLt`, and their toolkit dependency closure. The NVIDIA driver library
+(`libcuda.so.1`) remains host-owned. Windows runtimes likewise ship their
+redistributable toolkit DLLs, so both platforms can load on a driver-only host
+when the driver is new enough to run the selected toolkit major.
 
-Conflating the two selects a runtime the host cannot load. A CUDA 13 driver with
-a CUDA 12 toolkit must still choose the cuda12 runtime, otherwise startup fails
-with `libcudart.so.13: cannot open shared object file`.
+The resolver prefers a matching installed toolkit when one is present, but a
+complete self-contained artifact can use the driver's maximum supported major.
+A CUDA 13 driver with a CUDA 12 toolkit therefore chooses cuda12; a driver-only
+host can choose cuda13 when the packaged artifact contains the CUDA 13 closure.
 
 ## Resolution
 
@@ -176,7 +187,7 @@ use std::path::PathBuf;
 #     manifest: NativeRuntimeReleaseManifest,
 # ) -> anyhow::Result<()> {
 let cache = NativeRuntimeCache::new("/tmp/mesh-llm/native-runtimes");
-let resolution = NativeRuntimeResolver::new("0.76.0", profile, manifest, cache)
+let resolution = NativeRuntimeResolver::new("0.76.1", profile, manifest, cache)
     .with_skippy_abi_version("0.1.25")
     .with_bundle_dirs(vec![PathBuf::from("./meshllm-native-runtime-linux-x86_64-cpu")])
     .resolve(&RuntimeSelection::Recommended)?;
@@ -257,12 +268,14 @@ scripts/package-native-runtime.sh \
 scripts/verify-native-runtime-package.sh dist/native-runtimes/*.tar.gz
 ```
 
-Linux runtime packages must be relocatable from the installed cache. Packaged
+Linux runtime packages must be relocatable from the installed cache. MeshLLM's
 ELF shared libraries use `$ORIGIN` in their runtime search path so sibling
-libraries under `lib/` resolve without requiring users, CI, or SDK smoke tests to
-set `LD_LIBRARY_PATH`. The package verifier rejects absolute build or CI
-`RPATH`/`RUNPATH` entries and checks packaged Linux dependencies with
-`LD_LIBRARY_PATH` removed from the environment.
+libraries under `lib/` resolve without requiring users, CI, or SDK smoke tests
+to set `LD_LIBRARY_PATH`. Redistributed NVIDIA libraries are loaded first from
+their manifest paths and remain byte-for-byte unchanged. The package verifier
+rejects absolute build or CI `RPATH`/`RUNPATH` entries and proves that the
+declared dependency-first load plan closes every packaged CUDA dependency while
+`LD_LIBRARY_PATH` is absent.
 
 CUDA lanes use `MESH_LLM_CUDA_TOOLKIT_MAJOR` to emit IDs such as `cuda12` or
 `cuda13`. `--backend cuda-blackwell` defaults to `cuda13-sm120`.
@@ -271,7 +284,7 @@ Generate the release manifest:
 
 ```bash
 scripts/generate-native-runtime-release-manifest.sh \
-  --tag v0.76.0 \
+  --tag v0.76.1 \
   --out dist/native-runtimes/native-runtimes.json \
   dist/native-runtimes/*.tar.gz
 ```

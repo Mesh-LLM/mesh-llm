@@ -68,7 +68,6 @@ tuning_profile = "saver"
 
 [defaults.skippy]
 lifecycle_startup_timeout_ms = 120000
-lifecycle_readiness_interval_ms = 125
 lifecycle_health_interval_ms = 5000
 "#,
     )
