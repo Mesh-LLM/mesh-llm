@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import re
+import subprocess
+import tempfile
 import unittest
 
 
@@ -64,8 +67,8 @@ class BuildAcceleratorDefaultsTests(unittest.TestCase):
     def test_linker_drivers_encode_platform_policy(self) -> None:
         unix = (ROOT / "scripts/cargo-linker").read_text(encoding="utf-8")
         windows = (ROOT / "scripts/cargo-linker.cmd").read_text(encoding="utf-8")
-        self.assertIn("command -v mold", unix)
-        self.assertIn("probe_linker_cached mold", unix)
+        self.assertIn('command -v "$mold_linker"', unix)
+        self.assertIn('probe_linker_cached "$mold_linker"', unix)
         self.assertIn("report_lld_fallback", unix)
         self.assertIn("xcrun --show-sdk-build-version", unix)
         self.assertIn("rust-lld.exe", windows)
@@ -73,6 +76,50 @@ class BuildAcceleratorDefaultsTests(unittest.TestCase):
         self.assertIn('MESH_LLD_FLAVOR=-flavor link', windows)
         self.assertIn("aarch64-linux-gnu-gcc", unix)
         self.assertIn("x86_64-linux-gnu-gcc", unix)
+
+    def test_linux_driver_falls_back_and_removes_rustc_linker_override(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binaries = root / "bin"
+            binaries.mkdir()
+            log = root / "cc.log"
+
+            stubs = {
+                "uname": "#!/bin/sh\ncase \"$1\" in -s) echo Linux ;; -m) echo x86_64 ;; *) echo Linux ;; esac\n",
+                "cc": "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$MESH_TEST_CC_LOG\"\nexit 0\n",
+                "ld.lld": "#!/bin/sh\nexit 0\n",
+            }
+            for name, body in stubs.items():
+                path = binaries / name
+                path.write_text(body, encoding="utf-8")
+                path.chmod(0o755)
+
+            env = dict(os.environ)
+            env.update(
+                PATH=f"{binaries}{os.pathsep}{env['PATH']}",
+                MESH_LLM_MOLD="missing-mold-for-test",
+                MESH_LLM_LINKER_PROBE_CACHE_DIR=str(root / "probes"),
+                MESH_TEST_CC_LOG=str(log),
+            )
+            result = subprocess.run(
+                [
+                    str(ROOT / "scripts" / "cargo-linker-linux-x86_64"),
+                    "-m64",
+                    "-fuse-ld=rustc-injected",
+                    "input.o",
+                ],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("mold is unavailable", result.stderr)
+            final_invocation = log.read_text(encoding="utf-8").splitlines()[-1]
+            self.assertIn("input.o", final_invocation)
+            self.assertIn("-fuse-ld=lld", final_invocation)
+            self.assertNotIn("rustc-injected", final_invocation)
 
     def test_developer_bootstrap_pins_sccache_and_installs_linkers(self) -> None:
         unix = (ROOT / "scripts/bootstrap-build-tools").read_text(encoding="utf-8")

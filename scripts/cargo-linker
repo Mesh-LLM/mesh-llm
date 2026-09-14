@@ -7,19 +7,31 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=scripts/lib/lld.sh
 source "$SCRIPT_DIR/lib/lld.sh"
 
-link_args=("$@")
+link_args=()
 probe_args=()
-for ((index = 0; index < ${#link_args[@]}; index++)); do
-    argument="${link_args[$index]}"
+raw_link_args=("$@")
+for ((index = 0; index < ${#raw_link_args[@]}; index++)); do
+    argument="${raw_link_args[$index]}"
     case "$argument" in
+        -fuse-ld=*)
+            # The repository driver owns linker selection. Recent rustc
+            # versions may still inject their default lld preference.
+            continue
+            ;;
         -arch|-target|-isysroot)
-            if ((index + 1 < ${#link_args[@]})); then
-                probe_args+=("$argument" "${link_args[$((index + 1))]}")
+            link_args+=("$argument")
+            if ((index + 1 < ${#raw_link_args[@]})); then
+                probe_args+=("$argument" "${raw_link_args[$((index + 1))]}")
+                link_args+=("${raw_link_args[$((index + 1))]}")
                 index=$((index + 1))
             fi
             ;;
         --target=*|-m32|-m64)
             probe_args+=("$argument")
+            link_args+=("$argument")
+            ;;
+        *)
+            link_args+=("$argument")
             ;;
     esac
 done
@@ -146,19 +158,18 @@ probe_linker_cached() {
 selected_linker=""
 case "$(uname -s)" in
     Linux)
-        if ! command -v mold >/dev/null 2>&1; then
-            echo "Error: mold is required for Linux Rust links. Install mold and retry." >&2
-            exit 1
-        fi
-        if probe_linker_cached mold; then
-            selected_linker=mold
+        mold_linker="${MESH_LLM_MOLD:-mold}"
+        if command -v "$mold_linker" >/dev/null 2>&1 && probe_linker_cached "$mold_linker"; then
+            selected_linker="$mold_linker"
         else
             cat >&2 <<MSG
-Note: mold is installed but failed the active target/toolchain link probe.
+Note: mold is unavailable or failed the active target/toolchain link probe.
 Falling back to lld or the platform linker for this build.
 
 ${LLD_PROBE_OUTPUT:-}
 MSG
+        fi
+        if [[ -z "$selected_linker" ]]; then
             lld="$(find_lld)"
             if [[ -n "$lld" ]] && probe_linker_cached "$lld"; then
                 selected_linker="$lld"
@@ -188,6 +199,6 @@ if [[ "${1:-}" == --mesh-probe ]]; then
 fi
 
 if [[ -n "$selected_linker" ]]; then
-    exec "$compiler" "-fuse-ld=$selected_linker" "${link_args[@]}"
+    exec "$compiler" "${link_args[@]}" "-fuse-ld=$selected_linker"
 fi
 exec "$compiler" "${link_args[@]}"

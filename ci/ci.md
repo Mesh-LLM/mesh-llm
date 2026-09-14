@@ -572,7 +572,8 @@ from being duplicated into every composed product artifact.
 
 The checked-in Cargo configuration is the repository-wide Rust accelerator
 owner: `sccache` is mandatory, Linux final links prefer the probed mold driver
-and fall back to a compatible lld or the platform linker when that probe fails,
+and fall back to a compatible lld or the platform linker when mold is absent or
+its probe fails,
 macOS uses a probed ld64.lld with Apple ld fallback for SDK incompatibility,
 and Windows resolves rust-lld/lld-link. Workflows must not clear
 `RUSTC_WRAPPER`, synthesize a replacement Cargo linker config, or inject a
