@@ -176,3 +176,16 @@ fn json_detail_fallback_and_private_paths_are_preserved() {
     assert_eq!(actual, serde_json::json!({"path": "/tmp/log"}));
     assert_eq!(sanitize_json_paths_with_home(&text, ""), text);
 }
+
+#[test]
+fn home_in_url_query_values_is_redacted_before_query_separators() {
+    for home in ["/home/alice", r"C:\Users\alice"] {
+        for separator in ["&", "&amp;"] {
+            let text = format!("https://example.com/?path={home}{separator}next=1");
+            assert_eq!(
+                sanitize_paths_with_home(&text, home),
+                format!("https://example.com/?path=~{separator}next=1")
+            );
+        }
+    }
+}
