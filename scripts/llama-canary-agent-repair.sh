@@ -33,7 +33,8 @@ cd "$ROOT"
 
 OLD_SHA="$(tr -d '[:space:]' < third_party/llama.cpp/upstream.txt)"
 PIN_FILE="$ROOT/third_party/llama.cpp/upstream.txt"
-AGENT_MODEL="${CANARY_AGENT_MODEL:-zai-coding-plan/glm-5.3-flash}"
+AGENT_PROVIDER="${CANARY_AGENT_PROVIDER:-custom_z_ai_coding_plan}"
+AGENT_MODEL="${CANARY_AGENT_MODEL:-glm-5.3-flash}"
 AGENT_TIMEOUT_SECONDS="${CANARY_AGENT_TIMEOUT_SECONDS:-27000}"
 VERIFICATION_TIMEOUT_SECONDS="${CANARY_VERIFICATION_TIMEOUT_SECONDS:-14400}"
 RUN_ID="${GITHUB_RUN_ID:-manual-$(date +%s)}"
@@ -62,7 +63,8 @@ CERTIFIED_SHA=""
 VERIFICATION_TREE=""
 VERIFICATION_DEADLINE_AT=0
 REPAIR_DEADLINE_AT=0
-AGENT_SESSION_ID=""
+AGENT_SESSION_NAME="llama-canary-repair-${RUN_KEY}"
+AGENT_SESSION_STARTED=false
 
 if [[ "$HARNESS_MODE" != "repair" && "$HARNESS_MODE" != "verify" ]]; then
   echo "CANARY_HARNESS_MODE must be repair or verify" >&2
@@ -89,17 +91,22 @@ if [[ -z "$(git config user.name)" || -z "$(git config user.email)" ]]; then
   echo "git user.name and user.email must be configured before canary repair" >&2
   exit 1
 fi
-if [[ "$HARNESS_MODE" == "repair" ]] && ! command -v opencode >/dev/null 2>&1; then
-  echo "opencode CLI not found on runner; install opencode-ai on the family-certify image" >&2
+if [[ "$HARNESS_MODE" == "repair" ]] && ! command -v goose >/dev/null 2>&1; then
+  echo "Goose CLI not found on runner; install it at /Users/lab/.local/bin/goose on the family-certify image" >&2
   exit 1
 fi
-if [[ "$HARNESS_MODE" == "repair" \
-    && -z "${OPENCODE_API_KEY:-}" && -z "${NEMOTRON_API_KEY:-}" ]]; then
-  if [[ ! -s "${HOME}/.local/share/opencode/auth.json" ]] \
-      && ! opencode auth list 2>/dev/null | grep -Eq '[1-9][0-9]* credentials'; then
-    echo "no agent credentials: set OPENCODE_API_KEY/NEMOTRON_API_KEY or run 'opencode auth login' on the runner" >&2
+if [[ "$HARNESS_MODE" == "repair" ]]; then
+  goose_check_status=0
+  goose_check="$(
+    GOOSE_PROVIDER="$AGENT_PROVIDER" GOOSE_MODEL="$AGENT_MODEL" \
+      goose info --check 2>&1
+  )" || goose_check_status=$?
+  if (( goose_check_status != 0 )); then
+    printf '%s\n' "$goose_check" >&2
+    echo "Goose provider check failed for ${AGENT_PROVIDER}/${AGENT_MODEL}; repair the family-certify runner configuration" >&2
     exit 1
   fi
+  printf '%s\n' "$goose_check"
 fi
 
 mkdir -p "$STATE_DIR" "$(dirname "$PLAN_PATH")"
@@ -169,7 +176,7 @@ Do not weaken, skip, or narrow a gate. Do not edit the workflow, this wrapper, i
 
 agent_session_step() {
   local prompt="$1" started heartbeat_pid status seconds
-  local -a opencode_args
+  local -a goose_args
   if ! seconds="$(remaining_repair_seconds)"; then
     echo "agent developer task cannot continue: repair budget exhausted" >&2
     return 124
@@ -189,38 +196,35 @@ agent_session_step() {
   heartbeat_pid=$!
   set +m
   set +e
-  opencode_args=(run --auto --format json --model "$AGENT_MODEL" --dir "$ROOT")
-  if [[ -n "$AGENT_SESSION_ID" ]]; then
-    opencode_args+=(--session "$AGENT_SESSION_ID")
+  goose_args=(
+    run
+    --provider "$AGENT_PROVIDER"
+    --model "$AGENT_MODEL"
+    --with-builtin developer
+    --no-profile
+    --max-turns 1000
+    --output-format stream-json
+    --name "$AGENT_SESSION_NAME"
+  )
+  if [[ "$AGENT_SESSION_STARTED" == "true" ]]; then
+    goose_args+=(--resume)
   fi
+  goose_args+=(--text "$prompt")
   run_for "agent developer task" "$seconds" env \
     -u GH_TOKEN -u GITHUB_TOKEN -u CANARY_REPAIR_TOKEN \
-    opencode "${opencode_args[@]}" "$prompt" \
+    GOOSE_MODE=auto GOOSE_DISABLE_SESSION_NAMING=true \
+    goose "${goose_args[@]}" \
     > >(tee -a "$AGENT_LOG") 2>&1
   status=$?
   set -e
   kill -- "-$heartbeat_pid" 2>/dev/null || kill "$heartbeat_pid" 2>/dev/null || true
   wait "$heartbeat_pid" 2>/dev/null || true
-  if (( status == 0 )) && [[ -z "$AGENT_SESSION_ID" ]]; then
-    AGENT_SESSION_ID="$(python3 - "$AGENT_LOG" <<'PY'
-import json
-import sys
-
-for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
-    try:
-        event = json.loads(line)
-    except json.JSONDecodeError:
-        continue
-    session = event.get("sessionID")
-    if isinstance(session, str) and session:
-        print(session)
-        break
-PY
-)"
-    if [[ -z "$AGENT_SESSION_ID" ]]; then
-      echo "agent developer task did not emit an OpenCode session ID" >&2
-      return 1
-    fi
+  if (( status != 0 )); then
+    printf 'agent developer task exited with status %s\n' "$status" \
+      | tee -a "$AGENT_LOG" >&2
+  fi
+  if (( status == 0 )); then
+    AGENT_SESSION_STARTED=true
   fi
   return "$status"
 }

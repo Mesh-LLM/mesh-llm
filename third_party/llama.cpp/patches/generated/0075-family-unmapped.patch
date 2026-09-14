@@ -1385,10 +1385,10 @@ index ee41787ba3e59d86dd7e660d63b1fc60e12a50fb..b8ec8ed772ef65631aee64252e2f0efa
      // prune to the requested output rows once, after all HC streams are done
      if (inp_out_ids) {
 diff --git a/src/models/inkling.cpp b/src/models/inkling.cpp
-index e7a574e5fc1c71f954096e35a06395c61cee0947..a1f3678621b707ffa018bc37ce04baf1a48eb0b5 100644
+index 6b956188b132bb8dc404b155735ecabe2d312ecb..ac5cb713a38e230c01f9f702da51bdc25fb3608d 100644
 --- a/src/models/inkling.cpp
 +++ b/src/models/inkling.cpp
-@@ -622,20 +622,35 @@ llama_model_inkling::graph::graph(const llama_model & model, const llm_graph_par
+@@ -630,20 +630,35 @@ llama_model_inkling::graph::graph(const llama_model & model, const llm_graph_par
          return;
      }
  

@@ -1,4 +1,4 @@
-From ecbdfd2b11f24391633e4bc5a85bd2306897bdeb Mon Sep 17 00:00:00 2001
+From 8745e928fbc0a5781219a58770ad8eafc09e5864 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 14 Sep 2026 08:55:41 +1000
 Subject: [PATCH] fix(skippy): harden runtime state invariants
@@ -9,13 +9,13 @@ Subject: [PATCH] fix(skippy): harden runtime state invariants
  src/llama-kv-cache.cpp                        | 20 ++++--
  src/skippy/activation.cpp                     | 66 +++++++++++++++----
  src/skippy/events.cpp                         | 19 +++++-
- src/skippy/execution-batch.cpp                | 51 ++++++++++++--
- src/skippy/model_package.cpp                  | 23 +++++++
+ src/skippy/execution-batch.cpp                | 53 +++++++++++++--
+ src/skippy/model_package.cpp                  | 36 ++++++++++
  src/skippy/session.cpp                        | 18 +++--
  src/skippy/state.cpp                          | 10 ++-
  .../tests/renamed_multishard_planning.cpp     | 10 +++
  src/skippy/tests/runtime_events.cpp           | 36 ++++++++++
- 11 files changed, 226 insertions(+), 33 deletions(-)
+ 11 files changed, 241 insertions(+), 33 deletions(-)
 
 diff --git a/include/skippy/events.h b/include/skippy/events.h
 index a99d7307a..2e0aa446f 100644
@@ -270,7 +270,7 @@ index 517e94e54..a7bbe6028 100644
      quiesce(s);
  }
 diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
-index b66e25499..3e9d441a2 100644
+index b66e25499..9f768bb28 100644
 --- a/src/skippy/execution-batch.cpp
 +++ b/src/skippy/execution-batch.cpp
 @@ -7,6 +7,7 @@
@@ -316,7 +316,7 @@ index b66e25499..3e9d441a2 100644
                  session,
                  request.input_desc,
                  request.input_payload,
-@@ -331,7 +337,18 @@ enum skippy_status skippy_iteration_batch_sampled(
+@@ -331,7 +337,19 @@ enum skippy_status skippy_iteration_batch_sampled(
          const skippy_iteration_request & request = requests[request_index];
          const size_t offset = request_offsets[request_index];
          const size_t hidden_bytes = skippy_activation_hidden_bytes(request.session, request.token_count);
@@ -330,12 +330,13 @@ index b66e25499..3e9d441a2 100644
 +                token_start,
 +                out_error);
 +        if (status != SKIPPY_STATUS_OK) {
++            skippy_mtp_clear_session_state(request.session);
 +            return status;
 +        }
          skippy_record_tokens(request.session, request.token_ids, request.token_count);
  
          if (request.sample_last && request_logits) {
-@@ -352,7 +369,7 @@ enum skippy_status skippy_iteration_batch_sampled(
+@@ -352,7 +370,7 @@ enum skippy_status skippy_iteration_batch_sampled(
              uint8_t * output = static_cast<uint8_t *>(output_payloads[request_index]);
              std::memcpy(
                      output,
@@ -344,7 +345,7 @@ index b66e25499..3e9d441a2 100644
                      hidden_bytes);
              size_t actual_output_bytes = hidden_bytes;
              if ((batch_output_flags & SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0) {
-@@ -422,7 +439,16 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+@@ -422,7 +440,16 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
      const int32_t n_tokens = static_cast<int32_t>(request_count);
      const int32_t n_embd = llama_model_n_embd(first->stage_model->model);
      const int32_t n_embd_inp = llama_model_n_embd_inp(first->stage_model->model);
@@ -361,7 +362,7 @@ index b66e25499..3e9d441a2 100644
      const bool activation_input = skippy_is_filtered(first) && first->stage_model->config.layer_start > 0;
      const int32_t hyperconnection = skippy_activation_hyperconnection_count(first);
      const bool hyperconnection_activation_input = activation_input && hyperconnection > 0;
-@@ -447,9 +473,13 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+@@ -447,9 +474,13 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
              skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "all sessions must belong to the same stage model");
              return SKIPPY_STATUS_INVALID_ARGUMENT;
          }
@@ -376,7 +377,7 @@ index b66e25499..3e9d441a2 100644
          if (status != SKIPPY_STATUS_OK) {
              return status;
          }
-@@ -674,7 +704,18 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+@@ -674,7 +705,19 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
  
      for (int32_t i = 0; i < n_tokens; ++i) {
          skippy_session * session = sessions[i];
@@ -390,12 +391,13 @@ index b66e25499..3e9d441a2 100644
 +                token_start,
 +                out_error);
 +        if (status != SKIPPY_STATUS_OK) {
++            skippy_mtp_clear_session_state(session);
 +            return status;
 +        }
          if (!activation_input) {
              skippy_record_tokens(session, &token_ids[i], 1);
          }
-@@ -688,7 +729,7 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+@@ -688,7 +731,7 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
          if (embeddings != nullptr && output_payloads != nullptr && output_payloads[i] != nullptr) {
              std::memcpy(
                      output_payloads[i],
@@ -405,7 +407,7 @@ index b66e25499..3e9d441a2 100644
              size_t actual_output_bytes = hidden_bytes_per_request;
              const size_t request_top_k_bytes = glm_dsa_top_k_bytes_per_request[static_cast<size_t>(i)];
 diff --git a/src/skippy/model_package.cpp b/src/skippy/model_package.cpp
-index 6df18689e..5c14f9599 100644
+index 6df18689e..890401c3e 100644
 --- a/src/skippy/model_package.cpp
 +++ b/src/skippy/model_package.cpp
 @@ -61,6 +61,15 @@ struct skippy_model_info {
@@ -424,21 +426,41 @@ index 6df18689e..5c14f9599 100644
  
  static int32_t skippy_layer_from_name(const char * name) {
      if (name == nullptr) {
-@@ -683,6 +692,20 @@ enum skippy_status skippy_write_gguf_metadata_from_parts(
+@@ -666,6 +675,7 @@ enum skippy_status skippy_write_gguf_metadata_from_parts(
+ 
+     std::vector<skippy_model_info *> sources;
+     sources.reserve(input_count);
++    bool split_metadata_expected = false;
+     for (size_t i = 0; i < input_count; ++i) {
+         if (input_paths[i] == nullptr) {
+             for (skippy_model_info * source : sources) {
+@@ -683,6 +693,32 @@ enum skippy_status skippy_write_gguf_metadata_from_parts(
              return SKIPPY_STATUS_MODEL_ERROR;
          }
          sources.push_back(source);
 +        if (input_count > 1) {
++            const bool has_split_no = gguf_find_key(source->ctx, "split.no") >= 0;
++            const bool has_split_count = gguf_find_key(source->ctx, "split.count") >= 0;
 +            uint16_t split_no = 0;
 +            uint16_t split_count = 0;
-+            if (!skippy_gguf_read_u16(source->ctx, "split.no", split_no) ||
-+                    !skippy_gguf_read_u16(source->ctx, "split.count", split_count) ||
-+                    split_no != i || split_count != input_count) {
++            bool invalid_split_metadata = has_split_no != has_split_count;
++            if (i == 0) {
++                split_metadata_expected = has_split_no && has_split_count;
++            } else if (has_split_no != split_metadata_expected) {
++                invalid_split_metadata = true;
++            }
++            if (!invalid_split_metadata && split_metadata_expected &&
++                    (!skippy_gguf_read_u16(source->ctx, "split.no", split_no) ||
++                     !skippy_gguf_read_u16(source->ctx, "split.count", split_count) ||
++                     split_no != i || split_count != input_count)) {
++                invalid_split_metadata = true;
++            }
++            if (invalid_split_metadata) {
 +                for (skippy_model_info * opened : sources) {
 +                    skippy_model_info_delete(opened);
 +                }
 +                skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
-+                        "input paths must use exact split.no order and split.count");
++                        "input paths must consistently omit split metadata or use exact split.no order and split.count");
 +                return SKIPPY_STATUS_INVALID_ARGUMENT;
 +            }
 +        }
