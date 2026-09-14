@@ -1,5 +1,4 @@
 use serde::Deserialize;
-use std::io::Write;
 use std::sync::LazyLock;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -106,24 +105,23 @@ pub fn huggingface_repo_url(url: &str) -> Option<String> {
     Some(format!("https://huggingface.co/{repo}"))
 }
 
-pub fn list_models() {
-    let _ = writeln!(std::io::stderr(), "Available models:");
-    let _ = writeln!(std::io::stderr());
+/// Renders the built-in catalog as human-readable lines. This crate is a
+/// library, so it hands the listing back to the caller instead of choosing a
+/// stream: only the console output facility knows whether a JSON sink or the
+/// interactive dashboard currently owns the terminal.
+pub fn render_model_listing() -> String {
+    let mut listing = String::from("Available models:\n\n");
     for m in MODEL_CATALOG.iter() {
-        let draft_info = if let Some(d) = m.draft.as_deref() {
-            format!(" (draft: {})", d)
-        } else {
-            String::new()
+        let draft_info = match m.draft.as_deref() {
+            Some(draft) => format!(" (draft: {draft})"),
+            None => String::new(),
         };
-        let _ = writeln!(
-            std::io::stderr(),
-            "  {:40} {:>6}  {}{}",
-            m.name,
-            m.size,
-            m.description,
-            draft_info
-        );
+        listing.push_str(&format!(
+            "  {:40} {:>6}  {}{}\n",
+            m.name, m.size, m.description, draft_info
+        ));
     }
+    listing
 }
 
 #[cfg(test)]
