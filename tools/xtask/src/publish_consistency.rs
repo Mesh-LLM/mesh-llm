@@ -467,11 +467,22 @@ fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
           needs: [metadata, publish]
           if: ${{ needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.canary != 'true' }}
           runs-on: ubuntu-24.04
+          container:
+            image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
+          env:
+            SCCACHE_GHA_ENABLED: \"false\"
+            SCCACHE_MULTILEVEL_CHAIN: disk
           steps:
             - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
               with:
                 ref: ${{ needs.metadata.outputs.tag }}
                 persist-credentials: false
+            - name: Trust checkout directory
+              run: git config --global --add safe.directory \"$GITHUB_WORKSPACE\"
+            - uses: ./.github/actions/configure-sccache-gha
+              with:
+                allow_depot_remote_cache: \"false\"
+                allow_native_github_cache: \"false\"
             - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
             - name: Prepare dispatched release version
               if: github.event_name == 'workflow_dispatch'

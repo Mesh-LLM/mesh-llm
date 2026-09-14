@@ -570,12 +570,12 @@ jobs:
         include:
           - cuda_version: '12.9.2'
             cuda_major: '12'
-            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd
-            toolchain_epoch: mesh-llm-cuda-runner-sha256-c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd
+            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:6389ee2ae23c116b60fd1de61c1e67308ddabf50c274e7f1963b1a2d89b383e4
+            toolchain_epoch: mesh-llm-cuda-runner-sha256-6389ee2ae23c116b60fd1de61c1e67308ddabf50c274e7f1963b1a2d89b383e4
           - cuda_version: '13.1.2'
             cuda_major: '13'
-            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:6b87598605f5d8deeafecfb1a55027e0ca9e47f4fc6f230d030487c450c31aa6
-            toolchain_epoch: mesh-llm-cuda-runner-sha256-6b87598605f5d8deeafecfb1a55027e0ca9e47f4fc6f230d030487c450c31aa6
+            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:822ac658dc6e671286bddab9c92f70ce4ec0ae6a4f3b48da1578945971e63ac7
+            toolchain_epoch: mesh-llm-cuda-runner-sha256-822ac658dc6e671286bddab9c92f70ce4ec0ae6a4f3b48da1578945971e63ac7
     container:
       image: ${{ matrix.runner_image }}
       credentials:
@@ -634,14 +634,14 @@ jobs:
         include:
           - cuda_version: '12.9.2'
             cuda_major: '12'
-            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd
-            toolchain_epoch: mesh-llm-cuda-runner-sha256-c5b85ef527230f77cf9933ef40bcb44316f9bbcb8fd2ce0651b58acda5143dfd
+            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:6389ee2ae23c116b60fd1de61c1e67308ddabf50c274e7f1963b1a2d89b383e4
+            toolchain_epoch: mesh-llm-cuda-runner-sha256-6389ee2ae23c116b60fd1de61c1e67308ddabf50c274e7f1963b1a2d89b383e4
             cuda_architectures: '61;75;80;86;87;89;90'
             cuda_architectures_cache: '61_75_80_86_87_89_90'
           - cuda_version: '13.1.2'
             cuda_major: '13'
-            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:6b87598605f5d8deeafecfb1a55027e0ca9e47f4fc6f230d030487c450c31aa6
-            toolchain_epoch: mesh-llm-cuda-runner-sha256-6b87598605f5d8deeafecfb1a55027e0ca9e47f4fc6f230d030487c450c31aa6
+            runner_image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:822ac658dc6e671286bddab9c92f70ce4ec0ae6a4f3b48da1578945971e63ac7
+            toolchain_epoch: mesh-llm-cuda-runner-sha256-822ac658dc6e671286bddab9c92f70ce4ec0ae6a4f3b48da1578945971e63ac7
             cuda_architectures: '75;80;86;87;89;90;100;103;120;121'
             cuda_architectures_cache: '75_80_86_87_89_90_100_103_120_121'
     container:
@@ -705,7 +705,7 @@ jobs:
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ${{ needs.metadata.outputs.runner_16 }}
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:0e13e5d2d2c121df265ff6c69be81e468989e09f81d6b7ff049b110cc0bb0d2b
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:e82f0e51557d53e0bd4d4feaf79ea42681d3801fb4d0aeeeef3fa54e4e3e8184
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -727,7 +727,7 @@ jobs:
         id: native_toolchain
         uses: ./.github/actions/resolve-native-toolchain-epoch
         with:
-          pinned_epoch: mesh-llm-cuda-runner-sha256-0e13e5d2d2c121df265ff6c69be81e468989e09f81d6b7ff049b110cc0bb0d2b
+          pinned_epoch: mesh-llm-cuda-runner-sha256-e82f0e51557d53e0bd4d4feaf79ea42681d3801fb4d0aeeeef3fa54e4e3e8184
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.metadata.outputs.allow_depot_remote_cache }}
@@ -764,7 +764,7 @@ jobs:
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ${{ needs.metadata.outputs.runner_16 }}
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:ce55fed5c680cd3184b5d4770d9a77c43a702687690906e5753efd2cea27ed80
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:08439af08af125c82c25c32cbcd385e07a783ba8d9b7c19157e93089e349156e
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -785,7 +785,7 @@ jobs:
         id: native_toolchain
         uses: ./.github/actions/resolve-native-toolchain-epoch
         with:
-          pinned_epoch: mesh-llm-cuda-runner-sha256-ce55fed5c680cd3184b5d4770d9a77c43a702687690906e5753efd2cea27ed80
+          pinned_epoch: mesh-llm-cuda-runner-sha256-08439af08af125c82c25c32cbcd385e07a783ba8d9b7c19157e93089e349156e
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.metadata.outputs.allow_depot_remote_cache }}
@@ -1005,7 +1005,7 @@ jobs:
           - cuda_version: '12.9.2'
           - cuda_version: '13.1.2'
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -1087,7 +1087,7 @@ jobs:
           - cuda_version: '13.1.2'
             cuda_major: '13'
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -1162,7 +1162,7 @@ jobs:
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ${{ needs.metadata.outputs.runner_4 }}
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -1233,7 +1233,7 @@ jobs:
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: ${{ needs.metadata.outputs.runner_4 }}
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -1952,11 +1952,22 @@ jobs:
     needs: [metadata, publish]
     if: ${{ needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.canary != 'true' }}
     runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
+    env:
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_MULTILEVEL_CHAIN: disk
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ needs.metadata.outputs.tag }}
           persist-credentials: false
+      - name: Trust checkout directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: "false"
+          allow_native_github_cache: "false"
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'
@@ -1973,11 +1984,22 @@ jobs:
     needs: [metadata, publish, publish_crates_preflight]
     if: ${{ needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.canary != 'true' }}
     runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
+    env:
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_MULTILEVEL_CHAIN: disk
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ needs.metadata.outputs.tag }}
           persist-credentials: false
+      - name: Trust checkout directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: "false"
+          allow_native_github_cache: "false"
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
       - name: Prepare dispatched release version
         if: github.event_name == 'workflow_dispatch'

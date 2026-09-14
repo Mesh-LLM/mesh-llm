@@ -93,7 +93,9 @@ class SccacheEvidenceTests(unittest.TestCase):
         expected = {
             ("ci-linux-host-slice.yml", "linux_host"): policy,
             ("ci-linux-runtime-slice.yml", "linux_runtime"): policy,
+            ("ci-quality-slice.yml", "quality_contracts"): policy,
             ("ci-quality-slice.yml", "rust_clippy"): policy,
+            ("ci-quality-slice.yml", "cli_docs_sync"): policy,
             ("ci-rust-tests-slice.yml", "rust_tests"): policy,
             ("ci-rust-tests-slice.yml", "safetensors_runtime_smoke"): policy,
             ("ci-windows-host-slice.yml", "windows_host"): policy,
@@ -112,6 +114,8 @@ class SccacheEvidenceTests(unittest.TestCase):
             ("release.yml", "build_native_runtime_linux_x86_64_cuda"): "true",
             ("release.yml", "build_native_runtime_linux_x86_64_rocm"): effective_release_runner_16,
             ("release.yml", "build_native_runtime_linux_x86_64_vulkan"): effective_release_runner_16,
+            ("release.yml", "publish_crates_preflight"): "false",
+            ("release.yml", "publish_crates"): "false",
             ("static-abi-artifact.yml", "static_abi_artifact"): policy,
             ("swift-sdk-artifact.yml", "swift_sdk_target"): policy,
             ("swift-sdk-artifact.yml", "swift_sdk_artifact"): policy,
