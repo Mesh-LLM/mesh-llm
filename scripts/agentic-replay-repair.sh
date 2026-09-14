@@ -131,7 +131,12 @@ fi
 
 # 3. Emit a publication artifact for the trusted hosted job. The persistent
 # runner cannot receive publication credentials or publish the branch or PR.
-mkdir -p "$PUBLICATION_DIR"
+if [[ ! -d "$OUTPUT_DIR" || -L "$OUTPUT_DIR" ]]; then
+  echo "repair output directory must be a non-symlink directory: $OUTPUT_DIR" >&2
+  exit 1
+fi
+rm -rf -- "$PUBLICATION_DIR"
+install -d -m 700 -- "$PUBLICATION_DIR"
 PATCH_FILE="$PUBLICATION_DIR/repair.patch"
 BODY_FILE="$PUBLICATION_DIR/pr-body.md"
 STATUS_FILE="$PUBLICATION_DIR/status.json"

@@ -40,6 +40,9 @@ class AgenticReplayRepairContractTests(unittest.TestCase):
         self.assertIn('RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT:-1}"', self.repair)
         self.assertIn('repair-${RUN_ID}-${RUN_ATTEMPT}', self.repair)
         self.assertIn('s|{{SOURCE_SHA}}|${BASE_SHA}|g', self.repair)
+        self.assertIn('if [[ ! -d "$OUTPUT_DIR" || -L "$OUTPUT_DIR" ]]; then', self.repair)
+        self.assertIn('rm -rf -- "$PUBLICATION_DIR"', self.repair)
+        self.assertIn('install -d -m 700 -- "$PUBLICATION_DIR"', self.repair)
         self.assertNotIn('"repair_commit_sha"', self.repair)
 
     def test_hosted_publication_job_owns_secret_and_publication(self) -> None:
@@ -78,6 +81,15 @@ class AgenticReplayRepairContractTests(unittest.TestCase):
         self.assertNotIn('"repair_commit_sha"', publication)
         self.assertIn('repair-${RUN_ID}-${RUN_ATTEMPT}', publication)
         self.assertIn('run ${RUN_ID}-${RUN_ATTEMPT}', publication)
+
+    def test_hosted_validator_binds_publication_to_workflow_run(self) -> None:
+        self.assertIn(
+            '"${{ github.sha }}" "${{ github.run_id }}" "${{ github.run_attempt }}"',
+            self.workflow,
+        )
+        self.assertIn('expected_run_id = sys.argv[6]', self.workflow)
+        self.assertIn('expected_attempt = sys.argv[7]', self.workflow)
+        self.assertIn('or status["run_id"] != expected_run_id', self.workflow)
 
     def test_repair_rerun_uses_all_matrix_replay_parameters(self) -> None:
         for argument, variable in (

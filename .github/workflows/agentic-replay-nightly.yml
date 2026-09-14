@@ -380,7 +380,7 @@ jobs:
           STATUS_FILE="$PUBLICATION_DIR/status.json"
           PATCH_FILE="$PUBLICATION_DIR/repair.patch"
           BODY_FILE="$PUBLICATION_DIR/pr-body.md"
-          VALIDATED=$(python3 - "$PUBLICATION_DIR" "$STATUS_FILE" "$PATCH_FILE" "$BODY_FILE" "${{ github.sha }}" "${{ github.run_attempt }}" <<'PY'
+          VALIDATED=$(python3 - "$PUBLICATION_DIR" "$STATUS_FILE" "$PATCH_FILE" "$BODY_FILE" "${{ github.sha }}" "${{ github.run_id }}" "${{ github.run_attempt }}" <<'PY'
           import hashlib
           import json
           import pathlib
@@ -393,7 +393,8 @@ jobs:
           patch_path = pathlib.Path(sys.argv[3])
           body_path = pathlib.Path(sys.argv[4])
           expected_base = sys.argv[5]
-          expected_attempt = sys.argv[6]
+          expected_run_id = sys.argv[6]
+          expected_attempt = sys.argv[7]
           expected_files = {"pr-body.md", "repair.patch", "status.json"}
           if publication_dir.is_symlink() or not publication_dir.is_dir() or {
               path.name for path in publication_dir.iterdir()
@@ -423,7 +424,11 @@ jobs:
               raise SystemExit("repair publication status schema is invalid")
           if status["resolution"] not in {"fix-verified", "needs-attention"}:
               raise SystemExit("repair publication resolution is invalid")
-          if not isinstance(status["run_id"], str) or not re.fullmatch(r"[0-9]+", status["run_id"]):
+          if (
+              not isinstance(status["run_id"], str)
+              or not re.fullmatch(r"[0-9]+", status["run_id"])
+              or status["run_id"] != expected_run_id
+          ):
               raise SystemExit("repair publication run_id is invalid")
           if (
               isinstance(status["run_attempt"], bool)
