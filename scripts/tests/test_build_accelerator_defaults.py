@@ -70,6 +70,7 @@ class BuildAcceleratorDefaultsTests(unittest.TestCase):
         self.assertIn("xcrun --show-sdk-build-version", unix)
         self.assertIn("rust-lld.exe", windows)
         self.assertIn("lld-link.exe", windows)
+        self.assertIn('MESH_LLD_FLAVOR=-flavor link', windows)
         self.assertIn("aarch64-linux-gnu-gcc", unix)
         self.assertIn("x86_64-linux-gnu-gcc", unix)
 

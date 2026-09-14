@@ -17,11 +17,14 @@ if not defined MESH_LLD (
   exit /b 1
 )
 
+set "MESH_LLD_FLAVOR="
+for %%F in ("!MESH_LLD!") do if /I "%%~nxF"=="rust-lld.exe" set "MESH_LLD_FLAVOR=-flavor link"
+
 if "%~1"=="--mesh-probe" (
   echo %MESH_LLD%
   exit /b 0
 )
 
 setlocal DisableDelayedExpansion
-"%MESH_LLD%" %*
+"%MESH_LLD%" %MESH_LLD_FLAVOR% %*
 exit /b %ERRORLEVEL%
