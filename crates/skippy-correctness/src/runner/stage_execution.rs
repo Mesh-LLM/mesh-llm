@@ -30,6 +30,7 @@ use crate::{
     },
 };
 
+#[derive(Clone, Copy)]
 pub(in crate::runner) struct FullModelResult {
     pub(in crate::runner) token_id: i32,
     pub(in crate::runner) predicted_token: i32,

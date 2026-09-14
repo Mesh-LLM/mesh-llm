@@ -13,7 +13,7 @@ mod state_handoff;
 pub use kv_page_growth::kv_page_growth;
 pub use remote_handoff::remote_handoff;
 pub use single_step::single_step;
-pub use split_chain::{chain, split_scan};
+pub use split_chain::{chain, core_parity, split_scan};
 pub use split_prefix_hit::split_prefix_hit;
 pub use stage_fa_parity::stage_fa_parity;
 pub use state_handoff::state_handoff;

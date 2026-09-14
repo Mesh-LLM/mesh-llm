@@ -41,8 +41,9 @@ fn write_marker(path: Option<&std::path::Path>, line: &str) {
 #[test]
 fn runtime_events_native_gate() {
     // Resolve the evidence destination before loading native libraries. The
-    // loader and model-open path are process-global, so the marker destination
-    // must remain stable for the full gate.
+    // loader and model-open path are process-global; retaining this value also
+    // makes the marker destination stable if native initialization mutates the
+    // process environment.
     let evidence_path = env::var_os(EVIDENCE_FILE_ENV).map(PathBuf::from);
 
     if env::var(GATE_ENV).ok().as_deref() != Some("1") {
@@ -73,7 +74,6 @@ fn runtime_events_native_gate() {
 #[cfg(feature = "dynamic-native-runtime")]
 fn run_real_native_gate(evidence_path: Option<PathBuf>) {
     let evidence_path = evidence_path.unwrap_or_else(|| {
-        println!("BLOCKED: {EVIDENCE_FILE_ENV} unset");
         panic!("{GATE_ENV}=1 requires {EVIDENCE_FILE_ENV} to name the evidence file")
     });
     let bundle_dir = env::var(BUNDLE_DIR_ENV).unwrap_or_else(|_| {

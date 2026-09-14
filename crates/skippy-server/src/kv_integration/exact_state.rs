@@ -845,6 +845,7 @@ fn is_native_kv_unavailable(error: &anyhow::Error) -> bool {
         let message = cause.to_string();
         message.contains("runtime memory type is not supported for native KV pages")
             || message.contains("runtime has no attention KV cache")
+            || message.contains("no KV cache layers selected by layer range")
     })
 }
 
@@ -893,7 +894,10 @@ mod tests {
 
     use skippy_cache::{L3Location, UnifiedRadixCache};
 
-    use super::{preflight_l3_kv_location, resident_prefix_is_complete, try_touch_exact_state};
+    use super::{
+        is_native_kv_unavailable, preflight_l3_kv_location, resident_prefix_is_complete,
+        try_touch_exact_state,
+    };
 
     type TestRadix = UnifiedRadixCache<
         crate::kv_integration::RadixResidentEntry,
@@ -905,6 +909,12 @@ mod tests {
         assert!(resident_prefix_is_complete(4_000, 4_000));
         assert!(resident_prefix_is_complete(4_001, 4_000));
         assert!(!resident_prefix_is_complete(200, 4_000));
+    }
+
+    #[test]
+    fn empty_kv_layer_range_is_an_unavailable_optional_kv_component() {
+        let error = anyhow::anyhow!("RuntimeError: no KV cache layers selected by layer range");
+        assert!(is_native_kv_unavailable(&error));
     }
 
     #[test]

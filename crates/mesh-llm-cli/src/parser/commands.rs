@@ -671,6 +671,10 @@ pub struct Cli {
     #[arg(long, hide = true)]
     pub split: bool,
 
+    /// Experimentally allow split serving for an artifact not certified by the llama canary.
+    #[arg(long, requires = "split", hide = true)]
+    pub allow_uncertified_split: bool,
+
     /// Pin split-serving node order and layer ranges from a JSON topology lock.
     #[arg(long, value_name = "PATH", requires = "split", hide = true)]
     pub split_topology_lock: Option<PathBuf>,

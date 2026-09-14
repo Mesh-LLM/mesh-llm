@@ -13,8 +13,8 @@ use crate::{
     glm_dsa_trace::glm_dsa_stage0_trace,
     native_mtp_openai::native_mtp_openai_ab,
     runner::{
-        chain, kv_page_growth, remote_handoff, single_step, split_prefix_hit, split_scan,
-        stage_fa_parity, state_handoff,
+        chain, core_parity, kv_page_growth, remote_handoff, single_step, split_prefix_hit,
+        split_scan, stage_fa_parity, state_handoff,
     },
 };
 
@@ -39,6 +39,7 @@ fn prepare_model_download_directories() {
 fn main() -> Result<()> {
     prepare_model_download_directories();
     match Cli::parse().command {
+        CommandKind::CoreParity(args) => core_parity(args),
         CommandKind::SingleStep(args) => single_step(args),
         CommandKind::Chain(args) => chain(args),
         CommandKind::SplitScan(args) => split_scan(args),

@@ -3949,31 +3949,11 @@
   ],
   "crates/skippy-prompt/src/prompt_cli/binary_repl.rs": [
     {
-      "line": 64,
+      "line": 84,
       "macro_name": "eprintln!"
     },
     {
-      "line": 131,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 150,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 157,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 164,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 171,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 173,
+      "line": 156,
       "macro_name": "eprintln!"
     },
     {
@@ -3981,47 +3961,67 @@
       "macro_name": "eprintln!"
     },
     {
-      "line": 176,
-      "macro_name": "eprintln!"
-    },
-    {
       "line": 182,
       "macro_name": "eprintln!"
     },
     {
-      "line": 185,
+      "line": 189,
       "macro_name": "eprintln!"
     },
     {
-      "line": 188,
+      "line": 196,
       "macro_name": "eprintln!"
     },
     {
-      "line": 193,
+      "line": 198,
       "macro_name": "eprintln!"
     },
     {
-      "line": 197,
+      "line": 200,
       "macro_name": "eprintln!"
     },
     {
-      "line": 257,
+      "line": 201,
       "macro_name": "eprintln!"
     },
     {
-      "line": 262,
+      "line": 207,
       "macro_name": "eprintln!"
     },
     {
-      "line": 278,
+      "line": 210,
       "macro_name": "eprintln!"
     },
     {
-      "line": 281,
+      "line": 213,
       "macro_name": "eprintln!"
     },
     {
-      "line": 342,
+      "line": 218,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 222,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 282,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 287,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 303,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 306,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 367,
       "macro_name": "eprintln!"
     }
   ],
@@ -4425,15 +4425,11 @@
   ],
   "crates/skippy-runtime/tests/runtime_events_native.rs": [
     {
-      "line": 49,
+      "line": 50,
       "macro_name": "println!"
     },
     {
-      "line": 59,
-      "macro_name": "println!"
-    },
-    {
-      "line": 76,
+      "line": 60,
       "macro_name": "println!"
     },
     {
