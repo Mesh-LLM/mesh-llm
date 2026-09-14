@@ -67,6 +67,11 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Configure canary Git identity
+        run: |
+          git config --local user.name "mesh-llama-canary-bot"
+          git config --local user.email "llama-canary-bot@meshllm.invalid"
+
       - name: Verify runner toolchain
         run: |
           set -euo pipefail
@@ -447,6 +452,11 @@ jobs:
           ref: main
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Configure canary Git identity
+        run: |
+          git config --local user.name "mesh-llama-canary-bot"
+          git config --local user.email "llama-canary-bot@meshllm.invalid"
 
       - name: Configure verifier LLVM
         run: |

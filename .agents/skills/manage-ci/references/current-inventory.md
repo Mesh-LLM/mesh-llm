@@ -99,6 +99,9 @@ family-certification commands. The agent and trusted candidate checks share a
 450-minute deadline and the agent has no GitHub credentials. Ending one coding
 response is not success: the wrapper runs the candidate gates and returns their
 logs to the same OpenCode session until they pass or the deadline expires. The
+repair and independent-verifier checkouts configure the same repository-local
+`mesh-llama-canary-bot` identity before invoking the wrapper, so candidate
+commit creation never depends on persistent-runner global Git configuration.
 agent may leave only uncommitted candidate changes and cannot alter `.github/`,
 `.agents/`, `scripts/`, `ci/ci.md`, or its runbook. Existing certification and
 parity rows remain immutable. The only manifest edits admitted by the trusted

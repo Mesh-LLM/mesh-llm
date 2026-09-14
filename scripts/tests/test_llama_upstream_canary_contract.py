@@ -349,6 +349,34 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertNotIn("name: llama-family-battery-", upload)
         self.assertIn("retention-days: 14", upload)
 
+    def test_changed_pin_jobs_configure_local_git_identity_before_harness(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        jobs = (
+            workflow[
+                workflow.index("  latest-upstream:") : workflow.index(
+                    "  verify-changed-canary:"
+                )
+            ],
+            workflow[
+                workflow.index("  verify-changed-canary:") : workflow.index(
+                    "  publish-certified-canary:"
+                )
+            ],
+        )
+        for job in jobs:
+            identity = _step_block(job, "Configure canary Git identity")
+            self.assertIn(
+                'git config --local user.name "mesh-llama-canary-bot"', identity
+            )
+            self.assertIn(
+                'git config --local user.email "llama-canary-bot@meshllm.invalid"',
+                identity,
+            )
+            self.assertLess(
+                job.index("Configure canary Git identity"),
+                job.index("scripts/llama-canary-agent-repair.sh"),
+            )
+
     def test_two_scheduled_failures_raise_one_reconciled_issue(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         alert = workflow[workflow.index("  alert-consecutive-failures:") :]
