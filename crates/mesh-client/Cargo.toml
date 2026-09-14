@@ -32,7 +32,6 @@ async-trait = "0.1"
 httparse = "1"
 tokio = { version = "1", features = ["io-util", "sync", "net", "time", "rt-multi-thread"] }
 prost = "0.14"
-bytes = "1"
 anyhow = "1"
 nostr-sdk = { version = "0.45.1", default-features = false }
 rustls = "0.23"
