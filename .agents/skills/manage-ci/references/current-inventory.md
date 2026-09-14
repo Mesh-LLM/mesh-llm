@@ -45,7 +45,9 @@ concurrency group queues each run behind active work on the persistent runner.
 It executes trusted
 default-branch content only on the persistent self-hosted `family-certify`
 runner group (tools come from the runner image; no GitHub Actions model
-caching). Before native compilation,
+caching). The runner preflight prepends `/Users/lab/.local/bin` and executes
+`goose --version`, so a missing, damaged, or non-executable agent binary fails
+before the changed-pin harness starts. Before native compilation,
 `scripts/plan-family-battery.py` validates the versioned JSON family policy,
 the mandatory three-lane contract for every certified profile, and every exact
 artifact revision/file in the immutable local cache. It reads only GGUF
@@ -90,15 +92,20 @@ evidence, and logs are uploaded for 14 days even when the battery fails. Stage
 readiness uses a declared per-model override or a model-size-derived deadline,
 each complete certification has
 a portable process-group wall-clock limit, and the workflow's outer battery
-ceiling is 12 hours. For a changed pin, one non-interactive `opencode` session
-(`CANARY_AGENT_MODEL`, default `zai-coding-plan/glm-5.3-flash`, overridable
-through `LLAMA_CANARY_AGENT_MODEL`) receives the complete developer task:
+ceiling is 12 hours. For a changed pin, one non-interactive named Goose session
+(`CANARY_AGENT_PROVIDER`/`CANARY_AGENT_MODEL`, default
+`custom_z_ai_coding_plan`/`glm-5.3-flash`, overridable through
+`LLAMA_CANARY_GOOSE_PROVIDER`/`LLAMA_CANARY_GOOSE_MODEL`) receives the
+complete developer task:
 repair or regenerate the patch queue, address ABI fallout, and iterate through
 the canonical prepare, manifest-policy, build, smoke, live-matrix, and
 family-certification commands. The agent and trusted candidate checks share a
 450-minute deadline and the agent has no GitHub credentials. Ending one coding
 response is not success: the wrapper runs the candidate gates and returns their
-logs to the same OpenCode session until they pass or the deadline expires. The
+logs to the same Goose session until they pass or the deadline expires. The
+repair and independent-verifier checkouts configure the same repository-local
+`mesh-llama-canary-bot` identity before invoking the wrapper, so candidate
+commit creation never depends on persistent-runner global Git configuration.
 agent may leave only uncommitted candidate changes and cannot alter `.github/`,
 `.agents/`, `scripts/`, `ci/ci.md`, or its runbook. Existing certification and
 parity rows remain immutable. The only manifest edits admitted by the trusted
@@ -119,7 +126,7 @@ rewriter check because `GITHUB_ENV` state does not cross job boundaries. The
 wrapper owns the exact upstream selector, validates the prepared-upstream stamp,
 runs the patched llama.cpp/native-test and Rust build gates, and completes the
 full supported-family certification using new native-build and family-evidence
-directories. Only the passing bundle is uploaded as a one-day certified
+directories. Before each changed-pin candidate gate, the trusted wrapper regenerates the exact-artifact split certification roster for the candidate recipe. Only a complete battery pass is snapshotted; the independent verifier and unchanged-pin canary reject a roster that is stale for the llama pin, Skippy ABI, or ordered patch queue. Only the passing bundle is uploaded as a one-day certified
 artifact. A separate success-gated job on a fresh
 GitHub-hosted runner receives the `CANARY_REPAIR_TOKEN`, validates the bundle,
 pushes the unique
@@ -572,7 +579,10 @@ fail-open policy.
   `scripts/generate-test-model-manifests.py` owns the family battery and
   suite-specific projections; CI contract tests reject stale projections.
 - The Linux CPU runtime-event gate consumes `family-qwen3-dense` from
-  `skippy-ci-smoke.json` at pull-request, main, or manual cadence.
+  `skippy-ci-smoke.json` at pull-request, main, or manual cadence. Its
+  family-certification cadences remain unchanged. The gate resolves its
+  evidence output to an absolute path before Cargo starts, so the crate-local
+  test writer and lane check use the same file.
 - `restore-test-model`: the single implementation of model resolve, cache,
   download, and verify. Resolves generated suite manifests, uses exact
   digest-bearing cache keys, and stream-verifies size and SHA-256 before use.

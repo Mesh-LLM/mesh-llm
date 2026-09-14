@@ -240,6 +240,7 @@ pub(super) struct LocalRuntimeModelStartSpec<'a> {
     pub(super) flash_attention_override: FlashAttentionType,
     pub(super) parallel_override: Option<usize>,
     pub(super) local_source_required: bool,
+    pub(super) allow_uncertified_split: bool,
     pub(super) split_topology_lock: Option<&'a Path>,
     pub(super) planning_profile: RuntimeResourcePlanningProfile,
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,

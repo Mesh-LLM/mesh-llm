@@ -32,7 +32,9 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
         ]
         self.assertIn("while remaining_repair_seconds", repair)
         self.assertLess(repair.index("agent_session_step"), repair.index("run_candidate_gates"))
-        self.assertIn('opencode_args+=(--session "$AGENT_SESSION_ID")', self.wrapper)
+        self.assertIn('AGENT_SESSION_NAME="llama-canary-repair-${RUN_KEY}"', self.wrapper)
+        self.assertIn('goose_args+=(--resume)', self.wrapper)
+        self.assertIn('--name "$AGENT_SESSION_NAME"', self.wrapper)
         self.assertLess(gates.index("run_prepare"), gates.index("validate_agent_manifest_changes"))
         self.assertLess(gates.index("validate_agent_manifest_changes"), gates.index("run_full_build"))
         self.assertLess(gates.index("run_full_build"), gates.index("run_certification"))
@@ -128,10 +130,26 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
             self.wrapper.index("agent_session_step() {") : self.wrapper.index("assert_agent_control_unchanged() {")
         ]
         self.assertIn("-u GH_TOKEN -u GITHUB_TOKEN -u CANARY_REPAIR_TOKEN", agent)
-        self.assertIn('run --auto --format json --model "$AGENT_MODEL"', agent)
+        self.assertIn('--provider "$AGENT_PROVIDER"', agent)
+        self.assertIn('--model "$AGENT_MODEL"', agent)
+        self.assertIn("--with-builtin developer", agent)
+        self.assertIn("--output-format stream-json", agent)
+        self.assertIn("GOOSE_MODE=auto", agent)
+        self.assertNotIn("--no-session", agent)
+        self.assertIn("goose info --check", self.wrapper)
+        self.assertIn('GOOSE_PROVIDER="$AGENT_PROVIDER" GOOSE_MODEL="$AGENT_MODEL"', self.wrapper)
         self.assertNotIn("git push", self.wrapper)
         self.assertNotIn("gh pr", self.wrapper)
         self.assertNotIn("CANARY_REPAIR_TOKEN:?", self.wrapper)
+
+    def test_agent_failure_records_the_exit_status_in_evidence(self) -> None:
+        agent = self.wrapper[
+            self.wrapper.index("agent_session_step() {") : self.wrapper.index(
+                "assert_agent_control_unchanged() {"
+            )
+        ]
+        self.assertIn("agent developer task exited with status %s", agent)
+        self.assertIn('tee -a "$AGENT_LOG"', agent)
 
     def test_agent_cannot_change_harness_or_commit(self) -> None:
         guard = self.wrapper[

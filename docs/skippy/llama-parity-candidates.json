@@ -1435,6 +1435,18 @@
       "llama_model": "talkie",
       "family": "talkie",
       "status": "needs_boundary_registration"
+    },
+    {
+      "llama_model": "hy-v4",
+      "family": "hy-v4",
+      "status": "candidate",
+      "notes": "new upstream llama.cpp source registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
+    },
+    {
+      "llama_model": "spark2-5",
+      "family": "spark2-5",
+      "status": "candidate",
+      "notes": "new upstream llama.cpp source registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
     }
   ]
 }

@@ -67,16 +67,37 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Configure canary Git identity
+        run: |
+          git config --local user.name "mesh-llama-canary-bot"
+          git config --local user.email "llama-canary-bot@meshllm.invalid"
+
       - name: Verify runner toolchain
         run: |
           set -euo pipefail
           missing=0
-          for cmd in cargo just sccache jq python3 uv cmake ninja hf git-lfs lipo brew xcrun; do
+          goose_dir="/Users/lab/.local/bin"
+          export PATH="$goose_dir:$PATH"
+          echo "$goose_dir" >> "$GITHUB_PATH"
+          for cmd in cargo just sccache jq python3 uv cmake ninja hf git-lfs lipo brew xcrun goose; do
             if ! command -v "$cmd" >/dev/null 2>&1; then
               echo "missing on family-certify image: $cmd" >&2
               missing=1
             fi
           done
+          if command -v goose >/dev/null 2>&1; then
+            goose_status=0
+            goose_version="$(goose --version 2>&1)" || goose_status=$?
+            if (( goose_status != 0 )); then
+              echo "goose failed its executable preflight with status $goose_status; repair the family-certify runner installation" >&2
+              missing=1
+            elif [[ -z "$goose_version" ]]; then
+              echo "goose returned no version; repair the family-certify runner installation" >&2
+              missing=1
+            else
+              echo "goose version: $goose_version"
+            fi
+          fi
           expected_hf_cache="/Users/lab/models/huggingface"
           if [[ "${HF_CACHE:-}" != "$expected_hf_cache" ]]; then
             echo "HF_CACHE must be $expected_hf_cache on this runner; got: ${HF_CACHE:-<unset>}" >&2
@@ -163,7 +184,8 @@ jobs:
         timeout-minutes: 480
         continue-on-error: true
         env:
-          CANARY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_AGENT_MODEL || 'zai-coding-plan/glm-5.3-flash' }}
+          CANARY_AGENT_PROVIDER: ${{ vars.LLAMA_CANARY_GOOSE_PROVIDER || 'custom_z_ai_coding_plan' }}
+          CANARY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_GOOSE_MODEL || 'glm-5.3-flash' }}
           # One agent receives the complete developer task. Verification runs
           # later in a separate job after this process context has ended.
           CANARY_AGENT_TIMEOUT_SECONDS: "27000"
@@ -331,6 +353,12 @@ jobs:
           FAMILY_BATTERY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: scripts/skippy-family-battery.sh --skip-build --plan "${{ steps.family_plan.outputs.plan_path }}"
 
+      - name: Verify split certification roster
+        id: split_roster
+        if: steps.battery.outcome == 'success'
+        continue-on-error: true
+        run: python3 scripts/generate-split-certified.py --check
+
       - name: Upload supported-families battery evidence
         if: ${{ steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' && (success() || failure() || cancelled()) }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -359,6 +387,7 @@ jobs:
           steps.prepare.outcome == 'success'
           && steps.sha.outputs.cadence == 'manual-full'
           && steps.battery.outcome == 'success'
+          && steps.split_roster.outcome == 'success'
           && steps.parity_validate.outcome == 'success'
           && steps.live_matrix.outcome == 'success'
           && steps.family_patch.outcome == 'success'
@@ -378,6 +407,7 @@ jobs:
           steps.prepare.outcome == 'success'
           && steps.sha.outputs.cadence == 'nightly'
           && steps.battery.outcome == 'success'
+          && steps.split_roster.outcome == 'success'
           && steps.parity_validate.outcome == 'success'
           && steps.live_matrix.outcome == 'success'
           && steps.family_patch.outcome == 'success'
@@ -396,6 +426,7 @@ jobs:
           steps.sha.outputs.changed != 'true'
           && steps.sha.outputs.certify == 'true'
           && (steps.battery.outcome == 'failure'
+              || steps.split_roster.outcome == 'failure'
               || steps.parity_validate.outcome == 'failure'
               || steps.live_matrix.outcome == 'failure'
               || steps.family_patch.outcome == 'failure')
@@ -438,6 +469,11 @@ jobs:
           ref: main
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Configure canary Git identity
+        run: |
+          git config --local user.name "mesh-llama-canary-bot"
+          git config --local user.email "llama-canary-bot@meshllm.invalid"
 
       - name: Configure verifier LLVM
         run: |

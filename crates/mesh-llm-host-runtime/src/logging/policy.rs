@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use mesh_llm_events::logging::events::LifecycleEvent;
 
 mod artifact_redaction;
+#[cfg(test)]
+mod path_redaction_tests;
 pub use artifact_redaction::redact_artifact_bytes;
 
 /// Redaction mode applied to a string value. The most restrictive applicable rule wins.
@@ -490,42 +492,17 @@ pub fn hash_value(input: &str) -> String {
 }
 
 /// Remove private directory prefixes from a string containing paths.
+/// Unlike `sanitize_path`, conservatively redact every occurrence of the home
+/// string, including bare homes in prose and prefixes shared with siblings.
 pub fn sanitize_paths_in_text(text: &str) -> String {
     if let Some(home) = dirs::home_dir() {
         let home_str = home.to_string_lossy().to_string();
-        replace_home_prefix(text, &home_str)
+        text.replace(&home_str, "~")
             .replace("/private/var/", "/var/")
             .replace("/private/tmp/", "/tmp/")
     } else {
         text.to_string()
     }
-}
-
-/// Replace `home` with `~` only where a path boundary follows it.
-///
-/// A plain string replacement also rewrites siblings that merely share the
-/// prefix: with a home of `C:\Users\alice`, `C:\Users\alice-backup\log.txt`
-/// would become `~-backup\log.txt`.
-fn replace_home_prefix(text: &str, home: &str) -> String {
-    if home.is_empty() {
-        return text.to_string();
-    }
-
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(at) = rest.find(home) {
-        let (before, tail) = rest.split_at(at);
-        let after = &tail[home.len()..];
-        out.push_str(before);
-        if after.is_empty() || after.starts_with(['/', '\\']) {
-            out.push('~');
-        } else {
-            out.push_str(home);
-        }
-        rest = after;
-    }
-    out.push_str(rest);
-    out
 }
 
 // ---------------------------------------------------------------------------
@@ -920,50 +897,11 @@ mod redaction_corpus_tests {
     }
 
     #[test]
-    fn path_sanitization_hides_home_dir() {
-        let home = dirs::home_dir().expect("test runner has a home directory");
-        let test_path = home.join("some/deep/path/file.log");
-        let sanitized = sanitize_path(&test_path);
-        let expected_prefix = format!("~{}", std::path::MAIN_SEPARATOR);
-        assert!(sanitized.starts_with(&expected_prefix));
-        assert!(!sanitized.contains(&home.display().to_string()));
-    }
-
-    #[test]
-    fn sibling_of_the_home_directory_is_left_alone() {
-        let home = dirs::home_dir().expect("test runner has a home directory");
-        let sibling =
-            std::path::PathBuf::from(format!("{}-backup", home.display())).join("log.txt");
-
-        let sanitized = sanitize_path(&sibling);
-        assert_eq!(sanitized, sibling.display().to_string());
-
-        let text = format!("Error in {}", sibling.display());
-        assert_eq!(sanitize_paths_in_text(&text), text);
-    }
-
-    #[test]
-    fn the_home_directory_itself_collapses_to_a_tilde() {
-        let home = dirs::home_dir().expect("test runner has a home directory");
-        assert_eq!(sanitize_path(&home), "~");
-    }
-
-    #[test]
     fn hash_value_produces_fingerprint() {
         let h1 = hash_value("some-token-value");
         let h2 = hash_value("different-token");
         assert_eq!(h1.len(), 16); // 8 bytes hex.
         assert_ne!(h1, h2);
-    }
-
-    #[test]
-    fn sanitize_paths_in_text_replaces_home() {
-        let home = dirs::home_dir().expect("test runner has a home directory");
-        let text = format!("Error in {}", home.join("mesh-llm/logs/app.log").display());
-        let sanitized = sanitize_paths_in_text(&text);
-        let expected = format!("~{}mesh-llm", std::path::MAIN_SEPARATOR);
-        assert!(sanitized.contains(&expected));
-        assert!(!sanitized.contains(&home.display().to_string()));
     }
 
     #[test]

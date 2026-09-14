@@ -32,12 +32,35 @@ date_utc="$(date -u +%Y-%m-%d)"
 # A failure here is a defect in our own tooling, so it fails the job loudly
 # and publishes nothing.
 
-gh release view "$TAG" --repo "$REPO" --json body -q .body > "$WORKDIR/body.md"
-cp "$WORKDIR/body.md" "$WORKDIR/body.backup.md"
+gh release view "$TAG" --repo "$REPO" --json body -q .body > "$WORKDIR/body.github.md"
 
-if ! grep -q '^\* .*\/pull\/[0-9]\+' "$WORKDIR/body.md"; then
+if ! grep -q '^\* .*\/pull\/[0-9]\+' "$WORKDIR/body.github.md"; then
   echo "release-notes: no PR entries in the published body; nothing to regroup"
   exit 0
+fi
+
+entry_prs() {
+  grep -o 'pull/[0-9]\+' "$1" | sort
+}
+
+# The link pass repairs what GitHub's generated list cannot express: a batch of
+# pull requests merged into a staging branch and rebased into the release is
+# credited once, to the roll-up. It only adds entries, which the gate below
+# enforces, and every one of its API calls is best-effort.
+python3 "$ROOT/scripts/release-notes-link.py" \
+  --body "$WORKDIR/body.github.md" \
+  --range "$BASE..$TAG" \
+  --repo "$REPO" \
+  --repo-root "$ROOT" \
+  --out-body "$WORKDIR/body.md" \
+  --out-links "$WORKDIR/links.json"
+
+dropped="$(comm -23 <(entry_prs "$WORKDIR/body.github.md") \
+                    <(entry_prs "$WORKDIR/body.md"))"
+if [[ -n "$dropped" ]]; then
+  echo "release-notes: the link pass dropped a published entry; refusing to publish" >&2
+  printf '%s\n' "$dropped" >&2
+  exit 1
 fi
 
 python3 "$ROOT/scripts/release-notes-classify.py" \
@@ -46,6 +69,7 @@ python3 "$ROOT/scripts/release-notes-classify.py" \
   --version "$version" \
   --date "$date_utc" \
   --repo-root "$ROOT" \
+  --links "$WORKDIR/links.json" \
   --out "$WORKDIR/plan.deterministic.json"
 
 python3 "$ROOT/scripts/release-notes-regroup.py" \
@@ -53,17 +77,13 @@ python3 "$ROOT/scripts/release-notes-regroup.py" \
   --plan "$WORKDIR/plan.deterministic.json" \
   --out "$WORKDIR/notes.deterministic.md"
 
-# Gate: the rendered body must carry exactly the PRs GitHub published. The
-# renderer strips the conventional type prefix from a subject, so the entry
+# Gate: the rendered body must carry exactly the PRs the link pass settled on.
+# The renderer strips the conventional type prefix from a subject, so the entry
 # lines are not byte-identical; the set of referenced pull requests is the
 # invariant, and author credit is copied through untouched.
-entry_prs() {
-  grep -o 'pull/[0-9]\+' "$1" | sort
-}
-
 verify_entries() {
   local candidate="$1"
-  diff <(entry_prs "$WORKDIR/body.backup.md") \
+  diff <(entry_prs "$WORKDIR/body.md") \
        <(entry_prs "$candidate") > "$WORKDIR/entry-diff.txt"
 }
 
@@ -186,9 +206,9 @@ fi
 gh release edit "$TAG" --repo "$REPO" --notes-file "$chosen"
 
 gh release view "$TAG" --repo "$REPO" --json body -q .body > "$WORKDIR/live.md"
-if ! diff <(entry_prs "$WORKDIR/body.backup.md") <(entry_prs "$WORKDIR/live.md"); then
-  echo "release-notes: published body does not carry the original entry set" >&2
-  echo "release-notes: restore with: gh release edit $TAG --repo $REPO --notes-file $WORKDIR/body.backup.md" >&2
+if ! diff <(entry_prs "$WORKDIR/body.md") <(entry_prs "$WORKDIR/live.md"); then
+  echo "release-notes: published body does not carry the expected entry set" >&2
+  echo "release-notes: restore with: gh release edit $TAG --repo $REPO --notes-file $WORKDIR/body.github.md" >&2
   exit 1
 fi
 
