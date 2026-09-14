@@ -1,0 +1,118 @@
+name: Release · Resume crates.io
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing stable release tag to resume
+        required: true
+        type: string
+      expected_source_sha:
+        description: Exact 40-character commit SHA the release tag must resolve to
+        required: true
+        type: string
+
+concurrency:
+  group: release-crates-resume-${{ github.repository }}-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Resume v0.76.2 crates.io package chain
+    if: >-
+      github.repository == 'Mesh-LLM/mesh-llm' &&
+      github.ref == 'refs/heads/hotfix/v0.76.2-autoupdate' &&
+      inputs.release_tag == 'v0.76.2' &&
+      inputs.expected_source_sha == 'a0c1e66b0ac037dd56544b9e2d94969ea43d694f'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out immutable release source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.release_tag }}
+          persist-credentials: false
+
+      - name: Verify exact v0.76.2 release source
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+        run: |
+          set -euo pipefail
+          remote_refs="$(
+            git ls-remote origin \
+              "refs/tags/${RELEASE_TAG}" \
+              "refs/tags/${RELEASE_TAG}^{}"
+          )"
+          remote_sha="$(
+            printf '%s\n' "$remote_refs" | awk -v tag="refs/tags/${RELEASE_TAG}" '
+              $2 == tag { direct = $1 }
+              $2 == tag "^{}" { peeled = $1 }
+              END { print peeled != "" ? peeled : direct }
+            '
+          )"
+          checked_out_sha="$(git rev-parse HEAD)"
+          if [[ "$remote_sha" != "$EXPECTED_SOURCE_SHA" ]]; then
+            echo "release tag does not resolve to expected_source_sha" >&2
+            exit 1
+          fi
+          if [[ "$checked_out_sha" != "$EXPECTED_SOURCE_SHA" ]]; then
+            echo "checked-out release source does not match expected_source_sha" >&2
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
+
+      - name: Check crates.io publish-chain consistency
+        run: cargo run -p xtask -- repo-consistency publish-crates
+
+      - name: Restore verified v0.76.2 runtime libraries
+        id: runtime
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          archive="mesh-llm-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz"
+          runtime_root="$RUNNER_TEMP/mesh-llm-release-runtime"
+          mkdir -p "$runtime_root"
+          curl --fail --location --retry 3 \
+            --output "$runtime_root/$archive" \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${archive}"
+          curl --fail --location --retry 3 \
+            --output "$runtime_root/$archive.sha256" \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${archive}.sha256"
+          (
+            cd "$runtime_root"
+            sha256sum --check "$archive.sha256"
+            tar --extract --gzip --file "$archive"
+          )
+          lib_dir="$(
+            find "$runtime_root" \
+              -type d \
+              -path '*/native-runtimes/*/lib' \
+              -print \
+              -quit
+          )"
+          if [[ -z "$lib_dir" ]]; then
+            echo "release archive does not contain a native runtime library directory" >&2
+            exit 1
+          fi
+          for library in libmtmd.so libllama-common.so libllama.so; do
+            if [[ ! -f "$lib_dir/$library" ]]; then
+              echo "release runtime is missing $library" >&2
+              exit 1
+            fi
+          done
+          printf 'lib_dir=%s\n' "$lib_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Resume v0.76.2 crates.io package chain
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          LLAMA_STAGE_BUILD_DIR: ${{ runner.temp }}/mesh-llm-publish-crates-native-verify
+          LLAMA_STAGE_LIB_DIR: ${{ steps.runtime.outputs.lib_dir }}
+        run: scripts/publish-crates.sh --resume
