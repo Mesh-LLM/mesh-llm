@@ -23,7 +23,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MANIFEST="${SKIPPY_PARITY_MANIFEST:-$ROOT/docs/skippy/llama-parity-candidates.json}"
 EVIDENCE_ROOT="${SKIPPY_CANARY_LIVE_MATRIX_ROOT:-$ROOT/target/family-battery/${FAMILY_BATTERY_RUN_ID:-manual}}"
 WORK_ROOT="${SKIPPY_CANARY_LIVE_MATRIX_WORK_ROOT:-$(mktemp -d "${TMPDIR:-/tmp}/skippy-live-matrix.XXXXXX")}"
-CTX_SIZE="${SKIPPY_CANARY_LIVE_MATRIX_CTX_SIZE:-2048}"
+# Match the two-node prefix-growth smoke budget: its largest prompt must coexist
+# with a retained prefix while the unified KV cache admits the next request.
+CTX_SIZE="${SKIPPY_CANARY_LIVE_MATRIX_CTX_SIZE:-4096}"
 READINESS_TIMEOUT_SECONDS="${SKIPPY_CANARY_LIVE_MATRIX_READINESS_TIMEOUT_SECONDS:-300}"
 STAGE_SERVER_BIN="${STAGE_SERVER_BIN:-}"
 MESH_LLM_BIN="${MESH_LLM_BIN:-}"
@@ -306,7 +308,8 @@ print(r["llama_model"], r["repo"], r["revision"], r["file"], r["size_bytes"], r[
   fi
   # hf CLI prints the final artifact path as either a bare path or a
   # documented key/value line (`path=/...`, also tolerated: `path: /...`).
-  GGUF_PATH="${RAW_HF_PATH#path=}"
+  GGUF_PATH="${RAW_HF_PATH#"${RAW_HF_PATH%%[![:space:]]*}"}"
+  GGUF_PATH="${GGUF_PATH#path=}"
   GGUF_PATH="${GGUF_PATH#path: }"
   if [[ ! -f "$GGUF_PATH" ]]; then
     echo "row $MODEL_NAME: download produced no final file path (see $ROW_DIR/download.log)" | tee -a "$ROW_DIR/row.log"

@@ -99,6 +99,9 @@ family-certification commands. The agent and trusted candidate checks share a
 450-minute deadline and the agent has no GitHub credentials. Ending one coding
 response is not success: the wrapper runs the candidate gates and returns their
 logs to the same OpenCode session until they pass or the deadline expires. The
+repair and independent-verifier checkouts configure the same repository-local
+`mesh-llama-canary-bot` identity before invoking the wrapper, so candidate
+commit creation never depends on persistent-runner global Git configuration.
 agent may leave only uncommitted candidate changes and cannot alter `.github/`,
 `.agents/`, `scripts/`, `ci/ci.md`, or its runbook. Existing certification and
 parity rows remain immutable. The only manifest edits admitted by the trusted
@@ -119,7 +122,7 @@ rewriter check because `GITHUB_ENV` state does not cross job boundaries. The
 wrapper owns the exact upstream selector, validates the prepared-upstream stamp,
 runs the patched llama.cpp/native-test and Rust build gates, and completes the
 full supported-family certification using new native-build and family-evidence
-directories. Only the passing bundle is uploaded as a one-day certified
+directories. Before each changed-pin candidate gate, the trusted wrapper regenerates the exact-artifact split certification roster for the candidate recipe. Only a complete battery pass is snapshotted; the independent verifier and unchanged-pin canary reject a roster that is stale for the llama pin, Skippy ABI, or ordered patch queue. Only the passing bundle is uploaded as a one-day certified
 artifact. A separate success-gated job on a fresh
 GitHub-hosted runner receives the `CANARY_REPAIR_TOKEN`, validates the bundle,
 pushes the unique
@@ -571,10 +574,11 @@ fail-open policy.
   integrity, family capability tags, and allowed suite/cadence membership.
   `scripts/generate-test-model-manifests.py` owns the family battery and
   suite-specific projections; CI contract tests reject stale projections.
-  `family-qwen3-dense` permits PR and main use by the Linux CPU native
-  runtime-event gate. Its family-certification cadences remain unchanged.
-  The gate resolves its evidence output to an absolute path before Cargo
-  starts, so the crate-local test writer and lane check use the same file.
+- The Linux CPU runtime-event gate consumes `family-qwen3-dense` from
+  `skippy-ci-smoke.json` at pull-request, main, or manual cadence. Its
+  family-certification cadences remain unchanged. The gate resolves its
+  evidence output to an absolute path before Cargo starts, so the crate-local
+  test writer and lane check use the same file.
 - `restore-test-model`: the single implementation of model resolve, cache,
   download, and verify. Resolves generated suite manifests, uses exact
   digest-bearing cache keys, and stream-verifies size and SHA-256 before use.

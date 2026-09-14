@@ -1,5 +1,5 @@
 {
-  "full_patch_sha256": "404e84cefbadfd8cc9c67bfae700fa115d826e14bd0bcb8e0456e01659adf312",
+  "full_patch_sha256": "788f7c724d259e52d93841bf1a5f65edc52c4df412ef4c6143daa5e0899aafc1",
   "generator_version": "0.3.0",
   "schema_version": 1,
   "shards": [
@@ -199,7 +199,7 @@
         "gemma3n"
       ],
       "file": "0020-family-gemma3n.patch",
-      "sha256": "99ca9b71a0556048f7169767f3ca9bbe5fe011ee6c516b2dc843b5d75e0fe5de",
+      "sha256": "e5b741ee8540948b9b921085314b232093f698d278d5790bd5f5c4fb3813d470",
       "sources": [
         "src/models/gemma3n.cpp"
       ]
@@ -209,7 +209,7 @@
         "gemma4"
       ],
       "file": "0021-family-gemma4.patch",
-      "sha256": "93cdff1582df87dc15d2a9ab7c8ace579f5155b5b507aca3379700c106f21687",
+      "sha256": "070f39678cefc14f1f19dae517868add1088ba172f63a89bdb97e51ae6bfd85a",
       "sources": [
         "src/models/gemma4.cpp"
       ]
@@ -284,7 +284,7 @@
         "minicpm"
       ],
       "file": "0028-family-granite-dense--granite-moe--minicpm.patch",
-      "sha256": "d4fb4d18b0408e87020f45b5611940606a4c3a640af71dedbf5ef9d1ec1a629d",
+      "sha256": "98cbc87ac8f1e8164ff7890dde31d8844ff4ade95253fe30f16c2f00f091dc94",
       "sources": [
         "src/models/granite.cpp"
       ]
@@ -294,7 +294,7 @@
         "granite-hybrid"
       ],
       "file": "0029-family-granite-hybrid.patch",
-      "sha256": "ab454f776bc365e60a317961d5cf46e05644b9aa4025c21ef9a2564652bd1f13",
+      "sha256": "6372ef120da2e907f181091b7005bde9d99c2f48ea4ead1ab640877a915ff795",
       "sources": [
         "src/models/granite-hybrid.cpp"
       ]
@@ -619,7 +619,7 @@
         "qwen3-vl"
       ],
       "file": "0061-family-qwen3-vl.patch",
-      "sha256": "9a28393015584988b01a023f0577e0fdee326629fe7da4811cc714db38467755",
+      "sha256": "59cdc2cae8bd90f1abf7260cb7551a9f5c7f95635dd1cafccca4c10933655c59",
       "sources": [
         "src/models/qwen3vl.cpp",
         "src/models/qwen3vlmoe.cpp"
@@ -700,7 +700,7 @@
     {
       "families": [],
       "file": "0069-family-unmapped.patch",
-      "sha256": "68c12a1bb719c962bdb669b76737d8e06ce2e9b231932b62c055533558c7597d",
+      "sha256": "ca37ec4c0d7b93996d4c7713ab0e9d6661ce73365cc841a7ef78b58850aa3faa",
       "sources": [
         "src/models/arctic.cpp",
         "src/models/baichuan.cpp",

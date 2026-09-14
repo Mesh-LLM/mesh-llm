@@ -1,0 +1,783 @@
+{
+  "schema_version": 1,
+  "native_recipe": {
+    "llama_upstream_sha": "3057bb66c86c46d5781e50e85462a760ba7d1feb",
+    "skippy_abi": "0.1.54",
+    "patch_queue_sha256": "38de596e11761ec5cf778332462003416bd6af2e5f01ed2415308bd4d52a2888"
+  },
+  "models": [
+    {
+      "family": "afmoe",
+      "repo": "MaziyarPanahi/Trinity-Mini-GGUF",
+      "revision": "3a7d7a64abeabff7302851a2bc98508b36d0b8f7",
+      "files": [
+        "Trinity-Mini.Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "2c43474de9017d68331455cbf3852c1d365f7a5f9d3b050418e024ba3374a19e"
+    },
+    {
+      "family": "apertus",
+      "repo": "bartowski/swiss-ai_Apertus-8B-Instruct-2509-GGUF",
+      "revision": "d2ffbcc459d0a1bccb2097aca8bb825974f7678c",
+      "files": [
+        "swiss-ai_Apertus-8B-Instruct-2509-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "5901007f15aec9aabeea401cbe65559671166fc851bbdf8c26f56c2b61e9cd1d"
+    },
+    {
+      "family": "arcee",
+      "repo": "arcee-ai/AFM-4.5B-GGUF",
+      "revision": "741fded55739927f94be7934a174c2bcfc751969",
+      "files": [
+        "AFM-4.5B-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "f05516b323f581bebae1af2cbf900d83a2569b0a60c54366daf4a9c15ae30d4f"
+    },
+    {
+      "family": "arwkv7",
+      "repo": "mradermacher/ARWKV-7B-Preview-0.1-NoG-32B-i1-GGUF",
+      "revision": "301a9554c8271bca175a78f599b20e49bce383fa",
+      "files": [
+        "ARWKV-7B-Preview-0.1-NoG-32B.i1-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "841c66e3242e2a7e1b64641e1ff92248b2650129b196dc3e27c016f541cb0059"
+    },
+    {
+      "family": "bailingmoe3",
+      "repo": "SC117/Ling-3.0-tiny-abliterated-APEX-GGUF",
+      "revision": "b923d16fcf28261f12be9ece2b520ed442403f70",
+      "files": [
+        "Ling-3.0-tiny-abliterated-bf16.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "8c2ea2ead488a0e00bcc02c41fd144d6226ef70eb626afcd589e3960ce39fc85"
+    },
+    {
+      "family": "bloom",
+      "repo": "afrideva/bloom-560m-GGUF",
+      "revision": "fe8ad7e97957783ea24f6960f73e28e709aa6e96",
+      "files": [
+        "bloom-560m.q4_k_m.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "383bc73de0c2e96704301b27117e7fd209255eda0474198dafdf4dd61ad7bf3e"
+    },
+    {
+      "family": "chameleon",
+      "repo": "mradermacher/AA-chameleon-7b-plus-i1-GGUF",
+      "revision": "5e13750981e775965061feefb701f4b6e1e1f7d9",
+      "files": [
+        "AA-chameleon-7b-plus.i1-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "6af766cf8ac2c729c06c430eabc506e32ce10d237c92b426742b3b4cceabcd37"
+    },
+    {
+      "family": "cohere2",
+      "repo": "bartowski/c4ai-command-r7b-12-2024-GGUF",
+      "revision": "bfc7a934c45cb839d84c8ca01d87f1cfa51aaa3f",
+      "files": [
+        "c4ai-command-r7b-12-2024-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "0653c1915f7e4819a980deea8e9ba86b0a78cbb283712785cbf091c3ffbe3b13"
+    },
+    {
+      "family": "deepseek2",
+      "repo": "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF",
+      "revision": "8f248fa2072348f77a8bc37754e470de1f61866e",
+      "files": [
+        "DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "603bd3f8a0281d16571da7c08bd661ee17ff0d1be6fcbd1b42242da257ef0bb8"
+    },
+    {
+      "family": "deepseek32",
+      "repo": "sszymczyk/DeepSeek-V3.2-4Layers-GGUF",
+      "revision": "54c8e50a9bfaced560a51eeb63cace952e3ea247",
+      "files": [
+        "DeepSeek-V3.2-4Layers-Q8_0.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "a7587dc5291aab8ce6d806c1046a169c499fb39008d4188acbca223fd6ad686d"
+    },
+    {
+      "family": "deepseek4",
+      "repo": "huihui-ai/Huihui-DeepSeek-V4-Flash-0731-abliterated-GGUF",
+      "revision": "a8dfba9c1e43bdf324ee2c7787ed01c70975ffb4",
+      "files": [
+        "dspark-abliterated/dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "6575853d1c3736c160101bc7cd117c8edd39ca847cfdf2273d9a344108edfaf8"
+    },
+    {
+      "family": "dots1",
+      "repo": "Robertp423/dots.llm1.test-Q6_K-GGUF",
+      "revision": "a0404996541e6505cad00b7e3bfa4c7447f4f501",
+      "files": [
+        "dots.llm1.test-q6_k.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "2789482e96ffe36999a3c32c1224f0747c030f7aefe576a3a8510a0aa84fde7e"
+    },
+    {
+      "family": "ernie4-5",
+      "repo": "Arm/ernie-4-5-0-3b-pt-q4-k-m-llamacpp-raspberrypi5",
+      "revision": "86a80f7bb8780cdc73bed0ffbaab3f6ed98c8b63",
+      "files": [
+        "baidu__ERNIE-4.5-0.3B-PT_llamacpp_optimized.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "86202506dbbffaddaaa615c932676d3e4c21d1f93e11cd1da3ffb9c6d10cbaed"
+    },
+    {
+      "family": "ernie4-5-moe",
+      "repo": "mradermacher/ERNIE-21B-A3B-Claude-4.5-High-OPUS-Thinking-i1-GGUF",
+      "revision": "51b8fa4872193aee98ddf4ae60c63aef52e2a07a",
+      "files": [
+        "ERNIE-21B-A3B-Claude-4.5-High-OPUS-Thinking.i1-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "5658d5e0b82578ea7ec0a40d022cbed31013dc6bb0da11c11d16261915b7bcf3"
+    },
+    {
+      "family": "exaone4",
+      "repo": "LGAI-EXAONE/EXAONE-4.0-1.2B-GGUF",
+      "revision": "162446400ea4596377a3ce1d3ddffa32971af0a6",
+      "files": [
+        "EXAONE-4.0-1.2B-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "7b5e753540183ae4d56e6febd9b48cdd944de53386e6faa8f51c8f98cb2b47df"
+    },
+    {
+      "family": "falcon-dense",
+      "repo": "maddes8cht/tiiuae-falcon-7b-instruct-gguf",
+      "revision": "56d71fbb3ea040a1d35459013bd2688613075668",
+      "files": [
+        "tiiuae-falcon-7b-instruct-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "6f6c886ed07d4f6133a4dd7f8b799764ed719c50973d96816b2ac5ff3ada9913"
+    },
+    {
+      "family": "falcon-h1",
+      "repo": "tiiuae/Falcon-H1-1.5B-Instruct-GGUF",
+      "revision": "0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a",
+      "files": [
+        "Falcon-H1-1.5B-Instruct-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f"
+    },
+    {
+      "family": "gemma",
+      "repo": "lmstudio-ai/gemma-2b-it-GGUF",
+      "revision": "a0b140bfb922a743f89dd0682a24a17516071ab9",
+      "files": [
+        "gemma-2b-it-q4_k_m.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "144b3eb4fb500556034a29172cfa2b17f28cfce7c7698ac3467600adc510efcd"
+    },
+    {
+      "family": "gemma2",
+      "repo": "google/gemma-2-2b-it-GGUF",
+      "revision": "67803c710cb0c89bae2047a5f50a2481c9339d24",
+      "files": [
+        "2b_it_v2.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "8fc1a799613b873edd085ffcf33fd710077daf03833ead29e136cca9b528ecb6"
+    },
+    {
+      "family": "gemma3",
+      "repo": "ggml-org/gemma-3-1b-it-GGUF",
+      "revision": "f9c28bcd85737ffc5aef028638d3341d49869c27",
+      "files": [
+        "gemma-3-1b-it-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "8ccc5cd1f1b3602548715ae25a66ed73fd5dc68a210412eea643eb20eb75a135"
+    },
+    {
+      "family": "gemma3n",
+      "repo": "lmstudio-community/gemma-3n-E4B-it-text-GGUF",
+      "revision": "48ddb4928f7910916a599054277dac92ab70201a",
+      "files": [
+        "gemma-3n-E4B-it-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "7fcb647151fa19a0750538672cf824ef6cf18f74bb86ebe5592e1ed59b4070a0"
+    },
+    {
+      "family": "gemma4",
+      "repo": "HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive",
+      "revision": "45b6a334b4bcd1d7f37179df58b3b1d66a184e5d",
+      "files": [
+        "Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "d0027dd3a9128d9323e9f282c8bf010a8526c46477584535991dc1a869b56e96"
+    },
+    {
+      "family": "gemma4-assistant",
+      "repo": "RachidAR/gemma-4-26B-A4B-it-qat-assistant-q4_0-gguf",
+      "revision": "64fc324e6829824a37518f5a7c8841ac9a559d5b",
+      "files": [
+        "gemma-4-26b-A4B-it-assistant-Q4_0-q4emb.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "6195511a1bf402b1ab3ec3631347f310b4085774a17a0c6e673ea8988cc0a9fc"
+    },
+    {
+      "family": "glm4",
+      "repo": "bartowski/glm-4-9b-chat-GGUF",
+      "revision": "74a33eafa149550a60bff0fdafcdd34caa6df9f0",
+      "files": [
+        "glm-4-9b-chat-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "aa6cb8f5ef0a70399bdbf92eef566c26c6017ee0b131a424b65b5c757f1c81a2"
+    },
+    {
+      "family": "glm4-expansion",
+      "repo": "unsloth/GLM-4-9B-0414-GGUF",
+      "revision": "40a17a0c8f24664ddd851dafd03935553c25a57e",
+      "files": [
+        "GLM-4-9B-0414-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "8027e1089273e8817b2df0d91c9aa17c5ea467246dcdacac34989f8919fe6540"
+    },
+    {
+      "family": "glm45-air",
+      "repo": "unsloth/GLM-4.5-Air-GGUF",
+      "revision": "506d64aa8c5cfe9dbbf00bc7a15739438f83204d",
+      "files": [
+        "Q4_K_M/GLM-4.5-Air-Q4_K_M-00001-of-00002.gguf",
+        "Q4_K_M/GLM-4.5-Air-Q4_K_M-00002-of-00002.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "8ade9ac6a848292235a07f2c49127442f43af5d1fb5e56afdf03f91a3c6f1305"
+    },
+    {
+      "family": "glm47-flash",
+      "repo": "unsloth/GLM-4.7-Flash-GGUF",
+      "revision": "0d32489ecb9db6d2a4fc93bd27ef01519f95474d",
+      "files": [
+        "GLM-4.7-Flash-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "29837ed2c0fc5f51981adf8ac8083fcf80743c598381f13e9f06cbad0498b174"
+    },
+    {
+      "family": "gpt-oss",
+      "repo": "ggml-org/gpt-oss-20b-GGUF",
+      "revision": "ef9b12f2ff56c69cf32153a02784e7a3c88bf524",
+      "files": [
+        "gpt-oss-20b-MXFP4.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "27cd6c432c7672cb812a92f611cf3ba7bbc35928262bb1e1253ff4ee6ae35901"
+    },
+    {
+      "family": "gptneox",
+      "repo": "mradermacher/gpt-neox-20b-i1-GGUF",
+      "revision": "aea1d77733d7cef1ccc4556c63666d17e5f95a28",
+      "files": [
+        "gpt-neox-20b.i1-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "1a35c13535c26bb925a2379d9f021de67a0390124ffe2051aa94412002652d6d"
+    },
+    {
+      "family": "granite-dense",
+      "repo": "bartowski/ibm-granite_granite-3.2-2b-instruct-GGUF",
+      "revision": "9be2c106c8c073f5a140ec03c8c7a6a6e72d097b",
+      "files": [
+        "ibm-granite_granite-3.2-2b-instruct-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "e1b915b0849becf4fdda188dee7b09cbebbfabd71c6f3f2b75dd3eca0a8fded1"
+    },
+    {
+      "family": "granite-hybrid",
+      "repo": "ibm-granite/granite-4.0-h-350m-GGUF",
+      "revision": "a864f823cce6e6048b5752e2816fe7a23987d790",
+      "files": [
+        "granite-4.0-h-350m-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "0a8d6a7373602fadfba274a640ba784b86cc6847f1c67f1b0a90fa2ec266b7fb"
+    },
+    {
+      "family": "granite-moe",
+      "repo": "sinatras/granite-moe-1b-split",
+      "revision": "3beccd31cf6d51f94c93007e56a21e0df41a101a",
+      "files": [
+        "Q4_K_M/granite-3.1-1b-a400m-instruct-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "3a2ec1c2a78cb29d901e29bbf5162dcd03381e13803d2cbdcff838d4d08142eb"
+    },
+    {
+      "family": "granite-swa",
+      "repo": "emredeveloper/granite-swash-3b-a600m-GGUF",
+      "revision": "d20c88f11ef8622464f9678e6437ed9e72a07dcd",
+      "files": [
+        "granite-swash-3b-a600m-BF16.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "1961c3d8eb4e97536a2b95ebe0bd6830d508031443e81124516c05505af8c615"
+    },
+    {
+      "family": "granite-switch",
+      "repo": "barha/granite-switch-4.1-3b-preview-GGUF",
+      "revision": "1537da1c12cd890ef0e632678221ecd663485d4e",
+      "files": [
+        "granite-switch-4.1-3b-preview-f16.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "3c5edd7df00fa175defc73b6f4af58c9b3d66bfc091ade885d3acdd4ded87510"
+    },
+    {
+      "family": "grovemoe",
+      "repo": "mradermacher/GroveMoE-Inst-i1-GGUF",
+      "revision": "4e342287d10e5b616e087509fe2a979293bc7b0d",
+      "files": [
+        "GroveMoE-Inst.i1-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "e1d8ce9e762f74e65d85bea1e8f8e06db70f2dd735cecee9a6d889c71e6fc010"
+    },
+    {
+      "family": "hunyuan-dense",
+      "repo": "bartowski/tencent_Hunyuan-1.8B-Instruct-GGUF",
+      "revision": "bc16eeb7f561c3d7937aa2cde457668695c237ca",
+      "files": [
+        "tencent_Hunyuan-1.8B-Instruct-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "558ae86fc4251fd73cd54685319a83e7550997537e3ad41043ad5c0b5a2a26d4"
+    },
+    {
+      "family": "hy-v3",
+      "repo": "mradermacher/Tencent-Hy-30B-A3B-uncensored-heretic-i1-GGUF",
+      "revision": "6a7a7d5bea1641ec15202f14d4b467d45c104f06",
+      "files": [
+        "Tencent-Hy-30B-A3B-uncensored-heretic.i1-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "76d19eb68bea4de46f2f3dfc82cfa6896da447b9aec91d7c6c3e7791f2d306ac"
+    },
+    {
+      "family": "internlm2",
+      "repo": "Felladrin/gguf-internlm2-chat-1_8b",
+      "revision": "cdd579415ed57fca8af5c5e09b35ee5124449876",
+      "files": [
+        "internlm2-chat-1_8b.F16.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "377e44d5967ea2a51570fbc28448dd8693d0139c73b13b9e773fad783f7bd957"
+    },
+    {
+      "family": "jais",
+      "repo": "mradermacher/jais-family-13b-i1-GGUF",
+      "revision": "0339532e089ec7b6dd502eee16c758fc324046c3",
+      "files": [
+        "jais-family-13b.i1-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "8783a7d62b714c8520f2b03155f7f52145714dd9006653b7a64a6a6a097f5407"
+    },
+    {
+      "family": "jais2",
+      "repo": "inception42/Jais-2-8B-Chat-GGUF",
+      "revision": "61365d41aad6a2ffa9d7b7f79dfce21b65833254",
+      "files": [
+        "Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "26aef0cee0f9960cb12cc74ffa1049ca5e35e8159621aa1bacd9f9f703239923"
+    },
+    {
+      "family": "jamba2",
+      "repo": "bartowski/ai21labs_AI21-Jamba2-3B-GGUF",
+      "revision": "02d70acd708332ec4e78e9ceefe116851a307411",
+      "files": [
+        "ai21labs_AI21-Jamba2-3B-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "fa0876fa152f38689cefd6d498907d6255cf515780d65b16346d3190df6a0794"
+    },
+    {
+      "family": "kimi-k3",
+      "repo": "murillo2000/Kimi-K3-0.40B-GGUF",
+      "revision": "88de02cf8fa37f87eb06daaed370ac9c3411d5ca",
+      "files": [
+        "Kimi-K3-0.40B-F16.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "411c197b503e6fb9199a2b22115e32dc4e2cad803fb112b24967737b3bab26c7"
+    },
+    {
+      "family": "kimi-linear",
+      "repo": "bartowski/moonshotai_Kimi-Linear-48B-A3B-Instruct-GGUF",
+      "revision": "228dbe476e5a02091624a19068f4c962caa8a1c5",
+      "files": [
+        "moonshotai_Kimi-Linear-48B-A3B-Instruct-IQ2_XS.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "883be5561005ed6558c3f9d58d33bd9df818ea41c18086a49769047278953c0e"
+    },
+    {
+      "family": "laguna",
+      "repo": "poolside/Laguna-XS-2.1-GGUF",
+      "revision": "1a37c0a5fb8c7a18e6106decb6be6327d1b63fa6",
+      "files": [
+        "Laguna-XS-2.1-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "1ac7079101fca5a6df8c5a7523a3c30ea7d1c0e4b1258090e7d6d4039287f6cb"
+    },
+    {
+      "family": "lfm2",
+      "repo": "LiquidAI/LFM2-350M-GGUF",
+      "revision": "8fdc9d526b7ed346b19257551b05816c7912ecc2",
+      "files": [
+        "LFM2-350M-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "a4d000c7064bd3b2e42c6845836286a899a4e79cf1791da1a6797b58d575957d"
+    },
+    {
+      "family": "lfm2-moe",
+      "repo": "noctrex/LFM2.5-8B-A1B-MXFP4_MOE-GGUF",
+      "revision": "6f9e38da4a1715057e3c3a45105037944e767117",
+      "files": [
+        "LFM2.5-8B-A1B-MXFP4_MOE.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "a492e8b1d8c201b90de421f0ea1b6ed478aa7f4948604ea6659cd9afca715f3a"
+    },
+    {
+      "family": "lfm2-vl",
+      "repo": "ggml-org/LFM2-VL-450M-GGUF",
+      "revision": "0ff2ce5a6710f9bf0a6de87ec91832b43fa0ac05",
+      "files": [
+        "LFM2-VL-450M-Q8_0.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "e97704a0cf0a1d00ca604b4c672c82f4234318dba9d43a7f7a4c0d2df6747844"
+    },
+    {
+      "family": "llama",
+      "repo": "bartowski/Llama-3.2-1B-Instruct-GGUF",
+      "revision": "067b946cf014b7c697f3654f621d577a3e3afd1c",
+      "files": [
+        "Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83"
+    },
+    {
+      "family": "maincoder",
+      "repo": "mradermacher/Maincoder-1B-GGUF",
+      "revision": "1c963c98dfb478ea3b4719299bd85fbb5cf30899",
+      "files": [
+        "Maincoder-1B.Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "2db4b53955a58f4483442110fdd5534bfa22a45447f35a131b839a034ffa2998"
+    },
+    {
+      "family": "mamba",
+      "repo": "Felladrin/gguf-mamba-130m-hf",
+      "revision": "83ef2222e1a0437d26bda213537afc195a53b3ad",
+      "files": [
+        "mamba-130m-hf.Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "2784131bc0546f802bcb720cbc77d26c174c85514400cc645507146ad95f07da"
+    },
+    {
+      "family": "mamba2",
+      "repo": "bartowski/falcon-mamba-7b-GGUF",
+      "revision": "1236a076ebddbcfcbd6ba0fe310d473d20527f11",
+      "files": [
+        "falcon-mamba-7b-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "ef8ba78a1fd0b0fd1d1c966acc5f4c043b12fbbd7044f4d9aad82e6b7a51e0a7"
+    },
+    {
+      "family": "mellum",
+      "repo": "yuxinlu1/Mellum2-12B-A2.5B-Claude-4.6-4.8-Opus-Thinking-GGUF",
+      "revision": "a9c7b1a32ead28d4a868ff31bbf9c15a97362cfe",
+      "files": [
+        "mellum2-claude-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "2086900d9374d7a12388b6a44f7d34afcf5817abcba7983dc733d38c5003e2ea"
+    },
+    {
+      "family": "minicpm",
+      "repo": "openbmb/MiniCPM4.1-8B-GGUF",
+      "revision": "ebb834d0ad9acfa98bd16bc963ec51be5f7e08c1",
+      "files": [
+        "MiniCPM4.1-8B-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "9d2ffb9145bf7a88ddb94b2542b42d925293666c42962aa158eeb62fc9708654"
+    },
+    {
+      "family": "minicpm3",
+      "repo": "openbmb/MiniCPM3-4B-GGUF",
+      "revision": "816dc79b35f92827e0d2d87aacea3567e49661a8",
+      "files": [
+        "minicpm3-4b-q4_k_m.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "64913247e927414ecf47fd3e9ea8e3f0c9acae293f583dfa7e24b8872e20fa4c"
+    },
+    {
+      "family": "mistral-small",
+      "repo": "unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF",
+      "revision": "b750ec2299225e492f1bd27cab88a0a595fa848f",
+      "files": [
+        "Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "a3cc56310807ed0d145eaf9f018ccda9ae7ad8edb41ec870aa2454b0d4700b3c"
+    },
+    {
+      "family": "mpt",
+      "repo": "maddes8cht/mosaicml-mpt-7b-instruct-gguf",
+      "revision": "939bf1d3b1fcab272e542599bfaf74dcd04a9931",
+      "files": [
+        "mosaicml-mpt-7b-instruct-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "bfc1cf1333d60dd8f4c9ea97652ebdb984501c389d22cebc02b564f45c68d628"
+    },
+    {
+      "family": "muse-glimmer",
+      "repo": "Blackfrost-AI/Muse-Glimmer-30B-Abliterated-GGUF",
+      "revision": "83e7dc723f5515704adc8767dfeb279de3df914d",
+      "files": [
+        "dflash-Muse-Glimmer-30B-Abliterated-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "1b58b92b670d20b49d06a9a1210e4bf5350696bb8f7b4931769b7000d0456eda"
+    },
+    {
+      "family": "nemotron",
+      "repo": "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF",
+      "revision": "f2d3fe3694501008786e81e5f20360cbf715496a",
+      "files": [
+        "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "edcb5d4650796ed2fb412498de6f83b585862312c747ddb74f0ea04b22206181"
+    },
+    {
+      "family": "nemotron-expansion",
+      "repo": "bartowski/Nemotron-Mini-4B-Instruct-GGUF",
+      "revision": "fb49cde090c86092d89905bea2ffc41c23c2615e",
+      "files": [
+        "Nemotron-Mini-4B-Instruct-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "2bf02846dbd45e9580b9338b90505fb54e00d185713d4b7f06699e2d5d298e48"
+    },
+    {
+      "family": "olmo2",
+      "repo": "allenai/OLMo-2-0425-1B-Instruct-GGUF",
+      "revision": "62f8c199538474c3e33ed5d7e0580abd66686a27",
+      "files": [
+        "OLMo-2-0425-1B-Instruct-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "abd8187934a438fbf7cfff0a1de5b9d2793ce913f158794df1951dcba6c93cc6"
+    },
+    {
+      "family": "phi2",
+      "repo": "TheBloke/phi-2-GGUF",
+      "revision": "5a454d977c6438bb9fb2df233c8ca70f21c87420",
+      "files": [
+        "phi-2.Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "324356668fa5ba9f4135de348447bb2bbe2467eaa1b8fcfb53719de62fbd2499"
+    },
+    {
+      "family": "phi3",
+      "repo": "microsoft/Phi-3-mini-4k-instruct-gguf",
+      "revision": "a64113399c2f6b8ad3e11c394733a2ddadaa7f33",
+      "files": [
+        "Phi-3-mini-4k-instruct-q4.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "8a83c7fb9049a9b2e92266fa7ad04933bb53aa1e85136b7b30f1b8000ff2edef"
+    },
+    {
+      "family": "phi4",
+      "repo": "unsloth/phi-4-GGUF",
+      "revision": "5110b7771e8166d5530e73346a15aea096a8cb99",
+      "files": [
+        "phi-4-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "01e1f25b3e6931054c6c2227b06f4969828434eebc299e8e171f55dab6814485"
+    },
+    {
+      "family": "qwen2",
+      "repo": "Qwen/Qwen2-0.5B-Instruct-GGUF",
+      "revision": "198f08841147e5196a6a69bd0053690fb1fd3857",
+      "files": [
+        "qwen2-0_5b-instruct-q4_k_m.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "f0a42bb979ca62b5e61f3bf924ab4b6a40aa091825ee7dcb4039949980ab81a8"
+    },
+    {
+      "family": "qwen2-moe",
+      "repo": "RichardErkhov/Qwen_-_Qwen1.5-MoE-A2.7B-Chat-gguf",
+      "revision": "947580e7b3904cd4081810d0efec4520a75609c7",
+      "files": [
+        "Qwen1.5-MoE-A2.7B-Chat.Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "3dcfb1032781788bf373edb49b888fcac5b6093ea0fe0edf5e23a977390b3eea"
+    },
+    {
+      "family": "qwen2-vl",
+      "repo": "bartowski/Qwen2-VL-2B-Instruct-GGUF",
+      "revision": "2160e265f926e84e84dbb1c73e623b5324b23707",
+      "files": [
+        "Qwen2-VL-2B-Instruct-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "4ef095263343fc1237e8ca879790bb262bcf209f082e0a9bfce219b7ece55e8b"
+    },
+    {
+      "family": "qwen3-dense",
+      "repo": "Qwen/Qwen3-0.6B-GGUF",
+      "revision": "23749fefcc72300e3a2ad315e1317431b06b590a",
+      "files": [
+        "Qwen3-0.6B-Q8_0.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031"
+    },
+    {
+      "family": "qwen3-moe",
+      "repo": "unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF",
+      "revision": "eea7b2be5805a5f151f8847ede8e5f9a9284bf77",
+      "files": [
+        "Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "6c997b8af17debdfb01d890214400ccbab00db6acc0ba8da5de1cc906c4774d0"
+    },
+    {
+      "family": "qwen3-next",
+      "repo": "bartowski/Qwen_Qwen3-Next-80B-A3B-Thinking-GGUF",
+      "revision": "c36ac5f15be18742fcd09baa61d48dfc016aae79",
+      "files": [
+        "Qwen_Qwen3-Next-80B-A3B-Thinking-IQ2_XS.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "ece0ffe31891d1a0f1993565db4a977ae6d862d0ae2e45fc7282ff0a06cf5d5d"
+    },
+    {
+      "family": "qwen3-vl",
+      "repo": "unsloth/Qwen3-VL-8B-Instruct-GGUF",
+      "revision": "b93a7ee713758252c555be4210c00540df954dc2",
+      "files": [
+        "Qwen3-VL-8B-Instruct-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "108e7ff92b78eefd3db4741885104acba514255c11b617d3c7b197a5f46efe89"
+    },
+    {
+      "family": "qwen35",
+      "repo": "unsloth/Qwen3.5-0.8B-GGUF",
+      "revision": "6ab461498e2023f6e3c1baea90a8f0fe38ab64d0",
+      "files": [
+        "Qwen3.5-0.8B-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517"
+    },
+    {
+      "family": "qwen4exp",
+      "repo": "unsloth/Qwen3.8-Flash-Next-GGUF",
+      "revision": "c8b5954a88c2775c546b92593eda40ea041d3176",
+      "files": [
+        "UD-IQ1_S/Qwen3.8-Flash-Next-UD-IQ1_S-00001-of-00003.gguf",
+        "UD-IQ1_S/Qwen3.8-Flash-Next-UD-IQ1_S-00002-of-00003.gguf",
+        "UD-IQ1_S/Qwen3.8-Flash-Next-UD-IQ1_S-00003-of-00003.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "f806ed25dbc17413571d40bc3f41e1d9ca43c3cc6514792c032ff45c270ad873"
+    },
+    {
+      "family": "rwkv6",
+      "repo": "latestissue/rwkv-6-finch-1b6-gguf",
+      "revision": "9f4420bafb8fe463599b9983d81e12e1868c3746",
+      "files": [
+        "rwkv-6-finch-1b6-Q4_0.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "7b345728c3792f0168a615bd529a319d63f8becb760090330ce583a24f55e46b"
+    },
+    {
+      "family": "rwkv7",
+      "repo": "Mungert/RWKV7-Goose-World3-2.9B-HF-GGUF",
+      "revision": "e85c69858772a4d6b481d99e1e49910dad48e123",
+      "files": [
+        "RWKV7-Goose-World3-2.9B-HF-f16-q4_k.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "bfcb5b239cf99ac4a590d7163266bbe3bb14f41d221ad6f7a2bf602b610211b0"
+    },
+    {
+      "family": "smollm3",
+      "repo": "ggml-org/SmolLM3-3B-GGUF",
+      "revision": "4965cb60b150737b68a0408c36aeefb65078f894",
+      "files": [
+        "SmolLM3-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "8334b850b7bd46238c16b0c550df2138f0889bf433809008cc17a8b05761863e"
+    },
+    {
+      "family": "stablelm",
+      "repo": "second-state/stablelm-2-zephyr-1.6b-GGUF",
+      "revision": "6da77f49f48f36f1a01753ca27ba531bde13b861",
+      "files": [
+        "stablelm-2-zephyr-1_6b-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "4224a8a08417e34d5a224efb1291491c4f5762b46aa012021adaf0a0578848e2"
+    },
+    {
+      "family": "starcoder2",
+      "repo": "second-state/StarCoder2-3B-GGUF",
+      "revision": "7fca3e2da2ce31df411461e2cb9cae2d2b492f35",
+      "files": [
+        "starcoder2-3b-Q4_K_M.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "d8fb39287a463549b80d97473b0a7595c3a5a6da3ae2604ca33906a1a43f7175"
+    }
+  ]
+}

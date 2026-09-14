@@ -13,12 +13,32 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
     let tokenizer_path = materialized_tokenizer
         .as_deref()
         .unwrap_or(requested_tokenizer_path);
+    let tokenizer_materialized = materialized_tokenizer.is_some();
+    let tokenizer_layer_start = tokenizer_layer_start(&args, tokenizer_materialized);
+    let tokenizer_layer_end = tokenizer_layer_end(&args, tokenizer_materialized);
+    // Filtered stage loads must carry the exact admitted resident tensor
+    // closure. Artifact slices already contain only their slice tensors, so
+    // they load unfiltered; raw GGUF tokenizer slices plan the closure with
+    // the native stage planner, mirroring production stage admission.
+    let tokenizer_resident_tensor_names = if tokenizer_materialized {
+        Vec::new()
+    } else {
+        plan_gguf_stage_resident_tensor_names(
+            tokenizer_path,
+            &[(tokenizer_layer_start, tokenizer_layer_end)],
+            args.ctx_size,
+            1,
+        )?
+        .into_iter()
+        .next()
+        .context("stage planner returned no resident tensor closure")?
+    };
     let tokenizer = StageModel::open(
         tokenizer_path,
         &RuntimeConfig {
             stage_index: 0,
-            layer_start: tokenizer_layer_start(&args, materialized_tokenizer.is_some()),
-            layer_end: tokenizer_layer_end(&args, materialized_tokenizer.is_some()),
+            layer_start: tokenizer_layer_start,
+            layer_end: tokenizer_layer_end,
             ctx_size: args.ctx_size,
             lane_count: 1,
             n_batch: None,
@@ -50,8 +70,8 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
             include_embeddings: true,
             include_output: false,
             mtp_source: MtpSource::Disabled,
-            filter_tensors_on_load: true,
-            resident_tensor_names: Vec::new(),
+            filter_tensors_on_load: !tokenizer_materialized,
+            resident_tensor_names: tokenizer_resident_tensor_names,
             checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
             checkpoint_imatrix: None,
             checkpoint_imatrix_sha256: None,
@@ -80,6 +100,11 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
             .as_deref()
             .is_some_and(|path| path != args.model_path.as_path())
     {
+        let chat_template_resident_tensor_names =
+            plan_gguf_stage_resident_tensor_names(&args.model_path, &[(0, 1)], args.ctx_size, 1)?
+                .into_iter()
+                .next()
+                .context("stage planner returned no resident tensor closure")?;
         let model = StageModel::open(
             &args.model_path,
             &RuntimeConfig {
@@ -118,7 +143,7 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
                 include_output: false,
                 mtp_source: MtpSource::Disabled,
                 filter_tensors_on_load: true,
-                resident_tensor_names: Vec::new(),
+                resident_tensor_names: chat_template_resident_tensor_names,
                 checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
                 checkpoint_imatrix: None,
                 checkpoint_imatrix_sha256: None,
