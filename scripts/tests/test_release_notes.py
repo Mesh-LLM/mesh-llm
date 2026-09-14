@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import yaml
 
@@ -30,6 +31,7 @@ def load(name, filename):
 CONVENTIONAL = load("conventional_commit", "check-conventional-commit.py")
 CLASSIFY = load("release_notes_classify", "release-notes-classify.py")
 REGROUP = load("release_notes_regroup", "release-notes-regroup.py")
+LINK = load("release_notes_link", "release-notes-link.py")
 
 
 def entry(pr, subject="a change", author="someone"):
@@ -315,7 +317,9 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("prerelease != 'true'", condition)
 
     def test_declares_least_privilege_and_a_timeout(self):
-        self.assertEqual(self.job["permissions"], {"contents": "write"})
+        self.assertEqual(
+            self.job["permissions"], {"contents": "write", "pull-requests": "read"}
+        )
         self.assertIn("timeout-minutes", self.job)
 
     def test_checkout_is_pinned_and_credential_free(self):
@@ -750,6 +754,282 @@ class CalendarDateTest(unittest.TestCase):
 
     def test_accepts_a_real_date(self):
         self.assertEqual(self.check("2026-09-10").returncode, 0)
+
+
+class FakeGh:
+    """Stands in for the `gh` CLI; records what the link pass asked for."""
+
+    def __init__(self, pulls=None, details=None, budget=99):
+        self.pulls = pulls or {}
+        self.details = details or {}
+        self.calls = []
+        self.remaining = budget
+        self.exhausted = False
+        self.failures = 0
+
+    def json(self, args):
+        self.calls.append(args)
+        if self.remaining <= 0:
+            self.exhausted = True
+            return None
+        self.remaining -= 1
+        if args[0] == "api":
+            sha = args[1].split("/")[-2]
+            return self.pulls.get(sha)
+        return self.details.get(int(args[2]))
+
+
+def commit(sha, subject, trailers=None):
+    return {"sha": sha, "subject": subject, "trailers": trailers or {}}
+
+
+class LinkTest(unittest.TestCase):
+    """The link pass recovers entries GitHub credited only to a roll-up."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+
+    def body_file(self, *entries):
+        path = self.dir / "body.md"
+        path.write_text(
+            "\n".join(
+                ["## What's Changed", *entries, "", "**Full Changelog**: compare", ""]
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def test_the_suffix_is_authoritative_and_costs_nothing(self):
+        commits = [commit("aaa", "fix: repair a thing (#7)")]
+        gh = FakeGh()
+        self.assertEqual(LINK.resolve_pull_requests(commits, "o/r", gh), 0)
+        self.assertEqual(commits[0]["pr"], 7)
+        self.assertEqual(gh.calls, [])
+
+    def test_a_suffixless_commit_is_linked_through_the_api(self):
+        commits = [commit("aaa", "test(ci): guard selector drift")]
+        gh = FakeGh(pulls={"aaa": [1733]})
+        self.assertEqual(LINK.resolve_pull_requests(commits, "o/r", gh), 1)
+        self.assertEqual(commits[0]["pr"], 1733)
+        self.assertTrue(commits[0]["linked_by_api"])
+
+    def test_a_commit_the_api_cannot_place_is_not_guessed(self):
+        commits = [commit("aaa", "a direct push")]
+        LINK.resolve_pull_requests(commits, "o/r", FakeGh(pulls={}))
+        self.assertIsNone(commits[0]["pr"])
+
+    def test_orphans_are_credited_beneath_the_roll_up_that_carried_them(self):
+        commits = [
+            commit("a", "fix(openai): reject malformed tool definitions (#1761)"),
+            commit("b", "fix(skippy): link Apple OpenMP runtime (#1766)"),
+            commit("c", "fix: address review feedback (#1789)"),
+        ]
+        LINK.resolve_pull_requests(commits, "o/r", FakeGh())
+        gh = FakeGh(
+            details={
+                1761: {"title": "fix(openai): reject malformed tool definitions",
+                       "author": {"login": "i386"}},
+                1766: {"title": "fix(skippy): link Apple OpenMP runtime",
+                       "author": {"login": "i386"}},
+            }
+        )
+        insertions, trailing = LINK.recover_entries(commits, [1789], "o/r", gh)
+        self.assertEqual(trailing, [])
+        self.assertEqual(list(insertions), [1789])
+        self.assertEqual(
+            insertions[1789],
+            [
+                "* fix(openai): reject malformed tool definitions by @i386 in "
+                "https://github.com/o/r/pull/1761",
+                "* fix(skippy): link Apple OpenMP runtime by @i386 in "
+                "https://github.com/o/r/pull/1766",
+            ],
+        )
+
+    def test_an_orphan_with_no_carrier_after_it_is_still_credited(self):
+        commits = [
+            commit("a", "fix: repair a thing (#10)"),
+            commit("b", "fix: repair another (#11)"),
+        ]
+        LINK.resolve_pull_requests(commits, "o/r", FakeGh())
+        gh = FakeGh(details={11: {"title": "fix: repair another",
+                                  "author": {"login": "someone"}}})
+        insertions, trailing = LINK.recover_entries(commits, [10], "o/r", gh)
+        self.assertEqual(insertions, {})
+        self.assertEqual(len(trailing), 1)
+
+    def test_a_pull_request_without_an_author_is_left_uncredited(self):
+        commits = [commit("a", "fix: repair a thing (#10)")]
+        LINK.resolve_pull_requests(commits, "o/r", FakeGh())
+        insertions, trailing = LINK.recover_entries(commits, [], "o/r", FakeGh())
+        self.assertEqual((insertions, trailing), ({}, []))
+
+    def test_a_released_pull_request_is_never_credited_twice(self):
+        commits = [
+            commit("a", "fix: first commit (#10)"),
+            commit("b", "fix: second commit (#10)"),
+        ]
+        LINK.resolve_pull_requests(commits, "o/r", FakeGh())
+        gh = FakeGh(details={10: {"title": "fix: a thing",
+                                  "author": {"login": "someone"}}})
+        _, trailing = LINK.recover_entries(commits, [], "o/r", gh)
+        self.assertEqual(len(trailing), 1)
+
+    def test_augment_splices_beneath_the_carrier_and_keeps_the_tail(self):
+        published = entry(1789, "fix(release): roll up the branch")
+        path = self.body_file(entry(1673, "feat: a thing"), published)
+        lines, credited, insert_at = LINK.read_body(path)
+        self.assertEqual(credited, [1673, 1789])
+        rendered = LINK.augment(lines, insert_at, {1789: ["* recovered"]}, [])
+        self.assertEqual(
+            rendered.splitlines(),
+            [
+                "## What's Changed",
+                entry(1673, "feat: a thing"),
+                published,
+                "* recovered",
+                "",
+                "**Full Changelog**: compare",
+            ],
+        )
+
+    def test_augment_never_drops_a_published_entry(self):
+        path = self.body_file(entry(1), entry(2))
+        lines, credited, insert_at = LINK.read_body(path)
+        rendered = LINK.augment(lines, insert_at, {}, ["* trailing"])
+        for pr in credited:
+            self.assertIn(f"/pull/{pr}", rendered)
+        self.assertIn("* trailing", rendered)
+        self.assertLess(rendered.index("* trailing"), rendered.index("Full Changelog"))
+
+    def test_only_api_linked_records_reach_the_classifier(self):
+        commits = [
+            commit("a", "fix: repair a thing (#10)"),
+            commit("b", "test(ci): guard drift", {"release-notes": "Internal"}),
+        ]
+        LINK.resolve_pull_requests(commits, "o/r", FakeGh(pulls={"b": [1733]}))
+        links = LINK.commit_links(commits)
+        self.assertEqual(list(links), ["1733"])
+        self.assertEqual(links["1733"]["trailers"], {"release-notes": "Internal"})
+
+    def test_a_duplicate_record_keeps_the_first_subject_and_adds_its_trailers(self):
+        commits = [
+            commit("a", "fix(openai): repair a thing", {"release-notes": "Fixed"}),
+            commit("b", "fix(openai): repair it again", {"security": "CVE-1"}),
+        ]
+        LINK.resolve_pull_requests(
+            commits, "o/r", FakeGh(pulls={"a": [1733], "b": [1733]})
+        )
+        links = LINK.commit_links(commits)
+        self.assertEqual(list(links), ["1733"])
+        self.assertEqual(links["1733"]["subject"], "fix(openai): repair a thing")
+        self.assertEqual(
+            links["1733"]["trailers"],
+            {"release-notes": "Fixed", "security": "CVE-1"},
+        )
+
+    def test_a_decisive_trailer_on_a_later_duplicate_reaches_the_classifier(self):
+        commits = [
+            commit("a", "fix(openai): repair a thing"),
+            commit("b", "fix(openai): repair it again", {"security": "CVE-1"}),
+        ]
+        LINK.resolve_pull_requests(
+            commits, "o/r", FakeGh(pulls={"a": [1733], "b": [1733]})
+        )
+        records = {int(pr): record for pr, record in LINK.commit_links(commits).items()}
+        plan, unclassified = CLASSIFY.build_plan([1733], records, "1.0.0", "2026-01-01")
+        self.assertEqual(unclassified, 0)
+        self.assertEqual(
+            [section for section in plan["sections"] if section["title"] == "Security"],
+            [{"title": "Security", "prs": [1733]}],
+        )
+
+    def test_the_classifier_uses_a_linked_record(self):
+        path = self.dir / "links.json"
+        path.write_text(
+            json.dumps({"1733": {"subject": "test(ci): guard drift", "trailers": {}}}),
+            encoding="utf-8",
+        )
+        commits = CLASSIFY.load_links(path)
+        plan, unclassified = CLASSIFY.build_plan([1733], commits, "1.0.0", "2026-01-01")
+        self.assertEqual(unclassified, 0)
+        internal = [pr for group in plan["internal"]["groups"] for pr in group["prs"]]
+        self.assertEqual(internal, [1733])
+
+    def test_classifier_preserves_suffix_metadata_when_links_overlap(self):
+        body = self.body_file(entry(10), entry(11))
+        links = self.dir / "links.json"
+        links.write_text(json.dumps({
+            "10": {"subject": "feat: API-linked subject", "trailers": {}},
+            "11": {"subject": "fix: linked only", "trailers": {}},
+        }), encoding="utf-8")
+        output = self.dir / "plan.json"
+        args = ["classify", "--body", str(body), "--range", "base..HEAD",
+                "--version", "1.0.0", "--date", "2026-01-01",
+                "--links", str(links), "--out", str(output)]
+        for trailers, expected in [({}, "Fixed"),
+                                   ({"release-notes": "Security"}, "Security")]:
+            with self.subTest(trailers=trailers):
+                commits = {10: {"subject": "fix: suffix record (#10)",
+                                "trailers": trailers}}
+                with mock.patch.object(sys, "argv", args), mock.patch.object(
+                    CLASSIFY, "read_commits", return_value=commits
+                ):
+                    self.assertEqual(CLASSIFY.main(), 0)
+                plan = json.loads(output.read_text(encoding="utf-8"))
+                sections = {section["title"]: section["prs"]
+                            for section in plan["sections"]}
+                self.assertIn(10, sections[expected])
+                self.assertIn(11, sections["Fixed"])
+                self.assertNotIn("Added", sections)
+
+    def test_timeout_stops_resolution_and_recovery_api_calls(self):
+        commits = [commit("a", "fix: suffixless"),
+                   commit("b", "fix: another suffixless"),
+                   commit("c", "fix: known PR (#10)")]
+        gh = LINK.Gh()
+        with mock.patch.object(
+            LINK.subprocess, "run",
+            side_effect=subprocess.TimeoutExpired(["gh", "api"], 30),
+        ) as run:
+            self.assertEqual(LINK.resolve_pull_requests(commits, "o/r", gh), 0)
+            self.assertEqual(LINK.recover_entries(commits, [], "o/r", gh), ({}, []))
+            run.assert_called_once()
+        self.assertEqual(commits[2]["pr"], 10)
+        self.assertEqual(gh.failures, 1)
+        self.assertTrue(gh.exhausted)
+        body = self.body_file(entry(99))
+        lines, _, insert_at = LINK.read_body(body)
+        self.assertEqual(LINK.augment(lines, insert_at, {}, []), body.read_text())
+
+    def test_the_api_budget_bounds_a_large_release(self):
+        commits = [commit(str(n), f"chore: a change {n}") for n in range(5)]
+        gh = FakeGh(pulls={str(n): [n] for n in range(5)}, budget=2)
+        self.assertEqual(LINK.resolve_pull_requests(commits, "o/r", gh), 2)
+        self.assertTrue(gh.exhausted)
+
+
+class LinkPassContractTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.script = GENERATE.read_text(encoding="utf-8")
+
+    def test_the_link_pass_runs_before_classification(self):
+        self.assertLess(
+            self.script.index("release-notes-link.py"),
+            self.script.index("release-notes-classify.py"),
+        )
+
+    def test_a_dropped_entry_refuses_to_publish(self):
+        self.assertIn("the link pass dropped a published entry", self.script)
+        self.assertLess(
+            self.script.index("the link pass dropped a published entry"),
+            self.script.index("gh release edit"),
+        )
+
+    def test_the_published_body_is_kept_for_restore(self):
+        self.assertIn("body.github.md", self.script)
+        self.assertIn("--notes-file $WORKDIR/body.github.md", self.script)
 
 
 if __name__ == "__main__":

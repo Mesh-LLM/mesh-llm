@@ -33,6 +33,11 @@ readiness or build the change inventory from source; that is
   invariant every gate checks.
 - **Never drop an entry.** Every merged PR credits a contributor, including the
   CI and build churn. Noisy entries collapse into `### Internal`, never deleted.
+- **Recover an entry GitHub could not credit.** A batch of pull requests merged
+  into a staging branch and rebased into the release is credited once, to the
+  roll-up. The link pass adds the missing entries back in the roll-up's own
+  format, so the reader sees the fixes rather than the vehicle that carried
+  them. Adding is the only direction: the published set is a floor.
 - **Keep the tail.** `## New Contributors` and the `**Full Changelog**` link
   stay exactly as GitHub generated them.
 - **Never guess a section.** An entry the commit metadata cannot place goes to
@@ -43,13 +48,14 @@ readiness or build the change inventory from source; that is
 
 ## How The Pipeline Works
 
-Two passes, in this order. The first always runs and always produces a
-publishable body; the second is best-effort.
+Three passes, in this order. The first two always run and together always
+produce a publishable body; the third is best-effort.
 
 ```mermaid
 flowchart TD
     A["Release published"] --> B["Capture GitHub's flat list"]
-    B --> C["Classify by commit type<br/>feat → Added · fix → Fixed · ci → Internal"]
+    B --> L["Link commits to pull requests<br/>recover what GitHub credited to a roll-up"]
+    L --> C["Classify by commit type<br/>feat → Added · fix → Fixed · ci → Internal"]
     C --> D{"Agent reachable?"}
     D -- no --> F["Deterministic notes"]
     D -- yes --> E["Agent reviews the plan"]
@@ -60,12 +66,33 @@ flowchart TD
     P --> V["Verify the same pull requests"]
 ```
 
-The gate in steps 2, 3 and 5 is one rule: **the set of referenced pull
+One rule gates every step after the link pass: **the set of referenced pull
 requests must not change**. Sections move, subjects lose their type prefix,
 but no PR is dropped, duplicated, or invented, and author credit is copied
-through untouched. Nothing publishes unless that holds.
+through untouched. The link pass is the one step allowed to grow that set, and
+it is gated the other way: it may add entries and may never drop one. Nothing
+publishes unless both hold.
 
-### 1. Deterministic pass (authoritative)
+### 1. Link pass (authoritative, best-effort calls)
+
+`scripts/release-notes-link.py` pairs each commit in the range with the pull
+request that carried it. The `(#N)` suffix a squash merge leaves on the subject
+is authoritative and free; a commit without one costs a
+`repos/{repo}/commits/{sha}/pulls` lookup, and a commit the API cannot place is
+left unlinked rather than guessed at.
+
+That pairing repairs two things GitHub's generated list cannot express:
+
+- a commit that reached the branch without the suffix now reaches its entry, so
+  the classifier can read its type instead of dumping it in `Other changes`;
+- a pull request whose commit is in the release but whose entry GitHub never
+  published is credited beneath the roll-up that carried it in. v0.76.1 shipped
+  fifteen fixes behind a single `Fixed` entry before this existed.
+
+Both are bounded: `--api-budget` caps the lookups, and every failed call falls
+back to the behaviour the pipeline had before the pass existed.
+
+### 2. Deterministic pass (authoritative)
 
 `scripts/release-notes-classify.py` reads the canonical squash-merge commits
 between the comparison base and the tag, and maps each entry by its
@@ -89,7 +116,7 @@ express the change.
 `scripts/release-notes-regroup.py` then renders the plan, refusing unless it
 covers the body exactly.
 
-### 2. Agent review pass (optional, best-effort)
+### 3. Agent review pass (optional, best-effort)
 
 `scripts/release-notes-generate.sh` probes for a reachable agent and, only if
 one answers, asks it to review the deterministic plan — chiefly the
@@ -119,8 +146,8 @@ DRY_RUN=true scripts/release-notes-generate.sh
 a manual run additionally needs `RELEASE_NOTES_APPROVED=true`, so a hand run
 cannot edit a published release by accident; the release job sets that variable
 explicitly in its own definition. The work directory it prints keeps
-`body.backup.md`; restore with
-`gh release edit "$RELEASE_TAG" --notes-file <workdir>/body.backup.md`.
+`body.github.md`, exactly as GitHub published it; restore with
+`gh release edit "$RELEASE_TAG" --notes-file <workdir>/body.github.md`.
 
 To hand-classify instead, keep the scratch files outside the repository but
 keep running the scripts from the repository root:

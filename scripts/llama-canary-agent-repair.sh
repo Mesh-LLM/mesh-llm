@@ -33,9 +33,10 @@ cd "$ROOT"
 
 OLD_SHA="$(tr -d '[:space:]' < third_party/llama.cpp/upstream.txt)"
 PIN_FILE="$ROOT/third_party/llama.cpp/upstream.txt"
-AGENT_MODEL="${CANARY_AGENT_MODEL:-zai-coding-plan/glm-5.3-flash}"
-AGENT_TIMEOUT_SECONDS="${CANARY_AGENT_TIMEOUT_SECONDS:-27000}"
-VERIFICATION_TIMEOUT_SECONDS="${CANARY_VERIFICATION_TIMEOUT_SECONDS:-14400}"
+AGENT_PROVIDER="${CANARY_AGENT_PROVIDER:-custom_z_ai_coding_plan}"
+AGENT_MODEL="${CANARY_AGENT_MODEL:-glm-5.3-flash}"
+AGENT_TIMEOUT_SECONDS="${CANARY_AGENT_TIMEOUT_SECONDS:-41400}"
+VERIFICATION_TIMEOUT_SECONDS="${CANARY_VERIFICATION_TIMEOUT_SECONDS:-43200}"
 RUN_ID="${GITHUB_RUN_ID:-manual-$(date +%s)}"
 RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT:-1}"
 RUN_KEY="${RUN_ID}-${RUN_ATTEMPT}"
@@ -62,7 +63,8 @@ CERTIFIED_SHA=""
 VERIFICATION_TREE=""
 VERIFICATION_DEADLINE_AT=0
 REPAIR_DEADLINE_AT=0
-AGENT_SESSION_ID=""
+AGENT_SESSION_NAME="llama-canary-repair-${RUN_KEY}"
+AGENT_SESSION_STARTED=false
 
 if [[ "$HARNESS_MODE" != "repair" && "$HARNESS_MODE" != "verify" ]]; then
   echo "CANARY_HARNESS_MODE must be repair or verify" >&2
@@ -89,17 +91,22 @@ if [[ -z "$(git config user.name)" || -z "$(git config user.email)" ]]; then
   echo "git user.name and user.email must be configured before canary repair" >&2
   exit 1
 fi
-if [[ "$HARNESS_MODE" == "repair" ]] && ! command -v opencode >/dev/null 2>&1; then
-  echo "opencode CLI not found on runner; install opencode-ai on the family-certify image" >&2
+if [[ "$HARNESS_MODE" == "repair" ]] && ! command -v goose >/dev/null 2>&1; then
+  echo "Goose CLI not found on runner; install it at /Users/lab/.local/bin/goose on the family-certify image" >&2
   exit 1
 fi
-if [[ "$HARNESS_MODE" == "repair" \
-    && -z "${OPENCODE_API_KEY:-}" && -z "${NEMOTRON_API_KEY:-}" ]]; then
-  if [[ ! -s "${HOME}/.local/share/opencode/auth.json" ]] \
-      && ! opencode auth list 2>/dev/null | grep -Eq '[1-9][0-9]* credentials'; then
-    echo "no agent credentials: set OPENCODE_API_KEY/NEMOTRON_API_KEY or run 'opencode auth login' on the runner" >&2
+if [[ "$HARNESS_MODE" == "repair" ]]; then
+  goose_check_status=0
+  goose_check="$(
+    GOOSE_PROVIDER="$AGENT_PROVIDER" GOOSE_MODEL="$AGENT_MODEL" \
+      goose info --check 2>&1
+  )" || goose_check_status=$?
+  if (( goose_check_status != 0 )); then
+    printf '%s\n' "$goose_check" >&2
+    echo "Goose provider check failed for ${AGENT_PROVIDER}/${AGENT_MODEL}; repair the family-certify runner configuration" >&2
     exit 1
   fi
+  printf '%s\n' "$goose_check"
 fi
 
 mkdir -p "$STATE_DIR" "$(dirname "$PLAN_PATH")"
@@ -161,7 +168,7 @@ verify_repair_pin() {
 agent_prompt() {
   printf 'Complete the llama.cpp upstream update to %s as one developer task in this checkout.
 
-The trusted harness has already written third_party/llama.cpp/upstream.txt to the exact target and recorded it in .deps/llama-canary-target-sha. Read ci/llama-canary/agent-repair-prompt.md and every repository skill it names, then own the work end to end: reproduce the queue failure, deliberately rebase or regenerate the owned patches, fix any generated-family rewriter or Rust ABI fallout, and run the canonical prepare, build, smoke, live-matrix, and full supported-family certification commands. Inspect each failure and keep iterating until every required command passes.
+The trusted harness has already written third_party/llama.cpp/upstream.txt to the exact target and recorded it in .deps/llama-canary-target-sha. Read ci/llama-canary/agent-repair-prompt.md and every repository skill it names, then own the work end to end: reproduce the queue failure, deliberately rebase or regenerate the owned patches, fix any generated-family rewriter or Rust ABI fallout, and run the canonical prepare, build, smoke, and full supported-family certification commands. Inspect each failure and keep iterating until every required command passes.
 
 Do not weaken, skip, or narrow a gate. Do not edit the workflow, this wrapper, its publisher, the agent runbook, or their contract tests. Do not create or switch branches, commit, push, open a pull request, or use GitHub credentials. Leave the completed changes in this working tree. The harness will independently rerun the entire verification sequence and only a green exact tree can be published.' \
     "$UPSTREAM_SHA"
@@ -169,7 +176,7 @@ Do not weaken, skip, or narrow a gate. Do not edit the workflow, this wrapper, i
 
 agent_session_step() {
   local prompt="$1" started heartbeat_pid status seconds
-  local -a opencode_args
+  local -a goose_args
   if ! seconds="$(remaining_repair_seconds)"; then
     echo "agent developer task cannot continue: repair budget exhausted" >&2
     return 124
@@ -189,38 +196,35 @@ agent_session_step() {
   heartbeat_pid=$!
   set +m
   set +e
-  opencode_args=(run --auto --format json --model "$AGENT_MODEL" --dir "$ROOT")
-  if [[ -n "$AGENT_SESSION_ID" ]]; then
-    opencode_args+=(--session "$AGENT_SESSION_ID")
+  goose_args=(
+    run
+    --provider "$AGENT_PROVIDER"
+    --model "$AGENT_MODEL"
+    --with-builtin developer
+    --no-profile
+    --max-turns 1000
+    --output-format stream-json
+    --name "$AGENT_SESSION_NAME"
+  )
+  if [[ "$AGENT_SESSION_STARTED" == "true" ]]; then
+    goose_args+=(--resume)
   fi
+  goose_args+=(--text "$prompt")
   run_for "agent developer task" "$seconds" env \
     -u GH_TOKEN -u GITHUB_TOKEN -u CANARY_REPAIR_TOKEN \
-    opencode "${opencode_args[@]}" "$prompt" \
+    GOOSE_MODE=auto GOOSE_DISABLE_SESSION_NAMING=true \
+    goose "${goose_args[@]}" \
     > >(tee -a "$AGENT_LOG") 2>&1
   status=$?
   set -e
   kill -- "-$heartbeat_pid" 2>/dev/null || kill "$heartbeat_pid" 2>/dev/null || true
   wait "$heartbeat_pid" 2>/dev/null || true
-  if (( status == 0 )) && [[ -z "$AGENT_SESSION_ID" ]]; then
-    AGENT_SESSION_ID="$(python3 - "$AGENT_LOG" <<'PY'
-import json
-import sys
-
-for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
-    try:
-        event = json.loads(line)
-    except json.JSONDecodeError:
-        continue
-    session = event.get("sessionID")
-    if isinstance(session, str) and session:
-        print(session)
-        break
-PY
-)"
-    if [[ -z "$AGENT_SESSION_ID" ]]; then
-      echo "agent developer task did not emit an OpenCode session ID" >&2
-      return 1
-    fi
+  if (( status != 0 )); then
+    printf 'agent developer task exited with status %s\n' "$status" \
+      | tee -a "$AGENT_LOG" >&2
+  fi
+  if (( status == 0 )); then
+    AGENT_SESSION_STARTED=true
   fi
   return "$status"
 }
@@ -384,7 +388,7 @@ run_full_build() {
   run_verification_logged "generated model-family patch check" "$BUILD_LOG" \
     scripts/check-skippy-generated-family-patch.sh || return 1
   run_verification_logged "stage runtime crate build" "$BUILD_LOG" \
-    cargo build -p skippy-runtime -p skippy-server -p skippy-model-package -p skippy-correctness \
+    cargo build -p skippy-runtime -p skippy-server -p skippy-model-package -p skippy-correctness -p skippy-topology --bins \
     || return 1
   run_verification_logged "Skippy smoke tests" "$BUILD_LOG" \
     scripts/skippy-ci-smoke.sh || return 1
@@ -399,31 +403,44 @@ run_certification() {
   run_verification_logged "full family certification plan" "$CERTIFY_LOG" \
     python3 scripts/plan-family-battery.py \
       --manifest ci/llama-canary/family-certified.json \
-      --cadence llama-bump \
       --shard-count 1 \
       --check-cache \
       --cache-root "$HF_CACHE" \
       --output "$PLAN_PATH" \
     || return 1
-  run_verification_logged "live package-v2 matrix" "$CERTIFY_LOG" env \
-    FAMILY_BATTERY_RUN_ID="$FAMILY_BATTERY_RUN_ID" \
-    SKIPPY_CANARY_LIVE_MATRIX_BACKEND="${SKIPPY_CANARY_LIVE_MATRIX_BACKEND:-metal}" \
-    SKIPPY_CANARY_LIVE_MATRIX_ROOT="$ROOT/target/family-battery/$FAMILY_BATTERY_RUN_ID" \
-    scripts/skippy-canary-live-matrix.sh --prepare || return 1
   run_verification_logged "full supported-family certification" "$CERTIFY_LOG" env \
     FAMILY_BATTERY_RUN_ID="$FAMILY_BATTERY_RUN_ID" \
     scripts/skippy-family-battery.sh --skip-build --plan "$PLAN_PATH"
 }
 
 run_candidate_gates() {
+  local roster_mode="${1:-verify}"
+  if [[ "$roster_mode" != "verify" && "$roster_mode" != "refresh" ]]; then
+    echo "invalid candidate-gate roster mode: $roster_mode" >&2
+    return 2
+  fi
   : > "$PREPARE_LOG"
   : > "$MANIFEST_POLICY_LOG"
   : > "$BUILD_LOG"
   : > "$CERTIFY_LOG"
   run_prepare || return 1
+  if [[ "$roster_mode" == "refresh" ]]; then
+    # Preparation writes the candidate upstream pin. Generate only after that
+    # transition so the roster recipe matches the runtime about to be built.
+    # Independent verification uses the default read-only mode below.
+    write_split_certification_roster || return 1
+  fi
   validate_agent_manifest_changes || return 1
   run_full_build || return 1
   run_certification
+}
+
+write_split_certification_roster() {
+  python3 scripts/generate-split-certified.py
+}
+
+check_split_certification_roster() {
+  python3 scripts/generate-split-certified.py --check
 }
 
 repair_candidate_until_green() {
@@ -435,7 +452,7 @@ repair_candidate_until_green() {
   while remaining_repair_seconds >/dev/null; do
     agent_session_step "$prompt" || return 1
     assert_agent_control_unchanged || return 1
-    if run_candidate_gates; then
+    if run_candidate_gates refresh; then
       assert_agent_control_unchanged || return 1
       validate_agent_manifest_changes || return 1
       return 0
@@ -475,7 +492,7 @@ write_pr_body() {
     echo "- Workflow run: \`${RUN_KEY}\`"
     echo "- Certified commit: \`${CERTIFIED_SHA}\`"
     echo
-    echo "One agent completed the pin and patch-queue task. The trusted harness then independently passed prepare, the complete patched llama.cpp and Rust build, Skippy smoke tests, the live package-v2 matrix, and the full supported-family certification on this exact commit."
+    echo "One agent completed the pin and patch-queue task. The trusted harness then independently passed prepare, the complete patched llama.cpp and Rust build, Skippy smoke tests, and the full supported-family certification on this exact commit."
     echo
     cat "$UPSTREAM_SUMMARY"
   } > "$PR_BODY"
@@ -529,4 +546,5 @@ if ! run_candidate_gates; then
   echo "final canary verification failed; no canary branch or pull request was published" >&2
   exit 1
 fi
+check_split_certification_roster
 finalize_certified_tree

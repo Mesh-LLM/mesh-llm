@@ -34,46 +34,62 @@ const EVIDENCE_FILE_ENV: &str = "MESH_LLM_RUNTIME_EVENTS_EVIDENCE_FILE";
 /// `MESH_LLM_RUNTIME_EVENTS_EVIDENCE_FILE` is unset. The actual file I/O is
 /// `skippy_runtime::write_evidence_marker`, unit tested directly in
 /// `crates/skippy-runtime/src/native_test_evidence.rs`.
-fn write_marker(line: &str) {
-    let path = env::var_os(EVIDENCE_FILE_ENV).map(PathBuf::from);
-    skippy_runtime::write_evidence_marker(path.as_deref(), line);
+fn write_marker(path: Option<&std::path::Path>, line: &str) {
+    skippy_runtime::write_evidence_marker(path, line);
 }
 
 #[test]
 fn runtime_events_native_gate() {
+    // Resolve the evidence destination before loading native libraries. The
+    // loader and model-open path are process-global; retaining this value also
+    // makes the marker destination stable if native initialization mutates the
+    // process environment.
+    let evidence_path = env::var_os(EVIDENCE_FILE_ENV).map(PathBuf::from);
+
     if env::var(GATE_ENV).ok().as_deref() != Some("1") {
         println!("BLOCKED: {GATE_ENV} unset");
-        write_marker("blocked-when-ungated: gate unset, no native symbol was touched");
+        write_marker(
+            evidence_path.as_deref(),
+            "blocked-when-ungated: gate unset, no native symbol was touched",
+        );
         return;
     }
 
     #[cfg(not(feature = "dynamic-native-runtime"))]
     {
         println!("BLOCKED: dynamic-native-runtime feature not enabled");
-        write_marker("blocked: dynamic-native-runtime feature is not enabled for this run");
+        write_marker(
+            evidence_path.as_deref(),
+            "blocked: dynamic-native-runtime feature is not enabled for this run",
+        );
         panic!("{GATE_ENV}=1 requires the dynamic-native-runtime feature");
     }
 
     #[cfg(feature = "dynamic-native-runtime")]
     {
-        run_real_native_gate();
+        run_real_native_gate(evidence_path);
     }
 }
 
 #[cfg(feature = "dynamic-native-runtime")]
-fn run_real_native_gate() {
+fn run_real_native_gate(evidence_path: Option<PathBuf>) {
+    let evidence_path = evidence_path.unwrap_or_else(|| {
+        panic!("{GATE_ENV}=1 requires {EVIDENCE_FILE_ENV} to name the evidence file")
+    });
     let bundle_dir = env::var(BUNDLE_DIR_ENV).unwrap_or_else(|_| {
         println!("BLOCKED: {BUNDLE_DIR_ENV} unset");
-        write_marker(&format!(
-            "blocked: {BUNDLE_DIR_ENV} unset, required when {GATE_ENV}=1"
-        ));
+        write_marker(
+            Some(&evidence_path),
+            &format!("blocked: {BUNDLE_DIR_ENV} unset, required when {GATE_ENV}=1"),
+        );
         panic!("{GATE_ENV}=1 requires {BUNDLE_DIR_ENV} to point at a dynamic native runtime")
     });
     let model_path = env::var(MODEL_ENV).unwrap_or_else(|_| {
         println!("BLOCKED: {MODEL_ENV} unset");
-        write_marker(&format!(
-            "blocked: {MODEL_ENV} unset, required when {GATE_ENV}=1"
-        ));
+        write_marker(
+            Some(&evidence_path),
+            &format!("blocked: {MODEL_ENV} unset, required when {GATE_ENV}=1"),
+        );
         panic!("{GATE_ENV}=1 requires {MODEL_ENV} to name a readable model")
     });
 
@@ -197,22 +213,33 @@ fn run_real_native_gate() {
     // Only after reporter installation, successful model-open, structured
     // production callbacks, and the unload exercise have all completed do we
     // claim that this opt-in path actually executed.
-    write_marker("executed");
+    write_marker(Some(&evidence_path), "executed");
     write_marker(
+        Some(&evidence_path),
         "exact-abi-admission: native runtime loaded (loader enforces exact major.minor.patch)",
     );
-    write_marker(&format!(
-        "capability-probe: confirmed={:#x} health_messages={}",
-        report.confirmed,
-        report.health_messages.len()
-    ));
-    write_marker("reporter-install: true");
-    write_marker("model-open: single-part real model-open succeeded");
-    write_marker(&format!(
-        "structured-production-callbacks: {structured_count}"
-    ));
-    write_marker(&format!("unload-callbacks: {unload_count}"));
-    write_marker("reporter-clear: returned");
+    write_marker(
+        Some(&evidence_path),
+        &format!(
+            "capability-probe: confirmed={:#x} health_messages={}",
+            report.confirmed,
+            report.health_messages.len()
+        ),
+    );
+    write_marker(Some(&evidence_path), "reporter-install: true");
+    write_marker(
+        Some(&evidence_path),
+        "model-open: single-part real model-open succeeded",
+    );
+    write_marker(
+        Some(&evidence_path),
+        &format!("structured-production-callbacks: {structured_count}"),
+    );
+    write_marker(
+        Some(&evidence_path),
+        &format!("unload-callbacks: {unload_count}"),
+    );
+    write_marker(Some(&evidence_path), "reporter-clear: returned");
 }
 
 /// Resolves the real installed-runtime layout: `MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR`
