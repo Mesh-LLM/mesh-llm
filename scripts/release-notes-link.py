@@ -210,15 +210,31 @@ def augment(lines, insert_at, insertions, trailing):
 
 
 def commit_links(commits):
-    """Commit records the classifier cannot key from the subject alone."""
+    """Commit records the classifier cannot key from the subject alone.
+
+    One pull request can reach the range as several suffixless commits. The
+    first of them, in commit order, establishes the record's subject: that is
+    the commit `recover_entries` already renders the entry title from, so the
+    title the notes show and the subject the classifier reads stay the same
+    one. Every later record then contributes the trailers the first did not
+    carry, so a `Release-Notes:`, `Security:`, or `BREAKING CHANGE:` declared
+    on any commit of the pull request still reaches classification. A trailer
+    the first record already stated stands, so precedence never depends on how
+    many commits happened to carry the pull request.
+    """
     links = {}
     for commit in commits:
         if not commit.get("linked_by_api"):
             continue
-        links.setdefault(
-            str(commit["pr"]),
-            {"subject": commit["subject"], "trailers": commit["trailers"]},
-        )
+        record = links.get(str(commit["pr"]))
+        if record is None:
+            links[str(commit["pr"])] = {
+                "subject": commit["subject"],
+                "trailers": dict(commit["trailers"]),
+            }
+            continue
+        for key, value in commit["trailers"].items():
+            record["trailers"].setdefault(key, value)
     return links
 
 

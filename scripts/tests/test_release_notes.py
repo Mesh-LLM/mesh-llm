@@ -912,6 +912,38 @@ class LinkTest(unittest.TestCase):
         self.assertEqual(list(links), ["1733"])
         self.assertEqual(links["1733"]["trailers"], {"release-notes": "Internal"})
 
+    def test_a_duplicate_record_keeps_the_first_subject_and_adds_its_trailers(self):
+        commits = [
+            commit("a", "fix(openai): repair a thing", {"release-notes": "Fixed"}),
+            commit("b", "fix(openai): repair it again", {"security": "CVE-1"}),
+        ]
+        LINK.resolve_pull_requests(
+            commits, "o/r", FakeGh(pulls={"a": [1733], "b": [1733]})
+        )
+        links = LINK.commit_links(commits)
+        self.assertEqual(list(links), ["1733"])
+        self.assertEqual(links["1733"]["subject"], "fix(openai): repair a thing")
+        self.assertEqual(
+            links["1733"]["trailers"],
+            {"release-notes": "Fixed", "security": "CVE-1"},
+        )
+
+    def test_a_decisive_trailer_on_a_later_duplicate_reaches_the_classifier(self):
+        commits = [
+            commit("a", "fix(openai): repair a thing"),
+            commit("b", "fix(openai): repair it again", {"security": "CVE-1"}),
+        ]
+        LINK.resolve_pull_requests(
+            commits, "o/r", FakeGh(pulls={"a": [1733], "b": [1733]})
+        )
+        records = {int(pr): record for pr, record in LINK.commit_links(commits).items()}
+        plan, unclassified = CLASSIFY.build_plan([1733], records, "1.0.0", "2026-01-01")
+        self.assertEqual(unclassified, 0)
+        self.assertEqual(
+            [section for section in plan["sections"] if section["title"] == "Security"],
+            [{"title": "Security", "prs": [1733]}],
+        )
+
     def test_the_classifier_uses_a_linked_record(self):
         path = self.dir / "links.json"
         path.write_text(
