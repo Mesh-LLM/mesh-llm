@@ -213,6 +213,17 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn('echo "HF_HOME=$expected_hf_cache"', preflight)
         self.assertIn('echo "HF_HUB_CACHE=$expected_hf_cache/hub"', preflight)
 
+    def test_persistent_runner_executes_goose_preflight(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        preflight = _step_block(workflow, "Verify runner toolchain")
+        self.assertIn('goose_dir="/Users/lab/.local/bin"', preflight)
+        self.assertIn('echo "$goose_dir" >> "$GITHUB_PATH"', preflight)
+        self.assertIn("xcrun goose; do", preflight)
+        self.assertIn('goose_version="$(goose --version 2>&1)"', preflight)
+        self.assertIn("goose_status=$?", preflight)
+        self.assertIn("failed its executable preflight", preflight)
+        self.assertIn("goose returned no version", preflight)
+
     def test_rewriter_check_reexecs_and_pins_native_architecture(self) -> None:
         checker = REWRITER_CHECK.read_text(encoding="utf-8")
         self.assertIn('exec arch -arm64 "${BASH_SOURCE[0]}" "$@"', checker)
@@ -295,6 +306,10 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("steps.sha.outputs.changed == 'true'", changed)
         self.assertIn("timeout-minutes: 480", changed)
         self.assertIn("continue-on-error: true", changed)
+        self.assertIn("LLAMA_CANARY_GOOSE_PROVIDER", changed)
+        self.assertIn("custom_z_ai_coding_plan", changed)
+        self.assertIn("LLAMA_CANARY_GOOSE_MODEL", changed)
+        self.assertIn("glm-5.3-flash", changed)
         self.assertIn('CANARY_AGENT_TIMEOUT_SECONDS: "27000"', changed)
         self.assertIn("CANARY_HARNESS_MODE: repair", changed)
         self.assertNotIn("CANARY_REPAIR_TOKEN:", changed)
@@ -349,6 +364,34 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertNotIn("name: llama-family-battery-", upload)
         self.assertIn("retention-days: 14", upload)
 
+    def test_changed_pin_jobs_configure_local_git_identity_before_harness(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        jobs = (
+            workflow[
+                workflow.index("  latest-upstream:") : workflow.index(
+                    "  verify-changed-canary:"
+                )
+            ],
+            workflow[
+                workflow.index("  verify-changed-canary:") : workflow.index(
+                    "  publish-certified-canary:"
+                )
+            ],
+        )
+        for job in jobs:
+            identity = _step_block(job, "Configure canary Git identity")
+            self.assertIn(
+                'git config --local user.name "mesh-llama-canary-bot"', identity
+            )
+            self.assertIn(
+                'git config --local user.email "llama-canary-bot@meshllm.invalid"',
+                identity,
+            )
+            self.assertLess(
+                job.index("Configure canary Git identity"),
+                job.index("scripts/llama-canary-agent-repair.sh"),
+            )
+
     def test_two_scheduled_failures_raise_one_reconciled_issue(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         alert = workflow[workflow.index("  alert-consecutive-failures:") :]
@@ -377,6 +420,36 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertNotIn("CANARY_AGENT_REVIEW", workflow)
         self.assertNotIn("post_green", wrapper)
         self.assertNotIn("post-green", wrapper)
+
+    def test_trusted_canary_owns_split_roster_promotion(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        wrapper = (ROOT / "scripts" / "llama-canary-agent-repair.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Verify split certification roster", workflow)
+        self.assertIn("generate-split-certified.py --check", workflow)
+        self.assertIn("steps.split_roster.outcome == 'success'", workflow)
+        gates = wrapper[
+            wrapper.index("run_candidate_gates()") : wrapper.index(
+                "write_split_certification_roster()"
+            )
+        ]
+        self.assertLess(
+            gates.index("run_prepare"),
+            gates.index("write_split_certification_roster"),
+        )
+        self.assertLess(
+            gates.index("write_split_certification_roster"),
+            gates.index("validate_agent_manifest_changes"),
+        )
+        repair = wrapper[wrapper.index("repair_candidate_until_green()") :]
+        self.assertIn("run_candidate_gates refresh", repair)
+        verify = wrapper[wrapper.rindex("load_candidate_bundle") :]
+        self.assertIn("if ! run_candidate_gates; then", verify)
+        self.assertLess(
+            verify.index("check_split_certification_roster"),
+            verify.index("finalize_certified_tree"),
+        )
 
     def test_family_results_have_typed_failure_outcomes(self) -> None:
         certify = FAMILY_CERTIFY.read_text(encoding="utf-8")

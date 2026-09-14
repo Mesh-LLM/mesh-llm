@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/granite.cpp b/src/models/granite.cpp
-index 9e9f97e94dcad40313348f76c13ea439804847e4..895c414c1816630b3f1ffad3440f6cc3e587a7be 100644
+index 60d463aedab076d938df238d055469ecf4b38be7..afa1ce3f7650e3b0b4d290432ec37d691862b7c0 100644
 --- a/src/models/granite.cpp
 +++ b/src/models/granite.cpp
-@@ -124,7 +124,12 @@ llama_model_granite::graph::graph(
+@@ -133,7 +133,12 @@ llama_model_granite::graph::graph(
      ggml_tensor * cur;
      ggml_tensor * inpL;
  
@@ -26,7 +26,7 @@ index 9e9f97e94dcad40313348f76c13ea439804847e4..895c414c1816630b3f1ffad3440f6cc3
  
      // inp_pos - built only if rope enabled
      ggml_tensor * inp_pos = nullptr;
-@@ -133,15 +138,17 @@ llama_model_granite::graph::graph(
+@@ -142,15 +147,17 @@ llama_model_granite::graph::graph(
      }
      auto * inp_attn = build_attn_inp_kv();
  
@@ -47,7 +47,7 @@ index 9e9f97e94dcad40313348f76c13ea439804847e4..895c414c1816630b3f1ffad3440f6cc3
              ggml_tensor * ds = ggml_view_2d(ctx0,
                  res->t_inp_embd, n_embd, n_tokens,
                  res->t_inp_embd->nb[1],
-@@ -163,7 +170,7 @@ llama_model_granite::graph::graph(
+@@ -172,7 +179,7 @@ llama_model_granite::graph::graph(
              cur, inp_pos, inp_attn,
              model, n_embd_head, il);
  
@@ -56,7 +56,7 @@ index 9e9f97e94dcad40313348f76c13ea439804847e4..895c414c1816630b3f1ffad3440f6cc3
              cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
-@@ -172,7 +179,15 @@ llama_model_granite::graph::graph(
+@@ -181,7 +188,15 @@ llama_model_granite::graph::graph(
  
          // input for next layer
          inpL = cur;

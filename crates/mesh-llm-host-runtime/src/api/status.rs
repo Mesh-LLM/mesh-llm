@@ -112,6 +112,8 @@ pub(crate) struct RuntimeStagePayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) source_model_sha256: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) split_certification: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) source_model_bytes: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) materialized_path: Option<String>,
@@ -817,6 +819,11 @@ pub(crate) fn build_runtime_stage_payloads(
         .into_iter()
         .map(|status| {
             let multimodal = status.projector_path.is_some();
+            let split_certification = crate::inference::skippy::split_certification_label(
+                status.package_ref.as_deref(),
+                status.source_model_sha256.as_deref(),
+                status.manifest_sha256.as_deref(),
+            );
             RuntimeStagePayload {
                 topology_id: status.topology_id,
                 run_id: status.run_id,
@@ -826,6 +833,7 @@ pub(crate) fn build_runtime_stage_payloads(
                 manifest_sha256: status.manifest_sha256,
                 source_model_path: status.source_model_path,
                 source_model_sha256: status.source_model_sha256,
+                split_certification,
                 source_model_bytes: status.source_model_bytes,
                 materialized_bytes: materialized_stage_bytes(status.materialized_path.as_deref()),
                 materialized_path: status.materialized_path,

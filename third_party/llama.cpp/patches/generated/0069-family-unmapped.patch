@@ -233,10 +233,10 @@ index 24fc4e0226b4d3380786a3e0428673373d016154..ab2e16e6e5522ffbc94151c52ac9f866
      cur = inpL;
  
 diff --git a/src/models/bert.cpp b/src/models/bert.cpp
-index ca0281d306b157d4d1e0f1d882ee6f986b4f1ec5..093984fa0f76d063d9f556d156290f671d5d28b6 100644
+index 9cc03dc56ad0924ad9be842320a0c9a7a06c88ac..6d582a88eb4ae9b93b3d7cd4a4b91a35f32c1e29 100644
 --- a/src/models/bert.cpp
 +++ b/src/models/bert.cpp
-@@ -91,27 +91,34 @@ llama_model_bert::graph::graph(const llama_model & model, const llm_graph_params
+@@ -79,27 +79,34 @@ llama_model_bert::graph::graph(const llama_model & model, const llm_graph_params
      }
  
      // construct input embeddings (token, type, position)
@@ -277,7 +277,7 @@ index ca0281d306b157d4d1e0f1d882ee6f986b4f1ec5..093984fa0f76d063d9f556d156290f67
          ggml_tensor * cur = inpL;
  
          {
-@@ -154,7 +161,7 @@ llama_model_bert::graph::graph(const llama_model & model, const llm_graph_params
+@@ -142,7 +149,7 @@ llama_model_bert::graph::graph(const llama_model & model, const llm_graph_params
              cb(cur, "kqv_out", il);
          }
  
@@ -286,7 +286,7 @@ index ca0281d306b157d4d1e0f1d882ee6f986b4f1ec5..093984fa0f76d063d9f556d156290f67
              cur  = ggml_get_rows(ctx0, cur, inp_out_ids);
              inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
          }
-@@ -222,7 +229,15 @@ llama_model_bert::graph::graph(const llama_model & model, const llm_graph_params
+@@ -210,7 +217,15 @@ llama_model_bert::graph::graph(const llama_model & model, const llm_graph_params
  
          // input for next layer
          inpL = cur;
@@ -1385,10 +1385,10 @@ index ee41787ba3e59d86dd7e660d63b1fc60e12a50fb..b8ec8ed772ef65631aee64252e2f0efa
      // prune to the requested output rows once, after all HC streams are done
      if (inp_out_ids) {
 diff --git a/src/models/inkling.cpp b/src/models/inkling.cpp
-index e7a574e5fc1c71f954096e35a06395c61cee0947..a1f3678621b707ffa018bc37ce04baf1a48eb0b5 100644
+index 6b956188b132bb8dc404b155735ecabe2d312ecb..ac5cb713a38e230c01f9f702da51bdc25fb3608d 100644
 --- a/src/models/inkling.cpp
 +++ b/src/models/inkling.cpp
-@@ -622,20 +622,35 @@ llama_model_inkling::graph::graph(const llama_model & model, const llm_graph_par
+@@ -630,20 +630,35 @@ llama_model_inkling::graph::graph(const llama_model & model, const llm_graph_par
          return;
      }
  
@@ -1665,7 +1665,7 @@ index 8772319f4611abde0bf51a55ada4b633decff7b9..d8a659d1b7c0c2f6fb120414ed4afb07
      cur = inpL;
  
 diff --git a/src/models/minimax-01.cpp b/src/models/minimax-01.cpp
-index 361114acc327296f8b8a16b7d9ba741fe732ec32..192e13544c5ca1bcb90ec26a3f2b32575099ccf4 100644
+index 9fa2e8fc01cdd0b0f7f55ef7926ab135ccd49570..4f1aa9c3dcd975964ea83bbf3e24f207a7ca0461 100644
 --- a/src/models/minimax-01.cpp
 +++ b/src/models/minimax-01.cpp
 @@ -205,13 +205,26 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
@@ -1698,7 +1698,7 @@ index 361114acc327296f8b8a16b7d9ba741fe732ec32..192e13544c5ca1bcb90ec26a3f2b3257
  
      llm_graph_input_la * la = nullptr;
  
-@@ -237,7 +250,9 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
+@@ -238,7 +251,9 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
  
      ggml_tensor * slopes = la->inp_slopes;
  
@@ -1709,7 +1709,7 @@ index 361114acc327296f8b8a16b7d9ba741fe732ec32..192e13544c5ca1bcb90ec26a3f2b3257
          res->t_layer_inp[il] = inpL;
  
          ggml_tensor * inpSA = inpL;
-@@ -418,7 +433,7 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
+@@ -419,7 +434,7 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
              cb(cur, "attn_out", il);
          }
  
@@ -1718,7 +1718,7 @@ index 361114acc327296f8b8a16b7d9ba741fe732ec32..192e13544c5ca1bcb90ec26a3f2b3257
              cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
              residual = ggml_get_rows(ctx0, residual, inp_out_ids);
-@@ -462,8 +477,16 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
+@@ -463,8 +478,16 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
  
          // input for next layer
          inpL = cur;
@@ -2458,7 +2458,7 @@ index 246144519e43fff01c5d569be6083848cad72c28..0cc333a9d210df5e9f89aaf230259804
  
      cur = build_norm(cur,
 diff --git a/src/models/plamo2.cpp b/src/models/plamo2.cpp
-index d946b3cff6da23f4d48c99b2fd1fd0bdf77803cb..460a3bc4ac3dbd2111b84dd3b268dd0949b0fb05 100644
+index ba1cea1465fd9f0dcf7e4475272f1a6ea9495edc..7f00e8cef81328e84cf67c9e0403275a7644b040 100644
 --- a/src/models/plamo2.cpp
 +++ b/src/models/plamo2.cpp
 @@ -113,16 +113,31 @@ llama_model_plamo2::graph::graph(const llama_model & model, const llm_graph_para
@@ -2497,9 +2497,9 @@ index d946b3cff6da23f4d48c99b2fd1fd0bdf77803cb..460a3bc4ac3dbd2111b84dd3b268dd09
          ggml_tensor * residual = inpL;
  
          // ggml_graph_add_node(gf, model.layers[il].attn_norm);
-@@ -167,7 +182,7 @@ llama_model_plamo2::graph::graph(const llama_model & model, const llm_graph_para
-         cur = build_norm(cur, model.layers[il].ffn_post_norm, NULL, LLM_NORM_RMS, il);
-         cb(cur, "ffn_post_norm", il);
+@@ -142,7 +157,7 @@ llama_model_plamo2::graph::graph(const llama_model & model, const llm_graph_para
+             cur = build_plamo2_attn_layer(inp_hybrid->get_attn(), inp_pos, cur, model, il);
+         }
  
 -        if (il == n_layer - 1 && inp_out_ids) {
 +        if (il == il_end - 1 && inp_out_ids) {

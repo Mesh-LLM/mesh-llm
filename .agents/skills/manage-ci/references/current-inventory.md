@@ -45,7 +45,9 @@ concurrency group queues each run behind active work on the persistent runner.
 It executes trusted
 default-branch content only on the persistent self-hosted `family-certify`
 runner group (tools come from the runner image; no GitHub Actions model
-caching). Before native compilation,
+caching). The runner preflight prepends `/Users/lab/.local/bin` and executes
+`goose --version`, so a missing, damaged, or non-executable agent binary fails
+before the changed-pin harness starts. Before native compilation,
 `scripts/plan-family-battery.py` validates the versioned JSON family policy,
 the mandatory three-lane contract for every certified profile, and every exact
 artifact revision/file in the immutable local cache. It reads only GGUF
@@ -90,15 +92,20 @@ evidence, and logs are uploaded for 14 days even when the battery fails. Stage
 readiness uses a declared per-model override or a model-size-derived deadline,
 each complete certification has
 a portable process-group wall-clock limit, and the workflow's outer battery
-ceiling is 12 hours. For a changed pin, one non-interactive `opencode` session
-(`CANARY_AGENT_MODEL`, default `zai-coding-plan/glm-5.3-flash`, overridable
-through `LLAMA_CANARY_AGENT_MODEL`) receives the complete developer task:
+ceiling is 12 hours. For a changed pin, one non-interactive named Goose session
+(`CANARY_AGENT_PROVIDER`/`CANARY_AGENT_MODEL`, default
+`custom_z_ai_coding_plan`/`glm-5.3-flash`, overridable through
+`LLAMA_CANARY_GOOSE_PROVIDER`/`LLAMA_CANARY_GOOSE_MODEL`) receives the
+complete developer task:
 repair or regenerate the patch queue, address ABI fallout, and iterate through
 the canonical prepare, manifest-policy, build, smoke, live-matrix, and
 family-certification commands. The agent and trusted candidate checks share a
 450-minute deadline and the agent has no GitHub credentials. Ending one coding
 response is not success: the wrapper runs the candidate gates and returns their
-logs to the same OpenCode session until they pass or the deadline expires. The
+logs to the same Goose session until they pass or the deadline expires. The
+repair and independent-verifier checkouts configure the same repository-local
+`mesh-llama-canary-bot` identity before invoking the wrapper, so candidate
+commit creation never depends on persistent-runner global Git configuration.
 agent may leave only uncommitted candidate changes and cannot alter `.github/`,
 `.agents/`, `scripts/`, `ci/ci.md`, or its runbook. Existing certification and
 parity rows remain immutable. The only manifest edits admitted by the trusted
@@ -119,7 +126,7 @@ rewriter check because `GITHUB_ENV` state does not cross job boundaries. The
 wrapper owns the exact upstream selector, validates the prepared-upstream stamp,
 runs the patched llama.cpp/native-test and Rust build gates, and completes the
 full supported-family certification using new native-build and family-evidence
-directories. Only the passing bundle is uploaded as a one-day certified
+directories. Before each changed-pin candidate gate, the trusted wrapper regenerates the exact-artifact split certification roster for the candidate recipe. Only a complete battery pass is snapshotted; the independent verifier and unchanged-pin canary reject a roster that is stale for the llama pin, Skippy ABI, or ordered patch queue. Only the passing bundle is uploaded as a one-day certified
 artifact. A separate success-gated job on a fresh
 GitHub-hosted runner receives the `CANARY_REPAIR_TOKEN`, validates the bundle,
 pushes the unique
@@ -226,7 +233,7 @@ it after the protected-main runner-contract update is active.
 | `static-abi-artifact.yml` | Typed static llama ABI producer with internal runner policy and an exact toolchain-epoch output |
 | `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that verify the producer-owned static ABI toolchain epoch and a pinned, digest-verified Skippy correctness fixture; related PR changes additionally compile one asserted, fully qualified runtime test and smoke an immutable SmolLM2 SafeTensors checkpoint through the complete Mesh config/resolver/server/native path to sampled prefill and decode with every supported load-time quantization |
 | `ci-{linux,macos,windows}-host-slice.yml` | Platform-pure neutral host producers; no empty cross-platform jobs |
-| `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers |
+| `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers. The Linux CPU row also runs the native runtime-event gate against the runtime it just built and uploads its evidence. |
 | `ci-{linux,macos,windows}-product-slice.yml` | Platform-pure composition-only product consumers |
 | `ci-platform-checks-slice.yml` | macOS portable/unit, Windows portable, and Windows log-store privacy ACL checks |
 | `ci-linux-product-smoke-slice.yml`, `ci-macos-product-smoke-slice.yml` | Platform-local callers of the typed CPU/CUDA/Vulkan (`gpu-nvidia` self-hosted), conditional ROCm (`gpu-amd`), and Metal product-integration suite plus model-download. The suite stages the registry-pinned SmolLM2 Q8 and IBM Granite 4.0 H Q4 pair once, runs dense standalone/SDK/restart, then dense passive-client split routing and strict recurrent `KvRecurrent` validation. Each split phase persists strict-whitelist seed/worker node, mesh, and peer identity plus stage/model snapshots, then atomically reconciles exact two-observer, topology/run/model/package/manifest, two-stage contiguous-cut and bind-address, ready-status, and served-model agreement. A capped five-minute wall-clock deadline with parallel, bounded endpoint capture finalizes failure evidence before workflow cancellation; the status projection excludes invite tokens, nested fields, and unrelated paths. Product reconciliation independently verifies both evidence files, records their paths and SHA-256 digests in `phase-results.json`, rejects missing or modified evidence, and uploads every JSON snapshot/evidence file with logs on success or failure. Linux CUDA packages admit only the reviewed cudart, cuBLAS, cuBLASLt, and nvJitLink families for the declared CUDA major, retain NVIDIA object bytes, and include the toolkit distribution license. The Linux CUDA smoke verifies that closure with `LD_LIBRARY_PATH` unset; cudart and cuBLAS are not installed by apt, and the NVIDIA driver remains host-owned. Before inference, it records CUDA visibility variables, host driver-library resolution and NVIDIA device nodes, then runs the packaged benchmark's device-count probe without benchmark allocations, using inherited and strict packaged-library resolution. ROCm skips unless `MESH_ROCM_INFERENCE_RUNNER_ENABLED` is exactly `true`; accelerator product-integration rows remain outside the checked plan pending live qualification. |
@@ -571,9 +578,20 @@ fail-open policy.
   integrity, family capability tags, and allowed suite/cadence membership.
   `scripts/generate-test-model-manifests.py` owns the family battery and
   suite-specific projections; CI contract tests reject stale projections.
-- `restore-smoke-inputs`: product/model extraction for consumers. Model
-  restores resolve generated suite manifests, use exact digest-bearing cache
-  keys, and stream-verify size and SHA-256 before use.
+- The Linux CPU runtime-event gate consumes `family-qwen3-dense` from
+  `skippy-ci-smoke.json` at pull-request, main, or manual cadence. Its
+  family-certification cadences remain unchanged. The gate resolves its
+  evidence output to an absolute path before Cargo starts, so the crate-local
+  test writer and lane check use the same file.
+- `restore-test-model`: the single implementation of model resolve, cache,
+  download, and verify. Resolves generated suite manifests, uses exact
+  digest-bearing cache keys, and stream-verifies size and SHA-256 before use.
+  `model_artifact_id` selects one artifact from a multi-artifact manifest,
+  and reaches both the resolve and the verify call so verification cannot
+  check a different file than the one downloaded.
+- `restore-smoke-inputs`: product extraction for consumers; delegates model
+  restoration to `restore-test-model` rather than carrying a second copy of
+  that sequence.
 - `select-ci-runners`: provider labels, cache permissions, and the
   provider-derived `allow_native_github_cache` / `allow_depot_remote_cache`
   outputs. Depot selections disable both cache paths by default. During the

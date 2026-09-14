@@ -110,21 +110,28 @@ mod rotate_key_tests {
 
     struct HomeEnvGuard {
         previous_home: Option<OsString>,
+        previous_test_home: Option<OsString>,
         previous_node_key_path: Option<OsString>,
     }
 
     impl HomeEnvGuard {
         fn set(path: &std::path::Path) -> Self {
             let previous_home = std::env::var_os("HOME");
+            let previous_test_home = std::env::var_os("MESH_LLM_TEST_HOME");
             let previous_node_key_path = std::env::var_os("MESH_LLM_NODE_KEY_PATH");
             unsafe {
-                // SAFETY: this guard is used only by #[serial] tests and restores both values.
+                // SAFETY: this guard is used only by #[serial] tests and restores every value.
                 std::env::set_var("HOME", path);
-                // SAFETY: this guard is used only by #[serial] tests and restores both values.
+                // SAFETY: this guard is used only by #[serial] tests and restores every value.
+                // `dirs::home_dir()` ignores HOME on Windows, so the identity paths would
+                // resolve to the real home without this.
+                std::env::set_var("MESH_LLM_TEST_HOME", path);
+                // SAFETY: this guard is used only by #[serial] tests and restores every value.
                 std::env::remove_var("MESH_LLM_NODE_KEY_PATH");
             }
             Self {
                 previous_home,
+                previous_test_home,
                 previous_node_key_path,
             }
         }
@@ -140,6 +147,16 @@ mod rotate_key_tests {
                 None => {
                     // SAFETY: this guard is used only by #[serial] tests and restores both values.
                     unsafe { std::env::remove_var("HOME") }
+                }
+            }
+            match self.previous_test_home.take() {
+                Some(value) => {
+                    // SAFETY: this guard is used only by #[serial] tests and restores every value.
+                    unsafe { std::env::set_var("MESH_LLM_TEST_HOME", value) }
+                }
+                None => {
+                    // SAFETY: this guard is used only by #[serial] tests and restores every value.
+                    unsafe { std::env::remove_var("MESH_LLM_TEST_HOME") }
                 }
             }
             match self.previous_node_key_path.take() {

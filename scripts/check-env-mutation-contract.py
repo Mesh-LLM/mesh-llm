@@ -33,6 +33,8 @@ TODO = "// TODO: Audit that the environment access only happens in single-thread
 AUDITED_FILES = (
     "crates/skippy-protocol/build.rs",
     "crates/mesh-llm-plugin/build.rs",
+    "crates/mesh-llm-config/src/env_overrides.rs",
+    "crates/mesh-llm-host-runtime/src/plugin/config/tests.rs",
     "crates/mesh-llm-host-runtime/src/capture.rs",
     "crates/mesh-llm-host-runtime/src/mesh/identity_persistence.rs",
     "crates/mesh-llm-host-runtime/src/mesh/public_identity_tests.rs",
@@ -59,14 +61,14 @@ AUDITED_FILES = (
 # so a new call (or a new mutation-bearing file) requires explicit review.
 KNOWN_UNAUDITED_MUTATION_COUNTS = {
     "crates/mesh-llm-host-runtime/src/api/routes/plugins.rs": 3,
-    "crates/mesh-llm-host-runtime/src/api/tests/apply_config_diagnostics.rs": 3,
-    "crates/mesh-llm-host-runtime/src/api/tests/mod.rs": 3,
+    "crates/mesh-llm-host-runtime/src/api/tests/apply_config_diagnostics.rs": 6,
+    "crates/mesh-llm-host-runtime/src/api/tests/mod.rs": 6,
     "crates/mesh-llm-host-runtime/src/api/tests/runtime_config_validation_authority.rs": 3,
-    "crates/mesh-llm-host-runtime/src/mesh/tests/admission/requirements.rs": 3,
+    "crates/mesh-llm-host-runtime/src/mesh/tests/admission/requirements.rs": 6,
     "crates/mesh-llm-host-runtime/src/mesh/tests/owner_control.rs": 5,
     "crates/mesh-llm-host-runtime/src/models/inventory.rs": 13,
     "crates/mesh-llm-host-runtime/src/models/resolve/tests.rs": 4,
-    "crates/mesh-llm-host-runtime/src/network/nostr/auto.rs": 3,
+    "crates/mesh-llm-host-runtime/src/network/nostr/auto.rs": 6,
     "crates/mesh-llm-host-runtime/src/runtime/config_state_tests/support.rs": 3,
     "crates/mesh-llm-host-runtime/src/runtime/tests/auto_join.rs": 1,
     "crates/mesh-llm-host-runtime/src/runtime/tests/mod.rs": 2,
@@ -101,6 +103,11 @@ SERIAL_ATTR_RE = re.compile(r"^\s*#\[(?:serial|serial_test::serial)\]\s*$")
 # verified as serial tests. Listing the helpers prevents a production function
 # from passing merely because a nearby comment contains the text `#[serial]`.
 SERIAL_TEST_HELPERS = {
+    "crates/mesh-llm-config/src/env_overrides.rs": {
+        "drop",
+        "set",
+        "with_env_override_for_test",
+    },
     "crates/mesh-llm-host-runtime/src/capture.rs": {"drop"},
     "crates/mesh-llm-host-runtime/src/mesh/identity_persistence.rs": {"drop", "set"},
     "crates/mesh-llm-host-runtime/src/mesh/public_identity_tests.rs": {"drop", "set_home"},
