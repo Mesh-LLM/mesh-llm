@@ -203,10 +203,10 @@ pub struct OpenAiExchangeEnvelope {
     /// actually dispatched. This is the one fact a downstream capsule needs
     /// to bind its `agent_input_digest` to the real bytes: the terminal event
     /// otherwise carries provenance and usage but nothing tying the sealed
-    /// capsule to *what was asked*. Present on a host-served terminal
-    /// envelope whose request carried a JSON body; `None` when the host held
-    /// no parsed body to digest (never a fabricated digest). No raw prompt
-    /// text is carried — only its digest.
+    /// capsule to *what was asked*. Present on a terminal envelope on either
+    /// dispatch path (host-served or plugin-served) whenever the host held a
+    /// parsed JSON request body; `None` when it did not (never a fabricated
+    /// digest). No raw prompt text is carried — only its digest.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_digest: Option<String>,
 }
