@@ -570,6 +570,22 @@ from being duplicated into every composed product artifact.
 
 ## Provider and cache policy
 
+The checked-in Cargo configuration is the repository-wide Rust accelerator
+owner: `sccache` is mandatory, Linux final links use the probed mold driver,
+macOS uses a probed ld64.lld with Apple ld fallback for SDK incompatibility,
+and Windows resolves rust-lld/lld-link. Workflows must not clear
+`RUSTC_WRAPPER`, synthesize a replacement Cargo linker config, or inject a
+direct `-fuse-ld` flag. Full Linux runner-image verification performs a real
+mold link before the image is eligible for a pinned consumer digest.
+
+Native llama builds keep C/C++ plus CUDA/HIP compiler launchers under
+`scripts/build-llama.sh`. The macOS family canary isolates its persistent
+cache by arm64 toolchain, SDK, backend, profile and recipe identity while
+retaining run-unique CMake state and `lipo` archive checks. Every managed
+Windows compile job uses short cache/temp roots, and every Windows native
+backend sets `CMAKE_OBJECT_PATH_MAX=180`, so even the nine-target ROCm
+release row no longer disables sccache.
+
 `.github/actions/select-ci-runners` maps semantic roles to approved labels.
 Fork pull requests use GitHub-hosted runners. Eligible same-repository PRs may
 use Depot while the repository-wide gate and time-bounded cache-risk exception

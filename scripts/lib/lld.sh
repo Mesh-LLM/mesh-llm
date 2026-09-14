@@ -67,6 +67,7 @@ _find_lld_darwin() {
 # reason instead of guessing one.
 lld_links() {
     local linker="$1"
+    shift
     LLD_PROBE_OUTPUT=""
     if ! command -v cc >/dev/null 2>&1; then
         LLD_PROBE_OUTPUT="no C compiler driver (cc) on PATH to probe with"
@@ -76,7 +77,7 @@ lld_links() {
     probe_dir="$(mktemp -d)" || return 1
     printf 'int main(void) { return 0; }\n' >"$probe_dir/probe.c"
     LLD_PROBE_OUTPUT="$(
-        cc "-fuse-ld=$linker" "$probe_dir/probe.c" -o "$probe_dir/probe" 2>&1
+        cc "$@" "-fuse-ld=$linker" "$probe_dir/probe.c" -o "$probe_dir/probe" 2>&1
     )" || status=1
     rm -rf "$probe_dir"
     return "$status"

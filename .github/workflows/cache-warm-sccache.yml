@@ -26,7 +26,6 @@ jobs:
       CARGO_INCREMENTAL: "0"
       MESH_LLM_SKIP_UI: "1"
       RUSTC_WRAPPER: sccache
-      RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
       SCCACHE_GHA_ENABLED: "false"
       SCCACHE_CACHE_SIZE: 2G
     steps:
@@ -41,7 +40,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          key="mesh-llm-sccache-seed-linux-x86_64-img-f499b79b-epoch-f499b79b-v3-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', 'Justfile', 'just/**') }}"
+          key="mesh-llm-sccache-seed-linux-x86_64-img-f499b79b-epoch-f499b79b-v3-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/lib/lld.sh', 'Justfile', 'just/**') }}"
           echo "key=$key" >> "$GITHUB_OUTPUT"
       - name: Check for an existing exact seed
         id: restore

@@ -206,7 +206,7 @@ jobs:
           mkdir -p "$probe/src"
           printf '[package]\nname = "mesh-cargo-linker-check"\nversion = "0.0.0"\nedition = "2024"\n' > "$probe/Cargo.toml"
           printf 'fn main() {}\n' > "$probe/src/main.rs"
-          PATH="$lld_bin:$PATH" CARGO_ENCODED_RUSTFLAGS='-Clink-arg=-fuse-ld=lld' \
+          PATH="$lld_bin:$PATH" \
             cargo rustc --quiet --manifest-path "$probe/Cargo.toml" --target x86_64-apple-darwin
       - name: Build, smoke, and stage immutable addon
         env:
@@ -293,6 +293,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
+      - uses: ./.github/actions/setup-windows-short-paths
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.20.0

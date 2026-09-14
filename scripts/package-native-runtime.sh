@@ -6,9 +6,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/cuda-toolkit.sh"
-# shellcheck source=scripts/lib/lld.sh
-source "$SCRIPT_DIR/lib/lld.sh"
-
 BUILD=0
 OUT_DIR="$REPO_ROOT/dist/native-runtimes"
 BACKEND="${LLAMA_STAGE_BACKEND:-${SKIPPY_LLAMA_BACKEND:-cpu}}"
@@ -338,7 +335,7 @@ build_model_package_tool() {
         return 0
     fi
 
-    local tool_rel tool_path source_path configured cargo_target_dir macos_lld
+    local tool_rel tool_path source_path configured cargo_target_dir
     local -a cargo_env=(
         "LLAMA_STAGE_LINK_MODE=dynamic"
         "LLAMA_STAGE_LIB_DIR=$stage_dir/lib"
@@ -357,20 +354,6 @@ build_model_package_tool() {
         fi
         source_path="$configured"
     else
-        if [[ "$runtime_os" == "macos" ]]; then
-            # Use lld only when it is installed AND links against the active
-            # SDK. A protected reusable workflow may not include the
-            # repository setup action at all, and on a developer machine lld
-            # can fall behind the SDK; both take the platform linker. The
-            # explicitly empty encoded flag set still overrides any RUSTFLAGS
-            # a caller exported. See scripts/lib/lld.sh.
-            macos_lld="$(resolve_usable_lld)"
-            if [[ -n "$macos_lld" ]]; then
-                cargo_env+=("CARGO_ENCODED_RUSTFLAGS=-Clink-arg=-fuse-ld=$macos_lld")
-            else
-                cargo_env+=("CARGO_ENCODED_RUSTFLAGS=")
-            fi
-        fi
         env "${cargo_env[@]}" \
             cargo build --release --locked --target "$TARGET_TRIPLE" \
                 -p skippy-model-package

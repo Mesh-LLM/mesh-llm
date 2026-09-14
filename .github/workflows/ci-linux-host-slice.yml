@@ -108,7 +108,6 @@ jobs:
       MESH_LLM_SKIP_UI: "1"
       MESH_LLM_REQUIRE_SCCACHE: "1"
       RUSTC_WRAPPER: sccache
-      RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
     steps:
       - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
         with:
@@ -126,7 +125,7 @@ jobs:
         uses: ./.github/actions/restore-sccache-seed
         with:
           allow_trusted_seed: ${{ needs.runner_policy.outputs.allow_trusted_sccache_seed == 'true' && matrix.host.architecture == 'x86_64' && 'true' || 'false' }}
-          cache_key: mesh-llm-sccache-seed-linux-x86_64-img-f499b79b-epoch-f499b79b-v3-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', 'Justfile', 'just/**') }}
+          cache_key: mesh-llm-sccache-seed-linux-x86_64-img-f499b79b-epoch-f499b79b-v3-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/lib/lld.sh', 'Justfile', 'just/**') }}
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}

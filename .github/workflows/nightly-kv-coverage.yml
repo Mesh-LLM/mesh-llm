@@ -25,7 +25,6 @@ jobs:
       image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
     env:
       CARGO_INCREMENTAL: "0"
-      RUSTC_WRAPPER: ""
       RUST_BACKTRACE: "1"
       SKIPPY_CACHE_STATE_MACHINE_SEEDS: ${{ vars.MESH_NIGHTLY_KV_STATE_MACHINE_SEEDS || '256' }}
       SKIPPY_CACHE_STATE_MACHINE_STEPS: ${{ vars.MESH_NIGHTLY_KV_STATE_MACHINE_STEPS || '10000' }}

@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# shellcheck source=scripts/lib/lld.sh
+source "$SCRIPT_DIR/lib/lld.sh"
+
+link_args=("$@")
+probe_args=()
+for ((index = 0; index < ${#link_args[@]}; index++)); do
+    argument="${link_args[$index]}"
+    case "$argument" in
+        -arch|-target|-isysroot)
+            if ((index + 1 < ${#link_args[@]})); then
+                probe_args+=("$argument" "${link_args[$((index + 1))]}")
+                index=$((index + 1))
+            fi
+            ;;
+        --target=*|-m32|-m64)
+            probe_args+=("$argument")
+            ;;
+    esac
+done
+
+sha256_stdin() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum | awk '{print $1}'
+    else
+        shasum -a 256 | awk '{print $1}'
+    fi
+}
+
+target_identity() {
+    if [[ -n "${MESH_LLM_LINK_TARGET:-}" ]]; then
+        printf '%s\n' "$MESH_LLM_LINK_TARGET"
+        return
+    fi
+    for ((index = 0; index < ${#probe_args[@]}; index++)); do
+        case "${probe_args[$index]}" in
+            -arch|-target)
+                if ((index + 1 < ${#probe_args[@]})); then
+                    printf '%s\n' "${probe_args[$((index + 1))]}"
+                    return
+                fi
+                ;;
+            --target=*)
+                printf '%s\n' "${probe_args[$index]#--target=}"
+                return
+                ;;
+        esac
+    done
+    case "$(uname -s):$(uname -m)" in
+        Darwin:arm64) printf 'aarch64-apple-darwin\n' ;;
+        Darwin:x86_64) printf 'x86_64-apple-darwin\n' ;;
+        Linux:aarch64|Linux:arm64) printf 'aarch64-unknown-linux-gnu\n' ;;
+        Linux:x86_64) printf 'x86_64-unknown-linux-gnu\n' ;;
+        *) printf '%s:%s\n' "$(uname -s)" "$(uname -m)" ;;
+    esac
+}
+
+linker_identity() {
+    local linker="$1"
+    local linker_path=""
+    linker_path="$(command -v "$linker" 2>/dev/null || true)"
+    {
+        printf 'os=%s\n' "$(uname -s)"
+        printf 'machine=%s\n' "$(uname -m)"
+        printf 'target=%s\n' "$(target_identity)"
+        printf 'cc=%s\n' "$(command -v cc)"
+        cc --version 2>&1 || true
+        printf 'linker=%s\n' "$linker_path"
+        "$linker_path" --version 2>&1 || true
+        printf 'probe-arg=%s\n' "${probe_args[@]}"
+        if [[ "$(uname -s)" == Darwin ]] && command -v xcrun >/dev/null 2>&1; then
+            xcrun --show-sdk-path 2>&1 || true
+            xcrun --show-sdk-version 2>&1 || true
+            xcrun --show-sdk-build-version 2>&1 || true
+        fi
+    } | sha256_stdin
+}
+
+probe_linker_cached() {
+    local linker="$1"
+    local identity cache_root status_file diagnostics_file status temporary
+    identity="$(linker_identity "$linker")"
+    cache_root="${MESH_LLM_LINKER_PROBE_CACHE_DIR:-$REPO_ROOT/.deps/linker-probes}"
+    mkdir -p "$cache_root"
+    status_file="$cache_root/$identity.status"
+    diagnostics_file="$cache_root/$identity.log"
+
+    if [[ -r "$status_file" ]]; then
+        status="$(cat "$status_file")"
+        if [[ "$status" == usable ]]; then
+            return 0
+        fi
+        if [[ "$status" == incompatible ]]; then
+            LLD_PROBE_OUTPUT="$(cat "$diagnostics_file" 2>/dev/null || true)"
+            return 1
+        fi
+    fi
+
+    if lld_links "$linker" "${probe_args[@]}"; then
+        status=usable
+    else
+        status=incompatible
+    fi
+    temporary="$(mktemp "$cache_root/.probe.XXXXXX")"
+    printf '%s\n' "$status" > "$temporary"
+    mv -f "$temporary" "$status_file"
+    temporary="$(mktemp "$cache_root/.probe-log.XXXXXX")"
+    printf '%s\n' "${LLD_PROBE_OUTPUT:-}" > "$temporary"
+    mv -f "$temporary" "$diagnostics_file"
+    [[ "$status" == usable ]]
+}
+
+selected_linker=""
+case "$(uname -s)" in
+    Linux)
+        if ! command -v mold >/dev/null 2>&1; then
+            echo "Error: mold is required for Linux Rust links. Install mold and retry." >&2
+            exit 1
+        fi
+        if probe_linker_cached mold; then
+            selected_linker=mold
+        else
+            cat >&2 <<MSG
+Note: mold is installed but failed the active target/toolchain link probe.
+Falling back to lld or the platform linker for this build.
+
+${LLD_PROBE_OUTPUT:-}
+MSG
+            lld="$(find_lld)"
+            if [[ -n "$lld" ]] && probe_linker_cached "$lld"; then
+                selected_linker="$lld"
+            fi
+        fi
+        ;;
+    Darwin)
+        selected_linker="$(find_lld)"
+        if [[ -z "$selected_linker" ]]; then
+            echo "Error: LLVM ld64.lld is required; run 'brew install lld' and retry." >&2
+            exit 1
+        fi
+        if ! probe_linker_cached "$selected_linker"; then
+            report_lld_fallback "$selected_linker"
+            selected_linker=""
+        fi
+        ;;
+    *)
+        echo "unsupported Unix platform for Cargo linker driver: $(uname -s)" >&2
+        exit 1
+        ;;
+esac
+
+if [[ "${1:-}" == --mesh-probe ]]; then
+    printf '%s\n' "${selected_linker:-platform}"
+    exit 0
+fi
+
+if [[ -n "$selected_linker" ]]; then
+    exec cc "-fuse-ld=$selected_linker" "${link_args[@]}"
+fi
+exec cc "${link_args[@]}"

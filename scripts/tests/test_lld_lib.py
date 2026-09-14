@@ -108,29 +108,21 @@ class LldProbeTests(unittest.TestCase):
 class CallSiteTests(unittest.TestCase):
     """Every place that hands cargo an lld must probe it first."""
 
-    def test_the_with_lld_recipe_probes_before_exporting_the_linker(self) -> None:
+    def test_the_with_lld_recipe_delegates_to_repository_defaults(self) -> None:
         source = read_justfile_source(JUSTFILE)
         start = source.index("[unix]\nwith-lld *COMMAND:")
         end = source.index("[windows]\nwith-lld *COMMAND:", start)
         recipe = source[start:end]
-        self.assertIn("source scripts/lib/lld.sh", recipe)
-        self.assertIn('lld="$(find_lld)"', recipe)
-        self.assertIn('if lld_links "$lld"; then', recipe)
-        self.assertIn('report_lld_fallback "$lld"', recipe)
-        # Not installed stays fatal with install instructions; only an
-        # installed-but-unusable lld degrades to a note.
-        self.assertIn("brew install lld", recipe)
-        self.assertIn("exit 1", recipe)
+        self.assertIn("scripts/cargo-linker --mesh-probe", recipe)
+        self.assertIn("command -v sccache", recipe)
+        self.assertNotIn("RUSTFLAGS", recipe)
 
-    def test_build_host_probes_before_exporting_the_linker(self) -> None:
+    def test_build_host_does_not_override_repository_cargo_defaults(self) -> None:
         script = BUILD_HOST.read_text(encoding="utf-8")
-        self.assertIn('source "$SCRIPT_DIR/lib/lld.sh"', script)
-        start = script.index("configure_lld_linker() {")
-        end = script.index("configure_rust_cache() {", start)
-        function = script[start:end]
-        self.assertIn('if lld_links "$lld"; then', function)
-        self.assertIn('report_lld_fallback "$lld"', function)
-        self.assertNotIn("command -v ld64.lld", function)
+        self.assertNotIn("configure_lld_linker", script)
+        self.assertNotIn("configure_rust_cache", script)
+        self.assertNotIn("RUSTFLAGS", script)
+        self.assertNotIn("RUSTC_WRAPPER", script)
 
     def test_no_unprobed_linker_directive_in_cargo_config(self) -> None:
         """A checked-in `-fuse-ld=` applies to every cargo invocation with no
@@ -142,6 +134,12 @@ class CallSiteTests(unittest.TestCase):
             if "fuse-ld" in line and not line.lstrip().startswith("#")
         ]
         self.assertEqual(directives, [], f"unexpected linker directives: {directives}")
+
+    def test_cargo_config_owns_cache_and_platform_linker_drivers(self) -> None:
+        config = (ROOT / ".cargo" / "config.toml").read_text(encoding="utf-8")
+        self.assertIn('rustc-wrapper = "sccache"', config)
+        self.assertEqual(config.count('linker = "scripts/cargo-linker"'), 4)
+        self.assertEqual(config.count('linker = "scripts/cargo-linker.cmd"'), 2)
 
 
 if __name__ == "__main__":
