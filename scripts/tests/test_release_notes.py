@@ -858,6 +858,30 @@ class LinkTest(unittest.TestCase):
         self.assertEqual(insertions, {})
         self.assertEqual(len(trailing), 1)
 
+    def test_a_body_with_no_entries_at_all_still_recovers_the_release(self):
+        # GitHub credits a pull request through its merge commit, so a release
+        # assembled by cherry-pick is published with nothing but the changelog
+        # link. v0.76.2 shipped that way, with its only fix left out.
+        path = self.dir / "body.md"
+        path.write_text("**Full Changelog**: compare\n", encoding="utf-8")
+        lines, credited, insert_at = LINK.read_body(path)
+        self.assertEqual(credited, [])
+
+        commits = [commit("a", "fix: install composed bundles (#1844)")]
+        LINK.resolve_pull_requests(commits, "o/r", FakeGh())
+        gh = FakeGh(details={1844: {"title": "fix: install composed bundles",
+                                    "author": {"login": "someone"}}})
+        insertions, trailing = LINK.recover_entries(commits, credited, "o/r", gh)
+        self.assertEqual(insertions, {})
+        self.assertEqual(
+            LINK.augment(lines, insert_at, insertions, trailing).splitlines(),
+            [
+                "* fix: install composed bundles by @someone"
+                " in https://github.com/o/r/pull/1844",
+                "**Full Changelog**: compare",
+            ],
+        )
+
     def test_a_pull_request_without_an_author_is_left_uncredited(self):
         commits = [commit("a", "fix: repair a thing (#10)")]
         LINK.resolve_pull_requests(commits, "o/r", FakeGh())
@@ -1030,6 +1054,18 @@ class LinkPassContractTest(unittest.TestCase):
     def test_the_published_body_is_kept_for_restore(self):
         self.assertIn("body.github.md", self.script)
         self.assertIn("--notes-file $WORKDIR/body.github.md", self.script)
+
+    def test_giving_up_is_decided_after_the_link_pass(self):
+        # A release assembled by cherry-pick is published with no entries at
+        # all, which is exactly what the link pass repairs. Deciding there is
+        # nothing to regroup from GitHub's body skipped that repair.
+        self.assertLess(
+            self.script.index("release-notes-link.py"),
+            self.script.index("nothing to regroup"),
+        )
+        lines = self.script.splitlines()
+        guard = next(i for i, line in enumerate(lines) if "nothing to regroup" in line)
+        self.assertIn('"$WORKDIR/body.md"', lines[guard - 1])
 
 
 if __name__ == "__main__":
