@@ -76,12 +76,28 @@ jobs:
         run: |
           set -euo pipefail
           missing=0
-          for cmd in cargo just sccache jq python3 uv cmake ninja hf git-lfs lipo brew xcrun; do
+          goose_dir="/Users/lab/.local/bin"
+          export PATH="$goose_dir:$PATH"
+          echo "$goose_dir" >> "$GITHUB_PATH"
+          for cmd in cargo just sccache jq python3 uv cmake ninja hf git-lfs lipo brew xcrun goose; do
             if ! command -v "$cmd" >/dev/null 2>&1; then
               echo "missing on family-certify image: $cmd" >&2
               missing=1
             fi
           done
+          if command -v goose >/dev/null 2>&1; then
+            goose_status=0
+            goose_version="$(goose --version 2>&1)" || goose_status=$?
+            if (( goose_status != 0 )); then
+              echo "goose failed its executable preflight with status $goose_status; repair the family-certify runner installation" >&2
+              missing=1
+            elif [[ -z "$goose_version" ]]; then
+              echo "goose returned no version; repair the family-certify runner installation" >&2
+              missing=1
+            else
+              echo "goose version: $goose_version"
+            fi
+          fi
           expected_hf_cache="/Users/lab/models/huggingface"
           if [[ "${HF_CACHE:-}" != "$expected_hf_cache" ]]; then
             echo "HF_CACHE must be $expected_hf_cache on this runner; got: ${HF_CACHE:-<unset>}" >&2
@@ -168,7 +184,8 @@ jobs:
         timeout-minutes: 480
         continue-on-error: true
         env:
-          CANARY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_AGENT_MODEL || 'zai-coding-plan/glm-5.3-flash' }}
+          CANARY_AGENT_PROVIDER: ${{ vars.LLAMA_CANARY_GOOSE_PROVIDER || 'custom_z_ai_coding_plan' }}
+          CANARY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_GOOSE_MODEL || 'glm-5.3-flash' }}
           # One agent receives the complete developer task. Verification runs
           # later in a separate job after this process context has ended.
           CANARY_AGENT_TIMEOUT_SECONDS: "27000"

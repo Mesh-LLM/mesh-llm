@@ -213,6 +213,17 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn('echo "HF_HOME=$expected_hf_cache"', preflight)
         self.assertIn('echo "HF_HUB_CACHE=$expected_hf_cache/hub"', preflight)
 
+    def test_persistent_runner_executes_goose_preflight(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        preflight = _step_block(workflow, "Verify runner toolchain")
+        self.assertIn('goose_dir="/Users/lab/.local/bin"', preflight)
+        self.assertIn('echo "$goose_dir" >> "$GITHUB_PATH"', preflight)
+        self.assertIn("xcrun goose; do", preflight)
+        self.assertIn('goose_version="$(goose --version 2>&1)"', preflight)
+        self.assertIn("goose_status=$?", preflight)
+        self.assertIn("failed its executable preflight", preflight)
+        self.assertIn("goose returned no version", preflight)
+
     def test_rewriter_check_reexecs_and_pins_native_architecture(self) -> None:
         checker = REWRITER_CHECK.read_text(encoding="utf-8")
         self.assertIn('exec arch -arm64 "${BASH_SOURCE[0]}" "$@"', checker)
@@ -295,6 +306,10 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("steps.sha.outputs.changed == 'true'", changed)
         self.assertIn("timeout-minutes: 480", changed)
         self.assertIn("continue-on-error: true", changed)
+        self.assertIn("LLAMA_CANARY_GOOSE_PROVIDER", changed)
+        self.assertIn("custom_z_ai_coding_plan", changed)
+        self.assertIn("LLAMA_CANARY_GOOSE_MODEL", changed)
+        self.assertIn("glm-5.3-flash", changed)
         self.assertIn('CANARY_AGENT_TIMEOUT_SECONDS: "27000"', changed)
         self.assertIn("CANARY_HARNESS_MODE: repair", changed)
         self.assertNotIn("CANARY_REPAIR_TOKEN:", changed)
