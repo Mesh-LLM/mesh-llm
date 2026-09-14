@@ -8,7 +8,7 @@ use mesh_llm_events::logging::events::LifecycleEvent;
 mod artifact_redaction;
 mod path_redaction;
 pub use artifact_redaction::redact_artifact_bytes;
-pub use path_redaction::{sanitize_path, sanitize_paths_in_text};
+pub use path_redaction::{sanitize_path, sanitize_paths_in_json_text, sanitize_paths_in_text};
 
 /// Redaction mode applied to a string value. The most restrictive applicable rule wins.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

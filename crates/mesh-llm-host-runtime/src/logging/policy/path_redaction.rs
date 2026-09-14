@@ -42,6 +42,50 @@ pub fn sanitize_paths_in_text(text: &str) -> String {
     }
 }
 
+/// Redact decoded JSON string values at the audit persistence boundary.
+/// Non-JSON details retain the free-form text fallback.
+pub fn sanitize_paths_in_json_text(text: &str) -> String {
+    dirs::home_dir().map_or_else(
+        || text.to_string(),
+        |home| sanitize_json_paths_with_home(text, &home.to_string_lossy()),
+    )
+}
+
+fn sanitize_json_paths_with_home(text: &str, home: &str) -> String {
+    if home.is_empty() {
+        return text.to_string();
+    }
+    if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(text) {
+        sanitize_json_paths(&mut value, home);
+        value.to_string()
+    } else {
+        sanitize_paths_with_home(text, home)
+            .replace("/private/var/", "/var/")
+            .replace("/private/tmp/", "/tmp/")
+    }
+}
+
+fn sanitize_json_paths(value: &mut serde_json::Value, home: &str) {
+    match value {
+        serde_json::Value::String(text) => {
+            *text = sanitize_paths_with_home(text, home)
+                .replace("/private/var/", "/var/")
+                .replace("/private/tmp/", "/tmp/");
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                sanitize_json_paths(value, home);
+            }
+        }
+        serde_json::Value::Object(fields) => {
+            for value in fields.values_mut() {
+                sanitize_json_paths(value, home);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn sanitize_paths_with_home(text: &str, home: &str) -> String {
     if home.is_empty() {
         return text.to_string();

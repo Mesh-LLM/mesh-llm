@@ -1,6 +1,9 @@
 //! Path API and boundary-aware free-form logging redaction contracts.
 
-use super::{sanitize_path, sanitize_paths_in_text, sanitize_paths_with_home};
+use super::{
+    sanitize_json_paths_with_home, sanitize_path, sanitize_paths_in_json_text,
+    sanitize_paths_in_text, sanitize_paths_with_home,
+};
 
 #[test]
 fn path_sanitization_hides_home_dir() {
@@ -65,16 +68,14 @@ fn bare_home_in_quotes_whitespace_and_punctuation_is_redacted() {
 #[test]
 fn bare_home_in_json_string_values_is_redacted() {
     let home = dirs::home_dir().expect("test runner has a home directory");
-    // Sanitize the raw values before JSON encoding so Windows separators are
-    // not escaped before the text redaction boundary sees them.
-    let sanitized = sanitize_paths_in_text(&format!("\"{}\"", home.display()));
-    assert_eq!(sanitized, "\"~\"");
-    let text = format!(
-        r#"{{"home":"{}","again":"{}"}}"#,
-        home.display(),
-        home.display()
-    );
-    assert_eq!(sanitize_paths_in_text(&text), r#"{"home":"~","again":"~"}"#);
+    let text = serde_json::to_string(&serde_json::json!({
+        "home": home.to_string_lossy(),
+        "again": home.to_string_lossy(),
+    }))
+    .unwrap();
+    let sanitized: serde_json::Value =
+        serde_json::from_str(&sanitize_paths_in_json_text(&text)).unwrap();
+    assert_eq!(sanitized, serde_json::json!({"home": "~", "again": "~"}));
 }
 
 #[test]
@@ -116,4 +117,62 @@ fn deterministic_unix_and_windows_home_boundaries() {
 #[test]
 fn empty_home_does_not_insert_redactions() {
     assert_eq!(sanitize_paths_with_home("unchanged", ""), "unchanged");
+}
+
+#[test]
+fn serialized_windows_and_unix_paths_are_redacted_in_nested_values() {
+    for home in [
+        r"C:\Users\alice",
+        "C:/Users/alice",
+        "/home/alice",
+        "/home/a\"lice",
+    ] {
+        let sibling = format!("{home}-backup\\log.txt");
+        let input = serde_json::json!({
+            "home": home,
+            "nested": [{
+                "descendant": format!("{home}\\logs\\app.log"),
+                "forward": format!("{home}/logs/app.log"),
+                "message": format!("home=\"{home}\" next {home}\t{home}-backup"),
+                "sibling": sibling,
+            }],
+            "number": 42,
+            "flag": true,
+            "empty": null,
+        });
+        let text = serde_json::to_string(&input).unwrap();
+        let sanitized = sanitize_json_paths_with_home(&text, home);
+        let actual: serde_json::Value = serde_json::from_str(&sanitized).unwrap();
+        assert_eq!(
+            actual,
+            serde_json::json!({
+                "home": "~",
+                "nested": [{
+                    "descendant": "~\\logs\\app.log",
+                    "forward": "~/logs/app.log",
+                    "message": format!("home=\"~\" next ~\t{home}-backup"),
+                    "sibling": sibling,
+                }],
+                "number": 42,
+                "flag": true,
+                "empty": null,
+            }),
+            "serialized input: {text}"
+        );
+    }
+}
+
+#[test]
+fn json_detail_fallback_and_private_paths_are_preserved() {
+    let home = r"C:\Users\alice";
+    let text = format!("Error in {home}\\logs; {home}-backup");
+    assert_eq!(
+        sanitize_json_paths_with_home(&text, home),
+        format!("Error in ~\\logs; {home}-backup")
+    );
+    let text = serde_json::to_string(&serde_json::json!({"path": "/private/tmp/log"})).unwrap();
+    let actual: serde_json::Value =
+        serde_json::from_str(&sanitize_json_paths_with_home(&text, home)).unwrap();
+    assert_eq!(actual, serde_json::json!({"path": "/tmp/log"}));
+    assert_eq!(sanitize_json_paths_with_home(&text, ""), text);
 }
