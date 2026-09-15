@@ -65,6 +65,9 @@ pub struct HostRuntimeProfile {
     pub os: String,
     pub arch: String,
     pub target_triple: Option<String>,
+    /// Detected host glibc major.minor version on Linux, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub glibc_version: Option<String>,
     pub available_flavors: BTreeSet<NativeRuntimeBackendKind>,
     pub gpus: Vec<HostGpuProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -85,6 +88,7 @@ impl HostRuntimeProfile {
             os: std::env::consts::OS.to_string(),
             arch: std::env::consts::ARCH.to_string(),
             target_triple: option_env!("TARGET").map(str::to_string),
+            glibc_version: None,
             available_flavors,
             gpus: Vec::new(),
             cuda: None,

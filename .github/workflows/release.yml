@@ -134,7 +134,11 @@ jobs:
           RELEASE_TAG: ${{ steps.meta.outputs.tag }}
         run: |
           set -euo pipefail
-          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+          if ! existing_tag_refs="$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG")"; then
+            echo "Unable to verify whether release tag exists: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          if [[ -n "$existing_tag_refs" ]]; then
             echo "Manual release tag already exists and is immutable: $RELEASE_TAG" >&2
             exit 1
           fi
@@ -1795,7 +1799,11 @@ jobs:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
         run: |
           set -euo pipefail
-          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+          if ! existing_tag_refs="$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG")"; then
+            echo "Unable to verify whether release tag exists: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          if [[ -n "$existing_tag_refs" ]]; then
             echo "Release tag already exists and cannot be reused: $RELEASE_TAG" >&2
             exit 1
           fi

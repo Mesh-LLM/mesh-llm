@@ -24,6 +24,7 @@ pub fn host_runtime_profile() -> HostRuntimeProfile {
         os: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
         target_triple: option_env!("TARGET").map(str::to_string),
+        glibc_version: detect_glibc_version(),
         available_flavors: detected_native_runtime_flavors(
             &gpus,
             cuda.as_ref(),
@@ -269,6 +270,7 @@ mod tests {
             os: "linux".to_string(),
             arch: "x86_64".to_string(),
             target_triple: None,
+            glibc_version: None,
             available_flavors: detected_native_runtime_flavors(&[], None, Some(&rocm), None),
             gpus: Vec::new(),
             cuda: None,
@@ -283,6 +285,7 @@ mod tests {
                 os: "linux".to_string(),
                 arch: "x86_64".to_string(),
                 target: None,
+                min_glibc: None,
             },
             backend,
             rank: 0,
@@ -336,6 +339,35 @@ mod tests {
         assert_eq!(
             cuda_majors_from_nvidia_smi_output(output),
             BTreeSet::from([13])
+        );
+    }
+
+    #[test]
+    fn parses_glibc_version_from_getconf_output() {
+        assert_eq!(
+            parse_glibc_version("glibc 2.35\n"),
+            Some("2.35".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_glibc_version_override() {
+        assert_eq!(parse_glibc_version("2.35.1"), None);
+    }
+
+    #[test]
+    fn glibc_override_takes_precedence_over_detected_host_version() {
+        assert_eq!(
+            detect_glibc_version_from(true, Some("2.35"), Some("glibc 2.39")),
+            Some("2.35".to_string())
+        );
+    }
+
+    #[test]
+    fn glibc_detection_is_unknown_off_linux() {
+        assert_eq!(
+            detect_glibc_version_from(false, Some("2.35"), Some("glibc 2.39")),
+            None
         );
     }
 
