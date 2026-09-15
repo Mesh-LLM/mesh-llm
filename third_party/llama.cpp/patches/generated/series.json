@@ -1,6 +1,6 @@
 {
-  "full_patch_sha256": "c333f1d991e21ce8314022ea6a453ef5e39dba154ef184cd8f0c8b113212f45f",
-  "generator_version": "0.3.0",
+  "full_patch_sha256": "8f846fc85600ea6859cefb3e4df3804e6f84f499bcfecfc705590971138fe8db",
+  "generator_version": "0.4.0",
   "schema_version": 1,
   "shards": [
     {
@@ -210,7 +210,7 @@
         "gemma4"
       ],
       "file": "0021-family-gemma4.patch",
-      "sha256": "070f39678cefc14f1f19dae517868add1088ba172f63a89bdb97e51ae6bfd85a",
+      "sha256": "8ac060b6ee654eba9f159a86fe9eecee59683a3733e65ece6e3949bf128ec807",
       "sources": [
         "src/models/gemma4.cpp"
       ]

@@ -532,8 +532,15 @@ def main() -> int:
         per_layer_source = (
             source_root / "src/models/per-layer-sideband.cpp"
         ).read_text(encoding="utf-8")
-        assert "std::make_unique<llm_graph_input_stage_tokens>" in per_layer_source
-        assert "project_per_layer_inputs(inp_per_layer_proj" in per_layer_source
+        assert "inp_per_layer_stage" in per_layer_source
+        assert "res->add_skippy_activation_import(inp_per_layer, 1);" in per_layer_source
+        assert "res->add_skippy_activation_import(inpL, 1);" in per_layer_source
+        assert "res->add_skippy_activation_export(inp_per_layer, 1);" in per_layer_source
+        assert "res->add_skippy_activation_export(inpL, 1);" in per_layer_source
+        assert (
+            "std::make_unique<llm_graph_input_stage_tokens>"
+            not in per_layer_source
+        )
         per_layer_second = run(
             tool,
             source_root,
