@@ -246,7 +246,7 @@ pub(crate) fn is_package_v2_ref(package_ref: &str) -> bool {
         == Some(u64::from(skippy_package_format::PACKAGE_SCHEMA_VERSION))
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SkippyPackageIdentity {
     pub package_ref: String,
     pub manifest_sha256: String,
@@ -502,6 +502,7 @@ fn package_v2_generation_info(
     generation: &skippy_package_format::Generation,
 ) -> PackageGenerationInfo {
     PackageGenerationInfo {
+        request_defaults: generation.request_defaults.clone(),
         speculative_decoding: generation.speculative_decoding.as_ref().map(|speculative| {
             skippy_runtime::package::PackageSpeculativeDecodingInfo {
                 default: speculative.default.clone(),

@@ -75,8 +75,8 @@ pub use types::{
     ChatTemplateJsonOptions, ChatTemplateJsonResult, ChatTemplateMessage, ChatTemplateOptions,
     DecodeFrameBatchOutput, DrySamplingConfig, GenerationSignalWindow, IterationBatchOutput,
     IterationSample, LoadedModelCapability, LogitBias, MAX_LOGIT_BIAS, MediaInput, MediaPrefill,
-    MediaPrefillChunkFrame, MediaPrefillFrame, ModelStateKind, RuntimeKvPage, RuntimeKvPageDesc,
-    SamplingConfig, TensorInfo, TokenSignal, XtcSamplingConfig,
+    MediaPrefillChunkFrame, MediaPrefillFrame, ModelStateKind, ReasoningBudget, RuntimeKvPage,
+    RuntimeKvPageDesc, SamplingConfig, TensorInfo, TokenSignal, XtcSamplingConfig,
 };
 
 #[cfg(feature = "dynamic-native-runtime")]

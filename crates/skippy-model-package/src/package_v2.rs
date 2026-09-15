@@ -8,8 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, ensure};
 use skippy_model::package_carrier::resolve_package_carrier;
 use skippy_package_format::{
-    Artifact, ArtifactCatalog, PACKAGE_SCHEMA_VERSION, PackageManifest, Sidecar, SidecarKind,
-    SourceModel, Tensor, TensorCatalog,
+    Artifact, ArtifactCatalog, Generation, GenerationRequestDefaults, PACKAGE_SCHEMA_VERSION,
+    PackageManifest, Sidecar, SidecarKind, SourceModel, Tensor, TensorCatalog,
 };
 use skippy_runtime::{ModelInfo, TensorInfo, write_gguf_metadata_from_parts};
 
@@ -34,6 +34,7 @@ pub(crate) fn write_package(
     artifact_hook: ArtifactHook,
     artifact_transform: ArtifactHook,
     explicit: ExplicitSourceIdentity,
+    generation_defaults: Option<PathBuf>,
     resume_existing_artifacts: bool,
 ) -> Result<()> {
     ensure!(
@@ -46,6 +47,19 @@ pub(crate) fn write_package(
     ensure_native_inventory_matches(&inventory, &source)?;
     let planned = plan_artifacts(&source.tensors)?;
     let mut manifest = manifest_from_source(&input, &inventory)?;
+    if let Some(path) = generation_defaults {
+        let bytes = fs::read(&path)
+            .with_context(|| format!("read generation defaults {}", path.display()))?;
+        let request_defaults: GenerationRequestDefaults = serde_json::from_slice(&bytes)
+            .with_context(|| format!("parse generation defaults {}", path.display()))?;
+        request_defaults.validate().map_err(|error| {
+            anyhow::anyhow!("validate generation defaults {}: {error}", path.display())
+        })?;
+        manifest.generation = Some(Generation {
+            request_defaults: Some(request_defaults),
+            speculative_decoding: None,
+        });
+    }
     fs::create_dir_all(&out_dir)?;
     ensure!(
         !out_dir.join("model-package.json").exists(),

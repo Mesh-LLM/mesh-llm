@@ -188,6 +188,7 @@ async fn dispatch_model_prepare(cmd: &Command) -> Result<()> {
             quant: quant.as_deref(),
             target: target.as_deref(),
             model_id: model_id.as_deref(),
+            generation_defaults: None,
             flavor,
             timeout,
             mesh_llm_ref,

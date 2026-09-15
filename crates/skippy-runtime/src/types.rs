@@ -529,6 +529,46 @@ pub struct SamplingConfig {
     pub mirostat_entropy: f32,
     pub mirostat_learning_rate: f32,
     pub samplers: Vec<String>,
+    pub reasoning_budget: ReasoningBudget,
+}
+
+/// Reasoning-token limit resolved after the prompt establishes the effective
+/// output allowance. Explicit token counts are only bounded by the overall
+/// generation/context limit; semantic and fallback levels reserve half of the
+/// output allowance for the visible answer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ReasoningBudget {
+    #[default]
+    Unrestricted,
+    Explicit(u32),
+    Capped(u32),
+    Resolved(i32),
+}
+
+impl ReasoningBudget {
+    pub fn resolve_for_output(&mut self, max_output_tokens: usize) {
+        let resolved = match *self {
+            Self::Unrestricted => -1,
+            Self::Explicit(tokens) => i32::try_from(tokens).unwrap_or(i32::MAX),
+            Self::Capped(tokens) => {
+                let reserved = max_output_tokens / 2;
+                i32::try_from((tokens as usize).min(reserved)).unwrap_or(i32::MAX)
+            }
+            Self::Resolved(tokens) => tokens,
+        };
+        *self = Self::Resolved(resolved);
+    }
+
+    fn native_tokens(self) -> Result<i32> {
+        match self {
+            Self::Unrestricted => Ok(-1),
+            Self::Explicit(tokens) => Ok(i32::try_from(tokens).unwrap_or(i32::MAX)),
+            Self::Resolved(tokens) => Ok(tokens),
+            Self::Capped(_) => Err(anyhow!(
+                "reasoning budget must be resolved against the output limit before sampling"
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -590,11 +630,17 @@ impl Default for SamplingConfig {
                 "xtc".into(),
                 "temperature".into(),
             ],
+            reasoning_budget: ReasoningBudget::Unrestricted,
         }
     }
 }
 
 impl SamplingConfig {
+    pub fn resolve_reasoning_budget(&mut self, max_output_tokens: u32) {
+        self.reasoning_budget
+            .resolve_for_output(max_output_tokens as usize);
+    }
+
     pub(crate) fn as_raw(&self) -> Result<RawSamplingConfig> {
         if self.logit_bias.len() > MAX_LOGIT_BIAS {
             return Err(anyhow!("sampling logit_bias exceeds the native limit"));
@@ -643,7 +689,7 @@ impl SamplingConfig {
             target[..length].copy_from_slice(&bytes[..length]);
         }
         Ok(RawSamplingConfig {
-            version: 2,
+            version: 3,
             flags: u32::from(self.enabled) | (u32::from(self.ignore_eos) << 1),
             seed: self.seed,
             top_k: self.top_k,
@@ -674,6 +720,7 @@ impl SamplingConfig {
             dry_sequence_breaker_count: self.dry.sequence_breakers.len() as u32,
             dry_sequence_breakers,
             logit_bias,
+            reasoning_budget_tokens: self.reasoning_budget.native_tokens()?,
         })
     }
 }
@@ -1046,5 +1093,45 @@ mod kv_page_descriptor_tests {
         };
 
         assert!(sampling.as_raw().is_err());
+    }
+
+    #[test]
+    fn reasoning_budget_resolution_distinguishes_explicit_levels_and_unrestricted() {
+        let mut explicit = ReasoningBudget::Explicit(8_192);
+        explicit.resolve_for_output(4_096);
+        assert_eq!(explicit, ReasoningBudget::Resolved(8_192));
+
+        let mut semantic = ReasoningBudget::Capped(8_192);
+        semantic.resolve_for_output(4_096);
+        assert_eq!(semantic, ReasoningBudget::Resolved(2_048));
+
+        let mut small_fallback = ReasoningBudget::Capped(4_096);
+        small_fallback.resolve_for_output(31);
+        assert_eq!(small_fallback, ReasoningBudget::Resolved(15));
+
+        let mut disabled = ReasoningBudget::Explicit(0);
+        disabled.resolve_for_output(8_192);
+        assert_eq!(disabled, ReasoningBudget::Resolved(0));
+
+        let mut unrestricted = ReasoningBudget::Unrestricted;
+        unrestricted.resolve_for_output(8_192);
+        assert_eq!(unrestricted, ReasoningBudget::Resolved(-1));
+    }
+
+    #[test]
+    fn resolved_reasoning_budget_reaches_native_sampling_abi() {
+        for (budget, expected) in [
+            (ReasoningBudget::Resolved(-1), -1),
+            (ReasoningBudget::Resolved(0), 0),
+            (ReasoningBudget::Resolved(1_024), 1_024),
+        ] {
+            let raw = SamplingConfig {
+                reasoning_budget: budget,
+                ..SamplingConfig::default()
+            }
+            .as_raw()
+            .unwrap();
+            assert_eq!(raw.reasoning_budget_tokens, expected);
+        }
     }
 }

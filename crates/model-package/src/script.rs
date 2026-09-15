@@ -224,4 +224,11 @@ mod tests {
         assert!(EMBEDDED_SCRIPT.contains(r#"variants[variant_name]["source"] = source_entry"#));
         assert!(EMBEDDED_SCRIPT.contains(r#"existing_variant["source"] = source_entry"#));
     }
+
+    #[test]
+    fn embedded_script_forwards_generation_defaults_to_package_writer() {
+        assert!(EMBEDDED_SCRIPT.contains("GENERATION_DEFAULTS_JSON"));
+        assert!(EMBEDDED_SCRIPT.contains("generation-defaults.json"));
+        assert!(EMBEDDED_SCRIPT.contains("--generation-defaults"));
+    }
 }

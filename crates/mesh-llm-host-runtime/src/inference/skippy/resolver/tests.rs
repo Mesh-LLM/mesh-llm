@@ -153,7 +153,7 @@ temperature = 0.4
     assert_eq!(resolved.hardware.mmap, Some(false));
     assert!(resolved.hardware.mlock);
     assert_eq!(resolved.throughput.parallel, 3);
-    assert_eq!(resolved.request_defaults.max_tokens, 256);
+    assert_eq!(resolved.request_defaults.max_tokens, Some(256));
     assert_eq!(resolved.request_defaults.temperature, Some(0.7));
     assert_eq!(
         resolved.request_defaults.reasoning_budget,
@@ -200,6 +200,7 @@ fn mutually_exclusive_request_defaults_stop_lower_precedence_fill_in() {
         Some(&global),
         Some(&model),
         Some(&request),
+        None,
     )
     .expect("request defaults should resolve");
     assert_eq!(resolved.chat_template.as_deref(), Some("request-template"));
@@ -214,7 +215,7 @@ fn mutually_exclusive_request_defaults_stop_lower_precedence_fill_in() {
     );
 
     let resolved =
-        super::request_defaults::resolve_request_defaults(Some(&global), Some(&model), None)
+        super::request_defaults::resolve_request_defaults(Some(&global), Some(&model), None, None)
             .expect("request defaults should resolve");
     assert_eq!(resolved.chat_template, None);
     assert_eq!(
@@ -1671,8 +1672,8 @@ max_tokens = 128
     assert_request_override_keeps_load_time_config(&without_request, &with_request);
     assert_eq!(without_request.request_defaults.temperature, Some(0.2));
     assert_eq!(with_request.request_defaults.temperature, Some(0.9));
-    assert_eq!(without_request.request_defaults.max_tokens, 128);
-    assert_eq!(with_request.request_defaults.max_tokens, 32);
+    assert_eq!(without_request.request_defaults.max_tokens, Some(128));
+    assert_eq!(with_request.request_defaults.max_tokens, Some(32));
     assert_stage_configs_match_for_request_override(&without_request, &with_request);
     assert_openai_args_use_request_time_defaults(&without_request, &with_request);
 }

@@ -910,7 +910,7 @@ fn validate_request_chat_defaults(
             ReasoningBudget::Integer(_) => {}
             ReasoningBudget::String(value) => validate_allowed(
                 value,
-                &["auto", "low", "medium", "high"],
+                &["auto", "low", "medium", "high", "unrestricted"],
                 &format!("{base_path}.reasoning_budget"),
             )?,
         }

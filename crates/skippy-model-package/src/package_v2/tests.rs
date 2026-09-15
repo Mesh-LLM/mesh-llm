@@ -36,6 +36,7 @@ fn write(source: &Path, out: &Path, resume: bool) -> Result<()> {
         ArtifactHook { command: None },
         ArtifactHook { command: None },
         explicit(source),
+        None,
         resume,
     )
 }
@@ -109,6 +110,108 @@ fn writer_canonicalizes_an_implicit_default_alignment() {
 
     let manifest = read_manifest(&out);
     assert_eq!(manifest.model_metadata["general.alignment"], 32);
+}
+
+#[test]
+fn writer_embeds_reviewed_generation_defaults() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("model.gguf");
+    fixture(&source, &[tensor("unknown-global", 0)], None);
+    let defaults = temp.path().join("generation-defaults.json");
+    fs::write(
+        &defaults,
+        r#"{
+          "selection": {"default": "thinking", "reasoning_enabled": "thinking", "reasoning_disabled": "direct"},
+          "profiles": {
+            "thinking": {
+              "temperature": 1.0,
+              "top_k": 20,
+              "presence_penalty": 1.5,
+              "reasoning": {"enabled": "on", "budget": "medium"},
+              "provenance": {
+                "source_repo": "Qwen/Qwen3.5-9B",
+                "revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+                "file": "README.md",
+                "section": "Best Practices",
+                "url": "https://huggingface.co/Qwen/Qwen3.5-9B/blob/c202236235762e1c871ad0ccb60c8ee5ba337b9a/README.md"
+              }
+            },
+            "direct": {
+              "reasoning": {"enabled": "off", "budget": 0},
+              "provenance": {
+                "source_repo": "Qwen/Qwen3.5-9B",
+                "revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+                "file": "README.md",
+                "section": "Best Practices",
+                "url": "https://huggingface.co/Qwen/Qwen3.5-9B/blob/c202236235762e1c871ad0ccb60c8ee5ba337b9a/README.md"
+              }
+            }
+          }
+        }"#,
+    )
+    .unwrap();
+    let out = temp.path().join("package");
+
+    write_package(
+        source.display().to_string(),
+        out.clone(),
+        Vec::new(),
+        ArtifactHook { command: None },
+        ArtifactHook { command: None },
+        explicit(&source),
+        Some(defaults),
+        false,
+    )
+    .unwrap();
+
+    let manifest = read_manifest(&out);
+    let request_defaults = manifest
+        .generation
+        .unwrap()
+        .request_defaults
+        .expect("generation defaults");
+    assert_eq!(request_defaults.selection.default, "thinking");
+    assert_eq!(request_defaults.profiles["thinking"].top_k, Some(20));
+    assert_eq!(
+        request_defaults.profiles["direct"]
+            .reasoning
+            .as_ref()
+            .and_then(|reasoning| reasoning.budget.as_ref()),
+        Some(&skippy_package_format::GenerationReasoningBudget::Tokens(0))
+    );
+}
+
+#[test]
+fn writer_rejects_invalid_generation_defaults_before_creating_output() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("model.gguf");
+    fixture(&source, &[tensor("unknown-global", 0)], None);
+    let defaults = temp.path().join("generation-defaults.json");
+    fs::write(
+        &defaults,
+        r#"{
+          "selection": {"default": "missing"},
+          "profiles": {}
+        }"#,
+    )
+    .unwrap();
+    let out = temp.path().join("package");
+
+    let error = write_package(
+        source.display().to_string(),
+        out.clone(),
+        Vec::new(),
+        ArtifactHook { command: None },
+        ArtifactHook { command: None },
+        explicit(&source),
+        Some(defaults),
+        false,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("validate generation defaults"), "{error}");
+    assert!(!out.exists());
 }
 
 #[test]
@@ -373,6 +476,7 @@ fn refuses_transform_hooks_and_existing_completion_marker() {
             command: Some("must-not-run".into()),
         },
         explicit(&source),
+        None,
         false,
     );
     assert!(
@@ -404,6 +508,7 @@ fn verified_resume_and_projector_sidecar_round_trip() {
         ArtifactHook { command: None },
         ArtifactHook { command: None },
         explicit(&source),
+        None,
         true,
     )
     .unwrap();
@@ -446,6 +551,7 @@ fn upload_hook_can_delete_verified_copies_without_losing_inventory() {
         },
         ArtifactHook { command: None },
         explicit(&source),
+        None,
         false,
     )
     .unwrap();

@@ -1597,6 +1597,7 @@ mod tests {
 
     fn mock_generation() -> PackageGeneration {
         PackageGeneration {
+            request_defaults: None,
             policy: Some(PackageGenerationPolicy {
                 profile: GLM_DSA_POLICY_PROFILE.to_string(),
                 decode: GLM_DSA_POLICY_DECODE.to_string(),

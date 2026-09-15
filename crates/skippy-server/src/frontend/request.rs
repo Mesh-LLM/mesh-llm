@@ -11,6 +11,10 @@ use openai_frontend::MessageContentPart;
 use openai_frontend::OpenAiError;
 use openai_frontend::OpenAiResult;
 use serde_json::Value;
+use skippy_package_format::{
+    GenerationProfile, GenerationReasoningBudget, GenerationReasoningBudgetLevel,
+    GenerationReasoningEnabled, GenerationReasoningFormat,
+};
 use skippy_protocol::binary::MAX_STAGE_DRY_SEQUENCE_BREAKERS;
 use skippy_protocol::binary::MAX_STAGE_LOGIT_BIAS;
 use skippy_protocol::binary::MAX_STAGE_SAMPLERS;
@@ -24,10 +28,625 @@ use skippy_runtime::LogitBias as RuntimeLogitBias;
 use skippy_runtime::MAX_DRY_SEQUENCE_BREAKER_BYTES;
 use skippy_runtime::MAX_LOGIT_BIAS;
 use skippy_runtime::MediaInput;
+use skippy_runtime::ReasoningBudget;
 use skippy_runtime::SamplingConfig;
 use skippy_runtime::XtcSamplingConfig;
+use std::collections::BTreeMap;
 
 const MAX_NATIVE_PARSER_INPUT_BYTES: usize = 1024 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct RequestDefaultsDiagnostics {
+    pub(super) selected_package_profile: Option<String>,
+    pub(super) max_tokens_source: &'static str,
+    pub(super) reasoning_budget_source: &'static str,
+    pub(super) field_sources: BTreeMap<&'static str, &'static str>,
+}
+
+pub(super) fn resolve_chat_request_defaults(
+    request: &ChatCompletionRequest,
+    configured: &EmbeddedOpenAiRequestDefaults,
+) -> OpenAiResult<(EmbeddedOpenAiRequestDefaults, RequestDefaultsDiagnostics)> {
+    let template_reasoning = openai_frontend::normalize_reasoning_template_options(
+        request.reasoning.as_ref(),
+        request.reasoning_effort,
+        &request.extra,
+    )?
+    .enable_thinking;
+    let explicit_budget = request_reasoning_budget(request)?;
+    let resolved_reasoning = explicit_budget
+        .map(reasoning_budget_enables_thinking)
+        .or(template_reasoning)
+        .or_else(|| operator_reasoning_mode(configured));
+    let selected = configured
+        .package_request_defaults
+        .as_ref()
+        .and_then(|package| {
+            let profile_name = match resolved_reasoning {
+                Some(true) => package.selection.reasoning_enabled.as_ref(),
+                Some(false) => package.selection.reasoning_disabled.as_ref(),
+                None => Some(&package.selection.default),
+            }?;
+            package
+                .profiles
+                .get(profile_name)
+                .map(|profile| (profile_name.clone(), profile))
+        });
+    let mut resolved = configured.clone();
+    let selected_profile = selected.as_ref().map(|(name, _)| name.clone());
+    let field_sources = chat_field_sources(
+        request,
+        configured,
+        selected.as_ref().map(|(_, profile)| *profile),
+        explicit_budget,
+        template_reasoning,
+    );
+    if let Some((_, profile)) = selected {
+        apply_package_profile(&mut resolved, profile);
+    }
+    let max_tokens_source = if request.effective_max_tokens().is_some() {
+        "request"
+    } else if configured.max_tokens.is_some() {
+        "deployment"
+    } else if resolved.max_tokens.is_some() {
+        "package"
+    } else {
+        "fallback"
+    };
+    let reasoning_budget_source = if explicit_budget.is_some() {
+        "request"
+    } else if configured.reasoning_budget.is_some() {
+        "deployment"
+    } else if resolved.reasoning_budget.is_some() {
+        "package"
+    } else {
+        "fallback"
+    };
+    Ok((
+        resolved,
+        RequestDefaultsDiagnostics {
+            selected_package_profile: selected_profile,
+            max_tokens_source,
+            reasoning_budget_source,
+            field_sources,
+        },
+    ))
+}
+
+pub(super) fn resolve_completion_request_defaults(
+    request: &CompletionRequest,
+    configured: &EmbeddedOpenAiRequestDefaults,
+) -> (EmbeddedOpenAiRequestDefaults, RequestDefaultsDiagnostics) {
+    let selected = configured
+        .package_request_defaults
+        .as_ref()
+        .and_then(|package| {
+            let profile_name = package
+                .selection
+                .reasoning_disabled
+                .as_ref()
+                .unwrap_or(&package.selection.default);
+            package
+                .profiles
+                .get(profile_name)
+                .map(|profile| (profile_name.clone(), profile))
+        });
+    let mut resolved = configured.clone();
+    let selected_package_profile = selected.as_ref().map(|(name, _)| name.clone());
+    let field_sources = completion_field_sources(
+        request,
+        configured,
+        selected.as_ref().map(|(_, profile)| *profile),
+    );
+    if let Some((_, profile)) = selected {
+        apply_package_profile(&mut resolved, profile);
+    }
+    let max_tokens_source = if request.max_tokens.is_some() {
+        "request"
+    } else if configured.max_tokens.is_some() {
+        "deployment"
+    } else if resolved.max_tokens.is_some() {
+        "package"
+    } else {
+        "fallback"
+    };
+    (
+        resolved,
+        RequestDefaultsDiagnostics {
+            selected_package_profile,
+            max_tokens_source,
+            reasoning_budget_source: "not_applicable",
+            field_sources,
+        },
+    )
+}
+
+fn resolved_field_source(request: bool, deployment: bool, package: bool) -> &'static str {
+    if request {
+        "request"
+    } else if deployment {
+        "deployment"
+    } else if package {
+        "package"
+    } else {
+        "fallback"
+    }
+}
+
+fn request_extra_is_set(extra: &BTreeMap<String, Value>, field: &str) -> bool {
+    !extra_value_is_omitted(extra, field)
+}
+
+fn chat_field_sources(
+    request: &ChatCompletionRequest,
+    configured: &EmbeddedOpenAiRequestDefaults,
+    package: Option<&GenerationProfile>,
+    explicit_budget: Option<ReasoningBudget>,
+    template_reasoning: Option<bool>,
+) -> BTreeMap<&'static str, &'static str> {
+    let mut sources = BTreeMap::new();
+    macro_rules! field {
+        ($name:literal, $request:expr, $configured:ident, $package:ident) => {
+            sources.insert(
+                $name,
+                resolved_field_source(
+                    $request,
+                    configured.$configured.is_some(),
+                    package.is_some_and(|profile| profile.$package.is_some()),
+                ),
+            );
+        };
+    }
+    field!(
+        "max_tokens",
+        request.effective_max_tokens().is_some(),
+        max_tokens,
+        max_tokens
+    );
+    field!("stop", request.stop.is_some(), stop, stop);
+    field!(
+        "temperature",
+        request.temperature.is_some(),
+        temperature,
+        temperature
+    );
+    field!("top_p", request.top_p.is_some(), top_p, top_p);
+    field!(
+        "presence_penalty",
+        request.presence_penalty.is_some(),
+        presence_penalty,
+        presence_penalty
+    );
+    field!(
+        "frequency_penalty",
+        request.frequency_penalty.is_some(),
+        frequency_penalty,
+        frequency_penalty
+    );
+    field!("seed", request.seed.is_some(), seed, seed);
+    field!(
+        "logit_bias",
+        request.logit_bias.is_some(),
+        logit_bias,
+        logit_bias
+    );
+    for (name, requested, deployed, packaged) in [
+        (
+            "top_k",
+            request_extra_is_set(&request.extra, "top_k"),
+            configured.top_k.is_some(),
+            package.is_some_and(|profile| profile.top_k.is_some()),
+        ),
+        (
+            "min_p",
+            request_extra_is_set(&request.extra, "min_p"),
+            configured.min_p.is_some(),
+            package.is_some_and(|profile| profile.min_p.is_some()),
+        ),
+        (
+            "typical_p",
+            request_extra_is_set(&request.extra, "typical_p"),
+            configured.typical_p.is_some(),
+            package.is_some_and(|profile| profile.typical_p.is_some()),
+        ),
+        (
+            "top_nsigma",
+            request_extra_is_set(&request.extra, "top_nsigma"),
+            configured.top_nsigma.is_some(),
+            package.is_some_and(|profile| profile.top_nsigma.is_some()),
+        ),
+        (
+            "repeat_penalty",
+            request_extra_is_set(&request.extra, "repeat_penalty")
+                || request_extra_is_set(&request.extra, "repetition_penalty"),
+            configured.repeat_penalty.is_some(),
+            package.is_some_and(|profile| profile.repeat_penalty.is_some()),
+        ),
+        (
+            "repeat_last_n",
+            request_extra_is_set(&request.extra, "repeat_last_n"),
+            configured.repeat_last_n.is_some(),
+            package.is_some_and(|profile| profile.repeat_last_n.is_some()),
+        ),
+        (
+            "dynatemp_range",
+            request_extra_is_set(&request.extra, "dynatemp_range"),
+            configured.dynatemp_range.is_some(),
+            package.is_some_and(|profile| profile.dynatemp_range.is_some()),
+        ),
+        (
+            "dynatemp_exponent",
+            request_extra_is_set(&request.extra, "dynatemp_exponent"),
+            configured.dynatemp_exponent.is_some(),
+            package.is_some_and(|profile| profile.dynatemp_exponent.is_some()),
+        ),
+        (
+            "dry",
+            request_extra_is_set(&request.extra, "dry"),
+            configured.dry.is_some(),
+            package.is_some_and(|profile| profile.dry.is_some()),
+        ),
+        (
+            "xtc",
+            request_extra_is_set(&request.extra, "xtc"),
+            configured.xtc.is_some(),
+            package.is_some_and(|profile| profile.xtc.is_some()),
+        ),
+        (
+            "mirostat_mode",
+            request_extra_is_set(&request.extra, "mirostat_mode"),
+            configured.mirostat_mode.is_some(),
+            package.is_some_and(|profile| profile.mirostat_mode.is_some()),
+        ),
+        (
+            "mirostat_entropy",
+            request_extra_is_set(&request.extra, "mirostat_entropy"),
+            configured.mirostat_entropy.is_some(),
+            package.is_some_and(|profile| profile.mirostat_entropy.is_some()),
+        ),
+        (
+            "mirostat_learning_rate",
+            request_extra_is_set(&request.extra, "mirostat_learning_rate"),
+            configured.mirostat_learning_rate.is_some(),
+            package.is_some_and(|profile| profile.mirostat_learning_rate.is_some()),
+        ),
+        (
+            "samplers",
+            request_extra_is_set(&request.extra, "samplers"),
+            configured.samplers.is_some(),
+            package.is_some_and(|profile| profile.samplers.is_some()),
+        ),
+        (
+            "sampler_sequence",
+            request_extra_is_set(&request.extra, "sampler_sequence"),
+            configured.sampler_sequence.is_some(),
+            package.is_some_and(|profile| profile.sampler_sequence.is_some()),
+        ),
+        (
+            "ignore_eos",
+            request_extra_is_set(&request.extra, "ignore_eos"),
+            configured.ignore_eos.is_some(),
+            package.is_some_and(|profile| profile.ignore_eos.is_some()),
+        ),
+    ] {
+        sources.insert(name, resolved_field_source(requested, deployed, packaged));
+    }
+    let package_reasoning = package.and_then(|profile| profile.reasoning.as_ref());
+    sources.insert(
+        "reasoning_enabled",
+        resolved_field_source(
+            template_reasoning.is_some() || explicit_budget.is_some(),
+            configured.reasoning_enabled.is_some(),
+            package_reasoning.is_some_and(|reasoning| reasoning.enabled.is_some()),
+        ),
+    );
+    sources.insert(
+        "reasoning_format",
+        resolved_field_source(
+            request_extra_is_set(&request.extra, "reasoning_format"),
+            configured.reasoning_format.is_some(),
+            package_reasoning.is_some_and(|reasoning| reasoning.format.is_some()),
+        ),
+    );
+    sources.insert(
+        "reasoning_budget",
+        resolved_field_source(
+            explicit_budget.is_some(),
+            configured.reasoning_budget.is_some(),
+            package_reasoning.is_some_and(|reasoning| reasoning.budget.is_some()),
+        ),
+    );
+    sources
+}
+
+fn completion_field_sources(
+    request: &CompletionRequest,
+    configured: &EmbeddedOpenAiRequestDefaults,
+    package: Option<&GenerationProfile>,
+) -> BTreeMap<&'static str, &'static str> {
+    let mut sources = BTreeMap::new();
+    macro_rules! field {
+        ($name:literal, $request:expr, $configured:ident, $package:ident) => {
+            sources.insert(
+                $name,
+                resolved_field_source(
+                    $request,
+                    configured.$configured.is_some(),
+                    package.is_some_and(|profile| profile.$package.is_some()),
+                ),
+            );
+        };
+    }
+    field!(
+        "max_tokens",
+        request.max_tokens.is_some(),
+        max_tokens,
+        max_tokens
+    );
+    field!("stop", request.stop.is_some(), stop, stop);
+    field!(
+        "temperature",
+        request.temperature.is_some(),
+        temperature,
+        temperature
+    );
+    field!("top_p", request.top_p.is_some(), top_p, top_p);
+    field!(
+        "presence_penalty",
+        request.presence_penalty.is_some(),
+        presence_penalty,
+        presence_penalty
+    );
+    field!(
+        "frequency_penalty",
+        request.frequency_penalty.is_some(),
+        frequency_penalty,
+        frequency_penalty
+    );
+    field!("seed", request.seed.is_some(), seed, seed);
+    field!(
+        "logit_bias",
+        request.logit_bias.is_some(),
+        logit_bias,
+        logit_bias
+    );
+    for (name, requested, deployed, packaged) in [
+        (
+            "top_k",
+            request_extra_is_set(&request.extra, "top_k"),
+            configured.top_k.is_some(),
+            package.is_some_and(|profile| profile.top_k.is_some()),
+        ),
+        (
+            "min_p",
+            request_extra_is_set(&request.extra, "min_p"),
+            configured.min_p.is_some(),
+            package.is_some_and(|profile| profile.min_p.is_some()),
+        ),
+        (
+            "typical_p",
+            request_extra_is_set(&request.extra, "typical_p"),
+            configured.typical_p.is_some(),
+            package.is_some_and(|profile| profile.typical_p.is_some()),
+        ),
+        (
+            "top_nsigma",
+            request_extra_is_set(&request.extra, "top_nsigma"),
+            configured.top_nsigma.is_some(),
+            package.is_some_and(|profile| profile.top_nsigma.is_some()),
+        ),
+        (
+            "repeat_penalty",
+            request_extra_is_set(&request.extra, "repeat_penalty")
+                || request_extra_is_set(&request.extra, "repetition_penalty"),
+            configured.repeat_penalty.is_some(),
+            package.is_some_and(|profile| profile.repeat_penalty.is_some()),
+        ),
+        (
+            "repeat_last_n",
+            request_extra_is_set(&request.extra, "repeat_last_n"),
+            configured.repeat_last_n.is_some(),
+            package.is_some_and(|profile| profile.repeat_last_n.is_some()),
+        ),
+        (
+            "dynatemp_range",
+            request_extra_is_set(&request.extra, "dynatemp_range"),
+            configured.dynatemp_range.is_some(),
+            package.is_some_and(|profile| profile.dynatemp_range.is_some()),
+        ),
+        (
+            "dynatemp_exponent",
+            request_extra_is_set(&request.extra, "dynatemp_exponent"),
+            configured.dynatemp_exponent.is_some(),
+            package.is_some_and(|profile| profile.dynatemp_exponent.is_some()),
+        ),
+        (
+            "dry",
+            request_extra_is_set(&request.extra, "dry"),
+            configured.dry.is_some(),
+            package.is_some_and(|profile| profile.dry.is_some()),
+        ),
+        (
+            "xtc",
+            request_extra_is_set(&request.extra, "xtc"),
+            configured.xtc.is_some(),
+            package.is_some_and(|profile| profile.xtc.is_some()),
+        ),
+        (
+            "mirostat_mode",
+            request_extra_is_set(&request.extra, "mirostat_mode"),
+            configured.mirostat_mode.is_some(),
+            package.is_some_and(|profile| profile.mirostat_mode.is_some()),
+        ),
+        (
+            "mirostat_entropy",
+            request_extra_is_set(&request.extra, "mirostat_entropy"),
+            configured.mirostat_entropy.is_some(),
+            package.is_some_and(|profile| profile.mirostat_entropy.is_some()),
+        ),
+        (
+            "mirostat_learning_rate",
+            request_extra_is_set(&request.extra, "mirostat_learning_rate"),
+            configured.mirostat_learning_rate.is_some(),
+            package.is_some_and(|profile| profile.mirostat_learning_rate.is_some()),
+        ),
+        (
+            "samplers",
+            request_extra_is_set(&request.extra, "samplers"),
+            configured.samplers.is_some(),
+            package.is_some_and(|profile| profile.samplers.is_some()),
+        ),
+        (
+            "sampler_sequence",
+            request_extra_is_set(&request.extra, "sampler_sequence"),
+            configured.sampler_sequence.is_some(),
+            package.is_some_and(|profile| profile.sampler_sequence.is_some()),
+        ),
+        (
+            "ignore_eos",
+            request_extra_is_set(&request.extra, "ignore_eos"),
+            configured.ignore_eos.is_some(),
+            package.is_some_and(|profile| profile.ignore_eos.is_some()),
+        ),
+    ] {
+        sources.insert(name, resolved_field_source(requested, deployed, packaged));
+    }
+    sources
+}
+
+fn reasoning_budget_enables_thinking(budget: ReasoningBudget) -> bool {
+    !matches!(
+        budget,
+        ReasoningBudget::Explicit(0) | ReasoningBudget::Resolved(0)
+    )
+}
+
+fn operator_reasoning_mode(defaults: &EmbeddedOpenAiRequestDefaults) -> Option<bool> {
+    match defaults.reasoning_enabled {
+        Some(EmbeddedReasoningEnabled::Enabled) => return Some(true),
+        Some(EmbeddedReasoningEnabled::Disabled) => return Some(false),
+        Some(EmbeddedReasoningEnabled::Auto) | None => {}
+    }
+    defaults.reasoning_budget.and_then(|budget| match budget {
+        EmbeddedReasoningBudget::Tokens(0) => Some(false),
+        EmbeddedReasoningBudget::Auto => None,
+        EmbeddedReasoningBudget::Unrestricted | EmbeddedReasoningBudget::Tokens(_) => Some(true),
+        EmbeddedReasoningBudget::Effort(openai_frontend::ReasoningEffort::None) => Some(false),
+        EmbeddedReasoningBudget::Effort(_) => Some(true),
+    })
+}
+
+fn apply_package_profile(
+    resolved: &mut EmbeddedOpenAiRequestDefaults,
+    profile: &GenerationProfile,
+) {
+    macro_rules! fill {
+        ($field:ident) => {
+            if resolved.$field.is_none() {
+                resolved.$field = profile.$field.map(|value| value as _);
+            }
+        };
+    }
+    fill!(max_tokens);
+    if resolved.stop.is_none() {
+        resolved.stop.clone_from(&profile.stop);
+    }
+    fill!(temperature);
+    fill!(top_p);
+    fill!(top_k);
+    fill!(min_p);
+    fill!(typical_p);
+    fill!(top_nsigma);
+    fill!(presence_penalty);
+    fill!(frequency_penalty);
+    fill!(seed);
+    if resolved.logit_bias.is_none() {
+        resolved.logit_bias = profile.logit_bias.as_ref().map(|biases| {
+            biases
+                .iter()
+                .map(|(token, bias)| (token.clone(), Value::from(*bias)))
+                .collect()
+        });
+    }
+    fill!(repeat_penalty);
+    fill!(repeat_last_n);
+    fill!(dynatemp_range);
+    fill!(dynatemp_exponent);
+    fill!(mirostat_mode);
+    fill!(mirostat_entropy);
+    fill!(mirostat_learning_rate);
+    if resolved.samplers.is_none() {
+        resolved.samplers.clone_from(&profile.samplers);
+    }
+    if resolved.sampler_sequence.is_none() {
+        resolved
+            .sampler_sequence
+            .clone_from(&profile.sampler_sequence);
+    }
+    if resolved.ignore_eos.is_none() {
+        resolved.ignore_eos = profile.ignore_eos;
+    }
+    if resolved.dry.is_none() {
+        resolved.dry = profile.dry.as_ref().map(|dry| DrySamplingConfig {
+            multiplier: dry.multiplier.unwrap_or(0.0) as f32,
+            base: dry.base.unwrap_or(1.75) as f32,
+            allowed_length: dry.allowed_length.unwrap_or(2),
+            penalty_last_n: dry.penalty_last_n.unwrap_or(64),
+            sequence_breakers: dry
+                .sequence_breakers
+                .clone()
+                .unwrap_or_else(|| vec!["\n".into(), ":".into(), "\"".into(), "*".into()]),
+        });
+    }
+    if resolved.xtc.is_none() {
+        resolved.xtc = profile.xtc.as_ref().map(|xtc| XtcSamplingConfig {
+            probability: xtc.probability.unwrap_or(0.0) as f32,
+            threshold: xtc.threshold.unwrap_or(0.1) as f32,
+        });
+    }
+    if let Some(reasoning) = &profile.reasoning {
+        if resolved.reasoning_enabled.is_none() {
+            resolved.reasoning_enabled = reasoning.enabled.map(|enabled| match enabled {
+                GenerationReasoningEnabled::Auto => EmbeddedReasoningEnabled::Auto,
+                GenerationReasoningEnabled::Off => EmbeddedReasoningEnabled::Disabled,
+                GenerationReasoningEnabled::On => EmbeddedReasoningEnabled::Enabled,
+            });
+        }
+        if resolved.reasoning_format.is_none() {
+            resolved.reasoning_format = reasoning.format.map(|format| match format {
+                GenerationReasoningFormat::Auto => EmbeddedReasoningFormat::Auto,
+                GenerationReasoningFormat::None => EmbeddedReasoningFormat::None,
+                GenerationReasoningFormat::Deepseek => EmbeddedReasoningFormat::Deepseek,
+                GenerationReasoningFormat::DeepseekLegacy => {
+                    EmbeddedReasoningFormat::DeepseekLegacy
+                }
+                GenerationReasoningFormat::Hidden => EmbeddedReasoningFormat::Hidden,
+            });
+        }
+        if resolved.reasoning_budget.is_none() {
+            resolved.reasoning_budget = reasoning.budget.as_ref().map(|budget| match budget {
+                GenerationReasoningBudget::Tokens(tokens) => {
+                    EmbeddedReasoningBudget::Tokens(*tokens)
+                }
+                GenerationReasoningBudget::Level(level) => match level {
+                    GenerationReasoningBudgetLevel::Auto => EmbeddedReasoningBudget::Auto,
+                    GenerationReasoningBudgetLevel::Low => {
+                        EmbeddedReasoningBudget::Effort(openai_frontend::ReasoningEffort::Low)
+                    }
+                    GenerationReasoningBudgetLevel::Medium => {
+                        EmbeddedReasoningBudget::Effort(openai_frontend::ReasoningEffort::Medium)
+                    }
+                    GenerationReasoningBudgetLevel::High => {
+                        EmbeddedReasoningBudget::Effort(openai_frontend::ReasoningEffort::High)
+                    }
+                    GenerationReasoningBudgetLevel::Unrestricted => {
+                        EmbeddedReasoningBudget::Unrestricted
+                    }
+                },
+            });
+        }
+    }
+}
 
 struct SharedRequestFields<'a> {
     presence_penalty: &'a mut Option<f32>,
@@ -44,6 +663,9 @@ pub(super) fn apply_chat_request_defaults(
     request: &mut ChatCompletionRequest,
     defaults: &EmbeddedOpenAiRequestDefaults,
 ) -> OpenAiResult<()> {
+    if request.max_tokens.is_none() && request.max_completion_tokens.is_none() {
+        request.max_tokens = defaults.max_tokens;
+    }
     apply_shared_request_defaults(
         SharedRequestFields {
             presence_penalty: &mut request.presence_penalty,
@@ -161,6 +783,9 @@ pub(super) fn apply_completion_request_defaults(
     request: &mut CompletionRequest,
     defaults: &EmbeddedOpenAiRequestDefaults,
 ) {
+    if request.max_tokens.is_none() {
+        request.max_tokens = defaults.max_tokens;
+    }
     apply_shared_request_defaults(
         SharedRequestFields {
             presence_penalty: &mut request.presence_penalty,
@@ -381,8 +1006,9 @@ fn extra_value_is_omitted(
 
 pub(super) fn chat_sampling_config(
     request: &ChatCompletionRequest,
+    defaults: &EmbeddedOpenAiRequestDefaults,
 ) -> OpenAiResult<SamplingConfig> {
-    sampling_config(
+    let mut sampling = sampling_config(
         request.temperature,
         request.top_p,
         request.presence_penalty,
@@ -390,7 +1016,10 @@ pub(super) fn chat_sampling_config(
         request.seed,
         request.logit_bias.as_ref(),
         &request.extra,
-    )
+    )?;
+    sampling.reasoning_budget =
+        request_reasoning_budget(request)?.unwrap_or_else(|| embedded_reasoning_budget(defaults));
+    Ok(sampling)
 }
 
 pub(super) fn completion_sampling_config(
@@ -478,7 +1107,7 @@ fn merged_chat_template_kwargs(
                     }),
                 );
             }
-            EmbeddedReasoningBudget::Auto => {}
+            EmbeddedReasoningBudget::Auto | EmbeddedReasoningBudget::Unrestricted => {}
         }
     }
     merged.extend(request.clone());
@@ -500,6 +1129,73 @@ fn request_reasoning_format(
         Some(_) => Err(OpenAiError::invalid_request(
             "reasoning_format must be auto, none, deepseek, deepseek-legacy, or hidden",
         )),
+    }
+}
+
+fn request_reasoning_budget(
+    request: &ChatCompletionRequest,
+) -> OpenAiResult<Option<ReasoningBudget>> {
+    let normalized = openai_frontend::normalize_reasoning_template_options(
+        request.reasoning.as_ref(),
+        request.reasoning_effort,
+        &request.extra,
+    )?;
+    if normalized.enable_thinking == Some(false) {
+        return Ok(Some(ReasoningBudget::Explicit(0)));
+    }
+    for field in [
+        "reasoning_budget_tokens",
+        "thinking_budget_tokens",
+        "reasoning_budget",
+        "thinking_budget",
+    ] {
+        if let Some(tokens) = optional_i32_extra(&request.extra, field)? {
+            return match tokens {
+                -1 => Ok(Some(ReasoningBudget::Unrestricted)),
+                0.. => Ok(Some(ReasoningBudget::Explicit(tokens as u32))),
+                _ => Err(OpenAiError::invalid_request(format!(
+                    "{field} must be -1 or greater"
+                ))),
+            };
+        }
+    }
+    if let Some(max_tokens) = request
+        .reasoning
+        .as_ref()
+        .and_then(|reasoning| reasoning.max_tokens)
+    {
+        return Ok(Some(ReasoningBudget::Explicit(max_tokens)));
+    }
+    let effort = request.reasoning_effort.or_else(|| {
+        request
+            .reasoning
+            .as_ref()
+            .and_then(|reasoning| reasoning.effort)
+    });
+    Ok(effort.map(reasoning_effort_budget))
+}
+
+fn reasoning_effort_budget(effort: openai_frontend::ReasoningEffort) -> ReasoningBudget {
+    use openai_frontend::ReasoningEffort;
+    match effort {
+        ReasoningEffort::None => ReasoningBudget::Explicit(0),
+        ReasoningEffort::Minimal | ReasoningEffort::Low => ReasoningBudget::Capped(1_024),
+        ReasoningEffort::Medium => ReasoningBudget::Capped(4_096),
+        ReasoningEffort::High | ReasoningEffort::Xhigh | ReasoningEffort::Max => {
+            ReasoningBudget::Capped(8_192)
+        }
+    }
+}
+
+fn embedded_reasoning_budget(defaults: &EmbeddedOpenAiRequestDefaults) -> ReasoningBudget {
+    match defaults.reasoning_budget {
+        Some(EmbeddedReasoningBudget::Unrestricted) => ReasoningBudget::Unrestricted,
+        Some(EmbeddedReasoningBudget::Tokens(tokens)) => ReasoningBudget::Explicit(tokens),
+        Some(EmbeddedReasoningBudget::Effort(effort)) => reasoning_effort_budget(effort),
+        Some(EmbeddedReasoningBudget::Auto) | None => match defaults.reasoning_enabled {
+            Some(EmbeddedReasoningEnabled::Disabled) => ReasoningBudget::Explicit(0),
+            _ => ReasoningBudget::Capped(4_096),
+        },
     }
 }
 
@@ -617,6 +1313,7 @@ fn default_reasoning_budget_enabled(value: Option<EmbeddedReasoningBudget>) -> O
             Some(false)
         }
         Some(EmbeddedReasoningBudget::Effort(_)) => Some(true),
+        Some(EmbeddedReasoningBudget::Unrestricted) => Some(true),
         Some(EmbeddedReasoningBudget::Auto) | None => None,
     }
 }
@@ -780,6 +1477,7 @@ pub(super) fn sampling_config(
         mirostat_entropy,
         mirostat_learning_rate,
         samplers,
+        reasoning_budget: ReasoningBudget::Unrestricted,
     })
 }
 
@@ -1119,6 +1817,12 @@ pub(super) fn wire_sampling_config(sampling: &SamplingConfig) -> Option<WireSamp
         mirostat_entropy: sampling.mirostat_entropy,
         mirostat_learning_rate: sampling.mirostat_learning_rate,
         samplers: sampling.samplers.clone(),
+        reasoning_budget_tokens: match sampling.reasoning_budget {
+            ReasoningBudget::Unrestricted => -1,
+            ReasoningBudget::Explicit(tokens) => i32::try_from(tokens).unwrap_or(i32::MAX),
+            ReasoningBudget::Capped(_) => return None,
+            ReasoningBudget::Resolved(tokens) => tokens,
+        },
         ignore_eos: sampling.ignore_eos,
         ..WireSamplingConfig::default()
     };

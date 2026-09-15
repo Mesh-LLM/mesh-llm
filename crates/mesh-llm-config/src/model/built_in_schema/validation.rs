@@ -53,7 +53,7 @@ fn built_in_schema_preserves_union_typed_fields() {
     );
     assert_eq!(
         schema_value("models.<model-ref>.request_defaults.reasoning_budget"),
-        integer_or_string_enum(["auto", "low", "medium", "high"])
+        integer_or_string_enum(["auto", "low", "medium", "high", "unrestricted"])
     );
 }
 

@@ -6,7 +6,7 @@ use super::invalid_data;
 
 // v15 adds an explicit activation codec and encoded byte count to every stage frame. Stage peers
 // must be upgraded together so older readers reject compact payloads before decoding them as F32.
-pub const STAGE_STATE_VERSION: i32 = 15;
+pub const STAGE_STATE_VERSION: i32 = 16;
 pub const MAX_STAGE_LOGIT_BIAS: usize = 256;
 pub const MAX_STAGE_SAMPLERS: usize = 16;
 pub const MAX_STAGE_DRY_SEQUENCE_BREAKERS: usize = 8;
@@ -20,7 +20,7 @@ pub const MAX_STAGE_DECODED_ACTIVATION_BYTES: usize = 512 * 1024 * 1024;
 pub const READY_MAGIC: i32 = 0x5352_4459; // "SRDY"
 pub const LLAMA_TOKEN_NULL: i32 = -1;
 pub const STAGE_STATE_HEADER_BYTES: usize = 10 * 4;
-pub const STAGE_SAMPLING_CONFIG_BASE_BYTES: usize = 27 * 4;
+pub const STAGE_SAMPLING_CONFIG_BASE_BYTES: usize = 28 * 4;
 pub const STAGE_LOGIT_BIAS_WIRE_BYTES: usize = 4 + 4;
 pub const STAGE_WIRE_FIXED_HEADER_BYTES: usize = 6 * 4 + STAGE_STATE_HEADER_BYTES + 2 * 8;
 
@@ -278,6 +278,7 @@ pub struct StageSamplingConfig {
     pub mirostat_entropy: f32,
     pub mirostat_learning_rate: f32,
     pub samplers: Vec<String>,
+    pub reasoning_budget_tokens: i32,
     pub ignore_eos: bool,
 }
 
@@ -325,6 +326,7 @@ impl Default for StageSamplingConfig {
                 "xtc".into(),
                 "temperature".into(),
             ],
+            reasoning_budget_tokens: -1,
             ignore_eos: false,
         }
     }

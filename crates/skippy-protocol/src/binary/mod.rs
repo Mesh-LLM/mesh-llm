@@ -708,6 +708,7 @@ mod tests {
                 temperature: 0.8,
                 top_p: 0.9,
                 top_k: 40,
+                reasoning_budget_tokens: 1024,
                 ..StageSamplingConfig::default()
             }),
             Some("{\"grammar\":\"root ::= \\\"x\\\"\"}".to_string()),
@@ -731,6 +732,7 @@ mod tests {
         let sampling = decoded.sampling.expect("sampling extension round-tripped");
         assert_eq!(sampling.seed, 42);
         assert_eq!(sampling.top_k, 40);
+        assert_eq!(sampling.reasoning_budget_tokens, 1024);
     }
 
     #[test]
@@ -910,7 +912,7 @@ mod tests {
         write_stage_message(&mut bytes, &message).unwrap();
 
         assert_eq!(STAGE_STATE_HEADER_BYTES, 40);
-        assert_eq!(STAGE_SAMPLING_CONFIG_BASE_BYTES, 108);
+        assert_eq!(STAGE_SAMPLING_CONFIG_BASE_BYTES, 112);
         assert_eq!(STAGE_WIRE_FIXED_HEADER_BYTES, 80);
         assert_eq!(
             bytes.len(),
