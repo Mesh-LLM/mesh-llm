@@ -1720,9 +1720,9 @@ public:
               "n_layer);\n" + sideband_indent + "    cb(" + variable +
               ", \"inp_per_layer_stage\", -1);\n" + sideband_indent +
               "    ggml_set_input(" + variable + ");\n" + sideband_indent +
-              "    res->add_skippy_activation_import(" + variable +
-              ", 1);\n" + sideband_indent +
               "    res->add_skippy_activation_import(" + *carried +
+              ", 1);\n" + sideband_indent +
+              "    res->add_skippy_activation_import(" + variable +
               ", 1);\n" + sideband_indent + "}\n\n" + sideband_indent;
           valid &= addInsert(
               report.edits, "insert_per_layer_activation_frontier", report.file,
@@ -2185,10 +2185,10 @@ public:
       }
       if (per_layer_projection && !altup) {
         family_boundary_export +=
-            "    res->add_skippy_activation_export(" +
-            per_layer_projection->variable + ", 1);\n" + indent +
             "    res->add_skippy_activation_export(" + *carried +
-            ", 1);\n" + indent;
+            ", 1);\n" + indent +
+            "    res->add_skippy_activation_export(" +
+            per_layer_projection->variable + ", 1);\n" + indent;
       }
       const std::string boundary =
           altup

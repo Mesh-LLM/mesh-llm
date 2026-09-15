@@ -537,6 +537,16 @@ def main() -> int:
         assert "res->add_skippy_activation_import(inpL, 1);" in per_layer_source
         assert "res->add_skippy_activation_export(inp_per_layer, 1);" in per_layer_source
         assert "res->add_skippy_activation_export(inpL, 1);" in per_layer_source
+        assert per_layer_source.index(
+            "res->add_skippy_activation_import(inpL, 1);"
+        ) < per_layer_source.index(
+            "res->add_skippy_activation_import(inp_per_layer, 1);"
+        )
+        assert per_layer_source.index(
+            "res->add_skippy_activation_export(inpL, 1);"
+        ) < per_layer_source.index(
+            "res->add_skippy_activation_export(inp_per_layer, 1);"
+        )
         assert (
             "std::make_unique<llm_graph_input_stage_tokens>"
             not in per_layer_source
