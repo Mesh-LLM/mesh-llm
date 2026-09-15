@@ -263,7 +263,6 @@ export type ConfigAssignModelConfig = {
   flashAttention?: 'auto' | 'enabled' | 'disabled'
   cacheTypeK?: string
   cacheTypeV?: string
-  kvCachePolicy?: 'auto' | 'quality' | 'balanced' | 'saver'
 }
 export type ConfigAssign = {
   id: string
@@ -491,7 +490,6 @@ export type ConfigurationModelPlacementPaths = {
   gpuLayers: string
   cacheTypeK?: string
   cacheTypeV?: string
-  kvCachePolicy?: string
   flashAttention?: string
   mmproj?: string
 }

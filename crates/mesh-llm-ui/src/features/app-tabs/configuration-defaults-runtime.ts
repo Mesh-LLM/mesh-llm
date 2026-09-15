@@ -353,27 +353,6 @@ export const CONFIGURATION_DEFAULT_RUNTIME_SETTINGS = [
     control: { kind: 'text', name: 'device', value: '', placeholder: 'cuda:0 or CUDA0' }
   },
   {
-    id: 'kv-cache',
-    categoryId: 'memory',
-    tomlSection: 'defaults.model_fit',
-    tomlKey: 'kv_cache_policy',
-    icon: 'filter',
-    label: 'KV cache policy',
-    description: 'Select how aggressively KV cache precision is reduced to fit larger contexts.',
-    inheritedLabel: 'Used when the placement has no cache override',
-    control: {
-      kind: 'choice',
-      name: 'kv_cache_policy',
-      value: 'auto',
-      options: [
-        { value: 'auto', label: 'auto' },
-        { value: 'quality', label: 'quality' },
-        { value: 'balanced', label: 'balanced' },
-        { value: 'saver', label: 'saver' }
-      ]
-    }
-  },
-  {
     id: 'memory-margin',
     categoryId: 'memory',
     tomlSection: 'defaults.hardware',

@@ -6,12 +6,11 @@ use super::super::KvCachePolicy;
 use super::request_defaults::resolve_request_defaults;
 use super::speculative::resolve_speculative_config;
 use super::support::{
-    KvMacroDefaults, ThroughputMacroDefaults, bool_or_auto_value, derive_fit_target_mib,
-    effective_flash_attention, has_explicit_prefill_controls, kv_macro_defaults, parse_gpu_layers,
-    parse_kv_offload_string, pick_owned, pick_string, pick_string_owned, pick_value,
-    reject_unsupported_hardware_controls, reject_unsupported_model_fit_controls,
-    resolve_bool_or_auto, resolve_field_string, resolve_field_value, resolve_prefix_cache,
-    throughput_macro_defaults,
+    ThroughputMacroDefaults, bool_or_auto_value, derive_fit_target_mib, effective_flash_attention,
+    has_explicit_prefill_controls, parse_gpu_layers, parse_kv_offload_string, pick_owned,
+    pick_string, pick_string_owned, pick_value, reject_unsupported_hardware_controls,
+    reject_unsupported_model_fit_controls, resolve_bool_or_auto, resolve_field_string,
+    resolve_field_value, resolve_prefix_cache, throughput_macro_defaults,
 };
 use super::types::{
     BUILTIN_BATCH, BUILTIN_CTX_SIZE, BUILTIN_PARALLEL, BUILTIN_PREFILL_CHUNK_SIZE,
@@ -221,7 +220,6 @@ fn resolve_model_fit_config(
     context: &ResolverContext<'_>,
     kv_policy: KvCachePolicy,
 ) -> Result<ResolvedModelFitConfig> {
-    let kv = resolve_kv_defaults(context, kv_policy);
     let throughput = resolve_throughput_defaults(context);
 
     let ctx_size = pick_value(
@@ -255,9 +253,9 @@ fn resolve_model_fit_config(
             .and_then(|defaults| defaults.ubatch),
         BUILTIN_UBATCH,
     );
-    let cache_type_k = resolve_cache_type_k(context, &kv, kv_policy);
-    let cache_type_v = resolve_cache_type_v(context, &kv, kv_policy);
-    let kv_offload = resolve_kv_offload(context, &kv);
+    let cache_type_k = resolve_cache_type_k(context, kv_policy);
+    let cache_type_v = resolve_cache_type_v(context, kv_policy);
+    let kv_offload = resolve_kv_offload(context);
     let kv_offload_resolved = parse_kv_offload_string(&kv_offload);
     let kv_unified = resolve_kv_unified(context)?;
     let swa_full = pick_owned(
@@ -297,7 +295,6 @@ fn resolve_model_fit_config(
         ubatch,
         cache_type_k,
         cache_type_v,
-        kv_cache_policy: kv.effective_policy,
         prefix_cache,
         l2_max_bytes,
         kv_cache_codec,
@@ -326,39 +323,7 @@ fn resolve_kv_unified(context: &ResolverContext<'_>) -> Result<Option<bool>> {
     )
 }
 
-struct KvDefaults {
-    effective_policy: String,
-    model_macro: Option<KvMacroDefaults>,
-    global_macro: Option<KvMacroDefaults>,
-}
-
-fn resolve_kv_defaults(context: &ResolverContext<'_>, kv_policy: KvCachePolicy) -> KvDefaults {
-    let model_policy = context
-        .model_fit
-        .and_then(|fit| fit.kv_cache_policy.as_deref());
-    let global_policy = context
-        .global_model_fit
-        .and_then(|fit| fit.kv_cache_policy.as_deref());
-    let effective_policy = model_policy.or(global_policy).unwrap_or_else(|| {
-        if context.publisher_defaults.is_some() {
-            "publisher"
-        } else {
-            "safe_f16"
-        }
-    });
-
-    KvDefaults {
-        effective_policy: effective_policy.to_string(),
-        model_macro: model_policy.map(|policy| kv_macro_defaults(policy, kv_policy)),
-        global_macro: global_policy.map(|policy| kv_macro_defaults(policy, kv_policy)),
-    }
-}
-
-fn resolve_cache_type_k(
-    context: &ResolverContext<'_>,
-    kv: &KvDefaults,
-    kv_policy: KvCachePolicy,
-) -> String {
+fn resolve_cache_type_k(context: &ResolverContext<'_>, kv_policy: KvCachePolicy) -> String {
     if let Some(explicit) = context
         .model_fit
         .and_then(|fit| non_auto_string(fit.cache_type_k.as_deref()))
@@ -367,24 +332,16 @@ fn resolve_cache_type_k(
     }
     resolve_field_string(
         None,
-        kv.model_macro
-            .as_ref()
-            .and_then(|defaults| defaults.cache_type_k.as_deref()),
+        None,
         context
             .global_model_fit
             .and_then(|fit| non_auto_string(fit.cache_type_k.as_deref())),
-        kv.global_macro
-            .as_ref()
-            .and_then(|defaults| defaults.cache_type_k.as_deref()),
+        None,
         kv_policy.cache_type_k(),
     )
 }
 
-fn resolve_cache_type_v(
-    context: &ResolverContext<'_>,
-    kv: &KvDefaults,
-    kv_policy: KvCachePolicy,
-) -> String {
+fn resolve_cache_type_v(context: &ResolverContext<'_>, kv_policy: KvCachePolicy) -> String {
     if let Some(explicit) = context
         .model_fit
         .and_then(|fit| non_auto_string(fit.cache_type_v.as_deref()))
@@ -393,15 +350,11 @@ fn resolve_cache_type_v(
     }
     resolve_field_string(
         None,
-        kv.model_macro
-            .as_ref()
-            .and_then(|defaults| defaults.cache_type_v.as_deref()),
+        None,
         context
             .global_model_fit
             .and_then(|fit| non_auto_string(fit.cache_type_v.as_deref())),
-        kv.global_macro
-            .as_ref()
-            .and_then(|defaults| defaults.cache_type_v.as_deref()),
+        None,
         kv_policy.cache_type_v(),
     )
 }
@@ -410,7 +363,7 @@ fn non_auto_string(value: Option<&str>) -> Option<&str> {
     value.filter(|item| !item.eq_ignore_ascii_case("auto"))
 }
 
-fn resolve_kv_offload(context: &ResolverContext<'_>, kv: &KvDefaults) -> String {
+fn resolve_kv_offload(context: &ResolverContext<'_>) -> String {
     let model_kv_offload = context
         .model_fit
         .and_then(|fit| fit.kv_offload.as_ref())
@@ -422,13 +375,9 @@ fn resolve_kv_offload(context: &ResolverContext<'_>, kv: &KvDefaults) -> String 
 
     resolve_field_string(
         model_kv_offload.as_deref(),
-        kv.model_macro
-            .as_ref()
-            .and_then(|defaults| defaults.kv_offload.as_deref()),
+        None,
         global_kv_offload.as_deref(),
-        kv.global_macro
-            .as_ref()
-            .and_then(|defaults| defaults.kv_offload.as_deref()),
+        None,
         "auto",
     )
 }

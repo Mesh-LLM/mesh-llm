@@ -1,7 +1,6 @@
 use anyhow::{Result, bail};
 use skippy_protocol::{FlashAttentionType, StageKvCacheMode, StageKvCachePayload};
 
-use super::super::KvCachePolicy;
 use super::types::{
     BUILTIN_BATCH, BUILTIN_PARALLEL, BUILTIN_UBATCH, ResolvedStageKvCache,
     ResolvedStageKvCacheTemplate,
@@ -177,37 +176,6 @@ pub(super) fn resolve_prefix_cache(
                 .map(|value| value as usize),
         },
     ))
-}
-
-pub(super) struct KvMacroDefaults {
-    pub(super) cache_type_k: Option<String>,
-    pub(super) cache_type_v: Option<String>,
-    pub(super) kv_offload: Option<String>,
-}
-
-pub(super) fn kv_macro_defaults(policy: &str, kv_policy: KvCachePolicy) -> KvMacroDefaults {
-    match policy {
-        "quality" => KvMacroDefaults {
-            cache_type_k: Some("f16".to_string()),
-            cache_type_v: Some("f16".to_string()),
-            kv_offload: Some("auto".to_string()),
-        },
-        "saver" => KvMacroDefaults {
-            cache_type_k: Some("q8_0".to_string()),
-            cache_type_v: Some("q8_0".to_string()),
-            kv_offload: Some("true".to_string()),
-        },
-        "auto" | "balanced" => KvMacroDefaults {
-            cache_type_k: Some(kv_policy.cache_type_k().to_string()),
-            cache_type_v: Some(kv_policy.cache_type_v().to_string()),
-            kv_offload: Some("auto".to_string()),
-        },
-        _ => KvMacroDefaults {
-            cache_type_k: Some(kv_policy.cache_type_k().to_string()),
-            cache_type_v: Some(kv_policy.cache_type_v().to_string()),
-            kv_offload: Some("auto".to_string()),
-        },
-    }
 }
 
 pub(super) struct ThroughputMacroDefaults {

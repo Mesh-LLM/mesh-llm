@@ -167,8 +167,7 @@ describe('buildTOML model and plugin serialization', () => {
           model_fit: {
             ctx_size: 2048,
             cache_type_k: 'q8_0',
-            cache_type_v: 'q4_0',
-            kv_cache_policy: 'balanced'
+            cache_type_v: 'q4_0'
           }
         },
         {
@@ -191,7 +190,6 @@ describe('buildTOML model and plugin serialization', () => {
 
     expect(toml.match(/\[\[models\]\]/g)).toHaveLength(3)
     expect(toml).toContain('ctx_size = 131072\ncache_type_k = "q8_0"\ncache_type_v = "q4_0"')
-    expect(toml).toContain('[models.model_fit]\nkv_cache_policy = "balanced"')
     expect(toml).toContain('ctx_size = 262144\ncache_type_k = "f16"\ncache_type_v = "f16"')
     expect(toml).toContain('ctx_size = 65536\ncache_type_v = "q8_0"')
     expect(toml).not.toContain('[models.model_fit]\nctx_size')

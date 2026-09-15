@@ -61,7 +61,7 @@ schema row or stale manifest row from passing review:
 `runtime.model_target_demand_upgrade_max_age_secs`, `advanced.server.alias`,
 `model`, `hardware.model_path`, `hardware.hf_repo`, `hardware.hf_file`,
 `model_fit.ctx_size`, `model_fit.batch`, `model_fit.ubatch`,
-`model_fit.cache_type_k`, `model_fit.cache_type_v`, `model_fit.kv_cache_policy`,
+`model_fit.cache_type_k`, `model_fit.cache_type_v`,
 `model_fit.kv_offload`, `model_fit.kv_unified`, `model_fit.cache_ram_mib`,
 `model_fit.cache_idle_slots`, `model_fit.prompt_cache`,
 `model_fit.prefix_cache.enabled`, `model_fit.prefix_cache.max_entries`,

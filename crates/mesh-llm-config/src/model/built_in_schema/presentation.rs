@@ -56,7 +56,7 @@ const PROMPT_CACHE_CATEGORY: CategoryPresentation = CategoryPresentation {
 const MEMORY_CATEGORY: CategoryPresentation = CategoryPresentation {
     id: "memory",
     label: "Memory",
-    summary: "VRAM accounting and KV cache policy",
+    summary: "VRAM accounting and KV cache precision",
     order: 20,
 };
 const SPECULATIVE_CATEGORY: CategoryPresentation = CategoryPresentation {
@@ -480,19 +480,11 @@ fn runtime_defaults_presentation(rendered: &str) -> Option<SettingPresentation> 
         )
         .placeholder("cuda:0 or CUDA0")
         .hint("text")),
-        "defaults.model_fit.kv_cache_policy" => Some(sp(
-            "KV cache policy",
-            "Select how aggressively KV cache precision is reduced to fit larger contexts.",
-            MEMORY_CATEGORY,
-            10,
-        )
-        .hint("segmented")
-        .renderer("kv-cache-policy")),
         "defaults.hardware.safety_margin_gb" => Some(sp(
             "Memory / safety margin",
             "Keep this much GPU memory free before placement fit checks pass.",
             MEMORY_CATEGORY,
-            20,
+            10,
         )
         .unit("GB")
         .hint("range")),

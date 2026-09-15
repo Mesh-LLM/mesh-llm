@@ -400,8 +400,6 @@ pub struct ModelFitConfig {
     #[serde(default)]
     pub cache_type_v: Option<String>,
     #[serde(default)]
-    pub kv_cache_policy: Option<String>,
-    #[serde(default)]
     pub kv_offload: Option<BoolOrAuto>,
     #[serde(default)]
     pub kv_unified: Option<BoolOrAuto>,

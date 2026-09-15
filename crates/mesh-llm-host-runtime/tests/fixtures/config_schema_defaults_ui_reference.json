@@ -148,13 +148,6 @@
       }
     },
     {
-      "canonical_path": "defaults.model_fit.kv_cache_policy",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
       "canonical_path": "defaults.model_fit.kv_offload",
       "support": "supported",
       "source": {

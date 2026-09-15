@@ -601,13 +601,6 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         behavior: WiringBehavior::None,
     },
     WiringEntry {
-        path: "model_fit.kv_cache_policy",
-        status: WiringStatus::Wired,
-        owner: "n/a",
-        reason: "",
-        behavior: WiringBehavior::None,
-    },
-    WiringEntry {
         path: "model_fit.kv_offload",
         status: WiringStatus::Wired,
         owner: "n/a",

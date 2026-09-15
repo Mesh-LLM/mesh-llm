@@ -73,7 +73,6 @@ pub(crate) struct ResolvedModelFitConfig {
     pub(crate) ubatch: u32,
     pub(crate) cache_type_k: String,
     pub(crate) cache_type_v: String,
-    pub(crate) kv_cache_policy: String,
     pub(crate) prefix_cache: ResolvedStageKvCache,
     pub(crate) l2_max_bytes: u64,
     pub(crate) kv_cache_codec: StageKvCacheCodec,

@@ -63,9 +63,8 @@ fn update_platform_identity(hasher: &mut blake3::Hasher) {
 /// exported KV page without changing the token sequence.
 ///
 /// Identity must cover every input that alters the serialized layout or the
-/// numerical content of exported state. Flipping `kv_cache_policy` from
-/// `quality` to `saver` rewrites `cache_type_k`/`_v` from `f16` to `q8_0`;
-/// without these fields in the hash, incompatible state would share a page id.
+/// numerical content of exported state. Changing `cache_type_k`/`_v` from
+/// `f16` to `q8_0` must not let incompatible state share a page id.
 ///
 /// `NATIVE_KV_DTYPE` is a fixed layout tag and does **not** vary with the
 /// configured cache types, so it cannot stand in for them.
@@ -664,22 +663,21 @@ mod identity_completeness_tests {
         prefix_hash(config, 0, &[1, 2, 3, 4])
     }
 
-    /// Changing the KV cache policy rewrites `cache_type_k`/`_v`. These
-    /// formats must produce distinct page identities to prevent importing
-    /// cached q8_0 state as f16.
+    /// Changing `cache_type_k`/`_v` must produce distinct page identities to
+    /// prevent importing cached q8_0 state as f16.
     #[test]
     fn kv_cache_dtype_changes_page_identity() {
-        let quality = test_config();
-        let saver = StageConfig {
+        let f16 = test_config();
+        let quantized = StageConfig {
             cache_type_k: "q8_0".to_string(),
             cache_type_v: "q8_0".to_string(),
             ..test_config()
         };
 
-        assert_ne!(hash_of(&quality), hash_of(&saver));
+        assert_ne!(hash_of(&f16), hash_of(&quantized));
         assert_ne!(
-            prefix_identity(&quality, 0, &[1, 2, 3, 4]).page_id,
-            prefix_identity(&saver, 0, &[1, 2, 3, 4]).page_id
+            prefix_identity(&f16, 0, &[1, 2, 3, 4]).page_id,
+            prefix_identity(&quantized, 0, &[1, 2, 3, 4]).page_id
         );
     }
 

@@ -140,8 +140,7 @@ for the activity policy and privacy boundary.
 | `model_fit.ctx_size` | integer | `0` = auto | both | model reload | wired | `--ctx-size` on the ad-hoc single-model path |
 | `model_fit.batch` | integer | `0` = auto (`n_batch`) | both | model reload | wired | none |
 | `model_fit.ubatch` | integer | `0` = auto (`n_ubatch`); should not exceed `batch` | both | model reload | wired | none |
-| `model_fit.cache_type_k`<br>`model_fit.cache_type_v` | enum (dtype) | `auto` (default), `f16`, `q8_0`, `q4_0`; schema validation also accepts `f32`, `bf16`, `q4_1`, `iq4_nl`, `q5_0`, `q5_1`, but the normal serving runtime rejects them at model load; explicit value overrides `kv_cache_policy` | both | model reload | wired | none |
-| `model_fit.kv_cache_policy` | enum | `balanced` (default), `auto`, `quality`, `saver`; expands into cache dtypes | both | model reload | wired | none |
+| `model_fit.cache_type_k`<br>`model_fit.cache_type_v` | enum (dtype) | `auto` (default) follows package-validated publisher KV metadata, then publisher compute dtype, then F16; explicit schema values are `f16`, `f32`, `bf16`, `q8_0`, `q4_0`, `q4_1`, `iq4_nl`, `q5_0`, and `q5_1`, gated by runtime support | both | model reload | wired | none |
 | `model_fit.kv_offload` | bool-or-`auto` | `auto` | both | model reload | wired | none |
 | `model_fit.kv_unified` | bool-or-`auto` | `auto` | both | model reload | wired (recurrent/hybrid architectures still force this true natively) | none |
 | `model_fit.cache_ram_mib` | integer | `0`/unset = host-RAM L2 disabled | both | model reload | wired; requires prefix caching and active L3 | none |

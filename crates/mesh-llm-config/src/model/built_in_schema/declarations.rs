@@ -341,10 +341,6 @@ fn model_fit_settings(
         basic_setting(&format!("{prefix}.ubatch"), ConfigValueSchema::Integer),
         basic_setting(&format!("{prefix}.cache_type_k"), kv_cache_type_schema()),
         basic_setting(&format!("{prefix}.cache_type_v"), kv_cache_type_schema()),
-        basic_setting(
-            &format!("{prefix}.kv_cache_policy"),
-            string_enum(["auto", "quality", "balanced", "saver"]),
-        ),
         basic_setting(&format!("{prefix}.kv_offload"), bool_or_auto_schema()),
         basic_setting(&format!("{prefix}.kv_unified"), bool_or_auto_schema()),
         basic_setting(

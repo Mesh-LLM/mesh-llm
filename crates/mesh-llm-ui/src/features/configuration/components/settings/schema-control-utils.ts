@@ -98,7 +98,6 @@ export function hasSchemaKind(
 export function effectiveRendererId(setting: ConfigurationDefaultsSetting) {
   if (setting.rendererId) return setting.rendererId
   if (setting.id === 'parallel-slots') return 'slot-meter'
-  if (setting.id === 'kv-cache') return 'kv-cache-policy'
   if (setting.id === 'ctx-size') return 'context-slider'
   return undefined
 }
