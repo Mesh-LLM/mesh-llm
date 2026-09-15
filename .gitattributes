@@ -1,0 +1,5 @@
+# Every text file checks out with LF on every platform. The repository already
+# stores nothing with CRLF, and five host-runtime tests plus the embedded
+# Skippy patch-queue digest read files from the working tree byte for byte, so
+# a Windows checkout with core.autocrlf=true changed what they saw.
+* text=auto eol=lf
