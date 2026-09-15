@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
 use serde_json::json;
+use std::io::Write;
 use std::path::Path;
 
 use mesh_llm_cli::runtime::RuntimeCommand;
@@ -259,11 +260,13 @@ pub(crate) async fn run_control_scan_refresh(
     )
     .await?;
     if json_output {
-        println!("{}", serde_json::to_string_pretty(&body)?);
+        let mut out = mesh_llm_events::machine_out();
+        writeln!(out, "{}", serde_json::to_string_pretty(&body)?)?;
         return Ok(());
     }
+    let mut out = mesh_llm_events::console_out();
     for line in control_scan_refresh_lines(&body) {
-        println!("{line}");
+        writeln!(out, "{line}")?;
     }
     Ok(())
 }
@@ -385,19 +388,20 @@ async fn display_runtime_result(
     let action_inf = if verb == "Loaded" { "load" } else { "unload" };
     let is_success = resp.status().is_success();
     let body = resp.json::<serde_json::Value>().await.ok();
+    let mut err = mesh_llm_events::console_err();
     if is_success {
         for line in runtime_success_lines(model_name, verb, body.as_ref()) {
-            eprintln!("{line}");
+            writeln!(err, "{line}")?;
         }
     } else {
-        eprintln!("❌ Failed to {action_inf} runtime model");
-        eprintln!();
-        eprintln!("Model: {model_name}");
+        writeln!(err, "❌ Failed to {action_inf} runtime model")?;
+        writeln!(err)?;
+        writeln!(err, "Model: {model_name}")?;
         let reason = body
             .as_ref()
             .and_then(|value| value["error"].as_str().map(str::to_owned))
             .unwrap_or_else(|| "unknown error".to_string());
-        eprintln!("Reason: {reason}");
+        writeln!(err, "Reason: {reason}")?;
     }
     Ok(())
 }
@@ -474,23 +478,25 @@ pub(crate) async fn run_status(port: u16) -> Result<()> {
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("Invalid runtime process payload"))?;
 
-    println!("⚙️  Runtime");
-    println!();
+    let mut out = mesh_llm_events::console_out();
+    writeln!(out, "⚙️  Runtime")?;
+    writeln!(out)?;
 
     if models.is_empty() {
-        println!("📦 Models served locally: 0");
-        println!();
-        println!("No local models are currently being served.");
+        writeln!(out, "📦 Models served locally: 0")?;
+        writeln!(out)?;
+        writeln!(out, "No local models are currently being served.")?;
         return Ok(());
     }
 
-    println!("📦 Models served locally: {}", models.len());
-    println!();
+    writeln!(out, "📦 Models served locally: {}", models.len())?;
+    writeln!(out)?;
 
-    println!(
+    writeln!(
+        out,
         "{:<42} {:<12} {:<8} {:<10} {:<8} {:<6}",
         "Model", "Instance", "Backend", "State", "Pid", "Port"
-    );
+    )?;
     for model in models {
         let name = model["name"].as_str().unwrap_or("unknown");
         let instance = model["instance_id"].as_str().unwrap_or("-");
@@ -503,10 +509,11 @@ pub(crate) async fn run_status(port: u16) -> Result<()> {
             .as_u64()
             .map(|p| p.to_string())
             .unwrap_or_else(|| "-".into());
-        println!(
+        writeln!(
+            out,
             "{:<42} {:<12} {:<8} {:<10} {:<8} {:<6}",
             name, instance, backend, status, pid, port
-        );
+        )?;
     }
 
     Ok(())
@@ -519,12 +526,14 @@ pub(crate) async fn run_control_bootstrap(port: u16, json: bool) -> Result<()> {
     let payload = fetch_runtime_payload(&client, port, "/api/runtime/control-bootstrap").await?;
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&payload)?);
+        let mut out = mesh_llm_events::machine_out();
+        writeln!(out, "{}", serde_json::to_string_pretty(&payload)?)?;
         return Ok(());
     }
 
+    let mut out = mesh_llm_events::console_out();
     for line in control_bootstrap_lines(&payload) {
-        println!("{line}");
+        writeln!(out, "{line}")?;
     }
 
     Ok(())
@@ -694,10 +703,12 @@ async fn post_runtime_payload(
 
 fn print_control_response(title: &str, body: &serde_json::Value, json_output: bool) -> Result<()> {
     if !json_output {
-        println!("🔐 {title}");
-        println!();
+        let mut out = mesh_llm_events::console_out();
+        writeln!(out, "🔐 {title}")?;
+        writeln!(out)?;
     }
-    println!("{}", serde_json::to_string_pretty(body)?);
+    let mut out = mesh_llm_events::machine_out();
+    writeln!(out, "{}", serde_json::to_string_pretty(body)?)?;
     Ok(())
 }
 

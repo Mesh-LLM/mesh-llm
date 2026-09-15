@@ -1,8 +1,11 @@
 use super::*;
+use std::io::Write;
 
 pub(crate) fn log_target_selection(requested: &str, selection: &BenchmarkSelection) {
+    let mut err = mesh_llm_events::console_err();
     if let Some(best) = &selection.recommended {
-        eprintln!(
+        let _ = writeln!(
+            err,
             "benchmark tune: target `{requested}` recommended {} decode_tok_s={}",
             render_benchmark_candidate(&best.candidate),
             best.decode_tok_s
@@ -10,7 +13,10 @@ pub(crate) fn log_target_selection(requested: &str, selection: &BenchmarkSelecti
                 .unwrap_or_else(|| "n/a".to_string()),
         );
     } else {
-        eprintln!("benchmark tune: target `{requested}` produced no successful trials");
+        let _ = writeln!(
+            err,
+            "benchmark tune: target `{requested}` produced no successful trials"
+        );
     }
 }
 
@@ -21,7 +27,9 @@ pub(crate) fn run_trial_with_progress(
     total: usize,
     candidate: TuneBenchmarkCandidate,
 ) -> TuneBenchmarkTrial {
-    eprintln!(
+    let mut err = mesh_llm_events::console_err();
+    let _ = writeln!(
+        err,
         "benchmark tune: trial {}/{} start {}",
         index + 1,
         total,
@@ -33,33 +41,40 @@ pub(crate) fn run_trial_with_progress(
 }
 
 fn log_trial_result(index: usize, total: usize, trial: &TuneBenchmarkTrial) {
+    let mut err = mesh_llm_events::console_err();
     match trial.status {
-        TuneBenchmarkTrialStatus::Succeeded => eprintln!(
-            "benchmark tune: trial {}/{} ok {} decode_tok_s={} ttft_ms={} decode_only_tok_s={}{}",
-            index + 1,
-            total,
-            render_benchmark_candidate(&trial.candidate),
-            trial
-                .decode_tok_s
-                .map(|rate| format!("{rate:.2}"))
-                .unwrap_or_else(|| "n/a".to_string()),
-            trial
-                .ttft_ms
-                .map(|value| format!("{value:.0}"))
-                .unwrap_or_else(|| "n/a".to_string()),
-            trial
-                .decode_only_tok_s
-                .map(|rate| format!("{rate:.2}"))
-                .unwrap_or_else(|| "n/a".to_string()),
-            render_progress_timing(trial.timings.as_ref()),
-        ),
-        TuneBenchmarkTrialStatus::Failed => eprintln!(
-            "benchmark tune: trial {}/{} failed {} error={}",
-            index + 1,
-            total,
-            render_benchmark_candidate(&trial.candidate),
-            trial.error.as_deref().unwrap_or("unknown"),
-        ),
+        TuneBenchmarkTrialStatus::Succeeded => {
+            let _ = writeln!(
+                err,
+                "benchmark tune: trial {}/{} ok {} decode_tok_s={} ttft_ms={} decode_only_tok_s={}{}",
+                index + 1,
+                total,
+                render_benchmark_candidate(&trial.candidate),
+                trial
+                    .decode_tok_s
+                    .map(|rate| format!("{rate:.2}"))
+                    .unwrap_or_else(|| "n/a".to_string()),
+                trial
+                    .ttft_ms
+                    .map(|value| format!("{value:.0}"))
+                    .unwrap_or_else(|| "n/a".to_string()),
+                trial
+                    .decode_only_tok_s
+                    .map(|rate| format!("{rate:.2}"))
+                    .unwrap_or_else(|| "n/a".to_string()),
+                render_progress_timing(trial.timings.as_ref()),
+            );
+        }
+        TuneBenchmarkTrialStatus::Failed => {
+            let _ = writeln!(
+                err,
+                "benchmark tune: trial {}/{} failed {} error={}",
+                index + 1,
+                total,
+                render_benchmark_candidate(&trial.candidate),
+                trial.error.as_deref().unwrap_or("unknown"),
+            );
+        }
     }
 }
 

@@ -22,6 +22,7 @@ use mesh_llm_host_runtime::command_support::models::{
 use mesh_llm_tui::terminal_progress::{DeterminateProgressLine, clear_stderr_line, start_spinner};
 use serde_json::json;
 use std::io::IsTerminal;
+use std::io::Write;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -117,7 +118,8 @@ pub async fn run_model_search(
                 );
                 if completed == total {
                     let _ = clear_stderr_line();
-                    eprintln!("   Inspected {completed}/{total} candidate repos...");
+                    let mut err = mesh_llm_events::console_err();
+                    let _ = writeln!(err, "   Inspected {completed}/{total} candidate repos...");
                 }
             }
         },
@@ -172,18 +174,21 @@ pub async fn run_model_certify(
         std::fs::write(path, format!("{report_json}\n"))?;
     }
     if json_output {
-        println!("{report_json}");
+        let mut out = mesh_llm_events::machine_out();
+        writeln!(out, "{report_json}")?;
     } else {
-        println!(
+        let mut out = mesh_llm_events::console_out();
+        writeln!(
+            out,
             "Skippy package certification: {}",
             status_label(report.status)
-        );
-        println!("Model: {}", report.model_id);
-        println!("Package: {}", report.resolved_package_ref);
-        println!("Manifest: {}", report.manifest_sha256);
-        println!("Layers: {}", report.layer_count);
+        )?;
+        writeln!(out, "Model: {}", report.model_id)?;
+        writeln!(out, "Package: {}", report.resolved_package_ref)?;
+        writeln!(out, "Manifest: {}", report.manifest_sha256)?;
+        writeln!(out, "Layers: {}", report.layer_count)?;
         if let Some(path) = report_out {
-            println!("Report: {}", path.display());
+            writeln!(out, "Report: {}", path.display())?;
         }
     }
     if report.status != CertificationGateStatus::Passed {
@@ -265,20 +270,24 @@ pub async fn run_model_show(model_ref: &str, json_output: bool) -> Result<()> {
     let interactive = !json_output && std::io::stdout().is_terminal();
     let detail_started = Instant::now();
     if interactive {
-        eprintln!("🔎 Resolving model details from Hugging Face...");
+        let mut err = mesh_llm_events::console_err();
+        writeln!(err, "🔎 Resolving model details from Hugging Face...")?;
     }
     let details = show_exact_model(model_ref).await?;
     if interactive {
-        eprintln!(
+        let mut err = mesh_llm_events::console_err();
+        writeln!(
+            err,
             "✅ Resolved model details ({:.1}s)",
             detail_started.elapsed().as_secs_f32()
-        );
+        )?;
     }
     let is_gguf = model_kind_code(details.kind) == "gguf";
     let variants = if is_gguf {
         let variants_started = Instant::now();
         if interactive {
-            eprintln!("🔎 Fetching GGUF variants from Hugging Face...");
+            let mut err = mesh_llm_events::console_err();
+            writeln!(err, "🔎 Fetching GGUF variants from Hugging Face...")?;
         }
         let variants_progress = DeterminateProgressLine::new("🔎");
         let variants = show_model_variants_with_progress(&details.exact_ref, |progress| {
@@ -305,17 +314,21 @@ pub async fn run_model_show(model_ref: &str, json_output: bool) -> Result<()> {
         .await?;
         if let Some(variants) = &variants {
             if interactive {
-                eprintln!(
+                let mut err = mesh_llm_events::console_err();
+                writeln!(
+                    err,
                     "✅ Fetched {} GGUF variants ({:.1}s)",
                     variants.len(),
                     variants_started.elapsed().as_secs_f32()
-                );
+                )?;
             }
         } else if interactive {
-            eprintln!(
+            let mut err = mesh_llm_events::console_err();
+            writeln!(
+                err,
                 "✅ No GGUF variants for this ref ({:.1}s)",
                 variants_started.elapsed().as_secs_f32()
-            );
+            )?;
         }
         variants
     } else {
@@ -335,11 +348,12 @@ pub async fn run_model_download(
         && let Some((package_ref, package_dir)) =
             download_layer_package_for_model_ref(model_ref).await?
     {
+        let mut err = mesh_llm_events::console_err();
         if !json_output {
-            eprintln!("ℹ Using repackaged model from catalog: {package_ref}");
+            writeln!(err, "ℹ Using repackaged model from catalog: {package_ref}")?;
         }
         if include_draft && !json_output {
-            eprintln!("⚠ Draft download is not available for layer packages");
+            writeln!(err, "⚠ Draft download is not available for layer packages")?;
         }
         return formatter.render_layer_package_download(model_ref, &package_ref, &package_dir);
     }
@@ -381,10 +395,12 @@ pub async fn run_model_download(
             };
             draft_out = Some((draft_name.to_string(), draft_download.path));
         } else if !json_output {
-            eprintln!(
+            let mut err = mesh_llm_events::console_err();
+            writeln!(
+                err,
                 "⚠ No draft model available for {}",
                 details_ref.display_name
-            );
+            )?;
         }
     }
     formatter.render_download(DownloadRenderInput {
@@ -559,19 +575,22 @@ fn run_model_prune(yes: bool, json_output: bool) -> Result<()> {
         mesh_llm_host_runtime::command_support::models::skippy::materialized_stage_cache_dir();
     if !yes {
         if json_output {
-            println!(
+            let mut out = mesh_llm_events::machine_out();
+            writeln!(
+                out,
                 "{}",
                 serde_json::to_string_pretty(&json!({
                     "dry_run": true,
                     "cache_dir": cache_dir,
                     "apply": "mesh-llm models prune --yes",
                 }))?
-            );
+            )?;
         } else {
-            println!("🧹 Derived stage cache prune preview");
-            println!("📁 Cache: {}", cache_dir.display());
-            println!("Apply with:");
-            println!("  mesh-llm models prune --yes");
+            let mut out = mesh_llm_events::console_out();
+            writeln!(out, "🧹 Derived stage cache prune preview")?;
+            writeln!(out, "📁 Cache: {}", cache_dir.display())?;
+            writeln!(out, "Apply with:")?;
+            writeln!(out, "  mesh-llm models prune --yes")?;
         }
         return Ok(());
     }
@@ -579,17 +598,20 @@ fn run_model_prune(yes: bool, json_output: bool) -> Result<()> {
         mesh_llm_host_runtime::command_support::models::skippy::prune_unpinned_materialized_stages(
         )?;
     if json_output {
-        println!(
+        let mut out = mesh_llm_events::machine_out();
+        writeln!(
+            out,
             "{}",
             serde_json::to_string_pretty(&json!({
                 "dry_run": false,
                 "cache_dir": cache_dir,
                 "removed_files": removed,
             }))?
-        );
+        )?;
     } else {
-        println!("✅ Derived stage cache pruned");
-        println!("Removed files: {}", removed);
+        let mut out = mesh_llm_events::console_out();
+        writeln!(out, "✅ Derived stage cache pruned")?;
+        writeln!(out, "Removed files: {}", removed)?;
     }
     Ok(())
 }
@@ -624,95 +646,104 @@ fn render_cleanup_console(
     plan: &ModelCleanupPlan,
     result: Option<&ModelCleanupResult>,
 ) -> Result<()> {
+    let mut out = mesh_llm_events::console_out();
     let executed = result.is_some();
     if executed {
-        println!("✅ Model cleanup complete");
+        writeln!(out, "✅ Model cleanup complete")?;
     } else {
-        println!("🧹 Model cleanup preview");
+        writeln!(out, "🧹 Model cleanup preview")?;
     }
-    println!(
+    writeln!(
+        out,
         "📁 HF cache: {}",
         mesh_llm_host_runtime::command_support::models::huggingface_hub_cache_dir().display()
-    );
-    println!("📁 Mesh cache: {}", model_usage_cache_dir().display());
-    println!("🛡️ Scope: mesh-managed records only");
+    )?;
+    writeln!(out, "📁 Mesh cache: {}", model_usage_cache_dir().display())?;
+    writeln!(out, "🛡️ Scope: mesh-managed records only")?;
     if let Some(unused_since) = unused_since {
-        println!("⏱️ Filter: unused for at least {}", unused_since);
+        writeln!(out, "⏱️ Filter: unused for at least {}", unused_since)?;
     }
-    println!();
+    writeln!(out)?;
 
     if plan.candidates.is_empty() {
-        println!("No mesh-managed models matched the cleanup filters.");
+        writeln!(out, "No mesh-managed models matched the cleanup filters.")?;
     } else {
         for candidate in &plan.candidates {
-            println!("📦 {}", candidate.display_name);
+            writeln!(out, "📦 {}", candidate.display_name)?;
             if candidate.stale_record_only {
-                println!("   would remove: stale usage record only");
+                writeln!(out, "   would remove: stale usage record only")?;
             } else {
-                println!(
+                writeln!(
+                    out,
                     "   would remove: {} across {} file{}",
                     format_installed_size(candidate.total_bytes),
                     candidate.file_count,
                     if candidate.file_count == 1 { "" } else { "s" }
-                );
+                )?;
             }
             if let Some(model_ref) = candidate.model_ref.as_deref() {
-                println!("   ref: {}", model_ref);
+                writeln!(out, "   ref: {}", model_ref)?;
             }
-            println!("   source: {}", candidate.source);
+            writeln!(out, "   source: {}", candidate.source)?;
             if let Some(label) = format_relative_timestamp(&candidate.last_used_at) {
-                println!("   last used: {}", label);
+                writeln!(out, "   last used: {}", label)?;
             }
-            println!("   path: {}", candidate.primary_path.display());
+            writeln!(out, "   path: {}", candidate.primary_path.display())?;
             if candidate.stale_record_only {
-                println!(
+                writeln!(
+                    out,
                     "   note: no managed files remain on disk; cleanup only removes the usage record"
-                );
+                )?;
             }
-            println!();
+            writeln!(out)?;
         }
     }
 
     if let Some(result) = result {
-        println!("Removed model records: {}", result.removed_candidates);
-        println!("Removed files: {}", result.removed_files);
-        println!(
+        writeln!(out, "Removed model records: {}", result.removed_candidates)?;
+        writeln!(out, "Removed files: {}", result.removed_files)?;
+        writeln!(
+            out,
             "Removed metadata cache files: {}",
             result.removed_metadata_files
-        );
-        println!("Removed usage records: {}", result.removed_records);
-        println!(
+        )?;
+        writeln!(out, "Removed usage records: {}", result.removed_records)?;
+        writeln!(
+            out,
             "Reclaimed: {}",
             format_installed_size(result.reclaimed_bytes)
-        );
+        )?;
     } else {
-        println!(
+        writeln!(
+            out,
             "Would remove: {} across {} file{}",
             format_installed_size(plan.total_bytes),
             plan.total_files,
             if plan.total_files == 1 { "" } else { "s" }
-        );
+        )?;
         if plan.stale_record_only > 0 {
-            println!(
+            writeln!(
+                out,
                 "Would also clear {} stale usage record{}",
                 plan.stale_record_only,
                 if plan.stale_record_only == 1 { "" } else { "s" }
-            );
+            )?;
         }
         if plan.skipped_recent > 0 {
-            println!(
+            writeln!(
+                out,
                 "Skipped recent mesh-managed record{}: {}",
                 if plan.skipped_recent == 1 { "" } else { "s" },
                 plan.skipped_recent
-            );
+            )?;
         }
-        println!();
-        println!("Apply with:");
-        print!("  mesh-llm models cleanup");
+        writeln!(out)?;
+        writeln!(out, "Apply with:")?;
+        write!(out, "  mesh-llm models cleanup")?;
         if let Some(unused_since) = unused_since {
-            print!(" --unused-since {}", unused_since);
+            write!(out, " --unused-since {}", unused_since)?;
         }
-        println!(" --yes");
+        writeln!(out, " --yes")?;
     }
     Ok(())
 }
@@ -722,7 +753,9 @@ fn render_cleanup_json(
     plan: &ModelCleanupPlan,
     result: Option<&ModelCleanupResult>,
 ) -> Result<()> {
-    println!(
+    let mut out = mesh_llm_events::machine_out();
+    writeln!(
+        out,
         "{}",
         serde_json::to_string_pretty(&json!({
             "hf_cache_dir": mesh_llm_host_runtime::command_support::models::huggingface_hub_cache_dir(),
@@ -733,7 +766,7 @@ fn render_cleanup_json(
             "plan": plan,
             "result": result,
         }))?
-    );
+    )?;
     Ok(())
 }
 

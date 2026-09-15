@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde_json::{Map, Value, json};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -79,16 +80,18 @@ async fn run_split_doctor(
         None => Vec::new(),
     };
     if json_output {
-        println!("{}", serde_json::to_string_pretty(&report)?);
+        let mut out = mesh_llm_events::machine_out();
+        writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
     } else {
+        let mut out = mesh_llm_events::console_out();
         for line in split_readiness_lines(&report) {
-            println!("{line}");
+            writeln!(out, "{line}")?;
         }
         if !captured_files.is_empty() {
-            println!();
-            println!("Captured diagnostics:");
+            writeln!(out)?;
+            writeln!(out, "Captured diagnostics:")?;
             for path in captured_files {
-                println!("  - {}", path.display());
+                writeln!(out, "  - {}", path.display())?;
             }
         }
     }

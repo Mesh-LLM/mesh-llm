@@ -2,7 +2,8 @@ use crate::terminal::{self, ConfirmDefault, style_muted, style_ok, style_warn};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use std::{
-    fs, io,
+    fs,
+    io::{self, Write},
     path::{Path, PathBuf},
     process::Command,
 };
@@ -454,23 +455,27 @@ fn add_option_warnings(options: &UninstallOptions, outcome: &mut UninstallOutcom
 
 fn render_plan(plan: &UninstallPlan, json: bool, verbose: bool) -> Result<()> {
     if json {
-        println!("{}", serde_json::to_string_pretty(plan)?);
+        let mut out = mesh_llm_events::machine_out();
+        writeln!(out, "{}", serde_json::to_string_pretty(plan)?)?;
         return Ok(());
     }
+    let mut err = mesh_llm_events::console_err();
     for line in plan_lines(plan, verbose) {
-        eprintln!("{line}");
+        writeln!(err, "{line}")?;
     }
     Ok(())
 }
 
 fn render_outcome(outcome: &UninstallOutcome, json: bool, verbose: bool) -> Result<()> {
     if json {
-        println!("{}", serde_json::to_string_pretty(outcome)?);
+        let mut out = mesh_llm_events::machine_out();
+        writeln!(out, "{}", serde_json::to_string_pretty(outcome)?)?;
         return Ok(());
     }
-    eprintln!();
+    let mut err = mesh_llm_events::console_err();
+    writeln!(err)?;
     for line in outcome_lines(outcome, verbose) {
-        eprintln!("{line}");
+        writeln!(err, "{line}")?;
     }
     Ok(())
 }
