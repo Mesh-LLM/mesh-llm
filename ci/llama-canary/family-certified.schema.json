@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mesh-llm.dev/schemas/family-certified.schema.json",
   "title": "MeshLLM supported-family certification policy",
-  "$comment": "The schema validates transport shape. scripts/plan-family-battery.py additionally enforces the four-lane certified-profile invariant, exact profile semantics, unique families, safe artifact paths, and deterministic sharding.",
+  "$comment": "The schema validates transport shape. scripts/plan-family-battery.py additionally enforces the three-lane certified-profile invariant, exact profile semantics, unique families, safe artifact paths, and deterministic sharding.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "policy", "models"],
@@ -11,7 +11,7 @@
     "policy": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["profiles", "cadences"],
+      "required": ["profiles"],
       "properties": {
         "profiles": {
           "type": "object",
@@ -22,16 +22,6 @@
             "package-oracle": {"$ref": "#/$defs/profile"},
             "graph-only": {"$ref": "#/$defs/profile"}
           }
-        },
-        "cadences": {
-          "type": "array",
-          "prefixItems": [
-            {"const": "llama-bump"},
-            {"const": "manual-full"},
-            {"const": "nightly"},
-            {"const": "rotating"}
-          ],
-          "items": false
         }
       }
     },
@@ -97,7 +87,6 @@
       "required": [
         "family",
         "profile",
-        "cadences",
         "artifact",
         "execution",
         "resources",
@@ -106,12 +95,6 @@
       "properties": {
         "family": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
         "profile": {"enum": ["full", "package-oracle", "graph-only"]},
-        "cadences": {
-          "type": "array",
-          "minItems": 1,
-          "uniqueItems": true,
-          "items": {"enum": ["llama-bump", "manual-full", "nightly", "rotating"]}
-        },
         "artifact": {"$ref": "#/$defs/artifact"},
         "draft_artifact": {"$ref": "#/$defs/artifact"},
         "mmproj_artifact": {"$ref": "#/$defs/artifact"},
@@ -122,14 +105,12 @@
             "trunk_layers",
             "mtp_layers",
             "activation_width",
-            "boundary_sweep_period",
             "speculative_policy"
           ],
           "properties": {
             "trunk_layers": {"type": "integer", "minimum": 1},
             "mtp_layers": {"type": "integer", "minimum": 0},
             "activation_width": {"type": "integer", "minimum": 1},
-            "boundary_sweep_period": {"type": "integer", "minimum": 0},
             "speculative_policy": {"enum": ["mtp-if-present", "disabled"]}
           }
         },

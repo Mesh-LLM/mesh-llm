@@ -61,22 +61,24 @@ _find_lld_darwin() {
     return 0
 }
 
-# Link a one-line C program with `-fuse-ld=$1` through `cc`, the same driver
+# Link a one-line C program with `-fuse-ld=$1` through the same compiler driver
 # rustc uses. One invocation, tens of milliseconds. The linker's own
 # diagnostics are left in LLD_PROBE_OUTPUT so a caller can report the real
 # reason instead of guessing one.
 lld_links() {
     local linker="$1"
+    local compiler="${MESH_LLM_CC:-cc}"
+    shift
     LLD_PROBE_OUTPUT=""
-    if ! command -v cc >/dev/null 2>&1; then
-        LLD_PROBE_OUTPUT="no C compiler driver (cc) on PATH to probe with"
+    if ! command -v "$compiler" >/dev/null 2>&1; then
+        LLD_PROBE_OUTPUT="no C compiler driver ($compiler) on PATH to probe with"
         return 1
     fi
     local probe_dir status=0
     probe_dir="$(mktemp -d)" || return 1
     printf 'int main(void) { return 0; }\n' >"$probe_dir/probe.c"
     LLD_PROBE_OUTPUT="$(
-        cc "-fuse-ld=$linker" "$probe_dir/probe.c" -o "$probe_dir/probe" 2>&1
+        "$compiler" "$@" "-fuse-ld=$linker" "$probe_dir/probe.c" -o "$probe_dir/probe" 2>&1
     )" || status=1
     rm -rf "$probe_dir"
     return "$status"

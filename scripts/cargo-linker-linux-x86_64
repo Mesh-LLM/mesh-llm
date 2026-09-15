@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export MESH_LLM_LINK_TARGET=x86_64-unknown-linux-gnu
+exec "$SCRIPT_DIR/cargo-linker" "$@"

@@ -61,14 +61,14 @@ AUDITED_FILES = (
 # so a new call (or a new mutation-bearing file) requires explicit review.
 KNOWN_UNAUDITED_MUTATION_COUNTS = {
     "crates/mesh-llm-host-runtime/src/api/routes/plugins.rs": 3,
-    "crates/mesh-llm-host-runtime/src/api/tests/apply_config_diagnostics.rs": 3,
-    "crates/mesh-llm-host-runtime/src/api/tests/mod.rs": 3,
+    "crates/mesh-llm-host-runtime/src/api/tests/apply_config_diagnostics.rs": 6,
+    "crates/mesh-llm-host-runtime/src/api/tests/mod.rs": 6,
     "crates/mesh-llm-host-runtime/src/api/tests/runtime_config_validation_authority.rs": 3,
-    "crates/mesh-llm-host-runtime/src/mesh/tests/admission/requirements.rs": 3,
+    "crates/mesh-llm-host-runtime/src/mesh/tests/admission/requirements.rs": 6,
     "crates/mesh-llm-host-runtime/src/mesh/tests/owner_control.rs": 5,
     "crates/mesh-llm-host-runtime/src/models/inventory.rs": 13,
     "crates/mesh-llm-host-runtime/src/models/resolve/tests.rs": 4,
-    "crates/mesh-llm-host-runtime/src/network/nostr/auto.rs": 3,
+    "crates/mesh-llm-host-runtime/src/network/nostr/auto.rs": 6,
     "crates/mesh-llm-host-runtime/src/runtime/config_state_tests/support.rs": 3,
     "crates/mesh-llm-host-runtime/src/runtime/tests/auto_join.rs": 1,
     "crates/mesh-llm-host-runtime/src/runtime/tests/mod.rs": 2,

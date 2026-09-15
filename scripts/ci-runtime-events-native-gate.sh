@@ -74,7 +74,8 @@ if [[ ! -s "$MODEL_PATH" ]]; then
 fi
 
 mkdir -p "$(dirname "$EVIDENCE_FILE")"
-# Cargo runs integration tests from the crate directory, not this shell cwd.
+# Cargo runs integration tests from the crate directory. Keep the writer and
+# the check below pointed at the same file regardless of that working directory.
 EVIDENCE_FILE="$(cd "$(dirname "$EVIDENCE_FILE")" && pwd)/$(basename "$EVIDENCE_FILE")"
 # Start from an empty file so the assertion below reads THIS run's markers,
 # never a previous run's left behind by a warm workspace.

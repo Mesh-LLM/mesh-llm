@@ -3,13 +3,11 @@ set -euo pipefail
 
 # Supported-families certification battery (issue #1434; tiers dropped 2026-08-25).
 #
-# Every row of the single manifest gets core certification: single-step,
-# chain, and state-handoff lanes. Models with MTP/NextN tensors require the
-# native draft sideband and verify it against the target in the correctness
-# lanes. Dense rows run them at the first, midpoint, and last interior cuts.
-# Hybrid/recurrent rows (sweep_period > 0) run a boundary sweep — one
-# representative split layer for every cut offset modulo the family's
-# interleaving period.
+# Every row of the single manifest gets one consolidated core certification:
+# single-step, chain, and state-handoff lanes. Models with MTP/NextN tensors
+# require the native draft sideband and verify it against the target. The
+# production topology planner exhaustively classifies boundaries and selects
+# accepted balanced cuts before any model is loaded.
 #
 # Models are NEVER cached through GitHub Actions cache. The family-certify
 # runner ships a large pre-warmed, read-only HF cache. When HF_CACHE is set,
@@ -37,7 +35,6 @@ SKIP_BUILD=0
 DRY_RUN=0
 PREFLIGHT_ONLY=0
 FAMILY_FILTER=""
-SWEEP_MAX_CUTS="${FAMILY_BATTERY_SWEEP_MAX_CUTS:-3}"
 STARTUP_TIMEOUT_MIN_SECS="${FAMILY_BATTERY_STARTUP_TIMEOUT_MIN_SECS:-180}"
 STARTUP_TIMEOUT_PER_GIB_SECS="${FAMILY_BATTERY_STARTUP_TIMEOUT_PER_GIB_SECS:-10}"
 STARTUP_TIMEOUT_MAX_SECS="${FAMILY_BATTERY_STARTUP_TIMEOUT_MAX_SECS:-900}"
@@ -50,6 +47,7 @@ ARTIFACT_ROOT="${FAMILY_BATTERY_ARTIFACT_ROOT:-$ROOT/target/family-battery}"
 ARTIFACT_DIR="$ARTIFACT_ROOT/$BATTERY_RUN_ID"
 MODEL_SCAN_DIR="$ARTIFACT_DIR/model-scans"
 PREFLIGHT_DIR="$ARTIFACT_DIR/preflight"
+TOPOLOGY_PLAN_DIR="$PREFLIGHT_DIR/topology"
 CERT_DIR="$ARTIFACT_DIR/certifications"
 RESULTS_JSONL="$ARTIFACT_DIR/results.jsonl"
 NATIVE_MTP_MODELS_TSV="$ARTIFACT_DIR/native-mtp-models.tsv"
@@ -130,7 +128,6 @@ if [[ ! -x "$PLANNER" ]]; then
 fi
 
 for value in \
-  "$SWEEP_MAX_CUTS" \
   "$STARTUP_TIMEOUT_MIN_SECS" \
   "$STARTUP_TIMEOUT_PER_GIB_SECS" \
   "$STARTUP_TIMEOUT_MAX_SECS" \
@@ -156,10 +153,10 @@ if [[ -n "$FAMILY_FILTER" && ! "$FAMILY_FILTER" =~ ^[a-zA-Z0-9._-]+(,[a-zA-Z0-9.
   exit 1
 fi
 
-mkdir -p "$MODEL_SCAN_DIR" "$PREFLIGHT_DIR" "$CERT_DIR"
+mkdir -p "$MODEL_SCAN_DIR" "$PREFLIGHT_DIR" "$TOPOLOGY_PLAN_DIR" "$CERT_DIR"
 : > "$RESULTS_JSONL"
 printf 'family\tmodel_id\tsource_revision\tmodel_path\tmtp_layers\n' > "$NATIVE_MTP_MODELS_TSV"
-printf 'family|repo|source_revision|file|selector|sweep_period|layer_end|notes|target_path|draft_repo|draft_revision|draft_file|draft_path|native_mtp|model_size_bytes|mtp_layers|activation_width|startup_timeout_secs|mmproj_repo|mmproj_revision|mmproj_file|mmproj_path\n' > "$RESOLVED_MANIFEST"
+printf 'family|repo|source_revision|file|selector|two_stage_split|three_stage_splits|topology_plan|layer_end|notes|target_path|native_mtp|model_size_bytes|mtp_layers|activation_width|startup_timeout_secs|mmproj_repo|mmproj_revision|mmproj_file|mmproj_path\n' > "$RESOLVED_MANIFEST"
 
 prepare_policy_plan() {
   local plan_args=(
@@ -301,19 +298,19 @@ resolve_pinned_model() {
 }
 
 build_certification_binaries() {
-  local bins=(skippy-correctness skippy-server skippy-model-package)
+  local bins=(skippy-correctness skippy-server skippy-model-package skippy-topology-plan)
   local bin
 
   if (( DRY_RUN == 1 )); then
     if (( SKIP_BUILD == 0 )); then
-      echo "env LLAMA_STAGE_BUILD_DIR='<repo>/.deps/llama-build/build-stage-abi-static' cargo build -p skippy-correctness -p skippy-server -p skippy-model-package"
+      echo "env LLAMA_STAGE_BUILD_DIR='<repo>/.deps/llama-build/build-stage-abi-static' cargo build -p skippy-correctness -p skippy-server -p skippy-model-package -p skippy-topology --bins"
     fi
     return 0
   fi
 
   if (( SKIP_BUILD == 0 )); then
     env LLAMA_STAGE_BUILD_DIR="${LLAMA_STAGE_BUILD_DIR:-$ROOT/.deps/llama-build/build-stage-abi-static}" \
-      cargo build -p skippy-correctness -p skippy-server -p skippy-model-package
+      cargo build -p skippy-correctness -p skippy-server -p skippy-model-package -p skippy-topology --bins
     return 0
   fi
 
@@ -448,22 +445,15 @@ PY
 }
 
 run_certify() {
-  local family="$1" target="$2" model_id="$3" source_revision="$4" split_layer="$5" layer_end="$6" native_mtp="$7"
-  local startup_timeout="$8" model_size_bytes="$9" activation_width="${10}"
-  # Two distinct interior cut points so the chain lane (exactly two split
-  # indexes) always has valid inputs; distinct from each other and from 0.
-  local chain_a=$(( layer_end / 3 ))
-  local chain_b=$(( ( layer_end * 2 ) / 3 ))
-  if (( chain_b == chain_a || chain_a < 1 )); then
-    chain_a=1
-    chain_b=2
-  fi
+  local family="$1" target="$2" model_id="$3" source_revision="$4" split_layer="$5" chain_splits="$6" layer_end="$7" native_mtp="$8"
+  local startup_timeout="$9" model_size_bytes="${10}" activation_width="${11}"
   TOTAL=$((TOTAL + 1))
-  local cert_run_id cert_run_dir exit_code manifest_path cert_timeout
-  cert_run_id="$(printf '%03d-%s-split-%s' "$TOTAL" "$(slugify "$family")" "$split_layer")"
+  local cert_run_id cert_run_dir exit_code manifest_path cert_timeout port_base started_at elapsed_seconds
+  cert_run_id="$(printf '%03d-%s' "$TOTAL" "$(slugify "$family")")"
   cert_run_dir="$CERT_DIR/$cert_run_id"
   cert_timeout="$(cert_timeout_for_startup "$startup_timeout")"
-  echo "==> family-certify: family=$family split=$split_layer mtp=$native_mtp startup_timeout=${startup_timeout}s cert_timeout=${cert_timeout}s model=$(basename "$target")"
+  port_base=$((19000 + ((TOTAL - 1) % 20) * 50))
+  echo "==> family-certify: family=$family split=$split_layer chain=$chain_splits mtp=$native_mtp startup_timeout=${startup_timeout}s cert_timeout=${cert_timeout}s model=$(basename "$target")"
   local command=(
     "$ROOT/scripts/family-certify.sh"
     --family "$family"
@@ -471,11 +461,12 @@ run_certify() {
     --model-id "$model_id"
     --split-layer "$split_layer"
     --layer-end "$layer_end"
-    --splits "$chain_a,$chain_b"
+    --splits "$chain_splits"
     --activation-width "$activation_width"
     --startup-timeout-secs "$startup_timeout"
     --cert-root "$cert_run_dir"
     --run-id certification
+    --port-base "$port_base"
     --require-lanes
     --skip-build
   )
@@ -489,10 +480,15 @@ run_certify() {
     return 0
   fi
   exit_code=0
+  started_at="$(date +%s)"
   "$ROOT/scripts/run-command-with-timeout.py" \
     --seconds "$cert_timeout" \
     --label "family certification $family split $split_layer" \
     -- "${command[@]}" || exit_code=$?
+  elapsed_seconds=$(( $(date +%s) - started_at ))
+  if ! cleanup_certification_ports "$port_base"; then
+    exit_code=1
+  fi
   manifest_path=""
   if [[ -d "$cert_run_dir" ]]; then
     manifest_path="$(find "$cert_run_dir" -name manifest.json -type f -print -quit)"
@@ -507,9 +503,10 @@ run_certify() {
       --argjson activation_width "$activation_width" \
       --argjson startup_timeout_secs "$startup_timeout" \
       --argjson certification_timeout_secs "$cert_timeout" \
+      --argjson elapsed_seconds "$elapsed_seconds" \
       --argjson native_mtp "$native_mtp" \
       --argjson exit_code "$exit_code" \
-      '{family:$family,model_id:$model_id,source_revision:$source_revision,split_layer:$split_layer,model_size_bytes:$model_size_bytes,activation_width:$activation_width,startup_timeout_secs:$startup_timeout_secs,certification_timeout_secs:$certification_timeout_secs,native_mtp:($native_mtp == 1),exit_code:$exit_code,manifest:input_filename,outcomes:.commands}' \
+      '{family:$family,model_id:$model_id,source_revision:$source_revision,split_layer:$split_layer,model_size_bytes:$model_size_bytes,activation_width:$activation_width,startup_timeout_secs:$startup_timeout_secs,certification_timeout_secs:$certification_timeout_secs,elapsed_seconds:$elapsed_seconds,native_mtp:($native_mtp == 1),exit_code:$exit_code,manifest:input_filename,outcomes:.commands}' \
       "$manifest_path" >> "$RESULTS_JSONL"
   else
     jq -n \
@@ -521,16 +518,38 @@ run_certify() {
       --argjson activation_width "$activation_width" \
       --argjson startup_timeout_secs "$startup_timeout" \
       --argjson certification_timeout_secs "$cert_timeout" \
+      --argjson elapsed_seconds "$elapsed_seconds" \
       --argjson native_mtp "$native_mtp" \
       --argjson exit_code "$exit_code" \
       --arg outcome "$(if (( exit_code == 124 )); then printf timeout; else printf harness; fi)" \
-      '{family:$family,model_id:$model_id,source_revision:$source_revision,split_layer:$split_layer,model_size_bytes:$model_size_bytes,activation_width:$activation_width,startup_timeout_secs:$startup_timeout_secs,certification_timeout_secs:$certification_timeout_secs,native_mtp:($native_mtp == 1),exit_code:$exit_code,outcomes:[{name:"certification-manifest",status:"fail",outcome:$outcome,note:(if $outcome == "timeout" then "family-certify exceeded its wall-clock budget before writing a manifest" else "family-certify produced no manifest" end)}]}' \
+      '{family:$family,model_id:$model_id,source_revision:$source_revision,split_layer:$split_layer,model_size_bytes:$model_size_bytes,activation_width:$activation_width,startup_timeout_secs:$startup_timeout_secs,certification_timeout_secs:$certification_timeout_secs,elapsed_seconds:$elapsed_seconds,native_mtp:($native_mtp == 1),exit_code:$exit_code,outcomes:[{name:"certification-manifest",status:"fail",outcome:$outcome,note:(if $outcome == "timeout" then "family-certify exceeded its wall-clock budget before writing a manifest" else "family-certify produced no manifest" end)}]}' \
       >> "$RESULTS_JSONL"
   fi
   if (( exit_code != 0 )); then
     FAILURES+=("$family@split=$split_layer")
     CERT_FAILURE_COUNT=$((CERT_FAILURE_COUNT + 1))
   fi
+}
+
+cleanup_certification_ports() {
+  local port_base="$1" port pid command
+  command -v lsof >/dev/null 2>&1 || return 0
+  for port in "$((port_base + 1))" "$((port_base + 11))" "$((port_base + 12))" "$((port_base + 31))" "$((port_base + 32))"; do
+    while IFS= read -r pid; do
+      [[ -n "$pid" ]] || continue
+      command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+      if [[ "$command" != *"$BIN_DIR/skippy-server"* ]]; then
+        echo "port $port remains owned by unexpected process $pid: $command" >&2
+        return 1
+      fi
+      kill -TERM "$pid" 2>/dev/null || true
+      for _ in 1 2 3 4 5; do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 1
+      done
+      kill -KILL "$pid" 2>/dev/null || true
+    done < <(lsof -nP -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)
+  done
 }
 
 preflight_manifest() {
@@ -549,7 +568,7 @@ preflight_manifest() {
     return 1
   fi
 
-  while IFS='|' read -r family profile repo source_revision file selector sweep_period layer_end activation_width notes draft_repo draft_revision draft_file expected_model_bytes startup_timeout_override expected_mtp_layers lane_csv _speculative_policy mmproj_repo mmproj_revision mmproj_file; do
+  while IFS='|' read -r family profile repo source_revision file selector layer_end activation_width notes expected_model_bytes startup_timeout_override expected_mtp_layers lane_csv _speculative_policy mmproj_repo mmproj_revision mmproj_file; do
     if [[ "$profile" != "full" ]]; then
       echo "the local monolithic battery cannot execute profile $profile for $family" >&2
       exit 1
@@ -610,13 +629,40 @@ preflight_manifest() {
       fi
     fi
 
-    # Native MTP is part of the target model. It is exercised through the
-    # correctness lanes' draft sideband and target verification, never by
-    # reopening the same GGUF as a separate full draft model.
-    local draft=""
-    draft_repo=""
-    draft_revision=""
-    draft_file=""
+    local family_slug topology_plan two_stage_split three_stage_splits
+    family_slug="$(slugify "$family")"
+    topology_plan="$TOPOLOGY_PLAN_DIR/$family_slug.json"
+    if (( DRY_RUN == 0 )); then
+      if ! "$BIN_DIR/skippy-topology-plan" "$model_id" "$layer_end" "$activation_width" >"$topology_plan"; then
+        echo "product topology planning failed for $family" >&2
+        FAILURES+=("$family(topology-plan)")
+        PREFLIGHT_FAILURE_COUNT=$((PREFLIGHT_FAILURE_COUNT + 1))
+        record_preflight_outcome "topology-preflight" "$family" "$model_id" "fail" "model-invalid" "product planner could not produce accepted two-stage and three-stage cuts"
+        continue
+      fi
+      if ! jq -e --argjson expected "$((layer_end - 1))" '
+        . as $plan
+        | (.boundaries | length) == $expected
+        and all(.boundaries[]; .decision == "accepted" or .decision == "rejected")
+        and (.two_stage_splits | length) == 1
+        and (.three_stage_splits | length) == 2
+        and all((.two_stage_splits + .three_stage_splits)[];
+          . as $cut | any($plan.boundaries[]; .layer == $cut and .decision == "accepted"))
+      ' "$topology_plan" >/dev/null; then
+        echo "invalid topology preflight result for $family" >&2
+        FAILURES+=("$family(topology-plan-contract)")
+        PREFLIGHT_FAILURE_COUNT=$((PREFLIGHT_FAILURE_COUNT + 1))
+        record_preflight_outcome "topology-preflight" "$family" "$model_id" "fail" "harness" "topology plan did not exhaustively classify boundaries and select accepted cuts"
+        continue
+      fi
+      two_stage_split="$(jq -r '.two_stage_splits[0]' "$topology_plan")"
+      three_stage_splits="$(jq -r '.three_stage_splits | join(",")' "$topology_plan")"
+      record_preflight_outcome "topology-preflight" "$family" "$model_id" "pass" "pass" "all interior boundaries classified; product-approved balanced cuts selected"
+    else
+      echo "$BIN_DIR/skippy-topology-plan '$model_id' '$layer_end' '$activation_width' > '$topology_plan'"
+      two_stage_split="<planner-selected>"
+      three_stage_splits="<planner-selected>"
+    fi
 
     local startup_timeout
     startup_timeout="${startup_timeout_override:-$(startup_timeout_for_bytes "$MODEL_SIZE_BYTES")}"
@@ -635,9 +681,9 @@ preflight_manifest() {
         mmproj_path="<hf-cache>/$mmproj_repo/$mmproj_file"
       fi
     fi
-    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
-      "$family" "$repo" "$source_revision" "$file" "$selector" "$sweep_period" "$layer_end" "$notes" "$target" \
-      "$draft_repo" "$draft_revision" "$draft_file" "$draft" "$MODEL_HAS_MTP" "$MODEL_SIZE_BYTES" "$MODEL_MTP_LAYERS" "$activation_width" "$startup_timeout" \
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+      "$family" "$repo" "$source_revision" "$file" "$selector" "$two_stage_split" "$three_stage_splits" "$topology_plan" "$layer_end" "$notes" "$target" \
+      "$MODEL_HAS_MTP" "$MODEL_SIZE_BYTES" "$MODEL_MTP_LAYERS" "$activation_width" "$startup_timeout" \
       "$mmproj_repo" "$mmproj_revision" "$mmproj_file" "$mmproj_path" \
       >> "$RESOLVED_MANIFEST"
     if (( DRY_RUN == 0 )); then
@@ -661,13 +707,9 @@ preflight_manifest() {
           .artifact.revision,
           .artifact.files[0],
           .artifact.selector,
-          .execution.boundary_sweep_period,
           .execution.layer_end,
           .execution.activation_width,
           .notes,
-          (.draft_artifact.repo // ""),
-          (.draft_artifact.revision // ""),
-          (.draft_artifact.files[0] // ""),
           .resources.estimated_model_bytes,
           (.resources.startup_timeout_secs // ""),
           .execution.mtp_layers,
@@ -719,33 +761,7 @@ preflight_manifest() {
 
 planned_certification_count() {
   local resolved_manifest="$1"
-  local planned=0
-  while IFS='|' read -r family _repo _source_revision _file _selector sweep_period layer_end _rest; do
-    [[ "$family" == "family" ]] && continue
-    local base_split=$(( layer_end / 2 ))
-    local first_split=1
-    local last_split=$(( layer_end - 1 ))
-    planned=$((planned + 1))
-    if [[ "$sweep_period" == "0" ]]; then
-      if (( first_split != base_split )); then
-        planned=$((planned + 1))
-      fi
-      if (( last_split != base_split && last_split != first_split )); then
-        planned=$((planned + 1))
-      fi
-    else
-      local offset cut cuts
-      for (( offset = 1; offset <= sweep_period; offset++ )); do
-        cuts=0
-        for (( cut = offset; cut < layer_end && cuts < SWEEP_MAX_CUTS; cut += sweep_period )); do
-          (( cut == base_split )) && continue
-          planned=$((planned + 1))
-          cuts=$((cuts + 1))
-        done
-      done
-    fi
-  done < "$resolved_manifest"
-  printf '%s\n' "$planned"
+  printf '%s\n' "$(( $(wc -l < "$resolved_manifest") - 1 ))"
 }
 
 # Multimodal smoke lane: exercise the real projector + image prefill path
@@ -754,7 +770,7 @@ planned_certification_count() {
 # crates/skippy-server/src/frontend/tests/multimodal.rs. Runs once per family
 # that pins an mmproj artifact, after its core certification lanes.
 run_mmproj_smoke() {
-  local family="$1" target="$2" mmproj="$3" model_id="$4" startup_timeout="$5" activation_width="$6" layer_end="$7"
+  local family="$1" target="$2" mmproj="$3" model_id="$4" startup_timeout="$5" activation_width="$6" split_layer="$7"
   local smoke_run_id smoke_run_dir exit_code log_path smoke_timeout
   smoke_timeout="$(cert_timeout_for_startup "$startup_timeout")"
   smoke_run_id="$(printf '%03d-%s-mmproj' "$TOTAL" "$(slugify "$family")")"
@@ -764,7 +780,7 @@ run_mmproj_smoke() {
   echo "==> family-certify mmproj smoke: family=$family model=$(basename "$target") mmproj=$(basename "$mmproj")"
   MM_SMOKE_TOTAL=$((MM_SMOKE_TOTAL + 1))
   if (( DRY_RUN == 1 )); then
-    echo "env SKIPPY_MM_MODEL='$target' SKIPPY_MM_PROJECTOR='$mmproj' SKIPPY_MM_IMAGE='$ROOT/ci/llama-canary/fixtures/multimodal-smoke.png' SKIPPY_MM_ACTIVATION_WIDTH='$activation_width' SKIPPY_MM_SPLIT_LAYER='$(( layer_end / 2 ))' cargo test --manifest-path '$ROOT/Cargo.toml' -p skippy-server --lib frontend::tests::multimodal -- --nocapture --test-threads=1"
+    echo "env SKIPPY_MM_MODEL='$target' SKIPPY_MM_PROJECTOR='$mmproj' SKIPPY_MM_IMAGE='$ROOT/ci/llama-canary/fixtures/multimodal-smoke.png' SKIPPY_MM_ACTIVATION_WIDTH='$activation_width' SKIPPY_MM_SPLIT_LAYER='$split_layer' cargo test --manifest-path '$ROOT/Cargo.toml' -p skippy-server --lib frontend::tests::multimodal -- --nocapture --test-threads=1"
     return 0
   fi
   exit_code=0
@@ -779,7 +795,7 @@ run_mmproj_smoke() {
       SKIPPY_MM_CTX_SIZE=2048 \
       SKIPPY_MM_MAX_TOKENS=16 \
       SKIPPY_MM_N_GPU_LAYERS=999 \
-      SKIPPY_MM_SPLIT_LAYER="$(( layer_end / 2 ))" \
+      SKIPPY_MM_SPLIT_LAYER="$split_layer" \
       LLAMA_STAGE_BACKEND=metal \
       cargo test --manifest-path "$ROOT/Cargo.toml" -p skippy-server --lib frontend::tests::multimodal -- --nocapture --test-threads=1 \
       >"$log_path" 2>&1 || exit_code=$?
@@ -798,40 +814,13 @@ run_mmproj_smoke() {
 
 run_resolved_manifest() {
   local resolved_manifest="$1"
-  while IFS='|' read -r family repo source_revision file selector sweep_period layer_end _notes target _draft_repo _draft_revision _draft_file _draft native_mtp model_size_bytes _mtp_layers activation_width startup_timeout mmproj_repo mmproj_revision mmproj_file mmproj_path; do
+  while IFS='|' read -r family repo source_revision file selector split_layer chain_splits _topology_plan layer_end _notes target native_mtp model_size_bytes _mtp_layers activation_width startup_timeout mmproj_repo mmproj_revision mmproj_file mmproj_path; do
     [[ "$family" == "family" ]] && continue
     local model_id="$repo:$selector"
-
-    # Dense families exercise both endpoint ownership cases plus an ordinary
-    # interior handoff. Collapse duplicates for tiny models.
-    local base_split=$(( layer_end / 2 ))
-    local first_split=1
-    local last_split=$(( layer_end - 1 ))
-    run_certify "$family" "$target" "$model_id" "$source_revision" "$base_split" "$layer_end" "$native_mtp" "$startup_timeout" "$model_size_bytes" "$activation_width"
-    if [[ "$sweep_period" == "0" ]]; then
-      if (( first_split != base_split )); then
-        run_certify "$family" "$target" "$model_id" "$source_revision" "$first_split" "$layer_end" "$native_mtp" "$startup_timeout" "$model_size_bytes" "$activation_width"
-      fi
-      if (( last_split != base_split && last_split != first_split )); then
-        run_certify "$family" "$target" "$model_id" "$source_revision" "$last_split" "$layer_end" "$native_mtp" "$startup_timeout" "$model_size_bytes" "$activation_width"
-      fi
-    else
-      # Boundary sweep: every cut offset mod the interleaving period, one
-      # representative cut each (then every period up to SWEEP_MAX_CUTS cuts),
-      # so planner-cut dependence (the B1 bug class) cannot hide.
-      local offset cut cuts
-      for (( offset = 1; offset <= sweep_period; offset++ )); do
-        cuts=0
-        for (( cut = offset; cut < layer_end && cuts < SWEEP_MAX_CUTS; cut += sweep_period )); do
-          (( cut == base_split )) && continue
-          run_certify "$family" "$target" "$model_id" "$source_revision" "$cut" "$layer_end" "$native_mtp" "$startup_timeout" "$model_size_bytes" "$activation_width"
-          cuts=$((cuts + 1))
-        done
-      done
-    fi
+    run_certify "$family" "$target" "$model_id" "$source_revision" "$split_layer" "$chain_splits" "$layer_end" "$native_mtp" "$startup_timeout" "$model_size_bytes" "$activation_width"
 
     if [[ -n "$mmproj_repo" ]]; then
-      run_mmproj_smoke "$family" "$target" "$mmproj_path" "$model_id" "$startup_timeout" "$activation_width" "$layer_end"
+      run_mmproj_smoke "$family" "$target" "$mmproj_path" "$model_id" "$startup_timeout" "$activation_width" "$split_layer"
     fi
   done < "$resolved_manifest"
 }
@@ -841,7 +830,7 @@ if ! preflight_manifest "$POLICY_PLAN_COPY"; then
   echo "family battery preflight failed; no certification lane was started" >&2
 elif (( PREFLIGHT_ONLY == 0 )); then
   EXPECTED_TOTAL="$(planned_certification_count "$RESOLVED_MANIFEST")"
-  EXPECTED_MM_SMOKE_TOTAL="$(tail -n +2 "$RESOLVED_MANIFEST" | awk -F'|' '$19 != "" { count += 1 } END { print count + 0 }')"
+  EXPECTED_MM_SMOKE_TOTAL="$(tail -n +2 "$RESOLVED_MANIFEST" | awk -F'|' '$17 != "" { count += 1 } END { print count + 0 }')"
   run_resolved_manifest "$RESOLVED_MANIFEST"
   if (( TOTAL != EXPECTED_TOTAL )); then
     echo "executed $TOTAL certifications but validated plan requires $EXPECTED_TOTAL" >&2

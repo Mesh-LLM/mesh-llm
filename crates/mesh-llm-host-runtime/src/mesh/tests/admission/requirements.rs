@@ -1164,14 +1164,21 @@ pub(crate) fn assert_named_mesh_id_uses_documented_sha256_derivation() {
     );
 }
 
-struct HomeGuard(Option<std::ffi::OsString>);
+struct HomeGuard(Option<std::ffi::OsString>, Option<std::ffi::OsString>);
 
 impl HomeGuard {
     fn set(path: &std::path::Path) -> Self {
         let previous = std::env::var_os("HOME");
-        // SAFETY: requirement tests using this guard run serially, and Drop restores HOME.
-        unsafe { std::env::set_var("HOME", path) };
-        Self(previous)
+        let previous_test_home = std::env::var_os("MESH_LLM_TEST_HOME");
+        // SAFETY: requirement tests using this guard run serially, and Drop restores both.
+        unsafe {
+            std::env::set_var("HOME", path);
+            // SAFETY: requirement tests using this guard run serially, and Drop restores both.
+            // `dirs::home_dir()` ignores HOME on Windows, so the identity paths would
+            // resolve to the real home without this.
+            std::env::set_var("MESH_LLM_TEST_HOME", path);
+        };
+        Self(previous, previous_test_home)
     }
 }
 
@@ -1185,6 +1192,16 @@ impl Drop for HomeGuard {
             None => {
                 // SAFETY: this guard restores the process environment key it exclusively changed.
                 unsafe { std::env::remove_var("HOME") }
+            }
+        }
+        match self.1.take() {
+            Some(value) => {
+                // SAFETY: this guard restores the process environment key it exclusively changed.
+                unsafe { std::env::set_var("MESH_LLM_TEST_HOME", value) }
+            }
+            None => {
+                // SAFETY: this guard restores the process environment key it exclusively changed.
+                unsafe { std::env::remove_var("MESH_LLM_TEST_HOME") }
             }
         }
     }

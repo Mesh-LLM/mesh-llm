@@ -13,7 +13,7 @@ use mesh_llm_log_store::{
     UnavailableArtifactPointer,
 };
 
-use super::policy::{apply_redaction, sanitize_lifecycle_event, sanitize_paths_in_text};
+use super::policy::{apply_redaction, sanitize_lifecycle_event, sanitize_paths_in_json_text};
 use super::registry::RequestSummaryEntry;
 use super::service::{
     ArtifactCaptureContent, ArtifactCaptureEntry, ArtifactPersistenceStatus,
@@ -340,7 +340,7 @@ impl PersistSink for LogStoreSink {
             .map(str::to_owned)
             .unwrap_or_else(|| self.store.now());
         let detail_json = if let Some(detail_json) = record.detail_json() {
-            Some(apply_redaction(&sanitize_paths_in_text(detail_json)).0)
+            Some(apply_redaction(&sanitize_paths_in_json_text(detail_json)).0)
         } else {
             let mut detail = record.context().map_or_else(
                 serde_json::Map::new,
