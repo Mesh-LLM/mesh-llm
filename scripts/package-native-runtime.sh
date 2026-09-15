@@ -783,6 +783,8 @@ manifest_args+=(-- "${linux_relocatable_library_paths[@]}")
 import json
 import hashlib
 import os
+import re
+import subprocess
 import sys
 
 manifest_path = sys.argv[1]
@@ -821,6 +823,38 @@ def file_sha256(path):
             digest.update(chunk)
     return digest.hexdigest()
 
+def packaged_glibc_requirement(paths):
+    if "$runtime_os" != "linux":
+        return None
+    requirements = []
+    readelf_env = os.environ.copy()
+    readelf_env["LC_ALL"] = "C"
+    for relative_path in paths:
+        path = os.path.join(os.path.dirname(manifest_path), relative_path)
+        with open(path, "rb") as handle:
+            if handle.read(4) != b"\x7fELF":
+                continue
+        output = subprocess.run(
+            ["readelf", "-V", path], check=True, capture_output=True, text=True,
+            env=readelf_env,
+        ).stdout
+        _, heading, needs = output.partition("Version needs section")
+        if heading:
+            def glibc_requirement(version):
+                if version == "GLIBC_ABI_DT_RELR":
+                    return (2, 36)
+                major, minor = version.removeprefix("GLIBC_").split(".")
+                return (int(major), int(minor))
+
+            requirements.extend(
+                glibc_requirement(version)
+                for version in re.findall(r"GLIBC_(?:\d+\.\d+|ABI_DT_RELR)", needs)
+            )
+    if not requirements:
+        return None
+    major, minor = max(requirements)
+    return f"{major}.{minor}"
+
 files = {
     path: file_sha256(os.path.join(os.path.dirname(manifest_path), path))
     for path in [*library_paths, *license_paths]
@@ -829,6 +863,7 @@ tools = {
     path: file_sha256(os.path.join(os.path.dirname(manifest_path), path))
     for path in tool_paths
 }
+min_glibc = packaged_glibc_requirement([*library_paths, *tool_paths])
 backend_manifest = {"kind": kind}
 if kind == "cuda":
     backend_manifest["cuda"] = {
@@ -860,6 +895,7 @@ manifest = {
             "os": "$runtime_os",
             "arch": "$runtime_arch",
             "target": "$TARGET_TRIPLE",
+            "min_glibc": min_glibc,
         },
         "backend": backend_manifest,
         "rank": int(os.environ.get("MESH_LLM_NATIVE_RUNTIME_RANK") or 0),

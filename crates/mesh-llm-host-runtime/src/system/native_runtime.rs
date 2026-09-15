@@ -5,13 +5,18 @@ mod dynamic {
     use crate::system::native_runtime_install::{
         NativeRuntimeInstallOptions, NativeRuntimeInstallOutcome,
     };
-    use anyhow::{Context, Result};
+    use anyhow::{Context, Result, bail};
     use mesh_llm_native_runtime::{
-        HostRuntimeProfile, InstalledNativeRuntime, NativeRuntimeArtifact, NativeRuntimeCache,
-        NativeRuntimeLoadPlan, NativeRuntimeReleaseManifest, RuntimeSelection,
+        CandidateRejection, HostRuntimeProfile, InstalledNativeRuntime, NativeRuntimeArtifact,
+        NativeRuntimeCache, NativeRuntimeLoadPlan, NativeRuntimeManifest,
+        NativeRuntimeReleaseManifest, RuntimeSelection, evaluate_native_runtime_artifact,
+        has_startup_compatibility_metadata,
     };
     use skippy_runtime::RuntimeEvent;
-    use std::{future::Future, path::PathBuf};
+    use std::{
+        future::Future,
+        path::{Path, PathBuf},
+    };
 
     #[derive(Clone, Debug)]
     pub(crate) struct LoadedNativeRuntime {
@@ -101,11 +106,16 @@ mod dynamic {
         // and the tracing/audit surfaces this function's callers already use.
         let resolution = crate::system::native_runtime_events::NativeRuntimeResolution::begin();
         let cache = default_native_runtime_cache()?;
+        let profile = host_runtime_profile();
         let local_runtimes =
-            crate::system::native_runtime_install::discover_local_native_runtimes(&[], &cache)?;
+            crate::system::native_runtime_install::discover_local_native_runtimes_with_filter(
+                &[],
+                &cache,
+                |runtime| startup_runtime_is_eligible(runtime, &profile),
+            )?;
         let Some(plan) = resolve_local_native_runtime_plan(
             &local_runtimes,
-            &host_runtime_profile(),
+            &profile,
             crate::BUILD_VERSION,
             crate::RELEASE_VERSION,
             Some(&crate::system::native_runtime_install::current_skippy_abi_version()),
@@ -326,20 +336,21 @@ mod dynamic {
             crate::system::native_runtime_install::discover_native_runtime_bundle_dirs(
                 &options.bundle_dirs,
             )?;
+        let discovered_bundle_dirs =
+            filter_startup_bundle_dirs(discovered_bundle_dirs, &profile, &startup_selection);
         let discovered_bundle_dirs_empty = discovered_bundle_dirs.is_empty();
-        if discovered_bundle_dirs_empty {
-            if let Some(plan) = resolve_installed_native_runtime_plan(
+        options.bundle_dirs = discovered_bundle_dirs;
+        if discovered_bundle_dirs_empty
+            && let Some(plan) = resolve_installed_native_runtime_plan(
                 &cache,
                 &profile,
                 crate::BUILD_VERSION,
                 &startup_selection.mesh_version,
                 startup_selection.skippy_abi.as_deref(),
                 &startup_selection.runtime_selection,
-            )? {
-                return Ok(Some(plan));
-            }
-        } else {
-            options.bundle_dirs = discovered_bundle_dirs;
+            )?
+        {
+            return Ok(Some(plan));
         }
 
         tracing::info!(
@@ -352,6 +363,35 @@ mod dynamic {
         let install_result = install_executor(options.clone()).await;
         match install_result {
             Ok(outcome) => {
+                if !startup_runtime_is_eligible(&outcome.runtime, &profile) {
+                    bail!(
+                        "installed native runtime {} is not eligible for startup on {}/{}",
+                        outcome.runtime.native_runtime_id,
+                        profile.os,
+                        profile.arch
+                    );
+                }
+                let evaluation = mesh_llm_native_runtime::evaluate_native_runtime_artifact(
+                    &outcome.runtime.manifest.runtime,
+                    &profile,
+                    &startup_selection.mesh_version,
+                    startup_selection.skippy_abi.as_deref(),
+                    &startup_selection.runtime_selection,
+                );
+                if !evaluation.compatible {
+                    let reasons = evaluation
+                        .rejection_reasons
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    bail!(
+                        "installed native runtime {} is not compatible with startup on {}/{}: {reasons}",
+                        outcome.runtime.native_runtime_id,
+                        profile.os,
+                        profile.arch
+                    );
+                }
                 let load_plan = outcome.runtime.load_plan()?;
                 Ok(Some(startup_load_plan_from_installed(
                     outcome.runtime.mesh_version.clone(),
@@ -410,7 +450,11 @@ mod dynamic {
                 "Skipping unusable native runtime cache entry during startup"
             );
         }
-        let installed = scan.runtimes;
+        let installed = scan
+            .runtimes
+            .into_iter()
+            .filter(|runtime| startup_runtime_is_eligible(runtime, profile))
+            .collect::<Vec<_>>();
         if installed.is_empty() {
             return Ok(None);
         }
@@ -444,12 +488,16 @@ mod dynamic {
         target_skippy_abi: Option<&str>,
         selection: &RuntimeSelection,
     ) -> Result<Option<NativeRuntimeStartupLoadPlan>> {
-        if runtimes.is_empty() {
+        let eligible_runtimes = runtimes
+            .iter()
+            .filter(|runtime| startup_runtime_is_eligible(runtime, profile))
+            .collect::<Vec<_>>();
+        if eligible_runtimes.is_empty() {
             return Ok(None);
         }
         let cache_mesh_version =
             startup_native_runtime_cache_version(build_version, target_mesh_version);
-        let artifacts = runtimes
+        let artifacts = eligible_runtimes
             .iter()
             .map(|runtime| runtime.manifest.runtime.clone())
             .collect::<Vec<_>>();
@@ -466,7 +514,7 @@ mod dynamic {
             .artifact
             .mesh_version_or(cache_mesh_version)
             .to_string();
-        let Some(runtime) = runtimes.iter().find(|runtime| {
+        let Some(runtime) = eligible_runtimes.into_iter().find(|runtime| {
             runtime.mesh_version == selected_mesh_version
                 && runtime.native_runtime_id == candidate.artifact.native_runtime_id()
                 && runtime.manifest.runtime.skippy_abi == candidate.artifact.skippy_abi
@@ -478,6 +526,95 @@ mod dynamic {
             runtime.load_plan()?,
             NativeRuntimePlanSource::LocalDiscovery,
         )?))
+    }
+
+    fn startup_runtime_is_eligible(
+        runtime: &InstalledNativeRuntime,
+        profile: &HostRuntimeProfile,
+    ) -> bool {
+        startup_artifact_is_eligible(
+            &runtime.manifest.runtime,
+            &runtime.path,
+            &runtime.native_runtime_id,
+            profile,
+        )
+    }
+
+    fn filter_startup_bundle_dirs(
+        bundle_dirs: Vec<PathBuf>,
+        profile: &HostRuntimeProfile,
+        startup_selection: &NativeRuntimeStartupSelection,
+    ) -> Vec<PathBuf> {
+        bundle_dirs
+            .into_iter()
+            .filter(|path| {
+                let Ok(manifest) = NativeRuntimeManifest::read_from_dir(path) else {
+                    // Bundle discovery already validated this path. Keep it
+                    // in the installer input if it changes between discovery
+                    // and this second read so the existing error path remains
+                    // visible to the caller.
+                    return true;
+                };
+                startup_bundle_is_eligible(
+                    &manifest.runtime,
+                    path,
+                    &manifest.runtime.id,
+                    profile,
+                    startup_selection,
+                )
+            })
+            .collect()
+    }
+
+    fn startup_bundle_is_eligible(
+        artifact: &NativeRuntimeArtifact,
+        path: &Path,
+        native_runtime_id: &str,
+        profile: &HostRuntimeProfile,
+        startup_selection: &NativeRuntimeStartupSelection,
+    ) -> bool {
+        if !startup_artifact_is_eligible(artifact, path, native_runtime_id, profile) {
+            return false;
+        }
+        let evaluation = evaluate_native_runtime_artifact(
+            artifact,
+            profile,
+            &startup_selection.mesh_version,
+            startup_selection.skippy_abi.as_deref(),
+            &startup_selection.runtime_selection,
+        );
+        if evaluation
+            .rejection_reasons
+            .iter()
+            .any(|reason| matches!(reason, CandidateRejection::GlibcVersionTooOld { .. }))
+        {
+            tracing::warn!(
+                path = %path.display(),
+                native_runtime_id,
+                required_glibc = ?artifact.platform.min_glibc,
+                host_glibc = ?profile.glibc_version,
+                "Skipping locally installed Linux native runtime bundle requiring newer glibc"
+            );
+            return false;
+        }
+        true
+    }
+
+    fn startup_artifact_is_eligible(
+        artifact: &NativeRuntimeArtifact,
+        path: &Path,
+        native_runtime_id: &str,
+        profile: &HostRuntimeProfile,
+    ) -> bool {
+        if !has_startup_compatibility_metadata(artifact, profile) {
+            tracing::warn!(
+                path = %path.display(),
+                native_runtime_id,
+                "Skipping locally installed Linux native runtime without platform.min_glibc metadata; reinstall or repackage it before startup"
+            );
+            return false;
+        }
+        true
     }
 
     fn startup_native_runtime_cache_version<'a>(
@@ -557,9 +694,11 @@ mod dynamic {
     mod tests {
         use super::*;
         use mesh_llm_native_runtime::{
-            NativeRuntimeBackend, NativeRuntimeManifest, NativeRuntimePlatform,
+            NativeRuntimeBackend, NativeRuntimeBackendKind, NativeRuntimeManifest,
+            NativeRuntimePlatform,
         };
         use std::{
+            collections::BTreeSet,
             fs,
             path::Path,
             sync::{Arc, Mutex},
@@ -574,6 +713,28 @@ mod dynamic {
         }
 
         fn write_runtime_with_manifest_mesh_version(dir: &Path, version: Option<&str>, id: &str) {
+            write_runtime_for_platform(
+                dir,
+                version,
+                id,
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+                if cfg!(target_os = "linux") {
+                    Some("2.17")
+                } else {
+                    None
+                },
+            );
+        }
+
+        fn write_runtime_for_platform(
+            dir: &Path,
+            version: Option<&str>,
+            id: &str,
+            os: &str,
+            arch: &str,
+            min_glibc: Option<&str>,
+        ) {
             let library_rel_path = test_library_rel_path();
             fs::create_dir_all(dir.join(library_rel_path.parent().unwrap())).unwrap();
             fs::write(dir.join(&library_rel_path), b"native runtime").unwrap();
@@ -583,9 +744,10 @@ mod dynamic {
                     mesh_version: version.map(ToString::to_string),
                     skippy_abi: "0.1.25".to_string(),
                     platform: NativeRuntimePlatform {
-                        os: std::env::consts::OS.to_string(),
-                        arch: std::env::consts::ARCH.to_string(),
+                        os: os.to_string(),
+                        arch: arch.to_string(),
                         target: None,
+                        min_glibc: min_glibc.map(ToString::to_string),
                     },
                     backend: NativeRuntimeBackend::cpu(),
                     rank: 0,
@@ -616,6 +778,20 @@ mod dynamic {
                 mesh_version: "0.68.0".to_string(),
                 allow_download: false,
                 ..Default::default()
+            }
+        }
+
+        fn linux_host_profile(glibc_version: Option<&str>) -> HostRuntimeProfile {
+            HostRuntimeProfile {
+                os: "linux".to_string(),
+                arch: "x86_64".to_string(),
+                target_triple: None,
+                glibc_version: glibc_version.map(ToString::to_string),
+                available_flavors: BTreeSet::from([NativeRuntimeBackendKind::Cpu]),
+                gpus: Vec::new(),
+                cuda: None,
+                rocm: None,
+                vulkan: None,
             }
         }
 
@@ -775,6 +951,405 @@ mod dynamic {
         }
 
         #[test]
+        fn startup_cache_skips_linux_runtime_without_glibc_metadata() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+            let runtime_id = "meshllm-native-runtime-test-cpu";
+            let release_version = "0.68.0";
+            write_runtime_for_platform(
+                &cache.runtime_dir(release_version, runtime_id),
+                Some(release_version),
+                runtime_id,
+                "linux",
+                "x86_64",
+                None,
+            );
+
+            let plan = resolve_installed_native_runtime_plan(
+                &cache,
+                &linux_host_profile(Some("2.39")),
+                release_version,
+                release_version,
+                Some("0.1.25"),
+                &RuntimeSelection::Recommended,
+            )
+            .unwrap();
+
+            assert!(plan.is_none());
+        }
+
+        #[test]
+        fn startup_bundle_skips_linux_runtime_without_glibc_metadata() {
+            let temp = tempfile::tempdir().unwrap();
+            let runtime_id = "meshllm-native-runtime-test-cpu";
+            let release_version = "0.68.0";
+            let bundled_runtime_dir = temp.path().join("native-runtimes").join(runtime_id);
+            write_runtime_for_platform(
+                &bundled_runtime_dir,
+                Some(release_version),
+                runtime_id,
+                "linux",
+                "x86_64",
+                None,
+            );
+            let local_runtimes =
+                crate::system::native_runtime_install::discover_local_native_runtimes(
+                    std::slice::from_ref(&bundled_runtime_dir),
+                    &NativeRuntimeCache::new(temp.path().join("cache")),
+                )
+                .unwrap();
+
+            let plan = resolve_local_native_runtime_plan(
+                &local_runtimes,
+                &linux_host_profile(Some("2.39")),
+                release_version,
+                release_version,
+                Some("0.1.25"),
+                &RuntimeSelection::Recommended,
+            )
+            .unwrap();
+
+            assert!(plan.is_none());
+        }
+
+        #[test]
+        fn startup_local_discovery_keeps_cached_fallback_after_legacy_bundle() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+            let runtime_id = "meshllm-native-runtime-test-cpu";
+            let release_version = "0.68.0";
+            let cached_runtime_dir = cache.runtime_dir(release_version, runtime_id);
+            write_runtime_for_platform(
+                &cached_runtime_dir,
+                Some(release_version),
+                runtime_id,
+                "linux",
+                "x86_64",
+                Some("2.38"),
+            );
+            let product_root = temp.path().join("mesh-bundle");
+            let bundled_runtime_dir = product_root.join("native-runtimes").join(runtime_id);
+            write_runtime_for_platform(
+                &bundled_runtime_dir,
+                Some(release_version),
+                runtime_id,
+                "linux",
+                "x86_64",
+                None,
+            );
+            let profile = linux_host_profile(Some("2.39"));
+            let local_runtimes =
+                crate::system::native_runtime_install::discover_local_native_runtimes_with_filter(
+                    std::slice::from_ref(&product_root),
+                    &cache,
+                    |runtime| startup_runtime_is_eligible(runtime, &profile),
+                )
+                .unwrap();
+
+            assert_eq!(local_runtimes.len(), 1);
+            assert_eq!(local_runtimes[0].path, cached_runtime_dir);
+            let plan = resolve_local_native_runtime_plan(
+                &local_runtimes,
+                &profile,
+                release_version,
+                release_version,
+                Some("0.1.25"),
+                &RuntimeSelection::Recommended,
+            )
+            .unwrap()
+            .expect("expected compatible cached fallback");
+
+            assert_eq!(plan.root, cached_runtime_dir);
+        }
+
+        #[tokio::test]
+        async fn startup_bundle_with_newer_glibc_does_not_block_compatible_cache() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+            let runtime_id = "meshllm-native-runtime-test-cpu";
+            let release_version = "0.68.0";
+            let cached_runtime_dir = cache.runtime_dir(release_version, runtime_id);
+            write_runtime_for_platform(
+                &cached_runtime_dir,
+                Some(release_version),
+                runtime_id,
+                "linux",
+                "x86_64",
+                Some("2.35"),
+            );
+            let product_root = temp.path().join("mesh-bundle");
+            let bundled_runtime_dir = product_root.join("native-runtimes").join(runtime_id);
+            write_runtime_for_platform(
+                &bundled_runtime_dir,
+                Some(release_version),
+                runtime_id,
+                "linux",
+                "x86_64",
+                Some("2.38"),
+            );
+            let install_calls = Arc::new(Mutex::new(0_usize));
+            let options_product_root = product_root.clone();
+            let options_cache_root = cache.root().to_path_buf();
+            let install_calls_for_executor = Arc::clone(&install_calls);
+
+            let plan = resolve_startup_native_runtime_plan_with(
+                || Ok(cache.clone()),
+                || linux_host_profile(Some("2.35")),
+                move || NativeRuntimeInstallOptions {
+                    mesh_version: release_version.to_string(),
+                    skippy_abi_version: Some("0.1.25".to_string()),
+                    bundle_dirs: vec![options_product_root.clone()],
+                    cache_dir: Some(options_cache_root.clone()),
+                    allow_download: false,
+                    ..Default::default()
+                },
+                move |_| {
+                    let install_calls = Arc::clone(&install_calls_for_executor);
+                    async move {
+                        *install_calls.lock().unwrap() += 1;
+                        anyhow::bail!("an incompatible bundle must not block the cache hit")
+                    }
+                },
+                NativeRuntimeStartupSelection::explicit(
+                    release_version.to_string(),
+                    Some("0.1.25".to_string()),
+                    RuntimeSelection::Recommended,
+                ),
+            )
+            .await
+            .unwrap()
+            .expect("expected compatible cached runtime plan");
+
+            assert_eq!(plan.source, NativeRuntimePlanSource::CacheHit);
+            assert_eq!(plan.root, cached_runtime_dir);
+            assert_eq!(*install_calls.lock().unwrap(), 0);
+        }
+
+        #[tokio::test]
+        async fn startup_does_not_pass_legacy_linux_bundle_to_installer() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+            let runtime_id = "meshllm-native-runtime-test-cpu";
+            let release_version = "0.68.0";
+            let product_root = temp.path().join("mesh-bundle");
+            let bundled_runtime_dir = product_root.join("native-runtimes").join(runtime_id);
+            write_runtime_for_platform(
+                &bundled_runtime_dir,
+                Some(release_version),
+                runtime_id,
+                "linux",
+                "x86_64",
+                None,
+            );
+            let install_calls = Arc::new(Mutex::new(Vec::<NativeRuntimeInstallOptions>::new()));
+            let install_options_root = product_root.clone();
+            let install_options_cache = cache.root().to_path_buf();
+            let install_calls_for_executor = Arc::clone(&install_calls);
+
+            let result = resolve_startup_native_runtime_plan_with(
+                || Ok(cache.clone()),
+                || linux_host_profile(Some("2.39")),
+                move || NativeRuntimeInstallOptions {
+                    mesh_version: release_version.to_string(),
+                    skippy_abi_version: Some("0.1.25".to_string()),
+                    bundle_dirs: vec![install_options_root.clone()],
+                    cache_dir: Some(install_options_cache.clone()),
+                    allow_download: false,
+                    ..Default::default()
+                },
+                move |options| {
+                    let install_calls = Arc::clone(&install_calls_for_executor);
+                    async move {
+                        install_calls.lock().unwrap().push(options);
+                        anyhow::bail!("stop after observing startup install options")
+                    }
+                },
+                NativeRuntimeStartupSelection::explicit(
+                    release_version.to_string(),
+                    Some("0.1.25".to_string()),
+                    RuntimeSelection::Recommended,
+                ),
+            )
+            .await;
+
+            assert!(result.is_err());
+            let recorded_options = install_calls.lock().unwrap();
+            assert_eq!(recorded_options.len(), 1);
+            assert!(recorded_options[0].bundle_dirs.is_empty());
+        }
+
+        #[tokio::test]
+        async fn startup_rejects_legacy_linux_runtime_after_install_before_ffi_load() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+            let runtime_id = "meshllm-native-runtime-test-cpu";
+            let release_version = "0.68.0";
+            let legacy_runtime_dir = temp.path().join("legacy-runtime");
+            write_runtime_for_platform(
+                &legacy_runtime_dir,
+                Some(release_version),
+                runtime_id,
+                "linux",
+                "x86_64",
+                None,
+            );
+            let install_calls = Arc::new(Mutex::new(0_usize));
+            let load_calls = Arc::new(Mutex::new(0_usize));
+            let legacy_runtime_dir_for_executor = legacy_runtime_dir.clone();
+            let cache_for_executor = cache.clone();
+            let install_calls_for_executor = Arc::clone(&install_calls);
+
+            let result = try_load_installed_native_runtime_with(
+                || false,
+                || Ok(cache.clone()),
+                || linux_host_profile(Some("2.39")),
+                || NativeRuntimeInstallOptions {
+                    mesh_version: release_version.to_string(),
+                    skippy_abi_version: Some("0.1.25".to_string()),
+                    allow_download: true,
+                    ..Default::default()
+                },
+                move |_options| {
+                    let install_calls = Arc::clone(&install_calls_for_executor);
+                    let cache = cache_for_executor.clone();
+                    let legacy_runtime_dir = legacy_runtime_dir_for_executor.clone();
+                    async move {
+                        *install_calls.lock().unwrap() += 1;
+                        let runtime = cache.install_from_dir(&legacy_runtime_dir)?;
+                        Ok(NativeRuntimeInstallOutcome {
+                            status:
+                                crate::system::native_runtime_install::NativeRuntimeInstallStatus::Installed,
+                            resolution: mesh_llm_native_runtime::NativeRuntimeResolution {
+                                source: mesh_llm_native_runtime::NativeRuntimeSource::Download {
+                                    url: "https://example.invalid/legacy-runtime.tar.gz".to_string(),
+                                },
+                                selected: runtime.manifest.runtime.clone(),
+                                evaluated: Vec::new(),
+                            },
+                            runtime,
+                            sources: Default::default(),
+                        })
+                    }
+                },
+                NativeRuntimeStartupSelection::explicit(
+                    release_version.to_string(),
+                    Some("0.1.25".to_string()),
+                    RuntimeSelection::Recommended,
+                ),
+                {
+                    let load_calls = Arc::clone(&load_calls);
+                    move |_libraries| {
+                        *load_calls.lock().unwrap() += 1;
+                        Ok(())
+                    }
+                },
+            )
+            .await;
+
+            let error = result.unwrap_err();
+            assert!(error.to_string().contains("not eligible for startup"));
+            assert_eq!(*install_calls.lock().unwrap(), 1);
+            assert_eq!(*load_calls.lock().unwrap(), 0);
+        }
+
+        #[tokio::test]
+        async fn startup_rejects_post_install_runtime_with_newer_glibc_before_ffi_load() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+            let runtime_id = "meshllm-native-runtime-test-cpu";
+            let release_version = "0.68.0";
+            let runtime_dir = temp.path().join("newer-glibc-runtime");
+            write_runtime_for_platform(
+                &runtime_dir,
+                Some(release_version),
+                runtime_id,
+                "linux",
+                "x86_64",
+                Some("2.38"),
+            );
+            let load_calls = Arc::new(Mutex::new(0_usize));
+            let cache_for_executor = cache.clone();
+            let runtime_dir_for_executor = runtime_dir.clone();
+
+            let result = try_load_installed_native_runtime_with(
+                || false,
+                || Ok(cache.clone()),
+                || linux_host_profile(Some("2.35")),
+                || NativeRuntimeInstallOptions {
+                    mesh_version: release_version.to_string(),
+                    skippy_abi_version: Some("0.1.25".to_string()),
+                    allow_download: true,
+                    ..Default::default()
+                },
+                move |_options| {
+                    let cache = cache_for_executor.clone();
+                    let runtime_dir = runtime_dir_for_executor.clone();
+                    async move {
+                        let runtime = cache.install_from_dir(&runtime_dir)?;
+                        Ok(NativeRuntimeInstallOutcome {
+                            status:
+                                crate::system::native_runtime_install::NativeRuntimeInstallStatus::Installed,
+                            resolution: mesh_llm_native_runtime::NativeRuntimeResolution {
+                                source: mesh_llm_native_runtime::NativeRuntimeSource::Download {
+                                    url: "https://example.invalid/newer-glibc-runtime.tar.gz".to_string(),
+                                },
+                                selected: runtime.manifest.runtime.clone(),
+                                evaluated: Vec::new(),
+                            },
+                            runtime,
+                            sources: Default::default(),
+                        })
+                    }
+                },
+                NativeRuntimeStartupSelection::explicit(
+                    release_version.to_string(),
+                    Some("0.1.25".to_string()),
+                    RuntimeSelection::Recommended,
+                ),
+                {
+                    let load_calls = Arc::clone(&load_calls);
+                    move |_libraries| {
+                        *load_calls.lock().unwrap() += 1;
+                        Ok(())
+                    }
+                },
+            )
+            .await;
+
+            let error = result.unwrap_err();
+            assert!(error.to_string().contains("glibc too old"), "{error:#}");
+            assert_eq!(*load_calls.lock().unwrap(), 0);
+        }
+
+        #[test]
+        fn startup_cache_accepts_linux_runtime_with_glibc_metadata() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+            let runtime_id = "meshllm-native-runtime-test-cpu";
+            let release_version = "0.68.0";
+            write_runtime_for_platform(
+                &cache.runtime_dir(release_version, runtime_id),
+                Some(release_version),
+                runtime_id,
+                "linux",
+                "x86_64",
+                Some("2.38"),
+            );
+
+            let plan = resolve_installed_native_runtime_plan(
+                &cache,
+                &linux_host_profile(Some("2.39")),
+                release_version,
+                release_version,
+                Some("0.1.25"),
+                &RuntimeSelection::Recommended,
+            )
+            .unwrap();
+
+            assert!(plan.is_some());
+        }
+
+        #[test]
         fn startup_plan_can_represent_post_install_source_without_loading() {
             let temp = tempfile::tempdir().unwrap();
             let runtime_id = "meshllm-native-runtime-test-cpu";
@@ -859,6 +1434,7 @@ mod dynamic {
                     os: std::env::consts::OS.to_string(),
                     arch: std::env::consts::ARCH.to_string(),
                     target: None,
+                    min_glibc: None,
                 },
                 backend: NativeRuntimeBackend::cpu(),
                 rank: 0,
@@ -1374,6 +1950,11 @@ mod dynamic {
                         os: std::env::consts::OS.to_string(),
                         arch: std::env::consts::ARCH.to_string(),
                         target: None,
+                        min_glibc: if cfg!(target_os = "linux") {
+                            Some("2.17".to_string())
+                        } else {
+                            None
+                        },
                     },
                     backend,
                     rank: 0,
@@ -1400,6 +1981,7 @@ mod dynamic {
                     os: std::env::consts::OS.to_string(),
                     arch: std::env::consts::ARCH.to_string(),
                     target: None,
+                    min_glibc: None,
                 },
                 backend,
                 rank: 0,

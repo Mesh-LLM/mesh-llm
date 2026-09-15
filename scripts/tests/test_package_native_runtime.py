@@ -19,6 +19,17 @@ def write_failing_nvcc(path: Path) -> None:
 
 
 class PackageNativeRuntimeTests(unittest.TestCase):
+    def test_linux_glibc_manifest_probe_pins_readelf_locale(self) -> None:
+        script = SCRIPT.read_text(encoding="utf-8")
+        start = script.index("def packaged_glibc_requirement(paths):")
+        end = script.index("files = {", start)
+        probe = script[start:end]
+
+        self.assertIn('readelf_env["LC_ALL"] = "C"', probe)
+        self.assertIn("env=readelf_env", probe)
+        self.assertIn('version == "GLIBC_ABI_DT_RELR"', probe)
+        self.assertIn("return (2, 36)", probe)
+
     def test_linux_cuda_benchmark_links_shared_cudart(self) -> None:
         script = SCRIPT.read_text(encoding="utf-8")
         start = script.index("build_gpu_benchmark_tool() {")
