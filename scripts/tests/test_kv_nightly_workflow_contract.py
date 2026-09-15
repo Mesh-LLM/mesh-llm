@@ -21,6 +21,7 @@ class KvNightlyWorkflowContractTests(unittest.TestCase):
         self.assertIn("persist-credentials: false", workflow)
         self.assertIn("verify-runner-image public cpu", workflow)
         self.assertIn("cargo test --locked -p skippy-cache", workflow)
+        self.assertNotIn('RUSTC_WRAPPER: ""', workflow)
         self.assertIn("SKIPPY_CACHE_STATE_MACHINE_SEEDS", workflow)
         self.assertIn("SKIPPY_CACHE_STATE_MACHINE_STEPS", workflow)
         self.assertNotIn("secrets.", workflow)

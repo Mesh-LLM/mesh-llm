@@ -139,7 +139,7 @@ jobs:
     outputs:
       toolchain_epoch: ${{ steps.native_toolchain.outputs.epoch }}
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
     defaults:
       run:
         shell: bash
@@ -167,7 +167,7 @@ jobs:
         id: native_toolchain
         uses: ./.github/actions/resolve-native-toolchain-epoch
         with:
-          pinned_epoch: mesh-llm-cuda-runner-sha256-8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+          pinned_epoch: mesh-llm-cuda-runner-sha256-f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
 
       - uses: ./.github/actions/configure-sccache-gha
         with:

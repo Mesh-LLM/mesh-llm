@@ -13,11 +13,12 @@ ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location('canary', ROOT/'scripts/runtime-seed-canary.py')
 C = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(C)
+TEST_KEY = C.KEY_PREFIX + 'a' * 64
 
 
 def cache():
-    return {'id': C.CACHE_ID, 'key': C.KEY, 'version': C.VERSION,
-            'ref': 'refs/heads/main', 'size_in_bytes': C.CACHE_SIZE}
+    return {'id': 123, 'key': TEST_KEY, 'version': 'b' * 64,
+            'ref': 'refs/heads/main', 'size_in_bytes': 1024}
 
 
 def representative_stats():
@@ -36,6 +37,49 @@ def representative_stats():
 
 
 class RuntimeSeedCanaryTests(unittest.TestCase):
+    def test_preflight_looks_up_and_exports_the_validated_canary_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            evidence = root/'evidence'
+            output = root/'github-output'
+            sha = 'c' * 40
+            cpu = json.dumps({'lscpu': [
+                {'field': 'Architecture:', 'data': 'x86_64'},
+                {'field': 'CPU(s):', 'data': '4'},
+                {'field': 'Model name:', 'data': 'test cpu'},
+                {'field': 'Vendor ID:', 'data': 'test vendor'},
+                {'field': 'Thread(s) per core:', 'data': '1'},
+            ]})
+            environment = {
+                'CANARY_KEY': TEST_KEY, 'GITHUB_EVENT_NAME': 'workflow_dispatch',
+                'RUNNER_ENVIRONMENT': 'github-hosted', 'RUNNER_ARCH': 'X64',
+                'LLAMA_STAGE_BUILD_DIR': C.BUILD_DIR, 'RUSTC_WRAPPER': 'sccache',
+                'MESH_LLM_REQUIRE_SCCACHE': '1', 'CARGO_INCREMENTAL': '0',
+                'CACHE_NAMESPACE': 'mesh-llm', 'SCCACHE_GHA_ENABLED': 'false',
+                'SCCACHE_MULTILEVEL_CHAIN': 'disk', 'SCCACHE_CACHE_SIZE': '2G',
+                'LLAMA_STAGE_BACKEND': 'cpu', 'RUNNER_TEMP': str(root/'runner-temp'),
+                'GITHUB_SHA': sha, 'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1',
+                'CANARY_PAIR': '1', 'CANARY_ARM': 'cold', 'GITHUB_OUTPUT': str(output),
+            }
+
+            def command_output(command, **_kwargs):
+                if command == ['git', 'rev-parse', 'HEAD']:
+                    return sha + '\n'
+                if command == ['uname', '-srm']:
+                    return 'Linux 6.0 x86_64\n'
+                if command == ['lscpu', '--json']:
+                    return cpu
+                self.fail(f'unexpected command: {command}')
+
+            with chdir(root), patch.dict(C.os.environ, environment, clear=True), patch.object(
+                C.subprocess, 'check_output', side_effect=command_output
+            ), patch.object(C, 'fetch_cache', return_value=cache()) as fetch:
+                C.preflight(evidence)
+
+            fetch.assert_called_once_with(TEST_KEY)
+            self.assertEqual(output.read_text(), f'key={TEST_KEY}\n')
+            self.assertEqual(C.read(evidence/'context.json')['cache'], cache())
+
     def test_preflight_checks_container_temp_and_retains_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -45,7 +89,7 @@ class RuntimeSeedCanaryTests(unittest.TestCase):
             (cache_dir/'unexpected-cache').write_text('existing')
             evidence = root/'evidence'
             environment = {
-                'CANARY_KEY': C.KEY, 'GITHUB_EVENT_NAME': 'workflow_dispatch',
+                'CANARY_KEY': TEST_KEY, 'GITHUB_EVENT_NAME': 'workflow_dispatch',
                 'RUNNER_ENVIRONMENT': 'github-hosted', 'RUNNER_ARCH': 'X64',
                 'LLAMA_STAGE_BUILD_DIR': C.BUILD_DIR, 'RUSTC_WRAPPER': 'sccache',
                 'MESH_LLM_REQUIRE_SCCACHE': '1', 'CARGO_INCREMENTAL': '0',
@@ -74,14 +118,39 @@ class RuntimeSeedCanaryTests(unittest.TestCase):
         self.assertGreater(steps.index(preflight), 1)
 
     def test_cache_admission_rejects_missing_shadow_and_wrong_identity(self):
-        self.assertEqual(C.cache_identity({'actions_caches': [cache()]}), cache())
-        for field, value in [('id', 1), ('version', 'wrong'), ('ref', 'refs/heads/feature'), ('size_in_bytes', 1)]:
+        self.assertEqual(C.cache_identity({'actions_caches': [cache()]}, TEST_KEY), cache())
+        for field, value in [('id', 0), ('version', 'wrong'), ('ref', 'refs/heads/feature'), ('size_in_bytes', 0)]:
             altered = {**cache(), field: value}
             with self.subTest(field=field), self.assertRaises(ValueError):
-                C.cache_identity({'actions_caches': [altered]})
+                C.cache_identity({'actions_caches': [altered]}, TEST_KEY)
         for entries in ([], [cache(), cache()], [cache(), {**cache(), 'ref': 'refs/heads/feature'}]):
             with self.subTest(entries=entries), self.assertRaises(ValueError):
-                C.cache_identity({'actions_caches': entries})
+                C.cache_identity({'actions_caches': entries}, TEST_KEY)
+
+    def test_restored_cache_must_match_preflight_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            evidence = root/'evidence'
+            evidence.mkdir()
+            cache_dir = root/'cache'
+            cache_dir.mkdir()
+            C.save(evidence/'context.json', {'cache': cache(), 'arm': 'cold'})
+            C.save(evidence/'restore-start.json', {'monotonic': 1})
+            environment = {'SCCACHE_DIR': str(cache_dir), 'CANARY_CACHE_HIT': 'false'}
+
+            with patch.dict(C.os.environ, environment, clear=True), patch.object(
+                C.time, 'monotonic', return_value=2
+            ), patch.object(C, 'fetch_cache', return_value=cache()):
+                C.restored(evidence)
+            self.assertEqual(C.read(evidence/'context.json')['cache_after_restore'], cache())
+
+            for field, value in [('id', 456), ('version', 'c' * 64)]:
+                with self.subTest(field=field), patch.dict(
+                    C.os.environ, environment, clear=True
+                ), patch.object(C.time, 'monotonic', return_value=2), patch.object(
+                    C, 'fetch_cache', return_value={**cache(), field: value}
+                ), self.assertRaisesRegex(ValueError, 'restored cache identity changed'):
+                    C.restored(evidence)
 
     def test_raw_stats_preserve_languages_and_reject_bad_counters(self):
         raw = representative_stats()
@@ -159,6 +228,7 @@ class RuntimeSeedCanaryTests(unittest.TestCase):
     def test_canary_uses_real_action_six_fresh_jobs_and_never_saves(self):
         data = yaml.safe_load((ROOT/'.github/workflows/depot-canary.yml').read_text())
         job = data['jobs']['runtime_seed']
+        self.assertIn("github.ref == 'refs/heads/main'", job['if'])
         self.assertEqual(job['runs-on'], 'ubuntu-24.04')
         self.assertEqual(job['strategy']['matrix'], {'pair': [1,2,3], 'arm': ['cold','warm']})
         self.assertEqual(job['container']['image'], C.IMAGE)

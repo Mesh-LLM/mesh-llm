@@ -127,10 +127,12 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("LLAMA_STAGE_BACKEND: metal", workflow)
         self.assertNotIn("mozilla-actions/sccache-action", workflow)
         self.assertNotIn("SCCACHE_GHA_ENABLED", workflow)
-        self.assertNotIn("SCCACHE_C_CUSTOM_CACHE_BUSTER", workflow)
-        self.assertIn('RUSTC_WRAPPER: ""', workflow)
-        self.assertIn('LLAMA_STAGE_USE_SCCACHE: "0"', workflow)
-        self.assertNotIn("Show sccache stats", workflow)
+        self.assertIn("SCCACHE_C_CUSTOM_CACHE_BUSTER", workflow)
+        self.assertIn('MESH_LLM_REQUIRE_SCCACHE: "1"', workflow)
+        self.assertIn("SCCACHE_DIR: /Users/lab/Library/Caches/mesh-llm/sccache/llama-canary-arm64", workflow)
+        self.assertNotIn('RUSTC_WRAPPER: ""', workflow)
+        self.assertNotIn('LLAMA_STAGE_USE_SCCACHE: "0"', workflow)
+        self.assertIn("Show compiler cache stats", workflow)
 
         native_build = _step_block(workflow, "Build patched llama.cpp ABI")
         self.assertIn(

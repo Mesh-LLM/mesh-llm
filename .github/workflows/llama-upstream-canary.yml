@@ -42,11 +42,8 @@ jobs:
       contents: read
     env:
       LLAMA_UPSTREAM_CANARY_SMOKE: ${{ vars.LLAMA_UPSTREAM_CANARY_SMOKE || '1' }}
-      # Certification must compile the native closure for this arm64 runner.
-      # Both the former GitHub backend and the persistent runner-local cache
-      # have served Intel objects for AppleClang's implicit host target.
-      RUSTC_WRAPPER: ""
-      LLAMA_STAGE_USE_SCCACHE: "0"
+      MESH_LLM_REQUIRE_SCCACHE: "1"
+      SCCACHE_DIR: /Users/lab/Library/Caches/mesh-llm/sccache/llama-canary-arm64
       # A persistent runner can retain a CMake cache from a different host
       # architecture. Build every canary in a run-unique directory, and feed
       # that exact native closure to all Rust, smoke, and battery commands.
@@ -139,6 +136,22 @@ jobs:
             echo "bake the missing tools into the family-certify runner image; this job installs nothing" >&2
             exit 1
           fi
+
+      - name: Isolate compiler cache identity
+        run: |
+          set -euo pipefail
+          mkdir -p "$SCCACHE_DIR"
+          cache_buster="$({
+            printf '%s\n' 'platform=macos' 'architecture=arm64' 'backend=metal' 'profile=release' 'cmake-osx-architectures=arm64'
+            rustc -vV
+            cc --version
+            xcrun --show-sdk-path
+            xcrun --show-sdk-build-version
+            git ls-files -s -- .cargo/config.toml scripts/build-llama.sh scripts/package-native-runtime.sh third_party/llama.cpp/upstream.txt third_party/llama.cpp/patches
+          } | shasum -a 256 | awk '{print $1}')"
+          echo "SCCACHE_C_CUSTOM_CACHE_BUSTER=$cache_buster" >> "$GITHUB_ENV"
+          sccache --start-server >/dev/null 2>&1 || true
+          sccache --zero-stats
 
       - name: Resolve requested llama.cpp upstream
         id: sha
@@ -298,6 +311,7 @@ jobs:
             echo "canary native archive must be arm64, got: $arches" >&2
             exit 1
           fi
+          sccache --show-stats
 
       - name: Verify generated model-family patch
         id: family_patch
@@ -432,8 +446,8 @@ jobs:
     permissions:
       contents: read
     env:
-      RUSTC_WRAPPER: ""
-      LLAMA_STAGE_USE_SCCACHE: "0"
+      MESH_LLM_REQUIRE_SCCACHE: "1"
+      SCCACHE_DIR: /Users/lab/Library/Caches/mesh-llm/sccache/llama-canary-arm64
       LLAMA_BUILD_DIR: ${{ github.workspace }}/.deps/llama-canary-verify-${{ github.run_id }}-${{ github.run_attempt }}
       LLAMA_STAGE_BUILD_DIR: ${{ github.workspace }}/.deps/llama-canary-verify-${{ github.run_id }}-${{ github.run_attempt }}
       LLAMA_STAGE_BACKEND: metal
@@ -470,6 +484,22 @@ jobs:
           fi
           echo "SKIPPY_REWRITER_LLVM_PREFIX=$llvm_prefix" >> "$GITHUB_ENV"
 
+      - name: Isolate compiler cache identity
+        run: |
+          set -euo pipefail
+          mkdir -p "$SCCACHE_DIR"
+          cache_buster="$({
+            printf '%s\n' 'platform=macos' 'architecture=arm64' 'backend=metal' 'profile=release' 'cmake-osx-architectures=arm64'
+            rustc -vV
+            cc --version
+            xcrun --show-sdk-path
+            xcrun --show-sdk-build-version
+            git ls-files -s -- .cargo/config.toml scripts/build-llama.sh scripts/package-native-runtime.sh third_party/llama.cpp/upstream.txt third_party/llama.cpp/patches
+          } | shasum -a 256 | awk '{print $1}')"
+          echo "SCCACHE_C_CUSTOM_CACHE_BUSTER=$cache_buster" >> "$GITHUB_ENV"
+          sccache --start-server >/dev/null 2>&1 || true
+          sccache --zero-stats
+
       - name: Download agent candidate
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -487,6 +517,10 @@ jobs:
           FAMILY_BATTERY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           UPSTREAM_SHA_INPUT: ${{ needs.latest-upstream.outputs.candidate_upstream }}
         run: scripts/llama-canary-agent-repair.sh
+
+      - name: Show compiler cache stats
+        if: ${{ success() || failure() }}
+        run: sccache --show-stats
 
       - name: Upload independently certified candidate
         id: certified_upload
