@@ -35,9 +35,11 @@ fn write(source: &Path, out: &Path, resume: bool) -> Result<()> {
         Vec::new(),
         ArtifactHook { command: None },
         ArtifactHook { command: None },
-        explicit(source),
-        None,
-        resume,
+        PackageWriteOptions {
+            explicit: explicit(source),
+            generation_defaults: None,
+            resume_existing_artifacts: resume,
+        },
     )
 }
 
@@ -158,9 +160,11 @@ fn writer_embeds_reviewed_generation_defaults() {
         Vec::new(),
         ArtifactHook { command: None },
         ArtifactHook { command: None },
-        explicit(&source),
-        Some(defaults),
-        false,
+        PackageWriteOptions {
+            explicit: explicit(&source),
+            generation_defaults: Some(defaults),
+            resume_existing_artifacts: false,
+        },
     )
     .unwrap();
 
@@ -203,9 +207,11 @@ fn writer_rejects_invalid_generation_defaults_before_creating_output() {
         Vec::new(),
         ArtifactHook { command: None },
         ArtifactHook { command: None },
-        explicit(&source),
-        Some(defaults),
-        false,
+        PackageWriteOptions {
+            explicit: explicit(&source),
+            generation_defaults: Some(defaults),
+            resume_existing_artifacts: false,
+        },
     )
     .unwrap_err()
     .to_string();
@@ -475,9 +481,11 @@ fn refuses_transform_hooks_and_existing_completion_marker() {
         ArtifactHook {
             command: Some("must-not-run".into()),
         },
-        explicit(&source),
-        None,
-        false,
+        PackageWriteOptions {
+            explicit: explicit(&source),
+            generation_defaults: None,
+            resume_existing_artifacts: false,
+        },
     );
     assert!(
         result
@@ -507,9 +515,11 @@ fn verified_resume_and_projector_sidecar_round_trip() {
         vec![projector],
         ArtifactHook { command: None },
         ArtifactHook { command: None },
-        explicit(&source),
-        None,
-        true,
+        PackageWriteOptions {
+            explicit: explicit(&source),
+            generation_defaults: None,
+            resume_existing_artifacts: true,
+        },
     )
     .unwrap();
     let manifest = read_manifest(&out);
@@ -550,9 +560,11 @@ fn upload_hook_can_delete_verified_copies_without_losing_inventory() {
             command: Some(hook),
         },
         ArtifactHook { command: None },
-        explicit(&source),
-        None,
-        false,
+        PackageWriteOptions {
+            explicit: explicit(&source),
+            generation_defaults: None,
+            resume_existing_artifacts: false,
+        },
     )
     .unwrap();
     let manifest: PackageManifest =

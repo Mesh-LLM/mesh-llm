@@ -5,6 +5,7 @@ use ::model_package::jobs::HfJobsClient;
 use ::model_package::permissions;
 use ::model_package::prepare::{self, DiscoveredQuant, PrepareJob, PrepareParams};
 use ::model_package::script;
+use mesh_llm_events::OutputEvent;
 use serde_json::json;
 use std::path::Path;
 
@@ -155,7 +156,7 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
 
     let job = prepare::resolve(&hf_client, params, &perms).await?;
 
-    print_prepare_job(&job, &perms);
+    print_prepare_job(&job, &perms, json)?;
 
     if !submitting {
         let redacted = redacted_spec(&job.spec);
@@ -234,7 +235,11 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
     Ok(())
 }
 
-fn print_prepare_job(job: &PrepareJob, perms: &permissions::PermissionCheck) {
+fn print_prepare_job(
+    job: &PrepareJob,
+    perms: &permissions::PermissionCheck,
+    json: bool,
+) -> Result<()> {
     let shard_info = model_ref::split_gguf_shard_info(&job.source_file);
     let shard_str = if let Some(shard) = shard_info {
         format!(" ({} shards)", shard.total)
@@ -248,18 +253,24 @@ fn print_prepare_job(job: &PrepareJob, perms: &permissions::PermissionCheck) {
     for projector in &job.projectors {
         eprintln!("   MMProj: {}", projector.path);
     }
-    if let Some(defaults) = &job.generation_defaults {
-        eprintln!("   Generation profiles:");
-        for (name, profile) in &defaults.profiles {
-            eprintln!(
-                "     {name}: {}@{} {}#{}",
+    if let Some(defaults) = &job.generation_defaults
+        && !json
+    {
+        let mut lines = vec!["Generation profiles:".to_string()];
+        lines.extend(defaults.profiles.iter().map(|(name, profile)| {
+            format!(
+                "  {name}: {}@{} {}#{}",
                 profile.provenance.source_repo,
                 profile.provenance.revision,
                 profile.provenance.file,
                 profile.provenance.section
-            );
-        }
-        eprintln!("   Default profile: {}", defaults.selection.default);
+            )
+        }));
+        lines.push(format!("Default profile: {}", defaults.selection.default));
+        mesh_llm_events::emit_event(OutputEvent::Info {
+            message: lines.join("\n"),
+            context: None,
+        })?;
     }
     eprintln!();
     eprintln!(
@@ -311,6 +322,7 @@ fn print_prepare_job(job: &PrepareJob, perms: &permissions::PermissionCheck) {
         job.job_plan.unit_label,
         format_cost(job.job_plan.max_cost_usd)
     );
+    Ok(())
 }
 
 async fn run_list_quants(
