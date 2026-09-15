@@ -5,8 +5,8 @@ const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789
 
 #[test]
 fn checked_in_catalog_generation_defaults_are_schema_valid() {
-    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../model-packages/generation-defaults");
+    let directory =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/catalog-generation-defaults");
     let mut paths = fs::read_dir(&directory)
         .unwrap()
         .map(|entry| entry.unwrap().path())

@@ -7,7 +7,7 @@ This inventory covers every active `layer-package` mapping in that catalog revis
 ## Publication order
 
 1. Release a runtime that accepts `generation.request_defaults` and Skippy ABI 0.1.55.
-2. Use the reviewed file under `model-packages/generation-defaults/`, or the documented fallback decision for Kimi K3 and Inkling.
+2. Use the reviewed file under `crates/skippy-package-format/data/catalog-generation-defaults/`, or the documented fallback decision for Kimi K3 and Inkling.
 3. Run `mesh-llm models package ... --generation-defaults <file> --dry-run` and review the printed profiles and citations.
 4. Publish metadata-updated package revisions, certify each package, then pin the catalog to the new revisions.
 
@@ -72,7 +72,7 @@ Coverage: **22/22 active catalog layer packages inventoried and reviewed**. Nine
 ## Verification sources
 
 - Catalog entries: exact `entries/**/*.json` files at the catalog revision above.
-- Reviewed publisher inputs: `model-packages/generation-defaults/*.json`, each pinned to an official model repository revision.
+- Reviewed publisher inputs: `crates/skippy-package-format/data/catalog-generation-defaults/*.json`, each pinned to an official model repository revision.
 - Existing package manifests: Hugging Face package revisions recorded in this table; 21 were inspected during the 2026-09-15 full catalog audit.
 - Gemma recovery: `meshllm/gemma-4-E4B-it-Q4_K_M-layers@b48f77afdbc97659eac9acc1d1d3466de2662364`, produced by HF Job `6aa8c4945527934177ee35df` and inspected as schema v2.
 - Runtime compatibility: `crates/skippy-package-format/src/lib.rs` uses `deny_unknown_fields` on `Generation`, which is why publication follows runtime release.

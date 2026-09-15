@@ -1,7 +1,7 @@
 # Reviewed catalog generation defaults
 
 These JSON files are publisher inputs for the active layer packages listed in
-[`docs/model-package-generation-defaults-migration.md`](../../docs/model-package-generation-defaults-migration.md).
+[`docs/model-package-generation-defaults-migration.md`](../../../../docs/model-package-generation-defaults-migration.md).
 Each file is a standalone `GenerationRequestDefaults` object accepted by
 `mesh-llm models package --generation-defaults`.
 
