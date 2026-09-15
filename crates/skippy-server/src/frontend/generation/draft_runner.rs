@@ -29,8 +29,10 @@ fn map_split_mode(mode: skippy_protocol::SplitMode) -> skippy_runtime::SplitMode
 pub(in crate::frontend) struct DraftRunner {
     pub(in crate::frontend) path: PathBuf,
     pub(in crate::frontend) window: usize,
-    pub(in crate::frontend) _model: StageModel,
+    // Fields drop in declaration order. Free the native session before the
+    // model it borrows; reversing these fields can abort inside llama.cpp.
     pub(in crate::frontend) session: StageSession,
+    pub(in crate::frontend) _model: StageModel,
     /// Tokens currently materialized in the draft session's KV, maintained so
     /// fallback proposals can advance incrementally instead of re-prefilling
     /// the whole context on every call.
@@ -125,8 +127,8 @@ impl DraftRunner {
         Ok(Self {
             path: path.to_path_buf(),
             window,
-            _model: model,
             session,
+            _model: model,
             synced: DraftSyncState::default(),
         })
     }
@@ -325,6 +327,8 @@ pub(in crate::frontend) fn model_layer_count(path: &Path) -> Result<u32> {
 mod tests {
     use super::*;
 
+    const DRAFT_SYNC_TEST_MODEL: &str = "SKIPPY_DRAFT_SYNC_TEST_MODEL";
+
     fn state(tokens: &[i32]) -> DraftSyncState {
         DraftSyncState {
             tokens: tokens.to_vec(),
@@ -408,5 +412,62 @@ mod tests {
         };
 
         assert_eq!(&context[from..to], &[3, 4]);
+    }
+
+    /// Exercises the real StageSession KV path that the bookkeeping tests
+    /// above model. Run with a small GGUF draft model, for example:
+    ///
+    /// ```text
+    /// SKIPPY_DRAFT_SYNC_TEST_MODEL=/path/model.gguf \
+    ///   cargo test -p skippy-server \
+    ///   incremental_sync_matches_fresh_reset_with_a_real_model \
+    ///   --lib -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "requires SKIPPY_DRAFT_SYNC_TEST_MODEL; run explicitly with --ignored"]
+    fn incremental_sync_matches_fresh_reset_with_a_real_model() -> Result<()> {
+        let model_path = std::env::var_os(DRAFT_SYNC_TEST_MODEL)
+            .ok_or_else(|| anyhow!("{DRAFT_SYNC_TEST_MODEL} is required for this ignored test"))?;
+        let config = StageConfig {
+            ctx_size: 64,
+            n_gpu_layers: 0,
+            mmap: Some(true),
+            ..StageConfig::default()
+        };
+        let speculative = SpeculativeDecodeConfig::default();
+        let mut incremental =
+            DraftRunner::open(Path::new(&model_path), &config, Some(0), 4, &speculative)?;
+
+        let initial_context = [1, 2, 3];
+        incremental.sync_to_context(&initial_context)?;
+        let first_proposal = incremental.propose(initial_context[2], 2)?;
+
+        // Simulate accepting both proposed tokens and then committing a token
+        // from the verifier. The draft session has decoded through the first
+        // proposal token; syncing this context must prefill only the second.
+        let next_current = 4;
+        let extended_context = [
+            initial_context[0],
+            initial_context[1],
+            initial_context[2],
+            first_proposal[0],
+            first_proposal[1],
+            next_current,
+        ];
+        assert_eq!(
+            incremental.synced.plan(&extended_context),
+            DraftSyncPlan::Extend { from: 4, to: 5 }
+        );
+        incremental.sync_to_context(&extended_context)?;
+        let incremental_proposal = incremental.propose(next_current, 4)?;
+        drop(incremental);
+
+        let mut reset =
+            DraftRunner::open(Path::new(&model_path), &config, Some(0), 4, &speculative)?;
+        reset.reset_to_context(&extended_context)?;
+        let reset_proposal = reset.propose(next_current, 4)?;
+
+        assert_eq!(incremental_proposal, reset_proposal);
+        Ok(())
     }
 }
