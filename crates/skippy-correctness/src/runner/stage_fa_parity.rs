@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use skippy_runtime::{
     FlashAttentionType, GGML_TYPE_F16, MtpSource, RuntimeConfig, RuntimeLoadMode, StageModel,
-    package::{PackageStageRequest, inspect_layer_package, select_layer_package_parts},
+    package::{PackageStageRequest, select_layer_package_parts},
     plan_gguf_stage_runtime_plan_for_range,
 };
 
@@ -66,14 +66,14 @@ fn decode_boundary(
     args: &StageFaParityArgs,
     flash_attn_type: FlashAttentionType,
 ) -> Result<skippy_runtime::ActivationFrame> {
-    let package = inspect_layer_package(
-        args.model
-            .to_str()
-            .context("stage package path is not valid UTF-8")?,
-    )
-    .context("inspect stage package")?;
+    if !args.source_model.is_file() {
+        bail!(
+            "stage-fa-parity source GGUF is unavailable: {}",
+            args.source_model.display()
+        );
+    }
     let plan = plan_gguf_stage_runtime_plan_for_range(
-        std::path::Path::new(&package.source_model_path),
+        &args.source_model,
         (args.layer_start, args.layer_end),
         args.ctx_size,
         1,

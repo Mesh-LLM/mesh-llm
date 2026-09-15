@@ -649,19 +649,15 @@ fn write_stage_config(
         .model_id
         .clone()
         .unwrap_or_else(|| "local/glm-dsa-stage0-trace".to_string());
-    let runtime_plan = if args.runtime.stage_load_mode == StageLoadMode::RuntimeSlice {
-        Some(stage_runtime_plan_for_range(
-            args.runtime.stage_load_mode,
-            &model_path,
-            &model_path,
-            (0, args.stage_layer_end),
-            args.runtime.layer_end,
-            args.runtime.ctx_size,
-            1,
-        )?)
-    } else {
-        None
-    };
+    let runtime_plan = stage_runtime_plan_for_range(
+        args.runtime.stage_load_mode,
+        &args.runtime.model,
+        &model_path,
+        (0, args.stage_layer_end),
+        args.runtime.layer_end,
+        args.runtime.ctx_size,
+        1,
+    )?;
     let config = json!({
         "run_id": run_id,
         "topology_id": format!("glm-dsa-stage0-trace-{variant}"),
@@ -679,11 +675,11 @@ fn write_stage_config(
         "cache_type_k": "f16",
         "cache_type_v": "f16",
         "filter_tensors_on_load": true,
-        "resident_tensor_names": runtime_plan.as_ref().map_or_else(Vec::new, |plan| plan.resident_tensor_names.clone()),
-        "activation_import_identities": runtime_plan.as_ref().map_or_else(Vec::new, |plan| plan.activation_import_identities.clone()),
-        "activation_import_bindings": runtime_plan.as_ref().map_or_else(Vec::new, |plan| plan.activation_import_bindings.clone()),
-        "activation_export_identities": runtime_plan.as_ref().map_or_else(Vec::new, |plan| plan.activation_export_identities.clone()),
-        "activation_export_bindings": runtime_plan.as_ref().map_or_else(Vec::new, |plan| plan.activation_export_bindings.clone()),
+        "resident_tensor_names": runtime_plan.resident_tensor_names,
+        "activation_import_identities": runtime_plan.activation_import_identities,
+        "activation_import_bindings": runtime_plan.activation_import_bindings,
+        "activation_export_identities": runtime_plan.activation_export_identities,
+        "activation_export_bindings": runtime_plan.activation_export_bindings,
         "use_mmap": true,
         "load_mode": stage_load_mode_name(args.runtime.stage_load_mode),
         "bind_addr": args.stage0_bind_addr,
