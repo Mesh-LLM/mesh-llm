@@ -147,11 +147,17 @@ fn committee_admission(
     CommitteeAdmission::Admitted
 }
 
-/// Per-request routing inputs shared with ordinary single-model routing.
+/// Per-request routing inputs shared with ordinary single-model routing: the
+/// local targets table (for worker-pool assembly), the caller's token
+/// budget, cache affinity, and whether `x-mesh-target`/`x-mesh-exclude` were
+/// asked to be honored. Grouped so `try_handle_moa` stays under clippy's
+/// argument-count lint -- see its doc comment for what
+/// `mesh_routing_requested` controls.
 pub struct MoaRoutingContext<'a> {
     pub targets: Option<&'a election::ModelTargets>,
     pub required_tokens: Option<u32>,
     pub affinity: &'a crate::network::affinity::AffinityRouter,
+    pub mesh_routing_requested: bool,
 }
 
 /// Detect `model: "mesh"`, build a mesh-wide MoA config, run the turn,
@@ -168,6 +174,20 @@ pub struct MoaRoutingContext<'a> {
 ///   successful Mesh gateway response, a 503 (when no worker is admitted), or
 ///   a 400 (when the request body wasn't JSON) was already written. The caller
 ///   must *not* attempt to respond again.
+///
+/// `routing.mesh_routing_requested` is whether the caller asked
+/// `x-mesh-target` / `x-mesh-exclude` to be honored. Those headers cannot be
+/// honored once a real committee is convened -- a committee fans a turn out
+/// across every admitted worker, not one peer -- so this function rejects
+/// with 409 only at the point it actually decides to convene one (right
+/// before `run_moa_turn`, below). Degrading to a single concrete model
+/// instead (`degrade_to_single_model`, and
+/// `CommitteeAdmission::ServeFromSingleModel`) returns `Passthrough`
+/// unconditionally: the caller falls through to ordinary routing, which
+/// re-parses and honors the same headers against the rewritten model.
+/// Rejecting earlier -- before knowing whether a committee will actually
+/// form -- would reject requests that MoA was about to make routable (PR
+/// #1671 round 2 follow-up).
 pub async fn try_handle_moa(
     node: &mesh::Node,
     tcp_stream: ClientStream,
@@ -176,6 +196,12 @@ pub async fn try_handle_moa(
     routing: MoaRoutingContext<'_>,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> MoaDispatchResult {
+    let MoaRoutingContext {
+        targets,
+        required_tokens,
+        affinity,
+        mesh_routing_requested,
+    } = routing;
     if !effective_model.is_some_and(automatic::is_directive) {
         return MoaDispatchResult::Passthrough(tcp_stream);
     }
@@ -220,20 +246,14 @@ pub async fn try_handle_moa(
 
     let enable_thinking = effective_enable_thinking_for_moa(&body_json);
 
-    let Some(mut config) = admitted_gateway_config(
-        node,
-        routing.targets,
-        routing.required_tokens,
-        routing.affinity,
-    )
-    .await
+    let Some(mut config) = admitted_gateway_config(node, targets, required_tokens, affinity).await
     else {
         // Zero admitted workers cannot produce a turn, so degrade through the
         // ordinary selector (which returns 503 if no model exists).
         return degrade_to_single_model(
             node,
-            routing.targets,
-            routing.required_tokens,
+            targets,
+            required_tokens,
             tcp_stream,
             request,
             route_observer,
@@ -241,6 +261,28 @@ pub async fn try_handle_moa(
         .await;
     };
     config.enable_thinking = enable_thinking;
+
+    if mesh_routing_requested {
+        // A committee is about to be convened for real (candidates were
+        // admitted above) -- `x-mesh-target`/`x-mesh-exclude` name or
+        // exclude a single peer, which a fan-out across every admitted
+        // worker cannot honor. Reject here, at the point the committee
+        // decision is actually made, rather than before `try_handle_moa`
+        // knew whether it would degrade instead.
+        return match proxy::send_409_observed(
+            tcp_stream,
+            "x-mesh-target/x-mesh-exclude are not honored once a committee is convened for \
+             model \"mesh\" (multi-agent orchestration fans out across every admitted worker, \
+             not one peer); retry without the routing headers, or with a concrete model name \
+             once the fleet has degraded to one",
+            route_observer,
+        )
+        .await
+        {
+            Ok(()) => MoaDispatchResult::Responded(409),
+            Err(_) => MoaDispatchResult::Dropped("moa_response_write_failed"),
+        };
+    }
 
     run_moa_turn(
         tcp_stream,
@@ -449,6 +491,10 @@ mod usage_tests {
 #[cfg(test)]
 #[path = "fleet_sim_tests.rs"]
 mod fleet_sim_tests;
+
+#[cfg(test)]
+#[path = "mesh_routing_tests.rs"]
+mod mesh_routing_tests;
 
 #[cfg(test)]
 #[path = "fleet_fairness_tests.rs"]
