@@ -1524,6 +1524,7 @@ mod tests {
             flash_attention_override: FlashAttentionType::Auto,
             parallel_override: None,
             local_source_required: false,
+            allow_uncertified_split: false,
             split_topology_lock: None,
             planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
             openai_guardrail_policy: openai_guardrail_policy_handle(
@@ -1533,7 +1534,7 @@ mod tests {
             survey_telemetry: survey::SurveyTelemetry::disabled(),
         };
 
-        let result = super::start_runtime_local_model(spec, model_name).await;
+        let result = super::start_runtime_local_model(spec, model_name, None).await;
         assert!(
             result.is_err(),
             "test setup: an undersized capacity budget must fail the start"
