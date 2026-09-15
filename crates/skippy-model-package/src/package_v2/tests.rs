@@ -38,10 +38,12 @@ fn write(source: &Path, out: &Path, resume: bool) -> Result<()> {
         Vec::new(),
         ArtifactHook { command: None },
         ArtifactHook { command: None },
-        explicit(source),
-        None,
-        resume,
-        None,
+        PackageWriteOptions {
+            explicit: explicit(source),
+            generation_defaults: None,
+            resume_existing_artifacts: resume,
+            max_artifact_bytes: None,
+        },
     )
 }
 
@@ -162,9 +164,12 @@ fn writer_embeds_reviewed_generation_defaults() {
         Vec::new(),
         ArtifactHook { command: None },
         ArtifactHook { command: None },
-        explicit(&source),
-        Some(defaults),
-        false,
+        PackageWriteOptions {
+            explicit: explicit(&source),
+            generation_defaults: Some(defaults),
+            resume_existing_artifacts: false,
+            max_artifact_bytes: None,
+        },
     )
     .unwrap();
 
@@ -207,9 +212,12 @@ fn writer_rejects_invalid_generation_defaults_before_creating_output() {
         Vec::new(),
         ArtifactHook { command: None },
         ArtifactHook { command: None },
-        explicit(&source),
-        Some(defaults),
-        false,
+        PackageWriteOptions {
+            explicit: explicit(&source),
+            generation_defaults: Some(defaults),
+            resume_existing_artifacts: false,
+            max_artifact_bytes: None,
+        },
     )
     .unwrap_err()
     .to_string();
@@ -479,10 +487,12 @@ fn refuses_transform_hooks_and_existing_completion_marker() {
         ArtifactHook {
             command: Some("must-not-run".into()),
         },
-        explicit(&source),
-        None,
-        false,
-        None,
+        PackageWriteOptions {
+            explicit: explicit(&source),
+            generation_defaults: None,
+            resume_existing_artifacts: false,
+            max_artifact_bytes: None,
+        },
     );
     assert!(
         result
@@ -512,10 +522,12 @@ fn verified_resume_and_projector_sidecar_round_trip() {
         vec![projector],
         ArtifactHook { command: None },
         ArtifactHook { command: None },
-        explicit(&source),
-        None,
-        true,
-        None,
+        PackageWriteOptions {
+            explicit: explicit(&source),
+            generation_defaults: None,
+            resume_existing_artifacts: true,
+            max_artifact_bytes: None,
+        },
     )
     .unwrap();
     let manifest = read_manifest(&out);
@@ -556,10 +568,12 @@ fn upload_hook_can_delete_verified_copies_without_losing_inventory() {
             command: Some(hook),
         },
         ArtifactHook { command: None },
-        explicit(&source),
-        None,
-        false,
-        None,
+        PackageWriteOptions {
+            explicit: explicit(&source),
+            generation_defaults: None,
+            resume_existing_artifacts: false,
+            max_artifact_bytes: None,
+        },
     )
     .unwrap();
     let manifest: PackageManifest =
@@ -591,9 +605,12 @@ fn successful_artifact_hook_may_leave_verified_copies_for_rechecking() {
             command: Some("/usr/bin/true".into()),
         },
         ArtifactHook { command: None },
-        explicit(&source),
-        false,
-        None,
+        PackageWriteOptions {
+            explicit: explicit(&source),
+            generation_defaults: None,
+            resume_existing_artifacts: false,
+            max_artifact_bytes: None,
+        },
     )
     .unwrap();
     let manifest = read_manifest(&out);
@@ -672,9 +689,12 @@ fn oversized_layer_splits_into_verified_part_artifacts_end_to_end() {
         Vec::new(),
         ArtifactHook { command: None },
         ArtifactHook { command: None },
-        explicit(&source),
-        false,
-        Some(17),
+        PackageWriteOptions {
+            explicit: explicit(&source),
+            generation_defaults: None,
+            resume_existing_artifacts: false,
+            max_artifact_bytes: Some(17),
+        },
     )
     .unwrap();
     let manifest = read_manifest(&out);
