@@ -941,3 +941,29 @@ exact cause of misses is claimed. Whole-action C/C++ counts also include package
 tool dependencies. Global workload coverage stays unknown for other consumers.
 [Original retained evidence and hashes](runtime-seed-evidence/34272984200-1/README.md)
 preserve the basis beyond remote artifact expiry.
+
+## Console-print product scope
+
+`just no-console-print` keeps exact file/line/macro approvals for product
+sources. Its scope excludes test paths, parsed `#[cfg(test)]` modules,
+examples, benches, auxiliary `src/bin/` targets and the explicit
+`NON_PRODUCT_CRATES` list in `tools/xtask/src/no_console_print/scope.rs`.
+Build scripts remain excluded because their output contains Cargo directives.
+`mesh-llm/src/main.rs` and `mesh-client` remain in scope.
+
+The gate checks Cargo metadata on every invocation and rejects an exempt crate
+that becomes a transitive normal dependency of `mesh-llm`, including optional
+and platform-specific dependencies. Tests cover that guard and the scope rules.
+The Quality workflow still invokes the same `just no-console-print` gate.
+Direct stdout/stderr handle detection and deletion of the remaining product
+ratchet belong to later stages of issue #1763.
+
+The CPU native runtime-event gate selects `family-qwen3-dense` from the
+`skippy-ci-smoke` manifest for both `pull-request` and `main` cadences. The
+canonical artifact registry explicitly permits both uses, and the workflow
+contract test resolves its selected model through the real manifest resolver.
+
+The gate resolves bundle, model and evidence paths against the caller's working
+directory before invoking Cargo. Cargo starts the integration test in its crate
+directory; absolute paths keep its evidence writer and the wrapper's execution
+check on the same file.
