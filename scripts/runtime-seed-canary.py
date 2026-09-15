@@ -107,7 +107,13 @@ def preflight(directory):
 def restored(directory):
     context = read(directory/'context.json')
     context['restore_seconds'] = time.monotonic() - read(directory/'restore-start.json')['monotonic']
-    context['cache_after_restore'] = fetch_cache(context['cache']['key'])
+    restored_cache = fetch_cache(context['cache']['key'])
+    require(
+        (restored_cache['id'], restored_cache['version']) ==
+        (context['cache']['id'], context['cache']['version']),
+        'restored cache identity changed',
+    )
+    context['cache_after_restore'] = restored_cache
     context['cache_hit'] = os.environ.get('CANARY_CACHE_HIT') == 'true'
     require(context['arm'] == 'cold' or context['cache_hit'], 'warm restore missed: inconclusive')
     require(context['arm'] != 'cold' or not any(Path(os.environ['SCCACHE_DIR']).iterdir()), 'cold cache populated before build')

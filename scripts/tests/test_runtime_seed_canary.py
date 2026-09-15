@@ -127,6 +127,31 @@ class RuntimeSeedCanaryTests(unittest.TestCase):
             with self.subTest(entries=entries), self.assertRaises(ValueError):
                 C.cache_identity({'actions_caches': entries}, TEST_KEY)
 
+    def test_restored_cache_must_match_preflight_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            evidence = root/'evidence'
+            evidence.mkdir()
+            cache_dir = root/'cache'
+            cache_dir.mkdir()
+            C.save(evidence/'context.json', {'cache': cache(), 'arm': 'cold'})
+            C.save(evidence/'restore-start.json', {'monotonic': 1})
+            environment = {'SCCACHE_DIR': str(cache_dir), 'CANARY_CACHE_HIT': 'false'}
+
+            with patch.dict(C.os.environ, environment, clear=True), patch.object(
+                C.time, 'monotonic', return_value=2
+            ), patch.object(C, 'fetch_cache', return_value=cache()):
+                C.restored(evidence)
+            self.assertEqual(C.read(evidence/'context.json')['cache_after_restore'], cache())
+
+            for field, value in [('id', 456), ('version', 'c' * 64)]:
+                with self.subTest(field=field), patch.dict(
+                    C.os.environ, environment, clear=True
+                ), patch.object(C.time, 'monotonic', return_value=2), patch.object(
+                    C, 'fetch_cache', return_value={**cache(), field: value}
+                ), self.assertRaisesRegex(ValueError, 'restored cache identity changed'):
+                    C.restored(evidence)
+
     def test_raw_stats_preserve_languages_and_reject_bad_counters(self):
         raw = representative_stats()
         raw['cache_location'] = 'not retained'
