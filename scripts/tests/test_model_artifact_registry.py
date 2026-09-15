@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import hashlib
 import fnmatch
+import hashlib
 import json
-from pathlib import Path
 import re
 import subprocess
 import tempfile
 import unittest
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 REGISTRY = ROOT / "ci" / "model-artifacts" / "registry.json"
@@ -18,6 +17,21 @@ RESOLVER = ROOT / "scripts" / "resolve-test-model-manifest.py"
 
 
 class ModelArtifactRegistryTests(unittest.TestCase):
+    def test_family_schema_covers_every_registered_class_and_profile(self) -> None:
+        """Published schema enums and required fields must track the canonical workload roster."""
+        manifest = json.loads((ROOT / "ci/llama-canary/family-certified.json").read_text())
+        schema = json.loads((ROOT / "ci/llama-canary/family-certified.schema.json").read_text())
+        model_schema = schema["$defs"]["model"]
+        self.assertIn("class", model_schema["required"])
+        self.assertEqual({row["class"] for row in manifest["models"]},
+                         set(model_schema["properties"]["class"]["enum"]))
+        self.assertEqual(set(manifest["policy"]["profiles"]),
+                         set(model_schema["properties"]["profile"]["enum"]))
+        profiles = schema["properties"]["policy"]["properties"]["profiles"]
+        self.assertEqual(set(manifest["policy"]["profiles"]), set(profiles["required"]))
+        self.assertEqual({"fixture", "comparison"},
+                         set(model_schema["properties"]["evidence"]["required"]))
+
     def test_generated_manifests_are_current(self) -> None:
         subprocess.run(["python3", str(GENERATOR), "--check"], cwd=ROOT, check=True)
 

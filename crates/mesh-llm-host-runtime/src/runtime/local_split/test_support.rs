@@ -818,6 +818,7 @@ fn runtime_verified_served_model_descriptor_preserves_identity_and_updates_capab
             source_kind: mesh::ModelSourceKind::HuggingFace,
             repository: Some("Qwen/Qwen3-VL-2B-Instruct-GGUF".into()),
             artifact: Some("Qwen3VL-2B-Instruct-Q4_K_M.gguf".into()),
+            weights_digest: Some("sha256:verified-weights".into()),
             ..Default::default()
         },
         capabilities_known: false,
@@ -836,6 +837,7 @@ fn runtime_verified_served_model_descriptor_preserves_identity_and_updates_capab
         "Qwen3VL-2B-Instruct-Q4_K_M",
         "Qwen3VL-2B-Instruct-Q4_K_M",
         capabilities,
+        mesh::ModelWorkloadClass::CausalGeneration,
     );
 
     assert_eq!(
@@ -849,6 +851,14 @@ fn runtime_verified_served_model_descriptor_preserves_identity_and_updates_capab
     assert!(descriptor.identity.is_primary);
     assert!(descriptor.capabilities_known);
     assert_eq!(descriptor.capabilities, capabilities);
+    assert_eq!(
+        descriptor.identity.weights_digest.as_deref(),
+        Some("sha256:verified-weights")
+    );
+    assert_eq!(
+        descriptor.metadata.unwrap().workload_class,
+        Some(mesh::ModelWorkloadClass::CausalGeneration)
+    );
 }
 
 #[test]
@@ -858,6 +868,7 @@ fn runtime_verified_served_model_descriptor_builds_fallback_identity() {
         "Primary",
         "Runtime",
         models::ModelCapabilities::default(),
+        mesh::ModelWorkloadClass::Embedding,
     );
 
     assert_eq!(descriptor.identity.model_name, "Runtime");

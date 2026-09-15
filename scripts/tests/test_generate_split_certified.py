@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "generate-split-certified.py"
@@ -20,6 +19,27 @@ SPEC.loader.exec_module(GENERATOR)
 
 
 class SplitCertificationRosterTests(unittest.TestCase):
+    def test_non_chat_workload_evidence_never_grants_split_admission(self) -> None:
+        """Only the 83 causal artifacts may enter the host's split admission roster."""
+        manifest = json.loads(GENERATOR.DEFAULT_MANIFEST.read_text())
+        roster = GENERATOR.build_roster(manifest)
+        causal = {model["family"] for model in manifest["models"]
+                  if model["class"] == "causal_generation"}
+        self.assertEqual(83, len(causal))
+        self.assertTrue({"inkling", "llama4"}.issubset(causal))
+        self.assertEqual(causal, {model["family"] for model in roster["models"]})
+
+    def test_invalid_workload_class_or_profile_cannot_grant_split_admission(self) -> None:
+        """Fail closed on absent classes or non-chat rows mislabeled as split-certified."""
+        for fields in ({"class": None}, {"class": "future"},
+                       {"class": "embedding", "profile": "full"},
+                       {"class": "causal_generation", "profile": "workload-oracle"}):
+            with self.subTest(fields=fields):
+                manifest = json.loads(GENERATOR.DEFAULT_MANIFEST.read_text())
+                manifest["models"][0].update(fields)
+                with self.assertRaises(GENERATOR.RosterError):
+                    GENERATOR.build_roster(manifest)
+
     def test_single_file_identity_is_exact_blob_digest(self) -> None:
         digest = "a" * 64
         self.assertEqual(

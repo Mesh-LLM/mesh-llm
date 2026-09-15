@@ -6,13 +6,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
-
+from pathlib import Path
 
 PATCH_HEADER = """From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
@@ -165,6 +164,7 @@ def split_model_diff(diff: str) -> dict[str, str]:
 
 
 def load_certified_families(path: Path) -> set[str]:
+    """Require source mappings for causal split targets, not full-model-only workloads."""
     payload = json.loads(path.read_text(encoding="utf-8"))
     models = payload.get("models")
     if not isinstance(models, list):
@@ -172,7 +172,23 @@ def load_certified_families(path: Path) -> set[str]:
     families = {model.get("family") for model in models if isinstance(model, dict)}
     if None in families or len(families) != len(models):
         raise RuntimeError("family manifest contains missing or duplicate family names")
-    return families
+    split_families: set[str] = set()
+    for model in models:
+        model_class = model.get("class")
+        profile = model.get("profile")
+        if model_class == "causal_generation":
+            if profile not in ("full", "package-oracle", "graph-only"):
+                raise RuntimeError("causal family requires a split certification profile")
+            split_families.add(model["family"])
+        elif model_class in (
+            "embedding", "rerank", "encoder_decoder", "ocr",
+            "speech_synthesis", "speech_recognition",
+        ):
+            if profile not in ("workload-smoke", "workload-oracle"):
+                raise RuntimeError("non-chat family requires a workload profile")
+        else:
+            raise RuntimeError("family manifest contains a missing or unknown workload class")
+    return split_families
 
 
 def write_family_shards(
