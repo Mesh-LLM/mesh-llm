@@ -1,6 +1,36 @@
 use super::*;
+use std::fs;
 
 const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+#[test]
+fn checked_in_catalog_generation_defaults_are_schema_valid() {
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../model-packages/generation-defaults");
+    let mut paths = fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+
+    assert_eq!(
+        paths.len(),
+        19,
+        "reviewed catalog defaults inventory drifted"
+    );
+    for path in paths {
+        let bytes = fs::read(&path).unwrap();
+        let defaults: GenerationRequestDefaults = serde_json::from_slice(&bytes)
+            .unwrap_or_else(|error| panic!("{} failed to parse: {error}", path.display()));
+        defaults
+            .validate()
+            .unwrap_or_else(|error| panic!("{} failed validation: {error}", path.display()));
+    }
+}
 
 #[test]
 fn valid_manifest_passes() {

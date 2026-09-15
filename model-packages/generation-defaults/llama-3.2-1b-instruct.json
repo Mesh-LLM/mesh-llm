@@ -1,0 +1,18 @@
+{
+  "selection": {
+    "default": "recommended"
+  },
+  "profiles": {
+    "recommended": {
+      "temperature": 0.6,
+      "top_p": 0.9,
+      "provenance": {
+        "source_repo": "meta-llama/Llama-3.2-1B-Instruct",
+        "revision": "9213176726f574b556790deb65791e0c5aa438b6",
+        "file": "generation_config.json",
+        "section": "Generation defaults",
+        "url": "https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct/blob/9213176726f574b556790deb65791e0c5aa438b6/generation_config.json"
+      }
+    }
+  }
+}
