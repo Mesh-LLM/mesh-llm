@@ -177,7 +177,11 @@ surface. On a non-canary `release.yml` dispatch, the metadata job applies that
 script, creates a linear release-source commit when needed, and fast-forwards
 `main` before the build graph begins. `just release` only performs local
 preflight, dispatches that workflow, and waits for its result. Canary dispatches
-do not mutate `main` or publish.
+do not mutate `main` or publish. Release tags and releases are immutable on
+the manual release path: a non-canary dispatch refuses an already-existing tag
+and fails closed if it cannot verify the remote tag state. The release
+workflow is dispatch-only, so re-pushing a tag does not start a second release
+pipeline or silently replace bytes under an existing version.
 
 Release calls the existing UI producer once with the immutable source SHA and
 release tag. It prepares that version, builds the TypeScript console in release

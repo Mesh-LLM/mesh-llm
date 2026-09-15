@@ -149,7 +149,12 @@ For a non-canary manual dispatch, `release.yml` runs the checked-in
 `scripts/release-version.sh`, creates one linear release-source commit when the
 tracked version surface changes, and fast-forwards `main` before any release
 build starts. `just release` is a preflight and synchronous dispatcher for that
-same workflow. Canary dispatches never update `main` or publish. The publish job
+same workflow. Canary dispatches never update `main` or publish. Release tags
+and releases are immutable on the manual release path: a non-canary dispatch
+refuses an already-existing tag and fails closed if it cannot verify the
+remote tag state. The release workflow is dispatch-only, so re-pushing a tag
+does not start a second release pipeline or silently serve rebuilt bytes (for
+example a different glibc floor) under the same version. The publish job
 creates only the release-specific tag commit
 for generated Swift/SDK resources and enables GitHub-generated release notes.
 The comparison base is the highest stable `vMAJOR.MINOR.PATCH` tag below the
