@@ -357,6 +357,7 @@ impl MeshDownloadProgress {
     }
 
     fn draw(state: &mut MeshDownloadProgressState, force: bool) {
+        let mut err = mesh_llm_events::console_err();
         if !force && state.downloaded == 0 && state.total == 0 {
             return;
         }
@@ -408,7 +409,8 @@ impl MeshDownloadProgress {
             ),
         };
         let bar = render_inline_progress_bar(ratio, DOWNLOAD_PROGRESS_BAR_WIDTH);
-        eprint!(
+        let _ = write!(
+            err,
             "\r\x1b[KDownloading  {:>3}.{:01}%  {}  {} / {}{}",
             percent_major,
             percent_minor,
@@ -418,7 +420,7 @@ impl MeshDownloadProgress {
             speed_suffix,
         );
         state.drawn_line = true;
-        let _ = std::io::stderr().flush();
+        let _ = err.flush();
     }
 
     fn apply_download_event(state: &mut MeshDownloadProgressState, event: &DownloadEvent) {
@@ -566,6 +568,7 @@ fn download_hf_assets_sync(
     assets: Vec<HfAsset>,
     progress: bool,
 ) -> Result<HfAssetsDownload> {
+    let mut console = mesh_llm_events::console_err();
     let api = super::build_hf_api(false)?;
     let mut download_plan = initial_download_plan_for_assets(assets)?;
     let current_plan: Vec<(bool, HfAsset)> = download_plan.iter().cloned().collect();
@@ -592,7 +595,9 @@ fn download_hf_assets_sync(
             None,
             None,
             ModelProgressStatus::Ensuring,
-            || eprintln!("📥 Ensuring {} is available locally...", label),
+            || {
+                let _ = writeln!(console, "📥 Ensuring {} is available locally...", label);
+            },
         );
     }
 
@@ -649,7 +654,9 @@ fn download_hf_assets_sync(
                 None,
                 None,
                 ModelProgressStatus::Ensuring,
-                || eprintln!("   📥 Ensuring model {}", asset.file),
+                || {
+                    let _ = writeln!(console, "   📥 Ensuring model {}", asset.file);
+                },
             );
         }
         let visible_tracker = if progress && required {
@@ -743,6 +750,7 @@ fn emit_completed_asset_progress(
     path: &Path,
     visible_tracker: Option<&Arc<MeshDownloadProgress>>,
 ) {
+    let mut err = mesh_llm_events::console_err();
     if required && interactive_tui_active() {
         emit_required_asset_ready_progress(label, asset_file, path, visible_tracker);
     } else if interactive_tui_active() {
@@ -752,7 +760,9 @@ fn emit_completed_asset_progress(
             None,
             None,
             ModelProgressStatus::Ready,
-            || eprintln!("   Downloaded model metadata {asset_file}"),
+            || {
+                let _ = writeln!(err, "   Downloaded model metadata {asset_file}");
+            },
         );
     }
 }
@@ -763,6 +773,7 @@ fn emit_required_asset_ready_progress(
     path: &Path,
     visible_tracker: Option<&Arc<MeshDownloadProgress>>,
 ) {
+    let mut err = mesh_llm_events::console_err();
     let showed_progress =
         visible_tracker.is_some_and(|tracker| tracker.showed_meaningful_progress());
     if showed_progress {
@@ -772,7 +783,9 @@ fn emit_required_asset_ready_progress(
             None,
             None,
             ModelProgressStatus::Ready,
-            || eprintln!("   ✅ Ready {asset_file}"),
+            || {
+                let _ = writeln!(err, "   ✅ Ready {asset_file}");
+            },
         );
     } else if let Ok(meta) = std::fs::metadata(path) {
         emit_or_print_model_progress(
@@ -782,11 +795,12 @@ fn emit_required_asset_ready_progress(
             Some(meta.len()),
             ModelProgressStatus::Ready,
             || {
-                eprintln!(
+                let _ = writeln!(
+                    err,
                     "   ✅ Ready {} ({})",
                     asset_file,
                     format_download_bytes(meta.len())
-                )
+                );
             },
         );
     } else {
@@ -796,7 +810,9 @@ fn emit_required_asset_ready_progress(
             None,
             None,
             ModelProgressStatus::Ready,
-            || eprintln!("   ✅ Ready {asset_file}"),
+            || {
+                let _ = writeln!(err, "   ✅ Ready {asset_file}");
+            },
         );
     }
 }
@@ -839,11 +855,13 @@ fn print_multipart_terminal_progress(
     progress: &MultipartDownloadProgress,
     terminal_frame_mode: MultipartTerminalFrameMode,
 ) {
-    eprint!(
+    let mut err = mesh_llm_events::console_err();
+    let _ = write!(
+        err,
         "{}",
         multipart_progress_terminal_frame(progress, terminal_frame_mode)
     );
-    let _ = std::io::stderr().flush();
+    let _ = err.flush();
 }
 
 fn multipart_progress_terminal_frame(

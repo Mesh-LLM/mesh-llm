@@ -571,6 +571,13 @@ pub enum OutputEvent {
         model: String,
         target: String,
     },
+    NostrPublishing {
+        message: String,
+    },
+    AutoUpdate {
+        message: String,
+        version: Option<String>,
+    },
     Warning {
         message: String,
         context: Option<String>,
@@ -636,6 +643,8 @@ impl OutputEvent {
             OutputEvent::RuntimeReady { .. } => "ready",
             OutputEvent::ModelDownloadProgress { .. } => "model_download_progress",
             OutputEvent::RequestRouted { .. } => "request_routed",
+            OutputEvent::NostrPublishing { .. } => "nostr_publishing",
+            OutputEvent::AutoUpdate { .. } => "auto_update",
             OutputEvent::Warning { .. } => "warning",
             OutputEvent::Error { .. } => "error",
             OutputEvent::Fatal { .. } => "fatal",
@@ -657,6 +666,8 @@ impl OutputEvent {
             OutputEvent::Warning { .. } => OutputLevel::Warn,
             OutputEvent::Error { .. } => OutputLevel::Error,
             OutputEvent::Fatal { .. } => OutputLevel::Fatal,
+            OutputEvent::NostrPublishing { .. } => OutputLevel::Info,
+            OutputEvent::AutoUpdate { .. } => OutputLevel::Info,
             _ => OutputLevel::Info,
         }
     }
@@ -815,6 +826,8 @@ impl OutputEvent {
             OutputEvent::RequestRouted { model, target } => {
                 format!("routed request for {model} to {target}")
             }
+            OutputEvent::NostrPublishing { message } => message.clone(),
+            OutputEvent::AutoUpdate { message, .. } => message.clone(),
             OutputEvent::Warning { message, .. } => message.clone(),
             OutputEvent::Error { message, .. } => message.clone(),
             OutputEvent::Fatal { message, .. } => message.clone(),

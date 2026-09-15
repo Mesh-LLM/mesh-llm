@@ -55,6 +55,7 @@ use skippy_protocol::StageConfig;
 use skippy_protocol::StageTopology;
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::io::Write;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -63,6 +64,7 @@ use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
 pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
+    let mut out = mesh_llm_events::console_out();
     let config = load_json::<StageConfig>(&args.config)
         .with_context(|| format!("load stage config {}", args.config.display()))?;
     let topology = match args.topology.as_ref() {
@@ -195,7 +197,8 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
         .wrap_backend_with_context_limit(backend, Some(ctx_size));
     let app: Router = instrumented_openai_router(backend, tokenizer, telemetry.clone());
 
-    println!(
+    writeln!(
+        out,
         "skippy-server listening: openai={} model_id={} backend={} generation_concurrency={} generation_queue_capacity={} generation_admission_timeout_secs={}",
         args.bind_addr,
         model_id,
@@ -203,7 +206,7 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
         generation_concurrency,
         generation_queue_capacity,
         args.generation_admission_timeout_secs,
-    );
+    )?;
 
     let listener = bind_serve_listener(args.bind_addr)?;
     axum::serve(listener, app).await?;
@@ -341,17 +344,19 @@ async fn serve_embedded_openai_with_shutdown_and_scheduler(
     shutdown: impl Future<Output = ()> + Send + 'static,
     iteration_scheduler: Option<IterationScheduler>,
 ) -> Result<()> {
+    let mut out = mesh_llm_events::console_out();
     let bind_addr = args.bind_addr;
     let binding = embedded_openai_router_with_scheduler(args, iteration_scheduler)?;
 
-    println!(
+    writeln!(
+        out,
         "skippy-server listening: openai={} model_id={} backend=embedded-stage0 generation_concurrency={} generation_queue_capacity={} generation_admission_timeout_secs={}",
         bind_addr,
         binding.model_id,
         binding.generation_concurrency,
         binding.generation_queue_capacity,
         binding.generation_admission_timeout_secs,
-    );
+    )?;
 
     let listener = bind_serve_listener(bind_addr)?;
     axum::serve(listener, binding.router)
