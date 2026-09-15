@@ -121,6 +121,39 @@ class BuildAcceleratorDefaultsTests(unittest.TestCase):
             self.assertIn("-fuse-ld=lld", final_invocation)
             self.assertNotIn("rustc-injected", final_invocation)
 
+    def test_macos_probe_accepts_no_explicit_target_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binaries = root / "bin"
+            binaries.mkdir()
+
+            stubs = {
+                "uname": "#!/bin/sh\ncase \"$1\" in -s) echo Darwin ;; -m) echo arm64 ;; *) echo Darwin ;; esac\n",
+                "cc": "#!/bin/sh\nexit 0\n",
+                "ld64.lld": "#!/bin/sh\nexit 0\n",
+                "xcrun": "#!/bin/sh\necho test-sdk\n",
+            }
+            for name, body in stubs.items():
+                path = binaries / name
+                path.write_text(body, encoding="utf-8")
+                path.chmod(0o755)
+
+            env = dict(os.environ)
+            env.update(
+                PATH=f"{binaries}{os.pathsep}{env['PATH']}",
+                MESH_LLM_LINKER_PROBE_CACHE_DIR=str(root / "probes"),
+            )
+            result = subprocess.run(
+                ["/bin/bash", str(ROOT / "scripts" / "cargo-linker"), "--mesh-probe"],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), str(binaries / "ld64.lld"))
+
     def test_developer_bootstrap_pins_sccache_and_installs_linkers(self) -> None:
         unix = (ROOT / "scripts/bootstrap-build-tools").read_text(encoding="utf-8")
         windows = (ROOT / "scripts/bootstrap-build-tools.ps1").read_text(encoding="utf-8")

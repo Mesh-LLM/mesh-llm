@@ -112,7 +112,9 @@ linker_identity() {
         "$compiler" --version 2>&1 || true
         printf 'linker=%s\n' "$linker_path"
         "$linker_path" --version 2>&1 || true
-        printf 'probe-arg=%s\n' "${probe_args[@]}"
+        if ((${#probe_args[@]} > 0)); then
+            printf 'probe-arg=%s\n' "${probe_args[@]}"
+        fi
         if [[ "$(uname -s)" == Darwin ]] && command -v xcrun >/dev/null 2>&1; then
             xcrun --show-sdk-path 2>&1 || true
             xcrun --show-sdk-version 2>&1 || true
@@ -141,7 +143,9 @@ probe_linker_cached() {
         fi
     fi
 
-    if lld_links "$linker" "${probe_args[@]}"; then
+    # Bash 3.2 treats an empty quoted array expansion as unbound under `set
+    # -u`. macOS still ships that version, so use the compatible expansion.
+    if lld_links "$linker" ${probe_args[@]+"${probe_args[@]}"}; then
         status=usable
     else
         status=incompatible
@@ -199,6 +203,6 @@ if [[ "${1:-}" == --mesh-probe ]]; then
 fi
 
 if [[ -n "$selected_linker" ]]; then
-    exec "$compiler" "${link_args[@]}" "-fuse-ld=$selected_linker"
+    exec "$compiler" ${link_args[@]+"${link_args[@]}"} "-fuse-ld=$selected_linker"
 fi
-exec "$compiler" "${link_args[@]}"
+exec "$compiler" ${link_args[@]+"${link_args[@]}"}
