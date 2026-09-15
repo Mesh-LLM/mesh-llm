@@ -193,6 +193,132 @@ pub fn plan_contiguous_with_splits(
     plan_ranges(request, &ranges)
 }
 
+/// Selects the accepted contiguous split set nearest to an even partition.
+///
+/// This is the common product policy for callers that need a deterministic
+/// balanced topology but cannot assume that arithmetic midpoint or thirds are
+/// legal for the model family. Every candidate boundary is evaluated through
+/// the same capability rules used by explicit product topology plans.
+pub fn plan_balanced_accepted_contiguous(
+    request: &TopologyPlanRequest,
+    stage_count: usize,
+) -> Result<TopologyPlan, PlanError> {
+    validate_request(request)?;
+    if stage_count < 2 {
+        return Err(PlanError::InvalidStageCount {
+            stages: stage_count,
+        });
+    }
+    if request.nodes.len() < stage_count {
+        return Err(PlanError::NotEnoughNodesForSplits {
+            stages: stage_count,
+            nodes: request.nodes.len(),
+        });
+    }
+    if request.layers.len() < stage_count {
+        return Err(PlanError::NoAcceptedBalancedSplit {
+            stages: stage_count,
+        });
+    }
+
+    let layer_start = request.layers[0].index;
+    let layer_end = request.layers.last().expect("validated layers").index + 1;
+    let accepted = (layer_start + 1..layer_end)
+        .filter(|boundary| {
+            plan_contiguous_with_splits(request, &[*boundary]).is_ok_and(|plan| {
+                plan.boundaries
+                    .iter()
+                    .all(|item| item.decision == BoundaryDecision::Accepted)
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let split_count = stage_count - 1;
+    let mut best: Option<(u128, Vec<u32>)> = None;
+    choose_balanced_splits(
+        &accepted,
+        split_count,
+        0,
+        &mut Vec::with_capacity(split_count),
+        layer_start,
+        layer_end,
+        stage_count,
+        &mut best,
+    );
+    let Some((_, splits)) = best else {
+        return Err(PlanError::NoAcceptedBalancedSplit {
+            stages: stage_count,
+        });
+    };
+    let plan = plan_contiguous_with_splits(request, &splits)?;
+    if plan
+        .boundaries
+        .iter()
+        .any(|boundary| boundary.decision != BoundaryDecision::Accepted)
+    {
+        return Err(PlanError::NoAcceptedBalancedSplit {
+            stages: stage_count,
+        });
+    }
+    Ok(plan)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn choose_balanced_splits(
+    accepted: &[u32],
+    remaining: usize,
+    next_index: usize,
+    selected: &mut Vec<u32>,
+    layer_start: u32,
+    layer_end: u32,
+    stage_count: usize,
+    best: &mut Option<(u128, Vec<u32>)>,
+) {
+    if remaining == 0 {
+        let span = u128::from(layer_end - layer_start);
+        let score = selected
+            .iter()
+            .enumerate()
+            .map(|(index, boundary)| {
+                let actual = u128::from(*boundary - layer_start) * stage_count as u128;
+                let ideal = span * (index + 1) as u128;
+                actual.abs_diff(ideal)
+            })
+            .sum();
+        let replace = match best.as_ref() {
+            None => true,
+            Some((best_score, best_splits)) => {
+                score < *best_score
+                    || (score == *best_score && selected.as_slice() < best_splits.as_slice())
+            }
+        };
+        if replace {
+            *best = Some((score, selected.clone()));
+        }
+        return;
+    }
+
+    if accepted.len().saturating_sub(next_index) < remaining {
+        return;
+    }
+
+    let last_start = accepted.len().saturating_sub(remaining);
+    for index in next_index..=last_start {
+        selected.push(accepted[index]);
+        choose_balanced_splits(
+            accepted,
+            remaining - 1,
+            index + 1,
+            selected,
+            layer_start,
+            layer_end,
+            stage_count,
+            best,
+        );
+        selected.pop();
+    }
+}
+
 fn plan_ranges(
     request: &TopologyPlanRequest,
     ranges: &[(usize, usize)],

@@ -60,20 +60,23 @@ class RunnerImageIdentityTests(unittest.TestCase):
         paths = list((self.root / ".github/workflows").glob("*.yml")) + [self.root / "ci/slices.yml", self.root / "ci/ownership.yml"]
         before = {path: path.read_bytes() for path in paths}
         self.assertEqual(IDENTITY.check(self.catalog, self.root), {
-            "images": 9, "roles": 32, "workflow_bindings": 33,
+            "images": 9, "roles": 35, "workflow_bindings": 36,
             "runtime_rows": 4, "seed_consumers": 6,
         })
         self.assertEqual(before, {path: path.read_bytes() for path in paths})
 
-    def test_historical_tools_provenance_and_seed_coverage_are_unknown(self) -> None:
-        for image in (value for key, value in self.catalog["images"].items() if key not in ("public-ui", "public-browser")):
-            self.assertIsNone(image["receipt"])
-            self.assertIsNone(image["provenance"])
+    def test_current_images_are_qualified_while_seed_coverage_remains_unknown(self) -> None:
+        for image in self.catalog["images"].values():
+            self.assertIsNotNone(image["receipt"])
+            self.assertIsNotNone(image["provenance"])
             self.assertNotIn("tools", image)
         self.assertIsNone(self.catalog["compiler_seed"]["workload_coverage"])
         result = self.cli("lookup", "release-ui-artifact", "--field", "receipt")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout), None)
+        self.assertEqual(
+            json.loads(result.stdout)["index_candidate_key"],
+            "candidate-index-public-web",
+        )
 
     def test_duplicate_json_keys_fail(self) -> None:
         path = self.root / "ci/runner-images.json"
@@ -99,7 +102,11 @@ class RunnerImageIdentityTests(unittest.TestCase):
         self.assert_drift("duplicate consumer binding")
 
     def test_catalog_rejects_unverified_receipt_claim(self) -> None:
-        self.catalog["images"]["public-cpu"]["receipt"] = {"path": "invented.json", "sha256": "a" * 64}
+        self.catalog["images"]["public-cpu"]["receipt"]["index_candidate_key"] = "invented"
+        self.assert_drift("invalid fields")
+
+    def test_catalog_rejects_missing_provenance(self) -> None:
+        self.catalog["images"]["public-cpu"]["provenance"] = None
         self.assert_drift("receipt/provenance must be paired")
 
     def test_catalog_rejects_workflow_path_escape(self) -> None:
@@ -160,7 +167,7 @@ class RunnerImageIdentityTests(unittest.TestCase):
             for binding in role["bindings"]:
                 if binding["workflow"] == original:
                     binding["workflow"] = renamed
-        self.assertEqual(IDENTITY.check(self.catalog, self.root)["workflow_bindings"], 33)
+        self.assertEqual(IDENTITY.check(self.catalog, self.root)["workflow_bindings"], 36)
         self.replace(".github/workflows/" + renamed, self.image("public-web"), self.image("public-cpu"))
         self.assert_drift("image reference drift")
 
@@ -190,7 +197,7 @@ class RunnerImageIdentityTests(unittest.TestCase):
 
     def test_consumer_seed_key_drift_fails(self) -> None:
         prefix = self.catalog["compiler_seed"]["key_prefix"]
-        self.replace(".github/workflows/ci-rust-tests-slice.yml", prefix, prefix.replace("-v2-", "-v99-"))
+        self.replace(".github/workflows/ci-rust-tests-slice.yml", prefix, prefix.replace("-v3-", "-v99-"))
         self.assert_drift("compiler seed key drift")
 
     def test_publisher_seed_recipe_hash_drift_fails(self) -> None:
@@ -253,7 +260,7 @@ class RunnerImageIdentityTests(unittest.TestCase):
         self.assertEqual(lookup.stdout.strip(), self.image("public-cpu"))
         result = self.cli("seed-key", "--recipe-hash", "a" * 64)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "mesh-llm-sccache-seed-linux-x86_64-img-8d93de6b-epoch-8d93de6b-v2-" + "a" * 64)
+        self.assertEqual(result.stdout.strip(), "mesh-llm-sccache-seed-linux-x86_64-img-f499b79b-epoch-f499b79b-v3-" + "a" * 64)
 
     def test_publisher_and_sdk_roles_require_single_bindings(self) -> None:
         for role_id, message in (
@@ -311,11 +318,22 @@ class RunnerImageIdentityTests(unittest.TestCase):
         self.catalog["consumer_roles"]["ui-artifact"]["bindings"][0]["job"] = "ui_quality"
         self.assert_drift("complete UI artifact pair")
 
-    def test_qualified_lean_receipts_match_retained_admission(self) -> None:
-        for family in ("ui", "browser"):
-            image = self.catalog["images"]["public-" + family]
-            self.assertEqual(image["receipt"]["index_candidate_key"], "candidate-index-public-" + family)
-            self.assertEqual(image["provenance"]["origin"]["run_id"], 34256062098)
+    def test_qualified_receipts_match_retained_admission(self) -> None:
+        expected_candidates = {
+            "public-cpu": "candidate-index-public-cpu",
+            "public-web": "candidate-index-public-web",
+            "public-cuda12": "candidate-index-public-cuda12",
+            "public-cuda13": "candidate-index-public-cuda13",
+            "public-rocm-ci": "candidate-index-public-rocm72",
+            "public-rocm-release": "candidate-index-public-rocm70",
+            "public-vulkan": "candidate-index-public-vulkan",
+            "public-browser": "candidate-index-public-browser",
+            "public-ui": "candidate-index-public-ui",
+        }
+        for image_id, candidate_key in expected_candidates.items():
+            image = self.catalog["images"][image_id]
+            self.assertEqual(image["receipt"]["index_candidate_key"], candidate_key)
+            self.assertEqual(image["provenance"]["origin"]["run_id"], 34896161280)
             self.assertEqual(image["provenance"]["origin"]["run_attempt"], 1)
             self.assertEqual(image["provenance"]["validation"], "offline_binding_only")
         self.catalog["images"]["public-ui"]["receipt"]["index_candidate_key"] = "candidate-index-public-browser"

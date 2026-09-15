@@ -17,6 +17,33 @@ If one node can load the full model, Mesh LLM prefers the single-node path.
 Splitting is used when the model physically needs a split or when an explicit
 split run asks for it.
 
+## Certified artifact admission
+
+Split startup fails closed unless the exact immutable model artifact appears in
+the bundled split certification roster. The check runs after package identity
+resolution and before coordinator election, topology planning, stage
+materialization, or native model loading. Automatic splitting because a model
+does not fit locally uses the same gate.
+
+The llama canary regenerates the roster after its complete staged correctness
+battery passes. Each roster is bound to the llama.cpp upstream pin, the Skippy
+ABI, and the ordered patch queue. Direct GGUF entries use the path-independent
+aggregate source digest; package-v2 entries additionally require the exact
+manifest digest.
+
+An operator can explicitly run an uncertified artifact for development:
+
+```bash
+mesh-llm serve \
+  --model /path/to/model.gguf \
+  --split \
+  --allow-uncertified-split
+```
+
+The unsafe flag is accepted only with `--split`. Logs, `GET /api/status` under
+`runtime.stages`, and `GET /api/runtime/stages` report `split_certification` as
+either `certified` or `uncertified_override`.
+
 ## Use a published layer package
 
 Layer packages are durable Hugging Face repos with a `model-package.json`
@@ -110,6 +137,7 @@ every node with the same pinned package and context allocation:
 mesh-llm serve \
   --model meshllm/inkling-UD-Q2_K_XL-layers@9b4b91a7ddd978dd7a01679bc977f6e53777f2c7 \
   --split \
+  --allow-uncertified-split \
   --ctx-size 131072 \
   --bind-port 7842
 
@@ -117,6 +145,7 @@ mesh-llm serve \
 mesh-llm serve \
   --model meshllm/inkling-UD-Q2_K_XL-layers@9b4b91a7ddd978dd7a01679bc977f6e53777f2c7 \
   --split \
+  --allow-uncertified-split \
   --ctx-size 131072 \
   --bind-port 7842 \
   --join <token>
