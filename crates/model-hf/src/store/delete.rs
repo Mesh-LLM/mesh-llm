@@ -41,7 +41,11 @@ async fn parse_delete_model_ref(
     if input.starts_with("http://") || input.starts_with("https://") {
         bail!("Delete does not support direct URLs. Use a model stem or Hugging Face ref.");
     }
+    // A leading `/` is rooted on Windows without being absolute there, so
+    // `is_absolute()` alone lets POSIX-style paths through on that platform.
+    // No model stem or Hugging Face ref starts with one on any platform.
     if Path::new(input).is_absolute()
+        || input.starts_with('/')
         || input.contains('\\')
         || input.starts_with("./")
         || input.starts_with("../")

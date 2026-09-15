@@ -183,7 +183,7 @@ async fn control_plane_api_cli_requires_explicit_endpoint_and_runs_local_orchest
     let temp = tempfile::tempdir().unwrap();
     let _home_guard = HomeEnvGuard::set(temp.path());
     let owner = OwnerKeypair::generate();
-    let keystore_path = default_keystore_path().unwrap();
+    let keystore_path = temp.path().join("owner-keystore.json");
     save_keystore(&keystore_path, &owner, None, true).unwrap();
 
     let control_server = spawn_owner_control_test_server().await;
@@ -231,7 +231,7 @@ async fn control_plane_api_apply_config_uses_full_mesh_config_contract() {
     let temp = tempfile::tempdir().unwrap();
     let _home_guard = HomeEnvGuard::set(temp.path());
     let owner = OwnerKeypair::generate();
-    let keystore_path = default_keystore_path().unwrap();
+    let keystore_path = temp.path().join("owner-keystore.json");
     save_keystore(&keystore_path, &owner, None, true).unwrap();
 
     let get_server = spawn_owner_control_test_server().await;
@@ -323,7 +323,7 @@ async fn control_plane_api_apply_config_reports_revision_conflict() {
     let temp = tempfile::tempdir().unwrap();
     let _home_guard = HomeEnvGuard::set(temp.path());
     let owner = OwnerKeypair::generate();
-    let keystore_path = default_keystore_path().unwrap();
+    let keystore_path = temp.path().join("owner-keystore.json");
     save_keystore(&keystore_path, &owner, None, true).unwrap();
 
     let OwnerControlApplyTestServer {
@@ -421,7 +421,7 @@ async fn control_plane_api_reports_remote_endpoint_unreachable() {
     let temp = tempfile::tempdir().unwrap();
     let _home_guard = HomeEnvGuard::set(temp.path());
     let owner = OwnerKeypair::generate();
-    let keystore_path = default_keystore_path().unwrap();
+    let keystore_path = temp.path().join("owner-keystore.json");
     save_keystore(&keystore_path, &owner, None, true).unwrap();
 
     let endpoint_token = unreachable_owner_control_endpoint_token().await;
