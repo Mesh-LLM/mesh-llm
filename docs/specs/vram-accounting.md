@@ -26,8 +26,9 @@ overstates schedulable capacity; the UI helpers fall back to allocatable, then
 rated, inventory only for legacy payloads that carry no advertised value, never
 as the primary source of a total. The itemized total / reserved / usable
 breakdown from #1656 rides alongside that value: `/api/status` reports it as
-`my_memory` and `peers[].memory`, and the node drawer itemizes it, while totals
-keep using the single advertised figure.
+`my_memory` and `peers[].memory`, the node drawer itemizes it for any node in
+the mesh, and `mesh-llm gpus` prints it for the local host, while totals keep
+using the single advertised figure.
 
 ![Dashboard showing Mesh Capacity 115.4 GB from the advertised capacity](assets/vram-dashboard-advertised.png)
 
@@ -38,10 +39,11 @@ keep using the single advertised figure.
 | `crates/mesh-llm-system/src/hardware/mod.rs` | platform tools, Skippy devices, system RAM fallback | internal source | Builds `HardwareSurvey.vram_bytes`, per-GPU `gpu_vram`, and `gpu_reserved`. |
 | `crates/mesh-llm-system/src/hardware/enrichers.rs` | CUDA/NVML | internal source | Enriches NVIDIA totals and true NVML reserved memory. |
 | `crates/mesh-llm-system/src/vram.rs` | system-reported bytes plus optional reserved bytes | shared semantic utility | Computes rated capacity, decimal reported GB, and allocatable bytes. |
-| `crates/mesh-llm-commands/src/gpus.rs` | `HardwareSurvey.gpus` | user-facing CLI and machine JSON | Human CLI displays rated VRAM; JSON keeps raw `vram_bytes` and adds rated/allocatable fields. |
+| `crates/mesh-llm-commands/src/gpus.rs` | `HardwareSurvey` and the configured safety margin | user-facing CLI and machine JSON | Per-GPU lines show rated VRAM; JSON keeps raw `vram_bytes` and adds rated/allocatable fields. Both also print the advertised breakdown this host would announce (`advertised_memory`), with the itemized values in exact decimal GB. |
 | `crates/mesh-llm/src/commands/models/formatters.rs` | `hardware::survey().vram_bytes` | mixed | Model search fit hints use reported capacity. Human summary still reports effective available capacity. |
 | `crates/mesh-llm-host-runtime/src/mesh/mod.rs` | `HardwareSurvey` startup snapshot | internal and protocol | Stores node `vram_bytes`, `gpu_vram`, and `gpu_reserved_bytes` for runtime, gossip, and status. |
-| `crates/mesh-llm-host-runtime/src/mesh/capacity.rs` | `HardwareSurvey` startup snapshot and the effective safety margin | internal and protocol | Derives the advertised placement budget and its itemized breakdown (total, driver reserve, platform reserve, configured reserve, usable, system RAM, RAM-backed share) for gossip. |
+| `crates/mesh-llm-system/src/capacity.rs` | `HardwareSurvey` and a safety margin in bytes | shared semantic utility | Derives the advertised placement budget and its itemized breakdown (total, driver reserve, platform reserve, configured reserve, usable, system RAM, RAM-backed share), plus the MiB rounding of the configured margin. Single source for the runtime, the console and the CLI. |
+| `crates/mesh-llm-host-runtime/src/mesh/capacity.rs` | `mesh_llm_system::capacity` and the effective safety margin | internal and protocol | Re-exports the breakdown under the names the mesh code uses and feeds it into the startup snapshot for gossip. |
 | `crates/mesh-llm-host-runtime/src/protocol/convert.rs` | peer announcements and protobuf GPU fields | protocol/internal | Preserves additive per-GPU totals and reserved bytes across mixed-version gossip. |
 | `crates/mesh-llm-host-runtime/src/api/status.rs` | node fields and GPU CSV fields | API for user-facing console | Emits raw `vram_bytes`, `reserved_bytes`, rated VRAM, and allocatable VRAM per GPU, plus the advertised breakdown as `my_memory` and `peers[].memory` (`MemoryPayload`). |
 | `crates/mesh-llm-host-runtime/src/runtime/local.rs` | startup model specs and pinned GPU targets | internal | Skippy fit targets use allocatable capacity for pinned GPUs. |

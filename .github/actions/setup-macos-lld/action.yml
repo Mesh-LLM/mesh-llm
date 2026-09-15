@@ -1,8 +1,8 @@
-name: Set up macOS lld linker
+name: Set up macOS build accelerators
 description: >
-  Install and verify Homebrew's lld on a macOS runner. Always probe-links a
-  throwaway crate before any caller trusts the result -- a bad install must
-  fail loudly, not build silently against the wrong (or no) linker.
+  Install the required sccache and Homebrew lld tools on a macOS runner,
+  then run the repository linker probe. Cargo links keep using the same
+  repository driver afterwards.
   Deliberately uncached: mesh-llm's Actions cache is already over the 10GB
   per-repo quota (see gh cache list), so a ~1.9GB lld/llvm/z3 Cellar entry
   here would evict the far more expensive macOS Rust target/ cache for a
@@ -12,27 +12,38 @@ description: >
 runs:
   using: composite
   steps:
-    - name: Install lld
-      shell: bash
-      run: brew install lld
-
-    - name: Verify lld links a real binary
+    - name: Install required build tools
       shell: bash
       run: |
         set -euo pipefail
+        brew install lld
+        if ! command -v sccache >/dev/null 2>&1; then
+          brew install sccache
+        fi
+
+    - name: Verify repository build accelerators
+      shell: bash
+      run: |
+        set -euo pipefail
+        command -v sccache >/dev/null 2>&1
+        sccache --version
+        if [[ "${SCCACHE_GHA_ENABLED:-}" == "true" &&
+              -z "${ACTIONS_CACHE_URL:-}" &&
+              -z "${ACTIONS_RESULTS_URL:-}" ]]; then
+          cache_dir="${SCCACHE_DIR:-$RUNNER_TEMP/mesh-llm-sccache}"
+          mkdir -p "$cache_dir"
+          echo "SCCACHE_DIR=$cache_dir" >> "$GITHUB_ENV"
+          echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
+          echo "SCCACHE_MULTILEVEL_CHAIN=disk" >> "$GITHUB_ENV"
+          echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1" >> "$GITHUB_ENV"
+          export SCCACHE_GHA_ENABLED=false
+          export SCCACHE_DIR="$cache_dir"
+          export SCCACHE_MULTILEVEL_CHAIN=disk
+          export SCCACHE_IGNORE_SERVER_IO_ERROR=1
+          sccache --stop-server >/dev/null 2>&1 || true
+          sccache --start-server
+        fi
         lld_bin="$(brew --prefix lld)/bin"
         test -x "$lld_bin/ld64.lld"
-        probe="$RUNNER_TEMP/mesh-setup-macos-lld-probe"
-        mkdir -p "$probe/src"
-        printf '[package]\nname = "mesh-setup-macos-lld-probe"\nversion = "0.0.0"\nedition = "2024"\n' > "$probe/Cargo.toml"
-        printf 'fn main() {}\n' > "$probe/src/main.rs"
-        PATH="$lld_bin:$PATH" CARGO_ENCODED_RUSTFLAGS='-Clink-arg=-fuse-ld=lld' \
-          cargo rustc --quiet --manifest-path "$probe/Cargo.toml"
         echo "$lld_bin" >> "$GITHUB_PATH"
-        # Job-global via GITHUB_ENV, and cargo prefers CARGO_ENCODED_RUSTFLAGS
-        # over RUSTFLAGS -- any later step in the same job that sets RUSTFLAGS
-        # is silently ignored, and any macOS job that cross-builds an android
-        # target loses .cargo/config.toml's -Wl,-z,max-page-size=16384 for
-        # that job. Verified safe today: no other RUSTFLAGS setter and no
-        # android targets on any of this action's macOS call sites.
-        echo 'CARGO_ENCODED_RUSTFLAGS=-Clink-arg=-fuse-ld=lld' >> "$GITHUB_ENV"
+        PATH="$lld_bin:$PATH" scripts/cargo-linker --mesh-probe >/dev/null

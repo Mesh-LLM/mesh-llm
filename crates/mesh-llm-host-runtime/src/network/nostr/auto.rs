@@ -408,13 +408,24 @@ mod smart_auto_tests {
 
     struct HomeEnvGuard {
         previous: Option<OsString>,
+        previous_test_home: Option<OsString>,
     }
 
     impl HomeEnvGuard {
         fn set(path: &std::path::Path) -> Self {
             let previous = std::env::var_os("HOME");
-            unsafe { std::env::set_var("HOME", path) };
-            Self { previous }
+            let previous_test_home = std::env::var_os("MESH_LLM_TEST_HOME");
+            unsafe {
+                std::env::set_var("HOME", path);
+                // SAFETY: this guard is used only by #[serial] tests and restores both values.
+                // `dirs::home_dir()` ignores HOME on Windows, so the identity paths would
+                // resolve to the real home without this.
+                std::env::set_var("MESH_LLM_TEST_HOME", path);
+            };
+            Self {
+                previous,
+                previous_test_home,
+            }
         }
     }
 
@@ -423,6 +434,10 @@ mod smart_auto_tests {
             match self.previous.take() {
                 Some(value) => unsafe { std::env::set_var("HOME", value) },
                 None => unsafe { std::env::remove_var("HOME") },
+            }
+            match self.previous_test_home.take() {
+                Some(value) => unsafe { std::env::set_var("MESH_LLM_TEST_HOME", value) },
+                None => unsafe { std::env::remove_var("MESH_LLM_TEST_HOME") },
             }
         }
     }

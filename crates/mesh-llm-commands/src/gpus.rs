@@ -2,10 +2,12 @@ use anyhow::{Context, Result};
 use mesh_llm_cli::{GpuCommand, benchmark::GpuBenchmarkBackend};
 use mesh_llm_system::{
     benchmark::{self, SavedBenchmark},
+    capacity::{self, AdvertisedMemory},
     hardware::{self, GpuFacts, HardwareSurvey},
     vram::VramCapacity,
 };
 use serde_json::{Value, json};
+use std::path::Path;
 
 pub mod tune;
 
@@ -14,13 +16,17 @@ pub(crate) mod tune_hardware;
 pub(crate) mod tune_resolver;
 pub(crate) mod tune_runner;
 
-pub fn dispatch_gpu_command(json_output: bool, command: Option<&GpuCommand>) -> Result<()> {
+pub fn dispatch_gpu_command(
+    json_output: bool,
+    command: Option<&GpuCommand>,
+    config_path: Option<&Path>,
+) -> Result<()> {
     match command {
         Some(command) => match command {
             GpuCommand::Detect { json } => run_gpu_benchmark(json_output || *json),
             GpuCommand::RunBenchmark { backend } => run_gpu_backend_benchmark(*backend),
         },
-        None => run_gpus(json_output),
+        None => run_gpus(json_output, config_path),
     }
 }
 
@@ -39,17 +45,49 @@ fn map_gpu_backend(backend: GpuBenchmarkBackend) -> &'static str {
     }
 }
 
-pub fn run_gpus(json_output: bool) -> Result<()> {
+pub fn run_gpus(json_output: bool, config_path: Option<&Path>) -> Result<()> {
     let mut hw = hardware::survey();
     attach_cached_bandwidth(&mut hw);
+    let margin = configured_safety_margin(config_path);
 
     if json_output {
-        return print_json(gpus_json(&hw));
+        return print_json(gpus_json(&hw, &margin));
     }
 
-    println!("{}", format_gpus(&hw));
+    println!("{}", format_gpus(&hw, &margin));
 
     Ok(())
+}
+
+/// The safety margin the local fit withholds, and where its value came from.
+///
+/// `gpus` runs on hosts that have never been configured, so an unreadable or
+/// absent config is not an error here: the built-in margin applies and the
+/// output says so, rather than the command failing over a file it only needs
+/// one number from.
+struct SafetyMargin {
+    bytes: u64,
+    configured: bool,
+}
+
+fn configured_safety_margin(config_path: Option<&Path>) -> SafetyMargin {
+    let safety_margin_gb = mesh_llm_config::load_config(config_path)
+        .ok()
+        .and_then(|config| config.defaults)
+        .and_then(|defaults| defaults.hardware)
+        .and_then(|hardware| hardware.safety_margin_gb);
+    SafetyMargin {
+        bytes: capacity::safety_margin_bytes(safety_margin_gb),
+        configured: safety_margin_gb.is_some(),
+    }
+}
+
+/// What this host would announce to a mesh, itemized.
+///
+/// The `--max-vram` ceiling belongs to `serve`, so it is not applied here; the
+/// figures are what an uncapped node would advertise from this survey.
+fn advertised_memory(hw: &HardwareSurvey, margin: &SafetyMargin) -> AdvertisedMemory {
+    capacity::advertised_memory(hw, None, margin.bytes)
 }
 
 fn run_gpu_benchmark(json_output: bool) -> Result<()> {
@@ -86,10 +124,25 @@ fn run_gpu_benchmark(json_output: bool) -> Result<()> {
     Ok(())
 }
 
-fn gpus_json(hw: &HardwareSurvey) -> Value {
+fn gpus_json(hw: &HardwareSurvey, margin: &SafetyMargin) -> Value {
     json!({
         "gpu_count": hw.gpus.len(),
         "gpus": hw.gpus.iter().map(gpu_json).collect::<Vec<_>>(),
+        "advertised_memory": advertised_memory_json(hw, margin),
+    })
+}
+
+fn advertised_memory_json(hw: &HardwareSurvey, margin: &SafetyMargin) -> Value {
+    let memory = advertised_memory(hw, margin);
+    json!({
+        "total_bytes": memory.total_bytes,
+        "reserved_bytes": memory.reserved_bytes,
+        "platform_reserve_bytes": memory.platform_reserve_bytes,
+        "configured_reserve_bytes": memory.configured_reserve_bytes,
+        "configured_reserve_source": if margin.configured { "config" } else { "built-in" },
+        "usable_bytes": memory.usable_bytes,
+        "system_ram_bytes": memory.system_ram_bytes,
+        "ram_offload_bytes": memory.ram_offload_bytes,
     })
 }
 
@@ -210,15 +263,69 @@ fn attach_cached_bandwidth(hw: &mut HardwareSurvey) {
     }
 }
 
-fn format_gpus(hw: &HardwareSurvey) -> String {
+fn format_gpus(hw: &HardwareSurvey, margin: &SafetyMargin) -> String {
     if hw.gpus.is_empty() {
         return "⚠️ No runtime-selectable GPUs reported by the embedded inference backend. This node will run CPU-only until the backend exposes a selectable device.".to_string();
     }
-    hw.gpus
-        .iter()
-        .map(format_gpu)
-        .collect::<Vec<_>>()
-        .join("\n\n")
+    let mut sections = hw.gpus.iter().map(format_gpu).collect::<Vec<_>>();
+    sections.push(format_advertised_memory(hw, margin));
+    sections.join("\n\n")
+}
+
+/// Explains the single number a node announces: what it starts from, what each
+/// party withholds, and what is left for the mesh to place work in.
+fn format_advertised_memory(hw: &HardwareSurvey, margin: &SafetyMargin) -> String {
+    let memory = advertised_memory(hw, margin);
+    let margin_source = if margin.configured {
+        "configured"
+    } else {
+        "built-in default"
+    };
+    let mut lines = vec![
+        "📡 Advertised to the mesh".to_string(),
+        format!(
+            "  Total device memory: {}",
+            format_bytes(memory.total_bytes)
+        ),
+        format!("  Driver reserved: {}", format_bytes(memory.reserved_bytes)),
+    ];
+    if memory.platform_reserve_bytes > 0 {
+        lines.push(format!(
+            "  Platform reserve: {}",
+            format_bytes(memory.platform_reserve_bytes)
+        ));
+    }
+    // A margin wider than the memory left cannot be withheld in full. Say so,
+    // rather than printing a reserve that looks like the configured value.
+    let clamped = if memory.configured_reserve_bytes < margin.bytes {
+        format!(
+            ", {} asked for but only this much was left",
+            format_bytes(margin.bytes)
+        )
+    } else {
+        String::new()
+    };
+    lines.push(format!(
+        "  Configured reserve: {} ({margin_source}{clamped})",
+        format_bytes(memory.configured_reserve_bytes)
+    ));
+    lines.push(format!(
+        "  Usable for mesh placement: {}",
+        format_bytes(memory.usable_bytes)
+    ));
+    if let Some(system_ram_bytes) = memory.system_ram_bytes {
+        lines.push(format!("  System RAM: {}", format_bytes(system_ram_bytes)));
+    }
+    lines.push(format!(
+        "  RAM-backed local budget: {} (local fit only, never advertised)",
+        format_bytes(memory.ram_offload_bytes)
+    ));
+    if memory.usable_bytes > 0 {
+        lines.push(
+            "  A `serve --max-vram` ceiling would lower the usable share further.".to_string(),
+        );
+    }
+    lines.join("\n")
 }
 
 fn format_gpu(gpu: &GpuFacts) -> String {
@@ -267,6 +374,13 @@ fn format_vram(bytes: u64) -> String {
     mesh_llm_system::vram::format_rated_capacity(bytes)
 }
 
+/// Exact decimal GB, for itemized values that are not capacity classes. The
+/// per-GPU `VRAM:` line keeps the rated class; a reserve of 0.5 GB has no
+/// class to round to and must be shown as it is.
+fn format_bytes(bytes: u64) -> String {
+    format!("{:.1} GB", mesh_llm_system::vram::decimal_gb(bytes))
+}
+
 fn format_bandwidth(gbps: f64) -> String {
     format!("{gbps:.1} GB/s")
 }
@@ -275,6 +389,13 @@ fn format_bandwidth(gbps: f64) -> String {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    fn built_in_margin() -> SafetyMargin {
+        SafetyMargin {
+            bytes: capacity::safety_margin_bytes(None),
+            configured: false,
+        }
+    }
 
     fn sample_gpu(index: usize) -> GpuFacts {
         GpuFacts {
@@ -294,6 +415,148 @@ mod tests {
             dxgi_luid: None,
             pnp_instance_id: None,
         }
+    }
+
+    #[test]
+    fn human_output_itemizes_what_the_node_would_advertise() {
+        // 12 GB device with a 0.5 GB driver reserve on a 32 GB host: the 2 GB
+        // built-in margin leaves 9.5 GB for the mesh to place work in.
+        let mut gpu = sample_gpu(0);
+        gpu.vram_bytes = 12_000_000_000;
+        gpu.reserved_bytes = Some(500_000_000);
+        let hw = HardwareSurvey {
+            vram_bytes: 30_000_000_000,
+            gpus: vec![gpu],
+            system_ram_bytes: Some(32_000_000_000),
+            ram_offload_bytes: 18_000_000_000,
+            ..HardwareSurvey::default()
+        };
+
+        let output = format_gpus(&hw, &built_in_margin());
+
+        assert!(output.contains("📡 Advertised to the mesh"));
+        assert!(output.contains("  Total device memory: 12.0 GB"));
+        assert!(output.contains("  Driver reserved: 0.5 GB"));
+        assert!(output.contains("  Configured reserve: 2.1 GB (built-in default)"));
+        assert!(output.contains("  Usable for mesh placement: 9.4 GB"));
+        assert!(output.contains("  System RAM: 32.0 GB"));
+        assert!(output.contains("  RAM-backed local budget: 18.0 GB"));
+        // A discrete GPU keeps nothing back by platform policy.
+        assert!(!output.contains("Platform reserve"));
+    }
+
+    #[test]
+    fn a_margin_wider_than_the_memory_left_is_reported_as_clamped() {
+        // An integrated GPU with 0.5 GB enumerated cannot withhold the 2 GB
+        // built-in margin: it keeps everything and advertises nothing.
+        let mut gpu = sample_gpu(0);
+        gpu.vram_bytes = 536_870_912;
+        gpu.reserved_bytes = None;
+        let hw = HardwareSurvey {
+            vram_bytes: 14_848_231_424,
+            gpus: vec![gpu],
+            system_ram_bytes: Some(16_438_382_592),
+            ram_offload_bytes: 14_311_360_512,
+            ..HardwareSurvey::default()
+        };
+
+        let output = format_gpus(&hw, &built_in_margin());
+
+        assert!(output.contains(
+            "  Configured reserve: 0.5 GB (built-in default, 2.1 GB asked for but only this much was left)"
+        ));
+        assert!(output.contains("  Usable for mesh placement: 0.0 GB"));
+        // Nothing is left to cap, so the `--max-vram` hint would be noise.
+        assert!(!output.contains("--max-vram"));
+    }
+
+    #[test]
+    fn human_output_names_the_source_of_the_configured_reserve() {
+        let hw = HardwareSurvey {
+            gpus: vec![sample_gpu(0)],
+            ..HardwareSurvey::default()
+        };
+        let configured = SafetyMargin {
+            bytes: capacity::safety_margin_bytes(Some(4.0)),
+            configured: true,
+        };
+
+        let output = format_gpus(&hw, &configured);
+
+        assert!(output.contains("  Configured reserve: 4.3 GB (configured)"));
+    }
+
+    #[test]
+    fn human_output_shows_the_platform_reserve_only_when_one_is_withheld() {
+        // A Tegra-shaped survey: the collector budgets 90% of physical RAM, so
+        // the tenth the platform keeps is a reserve the owner never set.
+        let mut gpu = sample_gpu(0);
+        gpu.vram_bytes = 64_000_000_000;
+        gpu.reserved_bytes = None;
+        gpu.unified_memory = true;
+        let hw = HardwareSurvey {
+            vram_bytes: 57_600_000_000,
+            is_soc: true,
+            gpus: vec![gpu],
+            system_ram_bytes: Some(64_000_000_000),
+            ..HardwareSurvey::default()
+        };
+
+        let output = format_gpus(&hw, &built_in_margin());
+
+        assert!(output.contains("  Platform reserve: 6.4 GB"));
+    }
+
+    #[test]
+    fn machine_output_carries_the_breakdown_next_to_the_gpu_inventory() {
+        let mut gpu = sample_gpu(0);
+        gpu.vram_bytes = 12_000_000_000;
+        gpu.reserved_bytes = Some(500_000_000);
+        let hw = HardwareSurvey {
+            vram_bytes: 30_000_000_000,
+            gpus: vec![gpu],
+            system_ram_bytes: Some(32_000_000_000),
+            ram_offload_bytes: 18_000_000_000,
+            ..HardwareSurvey::default()
+        };
+
+        let memory = &gpus_json(&hw, &built_in_margin())["advertised_memory"];
+
+        assert_eq!(memory["total_bytes"], json!(12_000_000_000u64));
+        assert_eq!(memory["reserved_bytes"], json!(500_000_000u64));
+        assert_eq!(memory["platform_reserve_bytes"], json!(0));
+        assert_eq!(memory["system_ram_bytes"], json!(32_000_000_000u64));
+        assert_eq!(memory["ram_offload_bytes"], json!(18_000_000_000u64));
+        assert_eq!(memory["configured_reserve_source"], json!("built-in"));
+        // The itemized shares account for the whole total, as the announcement
+        // invariant requires.
+        let sum = memory["reserved_bytes"].as_u64().unwrap()
+            + memory["platform_reserve_bytes"].as_u64().unwrap()
+            + memory["configured_reserve_bytes"].as_u64().unwrap()
+            + memory["usable_bytes"].as_u64().unwrap();
+        assert_eq!(sum, memory["total_bytes"].as_u64().unwrap());
+    }
+
+    #[test]
+    fn machine_output_reports_an_absent_system_ram_reading_as_null() {
+        let hw = HardwareSurvey {
+            gpus: vec![sample_gpu(0)],
+            ..HardwareSurvey::default()
+        };
+
+        let memory = &gpus_json(&hw, &built_in_margin())["advertised_memory"];
+
+        assert_eq!(memory["system_ram_bytes"], Value::Null);
+    }
+
+    #[test]
+    fn an_unreadable_config_falls_back_to_the_built_in_margin() {
+        let margin = configured_safety_margin(Some(Path::new(
+            "/nonexistent/mesh-llm/config-that-is-not-there.toml",
+        )));
+
+        assert_eq!(margin.bytes, capacity::safety_margin_bytes(None));
+        assert!(!margin.configured);
     }
 
     #[test]
@@ -319,7 +582,7 @@ mod tests {
             ..HardwareSurvey::default()
         };
 
-        let value = gpus_json(&hw);
+        let value = gpus_json(&hw, &built_in_margin());
 
         assert_eq!(value["gpu_count"], json!(1));
         assert_eq!(value["gpus"][0]["name"], json!("GPU 0"));
@@ -337,13 +600,26 @@ mod tests {
 
     #[test]
     fn gpus_json_handles_no_gpus() {
-        let value = gpus_json(&HardwareSurvey::default());
+        let value = gpus_json(&HardwareSurvey::default(), &built_in_margin());
 
+        // A host with no enumerated accelerator memory advertises nothing: the
+        // breakdown is present but empty, matching the zero capacity such a
+        // node announces rather than offering its system RAM as VRAM.
         assert_eq!(
             value,
             json!({
                 "gpu_count": 0,
                 "gpus": [],
+                "advertised_memory": {
+                    "total_bytes": 0,
+                    "reserved_bytes": 0,
+                    "platform_reserve_bytes": 0,
+                    "configured_reserve_bytes": 0,
+                    "configured_reserve_source": "built-in",
+                    "usable_bytes": 0,
+                    "system_ram_bytes": Value::Null,
+                    "ram_offload_bytes": 0,
+                },
             })
         );
     }
@@ -362,8 +638,11 @@ mod tests {
             ..HardwareSurvey::default()
         };
 
+        let output = format_gpus(&hw, &built_in_margin());
+        let gpu_section = output.split("\n\n").next().expect("a GPU section");
+
         assert_eq!(
-            format_gpus(&hw),
+            gpu_section,
             "🖥️ GPU 0\n  Name: AMD Instinct MI300X\n  Stable ID: pci:0000:65:00.0\n  Backend device: ROCm0\n  VRAM: 24 GB\n  Bandwidth: unavailable\n  Unified memory: no\n  PCI BDF: 0000:65:00.0"
         );
     }
@@ -381,7 +660,7 @@ mod tests {
             ..HardwareSurvey::default()
         };
 
-        let output = format_gpus(&hw);
+        let output = format_gpus(&hw, &built_in_margin());
 
         assert_eq!(output.matches("🖥️ GPU ").count(), 2);
         assert!(output.contains("Backend device: ROCm0"));

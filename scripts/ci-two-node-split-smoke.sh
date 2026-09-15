@@ -60,6 +60,17 @@ mkdir -p "$WORK_DIR"
 # must fit platform SUN_LEN limits, especially on macOS where TMPDIR is long.
 PROCESS_ROOT="${MESH_TWO_NODE_SPLIT_PROCESS_ROOT:-$(mktemp -d "/tmp/m2split.XXXXXX")}"
 CLIENT_ROUTING="${MESH_TWO_NODE_SPLIT_CLIENT_ROUTING:-0}"
+# PR smoke callers execute from the protected default-branch workflow, so a
+# branch-local caller input cannot authorize a newly added unsafe flag until
+# that workflow change lands. Infer the narrow test-only default from the
+# inputs instead: this harness creates a fresh, unlisted package identity only
+# when it receives a local GGUF file. Existing package-v2 inputs remain
+# fail-closed unless their caller explicitly opts in.
+AUTO_ALLOW_UNCERTIFIED_SPLIT=0
+if [[ -f "$MODEL" ]] || [[ -n "$RECURRENT_MODEL" && -f "$RECURRENT_MODEL" ]]; then
+    AUTO_ALLOW_UNCERTIFIED_SPLIT=1
+fi
+ALLOW_UNCERTIFIED_SPLIT="${MESH_TWO_NODE_SPLIT_ALLOW_UNCERTIFIED:-$AUTO_ALLOW_UNCERTIFIED_SPLIT}"
 CLIENT_API_PORT="${MESH_TWO_NODE_SPLIT_CLIENT_API_PORT:-9369}"
 CLIENT_CONSOLE_PORT="${MESH_TWO_NODE_SPLIT_CLIENT_CONSOLE_PORT:-3163}"
 PRIMARY_MODEL_LABEL="${MESH_TWO_NODE_SPLIT_MODEL_LABEL:-}"
@@ -97,6 +108,12 @@ echo "  ctx size:       ${CTX_SIZE:-model default}"
 echo "  max vram:       ${MAX_VRAM}GB"
 echo "  device:         $DEVICE"
 echo "  client routing: $CLIENT_ROUTING"
+echo "  uncertified split override: $ALLOW_UNCERTIFIED_SPLIT"
+
+if [[ "$ALLOW_UNCERTIFIED_SPLIT" != "0" && "$ALLOW_UNCERTIFIED_SPLIT" != "1" ]]; then
+    echo "MESH_TWO_NODE_SPLIT_ALLOW_UNCERTIFIED must be 0 or 1" >&2
+    exit 2
+fi
 
 if [[ ! -x "$MESH_LLM" ]]; then
     echo "Missing executable mesh-llm binary: $MESH_LLM" >&2
@@ -648,6 +665,9 @@ start_node() {
     )
     if [[ -n "$join_token" ]]; then
         args+=(--join "$join_token")
+    fi
+    if [[ "$ALLOW_UNCERTIFIED_SPLIT" == "1" ]]; then
+        args+=(--allow-uncertified-split)
     fi
     if [[ -n "$CTX_SIZE" ]]; then
         args+=(--ctx-size "$CTX_SIZE")
