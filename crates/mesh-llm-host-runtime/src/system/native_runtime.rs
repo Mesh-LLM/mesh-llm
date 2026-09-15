@@ -7,9 +7,10 @@ mod dynamic {
     };
     use anyhow::{Context, Result, bail};
     use mesh_llm_native_runtime::{
-        HostRuntimeProfile, InstalledNativeRuntime, NativeRuntimeArtifact, NativeRuntimeCache,
-        NativeRuntimeLoadPlan, NativeRuntimeManifest, NativeRuntimeReleaseManifest,
-        RuntimeSelection, has_startup_compatibility_metadata,
+        CandidateRejection, HostRuntimeProfile, InstalledNativeRuntime, NativeRuntimeArtifact,
+        NativeRuntimeCache, NativeRuntimeLoadPlan, NativeRuntimeManifest,
+        NativeRuntimeReleaseManifest, RuntimeSelection, evaluate_native_runtime_artifact,
+        has_startup_compatibility_metadata,
     };
     use skippy_runtime::RuntimeEvent;
     use std::{
@@ -335,7 +336,8 @@ mod dynamic {
             crate::system::native_runtime_install::discover_native_runtime_bundle_dirs(
                 &options.bundle_dirs,
             )?;
-        let discovered_bundle_dirs = filter_startup_bundle_dirs(discovered_bundle_dirs, &profile);
+        let discovered_bundle_dirs =
+            filter_startup_bundle_dirs(discovered_bundle_dirs, &profile, &startup_selection);
         let discovered_bundle_dirs_empty = discovered_bundle_dirs.is_empty();
         options.bundle_dirs = discovered_bundle_dirs;
         if discovered_bundle_dirs_empty
@@ -541,6 +543,7 @@ mod dynamic {
     fn filter_startup_bundle_dirs(
         bundle_dirs: Vec<PathBuf>,
         profile: &HostRuntimeProfile,
+        startup_selection: &NativeRuntimeStartupSelection,
     ) -> Vec<PathBuf> {
         bundle_dirs
             .into_iter()
@@ -552,9 +555,49 @@ mod dynamic {
                     // visible to the caller.
                     return true;
                 };
-                startup_artifact_is_eligible(&manifest.runtime, path, &manifest.runtime.id, profile)
+                startup_bundle_is_eligible(
+                    &manifest.runtime,
+                    path,
+                    &manifest.runtime.id,
+                    profile,
+                    startup_selection,
+                )
             })
             .collect()
+    }
+
+    fn startup_bundle_is_eligible(
+        artifact: &NativeRuntimeArtifact,
+        path: &Path,
+        native_runtime_id: &str,
+        profile: &HostRuntimeProfile,
+        startup_selection: &NativeRuntimeStartupSelection,
+    ) -> bool {
+        if !startup_artifact_is_eligible(artifact, path, native_runtime_id, profile) {
+            return false;
+        }
+        let evaluation = evaluate_native_runtime_artifact(
+            artifact,
+            profile,
+            &startup_selection.mesh_version,
+            startup_selection.skippy_abi.as_deref(),
+            &startup_selection.runtime_selection,
+        );
+        if evaluation
+            .rejection_reasons
+            .iter()
+            .any(|reason| matches!(reason, CandidateRejection::GlibcVersionTooOld { .. }))
+        {
+            tracing::warn!(
+                path = %path.display(),
+                native_runtime_id,
+                required_glibc = ?artifact.platform.min_glibc,
+                host_glibc = ?profile.glibc_version,
+                "Skipping locally installed Linux native runtime bundle requiring newer glibc"
+            );
+            return false;
+        }
+        true
     }
 
     fn startup_artifact_is_eligible(
@@ -1017,6 +1060,69 @@ mod dynamic {
             .expect("expected compatible cached fallback");
 
             assert_eq!(plan.root, cached_runtime_dir);
+        }
+
+        #[tokio::test]
+        async fn startup_bundle_with_newer_glibc_does_not_block_compatible_cache() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+            let runtime_id = "meshllm-native-runtime-test-cpu";
+            let release_version = "0.68.0";
+            let cached_runtime_dir = cache.runtime_dir(release_version, runtime_id);
+            write_runtime_for_platform(
+                &cached_runtime_dir,
+                Some(release_version),
+                runtime_id,
+                "linux",
+                "x86_64",
+                Some("2.35"),
+            );
+            let product_root = temp.path().join("mesh-bundle");
+            let bundled_runtime_dir = product_root.join("native-runtimes").join(runtime_id);
+            write_runtime_for_platform(
+                &bundled_runtime_dir,
+                Some(release_version),
+                runtime_id,
+                "linux",
+                "x86_64",
+                Some("2.38"),
+            );
+            let install_calls = Arc::new(Mutex::new(0_usize));
+            let options_product_root = product_root.clone();
+            let options_cache_root = cache.root().to_path_buf();
+            let install_calls_for_executor = Arc::clone(&install_calls);
+
+            let plan = resolve_startup_native_runtime_plan_with(
+                || Ok(cache.clone()),
+                || linux_host_profile(Some("2.35")),
+                move || NativeRuntimeInstallOptions {
+                    mesh_version: release_version.to_string(),
+                    skippy_abi_version: Some("0.1.25".to_string()),
+                    bundle_dirs: vec![options_product_root.clone()],
+                    cache_dir: Some(options_cache_root.clone()),
+                    allow_download: false,
+                    ..Default::default()
+                },
+                move |_| {
+                    let install_calls = Arc::clone(&install_calls_for_executor);
+                    async move {
+                        *install_calls.lock().unwrap() += 1;
+                        anyhow::bail!("an incompatible bundle must not block the cache hit")
+                    }
+                },
+                NativeRuntimeStartupSelection::explicit(
+                    release_version.to_string(),
+                    Some("0.1.25".to_string()),
+                    RuntimeSelection::Recommended,
+                ),
+            )
+            .await
+            .unwrap()
+            .expect("expected compatible cached runtime plan");
+
+            assert_eq!(plan.source, NativeRuntimePlanSource::CacheHit);
+            assert_eq!(plan.root, cached_runtime_dir);
+            assert_eq!(*install_calls.lock().unwrap(), 0);
         }
 
         #[tokio::test]
