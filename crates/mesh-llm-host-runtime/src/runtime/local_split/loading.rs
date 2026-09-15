@@ -482,6 +482,7 @@ pub(super) async fn stage0_runtime_options(
         verified_stage0_load.as_ref().unwrap_or(&stage0_load),
         resolved_stage0_package.as_ref(),
     )?;
+    apply_admitted_activation_frontier(&mut runtime_options.config, &stage0_load)?;
     apply_split_generation_pinned_device(
         &mut runtime_options.config,
         spec.pinned_gpu,
@@ -496,6 +497,18 @@ pub(super) async fn stage0_runtime_options(
         endpoint: downstream_endpoint.to_string(),
     });
     Ok(runtime_options)
+}
+
+pub(super) fn apply_admitted_activation_frontier(
+    config: &mut skippy_protocol::StageConfig,
+    load: &skippy::StageLoadRequest,
+) -> Result<()> {
+    let frontier_profile = skippy::admitted_activation_frontier(load)?;
+    config.activation_import_identities = frontier_profile.activation_imports.clone();
+    config.activation_import_bindings = frontier_profile.activation_import_bindings.clone();
+    config.activation_export_identities = frontier_profile.activation_exports.clone();
+    config.activation_export_bindings = frontier_profile.activation_export_bindings.clone();
+    Ok(())
 }
 
 pub(super) async fn load_downstream_split_runtime_stages(

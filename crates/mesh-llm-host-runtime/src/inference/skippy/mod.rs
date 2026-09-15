@@ -88,7 +88,6 @@ pub(crate) use resolver::{
 };
 pub(crate) use skippy_server::OpenAiGuardrailsStatus as SkippyOpenAiGuardrailsStatus;
 pub(crate) use split_certification::{require_split_certification, split_certification_label};
-pub(crate) use stage::admitted_resident_tensor_names;
 #[cfg(test)]
 pub(crate) use stage::test_stage_admission;
 pub(crate) use stage::{
@@ -98,6 +97,7 @@ pub(crate) use stage::{
     StageReadyResponse, StageRuntimeState, StageStatusFilter, StageStatusSnapshot,
     StageStopRequest, StageTopologyStageDescriptor, spawn_stage_control_loop, stage_load_timeout,
 };
+pub(crate) use stage::{admitted_activation_frontier, admitted_resident_tensor_names};
 #[cfg(test)]
 pub(crate) use topology::{StageTopologyParticipant, plan_package_identity_topology};
 

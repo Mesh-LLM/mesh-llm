@@ -656,20 +656,7 @@ fn stage_config(
         );
     }
     let resident_tensor_names = admitted_resident_tensor_names(load, package)?;
-    let frontier_profile = load
-        .admission
-        .profiles
-        .first()
-        .context("stage admission descriptor has no execution profiles")?;
-    anyhow::ensure!(
-        load.admission.profiles.iter().all(|profile| {
-            profile.activation_imports == frontier_profile.activation_imports
-                && profile.activation_exports == frontier_profile.activation_exports
-                && profile.activation_import_bindings == frontier_profile.activation_import_bindings
-                && profile.activation_export_bindings == frontier_profile.activation_export_bindings
-        }),
-        "stage admission execution profiles disagree on activation frontier identities"
-    );
+    let frontier_profile = admitted_activation_frontier(load)?;
     let mut config = StageConfig {
         run_id: load.run_id.clone(),
         topology_id: load.topology_id.clone(),
@@ -764,6 +751,26 @@ fn stage_config(
         },
     );
     Ok(config)
+}
+
+pub(crate) fn admitted_activation_frontier(
+    load: &StageLoadRequest,
+) -> Result<&skippy_protocol::StageAdmissionProfile> {
+    let frontier = load
+        .admission
+        .profiles
+        .first()
+        .context("stage admission descriptor has no execution profiles")?;
+    anyhow::ensure!(
+        load.admission.profiles.iter().all(|profile| {
+            profile.activation_imports == frontier.activation_imports
+                && profile.activation_exports == frontier.activation_exports
+                && profile.activation_import_bindings == frontier.activation_import_bindings
+                && profile.activation_export_bindings == frontier.activation_export_bindings
+        }),
+        "stage admission execution profiles disagree on activation frontier identities"
+    );
+    Ok(frontier)
 }
 
 pub(crate) fn admitted_resident_tensor_names(
