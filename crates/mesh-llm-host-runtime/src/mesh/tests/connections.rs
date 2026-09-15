@@ -629,6 +629,11 @@ async fn set_serving_models_preserves_existing_known_descriptor_capabilities_whe
         .find(|descriptor| descriptor.identity.model_name == vision_model)
         .expect("existing vision descriptor should remain served");
     assert!(vision.identity.is_primary);
+    assert_eq!(vision.identity.source_kind, ModelSourceKind::LocalGguf);
+    assert_eq!(
+        vision.identity.local_file_name.as_deref(),
+        Some("Qwen3VL-2B-Instruct-Q4_K_M.gguf")
+    );
     assert!(vision.capabilities_known);
     assert_eq!(
         vision.capabilities.vision,

@@ -11,8 +11,24 @@ pub(super) fn launch_source(source: &Path) -> String {
             .to_string_lossy()
             .into_owned()
     } else {
-        source.to_string_lossy().into_owned()
+        let source = source.to_string_lossy();
+        sanitized_model_url(&source).unwrap_or_else(|| source.into_owned())
     }
+}
+
+/// Remove credentials and request-scoped URL data before source metadata is
+/// gossiped to peers. The stable URL path still lets the identity parser
+/// recover Hugging Face coordinates or a direct-download filename.
+fn sanitized_model_url(source: &str) -> Option<String> {
+    let mut url = url::Url::parse(source).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    url.set_username("").ok()?;
+    url.set_password(None).ok()?;
+    url.set_query(None);
+    url.set_fragment(None);
+    Some(url.into())
 }
 
 pub(super) async fn advertise_startup_sources(node: &mesh::Node, models: &[StartupModelPlan]) {
@@ -43,6 +59,16 @@ mod tests {
         assert_eq!(
             launch_source(Path::new("unsloth/Gemma-GGUF@main:Q4_K_M")),
             "unsloth/Gemma-GGUF@main:Q4_K_M"
+        );
+    }
+
+    #[test]
+    fn remote_sources_do_not_publish_url_credentials_or_query_tokens() {
+        assert_eq!(
+            launch_source(Path::new(
+                "https://user:password@example.com/private/model.gguf?token=secret#download"
+            )),
+            "https://example.com/private/model.gguf"
         );
     }
 }

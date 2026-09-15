@@ -1468,8 +1468,9 @@ impl Node {
                     crate::models::served_model_metadata_for_model(&descriptor.identity.model_name);
             }
             if let Some(existing) = existing_by_name.get(&descriptor.identity.model_name) {
-                if descriptor.identity.model_name.starts_with("local-gguf/")
-                    && existing.identity.source_kind != ModelSourceKind::Unknown
+                if existing.identity.source_kind == ModelSourceKind::LocalGguf
+                    || (descriptor.identity.model_name.starts_with("local-gguf/")
+                        && existing.identity.source_kind != ModelSourceKind::Unknown)
                 {
                     descriptor.identity = existing.identity.clone();
                 }
