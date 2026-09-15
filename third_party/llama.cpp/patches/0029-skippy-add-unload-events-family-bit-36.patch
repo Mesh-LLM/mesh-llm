@@ -1,7 +1,7 @@
-From a78359bf72832648e7c270c99cf60df0fc5452da Mon Sep 17 00:00:00 2001
+From 143d40b63d25da421f132f5f69df3578f003f8eb Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 5 Sep 2026 02:03:40 -0400
-Subject: [PATCH] skippy: add unload-events family (bit 36)
+Subject: [PATCH 029/113] skippy: add unload-events family (bit 36)
 
 Adds SKIPPY_RUNTIME_EVENT_CATEGORY_UNLOAD and
 SKIPPY_FEATURE_UNLOAD_EVENTS (bit 36): unload started/completed/failed/
@@ -24,7 +24,7 @@ Renumbered from 0048 (bit 34) to 0061 (bit 36), then again to 0062
  6 files changed, 72 insertions(+), 2 deletions(-)
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index f3bd0ac2f..b4681b1d7 100644
+index 9fb6bac0e..22a116414 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -103,6 +103,7 @@ enum skippy_feature {
@@ -75,10 +75,10 @@ index 745b40513..a99d7307a 100644
  }
  #endif
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index d2501f9d7..1284d117d 100644
+index 0aba5a516..3c6462466 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -120,7 +120,9 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -138,7 +138,9 @@ if (LLAMA_STAGE_BUILD_TESTS)
              model_load_events_v2_dispatch
              kv_events_dispatch
              device_events_dispatch
@@ -182,5 +182,5 @@ index 732e6ee67..dd051d67d 100644
      return 2;
  }
 -- 
-2.50.1 (Apple Git-155)
+2.55.0
 

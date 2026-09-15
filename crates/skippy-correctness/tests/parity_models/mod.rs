@@ -180,7 +180,10 @@ pub(crate) fn graph_boundary_contract_matches_stage_roles(spec: FamilySpec) -> R
             skippy_runtime::ACTIVATION_FLAG_GEMMA3N_ALTUP,
             skippy_runtime::ACTIVATION_SIDEBAND_TOKEN_IDS,
         ),
-        "qwen4exp" => (0, skippy_runtime::ACTIVATION_SIDEBAND_TOKEN_IDS),
+        "gemma4" | "granite-switch" | "qwen4exp" => {
+            (0, skippy_runtime::ACTIVATION_SIDEBAND_TOKEN_IDS)
+        }
+        "kimi-k3" => (skippy_runtime::ACTIVATION_FLAG_KIMI_K3_RESIDUAL, 0),
         _ => (0, 0),
     };
     for (edge, boundary) in [

@@ -1,7 +1,7 @@
-From 86261a1883b79a56118bd691ed183763dc8bdcfe Mon Sep 17 00:00:00 2001
+From 604bed28f0b892dc275d368035d2d31942787db6 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 7 Sep 2026 06:23:03 +1000
-Subject: [PATCH 04/23] skippy: implement staged execution and state runtime
+Subject: [PATCH 004/113] skippy: implement staged execution and state runtime
 
 ---
  src/llama-graph.cpp                 |   44 +-
@@ -39,7 +39,7 @@ Subject: [PATCH 04/23] skippy: implement staged execution and state runtime
  create mode 100644 src/skippy/tokenization.cpp
 
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 5c3c1a703..cf82e3925 100644
+index 4d51c3db3..0c276dd70 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -46,10 +46,10 @@ bool skippy_graph_build_inputs::topology_equal(const skippy_graph_build_inputs &
@@ -81,7 +81,7 @@ index 5c3c1a703..cf82e3925 100644
      return values &&
             values->ne[0] == n_embd &&
             values->ne[1] == n_hc &&
-@@ -1776,6 +1776,32 @@ void llm_graph_context::request_inputs(llm_graph_input_rs * input) const {
+@@ -1780,6 +1780,32 @@ void llm_graph_context::request_inputs(llm_graph_input_rs * input) const {
      request_input(input->s_copy, "recurrent.copy_indices");
  }
  
@@ -114,7 +114,7 @@ index 5c3c1a703..cf82e3925 100644
  
  
  ggml_tensor * llm_graph_context::build_cvec(
-@@ -3792,6 +3818,8 @@ llm_graph_input_dsv4 * llm_graph_context::build_inp_dsv4() const {
+@@ -3796,6 +3822,8 @@ llm_graph_input_dsv4 * llm_graph_context::build_inp_dsv4() const {
      inp->inp_hca.k_rot = mctx_cur->get_hca()->build_input_k_rot(ctx0);
      inp->inp_lid.k_rot = mctx_cur->get_lid()->build_input_k_rot(ctx0);
  

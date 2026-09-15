@@ -405,8 +405,11 @@ else
       --chain-stage2-bind-addr "127.0.0.1:$((PORT_BASE + 12))"
       --single-report-out "$REPORT_DIR/single-step.json"
       --chain-report-out "$REPORT_DIR/chain.json"
-      "${native_mtp_args[@]}"
       )
+      # macOS Bash 3.2 treats an empty array expansion as unbound under set -u.
+      if (( ${#native_mtp_args[@]} != 0 )); then
+        core_args+=("${native_mtp_args[@]}")
+      fi
       if (( ALLOW_MISMATCH != 0 )); then
         core_args+=(--allow-mismatch)
       fi
@@ -524,14 +527,22 @@ jq -n \
       | split(",")
       | map(capture("^(?<start>[0-9]+)(\\.\\.|-)(?<end>[0-9]+)$") | {start:(.start|tonumber), end:(.end|tonumber)})
     end;
-  def family_split_constraints($family_id):
+  def family_split_constraints($family_id; $layer_count):
     if $family_id == "gemma4_e4b" then
       [{
         kind:"shared_kv_producer_consumer",
-        range:{start:0,end:0},
-        forbidden_boundaries:[12,14,24,28],
-        reject_boundary_inside:false,
-        reason:"known-bad Gemma4 E4B shared-KV producer/consumer boundary; keep this cut rejected unless KV replay or KV transfer is added"
+        range:{start:($layer_count / 2 | floor),end:$layer_count},
+        forbidden_boundaries:[12,14],
+        reject_boundary_inside:true,
+        reason:"Gemma4 E4B has reviewed unsafe cuts and upper layers reuse KV produced at the start of the upper stack; keep the final slice start on an accepted boundary at or before that producer pair unless KV replay or transfer is added"
+      }]
+    elif $family_id == "gemma3n" then
+      [{
+        kind:"shared_kv_producer_consumer",
+        range:{start:(([20,$layer_count] | min) - 2),end:$layer_count},
+        forbidden_boundaries:[],
+        reject_boundary_inside:true,
+        reason:"Gemma3n layers 20+ reuse KV produced by layers 18/19; keep the final slice start at or before layer 18 unless KV replay or transfer is added"
       }]
     else [] end;
   def family_sidebands($family_id; $layer_count):
@@ -573,7 +584,7 @@ jq -n \
           activation_width:$activation_width,
           exact_state_mobility:$state_mobility,
           recurrent_ranges:$ranges,
-          split_constraints:family_split_constraints($family_id),
+          split_constraints:family_split_constraints($family_id; $layer_count),
           sidebands:family_sidebands($family_id; $layer_count)
         }
         end

@@ -216,13 +216,22 @@ pub(in crate::frontend) fn draft_runtime_config(
 }
 
 pub(in crate::frontend) fn model_layer_count(path: &Path) -> Result<u32> {
-    let info =
-        ModelInfo::open(path).with_context(|| format!("open model info {}", path.display()))?;
-    let layer_count = info
-        .tensors()?
-        .into_iter()
-        .filter_map(|tensor| tensor.layer_index)
-        .max()
+    let mut max_layer: Option<u32> = None;
+    for shard in skippy_runtime::gguf_shard_paths(path)? {
+        let info = ModelInfo::open(&shard)
+            .with_context(|| format!("open model info {}", shard.display()))?;
+        let shard_max = info
+            .tensors()
+            .with_context(|| format!("read model tensors {}", shard.display()))?
+            .into_iter()
+            .filter_map(|tensor| tensor.layer_index)
+            .max();
+        max_layer = match (max_layer, shard_max) {
+            (Some(current), Some(shard)) => Some(current.max(shard)),
+            (current, shard) => current.or(shard),
+        };
+    }
+    let layer_count = max_layer
         .map(|index| index + 1)
         .ok_or_else(|| anyhow!("could not infer layer count for {}", path.display()))?;
     Ok(layer_count)

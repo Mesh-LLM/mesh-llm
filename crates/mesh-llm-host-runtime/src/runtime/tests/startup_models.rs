@@ -333,6 +333,7 @@ fn remote_catalog_layer_entry(
 
 fn startup_model_plan(model_ref: &str) -> StartupModelPlan {
     StartupModelPlan {
+        model_source: String::new(),
         declared_ref: model_ref.to_string(),
         config_model_id: None,
         resolved_path: PathBuf::from("/tmp/model.gguf"),
@@ -431,6 +432,8 @@ async fn bare_direct_gguf_startup_identity_is_full_content_hash_across_paths() {
         .as_ref()
         .expect("second direct GGUF package must be indexed at resolution");
 
+    assert_eq!(first.model_source, "first-name.gguf");
+    assert_eq!(second.model_source, "other-name.gguf");
     assert_eq!(first.declared_ref, second.declared_ref);
     assert_eq!(
         first.declared_ref,
@@ -1444,6 +1447,7 @@ fn pinned_gpu_startup_preflight_uses_config_gpu_id() {
     };
     let specs = build_startup_model_specs(&options, &config).unwrap();
     let mut plans = vec![StartupModelPlan {
+        model_source: String::new(),
         declared_ref: "Qwen3-8B-Q4_K_M".into(),
         resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
         preindexed_split_package: None,
@@ -1522,6 +1526,7 @@ fn pinned_gpu_startup_preflight_rejects_synthesized_backend_missing_from_probe()
         profile: String::new(),
     }];
     let mut plans = vec![StartupModelPlan {
+        model_source: String::new(),
         declared_ref: "Qwen3-8B-Q4_K_M".into(),
         config_model_id: None,
         resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
@@ -1589,6 +1594,7 @@ fn pinned_gpu_startup_preflight_canonicalizes_rocm_hip_alias_from_probe() {
         profile: String::new(),
     }];
     let mut plans = vec![StartupModelPlan {
+        model_source: String::new(),
         declared_ref: "Qwen3-8B-Q4_K_M".into(),
         config_model_id: None,
         resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
@@ -1705,6 +1711,7 @@ fn pinned_gpu_startup_preflight_unmatched_cli_models_bypass_config_gpu_id() {
     };
     let specs = build_startup_model_specs(&options, &config).unwrap();
     let mut plans = vec![StartupModelPlan {
+        model_source: String::new(),
         declared_ref: "Qwen3-8B-Q4_K_M".into(),
         resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
         preindexed_split_package: None,
@@ -1760,6 +1767,7 @@ fn pinned_gpu_startup_preflight_missing_gpu_id_fails_closed() {
         profile: String::new(),
     }];
     let mut plans = vec![StartupModelPlan {
+        model_source: String::new(),
         declared_ref: "Qwen3-8B-Q4_K_M".into(),
         config_model_id: None,
         resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
@@ -1815,6 +1823,7 @@ fn pinned_gpu_startup_preflight_stores_resolved_pinned_target_in_plan() {
         profile: String::new(),
     }];
     let mut plans = vec![StartupModelPlan {
+        model_source: String::new(),
         declared_ref: "Qwen3-8B-Q4_K_M".into(),
         config_model_id: None,
         resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
@@ -1873,6 +1882,7 @@ fn pinned_gpu_startup_preflight_rejects_resolved_gpu_without_backend_device() {
         profile: String::new(),
     }];
     let mut plans = vec![StartupModelPlan {
+        model_source: String::new(),
         declared_ref: "Qwen3-8B-Q4_K_M".into(),
         config_model_id: None,
         resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
@@ -1928,6 +1938,7 @@ fn pinned_gpu_startup_preflight_unresolvable_gpu_id_fails_closed() {
         profile: String::new(),
     }];
     let mut plans = vec![StartupModelPlan {
+        model_source: String::new(),
         declared_ref: "Qwen3-8B-Q4_K_M".into(),
         config_model_id: None,
         resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),

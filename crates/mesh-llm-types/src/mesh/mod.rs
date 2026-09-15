@@ -31,7 +31,20 @@ pub struct ServedModelIdentity {
     pub revision: Option<String>,
     pub artifact: Option<String>,
     pub local_file_name: Option<String>,
+    /// Hash of a reference STRING identifying the model source (repo,
+    /// revision, file) -- `None` for a bare local path, where there is no
+    /// such string. NOT a hash of the served weight bytes; see
+    /// [`Self::weights_digest`] for that fact.
     pub identity_hash: Option<String>,
+    /// SHA-256 of the served GGUF's file BYTES, lowercase hex -- computed at
+    /// load time from the file actually opened for serving. `None` when the
+    /// file could not be read, or when no load-time hash has been computed
+    /// for this model yet -- an absent fact, never a fabricated digest.
+    /// Distinct from `identity_hash`: a name/reference-string hash and a
+    /// content hash are different facts about the model, and this field
+    /// never replaces the other.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weights_digest: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -214,6 +227,7 @@ fn identity_from_model_source(source: &str) -> Option<ServedModelIdentity> {
             artifact: selector,
             local_file_name: None,
             identity_hash: Some(identity_hash_for(&canonical_ref)),
+            weights_digest: None,
         });
     }
 
@@ -233,6 +247,7 @@ fn identity_from_model_source(source: &str) -> Option<ServedModelIdentity> {
             artifact: Some(file.clone()),
             local_file_name: file.rsplit('/').next().map(str::to_string),
             identity_hash: Some(identity_hash_for(&canonical_ref)),
+            weights_digest: None,
         });
     }
 
@@ -248,6 +263,7 @@ fn identity_from_model_source(source: &str) -> Option<ServedModelIdentity> {
             artifact: Some(file.clone()),
             local_file_name: file.rsplit('/').next().map(str::to_string),
             identity_hash: Some(identity_hash_for(&canonical_ref)),
+            weights_digest: None,
         });
     }
 
@@ -262,6 +278,7 @@ fn identity_from_model_source(source: &str) -> Option<ServedModelIdentity> {
             artifact: None,
             local_file_name: trimmed.rsplit('/').next().map(str::to_string),
             identity_hash: Some(identity_hash_for(trimmed)),
+            weights_digest: None,
         });
     }
 
@@ -281,6 +298,7 @@ fn identity_from_model_source(source: &str) -> Option<ServedModelIdentity> {
         artifact: None,
         local_file_name: None,
         identity_hash: Some(identity_hash_for(&format!("catalog:{trimmed}"))),
+        weights_digest: None,
     })
 }
 
@@ -368,6 +386,7 @@ fn local_gguf_identity_from_source(source: &str) -> ServedModelIdentity {
         artifact: None,
         local_file_name,
         identity_hash: None,
+        weights_digest: None,
     }
 }
 

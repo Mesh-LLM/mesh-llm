@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   APP_STORAGE_KEYS,
   CHAT_HARNESS,
-  DEFAULT_SYSTEM_PROMPT,
   adaptModelsToSummary,
   chatMock,
   loadChatState,
@@ -17,7 +16,22 @@ import {
 } from './ChatPage.test-support'
 
 describe('ChatPage', () => {
-  it('loads the default system prompt when no user override is stored', async () => {
+  it('shows a readable model label but sends its original routing identity', async () => {
+    const user = userEvent.setup()
+    const name = 'gguf:0123456789abcdef'
+    vi.mocked(adaptModelsToSummary).mockReturnValue([
+      { ...CHAT_HARNESS.models[0], name, displayName: 'Readable GGUF model', status: 'warm' }
+    ])
+    renderChatPage({ mode: 'live' })
+    await user.click(screen.getByRole('combobox', { name: 'Select model' }))
+    await user.click(screen.getByRole('option', { name: /Readable GGUF model/ }))
+    await user.type(screen.getByLabelText('Prompt'), 'Hello')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(chatMock.sendCalls[0]).toMatchObject({ model: name }))
+    expect(screen.getByRole('combobox', { name: 'Select model' })).toHaveTextContent('Readable GGUF model')
+  })
+
+  it('starts with an empty system prompt when no user override is stored', async () => {
     const user = userEvent.setup()
     localStorage.clear()
 
@@ -28,7 +42,7 @@ describe('ChatPage', () => {
     const dialog = screen.getByRole('dialog', { name: 'Set system prompt' })
 
     const textarea = within(dialog).getByLabelText('System prompt') as HTMLTextAreaElement
-    expect(textarea.value).toContain('You are a helpful assistant running inside MeshLLM.')
+    expect(textarea.value).toBe('')
   })
 
   it('hides the system prompt button until the chat feature flag is enabled', () => {
@@ -37,7 +51,7 @@ describe('ChatPage', () => {
     expect(screen.queryByRole('button', { name: 'System prompt' })).not.toBeInTheDocument()
   })
 
-  it('sends the default system prompt while the editor feature flag is disabled', async () => {
+  it('sends no default instructions while the editor feature flag is disabled', async () => {
     const user = userEvent.setup()
 
     renderChatPage()
@@ -51,7 +65,7 @@ describe('ChatPage', () => {
       expect(chatMock.sendCalls[0]).toMatchObject({
         content: 'Tell me about mesh-llm',
         model: 'mesh',
-        systemPrompt: DEFAULT_SYSTEM_PROMPT
+        systemPrompt: ''
       })
     })
   })

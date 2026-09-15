@@ -1,7 +1,7 @@
-From f3b2b6a0f4cd4bee514b8d0d67f62662e263fd5b Mon Sep 17 00:00:00 2001
+From 4ecf54b31d629b9bdcb170755445c6a153a6eabc Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 5 Sep 2026 02:01:58 -0400
-Subject: [PATCH] skippy: add kv-events family (bit 33)
+Subject: [PATCH 026/113] skippy: add kv-events family (bit 33)
 
 Adds SKIPPY_FEATURE_KV_EVENTS (bit 33): KV/cache init, pressure
 crossed/cleared, context-capacity approaching/exhausted, published
@@ -23,7 +23,7 @@ Renumbered from 0045 (bit 31) to 0058 (bit 33), then again to 0059
  6 files changed, 43 insertions(+), 2 deletions(-)
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index e9eed11a7..f710a1289 100644
+index 627e591d2..b445be9d7 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -100,6 +100,7 @@ enum skippy_feature {
@@ -67,10 +67,10 @@ index 69e2f04b2..bc6ee6647 100644
  }
  #endif
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 2ab35e564..9ef935595 100644
+index 5c97196dc..001f44e6e 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -117,7 +117,8 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -135,7 +135,8 @@ if (LLAMA_STAGE_BUILD_TESTS)
              clear_is_quiescent
              struct_size_extension
              concurrent_dispatch
@@ -145,5 +145,5 @@ index 039615df3..b717daa74 100644
      return 2;
  }
 -- 
-2.50.1 (Apple Git-155)
+2.55.0
 

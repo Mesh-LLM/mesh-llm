@@ -1,7 +1,8 @@
-From 4df07f43ec0e2a46c43b4e2f2d650a4cbc7c29da Mon Sep 17 00:00:00 2001
+From 84e3d59c9a1566f7c0e68d8c27654e228dceda98 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 5 Sep 2026 02:00:59 -0400
-Subject: [PATCH] skippy: add process-global runtime event reporter (bit 31)
+Subject: [PATCH 024/113] skippy: add process-global runtime event reporter
+ (bit 31)
 
 Bumps SKIPPY_ABI_VERSION_PATCH to 54 (the one bump for this atomically
 landed capability series; sibling family patches do not bump again) and
@@ -24,7 +25,6 @@ family's own emit entrypoint.
 
 Rebased onto main's graph-derived package-v2 queue as patches 0020-0029.
 Feature bits 31-36 are unchanged.
-
 ---
  include/skippy/common.h             |  12 +-
  include/skippy/events.h             |  37 +++++
@@ -640,5 +640,5 @@ index 000000000..666a5a52c
 +    return 2;
 +}
 -- 
-2.50.1 (Apple Git-155)
+2.55.0
 

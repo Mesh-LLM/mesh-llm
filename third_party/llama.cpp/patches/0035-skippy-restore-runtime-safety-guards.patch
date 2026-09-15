@@ -1,7 +1,7 @@
-From 3d856f7c873b35ec4a55189ff44f3fae171b9b4c Mon Sep 17 00:00:00 2001
+From a354f289a226242e97ac52e0aac133d654b40a71 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sun, 13 Sep 2026 14:34:46 +1000
-Subject: [PATCH] fix(skippy): restore runtime safety guards
+Subject: [PATCH 035/113] fix(skippy): restore runtime safety guards
 
 ---
  src/llama-context.cpp  | 20 +++++++++++++++-----
@@ -70,7 +70,7 @@ index b4102d1a3..4621eed19 100644
          const int64_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
  
 diff --git a/src/models/inkling.cpp b/src/models/inkling.cpp
-index a1f367862..ac5cb713a 100644
+index e7a574e5f..6b956188b 100644
 --- a/src/models/inkling.cpp
 +++ b/src/models/inkling.cpp
 @@ -345,7 +345,9 @@ llama_model_inkling::graph::graph(const llama_model & model, const llm_graph_par
@@ -100,5 +100,5 @@ index a1f367862..ac5cb713a 100644
          // h += attn_sconv(attn(attn_norm(h)))
          ggml_tensor * attn_in  = build_norm(cur, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
 

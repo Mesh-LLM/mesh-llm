@@ -48,6 +48,31 @@ pub fn plan_gguf_stage_resident_tensor_names(
     ctx_size: u32,
     lane_count: u32,
 ) -> Result<Vec<Vec<String>>> {
+    plan_gguf_stage_resident_tensor_names_impl(model_path, ranges, ctx_size, lane_count, true)
+}
+
+/// Derive the exact resident tensor closure for one independently loaded slice.
+///
+/// This does not require the requested range to form a complete model partition.
+pub fn plan_gguf_stage_resident_tensor_names_for_range(
+    model_path: &Path,
+    range: (u32, u32),
+    ctx_size: u32,
+    lane_count: u32,
+) -> Result<Vec<String>> {
+    plan_gguf_stage_resident_tensor_names_impl(model_path, &[range], ctx_size, lane_count, false)?
+        .into_iter()
+        .next()
+        .context("native stage planner returned no resident tensor closure")
+}
+
+fn plan_gguf_stage_resident_tensor_names_impl(
+    model_path: &Path,
+    ranges: &[(u32, u32)],
+    ctx_size: u32,
+    lane_count: u32,
+    validate_chain: bool,
+) -> Result<Vec<Vec<String>>> {
     anyhow::ensure!(!ranges.is_empty(), "stage plan chain is empty");
     anyhow::ensure!(ctx_size > 0, "stage planning context size must be positive");
     anyhow::ensure!(lane_count > 0, "stage planning lane count must be positive");
@@ -193,19 +218,21 @@ pub fn plan_gguf_stage_resident_tensor_names(
         .iter()
         .map(|(layer_start, layer_end)| realize_plan(&planner, *layer_start, *layer_end))
         .collect::<Result<Vec<_>>>()?;
-    let plan_ptrs = plans
-        .iter()
-        .map(|plan| plan.0.cast_const())
-        .collect::<Vec<_>>();
-    let mut error = ptr::null_mut();
-    let status = unsafe {
-        skippy_ffi::skippy_stage_plan_validate_chain_v1(
-            plan_ptrs.as_ptr(),
-            plan_ptrs.len(),
-            &mut error,
-        )
-    };
-    ensure_ok(status, error).context("validate native stage plan chain")?;
+    if validate_chain {
+        let plan_ptrs = plans
+            .iter()
+            .map(|plan| plan.0.cast_const())
+            .collect::<Vec<_>>();
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_stage_plan_validate_chain_v1(
+                plan_ptrs.as_ptr(),
+                plan_ptrs.len(),
+                &mut error,
+            )
+        };
+        ensure_ok(status, error).context("validate native stage plan chain")?;
+    }
 
     plans
         .iter()
@@ -217,32 +244,36 @@ pub fn plan_gguf_stage_resident_tensor_names(
         .collect()
 }
 
-fn gguf_shard_paths(model_path: &Path) -> Result<Vec<PathBuf>> {
-    let canonical = model_path
-        .canonicalize()
-        .with_context(|| format!("canonicalize GGUF path {}", model_path.display()))?;
-    let Some(file_name) = canonical.file_name().and_then(|name| name.to_str()) else {
-        anyhow::bail!("GGUF path has no UTF-8 filename: {}", canonical.display());
+pub fn gguf_shard_paths(model_path: &Path) -> Result<Vec<PathBuf>> {
+    let Some(file_name) = model_path.file_name().and_then(|name| name.to_str()) else {
+        anyhow::bail!("GGUF path has no UTF-8 filename: {}", model_path.display());
     };
     let Some(shard) = split_gguf_shard_info(file_name) else {
+        let canonical = model_path
+            .canonicalize()
+            .with_context(|| format!("canonicalize GGUF path {}", model_path.display()))?;
         return Ok(vec![canonical]);
     };
     anyhow::ensure!(
         shard.part == "00001",
         "split GGUF inputs must point at the first shard, got {}",
-        canonical.display()
+        model_path.display()
     );
     let total = shard
         .total
         .parse::<u32>()
         .context("parse split GGUF shard count")?;
     anyhow::ensure!(total > 0, "split GGUF shard count must be positive");
-    let parent = canonical
+    // Resolve siblings in the referenced directory: HF caches expose snapshot
+    // files as per-file symlinks into blobs/, so canonicalizing the input
+    // first would erase the shard name pattern.
+    let directory = model_path
         .parent()
-        .context("split GGUF shard has no parent")?;
+        .map(|parent| parent.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
     (1..=total)
         .map(|index| {
-            parent
+            directory
                 .join(format!("{}-{index:05}-of-{:05}.gguf", shard.prefix, total))
                 .canonicalize()
                 .with_context(|| format!("resolve split GGUF shard {index}/{total}"))

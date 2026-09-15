@@ -1,7 +1,7 @@
-From e889eead4a21f4c5bd9b029a352977d01e11920e Mon Sep 17 00:00:00 2001
+From a573874b63de9daf0f45d1706d103de82ef37139 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 5 Sep 2026 14:29:07 -0400
-Subject: [PATCH] skippy: report KV lifecycle transitions
+Subject: [PATCH 031/113] skippy: report KV lifecycle transitions
 
 ---
  src/skippy/session.cpp              | 13 ++++++++++++-
@@ -80,5 +80,5 @@ index 6b9e52bf0..a05806558 100644
      if (error != nullptr) {
          skippy_error_free(error);
 -- 
-2.50.1 (Apple Git-155)
+2.55.0
 

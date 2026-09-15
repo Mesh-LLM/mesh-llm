@@ -1,7 +1,7 @@
-From 744e963911b7e57335d468915b6d5a5847bcb862 Mon Sep 17 00:00:00 2001
+From 2cfc1b4c999b94ba0c2f2f40925ab3dbbe77166b Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 7 Sep 2026 06:23:22 +1000
-Subject: [PATCH 07/23] skippy: add chat, tokenization, and prompt support
+Subject: [PATCH 007/113] skippy: add chat, tokenization, and prompt support
 
 ---
  common/chat-auto-parser-generator.cpp |  51 ++-
@@ -22,12 +22,12 @@ Subject: [PATCH 07/23] skippy: add chat, tokenization, and prompt support
  create mode 100644 models/templates/Inkling.jinja
 
 diff --git a/common/chat-auto-parser-generator.cpp b/common/chat-auto-parser-generator.cpp
-index d7e117e4d..4707c524a 100644
+index b78789d8c..0fca78375 100644
 --- a/common/chat-auto-parser-generator.cpp
 +++ b/common/chat-auto-parser-generator.cpp
-@@ -22,6 +22,18 @@ static void foreach_function(const json & tools, const std::function<void(const
-     }
- }
+@@ -13,6 +13,18 @@
+ 
+ using json = common_json;
  
 +static bool is_ascii_space(char c) {
 +    return c == ' ' || c == '\n' || c == '\r' || c == '\t' || c == '\f' || c == '\v';
@@ -44,7 +44,7 @@ index d7e117e4d..4707c524a 100644
  namespace autoparser {
  
  parser_build_context::parser_build_context(common_chat_peg_builder & p, const generation_params & inputs) :
-@@ -102,7 +114,7 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &
+@@ -84,7 +96,7 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &
          // Set grammar triggers based on tool section markers (fall back to per-call markers)
          if (data.grammar_lazy) {
              data.grammar_triggers = {
@@ -53,9 +53,9 @@ index d7e117e4d..4707c524a 100644
              };
              if (autoparser.tools.format.openai_wrapper_trigger) {
                  // model emits the OpenAI function wrapper, trigger on it
-@@ -396,7 +408,9 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
-         auto schema_info = common_schema_info();
-         schema_info.resolve_refs(params);
+@@ -368,7 +380,9 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
+         const auto & func = tool.at("function");
+         std::string  name = func.at("name");
  
 -        // Build parser for each argument, separating required and optional
 +        // Object member order is semantically irrelevant. Split the declared
@@ -63,10 +63,10 @@ index d7e117e4d..4707c524a 100644
 +        // presence structurally instead of validating after the fact.
          std::vector<common_peg_parser> required_parsers;
          std::vector<common_peg_parser> optional_parsers;
-         for (const auto & [param_name, param_schema] : properties.items()) {
-@@ -421,22 +435,33 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
+         foreach_parameter(func, [&](const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
+@@ -391,22 +405,33 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
              }
-         }
+         });
  
 -        // Build required arg sequence in definition order
 -        common_peg_parser args_seq = p.eps();
@@ -151,7 +151,7 @@ index a7e370578..39ffa20f1 100644
  
      template_params params_content_only;
 diff --git a/common/chat-peg-parser.cpp b/common/chat-peg-parser.cpp
-index 79b97a80f..c38639d03 100644
+index ffa43a318..b052dceac 100644
 --- a/common/chat-peg-parser.cpp
 +++ b/common/chat-peg-parser.cpp
 @@ -386,11 +386,12 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
@@ -231,7 +231,7 @@ index 114fa049f..7723d4e35 100644
      common_peg_parser permute(const std::string & rule_prefix, const std::vector<common_peg_parser> & parsers);
  
 diff --git a/common/chat.cpp b/common/chat.cpp
-index faf27f786..ccf8ee420 100644
+index 3a204e12d..afdbe5005 100644
 --- a/common/chat.cpp
 +++ b/common/chat.cpp
 @@ -227,6 +227,11 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
@@ -277,7 +277,7 @@ index faf27f786..ccf8ee420 100644
              if (message.contains("reasoning_content")) {
                  msg.reasoning_content = message.at("reasoning_content");
              }
-@@ -710,6 +713,113 @@ std::string common_chat_format_example(const struct common_chat_templates *
+@@ -720,6 +723,113 @@ std::string common_chat_format_example(const struct common_chat_templates *
      "  {{- '<|im_start|>assistant\n' -}}\n"                                               \
      "{%- endif -%}"
  
@@ -391,7 +391,7 @@ index faf27f786..ccf8ee420 100644
  void common_chat_templates_free(struct common_chat_templates * tmpls) {
      delete tmpls;
  }
-@@ -767,6 +877,10 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model *
+@@ -777,6 +887,10 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model *
      } else {
          default_template_src = chat_template_override;
      }
@@ -402,7 +402,7 @@ index faf27f786..ccf8ee420 100644
      if (default_template_src.empty() || default_template_src == "chatml") {
          if (!template_tool_use_src.empty()) {
              default_template_src = template_tool_use_src;
-@@ -1132,6 +1246,14 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
+@@ -1142,6 +1256,14 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
          return common_chat_params_init_cohere2moe(tmpl, params);
      }
  
@@ -418,7 +418,7 @@ index faf27f786..ccf8ee420 100644
          LOG_DBG("Using specialized template: LFM2\n");
          return common_chat_params_init_lfm2(tmpl, params, /* tool_list_tokens = */ true);
 diff --git a/common/chat.h b/common/chat.h
-index cb39e3458..1826f5f47 100644
+index 0e1423a5a..71c803597 100644
 --- a/common/chat.h
 +++ b/common/chat.h
 @@ -85,6 +85,8 @@ struct common_chat_msg {
@@ -766,7 +766,7 @@ index 000000000..fce3cc0ef
 +    return data;
 +}
 diff --git a/common/parsers/parsers.h b/common/parsers/parsers.h
-index 7898f0007..515fa3da8 100644
+index 73fc719fd..14cfa68a9 100644
 --- a/common/parsers/parsers.h
 +++ b/common/parsers/parsers.h
 @@ -63,6 +63,8 @@ common_chat_params common_chat_params_init_kimi_k2(const common_chat_template &

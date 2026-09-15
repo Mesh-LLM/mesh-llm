@@ -4,15 +4,13 @@ use crate::{StageActivationCodec, StageActivationCodecPolicy};
 
 use super::{
     MAX_STAGE_ACTIVATION_BYTES, MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES,
-    MAX_STAGE_DECODED_ACTIVATION_BYTES, MAX_STAGE_DRY_SEQUENCE_BREAKERS, MAX_STAGE_LOGIT_BIAS,
-    MAX_STAGE_PREDICTED_TOKENS, MAX_STAGE_SAMPLERS, MAX_STAGE_SAMPLING_STRING_BYTES,
-    MAX_STAGE_SIDEBAND_VALUES, MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC, STAGE_STATE_VERSION,
-    StageLogitBias, StageNativeMtpDraft, StageReply, StageReplyStats, StageReplyWindow,
-    StageSamplingConfig, StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
+    MAX_STAGE_DRY_SEQUENCE_BREAKERS, MAX_STAGE_LOGIT_BIAS, MAX_STAGE_PREDICTED_TOKENS,
+    MAX_STAGE_SAMPLERS, MAX_STAGE_SAMPLING_STRING_BYTES, MAX_STAGE_SIDEBAND_VALUES,
+    MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC, STAGE_STATE_VERSION, StageLogitBias,
+    StageNativeMtpDraft, StageReply, StageReplyStats, StageReplyWindow, StageSamplingConfig,
+    StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
     activation::{
-        activation_decoded_f32_bytes_with_state_flags,
-        activation_wire_bytes_for_codec_with_state_flags,
-        decode_activation_payload_with_state_flags,
+        decode_activation_payload_with_state_flags, validate_activation_wire_payload_len,
     },
     invalid_data, invalid_input,
 };
@@ -400,23 +398,14 @@ fn read_stage_message_inner(
         {
             return Err(invalid_data("stage activation codec mismatch"));
         }
-        let expected_bytes = activation_wire_bytes_for_codec_with_state_flags(
+        validate_activation_wire_payload_len(
             state.activation_codec,
             token_count,
             n_embd,
             state.flags,
+            activation_wire_byte_count,
         )?;
-        if activation_wire_byte_count != expected_bytes {
-            return Err(invalid_data("activation payload size mismatch"));
-        }
-        let decoded_activation_bytes =
-            activation_decoded_f32_bytes_with_state_flags(token_count, n_embd, state.flags)?;
-        if decoded_activation_bytes > MAX_STAGE_DECODED_ACTIVATION_BYTES {
-            return Err(invalid_data(
-                "decoded activation payload byte count exceeds maximum",
-            ));
-        }
-        expected_bytes
+        activation_wire_byte_count
     };
     let sampling = if (state.flags & super::state_flags::SAMPLING) != 0 {
         Some(read_sampling_config(&mut reader)?)

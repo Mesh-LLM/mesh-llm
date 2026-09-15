@@ -27,6 +27,7 @@ use super::{
         emit_report, ensure_native_mtp_artifact_if_required, native_mtp_requirement,
         native_mtp_satisfies_requirement, native_mtp_sideband_report,
         native_mtp_verification_report, native_mtp_verification_satisfies_requirement,
+        normalize_runtime_layer_end,
     },
     prediction_return::PredictionReturnListener,
     single_step::{SingleStepCase, run_full_model_decode, run_single_step_with_baseline},
@@ -78,6 +79,8 @@ struct BinaryChainResult {
     pub(in crate::runner) stage_models: Vec<StageModelReport>,
 }
 pub fn chain(args: ChainArgs) -> Result<()> {
+    let mut args = args;
+    normalize_runtime_layer_end(&mut args.runtime)?;
     let native_mtp_requirement = native_mtp_requirement(args.native_mtp);
     ensure_native_mtp_artifact_if_required(&args.runtime, native_mtp_requirement)?;
     let splits = parse_chain_splits(&args.splits)?;
@@ -99,6 +102,8 @@ pub fn chain(args: ChainArgs) -> Result<()> {
 }
 
 pub fn core_parity(args: CoreParityArgs) -> Result<()> {
+    let mut args = args;
+    normalize_runtime_layer_end(&mut args.runtime)?;
     let native_mtp_requirement = native_mtp_requirement(args.native_mtp);
     ensure_native_mtp_artifact_if_required(&args.runtime, native_mtp_requirement)?;
     let splits = parse_chain_splits(&args.splits)?;
@@ -227,6 +232,8 @@ fn run_chain_with_baseline(
 }
 
 pub fn split_scan(args: SplitScanArgs) -> Result<()> {
+    let mut args = args;
+    normalize_runtime_layer_end(&mut args.runtime)?;
     let native_mtp = native_mtp_requirement(args.native_mtp);
     ensure_native_mtp_artifact_if_required(&args.runtime, native_mtp)?;
     let splits = parse_split_list(&args.splits)?;

@@ -69,6 +69,7 @@ export type ModelFamilyColorKey =
 export type ModelCapabilities = Partial<Record<string, boolean>>
 export type ModelSummary = {
   name: string
+  displayName?: string
   family: string
   familyColor?: ModelFamilyColorKey
   size: string

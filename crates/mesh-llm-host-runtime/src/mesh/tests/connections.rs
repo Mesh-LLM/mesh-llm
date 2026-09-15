@@ -406,6 +406,7 @@ async fn make_test_node_with_requirements(
         model_source: Arc::new(Mutex::new(None)),
         serving_models: Arc::new(Mutex::new(Vec::new())),
         served_model_descriptors: Arc::new(Mutex::new(Vec::new())),
+        served_model_generations: Arc::new(Mutex::new(HashMap::new())),
         model_runtime_descriptors: Arc::new(Mutex::new(Vec::new())),
         hosted_models: Arc::new(Mutex::new(Vec::new())),
         llama_ready: Arc::new(Mutex::new(false)),
@@ -629,6 +630,11 @@ async fn set_serving_models_preserves_existing_known_descriptor_capabilities_whe
         .find(|descriptor| descriptor.identity.model_name == vision_model)
         .expect("existing vision descriptor should remain served");
     assert!(vision.identity.is_primary);
+    assert_eq!(vision.identity.source_kind, ModelSourceKind::LocalGguf);
+    assert_eq!(
+        vision.identity.local_file_name.as_deref(),
+        Some("Qwen3VL-2B-Instruct-Q4_K_M.gguf")
+    );
     assert!(vision.capabilities_known);
     assert_eq!(
         vision.capabilities.vision,
