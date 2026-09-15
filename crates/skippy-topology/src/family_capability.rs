@@ -1015,6 +1015,14 @@ fn infer_mistral_olmo_llama_capability(
     if compact.contains("laguna") {
         return Some(laguna_capability(layer_count, activation_width));
     }
+    if compact.contains("llama4") {
+        return Some(dense_family_capability(
+            "llama4",
+            layer_count,
+            activation_width,
+            ExactStateMobility::Untested,
+        ));
+    }
     if compact.contains("llama") {
         return Some(llama_capability(layer_count, activation_width));
     }
