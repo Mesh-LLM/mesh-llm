@@ -301,6 +301,7 @@ export interface ResponsesRequest {
   input: ResponsesInputMessage[]
   stream: boolean
   stream_options?: { include_usage: boolean }
+  chat_template_kwargs?: { enable_thinking?: boolean }
 }
 
 export interface ChatSSEDeltaEvent {

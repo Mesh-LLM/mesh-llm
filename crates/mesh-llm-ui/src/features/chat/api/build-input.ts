@@ -186,6 +186,12 @@ export async function buildResponsesInput(
     request_id: requestId,
     input: messagesWithSystemPrompt,
     stream: true,
-    stream_options: { include_usage: true }
+    stream_options: { include_usage: true },
+    // Reasoning models think by default, and for chat that means tens of
+    // seconds of hidden deliberation over a casual question -- with weaker
+    // ones it degenerates into a repetition loop instead of answering. The
+    // console asks for a direct answer. API callers are unaffected: they
+    // choose their own reasoning controls.
+    chat_template_kwargs: { enable_thinking: false }
   }
 }

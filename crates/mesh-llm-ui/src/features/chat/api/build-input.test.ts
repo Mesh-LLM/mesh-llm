@@ -88,6 +88,17 @@ describe('buildResponsesInput', () => {
     expect(request.input).toEqual([{ role: 'user', content: 'Hello mesh' }])
   })
 
+  it('asks for a direct answer instead of hidden reasoning', async () => {
+    const request = await buildResponsesInput(
+      [createMessage([{ type: 'text', content: 'what is updog' }])],
+      'model-a',
+      'client-123',
+      'request-456'
+    )
+
+    expect(request.chat_template_kwargs).toEqual({ enable_thinking: false })
+  })
+
   it('prepends the saved system prompt as a responses system message', async () => {
     const request = await buildResponsesInput(
       [createMessage([{ type: 'text', content: 'Explain the cluster status' }])],
