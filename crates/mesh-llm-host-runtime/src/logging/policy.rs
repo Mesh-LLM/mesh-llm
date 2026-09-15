@@ -6,7 +6,9 @@ use std::collections::HashMap;
 use mesh_llm_events::logging::events::LifecycleEvent;
 
 mod artifact_redaction;
+mod path_redaction;
 pub use artifact_redaction::redact_artifact_bytes;
+pub use path_redaction::{sanitize_path, sanitize_paths_in_json_text, sanitize_paths_in_text};
 
 /// Redaction mode applied to a string value. The most restrictive applicable rule wins.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -451,26 +453,6 @@ fn redact_key_in_json(text: &str, key: &str) -> String {
     result
 }
 
-/// Sanitize a file path for logging: replace private home directory prefix with `~/`.
-pub fn sanitize_path(path: &std::path::Path) -> String {
-    use std::env;
-    if let Some(home) = env::var_os("HOME") {
-        let home_str = home.to_string_lossy();
-        return path.to_string_lossy().replace(&*home_str, "~");
-    }
-
-    // Fallback: just show the last 3 components.
-    let parts: Vec<_> = path.components().collect();
-    if parts.len() <= 3 {
-        return path.to_string_lossy().to_string();
-    }
-    format!(
-        "{}/.../{}",
-        parts[parts.len() - 3].as_os_str().to_string_lossy(),
-        parts.last().unwrap().as_os_str().to_string_lossy()
-    )
-}
-
 /// Hash a value for fingerprinting (e.g., token fingerprints in mDNS).
 pub fn hash_value(input: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -478,19 +460,6 @@ pub fn hash_value(input: &str) -> String {
     hasher.update(input.as_bytes());
     // Return first 16 hex chars (8 bytes of fingerprint).
     hex::encode(hasher.finalize())[..16].to_string()
-}
-
-/// Remove private directory prefixes from a string containing paths.
-pub fn sanitize_paths_in_text(text: &str) -> String {
-    use std::env;
-    if let Some(home) = env::var_os("HOME") {
-        let home_str = home.to_string_lossy().to_string();
-        text.replace(&home_str, "~")
-            .replace("/private/var/", "/var/")
-            .replace("/private/tmp/", "/tmp/")
-    } else {
-        text.to_string()
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -885,28 +854,11 @@ mod redaction_corpus_tests {
     }
 
     #[test]
-    fn path_sanitization_hides_home_dir() {
-        let home = dirs::home_dir().expect("test runner has a home directory");
-        let test_path = home.join("some/deep/path/file.log");
-        let sanitized = sanitize_path(&test_path);
-        assert!(sanitized.starts_with("~/"));
-        assert!(!sanitized.contains(&home.display().to_string()));
-    }
-
-    #[test]
     fn hash_value_produces_fingerprint() {
         let h1 = hash_value("some-token-value");
         let h2 = hash_value("different-token");
         assert_eq!(h1.len(), 16); // 8 bytes hex.
         assert_ne!(h1, h2);
-    }
-
-    #[test]
-    fn sanitize_paths_in_text_replaces_home() {
-        let home = dirs::home_dir().expect("test runner has a home directory");
-        let text = format!("Error in {}", home.join("mesh-llm/logs/app.log").display());
-        let sanitized = sanitize_paths_in_text(&text);
-        assert!(sanitized.contains("~/mesh-llm"));
     }
 
     #[test]

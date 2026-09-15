@@ -54,13 +54,7 @@
           "stage-load"
         ]
       }
-    },
-    "cadences": [
-      "llama-bump",
-      "manual-full",
-      "nightly",
-      "rotating"
-    ]
+    }
   },
   "unverified_consumers": [
     {
@@ -111,16 +105,10 @@
       },
       "certification": {
         "profile": "full",
-        "cadences": [
-          "llama-bump",
-          "manual-full",
-          "nightly"
-        ],
         "execution": {
           "trunk_layers": 28,
           "mtp_layers": 0,
           "activation_width": 1024,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -163,15 +151,10 @@
       },
       "certification": {
         "profile": "full",
-        "cadences": [
-          "llama-bump",
-          "manual-full"
-        ],
         "execution": {
           "trunk_layers": 16,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -215,7 +198,6 @@
           "trunk_layers": 47,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -258,7 +240,6 @@
           "trunk_layers": 40,
           "mtp_layers": 0,
           "activation_width": 4096,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -308,7 +289,6 @@
           "trunk_layers": 46,
           "mtp_layers": 1,
           "activation_width": 4096,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -351,15 +331,10 @@
       },
       "certification": {
         "profile": "full",
-        "cadences": [
-          "llama-bump",
-          "manual-full"
-        ],
         "execution": {
           "trunk_layers": 27,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -403,7 +378,6 @@
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 2880,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -446,7 +420,6 @@
           "trunk_layers": 48,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -489,7 +462,6 @@
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -535,16 +507,10 @@
       },
       "certification": {
         "profile": "full",
-        "cadences": [
-          "llama-bump",
-          "manual-full",
-          "nightly"
-        ],
         "execution": {
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 4,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -588,7 +554,6 @@
           "trunk_layers": 28,
           "mtp_layers": 0,
           "activation_width": 2560,
-          "boundary_sweep_period": 6,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -633,7 +598,6 @@
           "trunk_layers": 27,
           "mtp_layers": 0,
           "activation_width": 2304,
-          "boundary_sweep_period": 4,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -679,7 +643,6 @@
           "trunk_layers": 48,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 4,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -734,7 +697,6 @@
           "trunk_layers": 48,
           "mtp_layers": 0,
           "activation_width": 10240,
-          "boundary_sweep_period": 4,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -781,7 +743,6 @@
           "trunk_layers": 52,
           "mtp_layers": 1,
           "activation_width": 2688,
-          "boundary_sweep_period": 2,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -825,7 +786,6 @@
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 768,
-          "boundary_sweep_period": 2,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -868,7 +828,6 @@
           "trunk_layers": 64,
           "mtp_layers": 0,
           "activation_width": 4096,
-          "boundary_sweep_period": 2,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -911,7 +870,6 @@
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 1,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -954,7 +912,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 2560,
-          "boundary_sweep_period": 1,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -997,15 +954,10 @@
       },
       "certification": {
         "profile": "full",
-        "cadences": [
-          "llama-bump",
-          "manual-full"
-        ],
         "execution": {
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 768,
-          "boundary_sweep_period": 3,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1045,15 +997,10 @@
       },
       "certification": {
         "profile": "full",
-        "cadences": [
-          "llama-bump",
-          "manual-full"
-        ],
         "execution": {
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 1024,
-          "boundary_sweep_period": 4,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1096,7 +1043,6 @@
           "trunk_layers": 40,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1140,7 +1086,6 @@
           "trunk_layers": 16,
           "mtp_layers": 0,
           "activation_width": 1024,
-          "boundary_sweep_period": 2,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1186,7 +1131,6 @@
           "trunk_layers": 16,
           "mtp_layers": 0,
           "activation_width": 1024,
-          "boundary_sweep_period": 2,
           "speculative_policy": "mtp-if-present"
         },
         "mmproj_artifact": {
@@ -1241,7 +1185,6 @@
           "trunk_layers": 40,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1285,7 +1228,6 @@
           "trunk_layers": 28,
           "mtp_layers": 0,
           "activation_width": 1536,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1341,7 +1283,6 @@
           "trunk_layers": 36,
           "mtp_layers": 0,
           "activation_width": 4096,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1397,7 +1338,6 @@
           "trunk_layers": 26,
           "mtp_layers": 0,
           "activation_width": 2304,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1440,7 +1380,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 3072,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1483,7 +1422,6 @@
           "trunk_layers": 40,
           "mtp_layers": 0,
           "activation_width": 5120,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1526,7 +1464,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 4544,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1569,7 +1506,6 @@
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1612,7 +1548,6 @@
           "trunk_layers": 40,
           "mtp_layers": 0,
           "activation_width": 5120,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1655,7 +1590,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 4096,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1698,7 +1632,6 @@
           "trunk_layers": 36,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -1891,7 +1824,6 @@
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 896,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -1934,7 +1866,6 @@
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 1024,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -1977,7 +1908,6 @@
           "trunk_layers": 18,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2020,7 +1950,6 @@
           "trunk_layers": 26,
           "mtp_layers": 0,
           "activation_width": 1152,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2063,7 +1992,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 2560,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2106,7 +2034,6 @@
           "trunk_layers": 30,
           "mtp_layers": 0,
           "activation_width": 3072,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2149,7 +2076,6 @@
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2192,7 +2118,6 @@
           "trunk_layers": 16,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2235,7 +2160,6 @@
           "trunk_layers": 30,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2278,7 +2202,6 @@
           "trunk_layers": 62,
           "mtp_layers": 0,
           "activation_width": 2560,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2321,7 +2244,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 3072,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2364,7 +2286,6 @@
           "trunk_layers": 36,
           "mtp_layers": 0,
           "activation_width": 2560,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2407,7 +2328,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 4096,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2450,7 +2370,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 4096,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2493,7 +2412,6 @@
           "trunk_layers": 40,
           "mtp_layers": 0,
           "activation_width": 4096,
-          "boundary_sweep_period": 0,
           "speculative_policy": "disabled"
         },
         "resources": {
@@ -2536,7 +2454,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -2579,7 +2496,6 @@
           "trunk_layers": 28,
           "mtp_layers": 0,
           "activation_width": 3584,
-          "boundary_sweep_period": 1,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -2624,7 +2540,6 @@
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 1536,
-          "boundary_sweep_period": 4,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -2667,7 +2582,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 4096,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -2711,7 +2625,6 @@
           "trunk_layers": 4,
           "mtp_layers": 0,
           "activation_width": 7168,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -2720,49 +2633,6 @@
           "estimated_model_bytes": 16125871104
         },
         "notes": "compact four-layer DeepSeek 3.2 architecture probe"
-      }
-    },
-    {
-      "id": "family-deepseek4",
-      "family": "deepseek4",
-      "suites": [
-        "llama-family-certification"
-      ],
-      "cadences": [
-        "llama-bump",
-        "manual-full"
-      ],
-      "capability_tags": [
-        "gguf",
-        "moe"
-      ],
-      "artifact": {
-        "repo": "huihui-ai/Huihui-DeepSeek-V4-Flash-0731-abliterated-GGUF",
-        "revision": "a8dfba9c1e43bdf324ee2c7787ed01c70975ffb4",
-        "selector": "Q8_0",
-        "files": [
-          {
-            "path": "dspark-abliterated/dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf",
-            "size_bytes": 10896057440,
-            "sha256": "6575853d1c3736c160101bc7cd117c8edd39ca847cfdf2273d9a344108edfaf8"
-          }
-        ]
-      },
-      "certification": {
-        "profile": "full",
-        "execution": {
-          "trunk_layers": 3,
-          "mtp_layers": 0,
-          "activation_width": 16384,
-          "boundary_sweep_period": 0,
-          "speculative_policy": "mtp-if-present"
-        },
-        "resources": {
-          "runner_role": "family-certify",
-          "cache_policy": "immutable-local",
-          "estimated_model_bytes": 10890804124
-        },
-        "notes": "DeepSeek V4 Flash dflash path with four hyper-connection streams"
       }
     },
     {
@@ -2797,7 +2667,6 @@
           "trunk_layers": 27,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -2840,7 +2709,6 @@
           "trunk_layers": 18,
           "mtp_layers": 0,
           "activation_width": 1024,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -2883,7 +2751,6 @@
           "trunk_layers": 28,
           "mtp_layers": 0,
           "activation_width": 2560,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -2926,7 +2793,6 @@
           "trunk_layers": 35,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -2969,7 +2835,6 @@
           "trunk_layers": 42,
           "mtp_layers": 0,
           "activation_width": 2560,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -2990,49 +2855,6 @@
             }
           ]
         }
-      }
-    },
-    {
-      "id": "family-gemma4-assistant",
-      "family": "gemma4-assistant",
-      "suites": [
-        "llama-family-certification"
-      ],
-      "cadences": [
-        "llama-bump",
-        "manual-full"
-      ],
-      "capability_tags": [
-        "dense",
-        "gguf"
-      ],
-      "artifact": {
-        "repo": "RachidAR/gemma-4-26B-A4B-it-qat-assistant-q4_0-gguf",
-        "revision": "64fc324e6829824a37518f5a7c8841ac9a559d5b",
-        "selector": "Q4_0",
-        "files": [
-          {
-            "path": "gemma-4-26b-A4B-it-assistant-Q4_0-q4emb.gguf",
-            "size_bytes": 251938176,
-            "sha256": "6195511a1bf402b1ab3ec3631347f310b4085774a17a0c6e673ea8988cc0a9fc"
-          }
-        ]
-      },
-      "certification": {
-        "profile": "full",
-        "execution": {
-          "trunk_layers": 4,
-          "mtp_layers": 0,
-          "activation_width": 1024,
-          "boundary_sweep_period": 0,
-          "speculative_policy": "mtp-if-present"
-        },
-        "resources": {
-          "runner_role": "family-certify",
-          "cache_policy": "immutable-local",
-          "estimated_model_bytes": 236152848
-        },
-        "notes": "compact Gemma 4 assistant architecture probe"
       }
     },
     {
@@ -3067,7 +2889,6 @@
           "trunk_layers": 44,
           "mtp_layers": 0,
           "activation_width": 6144,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3111,7 +2932,6 @@
           "trunk_layers": 28,
           "mtp_layers": 0,
           "activation_width": 1280,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3154,7 +2974,6 @@
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 1024,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3197,7 +3016,6 @@
           "trunk_layers": 40,
           "mtp_layers": 0,
           "activation_width": 2560,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3240,7 +3058,6 @@
           "trunk_layers": 48,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3283,7 +3100,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3326,7 +3142,6 @@
           "trunk_layers": 48,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3369,7 +3184,6 @@
           "trunk_layers": 40,
           "mtp_layers": 0,
           "activation_width": 5120,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3412,7 +3226,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 3328,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3457,7 +3270,6 @@
           "trunk_layers": 8,
           "mtp_layers": 0,
           "activation_width": 1024,
-          "boundary_sweep_period": 4,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3503,7 +3315,6 @@
           "trunk_layers": 24,
           "mtp_layers": 0,
           "activation_width": 2048,
-          "boundary_sweep_period": 4,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3546,7 +3357,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 1536,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3590,7 +3400,6 @@
           "trunk_layers": 28,
           "mtp_layers": 0,
           "activation_width": 2304,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3633,7 +3442,6 @@
           "trunk_layers": 32,
           "mtp_layers": 0,
           "activation_width": 4096,
-          "boundary_sweep_period": 0,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
@@ -3645,8 +3453,52 @@
       }
     },
     {
-      "id": "family-muse-glimmer",
-      "family": "muse-glimmer",
+      "id": "family-qwen35moe",
+      "family": "qwen35moe",
+      "suites": [
+        "llama-family-certification"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full"
+      ],
+      "capability_tags": [
+        "gguf",
+        "hybrid",
+        "moe",
+        "recurrent"
+      ],
+      "artifact": {
+        "repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
+        "revision": "a483e9e6cbd595906af30beda3187c2663a1118c",
+        "selector": "UD-IQ2_XXS",
+        "files": [
+          {
+            "path": "Qwen3.6-35B-A3B-UD-IQ2_XXS.gguf",
+            "size_bytes": 10756586464,
+            "sha256": "2e8f5f705355c56311432d0a8a5d14a696dbb7e4b197d05c75ba805fc1857bef"
+          }
+        ]
+      },
+      "certification": {
+        "profile": "full",
+        "execution": {
+          "trunk_layers": 40,
+          "mtp_layers": 0,
+          "activation_width": 2048,
+          "speculative_policy": "mtp-if-present"
+        },
+        "resources": {
+          "runner_role": "family-certify",
+          "cache_policy": "immutable-local",
+          "estimated_model_bytes": 10745596416
+        },
+        "notes": "Qwen3.6 MoE gated-delta-net family with a four-layer full-attention interval"
+      }
+    },
+    {
+      "id": "family-qwen3vlmoe",
+      "family": "qwen3vlmoe",
       "suites": [
         "llama-family-certification"
       ],
@@ -3657,47 +3509,279 @@
       "capability_tags": [
         "gguf",
         "moe",
-        "multimodal"
+        "multimodal",
+        "projector"
       ],
       "artifact": {
-        "repo": "Blackfrost-AI/Muse-Glimmer-30B-Abliterated-GGUF",
-        "revision": "83e7dc723f5515704adc8767dfeb279de3df914d",
+        "repo": "Qwen/Qwen3-VL-30B-A3B-Instruct-GGUF",
+        "revision": "f54435e6cc31258f04b0969105c3f6badb197931",
         "selector": "Q4_K_M",
         "files": [
           {
-            "path": "dflash-Muse-Glimmer-30B-Abliterated-Q4_K_M.gguf",
-            "size_bytes": 1631210720,
-            "sha256": "1b58b92b670d20b49d06a9a1210e4bf5350696bb8f7b4931769b7000d0456eda"
+            "path": "Qwen3VL-30B-A3B-Instruct-Q4_K_M.gguf",
+            "size_bytes": 18556687168,
+            "sha256": "87bb374d849f80ebdfabb304189fac9e0bd35a0f74506e6a59c51b206cbe863b"
           }
         ]
       },
       "certification": {
         "profile": "full",
         "execution": {
-          "trunk_layers": 5,
+          "trunk_layers": 48,
           "mtp_layers": 0,
-          "activation_width": 6656,
-          "boundary_sweep_period": 0,
+          "activation_width": 2048,
           "speculative_policy": "mtp-if-present"
         },
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 1618131968
+          "estimated_model_bytes": 18550716416,
+          "startup_timeout_secs": 900
         },
-        "notes": "Muse Glimmer dflash text and projector lanes",
+        "notes": "Qwen3 VL MoE text and real-projector split certification",
         "mmproj_artifact": {
-          "repo": "Blackfrost-AI/Muse-Glimmer-30B-Abliterated-GGUF",
-          "revision": "83e7dc723f5515704adc8767dfeb279de3df914d",
-          "selector": "F16",
+          "repo": "Qwen/Qwen3-VL-30B-A3B-Instruct-GGUF",
+          "revision": "f54435e6cc31258f04b0969105c3f6badb197931",
+          "selector": "Q8_0",
           "files": [
             {
-              "path": "mmproj-Muse-Glimmer-30B-Abliterated-F16.gguf",
-              "size_bytes": 3847367616,
-              "sha256": "c2e08b8bd13ca60b59ffdcb79b969b354b1edda9b9198047d10621adc11591bb"
+              "path": "mmproj-Qwen3VL-30B-A3B-Instruct-Q8_0.gguf",
+              "size_bytes": 712148928,
+              "sha256": "82a9966edfdbc1b18a27fd90af96d50cbf111a51484f6290e946dccf461c8150"
             }
           ]
         }
+      }
+    },
+    {
+      "id": "family-mistral4",
+      "family": "mistral4",
+      "suites": [
+        "llama-family-certification"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full"
+      ],
+      "capability_tags": [
+        "gguf",
+        "mla",
+        "moe"
+      ],
+      "artifact": {
+        "repo": "unsloth/Mistral-Small-4-119B-2603-GGUF",
+        "revision": "bd93c721735aa32c035c0f19e738cb3371fd56ff",
+        "selector": "UD-IQ2_XXS",
+        "files": [
+          {
+            "path": "Mistral-Small-4-119B-2603-UD-IQ2_XXS.gguf",
+            "size_bytes": 34924187328,
+            "sha256": "82a676844e27065abe36cf9292603b6e2484a23ca5665a6d8a0bc62ac478beb3"
+          }
+        ]
+      },
+      "certification": {
+        "profile": "full",
+        "execution": {
+          "trunk_layers": 36,
+          "mtp_layers": 0,
+          "activation_width": 4096,
+          "speculative_policy": "mtp-if-present"
+        },
+        "resources": {
+          "runner_role": "family-certify",
+          "cache_policy": "immutable-local",
+          "estimated_model_bytes": 34916274176
+        },
+        "notes": "Mistral Small 4 MoE and MLA architecture coverage"
+      }
+    },
+    {
+      "id": "family-step35",
+      "family": "step35",
+      "suites": [
+        "llama-family-certification"
+      ],
+      "cadences": [
+        "manual-full"
+      ],
+      "capability_tags": [
+        "gguf",
+        "moe"
+      ],
+      "artifact": {
+        "repo": "bartowski/stepfun-ai_Step-3.5-Flash-GGUF",
+        "revision": "a2943ef56a0a240bdfb9a2feee97a775f612476d",
+        "selector": "IQ1_S",
+        "files": [
+          {
+            "path": "stepfun-ai_Step-3.5-Flash-IQ1_S.gguf",
+            "size_bytes": 41301534944,
+            "sha256": "69a6683e8e427c17170aaa55c8ac1160d7b24c18aa2a60ea11e3f5810c3ebb97"
+          }
+        ]
+      },
+      "certification": {
+        "profile": "full",
+        "execution": {
+          "trunk_layers": 45,
+          "mtp_layers": 0,
+          "activation_width": 4096,
+          "speculative_policy": "mtp-if-present"
+        },
+        "resources": {
+          "runner_role": "family-certify",
+          "cache_policy": "immutable-local",
+          "estimated_model_bytes": 41296256512
+        },
+        "notes": "Step 3.5 Flash MoE with three leading dense blocks and mixed attention windows"
+      }
+    },
+    {
+      "id": "family-mimo2",
+      "family": "mimo2",
+      "suites": [
+        "llama-family-certification"
+      ],
+      "cadences": [
+        "manual-full"
+      ],
+      "capability_tags": [
+        "gguf",
+        "moe",
+        "mtp",
+        "multipart"
+      ],
+      "artifact": {
+        "repo": "bartowski/MiMo-V2.5-GGUF",
+        "revision": "e528cbf4b6197dd642b393acc069fb1cd529e085",
+        "selector": "IQ1_S",
+        "files": [
+          {
+            "path": "MiMo-V2.5-IQ1_S/MiMo-V2.5-IQ1_S-00001-of-00002.gguf",
+            "size_bytes": 39894774368,
+            "sha256": "a4f597f6dd9369240cf12d0b4a8c118e0659bf123b4290e042a6f334c2182520"
+          },
+          {
+            "path": "MiMo-V2.5-IQ1_S/MiMo-V2.5-IQ1_S-00002-of-00002.gguf",
+            "size_bytes": 24622278784,
+            "sha256": "50b56e1aabb935f7505b7aea37883957489509bb56c34a575c90496754ad593f"
+          }
+        ]
+      },
+      "certification": {
+        "profile": "full",
+        "execution": {
+          "trunk_layers": 48,
+          "mtp_layers": 3,
+          "activation_width": 4096,
+          "speculative_policy": "mtp-if-present"
+        },
+        "resources": {
+          "runner_role": "family-certify",
+          "cache_policy": "immutable-local",
+          "estimated_model_bytes": 64511067648
+        },
+        "notes": "MiMo V2.5 MoE with three native NextN heads"
+      }
+    },
+    {
+      "id": "family-minimax-m3",
+      "family": "minimax-m3",
+      "suites": [
+        "llama-family-certification"
+      ],
+      "cadences": [
+        "manual-full"
+      ],
+      "capability_tags": [
+        "gguf",
+        "moe",
+        "multipart"
+      ],
+      "artifact": {
+        "repo": "unsloth/MiniMax-M3-GGUF",
+        "revision": "a31ac6425155f773fdde697421c3b8cf42083ecf",
+        "selector": "UD-IQ1_M",
+        "files": [
+          {
+            "path": "UD-IQ1_M/MiniMax-M3-UD-IQ1_M-00001-of-00004.gguf",
+            "size_bytes": 8243104,
+            "sha256": "b1c2b41d5078f43c2229c790f86266c68ce5d6d23f05c93085951a30acaca998"
+          },
+          {
+            "path": "UD-IQ1_M/MiniMax-M3-UD-IQ1_M-00002-of-00004.gguf",
+            "size_bytes": 49165334304,
+            "sha256": "fee0653b3aaaf3f41f0e15c297550995149c4a448b7c7b6d056a6cc227fee3bc"
+          },
+          {
+            "path": "UD-IQ1_M/MiniMax-M3-UD-IQ1_M-00003-of-00004.gguf",
+            "size_bytes": 49782135840,
+            "sha256": "c3253c3f5f7d99ab7a6855ce8d1ed870b3630e08cf509dc4606fb5bfdf447f36"
+          },
+          {
+            "path": "UD-IQ1_M/MiniMax-M3-UD-IQ1_M-00004-of-00004.gguf",
+            "size_bytes": 29461567904,
+            "sha256": "ac01e73d8d7e829f0627a7a82bb253725f15312f5fec0d00b98ae7e168baafbb"
+          }
+        ]
+      },
+      "certification": {
+        "profile": "full",
+        "execution": {
+          "trunk_layers": 60,
+          "mtp_layers": 0,
+          "activation_width": 6144,
+          "speculative_policy": "mtp-if-present"
+        },
+        "resources": {
+          "runner_role": "family-certify",
+          "cache_policy": "immutable-local",
+          "estimated_model_bytes": 128408977920
+        },
+        "notes": "MiniMax M3 MoE with three leading dense blocks and sparse-attention state"
+      }
+    },
+    {
+      "id": "family-spark2-5",
+      "family": "spark2-5",
+      "suites": [
+        "llama-family-certification"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full"
+      ],
+      "capability_tags": [
+        "dense",
+        "gguf"
+      ],
+      "artifact": {
+        "repo": "XHToken/Spark-X2.5-4B-GGUF",
+        "revision": "d313463f1ff7dc29db20193fddc4ad8386d16261",
+        "selector": "Q4_K_M",
+        "files": [
+          {
+            "path": "Spark-X2.5-4B-Q4_K_M.gguf",
+            "size_bytes": 2600224352,
+            "sha256": "adfcfa19a4ed6a5985da8bf565fe15f8e1a7e131d79bae2d19d48d1c40109428"
+          }
+        ]
+      },
+      "certification": {
+        "profile": "full",
+        "execution": {
+          "trunk_layers": 36,
+          "mtp_layers": 0,
+          "activation_width": 2560,
+          "speculative_policy": "mtp-if-present"
+        },
+        "resources": {
+          "runner_role": "family-certify",
+          "cache_policy": "immutable-local",
+          "estimated_model_bytes": 2594836480
+        },
+        "notes": "Spark X2.5 dense mixed-window attention architecture coverage"
       }
     },
     {

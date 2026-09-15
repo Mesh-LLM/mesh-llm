@@ -6,6 +6,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import statistics
 import subprocess
 import sys
@@ -13,12 +14,9 @@ import time
 import urllib.parse
 import urllib.request
 
-IMAGE = 'ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d'
+IMAGE = 'ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7'
 EPOCH = 'mesh-llm-cuda-runner-sha256-' + IMAGE.split(':')[-1]
-KEY = 'mesh-llm-sccache-seed-linux-x86_64-img-8d93de6b-epoch-8d93de6b-v2-9522c1c392ee2b2554146347af6629ecfb45ccba2b8b849deb844fe93c53f09f'
-VERSION = '6e0f5d9449f86cfe3ca2e00b7bb4d1ce5034f7275d4c6135aa59f5f733af8d8a'
-CACHE_ID = 7456497330
-CACHE_SIZE = 235465265
+KEY_PREFIX = 'mesh-llm-sccache-seed-linux-x86_64-img-f499b79b-epoch-f499b79b-v3-'
 BUILD_DIR = '.deps/llama.cpp/build-stage-abi-dynamic-cpu'
 
 
@@ -36,39 +34,47 @@ def save(path, value):
     path.write_text(json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + '\n')
 
 
-def cache_identity(payload):
+def cache_identity(payload, key):
     require(isinstance(payload, dict) and isinstance(payload.get('actions_caches'), list), 'invalid cache listing')
-    matches = [item for item in payload['actions_caches'] if item.get('key') == KEY]
+    matches = [item for item in payload['actions_caches'] if item.get('key') == key]
     require(len(matches) == 1, 'missing seed or branch-shadow cache')
     item = matches[0]
-    for key, expected in {'id': CACHE_ID, 'key': KEY, 'version': VERSION,
-                          'ref': 'refs/heads/main', 'size_in_bytes': CACHE_SIZE}.items():
-        require(item.get(key) == expected, 'seed metadata mismatch: ' + key)
+    require(type(item.get('id')) is int and 0 < item['id'] <= 2**53 - 1, 'seed metadata mismatch: id')
+    require(item.get('key') == key, 'seed metadata mismatch: key')
+    require(isinstance(item.get('version'), str) and re.fullmatch(r'[0-9a-f]{64}', item['version']), 'seed metadata mismatch: version')
+    require(item.get('ref') == 'refs/heads/main', 'seed metadata mismatch: ref')
+    require(type(item.get('size_in_bytes')) is int and 0 < item['size_in_bytes'] <= 2 * 1024**3, 'seed metadata mismatch: size_in_bytes')
     return item
 
 
-def fetch_cache():
-    url = 'https://api.github.com/repos/Mesh-LLM/mesh-llm/actions/caches?' + urllib.parse.urlencode({'key': KEY, 'per_page': 100})
+def fetch_cache(key):
+    url = 'https://api.github.com/repos/Mesh-LLM/mesh-llm/actions/caches?' + urllib.parse.urlencode({'key': key, 'per_page': 100})
     request = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'})
     with urllib.request.urlopen(request, timeout=30) as response:
         payload = json.load(response)
     require(payload.get('total_count', 101) <= 100, 'cache listing pagination requires review')
-    return cache_identity(payload)
+    return cache_identity(payload, key)
+
+
+def canary_key():
+    key = os.environ.get('CANARY_KEY', '')
+    require(re.fullmatch(re.escape(KEY_PREFIX) + r'[0-9a-f]{64}', key), 'source seed recipe hash changed')
+    return key
 
 
 def preflight(directory):
     require(not directory.exists(), 'fresh evidence directory required')
     directory.mkdir()
-    require(os.environ.get('CANARY_KEY') == KEY, 'source seed recipe hash changed')
+    canary_cache_key = canary_key()
     require(os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch', 'manual canary only')
     require(os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted' and os.environ.get('RUNNER_ARCH') == 'X64', 'hosted X64 runner required')
     require(os.environ.get('LLAMA_STAGE_BUILD_DIR') == BUILD_DIR, 'runtime path drift')
-    for key, value in {'RUSTC_WRAPPER':'sccache', 'MESH_LLM_REQUIRE_SCCACHE':'1', 'CARGO_INCREMENTAL':'0',
-                       'CACHE_NAMESPACE':'mesh-llm', 'SCCACHE_GHA_ENABLED':'false', 'SCCACHE_MULTILEVEL_CHAIN':'disk',
-                       'SCCACHE_CACHE_SIZE':'2G', 'LLAMA_STAGE_BACKEND':'cpu'}.items():
-        require(os.environ.get(key)==value, 'canary environment drift: '+key)
-    for key in ('LLAMA_STAGE_USE_SCCACHE','SKIPPY_USE_SCCACHE'):
-        require(os.environ.get(key,'1')=='1', 'compiler cache disabled')
+    for name, value in {'RUSTC_WRAPPER':'sccache', 'MESH_LLM_REQUIRE_SCCACHE':'1', 'CARGO_INCREMENTAL':'0',
+                        'CACHE_NAMESPACE':'mesh-llm', 'SCCACHE_GHA_ENABLED':'false', 'SCCACHE_MULTILEVEL_CHAIN':'disk',
+                        'SCCACHE_CACHE_SIZE':'2G', 'LLAMA_STAGE_BACKEND':'cpu'}.items():
+        require(os.environ.get(name)==value, 'canary environment drift: '+name)
+    for name in ('LLAMA_STAGE_USE_SCCACHE','SKIPPY_USE_SCCACHE'):
+        require(os.environ.get(name,'1')=='1', 'compiler cache disabled')
     for name in ('MESH_NATIVE_RUNTIME_MODEL_PACKAGE_TOOL', 'CARGO_TARGET_DIR', 'SKIPPY_LLAMA_BUILD_DIR', 'LLAMA_STAGE_FORCE_BUILD', 'SKIPPY_FORCE_LLAMA_BUILD', 'MESH_NATIVE_RUNTIME_GPU_BENCHMARK_TOOL'):
         require(not os.environ.get(name), 'unexpected override: ' + name)
     for name in (BUILD_DIR, 'target', 'runtime-input'):
@@ -77,20 +83,20 @@ def preflight(directory):
     require(not cache.is_symlink() and (not cache.exists() or not any(cache.iterdir())), 'initial compiler cache is not empty')
     source = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
     require(source == os.environ['GITHUB_SHA'], 'source differs from dispatch revision')
-    for key in ('GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT'):
-        require(os.environ.get(key, '').isdigit() and int(os.environ[key]) > 0, 'invalid run metadata: '+key)
+    for name in ('GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT'):
+        require(os.environ.get(name, '').isdigit() and int(os.environ[name]) > 0, 'invalid run metadata: '+name)
     require(os.environ.get('CANARY_PAIR') in ('1', '2', '3') and os.environ.get('CANARY_ARM') in ('cold', 'warm'), 'invalid sample metadata')
     kernel = subprocess.check_output(['uname', '-srm'], text=True).strip()
     require(kernel.startswith('Linux ') and kernel.endswith(' x86_64'), 'invalid kernel identity')
-    metadata = fetch_cache()
+    metadata = fetch_cache(canary_cache_key)
     with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-        output.write('key='+KEY+'\n')
+        output.write('key='+canary_cache_key+'\n')
     cpu = subprocess.check_output(['lscpu', '--json'], text=True)
     cpu_fields = {item['field']: item['data'] for item in json.loads(cpu)['lscpu']}
     host = {key: cpu_fields.get(key) for key in ('Architecture:', 'CPU(s):', 'Model name:', 'Vendor ID:', 'Thread(s) per core:')}
     require(all(host.values()), 'missing host CPU identity')
     save(directory/'context.json', {'schema': 1, 'source': source, 'image': IMAGE, 'epoch': EPOCH,
-         'cache': metadata, 'publisher_run': 34230668171, 'publisher_source': 'a6487dd64de7d0df4a2d72145d18ab33be0f0a9c',
+         'cache': metadata,
          'pair': int(os.environ['CANARY_PAIR']), 'arm': os.environ['CANARY_ARM'],
          'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
          'build_dir': BUILD_DIR, 'initial_outputs_absent': True, 'host_cpu': host,
@@ -101,7 +107,13 @@ def preflight(directory):
 def restored(directory):
     context = read(directory/'context.json')
     context['restore_seconds'] = time.monotonic() - read(directory/'restore-start.json')['monotonic']
-    context['cache_after_restore'] = fetch_cache()
+    restored_cache = fetch_cache(context['cache']['key'])
+    require(
+        (restored_cache['id'], restored_cache['version']) ==
+        (context['cache']['id'], context['cache']['version']),
+        'restored cache identity changed',
+    )
+    context['cache_after_restore'] = restored_cache
     context['cache_hit'] = os.environ.get('CANARY_CACHE_HIT') == 'true'
     require(context['arm'] == 'cold' or context['cache_hit'], 'warm restore missed: inconclusive')
     require(context['arm'] != 'cold' or not any(Path(os.environ['SCCACHE_DIR']).iterdir()), 'cold cache populated before build')
@@ -228,7 +240,7 @@ def summarize(directory):
     require(set(indexed)=={(p,a) for p in (1,2,3) for a in ('cold','warm')}, 'duplicate/missing sample')
     for item in results:
         require(item.get('verified') is True and item.get('eligibility_changed') is False, 'missing verification')
-        cache_identity({'actions_caches':[item['cache']]})
+        cache_identity({'actions_caches':[item['cache']]}, item['cache']['key'])
         require(item['image']==IMAGE and item['epoch']==EPOCH, 'image mismatch')
         for field in ('total_seconds','action_seconds','restore_seconds'):
             value=item.get(field)

@@ -782,6 +782,63 @@ fn gemma4_e4b_rejects_known_bad_shared_kv_boundaries() {
 }
 
 #[test]
+fn balanced_planner_avoids_rejected_gemma4_boundaries() {
+    let request = TopologyPlanRequest {
+        topology_id: "gemma-balanced".to_string(),
+        model_id: "gemma4-e4b".to_string(),
+        layers: dense_attention_layers(42, 10),
+        nodes: nodes(3),
+        family: Some(gemma4_e4b_capability(42, 2560)),
+        policy: PlannerPolicy::default(),
+    };
+
+    let two_stage = plan_balanced_accepted_contiguous(&request, 2).expect("two-stage plan");
+    assert_eq!(two_stage.boundaries[0].layer_boundary, 21);
+    assert_eq!(two_stage.boundaries[0].decision, BoundaryDecision::Accepted);
+
+    let three_stage = plan_balanced_accepted_contiguous(&request, 3).expect("three-stage plan");
+    assert_eq!(
+        three_stage
+            .boundaries
+            .iter()
+            .map(|boundary| boundary.layer_boundary)
+            .collect::<Vec<_>>(),
+        vec![13, 27]
+    );
+    assert!(
+        three_stage
+            .boundaries
+            .iter()
+            .all(|boundary| boundary.decision == BoundaryDecision::Accepted)
+    );
+}
+
+#[test]
+fn balanced_planner_uses_generic_boundaries_without_a_reviewed_family() {
+    let request = TopologyPlanRequest {
+        topology_id: "generic-balanced".to_string(),
+        model_id: "unknown-family".to_string(),
+        layers: dense_attention_layers(24, 10),
+        nodes: nodes(3),
+        family: None,
+        policy: PlannerPolicy::default(),
+    };
+
+    let two_stage = plan_balanced_accepted_contiguous(&request, 2).expect("two-stage plan");
+    assert_eq!(two_stage.boundaries[0].layer_boundary, 12);
+
+    let three_stage = plan_balanced_accepted_contiguous(&request, 3).expect("three-stage plan");
+    assert_eq!(
+        three_stage
+            .boundaries
+            .iter()
+            .map(|boundary| boundary.layer_boundary)
+            .collect::<Vec<_>>(),
+        vec![8, 16]
+    );
+}
+
+#[test]
 fn gemma3n_requires_altup_sideband_and_reviewed_kv_boundary() {
     let request = TopologyPlanRequest {
         topology_id: "gemma3n".to_string(),

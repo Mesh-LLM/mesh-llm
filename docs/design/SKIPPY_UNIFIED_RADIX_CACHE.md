@@ -143,9 +143,9 @@ third radix implementation.
 Cross-family graph, tensor-layout, dtype, parity, and hybrid-boundary coverage
 is supplied separately by the policy-driven family battery in
 [PR #1436](https://github.com/Mesh-LLM/mesh-llm/pull/1436). Its checked-in
-policy currently certifies 32 pinned dense, MLA, MoE, hybrid, and recurrent
-family artifacts; hybrid/recurrent rows sweep planner cut offsets
-so first-layer-only detection defects cannot hide. That battery complements the
+policy certifies pinned dense, MLA, MoE, hybrid, and recurrent family
+artifacts. The production topology planner classifies every legal and rejected
+boundary before each model runs one balanced live certification. That battery complements the
 cache-specific OLD/NEW measurements here rather than replacing them.
 
 Acceptance requires successful requests, correct output preservation, exact
