@@ -52,7 +52,7 @@ ALPN accepts activation transport only.
 ## Responsibilities
 
 - binary stage message and reply codecs
-- fixed-f32 activation framing
+- multipart typed activation framing and codec policy
 - ready handshake encoding
 - stage config fields that must survive JSON generation, including K/V cache
   type strings consumed by the runtime layer

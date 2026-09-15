@@ -1876,6 +1876,8 @@ public:
                 input_indent + "    ggml_set_input(stage_inp->values);\n" +
                 input_indent + "    " + rwkv_first->variable +
                 " = stage_inp->values;\n" + input_indent +
+                "    res->add_skippy_activation_import(" +
+                rwkv_first->variable + ", 1);\n" + input_indent +
                 "    res->add_input(std::move(stage_inp));\n" + input_indent +
                 "}\n\n" + input_indent;
             valid &=

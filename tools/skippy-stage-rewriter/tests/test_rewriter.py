@@ -654,6 +654,7 @@ def main() -> int:
             source_root / "src/models/rwkv-first-value.cpp"
         ).read_text(encoding="utf-8")
         assert "std::make_unique<llm_graph_input_rwkv7_v_first>" in rwkv_source
+        assert "res->add_skippy_activation_import(v_first, 1);" in rwkv_source
         assert "res->add_skippy_activation_export(v_first, 1);" in rwkv_source
         rwkv_second = run(
             tool,

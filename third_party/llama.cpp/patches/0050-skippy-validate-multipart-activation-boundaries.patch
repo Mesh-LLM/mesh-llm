@@ -1,0 +1,55 @@
+From 35ba4eb6f0a355946936bae337a22f1977d1e96d Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Tue, 15 Sep 2026 23:19:50 +1000
+Subject: [PATCH] fix(skippy): validate multipart activation boundaries
+
+---
+ src/skippy/activation.cpp      | 7 ++++++-
+ src/skippy/execution-batch.cpp | 6 ++++++
+ 2 files changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
+index 5a6fc871e..c0ff99a96 100644
+--- a/src/skippy/activation.cpp
++++ b/src/skippy/activation.cpp
+@@ -533,6 +533,12 @@ enum skippy_status skippy_copy_output_activation_frame(
+         size_t * out_output_payload_bytes,
+         skippy_activation_desc * output_desc,
+         struct skippy_error ** out_error) {
++    struct pending_activation_cleanup {
++        skippy_session * session;
++        ~pending_activation_cleanup() {
++            if (session != nullptr) session->pending_activation_exports.clear();
++        }
++    } cleanup{session};
+     if (!skippy_emits_activation_frame(session)) {
+         return skippy_success(out_error);
+     }
+@@ -611,7 +617,6 @@ enum skippy_status skippy_copy_output_activation_frame(
+         }
+         std::memcpy(static_cast<uint8_t *>(output_payload) + part.payload_offset, source, source_bytes);
+     }
+-    session->pending_activation_exports.clear();
+     if (out_output_payload_bytes != nullptr) *out_output_payload_bytes = desc->payload_bytes;
+     return skippy_success(out_error);
+ 
+diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
+index bdefb9ff6..e666e075a 100644
+--- a/src/skippy/execution-batch.cpp
++++ b/src/skippy/execution-batch.cpp
+@@ -141,6 +141,12 @@ static enum skippy_status skippy_copy_batched_exports(
+     for (size_t part_index = 0; part_index < boundary.part_count; ++part_index) {
+         const auto & part = desc->parts[part_index];
+         ggml_tensor * tensor = (*ports)[part_index].tensor;
++        if (part.rank == 0 || part.rank > SKIPPY_ACTIVATION_MAX_DIMS ||
++                part.token_axis < 0 || part.token_axis >= static_cast<int32_t>(part.rank)) {
++            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
++                    "batched graph export has an invalid token axis");
++            return SKIPPY_STATUS_RUNTIME_ERROR;
++        }
+         const size_t token_axis = static_cast<size_t>(part.token_axis);
+         const size_t inner_bytes = static_cast<size_t>(part.byte_strides[token_axis]);
+         const size_t destination_plane_bytes = inner_bytes*token_count;
+-- 
+2.54.0 (Apple Git-157)
+

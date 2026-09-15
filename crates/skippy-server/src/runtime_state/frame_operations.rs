@@ -781,6 +781,9 @@ fn combine_activation_frames(frames: &[ActivationFrame]) -> Result<ActivationFra
             usize::try_from(first_part.rank).context("activation part rank exceeds usize")?;
         let token_axis = usize::try_from(first_part.token_axis)
             .context("activation part token axis is negative")?;
+        if rank == 0 || rank > first_part.dimensions.len() || token_axis >= rank {
+            bail!("cannot combine incompatible activation parts");
+        }
         let inner_bytes = usize::try_from(first_part.byte_strides[token_axis])
             .context("activation part token stride exceeds usize")?;
         let mut frame_parts = Vec::with_capacity(frames.len());
@@ -878,5 +881,19 @@ mod iteration_admission_tests {
     fn rejects_batch_before_partial_session_admission() {
         assert!(ensure_iteration_session_capacity(3, 2).is_err());
         assert!(ensure_iteration_session_capacity(2, 2).is_ok());
+    }
+
+    #[test]
+    fn rejects_invalid_activation_axis_before_combining() {
+        let mut frame = crate::test_activation::f32_frame(1, &[1.0]);
+        frame.desc.parts[0].token_axis = 4;
+
+        let error = combine_activation_frames(&[frame]).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("cannot combine incompatible activation parts")
+        );
     }
 }

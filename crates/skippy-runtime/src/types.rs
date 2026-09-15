@@ -123,15 +123,16 @@ impl ActivationBoundaryDesc {
         if primary.ggml_type != crate::GGML_TYPE_F32 || primary.token_axis < 0 {
             bail!("{edge} primary activation part is not token-indexed F32");
         }
+        let rank = usize::try_from(primary.rank)
+            .with_context(|| format!("{edge} primary activation rank exceeds usize"))?;
+        let token_axis = usize::try_from(primary.token_axis)
+            .with_context(|| format!("{edge} primary activation token axis is negative"))?;
+        if rank == 0 || rank > primary.dimensions.len() || token_axis >= rank {
+            bail!("{edge} primary activation part has an invalid rank or token axis");
+        }
         let mut elements = 1_u64;
-        for (axis, dimension) in primary
-            .dimensions
-            .iter()
-            .copied()
-            .enumerate()
-            .take(primary.rank as usize)
-        {
-            if axis == primary.token_axis as usize {
+        for (axis, dimension) in primary.dimensions.iter().copied().enumerate().take(rank) {
+            if axis == token_axis {
                 continue;
             }
             let dimension = u64::try_from(dimension)
@@ -144,7 +145,7 @@ impl ActivationBoundaryDesc {
             .with_context(|| format!("graph-observed {edge} activation width exceeds i32"))
     }
 
-    pub fn payload_bytes(self, edge: &str, token_count: u32) -> Result<u64> {
+    pub fn payload_bytes_hint(self, edge: &str, token_count: u32) -> Result<Option<u64>> {
         let mut total = 0_u64;
         for part in self.parts()? {
             if part.token_axis < 0
@@ -165,9 +166,10 @@ impl ActivationBoundaryDesc {
                 let dimension = if axis == part.token_axis as usize {
                     u64::from(token_count)
                 } else {
-                    u64::try_from(dimension).with_context(|| {
-                        format!("{edge} activation part has an unresolved dynamic dimension")
-                    })?
+                    match u64::try_from(dimension) {
+                        Ok(dimension) => dimension,
+                        Err(_) => return Ok(None),
+                    }
                 };
                 elements = elements
                     .checked_mul(dimension)
@@ -180,7 +182,12 @@ impl ActivationBoundaryDesc {
                 .checked_add(bytes)
                 .context("activation payload bytes overflow")?;
         }
-        Ok(total)
+        Ok(Some(total))
+    }
+
+    pub fn payload_bytes(self, edge: &str, token_count: u32) -> Result<u64> {
+        self.payload_bytes_hint(edge, token_count)?
+            .with_context(|| format!("{edge} activation part has an unresolved dynamic dimension"))
     }
 }
 
@@ -939,6 +946,18 @@ mod activation_boundary_descriptor_tests {
         invalid_axis.parts[0].token_axis = -1;
         cases.push((invalid_axis, "not token-indexed F32"));
 
+        let mut axis_outside_rank = f32_boundary(1024);
+        axis_outside_rank.parts[0].token_axis = 2;
+        cases.push((axis_outside_rank, "invalid rank or token axis"));
+
+        let mut zero_rank = f32_boundary(1024);
+        zero_rank.parts[0].rank = 0;
+        cases.push((zero_rank, "invalid rank or token axis"));
+
+        let mut excessive_rank = f32_boundary(1024);
+        excessive_rank.parts[0].rank = 5;
+        cases.push((excessive_rank, "invalid rank or token axis"));
+
         let mut invalid_count = f32_boundary(1024);
         invalid_count.part_count = 0;
         cases.push((invalid_count, "part count is invalid"));
@@ -965,6 +984,23 @@ mod activation_boundary_descriptor_tests {
             .payload_bytes("output", u32::MAX)
             .expect_err("overflowing payload size must fail");
         assert!(error.to_string().contains("overflow"));
+    }
+
+    #[test]
+    fn payload_size_hint_defers_dynamic_non_token_dimensions() {
+        let mut boundary = f32_boundary(1024);
+        boundary.parts[0].rank = 3;
+        boundary.parts[0].token_axis = 2;
+        boundary.parts[0].dimensions = [1024, -1, -1, 0];
+
+        assert_eq!(boundary.payload_bytes_hint("output", 2).unwrap(), None);
+        assert!(
+            boundary
+                .payload_bytes("output", 2)
+                .unwrap_err()
+                .to_string()
+                .contains("unresolved dynamic dimension")
+        );
     }
 }
 

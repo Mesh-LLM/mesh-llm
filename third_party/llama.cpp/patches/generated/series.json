@@ -1,5 +1,5 @@
 {
-  "full_patch_sha256": "75df5c84d091006b9190e5668adbeda9e64dd34df29edf8eb907df662df5efba",
+  "full_patch_sha256": "c333f1d991e21ce8314022ea6a453ef5e39dba154ef184cd8f0c8b113212f45f",
   "generator_version": "0.3.0",
   "schema_version": 1,
   "shards": [
@@ -39,7 +39,7 @@
         "rwkv7"
       ],
       "file": "0004-family-arwkv7--rwkv7.patch",
-      "sha256": "8495e6059976dc94cf9a793445876dba7fa37e62e69c139519143d2408df6810",
+      "sha256": "17e8703cdcf94ec31fdb71456c87d4664358a49cb8757e69fdade25d20aec0b4",
       "sources": [
         "src/models/arwkv7.cpp"
       ]
@@ -720,7 +720,7 @@
         "rwkv7"
       ],
       "file": "0071-family-rwkv7.patch",
-      "sha256": "e603b3a87dcba4f938a72365969db60acbc99ae0c5ae6b8f5c0c87410f1dc6be",
+      "sha256": "6dd4a587926267ddba91e15411e96c4252515ede8997d78b343bb560af5abfbd",
       "sources": [
         "src/models/rwkv7.cpp"
       ]

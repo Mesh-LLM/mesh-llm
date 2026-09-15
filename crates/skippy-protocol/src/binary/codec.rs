@@ -276,6 +276,7 @@ pub fn write_stage_message(mut writer: impl Write, message: &StageWireMessage) -
         state.flags &= !super::state_flags::CHAT_SAMPLING_METADATA;
     }
     let activation_wire_byte_count = if message.kind == WireMessageKind::StateImport
+        || message.kind == WireMessageKind::Stop
         || state.source_stage_index < 0
         || message.kind.is_activationless_prefix_cache_control()
     {

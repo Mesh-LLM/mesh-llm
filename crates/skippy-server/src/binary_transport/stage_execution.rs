@@ -384,7 +384,8 @@ pub(crate) fn stage_output_activation_capacity(
     let token_count = u32::try_from(token_count).context("output activation token count")?;
     let bytes = boundary
         .context("loaded stage does not expose an output activation boundary")?
-        .payload_bytes("output", token_count)?;
+        .payload_bytes_hint("output", token_count)?
+        .unwrap_or(0);
     usize::try_from(bytes).context("output activation capacity exceeds usize")
 }
 pub(in crate::binary_transport) fn estimated_reply_wire_bytes(
@@ -1022,8 +1023,9 @@ mod tests {
     use super::{
         decode_record_tokens_sideband, first_decode_message_with_full_prompt_sideband,
         is_decode_frame_batch_candidate, prefix_cache_test_config, split_native_mtp_reply,
-        take_ready_downstream, take_warm_or_connect_downstream, token_sideband_or_fill,
-        warm_downstream_is_healthy, warm_downstream_preconnect_enabled_from,
+        stage_output_activation_capacity, take_ready_downstream, take_warm_or_connect_downstream,
+        token_sideband_or_fill, warm_downstream_is_healthy,
+        warm_downstream_preconnect_enabled_from,
     };
     use skippy_protocol::binary::{StageStateHeader, StageWireMessage, WireMessageKind};
     use std::{
@@ -1072,6 +1074,19 @@ mod tests {
         assert!(!warm_downstream_preconnect_enabled_from(Some("0")));
         assert!(warm_downstream_preconnect_enabled_from(Some("true")));
         assert!(warm_downstream_preconnect_enabled_from(Some(" ON ")));
+    }
+
+    #[test]
+    fn dynamic_output_dimensions_defer_capacity_to_native_preparation() {
+        let mut boundary = crate::test_activation::boundary_f32(4);
+        boundary.parts[0].rank = 3;
+        boundary.parts[0].token_axis = 2;
+        boundary.parts[0].dimensions = [4, -1, -1, 0];
+
+        assert_eq!(
+            stage_output_activation_capacity(true, 2, Some(boundary)).unwrap(),
+            0
+        );
     }
 
     #[test]

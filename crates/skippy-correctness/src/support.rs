@@ -103,16 +103,19 @@ pub fn activation_width(frame: &skippy_runtime::ActivationFrame) -> Result<i32> 
         primary.ggml_type == skippy_runtime::GGML_TYPE_F32,
         "primary activation part is not F32"
     );
+    let rank = usize::try_from(primary.rank).context("primary activation rank exceeds usize")?;
+    anyhow::ensure!(
+        rank > 0 && rank <= primary.dimensions.len(),
+        "primary activation part has an invalid rank"
+    );
     let token_axis = usize::try_from(primary.token_axis)
         .context("primary activation part has a negative token axis")?;
+    anyhow::ensure!(
+        token_axis < rank,
+        "primary activation part has an invalid token axis"
+    );
     let mut width = 1_u64;
-    for (axis, dimension) in primary
-        .dimensions
-        .iter()
-        .copied()
-        .enumerate()
-        .take(primary.rank as usize)
-    {
+    for (axis, dimension) in primary.dimensions.iter().copied().enumerate().take(rank) {
         if axis != token_axis {
             width = width
                 .checked_mul(u64::try_from(dimension).context("invalid activation dimension")?)

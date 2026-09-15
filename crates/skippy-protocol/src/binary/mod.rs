@@ -763,6 +763,34 @@ mod tests {
     }
 
     #[test]
+    fn stop_message_round_trips_without_activation_from_a_stage() {
+        let mut state = StageStateHeader::new(WireMessageKind::Stop);
+        state.source_stage_index = 0;
+        let message = StageWireMessage {
+            kind: WireMessageKind::Stop,
+            pos_start: 0,
+            token_count: 0,
+            state,
+            request_id: 19,
+            session_id: 23,
+            sampling: None,
+            chat_sampling_metadata: None,
+            tokens: Vec::new(),
+            positions: Vec::new(),
+            activation: Vec::new(),
+            raw_bytes: Vec::new(),
+        };
+
+        let mut bytes = Vec::new();
+        write_stage_message(&mut bytes, &message).unwrap();
+        let decoded = read_stage_message(Cursor::new(bytes), 2048).unwrap();
+
+        assert_eq!(decoded.kind, WireMessageKind::Stop);
+        assert_eq!(decoded.state.source_stage_index, 0);
+        assert!(decoded.activation.is_empty());
+    }
+
+    #[test]
     fn stage_message_bulk_reads_sidebands() {
         let value_count = 4_096;
         let mut state = StageStateHeader::new(WireMessageKind::PrefillEmbd);

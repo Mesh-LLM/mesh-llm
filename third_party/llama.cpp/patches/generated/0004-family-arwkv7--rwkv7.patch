@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/arwkv7.cpp b/src/models/arwkv7.cpp
-index b38b2064785b2d4ec566a228e01fded680e2a67f..158ac68cc9ae642a7c88fdfeb6491eb016f8ebf0 100644
+index b38b2064785b2d4ec566a228e01fded680e2a67f..ff6d0ba47622006a1e78ab75c13c8690b9530639 100644
 --- a/src/models/arwkv7.cpp
 +++ b/src/models/arwkv7.cpp
 @@ -124,7 +124,12 @@ llama_model_arwkv7::graph::graph(const llama_model & model, const llm_graph_para
@@ -26,7 +26,7 @@ index b38b2064785b2d4ec566a228e01fded680e2a67f..158ac68cc9ae642a7c88fdfeb6491eb0
  
      auto * rs_inp = build_rs_inp();
  
-@@ -132,9 +137,20 @@ llama_model_arwkv7::graph::graph(const llama_model & model, const llm_graph_para
+@@ -132,9 +137,21 @@ llama_model_arwkv7::graph::graph(const llama_model & model, const llm_graph_para
      const auto n_seq_tokens = ubatch.n_seq_tokens;
      const auto n_seqs = ubatch.n_seqs;
  
@@ -37,6 +37,7 @@ index b38b2064785b2d4ec566a228e01fded680e2a67f..158ac68cc9ae642a7c88fdfeb6491eb0
 +        cb(stage_inp->values, "inp_rwkv7_v_first", -1);
 +        ggml_set_input(stage_inp->values);
 +        v_first = stage_inp->values;
++        res->add_skippy_activation_import(v_first, 1);
 +        res->add_input(std::move(stage_inp));
 +    }
 +
@@ -49,7 +50,7 @@ index b38b2064785b2d4ec566a228e01fded680e2a67f..158ac68cc9ae642a7c88fdfeb6491eb0
          const llama_layer * layer = &model.layers[il];
          inpL = ggml_reshape_3d(ctx0, inpL, n_embd, n_seq_tokens, n_seqs);
  
-@@ -161,7 +177,7 @@ llama_model_arwkv7::graph::graph(const llama_model & model, const llm_graph_para
+@@ -161,7 +178,7 @@ llama_model_arwkv7::graph::graph(const llama_model & model, const llm_graph_para
          cur     = ggml_reshape_2d(ctx0, cur,     n_embd, n_tokens);
          ffn_inp = ggml_reshape_2d(ctx0, ffn_inp, n_embd, n_tokens);
  
@@ -58,7 +59,7 @@ index b38b2064785b2d4ec566a228e01fded680e2a67f..158ac68cc9ae642a7c88fdfeb6491eb0
              cur     = ggml_get_rows(ctx0, cur,     inp_out_ids);
              ffn_inp = ggml_get_rows(ctx0, ffn_inp, inp_out_ids);
          }
-@@ -186,7 +202,16 @@ llama_model_arwkv7::graph::graph(const llama_model & model, const llm_graph_para
+@@ -186,7 +203,16 @@ llama_model_arwkv7::graph::graph(const llama_model & model, const llm_graph_para
  
          // input for next layer
          inpL = cur;

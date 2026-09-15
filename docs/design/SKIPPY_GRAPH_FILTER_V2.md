@@ -386,26 +386,19 @@ negative fixtures fail before topology publication.
   identities. Generation-7 nodes may remain visible to mesh discovery but
   cannot join, coordinate, source artifacts for, or receive a generation-10
   topology. There is no downgrade or v1/direct-GGUF fallback.
-- Keep the current activation and KV data framing unchanged for boundaries
-  exactly representable as the existing single raw-F32 activation plus
-  supported flags. Fail closed before topology publication when a derived
-  boundary is not representable.
-- In a separate reviewed workstream, add a negotiated data-plane generation for
-  typed activation bundles:
+- Carry graph-described activation frontiers in the generation-10 multipart
+  frame. Each part includes:
   - repeated plane descriptors with stable semantic ids;
   - dtype, layout, dimensions/strides, byte offset, and byte length;
   - bounded payload framing and integrity validation;
   - exact producer/consumer descriptor matching.
+- Select the configured codec, or a lossless codec under the lossless policy,
+  while forwarding. Raw F32 remains a supported codec and fallback. Receivers
+  decode under the same policy and validate the complete typed descriptor.
 - Preserve discovery-level mixed-version visibility, but reject
   mixed-generation split topologies through capability negotiation at the
   coordinated v2-only cutoff. Package v1 compatibility is intentionally not
   retained.
-- The transport workstream may proceed independently, but it must land before
-  graph-filter-v2 cutover if the frozen expected support matrix contains any
-  required model or cut whose boundary the current data framing cannot
-  represent. Reduced support requires an explicit, separately reviewed product
-  decision.
-
 **Exit gate:** graph-described multipart activation framing runs behind
 generation-10 control admission; every participant echoes and verifies the same
 package/plan/stage descriptor, typed frontier obligations in the frozen support

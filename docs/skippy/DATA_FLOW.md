@@ -116,7 +116,7 @@ All 3 boundaries:
 ## Optimization Implication
 
 The next prefill optimization should attack activation traffic or activation
-handling before spending time on token/control traffic. The current wire uses
-raw little-endian `f32` so transport adds no quantization error and needs no
-per-family dtype policy. Compression or quantization belongs in a separately
-versioned protocol experiment with a model-agnostic safety contract.
+handling before spending time on token/control traffic. The wire carries a
+multipart typed descriptor and applies the configured or lossless-selected
+codec to each frame. Raw little-endian `f32` remains the exact fallback;
+compression and quantization use the same model-agnostic descriptor contract.
