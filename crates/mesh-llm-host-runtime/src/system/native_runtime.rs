@@ -369,6 +369,27 @@ mod dynamic {
                         profile.arch
                     );
                 }
+                let evaluation = mesh_llm_native_runtime::evaluate_native_runtime_artifact(
+                    &outcome.runtime.manifest.runtime,
+                    &profile,
+                    &startup_selection.mesh_version,
+                    startup_selection.skippy_abi.as_deref(),
+                    &startup_selection.runtime_selection,
+                );
+                if !evaluation.compatible {
+                    let reasons = evaluation
+                        .rejection_reasons
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    bail!(
+                        "installed native runtime {} is not compatible with startup on {}/{}: {reasons}",
+                        outcome.runtime.native_runtime_id,
+                        profile.os,
+                        profile.arch
+                    );
+                }
                 let load_plan = outcome.runtime.load_plan()?;
                 Ok(Some(startup_load_plan_from_installed(
                     outcome.runtime.mesh_version.clone(),
@@ -655,7 +676,11 @@ mod dynamic {
                 id,
                 std::env::consts::OS,
                 std::env::consts::ARCH,
-                None,
+                if cfg!(target_os = "linux") {
+                    Some("2.17")
+                } else {
+                    None
+                },
             );
         }
 
@@ -1118,6 +1143,75 @@ mod dynamic {
             let error = result.unwrap_err();
             assert!(error.to_string().contains("not eligible for startup"));
             assert_eq!(*install_calls.lock().unwrap(), 1);
+            assert_eq!(*load_calls.lock().unwrap(), 0);
+        }
+
+        #[tokio::test]
+        async fn startup_rejects_post_install_runtime_with_newer_glibc_before_ffi_load() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+            let runtime_id = "meshllm-native-runtime-test-cpu";
+            let release_version = "0.68.0";
+            let runtime_dir = temp.path().join("newer-glibc-runtime");
+            write_runtime_for_platform(
+                &runtime_dir,
+                Some(release_version),
+                runtime_id,
+                "linux",
+                "x86_64",
+                Some("2.38"),
+            );
+            let load_calls = Arc::new(Mutex::new(0_usize));
+            let cache_for_executor = cache.clone();
+            let runtime_dir_for_executor = runtime_dir.clone();
+
+            let result = try_load_installed_native_runtime_with(
+                || false,
+                || Ok(cache.clone()),
+                || linux_host_profile(Some("2.35")),
+                || NativeRuntimeInstallOptions {
+                    mesh_version: release_version.to_string(),
+                    skippy_abi_version: Some("0.1.25".to_string()),
+                    allow_download: true,
+                    ..Default::default()
+                },
+                move |_options| {
+                    let cache = cache_for_executor.clone();
+                    let runtime_dir = runtime_dir_for_executor.clone();
+                    async move {
+                        let runtime = cache.install_from_dir(&runtime_dir)?;
+                        Ok(NativeRuntimeInstallOutcome {
+                            status:
+                                crate::system::native_runtime_install::NativeRuntimeInstallStatus::Installed,
+                            resolution: mesh_llm_native_runtime::NativeRuntimeResolution {
+                                source: mesh_llm_native_runtime::NativeRuntimeSource::Download {
+                                    url: "https://example.invalid/newer-glibc-runtime.tar.gz".to_string(),
+                                },
+                                selected: runtime.manifest.runtime.clone(),
+                                evaluated: Vec::new(),
+                            },
+                            runtime,
+                            sources: Default::default(),
+                        })
+                    }
+                },
+                NativeRuntimeStartupSelection::explicit(
+                    release_version.to_string(),
+                    Some("0.1.25".to_string()),
+                    RuntimeSelection::Recommended,
+                ),
+                {
+                    let load_calls = Arc::clone(&load_calls);
+                    move |_libraries| {
+                        *load_calls.lock().unwrap() += 1;
+                        Ok(())
+                    }
+                },
+            )
+            .await;
+
+            let error = result.unwrap_err();
+            assert!(error.to_string().contains("glibc too old"), "{error:#}");
             assert_eq!(*load_calls.lock().unwrap(), 0);
         }
 

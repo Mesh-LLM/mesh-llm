@@ -474,9 +474,15 @@ for rel_path in [*runtime["libraries"], *(runtime.get("tools") or {})]:
     ).stdout
     _, heading, needs = output.partition("Version needs section")
     if heading:
+        def glibc_requirement(version):
+            if version == "GLIBC_ABI_DT_RELR":
+                return (2, 36)
+            major, minor = version.removeprefix("GLIBC_").split(".")
+            return (int(major), int(minor))
+
         requirements.extend(
-            (int(major), int(minor))
-            for major, minor in re.findall(r"GLIBC_(\d+)\.(\d+)", needs)
+            glibc_requirement(version)
+            for version in re.findall(r"GLIBC_(?:\d+\.\d+|ABI_DT_RELR)", needs)
         )
 actual = f"{max(requirements)[0]}.{max(requirements)[1]}" if requirements else None
 if declared is None:
