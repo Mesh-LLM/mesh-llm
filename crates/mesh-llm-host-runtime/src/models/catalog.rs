@@ -10,14 +10,27 @@ use hf_hub::progress::{FileProgress, FileStatus};
 use mesh_llm_events::terminal_progress::{
     SpinnerHandle, clear_stderr_line, ratio_complete_u64, render_inline_progress_bar, start_spinner,
 };
-use mesh_llm_events::{ModelProgressStatus, OutputEvent, emit_event, interactive_tui_active};
+use mesh_llm_events::{
+    ModelProgressStatus, OutputEvent, emit_event, interactive_tui_active, json_mode_enabled,
+};
 #[cfg(test)]
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
+
+/// Whether a carriage-return progress frame has a screen to draw on.
+///
+/// The frames below are written with `\r` and ANSI escapes, which only make
+/// sense on a terminal. A supervised runtime (the tray, launchd, a container)
+/// redirects stderr to a log file while still using pretty logs, and every
+/// 150 ms frame is then appended rather than overwritten -- tens of megabytes
+/// of escape sequences for one model download.
+fn download_progress_is_visible(json_mode: bool, stderr_is_terminal: bool) -> bool {
+    !json_mode && stderr_is_terminal
+}
 
 const DOWNLOAD_PROGRESS_PREFIX_WIDTH: usize = "Downloading  100.0%  ".len();
 const DOWNLOAD_PROGRESS_BAR_WIDTH: u16 = 32;
@@ -369,6 +382,11 @@ impl MeshDownloadProgress {
             return;
         }
         state.last_draw = Some(now);
+        if !download_progress_is_visible(json_mode_enabled(), std::io::stderr().is_terminal())
+            && !interactive_tui_active()
+        {
+            return;
+        }
         if interactive_tui_active() {
             emit_model_progress(
                 &state.filename,
@@ -1726,6 +1744,17 @@ mod tests {
         assert!(fixture.is_dir());
         assert_eq!(std::fs::read(sentinel).unwrap(), b"keep");
         assert!(!missing.exists());
+    }
+
+    #[test]
+    fn download_progress_frames_need_a_terminal_and_pretty_logs() {
+        // The only case a carriage-return frame can be overwritten in place.
+        assert!(download_progress_is_visible(false, true));
+        // Redirected stderr: a supervised runtime's log file, not a screen.
+        assert!(!download_progress_is_visible(false, false));
+        // JSON logs: structured events carry progress instead.
+        assert!(!download_progress_is_visible(true, true));
+        assert!(!download_progress_is_visible(true, false));
     }
 
     #[test]
