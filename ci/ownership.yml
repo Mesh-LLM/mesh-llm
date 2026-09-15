@@ -59,6 +59,7 @@
         ".cargo/**",
         ".dockerignore",
         ".gitignore",
+        ".gitattributes",
         ".nvmrc",
         ".well-known/**",
         "LICENSE",
