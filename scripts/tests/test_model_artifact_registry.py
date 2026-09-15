@@ -71,6 +71,23 @@ class ModelArtifactRegistryTests(unittest.TestCase):
                 with self.subTest(suite=suite, artifact=artifact["id"]):
                     self.assertTrue(required_cadences.issubset(artifact["cadences"]))
 
+    def test_native_event_gate_model_allows_pr_and_main(self) -> None:
+        import yaml
+
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/ci-linux-runtime-slice.yml").read_text()
+        )
+        steps = workflow["jobs"]["linux_runtime"]["steps"]
+        model = next(step["with"] for step in steps if step.get("id") == "gate_model")
+        for cadence in ("pull-request", "main"):
+            with self.subTest(cadence=cadence):
+                subprocess.run(
+                    ["python3", str(RESOLVER), model["model_manifest"],
+                     "--artifact-id", model["model_artifact_id"],
+                     "--cadence", cadence, "--require-single-file"],
+                    cwd=ROOT, check=True, capture_output=True, text=True,
+                )
+
     def test_product_integration_manifest_is_the_pinned_dense_recurrent_pair(self) -> None:
         manifest = json.loads(
             (MANIFESTS / "product-integration-smoke.json").read_text(

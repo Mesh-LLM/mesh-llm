@@ -83,7 +83,7 @@ class GateScriptBehaviorTests(unittest.TestCase):
         bundle: str | None = None,
         model: str | None = None,
         evidence_seed: str | None = None,
-        relative_evidence: bool = False,
+        evidence_path: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         stub_bin = root / "stub-bin"
         stub_bin.mkdir(exist_ok=True)
@@ -113,7 +113,7 @@ class GateScriptBehaviorTests(unittest.TestCase):
                 "--model",
                 model,
                 "--evidence",
-                "evidence.txt" if relative_evidence else str(evidence),
+                evidence_path if evidence_path is not None else str(evidence),
             ],
             cwd=root,
             capture_output=True,
@@ -143,23 +143,24 @@ class GateScriptBehaviorTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("executed", result.stdout)
 
-    def test_relative_evidence_survives_cargo_changing_directory(self) -> None:
+    def test_relative_evidence_survives_cargo_working_directory(self) -> None:
         """Cargo's crate cwd must not redirect the marker away from the wrapper."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "package").mkdir()
             result = self.run_gate(
                 root,
-                relative_evidence=True,
                 cargo_body=(
                     "#!/usr/bin/env bash\n"
-                    'cd "$(dirname "$MESH_LLM_RUNTIME_EVENTS_MODEL")/package"\n'
+                    'cd "$(dirname "$0")"\n'
                     'printf \'executed\\n\' >> "$MESH_LLM_RUNTIME_EVENTS_EVIDENCE_FILE"\n'
                 ),
+                evidence_path="nested evidence/result.txt",
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertEqual((root / "evidence.txt").read_text(), "executed\n")
-            self.assertFalse((root / "package/evidence.txt").exists())
+            self.assertEqual(
+                (root / "nested evidence/result.txt").read_text(), "executed\n"
+            )
+            self.assertFalse((root / "stub-bin/nested evidence").exists())
 
     def test_a_blocked_gate_fails_even_though_the_test_exits_zero(self) -> None:
         """The whole reason the script checks the marker.
@@ -338,11 +339,10 @@ class LinuxRuntimeSliceTests(unittest.TestCase):
                 self.assertEqual(len(resolved["sha256"]), 64)
                 self.assertGreater(int(resolved["size_bytes"]), 0)
 
-    def test_gate_cadences_do_not_expand_family_certification(self) -> None:
-        """Ordinary CI may load Qwen without scheduling family certification."""
+    def test_family_certification_has_one_complete_model_list(self) -> None:
         manifest = json.loads((ROOT / "ci/llama-canary/family-certified.json").read_text())
-        model = next(row for row in manifest["models"] if row["family"] == "qwen3-dense")
-        self.assertEqual(model["cadences"], ["llama-bump", "manual-full", "nightly"])
+        self.assertEqual(81, len(manifest["models"]))
+        self.assertTrue(all("cadences" not in model for model in manifest["models"]))
 
     def test_evidence_is_uploaded_even_when_the_gate_fails(self) -> None:
         """The evidence file is how a failure is diagnosed, so it must

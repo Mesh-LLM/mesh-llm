@@ -4,6 +4,7 @@ import copy
 import importlib.util
 import json
 from fnmatch import fnmatchcase
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -216,6 +217,16 @@ class PlanCiTests(unittest.TestCase):
                 "runner_contract_required": False,
             },
         )
+
+    def test_planning_metadata_does_not_invoke_the_rustc_wrapper(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"RUSTC_WRAPPER": "missing-wrapper-for-metadata-test"},
+        ):
+            plan = PLANNER.build_plan(fixture("docs-only.json"), root=ROOT)
+
+        self.assertEqual(plan["domains"], ["docs"])
+        self.assertEqual(plan["affected_crates"], [])
 
     def test_draft_profile_skips_build_slices_for_regular_changes(self) -> None:
         payload = fixture("runtime.json")
