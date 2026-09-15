@@ -1844,7 +1844,11 @@ mod dynamic {
                         os: std::env::consts::OS.to_string(),
                         arch: std::env::consts::ARCH.to_string(),
                         target: None,
-                        min_glibc: None,
+                        min_glibc: if cfg!(target_os = "linux") {
+                            Some("2.17".to_string())
+                        } else {
+                            None
+                        },
                     },
                     backend,
                     rank: 0,
