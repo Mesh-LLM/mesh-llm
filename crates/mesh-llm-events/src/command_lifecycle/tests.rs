@@ -45,6 +45,9 @@ impl Drop for OutputSinkResetGuard {
 
 #[test]
 fn public_emit_is_silent_unless_verbose_enabled() {
+    let _sink_lock = crate::OUTPUT_SINK_TEST_LOCK
+        .lock()
+        .expect("output sink test lock");
     let sink = Arc::new(RecordingSink::new(LogFormat::Pretty));
     let _sink_guard = OutputSinkResetGuard;
     let _verbose_guard = VerboseResetGuard;

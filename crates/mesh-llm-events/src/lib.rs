@@ -231,6 +231,9 @@ pub trait OutputSink: Send + Sync {
 
 static OUTPUT_SINK: OnceLock<RwLock<Option<Arc<dyn OutputSink>>>> = OnceLock::new();
 
+#[cfg(test)]
+pub(crate) static OUTPUT_SINK_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn output_sink_slot() -> &'static RwLock<Option<Arc<dyn OutputSink>>> {
     OUTPUT_SINK.get_or_init(|| RwLock::new(None))
 }

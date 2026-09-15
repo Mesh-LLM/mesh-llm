@@ -178,6 +178,9 @@ mod tests {
 
     #[test]
     fn writers_pass_through_without_an_installed_sink() {
+        let _sink_lock = crate::OUTPUT_SINK_TEST_LOCK
+            .lock()
+            .expect("output sink test lock");
         // One-shot CLI commands run before any sink exists; console text must
         // still reach the terminal there.
         crate::clear_output_sink();
