@@ -298,7 +298,7 @@ LLAMA_API enum skippy_status skippy_backend_device_at(
 <a id="skippy-fn-skippy-set-runtime-event-reporter"></a>
 #### `skippy_set_runtime_event_reporter`
 
-Installs one process-global runtime-scoped event reporter. Requires SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER. Replaces any previously installed global reporter. The per-call model-open reporter passed to a `*_with_events` entrypoint still takes precedence for SKIPPY_RUNTIME_EVENT_CATEGORY_MODEL_OPEN events during that call; the global reporter receives events published through it by any capability module (backend/device/KV/diagnostic/unload/model-load-v2, added by sibling patches) via the shared internal dispatch path. Returns SKIPPY_STATUS_INVALID_ARGUMENT if `reporter` is null or its `struct_size` is smaller than `sizeof(struct skippy_runtime_event_reporter_v1)`. When replacing an existing reporter, waits until every in-flight callback using the previous reporter has returned before installing the replacement.
+Installs one process-global runtime-scoped event reporter. Requires SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER. Replaces any previously installed global reporter. The per-call model-open reporter passed to a `*_with_events` entrypoint still takes precedence for SKIPPY_RUNTIME_EVENT_CATEGORY_MODEL_OPEN events during that call; the global reporter receives events published through it by any capability module (backend/device/KV/diagnostic/unload/model-load-v2, added by sibling patches) via the shared internal dispatch path. Returns SKIPPY_STATUS_INVALID_ARGUMENT if `reporter` is null or its `struct_size` is smaller than `sizeof(struct skippy_runtime_event_reporter_v1)`, or if called from a reporter callback. When replacing an existing reporter, waits until every in-flight callback using the previous reporter has returned before installing the replacement.
 
 ```cpp
 LLAMA_API enum skippy_status skippy_set_runtime_event_reporter(
@@ -308,7 +308,7 @@ LLAMA_API enum skippy_status skippy_set_runtime_event_reporter(
 <a id="skippy-fn-skippy-clear-runtime-event-reporter"></a>
 #### `skippy_clear_runtime_event_reporter`
 
-Removes the process-global runtime-scoped event reporter. Returns only after every in-flight callback invocation of the previously installed reporter has returned, so no callback occurs after this call returns. Idempotent: clearing when no reporter is installed is a no-op.
+Removes the process-global runtime-scoped event reporter. Returns only after every in-flight callback invocation of the previously installed reporter has returned, so no callback occurs after this call returns. Idempotent: clearing when no reporter is installed is a no-op. When called from a reporter callback, disables future callback admission and returns immediately; the calling callback remains active until it returns normally.
 
 ```cpp
 LLAMA_API void skippy_clear_runtime_event_reporter(
@@ -1673,7 +1673,7 @@ SKIPPY_COMMON_API enum skippy_status skippy_parse_chat_response_json(
 
 The headers also define the following enums, structs, opaque handles, and ABI constants:
 
-- `activation.h`: `skippy_activation_dtype`, `skippy_activation_layout`, `skippy_activation_boundary_desc`, `skippy_activation_desc`, `SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION = 1`, `SKIPPY_ACTIVATION_SIDEBAND_TOKEN_IDS = (UINT64_C(1) << 0)`, `SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST = (UINT64_C(1) << 0)`, `SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP = (UINT64_C(1) << 1)`, `SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD = (UINT64_C(1) << 2)`, `SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K = (UINT64_C(1) << 3)`
+- `activation.h`: `skippy_activation_dtype`, `skippy_activation_layout`, `skippy_activation_boundary_desc`, `skippy_activation_desc`, `SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION = 1`, `SKIPPY_ACTIVATION_SIDEBAND_TOKEN_IDS = (UINT64_C(1) << 0)`, `SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST = (UINT64_C(1) << 0)`, `SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP = (UINT64_C(1) << 1)`, `SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD = (UINT64_C(1) << 2)`, `SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K = (UINT64_C(1) << 3)`, `SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL = (UINT64_C(1) << 4)`
 - `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 54`, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER = ((uint64_t)1 << 31)`, `SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 = ((uint64_t)1 << 32)`, `SKIPPY_FEATURE_KV_EVENTS = ((uint64_t)1 << 33)`, `SKIPPY_FEATURE_DEVICE_EVENTS = ((uint64_t)1 << 34)`, `SKIPPY_FEATURE_DIAGNOSTIC_EVENTS = ((uint64_t)1 << 35)`, `SKIPPY_FEATURE_UNLOAD_EVENTS = ((uint64_t)1 << 36)`
 - `devices.h`: `skippy_backend_device_type`, `skippy_backend_device_cap`, `skippy_backend_device`
 - `events.h`: `skippy_runtime_event_v1`, `skippy_runtime_event_reporter_v1`, `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION = 1`

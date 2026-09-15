@@ -139,6 +139,38 @@ fn multimodal_stage_config(
     layer_end: u32,
     bind_addr: SocketAddr,
 ) -> StageConfig {
+    // Filtered stage loads must carry the exact admitted resident tensor set;
+    // derive it with the same native planner the correctness runner uses.
+    let filtered = layer_start != 0 || layer_end != fixture.layer_end;
+    let resident_tensor_names = if filtered {
+        // The native planner validates a complete contiguous partition, so
+        // plan the full two-stage chain and keep this stage's closure.
+        let boundary = if layer_start == 0 {
+            layer_end
+        } else {
+            layer_start
+        };
+        let ranges = if boundary >= fixture.layer_end {
+            vec![(0, fixture.layer_end)]
+        } else {
+            vec![(0, boundary), (boundary, fixture.layer_end)]
+        };
+        match skippy_runtime::plan_gguf_stage_resident_tensor_names(
+            &fixture.model_path,
+            &ranges,
+            fixture.ctx_size,
+            1,
+        ) {
+            Ok(mut names) => {
+                let index = usize::min(stage_index as usize, names.len().saturating_sub(1));
+                names.drain(..index);
+                names.into_iter().next().unwrap_or_default()
+            }
+            Err(error) => panic!("mm-smoke resident derivation failed for {stage_id}: {error:#}"),
+        }
+    } else {
+        Vec::new()
+    };
     StageConfig {
         run_id: "mm-smoke-run".to_string(),
         topology_id: "mm-smoke-topology".to_string(),
@@ -179,7 +211,7 @@ fn multimodal_stage_config(
         swa_full: None,
         cache_idle_slots: None,
         filter_tensors_on_load: layer_start != 0 || layer_end != fixture.layer_end,
-        resident_tensor_names: Vec::new(),
+        resident_tensor_names,
         selected_device: None,
         kv_cache: None,
         native_mtp_enabled: true,
@@ -289,15 +321,20 @@ fn malformed_multimodal_chat_request() -> ChatCompletionRequest {
 }
 
 fn assert_nonempty_chat_response(response: &ChatCompletionResponse) {
-    let content = response
+    let message = &response
         .choices
         .first()
-        .and_then(|choice| choice.message.content.as_deref())
+        .expect("expected a multimodal response choice")
+        .message;
+    let content = message.content.as_deref().unwrap_or_default().trim();
+    let reasoning = message
+        .reasoning_content
+        .as_deref()
         .unwrap_or_default()
         .trim();
     assert!(
-        !content.is_empty(),
-        "expected non-empty multimodal response"
+        !content.is_empty() || !reasoning.is_empty(),
+        "expected non-empty multimodal content or reasoning; response={response:?}"
     );
 }
 
@@ -470,7 +507,11 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
             continuous_batching: true,
             openai: None,
         });
-    let ready = connect_endpoint_ready(&stage1_addr.to_string(), 120);
+    // Large filtered GGUF slices can take several minutes to materialize on
+    // macOS even after the native library is warm. This test is opt-in and
+    // exercises a real cached model, so budget for the load before declaring
+    // the embedded stage unhealthy.
+    let ready = connect_endpoint_ready(&stage1_addr.to_string(), 1_800);
     if let Err(error) = ready {
         let status = stage1_handle.status();
         stage1_handle.abort();

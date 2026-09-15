@@ -12,7 +12,9 @@ pub const MAX_LOGIT_BIAS: usize = 256;
 pub const ACTIVATION_BOUNDARY_DESC_VERSION: u32 = 1;
 pub const ACTIVATION_BOUNDARY_LAYOUT_TOKEN_MAJOR: u32 = 1;
 pub const ACTIVATION_BOUNDARY_SUPPORTED_REQUIRED_FRAME_FLAGS: u64 =
-    skippy_ffi::ACTIVATION_FLAG_GEMMA3N_ALTUP;
+    skippy_ffi::ACTIVATION_FLAG_GEMMA3N_ALTUP
+        | skippy_ffi::ACTIVATION_FLAG_GLM_DSA_TOP_K
+        | skippy_ffi::ACTIVATION_FLAG_KIMI_K3_RESIDUAL;
 pub const ACTIVATION_BOUNDARY_SUPPORTED_REQUIRED_SIDEBANDS: u64 =
     skippy_ffi::ACTIVATION_SIDEBAND_TOKEN_IDS;
 
@@ -825,6 +827,14 @@ mod activation_boundary_descriptor_tests {
         let boundary = f32_boundary(1024);
         assert_eq!(boundary.raw_f32_width("output").unwrap(), 1024);
         assert_eq!(boundary.payload_bytes("output", 128).unwrap(), 524_288);
+    }
+
+    #[test]
+    fn raw_f32_boundary_accepts_kimi_k3_residual_flag_and_full_wire_width() {
+        let mut boundary = f32_boundary(3072);
+        boundary.required_frame_flags = skippy_ffi::ACTIVATION_FLAG_KIMI_K3_RESIDUAL;
+        assert_eq!(boundary.raw_f32_width("input").unwrap(), 3072);
+        assert_eq!(boundary.payload_bytes("input", 2).unwrap(), 24_576);
     }
 
     #[test]

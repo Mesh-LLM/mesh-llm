@@ -1,3 +1,4 @@
+use super::test_support::toml_path;
 use super::*;
 use crate::plugin::MeshConfig;
 
@@ -30,7 +31,7 @@ threads_batch = 7
 model = "{colliding_selector}"
 
 [models.hardware]
-model_path = "{}"
+model_path = {}
 
 [models.throughput]
 threads = 3
@@ -47,7 +48,7 @@ threads = 11
 [models.advanced.server]
 alias = "served-profile"
 "#,
-        canonical_path.display(),
+        toml_path(&canonical_path),
     ))
     .expect("colliding selector config parses");
     (config, temp_dir, colliding_selector)

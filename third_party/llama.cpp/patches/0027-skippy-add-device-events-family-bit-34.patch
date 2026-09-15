@@ -1,7 +1,7 @@
-From fe0e6ca95f8fa45fc15c8d67a965db1520c3689b Mon Sep 17 00:00:00 2001
+From 68ff4269675d4c39444368855e02c6e408639ed1 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 5 Sep 2026 02:02:27 -0400
-Subject: [PATCH] skippy: add device-events family (bit 34)
+Subject: [PATCH 027/113] skippy: add device-events family (bit 34)
 
 Adds SKIPPY_RUNTIME_EVENT_CATEGORY_DEVICE and
 SKIPPY_FEATURE_DEVICE_EVENTS (bit 34): backend init, device
@@ -24,7 +24,7 @@ Renumbered from 0046 (bit 32) to 0059 (bit 34), then again to 0060
  6 files changed, 47 insertions(+), 2 deletions(-)
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index f710a1289..18a259398 100644
+index b445be9d7..f3a6b0e12 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -101,6 +101,7 @@ enum skippy_feature {
@@ -80,10 +80,10 @@ index bc6ee6647..7d3256d39 100644
  }
  #endif
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 9ef935595..df11ae6b3 100644
+index 001f44e6e..57caf92f7 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -118,7 +118,8 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -136,7 +136,8 @@ if (LLAMA_STAGE_BUILD_TESTS)
              struct_size_extension
              concurrent_dispatch
              model_load_events_v2_dispatch
@@ -157,5 +157,5 @@ index b717daa74..323c02cbe 100644
      return 2;
  }
 -- 
-2.50.1 (Apple Git-155)
+2.55.0
 

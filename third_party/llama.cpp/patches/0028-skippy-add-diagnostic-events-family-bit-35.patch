@@ -1,7 +1,7 @@
-From 3fa9369ed7aaff9307cf6e474fbdd706bf5220fa Mon Sep 17 00:00:00 2001
+From 73721e0b99be129426a3520fc87970759f86e3e1 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 5 Sep 2026 02:02:54 -0400
-Subject: [PATCH] skippy: add diagnostic-events family (bit 35)
+Subject: [PATCH 028/113] skippy: add diagnostic-events family (bit 35)
 
 Adds SKIPPY_RUNTIME_EVENT_CATEGORY_DIAGNOSTIC and
 SKIPPY_FEATURE_DIAGNOSTIC_EVENTS (bit 35): warning raised/cleared,
@@ -23,7 +23,7 @@ Renumbered from 0047 (bit 33) to 0060 (bit 35), then again to 0061
  6 files changed, 44 insertions(+), 2 deletions(-)
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 18a259398..f3bd0ac2f 100644
+index f3a6b0e12..9fb6bac0e 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -102,6 +102,7 @@ enum skippy_feature {
@@ -75,10 +75,10 @@ index 7d3256d39..745b40513 100644
  }
  #endif
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index df11ae6b3..d2501f9d7 100644
+index 57caf92f7..0aba5a516 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -119,7 +119,8 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -137,7 +137,8 @@ if (LLAMA_STAGE_BUILD_TESTS)
              concurrent_dispatch
              model_load_events_v2_dispatch
              kv_events_dispatch
@@ -153,5 +153,5 @@ index 323c02cbe..732e6ee67 100644
      return 2;
  }
 -- 
-2.50.1 (Apple Git-155)
+2.55.0
 

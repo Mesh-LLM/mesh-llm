@@ -19,6 +19,7 @@ use super::{
         NativeMtpRequirement, emit_report, ensure_native_mtp_artifact_if_required,
         native_mtp_requirement, native_mtp_satisfies_requirement, native_mtp_sideband_report,
         native_mtp_verification_report, native_mtp_verification_satisfies_requirement,
+        normalize_runtime_layer_end,
     },
     stage_execution::{
         BinaryDecodeMessageArgs, BinarySplitConfig, BinarySplitResult, CorrectnessTopologyStage,
@@ -31,6 +32,8 @@ use super::{
 };
 
 pub fn single_step(args: SingleStepArgs) -> Result<()> {
+    let mut args = args;
+    normalize_runtime_layer_end(&mut args.runtime)?;
     let native_mtp = native_mtp_requirement(args.native_mtp);
     ensure_native_mtp_artifact_if_required(&args.runtime, native_mtp)?;
     let model_identity = runtime_model_identity(&args.runtime)?;

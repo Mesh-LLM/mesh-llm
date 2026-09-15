@@ -43,6 +43,8 @@ pub struct ActivationBoundaryDesc {
 
 pub const ACTIVATION_FLAG_GEMMA3N_ALTUP: u64 = 1 << 1;
 pub const ACTIVATION_FLAG_INKLING_MTP_EMBD: u64 = 1 << 2;
+pub const ACTIVATION_FLAG_GLM_DSA_TOP_K: u64 = 1 << 3;
+pub const ACTIVATION_FLAG_KIMI_K3_RESIDUAL: u64 = 1 << 4;
 pub const ACTIVATION_SIDEBAND_TOKEN_IDS: u64 = 1 << 0;
 
 #[repr(C)]

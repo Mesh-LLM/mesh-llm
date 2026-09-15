@@ -1,0 +1,24 @@
+From de2a970801d34ee2129d194e96af45ca5132d8c9 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Tue, 15 Sep 2026 14:06:37 +1000
+Subject: [PATCH] skippy: use Inkling projector width for audio
+
+---
+ tools/mtmd/models/inkling.cpp | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/tools/mtmd/models/inkling.cpp b/tools/mtmd/models/inkling.cpp
+index c072f66a2..5f9b4bd16 100644
+--- a/tools/mtmd/models/inkling.cpp
++++ b/tools/mtmd/models/inkling.cpp
+@@ -74,7 +74,6 @@ ggml_cgraph * clip_graph_inkling::build_vision() {
+ ggml_cgraph * clip_graph_inkling::build_audio() {
+     static constexpr int n_mels = 80;
+     static constexpr int mel_vocab_size = 16;
+-    static constexpr int n_embd = 6144;
+ 
+     GGML_ASSERT(img.ny() == n_mels);
+     GGML_ASSERT(model.inkling_dmel_embd_w);
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,7 +1,7 @@
-From 59ba4a5c91581b8628cc46158b813560deccb137 Mon Sep 17 00:00:00 2001
+From 897c301bd06c81823e34cd1dcd8704d4013b50fa Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sun, 13 Sep 2026 13:06:26 +1000
-Subject: [PATCH] skippy: prioritize empty KV stage ranges
+Subject: [PATCH 034/113] skippy: prioritize empty KV stage ranges
 
 Report an empty selected layer range before examining token positions so recurrent-only stages produce a stable optional-KV signal after state restore.
 
@@ -72,4 +72,5 @@ index 96937c8dc..3c0dcbb13 100644
      empty_range_desc.layer_count = 0;
      empty_range_desc.payload_bytes = 0;
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
+

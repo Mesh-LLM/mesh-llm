@@ -1384,50 +1384,6 @@ index ee41787ba3e59d86dd7e660d63b1fc60e12a50fb..b8ec8ed772ef65631aee64252e2f0efa
  
      // prune to the requested output rows once, after all HC streams are done
      if (inp_out_ids) {
-diff --git a/src/models/inkling.cpp b/src/models/inkling.cpp
-index 6b956188b132bb8dc404b155735ecabe2d312ecb..ac5cb713a38e230c01f9f702da51bdc25fb3608d 100644
---- a/src/models/inkling.cpp
-+++ b/src/models/inkling.cpp
-@@ -630,20 +630,35 @@ llama_model_inkling::graph::graph(const llama_model & model, const llm_graph_par
-         return;
-     }
- 
--    ggml_tensor * cur = build_inp_embd(model.tok_embd);
-+    const skippy_graph_filter & stage_filter = build_inputs.filter;
-+    const bool stage_filtered = stage_filter.enabled;
-+    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
-+    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
-+
-+    ggml_tensor * cur = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
-     // mtmd embd rows arrive pre-normalized; embed_norm applies to text token lookups only
--    if (ubatch.token) {
-+    if ((!stage_filtered || il_start == 0) && (ubatch.token)) {
-         cur = build_norm(cur, model.tok_norm, NULL, LLM_NORM_RMS, -1);
-     }
-     cb(cur, ubatch.token ? "inkling_embd_norm" : "inkling_mm_embd", -1);
-     ggml_build_forward_expand(gf, cur);
- 
--    for (int il = 0; il < n_layer; ++il) {
-+    for (int il = il_start; il < il_end; ++il) {
-+        begin_block(cur, il);
-+
-         res->t_layer_inp[il] = cur;
-         cur = build_block(cur, il);
-+        end_block(cur, il);
-+    }
-+    if (stage_filtered && !stage_filter.include_output) {
-+        cb(cur, "stage_boundary", il_end - 1);
-+        res->t_embd = cur;
-+        ggml_build_forward_expand(gf, cur);
-+        return;
-     }
- 
--    ggml_tensor * inp_out_ids = build_inp_out_ids();
-+
-+    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
- 
-     // Conv states need every layer to see all tokens. Intermediate stages hand off the full
-     // activation sequence, and the final stage trims outputs only after its last local layer.
 diff --git a/src/models/llada-moe.cpp b/src/models/llada-moe.cpp
 index 0ee9ce1bec5fde2e542cb69fcb9d8e9e85155906..563550b9f43e12e1697089f99ccdb1095fafa574 100644
 --- a/src/models/llada-moe.cpp
@@ -1541,83 +1497,8 @@ index ae3d6925c136177c39640fca0e7399e7af426f5f..f8356a2d11d3b4e6fa3cb7328f218b68
      cur = inpL;
  
      cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
-diff --git a/src/models/llama4.cpp b/src/models/llama4.cpp
-index 8a812beffac4b3b7702c1ccb71b3ae426d34c76e..a07452e9d29b7e4703699195196815325840885d 100644
---- a/src/models/llama4.cpp
-+++ b/src/models/llama4.cpp
-@@ -113,14 +113,29 @@ llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_grap
-     ggml_tensor * cur;
-     ggml_tensor * inpL;
- 
--    inpL = build_inp_embd(model.tok_embd);
-+    const skippy_graph_filter & stage_filter = build_inputs.filter;
-+    const bool stage_filtered = stage_filter.enabled;
-+    const int il_start = stage_filtered ? stage_filter.layer_start : 0;
-+    const int il_end   = stage_filtered ? stage_filter.layer_end   : n_layer;
-+
-+    inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
- 
-     // inp_pos - contains the positions
-     ggml_tensor * inp_pos = build_inp_pos();
- 
-     // temperature tuning
-     ggml_tensor * inp_attn_scale = nullptr;
--    inp_attn_scale = build_inp_attn_scale();
-+    bool skippy_uses_attention_scale = false;
-+    for (int skippy_il = il_start; skippy_il < il_end; ++skippy_il) {
-+        const bool skippy_use_rope = hparams.n_no_rope_layer_step > 0 &&
-+                (skippy_il + 1) % hparams.n_no_rope_layer_step != 0;
-+        if (!skippy_use_rope) {
-+            skippy_uses_attention_scale = true;
-+            break;
-+        }
-+    }
-+
-+    inp_attn_scale = skippy_uses_attention_scale ? build_inp_attn_scale() : nullptr;
- 
-     using inp_attn_type = std::conditional_t<iswa, llm_graph_input_attn_kv_iswa, llm_graph_input_attn_kv>;
-     inp_attn_type * inp_attn = nullptr;
-@@ -133,9 +148,11 @@ llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_grap
- 
-     const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
- 
--    ggml_tensor * inp_out_ids = build_inp_out_ids();
-+    ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
-+
-+    for (int il = il_start; il < il_end; ++il) {
-+        begin_block(inpL, il);
- 
--    for (int il = 0; il < n_layer; ++il) {
-         const float freq_base_l  = model.get_rope_freq_base (cparams, il);
-         const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
- 
-@@ -191,7 +208,7 @@ llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_grap
-                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
-             cb(cur, "attn_out", il);
-         }
--        if (il == n_layer - 1 && inp_out_ids) {
-+        if (il == il_end - 1 && inp_out_ids) {
-             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
-             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
-         }
-@@ -250,7 +267,15 @@ llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_grap
- 
-         // input for next layer
-         inpL = cur;
-+        end_block(inpL, il);
-+    }
-+    if (stage_filtered && !stage_filter.include_output) {
-+        cb(inpL, "stage_boundary", il_end - 1);
-+        res->t_embd = inpL;
-+        ggml_build_forward_expand(gf, inpL);
-+        return;
-     }
-+
-     cur = inpL;
- 
-     cur = build_norm(cur,
 diff --git a/src/models/minimax-01.cpp b/src/models/minimax-01.cpp
-index 9fa2e8fc01cdd0b0f7f55ef7926ab135ccd49570..4f1aa9c3dcd975964ea83bbf3e24f207a7ca0461 100644
+index 3067029eddd51e8c6642f57465b1ea6262cb046f..ef984a47a4c5078f242d4d662e00aa071b0e258e 100644
 --- a/src/models/minimax-01.cpp
 +++ b/src/models/minimax-01.cpp
 @@ -205,13 +205,26 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
@@ -1661,7 +1542,7 @@ index 9fa2e8fc01cdd0b0f7f55ef7926ab135ccd49570..4f1aa9c3dcd975964ea83bbf3e24f207
          res->t_layer_inp[il] = inpL;
  
          ggml_tensor * inpSA = inpL;
-@@ -419,7 +434,7 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
+@@ -420,7 +435,7 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
              cb(cur, "attn_out", il);
          }
  
@@ -1670,7 +1551,7 @@ index 9fa2e8fc01cdd0b0f7f55ef7926ab135ccd49570..4f1aa9c3dcd975964ea83bbf3e24f207
              cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
              residual = ggml_get_rows(ctx0, residual, inp_out_ids);
-@@ -463,8 +478,16 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
+@@ -464,8 +479,16 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
  
          // input for next layer
          inpL = cur;

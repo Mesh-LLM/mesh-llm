@@ -1,0 +1,1573 @@
+From a526229f1ea8d02bcda8093be904dfc3a750036e Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Tue, 15 Sep 2026 11:16:25 +1000
+Subject: [PATCH] skippy: preserve recovered family runtime semantics
+
+---
+ include/skippy/activation.h             |   1 +
+ src/CMakeLists.txt                      |   2 +-
+ src/llama-context.cpp                   |   4 +
+ src/llama-graph.cpp                     |  87 ++++++++++++++-----
+ src/llama-graph.h                       |  28 ++++++
+ src/llama-model.cpp                     |  20 +++--
+ src/models/chameleon.cpp                |  25 +++---
+ src/models/glm-dsa.cpp                  |  57 +++++++++++-
+ src/models/granite-switch.cpp           |  38 +++++---
+ src/models/mimo2.cpp                    |  11 ++-
+ src/skippy/activation.cpp               |  58 ++++++++++++-
+ src/skippy/activation_internal.h        |   3 +
+ src/skippy/activation_layout.cpp        |  42 ++++++++-
+ src/skippy/execution-batch.cpp          | 111 ++++++++++++++++++++++--
+ src/skippy/graph_build_inputs.h         |  31 +++++++
+ src/skippy/graph_identity.cpp           |   6 +-
+ src/skippy/model_loading.cpp            |  14 +++
+ src/skippy/package_tensor_binding.cpp   |  25 +++---
+ src/skippy/stage_plan.cpp               |  69 ++++++++++++---
+ src/skippy/stage_slice_plan.cpp         |  96 ++++++++++++++++----
+ src/skippy/tests/graph_build_inputs.cpp |  16 +++-
+ src/skippy/tests/stage_slice_plan.cpp   |  30 +++++++
+ tests/test-skippy-activation-layout.cpp |  20 +++++
+ 23 files changed, 685 insertions(+), 109 deletions(-)
+
+diff --git a/include/skippy/activation.h b/include/skippy/activation.h
+index 347576e05..4a097f044 100644
+--- a/include/skippy/activation.h
++++ b/include/skippy/activation.h
+@@ -47,6 +47,7 @@ struct skippy_activation_boundary_desc {
+ #define SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP   (UINT64_C(1) << 1)
+ #define SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD (UINT64_C(1) << 2)
+ #define SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K     (UINT64_C(1) << 3)
++#define SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL   (UINT64_C(1) << 4)
+ 
+ /** @brief Metadata for an activation payload passed between staged runtimes. */
+ struct skippy_activation_desc {
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 1e9610ad8..74b6d335e 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -368,7 +368,7 @@ if (LLAMA_STAGE_BUILD_TESTS)
+         COMMAND skippy-noalloc-graph-planning
+             "${SKIPPY_MODEL_FIXTURE_DIR}/kimi-linear-moe.gguf"
+             1
+-            "none,kda")
++            "k,kda")
+     set_tests_properties(skippy_noalloc_graph_planning_kimi_linear PROPERTIES
+         FIXTURES_REQUIRED skippy-noalloc-kimi-linear-fixture)
+ 
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index c6fc62df3..04230e7ba 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -3869,6 +3869,10 @@ llama_context * llama_init_from_model_with_graph_inputs(
+         LLAMA_LOG_WARN("%s: flash_attn is not compatible with Grok - forcing off\n", __func__);
+         params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+     }
++    if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED && model->arch == LLM_ARCH_CHAMELEON) {
++        LLAMA_LOG_WARN("%s: flash_attn is not compatible with Chameleon - forcing off\n", __func__);
++        params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
++    }
+ 
+     if (model->split_mode() == LLAMA_SPLIT_MODE_TENSOR) {
+         if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO) {
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index 2a24ce08d..348cf757c 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -47,6 +47,10 @@ bool skippy_graph_build_inputs::topology_equal(const skippy_graph_build_inputs &
+            gemma3n_altup.token_count == other.gemma3n_altup.token_count &&
+            gemma3n_altup.n_embd == other.gemma3n_altup.n_embd &&
+            gemma3n_altup.n_altup == other.gemma3n_altup.n_altup &&
++           (kimi_k3_residual.values != nullptr) == (other.kimi_k3_residual.values != nullptr) &&
++           kimi_k3_residual.token_count == other.kimi_k3_residual.token_count &&
++           kimi_k3_residual.n_embd == other.kimi_k3_residual.n_embd &&
++           kimi_k3_residual.n_checkpoints == other.kimi_k3_residual.n_checkpoints &&
+            (hyperconnection.values != nullptr) == (other.hyperconnection.values != nullptr) &&
+            hyperconnection.token_count == other.hyperconnection.token_count &&
+            hyperconnection.n_embd == other.hyperconnection.n_embd &&
+@@ -103,13 +107,13 @@ static bool can_reuse_kq_mask(
+ // impl
+ 
+ void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
+-    if (ubatch->token) {
++    if (ubatch->token && tokens != nullptr && tokens->buffer != nullptr) {
+         const int64_t n_tokens = ubatch->n_tokens;
+ 
+         ggml_backend_tensor_set(tokens, ubatch->token, 0, n_tokens*ggml_element_size(tokens));
+     }
+ 
+-    if (ubatch->embd) {
++    if (ubatch->embd && embd != nullptr && embd->buffer != nullptr) {
+         GGML_ASSERT(n_embd == embd->ne[0]);
+ 
+         const int64_t n_tokens = ubatch->n_tokens;
+@@ -246,6 +250,30 @@ bool llm_graph_input_gemma3n_altup::can_reuse(const llm_graph_params & params) {
+     return values && values->ne[0] == n_embd && values->ne[1] == params.ubatch.n_tokens && values->ne[2] == n_altup;
+ }
+ 
++void llm_graph_input_kimi_k3_residual::set_input(const llama_ubatch * ubatch) {
++    GGML_ASSERT(sideband.values != nullptr);
++    GGML_ASSERT(sideband.token_count == ubatch->n_tokens);
++    GGML_ASSERT(sideband.n_embd == n_embd);
++    GGML_ASSERT(sideband.n_checkpoints == n_checkpoints);
++
++    ggml_backend_tensor_set(
++            values,
++            sideband.values,
++            0,
++            sideband.token_count*n_embd*n_checkpoints*ggml_element_size(values));
++}
++
++void llm_graph_input_kimi_k3_residual::set_build_inputs(const skippy_graph_build_inputs & inputs) {
++    sideband = inputs.kimi_k3_residual;
++}
++
++bool llm_graph_input_kimi_k3_residual::can_reuse(const llm_graph_params & params) {
++    return values &&
++           values->ne[0] == n_embd &&
++           values->ne[1] == n_checkpoints &&
++           values->ne[2] == params.ubatch.n_tokens;
++}
++
+ void llm_graph_input_glm_dsa_top_k::set_input(const llama_ubatch * ubatch) {
+     GGML_ASSERT(sideband.values != nullptr);
+     GGML_ASSERT(sideband.token_count == ubatch->n_tokens);
+@@ -1659,29 +1687,42 @@ bool llm_graph_result::can_reuse(const llm_graph_params & params) {
+ }
+ 
+ llm_graph_input_i * llm_graph_result::add_input(llm_graph_input_ptr input) {
+-    // MTP graph builders create this shared input bundle directly instead of
+-    // going through build_inp_embd(). Register its generic request leaves in
+-    // one place so every current and future MTP family exposes the same
+-    // semantic input contract to graph planning.
++    const auto request_input = [&](ggml_tensor * tensor, const char * identity) {
++        if (tensor == nullptr) {
++            return;
++        }
++        const auto existing = std::find_if(request_input_bindings.begin(), request_input_bindings.end(),
++                [tensor](const skippy_request_input_binding & binding) {
++                    return binding.tensor == tensor;
++                });
++        if (existing == request_input_bindings.end()) {
++            const uint32_t ordinal = request_input_ordinals[identity]++;
++            request_input_bindings.push_back(
++                    {tensor, std::string(identity) + "." + std::to_string(ordinal)});
++        }
++    };
++
++    // Some family builders create generic input bundles directly instead of
++    // going through build_inp_embd(). Register those request leaves here so
++    // every graph exposes the same semantic input contract to stage planning.
++    if (auto * embd = dynamic_cast<llm_graph_input_embd *>(input.get())) {
++        request_input(embd->tokens, "tokens");
++        request_input(embd->embd, "embeddings");
++    }
+     if (auto * mtp = dynamic_cast<llm_graph_input_embd_h *>(input.get())) {
+-        const auto request_input = [&](ggml_tensor * tensor, const char * identity) {
+-            if (tensor == nullptr) {
+-                return;
+-            }
+-            const auto existing = std::find_if(request_input_bindings.begin(), request_input_bindings.end(),
+-                    [tensor](const skippy_request_input_binding & binding) {
+-                        return binding.tensor == tensor;
+-                    });
+-            if (existing == request_input_bindings.end()) {
+-                const uint32_t ordinal = request_input_ordinals[identity]++;
+-                request_input_bindings.push_back(
+-                        {tensor, std::string(identity) + "." + std::to_string(ordinal)});
+-            }
+-        };
+         request_input(mtp->tokens, "tokens");
+         request_input(mtp->embd, "embeddings");
+         request_input(mtp->h, "mtp.hidden");
+     }
++    if (auto * stage_tokens = dynamic_cast<llm_graph_input_stage_tokens *>(input.get())) {
++        request_input(stage_tokens->tokens, "stage.tokens");
++    }
++    if (auto * residual = dynamic_cast<llm_graph_input_kimi_k3_residual *>(input.get())) {
++        request_input(residual->values, "kimi_k3.residual");
++    }
++    if (auto * top_k = dynamic_cast<llm_graph_input_glm_dsa_top_k *>(input.get())) {
++        request_input(top_k->values, "glm_dsa.top_k");
++    }
+     inputs.emplace_back(std::move(input));
+     return inputs.back().get();
+ }
+@@ -3396,7 +3437,9 @@ ggml_tensor * llm_graph_context::build_attn(
+     {
+         const auto & k_idxs = inp->get_k_idxs();
+ 
+-        ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
++        ggml_tensor * k_write = mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il);
++        ggml_build_forward_expand(gf, k_write);
++        state_write(skippy_state_kind::kv_key, k_write, k_write, il);
+     }
+ 
+     const auto & kq_mask = inp->get_kq_mask();
+@@ -3405,6 +3448,8 @@ ggml_tensor * llm_graph_context::build_attn(
+     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
+     ggml_tensor * v = ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
+ 
++    state_read(skippy_state_kind::kv_key, k, il);
++
+     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, 0, kq_scale, il);
+     cb(cur, "kqv_out", il);
+ 
+diff --git a/src/llama-graph.h b/src/llama-graph.h
+index 9bdda3bbf..22a25ed89 100644
+--- a/src/llama-graph.h
++++ b/src/llama-graph.h
+@@ -77,6 +77,13 @@ struct skippy_activation_gemma3n_altup {
+     uint32_t n_altup = 0;
+ };
+ 
++struct skippy_activation_kimi_k3_residual {
++    const float * values = nullptr;
++    uint32_t token_count = 0;
++    uint32_t n_embd = 0;
++    uint32_t n_checkpoints = 0;
++};
++
+ struct skippy_activation_hyperconnection {
+     const float * values = nullptr;
+     uint32_t token_count = 0;
+@@ -104,6 +111,7 @@ struct skippy_graph_build_inputs {
+     skippy_activation_tokens activation_tokens;
+     skippy_activation_rwkv7_v_first rwkv7_v_first;
+     skippy_activation_gemma3n_altup gemma3n_altup;
++    skippy_activation_kimi_k3_residual kimi_k3_residual;
+     skippy_activation_hyperconnection hyperconnection;
+     skippy_activation_glm_dsa_top_k glm_dsa_top_k;
+     skippy_activation_mtp_embeddings mtp_embeddings;
+@@ -317,6 +325,24 @@ private:
+     skippy_activation_gemma3n_altup sideband;
+ };
+ 
++class llm_graph_input_kimi_k3_residual : public llm_graph_input_i {
++public:
++    llm_graph_input_kimi_k3_residual(int64_t n_embd, int64_t n_checkpoints)
++        : n_embd(n_embd), n_checkpoints(n_checkpoints) {}
++    virtual ~llm_graph_input_kimi_k3_residual() = default;
++
++    void set_input(const llama_ubatch * ubatch) override;
++    void set_build_inputs(const skippy_graph_build_inputs & inputs) override;
++    bool can_reuse(const llm_graph_params & params) override;
++
++    ggml_tensor * values = nullptr; // F32 [n_embd, n_checkpoints, n_batch]
++
++private:
++    int64_t n_embd;
++    int64_t n_checkpoints;
++    skippy_activation_kimi_k3_residual sideband;
++};
++
+ class llm_graph_input_glm_dsa_top_k : public llm_graph_input_i {
+ public:
+     llm_graph_input_glm_dsa_top_k(int64_t n_top_k, int64_t n_stream) : n_top_k(n_top_k), n_stream(n_stream) {}
+@@ -1089,6 +1115,7 @@ public:
+     ggml_tensor * get_h_nextn()     const { return t_h_nextn; }
+     ggml_tensor * get_skippy_rwkv7_v_first() const { return t_skippy_rwkv7_v_first; }
+     ggml_tensor * get_skippy_gemma3n_altup() const { return t_skippy_gemma3n_altup; }
++    ggml_tensor * get_skippy_kimi_k3_residual() const { return t_skippy_kimi_k3_residual; }
+     ggml_tensor * get_skippy_glm_dsa_top_k() const { return t_skippy_glm_dsa_top_k; }
+     ggml_tensor * get_skippy_activation_input() const {
+         return t_skippy_activation_input != nullptr ? t_skippy_activation_input : t_inp_embd;
+@@ -1143,6 +1170,7 @@ public:
+     ggml_tensor * t_h_nextn     = nullptr; // [n_embd, n_outputs] hidden state before final output norm
+     ggml_tensor * t_skippy_rwkv7_v_first = nullptr;
+     ggml_tensor * t_skippy_gemma3n_altup = nullptr;
++    ggml_tensor * t_skippy_kimi_k3_residual = nullptr;
+     ggml_tensor * t_skippy_glm_dsa_top_k = nullptr;
+     ggml_tensor * t_skippy_activation_input = nullptr;
+     ggml_tensor * t_skippy_activation_output = nullptr;
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index d1187db33..487d0e269 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -2304,16 +2304,18 @@ ggml_tensor * llama_model::get_rope_factors(const llama_cparams & cparams, int i
+ static llama_memory_i::layer_filter_cb skippy_stage_memory_filter(
+         llama_memory_i::layer_filter_cb filter,
+         enum llama_context_type ctx_type,
+-        const skippy_graph_filter & stage_filter) {
++        const skippy_graph_filter & stage_filter,
++        int32_t replicated_layer) {
+     if (!stage_filter.enabled || ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
+         return filter;
+     }
+ 
+     const int32_t layer_start = stage_filter.layer_start;
+     const int32_t layer_end   = stage_filter.layer_end;
+-    return [filter = std::move(filter), layer_start, layer_end](int32_t il) {
++    return [filter = std::move(filter), layer_start, layer_end, replicated_layer](int32_t il) {
+         const bool in_stage = il >= layer_start && il < layer_end;
+-        return in_stage && (!filter || filter(il));
++        const bool replicated = replicated_layer >= 0 && il == replicated_layer;
++        return (in_stage || replicated) && (!filter || filter(il));
+     };
+ }
+ 
+@@ -2347,10 +2349,10 @@ llama_memory_i * llama_model::create_memory(
+             {
+                 // Sparse MSA layers carry an indexer key cache, while leading
+                 // dense layers only use the base K/V cache.
+-                auto filter_base = skippy_stage_memory_filter(nullptr, params.ctx_type, stage_filter);
++                auto filter_base = skippy_stage_memory_filter(nullptr, params.ctx_type, stage_filter, hparams.router_layer);
+                 llama_kv_cache::layer_filter_cb filter_idx =
+                     [&](int32_t il) { return (uint32_t) il >= hparams.n_layer_dense_lead; };
+-                filter_idx = skippy_stage_memory_filter(std::move(filter_idx), params.ctx_type, stage_filter);
++                filter_idx = skippy_stage_memory_filter(std::move(filter_idx), params.ctx_type, stage_filter, hparams.router_layer);
+                 res = new llama_kv_cache_msa(
+                         *this,
+                         params.type_k,
+@@ -2604,7 +2606,7 @@ llama_memory_i * llama_model::create_memory(
+                             std::max((uint32_t) 1, cparams.n_seq_max),
+                             cparams.n_seq_max,
+                             cparams.n_rs_seq,
+-                            skippy_stage_memory_filter(nullptr, params.ctx_type, stage_filter));
++                            skippy_stage_memory_filter(nullptr, params.ctx_type, stage_filter, hparams.router_layer));
+                 } else if (llm_arch_is_hybrid(arch) && !mtp_on_hybrid_qwen && !mtp_on_hybrid_nemotron) {
+                     // The main difference between hybrid architectures is the
+                     // layer filters, so pick the right one here
+@@ -2662,8 +2664,8 @@ llama_memory_i * llama_model::create_memory(
+                     if (!filter_recr) {
+                         filter_recr = [&](uint32_t il) { return hparams.is_recr(il); };
+                     }
+-                    filter_attn = skippy_stage_memory_filter(std::move(filter_attn), params.ctx_type, stage_filter);
+-                    filter_recr = skippy_stage_memory_filter(std::move(filter_recr), params.ctx_type, stage_filter);
++                    filter_attn = skippy_stage_memory_filter(std::move(filter_attn), params.ctx_type, stage_filter, hparams.router_layer);
++                    filter_recr = skippy_stage_memory_filter(std::move(filter_recr), params.ctx_type, stage_filter, hparams.router_layer);
+ 
+                     if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
+                         // Use hybrid-iswa for hybrid models with SWA
+@@ -2757,7 +2759,7 @@ llama_memory_i * llama_model::create_memory(
+                         }
+                     }
+ 
+-                    filter = skippy_stage_memory_filter(std::move(filter), params.ctx_type, stage_filter);
++                    filter = skippy_stage_memory_filter(std::move(filter), params.ctx_type, stage_filter, hparams.router_layer);
+ 
+                     if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
+                         GGML_ASSERT(hparams.is_swa_any());
+diff --git a/src/models/chameleon.cpp b/src/models/chameleon.cpp
+index 4f45acecf..4679e294c 100644
+--- a/src/models/chameleon.cpp
++++ b/src/models/chameleon.cpp
+@@ -185,17 +185,20 @@ llama_model_chameleon::graph::graph(const llama_model & model, const llm_graph_p
+     cb(cur, "result_output_with_img_logits", -1);
+ 
+     // TODO: this suppresses the output of image tokens, which is required to enable text-only outputs.
+-    // Needs to be removed once image outputs are supported.
+-    int img_token_end_idx = 8196;
+-    int img_token_start_idx = 4;
+-    int num_img_tokens = img_token_end_idx - img_token_start_idx;
+-    // creates 1d tensor of size num_img_tokens and values -FLT_MAX,
+-    // which ensures that text token values are always at least larger than image token values
+-    ggml_tensor * img_logits = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, num_img_tokens);
+-    img_logits = ggml_clamp(ctx0, img_logits, -FLT_MAX, -FLT_MAX);
+-    cb(img_logits, "img_logits", -1);
+-
+-    cur = ggml_set_1d(ctx0, cur, img_logits, ggml_element_size(cur) * img_token_start_idx);
++    // Needs to be removed once image outputs are supported. State-only calls can request zero
++    // output rows, in which case there is no logits tensor range to mask.
++    if (cur->ne[1] > 0) {
++        int img_token_end_idx = 8196;
++        int img_token_start_idx = 4;
++        int num_img_tokens = img_token_end_idx - img_token_start_idx;
++        // creates 1d tensor of size num_img_tokens and values -FLT_MAX,
++        // which ensures that text token values are always at least larger than image token values
++        ggml_tensor * img_logits = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, num_img_tokens);
++        img_logits = ggml_clamp(ctx0, img_logits, -FLT_MAX, -FLT_MAX);
++        cb(img_logits, "img_logits", -1);
++
++        cur = ggml_set_1d(ctx0, cur, img_logits, ggml_element_size(cur) * img_token_start_idx);
++    }
+ 
+     cb(cur, "result_output", -1);
+     res->t_logits = cur;
+diff --git a/src/models/glm-dsa.cpp b/src/models/glm-dsa.cpp
+index a7b71f616..12cfc27d1 100644
+--- a/src/models/glm-dsa.cpp
++++ b/src/models/glm-dsa.cpp
+@@ -56,14 +56,67 @@ void llama_model_glm_dsa::load_arch_hparams(llama_model_loader & ml) {
+         hparams.expert_gating_func =  LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID;
+     }
+ 
+-    // BC for GLM 5, 5.1 (full indexers) without indexer_types metadata
++    ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K_FREQUENCY,   hparams.indexer_top_k_freq, false);
++    ml.get_key(LLM_KV_ATTENTION_INDEXER_SKIP_TOP_K_OFFSET, hparams.indexer_skip_top_k_offset, false);
++
++    // BC for GLM 5 and 5.1 (full indexers) and the first GLM 5.2
++    // conversions, which omitted explicit IndexShare metadata.
+     const bool is_pre_5_2 = hparams.n_ctx_train < 1048576;
+     if (is_pre_5_2) {
+         std::fill(hparams.is_indexer_full_impl.begin(), hparams.is_indexer_full_impl.end(), 1);
+     } else {
+         hparams.is_indexer_full_impl = GLM_5_2_DEFAULT_INDEXER_TYPES;
+     }
+-    ml.get_key_or_arr(LLM_KV_ATTENTION_INDEXER_TYPES, hparams.is_indexer_full_impl, hparams.n_layer(), false);
++
++    if (hparams.indexer_top_k_freq > 0) {
++        for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
++            const uint32_t offset = hparams.indexer_skip_top_k_offset;
++            hparams.is_indexer_full_impl[il] =
++                il < offset || (il >= offset && ((il - offset + 1) % hparams.indexer_top_k_freq) == 0);
++        }
++    }
++
++    bool has_explicit_indexer_types = false;
++    try {
++        std::vector<std::string> indexer_types;
++        if (ml.get_arr(LLM_KV_ATTENTION_INDEXER_TYPES, indexer_types, false)) {
++            if (indexer_types.size() != hparams.n_layer()) {
++                throw std::runtime_error(
++                    "glm-dsa.attention.indexer.types length must match the decoder layer count");
++            }
++            for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
++                const std::string & role = indexer_types[il];
++                if (role == "full") {
++                    hparams.is_indexer_full_impl[il] = 1;
++                } else if (role == "shared") {
++                    hparams.is_indexer_full_impl[il] = 0;
++                } else {
++                    throw std::runtime_error(
++                        "glm-dsa.attention.indexer.types values must be full or shared");
++                }
++            }
++            has_explicit_indexer_types = true;
++        }
++    } catch (const std::runtime_error & error) {
++        if (std::string(error.what()).find("wrong array element type") == std::string::npos) {
++            throw;
++        }
++        // Older GGUF writers represented the same roles as 0/1 integers.
++        has_explicit_indexer_types = ml.get_key_or_arr(
++            LLM_KV_ATTENTION_INDEXER_TYPES,
++            hparams.is_indexer_full_impl,
++            hparams.n_layer(),
++            false);
++    }
++
++    hparams.indexer_types_present = has_explicit_indexer_types;
++    for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
++        if (hparams.is_indexer_full_impl[il] > 1) {
++            throw std::runtime_error(
++                "glm-dsa.attention.indexer.types numeric values must be 0 or 1");
++        }
++        hparams.indexer_types[il] = static_cast<int32_t>(hparams.is_indexer_full_impl[il]);
++    }
+ 
+     switch (hparams.n_layer()) {
+         case 78: type = LLM_TYPE_744B_A40B; break;
+diff --git a/src/models/granite-switch.cpp b/src/models/granite-switch.cpp
+index 8b8b7370f..a5c6a7c4f 100644
+--- a/src/models/granite-switch.cpp
++++ b/src/models/granite-switch.cpp
+@@ -122,12 +122,12 @@ void llama_model_granite_switch::load_arch_tensors(llama_model_loader &) {
+ 
+         auto & sl = layer.switch_lora;
+ 
+-        sl.a_q = create_tensor(tn(LLM_TENSOR_ATTN_Q, "lora_a", i), {n_embd,  n_rank, n_slots}, 0);
+-        sl.b_q = create_tensor(tn(LLM_TENSOR_ATTN_Q, "lora_b", i), {n_rank, n_embd_q, n_slots}, 0);
+-        sl.a_k = create_tensor(tn(LLM_TENSOR_ATTN_K, "lora_a", i), {n_embd,  n_rank, n_slots}, 0);
+-        sl.b_k = create_tensor(tn(LLM_TENSOR_ATTN_K, "lora_b", i), {n_rank, n_embd_kv, n_slots}, 0);
+-        sl.a_v = create_tensor(tn(LLM_TENSOR_ATTN_V, "lora_a", i), {n_embd,  n_rank, n_slots}, 0);
+-        sl.b_v = create_tensor(tn(LLM_TENSOR_ATTN_V, "lora_b", i), {n_rank, n_embd_kv, n_slots}, 0);
++        sl.a_q = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "lora_a_q", i), {n_embd,  n_rank, n_slots}, 0);
++        sl.b_q = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "lora_b_q", i), {n_rank, n_embd_q, n_slots}, 0);
++        sl.a_k = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "lora_a_k", i), {n_embd,  n_rank, n_slots}, 0);
++        sl.b_k = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "lora_b_k", i), {n_rank, n_embd_kv, n_slots}, 0);
++        sl.a_v = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "lora_a_v", i), {n_embd,  n_rank, n_slots}, 0);
++        sl.b_v = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "lora_b_v", i), {n_rank, n_embd_kv, n_slots}, 0);
+ 
+         sl.a_o = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "lora_a", i), {n_embd_q, n_rank, n_slots}, 0);
+         sl.b_o = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "lora_b", i), {n_rank,   n_embd, n_slots}, 0);
+@@ -188,10 +188,18 @@ void llm_graph_input_switch::set_input(const llama_ubatch * ubatch) {
+             : (int32_t) tok;
+     }
+ 
+-    ggml_backend_tensor_set(sub_tokens,  sub.data(),  0, n_tokens*ggml_element_size(sub_tokens));
+-    ggml_backend_tensor_set(router_ksig, ksig.data(), 0, n_tokens*ggml_element_size(router_ksig));
+-    ggml_backend_tensor_set(router_vval, vval.data(), 0, n_tokens*ggml_element_size(router_vval));
+-    ggml_backend_tensor_set(router_q,    q.data(),    0, n_tokens*ggml_element_size(router_q));
++    if (sub_tokens != nullptr && sub_tokens->buffer != nullptr) {
++        ggml_backend_tensor_set(sub_tokens, sub.data(), 0, n_tokens*ggml_element_size(sub_tokens));
++    }
++    if (router_ksig != nullptr && router_ksig->buffer != nullptr) {
++        ggml_backend_tensor_set(router_ksig, ksig.data(), 0, n_tokens*ggml_element_size(router_ksig));
++    }
++    if (router_vval != nullptr && router_vval->buffer != nullptr) {
++        ggml_backend_tensor_set(router_vval, vval.data(), 0, n_tokens*ggml_element_size(router_vval));
++    }
++    if (router_q != nullptr && router_q->buffer != nullptr) {
++        ggml_backend_tensor_set(router_q, q.data(), 0, n_tokens*ggml_element_size(router_q));
++    }
+ }
+ 
+ std::unique_ptr<llm_graph_context> llama_model_granite_switch::build_arch_graph(const llm_graph_params & params) const {
+@@ -235,8 +243,10 @@ llama_model_granite_switch::graph::graph(
+ 
+     const auto & smodel = static_cast<const llama_model_granite_switch &>(model);
+ 
+-    // TODO: support raw embedding input (multimodal / pre-embedded tokens) when needed
+-    GGML_ASSERT(ubatch.token && "granite-switch requires token input");
++    // A downstream stage is built from activation embeddings. Token IDs arrive
++    // through the required sideband when the graph executes so every stage can
++    // rebuild the adapter-router lane.
++    GGML_ASSERT(ubatch.token || (build_inputs.filter.enabled && build_inputs.filter.layer_start > 0));
+ 
+     const int64_t n_embd_head = hparams.n_embd_head_v();
+     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
+@@ -255,6 +265,10 @@ llama_model_granite_switch::graph::graph(
+     ggml_tensor * router_ksig = inp_switch->router_ksig;
+     ggml_tensor * router_vval = inp_switch->router_vval;
+     ggml_tensor * router_q    = inp_switch->router_q;
++    request_input(sub_tokens,  "granite_switch.substituted_tokens");
++    request_input(router_ksig, "granite_switch.router_key_signal");
++    request_input(router_vval, "granite_switch.router_value");
++    request_input(router_q,    "granite_switch.router_query");
+     res->add_input(std::move(inp_switch));
+ 
+     // embed the substituted ids directly; build_inp_embd would embed the raw tokens
+diff --git a/src/models/mimo2.cpp b/src/models/mimo2.cpp
+index ee5f6bf85..1b0ca2d84 100644
+--- a/src/models/mimo2.cpp
++++ b/src/models/mimo2.cpp
+@@ -375,10 +375,17 @@ llama_model_mimo2::graph_mtp::graph_mtp(const llama_model & model, const llm_gra
+     cur = ggml_add(ctx0, cur, ffn_inp);
+     cb(cur, "mtp_post_ffn", il);
+ 
++    if (!cparams.embeddings_nextn_masked) {
++        cb(cur, "h_nextn", -1);
++        res->t_h_nextn = cur;
++    }
++
+     cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+ 
+-    cb(cur, "h_nextn", -1);
+-    res->t_h_nextn = cur;
++    if (cparams.embeddings_nextn_masked) {
++        cb(cur, "h_nextn", -1);
++        res->t_h_nextn = cur;
++    }
+ 
+     ggml_tensor * head_norm_w = layer.nextn.shared_head_norm
+             ? layer.nextn.shared_head_norm
+diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
+index 2156941fc..2b2e48f2e 100644
+--- a/src/skippy/activation.cpp
++++ b/src/skippy/activation.cpp
+@@ -197,7 +197,8 @@ static enum skippy_status skippy_validate_frame_input_sequences(
+             SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST |
+             SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP |
+             SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD |
+-            SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K;
++            SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K |
++            SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL;
+     if ((input_desc->flags & ~supported_flags) != 0) {
+         skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "activation frame has unsupported sideband flags");
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+@@ -246,6 +247,20 @@ static enum skippy_status skippy_validate_frame_input_sequences(
+         skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "Inkling MTP embedding sideband cannot be combined with other activation sidebands");
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
++    if ((input_desc->flags & SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL) != 0 && !skippy_is_kimi_k3_activation_model(session)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "Kimi-K3 residual sideband is only valid for Kimi-K3 stages");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (skippy_is_kimi_k3_activation_model(session) &&
++        (input_desc->flags & SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL) == 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "non-first Kimi-K3 runtime slices require residual checkpoint sideband");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if ((input_desc->flags & SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL) != 0 &&
++        (input_desc->flags & ~SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL) != 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "Kimi-K3 residual sideband cannot be combined with other activation sidebands");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
+ 
+     const size_t hidden_bytes = skippy_activation_hidden_bytes(session, expected_token_count);
+     if ((input_desc->flags & SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0) {
+@@ -273,6 +288,13 @@ static enum skippy_status skippy_validate_frame_input_sequences(
+             skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, message);
+             return SKIPPY_STATUS_INVALID_ARGUMENT;
+         }
++    } else if ((input_desc->flags & SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL) != 0) {
++        const size_t expected_bytes = hidden_bytes + skippy_kimi_k3_residual_bytes(
++                session, expected_token_count, session->stage_model->config.layer_start);
++        if (input_desc->payload_bytes != expected_bytes) {
++            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "Kimi-K3 residual sideband size does not match the stage boundary");
++            return SKIPPY_STATUS_INVALID_ARGUMENT;
++        }
+     } else {
+         const size_t expected_bytes = skippy_activation_payload_bytes(session, expected_token_count, input_desc->flags);
+         if (input_desc->payload_bytes != expected_bytes) {
+@@ -400,7 +422,6 @@ enum skippy_status skippy_decode_batch(
+         return SKIPPY_STATUS_RUNTIME_ERROR;
+     }
+     skippy_mark_context_work_pending(session->stage_model);
+-
+     session->n_past += static_cast<int32_t>(token_count);
+     return skippy_success(out_error);
+ }
+@@ -452,6 +473,11 @@ enum skippy_status skippy_copy_output_activation_frame(
+         return skippy_success(out_error);
+     }
+ 
++    // Stage activations are host-visible wire payloads. Backends such as Metal
++    // may still be executing after decode returns, so synchronize before any
++    // tensor or embedding readback.
++    skippy_synchronize_context_if_pending(session->stage_model);
++
+     const uint64_t output_flags = skippy_output_activation_flags(session, input_desc);
+     const size_t hidden_bytes = skippy_activation_hidden_bytes(session, token_count);
+     size_t actual_payload_bytes = hidden_bytes;
+@@ -545,6 +571,26 @@ enum skippy_status skippy_copy_output_activation_frame(
+         }
+     }
+ 
++    if ((output_flags & SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL) != 0) {
++        uint8_t * sideband_output = static_cast<uint8_t *>(output_payload) + hidden_bytes;
++        llm_graph_result * res = session->ctx->get_gf_res_prev();
++        ggml_tensor * residual = res != nullptr ? res->get_skippy_kimi_k3_residual() : nullptr;
++        const uint32_t n_checkpoints = skippy_kimi_k3_residual_checkpoint_count(
++                session, session->stage_model->config.layer_end);
++        const size_t residual_bytes = skippy_kimi_k3_residual_bytes(
++                session, token_count, session->stage_model->config.layer_end);
++        if (residual == nullptr || residual->type != GGML_TYPE_F32 || !ggml_is_contiguous(residual) ||
++                residual->ne[0] != llama_model_n_embd(session->stage_model->model) ||
++                residual->ne[1] != n_checkpoints ||
++                residual->ne[2] != static_cast<int64_t>(token_count) ||
++                ggml_nbytes(residual) != residual_bytes) {
++            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "Kimi-K3 residual checkpoint output shape is invalid");
++            return SKIPPY_STATUS_RUNTIME_ERROR;
++        }
++        ggml_backend_tensor_get(residual, sideband_output, 0, residual_bytes);
++        actual_payload_bytes += residual_bytes;
++    }
++
+     if ((output_flags & SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST) != 0) {
+         uint8_t * sideband_output = static_cast<uint8_t *>(output_payload) + hidden_bytes;
+         const skippy_runtime_config & config = session->stage_model->config;
+@@ -724,6 +770,10 @@ enum skippy_status skippy_decode_activation_frame(
+             hyperconnection_count);
+     skippy_graph_build_inputs_set_rwkv7_v_first(graph_build_inputs, input_desc, input_payload, hidden_bytes, n_embd);
+     skippy_graph_build_inputs_set_gemma3n_altup(graph_build_inputs, input_desc, input_payload, n_embd, n_altup);
++    skippy_graph_build_inputs_set_kimi_k3_residual(
++            graph_build_inputs, input_desc, input_payload, hidden_bytes, n_embd,
++            skippy_kimi_k3_residual_checkpoint_count(
++                    session, session->stage_model->config.layer_start));
+     const llama_pos token_start = pos_storage.empty() ? session->n_past : pos_storage[0];
+     skippy_graph_build_inputs_set_glm_dsa_top_k(
+             graph_build_inputs,
+@@ -869,6 +919,10 @@ enum skippy_status skippy_verify_activation_frame(
+             hyperconnection_count);
+     skippy_graph_build_inputs_set_rwkv7_v_first(graph_build_inputs, input_desc, input_payload, hidden_bytes, n_embd);
+     skippy_graph_build_inputs_set_gemma3n_altup(graph_build_inputs, input_desc, input_payload, n_embd, n_altup);
++    skippy_graph_build_inputs_set_kimi_k3_residual(
++            graph_build_inputs, input_desc, input_payload, hidden_bytes, n_embd,
++            skippy_kimi_k3_residual_checkpoint_count(
++                    session, session->stage_model->config.layer_start));
+     const llama_pos token_start = session->n_past;
+     skippy_graph_build_inputs_set_glm_dsa_top_k(
+             graph_build_inputs,
+diff --git a/src/skippy/activation_internal.h b/src/skippy/activation_internal.h
+index 1bebb87e1..45ded3c02 100644
+--- a/src/skippy/activation_internal.h
++++ b/src/skippy/activation_internal.h
+@@ -17,6 +17,9 @@ bool skippy_is_gemma3n_activation_model(const skippy_session * session);
+ bool skippy_is_glm_dsa_activation_model(const skippy_session * session);
+ bool skippy_glm_dsa_stage_starts_in_consumer_group(const skippy_session * session);
+ bool skippy_is_inkling_activation_model(const skippy_session * session);
++bool skippy_is_kimi_k3_activation_model(const skippy_session * session);
++uint32_t skippy_kimi_k3_residual_checkpoint_count(const skippy_session * session, int32_t layer_boundary);
++size_t skippy_kimi_k3_residual_bytes(const skippy_session * session, size_t token_count, int32_t layer_boundary);
+ size_t skippy_activation_hidden_bytes(const skippy_session * session, size_t token_count);
+ int32_t skippy_activation_hyperconnection_count(const skippy_session * session);
+ uint32_t skippy_glm_dsa_sideband_top_k_count_for_n_kv(
+diff --git a/src/skippy/activation_layout.cpp b/src/skippy/activation_layout.cpp
+index 8d60b6087..a3ace4cfe 100644
+--- a/src/skippy/activation_layout.cpp
++++ b/src/skippy/activation_layout.cpp
+@@ -207,6 +207,31 @@ bool skippy_is_inkling_activation_model(const skippy_session * session) {
+     return session->stage_model->model->arch == LLM_ARCH_INKLING;
+ }
+ 
++bool skippy_is_kimi_k3_activation_model(const skippy_session * session) {
++    if (session == nullptr || session->stage_model == nullptr || session->stage_model->model == nullptr) {
++        return false;
++    }
++    const llama_model * model = session->stage_model->model;
++    return model->arch == LLM_ARCH_KIMI_K3 && model->hparams.attn_res_block_size > 0;
++}
++
++uint32_t skippy_kimi_k3_residual_checkpoint_count(
++        const skippy_session * session,
++        int32_t layer_boundary) {
++    if (!skippy_is_kimi_k3_activation_model(session) || layer_boundary <= 0) {
++        return 0;
++    }
++    const uint32_t block_size = session->stage_model->model->hparams.attn_res_block_size;
++    return (static_cast<uint32_t>(layer_boundary) + block_size - 1)/block_size;
++}
++
++size_t skippy_kimi_k3_residual_bytes(
++        const skippy_session * session,
++        size_t token_count,
++        int32_t layer_boundary) {
++    return skippy_activation_hidden_bytes(session, token_count) *
++           skippy_kimi_k3_residual_checkpoint_count(session, layer_boundary);
++}
+ 
+ size_t skippy_activation_hidden_bytes(const skippy_session * session, size_t token_count) {
+     if (session == nullptr || session->stage_model == nullptr || session->stage_model->model == nullptr) {
+@@ -353,6 +378,9 @@ uint64_t skippy_output_activation_flags(
+         skippy_glm_dsa_layer_starts_consumer_group(session, session->stage_model->config.layer_end)) {
+         return SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K;
+     }
++    if (skippy_emits_activation_frame(session) && skippy_is_kimi_k3_activation_model(session)) {
++        return SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL;
++    }
+     if (skippy_emits_activation_frame(session) && skippy_is_inkling_activation_model(session)) {
+         if (input_desc != nullptr && (input_desc->flags & SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD) != 0) {
+             return SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD;
+@@ -387,6 +415,10 @@ size_t skippy_activation_payload_bytes(
+     if ((flags & SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0) {
+         payload_bytes += skippy_glm_dsa_top_k_bytes(session, token_count);
+     }
++    if ((flags & SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL) != 0) {
++        payload_bytes += skippy_kimi_k3_residual_bytes(
++                session, token_count, session->stage_model->config.layer_end);
++    }
+     if ((flags & SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST) != 0) {
+         payload_bytes += hidden_bytes;
+     }
+@@ -404,6 +436,11 @@ uint64_t skippy_activation_required_frame_flags(const skippy_model * model) {
+     if (model != nullptr && model->model != nullptr && model->model->arch == LLM_ARCH_GEMMA3N) {
+         return SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP;
+     }
++    if (model != nullptr && model->model != nullptr &&
++        model->model->arch == LLM_ARCH_KIMI_K3 &&
++        model->model->hparams.attn_res_block_size > 0) {
++        return SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL;
++    }
+     return 0;
+ }
+ 
+@@ -411,7 +448,10 @@ uint64_t skippy_activation_required_sidebands(const skippy_model * model) {
+     if (model == nullptr || model->model == nullptr) {
+         return 0;
+     }
+-    if (model->model->arch == LLM_ARCH_GEMMA3N || model->model->arch == LLM_ARCH_QWEN4EXP) {
++    if (model->model->arch == LLM_ARCH_GEMMA3N ||
++        model->model->arch == LLM_ARCH_GEMMA4 ||
++        model->model->arch == LLM_ARCH_GRANITE_SWITCH ||
++        model->model->arch == LLM_ARCH_QWEN4EXP) {
+         return SKIPPY_ACTIVATION_SIDEBAND_TOKEN_IDS;
+     }
+     return 0;
+diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
+index 9f768bb28..d0a0ff41c 100644
+--- a/src/skippy/execution-batch.cpp
++++ b/src/skippy/execution-batch.cpp
+@@ -130,15 +130,15 @@ enum skippy_status skippy_iteration_batch_sampled(
+             return status;
+         }
+         const uint64_t input_flags = request.input_desc != nullptr ? request.input_desc->flags : 0;
+-        if ((input_flags & ~SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0) {
+-            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "iteration batching currently supports only GLM-DSA activation sidebands");
++        if ((input_flags & ~(SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K | SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL)) != 0) {
++            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "iteration batching supports only GLM-DSA or Kimi-K3 activation sidebands");
+             return SKIPPY_STATUS_UNSUPPORTED;
+         }
+         const uint32_t input_top_k = skippy_glm_dsa_top_k_count_from_desc(session, request.input_desc);
+         const uint32_t input_streams = skippy_glm_dsa_n_stream(session);
+         const uint64_t output_flags = skippy_output_activation_flags(session, request.input_desc);
+-        if ((output_flags & ~SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0) {
+-            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "iteration batching currently supports only GLM-DSA output sidebands");
++        if ((output_flags & ~(SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K | SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL)) != 0) {
++            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "iteration batching supports only GLM-DSA or Kimi-K3 output sidebands");
+             return SKIPPY_STATUS_UNSUPPORTED;
+         }
+         if (request_index == 0) {
+@@ -180,6 +180,7 @@ enum skippy_status skippy_iteration_batch_sampled(
+     std::vector<llama_token> token_storage(total_token_count);
+     std::vector<float> embd_storage;
+     std::vector<float> hyperconnection_storage;
++    std::vector<float> kimi_k3_input_residual_storage;
+     std::vector<int32_t> glm_dsa_input_top_k_storage;
+     if (activation_input) {
+         embd_storage.resize(total_token_count * static_cast<size_t>(n_embd_inp));
+@@ -190,6 +191,12 @@ enum skippy_status skippy_iteration_batch_sampled(
+             glm_dsa_input_top_k_storage.resize(
+                     total_token_count * static_cast<size_t>(batch_input_top_k) * batch_input_streams);
+         }
++        if ((batch_input_flags & SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL) != 0) {
++            const uint32_t n_checkpoints = skippy_kimi_k3_residual_checkpoint_count(
++                    first, first->stage_model->config.layer_start);
++            kimi_k3_input_residual_storage.resize(
++                    total_token_count * static_cast<size_t>(n_embd) * n_checkpoints);
++        }
+     }
+ 
+     std::vector<llama_pos> pos_storage(total_token_count * static_cast<size_t>(n_pos_per_embd));
+@@ -225,6 +232,17 @@ enum skippy_status skippy_iteration_batch_sampled(
+                         request.input_payload,
+                         hidden_bytes);
+             }
++            if (!kimi_k3_input_residual_storage.empty()) {
++                const uint32_t n_checkpoints = skippy_kimi_k3_residual_checkpoint_count(
++                        request.session, request.session->stage_model->config.layer_start);
++                const size_t sideband_values = request.token_count * static_cast<size_t>(n_embd) * n_checkpoints;
++                const float * source = reinterpret_cast<const float *>(
++                        static_cast<const uint8_t *>(request.input_payload) + hidden_bytes);
++                std::memcpy(
++                        kimi_k3_input_residual_storage.data() + offset * static_cast<size_t>(n_embd) * n_checkpoints,
++                        source,
++                        sideband_values * sizeof(float));
++            }
+             if (!glm_dsa_input_top_k_storage.empty()) {
+                 const size_t sideband_values = request.token_count * static_cast<size_t>(batch_input_top_k) * batch_input_streams;
+                 const int32_t * source = reinterpret_cast<const int32_t *>(
+@@ -275,6 +293,12 @@ enum skippy_status skippy_iteration_batch_sampled(
+             static_cast<uint32_t>(total_token_count),
+             n_embd,
+             hyperconnection);
++    skippy_graph_build_inputs_set_kimi_k3_residual(
++            graph_build_inputs,
++            kimi_k3_input_residual_storage.empty() ? nullptr : kimi_k3_input_residual_storage.data(),
++            static_cast<uint32_t>(total_token_count),
++            n_embd,
++            skippy_kimi_k3_residual_checkpoint_count(first, first->stage_model->config.layer_start));
+     const llama_pos batch_pos_start = pos_storage.empty() ? first->n_past : pos_storage[0];
+     skippy_graph_build_inputs_set_glm_dsa_top_k(
+             graph_build_inputs,
+@@ -306,6 +330,20 @@ enum skippy_status skippy_iteration_batch_sampled(
+         return SKIPPY_STATUS_RUNTIME_ERROR;
+     }
+ 
++    ggml_tensor * kimi_k3_residual = (batch_output_flags & SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL) != 0 && graph_result != nullptr ?
++            graph_result->get_skippy_kimi_k3_residual() : nullptr;
++    const uint32_t kimi_k3_output_checkpoints = skippy_kimi_k3_residual_checkpoint_count(
++            first, first->stage_model->config.layer_end);
++    const size_t kimi_k3_output_row_bytes = static_cast<size_t>(n_embd) * kimi_k3_output_checkpoints * sizeof(float);
++    if ((batch_output_flags & SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL) != 0 &&
++        (kimi_k3_residual == nullptr || kimi_k3_residual->type != GGML_TYPE_F32 ||
++         kimi_k3_residual->ne[0] != n_embd ||
++         kimi_k3_residual->ne[1] != kimi_k3_output_checkpoints ||
++         kimi_k3_residual->ne[2] != static_cast<int64_t>(total_token_count))) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "iteration Kimi-K3 residual output shape is invalid");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++
+     std::vector<uint32_t> request_output_top_k(request_count, 0);
+     if ((batch_output_flags & SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0 &&
+         embeddings != nullptr && output_payloads != nullptr) {
+@@ -373,6 +411,15 @@ enum skippy_status skippy_iteration_batch_sampled(
+                     embeddings + offset * static_cast<size_t>(n_embd_out),
+                     hidden_bytes);
+             size_t actual_output_bytes = hidden_bytes;
++            if ((batch_output_flags & SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL) != 0) {
++                const size_t residual_bytes = request.token_count * kimi_k3_output_row_bytes;
++                ggml_backend_tensor_get(
++                        kimi_k3_residual,
++                        output + actual_output_bytes,
++                        offset * kimi_k3_output_row_bytes,
++                        residual_bytes);
++                actual_output_bytes += residual_bytes;
++            }
+             if ((batch_output_flags & SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0) {
+                 const uint32_t output_top_k = request_output_top_k[request_index];
+                 const size_t row_bytes = static_cast<size_t>(output_top_k) * sizeof(int32_t);
+@@ -485,8 +532,8 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+             return status;
+         }
+         const uint64_t input_flags = input_desc != nullptr ? input_desc->flags : 0;
+-        if ((input_flags & ~SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0) {
+-            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "batched activation decode only supports GLM-DSA input sidebands");
++        if ((input_flags & ~(SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K | SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL)) != 0) {
++            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "batched activation decode supports only GLM-DSA or Kimi-K3 input sidebands");
+             return SKIPPY_STATUS_UNSUPPORTED;
+         }
+         const uint32_t input_top_k = skippy_glm_dsa_top_k_count_from_desc(session, input_desc);
+@@ -498,8 +545,8 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+             return SKIPPY_STATUS_INVALID_ARGUMENT;
+         }
+         const uint64_t output_flags = skippy_output_activation_flags(session, input_desc);
+-        if ((output_flags & ~SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0) {
+-            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "batched activation decode only supports GLM-DSA output sidebands");
++        if ((output_flags & ~(SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K | SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL)) != 0) {
++            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "batched activation decode supports only GLM-DSA or Kimi-K3 output sidebands");
+             return SKIPPY_STATUS_UNSUPPORTED;
+         }
+         if (i == 0) {
+@@ -524,6 +571,7 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+ 
+     std::vector<float> embd_storage;
+     std::vector<float> hyperconnection_storage;
++    std::vector<float> kimi_k3_input_residual_storage;
+     std::vector<int32_t> glm_dsa_input_top_k_storage;
+     std::vector<llama_token> token_storage;
+     if (activation_input) {
+@@ -534,6 +582,12 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+         if ((batch_input_flags & SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0) {
+             glm_dsa_input_top_k_storage.resize(request_count*batch_input_top_k);
+         }
++        if ((batch_input_flags & SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL) != 0) {
++            const uint32_t n_checkpoints = skippy_kimi_k3_residual_checkpoint_count(
++                    first, first->stage_model->config.layer_start);
++            kimi_k3_input_residual_storage.resize(
++                    request_count * static_cast<size_t>(n_embd) * n_checkpoints);
++        }
+         for (int32_t i = 0; i < n_tokens; ++i) {
+             const skippy_activation_desc * input_desc = input_descs[i];
+             const void * input_payload = input_payloads[i];
+@@ -556,6 +610,17 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+                 std::memcpy(dst, input_payload, static_cast<size_t>(n_embd)*sizeof(float));
+                 std::memset(dst + n_embd, 0, static_cast<size_t>(n_embd_inp - n_embd)*sizeof(float));
+             }
++            if (!kimi_k3_input_residual_storage.empty()) {
++                const uint32_t n_checkpoints = skippy_kimi_k3_residual_checkpoint_count(
++                        sessions[i], sessions[i]->stage_model->config.layer_start);
++                const size_t residual_values = static_cast<size_t>(n_embd) * n_checkpoints;
++                const float * residual_src = reinterpret_cast<const float *>(
++                        static_cast<const uint8_t *>(input_payload) + hidden_bytes_per_request);
++                std::memcpy(
++                        kimi_k3_input_residual_storage.data() + static_cast<size_t>(i) * residual_values,
++                        residual_src,
++                        residual_values * sizeof(float));
++            }
+             if (!glm_dsa_input_top_k_storage.empty()) {
+                 const int32_t * top_k_src = reinterpret_cast<const int32_t *>(
+                         static_cast<const uint8_t *>(input_payload) + hidden_bytes_per_request);
+@@ -610,6 +675,12 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+             static_cast<uint32_t>(request_count),
+             n_embd,
+             hyperconnection);
++    skippy_graph_build_inputs_set_kimi_k3_residual(
++            graph_build_inputs,
++            kimi_k3_input_residual_storage.empty() ? nullptr : kimi_k3_input_residual_storage.data(),
++            static_cast<uint32_t>(request_count),
++            n_embd,
++            skippy_kimi_k3_residual_checkpoint_count(first, first->stage_model->config.layer_start));
+     const llama_pos batch_pos_start = pos_storage.empty() ? first->n_past : pos_storage[0];
+     skippy_graph_build_inputs_set_glm_dsa_top_k(
+             graph_build_inputs,
+@@ -634,6 +705,21 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+         }
+     }
+ 
++    llm_graph_result * graph_result = first->ctx->get_gf_res_prev();
++    ggml_tensor * kimi_k3_residual = (batch_output_flags & SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL) != 0 && graph_result != nullptr ?
++            graph_result->get_skippy_kimi_k3_residual() : nullptr;
++    const uint32_t kimi_k3_output_checkpoints = skippy_kimi_k3_residual_checkpoint_count(
++            first, first->stage_model->config.layer_end);
++    const size_t kimi_k3_output_row_bytes = static_cast<size_t>(n_embd) * kimi_k3_output_checkpoints * sizeof(float);
++    if ((batch_output_flags & SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL) != 0 &&
++        (kimi_k3_residual == nullptr || kimi_k3_residual->type != GGML_TYPE_F32 ||
++         kimi_k3_residual->ne[0] != n_embd ||
++         kimi_k3_residual->ne[1] != kimi_k3_output_checkpoints ||
++         kimi_k3_residual->ne[2] != n_tokens)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "batched Kimi-K3 residual output shape is invalid");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++
+     std::vector<uint8_t> glm_dsa_top_k_storage;
+     std::vector<size_t> glm_dsa_top_k_offsets(request_count + 1, 0);
+     std::vector<size_t> glm_dsa_top_k_bytes_per_request(request_count, 0);
+@@ -734,6 +820,15 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+                     embeddings + static_cast<size_t>(i)*n_embd_out,
+                     hidden_bytes_per_request);
+             size_t actual_output_bytes = hidden_bytes_per_request;
++            if ((batch_output_flags & SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL) != 0) {
++                uint8_t * output = static_cast<uint8_t *>(output_payloads[i]);
++                ggml_backend_tensor_get(
++                        kimi_k3_residual,
++                        output + actual_output_bytes,
++                        static_cast<size_t>(i) * kimi_k3_output_row_bytes,
++                        kimi_k3_output_row_bytes);
++                actual_output_bytes += kimi_k3_output_row_bytes;
++            }
+             const size_t request_top_k_bytes = glm_dsa_top_k_bytes_per_request[static_cast<size_t>(i)];
+             if (request_top_k_bytes > 0) {
+                 uint8_t * output = static_cast<uint8_t *>(output_payloads[i]);
+diff --git a/src/skippy/graph_build_inputs.h b/src/skippy/graph_build_inputs.h
+index 9b9678226..869f8312c 100644
+--- a/src/skippy/graph_build_inputs.h
++++ b/src/skippy/graph_build_inputs.h
+@@ -74,6 +74,37 @@ inline void skippy_graph_build_inputs_set_gemma3n_altup(
+     }
+ }
+ 
++inline void skippy_graph_build_inputs_set_kimi_k3_residual(
++        skippy_graph_build_inputs & inputs,
++        const skippy_activation_desc * desc,
++        const void * payload,
++        size_t hidden_bytes,
++        int32_t n_embd,
++        uint32_t n_checkpoints) {
++    if (desc != nullptr && payload != nullptr &&
++            (desc->flags & SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL) != 0) {
++        inputs.kimi_k3_residual.values = reinterpret_cast<const float *>(
++                static_cast<const uint8_t *>(payload) + hidden_bytes);
++        inputs.kimi_k3_residual.token_count = desc->token_count;
++        inputs.kimi_k3_residual.n_embd = static_cast<uint32_t>(n_embd);
++        inputs.kimi_k3_residual.n_checkpoints = n_checkpoints;
++    }
++}
++
++inline void skippy_graph_build_inputs_set_kimi_k3_residual(
++        skippy_graph_build_inputs & inputs,
++        const float * values,
++        uint32_t token_count,
++        int32_t n_embd,
++        uint32_t n_checkpoints) {
++    if (values != nullptr && token_count > 0 && n_embd > 0 && n_checkpoints > 0) {
++        inputs.kimi_k3_residual.values = values;
++        inputs.kimi_k3_residual.token_count = token_count;
++        inputs.kimi_k3_residual.n_embd = static_cast<uint32_t>(n_embd);
++        inputs.kimi_k3_residual.n_checkpoints = n_checkpoints;
++    }
++}
++
+ inline void skippy_graph_build_inputs_set_hyperconnection(
+         skippy_graph_build_inputs & inputs,
+         const void * payload,
+diff --git a/src/skippy/graph_identity.cpp b/src/skippy/graph_identity.cpp
+index 7e9130bdd..59f819ee6 100644
+--- a/src/skippy/graph_identity.cpp
++++ b/src/skippy/graph_identity.cpp
+@@ -358,7 +358,11 @@ private:
+         }
+         if (leaf.kind != leaf_class::state) {
+             const auto key = std::make_pair(static_cast<uint8_t>(leaf.kind), leaf.identity);
+-            if (!binding_identities.insert(key).second) {
++            const bool inserted = binding_identities.insert(key).second;
++            // A tied package parameter may be materialized as distinct tensors
++            // in separate backend contexts. They intentionally share one stable
++            // package identity. Request identities remain one-to-one.
++            if (!inserted && leaf.kind != leaf_class::parameter) {
+                 error = "duplicate semantic binding identity: " + leaf.identity;
+                 return false;
+             }
+diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
+index 874ca8842..b401376b7 100644
+--- a/src/skippy/model_loading.cpp
++++ b/src/skippy/model_loading.cpp
+@@ -728,6 +728,18 @@ enum skippy_status skippy_finish_model_open(
+         return SKIPPY_STATUS_RUNTIME_ERROR;
+     };
+ 
++    const auto include_kimi_k3_residual_boundary = [&](int32_t layer_boundary, uint64_t & elements, uint64_t & bytes) {
++        if (stage_model->model->arch != LLM_ARCH_KIMI_K3 ||
++            stage_model->model->hparams.attn_res_block_size == 0) {
++            return;
++        }
++        skippy_session boundary_session = {};
++        boundary_session.stage_model = stage_model;
++        const size_t sideband_bytes = skippy_kimi_k3_residual_bytes(&boundary_session, 1, layer_boundary);
++        elements += sideband_bytes/sizeof(float);
++        bytes += sideband_bytes;
++    };
++
+     if (config != nullptr && config->filter_tensors_on_load && !config->include_output) {
+         enum ggml_type type = GGML_TYPE_COUNT;
+         uint64_t elements_per_token = 0;
+@@ -735,6 +747,7 @@ enum skippy_status skippy_finish_model_open(
+         if (!stage_model->ctx->get_activation_boundary(type, elements_per_token, bytes_per_token)) {
+             return fail_boundary_load("stage graph did not expose a stable output activation boundary");
+         }
++        include_kimi_k3_residual_boundary(config->layer_end, elements_per_token, bytes_per_token);
+         stage_model->has_output_activation_boundary = true;
+         stage_model->output_activation_boundary = {
+             SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION,
+@@ -755,6 +768,7 @@ enum skippy_status skippy_finish_model_open(
+         if (!stage_model->ctx->get_input_activation_boundary(type, elements_per_token, bytes_per_token)) {
+             return fail_boundary_load("stage graph did not expose a stable input activation boundary");
+         }
++        include_kimi_k3_residual_boundary(config->layer_start, elements_per_token, bytes_per_token);
+         stage_model->has_input_activation_boundary = true;
+         stage_model->input_activation_boundary = {
+             SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION,
+diff --git a/src/skippy/package_tensor_binding.cpp b/src/skippy/package_tensor_binding.cpp
+index 5a5ae1007..1c0ceb180 100644
+--- a/src/skippy/package_tensor_binding.cpp
++++ b/src/skippy/package_tensor_binding.cpp
+@@ -54,16 +54,16 @@ bool skippy_bind_package_tensors(
+         return false;
+     }
+ 
+-    std::map<std::string, const ggml_tensor *> native_tensors;
++    std::map<std::string, std::vector<const ggml_tensor *>> native_tensors;
+     for (const auto & [name, tensor] : llama_internal_get_tensor_map(model)) {
+         if (name.empty() || tensor == nullptr) {
+             error = "native model tensor inventory is incomplete";
+             return false;
+         }
+-        // Tied weights (for example gemma3n's duplicated token embedding used
+-        // as both input and output) register the same name once per backend
+-        // context; keep the first instance for binding.
+-        native_tensors.emplace(name, tensor);
++        auto & instances = native_tensors[name];
++        if (std::find(instances.begin(), instances.end(), tensor) == instances.end()) {
++            instances.push_back(tensor);
++        }
+     }
+     if (native_tensors.size() != inputs.size()) {
+         error = "package and native tensor inventory sizes differ";
+@@ -94,11 +94,12 @@ bool skippy_bind_package_tensors(
+             error = "package tensor locator is absent from the native model: " + input.native_name;
+             return false;
+         }
+-        const ggml_tensor * tensor = found->second;
+-        if (tensor->type != input.type || !tensor_dimensions_match(tensor, input.dimensions) ||
+-                ggml_nbytes(tensor) != input.stored_length) {
+-            error = "package tensor metadata differs from the native model: " + input.native_name;
+-            return false;
++        for (const ggml_tensor * tensor : found->second) {
++            if (tensor->type != input.type || !tensor_dimensions_match(tensor, input.dimensions) ||
++                    ggml_nbytes(tensor) != input.stored_length) {
++                error = "package tensor metadata differs from the native model: " + input.native_name;
++                return false;
++            }
+         }
+         uint16_t split_no = 0;
+         size_t data_offset = 0;
+@@ -111,7 +112,9 @@ bool skippy_bind_package_tensors(
+             error = "package tensor storage locator differs from the native model: " + input.native_name;
+             return false;
+         }
+-        bindings.push_back({tensor, input.tensor_id});
++        for (const ggml_tensor * tensor : found->second) {
++            bindings.push_back({tensor, input.tensor_id});
++        }
+     }
+     return true;
+ }
+diff --git a/src/skippy/stage_plan.cpp b/src/skippy/stage_plan.cpp
+index 950c0d075..0c183a426 100644
+--- a/src/skippy/stage_plan.cpp
++++ b/src/skippy/stage_plan.cpp
+@@ -137,6 +137,46 @@ struct skippy_stage_plan {
+ 
+ namespace {
+ 
++bool add_runtime_replay_residents(
++        const skippy_stage_planner & planner,
++        int32_t layer_start,
++        skippy_guarded_stage_slice_plan & plan,
++        std::string & error) {
++    if (layer_start == 0 || planner.model->arch != LLM_ARCH_GEMMA4) {
++        return true;
++    }
++
++    // Gemma 4 rebuilds its per-layer input projection in downstream stages
++    // from the activation token sideband. The whole-model planning graph
++    // computes this request-derived cone before block 0, so it appears as an
++    // activation frontier unless these runtime replay weights are added
++    // explicitly to the stage resident closure.
++    std::set<const ggml_tensor *> required = {
++        planner.model->per_layer_tok_embd,
++        planner.model->per_layer_model_proj,
++        planner.model->per_layer_proj_norm,
++    };
++    if (required.find(nullptr) != required.end()) {
++        error = "Gemma 4 runtime replay parameters are incomplete";
++        return false;
++    }
++
++    std::set<std::string> residents(
++            plan.resident_parameter_identities.begin(),
++            plan.resident_parameter_identities.end());
++    for (const auto & binding : planner.bindings) {
++        if (required.erase(binding.tensor) > 0) {
++            residents.insert(binding.identity);
++        }
++    }
++    if (!required.empty()) {
++        error = "Gemma 4 runtime replay parameters have no package bindings";
++        return false;
++    }
++    plan.resident_parameter_identities.assign(residents.begin(), residents.end());
++    return true;
++}
++
+ void append_values(
+         skippy_stage_plan & plan,
+         const std::vector<std::string> & identities,
+@@ -253,6 +293,7 @@ bool build_profile(
+ bool build_mtp_profile(
+         const skippy_stage_planner & planner,
+         const owned_profile & profile,
++        int32_t nextn_layer_offset,
+         context_owner & context,
+         skippy_auxiliary_graph_plan & output,
+         std::string & error) {
+@@ -273,6 +314,7 @@ bool build_mtp_profile(
+         error = "stage planner cannot create metadata-only MTP graph context";
+         return false;
+     }
++    context->set_nextn_layer_offset(nextn_layer_offset);
+     llama_memory_context_ptr memory_context;
+     if (llama_memory_t memory = llama_get_memory(context.get())) {
+         memory_context = memory->init_full();
+@@ -299,16 +341,22 @@ bool add_mtp_profiles(
+ 
+     std::set<std::string> residents(plan.guarded.resident_parameter_identities.begin(),
+             plan.guarded.resident_parameter_identities.end());
++    const int32_t nextn_layer_count = llama_model_n_layer_nextn(planner.model.get());
+     for (const auto & profile : planner.profiles) {
+-        context_owner context(nullptr, llama_free);
+-        skippy_auxiliary_graph_plan auxiliary;
+-        if (!build_mtp_profile(planner, profile, context, auxiliary, error)) {
+-            error = "execution profile " + profile.profile_id + " MTP graph rejected: " + error;
+-            return false;
++        for (int32_t nextn_layer_offset = 0; nextn_layer_offset < nextn_layer_count; ++nextn_layer_offset) {
++            context_owner context(nullptr, llama_free);
++            skippy_auxiliary_graph_plan auxiliary;
++            if (!build_mtp_profile(planner, profile, nextn_layer_offset, context, auxiliary, error)) {
++                error = "execution profile " + profile.profile_id + " MTP graph offset " +
++                        std::to_string(nextn_layer_offset) + " rejected: " + error;
++                return false;
++            }
++            const std::string auxiliary_profile_id = profile.profile_id + ":mtp-" +
++                    std::to_string(nextn_layer_offset);
++            plan.guarded.auxiliary_profiles.push_back({auxiliary_profile_id, auxiliary.graph_identity});
++            residents.insert(auxiliary.parameter_identities.begin(), auxiliary.parameter_identities.end());
++            plan.contexts.push_back(std::move(context));
+         }
+-        plan.guarded.auxiliary_profiles.push_back({profile.profile_id, auxiliary.graph_identity});
+-        residents.insert(auxiliary.parameter_identities.begin(), auxiliary.parameter_identities.end());
+-        plan.contexts.push_back(std::move(context));
+     }
+     plan.guarded.resident_parameter_identities.assign(residents.begin(), residents.end());
+     return true;
+@@ -472,8 +520,9 @@ skippy_status skippy_stage_planner_realize_v1(
+             plan->contexts.push_back(std::move(context));
+         }
+         if (!skippy_build_guarded_stage_slice_plan(inputs, layer_start, layer_end,
+-                    plan->guarded, error) || !add_mtp_profiles(*planner, *plan, error) ||
+-                !build_descriptors(*plan, error)) {
++                    plan->guarded, error) ||
++                !add_runtime_replay_residents(*planner, layer_start, plan->guarded, error) ||
++                !add_mtp_profiles(*planner, *plan, error) || !build_descriptors(*plan, error)) {
+             return fail(out_error, SKIPPY_STATUS_UNSUPPORTED, error);
+         }
+         *out_plan = plan.release();
+diff --git a/src/skippy/stage_slice_plan.cpp b/src/skippy/stage_slice_plan.cpp
+index cb5071150..12b33da57 100644
+--- a/src/skippy/stage_slice_plan.cpp
++++ b/src/skippy/stage_slice_plan.cpp
+@@ -66,6 +66,7 @@ struct selector {
+     std::unordered_map<const ggml_tensor *, std::string> request_names;
+     std::unordered_set<const ggml_tensor *> state_storage;
+     std::unordered_map<const ggml_tensor *, std::unordered_set<int32_t>> state_layers;
++    std::unordered_set<const ggml_tensor *> block_boundaries;
+     std::unordered_set<const ggml_tensor *> prior_boundaries;
+     std::unordered_set<const ggml_tensor *> live_start;
+     std::unordered_set<const ggml_tensor *> live_end;
+@@ -100,6 +101,13 @@ struct selector {
+         return count;
+     }
+ 
++    bool state_owner_belongs_to_slice(int32_t owner) const {
++        // State attached to an auxiliary layer outside the decoder interval is
++        // rebuilt by every stage and therefore has one replicated owner per
++        // stage. Granite-Switch uses this for its router KV lane at n_layer.
++        return owner >= layer_count || (owner >= layer_start && owner < layer_end);
++    }
++
+     bool state_owned_by_slice(const ggml_tensor * tensor) {
+         const auto owners = state_layers.find(canonical_storage(tensor));
+         if (owners == state_layers.end() || owners->second.empty()) {
+@@ -107,7 +115,7 @@ struct selector {
+             return false;
+         }
+         for (int32_t owner : owners->second) {
+-            if (owner < layer_start || owner >= layer_end) {
++            if (!state_owner_belongs_to_slice(owner)) {
+                 error = "persistent state ";
+                 error += ggml_get_name(tensor);
+                 error += " is owned outside the requested slice";
+@@ -187,8 +195,11 @@ struct selector {
+             error = "graph dependency cycle encountered while classifying a frontier";
+             return false;
+         }
+-        bool local = locally_resolvable(tensor->view_src);
++        bool local = tensor->view_src == tensor ? true : locally_resolvable(tensor->view_src);
+         for (const ggml_tensor * source : tensor->src) {
++            if (source == tensor) {
++                continue;
++            }
+             local = locally_resolvable(source) && local;
+         }
+         local_visiting.erase(tensor);
+@@ -211,7 +222,7 @@ struct selector {
+                 return false;
+             }
+             for (int32_t owner : owners->second) {
+-                if (owner < layer_start || owner >= layer_end) {
++                if (!state_owner_belongs_to_slice(owner)) {
+                     foreign_state_cache[tensor] = 1;
+                     return true;
+                 }
+@@ -223,8 +234,11 @@ struct selector {
+             error = "graph dependency cycle encountered while resolving state ownership";
+             return false;
+         }
+-        bool foreign = depends_on_foreign_state(tensor->view_src);
++        bool foreign = tensor->view_src == tensor ? false : depends_on_foreign_state(tensor->view_src);
+         for (const ggml_tensor * source : tensor->src) {
++            if (source == tensor) {
++                continue;
++            }
+             foreign = depends_on_foreign_state(source) || foreign;
+         }
+         foreign_state_visiting.erase(tensor);
+@@ -251,8 +265,11 @@ struct selector {
+             error = "graph dependency cycle encountered while resolving block ownership";
+             return false;
+         }
+-        bool depends = depends_on_core_selection(tensor->view_src);
++        bool depends = tensor->view_src == tensor ? false : depends_on_core_selection(tensor->view_src);
+         for (const ggml_tensor * source : tensor->src) {
++            if (source == tensor) {
++                continue;
++            }
+             depends = depends_on_core_selection(source) || depends;
+         }
+         core_dependency_visiting.erase(tensor);
+@@ -274,21 +291,42 @@ struct selector {
+                 error = "graph dependency has multiple structural leaf classes";
+                 return false;
+             }
++            if (structural_classes == 0) {
++                request_derived_cache[tensor] = -1;
++                return false;
++            }
+             const ggml_tensor * canonical = canonical_storage(tensor);
+-            const bool request = structural_classes == 1 &&
+-                    (request_names.find(tensor) != request_names.end() ||
+-                     request_names.find(canonical) != request_names.end());
+-            request_derived_cache[tensor] = request ? 1 : -1;
+-            return request;
++            const auto owners = state_layers.find(canonical);
++            if (owners != state_layers.end()) {
++                for (int32_t owner : owners->second) {
++                    if (!state_owner_belongs_to_slice(owner)) {
++                        request_derived_cache[tensor] = -1;
++                        return false;
++                    }
++                }
++            }
++            request_derived_cache[tensor] = 1;
++            return true;
++        }
++        // Transformer boundaries carry computed activations even when their
++        // leaves are all structural. Only auxiliary cones outside the blocks
++        // may be rebuilt independently by the adjacent stage.
++        if (block_boundaries.find(tensor) != block_boundaries.end()) {
++            request_derived_cache[tensor] = -1;
++            return false;
+         }
+         if (!request_derived_visiting.insert(tensor).second) {
+             error = "graph dependency cycle encountered while resolving request ownership";
+             return false;
+         }
+-        bool has_dependency = tensor->view_src != nullptr;
+-        bool derived = request_derived(tensor->view_src);
++        bool has_dependency = false;
++        bool derived = true;
++        if (tensor->view_src != nullptr && tensor->view_src != tensor) {
++            has_dependency = true;
++            derived = request_derived(tensor->view_src);
++        }
+         for (const ggml_tensor * source : tensor->src) {
+-            if (source == nullptr) {
++            if (source == nullptr || source == tensor) {
+                 continue;
+             }
+             has_dependency = true;
+@@ -386,11 +424,11 @@ struct selector {
+         if (!selected_nodes.insert(found->second).second) {
+             return true;
+         }
+-        if (!walk(tensor->view_src)) {
++        if (tensor->view_src != tensor && !walk(tensor->view_src)) {
+             return false;
+         }
+         for (const ggml_tensor * source : tensor->src) {
+-            if (!walk(source)) {
++            if (source != tensor && !walk(source)) {
+                 return false;
+             }
+         }
+@@ -424,6 +462,9 @@ struct selector {
+             state_storage.insert(storage);
+             state_layers[storage].insert(effect.layer);
+         }
++        for (const auto & boundary : boundaries) {
++            block_boundaries.insert(boundary.tensor);
++        }
+         for (int32_t layer = 0; layer < layer_start; ++layer) {
+             prior_boundaries.insert(boundaries[2 * layer].tensor);
+             prior_boundaries.insert(boundaries[2 * layer + 1].tensor);
+@@ -458,7 +499,7 @@ struct selector {
+             return false;
+         }
+         for (const auto & effect : effects) {
+-            if (effect.layer < layer_start || effect.layer >= layer_end) {
++            if (!state_owner_belongs_to_slice(effect.layer)) {
+                 continue;
+             }
+             result.state_effects.push_back(effect);
+@@ -787,7 +828,28 @@ bool skippy_validate_guarded_stage_chain(
+                 return false;
+             }
+             if (left.slice.activation_export_identities != right.slice.activation_import_identities) {
+-                error = "adjacent stages have an incomplete activation frontier";
++                const auto append_identities = [&](const char * label,
++                        const std::vector<std::string> & identities,
++                        const std::vector<const ggml_tensor *> & tensors) {
++                    error += label;
++                    error += "=[";
++                    for (size_t identity_index = 0; identity_index < identities.size(); ++identity_index) {
++                        if (identity_index > 0) {
++                            error += ",";
++                        }
++                        error += identities[identity_index];
++                        if (identity_index < tensors.size()) {
++                            error += "(";
++                            error += ggml_get_name(tensors[identity_index]);
++                            error += ")";
++                        }
++                    }
++                    error += "]";
++                };
++                error = "adjacent stages have an incomplete activation frontier: ";
++                append_identities("exports", left.slice.activation_export_identities, left.slice.activation_exports);
++                error += " ";
++                append_identities("imports", right.slice.activation_import_identities, right.slice.activation_imports);
+                 return false;
+             }
+         }
+diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
+index 9da60aba5..5ea2a8b02 100644
+--- a/src/skippy/tests/graph_build_inputs.cpp
++++ b/src/skippy/tests/graph_build_inputs.cpp
+@@ -49,7 +49,11 @@ static skippy_graph_build_inputs make_inputs(uint32_t id) {
+     inputs.gemma3n_altup.token_count = id + 7;
+     inputs.gemma3n_altup.n_embd = id + 8;
+     inputs.gemma3n_altup.n_altup = id + 9;
+-    inputs.hyperconnection.values = reinterpret_cast<const float *>(static_cast<uintptr_t>(id + 10));
++    inputs.kimi_k3_residual.values = reinterpret_cast<const float *>(static_cast<uintptr_t>(id + 10));
++    inputs.kimi_k3_residual.token_count = id + 11;
++    inputs.kimi_k3_residual.n_embd = id + 12;
++    inputs.kimi_k3_residual.n_checkpoints = id + 13;
++    inputs.hyperconnection.values = reinterpret_cast<const float *>(static_cast<uintptr_t>(id + 14));
+     inputs.hyperconnection.token_count = id + 11;
+     inputs.hyperconnection.n_embd = id + 12;
+     inputs.hyperconnection.n_hc = id + 13;
+@@ -74,6 +78,10 @@ static bool matches(const skippy_graph_build_inputs & inputs, uint32_t id) {
+            inputs.activation_tokens.token_count == expected.activation_tokens.token_count &&
+            inputs.rwkv7_v_first.values == expected.rwkv7_v_first.values &&
+            inputs.gemma3n_altup.values == expected.gemma3n_altup.values &&
++           inputs.kimi_k3_residual.values == expected.kimi_k3_residual.values &&
++           inputs.kimi_k3_residual.token_count == expected.kimi_k3_residual.token_count &&
++           inputs.kimi_k3_residual.n_embd == expected.kimi_k3_residual.n_embd &&
++           inputs.kimi_k3_residual.n_checkpoints == expected.kimi_k3_residual.n_checkpoints &&
+            inputs.hyperconnection.values == expected.hyperconnection.values &&
+            inputs.glm_dsa_top_k.values == expected.glm_dsa_top_k.values &&
+            inputs.mtp_embeddings.values == expected.mtp_embeddings.values;
+@@ -135,6 +143,12 @@ static int check_topology_reuse_guards() {
+     if (base.topology_equal(changed_shape)) {
+         return 8;
+     }
++
++    auto changed_kimi_shape = base;
++    changed_kimi_shape.kimi_k3_residual.n_checkpoints++;
++    if (base.topology_equal(changed_kimi_shape)) {
++        return 9;
++    }
+     return 0;
+ }
+ 
+diff --git a/src/skippy/tests/stage_slice_plan.cpp b/src/skippy/tests/stage_slice_plan.cpp
+index d4b5d6f2f..1f5a04c98 100644
+--- a/src/skippy/tests/stage_slice_plan.cpp
++++ b/src/skippy/tests/stage_slice_plan.cpp
+@@ -344,6 +344,35 @@ static int check_semantic_identities() {
+     return 0;
+ }
+ 
++static int check_tied_parameter_identity() {
++    ggml_init_params params = {
++        ggml_tensor_overhead() * 32 + ggml_graph_overhead_custom(32, false), nullptr, true,
++    };
++    ggml_context_ptr ctx(ggml_init(params));
++    ggml_tensor * request = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 4);
++    ggml_tensor * input_weight = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 4);
++    ggml_tensor * output_weight = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 4);
++    ggml_set_input(request);
++    ggml_tensor * hidden = ggml_mul(ctx.get(), request, input_weight);
++    ggml_tensor * output = ggml_add(ctx.get(), hidden, output_weight);
++    ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 32, false);
++    ggml_build_forward_expand(graph, output);
++
++    const std::vector<skippy_parameter_binding> parameters = {
++        {input_weight, "weight.tied"},
++        {output_weight, "weight.tied"},
++    };
++    const std::vector<skippy_request_input_binding> requests = {{request, "tokens"}};
++    skippy_graph_semantics semantics;
++    std::string error;
++    if (!skippy_build_graph_semantics(graph, {}, {}, parameters, requests, semantics, error) ||
++            semantics.value_identities.at(input_weight) != semantics.value_identities.at(output_weight)) {
++        std::fprintf(stderr, "tied parameter instances did not share semantic identity: %s\n", error.c_str());
++        return 92;
++    }
++    return 0;
++}
++
+ static int check_middle_stage_selection() {
+     std::vector<uint8_t> buffer(ggml_tensor_overhead() * 96 + ggml_graph_overhead_custom(96, false));
+     ggml_init_params params = { buffer.size(), buffer.data(), true };
+@@ -1100,6 +1129,7 @@ static int check_auxiliary_graph_parameter_closure() {
+ 
+ int main() {
+     int result = check_semantic_identities();
++    if (!result) { result = check_tied_parameter_identity(); }
+     if (!result) { result = check_middle_stage_selection(); }
+     if (!result) { result = check_inferred_registered_state_write(); }
+     if (!result) { result = check_explicit_final_output(); }
+diff --git a/tests/test-skippy-activation-layout.cpp b/tests/test-skippy-activation-layout.cpp
+index 42a518677..84e78ac39 100644
+--- a/tests/test-skippy-activation-layout.cpp
++++ b/tests/test-skippy-activation-layout.cpp
+@@ -60,5 +60,25 @@ int main() {
+         return 3;
+     }
+ 
++    std::unique_ptr<llama_model> kimi(llama_model_create(LLM_ARCH_KIMI_K3, llama_model_default_params()));
++    kimi->hparams.n_embd = 1024;
++    kimi->hparams.attn_res_block_size = 4;
++    skippy_model stage_model = {};
++    stage_model.model = kimi.get();
++    skippy_session session = {};
++    session.stage_model = &stage_model;
++    const uint32_t expected_checkpoints[] = {0, 1, 1, 2, 2};
++    const int32_t boundaries[] = {0, 3, 4, 5, 8};
++    for (size_t i = 0; i < 5; ++i) {
++        if (skippy_kimi_k3_residual_checkpoint_count(&session, boundaries[i]) != expected_checkpoints[i]) {
++            std::fprintf(stderr, "Kimi-K3 residual checkpoint count is wrong at boundary %d\n", boundaries[i]);
++            return 4;
++        }
++    }
++    if (skippy_kimi_k3_residual_bytes(&session, tokens, 5) != tokens * 1024 * 2 * f32_bytes) {
++        std::fprintf(stderr, "Kimi-K3 residual payload size is wrong at boundary 5\n");
++        return 5;
++    }
++
+     return 0;
+ }
+-- 
+2.54.0 (Apple Git-157)
+

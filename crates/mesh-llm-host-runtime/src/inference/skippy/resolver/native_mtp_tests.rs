@@ -384,9 +384,9 @@ fn speculative_strategy_auto_uses_hardware_model_path_for_direct_gguf_detection(
 model = "unsloth/Qwen3.6-MTP-GGUF"
 
 [models.hardware]
-model_path = "{}"
+model_path = {}
 "#,
-        resolved_model_file.path().display()
+        toml_path(resolved_model_file.path())
     ));
 
     let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
@@ -1027,12 +1027,12 @@ strategy = "mtp"
 #[test]
 fn speculative_strategy_native_mtp_accepts_external_mtp_sidecar() {
     let draft_file = temp_model_file_with_tensor_names(&["blk.10.nextn.eh_proj.weight"], None);
-    let draft_path = draft_file.path().display().to_string();
+    let draft_path = toml_path(draft_file.path());
     let mesh_config = parse_config(&format!(
         r#"
 [defaults.speculative]
 strategy = "mtp"
-draft_model_path = "{draft_path}"
+draft_model_path = {draft_path}
 draft_max_tokens = 3
 draft_min_tokens = 0
 "#

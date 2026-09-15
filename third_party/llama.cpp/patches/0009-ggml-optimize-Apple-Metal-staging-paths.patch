@@ -1,15 +1,15 @@
-From f0a749bff1683329e918b3e8fc979dfcbc8340b8 Mon Sep 17 00:00:00 2001
+From 64599eef3a8e5cbcf478360100180e20fbd0cbbc Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 7 Sep 2026 06:23:35 +1000
-Subject: [PATCH 09/23] ggml: optimize Apple Metal staging paths
+Subject: [PATCH 009/113] ggml: optimize Apple Metal staging paths
 
 ---
- ggml/src/ggml-metal/ggml-metal-device.m | 177 +++++++++++++++++++++++-
- ggml/src/ggml-metal/ggml-metal-impl.h   |  34 ++---
- 2 files changed, 189 insertions(+), 22 deletions(-)
+ ggml/src/ggml-metal/ggml-metal-device.m | 200 +++++++++++++++++++++++-
+ ggml/src/ggml-metal/ggml-metal-impl.h   |  34 ++--
+ 2 files changed, 212 insertions(+), 22 deletions(-)
 
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
-index 5654c5004..3c03d8670 100644
+index 5654c5004..9e2d8e560 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
 @@ -11,6 +11,7 @@
@@ -320,6 +320,36 @@ index 5654c5004..3c03d8670 100644
  
                      for (int i = MTLGPUFamilyMetal3_GGML + 5; i >= MTLGPUFamilyMetal3_GGML; --i) {
                          if ([dev->mtl_device supportsFamily:i]) {
+@@ -1736,6 +1903,29 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
+             if (op->src[1]->type != op->src[2]->type) {
+                 return false;
+             }
++            {
++                // only the instantiated (dk, dv) kernel families can run on Metal
++                const int64_t dk = op->src[1]->ne[0];
++                const int64_t dv = op->src[2]->ne[0];
++                const bool dk_dv_ok = (dk == 32  && dv == 32)  ||
++                                      (dk == 40  && dv == 40)  ||
++                                      (dk == 48  && dv == 48)  ||
++                                      (dk == 64  && dv == 64)  ||
++                                      (dk == 72  && dv == 72)  ||
++                                      (dk == 80  && dv == 80)  ||
++                                      (dk == 96  && dv == 96)  ||
++                                      (dk == 112 && dv == 112) ||
++                                      (dk == 128 && dv == 128) ||
++                                      (dk == 192 && dv == 128) ||
++                                      (dk == 192 && dv == 192) ||
++                                      (dk == 256 && dv == 256) ||
++                                      (dk == 320 && dv == 256) ||
++                                      (dk == 512 && dv == 512) ||
++                                      (dk == 576 && dv == 512);
++                if (!dk_dv_ok) {
++                    return false;
++                }
++            }
+             switch (op->src[1]->type) {
+                 case GGML_TYPE_F32:
+                 case GGML_TYPE_F16:
 diff --git a/ggml/src/ggml-metal/ggml-metal-impl.h b/ggml/src/ggml-metal/ggml-metal-impl.h
 index 7ad21341e..629724219 100644
 --- a/ggml/src/ggml-metal/ggml-metal-impl.h

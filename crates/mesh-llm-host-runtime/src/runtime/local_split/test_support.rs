@@ -690,7 +690,7 @@ async fn runtime_resolver_uses_config_identity_and_honors_device_override() {
 model = "other/model-ref"
 
 [models.hardware]
-model_path = "{model_path}"
+model_path = {model_path}
 device = "CUDA1"
 
 [models.throughput]
@@ -701,7 +701,7 @@ threads_batch = 13
 model = "configured/model-ref"
 
 [models.hardware]
-model_path = "{model_path}"
+model_path = {model_path}
 
 [models.throughput]
 threads = 9
@@ -710,7 +710,7 @@ threads_batch = 5
 [models.request_defaults]
 max_tokens = 222
 "#,
-        model_path = model_path.display()
+        model_path = toml::Value::String(model_path.to_string_lossy().into_owned())
     ))
     .expect("test mesh config should parse");
     let model_bytes = fs::metadata(&model_path).unwrap().len();

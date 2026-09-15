@@ -1,7 +1,7 @@
-From f8be47b3c9ffddc43cd2f9f6b1db9c4d13bb111c Mon Sep 17 00:00:00 2001
+From 3a5202014654efdd1b0628dc4193143750616adf Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 7 Sep 2026 06:22:57 +1000
-Subject: [PATCH 03/23] skippy: implement model lifecycle and package loading
+Subject: [PATCH 003/113] skippy: implement model lifecycle and package loading
 
 ---
  src/skippy/abi.cpp                      |  52 ++
@@ -13,11 +13,11 @@ Subject: [PATCH 03/23] skippy: implement model lifecycle and package loading
  src/skippy/model_loading_internal.h     |  38 +
  src/skippy/model_package.cpp            | 738 ++++++++++++++++++
  src/skippy/model_source.cpp             | 470 ++++++++++++
- src/skippy/package_tensor_binding.cpp   | 104 +++
+ src/skippy/package_tensor_binding.cpp   | 117 +++
  src/skippy/package_tensor_binding.h     |  27 +
  src/skippy/runtime_support.h            |  37 +
  src/skippy/runtime_types.h              | 159 ++++
- 13 files changed, 3011 insertions(+)
+ 13 files changed, 3024 insertions(+)
  create mode 100644 src/skippy/abi.cpp
  create mode 100644 src/skippy/devices.cpp
  create mode 100644 src/skippy/model_lifecycle.cpp
@@ -2772,10 +2772,10 @@ index 000000000..c23fb60e3
 +}
 diff --git a/src/skippy/package_tensor_binding.cpp b/src/skippy/package_tensor_binding.cpp
 new file mode 100644
-index 000000000..3c816dfcc
+index 000000000..5a5ae1007
 --- /dev/null
 +++ b/src/skippy/package_tensor_binding.cpp
-@@ -0,0 +1,104 @@
+@@ -0,0 +1,117 @@
 +#include "package_tensor_binding.h"
 +
 +#include "llama-model.h"
@@ -2798,10 +2798,19 @@ index 000000000..3c816dfcc
 +bool tensor_dimensions_match(
 +        const ggml_tensor * tensor,
 +        const std::vector<int64_t> & dimensions) {
-+    if (tensor == nullptr || ggml_n_dims(tensor) != static_cast<int>(dimensions.size())) {
++    if (tensor == nullptr) {
 +        return false;
 +    }
-+    for (size_t index = 0; index < dimensions.size(); ++index) {
++    // GGUF may pad shapes with trailing ones while ggml drops them from the
++    // effective rank, so compare after trimming trailing ones on both sides.
++    size_t rank = dimensions.size();
++    while (rank > 1 && dimensions[rank - 1] == 1) {
++        --rank;
++    }
++    if (ggml_n_dims(tensor) != static_cast<int>(rank)) {
++        return false;
++    }
++    for (size_t index = 0; index < rank; ++index) {
 +        if (tensor->ne[index] != dimensions[index]) {
 +            return false;
 +        }
@@ -2825,10 +2834,14 @@ index 000000000..3c816dfcc
 +
 +    std::map<std::string, const ggml_tensor *> native_tensors;
 +    for (const auto & [name, tensor] : llama_internal_get_tensor_map(model)) {
-+        if (name.empty() || tensor == nullptr || !native_tensors.emplace(name, tensor).second) {
-+            error = "native model tensor inventory is incomplete or duplicated";
++        if (name.empty() || tensor == nullptr) {
++            error = "native model tensor inventory is incomplete";
 +            return false;
 +        }
++        // Tied weights (for example gemma3n's duplicated token embedding used
++        // as both input and output) register the same name once per backend
++        // context; keep the first instance for binding.
++        native_tensors.emplace(name, tensor);
 +    }
 +    if (native_tensors.size() != inputs.size()) {
 +        error = "package and native tensor inventory sizes differ";

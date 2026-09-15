@@ -1,7 +1,7 @@
-From 038d21b46dd65cf8158390134da64e78ede9c6fc Mon Sep 17 00:00:00 2001
+From 0d4c4c9ee42e250e895c5ee197c35ae53e441ac3 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 7 Sep 2026 22:48:55 +1000
-Subject: [PATCH 14/23] skippy: infer writes to registered persistent state
+Subject: [PATCH 014/113] skippy: infer writes to registered persistent state
 
 ---
  src/CMakeLists.txt                          | 18 ++++++
@@ -40,7 +40,7 @@ index d89193b1d..6fa5d7644 100644
          NAME skippy_generate_deepseek4_fixture
          COMMAND skippy-model-fixture-generator
 diff --git a/src/skippy/state_effects.cpp b/src/skippy/state_effects.cpp
-index 69db4f530..755b40560 100644
+index e4778aff3..2ec444728 100644
 --- a/src/skippy/state_effects.cpp
 +++ b/src/skippy/state_effects.cpp
 @@ -4,6 +4,7 @@
@@ -51,7 +51,7 @@ index 69db4f530..755b40560 100644
  #include <cinttypes>
  #include <cstdio>
  #include <limits>
-@@ -284,9 +285,35 @@ bool skippy_infer_state_effects(
+@@ -293,9 +294,35 @@ bool skippy_infer_state_effects(
          positions.emplace(ggml_graph_node(const_cast<ggml_cgraph *>(graph), index), index);
      }
  
@@ -89,7 +89,7 @@ index 69db4f530..755b40560 100644
      }
  
      struct inferred_owner {
-@@ -295,6 +322,7 @@ bool skippy_infer_state_effects(
+@@ -304,6 +331,7 @@ bool skippy_infer_state_effects(
      };
      std::unordered_map<const ggml_tensor *, inferred_owner> inferred;
      std::vector<const ggml_tensor *> storage_order;
@@ -97,7 +97,7 @@ index 69db4f530..755b40560 100644
  
      for (int32_t index = 0; index < ggml_graph_n_nodes(const_cast<ggml_cgraph *>(graph)); ++index) {
          const ggml_tensor * node = ggml_graph_node(const_cast<ggml_cgraph *>(graph), index);
-@@ -302,8 +330,27 @@ bool skippy_infer_state_effects(
+@@ -311,8 +339,27 @@ bool skippy_infer_state_effects(
              continue;
          }
          const ggml_tensor * storage = skippy_state_canonical_storage(write_destination(node));
@@ -127,7 +127,7 @@ index 69db4f530..755b40560 100644
              continue;
          }
          if (!valid_write_destination(node, storage)) {
-@@ -338,6 +385,21 @@ bool skippy_infer_state_effects(
+@@ -347,6 +394,21 @@ bool skippy_infer_state_effects(
          inserted.first->second.writes.push_back(node);
      }
  
@@ -150,7 +150,7 @@ index 69db4f530..755b40560 100644
          const auto & owner = inferred.at(storage);
          effects.push_back({skippy_state_kind::derived_persistent,
 diff --git a/src/skippy/tests/noalloc_graph_planning.cpp b/src/skippy/tests/noalloc_graph_planning.cpp
-index 2ea650314..01bb47f6e 100644
+index 27a590551..11559ce5c 100644
 --- a/src/skippy/tests/noalloc_graph_planning.cpp
 +++ b/src/skippy/tests/noalloc_graph_planning.cpp
 @@ -450,7 +450,9 @@ static bool check_stage_slices(
@@ -162,9 +162,9 @@ index 2ea650314..01bb47f6e 100644
 +                // KDA constructs its state preparation inside the block body.
 +            } else if (layer > 0) {
                  has_downstream_recurrent_layer = true;
-                 const ggml_tensor * entry = graph_result->get_block_boundaries()[2 * layer].tensor;
-                 int32_t entry_index = -1;
-@@ -572,7 +574,9 @@ static bool layer_has_state(
+                 // The retained-owning-write loop above already proves the
+                 // recurrent state preparation cone stayed inside the slice.
+@@ -560,7 +562,9 @@ static bool layer_has_state(
  
  enum class layer_state_class {
      kv,
@@ -174,7 +174,7 @@ index 2ea650314..01bb47f6e 100644
      none,
  };
  
-@@ -582,8 +586,12 @@ static bool parse_layer_classes(const char * spec, std::vector<layer_state_class
+@@ -570,8 +574,12 @@ static bool parse_layer_classes(const char * spec, std::vector<layer_state_class
          if (*c == ',' || *c == '\0') {
              if (token == "kv") {
                  classes.push_back(layer_state_class::kv);
@@ -187,7 +187,7 @@ index 2ea650314..01bb47f6e 100644
              } else if (token == "none") {
                  classes.push_back(layer_state_class::none);
              } else {
-@@ -606,9 +614,10 @@ static bool check_state_effects(
+@@ -594,9 +602,10 @@ static bool check_state_effects(
          const char * profile_name,
          const std::vector<layer_state_class> & layer_classes,
          size_t expected_conv_writes) {
@@ -200,7 +200,7 @@ index 2ea650314..01bb47f6e 100644
          std::fprintf(stderr, "metadata-only %s state effects invalid: %s\n",
                  profile_name, effect_error.c_str());
          return false;
-@@ -644,6 +653,11 @@ static bool check_state_effects(
+@@ -632,6 +641,11 @@ static bool check_state_effects(
                       kv_value_reads == 1 && kv_value_writes == 1 &&
                       recr_total == 0;
                  break;
@@ -212,7 +212,7 @@ index 2ea650314..01bb47f6e 100644
              case layer_state_class::recurrent:
                  ok = conv_reads == 1 && ssm_reads == 1 && ssm_writes == 3 &&
                       conv_writes == expected_conv_writes + 2 &&
-@@ -655,14 +669,21 @@ static bool check_state_effects(
+@@ -643,14 +657,21 @@ static bool check_state_effects(
                      return false;
                  }
                  break;
@@ -236,7 +236,7 @@ index 2ea650314..01bb47f6e 100644
              return false;
          }
      }
-@@ -686,7 +707,10 @@ static bool check_state_effects(
+@@ -674,7 +695,10 @@ static bool check_state_effects(
                  if (effect.write_ordinal == 1) { copy_position = i; extra_read = node->src[0]; }
              }
          }

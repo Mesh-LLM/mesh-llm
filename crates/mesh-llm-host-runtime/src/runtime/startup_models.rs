@@ -73,6 +73,8 @@ impl StartupPinnedGpuTarget {
 
 #[derive(Clone, Debug)]
 pub(super) struct StartupModelPlan {
+    /// Original source, independent of the content-addressed split routing ID.
+    pub(super) model_source: String,
     pub(super) declared_ref: String,
     pub(super) config_model_id: Option<String>,
     pub(super) resolved_path: PathBuf,
@@ -1020,6 +1022,7 @@ pub(super) async fn resolve_local_model_only_startup_models(
             .clone()
             .unwrap_or_else(|| models::model_ref_for_path(&resolved_path));
         plans.push(StartupModelPlan {
+            model_source: crate::runtime::model_presentation::launch_source(&spec.model_ref),
             declared_ref,
             config_model_id: spec.config_model_id.clone(),
             resolved_path,
@@ -1164,6 +1167,7 @@ async fn resolve_startup_models_with_package_discovery(
                 })
         };
         plans.push(StartupModelPlan {
+            model_source: crate::runtime::model_presentation::launch_source(&spec.model_ref),
             declared_ref,
             config_model_id: spec.config_model_id.clone(),
             resolved_path,

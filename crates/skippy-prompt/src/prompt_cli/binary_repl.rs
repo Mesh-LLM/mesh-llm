@@ -23,15 +23,12 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
     let tokenizer_resident_tensor_names = if tokenizer_materialized {
         Vec::new()
     } else {
-        plan_gguf_stage_resident_tensor_names(
+        plan_gguf_stage_resident_tensor_names_for_range(
             tokenizer_path,
-            &[(tokenizer_layer_start, tokenizer_layer_end)],
+            (tokenizer_layer_start, tokenizer_layer_end),
             args.ctx_size,
             1,
         )?
-        .into_iter()
-        .next()
-        .context("stage planner returned no resident tensor closure")?
     };
     let tokenizer = StageModel::open(
         tokenizer_path,
@@ -101,10 +98,12 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
             .is_some_and(|path| path != args.model_path.as_path())
     {
         let chat_template_resident_tensor_names =
-            plan_gguf_stage_resident_tensor_names(&args.model_path, &[(0, 1)], args.ctx_size, 1)?
-                .into_iter()
-                .next()
-                .context("stage planner returned no resident tensor closure")?;
+            plan_gguf_stage_resident_tensor_names_for_range(
+                &args.model_path,
+                (0, 1),
+                args.ctx_size,
+                1,
+            )?;
         let model = StageModel::open(
             &args.model_path,
             &RuntimeConfig {

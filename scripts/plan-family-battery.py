@@ -413,7 +413,7 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
                 resources["startup_timeout_secs"],
                 f"{field}.resources.startup_timeout_secs",
                 180,
-                900,
+                1800,
             )
         notes = _string(model.get("notes"), f"{field}.notes")
         profile_policy = policy["profiles"][profile]

@@ -1,7 +1,7 @@
-From 55d85c716735eb1d14500064d1135141a05f0434 Mon Sep 17 00:00:00 2001
+From 8851a9be115123d212631d99def74057aa166c74 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 5 Sep 2026 14:51:31 -0400
-Subject: [PATCH] skippy: add model-load-events-v2 family (bit 32)
+Subject: [PATCH 025/113] skippy: add model-load-events-v2 family (bit 32)
 
 ---
  include/skippy/common.h             |  1 +
@@ -13,7 +13,7 @@ Subject: [PATCH] skippy: add model-load-events-v2 family (bit 32)
  6 files changed, 53 insertions(+), 2 deletions(-)
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 98d69de67..e9eed11a7 100644
+index 212ac273d..627e591d2 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -99,6 +99,7 @@ enum skippy_feature {
@@ -64,10 +64,10 @@ index 97d451269..69e2f04b2 100644
  }
  #endif
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 1066937b5..2ab35e564 100644
+index fee006086..5c97196dc 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -116,7 +116,8 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -134,7 +134,8 @@ if (LLAMA_STAGE_BUILD_TESTS)
              replacement_waits_for_previous_callback
              clear_is_quiescent
              struct_size_extension
@@ -145,5 +145,5 @@ index 666a5a52c..039615df3 100644
      return 2;
  }
 -- 
-2.50.1 (Apple Git-155)
+2.55.0
 
