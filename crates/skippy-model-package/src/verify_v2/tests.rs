@@ -35,6 +35,7 @@ impl Case {
             ArtifactHook { command: None },
             ArtifactHook { command: None },
             explicit(&self.source),
+            None,
             false,
             None,
         )

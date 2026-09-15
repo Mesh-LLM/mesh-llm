@@ -9,9 +9,9 @@ use anyhow::{Context, Result, bail, ensure};
 use skippy_model::gguf_catalog::read_gguf_metadata_catalog;
 use skippy_model::package_carrier::resolve_package_carrier;
 use skippy_package_format::{
-    Artifact, ArtifactCatalog, Generation, PACKAGE_SCHEMA_VERSION, PackageManifest, Sidecar,
-    SidecarKind, SourceModel, SpeculativeDecoding, StrategyKind, StrategySpec, Tensor,
-    TensorCatalog, WindowPolicy,
+    Artifact, ArtifactCatalog, Generation, GenerationRequestDefaults, PACKAGE_SCHEMA_VERSION,
+    PackageManifest, Sidecar, SidecarKind, SourceModel, SpeculativeDecoding, StrategyKind,
+    StrategySpec, Tensor, TensorCatalog, WindowPolicy,
 };
 use skippy_runtime::{ModelInfo, TensorInfo, write_gguf_metadata_from_parts};
 
@@ -36,6 +36,7 @@ pub(crate) fn write_package(
     artifact_hook: ArtifactHook,
     artifact_transform: ArtifactHook,
     explicit: ExplicitSourceIdentity,
+    generation_defaults: Option<PathBuf>,
     resume_existing_artifacts: bool,
     max_artifact_bytes: Option<u64>,
 ) -> Result<()> {
@@ -50,6 +51,19 @@ pub(crate) fn write_package(
     let budget = max_artifact_bytes.unwrap_or(layout::DEFAULT_MAX_ARTIFACT_BYTES);
     let planned = plan_artifacts_with_budget(&source.tensors, budget)?;
     let mut manifest = manifest_from_source(&input, &inventory)?;
+    if let Some(path) = generation_defaults {
+        let bytes = fs::read(&path)
+            .with_context(|| format!("read generation defaults {}", path.display()))?;
+        let request_defaults: GenerationRequestDefaults = serde_json::from_slice(&bytes)
+            .with_context(|| format!("parse generation defaults {}", path.display()))?;
+        request_defaults.validate().map_err(|error| {
+            anyhow::anyhow!("validate generation defaults {}: {error}", path.display())
+        })?;
+        manifest.generation = Some(Generation {
+            request_defaults: Some(request_defaults),
+            speculative_decoding: None,
+        });
+    }
     fs::create_dir_all(&out_dir)?;
     ensure!(
         !out_dir.join("model-package.json").exists(),
@@ -338,6 +352,9 @@ fn parse_mtp_layer_index(name: &str) -> Option<u32> {
 /// `NativeMtp` form and a fixed window of 1.
 fn native_mtp_generation(layer_indices: &[u32]) -> Generation {
     Generation {
+        // The native-MTP declaration is target-only by contract; publisher request
+        // defaults are applied by the host resolver, not by this battery.
+        request_defaults: None,
         speculative_decoding: Some(SpeculativeDecoding {
             default: "mtp".to_string(),
             proposers: BTreeMap::new(),

@@ -298,10 +298,117 @@ fn absent_generation_passes_validation() {
     manifest.validate().unwrap();
 }
 
+fn manifest_with_request_defaults(defaults: serde_json::Value) -> PackageManifest {
+    let manifest = fixture();
+    let inventory = (
+        manifest.model_metadata.clone(),
+        manifest.tensor_catalog.clone(),
+    );
+    let mut encoded = serde_json::to_value(manifest).unwrap();
+    encoded["generation"] = serde_json::json!({"request_defaults": defaults});
+    let decoded: PackageManifest = serde_json::from_value(encoded).unwrap();
+    let mut decoded = decoded.resolve_inventory(inventory.0, inventory.1);
+    decoded.package_id = decoded.computed_package_id().unwrap();
+    decoded
+}
+
+fn valid_request_defaults_json() -> serde_json::Value {
+    serde_json::json!({
+        "selection": {
+            "default": "thinking",
+            "reasoning_enabled": "thinking",
+            "reasoning_disabled": "direct"
+        },
+        "profiles": {
+            "thinking": {
+                "max_tokens": 32768,
+                "temperature": 1.0,
+                "top_p": 0.95,
+                "top_k": 20,
+                "min_p": 0.0,
+                "presence_penalty": 1.5,
+                "repeat_penalty": 1.0,
+                "reasoning": {"enabled": "on", "format": "auto", "budget": "medium"},
+                "provenance": {
+                    "source_repo": "Qwen/Qwen3.5-9B",
+                    "revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+                    "file": "README.md",
+                    "section": "Best Practices",
+                    "url": "https://huggingface.co/Qwen/Qwen3.5-9B/blob/c202236235762e1c871ad0ccb60c8ee5ba337b9a/README.md"
+                }
+            },
+            "direct": {
+                "temperature": 0.7,
+                "reasoning": {"enabled": "off", "budget": 0},
+                "provenance": {
+                    "source_repo": "Qwen/Qwen3.5-9B",
+                    "revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+                    "file": "README.md",
+                    "section": "Best Practices",
+                    "url": "https://huggingface.co/Qwen/Qwen3.5-9B/blob/c202236235762e1c871ad0ccb60c8ee5ba337b9a/README.md"
+                }
+            }
+        }
+    })
+}
+
+#[test]
+fn request_generation_profiles_round_trip_canonically() {
+    let manifest = manifest_with_request_defaults(valid_request_defaults_json());
+    manifest.validate().unwrap();
+
+    let encoded = serde_json::to_string_pretty(&manifest).unwrap();
+    let decoded: PackageManifest = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(
+        serde_json::to_value(&decoded).unwrap(),
+        serde_json::to_value(&manifest).unwrap()
+    );
+    assert_eq!(decoded.computed_package_id().unwrap(), manifest.package_id);
+}
+
+#[test]
+fn request_generation_profiles_require_declared_selection_and_immutable_provenance() {
+    let mut invalid = valid_request_defaults_json();
+    invalid["selection"]["reasoning_enabled"] = serde_json::json!("missing");
+    invalid["profiles"]["thinking"]["provenance"]["revision"] = serde_json::json!("develop");
+    invalid["profiles"]["direct"]["provenance"]["url"] = serde_json::json!(
+        "https://huggingface.co/Qwen/Qwen3.5-9B/blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/README.md"
+    );
+    let manifest = manifest_with_request_defaults(invalid);
+
+    let error = manifest.validate().unwrap_err();
+    assert!(error.issues().iter().any(|issue| {
+        issue.path.ends_with("selection.reasoning_enabled")
+            && issue.code == ValidationCode::InvalidGenerationValue
+    }));
+    assert!(error.issues().iter().any(|issue| {
+        issue
+            .path
+            .ends_with("profiles[thinking].provenance.revision")
+            && issue.code == ValidationCode::InvalidGenerationValue
+    }));
+    assert!(error.issues().iter().any(|issue| {
+        issue.path.ends_with("profiles[direct].provenance.url")
+            && issue.code == ValidationCode::InvalidGenerationValue
+    }));
+}
+
+#[test]
+fn request_generation_profiles_reject_unknown_fields_at_parse() {
+    let mut defaults = valid_request_defaults_json();
+    defaults["profiles"]["thinking"]["invented_sampler"] = serde_json::json!(1);
+    let manifest = fixture();
+    let mut encoded = serde_json::to_value(manifest).unwrap();
+    encoded["generation"] = serde_json::json!({"request_defaults": defaults});
+
+    assert!(serde_json::from_value::<PackageManifest>(encoded).is_err());
+}
+
 #[test]
 fn generation_with_all_variants_round_trips_and_passes() {
     let mut manifest = fixture();
     manifest.generation = Some(Generation {
+        request_defaults: None,
         speculative_decoding: Some(SpeculativeDecoding {
             default: "mtp".to_string(),
             proposers: BTreeMap::from([
@@ -919,6 +1026,7 @@ fn rejects_invalid_window_policy() {
 fn rejects_default_not_declared_as_strategy() {
     let mut manifest = fixture();
     manifest.generation = Some(Generation {
+        request_defaults: None,
         speculative_decoding: Some(SpeculativeDecoding {
             default: "missing".to_string(),
             proposers: BTreeMap::new(),
@@ -940,6 +1048,7 @@ fn rejects_default_not_declared_as_strategy() {
 fn rejects_strategy_referencing_missing_proposer() {
     let mut manifest = fixture();
     manifest.generation = Some(Generation {
+        request_defaults: None,
         speculative_decoding: Some(SpeculativeDecoding {
             default: "cache".to_string(),
             proposers: BTreeMap::new(),
@@ -969,6 +1078,7 @@ fn rejects_strategy_referencing_missing_proposer() {
 fn rejects_generation_layer_index_out_of_range() {
     let mut manifest = fixture();
     manifest.generation = Some(Generation {
+        request_defaults: None,
         speculative_decoding: Some(SpeculativeDecoding {
             default: "mtp".to_string(),
             proposers: BTreeMap::from([(
@@ -1008,6 +1118,7 @@ fn rejects_generation_layer_index_out_of_range() {
 fn rejects_invalid_generation_values() {
     let mut manifest = fixture();
     manifest.generation = Some(Generation {
+        request_defaults: None,
         speculative_decoding: Some(SpeculativeDecoding {
             default: "combined".to_string(),
             proposers: BTreeMap::from([

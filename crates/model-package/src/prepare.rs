@@ -20,6 +20,7 @@ pub struct PrepareParams {
     pub quant: Option<String>,
     pub target: Option<String>,
     pub model_id: Option<String>,
+    pub generation_defaults: Option<skippy_package_format::GenerationRequestDefaults>,
     pub flavor: String,
     pub timeout_seconds: u64,
     pub mesh_llm_ref: String,
@@ -35,6 +36,7 @@ pub struct PrepareJob {
     pub projectors: Vec<DiscoveredProjector>,
     pub target_repo: String,
     pub model_id: String,
+    pub generation_defaults: Option<skippy_package_format::GenerationRequestDefaults>,
     pub namespace: String,
     pub catalog_create_pr: bool,
     pub experimental: bool,
@@ -285,6 +287,12 @@ pub async fn resolve(
     environment.insert("MODEL_ID".into(), model_id.clone());
     environment.insert("SOURCE_REVISION".into(), source_revision.clone());
     environment.insert("SOURCE_PIPELINE_TAG".into(), source_pipeline_tag);
+    if let Some(defaults) = &params.generation_defaults {
+        environment.insert(
+            "GENERATION_DEFAULTS_JSON".into(),
+            serde_json::to_string(defaults).context("serialize generation defaults")?,
+        );
+    }
     if !inventory.projectors.is_empty() {
         environment.insert(
             "SOURCE_PROJECTOR_FILES".into(),
@@ -349,6 +357,7 @@ pub async fn resolve(
         projectors: inventory.projectors,
         target_repo,
         model_id,
+        generation_defaults: params.generation_defaults,
         namespace: permissions.namespace.clone(),
         catalog_create_pr,
         experimental: params.experimental,
