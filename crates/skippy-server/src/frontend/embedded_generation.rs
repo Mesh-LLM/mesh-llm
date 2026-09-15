@@ -1112,6 +1112,9 @@ impl StageOpenAiBackend {
                                     && !pipeline.has_remaining_candidates()
                                     && ngram_fallback_draft_enabled
                                     && refill_budget >= 2
+                                    && draft_guard
+                                        .as_deref()
+                                        .is_some_and(|draft| draft.window >= 2)
                                 {
                                     let fallback_timer = PhaseTimer::start();
                                     let draft = draft_guard
@@ -1123,7 +1126,12 @@ impl StageOpenAiBackend {
                                         draft
                                             .sync_to_context(&sequence)
                                             .map_err(openai_backend_error)?;
-                                        let budget = refill_budget.min(draft.window.max(1));
+                                        let budget = draft_fallback_budget(
+                                            native_mtp_options.ngram_max_proposal_tokens,
+                                            draft.window,
+                                            refill_budget,
+                                        )
+                                        .expect("fallback guards require a two-token budget");
                                         let draft_tokens = draft
                                             .propose(last, budget)
                                             .map_err(openai_backend_error)?;
