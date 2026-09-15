@@ -66,8 +66,9 @@ pub use skippy_ffi::{
     ACTIVATION_PART_OPTIONAL,
 };
 pub use stage_planning::{
-    gguf_shard_paths, plan_gguf_stage_resident_tensor_names,
-    plan_gguf_stage_resident_tensor_names_for_range,
+    GgufStageRuntimePlan, gguf_shard_paths, plan_gguf_stage_resident_tensor_names,
+    plan_gguf_stage_resident_tensor_names_for_range, plan_gguf_stage_runtime_plan_for_range,
+    plan_gguf_stage_runtime_plans,
 };
 pub use types::{
     ACTIVATION_BOUNDARY_DESC_VERSION, ActivationBoundaryDesc, ActivationDesc, ActivationFrame,

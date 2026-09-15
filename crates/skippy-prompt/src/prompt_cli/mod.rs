@@ -33,7 +33,7 @@ use skippy_runtime::{
     ChatTemplateMessage, ChatTemplateOptions, GGML_TYPE_F16, ModelInfo, MtpSource, RuntimeConfig,
     RuntimeLoadMode, StageModel, StageSession,
     package::{PackageStageRequest, inspect_layer_package, materialize_layer_package},
-    plan_gguf_stage_resident_tensor_names_for_range, restore_native_logs, suppress_native_logs,
+    plan_gguf_stage_runtime_plan_for_range, restore_native_logs, suppress_native_logs,
 };
 use skippy_topology::{
     BoundaryDecision, NodeSpec, PlannerPolicy, TopologyPlanRequest, dense_attention_layers,

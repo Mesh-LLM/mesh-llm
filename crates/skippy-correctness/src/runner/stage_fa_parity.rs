@@ -1,7 +1,8 @@
 use anyhow::{Context, Result, bail};
 use skippy_runtime::{
     FlashAttentionType, GGML_TYPE_F16, MtpSource, RuntimeConfig, RuntimeLoadMode, StageModel,
-    package::{PackageStageRequest, select_layer_package_parts},
+    package::{PackageStageRequest, inspect_layer_package, select_layer_package_parts},
+    plan_gguf_stage_runtime_plan_for_range,
 };
 
 use crate::cli::StageFaParityArgs;
@@ -65,7 +66,19 @@ fn decode_boundary(
     args: &StageFaParityArgs,
     flash_attn_type: FlashAttentionType,
 ) -> Result<skippy_runtime::ActivationFrame> {
-    let config = RuntimeConfig {
+    let package = inspect_layer_package(
+        args.model
+            .to_str()
+            .context("stage package path is not valid UTF-8")?,
+    )
+    .context("inspect stage package")?;
+    let plan = plan_gguf_stage_runtime_plan_for_range(
+        std::path::Path::new(&package.source_model_path),
+        (args.layer_start, args.layer_end),
+        args.ctx_size,
+        1,
+    )?;
+    let mut config = RuntimeConfig {
         stage_index: 0,
         layer_start: args.layer_start,
         layer_end: args.layer_end,
@@ -113,6 +126,7 @@ fn decode_boundary(
         kv_unified: None,
         swa_full: None,
     };
+    plan.apply_to(&mut config);
     let selection = select_layer_package_parts(&PackageStageRequest {
         model_id: args.model_id.clone(),
         topology_id: "stage-fa-parity".to_string(),

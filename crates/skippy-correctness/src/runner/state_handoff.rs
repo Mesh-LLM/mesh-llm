@@ -8,8 +8,8 @@ use skippy_protocol::binary::{
     recv_reply, state_flags, write_stage_message,
 };
 use skippy_runtime::{
-    ActivationFrame, GGML_TYPE_F16, MtpSource, RuntimeConfig, RuntimeKvPageDesc, StageModel,
-    StageSession,
+    ActivationFrame, GGML_TYPE_F16, GgufStageRuntimePlan, MtpSource, RuntimeConfig,
+    RuntimeKvPageDesc, StageModel, StageSession,
 };
 
 use crate::{
@@ -29,7 +29,7 @@ use super::stage_execution::{
     BinaryStateHandoffConfig, PackageStageSpec, StageModelResolution, configure_child_logs,
     elapsed_ms, ensure_matches, mean_pair_sum, protocol_flash_attn, protocol_load_mode,
     runtime_flash_attn, runtime_load_mode, runtime_model_identity, speedup, stage_id_for_index,
-    stage_model_resolution, stage_resident_tensor_names_for_range, stage_server_model_path, status,
+    stage_model_resolution, stage_runtime_plan_for_range, stage_server_model_path, status,
     tokenizer_model_for_state_handoff,
 };
 
@@ -308,19 +308,15 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
         stage_spec,
     )?;
     let lane_count = effective_state_handoff_lane_count(&args);
-    let resident_tensor_names = if should_filter_state_handoff_tensors(&args) {
-        stage_resident_tensor_names_for_range(
-            args.stage_load_mode,
-            &args.model,
-            &stage_resolution.path,
-            (args.state_layer_start, args.state_layer_end),
-            args.layer_end,
-            args.ctx_size,
-            lane_count,
-        )?
-    } else {
-        Vec::new()
-    };
+    let runtime_plan = stage_runtime_plan_for_range(
+        args.stage_load_mode,
+        &args.model,
+        &stage_resolution.path,
+        (args.state_layer_start, args.state_layer_end),
+        args.layer_end,
+        args.ctx_size,
+        lane_count,
+    )?;
     let (tokenizer_path, tokenizer_config) = tokenizer_model_for_state_handoff(&args)?;
     let tokenizer = StageModel::open(&tokenizer_path, &tokenizer_config).with_context(|| {
         format!(
@@ -379,7 +375,7 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
             stage_activation_width,
             include_embeddings,
             include_output,
-            resident_tensor_names,
+            runtime_plan,
         );
     }
 
@@ -407,7 +403,11 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
         "n_gpu_layers": args.n_gpu_layers,
         "flash_attn_type": protocol_flash_attn(args.flash_attn),
         "filter_tensors_on_load": should_filter_state_handoff_tensors(&args),
-        "resident_tensor_names": resident_tensor_names.clone(),
+        "resident_tensor_names": runtime_plan.resident_tensor_names.clone(),
+        "activation_import_identities": runtime_plan.activation_import_identities.clone(),
+        "activation_import_bindings": runtime_plan.activation_import_bindings.clone(),
+        "activation_export_identities": runtime_plan.activation_export_identities.clone(),
+        "activation_export_bindings": runtime_plan.activation_export_bindings.clone(),
         "load_mode": protocol_load_mode(args.stage_load_mode),
         "bind_addr": args.source_bind_addr,
         "upstream": {
@@ -437,7 +437,11 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
         "n_gpu_layers": args.n_gpu_layers,
         "flash_attn_type": protocol_flash_attn(args.flash_attn),
         "filter_tensors_on_load": should_filter_state_handoff_tensors(&args),
-        "resident_tensor_names": resident_tensor_names,
+        "resident_tensor_names": runtime_plan.resident_tensor_names,
+        "activation_import_identities": runtime_plan.activation_import_identities,
+        "activation_import_bindings": runtime_plan.activation_import_bindings,
+        "activation_export_identities": runtime_plan.activation_export_identities,
+        "activation_export_bindings": runtime_plan.activation_export_bindings,
         "load_mode": protocol_load_mode(args.stage_load_mode),
         "bind_addr": args.restore_bind_addr,
         "upstream": {
@@ -666,7 +670,7 @@ fn run_local_state_handoff(
     activation_width: i32,
     include_embeddings: bool,
     include_output: bool,
-    resident_tensor_names: Vec<String>,
+    runtime_plan: GgufStageRuntimePlan,
 ) -> Result<BinaryStateHandoffResult> {
     let lane_count = effective_state_handoff_lane_count(args);
     let runtime_config = RuntimeConfig {
@@ -702,11 +706,11 @@ fn run_local_state_handoff(
         include_output,
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: should_filter_state_handoff_tensors(args),
-        resident_tensor_names,
-        activation_import_identities: Vec::new(),
-        activation_import_bindings: Vec::new(),
-        activation_export_identities: Vec::new(),
-        activation_export_bindings: Vec::new(),
+        resident_tensor_names: runtime_plan.resident_tensor_names,
+        activation_import_identities: runtime_plan.activation_import_identities,
+        activation_import_bindings: runtime_plan.activation_import_bindings,
+        activation_export_identities: runtime_plan.activation_export_identities,
+        activation_export_bindings: runtime_plan.activation_export_bindings,
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
@@ -1440,7 +1444,7 @@ fn build_state_handoff_inputs(
     let Some(input_resolution) = input_resolution else {
         return Ok((None, None, args.activation_width));
     };
-    let resident_tensor_names = stage_resident_tensor_names_for_range(
+    let runtime_plan = stage_runtime_plan_for_range(
         args.stage_load_mode,
         &args.model,
         &input_resolution.path,
@@ -1482,11 +1486,11 @@ fn build_state_handoff_inputs(
         include_output: false,
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
-        resident_tensor_names,
-        activation_import_identities: Vec::new(),
-        activation_import_bindings: Vec::new(),
-        activation_export_identities: Vec::new(),
-        activation_export_bindings: Vec::new(),
+        resident_tensor_names: runtime_plan.resident_tensor_names,
+        activation_import_identities: runtime_plan.activation_import_identities,
+        activation_import_bindings: runtime_plan.activation_import_bindings,
+        activation_export_identities: runtime_plan.activation_export_identities,
+        activation_export_bindings: runtime_plan.activation_export_bindings,
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,

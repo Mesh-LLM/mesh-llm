@@ -32,7 +32,7 @@ use crate::{
         GlmDsaTimingReport, GlmDsaTopKComparisonReport, GlmDsaTraceKeyReport,
         GlmDsaTraceParityMismatchReport, GlmDsaTraceParityReport, GlmDsaTraceVariantReport,
     },
-    runner::stage_resident_tensor_names_for_range,
+    runner::stage_runtime_plan_for_range,
     support::ChildGuard,
 };
 
@@ -649,8 +649,8 @@ fn write_stage_config(
         .model_id
         .clone()
         .unwrap_or_else(|| "local/glm-dsa-stage0-trace".to_string());
-    let resident_tensor_names = if args.runtime.stage_load_mode == StageLoadMode::RuntimeSlice {
-        stage_resident_tensor_names_for_range(
+    let runtime_plan = if args.runtime.stage_load_mode == StageLoadMode::RuntimeSlice {
+        Some(stage_runtime_plan_for_range(
             args.runtime.stage_load_mode,
             &model_path,
             &model_path,
@@ -658,9 +658,9 @@ fn write_stage_config(
             args.runtime.layer_end,
             args.runtime.ctx_size,
             1,
-        )?
+        )?)
     } else {
-        Vec::new()
+        None
     };
     let config = json!({
         "run_id": run_id,
@@ -679,7 +679,11 @@ fn write_stage_config(
         "cache_type_k": "f16",
         "cache_type_v": "f16",
         "filter_tensors_on_load": true,
-        "resident_tensor_names": resident_tensor_names,
+        "resident_tensor_names": runtime_plan.as_ref().map_or_else(Vec::new, |plan| plan.resident_tensor_names.clone()),
+        "activation_import_identities": runtime_plan.as_ref().map_or_else(Vec::new, |plan| plan.activation_import_identities.clone()),
+        "activation_import_bindings": runtime_plan.as_ref().map_or_else(Vec::new, |plan| plan.activation_import_bindings.clone()),
+        "activation_export_identities": runtime_plan.as_ref().map_or_else(Vec::new, |plan| plan.activation_export_identities.clone()),
+        "activation_export_bindings": runtime_plan.as_ref().map_or_else(Vec::new, |plan| plan.activation_export_bindings.clone()),
         "use_mmap": true,
         "load_mode": stage_load_mode_name(args.runtime.stage_load_mode),
         "bind_addr": args.stage0_bind_addr,

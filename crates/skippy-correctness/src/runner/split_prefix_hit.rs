@@ -23,7 +23,7 @@ use super::{
     native_mtp::{emit_report, normalize_runtime_layer_end},
     stage_execution::{
         CorrectnessTopologyStage, correctness_topology, ensure_matches, protocol_flash_attn,
-        protocol_load_mode, runtime_model_identity, status,
+        protocol_load_mode, runtime_model_identity, stage_runtime_plans, status,
     },
 };
 
@@ -123,6 +123,17 @@ fn run_split_prefix_hit_case(
         generate_run_id(),
         if warmup { "warm" } else { "control" }
     );
+    let runtime_plans = stage_runtime_plans(
+        args.runtime.stage_load_mode,
+        &args.runtime.model,
+        &[&args.runtime.model, &args.runtime.model],
+        &[
+            (0, args.split_layer),
+            (args.split_layer, args.runtime.layer_end),
+        ],
+        args.runtime.ctx_size,
+        1,
+    )?;
 
     let common_stage_fields = json!({
         "run_id": run_id,
@@ -148,6 +159,11 @@ fn run_split_prefix_hit_case(
             "stage_index": 0,
             "layer_start": 0,
             "layer_end": args.split_layer,
+            "resident_tensor_names": runtime_plans[0].resident_tensor_names,
+            "activation_import_identities": runtime_plans[0].activation_import_identities,
+            "activation_import_bindings": runtime_plans[0].activation_import_bindings,
+            "activation_export_identities": runtime_plans[0].activation_export_identities,
+            "activation_export_bindings": runtime_plans[0].activation_export_bindings,
             "bind_addr": stage0_bind_addr,
             "upstream": null,
             "downstream": {
@@ -164,6 +180,11 @@ fn run_split_prefix_hit_case(
             "stage_index": 1,
             "layer_start": args.split_layer,
             "layer_end": args.runtime.layer_end,
+            "resident_tensor_names": runtime_plans[1].resident_tensor_names,
+            "activation_import_identities": runtime_plans[1].activation_import_identities,
+            "activation_import_bindings": runtime_plans[1].activation_import_bindings,
+            "activation_export_identities": runtime_plans[1].activation_export_identities,
+            "activation_export_bindings": runtime_plans[1].activation_export_bindings,
             "bind_addr": stage1_bind_addr,
             "upstream": {
                 "stage_id": "stage-0",
