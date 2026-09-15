@@ -4317,27 +4317,27 @@
   ],
   "crates/skippy-server/src/binary_transport/binary_messaging.rs": [
     {
-      "line": 424,
+      "line": 425,
       "macro_name": "eprintln!"
     },
     {
-      "line": 434,
+      "line": 435,
       "macro_name": "println!"
     },
     {
-      "line": 469,
+      "line": 470,
       "macro_name": "eprintln!"
     },
     {
-      "line": 490,
+      "line": 491,
       "macro_name": "eprintln!"
     },
     {
-      "line": 498,
+      "line": 499,
       "macro_name": "eprintln!"
     },
     {
-      "line": 567,
+      "line": 568,
       "macro_name": "eprintln!"
     }
   ],
@@ -4405,7 +4405,7 @@
   ],
   "crates/skippy-server/src/frontend/embedded_generation/lifecycle.rs": [
     {
-      "line": 159,
+      "line": 201,
       "macro_name": "eprintln!"
     }
   ],
