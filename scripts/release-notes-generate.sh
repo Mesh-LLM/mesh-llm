@@ -34,11 +34,6 @@ date_utc="$(date -u +%Y-%m-%d)"
 
 gh release view "$TAG" --repo "$REPO" --json body -q .body > "$WORKDIR/body.github.md"
 
-if ! grep -q '^\* .*\/pull\/[0-9]\+' "$WORKDIR/body.github.md"; then
-  echo "release-notes: no PR entries in the published body; nothing to regroup"
-  exit 0
-fi
-
 entry_prs() {
   grep -o 'pull/[0-9]\+' "$1" | sort
 }
@@ -61,6 +56,18 @@ if [[ -n "$dropped" ]]; then
   echo "release-notes: the link pass dropped a published entry; refusing to publish" >&2
   printf '%s\n' "$dropped" >&2
   exit 1
+fi
+
+# Give up on the body the link pass settled on, not on GitHub's. GitHub
+# credits a pull request through its merge commit, so a release assembled by
+# cherry-pick, which is the ordinary shape of a hotfix branch, is published
+# with no entries at all. That is the case the link pass exists to repair, and
+# reading the published body first skipped it: v0.76.2 shipped with its only
+# fix, #1844, missing from the notes.
+if ! python3 "$ROOT/scripts/release-notes-classify.py" \
+    --body "$WORKDIR/body.md" --has-entries; then
+  echo "release-notes: no PR entries after the link pass; nothing to regroup"
+  exit 0
 fi
 
 python3 "$ROOT/scripts/release-notes-classify.py" \

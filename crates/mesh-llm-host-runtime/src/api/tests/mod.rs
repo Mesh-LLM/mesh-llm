@@ -1,6 +1,6 @@
 use super::*;
 use crate::api::status::decode_runtime_model_path;
-use crate::crypto::{OwnerKeypair, default_keystore_path, save_keystore};
+use crate::crypto::{OwnerKeypair, save_keystore};
 use crate::plugin;
 use crate::plugins::blobstore;
 use base64::Engine;
