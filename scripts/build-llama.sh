@@ -237,6 +237,10 @@ if command -v ninja >/dev/null 2>&1; then
   echo "using CMake generator: Ninja"
 fi
 
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) CMAKE_ARGS+=(-DCMAKE_OBJECT_PATH_MAX=180) ;;
+esac
+
 case "$LLAMA_BACKEND" in
   cuda)
     if ! configure_cuda_toolkit_env; then

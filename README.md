@@ -221,8 +221,12 @@ cd mesh-llm
 just build
 ```
 
-Source builds require `just`, `cmake`, Rust, and Node.js 24 + npm. To exercise
-the release boundary locally, build the neutral host and one runtime:
+Source builds require `just`, `cmake`, Rust, `sccache`, the platform fast linker
+(`mold` on Linux and lld on macOS/Windows), and Node.js 24 + npm. Cargo uses
+these defaults from the checked-in configuration, including plain `cargo
+build`. See [CONTRIBUTING.md](CONTRIBUTING.md) for installation commands and
+linker fallback behavior. To exercise the release boundary locally, build the
+neutral host and one runtime:
 
 ```bash
 just release-host-build

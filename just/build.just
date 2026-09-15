@@ -5,66 +5,30 @@ qa-logging-console-e2e:
     @just build
     @scripts/qa-logging-console-e2e.sh --current-binary ./target/debug/mesh-llm
 
+[unix]
+bootstrap-build-tools:
+    @scripts/bootstrap-build-tools
+
+[windows]
+bootstrap-build-tools:
+    @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap-build-tools.ps1
+
 [private]
 [unix]
 with-lld *COMMAND:
     #!/usr/bin/env bash
     set -euo pipefail
-    source scripts/lib/lld.sh
-    lld="$(find_lld)"
-    if [[ -z "$lld" ]]; then
-        case "$(uname -s)" in
-            Linux)
-                cat >&2 <<'EOF'
-    Error: LLVM ld.lld was not found.
-
-    lld is required for faster Rust builds (measured up to 26% faster locally).
-
-    Install lld, then rerun the just command. Common Linux packages:
-      Ubuntu/Debian: sudo apt-get update && sudo apt-get install -y lld
-      Fedora:        sudo dnf install lld
-      Arch Linux:    sudo pacman -S lld
-      openSUSE:      sudo zypper install lld
-
-    The build requires ld.lld to be available on PATH.
-    EOF
-                ;;
-            Darwin)
-                cat >&2 <<'EOF'
-    Error: LLVM ld64.lld was not found.
-
-    lld is required for faster Rust builds (measured up to 26% faster locally).
-
-    Install lld, then rerun the just command:
-      brew install lld
-
-    If Homebrew installed lld but it is not on PATH, Mesh-LLM also checks:
-      $(brew --prefix lld)/bin/ld64.lld
-      /opt/homebrew/opt/lld/bin/ld64.lld
-      /usr/local/opt/lld/bin/ld64.lld
-    EOF
-                ;;
-            *)
-                echo "Unsupported OS for lld linker setup: $(uname -s)" >&2
-                ;;
-        esac
+    command -v sccache >/dev/null 2>&1 || {
+        echo "Error: sccache is required; install it and retry." >&2
         exit 1
-    fi
-    # Installed but unable to link (typically the SDK is newer than lld) is a
-    # slower build, not a broken one: fall back to the platform linker and say
-    # why, rather than fail a build that would otherwise succeed. See
-    # scripts/lib/lld.sh.
-    if lld_links "$lld"; then
-        export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=-fuse-ld=$lld"
-    else
-        report_lld_fallback "$lld"
-    fi
+    }
+    scripts/cargo-linker --mesh-probe >/dev/null
     exec {{ COMMAND }}
 
 [private]
 [windows]
 with-lld *COMMAND:
-    @powershell -NoProfile -ExecutionPolicy Bypass -Command "$$ErrorActionPreference = 'Stop'; $$linker = $$null; try { $$sysroot = (& rustc --print sysroot).Trim(); foreach ($$target in @('x86_64-pc-windows-msvc', 'aarch64-pc-windows-msvc')) { $$candidate = Join-Path $$sysroot \"lib\rustlib\$$target\bin\rust-lld.exe\"; if (Test-Path $$candidate) { $$linker = $$candidate; break } } } catch {}; if (-not $$linker) { foreach ($$name in @('rust-lld.exe', 'lld-link.exe')) { $$command = Get-Command $$name -ErrorAction SilentlyContinue; if ($$command) { $$linker = $$command.Source; break } } }; if (-not $$linker) { Write-Error \"LLVM lld was not found for the Windows MSVC target.`n`nlld is required for faster Rust builds (measured up to 26% faster locally).`n`nInstall one of these, then rerun the just command:`n  rustup component add llvm-tools-preview`n`nOr install LLVM lld-link:`n  winget install LLVM.LLVM`n  choco install llvm`n`nThe build requires lld. It looks for rust-lld.exe in the active Rust sysroot first, then falls back to rust-lld.exe or lld-link.exe on PATH.\"; exit 1 }; $$env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER = $$linker; $$env:CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER = $$linker; Invoke-Expression '{{ COMMAND }}'"
+    @powershell -NoProfile -ExecutionPolicy Bypass -Command "$$ErrorActionPreference = 'Stop'; if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }; Invoke-Expression '{{ COMMAND }}'"
 
 
 # Build a local product for the current platform. This is always a
