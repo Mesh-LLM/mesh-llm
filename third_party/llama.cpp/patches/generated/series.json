@@ -1,5 +1,5 @@
 {
-  "full_patch_sha256": "788f7c724d259e52d93841bf1a5f65edc52c4df412ef4c6143daa5e0899aafc1",
+  "full_patch_sha256": "39cf8e94b2abd0ed2bdf0ce003ac08f15f6cb0d09f27189e13754f60f063a94c",
   "generator_version": "0.3.0",
   "schema_version": 1,
   "shards": [
@@ -69,7 +69,7 @@
         "chameleon"
       ],
       "file": "0007-family-chameleon.patch",
-      "sha256": "13218636b731fdda734b58317838eb178ab35ec0b855c1b30e464908f6cb81a5",
+      "sha256": "c3e5ebcf23d7ce6dd592743a1a4ec33decc5c959a4720b046895f04c1c6f62ab",
       "sources": [
         "src/models/chameleon.cpp"
       ]
@@ -220,7 +220,7 @@
         "glm-dsa"
       ],
       "file": "0022-family-glm-dsa.patch",
-      "sha256": "381b02a12f351008959cb067215c5c5c4b15d00bce0b29f8cf1ef278efd6d0d7",
+      "sha256": "bac426d85367f3d36a039ddbfdfdc910c33c6d4600a0e96f7487238a292bb201",
       "sources": [
         "src/models/glm-dsa.cpp"
       ]
@@ -304,7 +304,7 @@
         "granite-swa"
       ],
       "file": "0030-family-granite-swa.patch",
-      "sha256": "7b8904b04395886a297dc84bfa3ee079bc6f8ffcb8da5839f10e06a7eb10f859",
+      "sha256": "71bf5a8c93686db2da53c3c97f3804bb1ec0e56ed972f49752cfca22c37975fe",
       "sources": [
         "src/models/granite-swa.cpp"
       ]
@@ -314,7 +314,7 @@
         "granite-switch"
       ],
       "file": "0031-family-granite-switch.patch",
-      "sha256": "dbbc6f99c7f548cc5ace02b07b1904bfc277006a8b4420b63f2957c662604ff4",
+      "sha256": "594aaa9cad5162b3e4aca18f71077173129963a46c5555a71c91e40ff2e1838a",
       "sources": [
         "src/models/granite-switch.cpp"
       ]
@@ -351,9 +351,19 @@
     },
     {
       "families": [
+        "inkling"
+      ],
+      "file": "0035-family-inkling.patch",
+      "sha256": "54a3358fa2b68fc415716fecc2337a7da9898cc72104c3d618bf7a38e060cf28",
+      "sources": [
+        "src/models/inkling.cpp"
+      ]
+    },
+    {
+      "families": [
         "internlm2"
       ],
-      "file": "0035-family-internlm2.patch",
+      "file": "0036-family-internlm2.patch",
       "sha256": "c7b241802053271ced649645b35de2158f2059e3a4faea85e40188d05511043a",
       "sources": [
         "src/models/internlm2.cpp"
@@ -363,7 +373,7 @@
       "families": [
         "jais"
       ],
-      "file": "0036-family-jais.patch",
+      "file": "0037-family-jais.patch",
       "sha256": "e8f0a2a908cb34562f17a42603f806e045e18817eac36d268ee55790933bde6b",
       "sources": [
         "src/models/jais.cpp"
@@ -373,7 +383,7 @@
       "families": [
         "jais2"
       ],
-      "file": "0037-family-jais2.patch",
+      "file": "0038-family-jais2.patch",
       "sha256": "cf575008beb57c7537e2c05d7f515218f3a658d2e553eb96a435b2cdabbfd42f",
       "sources": [
         "src/models/jais2.cpp"
@@ -383,7 +393,7 @@
       "families": [
         "jamba2"
       ],
-      "file": "0038-family-jamba2.patch",
+      "file": "0039-family-jamba2.patch",
       "sha256": "b12bf9e9779ecd3af2d0221e25234518f19875980dbad49e3a4ea59b1b40fa5e",
       "sources": [
         "src/models/jamba.cpp"
@@ -393,8 +403,8 @@
       "families": [
         "kimi-k3"
       ],
-      "file": "0039-family-kimi-k3.patch",
-      "sha256": "94c3cf5791adb791166be13c861e21084e7ba13c7e59182430c2c4682d00ac3e",
+      "file": "0040-family-kimi-k3.patch",
+      "sha256": "344d37e5cf88f2b14ccedad7dc72b893dc00efc4dfb66ceca5dfd529c3e01b0a",
       "sources": [
         "src/models/kimi-k3.cpp"
       ]
@@ -403,7 +413,7 @@
       "families": [
         "kimi-linear"
       ],
-      "file": "0040-family-kimi-linear.patch",
+      "file": "0041-family-kimi-linear.patch",
       "sha256": "384d1f699471aac2582715a271b503f227399722527b198a03381e14bc659f1e",
       "sources": [
         "src/models/kimi-linear.cpp"
@@ -413,7 +423,7 @@
       "families": [
         "laguna"
       ],
-      "file": "0041-family-laguna.patch",
+      "file": "0042-family-laguna.patch",
       "sha256": "3c0b8d8b7fd4241c141e0f420fb8202debcd1717d6736ddb647ee027f325aae9",
       "sources": [
         "src/models/laguna.cpp"
@@ -425,8 +435,8 @@
         "lfm2-moe",
         "lfm2-vl"
       ],
-      "file": "0042-family-lfm2--lfm2-moe--lfm2-vl.patch",
-      "sha256": "df8e59a6801075f29b5870685e914c0bbcaa633855b1476f55b50109ced847fd",
+      "file": "0043-family-lfm2--lfm2-moe--lfm2-vl.patch",
+      "sha256": "bd176d782119ec7802df4e26edf159f0097ae87761df55fde84048fc82553f88",
       "sources": [
         "src/models/lfm2.cpp"
       ]
@@ -435,7 +445,7 @@
       "families": [
         "llama"
       ],
-      "file": "0043-family-llama.patch",
+      "file": "0044-family-llama.patch",
       "sha256": "6db78eb8982c72e2c37d1a2cb3e3a77e71d5bd8b20a158b4cdd37aed08739503",
       "sources": [
         "src/models/llama.cpp"
@@ -446,7 +456,7 @@
         "llama",
         "olmo2"
       ],
-      "file": "0044-family-llama--olmo2.patch",
+      "file": "0045-family-llama--olmo2.patch",
       "sha256": "2e40eb8477f02f321d3a430a9491a4c37073743cfeaa8d04c66995a2769ebd3d",
       "sources": [
         "src/models/olmo2.cpp"
@@ -454,9 +464,19 @@
     },
     {
       "families": [
+        "llama4"
+      ],
+      "file": "0046-family-llama4.patch",
+      "sha256": "7edc523647775ab9e3c5be6c984b4ccc9e81e42f7d96d9dc644ed0031e181bc0",
+      "sources": [
+        "src/models/llama4.cpp"
+      ]
+    },
+    {
+      "families": [
         "maincoder"
       ],
-      "file": "0045-family-maincoder.patch",
+      "file": "0047-family-maincoder.patch",
       "sha256": "c62c0797e547486eac58a899bff57f0064b4302601c8af62f28c65d814df5641",
       "sources": [
         "src/models/maincoder.cpp"
@@ -467,7 +487,7 @@
         "mamba",
         "mamba2"
       ],
-      "file": "0046-family-mamba--mamba2.patch",
+      "file": "0048-family-mamba--mamba2.patch",
       "sha256": "d2a882bf7271fc32466415f31a8561cd6d508352647381e4bba2ce340daec063",
       "sources": [
         "src/models/mamba.cpp"
@@ -477,7 +497,7 @@
       "families": [
         "mellum"
       ],
-      "file": "0047-family-mellum.patch",
+      "file": "0049-family-mellum.patch",
       "sha256": "2729e5f58025cf2b035708f235bea49f83f69f2a3d3ec3dad04ea3e73a90bc14",
       "sources": [
         "src/models/mellum.cpp"
@@ -487,8 +507,8 @@
       "families": [
         "mimo2"
       ],
-      "file": "0048-family-mimo2.patch",
-      "sha256": "248ac485b6bca982ac7f0d82b0fe43b3b3c06cc61ae25529cb65bf3f7aa78a04",
+      "file": "0050-family-mimo2.patch",
+      "sha256": "46050c147aac87bc33f82ee9466d7f015622fb583f7f28da874bde4444b620f8",
       "sources": [
         "src/models/mimo2.cpp"
       ]
@@ -497,7 +517,7 @@
       "families": [
         "minicpm3"
       ],
-      "file": "0049-family-minicpm3.patch",
+      "file": "0051-family-minicpm3.patch",
       "sha256": "a48073be42cbd85bf828222cf5d4ced20e62fc98b21afaf0754cab97628522f7",
       "sources": [
         "src/models/minicpm3.cpp"
@@ -507,8 +527,8 @@
       "families": [
         "minimax-m3"
       ],
-      "file": "0050-family-minimax-m3.patch",
-      "sha256": "9030e61bdbc4cecfbd33c4edefe0ced360b3bba00f58a369f50e4a6feaf87fb1",
+      "file": "0052-family-minimax-m3.patch",
+      "sha256": "07904440bff1e5e55fde5d17454792443866983c0165364186e57de44c961431",
       "sources": [
         "src/models/minimax-m3.cpp"
       ]
@@ -517,7 +537,7 @@
       "families": [
         "mistral-small"
       ],
-      "file": "0051-family-mistral-small.patch",
+      "file": "0053-family-mistral-small.patch",
       "sha256": "ac996cf36fedfbf18af180da7069dc85fc95655585dccb6848a1d9bf462cd843",
       "sources": [
         "src/models/mistral3.cpp"
@@ -527,7 +547,7 @@
       "families": [
         "mpt"
       ],
-      "file": "0052-family-mpt.patch",
+      "file": "0054-family-mpt.patch",
       "sha256": "f96afc2cfd888d3886af2f2ac14f0b8a41d7dca77786466f1a0d96690ab1ba9d",
       "sources": [
         "src/models/mpt.cpp"
@@ -537,8 +557,8 @@
       "families": [
         "nemotron"
       ],
-      "file": "0053-family-nemotron.patch",
-      "sha256": "27856800e0a460ca10691c4f36f4858c156f639c7a112e8366b7fd06dc9000d2",
+      "file": "0055-family-nemotron.patch",
+      "sha256": "96f1b05d0c37e0ee1b3312e87fd8741e78a9d3e783435cd7d64b5b55d3cebf4b",
       "sources": [
         "src/models/nemotron-h.cpp"
       ]
@@ -547,7 +567,7 @@
       "families": [
         "nemotron-expansion"
       ],
-      "file": "0054-family-nemotron-expansion.patch",
+      "file": "0056-family-nemotron-expansion.patch",
       "sha256": "bd374a47fc946be3592de3f72e84af8341a5432d6dad4a0b7c68da115ca68c0f",
       "sources": [
         "src/models/nemotron.cpp"
@@ -557,7 +577,7 @@
       "families": [
         "phi2"
       ],
-      "file": "0055-family-phi2.patch",
+      "file": "0057-family-phi2.patch",
       "sha256": "7abb188765da78f2d7949ad1535db48e29c86824077f94e52434a5476a57499d",
       "sources": [
         "src/models/phi2.cpp"
@@ -568,7 +588,7 @@
         "phi3",
         "phi4"
       ],
-      "file": "0056-family-phi3--phi4.patch",
+      "file": "0058-family-phi3--phi4.patch",
       "sha256": "eda7adf4961ba82f48b13ec000c923a4e54fbba3888b9deb2207bf884312d34b",
       "sources": [
         "src/models/phi3.cpp"
@@ -578,7 +598,7 @@
       "families": [
         "qwen2"
       ],
-      "file": "0057-family-qwen2.patch",
+      "file": "0059-family-qwen2.patch",
       "sha256": "5af2de4bf0da021f1c3a183946d033c4850ae27d0e45aa7ad697f5bcc14841a1",
       "sources": [
         "src/models/qwen2.cpp"
@@ -588,7 +608,7 @@
       "families": [
         "qwen2-moe"
       ],
-      "file": "0058-family-qwen2-moe.patch",
+      "file": "0060-family-qwen2-moe.patch",
       "sha256": "8c5d254ace04711668f324d9d8066a61ada35fa57cf79ec7d876f91e5caf8c7e",
       "sources": [
         "src/models/qwen2moe.cpp"
@@ -598,7 +618,7 @@
       "families": [
         "qwen2-vl"
       ],
-      "file": "0059-family-qwen2-vl.patch",
+      "file": "0061-family-qwen2-vl.patch",
       "sha256": "bc49d269f746a3962da0f0f648cfd7b8fbdca01e492dcba05790a45a562c3a23",
       "sources": [
         "src/models/qwen2vl.cpp"
@@ -608,7 +628,7 @@
       "families": [
         "qwen3-dense"
       ],
-      "file": "0060-family-qwen3-dense.patch",
+      "file": "0062-family-qwen3-dense.patch",
       "sha256": "81c22529ccd7f3ecf2203885822104bf4460ec9d7f66bebf3500f5452608090a",
       "sources": [
         "src/models/qwen3.cpp"
@@ -618,7 +638,7 @@
       "families": [
         "qwen3-moe"
       ],
-      "file": "0061-family-qwen3-moe.patch",
+      "file": "0063-family-qwen3-moe.patch",
       "sha256": "284aa66228933086f5fa7d04879cc52a720bb443b1902ee2a193da7213e4213a",
       "sources": [
         "src/models/qwen3moe.cpp"
@@ -628,7 +648,7 @@
       "families": [
         "qwen3-next"
       ],
-      "file": "0062-family-qwen3-next.patch",
+      "file": "0064-family-qwen3-next.patch",
       "sha256": "36fbc633a37310053debf74212e85f8a13f412d597d5764ae7495c78b156f5e1",
       "sources": [
         "src/models/qwen3next.cpp"
@@ -638,7 +658,7 @@
       "families": [
         "qwen3-vl"
       ],
-      "file": "0063-family-qwen3-vl.patch",
+      "file": "0065-family-qwen3-vl.patch",
       "sha256": "ffae82a79a5b857c79ef4c5944b8d7898efbf1bb25e834875d8926bdff291260",
       "sources": [
         "src/models/qwen3vl.cpp"
@@ -648,7 +668,7 @@
       "families": [
         "qwen35"
       ],
-      "file": "0064-family-qwen35.patch",
+      "file": "0066-family-qwen35.patch",
       "sha256": "2a634f1e2852e7de6880948663395aff5169ee51d2b97901325a840c629ad3ad",
       "sources": [
         "src/models/qwen35.cpp"
@@ -658,7 +678,7 @@
       "families": [
         "qwen35moe"
       ],
-      "file": "0065-family-qwen35moe.patch",
+      "file": "0067-family-qwen35moe.patch",
       "sha256": "3fb6a7821df37d5e62ddb4ddb15b81e829a7f613bd9dba39eda8e961387cdad9",
       "sources": [
         "src/models/qwen35moe.cpp"
@@ -668,7 +688,7 @@
       "families": [
         "qwen3vlmoe"
       ],
-      "file": "0066-family-qwen3vlmoe.patch",
+      "file": "0068-family-qwen3vlmoe.patch",
       "sha256": "c963b69f8f3d09df30e4326e30c78eb673e5b650b4c5dfbb62e0145b46bbac33",
       "sources": [
         "src/models/qwen3vlmoe.cpp"
@@ -678,7 +698,7 @@
       "families": [
         "qwen4exp"
       ],
-      "file": "0067-family-qwen4exp.patch",
+      "file": "0069-family-qwen4exp.patch",
       "sha256": "87f410f7e49b3a13c8fda5aa4b52db25b5c3cd9600fe76e501122909cd04c350",
       "sources": [
         "src/models/qwen4exp.cpp"
@@ -688,7 +708,7 @@
       "families": [
         "rwkv6"
       ],
-      "file": "0068-family-rwkv6.patch",
+      "file": "0070-family-rwkv6.patch",
       "sha256": "ec5844784e4e780fc9d1f7fdf3011cb7fd75a8561834886a0b7e28e74119f4f3",
       "sources": [
         "src/models/rwkv6.cpp",
@@ -699,7 +719,7 @@
       "families": [
         "rwkv7"
       ],
-      "file": "0069-family-rwkv7.patch",
+      "file": "0071-family-rwkv7.patch",
       "sha256": "edbae949fb6764a77107cefa6107683306b6bfe35db21b40469936a962260718",
       "sources": [
         "src/models/rwkv7.cpp"
@@ -709,7 +729,7 @@
       "families": [
         "smollm3"
       ],
-      "file": "0070-family-smollm3.patch",
+      "file": "0072-family-smollm3.patch",
       "sha256": "3b068f8deddd06507cb2945c13455a4879fdb144af319250fa941179e433da48",
       "sources": [
         "src/models/smollm3.cpp"
@@ -719,7 +739,7 @@
       "families": [
         "spark2-5"
       ],
-      "file": "0071-family-spark2-5.patch",
+      "file": "0073-family-spark2-5.patch",
       "sha256": "37f0b6bd239e155077beaad29ad5b957cb6acc756f5bd89875647a4679313d68",
       "sources": [
         "src/models/spark2-5.cpp"
@@ -729,7 +749,7 @@
       "families": [
         "stablelm"
       ],
-      "file": "0072-family-stablelm.patch",
+      "file": "0074-family-stablelm.patch",
       "sha256": "bb7df4b1a619c0471d0b485ae9f072262420571cca1fbe7d33ba60660f2ac070",
       "sources": [
         "src/models/stablelm.cpp"
@@ -739,7 +759,7 @@
       "families": [
         "starcoder2"
       ],
-      "file": "0073-family-starcoder2.patch",
+      "file": "0075-family-starcoder2.patch",
       "sha256": "4d803bb10236828ea24929ca87519d1092dc02609fcc81f97f10a1591b4956f4",
       "sources": [
         "src/models/starcoder2.cpp"
@@ -749,7 +769,7 @@
       "families": [
         "step35"
       ],
-      "file": "0074-family-step35.patch",
+      "file": "0076-family-step35.patch",
       "sha256": "88595b95cd2a3233446d60c1092ed15981049c006eaf0ffaa49a9967b1cb5f4b",
       "sources": [
         "src/models/step35.cpp"
@@ -757,8 +777,8 @@
     },
     {
       "families": [],
-      "file": "0075-family-unmapped.patch",
-      "sha256": "0c0a607e8472443ebc18f1a77c576cbeada3a8763ddcaba075e26ac52036ac66",
+      "file": "0077-family-unmapped.patch",
+      "sha256": "88c3f2a1049af74850ef99f5afc5c8379b9e71ad47e8c14eabed2a6683465e96",
       "sources": [
         "src/models/arctic.cpp",
         "src/models/baichuan.cpp",
@@ -784,10 +804,8 @@
         "src/models/grok.cpp",
         "src/models/hunyuan-moe.cpp",
         "src/models/hy-v4.cpp",
-        "src/models/inkling.cpp",
         "src/models/llada-moe.cpp",
         "src/models/llada.cpp",
-        "src/models/llama4.cpp",
         "src/models/minimax-01.cpp",
         "src/models/minimax-m2.cpp",
         "src/models/modern-bert.cpp",

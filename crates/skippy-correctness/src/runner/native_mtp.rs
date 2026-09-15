@@ -131,6 +131,27 @@ pub(crate) fn native_mtp_requirement(args: NativeMtpArgs) -> NativeMtpRequiremen
     }
 }
 
+/// Stage ranges cover the executable trunk only: llama.cpp's `n_layer()`
+/// excludes appended NextN/MTP draft blocks. An artifact-level `--layer-end`
+/// that includes those blocks is normalized to the trunk so every staged lane
+/// matches the native stage-range contract.
+pub(crate) fn normalize_runtime_layer_end(runtime: &mut RuntimeArgs) -> Result<()> {
+    let model_path = runtime.model.as_path();
+    if !model_path.is_file() {
+        return Ok(());
+    }
+    let Some(meta) = scan_gguf_compact_meta(model_path) else {
+        return Ok(());
+    };
+    let Some(executable_layers) = meta.executable_layer_count() else {
+        return Ok(());
+    };
+    if runtime.layer_end > executable_layers {
+        runtime.layer_end = executable_layers;
+    }
+    Ok(())
+}
+
 pub(crate) fn ensure_native_mtp_artifact_if_required(
     runtime: &RuntimeArgs,
     requirement: NativeMtpRequirement,

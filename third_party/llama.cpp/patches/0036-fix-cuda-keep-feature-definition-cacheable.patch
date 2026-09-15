@@ -1,8 +1,8 @@
-From fe2246204c4948128928e6405636da89f1e63a01 Mon Sep 17 00:00:00 2001
+From 5268ef7fd81bbcb276264dca1f3ee4ab2bc2896b Mon Sep 17 00:00:00 2001
 From: scama
  <a1860575018c4680d5669dd7bc3bd356b478bccb8d42e194df46304a5e25f49a@meshllm.communities.buzz.xyz>
 Date: Sun, 13 Sep 2026 16:05:07 +1000
-Subject: [PATCH] fix(cuda): keep feature definition cacheable
+Subject: [PATCH 036/113] fix(cuda): keep feature definition cacheable
 
 ---
  ggml/cmake/common.cmake         | 9 +++++++--
@@ -30,10 +30,10 @@ index 25eff7a5e..29e71898b 100644
          foreach (TYPE_K IN LISTS FA_TYPES)
              if ("${TYPE_K}-${TYPE_V}" IN_LIST FA_COMBINATIONS)
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 5ae3b8d22..a23417926 100644
+index 790553888..b39f0ab2e 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -5641,7 +5641,9 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
+@@ -5649,7 +5649,9 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
      #endif
  
      #ifdef GGML_CUDA_FA_QUANTS
@@ -45,5 +45,5 @@ index 5ae3b8d22..a23417926 100644
  
      {
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
 

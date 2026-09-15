@@ -1,7 +1,7 @@
-From 46494139e5792c5e13c87f47816b74d15d7638d6 Mon Sep 17 00:00:00 2001
+From a70b0c81d0e61e075b6a599a858276659cc47f18 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 7 Sep 2026 15:34:55 +1000
-Subject: [PATCH 12/23] skippy: keep metadata planning graphs backend neutral
+Subject: [PATCH 012/113] skippy: keep metadata planning graphs backend neutral
 
 ---
  src/skippy/stage_plan.cpp | 11 +++++++++++

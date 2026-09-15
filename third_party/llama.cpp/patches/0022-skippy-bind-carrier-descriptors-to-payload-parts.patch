@@ -1,7 +1,7 @@
-From 4fc6178d9f57ab198217f11329afd3fe22163e23 Mon Sep 17 00:00:00 2001
+From c5f275697436c748ad7d462124a912550a97fe89 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 9 Sep 2026 12:35:48 +1000
-Subject: [PATCH 22/23] skippy: bind carrier descriptors to payload parts
+Subject: [PATCH 022/113] skippy: bind carrier descriptors to payload parts
 
 Metadata-only carriers describe every tensor but contain no payload bytes. Exclude those descriptors from ordered runtime weight maps so admitted tensors bind to physical payload artifacts, while preserving carrier-only no-allocation planning.
 

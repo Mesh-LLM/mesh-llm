@@ -1,7 +1,7 @@
-From 981b0eaf9a8ece8f0ac71876d93b88d1d23252d4 Mon Sep 17 00:00:00 2001
+From 0943998ba2cdf179ac8cf9b1f064dff926b9555d Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 5 Sep 2026 14:41:08 -0400
-Subject: [PATCH] skippy: report selected device transitions
+Subject: [PATCH 032/113] skippy: report selected device transitions
 
 ---
  src/skippy/model_load_config.cpp | 27 +++++++++++++++++++++++++++
@@ -69,5 +69,5 @@ index a6ec5b2eb..dc29c6417 100644
  }
  
 -- 
-2.50.1 (Apple Git-155)
+2.55.0
 

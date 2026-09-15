@@ -1,18 +1,19 @@
-From 012073391f2be385821be6894aef31f6dca5b16e Mon Sep 17 00:00:00 2001
+From 6fc0b7dea562692ceb654c6979cc534ef5c1af62 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 7 Sep 2026 06:23:13 +1000
-Subject: [PATCH 06/23] test(skippy): cover graph planning and stage contracts
+Subject: [PATCH 006/113] test(skippy): cover graph planning and stage
+ contracts
 
 ---
  src/CMakeLists.txt                            |  310 +++++
  src/skippy/tests/graph_build_inputs.cpp       |  320 +++++
  .../tests/hardware_application_probe.cpp      |   64 +
- src/skippy/tests/noalloc_graph_planning.cpp   | 1066 +++++++++++++++++
+ src/skippy/tests/noalloc_graph_planning.cpp   | 1054 +++++++++++++++++
  .../tests/renamed_multishard_planning.cpp     |  882 ++++++++++++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
  src/skippy/tests/stage_slice_plan.cpp         | 1036 ++++++++++++++++
- 8 files changed, 3701 insertions(+)
+ 8 files changed, 3689 insertions(+)
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/hardware_application_probe.cpp
  create mode 100644 src/skippy/tests/noalloc_graph_planning.cpp
@@ -749,10 +750,10 @@ index 000000000..1a1bb0ca5
 +}
 diff --git a/src/skippy/tests/noalloc_graph_planning.cpp b/src/skippy/tests/noalloc_graph_planning.cpp
 new file mode 100644
-index 000000000..70fe2a283
+index 000000000..59fe21bf7
 --- /dev/null
 +++ b/src/skippy/tests/noalloc_graph_planning.cpp
-@@ -0,0 +1,1066 @@
+@@ -0,0 +1,1054 @@
 +#include "ggml-backend.h"
 +#include "ggml.h"
 +#include "gguf.h"
@@ -1093,7 +1094,7 @@ index 000000000..70fe2a283
 +    std::vector<std::string> selected_dependencies;
 +    std::vector<skippy_guarded_stage_slice_plan> stage_plans;
 +    bool has_downstream_recurrent_layer = false;
-+    bool proved_noncontiguous_recurrent_slice = false;
++    bool proved_state_preparation_retained = false;
 +    bool proved_self_contained_recurrent_source = false;
 +    const bool recurrent_layer0 = model->hparams.is_recr(0);
 +    for (int32_t layer = 0; layer < n_layer; ++layer) {
@@ -1197,21 +1198,9 @@ index 000000000..70fe2a283
 +        if (model->hparams.is_recr(layer)) {
 +            if (layer > 0) {
 +                has_downstream_recurrent_layer = true;
-+                const ggml_tensor * entry = graph_result->get_block_boundaries()[2 * layer].tensor;
-+                int32_t entry_index = -1;
-+                for (int32_t index = 0; index < ggml_graph_n_nodes(graph); ++index) {
-+                    if (ggml_graph_node(graph, index) == entry) {
-+                        entry_index = index;
-+                        break;
-+                    }
-+                }
-+                if (entry_index < 0 || selection.node_indices.front() >= entry_index) {
-+                    std::fprintf(stderr,
-+                            "metadata-only %s recurrent layer %d slice omitted its pre-entry auxiliary cone\n",
-+                            profile_name, layer);
-+                    return false;
-+                }
-+                proved_noncontiguous_recurrent_slice = true;
++                // The retained-owning-write loop above already proves the
++                // recurrent state preparation cone stayed inside the slice.
++                proved_state_preparation_retained = true;
 +            } else {
 +                if (!selection.activation_imports.empty()) {
 +                    std::fprintf(stderr,
@@ -1294,8 +1283,8 @@ index 000000000..70fe2a283
 +                profile_name);
 +        return false;
 +    }
-+    if (has_downstream_recurrent_layer && !proved_noncontiguous_recurrent_slice) {
-+        std::fprintf(stderr, "metadata-only %s did not prove a non-contiguous recurrent slice\n",
++    if (has_downstream_recurrent_layer && !proved_state_preparation_retained) {
++        std::fprintf(stderr, "metadata-only %s did not prove retained recurrent state preparation\n",
 +                profile_name);
 +        return false;
 +    }

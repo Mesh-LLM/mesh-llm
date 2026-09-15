@@ -77,6 +77,40 @@ def main() -> int:
         assert "end_block(inpL, il);" in transformed
         assert "for (int il = il_start; il < il_end; ++il)" in transformed
 
+        kimi = run(
+            tool,
+            source_root,
+            Path(temporary) / "kimi-k3.json",
+            source_name="kimi-k3.cpp",
+            apply=False,
+        )["builders"][0]
+        assert kimi["verdict"] == "transformable"
+        assert "kimi_k3_residual_sideband" in kimi["proof"]["scope_evidence"]
+        kimi_edits = {edit["kind"]: edit["text"] for edit in kimi["edits"]}
+        assert "llm_graph_input_kimi_k3_residual" in kimi_edits[
+            "insert_family_sideband_input"
+        ]
+        assert "t_skippy_kimi_k3_residual" in kimi_edits[
+            "insert_stage_boundary"
+        ]
+
+        glm_dsa = run(
+            tool,
+            source_root,
+            Path(temporary) / "glm-dsa.json",
+            source_name="glm-dsa.cpp",
+            apply=False,
+        )["builders"][0]
+        assert glm_dsa["verdict"] == "transformable"
+        assert "glm_dsa_top_k_sideband" in glm_dsa["proof"]["scope_evidence"]
+        glm_edits = {edit["kind"]: edit["text"] for edit in glm_dsa["edits"]}
+        assert "llm_graph_input_glm_dsa_top_k" in glm_edits[
+            "insert_family_sideband_input"
+        ]
+        assert "t_skippy_glm_dsa_top_k" in glm_edits[
+            "insert_stage_boundary"
+        ]
+
         second = run(tool, source_root, Path(temporary) / "second.json", apply=False)
         assert second["summary"]["transformable"] == 0
         assert second["summary"]["already_transformed"] == 1

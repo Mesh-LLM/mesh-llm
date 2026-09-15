@@ -311,6 +311,42 @@ mod tests {
     }
 
     #[test]
+    fn forwarded_stage_message_preserves_glm_dsa_mixed_dtype_sideband() {
+        let mut config = stage_config();
+        config.activation_codec = skippy_protocol::StageActivationCodec::F16RneV1;
+        let mut frame = f32_frame(
+            skippy_protocol::binary::ACTIVATION_FLAG_GLM_DSA_TOP_K,
+            1,
+            &[1.0_f32, 2.0],
+        );
+        let top_k = [7_i32, 11, 13]
+            .into_iter()
+            .flat_map(i32::to_le_bytes)
+            .collect::<Vec<_>>();
+        frame.payload.extend_from_slice(&top_k);
+        frame.desc.payload_bytes = frame.payload.len() as u64;
+
+        let forwarded =
+            forwarded_stage_message_timed(&config, &incoming_message(), &frame, 2).unwrap();
+        assert_eq!(forwarded.message.activation.len(), 4 + top_k.len());
+        assert_eq!(&forwarded.message.activation[4..], top_k);
+        assert_ne!(
+            forwarded.message.state.flags & state_flags::GLM_DSA_TOP_K_SIDEBAND,
+            0
+        );
+
+        let mut wire = Vec::new();
+        skippy_protocol::binary::write_stage_message(&mut wire, &forwarded.message).unwrap();
+        let decoded = skippy_protocol::binary::read_stage_message_for_codec(
+            std::io::Cursor::new(wire),
+            2,
+            skippy_protocol::StageActivationCodec::F16RneV1,
+        )
+        .unwrap();
+        assert_eq!(decoded.activation, frame.payload);
+    }
+
+    #[test]
     fn auto_lossless_selects_bf16_when_both_half_formats_are_exact() {
         let mut config = stage_config();
         config.activation_codec = StageActivationCodec::RawF32V1;

@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/minimax-m3.cpp b/src/models/minimax-m3.cpp
-index 89c7e2810788c321acf29836042ecd52200962d6..de413aec4a6888ac0e52d6b61f1825ce4482d4e6 100644
+index 5e875813207f1d502a930642679ec9a13dbdcba9..e9c8ad468b094a01ab148aa8b66a79262004b12f 100644
 --- a/src/models/minimax-m3.cpp
 +++ b/src/models/minimax-m3.cpp
-@@ -212,7 +212,12 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
+@@ -225,7 +225,12 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
      ggml_tensor * cur;
      ggml_tensor * inpL;
  
@@ -26,7 +26,7 @@ index 89c7e2810788c321acf29836042ecd52200962d6..de413aec4a6888ac0e52d6b61f1825ce
  
      ggml_tensor * inp_pos = build_inp_pos();
  
-@@ -298,9 +303,11 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
+@@ -312,9 +317,11 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
          msa = (llm_graph_input_msa *) res->add_input(std::move(inp));
      }
  
@@ -40,7 +40,7 @@ index 89c7e2810788c321acf29836042ecd52200962d6..de413aec4a6888ac0e52d6b61f1825ce
          ggml_tensor * inpSA = inpL;
  
          // self-attention
-@@ -536,7 +543,7 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
+@@ -550,7 +557,7 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
              }
          }
  
@@ -49,7 +49,7 @@ index 89c7e2810788c321acf29836042ecd52200962d6..de413aec4a6888ac0e52d6b61f1825ce
              cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
-@@ -591,7 +598,15 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
+@@ -605,7 +612,15 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
  
          // input for next layer
          inpL = cur;

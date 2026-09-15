@@ -1,0 +1,29 @@
+From 13fb810479988fb701474a1a72ae24f979c185e5 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Tue, 15 Sep 2026 13:04:12 +1000
+Subject: [PATCH] skippy: register Inkling request inputs
+
+---
+ src/models/inkling.cpp | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/src/models/inkling.cpp b/src/models/inkling.cpp
+index 6b956188b..0310612ef 100644
+--- a/src/models/inkling.cpp
++++ b/src/models/inkling.cpp
+@@ -314,6 +314,12 @@ llama_model_inkling::graph::graph(const llama_model & model, const llm_graph_par
+     ggml_tensor * vocab_mask  = inp->vocab_mask;
+     ggml_tensor * shexp_idx   = inp->shexp_idx;
+ 
++    request_input(tau,         "inkling.tau");
++    request_input(rel_idx,     "inkling.relative_indices");
++    request_input(rel_idx_swa, "inkling.swa.relative_indices");
++    request_input(vocab_mask,  "inkling.vocab_mask");
++    request_input(shexp_idx,   "inkling.shared_expert_indices");
++
+     res->add_input(std::move(inp));
+ 
+     auto * inp_hybrid = build_inp_mem_hybrid_iswa();
+-- 
+2.54.0 (Apple Git-157)
+

@@ -752,7 +752,7 @@ fn rwkv7_boundary_accounts_for_v_first_sideband() {
 }
 
 #[test]
-fn gemma4_e4b_rejects_known_bad_shared_kv_boundaries() {
+fn gemma4_e4b_rejects_shared_kv_consumer_boundaries() {
     let request = TopologyPlanRequest {
         topology_id: "gemma-invalid".to_string(),
         model_id: "gemma4-e4b".to_string(),
@@ -803,7 +803,7 @@ fn balanced_planner_avoids_rejected_gemma4_boundaries() {
             .iter()
             .map(|boundary| boundary.layer_boundary)
             .collect::<Vec<_>>(),
-        vec![13, 27]
+        vec![13, 21]
     );
     assert!(
         three_stage
@@ -874,7 +874,7 @@ fn gemma3n_requires_altup_sideband_and_reviewed_kv_boundary() {
             .contains(&PlanReasonCode::ActivationSidebandRequired)
     }));
 
-    let reviewed_plan = plan_contiguous_with_splits(&request, &[10, 15]).expect("reviewed plan");
+    let reviewed_plan = plan_contiguous_with_splits(&request, &[10, 18]).expect("reviewed plan");
     assert_eq!(
         reviewed_plan
             .boundaries
@@ -883,7 +883,7 @@ fn gemma3n_requires_altup_sideband_and_reviewed_kv_boundary() {
             .collect::<Vec<_>>(),
         vec![
             (10, BoundaryDecision::Accepted),
-            (15, BoundaryDecision::Accepted)
+            (18, BoundaryDecision::Accepted)
         ]
     );
 }

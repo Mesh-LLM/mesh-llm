@@ -25,6 +25,7 @@ use crate::{
 };
 
 use super::native_mtp::emit_report;
+use super::native_mtp::normalize_runtime_layer_end;
 use super::stage_execution::{
     BinaryStateHandoffConfig, PackageStageSpec, StageModelResolution, configure_child_logs,
     elapsed_ms, ensure_matches, mean_pair_sum, protocol_flash_attn, protocol_load_mode,
@@ -169,6 +170,8 @@ impl LocalStatePayload {
     }
 }
 pub fn state_handoff(args: StateHandoffArgs) -> Result<()> {
+    let mut args = args;
+    normalize_runtime_layer_end(&mut args.runtime)?;
     let report_out = args.output.report_out;
     let model_identity = runtime_model_identity(&args.runtime)?;
     let state_layer_end = args.state_layer_end.unwrap_or(args.runtime.layer_end);
