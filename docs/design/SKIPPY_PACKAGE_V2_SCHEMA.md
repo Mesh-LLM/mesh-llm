@@ -209,8 +209,10 @@ When all higher layers omit limits, total output is capped at the lesser of
 lesser of 4,096 tokens and half the effective output cap. Semantic reasoning
 levels map to 1,024 (`low`), 4,096 (`medium`), and 8,192 (`high`), then clamp to
 half the output cap. Numeric values are explicit and may exceed those
-interactive fallbacks. Zero closes reasoning immediately; `unrestricted`
-disables the reasoning-only cap while retaining the total-output limit.
+interactive fallbacks. `auto` selects the Mesh fallback, so enabled reasoning
+resolves to the lesser of 4,096 tokens and half the effective output cap. Zero
+closes reasoning immediately; `unrestricted` disables the reasoning-only cap
+while retaining the total-output limit.
 
 The resolved numeric budget travels through the public Skippy sampling ABI.
 When the chat parser recognizes thinking start and end markers, llama.cpp forces
