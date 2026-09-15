@@ -205,7 +205,7 @@ fn encode_f32_values(
     shape: ActivationShape,
     payload: &[u8],
 ) -> io::Result<Vec<u8>> {
-    if payload.len() % 4 != 0 {
+    if !payload.len().is_multiple_of(4) {
         return Err(invalid_data("F32 activation payload size mismatch"));
     }
     let values = payload
@@ -271,7 +271,7 @@ fn validate_glm_dsa_top_k_sideband_bytes(
     let bytes_per_column = (token_count as usize)
         .checked_mul(std::mem::size_of::<i32>())
         .ok_or_else(|| invalid_data("GLM-DSA top-k sideband byte count overflow"))?;
-    if sideband_bytes == 0 || sideband_bytes % bytes_per_column != 0 {
+    if sideband_bytes == 0 || !sideband_bytes.is_multiple_of(bytes_per_column) {
         return Err(invalid_data(
             "GLM-DSA top-k sideband is not token-major i32",
         ));
