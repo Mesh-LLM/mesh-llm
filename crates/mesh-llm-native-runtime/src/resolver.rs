@@ -385,6 +385,18 @@ pub fn select_native_runtime_from_artifacts(
     best_candidate(&evaluated).cloned()
 }
 
+/// Evaluates one native-runtime artifact against the host and requested
+/// startup selection using the same compatibility rules as catalog selection.
+pub fn evaluate_native_runtime_artifact(
+    artifact: &NativeRuntimeArtifact,
+    profile: &HostRuntimeProfile,
+    mesh_version: &str,
+    skippy_abi: Option<&str>,
+    selection: &RuntimeSelection,
+) -> CandidateEvaluation {
+    evaluate_artifact(artifact, profile, mesh_version, skippy_abi, selection)
+}
+
 /// Returns whether a locally installed artifact has the metadata required by
 /// automatic startup before the resolver attempts to load or execute it.
 /// Legacy catalog entries may omit this field, but that omission is not proof

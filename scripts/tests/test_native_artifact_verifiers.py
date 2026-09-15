@@ -742,7 +742,8 @@ class NativeArtifactVerifierTests(unittest.TestCase):
             "if flag == '-V':\n"
             "    print('Version needs section \\'.gnu.version_r\\' contains 1 entry:')\n"
             "    print('  000000: Name: libc.so.6  Flags: none  Version: 2')\n"
-            "    print(f'  0x0010:   Name: GLIBC_{version}  Flags: none  Version: 2')\n"
+            "    version_name = version if version.startswith('GLIBC_') else f'GLIBC_{version}'\n"
+            "    print(f'  0x0010:   Name: {version_name}  Flags: none  Version: 2')\n"
             "else:\n"
             "    print(' 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]')\n"
             "    print(' 0x000000000000001d (RUNPATH)            Library runpath: [$ORIGIN]')\n",
@@ -862,6 +863,22 @@ class NativeArtifactVerifierTests(unittest.TestCase):
             output = result.stdout + result.stderr
             self.assertNotEqual(result.returncode, 0, output)
             self.assertIn("does not match packaged ELF requirement", output)
+
+    def test_runtime_accepts_dt_relr_as_a_glibc_2_36_requirement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stub_bin = self.stub_readelf(root)
+            artifact = self.write_linux_runtime_artifact(
+                root,
+                library_glibc="2.35",
+                tool_glibc="GLIBC_ABI_DT_RELR",
+                min_glibc="2.36",
+            )
+
+            result = self.run_verifier_with_stub_readelf(artifact, stub_bin)
+
+            output = result.stdout + result.stderr
+            self.assertEqual(result.returncode, 0, output)
 
 
 if __name__ == "__main__":
