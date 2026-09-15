@@ -42,9 +42,9 @@ chain alone makes the hot path six hops, or about 60 ms before compute.
 
 ## Generation 7 Direct Prediction Return and Verify Retirement
 
-Generation 7 introduced direct prediction return. Generation 9 is the current
+Generation 7 introduced direct prediction return. Generation 10 is the current
 compatibility-breaking cutover: a peer is stage compatible only when it
-advertises both `skippy-stage/2` and the complete `stage-generation-9` bundle.
+advertises both `skippy-stage/2` and the complete `stage-generation-10` bundle.
 Every load carries a canonical admission descriptor. The ready response echoes
 that descriptor exactly before topology publication.
 Prediction-bearing messages return directly from the final/readout stage to the

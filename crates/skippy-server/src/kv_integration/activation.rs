@@ -1,6 +1,6 @@
 use skippy_cache::activation_page_id;
 use skippy_protocol::{MessageBase, StageConfig};
-use skippy_runtime::{ActivationFrame, RuntimeActivationLayout};
+use skippy_runtime::{ActivationFrame, ActivationPartDesc};
 
 use super::{KvStageIntegration, ResidentActivationRecord, ResidentActivationRestore};
 
@@ -110,23 +110,46 @@ fn activation_prefix_frame(
     if candidate_token_count == frame_token_count {
         return Some(frame.clone());
     }
-    if candidate_token_count == 0
-        || candidate_token_count > frame_token_count
-        || frame.desc.layout != RuntimeActivationLayout::TokenMajor
-        || frame.desc.flags != 0
-        || !frame.payload.len().is_multiple_of(frame_token_count)
-    {
+    if candidate_token_count == 0 || candidate_token_count > frame_token_count {
         return None;
     }
-    let payload_bytes = frame
-        .payload
-        .len()
-        .checked_div(frame_token_count)?
-        .checked_mul(candidate_token_count)?;
+    let mut payload = Vec::new();
+    let mut parts = [ActivationPartDesc::default(); skippy_runtime::ACTIVATION_MAX_PARTS];
+    for (part_index, source) in frame.desc.parts().ok()?.iter().enumerate() {
+        let rank = usize::try_from(source.rank).ok()?;
+        let token_axis = usize::try_from(source.token_axis).ok()?;
+        if rank == 0 || rank > source.dimensions.len() || token_axis >= rank {
+            return None;
+        }
+        let inner_bytes = usize::try_from(source.byte_strides[token_axis]).ok()?;
+        let plane_bytes = inner_bytes.checked_mul(frame_token_count)?;
+        let source_bytes = usize::try_from(source.payload_bytes).ok()?;
+        if plane_bytes == 0 || !source_bytes.is_multiple_of(plane_bytes) {
+            return None;
+        }
+        let output_offset = payload.len();
+        let prefix_bytes = inner_bytes.checked_mul(candidate_token_count)?;
+        let source_offset = usize::try_from(source.payload_offset).ok()?;
+        for outer_index in 0..source_bytes / plane_bytes {
+            let start = source_offset.checked_add(outer_index.checked_mul(plane_bytes)?)?;
+            let end = start.checked_add(prefix_bytes)?;
+            payload.extend_from_slice(frame.payload.get(start..end)?);
+        }
+        let mut output = *source;
+        output.dimensions[token_axis] = i64::try_from(candidate_token_count).ok()?;
+        for axis in token_axis + 1..rank {
+            output.byte_strides[axis] = output.byte_strides[axis - 1]
+                .checked_mul(u64::try_from(output.dimensions[axis - 1]).ok()?)?;
+        }
+        output.payload_offset = u64::try_from(output_offset).ok()?;
+        output.payload_bytes = u64::try_from(payload.len() - output_offset).ok()?;
+        parts[part_index] = output;
+    }
     let mut prefix = frame.clone();
     prefix.desc.token_count = u32::try_from(candidate_token_count).ok()?;
-    prefix.desc.payload_bytes = payload_bytes as u64;
-    prefix.payload.truncate(payload_bytes);
+    prefix.desc.payload_bytes = u64::try_from(payload.len()).ok()?;
+    prefix.desc.parts = parts;
+    prefix.payload = payload;
     Some(prefix)
 }
 
@@ -137,7 +160,8 @@ mod tests {
         StageKvCachePayload,
     };
     use skippy_runtime::{
-        ActivationDesc, ActivationFrame, RuntimeActivationDType, RuntimeActivationLayout,
+        ACTIVATION_FRAME_VERSION, ACTIVATION_IDENTITY_BYTES, ACTIVATION_MAX_PARTS, ActivationDesc,
+        ActivationFrame, ActivationPartDesc, GGML_TYPE_F32,
     };
 
     use super::*;
@@ -219,18 +243,30 @@ mod tests {
     }
 
     fn activation_frame(token_count: u32, payload_bytes: usize) -> ActivationFrame {
+        let row_bytes = payload_bytes / token_count as usize;
+        let mut parts = [ActivationPartDesc::default(); ACTIVATION_MAX_PARTS];
+        parts[0] = ActivationPartDesc {
+            identity: [1; ACTIVATION_IDENTITY_BYTES],
+            ggml_type: GGML_TYPE_F32,
+            rank: 2,
+            token_axis: 1,
+            dimensions: [(row_bytes / 4) as i64, i64::from(token_count), 0, 0],
+            byte_strides: [4, row_bytes as u64, 0, 0],
+            payload_bytes: payload_bytes as u64,
+            ..ActivationPartDesc::default()
+        };
         ActivationFrame {
             desc: ActivationDesc {
-                version: 1,
-                dtype: RuntimeActivationDType::F32,
-                layout: RuntimeActivationLayout::TokenMajor,
+                version: ACTIVATION_FRAME_VERSION,
                 producer_stage_index: 0,
                 layer_start: 0,
                 layer_end: 4,
                 token_count,
                 sequence_count: 1,
+                part_count: 1,
                 payload_bytes: payload_bytes as u64,
-                flags: 0,
+                frontier_identity: [9; ACTIVATION_IDENTITY_BYTES],
+                parts,
             },
             payload: vec![7; payload_bytes],
         }
@@ -365,19 +401,37 @@ mod tests {
     }
 
     #[test]
-    fn resident_activation_does_not_alias_flagged_frame_to_shorter_identity() {
+    fn resident_activation_slices_every_multipart_plane() {
         let config = test_config();
         let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
             .unwrap()
             .expect("resident cache enabled");
         let tokens = (0..300).collect::<Vec<_>>();
-        let mut frame = activation_frame(tokens.len() as u32, 600);
-        frame.desc.flags = 1;
+        let frame = crate::test_activation::frame(
+            tokens.len() as u32,
+            vec![
+                crate::test_activation::PartBytes {
+                    identity: 1,
+                    ggml_type: GGML_TYPE_F32,
+                    flags: 0,
+                    bytes: vec![1; tokens.len() * 4],
+                },
+                crate::test_activation::PartBytes {
+                    identity: 2,
+                    ggml_type: GGML_TYPE_F32,
+                    flags: 0,
+                    bytes: vec![2; tokens.len() * 8],
+                },
+            ],
+        );
 
         let records =
             kv.record_resident_activation(&config, &test_base(), 0, &tokens, 4096, &frame);
 
-        assert_eq!(records.len(), 1);
+        assert_eq!(records.len(), 2);
         assert_eq!(records[0].token_count, tokens.len());
+        assert_eq!(records[0].payload_bytes, tokens.len() * 12);
+        assert_eq!(records[1].token_count, 256);
+        assert_eq!(records[1].payload_bytes, 256 * 12);
     }
 }

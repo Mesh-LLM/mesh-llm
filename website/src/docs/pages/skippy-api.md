@@ -202,7 +202,7 @@ Capability consumers can include a narrower header:
 | Header | Used for |
 |---|---|
 | `include/skippy.h` | Umbrella include for the capability-oriented Skippy C API. Include a narrower header when a consumer only needs one capability. This file exists for consumers that want the complete staged-runtime surface. |
-| `include/skippy/activation.h` | Describes activation-frame payloads exchanged between stages. The descriptor carries the payload representation, layer range, token and sequence shape, and model-family sideband flags needed by downstream stages. |
+| `include/skippy/activation.h` | Describes activation-frame payloads exchanged between stages. The descriptor carries a typed directory for every tensor crossing a stage frontier. Parts are matched by planner identity rather than model family. |
 | `include/skippy/common.h` | ABI versioning, feature discovery, status codes, and errors. Every other public Skippy header depends on this capability boundary. The ABI is intentionally C-compatible so Rust and other native callers do not depend on private llama.cpp C++ layouts. |
 | `include/skippy/devices.h` | Enumerates backend devices available to the staged runtime. |
 | `include/skippy/events.h` | Versioned callbacks for model-open and runtime lifecycle progress. Event reporters are optional and operation-scoped. A reporter must remain valid until the corresponding model-open call returns. |
@@ -1673,8 +1673,8 @@ SKIPPY_COMMON_API enum skippy_status skippy_parse_chat_response_json(
 
 The headers also define the following enums, structs, opaque handles, and ABI constants:
 
-- `activation.h`: `skippy_activation_dtype`, `skippy_activation_layout`, `skippy_activation_boundary_desc`, `skippy_activation_desc`, `SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION = 1`, `SKIPPY_ACTIVATION_SIDEBAND_TOKEN_IDS = (UINT64_C(1) << 0)`, `SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST = (UINT64_C(1) << 0)`, `SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP = (UINT64_C(1) << 1)`, `SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD = (UINT64_C(1) << 2)`, `SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K = (UINT64_C(1) << 3)`, `SKIPPY_ACTIVATION_FLAG_KIMI_K3_RESIDUAL = (UINT64_C(1) << 4)`
-- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 54`, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER = ((uint64_t)1 << 31)`, `SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 = ((uint64_t)1 << 32)`, `SKIPPY_FEATURE_KV_EVENTS = ((uint64_t)1 << 33)`, `SKIPPY_FEATURE_DEVICE_EVENTS = ((uint64_t)1 << 34)`, `SKIPPY_FEATURE_DIAGNOSTIC_EVENTS = ((uint64_t)1 << 35)`, `SKIPPY_FEATURE_UNLOAD_EVENTS = ((uint64_t)1 << 36)`
+- `activation.h`: `skippy_activation_part_desc`, `skippy_activation_boundary_desc`, `skippy_activation_desc`, `SKIPPY_ACTIVATION_FRAME_VERSION = 2`, `SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION = 2`, `SKIPPY_ACTIVATION_IDENTITY_BYTES = 32`, `SKIPPY_ACTIVATION_MAX_DIMS = 4`, `SKIPPY_ACTIVATION_MAX_PARTS = 16`, `SKIPPY_ACTIVATION_PART_OPTIONAL = (UINT32_C(1) << 0)`
+- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 56`, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER = ((uint64_t)1 << 31)`, `SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 = ((uint64_t)1 << 32)`, `SKIPPY_FEATURE_KV_EVENTS = ((uint64_t)1 << 33)`, `SKIPPY_FEATURE_DEVICE_EVENTS = ((uint64_t)1 << 34)`, `SKIPPY_FEATURE_DIAGNOSTIC_EVENTS = ((uint64_t)1 << 35)`, `SKIPPY_FEATURE_UNLOAD_EVENTS = ((uint64_t)1 << 36)`
 - `devices.h`: `skippy_backend_device_type`, `skippy_backend_device_cap`, `skippy_backend_device`
 - `events.h`: `skippy_runtime_event_v1`, `skippy_runtime_event_reporter_v1`, `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION = 1`
 - `execution.h`: `skippy_iteration_request`

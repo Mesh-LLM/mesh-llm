@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/kimi-k3.cpp b/src/models/kimi-k3.cpp
-index 17ff450ee32900bfd771da63b33c11a007b5d0fe..e93af58ae84fed45643b81ce6041037de56207d3 100644
+index 17ff450ee32900bfd771da63b33c11a007b5d0fe..f144218d79f56ec9c5db89a295f57ec76b2802e4 100644
 --- a/src/models/kimi-k3.cpp
 +++ b/src/models/kimi-k3.cpp
 @@ -239,7 +239,12 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
@@ -35,7 +35,7 @@ index 17ff450ee32900bfd771da63b33c11a007b5d0fe..e93af58ae84fed45643b81ce6041037d
  
      const int64_t n_head_kda = hparams.n_head();
      const int64_t head_dim   = hparams.n_embd_head_kda;
-@@ -274,7 +279,19 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
+@@ -274,7 +279,20 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
      const bool     use_attn_res  = res_bs > 0;
      const int64_t  n_embd_latent = hparams.n_expert_latent > 0 ? hparams.n_expert_latent : n_embd;
  
@@ -47,6 +47,7 @@ index 17ff450ee32900bfd771da63b33c11a007b5d0fe..e93af58ae84fed45643b81ce6041037d
 +        ggml_set_input(residual_input->values);
 +        ggml_set_name(residual_input->values, "kimi_k3_residual_input");
 +        resi_stack = residual_input->values;
++        res->add_skippy_activation_import(resi_stack, 2);
 +        res->add_input(std::move(residual_input));
 +    }
 +
@@ -56,7 +57,7 @@ index 17ff450ee32900bfd771da63b33c11a007b5d0fe..e93af58ae84fed45643b81ce6041037d
          const auto & layer = model.layers[il];
  
          // the residual stream, banked on checkpoint layers and then restarted
-@@ -327,8 +344,18 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
+@@ -327,8 +345,18 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
          cb(prefix_sum, "l_out", il);
  
          inpL = prefix_sum;
@@ -66,7 +67,7 @@ index 17ff450ee32900bfd771da63b33c11a007b5d0fe..e93af58ae84fed45643b81ce6041037d
 +        cb(inpL, "stage_boundary", il_end - 1);
 +        res->t_embd = inpL;
 +        GGML_ASSERT(!use_attn_res || resi_stack != nullptr);
-+        res->t_skippy_kimi_k3_residual = resi_stack;
++        res->add_skippy_activation_export(resi_stack, 2);
 +        ggml_build_forward_expand(gf, inpL);
 +        return;
      }

@@ -4,9 +4,8 @@ use anyhow::{Context, Result, bail};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use skippy_protocol::binary::{
-    StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
-    activation_state_flags_from_frame_flags, read_stage_message, recv_reply, state_flags,
-    write_stage_message,
+    StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind, read_stage_message,
+    recv_reply, state_flags, write_stage_message,
 };
 use skippy_runtime::{
     ActivationFrame, GGML_TYPE_F16, MtpSource, RuntimeConfig, RuntimeKvPageDesc, StageModel,
@@ -704,6 +703,10 @@ fn run_local_state_handoff(
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: should_filter_state_handoff_tensors(args),
         resident_tensor_names,
+        activation_import_identities: Vec::new(),
+        activation_import_bindings: Vec::new(),
+        activation_export_identities: Vec::new(),
+        activation_export_bindings: Vec::new(),
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
@@ -977,15 +980,16 @@ fn run_local_resident_slot_handoff(
                 ActivationFrame {
                     desc: skippy_runtime::ActivationDesc {
                         version: 0,
-                        dtype: skippy_runtime::RuntimeActivationDType::Unknown,
-                        layout: skippy_runtime::RuntimeActivationLayout::Opaque,
                         producer_stage_index: args.state_stage_index as i32,
                         layer_start: args.state_layer_start as i32,
                         layer_end: args.state_layer_end as i32,
                         token_count: 0,
                         sequence_count: 0,
+                        part_count: 0,
                         payload_bytes: 0,
-                        flags: 0,
+                        frontier_identity: [0; skippy_runtime::ACTIVATION_IDENTITY_BYTES],
+                        parts: [skippy_runtime::ActivationPartDesc::default();
+                            skippy_runtime::ACTIVATION_MAX_PARTS],
                     },
                     payload: Vec::new(),
                 },
@@ -1017,15 +1021,16 @@ fn run_local_resident_slot_handoff(
                 ActivationFrame {
                     desc: skippy_runtime::ActivationDesc {
                         version: 0,
-                        dtype: skippy_runtime::RuntimeActivationDType::Unknown,
-                        layout: skippy_runtime::RuntimeActivationLayout::Opaque,
                         producer_stage_index: args.state_stage_index as i32,
                         layer_start: args.state_layer_start as i32,
                         layer_end: args.state_layer_end as i32,
                         token_count: 0,
                         sequence_count: 0,
+                        part_count: 0,
                         payload_bytes: 0,
-                        flags: 0,
+                        frontier_identity: [0; skippy_runtime::ACTIVATION_IDENTITY_BYTES],
+                        parts: [skippy_runtime::ActivationPartDesc::default();
+                            skippy_runtime::ACTIVATION_MAX_PARTS],
                     },
                     payload: Vec::new(),
                 },
@@ -1478,6 +1483,10 @@ fn build_state_handoff_inputs(
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
         resident_tensor_names,
+        activation_import_identities: Vec::new(),
+        activation_import_bindings: Vec::new(),
+        activation_export_identities: Vec::new(),
+        activation_export_bindings: Vec::new(),
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
@@ -1528,18 +1537,33 @@ fn synthetic_activation_frame(
             payload.extend_from_slice(&value.to_le_bytes());
         }
     }
+    let payload_bytes = payload.len() as u64;
+    let row_bytes = u64::try_from(width).unwrap_or(u64::MAX) * 4;
+    let mut parts =
+        [skippy_runtime::ActivationPartDesc::default(); skippy_runtime::ACTIVATION_MAX_PARTS];
+    parts[0] = skippy_runtime::ActivationPartDesc {
+        identity: [0x22; skippy_runtime::ACTIVATION_IDENTITY_BYTES],
+        ggml_type: skippy_runtime::GGML_TYPE_F32,
+        rank: 2,
+        token_axis: 1,
+        flags: 0,
+        dimensions: [width as i64, i64::from(token_count), 1, 1],
+        byte_strides: [4, row_bytes, payload_bytes, payload_bytes],
+        payload_offset: 0,
+        payload_bytes,
+    };
     ActivationFrame {
         desc: skippy_runtime::ActivationDesc {
-            version: 1,
-            dtype: skippy_runtime::RuntimeActivationDType::F32,
-            layout: skippy_runtime::RuntimeActivationLayout::TokenMajor,
+            version: skippy_runtime::ACTIVATION_FRAME_VERSION,
             producer_stage_index: args.state_stage_index.saturating_sub(1) as i32,
             layer_start: 0,
             layer_end: args.state_layer_start as i32,
             token_count,
             sequence_count: if token_count > 0 { 1 } else { 0 },
-            payload_bytes: payload.len() as u64,
-            flags: 0,
+            part_count: 1,
+            payload_bytes,
+            frontier_identity: [0x11; skippy_runtime::ACTIVATION_IDENTITY_BYTES],
+            parts,
         },
         payload,
     }
@@ -1561,7 +1585,6 @@ fn send_prefill_for_state_handoff(
     state.source_stage_index = input
         .map(|frame| frame.desc.producer_stage_index)
         .unwrap_or(-1);
-    state.flags |= activation_state_flags_optional(input);
     let activation =
         encode_handoff_activation(state.activation_codec, input, token_count, activation_width)?;
     let message = StageWireMessage {
@@ -1667,7 +1690,6 @@ fn decode_for_state_handoff(
     state.source_stage_index = input
         .map(|frame| frame.desc.producer_stage_index)
         .unwrap_or(-1);
-    state.flags |= activation_state_flags_optional(input);
     let activation = encode_handoff_activation(state.activation_codec, input, 1, activation_width)?;
     let message = StageWireMessage {
         kind: WireMessageKind::DecodeEmbd,
@@ -1700,20 +1722,7 @@ fn encode_handoff_activation(
     let Some(input) = input else {
         return Ok(Vec::new());
     };
-    skippy_protocol::binary::encode_activation_payload_with_state_flags(
-        codec,
-        token_count,
-        activation_width,
-        &input.payload,
-        activation_state_flags(input),
-    )
-    .context("failed to encode state handoff input activation")
-}
-
-fn activation_state_flags(frame: &ActivationFrame) -> i32 {
-    activation_state_flags_from_frame_flags(frame.desc.flags)
-}
-
-fn activation_state_flags_optional(frame: Option<&ActivationFrame>) -> i32 {
-    frame.map(activation_state_flags).unwrap_or(0)
+    let _ = (token_count, activation_width);
+    crate::support::encode_runtime_activation(codec, input)
+        .context("failed to encode state handoff input activation")
 }

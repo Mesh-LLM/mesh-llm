@@ -1581,7 +1581,7 @@ public:
             expression_indent +
             "    ggml_tensor * values = stage_inp->values;\n" +
             expression_indent +
-            "    res->t_skippy_activation_input = values;\n" +
+            "    res->add_skippy_activation_import(values, 1);\n" +
             expression_indent + "    res->add_input(std::move(stage_inp));\n" +
             expression_indent + "    return values;\n" + expression_indent +
             "}\n" + expression_indent + "return " + original_embedding + ";\n" +
@@ -1648,8 +1648,8 @@ public:
             "    cb(stage_inp->values, \"hc_stage_input\", -1);\n" +
             repeat_indent + "    ggml_set_input(stage_inp->values);\n" +
             repeat_indent + "    " + *carried + " = stage_inp->values;\n" +
-            repeat_indent + "    res->t_skippy_activation_input = " + *carried +
-            ";\n" + repeat_indent +
+            repeat_indent + "    res->add_skippy_activation_import(" + *carried +
+            ", 2);\n" + repeat_indent +
             "    res->add_input(std::move(stage_inp));\n" + repeat_indent +
             "}\n" + repeat_indent;
         if (hyperconnection->repeat_is_initializer) {
@@ -1883,17 +1883,6 @@ public:
                           output_statement->getBeginLoc(), input, sm);
           }
         }
-        const std::string export_indent =
-            indentationAt(rwkv_first->next_statement->getBeginLoc(), sm);
-        const std::string output =
-            "if (stage_filtered && !stage_filter.include_output && "
-            "il_start == 0 && " +
-            report.proof.loop_var + " == 0) {\n" + export_indent +
-            "    res->t_skippy_rwkv7_v_first = " + rwkv_first->variable +
-            ";\n" + export_indent + "}\n\n" + export_indent;
-        valid &=
-            addInsert(report.edits, "insert_rwkv_first_output", report.file,
-                      rwkv_first->next_statement->getBeginLoc(), output, sm);
       }
 
       std::string family_sideband_input;
@@ -1915,6 +1904,7 @@ public:
             "    ggml_set_name(residual_input->values, "
             "\"kimi_k3_residual_input\");\n" +
             indent + "    resi_stack = residual_input->values;\n" +
+            indent + "    res->add_skippy_activation_import(resi_stack, 2);\n" +
             indent + "    res->add_input(std::move(residual_input));\n" +
             indent + "}\n\n" + indent;
       }
@@ -1946,6 +1936,7 @@ public:
             "    ggml_set_name(sideband->values, "
             "\"glm_dsa_top_k_input\");\n" +
             indent + "    prev_top_k = sideband->values;\n" +
+            indent + "    res->add_skippy_activation_import(prev_top_k, 1);\n" +
             indent + "    res->add_input(std::move(sideband));\n" +
             indent + "}\n\n" + indent;
       }
@@ -2129,11 +2120,16 @@ public:
       const SourceLocation after_loop =
           clang::Lexer::getLocForEndOfToken(loop->getEndLoc(), 0, sm, lang);
       std::string family_boundary_export;
+      if (rwkv_first) {
+        family_boundary_export +=
+            "    res->add_skippy_activation_export(" + rwkv_first->variable +
+            ", 1);\n" + indent;
+      }
       if (kimi_k3_residual_sideband) {
         family_boundary_export +=
             "    GGML_ASSERT(!use_attn_res || resi_stack != nullptr);\n" +
             indent +
-            "    res->t_skippy_kimi_k3_residual = resi_stack;\n" + indent;
+            "    res->add_skippy_activation_export(resi_stack, 2);\n" + indent;
       }
       if (glm_dsa_top_k_sideband) {
         family_boundary_export +=
@@ -2143,7 +2139,7 @@ public:
             "        GGML_ASSERT(prev_top_k != nullptr && \"GLM-DSA "
             "consumer group boundary requires top-k sideband\");\n" +
             indent +
-            "        res->t_skippy_glm_dsa_top_k = prev_top_k;\n" +
+            "        res->add_skippy_activation_export(prev_top_k, 1);\n" +
             indent + "    }\n" + indent;
       }
       const std::string boundary =
@@ -2159,10 +2155,7 @@ public:
                     "il_end - "
                     "1);\n" +
                     indent +
-                    "    res->t_skippy_gemma3n_altup = stage_boundary;\n" +
-                    indent +
-                    "    res->t_skippy_activation_output = "
-                    "stage_boundary;\n" +
+                    "    res->add_skippy_activation_export(stage_boundary, 1);\n" +
                     indent +
                     "    res->t_embd = " + altup->slice_helper +
                     "(ctx0, stage_boundary, i_altup_act);\n" +
@@ -2175,8 +2168,8 @@ public:
                     indent + "    cb(" + *carried +
                     ", \"stage_boundary\", il_end - 1);\n" + indent +
                     (hyperconnection
-                         ? "    res->t_skippy_activation_output = " + *carried +
-                               ";\n" + indent
+                         ? "    res->add_skippy_activation_export(" + *carried +
+                               ", 2);\n" + indent
                          : "") +
                     "    res->t_embd = " + *carried + ";\n" + indent +
                     family_boundary_export +

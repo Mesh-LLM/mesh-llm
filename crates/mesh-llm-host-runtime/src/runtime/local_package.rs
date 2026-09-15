@@ -153,7 +153,7 @@ pub(super) async fn resolve_split_runtime_package(
         }
         anyhow::ensure!(
             model_path.is_file(),
-            "generation-9 split source must be a package-v2 directory or direct GGUF file: {}",
+            "generation-10 split source must be a package-v2 directory or direct GGUF file: {}",
             model_path.display()
         );
         if local_source_required {

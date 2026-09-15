@@ -4,9 +4,10 @@ use crate::StageActivationCodec;
 
 use super::invalid_data;
 
-// v15 adds an explicit activation codec and encoded byte count to every stage frame. Stage peers
-// must be upgraded together so older readers reject compact payloads before decoding them as F32.
-pub const STAGE_STATE_VERSION: i32 = 15;
+// v16 replaces family-specific activation state bits with a typed multipart frontier frame.
+// Stage peers must be upgraded together because the activation payload now starts with its
+// descriptor directory rather than an implicit F32 tensor.
+pub const STAGE_STATE_VERSION: i32 = 16;
 pub const MAX_STAGE_LOGIT_BIAS: usize = 256;
 pub const MAX_STAGE_SAMPLERS: usize = 16;
 pub const MAX_STAGE_DRY_SEQUENCE_BREAKERS: usize = 8;
@@ -17,6 +18,11 @@ pub const MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_STAGE_STATE_IMPORT_BYTES: usize = 512 * 1024 * 1024;
 pub const MAX_STAGE_ACTIVATION_BYTES: usize = 512 * 1024 * 1024;
 pub const MAX_STAGE_DECODED_ACTIVATION_BYTES: usize = 512 * 1024 * 1024;
+pub const STAGE_ACTIVATION_FRAME_VERSION: u32 = 2;
+pub const STAGE_ACTIVATION_IDENTITY_BYTES: usize = 32;
+pub const MAX_STAGE_ACTIVATION_DIMS: usize = 4;
+pub const MAX_STAGE_ACTIVATION_PARTS: usize = 16;
+pub const STAGE_ACTIVATION_PART_OPTIONAL: u32 = 1 << 0;
 pub const READY_MAGIC: i32 = 0x5352_4459; // "SRDY"
 pub const LLAMA_TOKEN_NULL: i32 = -1;
 pub const STAGE_STATE_HEADER_BYTES: usize = 10 * 4;
@@ -168,57 +174,44 @@ pub mod state_flags {
     pub const SAMPLING: i32 = 1 << 3;
     pub const FULL_STATE: i32 = 1 << 4;
     pub const CHAT_SAMPLING_METADATA: i32 = 1 << 5;
-    pub const RWKV7_V_FIRST_SIDEBAND: i32 = 1 << 6;
-    pub const GEMMA3N_ALTUP_SIDEBAND: i32 = 1 << 7;
-    pub const INKLING_MTP_EMBD_SIDEBAND: i32 = 1 << 8;
-    pub const KIMI_K3_RESIDUAL_SIDEBAND: i32 = 1 << 9;
-    pub const GLM_DSA_TOP_K_SIDEBAND: i32 = 1 << 10;
 }
 
-pub const ACTIVATION_FLAG_RWKV7_V_FIRST: u64 = 1 << 0;
-pub const ACTIVATION_FLAG_GEMMA3N_ALTUP: u64 = 1 << 1;
-pub const ACTIVATION_FLAG_INKLING_MTP_EMBD: u64 = 1 << 2;
-pub const ACTIVATION_FLAG_GLM_DSA_TOP_K: u64 = 1 << 3;
-pub const ACTIVATION_FLAG_KIMI_K3_RESIDUAL: u64 = 1 << 4;
-
-pub fn activation_frame_flags_from_state_flags(flags: i32) -> u64 {
-    let mut frame_flags = 0;
-    if (flags & state_flags::RWKV7_V_FIRST_SIDEBAND) != 0 {
-        frame_flags |= ACTIVATION_FLAG_RWKV7_V_FIRST;
-    }
-    if (flags & state_flags::GEMMA3N_ALTUP_SIDEBAND) != 0 {
-        frame_flags |= ACTIVATION_FLAG_GEMMA3N_ALTUP;
-    }
-    if (flags & state_flags::INKLING_MTP_EMBD_SIDEBAND) != 0 {
-        frame_flags |= ACTIVATION_FLAG_INKLING_MTP_EMBD;
-    }
-    if (flags & state_flags::KIMI_K3_RESIDUAL_SIDEBAND) != 0 {
-        frame_flags |= ACTIVATION_FLAG_KIMI_K3_RESIDUAL;
-    }
-    if (flags & state_flags::GLM_DSA_TOP_K_SIDEBAND) != 0 {
-        frame_flags |= ACTIVATION_FLAG_GLM_DSA_TOP_K;
-    }
-    frame_flags
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StageActivationPartDesc {
+    pub identity: [u8; STAGE_ACTIVATION_IDENTITY_BYTES],
+    pub ggml_type: u32,
+    pub rank: u32,
+    pub token_axis: i32,
+    pub flags: u32,
+    pub dimensions: [i64; MAX_STAGE_ACTIVATION_DIMS],
+    pub byte_strides: [u64; MAX_STAGE_ACTIVATION_DIMS],
+    pub payload_offset: u64,
+    pub payload_bytes: u64,
 }
 
-pub fn activation_state_flags_from_frame_flags(flags: u64) -> i32 {
-    let mut state = 0;
-    if (flags & ACTIVATION_FLAG_RWKV7_V_FIRST) != 0 {
-        state |= state_flags::RWKV7_V_FIRST_SIDEBAND;
+impl StageActivationPartDesc {
+    pub fn is_optional(self) -> bool {
+        self.flags & STAGE_ACTIVATION_PART_OPTIONAL != 0
     }
-    if (flags & ACTIVATION_FLAG_GEMMA3N_ALTUP) != 0 {
-        state |= state_flags::GEMMA3N_ALTUP_SIDEBAND;
-    }
-    if (flags & ACTIVATION_FLAG_INKLING_MTP_EMBD) != 0 {
-        state |= state_flags::INKLING_MTP_EMBD_SIDEBAND;
-    }
-    if (flags & ACTIVATION_FLAG_KIMI_K3_RESIDUAL) != 0 {
-        state |= state_flags::KIMI_K3_RESIDUAL_SIDEBAND;
-    }
-    if (flags & ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0 {
-        state |= state_flags::GLM_DSA_TOP_K_SIDEBAND;
-    }
-    state
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StageActivationDesc {
+    pub version: u32,
+    pub producer_stage_index: i32,
+    pub layer_start: i32,
+    pub layer_end: i32,
+    pub token_count: u32,
+    pub sequence_count: u32,
+    pub payload_bytes: u64,
+    pub frontier_identity: [u8; STAGE_ACTIVATION_IDENTITY_BYTES],
+    pub parts: Vec<StageActivationPartDesc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StageActivationFrame {
+    pub desc: StageActivationDesc,
+    pub payload: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -564,28 +557,19 @@ impl StageWireMessage {
         }
     }
 
-    pub fn activation_f32_payload(&self) -> io::Result<Vec<u8>> {
+    pub fn activation_frame(&self) -> io::Result<Option<StageActivationFrame>> {
         if self.activation.is_empty() {
-            return Ok(Vec::new());
+            return Ok(None);
         }
-        if self.activation.len() > MAX_STAGE_DECODED_ACTIVATION_BYTES {
-            return Err(invalid_data(
-                "decoded activation payload byte count exceeds maximum",
-            ));
-        }
-        Ok(self.activation.clone())
+        super::decode_raw_activation_frame(&self.activation).map(Some)
     }
 
-    pub fn take_activation_f32_payload(&mut self) -> io::Result<Vec<u8>> {
+    pub fn take_activation_frame(&mut self) -> io::Result<Option<StageActivationFrame>> {
         if self.activation.is_empty() {
-            return Ok(Vec::new());
+            return Ok(None);
         }
-        if self.activation.len() > MAX_STAGE_DECODED_ACTIVATION_BYTES {
-            return Err(invalid_data(
-                "decoded activation payload byte count exceeds maximum",
-            ));
-        }
-        Ok(std::mem::take(&mut self.activation))
+        let encoded = std::mem::take(&mut self.activation);
+        super::decode_raw_activation_frame(&encoded).map(Some)
     }
 }
 

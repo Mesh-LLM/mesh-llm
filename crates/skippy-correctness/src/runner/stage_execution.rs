@@ -13,8 +13,8 @@ use model_ref::ModelRef;
 use serde::Deserialize;
 use serde_json::json;
 use skippy_protocol::binary::{
-    StageReply, StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
-    activation_state_flags_from_frame_flags, recv_reply, write_stage_message,
+    StageReply, StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind, recv_reply,
+    write_stage_message,
 };
 use skippy_runtime::{
     ActivationFrame, GGML_TYPE_F16, ModelInfo, MtpSource, RuntimeConfig, RuntimeLoadMode,
@@ -112,7 +112,6 @@ pub(in crate::runner) struct BinaryDecodeMessageArgs<'a> {
     pub(in crate::runner) decode_step: i32,
     pub(in crate::runner) source_stage_index: i32,
     pub(in crate::runner) boundary: &'a ActivationFrame,
-    pub(in crate::runner) activation_width: i32,
     pub(in crate::runner) request_id: u64,
     pub(in crate::runner) session_id: u64,
 }
@@ -125,15 +124,9 @@ pub(in crate::runner) fn binary_decode_message(
     state.decode_step = args.decode_step;
     state.current_token = args.token_id;
     state.source_stage_index = args.source_stage_index;
-    state.flags |= activation_state_flags(args.boundary);
-    let activation = skippy_protocol::binary::encode_activation_payload_with_state_flags(
-        state.activation_codec,
-        1,
-        args.activation_width,
-        &args.boundary.payload,
-        activation_state_flags(args.boundary),
-    )
-    .context("failed to encode boundary activation for wire")?;
+    let activation =
+        crate::support::encode_runtime_activation(state.activation_codec, args.boundary)
+            .context("failed to encode boundary activation for wire")?;
     Ok(StageWireMessage {
         kind: WireMessageKind::DecodeEmbd,
         pos_start: args.decode_step,
@@ -246,10 +239,6 @@ pub(in crate::runner) fn speedup(recompute_ms: f64, cache_ms: f64) -> f64 {
     }
     recompute_ms / cache_ms
 }
-pub(in crate::runner) fn activation_state_flags(frame: &ActivationFrame) -> i32 {
-    activation_state_flags_from_frame_flags(frame.desc.flags)
-}
-
 pub(in crate::runner) fn baseline_report(result: FullModelResult) -> BaselineReport {
     BaselineReport {
         token_id: result.token_id,
@@ -476,6 +465,10 @@ pub(in crate::runner) fn tokenizer_model_for_state_handoff(
             mtp_source: MtpSource::Disabled,
             filter_tensors_on_load,
             resident_tensor_names,
+            activation_import_identities: Vec::new(),
+            activation_import_bindings: Vec::new(),
+            activation_export_identities: Vec::new(),
+            activation_export_bindings: Vec::new(),
             checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
             checkpoint_imatrix: None,
             checkpoint_imatrix_sha256: None,

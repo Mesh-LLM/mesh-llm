@@ -656,6 +656,20 @@ fn stage_config(
         );
     }
     let resident_tensor_names = admitted_resident_tensor_names(load, package)?;
+    let frontier_profile = load
+        .admission
+        .profiles
+        .first()
+        .context("stage admission descriptor has no execution profiles")?;
+    anyhow::ensure!(
+        load.admission.profiles.iter().all(|profile| {
+            profile.activation_imports == frontier_profile.activation_imports
+                && profile.activation_exports == frontier_profile.activation_exports
+                && profile.activation_import_bindings == frontier_profile.activation_import_bindings
+                && profile.activation_export_bindings == frontier_profile.activation_export_bindings
+        }),
+        "stage admission execution profiles disagree on activation frontier identities"
+    );
     let mut config = StageConfig {
         run_id: load.run_id.clone(),
         topology_id: load.topology_id.clone(),
@@ -727,6 +741,10 @@ fn stage_config(
             LoadMode::RuntimeSlice | LoadMode::LayerPackage
         ),
         resident_tensor_names,
+        activation_import_identities: frontier_profile.activation_imports.clone(),
+        activation_import_bindings: frontier_profile.activation_import_bindings.clone(),
+        activation_export_identities: frontier_profile.activation_exports.clone(),
+        activation_export_bindings: frontier_profile.activation_export_bindings.clone(),
         checkpoint_quantization: None,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,

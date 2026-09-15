@@ -5,7 +5,7 @@ mod dynamic_library;
 // without compiling the crate to determine native-runtime compatibility.
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 54;
+pub const ABI_VERSION_PATCH: u32 = 56;
 
 mod abi;
 mod activation;
@@ -41,9 +41,9 @@ pub use abi::{
     TRISTATE_FALSE, TRISTATE_TRUE, TensorRole, runtime_abi_supported,
 };
 pub use activation::{
-    ACTIVATION_FLAG_GEMMA3N_ALTUP, ACTIVATION_FLAG_GLM_DSA_TOP_K, ACTIVATION_FLAG_INKLING_MTP_EMBD,
-    ACTIVATION_FLAG_KIMI_K3_RESIDUAL, ACTIVATION_SIDEBAND_TOKEN_IDS, ActivationBoundaryDesc,
-    ActivationDesc, LogitBias, TensorInfo,
+    ACTIVATION_BOUNDARY_DESC_VERSION, ACTIVATION_FRAME_VERSION, ACTIVATION_IDENTITY_BYTES,
+    ACTIVATION_MAX_DIMS, ACTIVATION_MAX_PARTS, ACTIVATION_PART_OPTIONAL, ActivationBoundaryDesc,
+    ActivationDesc, ActivationPartDesc, LogitBias, TensorInfo,
 };
 pub use model::{
     GgmlType, LlamaFileType, LlamaModelImatrixData, LlamaModelKvOverride, LlamaModelKvOverrideType,

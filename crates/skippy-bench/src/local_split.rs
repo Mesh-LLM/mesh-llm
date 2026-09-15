@@ -243,6 +243,10 @@ fn run_full_model_decode(
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: false,
         resident_tensor_names: Vec::new(),
+        activation_import_identities: Vec::new(),
+        activation_import_bindings: Vec::new(),
+        activation_export_identities: Vec::new(),
+        activation_export_bindings: Vec::new(),
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
@@ -326,6 +330,10 @@ fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
         resident_tensor_names: Vec::new(),
+        activation_import_identities: Vec::new(),
+        activation_import_bindings: Vec::new(),
+        activation_export_identities: Vec::new(),
+        activation_export_bindings: Vec::new(),
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
@@ -431,16 +439,8 @@ fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {
     state.decode_step = 0;
     state.current_token = token_id;
     state.source_stage_index = 0;
-    state.flags |=
-        skippy_protocol::binary::activation_state_flags_from_frame_flags(boundary.desc.flags);
-    let activation = skippy_protocol::binary::encode_activation_payload_with_state_flags(
-        state.activation_codec,
-        1,
-        activation_width,
-        &boundary.payload,
-        state.flags,
-    )
-    .context("failed to encode boundary activation for wire")?;
+    let activation = crate::support::encode_runtime_activation(state.activation_codec, &boundary)
+        .context("failed to encode boundary activation for wire")?;
     let message = StageWireMessage {
         kind: WireMessageKind::DecodeEmbd,
         pos_start: 0,
@@ -526,6 +526,10 @@ fn run_binary_chain(args: LocalSplitChainBinaryArgs) -> Result<BinaryChainResult
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
         resident_tensor_names: Vec::new(),
+        activation_import_identities: Vec::new(),
+        activation_import_bindings: Vec::new(),
+        activation_export_identities: Vec::new(),
+        activation_export_bindings: Vec::new(),
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
@@ -681,16 +685,8 @@ fn run_binary_chain(args: LocalSplitChainBinaryArgs) -> Result<BinaryChainResult
     state.decode_step = 0;
     state.current_token = token_id;
     state.source_stage_index = 0;
-    state.flags |=
-        skippy_protocol::binary::activation_state_flags_from_frame_flags(boundary.desc.flags);
-    let activation = skippy_protocol::binary::encode_activation_payload_with_state_flags(
-        state.activation_codec,
-        1,
-        activation_width,
-        &boundary.payload,
-        state.flags,
-    )
-    .context("failed to encode boundary activation for wire")?;
+    let activation = crate::support::encode_runtime_activation(state.activation_codec, &boundary)
+        .context("failed to encode boundary activation for wire")?;
     let message = StageWireMessage {
         kind: WireMessageKind::DecodeEmbd,
         pos_start: 0,
@@ -873,6 +869,10 @@ pub fn local_split_inprocess(args: LocalSplitInprocessArgs) -> Result<()> {
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
         resident_tensor_names: Vec::new(),
+        activation_import_identities: Vec::new(),
+        activation_import_bindings: Vec::new(),
+        activation_export_identities: Vec::new(),
+        activation_export_bindings: Vec::new(),
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
@@ -917,6 +917,10 @@ pub fn local_split_inprocess(args: LocalSplitInprocessArgs) -> Result<()> {
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
         resident_tensor_names: Vec::new(),
+        activation_import_identities: Vec::new(),
+        activation_import_bindings: Vec::new(),
+        activation_export_identities: Vec::new(),
+        activation_export_bindings: Vec::new(),
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,

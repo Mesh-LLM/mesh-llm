@@ -1320,6 +1320,10 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
         cache_idle_slots: options.cache_idle_slots,
         filter_tensors_on_load: false,
         resident_tensor_names: Vec::new(),
+        activation_import_identities: Vec::new(),
+        activation_import_bindings: Vec::new(),
+        activation_export_identities: Vec::new(),
+        activation_export_bindings: Vec::new(),
         checkpoint_quantization: options
             .checkpoint_quantization
             .as_ref()

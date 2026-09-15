@@ -600,8 +600,8 @@ mod shutdown_tests {
         ConnectionWorker, ConnectionWorkerControl, ConnectionWorkers, activation_width_from_graph,
         finish_connection_workers,
     };
+    use crate::test_activation::boundary_f32;
     use anyhow::anyhow;
-    use skippy_runtime::ActivationBoundaryDesc;
     use std::{
         io::{Read, Write},
         net::{TcpListener, TcpStream},
@@ -614,22 +614,10 @@ mod shutdown_tests {
         time::{Duration, Instant},
     };
 
-    fn f32_boundary(elements_per_token: u64) -> ActivationBoundaryDesc {
-        ActivationBoundaryDesc {
-            version: 1,
-            ggml_type: 0,
-            layout: 1,
-            elements_per_token,
-            bytes_per_token: elements_per_token * std::mem::size_of::<f32>() as u64,
-            required_frame_flags: 0,
-            required_sidebands: 0,
-        }
-    }
-
     #[test]
     fn graph_boundary_is_the_only_activation_width_authority() {
         assert_eq!(
-            activation_width_from_graph("output", Some(f32_boundary(1024)), true)
+            activation_width_from_graph("output", Some(boundary_f32(1024)), true)
                 .expect("valid graph boundary"),
             1024
         );
@@ -653,21 +641,23 @@ mod shutdown_tests {
 
     #[test]
     fn unsupported_graph_boundary_fails_closed() {
-        let mut boundary = f32_boundary(1024);
-        boundary.ggml_type = 1;
+        let mut boundary = boundary_f32(1024);
+        boundary.parts[0].ggml_type = 1;
         let error = activation_width_from_graph("output", Some(boundary), true)
             .expect_err("non-F32 graph boundary must not use the F32 codec");
-        assert!(error.to_string().contains("requires graph-observed F32"));
+        assert!(error.to_string().contains("not token-indexed F32"));
 
-        let mut boundary = f32_boundary(1024);
-        boundary.bytes_per_token -= 1;
+        let mut boundary = boundary_f32(1024);
+        boundary.parts[0].token_axis = -1;
         let error = activation_width_from_graph("output", Some(boundary), true)
-            .expect_err("inconsistent graph boundary must fail");
-        assert!(error.to_string().contains("reports 4095 bytes"));
+            .expect_err("non-token-indexed graph boundary must fail");
+        assert!(error.to_string().contains("not token-indexed F32"));
 
-        let error = activation_width_from_graph("output", Some(f32_boundary(0)), true)
+        let mut boundary = boundary_f32(1024);
+        boundary.part_count = 0;
+        let error = activation_width_from_graph("output", Some(boundary), true)
             .expect_err("empty graph boundary must fail");
-        assert!(error.to_string().contains("zero elements"));
+        assert!(error.to_string().contains("part count is invalid"));
     }
 
     #[test]

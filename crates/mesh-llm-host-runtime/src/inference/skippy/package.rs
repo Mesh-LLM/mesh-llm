@@ -270,7 +270,7 @@ pub struct SkippyPackageSourceFile {
 
 /// Resolve a validated package-v2 directory into the existing host planning
 /// identity. The content-derived package ID remains in the v2 manifest and is
-/// carried into split control by the generation-9 admission descriptor.
+/// carried into split control by the generation-10 admission descriptor.
 pub fn identity_from_package_v2(package_dir: &Path) -> Result<SkippyPackageIdentity> {
     let package_dir = package_dir.canonicalize().with_context(|| {
         format!(
@@ -964,7 +964,7 @@ pub(crate) fn direct_gguf_source_paths(model_path: &Path) -> Result<Vec<PathBuf>
         .collect()
 }
 
-/// Build the source-complete metadata envelope required by generation-9
+/// Build the source-complete metadata envelope required by generation-10
 /// planning directly from local GGUF shards. The envelope is in memory: the
 /// source files remain at their original paths and no package or layer shard
 /// is written.

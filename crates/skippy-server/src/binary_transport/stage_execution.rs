@@ -24,13 +24,15 @@ use skippy_protocol::{
     MessageBase, SCHEMA_VERSION, StageConfig, StageTopology,
     binary::{
         READY_MAGIC, StageNativeMtpDraft, StageSamplingConfig, StageWireMessage, WireMessageKind,
-        WireReplyKind, activation_frame_flags_from_state_flags, sampling_flags, send_ready,
+        WireReplyKind, sampling_flags, send_ready,
     },
 };
 use skippy_runtime::{
-    ActivationDesc, ActivationFrame, LogitBias, MAX_LOGIT_BIAS, NativeMtpDraft,
-    RuntimeActivationDType, RuntimeActivationLayout, SamplingConfig,
+    ACTIVATION_FRAME_VERSION, ACTIVATION_MAX_PARTS, ActivationDesc, ActivationFrame, LogitBias,
+    MAX_LOGIT_BIAS, NativeMtpDraft, SamplingConfig,
 };
+
+use super::prefill_execution::runtime_activation_frame;
 
 use super::socket::{
     connect_downstream_socket, connect_downstream_socket_cancellable, downstream_source_ip,
@@ -372,15 +374,18 @@ pub(in crate::binary_transport) fn split_native_mtp_reply(
 }
 
 pub(crate) fn stage_output_activation_capacity(
-    config: &StageConfig,
+    has_downstream: bool,
     token_count: i32,
-    activation_width: i32,
+    boundary: Option<skippy_runtime::ActivationBoundaryDesc>,
 ) -> Result<usize> {
-    if config.downstream.is_none() || token_count <= 0 {
+    if !has_downstream || token_count <= 0 {
         return Ok(0);
     }
-    skippy_protocol::binary::activation_wire_bytes(token_count, activation_width)
-        .context("estimate output activation capacity")
+    let token_count = u32::try_from(token_count).context("output activation token count")?;
+    let bytes = boundary
+        .context("loaded stage does not expose an output activation boundary")?
+        .payload_bytes("output", token_count)?;
+    usize::try_from(bytes).context("output activation capacity exceeds usize")
 }
 pub(in crate::binary_transport) fn estimated_reply_wire_bytes(
     reply_kind: WireReplyKind,
@@ -810,25 +815,21 @@ pub(in crate::binary_transport) fn input_activation_frame(
     if message.activation.is_empty() {
         return Ok(None);
     }
-    let payload = message
-        .take_activation_f32_payload()
-        .context("decode wire activation payload")?;
-    let (layer_start, layer_end) = upstream_layer_range(config, topology, message);
-    Ok(Some(ActivationFrame {
-        desc: ActivationDesc {
-            version: 1,
-            dtype: RuntimeActivationDType::F32,
-            layout: RuntimeActivationLayout::TokenMajor,
-            producer_stage_index: message.state.source_stage_index,
-            layer_start,
-            layer_end,
-            token_count: message.token_count.try_into().unwrap_or(0),
-            sequence_count: if message.token_count > 0 { 1 } else { 0 },
-            payload_bytes: payload.len() as u64,
-            flags: activation_frame_flags_from_state_flags(message.state.flags),
-        },
-        payload,
-    }))
+    let frame = message
+        .take_activation_frame()
+        .context("decode wire activation frame")?
+        .context("activation payload did not contain a frame")?;
+    let expected_range = upstream_layer_range(config, topology, message);
+    if (frame.desc.layer_start, frame.desc.layer_end) != expected_range {
+        bail!(
+            "activation frame layer range {}..{} does not match upstream stage {}..{}",
+            frame.desc.layer_start,
+            frame.desc.layer_end,
+            expected_range.0,
+            expected_range.1,
+        );
+    }
+    runtime_activation_frame(frame).map(Some)
 }
 
 pub(in crate::binary_transport) fn empty_activation_frame(
@@ -837,16 +838,16 @@ pub(in crate::binary_transport) fn empty_activation_frame(
 ) -> ActivationFrame {
     ActivationFrame {
         desc: ActivationDesc {
-            version: 1,
-            dtype: RuntimeActivationDType::F32,
-            layout: RuntimeActivationLayout::TokenMajor,
+            version: ACTIVATION_FRAME_VERSION,
             producer_stage_index: config.stage_index as i32,
             layer_start: config.layer_start as i32,
             layer_end: config.layer_end as i32,
             token_count: message.token_count.try_into().unwrap_or(0),
             sequence_count: if message.token_count > 0 { 1 } else { 0 },
+            part_count: 0,
             payload_bytes: 0,
-            flags: 0,
+            frontier_identity: [0; skippy_runtime::ACTIVATION_IDENTITY_BYTES],
+            parts: [skippy_runtime::ActivationPartDesc::default(); ACTIVATION_MAX_PARTS],
         },
         payload: Vec::new(),
     }
