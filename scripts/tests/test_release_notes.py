@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -130,6 +131,14 @@ class ClassifyTest(unittest.TestCase):
                 prs += group["prs"]
             found[section["title"]] = prs
         return found
+
+    def test_entries_after_the_release_tail_do_not_count(self):
+        body = Path(tempfile.mkdtemp()) / "body.md"
+        body.write_text(
+            "**Full Changelog**: compare\n" + entry(7) + "\n",
+            encoding="utf-8",
+        )
+        self.assertFalse(CLASSIFY.body_has_entries(body))
 
     def test_type_drives_the_section(self):
         plan, _ = self.plan_for(
@@ -1065,7 +1074,92 @@ class LinkPassContractTest(unittest.TestCase):
         )
         lines = self.script.splitlines()
         guard = next(i for i, line in enumerate(lines) if "nothing to regroup" in line)
-        self.assertIn('"$WORKDIR/body.md"', lines[guard - 1])
+        self.assertIn('--body "$WORKDIR/body.md" --has-entries', lines[guard - 1])
+
+
+class ReleaseNotesGenerateIntegrationTest(unittest.TestCase):
+    def test_link_only_body_is_recovered_classified_and_published(self):
+        directory = Path(tempfile.mkdtemp())
+        scripts = directory / "scripts"
+        scripts.mkdir()
+        for name in (
+            "check-conventional-commit.py",
+            "release-notes-classify.py",
+            "release-notes-generate.sh",
+            "release-notes-link.py",
+            "release-notes-regroup.py",
+        ):
+            (scripts / name).write_bytes((SCRIPTS / name).read_bytes())
+        (scripts / "release-notes-generate.sh").chmod(0o755)
+
+        subprocess.run(["git", "init", "-q"], cwd=directory, check=True)
+        subprocess.run(
+            ["git", "config", "user.name", "Release test"], cwd=directory, check=True
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "release-test@example.invalid"],
+            cwd=directory,
+            check=True,
+        )
+        tracked = directory / "tracked"
+        tracked.write_text("base\n", encoding="utf-8")
+        subprocess.run(["git", "add", "tracked"], cwd=directory, check=True)
+        subprocess.run(["git", "commit", "-qm", "chore: base"], cwd=directory, check=True)
+        subprocess.run(["git", "tag", "v1"], cwd=directory, check=True)
+        tracked.write_text("fixed\n", encoding="utf-8")
+        subprocess.run(["git", "commit", "-qam", "fix: recover the release entry"], cwd=directory, check=True)
+        subprocess.run(["git", "tag", "v2"], cwd=directory, check=True)
+
+        fake_bin = directory / "bin"
+        fake_bin.mkdir()
+        published = directory / "published.md"
+        fake_gh = fake_bin / "gh"
+        fake_gh.write_text(
+            """#!/usr/bin/env python3
+import json, os, pathlib, shutil, sys
+args = sys.argv[1:]
+published = pathlib.Path(os.environ["FAKE_GH_PUBLISHED"])
+if args[:2] == ["release", "view"]:
+    if published.exists():
+        sys.stdout.write(published.read_text())
+    else:
+        print("**Full Changelog**: compare")
+elif args[:1] == ["api"]:
+    print(json.dumps([1844]))
+elif args[:2] == ["pr", "view"]:
+    print(json.dumps({"title": "fix: recover the release entry", "author": {"login": "someone"}}))
+elif args[:2] == ["release", "edit"]:
+    source = pathlib.Path(args[args.index("--notes-file") + 1])
+    shutil.copyfile(source, published)
+else:
+    raise SystemExit(f"unexpected gh invocation: {args}")
+""",
+            encoding="utf-8",
+        )
+        fake_gh.chmod(0o755)
+
+        work = directory / "work"
+        env = {
+            **dict(os.environ),
+            "PATH": str(fake_bin) + os.pathsep + os.environ["PATH"],
+            "FAKE_GH_PUBLISHED": str(published),
+            "GITHUB_REPOSITORY": "o/r",
+            "RELEASE_TAG": "v2",
+            "RELEASE_NOTES_BASE": "v1",
+            "RELEASE_NOTES_APPROVED": "true",
+            "RELEASE_NOTES_WORKDIR": str(work),
+        }
+        result = subprocess.run(
+            [str(scripts / "release-notes-generate.sh")],
+            cwd=directory,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rendered = published.read_text(encoding="utf-8")
+        self.assertIn("### Fixed", rendered)
+        self.assertIn("https://github.com/o/r/pull/1844", rendered)
 
 
 if __name__ == "__main__":

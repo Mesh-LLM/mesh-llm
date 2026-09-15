@@ -64,7 +64,8 @@ fi
 # with no entries at all. That is the case the link pass exists to repair, and
 # reading the published body first skipped it: v0.76.2 shipped with its only
 # fix, #1844, missing from the notes.
-if ! grep -q '^\* .*\/pull\/[0-9]\+' "$WORKDIR/body.md"; then
+if ! python3 "$ROOT/scripts/release-notes-classify.py" \
+    --body "$WORKDIR/body.md" --has-entries; then
   echo "release-notes: no PR entries after the link pass; nothing to regroup"
   exit 0
 fi
