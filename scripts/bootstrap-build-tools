@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCCACHE_VERSION="${MESH_LLM_SCCACHE_VERSION:-0.16.0}"
+
+case "$(uname -s)" in
+    Darwin)
+        command -v brew >/dev/null 2>&1 || {
+            echo "Homebrew is required to install ld64.lld." >&2
+            exit 1
+        }
+        brew install lld
+        ;;
+    Linux)
+        if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y mold lld
+        elif command -v dnf >/dev/null 2>&1; then
+            sudo dnf install -y mold lld
+        elif command -v pacman >/dev/null 2>&1; then
+            sudo pacman -S --needed mold lld
+        elif command -v zypper >/dev/null 2>&1; then
+            sudo zypper install -y mold lld
+        else
+            echo "Install mold and lld with the system package manager, then retry." >&2
+            exit 1
+        fi
+        ;;
+    *)
+        echo "Unsupported Unix platform: $(uname -s)" >&2
+        exit 1
+        ;;
+esac
+
+installed_version="$(sccache --version 2>/dev/null | awk '{print $2}' || true)"
+if [[ "$installed_version" != "$SCCACHE_VERSION" ]]; then
+    RUSTC_WRAPPER='' cargo install sccache --version "$SCCACHE_VERSION" --locked --force
+fi
+
+sccache --version
+"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cargo-linker" --mesh-probe

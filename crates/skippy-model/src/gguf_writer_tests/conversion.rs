@@ -176,8 +176,10 @@ fn assert_f32_tensor(bytes: &[u8], parsed: &ParsedGguf, name: &str, expected: &[
     let tensor = parsed.tensor(name);
     assert_eq!(tensor.ggml_type, GGML_TYPE_F32);
     let actual = bytes[tensor.absolute_offset..tensor.absolute_offset + expected.len() * 4]
-        .chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| f32::from_le_bytes(*chunk))
         .collect::<Vec<_>>();
     assert_eq!(actual, expected);
 }
