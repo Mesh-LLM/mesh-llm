@@ -203,7 +203,7 @@ agent_session_step() {
     --with-builtin developer
     --no-profile
     --max-turns 1000
-    --output-format stream-json
+    --output-format text
     --name "$AGENT_SESSION_NAME"
   )
   if [[ "$AGENT_SESSION_STARTED" == "true" ]]; then

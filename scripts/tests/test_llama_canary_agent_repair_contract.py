@@ -133,7 +133,7 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
         self.assertIn('--provider "$AGENT_PROVIDER"', agent)
         self.assertIn('--model "$AGENT_MODEL"', agent)
         self.assertIn("--with-builtin developer", agent)
-        self.assertIn("--output-format stream-json", agent)
+        self.assertIn("--output-format text", agent)
         self.assertIn("GOOSE_MODE=auto", agent)
         self.assertNotIn("--no-session", agent)
         self.assertIn("goose info --check", self.wrapper)

@@ -34,7 +34,6 @@ mesh-native-serving-plugin-api = { path = "../mesh-native-serving-plugin-api", v
 skippy-protocol = { path = "../skippy-protocol", version = "0.76.1"  }
 skippy-cache = { path = "../skippy-cache", version = "0.76.1"  }
 skippy-metrics = { path = "../skippy-metrics", version = "0.76.1"  }
-skippy-topology = { path = "../skippy-topology", version = "0.76.1" }
 openai-frontend = { path = "../openai-frontend", version = "0.76.1"  }
 opentelemetry-proto = "0.32.0"
 serde.workspace = true

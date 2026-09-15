@@ -24,6 +24,11 @@ jobs:
     name: Resume crates.io package chain
     if: github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
+    env:
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_MULTILEVEL_CHAIN: disk
     timeout-minutes: 120
     steps:
       - name: Check out trusted recovery controller
@@ -38,6 +43,16 @@ jobs:
           ref: ${{ inputs.release_tag }}
           persist-credentials: false
           path: release-source
+
+      - name: Trust checkout directories
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/controller"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/release-source"
+
+      - uses: ./controller/.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: "false"
+          allow_native_github_cache: "false"
 
       - name: Verify exact stable release source
         shell: bash
