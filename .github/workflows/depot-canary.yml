@@ -677,7 +677,7 @@ jobs:
 
   runtime_seed:
     name: CPU runtime seed (${{ matrix.pair }} / ${{ matrix.arm }})
-    if: github.repository == 'Mesh-LLM/mesh-llm' && github.event_name == 'workflow_dispatch' && inputs.mode == 'runtime-seed'
+    if: github.repository == 'Mesh-LLM/mesh-llm' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.mode == 'runtime-seed'
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     permissions:
@@ -691,7 +691,7 @@ jobs:
         pair: [1, 2, 3]
         arm: [cold, warm]
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
     env:
       LLAMA_STAGE_BACKEND: cpu
       LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-dynamic-cpu
@@ -717,12 +717,12 @@ jobs:
         run: verify-runner-image public cpu
       - uses: ./.github/actions/resolve-native-toolchain-epoch
         with:
-          pinned_epoch: mesh-llm-cuda-runner-sha256-8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+          pinned_epoch: mesh-llm-cuda-runner-sha256-f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
       - name: Admit exact seed and observe fresh filesystem
         id: seed_key
         env:
           GH_TOKEN: ${{ github.token }}
-          CANARY_KEY: mesh-llm-sccache-seed-linux-x86_64-img-8d93de6b-epoch-8d93de6b-v2-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', 'Justfile', 'just/**') }}
+          CANARY_KEY: mesh-llm-sccache-seed-linux-x86_64-img-f499b79b-epoch-f499b79b-v3-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', 'Justfile', 'just/**') }}
         run: python3 scripts/runtime-seed-canary.py preflight runtime-seed-evidence
       - name: Start restore timer
         run: python3 scripts/runtime-seed-canary.py restore_start runtime-seed-evidence

@@ -55,7 +55,7 @@ echo "macOS deployment target: $MACOSX_DEPLOYMENT_TARGET"
 echo "llama.cpp backend: $LLAMA_STAGE_BACKEND"
 echo "llama.cpp build dir: $LLAMA_STAGE_BUILD_DIR"
 RUSTC="$RUSTUP_RUSTC" \
-  cargo build --release -p mesh-llm-ffi --target "$RUST_TARGET" --no-default-features --features host,embedded-runtime
+  cargo build --release -p mesh-llm-ffi --target "$RUST_TARGET" --no-default-features --features embedded-runtime
 
 LIB_PATH="$TARGET_DIR/$RUST_TARGET/release/libmeshllm_ffi.a"
 

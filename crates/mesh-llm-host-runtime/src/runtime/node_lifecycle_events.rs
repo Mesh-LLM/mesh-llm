@@ -134,6 +134,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(runtime_event_engine_state)]
     fn absent_engine_never_panics() {
         clear_runtime_event_engine();
         emit_node_starting();

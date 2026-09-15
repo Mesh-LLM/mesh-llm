@@ -100,7 +100,7 @@ jobs:
       matrix:
         host: ${{ fromJson(inputs.hosts_matrix) }}
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
     defaults:
       run:
         shell: bash
@@ -126,7 +126,7 @@ jobs:
         uses: ./.github/actions/restore-sccache-seed
         with:
           allow_trusted_seed: ${{ needs.runner_policy.outputs.allow_trusted_sccache_seed == 'true' && matrix.host.architecture == 'x86_64' && 'true' || 'false' }}
-          cache_key: mesh-llm-sccache-seed-linux-x86_64-img-8d93de6b-epoch-8d93de6b-v2-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', 'Justfile', 'just/**') }}
+          cache_key: mesh-llm-sccache-seed-linux-x86_64-img-f499b79b-epoch-f499b79b-v3-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', 'Justfile', 'just/**') }}
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
