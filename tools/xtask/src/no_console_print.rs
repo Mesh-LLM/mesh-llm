@@ -25,7 +25,8 @@ pub(crate) const FORBIDDEN_CONSOLE_MACROS: [&str; 4] =
 /// Direct terminal handles the gate forbids outside the surfaces that own
 /// console output. Retiring the print macros makes `writeln!(io::stdout(), ..)`
 /// the obvious way to reintroduce exactly the debt the macros carried.
-pub(crate) const DIRECT_TERMINAL_HANDLES: [&str; 2] = ["io::stdout()", "io::stderr()"];
+pub(crate) const DIRECT_TERMINAL_HANDLES: [(&str, &str); 2] =
+    [("stdout", "stdout()"), ("stderr", "stderr()")];
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct ConsolePrintHit {
@@ -171,15 +172,22 @@ fn advance_to_next_line(lines: &[&str], line_index: &mut usize) -> bool {
 /// probes such as `io::stdout().is_terminal()` read nothing and write nothing,
 /// so they are not handles for this purpose.
 pub(crate) fn find_direct_terminal_handles(source: &str) -> Vec<DirectHandleHit> {
+    let lines: Vec<&str> = source.lines().collect();
     let mut hits = Vec::new();
-    for (index, raw_line) in source.lines().enumerate() {
+    for (index, raw_line) in lines.iter().enumerate() {
         if is_comment_only_line(raw_line) {
             continue;
         }
-        for handle in DIRECT_TERMINAL_HANDLES {
-            for (byte_offset, _matched) in raw_line.match_indices(handle) {
-                if !is_macro_boundary(raw_line, byte_offset)
-                    || is_capability_probe(&raw_line[byte_offset + handle.len()..])
+        for (function, handle) in DIRECT_TERMINAL_HANDLES {
+            for (byte_offset, _matched) in raw_line.match_indices(function) {
+                let end = byte_offset + function.len();
+                if !is_identifier_boundary(raw_line, byte_offset, end) {
+                    continue;
+                }
+                let direct_call = terminal_call_end(&lines, index, end);
+                let alias_import = resolves_to_alias(&lines, index, end);
+                if direct_call.is_some_and(|cursor| is_capability_probe_at(&lines, cursor))
+                    || direct_call.is_none() && !alias_import
                 {
                     continue;
                 }
@@ -194,10 +202,105 @@ pub(crate) fn find_direct_terminal_handles(source: &str) -> Vec<DirectHandleHit>
     hits
 }
 
+fn is_identifier_boundary(line: &str, start: usize, end: usize) -> bool {
+    let identifier = |ch: char| ch.is_alphanumeric() || ch == '_';
+    !line[..start].chars().next_back().is_some_and(identifier)
+        && !line[end..].chars().next().is_some_and(identifier)
+}
+
+#[derive(Clone, Copy)]
+struct SourceCursor {
+    line: usize,
+    byte: usize,
+}
+
+/// Skip Rust whitespace and comments, including nested block comments.
+fn skip_trivia(lines: &[&str], cursor: &mut SourceCursor) {
+    let mut block_depth = 0u32;
+    loop {
+        if cursor.line >= lines.len() {
+            return;
+        }
+        let line = lines[cursor.line];
+        if cursor.byte >= line.len() {
+            cursor.line += 1;
+            cursor.byte = 0;
+            continue;
+        }
+        let rest = &line[cursor.byte..];
+        if block_depth > 0 {
+            if rest.starts_with("/*") {
+                block_depth += 1;
+                cursor.byte += 2;
+            } else if rest.starts_with("*/") {
+                block_depth -= 1;
+                cursor.byte += 2;
+            } else {
+                cursor.byte += rest.chars().next().expect("non-empty rest").len_utf8();
+            }
+            continue;
+        }
+        if rest.starts_with("//") {
+            cursor.line += 1;
+            cursor.byte = 0;
+        } else if rest.starts_with("/*") {
+            block_depth = 1;
+            cursor.byte += 2;
+        } else if rest.chars().next().expect("non-empty rest").is_whitespace() {
+            cursor.byte += rest.chars().next().expect("non-empty rest").len_utf8();
+        } else {
+            return;
+        }
+    }
+}
+
+fn consume(lines: &[&str], cursor: &mut SourceCursor, token: &str) -> bool {
+    skip_trivia(lines, cursor);
+    let Some(rest) = lines
+        .get(cursor.line)
+        .and_then(|line| line.get(cursor.byte..))
+    else {
+        return false;
+    };
+    if !rest.starts_with(token) {
+        return false;
+    }
+    cursor.byte += token.len();
+    true
+}
+
+/// Return the cursor after a trivia-tolerant empty call to stdout/stderr.
+fn terminal_call_end(lines: &[&str], line: usize, byte: usize) -> Option<SourceCursor> {
+    let mut cursor = SourceCursor { line, byte };
+    if consume(lines, &mut cursor, "(") && consume(lines, &mut cursor, ")") {
+        Some(cursor)
+    } else {
+        None
+    }
+}
+
+/// A renamed direct import can hide the canonical function name at the call
+/// site, so the import itself is enough to fail the conservative gate.
+fn resolves_to_alias(lines: &[&str], line: usize, byte: usize) -> bool {
+    let mut cursor = SourceCursor { line, byte };
+    if !consume(lines, &mut cursor, "as") {
+        return false;
+    }
+    skip_trivia(lines, &mut cursor);
+    lines
+        .get(cursor.line)
+        .and_then(|source| source.get(cursor.byte..))
+        .and_then(|rest| rest.chars().next())
+        .is_some_and(|ch| ch.is_alphabetic() || ch == '_')
+}
+
 /// True when the handle is immediately consumed by a read-only capability
 /// question rather than kept for writing.
-fn is_capability_probe(after_handle: &str) -> bool {
-    after_handle.trim_start().starts_with(".is_terminal()")
+fn is_capability_probe_at(lines: &[&str], mut cursor: SourceCursor) -> bool {
+    consume(lines, &mut cursor, ".")
+        && consume(lines, &mut cursor, "is_terminal")
+        && consume(lines, &mut cursor, "(")
+        && consume(lines, &mut cursor, ")")
 }
 
 /// Collects relative paths (slash separated, deterministic order) of every
@@ -322,7 +425,10 @@ fn read_source(repo_root: &Path, file: &str) -> DynResult<String> {
 }
 
 /// Entry point for `xtask repo-consistency no-console-print`.
-pub(crate) fn check_no_console_print_command(_rest: &[String]) -> DynResult<()> {
+pub(crate) fn check_no_console_print_command(rest: &[String]) -> DynResult<()> {
+    if !rest.is_empty() {
+        return Err("usage: cargo run -p xtask -- repo-consistency no-console-print".into());
+    }
     let repo_root = crate::repo_consistency::repo_root()?;
     scope::check_exempt_crates(&repo_root)?;
     check_no_console_prints(&repo_root)?;
@@ -455,13 +561,53 @@ lines */ !(x);
             vec![
                 DirectHandleHit {
                     line: 5,
-                    handle: "io::stderr()"
+                    handle: "stderr()"
                 },
                 DirectHandleHit {
                     line: 6,
-                    handle: "io::stdout()"
+                    handle: "stdout()"
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn finds_imported_aliased_and_multiline_terminal_handles() {
+        let source = r#"use std::io::stdout;
+use std::io::{stderr as terminal_error};
+fn f() {
+    stdout /* split */
+      (
+      );
+    terminal_error();
+    std::io::
+      stderr
+      /* split */ ()
+      .is_terminal();
+}"#;
+        assert_eq!(
+            find_direct_terminal_handles(source),
+            vec![
+                DirectHandleHit {
+                    line: 2,
+                    handle: "stderr()"
+                },
+                DirectHandleHit {
+                    line: 4,
+                    handle: "stdout()"
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn no_console_print_command_rejects_trailing_arguments() {
+        let error = check_no_console_print_command(&["--regen".to_owned()])
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            error,
+            "usage: cargo run -p xtask -- repo-consistency no-console-print"
         );
     }
 
@@ -516,7 +662,7 @@ lines */ !(x);
             "{error}"
         );
         assert!(
-            error.contains("crates/demo/src/lib.rs:2 io::stderr()"),
+            error.contains("crates/demo/src/lib.rs:2 stderr()"),
             "{error}"
         );
     }
