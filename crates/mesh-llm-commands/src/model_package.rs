@@ -74,6 +74,7 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
     }
 
     // ── Submit flow (source ref required) ────────────────────────────
+    validate_submit_output_options(follow, json)?;
     let source_ref = source_repo.context(
         "Source repo is required for job submission.\n\
          Usage: mesh-llm models package <source_repo>:<quant>",
@@ -231,6 +232,16 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
         follow_until_done(jobs_client, &job.namespace, &info.id).await?;
     }
 
+    Ok(())
+}
+
+fn validate_submit_output_options(follow: bool, json: bool) -> Result<()> {
+    if follow && json {
+        bail!(
+            "--json cannot be combined with --follow: use the submitted job ID with \
+             `mesh-llm models package --logs <job-id> --json`"
+        );
+    }
     Ok(())
 }
 
@@ -727,6 +738,16 @@ fn format_timeout(seconds: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_submit_rejects_follow_before_starting_a_job() {
+        let error = validate_submit_output_options(true, true)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("--json cannot be combined with --follow"));
+        assert!(validate_submit_output_options(false, true).is_ok());
+        assert!(validate_submit_output_options(true, false).is_ok());
+    }
 
     #[test]
     fn parse_timeout_hours() {
