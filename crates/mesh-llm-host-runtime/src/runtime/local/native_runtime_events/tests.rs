@@ -306,7 +306,43 @@ async fn native_reporter_keeps_rich_presentation_while_audit_stays_static() {
     }
 
     let presentation = sink.take_events();
-    assert_eq!(presentation.len(), 3);
+    // The output sink is process-global and outlives this test's own setup:
+    // other tests in the binary share the global logging foundation and any
+    // accepted delivery projects an event into whichever sink is installed.
+    // Count the model-open presentation family exactly instead of the
+    // sink-wide total, and keep the readiness exclusion this test actually
+    // guards: the per-call model-open bridge must not surface readiness.
+    let model_open_presentation = presentation
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                OutputEvent::Info { message, .. }
+                    if message.starts_with("Native runtime started opening model")
+                        || message.starts_with("Opening native model ")
+                        || message.starts_with("Native runtime finished opening model")
+            )
+        })
+        .count();
+    assert_eq!(
+        model_open_presentation, 3,
+        "every model-open callback should stay visible"
+    );
+    assert!(
+        presentation.iter().all(|event| {
+            !matches!(
+                event,
+                OutputEvent::LaunchPlan { .. }
+                    | OutputEvent::ApiReady { .. }
+                    | OutputEvent::WebserverReady { .. }
+                    | OutputEvent::ModelLoading { .. }
+                    | OutputEvent::ModelLoaded { .. }
+                    | OutputEvent::ModelReady { .. }
+                    | OutputEvent::RuntimeReady { .. }
+            )
+        }),
+        "the model-open bridge must not surface readiness transitions"
+    );
     let serialized_presentation = format!("{presentation:?}");
     for rich_context in [
         "sequence=1",
@@ -320,13 +356,17 @@ async fn native_reporter_keeps_rich_presentation_while_audit_stays_static() {
         );
     }
 
+    // Read the audit replay window instead of draining the delivery queue:
+    // the persistence worker this test started consumes that queue too, so
+    // a drain can race the worker and lose entries the assertion expects.
     let audits = service
         .bus_ref()
-        .drain()
-        .into_iter()
-        .map(|entry| {
+        .audit_replay_window()
+        .records
+        .iter()
+        .map(|record| {
             let audit: serde_json::Value =
-                serde_json::from_str(&entry.payload).expect("audit payload");
+                serde_json::from_str(&record.entry.payload).expect("audit payload");
             serde_json::json!({
                 "kind": "audit",
                 "level": audit["severity"],

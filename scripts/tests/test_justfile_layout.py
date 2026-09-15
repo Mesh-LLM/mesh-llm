@@ -22,7 +22,7 @@ IMPORTS: Final = (
 )
 RECIPES_BY_FILE: Final = {
     "just/build.just": {
-        "build", "build-dev", "build-linux", "build-mac", "build-runtime",
+        "bootstrap-build-tools", "build", "build-dev", "build-linux", "build-mac", "build-runtime",
         "qa-logging-console-e2e", "with-lld",
     },
     "just/release-build.just": {

@@ -1,0 +1,75 @@
+From 59ba4a5c91581b8628cc46158b813560deccb137 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sun, 13 Sep 2026 13:06:26 +1000
+Subject: [PATCH] skippy: prioritize empty KV stage ranges
+
+Report an empty selected layer range before examining token positions so recurrent-only stages produce a stable optional-KV signal after state restore.
+
+Assisted-by: scama
+---
+ src/llama-kv-cache.cpp               | 16 ++++++++++++++++
+ tests/test-skippy-kv-page-export.cpp | 22 ++++++++++++++++++++++
+ 2 files changed, 38 insertions(+)
+
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index a7d65f23f..b4102d1a3 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -1541,6 +1541,22 @@ bool llama_kv_cache::stage_export_kv_page(
+         error = "sequence id is mapped to an invalid KV stream";
+         return false;
+     }
++    bool has_selected_layer = false;
++    for (const auto & layer : layers) {
++        const uint32_t il = layer.il;
++        if (il >= static_cast<uint32_t>(layer_start) &&
++                il < static_cast<uint32_t>(layer_end) &&
++                layer.k_stream.size() > strm &&
++                layer.k_stream[strm] != nullptr) {
++            has_selected_layer = true;
++            break;
++        }
++    }
++    if (!has_selected_layer) {
++        error = "no KV cache layers selected by layer range";
++        return false;
++    }
++
+     const auto & cells = v_cells[strm];
+     if (token_count > static_cast<uint64_t>(cells.size())) {
+         error = "token_count exceeds KV cache capacity";
+diff --git a/tests/test-skippy-kv-page-export.cpp b/tests/test-skippy-kv-page-export.cpp
+index 96937c8dc..3c0dcbb13 100644
+--- a/tests/test-skippy-kv-page-export.cpp
++++ b/tests/test-skippy-kv-page-export.cpp
+@@ -179,6 +179,28 @@ int main() {
+             {});
+     filtered_kv.apply_ubatch(slot, ubatch);
+ 
++    skippy_kv_page_desc filtered_export_desc = {};
++    size_t filtered_export_bytes = 0;
++    if (filtered_kv.stage_export_kv_page(
++                0,
++                1,
++                2,
++                1,
++                1,
++                &filtered_export_desc,
++                nullptr,
++                0,
++                &filtered_export_bytes,
++                error)) {
++        fprintf(stderr, "empty KV page layer selection was exported\n");
++        return 1;
++    }
++    if (error != "no KV cache layers selected by layer range") {
++        fprintf(stderr, "empty KV page layer selection returned the wrong error: %s\n", error.c_str());
++        return 1;
++    }
++    error.clear();
++
+     skippy_kv_page_desc empty_range_desc = desc;
+     empty_range_desc.layer_count = 0;
+     empty_range_desc.payload_bytes = 0;
+-- 
+2.54.0 (Apple Git-157)

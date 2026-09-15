@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 LIB = ROOT / "scripts" / "lib" / "lld.sh"
 JUSTFILE = ROOT / "Justfile"
 BUILD_HOST = ROOT / "scripts" / "build-host.sh"
+MACOS_SETUP = ROOT / ".github" / "actions" / "setup-macos-lld" / "action.yml"
 
 WORKING_CC = "#!/bin/sh\nexit 0\n"
 # Mirrors the real failure: lld rejects the SDK's text-based stub, after which
@@ -78,6 +79,15 @@ class LldProbeTests(unittest.TestCase):
         result = run_with_stub_cc(recording_cc, 'lld_links /opt/x/ld64.lld; printf %s "$LLD_PROBE_OUTPUT"')
         self.assertIn("-fuse-ld=/opt/x/ld64.lld", result.stdout)
 
+    def test_the_probe_uses_the_selected_target_compiler(self) -> None:
+        recording_cc = "#!/bin/sh\necho \"$0 $@\" >&2\nexit 0\n"
+        result = run_with_stub_cc(
+            recording_cc,
+            'cp "$(command -v cc)" "$(dirname "$(command -v cc)")/target-cc"\n'
+            'MESH_LLM_CC=target-cc lld_links lld; printf %s "$LLD_PROBE_OUTPUT"',
+        )
+        self.assertIn("target-cc", result.stdout)
+
     def test_resolve_prints_nothing_and_explains_when_the_probe_fails(self) -> None:
         result = run_with_stub_cc(BROKEN_CC, 'printf "[%s]" "$(resolve_usable_lld)"')
         self.assertEqual(result.stdout.strip(), "[]")
@@ -108,29 +118,32 @@ class LldProbeTests(unittest.TestCase):
 class CallSiteTests(unittest.TestCase):
     """Every place that hands cargo an lld must probe it first."""
 
-    def test_the_with_lld_recipe_probes_before_exporting_the_linker(self) -> None:
+    def test_the_with_lld_recipe_delegates_to_repository_defaults(self) -> None:
         source = read_justfile_source(JUSTFILE)
         start = source.index("[unix]\nwith-lld *COMMAND:")
         end = source.index("[windows]\nwith-lld *COMMAND:", start)
         recipe = source[start:end]
-        self.assertIn("source scripts/lib/lld.sh", recipe)
-        self.assertIn('lld="$(find_lld)"', recipe)
-        self.assertIn('if lld_links "$lld"; then', recipe)
-        self.assertIn('report_lld_fallback "$lld"', recipe)
-        # Not installed stays fatal with install instructions; only an
-        # installed-but-unusable lld degrades to a note.
-        self.assertIn("brew install lld", recipe)
-        self.assertIn("exit 1", recipe)
+        self.assertIn("scripts/cargo-linker --mesh-probe", recipe)
+        self.assertIn("command -v sccache", recipe)
+        self.assertNotIn("RUSTFLAGS", recipe)
 
-    def test_build_host_probes_before_exporting_the_linker(self) -> None:
+    def test_macos_setup_provisions_both_required_accelerators(self) -> None:
+        action = MACOS_SETUP.read_text(encoding="utf-8")
+        self.assertIn("brew install lld", action)
+        self.assertIn("brew install sccache", action)
+        self.assertIn("command -v sccache", action)
+        self.assertIn('"${SCCACHE_GHA_ENABLED:-}" == "true"', action)
+        self.assertIn('SCCACHE_GHA_ENABLED=false', action)
+        self.assertIn('SCCACHE_MULTILEVEL_CHAIN=disk', action)
+        self.assertIn('$RUNNER_TEMP/mesh-llm-sccache', action)
+        self.assertIn("scripts/cargo-linker --mesh-probe", action)
+
+    def test_build_host_does_not_override_repository_cargo_defaults(self) -> None:
         script = BUILD_HOST.read_text(encoding="utf-8")
-        self.assertIn('source "$SCRIPT_DIR/lib/lld.sh"', script)
-        start = script.index("configure_lld_linker() {")
-        end = script.index("configure_rust_cache() {", start)
-        function = script[start:end]
-        self.assertIn('if lld_links "$lld"; then', function)
-        self.assertIn('report_lld_fallback "$lld"', function)
-        self.assertNotIn("command -v ld64.lld", function)
+        self.assertNotIn("configure_lld_linker", script)
+        self.assertNotIn("configure_rust_cache", script)
+        self.assertNotIn("RUSTFLAGS", script)
+        self.assertNotIn("RUSTC_WRAPPER", script)
 
     def test_no_unprobed_linker_directive_in_cargo_config(self) -> None:
         """A checked-in `-fuse-ld=` applies to every cargo invocation with no
@@ -142,6 +155,14 @@ class CallSiteTests(unittest.TestCase):
             if "fuse-ld" in line and not line.lstrip().startswith("#")
         ]
         self.assertEqual(directives, [], f"unexpected linker directives: {directives}")
+
+    def test_cargo_config_owns_cache_and_platform_linker_drivers(self) -> None:
+        config = (ROOT / ".cargo" / "config.toml").read_text(encoding="utf-8")
+        self.assertIn('rustc-wrapper = "sccache"', config)
+        self.assertEqual(config.count('linker = "scripts/cargo-linker"'), 2)
+        self.assertIn('linker = "scripts/cargo-linker-linux-aarch64"', config)
+        self.assertIn('linker = "scripts/cargo-linker-linux-x86_64"', config)
+        self.assertEqual(config.count('linker = "scripts/cargo-linker.cmd"'), 2)
 
 
 if __name__ == "__main__":

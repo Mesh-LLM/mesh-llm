@@ -162,20 +162,20 @@ pub(super) async fn start_runtime_split_model(
     spec.capacity_budget_bytes = spec.capacity_budget_bytes.filter(|bytes| *bytes > 0);
     let local_source_required = spec.local_source_required;
     skippy::register_local_source_policy(model_ref, spec.runtime_profile, local_source_required);
-    // A strict-local standby must index its own file before election so the
-    // elected coordinator can verify identical content without exchanging a
-    // coordinator-local path or falling back to artifact transfer.
-    let preindexed_package = if let Some(package) = spec.preindexed_split_package {
-        Some(package.clone())
-    } else if local_source_required {
-        Some(resolve_split_runtime_package(spec.model_path, model_ref, true).await?)
-    } else {
-        None
+    // Resolve the immutable identity and fail closed before coordinator
+    // election. This keeps unsupported artifacts out of topology planning and
+    // ensures every candidate coordinator applies the same admission policy.
+    let preindexed_package = match spec.preindexed_split_package {
+        Some(package) => package.clone(),
+        None => {
+            resolve_split_runtime_package(spec.model_path, model_ref, local_source_required).await?
+        }
     };
+    skippy::require_split_certification(&preindexed_package, spec.allow_uncertified_split)?;
     let coordinator_start = elect_split_start_coordinator(
         &spec,
         model_ref,
-        preindexed_package.as_ref(),
+        Some(&preindexed_package),
         local_source_required,
     )
     .await?;
@@ -195,7 +195,7 @@ pub(super) async fn start_runtime_split_model(
         &settled_membership,
         canonical_coordinator,
         Duration::from_secs(30),
-        preindexed_package,
+        Some(preindexed_package),
     )
     .await?;
     let SplitRuntimeStartPreparation {
