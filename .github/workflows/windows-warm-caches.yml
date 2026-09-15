@@ -28,6 +28,14 @@ on:
         description: 'Number of warmed Windows ABI cache versions to keep'
         required: false
         default: ''
+      workload:
+        description: 'Cache workload to warm'
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - cpu
 
 concurrency:
   group: windows-warm-caches-${{ github.ref }}
@@ -48,7 +56,7 @@ env:
 jobs:
   warm_windows_cpu:
     name: Warm Windows CPU ABI cache
-    if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch') && (github.event_name != 'workflow_dispatch' || inputs.workload == 'all' || inputs.workload == 'cpu') }}
     runs-on: windows-2022
     env:
       LLAMA_STAGE_BACKEND: cpu
@@ -127,7 +135,7 @@ jobs:
 
   warm_windows_gpu:
     name: Warm Windows ${{ matrix.name }} ABI cache
-    if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch') && (github.event_name != 'workflow_dispatch' || inputs.workload == 'all') }}
     runs-on: windows-2022
     env:
       LLAMA_STAGE_BUILD_DIR: .deps/llama-build/windows/build-stage-abi-${{ matrix.backend }}

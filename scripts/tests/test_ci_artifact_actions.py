@@ -707,6 +707,29 @@ class CiArtifactActionTests(unittest.TestCase):
             action,
         )
 
+    def test_exact_cache_publication_retries_after_service_cooldown(self) -> None:
+        action = self.read_action("save-and-verify-actions-cache")
+        cache_save = (
+            "uses: actions/cache/save@"
+            "caa296126883cff596d87d8935842f9db880ef25 # v5.1.0"
+        )
+
+        self.assertEqual(action.count(cache_save), 2)
+        self.assertIn("id: initial-publication", action)
+        self.assertIn("for (let attempt = 1; attempt <= 13; attempt++)", action)
+        self.assertIn("return 'published';", action)
+        self.assertIn("return 'missing';", action)
+        self.assertIn(
+            "if: steps.initial-publication.outputs.result != 'published'",
+            action,
+        )
+        self.assertIn(
+            "The initial ${label} cache save was not published; retrying once.",
+            action,
+        )
+        self.assertIn("for (let attempt = 1; attempt <= 12; attempt++)", action)
+        self.assertIn("!existingIds.has(String(candidate.id))", action)
+
     def test_windows_native_cache_inputs_fail_closed_and_callers_opt_in(
         self,
     ) -> None:
