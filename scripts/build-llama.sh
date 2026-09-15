@@ -237,6 +237,10 @@ if command -v ninja >/dev/null 2>&1; then
   echo "using CMake generator: Ninja"
 fi
 
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) CMAKE_ARGS+=(-DCMAKE_OBJECT_PATH_MAX=180) ;;
+esac
+
 case "$LLAMA_BACKEND" in
   cuda)
     if ! configure_cuda_toolkit_env; then
@@ -385,6 +389,7 @@ if [[ "$LLAMA_STAGE_BUILD_TESTS" == "ON" ]]; then
     skippy-hardware-application-probe
     skippy-model-fixture-generator
     skippy-model-loader-accounting
+    skippy-runtime-events-test
     skippy-noalloc-graph-planning
     skippy-renamed-multishard-planning
     skippy-stage-slice-plan

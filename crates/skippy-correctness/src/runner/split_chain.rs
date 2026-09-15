@@ -13,7 +13,7 @@ use skippy_protocol::binary::{StageWireMessage, WireReplyKind, write_stage_messa
 use skippy_runtime::{GGML_TYPE_F16, MtpSource, RuntimeConfig, StageModel};
 
 use crate::{
-    cli::{ChainArgs, FlashAttentionArg, SplitScanArgs, StageLoadMode},
+    cli::{ChainArgs, CoreParityArgs, FlashAttentionArg, ServerArgs, SplitScanArgs, StageLoadMode},
     report::{
         ChainReport, ChainStageReport, NativeMtpSidebandReport, SplitScanReport, StageModelReport,
     },
@@ -83,25 +83,86 @@ pub fn chain(args: ChainArgs) -> Result<()> {
     let splits = parse_chain_splits(&args.splits)?;
     let model_identity = runtime_model_identity(&args.runtime)?;
     let baseline = run_full_model_decode(&args.runtime)?;
+    let report = run_chain_with_baseline(
+        &args.runtime,
+        &args.server,
+        &model_identity,
+        baseline,
+        splits,
+        args.stage1_bind_addr,
+        args.stage2_bind_addr,
+        native_mtp_requirement,
+    )?;
+    emit_report(&report, args.output.report_out.as_deref())?;
+    ensure_matches(report.matches, args.allow_mismatch)?;
+    Ok(())
+}
+
+pub fn core_parity(args: CoreParityArgs) -> Result<()> {
+    let native_mtp_requirement = native_mtp_requirement(args.native_mtp);
+    ensure_native_mtp_artifact_if_required(&args.runtime, native_mtp_requirement)?;
+    let splits = parse_chain_splits(&args.splits)?;
+    let model_identity = runtime_model_identity(&args.runtime)?;
+    // StageModel is dropped inside run_full_model_decode. Only the token oracle
+    // remains resident while the staged processes load the model.
+    let baseline = run_full_model_decode(&args.runtime)?;
+    let single = run_single_step_with_baseline(
+        &args.runtime,
+        &args.server,
+        &model_identity,
+        baseline,
+        SingleStepCase {
+            split_layer: args.split_layer,
+            stage1_bind_addr: args.single_stage1_bind_addr,
+            native_mtp: native_mtp_requirement,
+        },
+    )?;
+    emit_report(&single, Some(&args.single_report_out))?;
+    let chain = run_chain_with_baseline(
+        &args.runtime,
+        &args.server,
+        &model_identity,
+        baseline,
+        splits,
+        args.chain_stage1_bind_addr,
+        args.chain_stage2_bind_addr,
+        native_mtp_requirement,
+    )?;
+    emit_report(&chain, Some(&args.chain_report_out))?;
+    ensure_matches(single.matches && chain.matches, args.allow_mismatch)?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_chain_with_baseline(
+    runtime: &crate::cli::RuntimeArgs,
+    server: &ServerArgs,
+    model_identity: &ModelIdentity,
+    baseline: FullModelResult,
+    splits: (u32, u32),
+    stage1_bind_addr: SocketAddr,
+    stage2_bind_addr: SocketAddr,
+    native_mtp_requirement: super::native_mtp::NativeMtpRequirement,
+) -> Result<ChainReport> {
     let chain = run_binary_chain(BinaryChainConfig {
-        stage_server_bin: args.server.stage_server_bin,
-        model: args.runtime.model,
-        stage_model: args.runtime.stage_model,
-        stage_load_mode: args.runtime.stage_load_mode,
+        stage_server_bin: server.stage_server_bin.clone(),
+        model: runtime.model.clone(),
+        stage_model: runtime.stage_model.clone(),
+        stage_load_mode: runtime.stage_load_mode,
         split_layer_1: splits.0,
         split_layer_2: splits.1,
-        layer_end: args.runtime.layer_end,
-        ctx_size: args.runtime.ctx_size,
-        n_batch: args.runtime.n_batch,
-        n_ubatch: args.runtime.n_ubatch,
-        n_gpu_layers: args.runtime.n_gpu_layers,
-        flash_attn: args.runtime.flash_attn,
-        prompt: args.runtime.prompt,
-        stage1_bind_addr: args.stage1_bind_addr,
-        stage2_bind_addr: args.stage2_bind_addr,
-        child_logs: args.server.child_logs,
-        startup_timeout_secs: args.server.startup_timeout_secs,
-        max_inflight: args.server.max_inflight,
+        layer_end: runtime.layer_end,
+        ctx_size: runtime.ctx_size,
+        n_batch: runtime.n_batch,
+        n_ubatch: runtime.n_ubatch,
+        n_gpu_layers: runtime.n_gpu_layers,
+        flash_attn: runtime.flash_attn,
+        prompt: runtime.prompt.clone(),
+        stage1_bind_addr,
+        stage2_bind_addr,
+        child_logs: server.child_logs,
+        startup_timeout_secs: server.startup_timeout_secs,
+        max_inflight: server.max_inflight,
         model_identity: model_identity.clone(),
         native_mtp_verification: native_mtp_requirement.require_draft,
     })?;
@@ -119,10 +180,10 @@ pub fn chain(args: ChainArgs) -> Result<()> {
             &native_mtp_verification,
             native_mtp_requirement,
         );
-    let report = ChainReport {
+    Ok(ChainReport {
         mode: "chain",
         status: status(matches),
-        model_identity,
+        model_identity: model_identity.clone(),
         matches,
         native_mtp_draft_required: native_mtp_requirement.require_draft,
         baseline: baseline_report(baseline),
@@ -162,10 +223,7 @@ pub fn chain(args: ChainArgs) -> Result<()> {
             },
         ],
         stage_models: chain.stage_models,
-    };
-    emit_report(&report, args.output.report_out.as_deref())?;
-    ensure_matches(report.matches, args.allow_mismatch)?;
-    Ok(())
+    })
 }
 
 pub fn split_scan(args: SplitScanArgs) -> Result<()> {

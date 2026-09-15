@@ -15,6 +15,8 @@ use release_integrity::{
 };
 
 const DEFAULT_RELEASE_REPO: &str = "Mesh-LLM/mesh-llm";
+const PRODUCT_MANIFEST_NAME: &str = "product-manifest.json";
+const NATIVE_RUNTIMES_DIR_NAME: &str = "native-runtimes";
 const PATH_WRITE_PROBE_PREFIX: &str = ".mesh-llm-write-probe";
 #[cfg(not(windows))]
 pub(super) const INSTALL_SCRIPT_URL: &str =
@@ -602,6 +604,18 @@ mod zip_tests {
         Ok(())
     }
 }
+/// Files and directories a downloaded bundle installs into the install dir.
+///
+/// release bundles come in two layouts:
+///
+/// - legacy flat bundles (pre product-v2): only top-level files, including the
+///   mesh-llm binary.
+/// - composed product-v2 bundles (v0.75.0 and newer): the mesh-llm binary plus
+///   product-manifest.json, host-imports.json, and a native-runtimes/ directory
+///   holding the packaged runtime tree.
+///
+/// The returned paths are relative to the extracted bundle root, sorted so the
+/// mesh binary installs first.
 fn collect_bundle_files(
     extracted: &Path,
     expected_flavor: backend::BinaryFlavor,
@@ -609,6 +623,7 @@ fn collect_bundle_files(
     let _ = expected_flavor;
 
     let mut files = Vec::new();
+    let mut dirs = Vec::new();
     for entry in std::fs::read_dir(extracted)
         .with_context(|| format!("Failed to read {}", extracted.display()))?
     {
@@ -617,7 +632,7 @@ fn collect_bundle_files(
         let name = entry.file_name();
         let name = name.to_string_lossy().to_string();
         if file_type.is_dir() {
-            anyhow::bail!("Unexpected directory in bundle: {name}");
+            dirs.push(name.clone());
         }
         if file_type.is_file() {
             files.push(name);
@@ -630,8 +645,31 @@ fn collect_bundle_files(
         "Downloaded bundle missing {}",
         mesh_binary_name()
     );
-    files.sort_by_key(|name| (name == &mesh_binary_name(), name.clone()));
-    Ok(files)
+    if dirs.contains(&NATIVE_RUNTIMES_DIR_NAME.to_string()) {
+        // Composed product-v2 bundle: the runtime tree ships inside the
+        // bundle and installs recursively alongside the host.
+        anyhow::ensure!(
+            files.iter().any(|name| name == PRODUCT_MANIFEST_NAME),
+            "Downloaded bundle has {} but no {PRODUCT_MANIFEST_NAME}",
+            NATIVE_RUNTIMES_DIR_NAME
+        );
+    } else {
+        // Legacy flat bundle: no directory is expected.
+        anyhow::ensure!(
+            dirs.is_empty(),
+            "Unexpected directory in bundle: {}",
+            dirs[0]
+        );
+    }
+
+    let mut staged = files;
+    if dirs.contains(&NATIVE_RUNTIMES_DIR_NAME.to_string()) {
+        staged.push(NATIVE_RUNTIMES_DIR_NAME.to_string());
+    }
+    // The mesh binary must install first so a mid-install failure can never
+    // leave the new runtime tree beside an old host.
+    staged.sort_by_key(|name| (name != &mesh_binary_name(), name.clone()));
+    Ok(staged)
 }
 
 fn verify_staged_mesh_binary_version(extracted: &Path, expected_version: &str) -> Result<()> {
@@ -662,23 +700,190 @@ fn verify_staged_mesh_binary_version(extracted: &Path, expected_version: &str) -
     Ok(())
 }
 
+#[cfg(test)]
+fn installed_runtime_tree(install_dir: &Path) -> PathBuf {
+    install_dir.join(NATIVE_RUNTIMES_DIR_NAME).join("runtime")
+}
+
+/// Regression tests for the product-v2 self-update break: since v0.75.0 the
+/// release archives carry a nested `native-runtimes/` directory that must
+/// survive extraction (top-level stripped), pass `collect_bundle_files`, and
+/// install recursively. The updater used to bail with "Unexpected directory
+/// in bundle: native-runtimes", breaking every in-app update since v0.75.0.
+#[cfg(all(unix, test))]
+mod composed_product_regression_tests {
+    use super::*;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let unique = format!(
+            "mesh-llm-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let path = std::env::temp_dir().join(unique);
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn test_extract_and_stage_composed_product_bundle_tar_gz() {
+        use std::process::Command;
+
+        let base = temp_dir("self-update-pv2-e2e-tar");
+        let bundle_root = base.join("mesh-bundle");
+        std::fs::create_dir_all(
+            bundle_root
+                .join("native-runtimes")
+                .join("runtime")
+                .join("lib"),
+        )
+        .unwrap();
+        std::fs::write(bundle_root.join(mesh_binary_name()), b"binary").unwrap();
+        std::fs::write(bundle_root.join("host-imports.json"), b"{}").unwrap();
+        std::fs::write(bundle_root.join(PRODUCT_MANIFEST_NAME), b"{}").unwrap();
+        std::fs::write(
+            bundle_root
+                .join("native-runtimes")
+                .join("runtime")
+                .join("lib")
+                .join("libggml.dylib"),
+            b"runtime",
+        )
+        .unwrap();
+
+        let archive = base.join("bundle.tar.gz");
+        let status = Command::new("tar")
+            .arg("-C")
+            .arg(&base)
+            .arg("-czf")
+            .arg(&archive)
+            .arg("mesh-bundle")
+            .status()
+            .unwrap();
+        assert!(status.success(), "test tar packaging failed");
+
+        let extracted = base.join("extracted");
+        std::fs::create_dir_all(&extracted).unwrap();
+        extract_bundle_archive(&archive, &extracted).unwrap();
+
+        let staged = collect_bundle_files(&extracted, backend::BinaryFlavor::Cpu).unwrap();
+        assert!(staged.contains(&NATIVE_RUNTIMES_DIR_NAME.to_string()));
+
+        let install_dir = base.join("install");
+        let backup = base.join("backup");
+        std::fs::create_dir_all(&install_dir).unwrap();
+        replace_bundle_files(&install_dir, &extracted, &backup, &staged).unwrap();
+
+        assert_eq!(
+            std::fs::read(install_dir.join(mesh_binary_name())).unwrap(),
+            b"binary"
+        );
+        assert_eq!(
+            std::fs::read(
+                install_dir
+                    .join(NATIVE_RUNTIMES_DIR_NAME)
+                    .join("runtime")
+                    .join("lib")
+                    .join("libggml.dylib")
+            )
+            .unwrap(),
+            b"runtime"
+        );
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// Same composed-product scenario for the Windows zip lane: the zip
+    /// extractor strips the top-level directory and must not resurrect it as
+    /// an unexpected nested directory that `collect_bundle_files` rejects.
+    #[test]
+    fn test_extract_and_stage_composed_product_bundle_zip() {
+        use std::io::Write as _;
+        use zip::CompressionMethod;
+        use zip::write::SimpleFileOptions;
+
+        let base = temp_dir("self-update-pv2-e2e-zip");
+        let archive = base.join("bundle.zip");
+        let file = std::fs::File::create(&archive).unwrap();
+        let mut writer = zip::ZipWriter::new(file);
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+
+        writer.add_directory("mesh-bundle/", options).unwrap();
+        writer
+            .add_directory("mesh-bundle/native-runtimes/", options)
+            .unwrap();
+        writer
+            .add_directory("mesh-bundle/native-runtimes/runtime/", options)
+            .unwrap();
+        writer.start_file("mesh-bundle/mesh-llm", options).unwrap();
+        writer.write_all(b"binary").unwrap();
+        writer
+            .start_file("mesh-bundle/product-manifest.json", options)
+            .unwrap();
+        writer.write_all(b"{}").unwrap();
+        writer
+            .start_file("mesh-bundle/host-imports.json", options)
+            .unwrap();
+        writer.write_all(b"{}").unwrap();
+        writer
+            .start_file("mesh-bundle/native-runtimes/runtime/libggml.dylib", options)
+            .unwrap();
+        writer.write_all(b"runtime").unwrap();
+        writer.finish().unwrap();
+
+        let extracted = base.join("extracted");
+        std::fs::create_dir_all(&extracted).unwrap();
+        extract_bundle_archive(&archive, &extracted).unwrap();
+
+        let staged = collect_bundle_files(&extracted, backend::BinaryFlavor::Cpu).unwrap();
+        assert!(staged.contains(&NATIVE_RUNTIMES_DIR_NAME.to_string()));
+
+        let install_dir = base.join("install");
+        let backup = base.join("backup");
+        std::fs::create_dir_all(&install_dir).unwrap();
+        replace_bundle_files(&install_dir, &extracted, &backup, &staged).unwrap();
+
+        assert_eq!(
+            std::fs::read(install_dir.join(mesh_binary_name())).unwrap(),
+            b"binary"
+        );
+        assert_eq!(
+            std::fs::read(
+                install_dir
+                    .join(NATIVE_RUNTIMES_DIR_NAME)
+                    .join("runtime")
+                    .join("libggml.dylib")
+            )
+            .unwrap(),
+            b"runtime"
+        );
+        let _ = std::fs::remove_dir_all(base);
+    }
+}
+
 #[cfg(not(windows))]
-fn backup_existing_file(
+fn backup_existing_path(
     install_dir: &Path,
     backup: &Path,
-    name: &str,
+    relative: &str,
     backed_up: &mut Vec<String>,
 ) -> Result<()> {
-    if backed_up.iter().any(|existing| existing == name) {
+    if backed_up.iter().any(|existing| existing == relative) {
         return Ok(());
     }
 
-    let dest = install_dir.join(name);
+    let dest = install_dir.join(relative);
     if !dest.exists() {
         return Ok(());
     }
 
-    let backup_path = backup.join(name);
+    let backup_path = backup.join(relative);
+    if let Some(parent) = backup_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create backup directory {}", parent.display()))?;
+    }
     std::fs::rename(&dest, &backup_path).with_context(|| {
         format!(
             "Failed to move {} to {}",
@@ -686,7 +891,7 @@ fn backup_existing_file(
             backup_path.display()
         )
     })?;
-    backed_up.push(name.to_string());
+    backed_up.push(relative.to_string());
     Ok(())
 }
 
@@ -709,15 +914,15 @@ fn replace_bundle_files(
 
     let result = (|| {
         for name in managed_names {
-            backup_existing_file(install_dir, backup, &name, &mut backed_up)?;
+            backup_existing_path(install_dir, backup, &name, &mut backed_up)?;
         }
-        for name in staged_files {
-            backup_existing_file(install_dir, backup, name, &mut backed_up)?;
+        for relative in staged_files {
+            backup_existing_path(install_dir, backup, relative, &mut backed_up)?;
         }
 
-        for name in staged_files {
-            let source = extracted.join(name);
-            let dest = install_dir.join(name);
+        for relative in staged_files {
+            let source = extracted.join(relative);
+            let dest = install_dir.join(relative);
             if let Err(err) = std::fs::rename(&source, &dest) {
                 return Err(err).with_context(|| {
                     format!(
@@ -727,7 +932,7 @@ fn replace_bundle_files(
                     )
                 });
             }
-            installed.push(name.clone());
+            installed.push(relative.clone());
         }
 
         Ok(())
@@ -845,15 +1050,38 @@ $managedNames = @((ConvertFrom-Json '{managed_json_ps}'))
 $stagedNames = @((ConvertFrom-Json '{staged_json_ps}'))
 $args = @((ConvertFrom-Json '{args_json_ps}'))
 
+function Ensure-Parent([string]$Path) {{
+    $parent = Split-Path -Parent $Path
+    if (-not (Test-Path $parent)) {{
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }}
+}}
+
+function Move-ToBackup([string]$Name, [System.Collections.Generic.List[string]]$BackedUp) {{
+    $dest = Join-Path $installDir $Name
+    if (-not (Test-Path $dest)) {{
+        return
+    }}
+    $backupPath = Join-Path $backupDir $Name
+    Ensure-Parent $backupPath
+    Move-Item -Force $dest $backupPath
+    $BackedUp.Add($Name) | Out-Null
+}}
+
 function Restore-Backups([string[]]$BackedUpNames, [string[]]$InstalledNames) {{
     foreach ($name in $InstalledNames) {{
         $dest = Join-Path $installDir $name
-        Remove-Item $dest -Force -ErrorAction SilentlyContinue
+        if (Test-Path $dest -PathType Container) {{
+            Remove-Item $dest -Recurse -Force -ErrorAction SilentlyContinue
+        }} else {{
+            Remove-Item $dest -Force -ErrorAction SilentlyContinue
+        }}
     }}
     foreach ($name in $BackedUpNames) {{
         $backupPath = Join-Path $backupDir $name
         $dest = Join-Path $installDir $name
         if (Test-Path $backupPath) {{
+            Ensure-Parent $dest
             Move-Item -Force $backupPath $dest
         }}
     }}
@@ -873,31 +1101,17 @@ try {{
         if ($stagedNames -contains $name) {{
             continue
         }}
-        $dest = Join-Path $installDir $name
-        if (-not (Test-Path $dest)) {{
-            continue
-        }}
-        $backupPath = Join-Path $backupDir $name
-        Move-Item -Force $dest $backupPath
-        $backedUp.Add($name) | Out-Null
+        Move-ToBackup $name $backedUp
     }}
 
     foreach ($name in $stagedNames) {{
-        $dest = Join-Path $installDir $name
-        if (-not (Test-Path $dest)) {{
-            continue
-        }}
-        if ($backedUp.Contains($name)) {{
-            continue
-        }}
-        $backupPath = Join-Path $backupDir $name
-        Move-Item -Force $dest $backupPath
-        $backedUp.Add($name) | Out-Null
+        Move-ToBackup $name $backedUp
     }}
 
     foreach ($name in $stagedNames) {{
         $source = Join-Path $stagingDir $name
         $dest = Join-Path $installDir $name
+        Ensure-Parent $dest
         Move-Item -Force $source $dest
         $installed.Add($name) | Out-Null
     }}
@@ -939,13 +1153,24 @@ fn rollback_bundle_replace(
     installed: &[String],
     backed_up: &[String],
 ) {
-    for name in installed.iter().rev() {
-        let dest = install_dir.join(name);
-        let _ = std::fs::remove_file(&dest);
+    // Staged entries can be whole trees (`native-runtimes`). `remove_file`
+    // no-ops on a directory, which would leave the new tree in place and make
+    // the restore rename below fail.
+    for relative in installed.iter().rev() {
+        let dest = install_dir.join(relative);
+        match std::fs::symlink_metadata(&dest) {
+            Ok(metadata) if metadata.is_dir() => {
+                let _ = std::fs::remove_dir_all(&dest);
+            }
+            Ok(_) => {
+                let _ = std::fs::remove_file(&dest);
+            }
+            Err(_) => {}
+        }
     }
-    for name in backed_up.iter().rev() {
-        let backup_path = backup.join(name);
-        let dest = install_dir.join(name);
+    for relative in backed_up.iter().rev() {
+        let backup_path = backup.join(relative);
+        let dest = install_dir.join(relative);
         let _ = std::fs::rename(&backup_path, &dest);
     }
 }
@@ -1363,6 +1588,239 @@ mod tests {
             std::fs::read(install_dir.join("sidecar")).unwrap(),
             b"old-sidecar"
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_replace_bundle_files_installs_and_backs_up_runtime_tree() {
+        let dir = temp_dir("self-update-runtime-tree");
+        let install_dir = dir.join("install");
+        let extracted = dir.join("extracted");
+        let backup = dir.join("backup");
+        std::fs::create_dir_all(&install_dir).unwrap();
+        std::fs::create_dir_all(installed_runtime_tree(&install_dir).join("lib")).unwrap();
+        std::fs::create_dir_all(
+            extracted
+                .join("native-runtimes")
+                .join("runtime")
+                .join("lib"),
+        )
+        .unwrap();
+        std::fs::write(install_dir.join(mesh_binary_name()), b"old-binary").unwrap();
+        std::fs::write(
+            installed_runtime_tree(&install_dir)
+                .join("lib")
+                .join("core.dylib"),
+            b"old-runtime",
+        )
+        .unwrap();
+        std::fs::write(install_dir.join(PRODUCT_MANIFEST_NAME), b"old-manifest").unwrap();
+        std::fs::write(extracted.join(mesh_binary_name()), b"new-binary").unwrap();
+        std::fs::write(extracted.join(PRODUCT_MANIFEST_NAME), b"new-manifest").unwrap();
+        std::fs::write(
+            extracted
+                .join("native-runtimes")
+                .join("runtime")
+                .join("lib")
+                .join("core.dylib"),
+            b"new-runtime",
+        )
+        .unwrap();
+
+        let staged = vec![
+            PRODUCT_MANIFEST_NAME.to_string(),
+            NATIVE_RUNTIMES_DIR_NAME.to_string(),
+            mesh_binary_name(),
+        ];
+        replace_bundle_files(&install_dir, &extracted, &backup, &staged).unwrap();
+
+        assert_eq!(
+            std::fs::read(install_dir.join(mesh_binary_name())).unwrap(),
+            b"new-binary"
+        );
+        assert_eq!(
+            std::fs::read(install_dir.join(PRODUCT_MANIFEST_NAME)).unwrap(),
+            b"new-manifest"
+        );
+        assert_eq!(
+            std::fs::read(
+                installed_runtime_tree(&install_dir)
+                    .join("lib")
+                    .join("core.dylib")
+            )
+            .unwrap(),
+            b"new-runtime"
+        );
+        // Superseded files must be restorable from the backup.
+        assert_eq!(
+            std::fs::read(
+                backup
+                    .join("native-runtimes")
+                    .join("runtime")
+                    .join("lib")
+                    .join("core.dylib")
+            )
+            .unwrap(),
+            b"old-runtime"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_replace_bundle_files_rolls_back_runtime_tree() {
+        let dir = temp_dir("self-update-runtime-rollback");
+        let install_dir = dir.join("install");
+        let extracted = dir.join("extracted");
+        let backup = dir.join("backup");
+        std::fs::create_dir_all(&install_dir).unwrap();
+        std::fs::create_dir_all(extracted.join("native-runtimes").join("runtime")).unwrap();
+        std::fs::write(install_dir.join(mesh_binary_name()), b"old-binary").unwrap();
+        std::fs::write(extracted.join(mesh_binary_name()), b"new-binary").unwrap();
+        std::fs::write(
+            extracted
+                .join("native-runtimes")
+                .join("runtime")
+                .join("core.dylib"),
+            b"new-runtime",
+        )
+        .unwrap();
+
+        let staged = vec![
+            NATIVE_RUNTIMES_DIR_NAME.to_string(),
+            mesh_binary_name(),
+            "missing.bin".to_string(),
+        ];
+        let err = replace_bundle_files(&install_dir, &extracted, &backup, &staged).unwrap_err();
+
+        assert!(err.to_string().contains("Failed to install"));
+        assert_eq!(
+            std::fs::read(install_dir.join(mesh_binary_name())).unwrap(),
+            b"old-binary"
+        );
+        assert!(
+            !install_dir.join(NATIVE_RUNTIMES_DIR_NAME).exists(),
+            "runtime tree installed by a failed update must be rolled back"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_replace_bundle_files_restores_previous_runtime_tree() {
+        let dir = temp_dir("self-update-runtime-restore");
+        let install_dir = dir.join("install");
+        let extracted = dir.join("extracted");
+        let backup = dir.join("backup");
+        std::fs::create_dir_all(installed_runtime_tree(&install_dir).join("lib")).unwrap();
+        std::fs::create_dir_all(extracted.join("native-runtimes").join("runtime")).unwrap();
+        std::fs::write(install_dir.join(mesh_binary_name()), b"old-binary").unwrap();
+        std::fs::write(
+            installed_runtime_tree(&install_dir)
+                .join("lib")
+                .join("core.dylib"),
+            b"old-runtime",
+        )
+        .unwrap();
+        std::fs::write(extracted.join(mesh_binary_name()), b"new-binary").unwrap();
+        std::fs::write(
+            extracted
+                .join("native-runtimes")
+                .join("runtime")
+                .join("core.dylib"),
+            b"new-runtime",
+        )
+        .unwrap();
+
+        let staged = vec![
+            NATIVE_RUNTIMES_DIR_NAME.to_string(),
+            mesh_binary_name(),
+            "missing.bin".to_string(),
+        ];
+        let err = replace_bundle_files(&install_dir, &extracted, &backup, &staged).unwrap_err();
+
+        assert!(err.to_string().contains("Failed to install"));
+        assert_eq!(
+            std::fs::read(install_dir.join(mesh_binary_name())).unwrap(),
+            b"old-binary"
+        );
+        assert_eq!(
+            std::fs::read(
+                installed_runtime_tree(&install_dir)
+                    .join("lib")
+                    .join("core.dylib")
+            )
+            .unwrap(),
+            b"old-runtime"
+        );
+        assert!(
+            !installed_runtime_tree(&install_dir)
+                .join("core.dylib")
+                .exists(),
+            "the failed update's runtime files must not survive rollback"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_collect_bundle_files_accepts_product_v2_layout() {
+        let dir = temp_dir("self-update-pv2-collect");
+        std::fs::create_dir_all(dir.join("native-runtimes").join("runtime").join("lib")).unwrap();
+        std::fs::write(dir.join(mesh_binary_name()), b"binary").unwrap();
+        std::fs::write(dir.join("host-imports.json"), b"{}").unwrap();
+        std::fs::write(dir.join(PRODUCT_MANIFEST_NAME), b"{}").unwrap();
+        std::fs::write(
+            dir.join("native-runtimes")
+                .join("runtime")
+                .join("core.dylib"),
+            b"runtime",
+        )
+        .unwrap();
+
+        let staged = collect_bundle_files(&dir, backend::BinaryFlavor::Cpu).unwrap();
+        assert_eq!(
+            staged,
+            vec![
+                mesh_binary_name(),
+                "host-imports.json".to_string(),
+                NATIVE_RUNTIMES_DIR_NAME.to_string(),
+                PRODUCT_MANIFEST_NAME.to_string(),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_collect_bundle_files_rejects_product_v2_without_manifest() {
+        let dir = temp_dir("self-update-pv2-manifest");
+        std::fs::create_dir_all(dir.join("native-runtimes").join("runtime")).unwrap();
+        std::fs::write(dir.join(mesh_binary_name()), b"binary").unwrap();
+
+        let err = collect_bundle_files(&dir, backend::BinaryFlavor::Cpu).unwrap_err();
+        assert!(err.to_string().contains(PRODUCT_MANIFEST_NAME));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_collect_bundle_files_rejects_unexpected_directory() {
+        let dir = temp_dir("self-update-unexpected-dir");
+        std::fs::create_dir_all(dir.join("surprise")).unwrap();
+        std::fs::write(dir.join(mesh_binary_name()), b"binary").unwrap();
+
+        let err = collect_bundle_files(&dir, backend::BinaryFlavor::Cpu).unwrap_err();
+        assert!(err.to_string().contains("Unexpected directory in bundle"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_collect_bundle_files_accepts_legacy_flat_bundle() {
+        let dir = temp_dir("self-update-legacy-collect");
+        std::fs::write(dir.join(mesh_binary_name()), b"binary").unwrap();
+        std::fs::write(dir.join("sidecar.txt"), b"sidecar").unwrap();
+
+        let staged = collect_bundle_files(&dir, backend::BinaryFlavor::Cpu).unwrap();
+        assert_eq!(staged, vec![mesh_binary_name(), "sidecar.txt".to_string()]);
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -1147,6 +1147,10 @@ Invoke-InRepo {
         "-DLLAMA_BUILD_EXAMPLES=OFF",
         "-DLLAMA_BUILD_TESTS=OFF",
         "-DGGML_BUILD_TESTS=OFF",
+        # Keep every Windows native build below the shortest tool in the
+        # compiler chain, regardless of backend. CMake hashes long object
+        # paths once this limit is reached.
+        "-DCMAKE_OBJECT_PATH_MAX=180",
         # mtmd video pulls in the ffmpeg subprocess path (sheredom/subprocess.h)
         # that mesh-llm does not use; keep it off to match build-llama.sh.
         "-DMTMD_VIDEO=OFF"

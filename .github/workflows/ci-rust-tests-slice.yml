@@ -97,7 +97,7 @@ jobs:
       matrix:
         batch: ${{ fromJson(inputs.rust_tests_matrix) }}
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
     defaults:
       run:
         shell: bash
@@ -106,7 +106,6 @@ jobs:
       LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-static
       MESH_LLM_SKIP_UI: "1"
       MESH_LLM_REQUIRE_SCCACHE: "1"
-      RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
       RUSTC_WRAPPER: sccache
     steps:
       - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
@@ -129,7 +128,7 @@ jobs:
         uses: ./.github/actions/restore-sccache-seed
         with:
           allow_trusted_seed: ${{ needs.runner_policy.outputs.allow_trusted_sccache_seed }}
-          cache_key: mesh-llm-sccache-seed-linux-x86_64-img-8d93de6b-epoch-8d93de6b-v2-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', 'Justfile', 'just/**') }}
+          cache_key: mesh-llm-sccache-seed-linux-x86_64-img-f499b79b-epoch-f499b79b-v3-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', 'Justfile', 'just/**') }}
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
@@ -213,7 +212,7 @@ jobs:
     runs-on: ${{ needs.runner_policy.outputs.runner }}
     timeout-minutes: 60
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
     defaults:
       run:
         shell: bash
@@ -222,7 +221,6 @@ jobs:
       LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-static
       MESH_LLM_SKIP_UI: "1"
       MESH_LLM_REQUIRE_SCCACHE: "1"
-      RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
       RUSTC_WRAPPER: sccache
     steps:
       - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
@@ -245,7 +243,7 @@ jobs:
         uses: ./.github/actions/restore-sccache-seed
         with:
           allow_trusted_seed: ${{ needs.runner_policy.outputs.allow_trusted_sccache_seed }}
-          cache_key: mesh-llm-sccache-seed-linux-x86_64-img-8d93de6b-epoch-8d93de6b-v2-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', 'Justfile', 'just/**') }}
+          cache_key: mesh-llm-sccache-seed-linux-x86_64-img-f499b79b-epoch-f499b79b-v3-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', 'Justfile', 'just/**') }}
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
@@ -290,12 +288,19 @@ jobs:
           test_binary="$(
             cargo test --locked -p mesh-llm-host-runtime --no-default-features \
               --lib --no-run --message-format=json |
-              jq -r 'select(
-                .reason == "compiler-artifact" and
-                .target.name == "mesh_llm_host_runtime" and
-                .profile.test == true and
-                .executable != null
-              ) | .executable' |
+              jq -r '
+                if .reason == "compiler-message" then
+                  (.message.rendered // empty) | stderr | empty
+                elif .reason == "compiler-artifact" and
+                  .target.name == "mesh_llm_host_runtime" and
+                  .profile.test == true and
+                  .executable != null
+                then
+                  .executable
+                else
+                  empty
+                end
+              ' |
               tail -n 1
           )"
           if [[ -z "$test_binary" || ! -x "$test_binary" ]]; then

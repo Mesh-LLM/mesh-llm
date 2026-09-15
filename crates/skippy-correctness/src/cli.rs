@@ -12,6 +12,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum CommandKind {
+    CoreParity(CoreParityArgs),
     SingleStep(SingleStepArgs),
     Chain(ChainArgs),
     SplitScan(SplitScanArgs),
@@ -20,6 +21,32 @@ pub enum CommandKind {
     NativeMtpOpenAiAb(Box<NativeMtpOpenAiAbArgs>),
     GlmDsaStage0Trace(Box<GlmDsaStage0TraceArgs>),
     StageFaParity(StageFaParityArgs),
+}
+
+#[derive(Args)]
+pub struct CoreParityArgs {
+    #[command(flatten)]
+    pub runtime: RuntimeArgs,
+    #[command(flatten)]
+    pub server: ServerArgs,
+    #[command(flatten)]
+    pub native_mtp: NativeMtpArgs,
+    #[arg(long, default_value_t = 15)]
+    pub split_layer: u32,
+    #[arg(long, default_value = "10,20")]
+    pub splits: String,
+    #[arg(long, default_value = "127.0.0.1:19021")]
+    pub single_stage1_bind_addr: SocketAddr,
+    #[arg(long, default_value = "127.0.0.1:19031")]
+    pub chain_stage1_bind_addr: SocketAddr,
+    #[arg(long, default_value = "127.0.0.1:19032")]
+    pub chain_stage2_bind_addr: SocketAddr,
+    #[arg(long)]
+    pub single_report_out: PathBuf,
+    #[arg(long)]
+    pub chain_report_out: PathBuf,
+    #[arg(long)]
+    pub allow_mismatch: bool,
 }
 
 #[derive(Args, Clone)]

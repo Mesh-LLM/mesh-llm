@@ -74,7 +74,9 @@ pub(super) fn apply_runtime_controls_behavior(setting: &mut ConfigSettingSchema,
         "plugin.<plugin-name>.startup.optional" | "plugin.<plugin-name>.startup.lazy_start" => {
             set_static_options(setting)
         }
-        "runtime.mode" | "runtime.startup_failure_policy" => set_static_options(setting),
+        "runtime.mode" | "runtime.startup_failure_policy" | "runtime.lifecycle_log_parser" => {
+            set_static_options(setting)
+        }
         "runtime.native_runtime.selection" => {
             set_runtime_native_backend_options(setting);
             push_non_empty_constraint(setting);
