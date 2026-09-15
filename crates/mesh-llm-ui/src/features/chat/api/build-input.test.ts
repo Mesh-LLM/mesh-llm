@@ -88,7 +88,7 @@ describe('buildResponsesInput', () => {
     expect(request.input).toEqual([{ role: 'user', content: 'Hello mesh' }])
   })
 
-  it('asks for a direct answer instead of hidden reasoning', async () => {
+  it('asks for minimal reasoning effort', async () => {
     const request = await buildResponsesInput(
       [createMessage([{ type: 'text', content: 'what is updog' }])],
       'model-a',
@@ -96,7 +96,8 @@ describe('buildResponsesInput', () => {
       'request-456'
     )
 
-    expect(request.chat_template_kwargs).toEqual({ enable_thinking: false })
+    expect(request.reasoning_effort).toBe('minimal')
+    expect(request).not.toHaveProperty('chat_template_kwargs')
   })
 
   it('prepends the saved system prompt as a responses system message', async () => {
