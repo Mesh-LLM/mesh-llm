@@ -37,8 +37,9 @@
 /// Returns `None` — never a digest of a body the reference would refuse —
 /// when `body` contains a JSON integer literal outside the reference's safe
 /// range; see [`MAX_SAFE_INTEGER`].
-pub fn request_body_digest(body: &serde_json::Value) -> Option<String> {
-    if contains_unsafe_integer(body) {
+pub fn request_body_digest(body: &serde_json::Value, source_json: Option<&[u8]>) -> Option<String> {
+    if contains_unsafe_integer(body) || source_json.is_some_and(contains_oversized_integer_literal)
+    {
         return None;
     }
     use sha2::{Digest, Sha256};
@@ -74,6 +75,69 @@ fn contains_unsafe_integer(value: &serde_json::Value) -> bool {
     }
 }
 
+/// Detect an integer token that serde_json would otherwise round to `f64`
+/// after it exceeds `u64`. This small lexer runs over the original request
+/// body so exponent/decimal floats remain distinguishable from integer
+/// literals; strings are skipped, including escaped quotes.
+fn contains_oversized_integer_literal(source: &[u8]) -> bool {
+    let mut index = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+    while index < source.len() {
+        let byte = source[index];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            index += 1;
+            continue;
+        }
+        if byte == b'"' {
+            in_string = true;
+            index += 1;
+            continue;
+        }
+        if byte == b'-' || byte.is_ascii_digit() {
+            let start = index;
+            index += 1;
+            while index < source.len()
+                && matches!(
+                    source[index],
+                    b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-'
+                )
+            {
+                index += 1;
+            }
+            let token = &source[start..index];
+            if !token.contains(&b'.')
+                && !token.contains(&b'e')
+                && !token.contains(&b'E')
+                && integer_token_exceeds_safe_range(token)
+            {
+                return true;
+            }
+            continue;
+        }
+        index += 1;
+    }
+    false
+}
+
+fn integer_token_exceeds_safe_range(token: &[u8]) -> bool {
+    let digits = token.strip_prefix(b"-").unwrap_or(token);
+    let digits = digits
+        .iter()
+        .skip_while(|digit| **digit == b'0')
+        .copied()
+        .collect::<Vec<_>>();
+    let safe = MAX_SAFE_INTEGER.to_string();
+    digits.len() > safe.len() || (digits.len() == safe.len() && digits.as_slice() > safe.as_bytes())
+}
+
 /// Replace every JSON float with its exact decimal-string form via
 /// [`float_repr`] (mirrors the Python reference's `_stringify_floats`, which
 /// stringifies via `repr(float)`).
@@ -91,9 +155,9 @@ fn contains_unsafe_integer(value: &serde_json::Value) -> bool {
 fn stringify_floats(value: &serde_json::Value) -> serde_json::Value {
     use serde_json::Value;
     match value {
-        // Without the `arbitrary_precision` feature (not enabled anywhere in
-        // this workspace), `is_f64()` is already exclusive with
-        // `is_i64()`/`is_u64()` — an integer literal never takes this branch.
+        // Without serde_json's `arbitrary_precision` feature, `is_f64()` is
+        // exclusive with in-range integer literals. Oversized integer syntax
+        // is checked against the original source before this traversal.
         Value::Number(n) if n.is_f64() => match n.as_f64() {
             Some(f) => Value::String(float_repr(f)),
             // Unreachable given the guard above; keep the original value
@@ -246,6 +310,10 @@ fn jcs_string(s: &str, out: &mut String) {
 mod tests {
     use super::*;
 
+    fn digest(body: &serde_json::Value) -> Option<String> {
+        request_body_digest(body, None)
+    }
+
     /// The host's `request_body_digest` is byte-for-byte the value a live run
     /// of the Python reference, `capsule_sidecar.digest_json`, produces over
     /// the identical JSON value:
@@ -275,7 +343,7 @@ mod tests {
             "max_tokens": 512
         });
         let expected = "a6329c5ebb66562f38a8136a8d8511b6aeed166e4c7d889b9133ac96fc49a9d5";
-        assert_eq!(request_body_digest(&body).as_deref(), Some(expected));
+        assert_eq!(digest(&body).as_deref(), Some(expected));
     }
 
     /// The same body, plus two explicit-`null` optional fields (as real
@@ -299,7 +367,7 @@ mod tests {
             "user": null
         });
         let expected = "ee8aeb450ccf8c8017caae0d3733d3dcd62ec88752053894118d28cea0d176fe";
-        assert_eq!(request_body_digest(&body).as_deref(), Some(expected));
+        assert_eq!(digest(&body).as_deref(), Some(expected));
     }
 
     /// `float_repr`'s fixed-vs-exponent switch and digit sequence, each
@@ -334,31 +402,31 @@ mod tests {
     #[test]
     fn request_body_digest_matches_python_reference_for_float_edge_cases() {
         assert_eq!(
-            request_body_digest(&serde_json::json!({"v": 1e-5_f64})).as_deref(),
+            digest(&serde_json::json!({"v": 1e-5_f64})).as_deref(),
             Some("8edda8e740022353cd222db1ff9c56e6bef76663a10814bd6aaf579f8d0e2332")
         );
         assert_eq!(
-            request_body_digest(&serde_json::json!({"v": 1e-7_f64})).as_deref(),
+            digest(&serde_json::json!({"v": 1e-7_f64})).as_deref(),
             Some("bbe43d466a7e53136ff444be1b91529154b547b43774b99d7a6cf41bb4a3ae34")
         );
         assert_eq!(
-            request_body_digest(&serde_json::json!({"v": 1e16_f64})).as_deref(),
+            digest(&serde_json::json!({"v": 1e16_f64})).as_deref(),
             Some("318fda488ff6a31c5710e73d0ad02340677be5ed8d553869596ff8b2e27b3b94")
         );
         assert_eq!(
-            request_body_digest(&serde_json::json!({"v": 1e20_f64})).as_deref(),
+            digest(&serde_json::json!({"v": 1e20_f64})).as_deref(),
             Some("edf56ab854860723e8a400417d7605b1405964f0dbd4289bfe8c2373238496f5")
         );
         assert_eq!(
-            request_body_digest(&serde_json::json!({"v": -0.0_f64})).as_deref(),
+            digest(&serde_json::json!({"v": -0.0_f64})).as_deref(),
             Some("7c9018d8078566c67ebff7a4fa6be32f7b4f0f1dbd4e5d3abcaca596e57d6831")
         );
         assert_eq!(
-            request_body_digest(&serde_json::json!({"v": 1e-9_f64})).as_deref(),
+            digest(&serde_json::json!({"v": 1e-9_f64})).as_deref(),
             Some("f253528520b4878440038edf53d7a32b00a08bd216c2a0c0b60ffbf5cda133b0")
         );
         assert_eq!(
-            request_body_digest(&serde_json::json!({"v": 0.1_f64 + 0.2_f64})).as_deref(),
+            digest(&serde_json::json!({"v": 0.1_f64 + 0.2_f64})).as_deref(),
             Some("5204642c42382100bd6fb098cb429a45a4f42c994b67f2de909274e597756b4b")
         );
     }
@@ -379,24 +447,45 @@ mod tests {
     #[test]
     fn request_body_digest_omits_when_body_has_an_unsafe_integer() {
         let safe = serde_json::json!({"v": 9_007_199_254_740_991_i64});
-        assert!(request_body_digest(&safe).is_some(), "2^53-1 is safe");
+        assert!(digest(&safe).is_some(), "2^53-1 is safe");
 
         let one_over = serde_json::json!({"v": 9_007_199_254_740_993_i64});
         assert!(
-            request_body_digest(&one_over).is_none(),
+            digest(&one_over).is_none(),
             "2^53+1 exceeds the reference's safe-integer range"
         );
 
         let nested = serde_json::json!({"a": [1, {"b": 9_007_199_254_740_993_i64}]});
         assert!(
-            request_body_digest(&nested).is_none(),
+            digest(&nested).is_none(),
             "an unsafe integer nested inside an array/object must still be caught"
         );
 
         let negative_over = serde_json::json!({"v": -9_007_199_254_740_993_i64});
         assert!(
-            request_body_digest(&negative_over).is_none(),
+            digest(&negative_over).is_none(),
             "the safe range is symmetric"
+        );
+
+        let above_u64_source = br#"{"v":18446744073709551616}"#;
+        let above_u64: serde_json::Value = serde_json::from_slice(above_u64_source).unwrap();
+        assert!(
+            request_body_digest(&above_u64, Some(above_u64_source)).is_none(),
+            "an integer literal above u64::MAX must not be rounded into a float digest"
+        );
+
+        let exponent_source = br#"{"v":1e20}"#;
+        let exponent: serde_json::Value = serde_json::from_slice(exponent_source).unwrap();
+        assert!(
+            request_body_digest(&exponent, Some(exponent_source)).is_some(),
+            "a floating-point exponent remains digestible"
+        );
+
+        let quoted_source = br#"{"v":"18446744073709551616"}"#;
+        let quoted: serde_json::Value = serde_json::from_slice(quoted_source).unwrap();
+        assert!(
+            request_body_digest(&quoted, Some(quoted_source)).is_some(),
+            "integer-looking text inside a string is not a numeric literal"
         );
     }
 
@@ -406,15 +495,15 @@ mod tests {
     #[test]
     fn request_body_digest_matches_python_reference_for_structural_edge_cases() {
         assert_eq!(
-            request_body_digest(&serde_json::json!({"v": [1, [2, 3], {"a": 1.5}]})).as_deref(),
+            digest(&serde_json::json!({"v": [1, [2, 3], {"a": 1.5}]})).as_deref(),
             Some("1cb385d061fc163f6663b80217f5c262795c669da48c0b788dcc9b328b888226")
         );
         assert_eq!(
-            request_body_digest(&serde_json::json!({"\u{1F600}": 1})).as_deref(),
+            digest(&serde_json::json!({"\u{1F600}": 1})).as_deref(),
             Some("763606c9e0046348cc185a6e829e12ae6c0f3565b940f8184901a4d83dda6c33")
         );
         assert_eq!(
-            request_body_digest(&serde_json::json!({"v": "a\tb"})).as_deref(),
+            digest(&serde_json::json!({"v": "a\tb"})).as_deref(),
             Some("595711cef0e6e4d037e1fae2b1ece32702c442c0501d6362791e31cd1a6c866d")
         );
     }

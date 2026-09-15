@@ -862,7 +862,10 @@ async fn try_route_plugin_model(
             // force parsing); `None` otherwise, never fabricated. The
             // plugin-served completion itself is a stub (zero usage), but the
             // request digest is still the real request that was asked.
-            let request_digest = request.body_json.as_ref().and_then(request_body_digest);
+            let request_digest = request
+                .body_json
+                .as_ref()
+                .and_then(|body| request_body_digest(body, request.body_bytes.as_deref()));
             publish_raw_proxy_terminal(
                 ctx.node,
                 plugin_manager,
@@ -978,7 +981,10 @@ async fn route_request(
         // rather than a fabricated one.
         let request_digest = announce.as_ref().and_then(|_| {
             request.ensure_body_json();
-            request.body_json.as_ref().and_then(request_body_digest)
+            request
+                .body_json
+                .as_ref()
+                .and_then(|body| request_body_digest(body, request.body_bytes.as_deref()))
         });
         if let Some((plugin_manager, exchange_id)) = announce.as_ref() {
             plugin_manager
