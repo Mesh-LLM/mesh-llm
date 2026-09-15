@@ -458,29 +458,14 @@ bump `@playwright/test` in `crates/mesh-llm-ui/package.json`.
 
 ### `setup-macos-lld` composite
 
-`.github/actions/setup-macos-lld` replaces per-callsite
-`brew install lld` plus a hand-rolled `PATH`/`RUSTFLAGS` export with one
-composite: install lld via brew, resolve `$(brew --prefix lld)/bin`, link a
-real `edition = "2024"` probe binary with `-Clink-arg=-fuse-ld=lld`, then
-export `CARGO_ENCODED_RUSTFLAGS=-Clink-arg=-fuse-ld=lld` and the resolved bin
-directory. `CARGO_ENCODED_RUSTFLAGS` **replaces** any
-`target.<triple>.rustflags` from a checked-in `.cargo/config.toml` rather
-than merging with it -- confirmed safe here because every call site is
-macOS-gated and no call site touches an `android` target (the repo's
-`.cargo/config.toml` android entries carry a `-Wl,-z,max-page-size=16384`
-flag that would otherwise silently stop applying). Seven call sites:
+`.github/actions/setup-macos-lld` installs lld through Homebrew, adds its
+resolved bin directory to the job path, and invokes the checked-in
+`scripts/cargo-linker` probe. It does not export Rust flags. The repository
+Cargo config owns every later link, so Android target flags and caller flags
+continue to compose normally. Seven call sites:
 `ci-platform-checks-slice.yml`, `ci-macos-host-slice.yml`,
 `swift-sdk-artifact.yml`, `native-sdk-artifact.yml`,
-`node-sdk-addon-artifact.yml`, and two in `release.yml`. Only the first
-three were reachable by the temporary branch-head harness used to validate
-PR #1380 (no macOS row in
-`native-sdk-artifact.yml`/`node-sdk-addon-artifact.yml` ran there, and
-`release.yml` only runs on an actual release cut) -- the other four are
-statically cleared (macOS-gated, no android target on any of them) rather
-than proven by a real run. `node-sdk-addon-artifact.yml`'s own
-`Validate macOS x64 cross-linker` step is a deliberate near-duplicate of the
-composite's probe, not dead code: it passes `--target x86_64-apple-darwin`
-where the composite only probes the host target.
+`node-sdk-addon-artifact.yml`, and two in `release.yml`.
 
 ### A pinned digest is a frozen artifact
 
@@ -548,6 +533,23 @@ changed paths require the documented CI-control or runner-infrastructure
 fail-open policy.
 
 ## Artifact and cache owners
+
+Repository Cargo defaults require `sccache` and select a target-specific
+linker driver. Full Linux runner images provide mold as the primary linker and
+lld as the compatibility control. macOS jobs install lld through the shared
+setup action; an installed ld64.lld that fails the active SDK/target probe
+falls back to Apple ld. Windows resolves rust-lld or lld-link. The Unix probe
+cache includes the linker, compiler, SDK, host and target-driver identity.
+
+The persistent macOS llama canary keeps a stable arm64-only sccache directory
+and adds an explicit C/C++ cache buster over architecture, backend, profile,
+compiler/SDK identity and native recipe inputs. Its CMake build directory
+remains run-unique, every staged archive is checked with `lipo`, and cache
+statistics are retained in the job log. The nightly KV workflow no longer
+clears the repository Rust wrapper. Every managed Windows compile job uses
+sccache with short `C:\\s` and `C:\\t` roots, and every Windows native backend
+asks CMake to hash object paths at 180 characters before the legacy MAX_PATH
+boundary.
 
 - `restore-release-ui` / `scripts/ui-distribution.py`: verify the shared release
   console's source SHA, version, complete file hashes and built JavaScript entry
@@ -807,14 +809,15 @@ other historical receipts and CPU seed workload coverage remain unknown.
 See [CI topology](../../../../ci/ci.md#qualified-lean-ui-consumers) for admission
 scope and the required candidate-branch lane execution before merge.
 
-### Existing-seed CPU runtime canary
+### CPU runtime seed canary
 
-`depot-canary.yml` has an isolated manual `runtime-seed` mode with three cold/warm
-pairs on fresh GitHub-hosted CPU jobs. It restores only the admitted main seed,
+`depot-canary.yml` has an isolated default-branch-only manual `runtime-seed` mode
+with three cold/warm pairs on fresh GitHub-hosted CPU jobs. It restores only the
+current image-bound, recipe-bound main seed,
 never saves caches or changes production eligibility, and retains negative or
 inconclusive results. The catalog tracks this qualification restore separately
 from the five production restore-action bindings, including the explicitly
-disabled runtime binding. See [CI topology](../../../../ci/ci.md#existing-seed-cpu-runtime-canary)
+disabled runtime binding. See [CI topology](../../../../ci/ci.md#cpu-runtime-seed-canary)
 for identity, measurements and the completed qualification limits.
 
 Runtime exclusion evidence: run `34272984200/1`, source

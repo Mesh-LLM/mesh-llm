@@ -38,7 +38,8 @@ SDK_SMOKE_WORKFLOW = ROOT / ".github" / "workflows" / "sdk-smoke.yml"
 SEED_WARMER = ROOT / ".github" / "workflows" / "cache-warm-sccache.yml"
 SEED_KEY_PATTERN = re.compile(
     r"mesh-llm-sccache-seed-[^\n]+-\$\{\{ hashFiles\('"
-    r"Cargo\.lock', '\.github/cache-version\.txt', 'Justfile', 'just/\*\*'\) \}\}"
+    r"Cargo\.lock', '\.github/cache-version\.txt', '\.cargo/config\.toml', "
+    r"'scripts/cargo-linker', 'scripts/cargo-linker-linux-\*', 'scripts/lib/lld\.sh', 'Justfile', 'just/\*\*'\) \}\}"
 )
 SEED_IMAGE = (
     "ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:"
@@ -93,7 +94,9 @@ class SccacheEvidenceTests(unittest.TestCase):
         expected = {
             ("ci-linux-host-slice.yml", "linux_host"): policy,
             ("ci-linux-runtime-slice.yml", "linux_runtime"): policy,
+            ("ci-quality-slice.yml", "quality_contracts"): policy,
             ("ci-quality-slice.yml", "rust_clippy"): policy,
+            ("ci-quality-slice.yml", "cli_docs_sync"): policy,
             ("ci-rust-tests-slice.yml", "rust_tests"): policy,
             ("ci-rust-tests-slice.yml", "safetensors_runtime_smoke"): policy,
             ("ci-windows-host-slice.yml", "windows_host"): policy,
@@ -112,6 +115,8 @@ class SccacheEvidenceTests(unittest.TestCase):
             ("release.yml", "build_native_runtime_linux_x86_64_cuda"): "true",
             ("release.yml", "build_native_runtime_linux_x86_64_rocm"): effective_release_runner_16,
             ("release.yml", "build_native_runtime_linux_x86_64_vulkan"): effective_release_runner_16,
+            ("release.yml", "publish_crates_preflight"): "false",
+            ("release.yml", "publish_crates"): "false",
             ("static-abi-artifact.yml", "static_abi_artifact"): policy,
             ("swift-sdk-artifact.yml", "swift_sdk_target"): policy,
             ("swift-sdk-artifact.yml", "swift_sdk_artifact"): policy,
@@ -524,6 +529,8 @@ class SccacheEvidenceTests(unittest.TestCase):
             "'Cargo.lock'",
             "'.github/cache-version.txt'",
             "'.cargo/config.toml'",
+            "'scripts/cargo-linker', 'scripts/cargo-linker-linux-*'",
+            "'scripts/lib/lld.sh'",
             "'**/Cargo.toml'",
             "'scripts/ci-rust-sdk-smoke.sh'",
             "'scripts/ci-sdk-fixture.sh'",

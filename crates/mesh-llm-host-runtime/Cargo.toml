@@ -48,11 +48,9 @@ mesh-llm-system = { path = "../mesh-llm-system", version = "0.76.1", features = 
 mesh-llm-types = { path = "../mesh-llm-types", version = "0.76.1"  }
 mesh-llm-ui = { path = "../mesh-llm-ui", version = "0.76.1", default-features = false  }
 mesh-llm-node = { path = "../mesh-llm-node", version = "0.76.1"  }
-mesh-llm-api-server = { path = "../mesh-llm-api-server", version = "0.76.1"  }
 mesh-client = { package = "mesh-llm-client", path = "../mesh-client", version = "0.76.1", features = ["host-io"]  }
 model-artifact = { path = "../model-artifact", version = "0.76.1"  }
 model-hf = { path = "../model-hf", version = "0.76.1"  }
-model-package = { path = "../model-package", version = "0.76.1"  }
 model-ref = { path = "../model-ref", version = "0.76.1"  }
 model-resolver = { path = "../model-resolver", version = "0.76.1"  }
 openai-frontend = { path = "../openai-frontend", version = "0.76.1"  }
@@ -66,7 +64,6 @@ skippy-topology = { path = "../skippy-topology", version = "0.76.1"  }
 skippy-package-format = { path = "../skippy-package-format", version = "0.76.1"  }
 iroh = { version = "1.0.3", default-features = false, features = ["metrics", "fast-apple-datapath", "portmapper", "tls-aws-lc-rs", "unstable-net-report"] }
 tokio = { version = "1", features = ["full"] }
-clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }
@@ -86,19 +83,13 @@ opentelemetry_sdk = { version = "0.32.1", default-features = false, features = [
 opentelemetry-otlp = { version = "0.32.0", default-features = false, features = ["metrics", "http-proto", "reqwest-blocking-client"] }
 rustls = "0.23.36"
 reqwest = { version = "0.13", features = ["stream", "json"] }
-flate2 = "1"
 futures-util = "0.3"
 semver = "1"
 sha2 = "0.11"
-tar = "0.4"
 ed25519-dalek = { version = "=3.0.0", features = ["rand_core"] }
-crypto_box = "0.9"
-chacha20poly1305 = "0.11"
-argon2 = "0.6"
 thiserror = "2"
 zeroize = { version = "1", features = ["derive"] }
 rpassword = "7.5"
-keyring = "4.2"
 chrono = { version = "0.4", features = ["serde"] }
 httparse = "1"
 http = "1"
@@ -116,9 +107,7 @@ axum = "0.8"
 schemars = "1"
 prost = "0.14"
 toml = "1.1"
-zip = { version = "8.6", default-features = false, features = ["deflate"] }
 hf_hub = { package = "mesh-llm-hf-hub", version = "1.0.2", default-features = false, features = ["blocking"] }
-tabwriter = "1"
 tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
