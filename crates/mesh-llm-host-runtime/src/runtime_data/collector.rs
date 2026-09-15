@@ -650,6 +650,7 @@ fn build_model_payload_from_catalog_entry(
         || input.my_serving_models.iter().any(|served| served == name)
         || name == &input.model_name;
     let display_name = crate::models::loaded_remote_catalog_display_name(name)
+        .or_else(|| super::model_labels::source_display_name(name, identity))
         .or_else(|| ctx.display_name_by_name.get(name).cloned())
         .unwrap_or_else(|| name.to_string());
     let route_stats = is_warm.then(|| {

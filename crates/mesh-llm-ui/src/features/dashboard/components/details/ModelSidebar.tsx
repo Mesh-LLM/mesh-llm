@@ -64,7 +64,7 @@ export function ModelSidebar({
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <SheetTitle className="text-lg font-semibold leading-tight tracking-tight [overflow-wrap:anywhere] sm:text-xl">
-                  {model.name}
+                  {model.display_name || model.name}
                 </SheetTitle>
                 <StatusPill
                   label={
@@ -82,7 +82,7 @@ export function ModelSidebar({
                 />
               </div>
               <SheetDescription className="mt-1.5 text-sm text-muted-foreground [overflow-wrap:anywhere]">
-                {model.name}
+                {model.display_name || model.name}
               </SheetDescription>
             </div>
             {onBack ? (
@@ -255,7 +255,11 @@ export function ModelSidebar({
                 The same model file shown as the mesh shorthand, repository path, and pinned revision.
               </p>
               <div className="grid gap-3">
-                <ModelMetaItem label="Shorthand" value={model.name} copyValue={model.name} />
+                <ModelMetaItem
+                  label="Shorthand"
+                  value={model.display_name || model.name}
+                  copyValue={model.display_name || model.name}
+                />
                 {fullFileName ? (
                   <ModelMetaItem label="Full name" value={fullFileName} copyValue={fullFileName} />
                 ) : null}
