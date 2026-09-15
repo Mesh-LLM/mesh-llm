@@ -7,6 +7,11 @@ pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
 pub const ABI_VERSION_PATCH: u32 = 56;
 
+// Propagate static native archive changes through Cargo dependency metadata so
+// final binaries are relinked after CMake rebuilds llama.cpp.
+#[doc(hidden)]
+pub const NATIVE_LINK_FINGERPRINT: &str = env!("SKIPPY_NATIVE_LINK_FINGERPRINT");
+
 mod abi;
 mod activation;
 #[cfg(feature = "dynamic-runtime")]
