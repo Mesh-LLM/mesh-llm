@@ -511,8 +511,29 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
     // macOS even after the native library is warm. This test is opt-in and
     // exercises a real cached model, so budget for the load before declaring
     // the embedded stage unhealthy.
-    let ready = connect_endpoint_ready(&stage1_addr.to_string(), 1_800);
-    if let Err(error) = ready {
+    let mut last_ready_error = None;
+    for _ in 0..1_800 {
+        match connect_endpoint_ready(&stage1_addr.to_string(), 1) {
+            Ok(_) => {
+                last_ready_error = None;
+                break;
+            }
+            Err(error) => last_ready_error = Some(error),
+        }
+        let status = stage1_handle.status();
+        if matches!(
+            status.state,
+            crate::embedded::EmbeddedState::Failed | crate::embedded::EmbeddedState::Stopped
+        ) {
+            stage1_handle.abort();
+            bail!(
+                "stage-1 binary server stopped during startup; status={:?} last_error={:?}",
+                status.state,
+                status.last_error
+            );
+        }
+    }
+    if let Some(error) = last_ready_error {
         let status = stage1_handle.status();
         stage1_handle.abort();
         return Err(error.context(format!(
