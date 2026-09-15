@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 LIB = ROOT / "scripts" / "lib" / "lld.sh"
 JUSTFILE = ROOT / "Justfile"
 BUILD_HOST = ROOT / "scripts" / "build-host.sh"
+MACOS_SETUP = ROOT / ".github" / "actions" / "setup-macos-lld" / "action.yml"
 
 WORKING_CC = "#!/bin/sh\nexit 0\n"
 # Mirrors the real failure: lld rejects the SDK's text-based stub, after which
@@ -125,6 +126,17 @@ class CallSiteTests(unittest.TestCase):
         self.assertIn("scripts/cargo-linker --mesh-probe", recipe)
         self.assertIn("command -v sccache", recipe)
         self.assertNotIn("RUSTFLAGS", recipe)
+
+    def test_macos_setup_provisions_both_required_accelerators(self) -> None:
+        action = MACOS_SETUP.read_text(encoding="utf-8")
+        self.assertIn("brew install lld", action)
+        self.assertIn("brew install sccache", action)
+        self.assertIn("command -v sccache", action)
+        self.assertIn('"${SCCACHE_GHA_ENABLED:-}" == "true"', action)
+        self.assertIn('SCCACHE_GHA_ENABLED=false', action)
+        self.assertIn('SCCACHE_MULTILEVEL_CHAIN=disk', action)
+        self.assertIn('$RUNNER_TEMP/mesh-llm-sccache', action)
+        self.assertIn("scripts/cargo-linker --mesh-probe", action)
 
     def test_build_host_does_not_override_repository_cargo_defaults(self) -> None:
         script = BUILD_HOST.read_text(encoding="utf-8")
