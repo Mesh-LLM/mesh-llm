@@ -138,6 +138,10 @@ just build
 
 This is an npm bug that surfaces when `node_modules` gets into a bad state (e.g. after branch switches that change `package-lock.json`). Nuking `node_modules` and letting `npm ci` reinstall from scratch fixes it.
 
+### llama.cpp "generator does not match" error
+
+If a native build fails with `CMake Error: ... generator : Ninja / Does not match the generator used previously: Unix Makefiles`, the build directory still holds a CMake cache from a build configured with a different generator. That happens when `ninja` appears on or leaves `PATH` between builds, because `scripts/build-llama.sh` picks the generator from `PATH` at configure time. The script detects the mismatch and clears the stale `.deps/llama-build/...` directory by itself before reconfiguring. On a checkout that predates the guard, remove the build directory named in the error and rebuild.
+
 See `CONTRIBUTING.md` for full dev workflow.
 
 ## llama.cpp ABI Patch Queue

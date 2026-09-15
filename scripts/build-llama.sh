@@ -232,10 +232,18 @@ if [[ "$LLAMA_LINK_MODE" == "static" ]]; then
   )
 fi
 
+SELECTED_CMAKE_GENERATOR="Unix Makefiles"
 if command -v ninja >/dev/null 2>&1; then
-  CMAKE_ARGS=(-G Ninja "${CMAKE_ARGS[@]}")
+  SELECTED_CMAKE_GENERATOR="Ninja"
   echo "using CMake generator: Ninja"
 fi
+# Always pass the generator explicitly. When -G is absent CMake honors a
+# CMAKE_GENERATOR environment variable, so relying on CMake's default when
+# ninja is unavailable would let the inherited environment override the
+# selection this script makes (and the stale-cache guard below compares
+# against). Unix Makefiles is CMake's POSIX default, so pinning it changes
+# nothing on make-based toolchains.
+CMAKE_ARGS=(-G "$SELECTED_CMAKE_GENERATOR" "${CMAKE_ARGS[@]}")
 
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) CMAKE_ARGS+=(-DCMAKE_OBJECT_PATH_MAX=180) ;;
@@ -378,6 +386,21 @@ if [[ "$REQUIRE_EXISTING" == "1" ]]; then
   echo "  build dir:       $LLAMA_BUILD_DIR" >&2
   echo "refusing to rebuild because --require-existing was set" >&2
   exit 1
+fi
+
+# The generator is picked from PATH at configure time, so a build directory
+# cached by an earlier build may have been configured with a different
+# generator (e.g. ninja was installed or removed since). CMake refuses to
+# reuse a cache across generators; clear the stale build directory so this
+# configure starts fresh. Only reached on the rebuild path -- the stamp fast
+# path and --require-existing exit above, so warm or pre-warmed caches that
+# will not be reconfigured are never touched.
+if [[ -f "$LLAMA_BUILD_DIR/CMakeCache.txt" ]]; then
+  cached_generator="$(sed -n 's/^CMAKE_GENERATOR:INTERNAL=//p' "$LLAMA_BUILD_DIR/CMakeCache.txt" | head -n 1)"
+  if [[ -n "$cached_generator" && "$cached_generator" != "$SELECTED_CMAKE_GENERATOR" ]]; then
+    echo "clearing stale CMake cache in $LLAMA_BUILD_DIR (configured with '$cached_generator', now using '$SELECTED_CMAKE_GENERATOR')"
+    rm -rf "$LLAMA_BUILD_DIR"
+  fi
 fi
 
 cmake "${CMAKE_ARGS[@]}"

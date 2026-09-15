@@ -42,7 +42,7 @@ async fn control_plane_api_apply_config_serializes_structured_diagnostics() {
     let temp = tempfile::tempdir().unwrap();
     let _home_guard = HomeEnvGuard::set(temp.path());
     let owner = OwnerKeypair::generate();
-    let keystore_path = default_keystore_path().unwrap();
+    let keystore_path = temp.path().join("owner-keystore.json");
     save_keystore(&keystore_path, &owner, None, true).unwrap();
 
     let OwnerControlApplyTestServer {
@@ -125,7 +125,7 @@ async fn control_plane_api_apply_config_serializes_success_warning_diagnostics()
     let temp = tempfile::tempdir().unwrap();
     let _home_guard = HomeEnvGuard::set(temp.path());
     let owner = OwnerKeypair::generate();
-    let keystore_path = default_keystore_path().unwrap();
+    let keystore_path = temp.path().join("owner-keystore.json");
     save_keystore(&keystore_path, &owner, None, true).unwrap();
 
     let OwnerControlApplyTestServer {

@@ -3,6 +3,19 @@ import { adaptModelsToSummary } from '@/features/network/api/models-adapter'
 import type { MeshModelRaw } from '@/lib/api/types'
 
 describe('adaptModelsToSummary', () => {
+  it.each(['Readable model', '', '   ', undefined])(
+    'preserves routing identity with display name %j',
+    (displayName) => {
+      const name = 'gguf:0123456789abcdef'
+      const [model] = adaptModelsToSummary([
+        { name, display_name: displayName, status: 'warm', size_gb: 1, node_count: 1 }
+      ])
+      expect(model.name).toBe(name)
+      expect(model.fullId).toBe(name)
+      expect(model.displayName).toBe(displayName?.trim() || undefined)
+    }
+  )
+
   it('accepts public API model rows without a nested capabilities object', () => {
     const models: MeshModelRaw[] = [
       {

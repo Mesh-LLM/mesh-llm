@@ -9,8 +9,8 @@ use crate::native::StageModel;
 use crate::path_cstring::path_to_cstring;
 use crate::session::StageSession;
 use crate::{
-    ActivationDesc, ActivationFrame, MediaInput, MediaPrefill, MediaPrefillChunkFrame,
-    MediaPrefillFrame, SamplingConfig,
+    ActivationFrame, MediaInput, MediaPrefill, MediaPrefillChunkFrame, MediaPrefillFrame,
+    SamplingConfig,
 };
 
 pub(crate) struct MediaProjector {
@@ -25,6 +25,96 @@ type MediaFrameEval = (
     ActivationFrame,
     Vec<MediaPrefillChunkFrame>,
 );
+
+fn aggregate_media_chunk_outputs(chunks: &[MediaPrefillChunkFrame]) -> Result<ActivationFrame> {
+    let first = chunks
+        .first()
+        .ok_or_else(|| anyhow!("multimodal prefill produced no activation output"))?;
+    let mut desc = first.output.desc;
+    let mut token_count = 0usize;
+    let mut common_flags = desc.flags;
+
+    for (index, chunk) in chunks.iter().enumerate() {
+        let frame = &chunk.output;
+        if desc.version != frame.desc.version
+            || desc.dtype != frame.desc.dtype
+            || desc.layout != frame.desc.layout
+            || desc.producer_stage_index != frame.desc.producer_stage_index
+            || desc.layer_start != frame.desc.layer_start
+            || desc.layer_end != frame.desc.layer_end
+            || desc.sequence_count != frame.desc.sequence_count
+        {
+            return Err(anyhow!(
+                "multimodal chunk {index} produced incompatible activation descriptor"
+            ));
+        }
+        token_count = token_count
+            .checked_add(chunk.token_count)
+            .context("multimodal activation token count overflow")?;
+        common_flags &= frame.desc.flags;
+    }
+
+    let differing_flags = chunks
+        .iter()
+        .fold(0_u64, |flags, chunk| flags | chunk.output.desc.flags)
+        & !common_flags;
+    if differing_flags & !skippy_ffi::ACTIVATION_FLAG_INKLING_MTP_EMBD != 0 {
+        return Err(anyhow!(
+            "multimodal chunks produced incompatible activation sideband flags {differing_flags:#x}"
+        ));
+    }
+
+    let mut payload = Vec::new();
+    if differing_flags == skippy_ffi::ACTIVATION_FLAG_INKLING_MTP_EMBD {
+        let base_chunk = chunks
+            .iter()
+            .find(|chunk| {
+                chunk.output.desc.flags & skippy_ffi::ACTIVATION_FLAG_INKLING_MTP_EMBD == 0
+            })
+            .ok_or_else(|| anyhow!("multimodal Inkling output has no base activation chunk"))?;
+        let bytes_per_token = base_chunk
+            .output
+            .payload
+            .len()
+            .checked_div(base_chunk.token_count)
+            .filter(|_| base_chunk.output.payload.len() % base_chunk.token_count == 0)
+            .ok_or_else(|| anyhow!("multimodal base activation payload is not token-aligned"))?;
+        for (index, chunk) in chunks.iter().enumerate() {
+            let hidden_bytes = bytes_per_token
+                .checked_mul(chunk.token_count)
+                .context("multimodal base activation byte count overflow")?;
+            let hidden = chunk.output.payload.get(..hidden_bytes).ok_or_else(|| {
+                anyhow!("multimodal chunk {index} is smaller than its base activation payload")
+            })?;
+            payload.extend_from_slice(hidden);
+        }
+        desc.flags = common_flags;
+    } else if common_flags & skippy_ffi::ACTIVATION_FLAG_INKLING_MTP_EMBD != 0 {
+        let mut hidden_planes = Vec::new();
+        let mut mtp_planes = Vec::new();
+        for (index, chunk) in chunks.iter().enumerate() {
+            if chunk.output.payload.len() % 2 != 0 {
+                return Err(anyhow!(
+                    "multimodal Inkling chunk {index} sideband payload is not evenly split"
+                ));
+            }
+            let plane_bytes = chunk.output.payload.len() / 2;
+            hidden_planes.extend_from_slice(&chunk.output.payload[..plane_bytes]);
+            mtp_planes.extend_from_slice(&chunk.output.payload[plane_bytes..]);
+        }
+        payload = hidden_planes;
+        payload.extend_from_slice(&mtp_planes);
+    } else {
+        for chunk in chunks {
+            payload.extend_from_slice(&chunk.output.payload);
+        }
+    }
+
+    desc.token_count = u32::try_from(token_count).context("multimodal token count exceeds u32")?;
+    desc.payload_bytes =
+        u64::try_from(payload.len()).context("multimodal activation payload length exceeds u64")?;
+    Ok(ActivationFrame { desc, payload })
+}
 
 // The experimental C ABI owns synchronization internally for model/session use.
 // Rust stage-server access is additionally serialized behind a Mutex.
@@ -432,8 +522,6 @@ impl StageModel {
         let chunk_count = unsafe { skippy_ffi::mtmd_input_chunks_size(chunks.raw) };
         let use_mrope = unsafe { skippy_ffi::mtmd_decode_use_mrope(projector.raw) };
         let mut token_positions = Vec::<[i32; 4]>::new();
-        let mut output_desc: Option<ActivationDesc> = None;
-        let mut output_payload = Vec::new();
         let mut chunk_frames = Vec::new();
         let mut copied_tokens = 0usize;
         for index in 0..chunk_count {
@@ -538,27 +626,9 @@ impl StageModel {
                 ));
             }
             let frame = session.copy_output_activation_frame(chunk_tokens, 0)?;
-            if let Some(desc) = output_desc.as_ref() {
-                if desc.version != frame.desc.version
-                    || desc.dtype != frame.desc.dtype
-                    || desc.layout != frame.desc.layout
-                    || desc.producer_stage_index != frame.desc.producer_stage_index
-                    || desc.layer_start != frame.desc.layer_start
-                    || desc.layer_end != frame.desc.layer_end
-                    || desc.sequence_count != frame.desc.sequence_count
-                    || desc.flags != frame.desc.flags
-                {
-                    return Err(anyhow!(
-                        "multimodal chunk {index} produced incompatible activation descriptor"
-                    ));
-                }
-            } else {
-                output_desc = Some(frame.desc);
-            }
             copied_tokens = copied_tokens
                 .checked_add(chunk_tokens)
                 .context("multimodal activation token count overflow")?;
-            output_payload.extend_from_slice(&frame.payload);
             chunk_frames.push(MediaPrefillChunkFrame {
                 token_count: chunk_tokens,
                 tokens: chunk_token_ids,
@@ -579,12 +649,7 @@ impl StageModel {
                 "multimodal activation tokens copied {copied_tokens} did not match prompt tokens {token_count}"
             ));
         }
-        let mut desc = output_desc
-            .ok_or_else(|| anyhow!("multimodal prefill produced no activation output"))?;
-        desc.token_count =
-            u32::try_from(copied_tokens).context("multimodal token count exceeds u32")?;
-        desc.payload_bytes = u64::try_from(output_payload.len())
-            .context("multimodal activation payload length exceeds u64")?;
+        let output = aggregate_media_chunk_outputs(&chunk_frames)?;
         let positions = if use_mrope {
             let mut positions = Vec::with_capacity(copied_tokens * 4);
             for dim in 0..4 {
@@ -598,10 +663,7 @@ impl StageModel {
             token_count,
             session.token_count,
             positions,
-            ActivationFrame {
-                desc,
-                payload: output_payload,
-            },
+            output,
             chunk_frames,
         ))
     }
@@ -639,5 +701,77 @@ impl StageModel {
             output,
             chunks,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::aggregate_media_chunk_outputs;
+    use crate::{
+        ActivationDesc, ActivationFrame, MediaPrefillChunkFrame, RuntimeActivationDType,
+        RuntimeActivationLayout,
+    };
+
+    fn chunk(token_count: usize, flags: u64, payload: Vec<u8>) -> MediaPrefillChunkFrame {
+        MediaPrefillChunkFrame {
+            token_count,
+            tokens: Vec::new(),
+            positions: Vec::new(),
+            output: ActivationFrame {
+                desc: ActivationDesc {
+                    version: 1,
+                    dtype: RuntimeActivationDType::F32,
+                    layout: RuntimeActivationLayout::TokenMajor,
+                    producer_stage_index: 0,
+                    layer_start: 0,
+                    layer_end: 1,
+                    token_count: token_count as u32,
+                    sequence_count: 1,
+                    payload_bytes: payload.len() as u64,
+                    flags,
+                },
+                payload,
+            },
+        }
+    }
+
+    #[test]
+    fn mixed_inkling_chunks_aggregate_the_common_hidden_plane() -> anyhow::Result<()> {
+        let chunks = vec![
+            chunk(1, 0, vec![1, 2, 3, 4]),
+            chunk(
+                2,
+                skippy_ffi::ACTIVATION_FLAG_INKLING_MTP_EMBD,
+                vec![5, 6, 7, 8, 9, 10, 11, 12, 21, 22, 23, 24, 25, 26, 27, 28],
+            ),
+        ];
+
+        let output = aggregate_media_chunk_outputs(&chunks)?;
+
+        assert_eq!(output.desc.token_count, 3);
+        assert_eq!(output.desc.flags, 0);
+        assert_eq!(output.desc.payload_bytes, 12);
+        assert_eq!(output.payload, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+        Ok(())
+    }
+
+    #[test]
+    fn uniform_inkling_chunks_aggregate_each_plane_in_token_order() -> anyhow::Result<()> {
+        let flag = skippy_ffi::ACTIVATION_FLAG_INKLING_MTP_EMBD;
+        let chunks = vec![
+            chunk(1, flag, vec![1, 2, 3, 4, 11, 12, 13, 14]),
+            chunk(1, flag, vec![5, 6, 7, 8, 15, 16, 17, 18]),
+        ];
+
+        let output = aggregate_media_chunk_outputs(&chunks)?;
+
+        assert_eq!(output.desc.token_count, 2);
+        assert_eq!(output.desc.flags, flag);
+        assert_eq!(output.desc.payload_bytes, 16);
+        assert_eq!(
+            output.payload,
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 11, 12, 13, 14, 15, 16, 17, 18]
+        );
+        Ok(())
     }
 }

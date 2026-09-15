@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 use crate::{
     cli::{NativeMtpOpenAiAbArgs, StageLoadMode},
     report::{NativeMtpOpenAiAbReport, NativeMtpOpenAiCaseReport},
+    runner::native_mtp::normalize_runtime_layer_end,
     support::generate_run_id,
 };
 
@@ -56,6 +57,8 @@ struct OpenAiStageConfig<'a> {
 }
 
 pub fn native_mtp_openai_ab(args: NativeMtpOpenAiAbArgs) -> Result<()> {
+    let mut args = args;
+    normalize_runtime_layer_end(&mut args.runtime)?;
     if args.runtime.stage_load_mode != StageLoadMode::RuntimeSlice {
         bail!("native-mtp-open-ai-ab currently supports --stage-load-mode runtime-slice only");
     }

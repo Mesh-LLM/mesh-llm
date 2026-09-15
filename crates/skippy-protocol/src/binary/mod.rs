@@ -20,8 +20,9 @@ pub use codec::{
 };
 pub use types::sampling_flags;
 pub use types::{
-    ACTIVATION_FLAG_GEMMA3N_ALTUP, ACTIVATION_FLAG_INKLING_MTP_EMBD, ACTIVATION_FLAG_RWKV7_V_FIRST,
-    LLAMA_TOKEN_NULL, MAX_STAGE_ACTIVATION_BYTES, MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES,
+    ACTIVATION_FLAG_GEMMA3N_ALTUP, ACTIVATION_FLAG_GLM_DSA_TOP_K, ACTIVATION_FLAG_INKLING_MTP_EMBD,
+    ACTIVATION_FLAG_KIMI_K3_RESIDUAL, ACTIVATION_FLAG_RWKV7_V_FIRST, LLAMA_TOKEN_NULL,
+    MAX_STAGE_ACTIVATION_BYTES, MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES,
     MAX_STAGE_DECODED_ACTIVATION_BYTES, MAX_STAGE_DRY_SEQUENCE_BREAKERS, MAX_STAGE_LOGIT_BIAS,
     MAX_STAGE_PREDICTED_TOKENS, MAX_STAGE_SAMPLERS, MAX_STAGE_SAMPLING_STRING_BYTES,
     MAX_STAGE_SIDEBAND_VALUES, MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC,
@@ -1170,6 +1171,122 @@ mod tests {
             state_flags::INKLING_MTP_EMBD_SIDEBAND
         );
         assert_eq!(decoded.activation_f32_payload().unwrap(), activation_f32);
+    }
+
+    #[test]
+    fn kimi_k3_residual_sideband_activation_round_trips_with_full_boundary_width() {
+        let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
+        state.source_stage_index = 1;
+        state.activation_codec = crate::StageActivationCodec::RawF32V1;
+        state.flags |= state_flags::KIMI_K3_RESIDUAL_SIDEBAND;
+        let activation_f32 = (0..6)
+            .flat_map(|value| (value as f32).to_le_bytes())
+            .collect::<Vec<_>>();
+        let activation =
+            encode_f32_activation_payload_with_state_flags(1, 6, &activation_f32, state.flags)
+                .unwrap();
+        let message = StageWireMessage {
+            kind: WireMessageKind::DecodeEmbd,
+            pos_start: 0,
+            token_count: 1,
+            state,
+            request_id: 7,
+            session_id: 9,
+            sampling: None,
+            chat_sampling_metadata: None,
+            tokens: vec![42],
+            positions: Vec::new(),
+            activation,
+            raw_bytes: Vec::new(),
+        };
+        let mut bytes = Vec::new();
+        write_stage_message(&mut bytes, &message).unwrap();
+        let decoded = read_stage_message(Cursor::new(bytes), 6).unwrap();
+        assert_eq!(decoded.activation.len(), 24);
+        assert_eq!(
+            activation_frame_flags_from_state_flags(decoded.state.flags),
+            ACTIVATION_FLAG_KIMI_K3_RESIDUAL
+        );
+        assert_eq!(
+            activation_state_flags_from_frame_flags(ACTIVATION_FLAG_KIMI_K3_RESIDUAL),
+            state_flags::KIMI_K3_RESIDUAL_SIDEBAND
+        );
+        assert_eq!(decoded.activation_f32_payload().unwrap(), activation_f32);
+    }
+
+    #[test]
+    fn glm_dsa_top_k_sideband_round_trips_as_raw_i32_after_compressed_hidden_rows() {
+        let mut state = StageStateHeader::new(WireMessageKind::PrefillEmbd);
+        state.source_stage_index = 0;
+        state.activation_codec = crate::StageActivationCodec::F16RneV1;
+        state.flags |= state_flags::GLM_DSA_TOP_K_SIDEBAND;
+        let hidden = [1.0_f32, 2.0, 3.0, 4.0]
+            .into_iter()
+            .flat_map(f32::to_le_bytes)
+            .collect::<Vec<_>>();
+        let top_k = [0_i32, 1, 2, 0, 1, 2]
+            .into_iter()
+            .flat_map(i32::to_le_bytes)
+            .collect::<Vec<_>>();
+        let mut decoded_payload = hidden.clone();
+        decoded_payload.extend_from_slice(&top_k);
+        let activation = encode_activation_payload_with_state_flags(
+            state.activation_codec,
+            2,
+            2,
+            &decoded_payload,
+            state.flags,
+        )
+        .unwrap();
+        assert_eq!(activation.len(), 8 + top_k.len());
+        assert_eq!(&activation[8..], top_k);
+
+        let message = StageWireMessage {
+            kind: WireMessageKind::PrefillEmbd,
+            pos_start: 0,
+            token_count: 2,
+            state,
+            request_id: 7,
+            session_id: 9,
+            sampling: None,
+            chat_sampling_metadata: None,
+            tokens: vec![42, 43],
+            positions: Vec::new(),
+            activation,
+            raw_bytes: Vec::new(),
+        };
+        let mut bytes = Vec::new();
+        write_stage_message(&mut bytes, &message).unwrap();
+        let decoded = read_stage_message_for_codec(
+            Cursor::new(bytes),
+            2,
+            crate::StageActivationCodec::F16RneV1,
+        )
+        .unwrap();
+        assert_eq!(decoded.activation, decoded_payload);
+        assert_eq!(
+            activation_frame_flags_from_state_flags(decoded.state.flags),
+            ACTIVATION_FLAG_GLM_DSA_TOP_K
+        );
+        assert_eq!(
+            activation_state_flags_from_frame_flags(ACTIVATION_FLAG_GLM_DSA_TOP_K),
+            state_flags::GLM_DSA_TOP_K_SIDEBAND
+        );
+    }
+
+    #[test]
+    fn glm_dsa_top_k_sideband_rejects_non_token_major_i32_payload() {
+        let flags = state_flags::GLM_DSA_TOP_K_SIDEBAND;
+        let mut payload = [1.0_f32, 2.0, 3.0, 4.0]
+            .into_iter()
+            .flat_map(f32::to_le_bytes)
+            .collect::<Vec<_>>();
+        payload.extend_from_slice(&[0_u8; 4]);
+
+        assert_invalid_data(
+            encode_f32_activation_payload_with_state_flags(2, 2, &payload, flags),
+            "GLM-DSA top-k sideband is not token-major i32",
+        );
     }
 
     #[test]

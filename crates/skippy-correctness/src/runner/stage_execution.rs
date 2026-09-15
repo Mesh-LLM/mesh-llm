@@ -541,7 +541,7 @@ pub(in crate::runner) fn stage_resident_tensor_names(
     }
 }
 
-pub(in crate::runner) fn stage_resident_tensor_names_for_range(
+pub(crate) fn stage_resident_tensor_names_for_range(
     stage_load_mode: StageLoadMode,
     baseline_model: &Path,
     stage_path: &Path,

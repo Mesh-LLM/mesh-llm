@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/chameleon.cpp b/src/models/chameleon.cpp
-index 4f45acecf8484f6b2d7ba81043b8a5c6c0d2d528..288c47460f65afaad1b54a215c46b320eb9c86c9 100644
+index 4679e294c4928daed8a79874365773ac0f74e4e4..8ed7bf9f3e74d77496775508577a59ee2b41cb1b 100644
 --- a/src/models/chameleon.cpp
 +++ b/src/models/chameleon.cpp
 @@ -59,16 +59,23 @@ llama_model_chameleon::graph::graph(const llama_model & model, const llm_graph_p

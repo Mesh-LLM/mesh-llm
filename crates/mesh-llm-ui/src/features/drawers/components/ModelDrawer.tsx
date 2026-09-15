@@ -130,7 +130,7 @@ function ModelDrawerContent({
         }
         onClose={onClose}
         subtitle={modelSubtitle(model)}
-        title={model.name}
+        title={model.displayName || model.name}
         titleId={titleId}
       />
 

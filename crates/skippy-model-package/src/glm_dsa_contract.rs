@@ -669,11 +669,6 @@ fn validate_decoder_layer(
         }
         IndexShareRole::Shared => {
             report.shared_layers.push(layer);
-            if indexer_count == INDEXER_TENSORS.len() {
-                report.tensor_errors.push(format!(
-                    "blk.{layer} is declared Shared but contains complete indexer tensors"
-                ));
-            }
         }
     }
 }
@@ -1350,21 +1345,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_shared_layer_with_complete_indexer_group() {
+    fn accepts_explicit_shared_layer_with_complete_indexer_group() {
         let mut input = mock_input(false);
         add_indexer_tensors(&mut input.tensors, 1);
 
         let report = validate_contract(input, GlmDsaContractOptions::default());
 
-        assert!(!report.valid);
-        assert!(
-            report
-                .tensor_errors
-                .iter()
-                .any(|error| error.contains("declared Shared")
-                    && error.contains("complete indexer tensors")),
-            "{report:#?}"
-        );
+        assert!(report.valid, "{report:#?}");
+        assert_eq!(report.shared_layers, vec![1, 2]);
     }
 
     #[test]

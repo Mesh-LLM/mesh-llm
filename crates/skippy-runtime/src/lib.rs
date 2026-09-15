@@ -62,10 +62,14 @@ pub use session::{DecodeBatchRequest, StageSession};
 pub use skippy_ffi::LoadMode as RuntimeLoadMode;
 pub use skippy_ffi::MAX_DRY_SEQUENCE_BREAKER_BYTES;
 pub use skippy_ffi::{
-    ACTIVATION_FLAG_GEMMA3N_ALTUP, ACTIVATION_SIDEBAND_TOKEN_IDS,
-    ActivationDType as RuntimeActivationDType, ActivationLayout as RuntimeActivationLayout,
+    ACTIVATION_FLAG_GEMMA3N_ALTUP, ACTIVATION_FLAG_GLM_DSA_TOP_K, ACTIVATION_FLAG_KIMI_K3_RESIDUAL,
+    ACTIVATION_SIDEBAND_TOKEN_IDS, ActivationDType as RuntimeActivationDType,
+    ActivationLayout as RuntimeActivationLayout,
 };
-pub use stage_planning::plan_gguf_stage_resident_tensor_names;
+pub use stage_planning::{
+    gguf_shard_paths, plan_gguf_stage_resident_tensor_names,
+    plan_gguf_stage_resident_tensor_names_for_range,
+};
 pub use types::{
     ActivationBoundaryDesc, ActivationDesc, ActivationFrame, ChatReasoningFormat,
     ChatTemplateJsonOptions, ChatTemplateJsonResult, ChatTemplateMessage, ChatTemplateOptions,

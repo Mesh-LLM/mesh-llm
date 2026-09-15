@@ -15,6 +15,7 @@ mod local_model_only;
 mod local_package;
 mod local_split;
 mod model_lifecycle;
+mod model_presentation;
 pub(crate) mod model_reconciliation;
 mod node_lifecycle_events;
 mod operational_logging;

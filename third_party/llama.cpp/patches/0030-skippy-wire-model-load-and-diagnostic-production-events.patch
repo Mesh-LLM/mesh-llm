@@ -1,7 +1,8 @@
-From d501f1e4dcd92a95fbb5e0319ffe753b1c7f2184 Mon Sep 17 00:00:00 2001
+From 13ca2de72fb383c448c7ef75cc84f675ba12a5a5 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 5 Sep 2026 14:26:42 -0400
-Subject: [PATCH] skippy: wire model-load and diagnostic production events
+Subject: [PATCH 030/113] skippy: wire model-load and diagnostic production
+ events
 
 ---
  src/CMakeLists.txt                  |   7 ++
@@ -10,10 +11,10 @@ Subject: [PATCH] skippy: wire model-load and diagnostic production events
  3 files changed, 208 insertions(+), 4 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 1284d117d..44e88d18a 100644
+index 3c6462466..3f7c575cc 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -142,6 +142,13 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -160,6 +160,13 @@ if (LLAMA_STAGE_BUILD_TESTS)
      target_compile_features(skippy-model-loader-accounting PRIVATE cxx_std_17)
      target_link_libraries(skippy-model-loader-accounting PRIVATE llama-common)
  
@@ -323,5 +324,5 @@ index dd051d67d..6b9e52bf0 100644
      if (name == "device_events_dispatch") return test_device_events_dispatch();
      if (name == "diagnostic_events_dispatch") return test_diagnostic_events_dispatch();
 -- 
-2.50.1 (Apple Git-155)
+2.55.0
 

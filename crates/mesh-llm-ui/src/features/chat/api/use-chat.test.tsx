@@ -109,7 +109,7 @@ describe('useMeshChat', () => {
     vi.restoreAllMocks()
   })
 
-  it('sends the default system prompt with the first message in a new chat', async () => {
+  it('omits the system message from the first request with the empty default', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(createSSEStream(['data: [DONE]\n']), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
 
@@ -120,8 +120,7 @@ describe('useMeshChat', () => {
     const request = fetchMock.mock.calls[0]?.[1]
     const body = JSON.parse(String(request?.body)) as { input: Array<{ role: string; content: string }> }
 
-    expect(body.input[0]).toEqual({ role: 'system', content: DEFAULT_SYSTEM_PROMPT })
-    expect(body.input[1]).toEqual({ role: 'user', content: 'What is MeshLLM?' })
+    expect(body.input).toEqual([{ role: 'user', content: 'What is MeshLLM?' }])
   })
 
   it('sends the latest model and system prompt after rerendering the chat hook', async () => {

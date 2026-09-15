@@ -1398,6 +1398,14 @@ public:
                         "build_inp_ple", "is_ple", context, sm, lang);
     const auto rwkv_first =
         rwkvFirstValue(constructor_body, loop_body, facts, sm, lang);
+    const bool kimi_k3_residual_sideband =
+        llvm::StringRef(report.file).ends_with("src/models/kimi-k3.cpp") &&
+        containsName(constructor_body, "res_bs") &&
+        containsName(constructor_body, "use_attn_res");
+    const bool glm_dsa_top_k_sideband =
+        facts.calls.count("build_attn_inp_k_dsa") != 0 &&
+        containsName(constructor_body, "prev_top_k") &&
+        containsName(constructor_body, "is_indexer_full");
     const auto stage_zero_sidebands =
         stageZeroSidebands(loop_body, report.proof.loop_var);
     const auto stage_zero_embedding_checks = stageZeroEmbeddingModeChecks(
@@ -1432,6 +1440,12 @@ public:
     }
     if (rwkv_first) {
       report.proof.scope_evidence.emplace_back("rwkv_first_value_sideband");
+    }
+    if (kimi_k3_residual_sideband) {
+      report.proof.scope_evidence.emplace_back("kimi_k3_residual_sideband");
+    }
+    if (glm_dsa_top_k_sideband) {
+      report.proof.scope_evidence.emplace_back("glm_dsa_top_k_sideband");
     }
     if (!stage_zero_sidebands.empty()) {
       report.proof.scope_evidence.emplace_back("stage_zero_loop_sideband");
@@ -1882,6 +1896,65 @@ public:
                       rwkv_first->next_statement->getBeginLoc(), output, sm);
       }
 
+      std::string family_sideband_input;
+      if (kimi_k3_residual_sideband) {
+        family_sideband_input +=
+            "if (stage_filtered && il_start > 0 && use_attn_res) {\n" +
+            indent +
+            "    const int64_t n_checkpoints = (il_start + "
+            "static_cast<int>(res_bs) - 1)/res_bs;\n" +
+            indent +
+            "    auto residual_input = "
+            "std::make_unique<llm_graph_input_kimi_k3_residual>(n_embd, "
+            "n_checkpoints);\n" +
+            indent +
+            "    residual_input->values = ggml_new_tensor_3d(ctx0, "
+            "GGML_TYPE_F32, n_embd, n_checkpoints, n_tokens);\n" +
+            indent + "    ggml_set_input(residual_input->values);\n" +
+            indent +
+            "    ggml_set_name(residual_input->values, "
+            "\"kimi_k3_residual_input\");\n" +
+            indent + "    resi_stack = residual_input->values;\n" +
+            indent + "    res->add_input(std::move(residual_input));\n" +
+            indent + "}\n\n" + indent;
+      }
+      if (glm_dsa_top_k_sideband) {
+        family_sideband_input +=
+            "if (stage_filtered && il_start > 0 && "
+            "!hparams.is_indexer_full(il_start)) {\n" +
+            indent +
+            "    const auto * mctx_lid = inp_attn_dsa->mctx->get_lid();\n" +
+            indent +
+            "    const int64_t n_stream = cparams.kv_unified ? 1 : "
+            "ubatch.n_seqs_unq;\n" +
+            indent +
+            "    const int64_t n_top_k = std::min<int64_t>(mctx_lid->get_n_kv(), "
+            "n_indexer_top_k);\n" +
+            indent +
+            "    GGML_ASSERT(n_stream > 0 && n_top_k > 0 && n_tokens % "
+            "n_stream == 0);\n\n" +
+            indent +
+            "    auto sideband = "
+            "std::make_unique<llm_graph_input_glm_dsa_top_k>(n_top_k, "
+            "n_stream);\n" +
+            indent +
+            "    sideband->values = ggml_new_tensor_4d(\n" + indent +
+            "            ctx0, GGML_TYPE_I32, n_top_k, n_tokens/n_stream, "
+            "1, n_stream);\n" +
+            indent + "    ggml_set_input(sideband->values);\n" +
+            indent +
+            "    ggml_set_name(sideband->values, "
+            "\"glm_dsa_top_k_input\");\n" +
+            indent + "    prev_top_k = sideband->values;\n" +
+            indent + "    res->add_input(std::move(sideband));\n" +
+            indent + "}\n\n" + indent;
+      }
+      if (!family_sideband_input.empty()) {
+        valid &= addInsert(report.edits, "insert_family_sideband_input",
+                           report.file, loop->getBeginLoc(),
+                           family_sideband_input, sm);
+      }
+
       for (const IfStmt *sideband : stage_zero_sidebands) {
         const Expr *sideband_condition = sideband->getCond();
         valid &= addReplace(
@@ -2055,6 +2128,24 @@ public:
     if (!completing_filter) {
       const SourceLocation after_loop =
           clang::Lexer::getLocForEndOfToken(loop->getEndLoc(), 0, sm, lang);
+      std::string family_boundary_export;
+      if (kimi_k3_residual_sideband) {
+        family_boundary_export +=
+            "    GGML_ASSERT(!use_attn_res || resi_stack != nullptr);\n" +
+            indent +
+            "    res->t_skippy_kimi_k3_residual = resi_stack;\n" + indent;
+      }
+      if (glm_dsa_top_k_sideband) {
+        family_boundary_export +=
+            "    if (il_end < n_layer && "
+            "!hparams.is_indexer_full(il_end)) {\n" +
+            indent +
+            "        GGML_ASSERT(prev_top_k != nullptr && \"GLM-DSA "
+            "consumer group boundary requires top-k sideband\");\n" +
+            indent +
+            "        res->t_skippy_glm_dsa_top_k = prev_top_k;\n" +
+            indent + "    }\n" + indent;
+      }
       const std::string boundary =
           altup
               ? "\n" + indent +
@@ -2088,6 +2179,7 @@ public:
                                ";\n" + indent
                          : "") +
                     "    res->t_embd = " + *carried + ";\n" + indent +
+                    family_boundary_export +
                     "    ggml_build_forward_expand(gf, " + *carried + ");\n" +
                     indent + "    return;\n" + indent + "}\n";
       valid &= addInsert(report.edits, "insert_stage_boundary", report.file,

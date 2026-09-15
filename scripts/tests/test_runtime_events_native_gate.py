@@ -341,7 +341,7 @@ class LinuxRuntimeSliceTests(unittest.TestCase):
 
     def test_family_certification_has_one_complete_model_list(self) -> None:
         manifest = json.loads((ROOT / "ci/llama-canary/family-certified.json").read_text())
-        self.assertEqual(81, len(manifest["models"]))
+        self.assertEqual(83, len(manifest["models"]))
         self.assertTrue(all("cadences" not in model for model in manifest["models"]))
 
     def test_evidence_is_uploaded_even_when_the_gate_fails(self) -> None:

@@ -1,10 +1,11 @@
-From 84ec139f610f4663e44876559c7dda100f83ed5d Mon Sep 17 00:00:00 2001
+From 6334a300626dc149df37a1b1a0b713c288b75fd6 Mon Sep 17 00:00:00 2001
 From: scama
  <a1860575018c4680d5669dd7bc3bd356b478bccb8d42e194df46304a5e25f49a@meshllm.communities.buzz.xyz>
 Date: Tue, 8 Sep 2026 07:24:43 +1000
-Subject: [PATCH 19/23] skippy: add stage-free model semantics
+Subject: [PATCH 019/113] skippy: add stage-free model semantics
 
 ---
+ src/llama-graph.cpp           |   9 +-
  src/models/bailingmoe3.cpp    |   4 +-
  src/models/bitnet.cpp         |   4 +-
  src/models/deepseek32.cpp     |  16 +-
@@ -14,7 +15,9 @@ Subject: [PATCH 19/23] skippy: add stage-free model semantics
  src/models/inkling.cpp        | 673 ++++++++++++++++++++++++++++++++++
  src/models/kimi-k3.cpp        |   4 +-
  src/models/kimi-linear.cpp    |   4 +-
+ src/models/lfm2.cpp           |   8 +-
  src/models/mamba-base.cpp     |  48 ++-
+ src/models/minimax-01.cpp     |  13 +-
  src/models/models.h           |  13 +
  src/models/nemotron-h-moe.cpp |  31 +-
  src/models/nemotron-h.cpp     |  13 +-
@@ -24,10 +27,41 @@ Subject: [PATCH 19/23] skippy: add stage-free model semantics
  src/models/qwen3next.cpp      |   2 +-
  src/models/qwen3vl.cpp        |   3 +-
  src/models/qwen4exp.cpp       |  30 +-
+ src/models/rwkv6-base.cpp     |   9 +-
  src/models/rwkv6.cpp          |   2 +-
- 20 files changed, 829 insertions(+), 56 deletions(-)
+ src/models/rwkv7-base.cpp     |   9 +-
+ 25 files changed, 856 insertions(+), 77 deletions(-)
  create mode 100644 src/models/inkling.cpp
 
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index 1a3491875..2a24ce08d 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -4049,7 +4049,7 @@ ggml_tensor * llm_graph_context::build_rwkv_token_shift_load(
+ 
+     ggml_tensor * token_shift = build_rs(
+             inp, token_shift_all,
+-            hparams.n_embd_r(), n_seqs);
++            hparams.n_embd_r(), n_seqs, skippy_state_kind::recurrent_conv, il);
+ 
+     token_shift = ggml_reshape_3d(ctx0, token_shift, hparams.n_embd, token_shift_count, n_seqs);
+ 
+@@ -4069,11 +4069,12 @@ ggml_tensor * llm_graph_context::build_rwkv_token_shift_store(
+ 
+     const auto kv_head = mctx_cur->get_head();
+ 
+-    return ggml_cpy(
++    ggml_tensor * token_shift_write = ggml_cpy(
+         ctx0,
+         ggml_view_1d(ctx0, token_shift, n_embd * n_seqs * token_shift_count, 0),
+-        ggml_view_1d(ctx0, mctx_cur->get_r_l(il), hparams.n_embd_r()*n_seqs, hparams.n_embd_r()*kv_head*ggml_element_size(mctx_cur->get_r_l(il)))
+-    );
++        ggml_view_1d(ctx0, mctx_cur->get_r_l(il), hparams.n_embd_r()*n_seqs, hparams.n_embd_r()*kv_head*ggml_element_size(mctx_cur->get_r_l(il))));
++    state_write(skippy_state_kind::recurrent_conv, mctx_cur->get_r_l(il), token_shift_write, il);
++    return token_shift_write;
+ }
+ 
+ llm_graph_input_mem_hybrid * llm_graph_context::build_inp_mem_hybrid() const {
 diff --git a/src/models/bailingmoe3.cpp b/src/models/bailingmoe3.cpp
 index e208c7d5a..d375502dd 100644
 --- a/src/models/bailingmoe3.cpp
@@ -928,6 +962,34 @@ index b9cf28d85..b8c455360 100644
              state = ggml_reshape_4d(ctx0, state, head_dim, head_dim, n_head, n_seqs);
  
  
+diff --git a/src/models/lfm2.cpp b/src/models/lfm2.cpp
+index 07b71ccd3..9a7eadd24 100644
+--- a/src/models/lfm2.cpp
++++ b/src/models/lfm2.cpp
+@@ -190,7 +190,7 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+ 
+         // read conv state
+         auto * conv_state = mctx_cur->get_r_l(il);
+-        auto * conv_rs    = build_rs(inp_recr, conv_state, hparams.n_embd_r(), n_seqs);
++        auto * conv_rs    = build_rs(inp_recr, conv_state, hparams.n_embd_r(), n_seqs, skippy_state_kind::recurrent_conv, il);
+         auto * conv       = ggml_reshape_3d(ctx0, conv_rs, d_conv, hparams.n_embd, n_seqs);
+ 
+         // causal prepends the state, non-causal pads symmetrically for a centered window
+@@ -213,10 +213,12 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+         for (int64_t slot = 0; slot < n_written; ++slot) {
+             auto * conv_snap = ggml_view_3d(ctx0, bx, d_conv, bx->ne[1], bx->ne[2], bx->nb[1], bx->nb[2],
+                                             (bx->ne[0] - d_conv - slot) * ggml_element_size(bx));
+-            ggml_build_forward_expand(gf, ggml_cpy(ctx0, conv_snap,
++            ggml_tensor * conv_write = ggml_cpy(ctx0, conv_snap,
+                                                    ggml_view_2d(ctx0, conv_state, (int64_t) d_conv * n_embd, n_seqs,
+                                                                 conv_state->nb[1],
+-                                                                ((size_t) slot * mem_size + kv_head) * row_size)));
++                                                                ((size_t) slot * mem_size + kv_head) * row_size));
++            ggml_build_forward_expand(gf, conv_write);
++            state_write(skippy_state_kind::recurrent_conv, conv_state, conv_write, il);
+         }
+ 
+         auto * conv_kernel = model.layers[il].shortconv.conv;
 diff --git a/src/models/mamba-base.cpp b/src/models/mamba-base.cpp
 index 03ee3805b..44dfda9d1 100644
 --- a/src/models/mamba-base.cpp
@@ -1033,6 +1095,44 @@ index 03ee3805b..44dfda9d1 100644
  
          ggml_tensor * y = ggml_view_4d(ctx0, y_ssm, head_dim, n_head, n_seq_tokens, n_seqs, x->nb[1], n_head * x->nb[1],
                                         n_seq_tokens * n_head * x->nb[1], 0);
+diff --git a/src/models/minimax-01.cpp b/src/models/minimax-01.cpp
+index 9fa2e8fc0..3067029ed 100644
+--- a/src/models/minimax-01.cpp
++++ b/src/models/minimax-01.cpp
+@@ -282,7 +282,7 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
+ 
+             // TODO unneeded - any way to make conv states optional in recurrent memory?
+             ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
+-            ggml_tensor * conv_state_all  = build_rs(inp_rs, conv_states_all, hparams.n_embd_r(), n_seqs);
++            ggml_tensor * conv_state_all  = build_rs(inp_rs, conv_states_all, hparams.n_embd_r(), n_seqs, skippy_state_kind::recurrent_conv, il);
+             ggml_build_forward_expand(gf, conv_state_all);
+ 
+             float slope_scale = 1.0 - 1.0 * il / (n_layer - 1) + 1e-5;
+@@ -309,7 +309,7 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
+ 
+             // get previous KV
+             ggml_tensor * la_states_all = mctx_cur->get_s_l(il);
+-            ggml_tensor * state = build_rs(inp_rs, la_states_all, hparams.n_embd_s(), n_seqs);
++            ggml_tensor * state = build_rs(inp_rs, la_states_all, hparams.n_embd_s(), n_seqs, skippy_state_kind::recurrent_ssm, il);
+ 
+             ggml_tensor * kv_old = ggml_reshape_4d(ctx0, state, n_embd_head, n_embd_head, n_head, n_seqs);
+             cb(kv_old, "kv_old", il);
+@@ -388,10 +388,11 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
+             }
+ 
+             // store new KV
+-            ggml_build_forward_expand(gf,
+-                                     ggml_cpy(ctx0, kv_new,
+-                                              ggml_view_1d(ctx0, la_states_all, hparams.n_embd_s() * n_seqs,
+-                                                           kv_head * hparams.n_embd_s() * ggml_element_size(la_states_all))));
++            ggml_tensor * la_state_write = ggml_cpy(ctx0, kv_new,
++                                     ggml_view_1d(ctx0, la_states_all, hparams.n_embd_s() * n_seqs,
++                                                  kv_head * hparams.n_embd_s() * ggml_element_size(la_states_all)));
++            ggml_build_forward_expand(gf, la_state_write);
++            state_write(skippy_state_kind::recurrent_ssm, la_states_all, la_state_write, il);
+ 
+             qkv = ggml_cont(ctx0, ggml_permute(ctx0, qkv, 0, 2, 1, 3));
+             cb(qkv, "qkv_permuted", il);
 diff --git a/src/models/models.h b/src/models/models.h
 index 87195fddd..3f8854a64 100644
 --- a/src/models/models.h
@@ -1122,7 +1222,7 @@ index 4d03f49e0..ce1cec84f 100644
      cb(cur, "result_output", -1);
  
 diff --git a/src/models/nemotron-h.cpp b/src/models/nemotron-h.cpp
-index d2c48f125..096fb4307 100644
+index ff8784d18..51a0855f5 100644
 --- a/src/models/nemotron-h.cpp
 +++ b/src/models/nemotron-h.cpp
 @@ -62,14 +62,16 @@ void llama_model_nemotron_h::load_arch_tensors(llama_model_loader & ml) {
@@ -1145,7 +1245,7 @@ index d2c48f125..096fb4307 100644
              output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
          }
      }
-@@ -164,6 +166,11 @@ void llama_model_nemotron_h::load_arch_tensors(llama_model_loader & ml) {
+@@ -170,6 +172,11 @@ void llama_model_nemotron_h::load_arch_tensors(llama_model_loader & ml) {
          layer.attn_post_norm  = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM,  "weight", i), {n_embd}, mtp_flags);
          layer.ffn_gate_inp    = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,    "weight", i), {n_embd, n_expert}, mtp_flags);
          layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias",   i), {n_expert}, mtp_flags);
@@ -1303,6 +1403,34 @@ index 8ace95f73..051b1e6d3 100644
      ggml_tensor * rows = ple_inp->rows;
      res->add_input(std::move(ple_inp));
  
+diff --git a/src/models/rwkv6-base.cpp b/src/models/rwkv6-base.cpp
+index 83aeab728..27d30b669 100644
+--- a/src/models/rwkv6-base.cpp
++++ b/src/models/rwkv6-base.cpp
+@@ -130,7 +130,7 @@ ggml_tensor * llm_build_rwkv6_base::build_rwkv6_time_mix(llm_graph_input_rs * in
+         // k = k * (1 - w)
+         k = ggml_sub(ctx0, k, ggml_mul(ctx0, k, w));
+     }
+-    ggml_tensor * wkv_state = build_rs(inp, mctx_cur->get_s_l(il), hparams.n_embd_s(), n_seqs);
++    ggml_tensor * wkv_state = build_rs(inp, mctx_cur->get_s_l(il), hparams.n_embd_s(), n_seqs, skippy_state_kind::recurrent_ssm, il);
+ 
+     ggml_tensor * wkv_output;
+     if (is_qrwkv) {
+@@ -141,10 +141,11 @@ ggml_tensor * llm_build_rwkv6_base::build_rwkv6_time_mix(llm_graph_input_rs * in
+     cur       = ggml_view_1d(ctx0, wkv_output, n_embd * n_tokens, 0);
+     wkv_state = ggml_view_1d(ctx0, wkv_output, n_embd * head_size * n_seqs, n_embd * n_tokens * sizeof(float));
+ 
+-    ggml_build_forward_expand(
+-        gf, ggml_cpy(ctx0, wkv_state,
++    ggml_tensor * wkv_state_write = ggml_cpy(ctx0, wkv_state,
+                      ggml_view_1d(ctx0, mctx_cur->get_s_l(il), hparams.n_embd_s() * n_seqs,
+-                                  hparams.n_embd_s() * kv_head * ggml_element_size(mctx_cur->get_s_l(il)))));
++                                  hparams.n_embd_s() * kv_head * ggml_element_size(mctx_cur->get_s_l(il))));
++    ggml_build_forward_expand(gf, wkv_state_write);
++    state_write(skippy_state_kind::recurrent_ssm, mctx_cur->get_s_l(il), wkv_state_write, il);
+ 
+     if (!is_qrwkv) {
+         // group norm with head_count groups
 diff --git a/src/models/rwkv6.cpp b/src/models/rwkv6.cpp
 index 0b5013dc7..ef58f3e47 100644
 --- a/src/models/rwkv6.cpp
@@ -1316,6 +1444,32 @@ index 0b5013dc7..ef58f3e47 100644
  
          layer.time_mix_first = create_tensor(tn(LLM_TENSOR_TIME_MIX_FIRST, "weight", i), {head_size, n_embd / head_size}, 0);
          layer.time_mix_decay = create_tensor(tn(LLM_TENSOR_TIME_MIX_DECAY, "weight", i), {n_embd}, 0);
+diff --git a/src/models/rwkv7-base.cpp b/src/models/rwkv7-base.cpp
+index 7fcab7774..d42c07ab7 100644
+--- a/src/models/rwkv7-base.cpp
++++ b/src/models/rwkv7-base.cpp
+@@ -102,16 +102,17 @@ ggml_tensor * llm_build_rwkv7_base::build_rwkv7_time_mix(llm_graph_input_rs * in
+     v = ggml_reshape_3d(ctx0, v, head_size, head_count, n_tokens);
+     a = ggml_reshape_3d(ctx0, a, head_size, head_count, n_tokens);
+ 
+-    ggml_tensor * wkv_state = build_rs(inp, mctx_cur->get_s_l(il), hparams.n_embd_s(), n_seqs);
++    ggml_tensor * wkv_state = build_rs(inp, mctx_cur->get_s_l(il), hparams.n_embd_s(), n_seqs, skippy_state_kind::recurrent_ssm, il);
+ 
+     ggml_tensor * wkv_output = ggml_rwkv_wkv7(ctx0, r, w, k, v, ggml_neg(ctx0, kk), ggml_mul(ctx0, kk, a), wkv_state);
+     cur                      = ggml_view_1d(ctx0, wkv_output, n_embd * n_tokens, 0);
+     wkv_state = ggml_view_1d(ctx0, wkv_output, n_embd * head_size * n_seqs, n_embd * n_tokens * sizeof(float));
+ 
+-    ggml_build_forward_expand(
+-        gf, ggml_cpy(ctx0, wkv_state,
++    ggml_tensor * wkv_state_write = ggml_cpy(ctx0, wkv_state,
+                      ggml_view_1d(ctx0, mctx_cur->get_s_l(il), hparams.n_embd_s() * n_seqs,
+-                                  hparams.n_embd_s() * kv_head * ggml_element_size(mctx_cur->get_s_l(il)))));
++                                  hparams.n_embd_s() * kv_head * ggml_element_size(mctx_cur->get_s_l(il))));
++    ggml_build_forward_expand(gf, wkv_state_write);
++    state_write(skippy_state_kind::recurrent_ssm, mctx_cur->get_s_l(il), wkv_state_write, il);
+ 
+     if (layer.time_mix_ln && layer.time_mix_ln_b) {
+         // group norm with head_count groups
 -- 
 2.55.0
 

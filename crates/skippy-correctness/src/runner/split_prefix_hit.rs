@@ -20,7 +20,7 @@ use crate::{
 };
 
 use super::{
-    native_mtp::emit_report,
+    native_mtp::{emit_report, normalize_runtime_layer_end},
     stage_execution::{
         CorrectnessTopologyStage, correctness_topology, ensure_matches, protocol_flash_attn,
         protocol_load_mode, runtime_model_identity, status,
@@ -30,6 +30,8 @@ use super::{
 const CASE_PORT_OFFSET: u16 = 10;
 
 pub fn split_prefix_hit(args: SplitPrefixHitArgs) -> Result<()> {
+    let mut args = args;
+    normalize_runtime_layer_end(&mut args.runtime)?;
     if args.split_layer == 0 || args.split_layer >= args.runtime.layer_end {
         bail!(
             "split_layer must be greater than zero and less than layer_end {}",

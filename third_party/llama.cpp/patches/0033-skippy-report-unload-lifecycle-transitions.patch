@@ -1,7 +1,7 @@
-From 8320d6e8d4944c77be7d517633111833bfb04400 Mon Sep 17 00:00:00 2001
+From 339af4c48ff797c99b6ede1bf8ed5296a856e44b Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 5 Sep 2026 15:45:36 -0400
-Subject: [PATCH] skippy: report unload lifecycle transitions
+Subject: [PATCH 033/113] skippy: report unload lifecycle transitions
 
 ---
  src/skippy/model_lifecycle.cpp      |  9 +++++++++
@@ -73,5 +73,5 @@ index a05806558..f9b57cb93 100644
          skippy_error_free(error);
          error = nullptr;
 -- 
-2.50.1 (Apple Git-155)
+2.55.0
 

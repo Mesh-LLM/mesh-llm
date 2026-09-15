@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "native_recipe": {
-    "llama_upstream_sha": "3057bb66c86c46d5781e50e85462a760ba7d1feb",
+    "llama_upstream_sha": "661643e43079a4ee6faab4c1895291767b67ea8d",
     "skippy_abi": "0.1.54",
-    "patch_queue_sha256": "38de596e11761ec5cf778332462003416bd6af2e5f01ed2415308bd4d52a2888"
+    "patch_queue_sha256": "3b12d21a496aa526288b8106c32a6957f5c924f981e2ee708fcd4d32d7ba02c9"
   },
   "models": [
     {
@@ -358,6 +358,20 @@
       "source_model_sha256": "76d19eb68bea4de46f2f3dfc82cfa6896da447b9aec91d7c6c3e7791f2d306ac"
     },
     {
+      "family": "inkling",
+      "repo": "unsloth/Inkling-Small-GGUF",
+      "revision": "1a19ef82883cb7b9c581b93c30ea252dabbf658d",
+      "files": [
+        "UD-Q4_K_M/Inkling-Small-UD-Q4_K_M-00001-of-00005.gguf",
+        "UD-Q4_K_M/Inkling-Small-UD-Q4_K_M-00002-of-00005.gguf",
+        "UD-Q4_K_M/Inkling-Small-UD-Q4_K_M-00003-of-00005.gguf",
+        "UD-Q4_K_M/Inkling-Small-UD-Q4_K_M-00004-of-00005.gguf",
+        "UD-Q4_K_M/Inkling-Small-UD-Q4_K_M-00005-of-00005.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "0d5ff53791ea7249c006c2127c88253f628472de8b97c08cc16063a3fe361810"
+    },
+    {
       "family": "internlm2",
       "repo": "Felladrin/gguf-internlm2-chat-1_8b",
       "revision": "cdd579415ed57fca8af5c5e09b35ee5124449876",
@@ -466,6 +480,17 @@
       ],
       "package_kind": "content-addressed-direct-gguf",
       "source_model_sha256": "6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83"
+    },
+    {
+      "family": "llama4",
+      "repo": "unsloth/Llama-4-Scout-17B-16E-Instruct-GGUF",
+      "revision": "72a6853f56a66dc13a3a4b6bdc9cf7ee4c364b47",
+      "files": [
+        "Q4_K_M/Llama-4-Scout-17B-16E-Instruct-Q4_K_M-00001-of-00002.gguf",
+        "Q4_K_M/Llama-4-Scout-17B-16E-Instruct-Q4_K_M-00002-of-00002.gguf"
+      ],
+      "package_kind": "content-addressed-direct-gguf",
+      "source_model_sha256": "1aef3dd2fd3d66299de47cd9f2754187dfd70e97eeb1fe7d4cd9e529e09b602b"
     },
     {
       "family": "maincoder",
