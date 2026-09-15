@@ -508,6 +508,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(runtime_event_engine_state)]
     fn recording_never_touches_the_installed_engine_no_recursion() {
         clear_runtime_event_engine();
         let engine = RuntimeEventEngine::with_capacity(4);

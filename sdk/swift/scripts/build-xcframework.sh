@@ -8,7 +8,7 @@ TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
 XCFRAMEWORK_DIR="$SWIFT_DIR/Generated"
 FRAMEWORK_NAME="MeshLLMFFI"
 GENERATED_SWIFT="$SWIFT_DIR/Sources/MeshLLM/Generated/mesh_ffi.swift"
-RUST_FEATURES="host,embedded-runtime"
+RUST_FEATURES="embedded-runtime"
 SWIFT_TARGET_OUTPUT_DIR="${SWIFT_TARGET_OUTPUT_DIR:-$REPO_ROOT/dist/swift-targets}"
 APPLE_TARGETS=(
   aarch64-apple-ios

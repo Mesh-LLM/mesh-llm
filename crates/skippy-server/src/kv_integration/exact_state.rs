@@ -395,6 +395,7 @@ fn is_native_kv_unavailable(error: &anyhow::Error) -> bool {
         let message = cause.to_string();
         message.contains("runtime memory type is not supported for native KV pages")
             || message.contains("runtime has no attention KV cache")
+            || message.contains("no KV cache layers selected by layer range")
     })
 }
 
@@ -443,12 +444,18 @@ mod tests {
 
     use skippy_cache::UnifiedRadixCache;
 
-    use super::try_touch_exact_state;
+    use super::{is_native_kv_unavailable, try_touch_exact_state};
 
     type TestRadix = UnifiedRadixCache<
         crate::kv_integration::RadixResidentEntry,
         crate::kv_integration::RadixExactEntry,
     >;
+
+    #[test]
+    fn empty_kv_layer_range_is_an_unavailable_optional_kv_component() {
+        let error = anyhow::anyhow!("RuntimeError: no KV cache layers selected by layer range");
+        assert!(is_native_kv_unavailable(&error));
+    }
 
     #[test]
     fn busy_exact_state_lock_skips_touch_without_waiting() {

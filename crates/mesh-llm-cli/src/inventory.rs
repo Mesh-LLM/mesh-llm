@@ -489,6 +489,7 @@ fn client_excluded_arg(id: &str) -> bool {
             | "draft_max"
             | "no_draft"
             | "split"
+            | "allow_uncertified_split"
             | "split_topology_lock"
             | "ctx_size"
     ) || id.starts_with("speculative_")

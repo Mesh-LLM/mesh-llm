@@ -1,3 +1,24 @@
+[build]
+rustc-wrapper = "sccache"
+
+[target.aarch64-apple-darwin]
+linker = "scripts/cargo-linker"
+
+[target.x86_64-apple-darwin]
+linker = "scripts/cargo-linker"
+
+[target.aarch64-unknown-linux-gnu]
+linker = "scripts/cargo-linker-linux-aarch64"
+
+[target.x86_64-unknown-linux-gnu]
+linker = "scripts/cargo-linker-linux-x86_64"
+
+[target.aarch64-pc-windows-msvc]
+linker = "scripts/cargo-linker.cmd"
+
+[target.x86_64-pc-windows-msvc]
+linker = "scripts/cargo-linker.cmd"
+
 [target.aarch64-linux-android]
 rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]
 
@@ -7,10 +28,9 @@ rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]
 [target.x86_64-linux-android]
 rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]
 
-# No macOS linker is configured here on purpose. A checked-in absolute
-# `-fuse-ld=/opt/homebrew/bin/ld64.lld` applied to every cargo invocation,
-# hardcoded an Apple-Silicon Homebrew path, and could not check that the
-# linker works first. When lld fell behind the macOS SDK, every `cargo build`
-# and `cargo test` failed to link while `cargo check` stayed green, because
-# check never links. lld is now resolved and probed at build time by
-# scripts/lib/lld.sh, which `just with-lld` and scripts/build-host.sh use.
+# The repository linker drivers resolve and probe the active platform linker
+# before they execute it. Linux prefers mold and falls back to a compatible
+# lld or the platform linker; macOS prefers Homebrew ld64.lld and falls back
+# to Apple ld when the installed lld cannot parse the active SDK. Windows
+# resolves rust-lld/lld-link and fails with setup instructions when neither is
+# installed.

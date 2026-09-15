@@ -13,6 +13,11 @@ struct ggml_tensor {
 };
 enum ggml_type { GGML_TYPE_F32, GGML_TYPE_I32 };
 
+static ggml_tensor *ggml_view_2d(void *, ggml_tensor *, long, long, long);
+static ggml_tensor *model_view_2d_slice(void *ctx0, ggml_tensor *x, int idx) {
+  return ggml_view_2d(ctx0, x, x->ne[0], x->ne[1], idx * x->ne[0] * x->ne[1]);
+}
+
 struct skippy_graph_filter {
   bool enabled;
   bool include_output;
@@ -66,7 +71,6 @@ struct model_altup_sideband {
     ggml_tensor *ggml_new_tensor_1d(void *, ggml_type, long);
     ggml_tensor *ggml_new_tensor_3d(void *, ggml_type, long, long, long);
     ggml_tensor *ggml_cont(void *, ggml_tensor *);
-    ggml_tensor *ggml_view_2d_slice(void *, ggml_tensor *, int);
     void ggml_set_input(ggml_tensor *);
     void begin_block(ggml_tensor *, int);
     void end_block(ggml_tensor *, int);
@@ -105,7 +109,7 @@ model_altup_sideband::graph::graph(const model_type &model) {
     inpL = cur;
   }
 
-  inpL = ggml_view_2d_slice(ctx0, inpL, i_altup_act);
+  inpL = model_view_2d_slice(ctx0, inpL, i_altup_act);
   ggml_tensor *inp_out_ids = build_inp_out_ids();
   if (inp_out_ids) {
     inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
