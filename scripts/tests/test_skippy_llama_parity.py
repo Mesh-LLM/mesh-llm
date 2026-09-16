@@ -86,7 +86,7 @@ class SkippyLlamaParityTests(unittest.TestCase):
             source.parent.mkdir(parents=True)
             source.write_text(
                 self.runtime_slice_admission_source().replace(
-                    "stage graph did not expose a stable input activation boundary",
+                    "stage graph input frontier does not match its admitted planner identities",
                     "missing input boundary",
                 ),
                 encoding="utf-8",
@@ -290,8 +290,8 @@ class SkippyLlamaParityTests(unittest.TestCase):
             "only the first runtime slice may include token embeddings",
             "the first runtime slice must include token embeddings",
             "only the final runtime slice may include output tensors",
-            "stage graph did not expose a stable output activation boundary",
-            "stage graph did not expose a stable input activation boundary",
+            "stage graph output frontier does not match its admitted planner identities",
+            "stage graph input frontier does not match its admitted planner identities",
         )
         invalid_argument_checks = (
             (
@@ -355,20 +355,20 @@ class SkippyLlamaParityTests(unittest.TestCase):
             )
         if controls:
             boundary_lines = (
-                "if (!stage_model->ctx->get_activation_boundary(type, elements, bytes)) { "
+                "if (!build_boundary(false, stage_model->output_activation_boundary)) { "
                 f'return fail_boundary_load("{checks[4]}"); }}',
-                "if (!stage_model->ctx->get_input_activation_boundary(type, elements, bytes)) { "
+                "if (!build_boundary(true, stage_model->input_activation_boundary)) { "
                 f'return fail_boundary_load("{checks[5]}"); }}',
             )
             if nested_boundary_failure:
                 boundary_lines = (
-                    "if (!stage_model->ctx->get_activation_boundary(type, elements, bytes)) { "
+                    "if (!build_boundary(false, stage_model->output_activation_boundary)) { "
                     f'if (false) {{ return fail_boundary_load("{checks[4]}"); }} }}',
                     boundary_lines[1],
                 )
             if unbraced_boundary_failure:
                 boundary_lines = (
-                    "if (!stage_model->ctx->get_activation_boundary(type, elements, bytes)) { "
+                    "if (!build_boundary(false, stage_model->output_activation_boundary)) { "
                     f'if (false) return fail_boundary_load("{checks[4]}"); }}',
                     boundary_lines[1],
                 )

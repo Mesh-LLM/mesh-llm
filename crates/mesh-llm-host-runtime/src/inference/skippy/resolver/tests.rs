@@ -85,6 +85,37 @@ fn assert_openai_args_use_request_time_defaults(
 }
 
 #[test]
+fn package_request_defaults_reach_embedded_openai_server_config() {
+    let package_request_defaults = serde_json::from_str(include_str!(
+        "../../../../../skippy-package-format/data/catalog-generation-defaults/qwen3.8-27b.json"
+    ))
+    .unwrap();
+    let package_generation = skippy_runtime::package::PackageGenerationInfo {
+        request_defaults: Some(package_request_defaults.clone()),
+        speculative_decoding: None,
+    };
+    let mesh_config = parse_config("");
+    let model_file = temp_model_file();
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "unsloth/Qwen3.5-9B-GGUF:Q4_K_M",
+        model_path: model_file.path(),
+        model_bytes: 10 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: Some(&package_generation),
+        compact_meta: None,
+    })
+    .unwrap();
+    let embedded = resolved.to_embedded_openai_args(32_000, true).unwrap();
+
+    assert_eq!(
+        embedded.request_defaults.package_request_defaults.as_ref(),
+        Some(&package_request_defaults)
+    );
+}
+
+#[test]
 fn resolver_applies_precedence_and_keeps_request_defaults_out_of_stage_config() {
     let mesh_config = parse_config(
         r#"
@@ -2216,4 +2247,47 @@ placement = "auto"
     .to_string();
 
     assert!(error.contains("defaults.hardware.placement"));
+}
+
+#[test]
+fn model_level_zero_runahead_overrides_a_positive_global_default() {
+    use crate::plugin::SpeculativeConfig;
+    let global: SpeculativeConfig = toml::from_str(
+        r#"
+strategy = "ngram-suffix"
+ngram_proposer = "suffix"
+ngram_min = 5
+ngram_max = 32
+verify_window_pipeline_depth = 2
+verify_window_runahead_tokens = 256
+"#,
+    )
+    .expect("parse global speculative config");
+    let model: SpeculativeConfig = toml::from_str(
+        r#"
+verify_window_runahead_tokens = 0
+"#,
+    )
+    .expect("parse model speculative config");
+    let inherited = super::speculative::resolve_speculative_config(
+        None,
+        Some(&global),
+        "meshllm/test-model",
+        std::path::Path::new("/nonexistent/test-model.gguf"),
+        None,
+    )
+    .expect("global run-ahead must resolve");
+    assert_eq!(inherited.decode.verify_window.runahead_max_tokens, 256);
+    let overridden = super::speculative::resolve_speculative_config(
+        Some(&model),
+        Some(&global),
+        "meshllm/test-model",
+        std::path::Path::new("/nonexistent/test-model.gguf"),
+        None,
+    )
+    .expect("model-level zero must resolve to fixed-depth mode");
+    assert_eq!(
+        overridden.decode.verify_window.runahead_max_tokens, 0,
+        "Some(0) at the model level must win over the inherited positive default"
+    );
 }

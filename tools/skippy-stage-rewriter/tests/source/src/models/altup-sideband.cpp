@@ -48,9 +48,8 @@ struct llm_graph_input_stage_tokens {
 };
 struct graph_result {
   ggml_tensor *t_embd;
-  ggml_tensor *t_skippy_gemma3n_altup;
-  ggml_tensor *t_skippy_activation_input;
-  ggml_tensor *t_skippy_activation_output;
+  void add_skippy_activation_import(ggml_tensor *, int) {}
+  void add_skippy_activation_export(ggml_tensor *, int) {}
   template <typename T> void add_input(std::unique_ptr<T>) {}
 };
 

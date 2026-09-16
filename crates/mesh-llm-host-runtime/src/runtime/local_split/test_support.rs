@@ -690,7 +690,7 @@ async fn runtime_resolver_uses_config_identity_and_honors_device_override() {
 model = "other/model-ref"
 
 [models.hardware]
-model_path = "{model_path}"
+model_path = {model_path}
 device = "CUDA1"
 
 [models.throughput]
@@ -701,7 +701,7 @@ threads_batch = 13
 model = "configured/model-ref"
 
 [models.hardware]
-model_path = "{model_path}"
+model_path = {model_path}
 
 [models.throughput]
 threads = 9
@@ -710,7 +710,7 @@ threads_batch = 5
 [models.request_defaults]
 max_tokens = 222
 "#,
-        model_path = model_path.display()
+        model_path = toml::Value::String(model_path.to_string_lossy().into_owned())
     ))
     .expect("test mesh config should parse");
     let model_bytes = fs::metadata(&model_path).unwrap().len();
@@ -878,14 +878,22 @@ pub(super) fn test_stage_status_from_load(
     load: &skippy::StageLoadRequest,
     state: skippy::StageRuntimeState,
 ) -> skippy::StageStatusSnapshot {
+    let mut parts =
+        [skippy_runtime::ActivationPartDesc::default(); skippy_runtime::ACTIVATION_MAX_PARTS];
+    parts[0] = skippy_runtime::ActivationPartDesc {
+        identity: [1; 32],
+        ggml_type: skippy_runtime::GGML_TYPE_F32,
+        rank: 2,
+        token_axis: 1,
+        dimensions: [4096, -1, 0, 0],
+        byte_strides: [4, 4096 * 4, 0, 0],
+        ..skippy_runtime::ActivationPartDesc::default()
+    };
     let boundary = Some(skippy_runtime::ActivationBoundaryDesc {
-        version: 1,
-        ggml_type: 0,
-        layout: 1,
-        elements_per_token: 4096,
-        bytes_per_token: 4096 * std::mem::size_of::<f32>() as u64,
-        required_frame_flags: 0,
-        required_sidebands: 0,
+        version: skippy_runtime::ACTIVATION_BOUNDARY_DESC_VERSION,
+        part_count: 1,
+        frontier_identity: [9; 32],
+        parts,
     });
     skippy::StageStatusSnapshot {
         topology_id: load.topology_id.clone(),

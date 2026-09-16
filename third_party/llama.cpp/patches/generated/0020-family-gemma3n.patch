@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/gemma3n.cpp b/src/models/gemma3n.cpp
-index bb628203aaaf584a386b42a615668df9681ccaaa..e7bedbc18661faca4676d4d96b7b6ce06b5d2764 100644
+index bb628203aaaf584a386b42a615668df9681ccaaa..4d6f433477f1fa3e57683e82491ee3f686c9797c 100644
 --- a/src/models/gemma3n.cpp
 +++ b/src/models/gemma3n.cpp
 @@ -98,10 +98,27 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
@@ -29,7 +29,7 @@ index bb628203aaaf584a386b42a615668df9681ccaaa..e7bedbc18661faca4676d4d96b7b6ce0
 +            cb(stage_inp->values, "inp_gemma3n_altup", -1);
 +            ggml_set_input(stage_inp->values);
 +            ggml_tensor * values = stage_inp->values;
-+            res->t_skippy_activation_input = values;
++            res->add_skippy_activation_import(values, 1);
 +            res->add_input(std::move(stage_inp));
 +            return values;
 +        }
@@ -99,7 +99,7 @@ index bb628203aaaf584a386b42a615668df9681ccaaa..e7bedbc18661faca4676d4d96b7b6ce0
          // this block is made to be closely resemble Gemma3p5DecoderLayer on python code
          const float freq_base_l  = model.get_rope_freq_base(cparams, il);
          const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
-@@ -266,7 +312,19 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
+@@ -266,7 +312,18 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
  
          // input for next layer
          inpL = cur;
@@ -109,8 +109,7 @@ index bb628203aaaf584a386b42a615668df9681ccaaa..e7bedbc18661faca4676d4d96b7b6ce0
 +        cb(inpL, "stage_boundary", il_end - 1);
 +        ggml_tensor * stage_boundary = ggml_cont(ctx0, inpL);
 +        cb(stage_boundary, "stage_boundary_cont", il_end - 1);
-+        res->t_skippy_gemma3n_altup = stage_boundary;
-+        res->t_skippy_activation_output = stage_boundary;
++        res->add_skippy_activation_export(stage_boundary, 1);
 +        res->t_embd = gemma3n_view_2d_slice(ctx0, stage_boundary, i_altup_act);
 +        ggml_build_forward_expand(gf, stage_boundary);
 +        return;
@@ -119,7 +118,7 @@ index bb628203aaaf584a386b42a615668df9681ccaaa..e7bedbc18661faca4676d4d96b7b6ce0
      cur = inpL;  // [n_embd, n_tokens, n_altup]
  
      // cur now has multiple altup(s), we want to merge them back to 1 altup
-@@ -295,7 +353,7 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
+@@ -295,7 +352,7 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
      // TODO: move this to right after the last KV layer
      {
          // skip computing output for unused tokens

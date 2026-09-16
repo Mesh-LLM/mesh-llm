@@ -339,8 +339,8 @@ index 22a116414..6479f400a 100644
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 54
-+#define SKIPPY_ABI_VERSION_PATCH 55
+-#define SKIPPY_ABI_VERSION_PATCH 56
++#define SKIPPY_ABI_VERSION_PATCH 57
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -614,4 +614,3 @@ index 27e6614ea..3b247cae8 100644
          skippy_clear_chat_sampling(session);
 -- 
 2.54.0 (Apple Git-157)
-

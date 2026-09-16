@@ -446,21 +446,42 @@ fn omitted_max_tokens_with_embedded_default_is_bounded() {
 
 #[test]
 fn qwen35_incident_path_gets_bounded_output_and_native_reasoning_budget() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "unsloth/Qwen3.5-9B-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}]
     }))
     .unwrap();
-    let output_limit = GenerationTokenLimit::from_request(None, DEFAULT_EMBEDDED_MAX_TOKENS)
-        .resolve(128, 32_000)
-        .unwrap();
-    let mut sampling =
-        chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
+    let configured = EmbeddedOpenAiRequestDefaults {
+        package_request_defaults: Some(
+            serde_json::from_str(include_str!(
+                "../../../../skippy-package-format/data/catalog-generation-defaults/qwen3.8-27b.json"
+            ))
+            .unwrap(),
+        ),
+        ..EmbeddedOpenAiRequestDefaults::default()
+    };
+    let (resolved, diagnostics) = resolve_chat_request_defaults(&request, &configured).unwrap();
+    apply_chat_request_defaults(&mut request, &resolved).unwrap();
+    let output_limit = GenerationTokenLimit::from_request(
+        request.effective_max_tokens(),
+        DEFAULT_EMBEDDED_MAX_TOKENS,
+    )
+    .resolve(128, 32_000)
+    .unwrap();
+    let mut sampling = chat_sampling_config(&request, &resolved).unwrap();
 
     sampling.resolve_reasoning_budget(output_limit);
     let wire = wire_sampling_config(&sampling).expect("resolved sampling wire payload");
 
+    assert_eq!(
+        diagnostics.selected_package_profile.as_deref(),
+        Some("thinking")
+    );
+    assert_eq!(diagnostics.max_tokens_source, "fallback");
+    assert_eq!(diagnostics.reasoning_budget_source, "package");
     assert_eq!(output_limit, 8_192);
+    assert_eq!(sampling.temperature, 1.0);
+    assert_eq!(sampling.top_k, 20);
     assert_eq!(wire.reasoning_budget_tokens, 4_096);
 }
 

@@ -9,9 +9,7 @@ use super::{
     MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC, STAGE_STATE_VERSION, StageLogitBias,
     StageNativeMtpDraft, StageReply, StageReplyStats, StageReplyWindow, StageSamplingConfig,
     StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
-    activation::{
-        decode_activation_payload_with_state_flags, validate_activation_wire_payload_len,
-    },
+    activation::{decode_activation_frame, encode_raw_activation_frame},
     invalid_data, invalid_input,
 };
 
@@ -278,6 +276,7 @@ pub fn write_stage_message(mut writer: impl Write, message: &StageWireMessage) -
         state.flags &= !super::state_flags::CHAT_SAMPLING_METADATA;
     }
     let activation_wire_byte_count = if message.kind == WireMessageKind::StateImport
+        || message.kind == WireMessageKind::Stop
         || state.source_stage_index < 0
         || message.kind.is_activationless_prefix_cache_control()
     {
@@ -293,6 +292,8 @@ pub fn write_stage_message(mut writer: impl Write, message: &StageWireMessage) -
                 "activation payload byte count exceeds maximum",
             ));
         }
+        let frame = decode_activation_frame(state.activation_codec, &message.activation)?;
+        validate_activation_frame_header(&frame, message.token_count, state.source_stage_index)?;
         i32::try_from(message.activation.len())
             .map_err(|_| invalid_input("activation payload byte count exceeds maximum"))?
     };
@@ -334,34 +335,32 @@ pub fn write_stage_message(mut writer: impl Write, message: &StageWireMessage) -
     Ok(())
 }
 
-pub fn read_stage_message(reader: impl Read, n_embd: i32) -> io::Result<StageWireMessage> {
-    read_stage_message_inner(reader, n_embd, None)
+pub fn read_stage_message(reader: impl Read, _n_embd: i32) -> io::Result<StageWireMessage> {
+    read_stage_message_inner(reader, None)
 }
 
 pub fn read_stage_message_for_codec(
     reader: impl Read,
-    n_embd: i32,
+    _n_embd: i32,
     expected_codec: StageActivationCodec,
 ) -> io::Result<StageWireMessage> {
     read_stage_message_inner(
         reader,
-        n_embd,
         Some((expected_codec, StageActivationCodecPolicy::Fixed)),
     )
 }
 
 pub fn read_stage_message_for_codec_policy(
     reader: impl Read,
-    n_embd: i32,
+    _n_embd: i32,
     configured_codec: StageActivationCodec,
     policy: StageActivationCodecPolicy,
 ) -> io::Result<StageWireMessage> {
-    read_stage_message_inner(reader, n_embd, Some((configured_codec, policy)))
+    read_stage_message_inner(reader, Some((configured_codec, policy)))
 }
 
 fn read_stage_message_inner(
     mut reader: impl Read,
-    n_embd: i32,
     expected_codec: Option<(StageActivationCodec, StageActivationCodecPolicy)>,
 ) -> io::Result<StageWireMessage> {
     let kind = WireMessageKind::try_from(read_i32(&mut reader)?)?;
@@ -398,13 +397,6 @@ fn read_stage_message_inner(
         {
             return Err(invalid_data("stage activation codec mismatch"));
         }
-        validate_activation_wire_payload_len(
-            state.activation_codec,
-            token_count,
-            n_embd,
-            state.flags,
-            activation_wire_byte_count,
-        )?;
         activation_wire_byte_count
     };
     let sampling = if (state.flags & super::state_flags::SAMPLING) != 0 {
@@ -493,13 +485,9 @@ fn read_stage_message_inner(
     let activation = if wire_activation.is_empty() {
         Vec::new()
     } else {
-        decode_activation_payload_with_state_flags(
-            state.activation_codec,
-            token_count,
-            n_embd,
-            &wire_activation,
-            state.flags,
-        )?
+        let frame = decode_activation_frame(state.activation_codec, &wire_activation)?;
+        validate_activation_frame_header(&frame, token_count, state.source_stage_index)?;
+        encode_raw_activation_frame(&frame)?
     };
     Ok(StageWireMessage {
         kind,
@@ -515,6 +503,24 @@ fn read_stage_message_inner(
         activation,
         raw_bytes: Vec::new(),
     })
+}
+
+fn validate_activation_frame_header(
+    frame: &super::StageActivationFrame,
+    token_count: i32,
+    source_stage_index: i32,
+) -> io::Result<()> {
+    if token_count < 0 || frame.desc.token_count != token_count as u32 {
+        return Err(invalid_data(
+            "activation frame token count does not match stage message",
+        ));
+    }
+    if frame.desc.producer_stage_index != source_stage_index {
+        return Err(invalid_data(
+            "activation frame producer does not match stage message",
+        ));
+    }
+    Ok(())
 }
 
 fn checked_i32_len(

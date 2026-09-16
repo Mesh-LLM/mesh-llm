@@ -937,13 +937,15 @@ def validate_runtime_slice_admission(llama_root: Path | None = None) -> int:
     boundary_contracts = (
         (
             "output activation boundary",
-            r"if\s*\(\s*!stage_model->ctx->get_activation_boundary\s*\([^)]*\)\s*\)",
-            "stage graph did not expose a stable output activation boundary",
+            r"if\s*\(\s*!build_boundary\s*\(\s*false\s*,\s*"
+            r"stage_model->output_activation_boundary\s*\)\s*\)",
+            "stage graph output frontier does not match its admitted planner identities",
         ),
         (
             "input activation boundary",
-            r"if\s*\(\s*!stage_model->ctx->get_input_activation_boundary\s*\([^)]*\)\s*\)",
-            "stage graph did not expose a stable input activation boundary",
+            r"if\s*\(\s*!build_boundary\s*\(\s*true\s*,\s*"
+            r"stage_model->input_activation_boundary\s*\)\s*\)",
+            "stage graph input frontier does not match its admitted planner identities",
         ),
     )
     for name, guard, message in boundary_contracts:

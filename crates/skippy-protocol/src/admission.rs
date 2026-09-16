@@ -1,6 +1,6 @@
-//! Canonical generation-9 stage admission descriptors.
+//! Canonical generation-10 stage admission descriptors.
 
-/// Current descriptor schema carried by stage-control generation 9.
+/// Current descriptor schema carried by stage-control generation 10.
 pub const STAGE_ADMISSION_DESCRIPTOR_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -36,6 +36,10 @@ pub struct StageAdmissionProfile {
     pub source_snapshot_identity: String,
     pub graph_configuration_id: String,
     pub backend_id: String,
+    pub activation_imports: Vec<String>,
+    pub activation_exports: Vec<String>,
+    pub activation_import_bindings: Vec<String>,
+    pub activation_export_bindings: Vec<String>,
 }
 
 impl From<StageAdmissionDescriptor> for crate::proto::stage::StageAdmissionDescriptor {
@@ -123,6 +127,10 @@ impl From<StageAdmissionProfile> for crate::proto::stage::StageAdmissionProfile 
             source_snapshot_identity: profile.source_snapshot_identity,
             graph_configuration_id: profile.graph_configuration_id,
             backend_id: profile.backend_id,
+            activation_imports: profile.activation_imports,
+            activation_exports: profile.activation_exports,
+            activation_import_bindings: profile.activation_import_bindings,
+            activation_export_bindings: profile.activation_export_bindings,
         }
     }
 }
@@ -137,6 +145,10 @@ impl From<crate::proto::stage::StageAdmissionProfile> for StageAdmissionProfile 
             source_snapshot_identity: profile.source_snapshot_identity,
             graph_configuration_id: profile.graph_configuration_id,
             backend_id: profile.backend_id,
+            activation_imports: profile.activation_imports,
+            activation_exports: profile.activation_exports,
+            activation_import_bindings: profile.activation_import_bindings,
+            activation_export_bindings: profile.activation_export_bindings,
         }
     }
 }

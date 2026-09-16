@@ -632,7 +632,7 @@ pub(super) fn stage_load_mode_from_proto(value: i32) -> anyhow::Result<skippy_pr
             Ok(skippy_protocol::LoadMode::ArtifactSlice)
         }
         Ok(skippy_stage_proto::StageLoadMode::Unspecified) | Err(_) => {
-            anyhow::bail!("unsupported generation-9 stage load mode {value}")
+            anyhow::bail!("unsupported generation-10 stage load mode {value}")
         }
     }
 }
@@ -672,7 +672,7 @@ fn stage_activation_codec_from_proto(
         Ok(skippy_stage_proto::StageActivationCodec::S8RowF32RneV1) => {
             Ok(skippy_protocol::StageActivationCodec::S8RowF32RneV1)
         }
-        _ => anyhow::bail!("unsupported generation-9 activation codec {value}"),
+        _ => anyhow::bail!("unsupported generation-10 activation codec {value}"),
     }
 }
 
@@ -694,7 +694,7 @@ fn stage_activation_codec_policy_from_proto(
 ) -> anyhow::Result<skippy_protocol::StageActivationCodecPolicy> {
     match skippy_stage_proto::StageActivationCodecPolicy::try_from(value) {
         Ok(skippy_stage_proto::StageActivationCodecPolicy::Unspecified) => {
-            anyhow::bail!("generation-9 activation codec policy must be explicit")
+            anyhow::bail!("generation-10 activation codec policy must be explicit")
         }
         Ok(skippy_stage_proto::StageActivationCodecPolicy::FixedV1) => {
             Ok(skippy_protocol::StageActivationCodecPolicy::Fixed)
@@ -702,7 +702,7 @@ fn stage_activation_codec_policy_from_proto(
         Ok(skippy_stage_proto::StageActivationCodecPolicy::AutoLosslessV1) => {
             Ok(skippy_protocol::StageActivationCodecPolicy::AutoLosslessV1)
         }
-        _ => anyhow::bail!("unsupported generation-9 activation codec policy {value}"),
+        _ => anyhow::bail!("unsupported generation-10 activation codec policy {value}"),
     }
 }
 
@@ -1007,7 +1007,7 @@ fn source_resolution_policy_from_proto(value: i32) -> anyhow::Result<bool> {
         Ok(skippy_stage_proto::SourceResolutionPolicy::Fallback) => Ok(false),
         Ok(skippy_stage_proto::SourceResolutionPolicy::LocalRequired) => Ok(true),
         Ok(skippy_stage_proto::SourceResolutionPolicy::Unspecified) | Err(_) => {
-            anyhow::bail!("unsupported generation-9 stage source resolution policy {value}")
+            anyhow::bail!("unsupported generation-10 stage source resolution policy {value}")
         }
     }
 }
@@ -1163,10 +1163,12 @@ pub(super) fn stage_status_from_proto(
         bind_addr: status.bind_addr,
         input_activation_boundary: status
             .input_activation_boundary
-            .map(activation_boundary_from_proto),
+            .map(activation_boundary_from_proto)
+            .transpose()?,
         output_activation_boundary: status
             .output_activation_boundary
-            .map(activation_boundary_from_proto),
+            .map(activation_boundary_from_proto)
+            .transpose()?,
         selected_device: status
             .selected_device
             .map(stage_device_from_proto)
@@ -1203,29 +1205,88 @@ pub(super) fn stage_status_from_proto(
 fn activation_boundary_to_proto(
     value: skippy_runtime::ActivationBoundaryDesc,
 ) -> skippy_stage_proto::ActivationBoundaryDescriptor {
+    let part_count = usize::try_from(value.part_count)
+        .unwrap_or(usize::MAX)
+        .min(value.parts.len());
     skippy_stage_proto::ActivationBoundaryDescriptor {
         version: value.version,
-        ggml_type: value.ggml_type,
-        layout: value.layout,
-        elements_per_token: value.elements_per_token,
-        bytes_per_token: value.bytes_per_token,
-        required_frame_flags: value.required_frame_flags,
-        required_sidebands: value.required_sidebands,
+        frontier_identity: value.frontier_identity.to_vec(),
+        parts: value.parts[..part_count]
+            .iter()
+            .map(|part| skippy_stage_proto::ActivationPartDescriptor {
+                identity: part.identity.to_vec(),
+                ggml_type: part.ggml_type,
+                rank: part.rank,
+                token_axis: part.token_axis,
+                flags: part.flags,
+                dimensions: part.dimensions.to_vec(),
+                byte_strides: part.byte_strides.to_vec(),
+                payload_offset: part.payload_offset,
+                payload_bytes: part.payload_bytes,
+            })
+            .collect(),
     }
 }
 
 fn activation_boundary_from_proto(
     value: skippy_stage_proto::ActivationBoundaryDescriptor,
-) -> skippy_runtime::ActivationBoundaryDesc {
-    skippy_runtime::ActivationBoundaryDesc {
-        version: value.version,
-        ggml_type: value.ggml_type,
-        layout: value.layout,
-        elements_per_token: value.elements_per_token,
-        bytes_per_token: value.bytes_per_token,
-        required_frame_flags: value.required_frame_flags,
-        required_sidebands: value.required_sidebands,
+) -> anyhow::Result<skippy_runtime::ActivationBoundaryDesc> {
+    anyhow::ensure!(
+        value.frontier_identity.len() == skippy_runtime::ACTIVATION_IDENTITY_BYTES,
+        "activation frontier identity must contain exactly {} bytes",
+        skippy_runtime::ACTIVATION_IDENTITY_BYTES
+    );
+    anyhow::ensure!(
+        !value.parts.is_empty() && value.parts.len() <= skippy_runtime::ACTIVATION_MAX_PARTS,
+        "activation boundary must contain between 1 and {} parts",
+        skippy_runtime::ACTIVATION_MAX_PARTS
+    );
+    let part_count = value.parts.len();
+    let mut parts =
+        [skippy_runtime::ActivationPartDesc::default(); skippy_runtime::ACTIVATION_MAX_PARTS];
+    for (index, part) in value.parts.into_iter().enumerate() {
+        anyhow::ensure!(
+            part.identity.len() == skippy_runtime::ACTIVATION_IDENTITY_BYTES,
+            "activation part identity must contain exactly {} bytes",
+            skippy_runtime::ACTIVATION_IDENTITY_BYTES
+        );
+        anyhow::ensure!(
+            part.dimensions.len() == skippy_runtime::ACTIVATION_MAX_DIMS,
+            "activation part dimensions must contain exactly {} entries",
+            skippy_runtime::ACTIVATION_MAX_DIMS
+        );
+        anyhow::ensure!(
+            part.byte_strides.len() == skippy_runtime::ACTIVATION_MAX_DIMS,
+            "activation part byte strides must contain exactly {} entries",
+            skippy_runtime::ACTIVATION_MAX_DIMS
+        );
+        parts[index] = skippy_runtime::ActivationPartDesc {
+            identity: part.identity.try_into().expect("validated identity length"),
+            ggml_type: part.ggml_type,
+            rank: part.rank,
+            token_axis: part.token_axis,
+            flags: part.flags,
+            dimensions: part
+                .dimensions
+                .try_into()
+                .expect("validated dimensions length"),
+            byte_strides: part
+                .byte_strides
+                .try_into()
+                .expect("validated byte strides length"),
+            payload_offset: part.payload_offset,
+            payload_bytes: part.payload_bytes,
+        };
     }
+    Ok(skippy_runtime::ActivationBoundaryDesc {
+        version: value.version,
+        part_count: u32::try_from(part_count).expect("part count is bounded"),
+        frontier_identity: value
+            .frontier_identity
+            .try_into()
+            .expect("validated frontier identity length"),
+        parts,
+    })
 }
 
 pub(super) fn stage_flash_attn_type_to_proto(
@@ -1368,19 +1429,29 @@ mod tests {
 
     #[test]
     fn activation_boundary_descriptor_wire_round_trip_preserves_every_field() {
+        let mut parts =
+            [skippy_runtime::ActivationPartDesc::default(); skippy_runtime::ACTIVATION_MAX_PARTS];
+        parts[0] = skippy_runtime::ActivationPartDesc {
+            identity: [0x22; skippy_runtime::ACTIVATION_IDENTITY_BYTES],
+            ggml_type: skippy_runtime::GGML_TYPE_F32,
+            rank: 2,
+            token_axis: 1,
+            flags: 0,
+            dimensions: [2_560, -1, 1, 1],
+            byte_strides: [4, 10_240, 10_240, 10_240],
+            payload_offset: 0,
+            payload_bytes: 20_480,
+        };
         let expected = skippy_runtime::ActivationBoundaryDesc {
-            version: 7,
-            ggml_type: 8,
-            layout: 3,
-            elements_per_token: 2_560,
-            bytes_per_token: 10_240,
-            required_frame_flags: 0x04,
-            required_sidebands: 0x02,
+            version: skippy_runtime::ACTIVATION_BOUNDARY_DESC_VERSION,
+            part_count: 1,
+            frontier_identity: [0x11; skippy_runtime::ACTIVATION_IDENTITY_BYTES],
+            parts,
         };
         let encoded = activation_boundary_to_proto(expected).encode_to_vec();
         let decoded = skippy_stage_proto::ActivationBoundaryDescriptor::decode(encoded.as_slice())
             .expect("decode activation boundary descriptor");
 
-        assert_eq!(activation_boundary_from_proto(decoded), expected);
+        assert_eq!(activation_boundary_from_proto(decoded).unwrap(), expected);
     }
 }

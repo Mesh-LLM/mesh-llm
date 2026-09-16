@@ -142,7 +142,7 @@ fn multimodal_stage_config(
     // Filtered stage loads must carry the exact admitted resident tensor set;
     // derive it with the same native planner the correctness runner uses.
     let filtered = layer_start != 0 || layer_end != fixture.layer_end;
-    let resident_tensor_names = if filtered {
+    let runtime_plan = if filtered {
         // The native planner validates a complete contiguous partition, so
         // plan the full two-stage chain and keep this stage's closure.
         let boundary = if layer_start == 0 {
@@ -155,23 +155,28 @@ fn multimodal_stage_config(
         } else {
             vec![(0, boundary), (boundary, fixture.layer_end)]
         };
-        match skippy_runtime::plan_gguf_stage_resident_tensor_names(
+        match skippy_runtime::plan_gguf_stage_runtime_plans(
             &fixture.model_path,
             &ranges,
             fixture.ctx_size,
             1,
         ) {
-            Ok(mut names) => {
-                let index = usize::min(stage_index as usize, names.len().saturating_sub(1));
-                names.drain(..index);
-                names.into_iter().next().unwrap_or_default()
+            Ok(mut plans) => {
+                let index = usize::min(stage_index as usize, plans.len().saturating_sub(1));
+                plans.drain(..index);
+                Some(
+                    plans
+                        .into_iter()
+                        .next()
+                        .expect("mm-smoke planner returned no stage plan"),
+                )
             }
-            Err(error) => panic!("mm-smoke resident derivation failed for {stage_id}: {error:#}"),
+            Err(error) => panic!("mm-smoke runtime planning failed for {stage_id}: {error:#}"),
         }
     } else {
-        Vec::new()
+        None
     };
-    StageConfig {
+    let mut config = StageConfig {
         run_id: "mm-smoke-run".to_string(),
         topology_id: "mm-smoke-topology".to_string(),
         model_id: "mm-smoke".to_string(),
@@ -211,7 +216,7 @@ fn multimodal_stage_config(
         swa_full: None,
         cache_idle_slots: None,
         filter_tensors_on_load: layer_start != 0 || layer_end != fixture.layer_end,
-        resident_tensor_names,
+        resident_tensor_names: Vec::new(),
         selected_device: None,
         kv_cache: None,
         native_mtp_enabled: true,
@@ -220,7 +225,15 @@ fn multimodal_stage_config(
         upstream: None,
         downstream: None,
         ..StageConfig::default()
+    };
+    if let Some(plan) = runtime_plan {
+        config.resident_tensor_names = plan.resident_tensor_names;
+        config.activation_import_identities = plan.activation_import_identities;
+        config.activation_import_bindings = plan.activation_import_bindings;
+        config.activation_export_identities = plan.activation_export_identities;
+        config.activation_export_bindings = plan.activation_export_bindings;
     }
+    config
 }
 
 fn local_openai_backend(config: StageConfig) -> Result<StageOpenAiBackend> {
@@ -511,8 +524,29 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
     // macOS even after the native library is warm. This test is opt-in and
     // exercises a real cached model, so budget for the load before declaring
     // the embedded stage unhealthy.
-    let ready = connect_endpoint_ready(&stage1_addr.to_string(), 1_800);
-    if let Err(error) = ready {
+    let mut last_ready_error = None;
+    for _ in 0..1_800 {
+        match connect_endpoint_ready(&stage1_addr.to_string(), 1) {
+            Ok(_) => {
+                last_ready_error = None;
+                break;
+            }
+            Err(error) => last_ready_error = Some(error),
+        }
+        let status = stage1_handle.status();
+        if matches!(
+            status.state,
+            crate::embedded::EmbeddedState::Failed | crate::embedded::EmbeddedState::Stopped
+        ) {
+            stage1_handle.abort();
+            bail!(
+                "stage-1 binary server stopped during startup; status={:?} last_error={:?}",
+                status.state,
+                status.last_error
+            );
+        }
+    }
+    if let Some(error) = last_ready_error {
         let status = stage1_handle.status();
         stage1_handle.abort();
         return Err(error.context(format!(
