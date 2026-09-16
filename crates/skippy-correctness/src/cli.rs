@@ -362,6 +362,11 @@ pub enum StatePayloadKind {
 pub struct StageFaParityArgs {
     #[arg(long)]
     pub model: PathBuf,
+    #[arg(
+        long,
+        help = "Accessible source GGUF used to derive the stage activation frontier"
+    )]
+    pub source_model: PathBuf,
     #[arg(long, default_value = "unsloth/inkling-GGUF:UD-Q2_K_XL")]
     pub model_id: String,
     #[arg(long, default_value_t = 0)]

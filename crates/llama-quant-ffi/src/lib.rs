@@ -1,5 +1,10 @@
 use std::ffi::c_char;
 
+// Propagate static native archive changes through Cargo dependency metadata so
+// final binaries are relinked after CMake rebuilds llama.cpp.
+#[doc(hidden)]
+pub const NATIVE_LINK_FINGERPRINT: &str = env!("LLAMA_QUANT_NATIVE_LINK_FINGERPRINT");
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
 pub enum LlamaFileType {

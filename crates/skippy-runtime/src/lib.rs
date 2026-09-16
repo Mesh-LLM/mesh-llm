@@ -28,9 +28,9 @@ pub use activation::{DecodeFrameBatchRequest, IterationBatchPhase, IterationBatc
 pub use capability_probe::{CapabilityReport, probe_capabilities};
 pub use checkpoint::{CheckpointQuantization, is_safetensors_checkpoint};
 pub use config::{
-    FlashAttentionType, GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GlmDsaPolicy,
-    LLAMA_SERVER_DEFAULT_N_BATCH, LLAMA_SERVER_DEFAULT_N_UBATCH, MtpSource, RuntimeConfig,
-    SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH, SplitMode, parse_cache_type,
+    FlashAttentionType, GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_I32, GGML_TYPE_Q4_0,
+    GGML_TYPE_Q8_0, GlmDsaPolicy, LLAMA_SERVER_DEFAULT_N_BATCH, LLAMA_SERVER_DEFAULT_N_UBATCH,
+    MtpSource, RuntimeConfig, SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH, SplitMode, parse_cache_type,
 };
 pub use devices::{BackendDevice, BackendDeviceType, backend_devices};
 pub(crate) use error::ensure_ok;
@@ -62,21 +62,22 @@ pub use session::{DecodeBatchRequest, StageSession};
 pub use skippy_ffi::LoadMode as RuntimeLoadMode;
 pub use skippy_ffi::MAX_DRY_SEQUENCE_BREAKER_BYTES;
 pub use skippy_ffi::{
-    ACTIVATION_FLAG_GEMMA3N_ALTUP, ACTIVATION_FLAG_GLM_DSA_TOP_K, ACTIVATION_FLAG_KIMI_K3_RESIDUAL,
-    ACTIVATION_SIDEBAND_TOKEN_IDS, ActivationDType as RuntimeActivationDType,
-    ActivationLayout as RuntimeActivationLayout,
+    ACTIVATION_FRAME_VERSION, ACTIVATION_IDENTITY_BYTES, ACTIVATION_MAX_DIMS, ACTIVATION_MAX_PARTS,
+    ACTIVATION_PART_OPTIONAL,
 };
 pub use stage_planning::{
-    gguf_shard_paths, plan_gguf_stage_resident_tensor_names,
-    plan_gguf_stage_resident_tensor_names_for_range,
+    GgufStageRuntimePlan, gguf_shard_paths, plan_gguf_stage_resident_tensor_names,
+    plan_gguf_stage_resident_tensor_names_for_range, plan_gguf_stage_runtime_plan_for_range,
+    plan_gguf_stage_runtime_plans,
 };
 pub use types::{
-    ActivationBoundaryDesc, ActivationDesc, ActivationFrame, ChatReasoningFormat,
-    ChatTemplateJsonOptions, ChatTemplateJsonResult, ChatTemplateMessage, ChatTemplateOptions,
-    DecodeFrameBatchOutput, DrySamplingConfig, GenerationSignalWindow, IterationBatchOutput,
-    IterationSample, LoadedModelCapability, LogitBias, MAX_LOGIT_BIAS, MediaInput, MediaPrefill,
-    MediaPrefillChunkFrame, MediaPrefillFrame, ModelStateKind, RuntimeKvPage, RuntimeKvPageDesc,
-    SamplingConfig, TensorInfo, TokenSignal, XtcSamplingConfig,
+    ACTIVATION_BOUNDARY_DESC_VERSION, ActivationBoundaryDesc, ActivationDesc, ActivationFrame,
+    ActivationPartDesc, ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateJsonResult,
+    ChatTemplateMessage, ChatTemplateOptions, DecodeFrameBatchOutput, DrySamplingConfig,
+    GenerationSignalWindow, IterationBatchOutput, IterationSample, LoadedModelCapability,
+    LogitBias, MAX_LOGIT_BIAS, MediaInput, MediaPrefill, MediaPrefillChunkFrame, MediaPrefillFrame,
+    ModelStateKind, RuntimeKvPage, RuntimeKvPageDesc, SamplingConfig, TensorInfo, TokenSignal,
+    XtcSamplingConfig,
 };
 
 #[cfg(feature = "dynamic-native-runtime")]

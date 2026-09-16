@@ -2,9 +2,9 @@ use std::mem::{offset_of, size_of};
 
 use crate::{
     ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, ActivationBoundaryDesc,
-    StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStateKind,
-    StagePlanStringRefV1, StagePlanValueDescV1, StagePlannerConfigV1, StagePlannerProfileV1,
-    StagePlannerTensorV1, runtime_abi_supported,
+    ActivationPartDesc, StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1,
+    StagePlanStateKind, StagePlanStringRefV1, StagePlanValueDescV1, StagePlannerConfigV1,
+    StagePlannerProfileV1, StagePlannerTensorV1, runtime_abi_supported,
 };
 
 #[cfg(target_pointer_width = "64")]
@@ -65,15 +65,19 @@ fn rejects_major_and_minor_mismatches() {
 
 #[test]
 fn activation_boundary_descriptor_matches_native_layout() {
-    assert_eq!(size_of::<ActivationBoundaryDesc>(), 48);
+    assert_eq!(size_of::<ActivationPartDesc>(), 128);
+    assert_eq!(offset_of!(ActivationPartDesc, identity), 0);
+    assert_eq!(offset_of!(ActivationPartDesc, ggml_type), 32);
+    assert_eq!(offset_of!(ActivationPartDesc, dimensions), 48);
+    assert_eq!(offset_of!(ActivationPartDesc, byte_strides), 80);
+    assert_eq!(offset_of!(ActivationPartDesc, payload_offset), 112);
+    assert_eq!(offset_of!(ActivationPartDesc, payload_bytes), 120);
+
+    assert_eq!(size_of::<ActivationBoundaryDesc>(), 2088);
     assert_eq!(offset_of!(ActivationBoundaryDesc, version), 0);
-    assert_eq!(offset_of!(ActivationBoundaryDesc, ggml_type), 4);
-    assert_eq!(offset_of!(ActivationBoundaryDesc, layout), 8);
-    assert_eq!(offset_of!(ActivationBoundaryDesc, reserved), 12);
-    assert_eq!(offset_of!(ActivationBoundaryDesc, elements_per_token), 16);
-    assert_eq!(offset_of!(ActivationBoundaryDesc, bytes_per_token), 24);
-    assert_eq!(offset_of!(ActivationBoundaryDesc, required_frame_flags), 32);
-    assert_eq!(offset_of!(ActivationBoundaryDesc, required_sidebands), 40);
+    assert_eq!(offset_of!(ActivationBoundaryDesc, part_count), 4);
+    assert_eq!(offset_of!(ActivationBoundaryDesc, frontier_identity), 8);
+    assert_eq!(offset_of!(ActivationBoundaryDesc, parts), 40);
 }
 
 #[test]
@@ -98,7 +102,8 @@ fn stage_plan_types_match_native_layout() {
     assert_eq!(size_of::<StagePlanProfileDescV1>(), 168);
     assert_eq!(offset_of!(StagePlanProfileDescV1, n_tokens), 120);
     assert_eq!(offset_of!(StagePlanProfileDescV1, state_effect_count), 160);
-    assert_eq!(size_of::<StagePlanValueDescV1>(), 24);
+    assert_eq!(size_of::<StagePlanValueDescV1>(), 40);
+    assert_eq!(offset_of!(StagePlanValueDescV1, binding), 24);
     assert_eq!(size_of::<StagePlanStateDescV1>(), 48);
     assert_eq!(offset_of!(StagePlanStateDescV1, write_ordinal), 40);
 }

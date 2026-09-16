@@ -445,6 +445,7 @@ fn unique_test_dir(name: &str) -> PathBuf {
 fn mid_stage_artifact_opens_with_the_stage_filter_applied() -> anyhow::Result<()> {
     use skippy_runtime::{
         FlashAttentionType, GGML_TYPE_F16, RuntimeConfig, RuntimeLoadMode, StageModel,
+        plan_gguf_stage_runtime_plan_for_range,
     };
 
     let Some(model_path) = std::env::var_os("SKIPPY_CORRECTNESS_MODEL").map(PathBuf::from) else {
@@ -479,6 +480,8 @@ fn mid_stage_artifact_opens_with_the_stage_filter_applied() -> anyhow::Result<()
         .collect::<Vec<_>>();
     resident_tensor_names.sort();
     resident_tensor_names.dedup();
+    let runtime_plan =
+        plan_gguf_stage_runtime_plan_for_range(&model_path, (layer_start, layer_count), 256, 1)?;
 
     let config = RuntimeConfig {
         stage_index: 1,
@@ -494,6 +497,10 @@ fn mid_stage_artifact_opens_with_the_stage_filter_applied() -> anyhow::Result<()
         include_output: true,
         filter_tensors_on_load: true,
         resident_tensor_names,
+        activation_import_identities: runtime_plan.activation_import_identities,
+        activation_import_bindings: runtime_plan.activation_import_bindings,
+        activation_export_identities: runtime_plan.activation_export_identities,
+        activation_export_bindings: runtime_plan.activation_export_bindings,
         ..RuntimeConfig::default()
     };
 

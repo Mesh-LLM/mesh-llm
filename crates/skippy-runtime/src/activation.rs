@@ -3,9 +3,8 @@ use std::ptr;
 
 use anyhow::{Context, Result, anyhow};
 use skippy_ffi::{
-    ActivationDType, ActivationDesc as RawActivationDesc, ActivationLayout,
-    IterationRequest as RawIterationRequest, NativeMtpDraft as RawNativeMtpDraft,
-    SamplingConfig as RawSamplingConfig,
+    ActivationDesc as RawActivationDesc, IterationRequest as RawIterationRequest,
+    NativeMtpDraft as RawNativeMtpDraft, SamplingConfig as RawSamplingConfig,
 };
 
 use crate::error::{ensure_ok, free_error};
@@ -335,18 +334,7 @@ impl StageSession {
         let raw_input = raw_input_frame(input)?;
         let input_desc_ptr = raw_input_desc_ptr(&raw_input);
         let input_payload_ptr = raw_input.1;
-        let mut output_desc = RawActivationDesc {
-            version: 0,
-            dtype: ActivationDType::Unknown,
-            layout: ActivationLayout::Opaque,
-            producer_stage_index: -1,
-            layer_start: 0,
-            layer_end: 0,
-            token_count: 0,
-            sequence_count: 0,
-            payload_bytes: 0,
-            flags: 0,
-        };
+        let mut output_desc = empty_raw_activation_desc();
         let mut output_payload = vec![0_u8; output_capacity];
         let mut output_bytes = 0usize;
         let mut error = ptr::null_mut();
@@ -451,18 +439,7 @@ impl StageSession {
         let sampling_ptr = raw_sampling
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
-        let mut output_desc = RawActivationDesc {
-            version: 0,
-            dtype: ActivationDType::Unknown,
-            layout: ActivationLayout::Opaque,
-            producer_stage_index: -1,
-            layer_start: 0,
-            layer_end: 0,
-            token_count: 0,
-            sequence_count: 0,
-            payload_bytes: 0,
-            flags: 0,
-        };
+        let mut output_desc = empty_raw_activation_desc();
         let mut output_payload = vec![0_u8; output_capacity];
         let mut output_bytes = 0usize;
         let mut predicted_token = 0_i32;
@@ -584,18 +561,7 @@ impl StageSession {
         let raw_input = raw_input_frame(input)?;
         let input_desc_ptr = raw_input_desc_ptr(&raw_input);
         let input_payload_ptr = raw_input.1;
-        let mut output_desc = RawActivationDesc {
-            version: 0,
-            dtype: ActivationDType::Unknown,
-            layout: ActivationLayout::Opaque,
-            producer_stage_index: -1,
-            layer_start: 0,
-            layer_end: 0,
-            token_count: 0,
-            sequence_count: 0,
-            payload_bytes: 0,
-            flags: 0,
-        };
+        let mut output_desc = empty_raw_activation_desc();
         let mut output_payload = vec![0_u8; output_capacity];
         let mut output_bytes = 0usize;
         let mut predicted_token = 0_i32;
@@ -643,18 +609,7 @@ impl StageSession {
         let raw_input = raw_input_frame(input)?;
         let input_desc_ptr = raw_input_desc_ptr(&raw_input);
         let input_payload_ptr = raw_input.1;
-        let mut output_desc = RawActivationDesc {
-            version: 0,
-            dtype: ActivationDType::Unknown,
-            layout: ActivationLayout::Opaque,
-            producer_stage_index: -1,
-            layer_start: 0,
-            layer_end: 0,
-            token_count: 0,
-            sequence_count: 0,
-            payload_bytes: 0,
-            flags: 0,
-        };
+        let mut output_desc = empty_raw_activation_desc();
         let mut output_payload = vec![0_u8; output_capacity];
         let mut output_bytes = 0usize;
         let mut predicted_token = 0_i32;
@@ -933,18 +888,7 @@ impl StageSession {
         let raw_input = raw_input_frame(input)?;
         let input_desc_ptr = raw_input_desc_ptr(&raw_input);
         let input_payload_ptr = raw_input.1;
-        let mut output_desc = RawActivationDesc {
-            version: 0,
-            dtype: ActivationDType::Unknown,
-            layout: ActivationLayout::Opaque,
-            producer_stage_index: -1,
-            layer_start: 0,
-            layer_end: 0,
-            token_count: 0,
-            sequence_count: 0,
-            payload_bytes: 0,
-            flags: 0,
-        };
+        let mut output_desc = empty_raw_activation_desc();
         let mut output_payload = vec![0_u8; output_capacity];
         let mut output_bytes = 0usize;
         let mut predicted = vec![0_i32; token_ids.len()];
@@ -1023,18 +967,7 @@ impl StageSession {
                 "copy_output_activation_frame requires at least one token"
             ));
         }
-        let mut output_desc = RawActivationDesc {
-            version: 0,
-            dtype: ActivationDType::Unknown,
-            layout: ActivationLayout::Opaque,
-            producer_stage_index: -1,
-            layer_start: 0,
-            layer_end: 0,
-            token_count: 0,
-            sequence_count: 0,
-            payload_bytes: 0,
-            flags: 0,
-        };
+        let mut output_desc = empty_raw_activation_desc();
         let mut output_payload = vec![0_u8; output_capacity];
         let mut output_bytes = 0usize;
         let mut error = ptr::null_mut();
@@ -1120,21 +1053,34 @@ mod tests {
         iteration_request_should_emit_sample, raw_input_frame, validate_serial_decode_request,
     };
     use crate::StageSession;
-    use crate::{ActivationDesc, ActivationFrame, RuntimeActivationDType, RuntimeActivationLayout};
+    use crate::{
+        ACTIVATION_FRAME_VERSION, ACTIVATION_MAX_PARTS, ActivationDesc, ActivationFrame,
+        ActivationPartDesc, GGML_TYPE_F32,
+    };
     use std::ptr;
 
     fn activation_desc(payload_bytes: u64) -> ActivationDesc {
+        let mut parts = [ActivationPartDesc::default(); ACTIVATION_MAX_PARTS];
+        parts[0] = ActivationPartDesc {
+            ggml_type: GGML_TYPE_F32,
+            rank: 2,
+            token_axis: 1,
+            dimensions: [1, 1, 0, 0],
+            byte_strides: [4, 4, 0, 0],
+            payload_bytes,
+            ..ActivationPartDesc::default()
+        };
         ActivationDesc {
-            version: 1,
-            dtype: RuntimeActivationDType::F32,
-            layout: RuntimeActivationLayout::TokenMajor,
+            version: ACTIVATION_FRAME_VERSION,
             producer_stage_index: 0,
             layer_start: 0,
             layer_end: 1,
             token_count: 1,
             sequence_count: 1,
+            part_count: 1,
             payload_bytes,
-            flags: 0,
+            frontier_identity: [0; crate::ACTIVATION_IDENTITY_BYTES],
+            parts,
         }
     }
 

@@ -461,6 +461,17 @@ pub fn validate_stage_admission_descriptor(
                 "profile identities are required",
             ));
         }
+        if !unique_nonempty_values(&profile.activation_imports)
+            || !unique_nonempty_values(&profile.activation_exports)
+            || !unique_nonempty_values(&profile.activation_import_bindings)
+            || !unique_nonempty_values(&profile.activation_export_bindings)
+            || profile.activation_imports.len() != profile.activation_import_bindings.len()
+            || profile.activation_exports.len() != profile.activation_export_bindings.len()
+        {
+            return Err(StageFrameError::InvalidStageAdmissionDescriptor(
+                "activation frontier identities and bindings must be paired, non-empty, and unique within each edge",
+            ));
+        }
     }
     let mut previous_sidecar: Option<(i32, Option<&str>, &str)> = None;
     for sidecar in &descriptor.sidecars {
@@ -490,6 +501,12 @@ pub fn validate_stage_admission_descriptor(
 
 fn strictly_sorted_nonempty(values: &[String]) -> bool {
     values.iter().all(|value| !value.is_empty()) && values.windows(2).all(|pair| pair[0] < pair[1])
+}
+
+fn unique_nonempty_values(values: &[String]) -> bool {
+    values.iter().enumerate().all(|(index, value)| {
+        !value.is_empty() && !values[..index].iter().any(|previous| previous == value)
+    })
 }
 
 fn valid_prefixed_sha256(value: &str, prefix: &str) -> bool {

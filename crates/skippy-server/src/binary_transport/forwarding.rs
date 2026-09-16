@@ -3,12 +3,11 @@ use std::time::Instant;
 use anyhow::{Context, Result, bail};
 use skippy_protocol::{
     StageActivationCodec, StageActivationCodecPolicy, StageConfig,
-    binary::{
-        StageWireMessage, activation_state_flags_from_frame_flags,
-        select_lossless_activation_codec_with_state_flags,
-    },
+    binary::{StageWireMessage, encode_activation_frame, select_lossless_activation_codec},
 };
-use skippy_runtime::{ActivationFrame, RuntimeActivationDType};
+use skippy_runtime::ActivationFrame;
+
+use super::prefill_execution::stage_activation_desc;
 
 pub(crate) fn forwarded_stage_message(
     config: &StageConfig,
@@ -28,7 +27,7 @@ pub(crate) fn forwarded_stage_message_timed(
     config: &StageConfig,
     incoming: &StageWireMessage,
     output: &ActivationFrame,
-    activation_width: i32,
+    _activation_width: i32,
 ) -> Result<ForwardedStageMessage> {
     // A stage with a downstream consumer must compute the *full* incoming token
     // range unless it owns layer 0. Suffix-only execution after a partial cache
@@ -58,37 +57,26 @@ pub(crate) fn forwarded_stage_message_timed(
     }
     let mut state = incoming.state;
     state.source_stage_index = config.stage_index as i32;
-    state.flags |= activation_state_flags_from_frame_flags(output.desc.flags);
+    let activation_desc = stage_activation_desc(&output.desc)?;
     let activation_codec = select_output_activation_codec(
         config.activation_codec,
         config.activation_codec_policy,
-        incoming,
+        &activation_desc,
         output,
-        activation_width,
-        state.flags,
     )?;
     state.activation_codec = activation_codec;
     let encode_started = Instant::now();
-    let activation =
-        encode_output_activation_payload(
-            activation_codec,
-            incoming,
-            output,
-            activation_width,
-            state.flags,
-        )
-            .with_context(|| {
-                format!(
-                    "encode f32 output activation payload; frame_dtype={:?} incoming_tokens={} output_tokens={} activation_width={} payload_bytes={} frame_payload_bytes={} state_flags={}",
-                    output.desc.dtype,
-                    incoming.token_count,
-                    output.desc.token_count,
-                    activation_width,
-                    output.payload.len(),
-                    output.desc.payload_bytes,
-                    state.flags,
-                )
-            })?;
+    let activation = encode_activation_frame(activation_codec, &activation_desc, &output.payload)
+        .with_context(|| {
+            format!(
+                "encode multipart output activation; incoming_tokens={} output_tokens={} parts={} payload_bytes={} frame_payload_bytes={}",
+                incoming.token_count,
+                output.desc.token_count,
+                output.desc.part_count,
+                output.payload.len(),
+                output.desc.payload_bytes,
+            )
+        })?;
     Ok(ForwardedStageMessage {
         message: StageWireMessage {
             kind: incoming.kind,
@@ -111,10 +99,8 @@ pub(crate) fn forwarded_stage_message_timed(
 fn select_output_activation_codec(
     configured_codec: StageActivationCodec,
     policy: StageActivationCodecPolicy,
-    incoming: &StageWireMessage,
+    desc: &skippy_protocol::binary::StageActivationDesc,
     output: &ActivationFrame,
-    activation_width: i32,
-    state_flags: i32,
 ) -> Result<StageActivationCodec> {
     if !policy.compatible(configured_codec) {
         bail!(
@@ -123,43 +109,15 @@ fn select_output_activation_codec(
     }
     match policy {
         StageActivationCodecPolicy::Fixed => Ok(configured_codec),
-        StageActivationCodecPolicy::AutoLosslessV1 => match output.desc.dtype {
-            RuntimeActivationDType::F32 => Ok(select_lossless_activation_codec_with_state_flags(
-                incoming.token_count,
-                activation_width,
-                &output.payload,
-                state_flags,
-                &[
-                    StageActivationCodec::RawF32V1,
-                    StageActivationCodec::Bf16RneV1,
-                    StageActivationCodec::F16RneV1,
-                ],
-            )?),
-            dtype => bail!("unsupported activation dtype selection: {dtype:?}"),
-        },
-    }
-}
-
-fn encode_output_activation_payload(
-    codec: skippy_protocol::StageActivationCodec,
-    incoming: &StageWireMessage,
-    output: &ActivationFrame,
-    activation_width: i32,
-    state_flags: i32,
-) -> Result<Vec<u8>> {
-    match output.desc.dtype {
-        RuntimeActivationDType::F32 => Ok(
-            skippy_protocol::binary::encode_activation_payload_with_state_flags(
-                codec,
-                incoming.token_count,
-                activation_width,
-                &output.payload,
-                state_flags,
-            )?,
-        ),
-        dtype => {
-            bail!("unsupported activation dtype conversion: {dtype:?} to f32")
-        }
+        StageActivationCodecPolicy::AutoLosslessV1 => Ok(select_lossless_activation_codec(
+            desc,
+            &output.payload,
+            &[
+                StageActivationCodec::RawF32V1,
+                StageActivationCodec::Bf16RneV1,
+                StageActivationCodec::F16RneV1,
+            ],
+        )?),
     }
 }
 
@@ -168,11 +126,11 @@ mod tests {
     use super::*;
     use skippy_protocol::{
         FlashAttentionType, LoadMode, PeerConfig, StageDevice, StageKvCacheConfig,
-        binary::{
-            StageStateHeader, WireMessageKind, activation_frame_flags_from_state_flags, state_flags,
-        },
+        binary::{StageStateHeader, WireMessageKind, activation_frame_wire_bytes},
     };
-    use skippy_runtime::{ActivationDesc, RuntimeActivationDType, RuntimeActivationLayout};
+    use skippy_runtime::{ACTIVATION_PART_OPTIONAL, GGML_TYPE_F32, GGML_TYPE_I32};
+
+    use crate::test_activation::{PartBytes, f32_frame, frame};
 
     fn stage_config() -> StageConfig {
         StageConfig {
@@ -247,56 +205,44 @@ mod tests {
         }
     }
 
-    fn f32_frame(flags: u64, token_count: u32, values: &[f32]) -> ActivationFrame {
-        let mut payload = Vec::new();
-        for value in values {
-            payload.extend_from_slice(&value.to_le_bytes());
-        }
-        ActivationFrame {
-            desc: ActivationDesc {
-                version: 1,
-                dtype: RuntimeActivationDType::F32,
-                layout: RuntimeActivationLayout::TokenMajor,
-                producer_stage_index: 1,
-                layer_start: 4,
-                layer_end: 8,
-                token_count,
-                sequence_count: 1,
-                payload_bytes: payload.len() as u64,
-                flags,
-            },
-            payload,
-        }
-    }
-
-    fn rwkv7_sideband_frame() -> ActivationFrame {
-        f32_frame(
-            skippy_protocol::binary::ACTIVATION_FLAG_RWKV7_V_FIRST,
+    fn two_f32_part_frame(values: &[f32]) -> ActivationFrame {
+        let midpoint = values.len() / 2;
+        frame(
             1,
-            &[1.0_f32, 2.0, 3.0, 4.0],
+            vec![
+                PartBytes {
+                    identity: 1,
+                    ggml_type: GGML_TYPE_F32,
+                    flags: 0,
+                    bytes: values[..midpoint]
+                        .iter()
+                        .flat_map(|value| value.to_le_bytes())
+                        .collect(),
+                },
+                PartBytes {
+                    identity: 2,
+                    ggml_type: GGML_TYPE_F32,
+                    flags: ACTIVATION_PART_OPTIONAL,
+                    bytes: values[midpoint..]
+                        .iter()
+                        .flat_map(|value| value.to_le_bytes())
+                        .collect(),
+                },
+            ],
         )
     }
 
     #[test]
-    fn forwarded_stage_message_preserves_rwkv7_sideband_shape() {
+    fn forwarded_stage_message_preserves_two_f32_parts() {
         let mut config = stage_config();
         config.activation_codec = skippy_protocol::StageActivationCodec::F16RneV1;
+        let source = two_f32_part_frame(&[1.0_f32, 2.0, 3.0, 4.0]);
         let forwarded =
-            forwarded_stage_message_timed(&config, &incoming_message(), &rwkv7_sideband_frame(), 2)
-                .unwrap();
+            forwarded_stage_message_timed(&config, &incoming_message(), &source, 2).unwrap();
 
         assert_eq!(
             forwarded.message.state.activation_codec,
             skippy_protocol::StageActivationCodec::F16RneV1
-        );
-        assert_eq!(forwarded.message.activation.len(), 8);
-        assert_ne!(
-            forwarded.message.state.flags & state_flags::RWKV7_V_FIRST_SIDEBAND,
-            0
-        );
-        assert_eq!(
-            activation_frame_flags_from_state_flags(forwarded.message.state.flags),
-            skippy_protocol::binary::ACTIVATION_FLAG_RWKV7_V_FIRST
         );
 
         let mut wire = Vec::new();
@@ -307,33 +253,42 @@ mod tests {
             skippy_protocol::StageActivationCodec::F16RneV1,
         )
         .unwrap();
-        assert_eq!(decoded.activation.len(), 16);
+        let decoded = decoded.activation_frame().unwrap().unwrap();
+        assert_eq!(decoded.desc, stage_activation_desc(&source.desc).unwrap());
+        assert_eq!(decoded.payload, source.payload);
     }
 
     #[test]
     fn forwarded_stage_message_preserves_glm_dsa_mixed_dtype_sideband() {
         let mut config = stage_config();
         config.activation_codec = skippy_protocol::StageActivationCodec::F16RneV1;
-        let mut frame = f32_frame(
-            skippy_protocol::binary::ACTIVATION_FLAG_GLM_DSA_TOP_K,
-            1,
-            &[1.0_f32, 2.0],
-        );
         let top_k = [7_i32, 11, 13]
             .into_iter()
             .flat_map(i32::to_le_bytes)
             .collect::<Vec<_>>();
-        frame.payload.extend_from_slice(&top_k);
-        frame.desc.payload_bytes = frame.payload.len() as u64;
+        let frame = frame(
+            1,
+            vec![
+                PartBytes {
+                    identity: 1,
+                    ggml_type: GGML_TYPE_F32,
+                    flags: 0,
+                    bytes: [1.0_f32, 2.0]
+                        .into_iter()
+                        .flat_map(f32::to_le_bytes)
+                        .collect(),
+                },
+                PartBytes {
+                    identity: 2,
+                    ggml_type: GGML_TYPE_I32,
+                    flags: 0,
+                    bytes: top_k.clone(),
+                },
+            ],
+        );
 
         let forwarded =
             forwarded_stage_message_timed(&config, &incoming_message(), &frame, 2).unwrap();
-        assert_eq!(forwarded.message.activation.len(), 4 + top_k.len());
-        assert_eq!(&forwarded.message.activation[4..], top_k);
-        assert_ne!(
-            forwarded.message.state.flags & state_flags::GLM_DSA_TOP_K_SIDEBAND,
-            0
-        );
 
         let mut wire = Vec::new();
         skippy_protocol::binary::write_stage_message(&mut wire, &forwarded.message).unwrap();
@@ -343,7 +298,9 @@ mod tests {
             skippy_protocol::StageActivationCodec::F16RneV1,
         )
         .unwrap();
-        assert_eq!(decoded.activation, frame.payload);
+        let decoded = decoded.activation_frame().unwrap().unwrap();
+        assert_eq!(decoded.desc, stage_activation_desc(&frame.desc).unwrap());
+        assert_eq!(&decoded.payload[8..], top_k);
     }
 
     #[test]
@@ -351,19 +308,22 @@ mod tests {
         let mut config = stage_config();
         config.activation_codec = StageActivationCodec::RawF32V1;
         config.activation_codec_policy = StageActivationCodecPolicy::AutoLosslessV1;
-        let forwarded = forwarded_stage_message_timed(
-            &config,
-            &incoming_message(),
-            &f32_frame(0, 1, &[1.0, 2.0]),
-            2,
-        )
-        .unwrap();
+        let frame = f32_frame(1, &[1.0, 2.0]);
+        let forwarded =
+            forwarded_stage_message_timed(&config, &incoming_message(), &frame, 2).unwrap();
 
         assert_eq!(
             forwarded.message.state.activation_codec,
             StageActivationCodec::Bf16RneV1
         );
-        assert_eq!(forwarded.message.activation.len(), 4);
+        assert_eq!(
+            forwarded.message.activation.len(),
+            activation_frame_wire_bytes(
+                StageActivationCodec::Bf16RneV1,
+                &stage_activation_desc(&frame.desc).unwrap(),
+            )
+            .unwrap()
+        );
     }
 
     #[test]
@@ -374,7 +334,7 @@ mod tests {
         let forwarded = forwarded_stage_message_timed(
             &config,
             &incoming_message(),
-            &f32_frame(0, 1, &[1.000_976_6, 2.0]),
+            &f32_frame(1, &[1.000_976_6, 2.0]),
             2,
         )
         .unwrap();
@@ -390,23 +350,22 @@ mod tests {
         let mut config = stage_config();
         config.activation_codec = StageActivationCodec::RawF32V1;
         config.activation_codec_policy = StageActivationCodecPolicy::AutoLosslessV1;
-        let forwarded = forwarded_stage_message_timed(
-            &config,
-            &incoming_message(),
-            &f32_frame(
-                skippy_protocol::binary::ACTIVATION_FLAG_RWKV7_V_FIRST,
-                1,
-                &[1.000_976_6, 2.0, 65_536.0, 4.0],
-            ),
-            2,
-        )
-        .unwrap();
+        let frame = two_f32_part_frame(&[1.000_976_6, 2.0, 65_536.0, 4.0]);
+        let forwarded =
+            forwarded_stage_message_timed(&config, &incoming_message(), &frame, 2).unwrap();
 
         assert_eq!(
             forwarded.message.state.activation_codec,
             StageActivationCodec::RawF32V1
         );
-        assert_eq!(forwarded.message.activation.len(), 16);
+        assert_eq!(
+            forwarded.message.activation.len(),
+            activation_frame_wire_bytes(
+                StageActivationCodec::RawF32V1,
+                &stage_activation_desc(&frame.desc).unwrap(),
+            )
+            .unwrap()
+        );
     }
 
     #[test]
@@ -417,7 +376,7 @@ mod tests {
         let error = forwarded_stage_message_timed(
             &config,
             &incoming_message(),
-            &f32_frame(0, 1, &[1.0, 2.0]),
+            &f32_frame(1, &[1.0, 2.0]),
             2,
         )
         .err()
@@ -436,7 +395,7 @@ mod tests {
         let forwarded = forwarded_stage_message_timed(
             &config,
             &incoming_message(),
-            &f32_frame(0, 1, &[1.0, 2.0]),
+            &f32_frame(1, &[1.0, 2.0]),
             2,
         )
         .unwrap();
@@ -455,7 +414,7 @@ mod tests {
         let error = forwarded_stage_message_timed(
             &config,
             &incoming_message(),
-            &f32_frame(0, 1, &[f32::MAX, 1.0]),
+            &f32_frame(1, &[f32::MAX, 1.0]),
             2,
         )
         .err()
@@ -478,7 +437,7 @@ mod tests {
         incoming.token_count = 4;
         // Frame covers only 1 of the 4 incoming tokens, as a suffix-only
         // execution after a 3-token restore would produce.
-        let output = f32_frame(0, 1, &[1.0, 2.0, 3.0, 4.0]);
+        let output = f32_frame(1, &[1.0, 2.0, 3.0, 4.0]);
 
         let error = forwarded_stage_message_timed(&config, &incoming, &output, 4)
             .err()
@@ -504,7 +463,7 @@ mod tests {
         // Keep the encoded payload valid for the four-token wire header while
         // the frame descriptor exercises the first-stage short-frame branch.
         assert!(
-            forwarded_stage_message_timed(&config, &incoming, &f32_frame(0, 1, &[1.0; 16]), 4,)
+            forwarded_stage_message_timed(&config, &incoming, &f32_frame(1, &[1.0; 16]), 4,)
                 .is_ok()
         );
     }

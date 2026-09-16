@@ -82,6 +82,10 @@ mod tests {
                 source_snapshot_identity: "snapshot-a".to_string(),
                 graph_configuration_id: "graph-config-a".to_string(),
                 backend_id: "cpu".to_string(),
+                activation_imports: Vec::new(),
+                activation_exports: Vec::new(),
+                activation_import_bindings: Vec::new(),
+                activation_export_bindings: Vec::new(),
             }],
         }
     }
@@ -248,6 +252,17 @@ mod tests {
 
         let mut invalid = descriptor.clone();
         invalid.profiles[0].graph_identity.clear();
+        assert!(validate_stage_admission_descriptor(&invalid).is_err());
+
+        let mut invalid = descriptor.clone();
+        invalid.profiles[0].activation_imports = vec!["frontier-a".to_string()];
+        assert!(validate_stage_admission_descriptor(&invalid).is_err());
+
+        let mut invalid = descriptor.clone();
+        invalid.profiles[0].activation_exports =
+            vec!["frontier-a".to_string(), "frontier-b".to_string()];
+        invalid.profiles[0].activation_export_bindings =
+            vec!["live-output".to_string(), "live-output".to_string()];
         assert!(validate_stage_admission_descriptor(&invalid).is_err());
 
         let mut invalid = descriptor;

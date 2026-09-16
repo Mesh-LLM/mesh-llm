@@ -167,7 +167,7 @@ index ec2b47444..21dcbecb9 100644
 --- a/src/skippy/abi.cpp
 +++ b/src/skippy/abi.cpp
 @@ -39,7 +39,8 @@ uint64_t skippy_abi_features(void) {
-            SKIPPY_FEATURE_INKLING_MTP_MM |
+            SKIPPY_FEATURE_MTP_MULTIMODAL |
             SKIPPY_FEATURE_ITERATION_BATCH |
             SKIPPY_FEATURE_ACTIVATION_BOUNDARY |
 -           SKIPPY_FEATURE_MODEL_SOURCE;

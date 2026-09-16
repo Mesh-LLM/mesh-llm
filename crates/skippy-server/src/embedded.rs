@@ -680,15 +680,7 @@ mod tests {
             input_activation_boundary: None,
             output_activation_boundary: None,
         }));
-        let boundary = ActivationBoundaryDesc {
-            version: 1,
-            ggml_type: skippy_runtime::GGML_TYPE_F32,
-            layout: 1,
-            elements_per_token: 1024,
-            bytes_per_token: 4096,
-            required_frame_flags: 0,
-            required_sidebands: 0,
-        };
+        let boundary = crate::test_activation::boundary_f32(1024);
 
         {
             let status = status.lock().expect("server status lock poisoned");

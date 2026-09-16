@@ -9,8 +9,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use serde_json::json;
 use skippy_protocol::binary::{
-    StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind, recv_ready, recv_reply,
-    write_stage_message,
+    STAGE_ACTIVATION_FRAME_VERSION, StageActivationDesc, StageActivationPartDesc, StageStateHeader,
+    StageWireMessage, WireMessageKind, WireReplyKind, encode_activation_frame, recv_ready,
+    recv_reply, write_stage_message,
 };
 
 #[derive(Debug)]
@@ -64,8 +65,6 @@ fn message(
     state.current_token = token_ids.first().copied().unwrap_or(1);
     state.source_stage_index = 0;
     let token_count = i32::try_from(token_ids.len()).context("token count exceeds i32")?;
-    let activation_width_i32 =
-        i32::try_from(activation_width).context("activation width exceeds i32")?;
     let f32_payload = vec![
         0;
         token_ids
@@ -74,13 +73,38 @@ fn message(
             .and_then(|elements| elements.checked_mul(std::mem::size_of::<f32>()))
             .context("activation payload size overflow")?
     ];
-    let activation = skippy_protocol::binary::encode_activation_payload_with_state_flags(
-        state.activation_codec,
-        token_count,
-        activation_width_i32,
-        &f32_payload,
-        state.flags,
-    )?;
+    let row_bytes = activation_width
+        .checked_mul(std::mem::size_of::<f32>())
+        .context("activation row size overflow")?;
+    let activation = if token_count == 0 {
+        Vec::new()
+    } else {
+        encode_activation_frame(
+            state.activation_codec,
+            &StageActivationDesc {
+                version: STAGE_ACTIVATION_FRAME_VERSION,
+                producer_stage_index: 0,
+                layer_start: 0,
+                layer_end: 1,
+                token_count: u32::try_from(token_count).context("negative token count")?,
+                sequence_count: 1,
+                payload_bytes: f32_payload.len() as u64,
+                frontier_identity: [9; 32],
+                parts: vec![StageActivationPartDesc {
+                    identity: [1; 32],
+                    ggml_type: 0,
+                    rank: 2,
+                    token_axis: 1,
+                    flags: 0,
+                    dimensions: [activation_width as i64, i64::from(token_count), 0, 0],
+                    byte_strides: [4, row_bytes as u64, 0, 0],
+                    payload_offset: 0,
+                    payload_bytes: f32_payload.len() as u64,
+                }],
+            },
+            &f32_payload,
+        )?
+    };
     Ok(StageWireMessage {
         kind,
         pos_start,

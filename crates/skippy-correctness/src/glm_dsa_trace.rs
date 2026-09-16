@@ -18,10 +18,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use skippy_protocol::binary::{
-    ACTIVATION_FLAG_GLM_DSA_TOP_K, StageReplyStats, StageStateHeader, StageWireMessage,
-    WireMessageKind, WireReplyKind, activation_frame_flags_from_state_flags, read_stage_message,
-    recv_ready, recv_reply, send_ready, send_reply_ack_with_stats, send_reply_predicted_with_stats,
-    write_stage_message,
+    StageReplyStats, StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
+    read_stage_message, recv_ready, recv_reply, send_ready, send_reply_ack_with_stats,
+    send_reply_predicted_with_stats, write_stage_message,
 };
 
 use crate::{
@@ -33,7 +32,7 @@ use crate::{
         GlmDsaTimingReport, GlmDsaTopKComparisonReport, GlmDsaTraceKeyReport,
         GlmDsaTraceParityMismatchReport, GlmDsaTraceParityReport, GlmDsaTraceVariantReport,
     },
-    runner::stage_resident_tensor_names_for_range,
+    runner::stage_runtime_plan_for_range,
     support::ChildGuard,
 };
 
@@ -650,19 +649,15 @@ fn write_stage_config(
         .model_id
         .clone()
         .unwrap_or_else(|| "local/glm-dsa-stage0-trace".to_string());
-    let resident_tensor_names = if args.runtime.stage_load_mode == StageLoadMode::RuntimeSlice {
-        stage_resident_tensor_names_for_range(
-            args.runtime.stage_load_mode,
-            &model_path,
-            &model_path,
-            (0, args.stage_layer_end),
-            args.runtime.layer_end,
-            args.runtime.ctx_size,
-            1,
-        )?
-    } else {
-        Vec::new()
-    };
+    let runtime_plan = stage_runtime_plan_for_range(
+        args.runtime.stage_load_mode,
+        &args.runtime.model,
+        &model_path,
+        (0, args.stage_layer_end),
+        args.runtime.layer_end,
+        args.runtime.ctx_size,
+        1,
+    )?;
     let config = json!({
         "run_id": run_id,
         "topology_id": format!("glm-dsa-stage0-trace-{variant}"),
@@ -680,7 +675,11 @@ fn write_stage_config(
         "cache_type_k": "f16",
         "cache_type_v": "f16",
         "filter_tensors_on_load": true,
-        "resident_tensor_names": resident_tensor_names,
+        "resident_tensor_names": runtime_plan.resident_tensor_names,
+        "activation_import_identities": runtime_plan.activation_import_identities,
+        "activation_import_bindings": runtime_plan.activation_import_bindings,
+        "activation_export_identities": runtime_plan.activation_export_identities,
+        "activation_export_bindings": runtime_plan.activation_export_bindings,
         "use_mmap": true,
         "load_mode": stage_load_mode_name(args.runtime.stage_load_mode),
         "bind_addr": args.stage0_bind_addr,
@@ -895,26 +894,23 @@ impl FakeDownstreamGuard {
                                     return Err(anyhow!(error).context("read stage message"));
                                 }
                             };
-                            let activation_payload = message.activation_f32_payload().ok();
-                            let hidden_bytes = usize::try_from(message.token_count.max(0))
-                                .ok()
-                                .and_then(|tokens| tokens.checked_mul(activation_width as usize))
-                                .and_then(|elements| {
-                                    elements.checked_mul(std::mem::size_of::<f32>())
-                                })
-                                .unwrap_or(usize::MAX);
-                            let has_top_k =
-                                activation_frame_flags_from_state_flags(message.state.flags)
-                                    & ACTIVATION_FLAG_GLM_DSA_TOP_K
-                                    != 0;
-                            let (activation_f32_payload, top_k_payload) = match activation_payload {
-                                Some(payload) if has_top_k && payload.len() >= hidden_bytes => {
-                                    let (hidden, top_k) = payload.split_at(hidden_bytes);
-                                    (Some(hidden.to_vec()), top_k.to_vec())
-                                }
-                                Some(payload) => (Some(payload), Vec::new()),
-                                None => (None, Vec::new()),
+                            let activation_frame = message.activation_frame().ok().flatten();
+                            let part_payload = |ggml_type| {
+                                let frame = activation_frame.as_ref()?;
+                                let part = frame
+                                    .desc
+                                    .parts
+                                    .iter()
+                                    .find(|part| part.ggml_type == ggml_type)?;
+                                let start = usize::try_from(part.payload_offset).ok()?;
+                                let bytes = usize::try_from(part.payload_bytes).ok()?;
+                                frame
+                                    .payload
+                                    .get(start..start.checked_add(bytes)?)
+                                    .map(<[u8]>::to_vec)
                             };
+                            let activation_f32_payload = part_payload(0);
+                            let top_k_payload = part_payload(26).unwrap_or_default();
                             let summary = FakeDownstreamMessage {
                                 kind: message.kind,
                                 pos_start: message.pos_start,

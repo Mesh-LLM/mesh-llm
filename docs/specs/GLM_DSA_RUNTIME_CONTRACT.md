@@ -184,17 +184,17 @@ The sideband format is:
 
 - dtype: `i32`
 - layout: token-major contiguous top-k indices
-- width: `n_top_k` inferred from sideband byte count
+- width: `n_top_k` carried by the typed frontier-part dimensions
 - byte size: `token_count * n_top_k * sizeof(i32)`
 
-The sideband width must be positive and must exactly match what the consuming
+The frontier-part width must be positive and must exactly match what the consuming
 stage expects for the current token count and KV shape. A narrower sideband is
 invalid because Shared consumers would otherwise run with a partial visibility
 window for the current session position. A wider sideband is invalid because it
 does not match the graph input shape. The activation frame `layer_end` must
 exactly match the consumer stage `layer_start`.
 
-GLM-DSA top-k sidebands cannot be combined with other activation sidebands.
+The GLM-DSA top-k value is one typed part in the multipart activation frontier.
 
 ## Failure Behavior
 

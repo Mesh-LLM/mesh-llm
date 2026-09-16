@@ -15,6 +15,9 @@ pub mod package;
 pub mod runtime_state;
 
 #[cfg(test)]
+pub(crate) mod test_activation;
+
+#[cfg(test)]
 mod legacy_scheduler_absence_tests {
     use std::path::Path;
 

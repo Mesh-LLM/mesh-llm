@@ -4,11 +4,8 @@ mod codec;
 mod types;
 
 pub use activation::{
-    activation_payload_multiplier_from_state_flags, activation_wire_bytes,
-    activation_wire_bytes_for_codec_with_state_flags, activation_wire_bytes_with_state_flags,
-    encode_activation_payload_with_state_flags, encode_f32_activation_payload,
-    encode_f32_activation_payload_with_state_flags,
-    select_lossless_activation_codec_with_state_flags,
+    activation_frame_wire_bytes, decode_activation_frame, decode_raw_activation_frame,
+    encode_activation_frame, encode_raw_activation_frame, select_lossless_activation_codec,
 };
 pub use codec::{
     read_stage_message, read_stage_message_for_codec, read_stage_message_for_codec_policy,
@@ -20,17 +17,18 @@ pub use codec::{
 };
 pub use types::sampling_flags;
 pub use types::{
-    ACTIVATION_FLAG_GEMMA3N_ALTUP, ACTIVATION_FLAG_GLM_DSA_TOP_K, ACTIVATION_FLAG_INKLING_MTP_EMBD,
-    ACTIVATION_FLAG_KIMI_K3_RESIDUAL, ACTIVATION_FLAG_RWKV7_V_FIRST, LLAMA_TOKEN_NULL,
-    MAX_STAGE_ACTIVATION_BYTES, MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES,
+    LLAMA_TOKEN_NULL, MAX_STAGE_ACTIVATION_BYTES, MAX_STAGE_ACTIVATION_DIMS,
+    MAX_STAGE_ACTIVATION_PARTS, MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES,
     MAX_STAGE_DECODED_ACTIVATION_BYTES, MAX_STAGE_DRY_SEQUENCE_BREAKERS, MAX_STAGE_LOGIT_BIAS,
     MAX_STAGE_PREDICTED_TOKENS, MAX_STAGE_SAMPLERS, MAX_STAGE_SAMPLING_STRING_BYTES,
     MAX_STAGE_SIDEBAND_VALUES, MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC,
-    STAGE_LOGIT_BIAS_WIRE_BYTES, STAGE_SAMPLING_CONFIG_BASE_BYTES, STAGE_STATE_HEADER_BYTES,
-    STAGE_STATE_VERSION, STAGE_WIRE_FIXED_HEADER_BYTES, StageLogitBias, StageNativeMtpDraft,
-    StageReply, StageReplyStats, StageReplyWindow, StageRequestEpoch, StageSamplingConfig,
-    StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind, WireStagePhase,
-    activation_frame_flags_from_state_flags, activation_state_flags_from_frame_flags, state_flags,
+    STAGE_ACTIVATION_FRAME_VERSION, STAGE_ACTIVATION_IDENTITY_BYTES,
+    STAGE_ACTIVATION_PART_OPTIONAL, STAGE_LOGIT_BIAS_WIRE_BYTES, STAGE_SAMPLING_CONFIG_BASE_BYTES,
+    STAGE_STATE_HEADER_BYTES, STAGE_STATE_VERSION, STAGE_WIRE_FIXED_HEADER_BYTES,
+    StageActivationDesc, StageActivationFrame, StageActivationPartDesc, StageLogitBias,
+    StageNativeMtpDraft, StageReply, StageReplyStats, StageReplyWindow, StageRequestEpoch,
+    StageSamplingConfig, StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
+    WireStagePhase, state_flags,
 };
 
 pub(crate) fn invalid_data(message: &'static str) -> std::io::Error {
@@ -262,53 +260,122 @@ mod tests {
         );
     }
 
-    #[test]
-    fn stage_message_round_trips_f32() {
-        let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
-        state.checkpoint_generation = 3;
-        state.prompt_token_count = 1;
-        state.decode_step = 0;
-        state.current_token = 11;
-        state.source_stage_index = 0;
-        state.activation_codec = crate::StageActivationCodec::RawF32V1;
-        let activation: Vec<u8> = [1.0_f32, 2.0_f32]
+    fn multipart_activation_frame(token_count: u32) -> StageActivationFrame {
+        let hidden_values = (0..token_count * 2)
+            .map(|value| value as f32 * 0.5)
+            .collect::<Vec<_>>();
+        let hidden = hidden_values
             .into_iter()
             .flat_map(f32::to_le_bytes)
-            .collect();
-        let message = StageWireMessage {
+            .collect::<Vec<_>>();
+        let routes = (0..token_count * 3)
+            .map(|value| i32::try_from(value).unwrap())
+            .flat_map(i32::to_le_bytes)
+            .collect::<Vec<_>>();
+        let hidden_bytes = u64::try_from(hidden.len()).unwrap();
+        let route_bytes = u64::try_from(routes.len()).unwrap();
+        let mut payload = hidden;
+        payload.extend_from_slice(&routes);
+        StageActivationFrame {
+            desc: StageActivationDesc {
+                version: STAGE_ACTIVATION_FRAME_VERSION,
+                producer_stage_index: 0,
+                layer_start: 0,
+                layer_end: 1,
+                token_count,
+                sequence_count: 1,
+                payload_bytes: hidden_bytes + route_bytes,
+                frontier_identity: [0x11; STAGE_ACTIVATION_IDENTITY_BYTES],
+                parts: vec![
+                    StageActivationPartDesc {
+                        identity: [0x22; STAGE_ACTIVATION_IDENTITY_BYTES],
+                        ggml_type: 0,
+                        rank: 2,
+                        token_axis: 1,
+                        flags: 0,
+                        dimensions: [2, i64::from(token_count), 1, 1],
+                        byte_strides: [
+                            4,
+                            8,
+                            8 * u64::from(token_count),
+                            8 * u64::from(token_count),
+                        ],
+                        payload_offset: 0,
+                        payload_bytes: hidden_bytes,
+                    },
+                    StageActivationPartDesc {
+                        identity: [0x33; STAGE_ACTIVATION_IDENTITY_BYTES],
+                        ggml_type: 26,
+                        rank: 2,
+                        token_axis: 1,
+                        flags: STAGE_ACTIVATION_PART_OPTIONAL,
+                        dimensions: [3, i64::from(token_count), 1, 1],
+                        byte_strides: [
+                            4,
+                            12,
+                            12 * u64::from(token_count),
+                            12 * u64::from(token_count),
+                        ],
+                        payload_offset: hidden_bytes,
+                        payload_bytes: route_bytes,
+                    },
+                ],
+            },
+            payload,
+        }
+    }
+
+    fn activation_message(
+        frame: &StageActivationFrame,
+        codec: crate::StageActivationCodec,
+    ) -> StageWireMessage {
+        let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
+        state.checkpoint_generation = 3;
+        state.prompt_token_count = i32::try_from(frame.desc.token_count).unwrap();
+        state.decode_step = 0;
+        state.current_token = 11;
+        state.source_stage_index = frame.desc.producer_stage_index;
+        state.activation_codec = codec;
+        StageWireMessage {
             kind: WireMessageKind::DecodeEmbd,
             pos_start: 1,
-            token_count: 1,
+            token_count: i32::try_from(frame.desc.token_count).unwrap(),
             state,
             request_id: 7,
             session_id: 11,
-            sampling: Some(StageSamplingConfig {
-                flags: 1,
-                seed: 42,
-                temperature: 0.8,
-                top_p: 0.9,
-                top_k: 40,
-                logit_bias: vec![StageLogitBias {
-                    token_id: 123,
-                    bias: -50.0,
-                }],
-                ..StageSamplingConfig::default()
-            }),
+            sampling: None,
             chat_sampling_metadata: None,
             tokens: vec![11],
             positions: Vec::new(),
-            activation: activation.clone(),
+            activation: encode_activation_frame(codec, &frame.desc, &frame.payload).unwrap(),
             raw_bytes: Vec::new(),
-        };
+        }
+    }
+
+    #[test]
+    fn stage_message_round_trips_multipart_activation_and_sampling() {
+        let frame = multipart_activation_frame(1);
+        let mut message = activation_message(&frame, crate::StageActivationCodec::RawF32V1);
+        message.sampling = Some(StageSamplingConfig {
+            flags: 1,
+            seed: 42,
+            temperature: 0.8,
+            top_p: 0.9,
+            top_k: 40,
+            logit_bias: vec![StageLogitBias {
+                token_id: 123,
+                bias: -50.0,
+            }],
+            ..StageSamplingConfig::default()
+        });
+
         let mut bytes = Vec::new();
         write_stage_message(&mut bytes, &message).unwrap();
         let decoded = read_stage_message(Cursor::new(bytes), 2).unwrap();
         assert_eq!(decoded.kind, WireMessageKind::DecodeEmbd);
         assert_eq!(decoded.tokens, vec![11]);
-        assert_eq!(decoded.activation, activation);
+        assert_eq!(decoded.activation_frame().unwrap(), Some(frame));
         assert_eq!(decoded.state.source_stage_index, 0);
-        assert_eq!(decoded.request_id, 7);
-        assert_eq!(decoded.session_id, 11);
         assert_eq!(
             decoded.request_epoch(),
             StageRequestEpoch {
@@ -320,97 +387,52 @@ mod tests {
             }
         );
         assert_ne!(decoded.state.flags & state_flags::SAMPLING, 0);
-        assert_eq!(decoded.state.flags & state_flags::CHAT_SAMPLING_METADATA, 0);
-        assert_eq!(decoded.chat_sampling_metadata, None);
         let sampling = decoded.sampling.expect("sampling extension round-tripped");
         assert_eq!(sampling.seed, 42);
         assert_eq!(sampling.top_k, 40);
-        assert_eq!(sampling.logit_bias.len(), 1);
         assert_eq!(sampling.logit_bias[0].token_id, 123);
         assert_eq!(sampling.logit_bias[0].bias, -50.0);
     }
 
     #[test]
-    fn stage_message_round_trips_every_activation_codec_with_sideband_rows() {
-        let values = [1.0_f32, -1.0, 0.5, -0.5];
-        let f32_payload = values
-            .into_iter()
-            .flat_map(f32::to_le_bytes)
-            .collect::<Vec<_>>();
+    fn stage_message_round_trips_every_activation_codec_with_typed_parts() {
+        let frame = multipart_activation_frame(2);
+        let i32_part = frame.desc.parts[1];
+        let i32_start = usize::try_from(i32_part.payload_offset).unwrap();
         for codec in [
             crate::StageActivationCodec::RawF32V1,
             crate::StageActivationCodec::F16RneV1,
             crate::StageActivationCodec::Bf16RneV1,
             crate::StageActivationCodec::S8RowF32RneV1,
         ] {
-            let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
-            state.source_stage_index = 0;
-            state.flags |= state_flags::RWKV7_V_FIRST_SIDEBAND;
-            state.activation_codec = codec;
-            let activation =
-                encode_activation_payload_with_state_flags(codec, 1, 2, &f32_payload, state.flags)
-                    .unwrap();
+            let message = activation_message(&frame, codec);
             assert_eq!(
-                activation.len(),
-                activation_wire_bytes_for_codec_with_state_flags(codec, 1, 2, state.flags).unwrap()
+                message.activation.len(),
+                activation_frame_wire_bytes(codec, &frame.desc).unwrap()
             );
-            let message = StageWireMessage {
-                kind: WireMessageKind::DecodeEmbd,
-                pos_start: 0,
-                token_count: 1,
-                state,
-                request_id: 7,
-                session_id: 9,
-                sampling: None,
-                chat_sampling_metadata: None,
-                tokens: vec![42],
-                positions: Vec::new(),
-                activation,
-                raw_bytes: Vec::new(),
-            };
             let mut bytes = Vec::new();
             write_stage_message(&mut bytes, &message).unwrap();
             let decoded = read_stage_message_for_codec(Cursor::new(bytes), 2, codec).unwrap();
-            assert_eq!(decoded.state.activation_codec, codec);
-            assert_eq!(decoded.activation.len(), f32_payload.len());
-            if codec == crate::StageActivationCodec::RawF32V1 {
-                assert_eq!(decoded.activation, f32_payload);
-            }
+            let decoded_frame = decoded.activation_frame().unwrap().unwrap();
+            assert_eq!(decoded_frame.desc, frame.desc);
+            assert_eq!(
+                &decoded_frame.payload[i32_start..],
+                &frame.payload[i32_start..],
+                "non-F32 parts must stay byte-exact for {codec:?}"
+            );
         }
     }
 
     #[test]
-    fn stage_message_rejects_codec_mismatch_and_malformed_compact_header() {
+    fn stage_message_rejects_codec_mismatch_and_malformed_header() {
+        let frame = multipart_activation_frame(1);
         let codec = crate::StageActivationCodec::F16RneV1;
-        let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
-        state.source_stage_index = 0;
-        state.activation_codec = codec;
-        let f32_payload = [1.0_f32, -2.0]
-            .into_iter()
-            .flat_map(f32::to_le_bytes)
-            .collect::<Vec<_>>();
-        let activation =
-            encode_activation_payload_with_state_flags(codec, 1, 2, &f32_payload, 0).unwrap();
-        let message = StageWireMessage {
-            kind: WireMessageKind::DecodeEmbd,
-            pos_start: 0,
-            token_count: 1,
-            state,
-            request_id: 7,
-            session_id: 9,
-            sampling: None,
-            chat_sampling_metadata: None,
-            tokens: Vec::new(),
-            positions: Vec::new(),
-            activation,
-            raw_bytes: Vec::new(),
-        };
+        let message = activation_message(&frame, codec);
         let mut bytes = Vec::new();
         write_stage_message(&mut bytes, &message).unwrap();
-        let fixed_header_only = bytes[..STAGE_WIRE_FIXED_HEADER_BYTES].to_vec();
         assert_invalid_data(
             read_stage_message_for_codec(
-                Cursor::new(fixed_header_only),
+                Cursor::new(bytes.clone()),
                 2,
                 crate::StageActivationCodec::RawF32V1,
             ),
@@ -419,9 +441,11 @@ mod tests {
 
         let mut wrong_size = bytes.clone();
         wrong_size[60..64].copy_from_slice(&5_i32.to_le_bytes());
-        assert_invalid_data(
-            read_stage_message(Cursor::new(wrong_size), 2),
-            "activation payload size mismatch",
+        assert_eq!(
+            read_stage_message_for_codec(Cursor::new(wrong_size), 2, codec)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::UnexpectedEof
         );
 
         bytes[56..60].copy_from_slice(&99_i32.to_le_bytes());
@@ -433,39 +457,13 @@ mod tests {
 
     #[test]
     fn stage_message_auto_lossless_policy_admits_only_exact_codec_set() {
-        let f32_payload = [1.0_f32, -2.0]
-            .into_iter()
-            .flat_map(f32::to_le_bytes)
-            .collect::<Vec<_>>();
+        let frame = multipart_activation_frame(1);
         for codec in [
             crate::StageActivationCodec::RawF32V1,
             crate::StageActivationCodec::Bf16RneV1,
             crate::StageActivationCodec::F16RneV1,
         ] {
-            let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
-            state.source_stage_index = 0;
-            state.activation_codec = codec;
-            let message = StageWireMessage {
-                kind: WireMessageKind::DecodeEmbd,
-                pos_start: 0,
-                token_count: 1,
-                state,
-                request_id: 7,
-                session_id: 9,
-                sampling: None,
-                chat_sampling_metadata: None,
-                tokens: Vec::new(),
-                positions: Vec::new(),
-                activation: encode_activation_payload_with_state_flags(
-                    codec,
-                    1,
-                    2,
-                    &f32_payload,
-                    0,
-                )
-                .unwrap(),
-                raw_bytes: Vec::new(),
-            };
+            let message = activation_message(&frame, codec);
             let mut bytes = Vec::new();
             write_stage_message(&mut bytes, &message).unwrap();
             let decoded = read_stage_message_for_codec_policy(
@@ -478,25 +476,7 @@ mod tests {
             assert_eq!(decoded.state.activation_codec, codec);
         }
 
-        let codec = crate::StageActivationCodec::S8RowF32RneV1;
-        let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
-        state.source_stage_index = 0;
-        state.activation_codec = codec;
-        let message = StageWireMessage {
-            kind: WireMessageKind::DecodeEmbd,
-            pos_start: 0,
-            token_count: 1,
-            state,
-            request_id: 7,
-            session_id: 9,
-            sampling: None,
-            chat_sampling_metadata: None,
-            tokens: Vec::new(),
-            positions: Vec::new(),
-            activation: encode_activation_payload_with_state_flags(codec, 1, 2, &f32_payload, 0)
-                .unwrap(),
-            raw_bytes: Vec::new(),
-        };
+        let message = activation_message(&frame, crate::StageActivationCodec::S8RowF32RneV1);
         let mut bytes = Vec::new();
         write_stage_message(&mut bytes, &message).unwrap();
         assert_invalid_data(
@@ -599,6 +579,7 @@ mod tests {
 
     #[test]
     fn stage_message_estimates_full_wire_transfer_bytes() {
+        let frame = multipart_activation_frame(2);
         let mut state = StageStateHeader::new(WireMessageKind::PrefillEmbd);
         state.source_stage_index = 0;
         let message = StageWireMessage {
@@ -625,7 +606,7 @@ mod tests {
             chat_sampling_metadata: Some("{}".to_string()),
             tokens: vec![1, 2],
             positions: vec![0],
-            activation: vec![0; 16],
+            activation: encode_raw_activation_frame(&frame).unwrap(),
             raw_bytes: Vec::new(),
         };
 
@@ -779,6 +760,34 @@ mod tests {
         assert_eq!(decoded.session_id, 17);
         assert_eq!(decoded.state.flags & state_flags::SAMPLING, 0);
         assert!(decoded.sampling.is_none());
+    }
+
+    #[test]
+    fn stop_message_round_trips_without_activation_from_a_stage() {
+        let mut state = StageStateHeader::new(WireMessageKind::Stop);
+        state.source_stage_index = 0;
+        let message = StageWireMessage {
+            kind: WireMessageKind::Stop,
+            pos_start: 0,
+            token_count: 0,
+            state,
+            request_id: 19,
+            session_id: 23,
+            sampling: None,
+            chat_sampling_metadata: None,
+            tokens: Vec::new(),
+            positions: Vec::new(),
+            activation: Vec::new(),
+            raw_bytes: Vec::new(),
+        };
+
+        let mut bytes = Vec::new();
+        write_stage_message(&mut bytes, &message).unwrap();
+        let decoded = read_stage_message(Cursor::new(bytes), 2048).unwrap();
+
+        assert_eq!(decoded.kind, WireMessageKind::Stop);
+        assert_eq!(decoded.state.source_stage_index, 0);
+        assert!(decoded.activation.is_empty());
     }
 
     #[test]
@@ -1068,320 +1077,83 @@ mod tests {
     }
 
     #[test]
-    fn stage_message_rejects_activation_payload_over_limit() {
-        let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
-        state.source_stage_index = 0;
-        state.flags |= state_flags::GEMMA3N_ALTUP_SIDEBAND;
-        let token_count = i32::try_from(MAX_STAGE_ACTIVATION_BYTES / 2 / 1024 + 1).unwrap();
-        let bytes = stage_frame_prefix(WireMessageKind::DecodeEmbd, token_count, 0, 0, state);
+    fn activation_descriptor_rejects_duplicate_identity() {
+        let frame = multipart_activation_frame(1);
+        let mut duplicate = frame.desc.clone();
+        duplicate.parts[1].identity = duplicate.parts[0].identity;
 
         assert_invalid_data(
-            read_stage_message(Cursor::new(bytes), 1024),
-            "activation payload byte count exceeds maximum",
+            encode_activation_frame(
+                crate::StageActivationCodec::RawF32V1,
+                &duplicate,
+                &frame.payload,
+            ),
+            "activation frame has duplicate part identities",
         );
     }
 
     #[test]
-    fn activation_encoding_rejects_decoded_payload_over_limit_before_compression() {
-        let n_embd = 65_536;
-        let token_count =
-            i32::try_from(MAX_STAGE_DECODED_ACTIVATION_BYTES / 4 / n_embd as usize + 1).unwrap();
+    fn activation_descriptor_rejects_token_dimension_mismatch() {
+        let frame = multipart_activation_frame(2);
+        let mut mismatched = frame.desc.clone();
+        mismatched.parts[0].dimensions[1] = 1;
 
         assert_invalid_data(
-            encode_f32_activation_payload(token_count, n_embd, &[]),
+            encode_activation_frame(
+                crate::StageActivationCodec::RawF32V1,
+                &mismatched,
+                &frame.payload,
+            ),
+            "activation part token dimension does not match frame",
+        );
+    }
+
+    #[test]
+    fn activation_descriptor_rejects_payload_over_limit_before_allocation() {
+        let mut desc = multipart_activation_frame(1).desc;
+        let elements = u64::try_from(MAX_STAGE_DECODED_ACTIVATION_BYTES / 4 + 1).unwrap();
+        desc.parts.truncate(1);
+        desc.parts[0].dimensions = [i64::try_from(elements).unwrap(), 1, 1, 1];
+        desc.parts[0].byte_strides = [4, elements * 4, elements * 4, elements * 4];
+        desc.parts[0].payload_bytes = elements * 4;
+        desc.payload_bytes = elements * 4;
+
+        assert_invalid_data(
+            activation_frame_wire_bytes(crate::StageActivationCodec::RawF32V1, &desc),
             "decoded activation payload byte count exceeds maximum",
         );
     }
 
     #[test]
-    fn rwkv7_sideband_activation_round_trips() {
-        let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
-        state.source_stage_index = 0;
-        state.activation_codec = crate::StageActivationCodec::RawF32V1;
-        state.flags |= state_flags::RWKV7_V_FIRST_SIDEBAND;
-        let mut activation_f32 = Vec::new();
-        for value in [1.0_f32, 2.0, 3.0, 4.0] {
-            activation_f32.extend_from_slice(&value.to_le_bytes());
-        }
-        let activation =
-            encode_f32_activation_payload_with_state_flags(1, 2, &activation_f32, state.flags)
-                .unwrap();
-        let message = StageWireMessage {
-            kind: WireMessageKind::DecodeEmbd,
-            pos_start: 0,
-            token_count: 1,
-            state,
-            request_id: 7,
-            session_id: 9,
-            sampling: None,
-            chat_sampling_metadata: None,
-            tokens: vec![42],
-            positions: Vec::new(),
-            activation,
-            raw_bytes: Vec::new(),
-        };
-        let mut bytes = Vec::new();
-        write_stage_message(&mut bytes, &message).unwrap();
-        let decoded = read_stage_message(Cursor::new(bytes), 2).unwrap();
-        assert_eq!(decoded.activation.len(), 16);
-        assert_eq!(
-            activation_frame_flags_from_state_flags(decoded.state.flags),
-            ACTIVATION_FLAG_RWKV7_V_FIRST
-        );
-        assert_eq!(decoded.activation_f32_payload().unwrap(), activation_f32);
-    }
+    fn multipart_activation_frame_can_be_taken() {
+        let frame = multipart_activation_frame(1);
+        let mut message = activation_message(&frame, crate::StageActivationCodec::RawF32V1);
 
-    #[test]
-    fn inkling_mtp_embedding_sideband_activation_round_trips() {
-        let mut state = StageStateHeader::new(WireMessageKind::PrefillEmbd);
-        state.source_stage_index = 0;
-        state.activation_codec = crate::StageActivationCodec::RawF32V1;
-        state.flags |= state_flags::INKLING_MTP_EMBD_SIDEBAND;
-        let mut activation_f32 = Vec::new();
-        for value in [1.0_f32, 2.0, 3.0, 4.0] {
-            activation_f32.extend_from_slice(&value.to_le_bytes());
-        }
-        let activation =
-            encode_f32_activation_payload_with_state_flags(1, 2, &activation_f32, state.flags)
-                .unwrap();
-        let message = StageWireMessage {
-            kind: WireMessageKind::PrefillEmbd,
-            pos_start: 0,
-            token_count: 1,
-            state,
-            request_id: 7,
-            session_id: 9,
-            sampling: None,
-            chat_sampling_metadata: None,
-            tokens: Vec::new(),
-            positions: Vec::new(),
-            activation,
-            raw_bytes: Vec::new(),
-        };
-        let mut bytes = Vec::new();
-        write_stage_message(&mut bytes, &message).unwrap();
-        let decoded = read_stage_message(Cursor::new(bytes), 2).unwrap();
-        assert_eq!(decoded.activation.len(), 16);
-        assert_eq!(
-            activation_frame_flags_from_state_flags(decoded.state.flags),
-            ACTIVATION_FLAG_INKLING_MTP_EMBD
-        );
-        assert_eq!(
-            activation_state_flags_from_frame_flags(ACTIVATION_FLAG_INKLING_MTP_EMBD),
-            state_flags::INKLING_MTP_EMBD_SIDEBAND
-        );
-        assert_eq!(decoded.activation_f32_payload().unwrap(), activation_f32);
-    }
-
-    #[test]
-    fn kimi_k3_residual_sideband_activation_round_trips_with_full_boundary_width() {
-        let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
-        state.source_stage_index = 1;
-        state.activation_codec = crate::StageActivationCodec::RawF32V1;
-        state.flags |= state_flags::KIMI_K3_RESIDUAL_SIDEBAND;
-        let activation_f32 = (0..6)
-            .flat_map(|value| (value as f32).to_le_bytes())
-            .collect::<Vec<_>>();
-        let activation =
-            encode_f32_activation_payload_with_state_flags(1, 6, &activation_f32, state.flags)
-                .unwrap();
-        let message = StageWireMessage {
-            kind: WireMessageKind::DecodeEmbd,
-            pos_start: 0,
-            token_count: 1,
-            state,
-            request_id: 7,
-            session_id: 9,
-            sampling: None,
-            chat_sampling_metadata: None,
-            tokens: vec![42],
-            positions: Vec::new(),
-            activation,
-            raw_bytes: Vec::new(),
-        };
-        let mut bytes = Vec::new();
-        write_stage_message(&mut bytes, &message).unwrap();
-        let decoded = read_stage_message(Cursor::new(bytes), 6).unwrap();
-        assert_eq!(decoded.activation.len(), 24);
-        assert_eq!(
-            activation_frame_flags_from_state_flags(decoded.state.flags),
-            ACTIVATION_FLAG_KIMI_K3_RESIDUAL
-        );
-        assert_eq!(
-            activation_state_flags_from_frame_flags(ACTIVATION_FLAG_KIMI_K3_RESIDUAL),
-            state_flags::KIMI_K3_RESIDUAL_SIDEBAND
-        );
-        assert_eq!(decoded.activation_f32_payload().unwrap(), activation_f32);
-    }
-
-    #[test]
-    fn glm_dsa_top_k_sideband_round_trips_as_raw_i32_after_compressed_hidden_rows() {
-        let mut state = StageStateHeader::new(WireMessageKind::PrefillEmbd);
-        state.source_stage_index = 0;
-        state.activation_codec = crate::StageActivationCodec::F16RneV1;
-        state.flags |= state_flags::GLM_DSA_TOP_K_SIDEBAND;
-        let hidden = [1.0_f32, 2.0, 3.0, 4.0]
-            .into_iter()
-            .flat_map(f32::to_le_bytes)
-            .collect::<Vec<_>>();
-        let top_k = [0_i32, 1, 2, 0, 1, 2]
-            .into_iter()
-            .flat_map(i32::to_le_bytes)
-            .collect::<Vec<_>>();
-        let mut decoded_payload = hidden.clone();
-        decoded_payload.extend_from_slice(&top_k);
-        let activation = encode_activation_payload_with_state_flags(
-            state.activation_codec,
-            2,
-            2,
-            &decoded_payload,
-            state.flags,
-        )
-        .unwrap();
-        assert_eq!(activation.len(), 8 + top_k.len());
-        assert_eq!(&activation[8..], top_k);
-
-        let message = StageWireMessage {
-            kind: WireMessageKind::PrefillEmbd,
-            pos_start: 0,
-            token_count: 2,
-            state,
-            request_id: 7,
-            session_id: 9,
-            sampling: None,
-            chat_sampling_metadata: None,
-            tokens: vec![42, 43],
-            positions: Vec::new(),
-            activation,
-            raw_bytes: Vec::new(),
-        };
-        let mut bytes = Vec::new();
-        write_stage_message(&mut bytes, &message).unwrap();
-        let decoded = read_stage_message_for_codec(
-            Cursor::new(bytes),
-            2,
-            crate::StageActivationCodec::F16RneV1,
-        )
-        .unwrap();
-        assert_eq!(decoded.activation, decoded_payload);
-        assert_eq!(
-            activation_frame_flags_from_state_flags(decoded.state.flags),
-            ACTIVATION_FLAG_GLM_DSA_TOP_K
-        );
-        assert_eq!(
-            activation_state_flags_from_frame_flags(ACTIVATION_FLAG_GLM_DSA_TOP_K),
-            state_flags::GLM_DSA_TOP_K_SIDEBAND
-        );
-    }
-
-    #[test]
-    fn glm_dsa_top_k_sideband_rejects_non_token_major_i32_payload() {
-        let flags = state_flags::GLM_DSA_TOP_K_SIDEBAND;
-        let mut payload = [1.0_f32, 2.0, 3.0, 4.0]
-            .into_iter()
-            .flat_map(f32::to_le_bytes)
-            .collect::<Vec<_>>();
-        payload.extend_from_slice(&[0_u8; 4]);
-
-        assert_invalid_data(
-            encode_f32_activation_payload_with_state_flags(2, 2, &payload, flags),
-            "GLM-DSA top-k sideband is not token-major i32",
-        );
-    }
-
-    #[test]
-    fn f32_activation_payload_can_be_taken() {
-        let state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
-        let f32_payload = [1.0_f32, -1.0_f32]
-            .into_iter()
-            .flat_map(f32::to_le_bytes)
-            .collect::<Vec<_>>();
-        let activation = encode_f32_activation_payload(1, 2, &f32_payload).unwrap();
-        let mut message = StageWireMessage {
-            kind: WireMessageKind::DecodeEmbd,
-            pos_start: 0,
-            token_count: 1,
-            state,
-            request_id: 7,
-            session_id: 9,
-            sampling: None,
-            chat_sampling_metadata: None,
-            tokens: vec![42],
-            positions: Vec::new(),
-            activation: activation.clone(),
-            raw_bytes: Vec::new(),
-        };
-
-        let payload = message.take_activation_f32_payload().unwrap();
-
-        assert_eq!(payload, f32_payload);
+        assert_eq!(message.take_activation_frame().unwrap(), Some(frame));
         assert!(message.activation.is_empty());
     }
 
     #[test]
-    fn f32_activation_payload_helper_preserves_wire_payload() {
-        let state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
-        let f32_payload = [1.0_f32, -1.0_f32]
-            .into_iter()
-            .flat_map(f32::to_le_bytes)
-            .collect::<Vec<_>>();
-        let activation = encode_f32_activation_payload(1, 2, &f32_payload).unwrap();
-        let message = StageWireMessage {
-            kind: WireMessageKind::DecodeEmbd,
-            pos_start: 0,
-            token_count: 1,
-            state,
-            request_id: 7,
-            session_id: 9,
-            sampling: None,
-            chat_sampling_metadata: None,
-            tokens: vec![42],
-            positions: Vec::new(),
-            activation: activation.clone(),
-            raw_bytes: Vec::new(),
-        };
+    fn lossless_selection_checks_every_f32_part_and_preserves_raw_fallback() {
+        let frame = multipart_activation_frame(2);
+        let selected = select_lossless_activation_codec(
+            &frame.desc,
+            &frame.payload,
+            &[
+                crate::StageActivationCodec::Bf16RneV1,
+                crate::StageActivationCodec::F16RneV1,
+                crate::StageActivationCodec::RawF32V1,
+            ],
+        )
+        .unwrap();
 
-        let payload = message.activation_f32_payload().unwrap();
-
-        assert_eq!(payload, f32_payload);
-        assert_eq!(message.activation, activation);
-    }
-
-    #[test]
-    fn gemma3n_altup_sideband_activation_round_trips() {
-        let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
-        state.source_stage_index = 0;
-        state.activation_codec = crate::StageActivationCodec::RawF32V1;
-        state.flags |= state_flags::GEMMA3N_ALTUP_SIDEBAND;
-        let mut activation_f32 = Vec::new();
-        for value in 0..8 {
-            activation_f32.extend_from_slice(&(value as f32).to_le_bytes());
-        }
-        let activation =
-            encode_f32_activation_payload_with_state_flags(1, 8, &activation_f32, state.flags)
-                .unwrap();
-        let message = StageWireMessage {
-            kind: WireMessageKind::DecodeEmbd,
-            pos_start: 0,
-            token_count: 1,
-            state,
-            request_id: 7,
-            session_id: 9,
-            sampling: None,
-            chat_sampling_metadata: None,
-            tokens: vec![42],
-            positions: Vec::new(),
-            activation,
-            raw_bytes: Vec::new(),
-        };
-        let mut bytes = Vec::new();
-        write_stage_message(&mut bytes, &message).unwrap();
-        let decoded = read_stage_message(Cursor::new(bytes), 8).unwrap();
-        assert_eq!(decoded.activation.len(), 32);
-        assert_eq!(
-            activation_frame_flags_from_state_flags(decoded.state.flags),
-            ACTIVATION_FLAG_GEMMA3N_ALTUP
+        assert!(
+            [
+                crate::StageActivationCodec::Bf16RneV1,
+                crate::StageActivationCodec::F16RneV1,
+                crate::StageActivationCodec::RawF32V1,
+            ]
+            .contains(&selected)
         );
-        assert_eq!(decoded.activation_f32_payload().unwrap(), activation_f32);
     }
 }

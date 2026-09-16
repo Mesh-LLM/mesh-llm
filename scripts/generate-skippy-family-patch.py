@@ -26,7 +26,7 @@ separately and remain outside the primary decoder stage interval.
 ---
 """
 
-GENERATOR_VERSION = "0.3.0"
+GENERATOR_VERSION = "0.4.1"
 DIFF_HEADER = re.compile(r"^diff --git a/(src/models/[^ ]+) b/[^\n]+$", re.MULTILINE)
 
 

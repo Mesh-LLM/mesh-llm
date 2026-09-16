@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/qwen4exp.cpp b/src/models/qwen4exp.cpp
-index 051b1e6d375eca78ca533ec7d0bb4c2ac7c1aa26..3e8ec9f55f2c2f4fe99b40ceb0225bc942a21b7e 100644
+index 051b1e6d375eca78ca533ec7d0bb4c2ac7c1aa26..19e4725a9574e47aa5ba15f967dc176424b76de0 100644
 --- a/src/models/qwen4exp.cpp
 +++ b/src/models/qwen4exp.cpp
 @@ -355,9 +355,18 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
@@ -78,7 +78,7 @@ index 051b1e6d375eca78ca533ec7d0bb4c2ac7c1aa26..3e8ec9f55f2c2f4fe99b40ceb0225bc9
 +        cb(stage_inp->values, "hc_stage_input", -1);
 +        ggml_set_input(stage_inp->values);
 +        res_hc = stage_inp->values;
-+        res->t_skippy_activation_input = res_hc;
++        res->add_skippy_activation_import(res_hc, 2);
 +        res->add_input(std::move(stage_inp));
 +    }
 +
@@ -108,7 +108,7 @@ index 051b1e6d375eca78ca533ec7d0bb4c2ac7c1aa26..3e8ec9f55f2c2f4fe99b40ceb0225bc9
 +    }
 +    if (stage_filtered && !stage_filter.include_output) {
 +        cb(res_hc, "stage_boundary", il_end - 1);
-+        res->t_skippy_activation_output = res_hc;
++        res->add_skippy_activation_export(res_hc, 2);
 +        res->t_embd = res_hc;
 +        ggml_build_forward_expand(gf, res_hc);
 +        return;
