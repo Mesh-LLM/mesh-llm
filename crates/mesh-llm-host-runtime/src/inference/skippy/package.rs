@@ -674,6 +674,30 @@ pub fn synthetic_direct_gguf_package(
     synthetic_gguf_package(model_id, model_path)
 }
 
+/// Build a content-addressed GGUF package from the immutable provenance and
+/// object digests already recorded by Hugging Face.
+///
+/// The canonical identity includes the repository, resolved commit, and exact
+/// ordered file set, but avoids reading the model weights at startup.
+pub fn synthetic_huggingface_gguf_package(
+    _model_id: &str,
+    identity: &crate::models::HuggingFaceModelIdentity,
+) -> Result<SkippyPackageIdentity> {
+    let source = content_addressed::huggingface_source_files(identity)?;
+    let source_paths = source
+        .files
+        .iter()
+        .map(|source| source.path.clone())
+        .collect::<Vec<_>>();
+    let verified_fingerprint = super::local_source::verified_path_fingerprint(&source_paths);
+    synthetic_gguf_package_from_source_files(
+        source.files,
+        verified_fingerprint,
+        Some(source.identity_sha256),
+        true,
+    )
+}
+
 fn safetensors_checkpoint_root(model_path: &Path) -> Option<PathBuf> {
     let root = if model_path.is_dir() {
         model_path
@@ -796,6 +820,15 @@ fn synthetic_gguf_package(_model_id: &str, model_path: &Path) -> Result<SkippyPa
     }
     let verified_fingerprint = super::local_source::verified_path_fingerprint(&source_paths);
     let source_files = direct_gguf_source_files_from_paths(source_paths, None)?;
+    synthetic_gguf_package_from_source_files(source_files, verified_fingerprint, None, false)
+}
+
+fn synthetic_gguf_package_from_source_files(
+    source_files: Vec<SkippyPackageSourceFile>,
+    verified_fingerprint: Option<Vec<super::local_source::VerifiedFileFingerprint>>,
+    source_identity_sha256: Option<String>,
+    allow_immutable_source_metadata: bool,
+) -> Result<SkippyPackageIdentity> {
     content_addressed::ensure_fingerprint_unchanged(
         &source_files,
         verified_fingerprint.as_deref(),
@@ -838,7 +871,8 @@ fn synthetic_gguf_package(_model_id: &str, model_path: &Path) -> Result<SkippyPa
         verified_fingerprint.as_deref(),
     )?;
 
-    let source_model_sha256 = content_addressed::aggregate_source_sha256(&source_files);
+    let source_model_sha256 = source_identity_sha256
+        .unwrap_or_else(|| content_addressed::aggregate_source_sha256(&source_files));
     let package_ref = super::local_source::content_addressed_package_ref(&source_model_sha256)?;
     let manifest_sha256 = content_addressed::manifest_sha256(
         &source_model_sha256,
@@ -864,7 +898,11 @@ fn synthetic_gguf_package(_model_id: &str, model_path: &Path) -> Result<SkippyPa
         tensor_count,
         generation: None,
     };
-    super::local_source::register_content_addressed_identity(&identity, verified_fingerprint);
+    super::local_source::register_content_addressed_identity(
+        &identity,
+        verified_fingerprint,
+        allow_immutable_source_metadata,
+    );
     Ok(identity)
 }
 

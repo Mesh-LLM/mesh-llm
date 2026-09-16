@@ -80,7 +80,7 @@ pub use package::{
 };
 pub(crate) use package::{
     direct_gguf_planning_manifest_from_identity, direct_gguf_source_paths, is_package_v2_ref,
-    synthetic_content_addressed_gguf_package,
+    synthetic_content_addressed_gguf_package, synthetic_huggingface_gguf_package,
 };
 pub(crate) use resolver::{
     ResolvedEmbeddedOpenAiArgs, ResolvedSkippyConfig, SkippyConfigResolveRequest,
