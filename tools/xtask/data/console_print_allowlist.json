@@ -3787,11 +3787,11 @@
   ],
   "crates/skippy-correctness/src/runner/kv_page_growth.rs": [
     {
-      "line": 285,
+      "line": 289,
       "macro_name": "println!"
     },
     {
-      "line": 340,
+      "line": 344,
       "macro_name": "println!"
     }
   ],
@@ -3811,19 +3811,15 @@
       "macro_name": "eprintln!"
     },
     {
-      "line": 933,
+      "line": 937,
       "macro_name": "eprintln!"
     },
     {
-      "line": 942,
+      "line": 946,
       "macro_name": "eprintln!"
     },
     {
-      "line": 954,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 957,
+      "line": 958,
       "macro_name": "eprintln!"
     },
     {
@@ -3831,7 +3827,11 @@
       "macro_name": "eprintln!"
     },
     {
-      "line": 1309,
+      "line": 965,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 1313,
       "macro_name": "eprintln!"
     }
   ],
