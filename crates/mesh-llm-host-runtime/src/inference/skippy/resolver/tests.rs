@@ -86,10 +86,11 @@ fn assert_openai_args_use_request_time_defaults(
 
 #[test]
 fn package_request_defaults_reach_embedded_openai_server_config() {
-    let package_request_defaults = serde_json::from_str(include_str!(
-        "../../../../../skippy-package-format/data/catalog-generation-defaults/qwen3.8-27b.json"
-    ))
-    .unwrap();
+    let package_request_defaults: skippy_package_format::GenerationRequestDefaults =
+        serde_json::from_str(include_str!(
+            "../../../../../skippy-package-format/data/catalog-generation-defaults/qwen3.8-27b.json"
+        ))
+        .unwrap();
     let package_generation = skippy_runtime::package::PackageGenerationInfo {
         request_defaults: Some(package_request_defaults.clone()),
         speculative_decoding: None,
