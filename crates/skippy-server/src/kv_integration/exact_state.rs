@@ -11,15 +11,68 @@ use super::{
     records::add_reconstruct_stats,
 };
 
+fn l3_fill_claim_key(l3: &skippy_cache::L3Tier, location: &skippy_cache::L3Location) -> String {
+    format!("{}:{}", l3.state_identity(), location.manifest_key)
+}
+
+fn resident_prefix_is_complete(matched_tokens: usize, requested_tokens: usize) -> bool {
+    matched_tokens >= requested_tokens
+}
+
+fn preflight_l3_kv_location(
+    location: &skippy_cache::L3Location,
+) -> Result<Option<skippy_runtime::RuntimeKvPageDesc>> {
+    if !location.native_kv_passthrough && !location.cachegen_kv {
+        return Ok(None);
+    }
+    let json = location
+        .kv_desc_json
+        .as_deref()
+        .context("native KV manifest has no runtime page descriptor")?;
+    let desc: skippy_runtime::RuntimeKvPageDesc =
+        serde_json::from_str(json).context("native KV manifest has an invalid page descriptor")?;
+    let declared_bytes = if location.cachegen_kv {
+        location.kv_decoded_bytes
+    } else {
+        location.kv_bytes
+    };
+    let kv_bytes = usize::try_from(declared_bytes).context("KV payload length exceeds usize")?;
+    desc.validate_payload(kv_bytes)
+        .context("native KV manifest page descriptor is incompatible")?;
+    if desc.token_start != 0 || desc.token_count != location.token_count {
+        anyhow::bail!("native KV manifest page descriptor does not cover the located prefix");
+    }
+    Ok(Some(desc))
+}
+
 impl KvStageIntegration {
+    pub(crate) fn l3_benefit_cost(
+        &self,
+        cold_prefill_cost: Option<f64>,
+    ) -> Option<skippy_cache::policy::CostSample> {
+        self.l3
+            .as_ref()
+            .and_then(|l3| l3.benefit_candidate_cost(cold_prefill_cost))
+    }
+
     pub fn restore_exact_state(
         &self,
         runtime: &mut RuntimeState,
         session_id: &str,
         identities: &[PrefillKvIdentity],
     ) -> Result<Option<ExactStateRestore>> {
+        self.restore_exact_state_with_cold_cost(runtime, session_id, identities, None)
+    }
+
+    pub fn restore_exact_state_with_cold_cost(
+        &self,
+        runtime: &mut RuntimeState,
+        session_id: &str,
+        identities: &[PrefillKvIdentity],
+        cold_prefill_cost: Option<f64>,
+    ) -> Result<Option<ExactStateRestore>> {
         runtime.restore_transaction(session_id, |runtime| {
-            self.restore_exact_state_inner(runtime, session_id, identities)
+            self.restore_exact_state_inner(runtime, session_id, identities, cold_prefill_cost)
         })
     }
 
@@ -28,8 +81,23 @@ impl KvStageIntegration {
         runtime: &mut RuntimeState,
         session_id: &str,
         identities: &[PrefillKvIdentity],
+        cold_prefill_cost: Option<f64>,
     ) -> Result<Option<ExactStateRestore>> {
-        if !self.should_lookup() || !self.payload.is_exact_state() {
+        if !self.should_lookup() || self.exact_state_payload().is_none() {
+            return Ok(None);
+        }
+        // Dense L3 uses serialized exact state only as the durable floor.
+        // Prefer a native resident-prefix hit whenever one is already warm;
+        // importing the serialized snapshot would otherwise make enabling L3
+        // slower than the ordinary L1 path on every repeated request.
+        if self.payload == StagePrefixCachePayload::ResidentKv
+            && identities.iter().any(|identity| {
+                self.probe_resident_prefix(identity)
+                    .is_some_and(|resident| {
+                        resident_prefix_is_complete(resident.token_count, identity.token_ids.len())
+                    })
+            })
+        {
             return Ok(None);
         }
         for identity in identities {
@@ -44,6 +112,18 @@ impl KvStageIntegration {
                 (lookup, entries)
             };
             let Some(lookup) = lookup else {
+                // The durable tiers may still hold this prefix.
+                // Runs inside the restore transaction, so a failed import
+                // rolls the lane back exactly as a radix restore would.
+                if let Some(restored) = self.restore_from_l3(
+                    runtime,
+                    session_id,
+                    identity,
+                    lookup_started,
+                    cold_prefill_cost,
+                )? {
+                    return Ok(Some(restored));
+                }
                 continue;
             };
             let lease = ExactStateLease {
@@ -132,7 +212,7 @@ impl KvStageIntegration {
                             .map_err(|error| {
                                 mark_deterministic_failure(&mut deterministic_failure, error)
                             })?;
-                        if recurrent.is_empty() {
+                        if recurrent.is_empty() && !self.dense_without_recurrent {
                             deterministic_failure = true;
                             return Err(anyhow::anyhow!("cached recurrent-state payload is empty"));
                         }
@@ -143,11 +223,17 @@ impl KvStageIntegration {
                             stats,
                         );
                         let import_started = Instant::now();
-                        runtime.import_recurrent_state_for_token_count(
-                            session_id,
-                            recurrent.as_ref(),
-                            token_count,
-                        )?;
+                        if recurrent.is_empty() {
+                            // Known-dense model: there is no snapshot to
+                            // import, only a position to finalize.
+                            runtime.set_session_position(session_id, token_count)?;
+                        } else {
+                            runtime.import_recurrent_state_for_token_count(
+                                session_id,
+                                recurrent.as_ref(),
+                                token_count,
+                            )?;
+                        }
                         recurrent_import_ms = import_started.elapsed().as_secs_f64() * 1000.0;
                     }
                     _ => return Ok(false),
@@ -184,8 +270,41 @@ impl KvStageIntegration {
                 drop(lease);
                 continue;
             }
+            let promote_to_l3 = self.l3.as_ref().is_some_and(|l3| {
+                l3.benefit_observe_memory_hit(
+                    &identity.namespace,
+                    &lookup.stored_tokens,
+                    cold_prefill_cost,
+                )
+            });
+            let page_id = lookup.value.page_id.clone();
+            let promotion_payload = promote_to_l3.then(|| lookup.value.payload.clone());
+            let promotion_extra = promote_to_l3.then(|| lookup.value.extra.clone());
+            let stored_tokens = lookup.stored_tokens.clone();
+            drop(lease);
+            let promotion_enqueued = if let (Some(payload), Some(extra)) =
+                (promotion_payload, promotion_extra)
+                && self.try_begin_record(&page_id)
+            {
+                matches!(
+                    self.enqueue_exact_state_record(PendingExactStateRecord {
+                        page_id: page_id.clone(),
+                        payload,
+                        extra,
+                        namespace: identity.namespace.clone(),
+                        token_ids: stored_tokens,
+                        l3_fill_claim: None,
+                        write_through_l3: true,
+                        l2_promotion_digest: None,
+                        l3_cost: None,
+                    }),
+                    ExactStateRecordAdmission::Queued
+                )
+            } else {
+                false
+            };
             let restored = ExactStateRestore {
-                page_id: lookup.value.page_id,
+                page_id,
                 token_count: token_count as usize,
                 payload_kind: lookup.value.payload.kind(),
                 logical_bytes: lookup.logical_bytes,
@@ -196,8 +315,10 @@ impl KvStageIntegration {
                 lookup_ms,
                 kv_import_ms,
                 recurrent_import_ms,
+                source: "radix",
+                fill_ms: 0.0,
+                rewarm_enqueued: promotion_enqueued,
             };
-            drop(lease);
             return Ok(Some(restored));
         }
         Ok(None)
@@ -232,7 +353,20 @@ impl KvStageIntegration {
         session_id: &str,
         identity: &PrefillKvIdentity,
     ) -> Result<Option<ExactStateRecord>> {
-        if !self.should_record() || !self.payload.is_exact_state() {
+        self.record_exact_state_with_cost(runtime, session_id, identity, None)
+    }
+
+    pub fn record_exact_state_with_cost(
+        &self,
+        runtime: &mut RuntimeState,
+        session_id: &str,
+        identity: &PrefillKvIdentity,
+        l3_cost: Option<skippy_cache::policy::CostSample>,
+    ) -> Result<Option<ExactStateRecord>> {
+        let Some(exact_state_payload) = self.exact_state_payload() else {
+            return Ok(None);
+        };
+        if !self.should_record() {
             return Ok(None);
         }
         let token_count = identity.identity.token_count;
@@ -256,7 +390,12 @@ impl KvStageIntegration {
                     return Err(error);
                 }
             };
-        if already_recorded {
+        let probation_recurrence = already_recorded
+            && l3_cost.is_some()
+            && self.l3.as_ref().is_some_and(|l3| {
+                l3.benefit_tracks_prefix(&identity.namespace, &identity.token_ids)
+            });
+        if already_recorded && !probation_recurrence {
             self.finish_record(&identity.page_id);
             return Ok(None);
         }
@@ -267,7 +406,7 @@ impl KvStageIntegration {
             self.finish_record(&identity.page_id);
             return Ok(None);
         }
-        let exported = match self.payload {
+        let exported = match exact_state_payload {
             StagePrefixCachePayload::FullState => {
                 runtime.export_full_state(session_id).map(|state| {
                     (
@@ -282,7 +421,17 @@ impl KvStageIntegration {
                     Err(error) if is_native_kv_unavailable(&error) => None,
                     Err(error) => return Err(error),
                 };
-                let recurrent = runtime.export_recurrent_state(session_id)?;
+                let recurrent = match runtime.export_recurrent_state(session_id) {
+                    Ok(recurrent) => recurrent,
+                    // A known-dense model has no recurrent memory to export;
+                    // its snapshot is legitimately empty.
+                    Err(error)
+                        if self.dense_without_recurrent && is_recurrent_unavailable(&error) =>
+                    {
+                        Vec::new()
+                    }
+                    Err(error) => return Err(error),
+                };
                 Ok((
                     ExactStatePayload::kv_recurrent(
                         kv.as_ref().map(|kv| kv.payload.clone()).unwrap_or_default(),
@@ -305,6 +454,13 @@ impl KvStageIntegration {
                 return Err(error);
             }
         };
+        if payload.byte_len() == 0 {
+            // A dense model whose native KV export was unavailable has no
+            // state component at all. Recording it would later restore as a
+            // bare position advance over missing attention state.
+            self.finish_record(&identity.page_id);
+            return Ok(None);
+        }
         let payload_kind = payload.kind();
         let logical_bytes = payload.byte_len();
         match self.enqueue_exact_state_record(PendingExactStateRecord {
@@ -313,6 +469,10 @@ impl KvStageIntegration {
             extra,
             namespace: identity.namespace.clone(),
             token_ids: identity.token_ids.clone(),
+            l3_fill_claim: None,
+            write_through_l3: true,
+            l2_promotion_digest: None,
+            l3_cost,
         }) {
             ExactStateRecordAdmission::Queued => {
                 // Recording owns the radix/blob locks while it hashes a potentially
@@ -348,6 +508,296 @@ impl KvStageIntegration {
             }
         }
     }
+}
+
+impl KvStageIntegration {
+    /// Fill a radix miss from the durable tier with the longest recorded
+    /// prefix of the query, import it, and enqueue a radix re-warm so the
+    /// next lookup hits RAM. `None` when there is no tier, nothing usable is
+    /// stored, or another fill of the same entry is in flight: concurrent
+    /// misses must not each read the entry from disk, so the loser prefills
+    /// normally while the winner warms the radix for everyone.
+    fn restore_from_l3(
+        &self,
+        runtime: &mut RuntimeState,
+        session_id: &str,
+        identity: &PrefillKvIdentity,
+        lookup_started: Instant,
+        cold_prefill_cost: Option<f64>,
+    ) -> Result<Option<ExactStateRestore>> {
+        const MAX_PREFIX_PROBES: usize = 64;
+        let Some(l3) = &self.l3 else {
+            return Ok(None);
+        };
+        // Locate first (cheap index probes), then single-flight the expensive
+        // load on the located entry's manifest key: same-length queries for
+        // different prefixes never suppress each other, and different-length
+        // queries resolving to one entry never load it twice.
+        let location =
+            match l3.locate_longest(&identity.namespace, &identity.token_ids, MAX_PREFIX_PROBES) {
+                Ok(Some(location)) => location,
+                // Nothing stored, or a corrupt / identity-mismatched entry.
+                // Either way the miss path is the safe one; the tier has
+                // recorded the reason for the status surface.
+                Ok(None) | Err(_) => return Ok(None),
+            };
+        // L3 remains the authority for L2: locate and validate the current
+        // manifest identity before a host-RAM mirror may serve the request.
+        if let Some(restored) =
+            self.restore_from_l2(runtime, session_id, identity, &location, lookup_started)?
+        {
+            return Ok(Some(restored));
+        }
+        // Segment and manifest digests intentionally deduplicate bytes across
+        // numerical states. A fill claim must not: one state's fill cannot
+        // warm another state's radix namespace, even when their payload bytes
+        // happen to be identical.
+        let fill_claim = l3_fill_claim_key(l3, &location);
+        {
+            let mut inflight = self
+                .inflight_fills
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !inflight.insert(fill_claim.clone()) {
+                return Ok(None);
+            }
+        }
+        let outcome = self.fill_and_import(
+            runtime,
+            session_id,
+            identity,
+            lookup_started,
+            l3,
+            &location,
+            cold_prefill_cost,
+        );
+        // On success the claim travels with the re-warm record and the worker
+        // releases it once the entry is radix-resident. On any other outcome
+        // release it here.
+        let handed_to_worker = matches!(&outcome, Ok(Some(restored)) if restored.rewarm_enqueued);
+        if !handed_to_worker {
+            self.inflight_fills
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&fill_claim);
+        }
+        outcome
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn fill_and_import(
+        &self,
+        runtime: &mut RuntimeState,
+        session_id: &str,
+        identity: &PrefillKvIdentity,
+        lookup_started: Instant,
+        l3: &std::sync::Arc<skippy_cache::L3Tier>,
+        location: &skippy_cache::L3Location,
+        cold_prefill_cost: Option<f64>,
+    ) -> Result<Option<ExactStateRestore>> {
+        // Native page capability is checked from manifest metadata before the
+        // tier reads any segment bytes. Runtime ABI, platform and numerical
+        // mode are already bound by the tier's exact-state identity; the page
+        // descriptor completes the representation check.
+        let Ok(native_kv_desc) = preflight_l3_kv_location(location) else {
+            return Ok(None);
+        };
+        let fill_started = Instant::now();
+        // A load failure (corrupt segment, now quarantined) is a miss, not a
+        // request failure. Import failures below do propagate: the transaction
+        // rolls the lane back and the caller falls back to cold prefill.
+        let fill = match l3.load(location) {
+            Ok(fill) => fill,
+            Err(_) => {
+                if let Some(l2) = &self.l2 {
+                    l2.invalidate_digest(&location.manifest_key);
+                }
+                return Ok(None);
+            }
+        };
+        if fill.payload.byte_len() == 0 {
+            return Ok(None);
+        }
+        if (location.native_kv_passthrough || location.cachegen_kv)
+            && (fill.token_count != location.token_count
+                || fill.kv_desc_json != location.kv_desc_json
+                || fill.cachegen_kv != location.cachegen_kv
+                || fill.kv_decoded_bytes != location.kv_decoded_bytes)
+        {
+            return Ok(None);
+        }
+        let fill_ms = fill_started.elapsed().as_secs_f64() * 1000.0;
+        let token_count = fill.token_count;
+        let kv_desc: Option<skippy_runtime::RuntimeKvPageDesc> = native_kv_desc.or_else(|| {
+            fill.kv_desc_json
+                .as_deref()
+                .and_then(|json| serde_json::from_str(json).ok())
+        });
+        let lookup_ms = lookup_started.elapsed().as_secs_f64() * 1000.0;
+        let mut kv_import_ms = 0.0;
+        let mut recurrent_import_ms = 0.0;
+        match fill.payload.kind().into() {
+            StagePrefixCachePayload::FullState => {
+                let (full_state, _) = fill
+                    .payload
+                    .full_state_bytes_timed()
+                    .context("reconstruct L3 full-state payload")?;
+                if full_state.is_empty() {
+                    return Ok(None);
+                }
+                let import_started = Instant::now();
+                runtime.import_full_state_for_token_count(
+                    session_id,
+                    full_state.as_ref(),
+                    token_count,
+                )?;
+                kv_import_ms = import_started.elapsed().as_secs_f64() * 1000.0;
+            }
+            StagePrefixCachePayload::KvRecurrent => {
+                // Every check runs before the first import. Once bytes have
+                // gone into the session, the only acceptable exit is `Err`,
+                // which the transaction rolls back; an `Ok(None)` after a
+                // partial import would hand a dirty lane to cold prefill.
+                let kv = fill
+                    .payload
+                    .kv_bytes()
+                    .context("reconstruct L3 KV payload")?;
+                let recurrent = fill
+                    .payload
+                    .recurrent_state_bytes()
+                    .context("reconstruct L3 recurrent payload")?;
+                if recurrent.is_empty() && !self.dense_without_recurrent {
+                    return Ok(None);
+                }
+                let kv_page = match (kv.as_ref(), kv_desc.as_ref()) {
+                    (Some(kv), Some(desc)) => {
+                        // Same fail-closed checks as a radix restore: a
+                        // descriptor that does not describe these bytes, or a
+                        // page that is not the whole prefix, is a miss.
+                        let payload_valid = if fill.cachegen_kv {
+                            usize::try_from(desc.payload_bytes)
+                                .ok()
+                                .is_some_and(|raw_len| {
+                                    skippy_cache::cachegen::archive::validate_archive(kv, raw_len)
+                                        .is_ok()
+                                })
+                        } else {
+                            desc.validate_payload(kv.len()).is_ok()
+                        };
+                        if !payload_valid
+                            || desc.token_start != 0
+                            || desc.token_count != token_count
+                        {
+                            return Ok(None);
+                        }
+                        Some((kv, desc))
+                    }
+                    (Some(kv), None) if !kv.is_empty() => return Ok(None),
+                    _ => None,
+                };
+
+                if let Some((kv, desc)) = kv_page {
+                    let import_started = Instant::now();
+                    if fill.cachegen_kv {
+                        runtime.import_cachegen_kv_page(session_id, desc, kv.as_ref())?;
+                    } else {
+                        runtime.import_kv_page(session_id, desc, kv.as_ref())?;
+                    }
+                    kv_import_ms = import_started.elapsed().as_secs_f64() * 1000.0;
+                }
+                let import_started = Instant::now();
+                if recurrent.is_empty() {
+                    runtime.set_session_position(session_id, token_count)?;
+                } else {
+                    runtime.import_recurrent_state_for_token_count(
+                        session_id,
+                        recurrent.as_ref(),
+                        token_count,
+                    )?;
+                }
+                recurrent_import_ms = import_started.elapsed().as_secs_f64() * 1000.0;
+            }
+            _ => return Ok(None),
+        }
+        let logical_bytes = if fill.cachegen_kv {
+            fill.kv_decoded_bytes.saturating_add(
+                fill.payload
+                    .recurrent_state_bytes()
+                    .map(|bytes| bytes.len() as u64)
+                    .unwrap_or_default(),
+            )
+        } else {
+            fill.payload.byte_len()
+        };
+        let payload_kind = fill.payload.kind();
+        let restore_cost = lookup_started.elapsed().as_secs_f64() * 1_000.0;
+        l3.benefit_observe_l3_restore(
+            &identity.namespace,
+            &identity.token_ids[..token_count as usize],
+            location,
+            cold_prefill_cost,
+            restore_cost,
+        );
+        // Re-warm the RAM tier off the request path. A drop is fine: the
+        // disk copy stays authoritative. The fill claim rides along so the
+        // worker releases it only once the entry is radix-resident.
+        if fill.cachegen_kv {
+            return Ok(Some(ExactStateRestore {
+                page_id: identity.page_id.clone(),
+                token_count: token_count as usize,
+                payload_kind,
+                logical_bytes,
+                entries: 0,
+                reconstruct_ms: 0.0,
+                reconstruct_bytes: 0,
+                reconstruct_blocks: 0,
+                lookup_ms,
+                kv_import_ms,
+                recurrent_import_ms,
+                source: "l3-cachegen",
+                fill_ms,
+                rewarm_enqueued: false,
+            }));
+        }
+        let l2_promotion_digest = self.l2.as_ref().and_then(|l2| {
+            l2.consider_l3_fill(&location.manifest_key, token_count, fill.payload.byte_len())
+                .then(|| location.manifest_key.clone())
+        });
+        let admission = self.enqueue_exact_state_record(PendingExactStateRecord {
+            page_id: identity.page_id.clone(),
+            payload: fill.payload,
+            extra: ExactStateExtra { kv_desc },
+            namespace: identity.namespace.clone(),
+            token_ids: identity.token_ids[..token_count as usize].to_vec(),
+            l3_fill_claim: Some(l3_fill_claim_key(l3, location)),
+            write_through_l3: false,
+            l2_promotion_digest,
+            l3_cost: None,
+        });
+        let rewarm_enqueued = matches!(admission, ExactStateRecordAdmission::Queued);
+        Ok(Some(ExactStateRestore {
+            page_id: identity.page_id.clone(),
+            token_count: token_count as usize,
+            payload_kind,
+            logical_bytes,
+            entries: 0,
+            reconstruct_ms: 0.0,
+            reconstruct_bytes: 0,
+            reconstruct_blocks: 0,
+            lookup_ms,
+            kv_import_ms,
+            recurrent_import_ms,
+            source: "l3",
+            fill_ms,
+            rewarm_enqueued,
+        }))
+    }
+}
+
+fn is_recurrent_unavailable(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.to_string().contains("no recurrent memory"))
 }
 
 struct ExactStateLease {
@@ -442,14 +892,24 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use skippy_cache::UnifiedRadixCache;
+    use skippy_cache::{L3Location, UnifiedRadixCache};
 
-    use super::{is_native_kv_unavailable, try_touch_exact_state};
+    use super::{
+        is_native_kv_unavailable, preflight_l3_kv_location, resident_prefix_is_complete,
+        try_touch_exact_state,
+    };
 
     type TestRadix = UnifiedRadixCache<
         crate::kv_integration::RadixResidentEntry,
         crate::kv_integration::RadixExactEntry,
     >;
+
+    #[test]
+    fn only_complete_resident_prefixes_skip_exact_restore() {
+        assert!(resident_prefix_is_complete(4_000, 4_000));
+        assert!(resident_prefix_is_complete(4_001, 4_000));
+        assert!(!resident_prefix_is_complete(200, 4_000));
+    }
 
     #[test]
     fn empty_kv_layer_range_is_an_unavailable_optional_kv_component() {
@@ -498,5 +958,60 @@ mod tests {
             try_touch_exact_state(&cache, "namespace", &[1]).unwrap(),
             Some(false)
         );
+    }
+
+    fn native_location(desc: &skippy_runtime::RuntimeKvPageDesc) -> L3Location {
+        L3Location {
+            namespace_key: "namespace".to_string(),
+            prefix_key: "prefix".to_string(),
+            token_count: desc.token_count,
+            manifest_key: "manifest".to_string(),
+            kv_desc_json: Some(serde_json::to_string(desc).unwrap()),
+            kv_bytes: desc.payload_bytes,
+            native_kv_passthrough: true,
+            cachegen_kv: false,
+            kv_decoded_bytes: desc.payload_bytes,
+        }
+    }
+
+    fn native_desc() -> skippy_runtime::RuntimeKvPageDesc {
+        skippy_runtime::RuntimeKvPageDesc {
+            version: 1,
+            layer_start: 0,
+            layer_end: 1,
+            token_start: 0,
+            token_count: 8,
+            layer_count: 1,
+            k_type: skippy_runtime::GGML_TYPE_Q8_0,
+            v_type: skippy_runtime::GGML_TYPE_Q8_0,
+            k_row_bytes: 16,
+            v_row_bytes: 16,
+            v_element_bytes: 2,
+            k_idx_row_bytes: 0,
+            payload_bytes: 256,
+            flags: 0,
+            codec: 0,
+            component_count: 0,
+            components: Box::new([Default::default(); 2]),
+        }
+    }
+
+    #[test]
+    fn native_kv_descriptor_is_validated_before_segment_load() {
+        let desc = native_desc();
+        assert_eq!(
+            preflight_l3_kv_location(&native_location(&desc)).unwrap(),
+            Some(desc)
+        );
+
+        let mut wrong_length = native_desc();
+        wrong_length.payload_bytes += 1;
+        let mut location = native_location(&wrong_length);
+        location.kv_bytes -= 1;
+        assert!(preflight_l3_kv_location(&location).is_err());
+
+        let mut wrong_prefix = native_desc();
+        wrong_prefix.token_start = 1;
+        assert!(preflight_l3_kv_location(&native_location(&wrong_prefix)).is_err());
     }
 }

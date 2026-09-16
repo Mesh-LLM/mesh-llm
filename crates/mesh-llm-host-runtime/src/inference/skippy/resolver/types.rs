@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use skippy_protocol::{FlashAttentionType, StageKvCacheMode, StageKvCachePayload};
+use skippy_protocol::{
+    FlashAttentionType, StageKvCacheCodec, StageKvCacheMode, StageKvCachePayload,
+};
 use skippy_runtime::package::PackageGenerationInfo;
 use skippy_server::{EmbeddedOpenAiRequestDefaults, SpeculativeDecodeConfig};
 
@@ -8,7 +10,13 @@ use crate::plugin::{MeshConfig, ReasoningBudget, ReasoningEnabled, RequestDefaul
 
 pub(super) const BUILTIN_CTX_SIZE: u32 = 4096;
 pub(super) const BUILTIN_BATCH: u32 = 512;
-pub(super) const BUILTIN_UBATCH: u32 = 128;
+/// Matches llama.cpp's own default (`LLAMA_SERVER_DEFAULT_N_UBATCH = 512`) and clears
+/// the CUDA SSM SSD kernel gate (`n_tok > SSM_SSD_MIN_TOKENS`, 128, strict), which the
+/// previous 128 default missed by exactly one token — forcing every recurrent (mamba)
+/// prefill onto the sequential scan fallback. Measured on granite-4.0-h-1b: TTFT p50
+/// 0.670 → 0.415 s (C1) and 6.38 → 3.97 s (C8); decode 22.2 → 39.4 tok/s at C8.
+/// See WHITE_UBATCH_512_FALSIFICATION_2026_09_08 in the 2026-09-08 competitive bench.
+pub(super) const BUILTIN_UBATCH: u32 = 512;
 pub(super) const BUILTIN_PARALLEL: usize = 32;
 pub(super) const BUILTIN_PREFILL_CHUNK_SIZE: usize = 64;
 pub(super) const BUILTIN_PREFILL_ADAPTIVE_START: usize = 64;
@@ -28,9 +36,8 @@ pub(crate) struct SkippyConfigResolveRequest<'a> {
     pub(crate) request_defaults: Option<&'a RequestDefaultsConfig>,
     pub(crate) package_generation: Option<&'a PackageGenerationInfo>,
     /// GGUF metadata for the model being resolved, when available. Used to
-    /// guard the size-tiered KV cache default against quantised-KV load
-    /// incompatibilities (Flash Attention / block alignment). `None` leaves the
-    /// default unguarded — the pre-existing behaviour.
+    /// guard publisher-declared quantised K/V against native load constraints
+    /// such as Flash Attention and block alignment.
     pub(crate) compact_meta: Option<&'a crate::models::gguf::GgufCompactMeta>,
 }
 
@@ -66,8 +73,9 @@ pub(crate) struct ResolvedModelFitConfig {
     pub(crate) ubatch: u32,
     pub(crate) cache_type_k: String,
     pub(crate) cache_type_v: String,
-    pub(crate) kv_cache_policy: String,
     pub(crate) prefix_cache: ResolvedStageKvCache,
+    pub(crate) l2_max_bytes: u64,
+    pub(crate) kv_cache_codec: StageKvCacheCodec,
     pub(crate) kv_offload: String,
     /// Parsed `kv_offload` for the native tri-state control. `None` covers
     /// both "auto" and any value that did not parse to a bool.

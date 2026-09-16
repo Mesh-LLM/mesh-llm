@@ -216,7 +216,7 @@
         "help": "Set the default prefill batch size.",
         "category_id": "memory",
         "category_label": "Memory",
-        "category_summary": "VRAM accounting and KV cache policy",
+        "category_summary": "VRAM accounting and KV cache precision",
         "category_order": 20,
         "setting_order": 40,
         "unit": "tokens",

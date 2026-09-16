@@ -40,31 +40,38 @@ pub(crate) struct KvCachePolicy {
 }
 
 impl KvCachePolicy {
-    const LARGE_MODEL_MIN_BYTES: u64 = 50 * 1024 * 1024 * 1024;
+    /// Conservative live-KV default when the package has no validated
+    /// publisher declaration. Model weight bytes and weight quantisation are
+    /// intentionally not inputs to this decision.
+    pub(crate) fn safe_default() -> Self {
+        Self {
+            k_type: KvCacheType::F16,
+            v_type: KvCacheType::F16,
+        }
+    }
 
-    /// Default KV cache policy, tiered by model size.
-    ///
-    /// Models >= 50 GB use Q4_0 K + Q4_0 V to keep KV cache small enough
-    /// that unified-memory machines don't thrash.  On a 480B MoE split
-    /// across two Apple Silicon nodes the difference between Q8_0 and Q4_0
-    /// is the difference between swap-thrashing at 1 tok/s and running at
-    /// 20+ tok/s.
-    ///
-    /// Smaller models use Q8_0 K + Q8_0 V which gives ~2× compression over
-    /// f16 with negligible quality loss.
-    ///
-    /// Users can override via `--cache-type-k` / `--cache-type-v`.
-    pub(crate) fn for_model_size(model_bytes: u64) -> Self {
-        if model_bytes >= Self::LARGE_MODEL_MIN_BYTES {
-            Self {
-                k_type: KvCacheType::Q4_0,
-                v_type: KvCacheType::Q4_0,
-            }
-        } else {
-            Self {
+    pub(crate) fn from_publisher_defaults(
+        defaults: Option<&skippy_package_format::PublisherModelDefaults>,
+    ) -> Self {
+        use skippy_package_format::PublisherDtype;
+
+        let dtype = defaults
+            .and_then(|defaults| defaults.kv_cache_dtype.as_ref())
+            .or_else(|| defaults.and_then(|defaults| defaults.compute_dtype.as_ref()))
+            .map(|declaration| declaration.dtype);
+        match dtype {
+            Some(PublisherDtype::Q8_0) => Self {
                 k_type: KvCacheType::Q8_0,
                 v_type: KvCacheType::Q8_0,
-            }
+            },
+            Some(PublisherDtype::Q4_0) => Self {
+                k_type: KvCacheType::Q4_0,
+                v_type: KvCacheType::Q4_0,
+            },
+            // BF16 maps conservatively to F16 until BF16 live KV is qualified.
+            // FP8 and F32 declarations also fall back because the embedded
+            // runtime does not currently expose a qualified matching type.
+            _ => Self::safe_default(),
         }
     }
 
@@ -74,8 +81,8 @@ impl KvCachePolicy {
 
     /// Downgrade this *default* policy to one the model can actually load.
     ///
-    /// The size tiers above choose a quant purely from byte size; they do not
-    /// know whether the model satisfies llama.cpp's quantised-KV constraints
+    /// Publisher metadata does not know whether the model satisfies
+    /// llama.cpp's quantised-KV constraints
     /// (Flash Attention availability, per-head block alignment). Without this
     /// guard, an incompatible model (e.g. Grok, or a head_dim not divisible by
     /// the q8_0/q4_0 block size of 32) fails the context build outright rather
@@ -121,19 +128,56 @@ impl KvCachePolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use skippy_package_format::{
+        PublisherDtype, PublisherDtypeDeclaration, PublisherModelDefaults,
+    };
 
-    #[test]
-    fn small_model_uses_q8_0() {
-        let policy = KvCachePolicy::for_model_size(10 * 1024 * 1024 * 1024);
-        assert_eq!(policy.k_type, KvCacheType::Q8_0);
-        assert_eq!(policy.v_type, KvCacheType::Q8_0);
+    fn publisher_defaults(
+        kv_cache_dtype: Option<PublisherDtype>,
+        compute_dtype: Option<PublisherDtype>,
+    ) -> PublisherModelDefaults {
+        let declaration = |dtype| PublisherDtypeDeclaration {
+            dtype,
+            artifact_id: "publisher-config-json".to_string(),
+            json_path: "/dtype".to_string(),
+        };
+        PublisherModelDefaults {
+            compute_dtype: compute_dtype.map(declaration),
+            kv_cache_dtype: kv_cache_dtype.map(declaration),
+        }
     }
 
     #[test]
-    fn large_model_uses_q4_0() {
-        let policy = KvCachePolicy::for_model_size(50 * 1024 * 1024 * 1024);
-        assert_eq!(policy.k_type, KvCacheType::Q4_0);
-        assert_eq!(policy.v_type, KvCacheType::Q4_0);
+    fn missing_publisher_metadata_uses_f16() {
+        let policy = KvCachePolicy::from_publisher_defaults(None);
+        assert_eq!(policy.k_type, KvCacheType::F16);
+        assert_eq!(policy.v_type, KvCacheType::F16);
+    }
+
+    #[test]
+    fn publisher_compute_bf16_maps_to_supported_f16() {
+        let defaults = publisher_defaults(None, Some(PublisherDtype::Bf16));
+        assert_eq!(
+            KvCachePolicy::from_publisher_defaults(Some(&defaults)),
+            KvCachePolicy::safe_default()
+        );
+    }
+
+    #[test]
+    fn unqualified_publisher_fp8_falls_back_to_f16() {
+        let defaults = publisher_defaults(Some(PublisherDtype::Fp8), Some(PublisherDtype::Bf16));
+        assert_eq!(
+            KvCachePolicy::from_publisher_defaults(Some(&defaults)),
+            KvCachePolicy::safe_default()
+        );
+    }
+
+    #[test]
+    fn explicit_publisher_kv_declaration_precedes_compute_dtype() {
+        let defaults = publisher_defaults(Some(PublisherDtype::Q8_0), Some(PublisherDtype::Bf16));
+        let policy = KvCachePolicy::from_publisher_defaults(Some(&defaults));
+        assert_eq!(policy.k_type, KvCacheType::Q8_0);
+        assert_eq!(policy.v_type, KvCacheType::Q8_0);
     }
 
     fn meta(architecture: &str, head_dim: u32) -> crate::models::gguf::GgufCompactMeta {
@@ -150,14 +194,20 @@ mod tests {
 
     #[test]
     fn guard_keeps_quant_for_block_aligned_model() {
-        let policy = KvCachePolicy::for_model_size(10 * 1024 * 1024 * 1024);
+        let policy = KvCachePolicy {
+            k_type: KvCacheType::Q8_0,
+            v_type: KvCacheType::Q8_0,
+        };
         let guarded = policy.guarded_for_model(Some(&meta("qwen3", 128)));
         assert_eq!(guarded, policy);
     }
 
     #[test]
     fn guard_falls_back_to_f16_for_unaligned_head_dim() {
-        let policy = KvCachePolicy::for_model_size(10 * 1024 * 1024 * 1024);
+        let policy = KvCachePolicy {
+            k_type: KvCacheType::Q8_0,
+            v_type: KvCacheType::Q8_0,
+        };
         let guarded = policy.guarded_for_model(Some(&meta("phi2", 80)));
         assert_eq!(guarded.k_type, KvCacheType::F16);
         assert_eq!(guarded.v_type, KvCacheType::F16);
@@ -165,7 +215,10 @@ mod tests {
 
     #[test]
     fn guard_falls_back_to_f16_for_grok() {
-        let policy = KvCachePolicy::for_model_size(60 * 1024 * 1024 * 1024);
+        let policy = KvCachePolicy {
+            k_type: KvCacheType::Q4_0,
+            v_type: KvCacheType::Q4_0,
+        };
         let guarded = policy.guarded_for_model(Some(&meta("grok", 128)));
         assert_eq!(guarded.k_type, KvCacheType::F16);
         assert_eq!(guarded.v_type, KvCacheType::F16);
@@ -173,7 +226,10 @@ mod tests {
 
     #[test]
     fn guard_is_noop_without_metadata() {
-        let policy = KvCachePolicy::for_model_size(10 * 1024 * 1024 * 1024);
+        let policy = KvCachePolicy {
+            k_type: KvCacheType::Q8_0,
+            v_type: KvCacheType::Q8_0,
+        };
         assert_eq!(policy.guarded_for_model(None), policy);
     }
 }

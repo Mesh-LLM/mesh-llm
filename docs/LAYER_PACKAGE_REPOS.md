@@ -303,6 +303,14 @@ preserves the source pipeline tag in the package model card. This is how a
 combined vision/audio projector such as Inkling's `mmproj-BF16.gguf` travels
 with its Q2 layer package.
 
+The job also resolves the requested source revision to an immutable Hugging
+Face commit, downloads supported publisher configuration files when present,
+and passes them to the package writer. They are uploaded under `metadata/` and
+recorded in the manifest with semantic roles, hashes, and source provenance.
+Existing packages without these entries continue to load with the safe F16 KV
+default; they require a post-merge metadata backfill before publisher defaults
+can become effective.
+
 ## Publishing flow
 
 The HF Jobs script performs the publishing work:

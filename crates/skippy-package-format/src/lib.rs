@@ -23,6 +23,8 @@ pub struct PackageManifest {
     pub artifact_catalog: ArtifactCatalog,
     pub tensor_catalog: TensorCatalog,
     pub sidecars: Vec<Sidecar>,
+    pub publisher_metadata: Vec<PublisherMetadata>,
+    pub publisher_defaults: Option<PublisherModelDefaults>,
     pub generation: Option<Generation>,
     pub native_abi_version: String,
     pub generator_version: String,
@@ -41,6 +43,10 @@ struct PackageRoot {
     artifact_catalog: ArtifactCatalog,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     sidecars: Vec<Sidecar>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    publisher_metadata: Vec<PublisherMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    publisher_defaults: Option<PublisherModelDefaults>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     generation: Option<Generation>,
     native_abi_version: String,
@@ -59,6 +65,8 @@ impl From<&PackageManifest> for PackageRoot {
             layer_count: manifest.layer_count,
             artifact_catalog: manifest.artifact_catalog.clone(),
             sidecars: manifest.sidecars.clone(),
+            publisher_metadata: manifest.publisher_metadata.clone(),
+            publisher_defaults: manifest.publisher_defaults.clone(),
             generation: manifest.generation.clone(),
             native_abi_version: manifest.native_abi_version.clone(),
             generator_version: manifest.generator_version.clone(),
@@ -82,6 +90,8 @@ impl PackageRoot {
                 entries: Vec::new(),
             },
             sidecars: self.sidecars,
+            publisher_metadata: self.publisher_metadata,
+            publisher_defaults: self.publisher_defaults,
             generation: self.generation,
             native_abi_version: self.native_abi_version,
             generator_version: self.generator_version,
@@ -128,6 +138,8 @@ impl PackageManifest {
         let artifacts = collect_artifacts(&self.artifact_catalog.entries, &mut issues);
         validate_metadata_artifact_binding(self, &artifacts, &mut issues);
         validate_sidecars(&self.sidecars, &artifacts, &mut issues);
+        validate_publisher_metadata(self, &artifacts, &mut issues);
+        validate_publisher_defaults(self, &artifacts, &mut issues);
         if let Some(generation) = &self.generation {
             validate_generation(generation, self.layer_count, &mut issues);
         }
@@ -157,6 +169,7 @@ impl PackageManifest {
             .entries
             .sort_by(|left, right| left.id.cmp(&right.id));
         normalized.sidecars.sort();
+        normalized.publisher_metadata.sort();
         let digest = Sha256::digest(serde_json::to_vec(&normalized)?);
         let hex = digest
             .iter()
@@ -291,6 +304,60 @@ impl PartialOrd for Sidecar {
 #[serde(rename_all = "snake_case")]
 pub enum SidecarKind {
     Mmproj,
+}
+
+/// Immutable publisher files used to derive typed model defaults.
+///
+/// These files are package-level metadata. They are not loader sidecars and
+/// therefore never participate in stage selection.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublisherMetadata {
+    pub role: PublisherMetadataRole,
+    pub artifact_id: String,
+    pub source_repo: String,
+    pub source_revision: String,
+    pub source_path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PublisherMetadataRole {
+    ModelConfig,
+    GenerationConfig,
+    TokenizerConfig,
+    ChatTemplate,
+    HfQuantConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublisherModelDefaults {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compute_dtype: Option<PublisherDtypeDeclaration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kv_cache_dtype: Option<PublisherDtypeDeclaration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublisherDtypeDeclaration {
+    pub dtype: PublisherDtype,
+    pub artifact_id: String,
+    pub json_path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PublisherDtype {
+    F16,
+    Bf16,
+    F32,
+    Fp8,
+    Fp8E4m3,
+    Fp8E5m2,
+    Q8_0,
+    Q4_0,
 }
 
 /// Generation capability declarations carried as package data.
@@ -922,6 +989,141 @@ fn validate_sidecars(
         if let Some(name) = &sidecar.name {
             validate_nonempty(&format!("{prefix}.name"), name, issues);
         }
+    }
+}
+
+fn validate_publisher_metadata(
+    manifest: &PackageManifest,
+    artifacts: &BTreeMap<&str, &Artifact>,
+    issues: &mut Vec<ValidationIssue>,
+) {
+    let mut seen = BTreeSet::new();
+    for (index, metadata) in manifest.publisher_metadata.iter().enumerate() {
+        let prefix = format!("publisher_metadata[{index}]");
+        if !seen.insert((metadata.role, metadata.source_path.as_str())) {
+            push_issue(
+                issues,
+                ValidationCode::DuplicateSidecar,
+                prefix.clone(),
+                format!(
+                    "publisher metadata semantic identity ({:?}, {:?}) appears more than once",
+                    metadata.role, metadata.source_path
+                ),
+            );
+        }
+        if !artifacts.contains_key(metadata.artifact_id.as_str()) {
+            push_issue(
+                issues,
+                ValidationCode::UnknownArtifact,
+                format!("{prefix}.artifact_id"),
+                format!("artifact {:?} does not exist", metadata.artifact_id),
+            );
+        }
+        validate_nonempty(
+            &format!("{prefix}.source_repo"),
+            &metadata.source_repo,
+            issues,
+        );
+        validate_nonempty(
+            &format!("{prefix}.source_revision"),
+            &metadata.source_revision,
+            issues,
+        );
+        if metadata.source_revision.len() != 40
+            || !metadata
+                .source_revision
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            push_issue(
+                issues,
+                ValidationCode::SourceIdentityMismatch,
+                format!("{prefix}.source_revision"),
+                "publisher metadata revision must be an immutable 40-character commit",
+            );
+        }
+        validate_relative_path(
+            &format!("{prefix}.source_path"),
+            &metadata.source_path,
+            issues,
+        );
+        if manifest.source_model.repo.as_deref() != Some(metadata.source_repo.as_str()) {
+            push_issue(
+                issues,
+                ValidationCode::SourceIdentityMismatch,
+                format!("{prefix}.source_repo"),
+                "publisher metadata repository differs from source_model.repo",
+            );
+        }
+        if manifest.source_model.revision.as_deref() != Some(metadata.source_revision.as_str()) {
+            push_issue(
+                issues,
+                ValidationCode::SourceIdentityMismatch,
+                format!("{prefix}.source_revision"),
+                "publisher metadata revision differs from source_model.revision",
+            );
+        }
+    }
+}
+
+fn validate_publisher_defaults(
+    manifest: &PackageManifest,
+    artifacts: &BTreeMap<&str, &Artifact>,
+    issues: &mut Vec<ValidationIssue>,
+) {
+    let Some(defaults) = &manifest.publisher_defaults else {
+        return;
+    };
+    for (name, declaration) in [
+        ("compute_dtype", defaults.compute_dtype.as_ref()),
+        ("kv_cache_dtype", defaults.kv_cache_dtype.as_ref()),
+    ] {
+        let Some(declaration) = declaration else {
+            continue;
+        };
+        let path = format!("publisher_defaults.{name}");
+        if !artifacts.contains_key(declaration.artifact_id.as_str()) {
+            push_issue(
+                issues,
+                ValidationCode::UnknownArtifact,
+                format!("{path}.artifact_id"),
+                format!("artifact {:?} does not exist", declaration.artifact_id),
+            );
+        }
+        let metadata = manifest
+            .publisher_metadata
+            .iter()
+            .find(|metadata| metadata.artifact_id == declaration.artifact_id);
+        if metadata.is_none() {
+            push_issue(
+                issues,
+                ValidationCode::SourceIdentityMismatch,
+                format!("{path}.artifact_id"),
+                "typed publisher default is not bound to publisher_metadata",
+            );
+        }
+        if let Some(metadata) = metadata {
+            let role_is_valid = match name {
+                "compute_dtype" => metadata.role == PublisherMetadataRole::ModelConfig,
+                "kv_cache_dtype" => matches!(
+                    metadata.role,
+                    PublisherMetadataRole::ModelConfig | PublisherMetadataRole::HfQuantConfig
+                ),
+                _ => false,
+            };
+            if !role_is_valid {
+                push_issue(
+                    issues,
+                    ValidationCode::SourceIdentityMismatch,
+                    format!("{path}.artifact_id"),
+                    format!(
+                        "publisher default {name} cannot be sourced from {:?}",
+                        metadata.role
+                    ),
+                );
+            }
+        }
+        validate_nonempty(&format!("{path}.json_path"), &declaration.json_path, issues);
     }
 }
 

@@ -113,6 +113,31 @@ fn build_built_in_config_schema() -> ConfigSchema {
             "runtime.native_runtime.selection",
             one_of([string_enum(["recommended"]), ConfigValueSchema::String]),
         ),
+        kv_disk_setting(
+            "runtime.kv_cache.disk.mode",
+            string_enum(["off", "auto", "fixed"]),
+            false,
+        ),
+        kv_disk_setting(
+            "runtime.kv_cache.disk.directory",
+            ConfigValueSchema::Path,
+            false,
+        ),
+        kv_disk_setting(
+            "runtime.kv_cache.disk.budget_mib",
+            ConfigValueSchema::Integer,
+            true,
+        ),
+        kv_disk_setting(
+            "runtime.kv_cache.disk.minimum_free_mib",
+            ConfigValueSchema::Integer,
+            true,
+        ),
+        kv_disk_setting(
+            "runtime.kv_cache.disk.codec",
+            string_enum(["native", "cachegen"]),
+            false,
+        ),
         runtime_setting(
             "runtime.model_target_demand_upgrade_min_requests",
             ConfigValueSchema::Integer,
@@ -316,13 +341,9 @@ fn model_fit_settings(
         basic_setting(&format!("{prefix}.ubatch"), ConfigValueSchema::Integer),
         basic_setting(&format!("{prefix}.cache_type_k"), kv_cache_type_schema()),
         basic_setting(&format!("{prefix}.cache_type_v"), kv_cache_type_schema()),
-        basic_setting(
-            &format!("{prefix}.kv_cache_policy"),
-            string_enum(["auto", "quality", "balanced", "saver"]),
-        ),
         basic_setting(&format!("{prefix}.kv_offload"), bool_or_auto_schema()),
         basic_setting(&format!("{prefix}.kv_unified"), bool_or_auto_schema()),
-        unwired_setting(
+        basic_setting(
             &format!("{prefix}.cache_ram_mib"),
             ConfigValueSchema::Integer,
         ),

@@ -704,6 +704,7 @@ mod tests {
             activation_width: 896,
             tensor_count: 100,
             generation: None,
+            publisher_defaults: None,
         }
     }
 

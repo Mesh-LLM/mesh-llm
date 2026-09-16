@@ -1,6 +1,6 @@
 use mesh_llm_config::{
     FlashAttentionType, HardwareConfig, IntegerOrString, MeshConfig, ModelConfigDefaults,
-    ModelConfigEntry, ModelFitConfig,
+    ModelConfigEntry, ModelFitConfig, ThroughputConfig,
 };
 
 use super::*;
@@ -21,9 +21,38 @@ fn gpu_tune_recommends_stable_defaults() {
     assert_applied_flash_attention(&plan, TuneFlashAttentionValue::Enabled);
     assert_applied_context(&plan, 131_072);
     assert_applied_batch(&plan, 512);
-    assert_applied_ubatch(&plan, 128);
+    assert_applied_ubatch(&plan, 512);
     assert_applied_gpu_layers(&plan, TuneGpuLayersValue::All);
     assert_applied_fit_target(&plan, 22 * 1024);
+}
+
+#[test]
+fn gpu_tune_does_not_shadow_throughput_profile_ubatch() {
+    let config = MeshConfig {
+        defaults: Some(ModelConfigDefaults {
+            throughput: Some(ThroughputConfig {
+                tuning_profile: Some("throughput".to_string()),
+                ..ThroughputConfig::default()
+            }),
+            ..ModelConfigDefaults::default()
+        }),
+        models: vec![ModelConfigEntry {
+            model: "hf://mesh/example.gguf".to_string(),
+            ..ModelConfigEntry::default()
+        }],
+        ..MeshConfig::default()
+    };
+    let plan = build_tune_plan(TuneRecommendationInput {
+        apply_mode: TuneApplyMode::ApplyMissing,
+        config: &config,
+        target: &recommendation_target(true),
+        metadata: &sample_metadata(8 * gib(), 32, 131_072, 0),
+        hardware: &gpu_hardware(24 * gib()),
+        survey: &survey_with_gpu(24 * gib(), 64 * gib()),
+    });
+
+    assert_applied_batch(&plan, 512);
+    assert_preserved(&plan, TuneField::Ubatch, "throughput tuning profile");
 }
 
 #[test]

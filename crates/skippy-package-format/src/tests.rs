@@ -1113,6 +1113,8 @@ fn fixture() -> PackageManifest {
             }],
         },
         sidecars: Vec::new(),
+        publisher_metadata: Vec::new(),
+        publisher_defaults: None,
         generation: None,
         native_abi_version: "7".to_string(),
         generator_version: "0.76.0-rc9".to_string(),

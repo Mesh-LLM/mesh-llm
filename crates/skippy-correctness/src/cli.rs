@@ -17,10 +17,33 @@ pub enum CommandKind {
     Chain(ChainArgs),
     SplitScan(SplitScanArgs),
     StateHandoff(StateHandoffArgs),
+    RemoteHandoff(RemoteHandoffArgs),
     SplitPrefixHit(SplitPrefixHitArgs),
     NativeMtpOpenAiAb(Box<NativeMtpOpenAiAbArgs>),
     GlmDsaStage0Trace(Box<GlmDsaStage0TraceArgs>),
     StageFaParity(StageFaParityArgs),
+    KvPageGrowth(KvPageGrowthArgs),
+}
+
+#[derive(Args)]
+pub struct KvPageGrowthArgs {
+    #[command(flatten)]
+    pub runtime: RuntimeArgs,
+    /// Tokens prefilled before the first export, standing in for an agent's
+    /// system prefix.
+    #[arg(long, default_value_t = 2048)]
+    pub base_tokens: usize,
+    /// Tokens appended per turn.
+    #[arg(long, default_value_t = 512)]
+    pub turn_tokens: usize,
+    /// Turns appended after the base prefix.
+    #[arg(long, default_value_t = 4)]
+    pub turns: usize,
+    /// Segment size the L3 store cuts at.
+    #[arg(long, default_value_t = 8 * 1024 * 1024)]
+    pub segment_bytes: u64,
+    #[arg(long)]
+    pub json: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -92,6 +115,29 @@ pub enum FlashAttentionArg {
     Auto,
     Disabled,
     Enabled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum CacheTypeArg {
+    #[value(name = "f16")]
+    F16,
+    #[value(name = "f32")]
+    F32,
+    #[value(name = "q8_0")]
+    Q8Zero,
+    #[value(name = "q4_0")]
+    Q4Zero,
+}
+
+impl CacheTypeArg {
+    pub(crate) const fn ggml_type(self) -> u32 {
+        match self {
+            Self::F16 => skippy_runtime::GGML_TYPE_F16,
+            Self::F32 => skippy_runtime::GGML_TYPE_F32,
+            Self::Q8Zero => skippy_runtime::GGML_TYPE_Q8_0,
+            Self::Q4Zero => skippy_runtime::GGML_TYPE_Q4_0,
+        }
+    }
 }
 
 #[derive(Args, Clone)]
@@ -215,6 +261,123 @@ pub struct StateHandoffArgs {
     pub synthetic_input_activation: bool,
     #[arg(long)]
     pub binary_control: bool,
+    /// Run the experimental CacheGen acceptance gate against the native
+    /// KV-page control. Requires a local full-model kv-recurrent handoff and
+    /// direct device decode support; unsupported backends fail without a
+    /// scalar restore fallback.
+    #[arg(long)]
+    pub cachegen_gate: bool,
+    /// Native K cache type used by the state-handoff and CacheGen control arms.
+    #[arg(long, value_enum, default_value = "f16")]
+    pub cache_type_k: CacheTypeArg,
+    /// Native V cache type used by the state-handoff and CacheGen control arms.
+    #[arg(long, value_enum, default_value = "f16")]
+    pub cache_type_v: CacheTypeArg,
+    /// Teacher-forced continuation steps used for CacheGen quality and
+    /// steady-state decode measurements.
+    #[arg(long, default_value_t = 64)]
+    pub cachegen_continuation_steps: usize,
+    /// Minimum fraction of greedy tokens that must agree with native.
+    #[arg(long, default_value_t = 0.95)]
+    pub cachegen_min_token_agreement: f64,
+    /// Maximum allowed CacheGen/native p99 decode latency regression.
+    #[arg(long, default_value_t = 0.05)]
+    pub cachegen_max_p99_decode_regression: f64,
+    /// Optional maximum estimated codec working bytes. If omitted, peak
+    /// memory is reported without adding a pass/fail criterion.
+    #[arg(long)]
+    pub cachegen_max_peak_working_bytes: Option<usize>,
+    #[arg(long)]
+    pub allow_mismatch: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum RemoteHandoffRole {
+    Send,
+    Recv,
+    Restore,
+    Serve,
+    Fetch,
+}
+
+#[derive(Args)]
+pub struct RemoteHandoffArgs {
+    #[command(flatten)]
+    pub runtime: RuntimeArgs,
+    #[command(flatten)]
+    pub output: OutputArgs,
+    #[arg(long, value_enum, help = "send = prefill node, recv = decode node")]
+    pub role: RemoteHandoffRole,
+    #[arg(
+        long,
+        default_value = "127.0.0.1:19081",
+        help = "Address the receiver listens on; binding beyond loopback exposes the unauthenticated lab transport and requires a trusted private network"
+    )]
+    pub listen: SocketAddr,
+    #[arg(long, help = "Receiver address the sender connects to")]
+    pub peer: Option<SocketAddr>,
+    #[arg(long, value_enum, default_value = "full-state")]
+    pub state_payload_kind: StatePayloadKind,
+    #[arg(
+        long,
+        help = "Expand or truncate the prompt to this many prefix tokens"
+    )]
+    pub prefix_token_count: Option<usize>,
+    #[arg(
+        long,
+        default_value_t = 32,
+        help = "Greedy continuation length compared token-for-token across nodes"
+    )]
+    pub decode_tokens: usize,
+    #[arg(long, default_value_t = 8 * 1024 * 1024)]
+    pub segment_bytes: usize,
+    #[arg(
+        long,
+        help = "Also measure prefill-in-place on the receiver for a TTFT baseline"
+    )]
+    pub baseline: bool,
+    #[arg(long)]
+    pub runtime_lane_count: Option<u32>,
+    #[arg(
+        long,
+        default_value_t = 600,
+        help = "Per-read socket timeout for the whole connection (not just the handshake): a peer that stalls mid-stream errors out after this long"
+    )]
+    pub handshake_timeout_secs: u64,
+    #[arg(
+        long,
+        default_value_t = 1,
+        help = "Receiver only: handoffs to serve before exiting (0 = until killed); reports get a -N suffix when not 1"
+    )]
+    pub accept_count: usize,
+    #[arg(
+        long,
+        help = "L3 segment store directory: sender spills exported state, receiver write-behinds incoming segments and imports from the store, restore reattaches from it"
+    )]
+    pub store_dir: Option<PathBuf>,
+    #[arg(
+        long,
+        default_value_t = 0,
+        help = "Segment footprint cap for the store; oldest manifests evict first (0 = unlimited)"
+    )]
+    pub store_budget_bytes: u64,
+    #[arg(
+        long,
+        help = "Restore only: manifest key (payload digest) to reattach; defaults to the newest manifest"
+    )]
+    pub manifest: Option<String>,
+    #[arg(
+        long,
+        help = "Stream KV pages per prefill chunk, overlapping transfer with the remaining prefill; the receiver stages pages but cannot generate until the commit record validates (pass on both sides)"
+    )]
+    pub streaming: bool,
+    #[arg(
+        long,
+        default_value_t = 512,
+        help = "Prefill chunk size in tokens for --streaming"
+    )]
+    pub stream_chunk_tokens: usize,
     #[arg(long)]
     pub allow_mismatch: bool,
 }
@@ -356,6 +519,30 @@ pub enum StatePayloadKind {
     FullState,
     RecurrentOnly,
     KvRecurrent,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_handoff_listener_defaults_to_loopback() {
+        let cli = Cli::try_parse_from([
+            "skippy-correctness",
+            "remote-handoff",
+            "--model",
+            "model.gguf",
+            "--role",
+            "serve",
+        ])
+        .expect("parse remote handoff defaults");
+        let CommandKind::RemoteHandoff(args) = cli.command else {
+            panic!("expected remote handoff command");
+        };
+
+        assert!(args.listen.ip().is_loopback());
+        assert_eq!(args.listen.port(), 19081);
+    }
 }
 
 #[derive(Args)]

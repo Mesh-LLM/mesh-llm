@@ -1990,7 +1990,7 @@ fn split_topology_minimum_rejects_single_stage_split_candidate() {
 }
 
 #[test]
-fn split_planning_uses_family_kv_defaults_for_inkling() {
+fn split_planning_uses_safe_f16_without_publisher_metadata() {
     let mut meta = crate::models::gguf::GgufCompactMeta {
         architecture: "inkling".to_string(),
         context_length: 65_536,
@@ -2004,22 +2004,20 @@ fn split_planning_uses_family_kv_defaults_for_inkling() {
     };
     meta.kv_head_counts = vec![8; 66];
 
-    // Inkling's reviewed family default keeps both planning and stage loading
-    // on quantized Q4_0 K/V rather than silently expanding to F16.
     let mut identity = package(66);
     identity.source_model_bytes = 318 * 1024 * 1024 * 1024;
 
     let planned = split_runtime_kv_bytes_per_token(&identity, &meta, None, None).unwrap();
-    let expected_q4 = crate::models::gguf::GgufKvCacheQuant::from_llama_args("q4_0", "q4_0")
+    let expected_f16 = crate::models::gguf::GgufKvCacheQuant::from_llama_args("f16", "f16")
         .unwrap()
         .kv_cache_bytes_per_token(&meta)
         .unwrap();
-    assert_eq!(planned, expected_q4);
+    assert_eq!(planned, expected_f16);
 
-    // Explicit user overrides still win over the family default.
+    // Explicit user overrides still win over the safe package fallback.
     let overridden =
-        split_runtime_kv_bytes_per_token(&identity, &meta, Some("f16"), Some("f16")).unwrap();
-    assert!(overridden > planned);
+        split_runtime_kv_bytes_per_token(&identity, &meta, Some("q8_0"), Some("q8_0")).unwrap();
+    assert!(overridden < planned);
 }
 
 #[test]
@@ -2048,12 +2046,10 @@ fn split_planning_allows_zero_kv_only_for_proven_pure_recurrent_metadata() {
     assert!(split_runtime_kv_bytes_per_token(&identity, &dense_missing_heads, None, None).is_err());
 }
 
-/// The family default must get the same metadata guard as the size-tiered
-/// policy: an Inkling variant whose per-head widths are not q4_0-block-aligned
-/// cannot load quantised K/V, so planning must budget f16 bytes instead of
-/// selecting an unloadable family default.
+/// A package's quantised K/V declaration must be guarded by the actual GGUF
+/// layout so planning never budgets an unloadable cache type.
 #[test]
-fn split_planning_guards_family_kv_default_against_incompatible_meta() {
+fn split_planning_guards_publisher_kv_default_against_incompatible_meta() {
     let mut meta = crate::models::gguf::GgufCompactMeta {
         architecture: "inkling".to_string(),
         context_length: 65_536,
@@ -2071,6 +2067,14 @@ fn split_planning_guards_family_kv_default_against_incompatible_meta() {
 
     let mut identity = package(66);
     identity.source_model_bytes = 318 * 1024 * 1024 * 1024;
+    identity.publisher_defaults = Some(skippy_package_format::PublisherModelDefaults {
+        compute_dtype: None,
+        kv_cache_dtype: Some(skippy_package_format::PublisherDtypeDeclaration {
+            dtype: skippy_package_format::PublisherDtype::Q4_0,
+            artifact_id: "publisher-config".to_string(),
+            json_path: "/kv_cache_dtype".to_string(),
+        }),
+    });
 
     let planned = split_runtime_kv_bytes_per_token(&identity, &meta, None, None).unwrap();
     let expected_f16 = crate::models::gguf::GgufKvCacheQuant::from_llama_args("f16", "f16")
@@ -2079,7 +2083,7 @@ fn split_planning_guards_family_kv_default_against_incompatible_meta() {
         .unwrap();
     assert_eq!(
         planned, expected_f16,
-        "incompatible family default must degrade to f16 in split planning"
+        "incompatible publisher default must degrade to f16 in split planning"
     );
 
     // An explicit override is never guarded — it still selects q4_0 even
@@ -2098,7 +2102,7 @@ fn split_planning_guards_family_kv_default_against_incompatible_meta() {
 /// Set `INKLING_METADATA_GGUF` to a package's `shared/metadata.gguf` to run it;
 /// skipped otherwise so CI stays hermetic.
 #[test]
-fn real_inkling_metadata_plans_family_kv_not_size_tiered() {
+fn real_inkling_metadata_uses_safe_f16_without_publisher_defaults() {
     let Ok(path) = std::env::var("INKLING_METADATA_GGUF") else {
         eprintln!("skip: INKLING_METADATA_GGUF not set");
         return;
@@ -2116,43 +2120,16 @@ fn real_inkling_metadata_plans_family_kv_not_size_tiered() {
         meta.context_length
     );
 
-    let policy = crate::inference::skippy::family_policy_for_compact_meta(&meta);
-    eprintln!(
-        "FAMILY default_kv_cache_type={:?}",
-        policy.default_kv_cache_type
-    );
-
     let mut identity = package(meta.layer_count);
     identity.source_model_bytes = 318 * 1024 * 1024 * 1024;
 
     let planned = split_runtime_kv_bytes_per_token(&identity, &meta, None, None).unwrap();
-    let expected_q4 = crate::models::gguf::GgufKvCacheQuant::from_llama_args("q4_0", "q4_0")
+    let expected_f16 = crate::models::gguf::GgufKvCacheQuant::from_llama_args("f16", "f16")
         .unwrap()
         .kv_cache_bytes_per_token(&meta)
         .unwrap();
-    let size_tiered = {
-        let p =
-            crate::inference::skippy::KvCachePolicy::for_model_size(identity.source_model_bytes);
-        split_kv_cache_quant(&p, None, None)
-            .kv_cache_bytes_per_token(&meta)
-            .unwrap()
-    };
-    let ctx = u64::from(meta.context_length.max(1));
-    eprintln!(
-        "KV/token planned={planned} size_tiered={size_tiered} ratio={:.2}x | @ctx{ctx}: planned={:.1}GiB size_tiered={:.1}GiB under_budget={:.1}GiB",
-        planned as f64 / size_tiered.max(1) as f64,
-        (planned * ctx) as f64 / (1024.0 * 1024.0 * 1024.0),
-        (size_tiered * ctx) as f64 / (1024.0 * 1024.0 * 1024.0),
-        ((planned - size_tiered.min(planned)) * ctx) as f64 / (1024.0 * 1024.0 * 1024.0),
-    );
-
     assert_eq!(
-        policy.default_kv_cache_type,
-        Some("q4_0"),
-        "inkling must resolve a q4_0 family K/V default"
-    );
-    assert_eq!(
-        planned, expected_q4,
-        "family-aware planning must use the Inkling Q4_0 K/V default"
+        planned, expected_f16,
+        "model architecture and weight size must not quantize live K/V"
     );
 }

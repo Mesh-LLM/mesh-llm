@@ -505,6 +505,8 @@ mod tests {
             payload: StageKvCachePayload::Auto,
             max_entries: 8,
             max_bytes: 0,
+            l2_max_bytes: 0,
+            codec: skippy_protocol::StageKvCacheCodec::Native,
             min_tokens: 8,
             shared_prefix_stride_tokens: 8,
             shared_prefix_record_limit: 2,

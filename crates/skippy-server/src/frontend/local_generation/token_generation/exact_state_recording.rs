@@ -120,7 +120,11 @@ impl StageOpenAiBackend {
 
         let base = self.local_kv_message_base(session_id, ids);
         let identity = kv.prefill_identity(&self.config, &base, 0, checkpoint_tokens);
-        match kv.record_exact_state(runtime, session_id, &identity) {
+        let cold_prefill_cost = self
+            .generation_service_estimator
+            .estimated_prefill_ms(checkpoint_tokens.len());
+        let l3_cost = kv.l3_benefit_cost(cold_prefill_cost);
+        match kv.record_exact_state_with_cost(runtime, session_id, &identity, l3_cost) {
             Ok(Some(record)) => {
                 let mut attrs = self.openai_attrs(ids);
                 attrs.insert(

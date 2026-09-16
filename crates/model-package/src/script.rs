@@ -223,6 +223,15 @@ mod tests {
                 .contains(r#"WRITE_PACKAGE_PROJECTOR_ARGS+=(--projector "$PROJECTOR_PATH")"#)
         );
         assert!(EMBEDDED_SCRIPT.contains(r#""${WRITE_PACKAGE_PROJECTOR_ARGS[@]}""#));
+        assert!(EMBEDDED_SCRIPT.contains("Pinned source revision"));
+        assert!(EMBEDDED_SCRIPT.contains("config.json"));
+        assert!(EMBEDDED_SCRIPT.contains("hf_quant_config.json"));
+        assert!(
+            EMBEDDED_SCRIPT.contains(
+                r#"WRITE_PACKAGE_METADATA_ARGS+=(--publisher-metadata "$METADATA_PATH")"#
+            )
+        );
+        assert!(EMBEDDED_SCRIPT.contains(r#""${WRITE_PACKAGE_METADATA_ARGS[@]}""#));
         assert!(EMBEDDED_SCRIPT.contains(r#"time "$SLICER" write-package "$WRITE_PACKAGE_INPUT""#));
         assert!(!EMBEDDED_SCRIPT.contains(r#"time $SLICER write-package "$SOURCE_PATH""#));
     }

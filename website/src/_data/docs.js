@@ -40,6 +40,7 @@ export default [
     links: [
       ["OpenAI-compatible API", "/docs/pages/openai-compatible-api/"],
       ["Automatic routing", "/docs/pages/automatic-routing/"],
+      ["KV caching", "/docs/pages/kv-caching/"],
       ["Streaming", "/docs/pages/openai-compatible-api/#streaming"],
       ["Tool calling", "/docs/pages/openai-compatible-api/#tool-calling"],
       ["Structured outputs", "/docs/pages/openai-compatible-api/#structured-outputs"]

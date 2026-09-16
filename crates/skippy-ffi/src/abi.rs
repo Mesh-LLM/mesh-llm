@@ -19,6 +19,7 @@ pub const FEATURE_KV_EVENTS: u64 = 1 << 33;
 pub const FEATURE_DEVICE_EVENTS: u64 = 1 << 34;
 pub const FEATURE_DIAGNOSTIC_EVENTS: u64 = 1 << 35;
 pub const FEATURE_UNLOAD_EVENTS: u64 = 1 << 36;
+pub const FEATURE_CACHEGEN_KV_PAGE: u64 = 1 << 37;
 pub const MODEL_TENSOR_SOURCE_V1_ABI_VERSION: u32 = 1;
 
 pub type ModelReadTensorF32Callback = Option<
