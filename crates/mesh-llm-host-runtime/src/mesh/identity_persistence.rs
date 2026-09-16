@@ -52,6 +52,10 @@ pub(crate) fn mesh_genesis_policy_path() -> Result<std::path::PathBuf> {
     Ok(identity_state_dir()?.join("mesh-genesis-policy.json"))
 }
 
+pub(crate) fn adopted_mesh_membership_path() -> Result<std::path::PathBuf> {
+    Ok(identity_state_dir()?.join("mesh-adopted-membership.json"))
+}
+
 /// Save the mesh ID of the last mesh we successfully joined.
 pub fn save_last_mesh_id(mesh_id: &str) -> Result<()> {
     let path = identity_state_dir()?.join("last-mesh");
@@ -220,7 +224,12 @@ fn clear_public_identity_at(
     if active_key_path == home.join(".mesh-llm").join("key") {
         clear_public_identity_file(&state_dir.join("key"))?;
     }
-    for name in &["nostr.nsec", "mesh-id", "last-mesh"] {
+    for name in &[
+        "nostr.nsec",
+        "mesh-id",
+        "last-mesh",
+        "mesh-adopted-membership.json",
+    ] {
         clear_public_identity_file(&state_dir.join(name))?;
     }
     let marker = state_dir.join("was-public");

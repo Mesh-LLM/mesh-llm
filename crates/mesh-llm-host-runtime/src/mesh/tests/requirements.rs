@@ -109,6 +109,12 @@ fn mesh_requirements_unrestricted_legacy_mesh_join_stays_compatible() {
 }
 
 #[test]
+#[serial_test::serial]
+fn expired_bootstrap_token_requires_matching_adopted_membership() {
+    assert_expired_bootstrap_token_requires_matching_adopted_membership();
+}
+
+#[test]
 fn named_mesh_id_uses_documented_sha256_derivation() {
     assert_named_mesh_id_uses_documented_sha256_derivation();
 }
