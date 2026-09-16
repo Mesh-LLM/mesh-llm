@@ -112,6 +112,9 @@ impl BinaryStageOptions {
             .context("load --openai-speculative-config")?
             .unwrap_or_default();
         openai_speculative.validate()?;
+        if openai_speculative.ngram_fallback_draft && args.openai_draft_model_path.is_none() {
+            bail!("ngram_fallback_draft requires --openai-draft-model-path");
+        }
         let openai = args
             .openai_bind_addr
             .map(|bind_addr| EmbeddedOpenAiStageOptions {
@@ -268,6 +271,7 @@ mod tests {
                 pipeline_depth: 2,
                 runahead_max_tokens: 0,
             },
+            ngram_fallback_draft: false,
             ..SpeculativeDecodeConfig::default()
         }
     }
@@ -437,5 +441,46 @@ mod tests {
 
         assert_eq!(json["ngram"]["min_ngram"], 2);
         assert_eq!(json["verify_window"]["pipeline_depth"], 2);
+    }
+
+    #[test]
+    fn draft_fallback_requires_a_standalone_draft_model_path() {
+        let dir = tempfile::tempdir().expect("create temp directory");
+        let stage_path = dir.path().join("stage.json");
+        let plan_path = dir.path().join("speculative.json");
+        fs::write(
+            &stage_path,
+            serde_json::to_vec(&stage_config()).expect("serialize stage config"),
+        )
+        .expect("write stage config");
+        let mut plan = cache_composite_plan();
+        plan.ngram_fallback_draft = true;
+        fs::write(
+            &plan_path,
+            serde_json::to_vec(&plan).expect("serialize speculative config"),
+        )
+        .expect("write speculative config");
+
+        let cli = Cli::try_parse_from([
+            "skippy-server",
+            "serve-binary",
+            "--config",
+            stage_path.to_str().expect("UTF-8 stage path"),
+            "--openai-bind-addr",
+            "127.0.0.1:9337",
+            "--openai-speculative-config",
+            plan_path.to_str().expect("UTF-8 speculative path"),
+        ])
+        .expect("parse binary stage CLI");
+        let Command::ServeBinary(args) = cli.command else {
+            panic!("expected serve-binary command");
+        };
+
+        let error = match BinaryStageOptions::from_cli_args(args) {
+            Ok(_) => panic!("draft fallback without a draft model must fail"),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(error.contains("requires --openai-draft-model-path"));
     }
 }
