@@ -43,11 +43,11 @@ token axis for every graph-frontier value. The selected frame codec applies to
 F32 parts; other typed parts remain byte-exact.
 
 Generation 10 requires mesh-subprotocol control, list-valued status responses,
-strict local-content identity, and canonical stage-admission descriptors as one
-fail-closed capability bundle. Participants validate the descriptor while loading
-and echo it when ready; any package, plan, range, tensor, sidecar, profile, backend, or
-graph-configuration mismatch rejects the stage. The dedicated `skippy-stage/2`
-ALPN accepts activation transport only.
+strict local-content identity, canonical stage-admission descriptors, and stale
+verify-window discard as one fail-closed capability bundle. Participants validate
+the descriptor while loading and echo it when ready; any package, plan, range,
+tensor, sidecar, profile, backend, or graph-configuration mismatch rejects the
+stage. The dedicated `skippy-stage/2` ALPN accepts activation transport only.
 
 ## Responsibilities
 

@@ -35,9 +35,10 @@ pub use messages::{
     StateImportMessage, StopMessage, TokenReplyMessage,
 };
 pub use validation::{
-    KV_ALPN_V1, MAX_STAGE_FRAME_BYTES, MAX_VERIFY_WINDOW_PIPELINE_DEPTH, SCHEMA_VERSION,
-    STAGE_ALPN_V2, STAGE_PROTOCOL_GENERATION, STAGE_STREAM_ARTIFACT_TRANSFER, STAGE_STREAM_CONTROL,
-    STAGE_STREAM_TRANSPORT, STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER,
+    KV_ALPN_V1, MAX_STAGE_FRAME_BYTES, MAX_VERIFY_WINDOW_PIPELINE_DEPTH,
+    MAX_VERIFY_WINDOW_RUNAHEAD_TOKENS, SCHEMA_VERSION, STAGE_ALPN_V2, STAGE_PROTOCOL_GENERATION,
+    STAGE_STREAM_ARTIFACT_TRANSFER, STAGE_STREAM_CONTROL, STAGE_STREAM_TRANSPORT,
+    STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER,
     STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1, STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
     STAGE_SUBPROTOCOL_FEATURE_STAGE_GENERATION,
     STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V10, STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
@@ -498,14 +499,20 @@ mod tests {
             Err(StageFrameError::MissingStageControlCommand)
         ));
 
+        let previous_generation = STAGE_PROTOCOL_GENERATION - 1;
         let wrong_gen = StageControlRequest {
-            r#gen: STAGE_PROTOCOL_GENERATION - 1,
+            r#gen: previous_generation,
             ..frame
         };
-        assert!(matches!(
+        // Compared against the computed previous generation rather than a
+        // literal, so the assertion keeps testing rejection of the previous
+        // generation across bumps instead of failing on the number.
+        assert_eq!(
             validate_stage_control_request(&wrong_gen),
-            Err(StageFrameError::BadGeneration { got }) if got == STAGE_PROTOCOL_GENERATION - 1
-        ));
+            Err(StageFrameError::BadGeneration {
+                got: previous_generation,
+            })
+        );
     }
 
     #[test]

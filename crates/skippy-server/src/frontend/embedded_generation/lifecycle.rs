@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::VecDeque};
+use std::{borrow::Cow, collections::VecDeque, time::Instant};
 
 use openai_frontend::{OpenAiError, OpenAiResult};
 use serde_json::json;
@@ -13,9 +13,51 @@ use crate::frontend::{
         EmbeddedStageZeroGeneration, GenerationCacheStats, LocalGeneration, PersistentStageLane,
         PersistentStageLanePool, PhaseTimer, StageOpenAiBackend, TokenControl,
     },
+    generation_receipt::GenerationLifecycleState,
     speculative::{OpenAiSpeculativeStats, SpeculativeDecodeConfig},
     util::{openai_backend_error, openai_io_error},
 };
+
+pub(super) fn begin_generation_lifecycle(
+    backend: &StageOpenAiBackend,
+    request: &EmbeddedStageZeroGeneration<'_>,
+) -> GenerationLifecycleState {
+    GenerationLifecycleState::new(
+        backend.generation_lifecycle.as_ref(),
+        request.ids.request_id,
+        request.ids.session_id,
+        request.ids.agent_session_id.clone(),
+        request.ids.frontend_request_id,
+        request.prompt_token_ids,
+    )
+}
+
+pub(super) fn lifecycle_on_token<'a>(
+    lifecycle: &'a mut GenerationLifecycleState,
+    request: &EmbeddedStageZeroGeneration<'_>,
+    mut on_token: impl FnMut(i32) -> OpenAiResult<TokenControl> + 'a,
+) -> impl FnMut(i32) -> OpenAiResult<TokenControl> + 'a {
+    let request_started_at: Instant = request.ids.request_started_at;
+    move |token_id| {
+        lifecycle.commit(token_id, request_started_at.elapsed());
+        let control = on_token(token_id)?;
+        if control == TokenControl::Stop {
+            lifecycle.mark_callback_stop();
+        }
+        Ok(control)
+    }
+}
+
+pub(super) fn finish_generation_lifecycle(
+    mut lifecycle: GenerationLifecycleState,
+    cancelled: bool,
+    succeeded: bool,
+) {
+    if cancelled {
+        lifecycle.mark_cancelled();
+    }
+    lifecycle.finish(succeeded);
+}
 
 /// Keeps the configured speculative plan unless a distributed prefix restore
 /// has already populated every stage's session. Pure N-gram verification after
@@ -192,6 +234,24 @@ pub(super) fn queued_active_tokens(windows: &VecDeque<PipelinedCompositeWindow>)
 
 pub(super) fn can_seed_pipeline(windows: &VecDeque<PipelinedCompositeWindow>) -> bool {
     windows.iter().all(|window| window.stale)
+}
+
+/// Inclusive window-id range of the stale windows of `epoch`, if any.
+pub(super) fn stale_window_id_range(
+    windows: &VecDeque<PipelinedCompositeWindow>,
+    epoch: u64,
+) -> Option<(i32, i32)> {
+    let mut range: Option<(i32, i32)> = None;
+    for window in windows {
+        if window.epoch == epoch && window.stale {
+            let id = window.window.id;
+            range = Some(match range {
+                Some((min, max)) => (min.min(id), max.max(id)),
+                None => (id, id),
+            });
+        }
+    }
+    range
 }
 
 pub(super) fn mark_epoch_stale(

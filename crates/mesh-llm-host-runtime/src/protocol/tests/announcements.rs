@@ -469,7 +469,7 @@ fn proto_announcement_without_required_generation_bundle_is_not_stage_compatible
         let (_, ann) = proto_ann_to_local(&proto_pa).expect("proto announcement should decode");
         assert!(
             !ann.stage_protocol_generation_supported,
-            "missing {missing} must reject the generation-7 bundle"
+            "missing {missing} must reject the generation-10 bundle"
         );
     }
 }
