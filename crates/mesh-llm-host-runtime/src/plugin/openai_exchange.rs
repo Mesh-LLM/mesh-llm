@@ -1042,7 +1042,7 @@ mod tests {
             ))
             .await;
 
-        let events = channel.events.lock().unwrap();
+        let events = channel.events();
         assert_eq!(events.len(), 2, "one effective-request, one terminal");
 
         assert_eq!(
@@ -1096,7 +1096,7 @@ mod tests {
             ))
             .await;
 
-        let events = channel.events.lock().unwrap();
+        let events = channel.events();
         assert_eq!(events.len(), 2, "one effective-request, one terminal");
 
         assert_eq!(
