@@ -89,7 +89,11 @@ separate native inspection change. Equal bytes in distinct source allocations
 are **not** aliases.
 
 Pass `--projector path/to/mmproj*.gguf` to copy and verify explicit projector
-sidecars. This writer does not infer generation policy/defaults from tensor names
+sidecars. Pass `--publisher-metadata path/to/config.json` (repeatable) to copy
+supported Hugging Face configuration files into `metadata/`, bind each file to
+the source repository and immutable revision, and derive typed compute/KV
+defaults. `config.json` geometry that conflicts with the GGUF fails before
+payload emission. This writer does not infer generation policy/defaults from tensor names
 or implement offline conversion. The existing `plan`, `write`, `write-stages`,
 `validate`, `validate-package`, `preflight`, and GLM-DSA commands still serve their
 existing slice/v1 contracts; they are not v2 certification or serving paths.
@@ -124,6 +128,9 @@ substituted tensors, inconsistent source identities, duplicate artifacts/sidecar
 unproven alias claims, v1 manifests and corrupt/truncated files fail with nonzero
 exit status. Success prints JSON with the package ID, `source_completeness_verified`
 and checked source/artifact/tensor/projector counts; it does not modify the package.
+Publisher metadata artifacts receive the same size and SHA-256 verification;
+their repository/revision labels remain caller-supplied provenance rather than
+an independently authenticated Hub claim.
 
 This unit verifies the writer's **byte-preserving whole-shard representation**.
 Repacked/transformed containers, tensor-only digests, non-projector sidecars and
@@ -141,8 +148,10 @@ explicit provenance:
 skippy-model-package write-package ./model.gguf \
   --out-dir model-package/ \
   --model-id org/repo:Q4_K_M \
-  --source-revision abc123 \
-  --source-file Qwen3-8B-Q4_K_M.gguf
+  --source-repo org/repo \
+  --source-revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  --source-file Qwen3-8B-Q4_K_M.gguf \
+  --publisher-metadata ./config.json
 ```
 
 This keeps canonical package identity tied to real model coordinates rather

@@ -3,6 +3,7 @@ mod cli;
 mod direct_return_listener;
 mod distributed;
 mod evals;
+mod l2_tier;
 mod local_single;
 mod local_split;
 mod model_identity;
@@ -54,6 +55,7 @@ fn main() -> Result<()> {
         CommandKind::LocalSplitCompare(args) => local_split_compare(args),
         CommandKind::LocalSplitChainBinary(args) => local_split_chain_binary(args),
         CommandKind::VerifyWindowLocal(args) => verify_window_local(args),
+        CommandKind::L2Tier(args) => l2_tier::l2_tier(args),
         CommandKind::ChatCorpus(args) => chat_corpus(args),
         CommandKind::TokenLengths(args) => token_lengths(args),
         CommandKind::FocusedRuntime(args) => focused_runtime(args),

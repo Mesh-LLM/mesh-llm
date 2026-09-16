@@ -26,8 +26,8 @@ pub use admission::{
 pub use config::{
     ActivationDType, ActivationDescriptor, ActivationLayout, FlashAttentionType, GlmDsaPolicy,
     LoadMode, PeerConfig, SplitMode, StageActivationCodec, StageActivationCodecPolicy, StageConfig,
-    StageDevice, StageIdentity, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
-    StageTopology, StageTopologyEntry,
+    StageDevice, StageIdentity, StageKvCacheCodec, StageKvCacheConfig, StageKvCacheMode,
+    StageKvCachePayload, StageTopology, StageTopologyEntry,
 };
 pub use messages::{
     AckMessage, DecodeTokenMessage, ErrorMessage, FinalPrefillChunkMessage, MessageBase,
@@ -35,9 +35,10 @@ pub use messages::{
     StateImportMessage, StopMessage, TokenReplyMessage,
 };
 pub use validation::{
-    MAX_STAGE_FRAME_BYTES, MAX_VERIFY_WINDOW_PIPELINE_DEPTH, MAX_VERIFY_WINDOW_RUNAHEAD_TOKENS,
-    SCHEMA_VERSION, STAGE_ALPN_V2, STAGE_PROTOCOL_GENERATION, STAGE_STREAM_ARTIFACT_TRANSFER,
-    STAGE_STREAM_CONTROL, STAGE_STREAM_TRANSPORT, STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER,
+    KV_ALPN_V1, MAX_STAGE_FRAME_BYTES, MAX_VERIFY_WINDOW_PIPELINE_DEPTH,
+    MAX_VERIFY_WINDOW_RUNAHEAD_TOKENS, SCHEMA_VERSION, STAGE_ALPN_V2, STAGE_PROTOCOL_GENERATION,
+    STAGE_STREAM_ARTIFACT_TRANSFER, STAGE_STREAM_CONTROL, STAGE_STREAM_TRANSPORT,
+    STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER,
     STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1, STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
     STAGE_SUBPROTOCOL_FEATURE_STAGE_GENERATION,
     STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V10, STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,

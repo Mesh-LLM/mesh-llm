@@ -2,26 +2,26 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 
-use super::super::{KvCachePolicy, family_policy_for_model_path};
+use super::super::KvCachePolicy;
 use super::request_defaults::resolve_request_defaults;
 use super::speculative::resolve_speculative_config;
 use super::support::{
-    KvMacroDefaults, ThroughputMacroDefaults, bool_or_auto_value, derive_fit_target_mib,
-    effective_flash_attention, has_explicit_prefill_controls, kv_macro_defaults, parse_gpu_layers,
-    parse_kv_offload_string, pick_owned, pick_string, pick_string_owned, pick_value,
-    reject_unsupported_hardware_controls, reject_unsupported_model_fit_controls,
-    resolve_bool_or_auto, resolve_field_string, resolve_field_value, resolve_prefix_cache,
-    throughput_macro_defaults,
+    ThroughputMacroDefaults, bool_or_auto_value, derive_fit_target_mib, effective_flash_attention,
+    has_explicit_prefill_controls, parse_gpu_layers, parse_kv_offload_string, pick_owned,
+    pick_string, pick_string_owned, pick_value, reject_unsupported_hardware_controls,
+    reject_unsupported_model_fit_controls, resolve_bool_or_auto, resolve_field_string,
+    resolve_field_value, resolve_prefix_cache, throughput_macro_defaults,
 };
 use super::types::{
     BUILTIN_BATCH, BUILTIN_CTX_SIZE, BUILTIN_PARALLEL, BUILTIN_PREFILL_CHUNK_SIZE,
     BUILTIN_SAFETY_MARGIN_GB, BUILTIN_UBATCH, ResolvedHardwareConfig, ResolvedModelFitConfig,
     ResolvedMultimodalConfig, ResolvedSkippyConfig, ResolvedSkippyExecutionConfig,
-    ResolvedThroughputConfig, SkippyConfigResolveRequest,
+    ResolvedStageKvCache, ResolvedThroughputConfig, SkippyConfigResolveRequest,
 };
 use crate::plugin::{
     BoolOrAuto, ModelConfigDefaults, ModelConfigEntry, ModelFitConfig, ThroughputConfig,
 };
+use mesh_llm_config::KvDiskCodec;
 
 #[cfg(test)]
 pub(crate) fn resolve_skippy_config(
@@ -35,7 +35,19 @@ pub(crate) fn resolve_skippy_config_for_selector(
     request: SkippyConfigResolveRequest<'_>,
     config_model_id: Option<&str>,
 ) -> Result<ResolvedSkippyConfig> {
-    resolve_skippy_config_with_context(ResolverContext::new_for_selector(request, config_model_id))
+    resolve_skippy_config_for_selector_with_publisher_defaults(request, config_model_id, None)
+}
+
+pub(crate) fn resolve_skippy_config_for_selector_with_publisher_defaults(
+    request: SkippyConfigResolveRequest<'_>,
+    config_model_id: Option<&str>,
+    publisher_defaults: Option<&skippy_package_format::PublisherModelDefaults>,
+) -> Result<ResolvedSkippyConfig> {
+    resolve_skippy_config_with_context(ResolverContext::new_for_selector(
+        request,
+        config_model_id,
+        publisher_defaults,
+    ))
 }
 
 fn resolve_skippy_config_with_context(
@@ -44,16 +56,10 @@ fn resolve_skippy_config_with_context(
     validate_supported_model_fit_controls(&context)?;
     validate_supported_hardware_controls(&context)?;
 
-    // Guard the size-tiered default so a model that cannot load quantised KV
-    // (Flash Attention off, or a head_dim not divisible by the block size)
-    // resolves to f16 instead of failing the context build. Explicit config /
-    // family defaults still take precedence in resolve_cache_type_* below and
-    // are intentionally not guarded here.
-    let kv_policy = KvCachePolicy::for_model_size(context.request.model_bytes)
+    let kv_policy = KvCachePolicy::from_publisher_defaults(context.publisher_defaults)
         .guarded_for_model(context.request.compact_meta);
     let hardware = resolve_hardware_config(&context)?;
-    let family_policy = family_policy_for_model_path(&hardware.resolved_model_path);
-    let model_fit = resolve_model_fit_config(&context, kv_policy, &family_policy)?;
+    let model_fit = resolve_model_fit_config(&context, kv_policy)?;
     let throughput = resolve_throughput_config(&context);
     let skippy = resolve_execution_config(&context);
     let speculative = resolve_speculative_config(
@@ -146,12 +152,14 @@ struct ResolverContext<'a> {
     global_model_fit: Option<&'a ModelFitConfig>,
     model_throughput: Option<&'a ThroughputConfig>,
     global_throughput: Option<&'a ThroughputConfig>,
+    publisher_defaults: Option<&'a skippy_package_format::PublisherModelDefaults>,
 }
 
 impl<'a> ResolverContext<'a> {
     fn new_for_selector(
         request: SkippyConfigResolveRequest<'a>,
         config_model_id: Option<&str>,
+        publisher_defaults: Option<&'a skippy_package_format::PublisherModelDefaults>,
     ) -> Self {
         let model_entry = config_model_id.and_then(|selector| {
             request
@@ -160,12 +168,13 @@ impl<'a> ResolverContext<'a> {
                 .iter()
                 .find(|entry| entry.model == selector)
         });
-        Self::with_model_entry(request, model_entry)
+        Self::with_model_entry(request, model_entry, publisher_defaults)
     }
 
     fn with_model_entry(
         request: SkippyConfigResolveRequest<'a>,
         model_entry: Option<&'a ModelConfigEntry>,
+        publisher_defaults: Option<&'a skippy_package_format::PublisherModelDefaults>,
     ) -> Self {
         let mesh_config = request.mesh_config;
         let defaults = mesh_config.defaults.as_ref();
@@ -182,6 +191,7 @@ impl<'a> ResolverContext<'a> {
             global_model_fit,
             model_throughput,
             global_throughput,
+            publisher_defaults,
         }
     }
 }
@@ -209,9 +219,7 @@ fn validate_supported_hardware_controls(context: &ResolverContext<'_>) -> Result
 fn resolve_model_fit_config(
     context: &ResolverContext<'_>,
     kv_policy: KvCachePolicy,
-    family_policy: &super::super::family_policy::FamilyPolicy,
 ) -> Result<ResolvedModelFitConfig> {
-    let kv = resolve_kv_defaults(context, kv_policy);
     let throughput = resolve_throughput_defaults(context);
 
     let ctx_size = pick_value(
@@ -245,9 +253,9 @@ fn resolve_model_fit_config(
             .and_then(|defaults| defaults.ubatch),
         BUILTIN_UBATCH,
     );
-    let cache_type_k = resolve_cache_type_k(context, &kv, kv_policy, family_policy);
-    let cache_type_v = resolve_cache_type_v(context, &kv, kv_policy, family_policy);
-    let kv_offload = resolve_kv_offload(context, &kv);
+    let cache_type_k = resolve_cache_type_k(context, kv_policy);
+    let cache_type_v = resolve_cache_type_v(context, kv_policy);
+    let kv_offload = resolve_kv_offload(context);
     let kv_offload_resolved = parse_kv_offload_string(&kv_offload);
     let kv_unified = resolve_kv_unified(context)?;
     let swa_full = pick_owned(
@@ -266,6 +274,20 @@ fn resolve_model_fit_config(
         .or(context.global_model_fit.and_then(|fit| fit.flash_attention))
         .unwrap_or_else(|| effective_flash_attention(&cache_type_v));
     let prefix_cache = resolve_prefix_cache(context.model_fit, context.global_model_fit)?;
+    let l2_max_bytes = pick_owned(
+        context.model_fit.and_then(|fit| fit.cache_ram_mib),
+        context.global_model_fit.and_then(|fit| fit.cache_ram_mib),
+    )
+    .unwrap_or(0)
+    .checked_mul(1024 * 1024)
+    .ok_or_else(|| anyhow::anyhow!("model_fit.cache_ram_mib exceeds the byte range"))?;
+    if l2_max_bytes > 0 && matches!(prefix_cache, ResolvedStageKvCache::Disabled) {
+        anyhow::bail!("model_fit.cache_ram_mib requires prefix caching to be enabled");
+    }
+    let kv_cache_codec = match context.request.mesh_config.runtime.kv_cache.disk.codec {
+        KvDiskCodec::Native => skippy_protocol::StageKvCacheCodec::Native,
+        KvDiskCodec::CacheGen => skippy_protocol::StageKvCacheCodec::CacheGen,
+    };
 
     Ok(ResolvedModelFitConfig {
         ctx_size,
@@ -273,8 +295,9 @@ fn resolve_model_fit_config(
         ubatch,
         cache_type_k,
         cache_type_v,
-        kv_cache_policy: kv.effective_policy,
         prefix_cache,
+        l2_max_bytes,
+        kv_cache_codec,
         kv_offload,
         kv_offload_resolved,
         kv_unified,
@@ -300,118 +323,38 @@ fn resolve_kv_unified(context: &ResolverContext<'_>) -> Result<Option<bool>> {
     )
 }
 
-struct KvDefaults {
-    effective_policy: String,
-    model_macro: Option<KvMacroDefaults>,
-    global_macro: Option<KvMacroDefaults>,
-}
-
-fn resolve_kv_defaults(context: &ResolverContext<'_>, kv_policy: KvCachePolicy) -> KvDefaults {
-    let model_policy = context
-        .model_fit
-        .and_then(|fit| fit.kv_cache_policy.as_deref());
-    let global_policy = context
-        .global_model_fit
-        .and_then(|fit| fit.kv_cache_policy.as_deref());
-    let effective_policy = pick_string(model_policy, global_policy, Some("balanced"));
-
-    KvDefaults {
-        effective_policy: effective_policy.to_string(),
-        model_macro: model_policy.map(|policy| kv_macro_defaults(policy, kv_policy)),
-        global_macro: global_policy.map(|policy| kv_macro_defaults(policy, kv_policy)),
-    }
-}
-
-fn guarded_family_default_kv_cache_type(
-    context: &ResolverContext<'_>,
-    family_policy: &super::super::family_policy::FamilyPolicy,
-) -> Option<&'static str> {
-    family_policy
-        .default_kv_cache_type
-        .and_then(|default| {
-            crate::models::gguf::GgufKvCacheQuant::from_llama_args(default, default)
-        })
-        .map(|quant| {
-            context
-                .request
-                .compact_meta
-                .map(|meta| meta.compatible_default_kv_cache_quant(quant))
-                .unwrap_or(quant)
-        })
-        .map(|quant| quant.k.as_llama_arg())
-}
-
-fn resolve_cache_type_k(
-    context: &ResolverContext<'_>,
-    kv: &KvDefaults,
-    kv_policy: KvCachePolicy,
-    family_policy: &super::super::family_policy::FamilyPolicy,
-) -> String {
+fn resolve_cache_type_k(context: &ResolverContext<'_>, kv_policy: KvCachePolicy) -> String {
     if let Some(explicit) = context
         .model_fit
         .and_then(|fit| non_auto_string(fit.cache_type_k.as_deref()))
     {
         return explicit.to_string();
     }
-    // Guard the family default against the model's quantised-KV compatibility
-    // so an unloadable family default degrades to f16 instead of failing the
-    // context build. Explicit config above and below stays unguarded.
-    if let Some(family_default) = guarded_family_default_kv_cache_type(context, family_policy) {
-        if let Some(explicit) = context
-            .global_model_fit
-            .and_then(|fit| non_auto_string(fit.cache_type_k.as_deref()))
-        {
-            return explicit.to_string();
-        }
-        return family_default.to_string();
-    }
     resolve_field_string(
         None,
-        kv.model_macro
-            .as_ref()
-            .and_then(|defaults| defaults.cache_type_k.as_deref()),
+        None,
         context
             .global_model_fit
             .and_then(|fit| non_auto_string(fit.cache_type_k.as_deref())),
-        kv.global_macro
-            .as_ref()
-            .and_then(|defaults| defaults.cache_type_k.as_deref()),
+        None,
         kv_policy.cache_type_k(),
     )
 }
 
-fn resolve_cache_type_v(
-    context: &ResolverContext<'_>,
-    kv: &KvDefaults,
-    kv_policy: KvCachePolicy,
-    family_policy: &super::super::family_policy::FamilyPolicy,
-) -> String {
+fn resolve_cache_type_v(context: &ResolverContext<'_>, kv_policy: KvCachePolicy) -> String {
     if let Some(explicit) = context
         .model_fit
         .and_then(|fit| non_auto_string(fit.cache_type_v.as_deref()))
     {
         return explicit.to_string();
     }
-    if let Some(family_default) = guarded_family_default_kv_cache_type(context, family_policy) {
-        if let Some(explicit) = context
-            .global_model_fit
-            .and_then(|fit| non_auto_string(fit.cache_type_v.as_deref()))
-        {
-            return explicit.to_string();
-        }
-        return family_default.to_string();
-    }
     resolve_field_string(
         None,
-        kv.model_macro
-            .as_ref()
-            .and_then(|defaults| defaults.cache_type_v.as_deref()),
+        None,
         context
             .global_model_fit
             .and_then(|fit| non_auto_string(fit.cache_type_v.as_deref())),
-        kv.global_macro
-            .as_ref()
-            .and_then(|defaults| defaults.cache_type_v.as_deref()),
+        None,
         kv_policy.cache_type_v(),
     )
 }
@@ -420,7 +363,7 @@ fn non_auto_string(value: Option<&str>) -> Option<&str> {
     value.filter(|item| !item.eq_ignore_ascii_case("auto"))
 }
 
-fn resolve_kv_offload(context: &ResolverContext<'_>, kv: &KvDefaults) -> String {
+fn resolve_kv_offload(context: &ResolverContext<'_>) -> String {
     let model_kv_offload = context
         .model_fit
         .and_then(|fit| fit.kv_offload.as_ref())
@@ -432,13 +375,9 @@ fn resolve_kv_offload(context: &ResolverContext<'_>, kv: &KvDefaults) -> String 
 
     resolve_field_string(
         model_kv_offload.as_deref(),
-        kv.model_macro
-            .as_ref()
-            .and_then(|defaults| defaults.kv_offload.as_deref()),
+        None,
         global_kv_offload.as_deref(),
-        kv.global_macro
-            .as_ref()
-            .and_then(|defaults| defaults.kv_offload.as_deref()),
+        None,
         "auto",
     )
 }

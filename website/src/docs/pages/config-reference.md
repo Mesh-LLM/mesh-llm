@@ -117,6 +117,11 @@ produces a clear startup error rather than a partial start.
 | `runtime.reconcile_model_targets` | boolean | `false` | node-level | process restart | wired | none |
 | `runtime.reconcile_model_target_demand_upgrades` | boolean | `false` | node-level | process restart | wired | none |
 | `runtime.native_runtime.mesh_version`<br>`runtime.native_runtime.skippy_abi`<br>`runtime.native_runtime.selection` | string | unset (auto-selected) | node-level | process restart | wired | none |
+| `runtime.kv_cache.disk.mode` | enum | `off` (default), `auto`, `fixed` | node-level | process restart | wired | `--kv-cache-disk` |
+| `runtime.kv_cache.disk.directory` | absolute path | `$MESH_LLM_HOME/kv-cache` | node-level | process restart | wired | `--kv-cache-disk-dir` |
+| `runtime.kv_cache.disk.budget_mib` | integer | required and > 0 only for `fixed` | node-level | applies dynamically | wired | fixed size passed to `--kv-cache-disk` |
+| `runtime.kv_cache.disk.minimum_free_mib` | integer | `16384`; minimum `1024` | node-level | applies dynamically | wired | `--kv-cache-min-free` |
+| `runtime.kv_cache.disk.codec` | enum | `native` (default), `cachegen` | node-level | process restart | wired | config only |
 | `runtime.model_target_demand_upgrade_min_requests` | integer | `2` | node-level | process restart | wired | none |
 | `runtime.model_target_demand_upgrade_max_age_secs` | integer | `3600` | node-level | process restart | wired | none |
 | `advanced.server.alias` | string | unset; per-model alias overrides the default | both | model reload | wired; becomes the served identity used by `/v1/models` and routing | none |
@@ -135,14 +140,13 @@ for the activity policy and privacy boundary.
 | `model_fit.ctx_size` | integer | `0` = auto | both | model reload | wired | `--ctx-size` on the ad-hoc single-model path |
 | `model_fit.batch` | integer | `0` = auto (`n_batch`) | both | model reload | wired | none |
 | `model_fit.ubatch` | integer | `0` = auto (`n_ubatch`); should not exceed `batch` | both | model reload | wired | none |
-| `model_fit.cache_type_k`<br>`model_fit.cache_type_v` | enum (dtype) | `auto`, `f32`, `f16` (default), `bf16`, `q8_0`, `q4_0`, `q4_1`, `iq4_nl`, `q5_0`, `q5_1`; explicit value overrides `kv_cache_policy` | both | model reload | wired | none |
-| `model_fit.kv_cache_policy` | enum | `auto`, `quality`, `balanced`, `saver`; expands into cache dtypes | both | model reload | wired | none |
+| `model_fit.cache_type_k`<br>`model_fit.cache_type_v` | enum (dtype) | `auto` (default) follows package-validated publisher KV metadata, then publisher compute dtype, then F16; explicit schema values are `f16`, `f32`, `bf16`, `q8_0`, `q4_0`, `q4_1`, `iq4_nl`, `q5_0`, and `q5_1`, gated by runtime support | both | model reload | wired | none |
 | `model_fit.kv_offload` | bool-or-`auto` | `auto` | both | model reload | wired | none |
 | `model_fit.kv_unified` | bool-or-`auto` | `auto` | both | model reload | wired (recurrent/hybrid architectures still force this true natively) | none |
-| `model_fit.cache_ram_mib` | integer | unset (no cap) | both | model reload | unwired (any positive value fails at model load) | none |
-| `model_fit.cache_idle_slots` | integer | unset (unbounded) | both | model reload | wired | none |
+| `model_fit.cache_ram_mib` | integer | `0`/unset = host-RAM L2 disabled | both | model reload | wired; requires prefix caching and active L3 | none |
+| `model_fit.cache_idle_slots` | integer | unset uses the runtime lane count; `0` drops every reset lane, positive values cap retained idle sessions | both | model reload | wired | none |
 | `model_fit.prompt_cache` | bool-or-`auto` | `auto` | both | model reload | wired | none |
-| `model_fit.prefix_cache.enabled` | boolean | unset (disabled) | both | model reload | wired | none |
+| `model_fit.prefix_cache.enabled` | boolean | unset uses family defaults; `false` disables | both | model reload | wired | none |
 | `model_fit.prefix_cache.max_entries` | integer | runtime default | both | model reload | wired | none |
 | `model_fit.prefix_cache.max_bytes` | integer | `0`/unset = no cap | both | model reload | wired | none |
 | `model_fit.prefix_cache.min_tokens` | integer | runtime default | both | model reload | wired | none |
@@ -159,6 +163,9 @@ for the activity policy and privacy boundary.
 Missing TOML for this group: GGUF metadata `kv_overrides`. There is no
 schema key for it yet; do not expect an override path until a later PR adds
 one.
+
+See [KV Caching](/docs/pages/kv-caching/) for the default behavior and common
+configuration recipes.
 
 ## Group 4: device selection, GPU offload, multi-GPU, CPU MoE, and loading behavior
 

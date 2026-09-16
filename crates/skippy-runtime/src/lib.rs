@@ -37,12 +37,13 @@ pub(crate) use error::ensure_ok;
 pub use gguf_writer::{
     ModelInfo, SlicePlan, write_gguf_from_parts, write_gguf_metadata_from_parts,
 };
+pub use kv_pages::{decode_cachegen_kv_page, encode_cachegen_kv_page};
 pub use logging::{
-    LLAMA_LOG_LEVEL_DEBUG, NativeLogEvent, NativeLogParserMode, NativeLogParserPolicy,
-    configure_native_log_parser, disable_verbose_native_logs, enable_verbose_native_logs,
-    redirect_native_logs_to_file, register_filtered_native_logs, restore_native_logs,
-    set_filtered_native_logs_enabled, suppress_native_logs, unregister_filtered_native_logs,
-    write_native_log_note,
+    LLAMA_LOG_LEVEL_DEBUG, MeasuredNativeBuffers, NativeLogEvent, NativeLogParserMode,
+    NativeLogParserPolicy, configure_native_log_parser, disable_verbose_native_logs,
+    enable_verbose_native_logs, measured_native_buffers, redirect_native_logs_to_file,
+    register_filtered_native_logs, restore_native_logs, set_filtered_native_logs_enabled,
+    suppress_native_logs, unregister_filtered_native_logs, write_native_log_note,
 };
 pub use native::{StageModel, StageModelReader};
 pub use native_mtp::NativeMtpDraft;
@@ -70,6 +71,9 @@ pub use stage_planning::{
     plan_gguf_stage_resident_tensor_names_for_range, plan_gguf_stage_runtime_plan_for_range,
     plan_gguf_stage_runtime_plans,
 };
+// KV page descriptor flags. Re-exported so callers can read a page's layout
+// without taking a direct dependency on the raw ABI crate.
+pub use skippy_ffi::{KV_PAGE_FLAG_HAS_K_IDX, KV_PAGE_FLAG_V_TRANSPOSED};
 pub use types::{
     ACTIVATION_BOUNDARY_DESC_VERSION, ActivationBoundaryDesc, ActivationDesc, ActivationFrame,
     ActivationPartDesc, ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateJsonResult,

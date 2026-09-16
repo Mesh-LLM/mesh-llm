@@ -3,7 +3,6 @@ import type { RuntimeConfigSchemaEntry, RuntimeConfigSchemaReference } from './c
 
 const PATH_RENDERER_FALLBACKS: Record<string, string> = {
   'defaults.throughput.parallel': 'slot-meter',
-  'defaults.model_fit.kv_cache_policy': 'kv-cache-policy',
   'defaults.model_fit.ctx_size': 'context-slider'
 }
 
@@ -18,7 +17,6 @@ export const DEFAULT_MODEL_PLACEMENT_PATHS: ConfigurationModelPlacementPaths = {
   gpuLayers: 'models.<model-ref>.hardware.gpu_layers',
   cacheTypeK: 'models.<model-ref>.model_fit.cache_type_k',
   cacheTypeV: 'models.<model-ref>.model_fit.cache_type_v',
-  kvCachePolicy: 'models.<model-ref>.model_fit.kv_cache_policy',
   flashAttention: 'models.<model-ref>.model_fit.flash_attention',
   mmproj: 'models.<model-ref>.multimodal.mmproj'
 }
@@ -42,7 +40,6 @@ export function modelPlacementPathsFromSchema(
     gpuLayers: pathByRenderer.get('model-placement-gpu-layers') ?? DEFAULT_MODEL_PLACEMENT_PATHS.gpuLayers,
     cacheTypeK: DEFAULT_MODEL_PLACEMENT_PATHS.cacheTypeK,
     cacheTypeV: DEFAULT_MODEL_PLACEMENT_PATHS.cacheTypeV,
-    kvCachePolicy: DEFAULT_MODEL_PLACEMENT_PATHS.kvCachePolicy,
     flashAttention: DEFAULT_MODEL_PLACEMENT_PATHS.flashAttention,
     mmproj: DEFAULT_MODEL_PLACEMENT_PATHS.mmproj
   }

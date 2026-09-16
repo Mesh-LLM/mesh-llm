@@ -32,6 +32,7 @@ pub(super) fn package(layer_count: u32) -> skippy::SkippyPackageIdentity {
         activation_width: 2048,
         tensor_count: 100,
         generation: None,
+        publisher_defaults: None,
     }
 }
 
@@ -564,19 +565,10 @@ stop = ["END"]
 }
 
 /// Split stage loading must resolve with the compact metadata scanned during
-/// planning: the architecture-driven K/V default gets the same compatibility
-/// guard as the planner, so a default the actual GGUF cannot load (here:
-/// Inkling → q4_0 with per-head widths not divisible by the q4_0 block size)
-/// degrades to f16 at stage load instead of failing the context build.
-///
-/// The package is deliberately small (10 GB) so the size-tiered policy alone
-/// would pick q8_0: the observed q4_0-vs-f16 swing can only come from actual
-/// Inkling metadata, pinning the plumbing rather than a model-name heuristic.
-/// Split load specifications require this metadata, so both the
-/// initial-load and coordinator-replan constructors must carry it; dropping
-/// the final resolver handoff would regress this test to q4_0.
+/// planning. A publisher-declared quantised K/V type that the GGUF cannot load
+/// must degrade to f16 at stage load instead of failing the context build.
 #[tokio::test]
-async fn split_stage_load_guards_metadata_kv_default_with_planned_metadata() {
+async fn split_stage_load_guards_publisher_kv_default_with_planned_metadata() {
     let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9338 })
         .await
         .unwrap();
@@ -587,6 +579,14 @@ async fn split_stage_load_guards_metadata_kv_default_with_planned_metadata() {
     let mut identity = package(66);
     identity.package_ref = "hf://Mesh-LLM/test-inkling-package".to_string();
     identity.source_model_bytes = 10 * 1024 * 1024 * 1024;
+    identity.publisher_defaults = Some(skippy_package_format::PublisherModelDefaults {
+        compute_dtype: None,
+        kv_cache_dtype: Some(skippy_package_format::PublisherDtypeDeclaration {
+            dtype: skippy_package_format::PublisherDtype::Q4_0,
+            artifact_id: "publisher-config".to_string(),
+            json_path: "/kv_cache_dtype".to_string(),
+        }),
+    });
     let local_id = node.id();
     let generation = SplitTopologyGeneration::new(
         "guard-topology".into(),
@@ -600,7 +600,7 @@ async fn split_stage_load_guards_metadata_kv_default_with_planned_metadata() {
     );
 
     // Per-head widths of 100 are not a multiple of the q4_0 block size (32),
-    // so the Inkling architecture's quantised default cannot load.
+    // so the publisher declaration cannot load.
     let incompatible_meta = crate::models::gguf::GgufCompactMeta {
         architecture: "inkling".to_string(),
         context_length: 65_536,
@@ -613,8 +613,8 @@ async fn split_stage_load_guards_metadata_kv_default_with_planned_metadata() {
         ..Default::default()
     };
 
-    // With the planned metadata, the unloadable architecture default degrades to
-    // f16 — the same cache the split planner budgets for.
+    // With the planned metadata, the unloadable publisher default degrades to
+    // f16, matching the split planner's budget.
     let guarded_spec = SplitGenerationLoadSpec {
         node: &node,
         mesh_config: &mesh_config,
@@ -649,12 +649,11 @@ async fn split_stage_load_guards_metadata_kv_default_with_planned_metadata() {
         .expect("guarded split settings should resolve");
     assert_eq!(
         guarded.runtime_options.config.cache_type_k, "f16",
-        "incompatible architecture default must degrade to f16 at stage load"
+        "incompatible publisher default must degrade to f16 at stage load"
     );
     assert_eq!(guarded.runtime_options.config.cache_type_v, "f16");
 
-    // Without metadata the model name carries no architecture authority, so
-    // the generic q8_0 size tier remains in effect.
+    // Without publisher metadata, model name and weight size do not quantize KV.
     let unguarded = skippy::resolve_skippy_config_for_selector(
         skippy::SkippyConfigResolveRequest {
             mesh_config: &mesh_config,
@@ -670,10 +669,10 @@ async fn split_stage_load_guards_metadata_kv_default_with_planned_metadata() {
     )
     .expect("unguarded resolver settings should resolve");
     assert_eq!(
-        unguarded.model_fit.cache_type_k, "q8_0",
-        "no-metadata stage load keeps the generic size-tier default"
+        unguarded.model_fit.cache_type_k, "f16",
+        "no-metadata stage load uses the safe f16 default"
     );
-    assert_eq!(unguarded.model_fit.cache_type_v, "q8_0");
+    assert_eq!(unguarded.model_fit.cache_type_v, "f16");
 }
 
 #[tokio::test]

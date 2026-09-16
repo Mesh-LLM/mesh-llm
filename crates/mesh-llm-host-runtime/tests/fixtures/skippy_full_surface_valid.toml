@@ -14,7 +14,6 @@ batch = 512
 ubatch = 128
 cache_type_k = "auto"
 cache_type_v = "auto"
-kv_cache_policy = "balanced"
 kv_offload = "auto"
 kv_unified = "auto"
 prompt_cache = true
