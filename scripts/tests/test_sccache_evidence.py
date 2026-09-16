@@ -614,6 +614,7 @@ class SccacheEvidenceTests(unittest.TestCase):
             [line.strip() for line in recipe_match.group("body").splitlines()],
             [
                 "cargo clippy --locked -p mesh-llm --all-targets -- -D warnings",
+                "cargo build --release --locked -p mesh-llm --bin mesh-llm --no-default-features --features web-ui,dynamic-native-runtime",
                 "cargo test --locked -p mesh-llm-cli --no-run",
             ],
         )
