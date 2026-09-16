@@ -488,11 +488,7 @@ fn handle_binary_connection_messages(
                         (message.state.prompt_token_count.max(0) as usize)
                             .saturating_sub(message.pos_start.max(0) as usize),
                     );
-                    let output_capacity = stage_output_activation_capacity(
-                        config,
-                        message.token_count,
-                        output_activation_width,
-                    )?;
+                    let has_downstream = config.downstream.is_some();
                     let sample_prefill_final =
                         message.kind == WireMessageKind::PrefillFinalEmbd && downstream.is_none();
                     let scheduler_session_key = session_key.clone();
@@ -504,6 +500,14 @@ fn handle_binary_connection_messages(
                     let collect_session_stats = telemetry.is_debug_enabled();
                     let outcome = iteration_scheduler
                         .execute_runtime_timed("binary-stage-execute", move |runtime| {
+                            let output_capacity = stage_output_activation_capacity(
+                                has_downstream,
+                                scheduler_message.token_count,
+                                runtime.output_activation_boundary(),
+                            )
+                            .map_err(|error| {
+                                openai_frontend::OpenAiError::backend(format!("{error:#}"))
+                            })?;
                             let auto_align = if align_in_compute {
                                 align_session_to_target(
                                     runtime,

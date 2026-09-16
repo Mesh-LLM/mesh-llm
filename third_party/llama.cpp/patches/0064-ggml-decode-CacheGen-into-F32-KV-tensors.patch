@@ -1,7 +1,7 @@
 From 8b5e8d04923fd86b78d3265e2e1850d3bc8a8f74 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 11 Sep 2026 18:22:56 +1000
-Subject: [PATCH 45/50] ggml: decode CacheGen into F32 KV tensors
+Subject: [PATCH 64/69] ggml: decode CacheGen into F32 KV tensors
 
 Replace the F16-specific backend hook with a typed decoder and write the entropy-decoded half values directly into F16 or F32 resident layouts.
 

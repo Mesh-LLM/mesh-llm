@@ -87,7 +87,6 @@ pub(crate) use resolver::{
 };
 pub(crate) use skippy_server::OpenAiGuardrailsStatus as SkippyOpenAiGuardrailsStatus;
 pub(crate) use split_certification::{require_split_certification, split_certification_label};
-pub(crate) use stage::admitted_resident_tensor_names;
 #[cfg(test)]
 pub(crate) use stage::test_stage_admission;
 pub(crate) use stage::{
@@ -97,6 +96,7 @@ pub(crate) use stage::{
     StageReadyResponse, StageRuntimeState, StageStatusFilter, StageStatusSnapshot,
     StageStopRequest, StageTopologyStageDescriptor, spawn_stage_control_loop, stage_load_timeout,
 };
+pub(crate) use stage::{admitted_activation_frontier, admitted_resident_tensor_names};
 #[cfg(test)]
 pub(crate) use topology::{StageTopologyParticipant, plan_package_identity_topology};
 
@@ -1320,6 +1320,10 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
         cache_idle_slots: options.cache_idle_slots,
         filter_tensors_on_load: false,
         resident_tensor_names: Vec::new(),
+        activation_import_identities: Vec::new(),
+        activation_import_bindings: Vec::new(),
+        activation_export_identities: Vec::new(),
+        activation_export_bindings: Vec::new(),
         checkpoint_quantization: options
             .checkpoint_quantization
             .as_ref()

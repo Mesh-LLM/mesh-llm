@@ -1,7 +1,7 @@
 From 7e8c8fb1571509c24b970cfcf172521051fa4d44 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 12 Sep 2026 05:42:09 +1000
-Subject: [PATCH 48/50] ggml: decode packed CacheGen symbols on device
+Subject: [PATCH 67/69] ggml: decode packed CacheGen symbols on device
 
 ---
  ggml/src/ggml-cuda/cachegen.cu             | 52 ++++++++++----

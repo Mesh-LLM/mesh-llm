@@ -44,6 +44,41 @@ lifecycle_health_interval_ms = 5000
 }
 
 #[test]
+fn stage_zero_runtime_config_carries_the_admitted_activation_frontier() {
+    let mut load = stage_load_request(LoadMode::RuntimeSlice);
+    let profile = load
+        .admission
+        .profiles
+        .first_mut()
+        .expect("test admission profile");
+    profile.activation_imports = vec!["import-identity".to_string()];
+    profile.activation_import_bindings = vec!["import-binding".to_string()];
+    profile.activation_exports = vec!["export-identity".to_string()];
+    profile.activation_export_bindings = vec!["export-binding".to_string()];
+    let expected = profile.clone();
+    let mut config = skippy_protocol::StageConfig::default();
+
+    apply_admitted_activation_frontier(&mut config, &load).expect("copy admitted frontier");
+
+    assert_eq!(
+        config.activation_import_identities,
+        expected.activation_imports
+    );
+    assert_eq!(
+        config.activation_import_bindings,
+        expected.activation_import_bindings
+    );
+    assert_eq!(
+        config.activation_export_identities,
+        expected.activation_exports
+    );
+    assert_eq!(
+        config.activation_export_bindings,
+        expected.activation_export_bindings
+    );
+}
+
+#[test]
 fn topology_hash_commits_exact_stage_admission() {
     let stages = vec![stage(1, 0, 0, 8)];
     let mut admissions = std::collections::BTreeMap::from([(

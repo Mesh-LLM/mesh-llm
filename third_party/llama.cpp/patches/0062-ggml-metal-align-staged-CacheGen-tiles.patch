@@ -1,7 +1,7 @@
 From 90e967661980eaf7008d17b1582ed1939d05a2f1 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 11 Sep 2026 17:43:11 +1000
-Subject: [PATCH 43/50] ggml-metal: align staged CacheGen tiles
+Subject: [PATCH 62/69] ggml-metal: align staged CacheGen tiles
 
 Assisted-by: scama
 ---

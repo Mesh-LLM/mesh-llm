@@ -140,25 +140,7 @@ pub(crate) fn select_lossless_activation_codec(
     select_lossless_activation_codec_from_values(shape, values.iter().copied(), permitted_codecs)
 }
 
-pub(crate) fn select_lossless_activation_codec_from_f32_payload(
-    shape: ActivationShape,
-    f32_payload: &[u8],
-    permitted_codecs: &[StageActivationCodec],
-) -> io::Result<StageActivationCodec> {
-    let elements = shape.elements()?;
-    shape.validate_decoded_limit()?;
-    validate_payload_bytes(f32_payload.len(), checked_wire_bytes(elements, 4)?)?;
-    select_lossless_activation_codec_from_values(
-        shape,
-        f32_payload
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|bytes| f32::from_le_bytes(*bytes)),
-        permitted_codecs,
-    )
-}
-
+#[cfg(test)]
 fn select_lossless_activation_codec_from_values(
     shape: ActivationShape,
     values: impl Iterator<Item = f32>,

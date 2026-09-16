@@ -138,6 +138,7 @@ pub struct StagePlanValueDescV1 {
     pub abi_version: u32,
     pub struct_size: u32,
     pub identity: StagePlanStringRefV1,
+    pub binding: StagePlanStringRefV1,
 }
 
 #[repr(C)]

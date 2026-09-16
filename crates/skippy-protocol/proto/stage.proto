@@ -180,12 +180,20 @@ message CoordinatorClaimAccepted {
 
 message ActivationBoundaryDescriptor {
   uint32 version = 1;
+  bytes frontier_identity = 2;
+  repeated ActivationPartDescriptor parts = 3;
+}
+
+message ActivationPartDescriptor {
+  bytes identity = 1;
   uint32 ggml_type = 2;
-  uint32 layout = 3;
-  uint64 elements_per_token = 4;
-  uint64 bytes_per_token = 5;
-  uint64 required_frame_flags = 6;
-  uint64 required_sidebands = 7;
+  uint32 rank = 3;
+  sint32 token_axis = 4;
+  uint32 flags = 5;
+  repeated sint64 dimensions = 6 [packed = true];
+  repeated uint64 byte_strides = 7 [packed = true];
+  uint64 payload_offset = 8;
+  uint64 payload_bytes = 9;
 }
 
 message StageAdmissionIdle {}
@@ -308,6 +316,10 @@ message StageAdmissionProfile {
   string source_snapshot_identity = 5;
   string graph_configuration_id = 6;
   string backend_id = 7;
+  repeated string activation_imports = 8;
+  repeated string activation_exports = 9;
+  repeated string activation_import_bindings = 10;
+  repeated string activation_export_bindings = 11;
 }
 
 enum SourceModelKind {

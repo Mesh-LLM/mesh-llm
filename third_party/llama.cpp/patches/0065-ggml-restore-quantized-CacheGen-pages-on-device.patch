@@ -1,7 +1,7 @@
 From a3d5e0772844fe04fbbe55705af946e094fb1141 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 11 Sep 2026 18:49:55 +1000
-Subject: [PATCH 46/50] feat(skippy): restore quantized CacheGen pages on
+Subject: [PATCH 65/69] feat(skippy): restore quantized CacheGen pages on
  device
 
 Assisted-by: scama

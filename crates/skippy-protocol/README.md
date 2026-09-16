@@ -37,11 +37,12 @@ sequenceDiagram
     S0-->>D: PredictedToken
 ```
 
-Activation payloads dominate the wire path. Protocol generation 7 fixes every
-activation frame to raw little-endian `f32`; there is no negotiated or
-per-request activation dtype.
+Activation payloads dominate the wire path. Protocol generation 10 carries a
+versioned multipart directory with identity, dtype, dimensions, strides, and a
+token axis for every graph-frontier value. The selected frame codec applies to
+F32 parts; other typed parts remain byte-exact.
 
-Generation 9 requires mesh-subprotocol control, list-valued status responses,
+Generation 10 requires mesh-subprotocol control, list-valued status responses,
 strict local-content identity, and canonical stage-admission descriptors as one
 fail-closed capability bundle. Participants validate the descriptor while loading
 and echo it when ready; any package, plan, range, tensor, sidecar, profile, backend, or
@@ -51,7 +52,7 @@ ALPN accepts activation transport only.
 ## Responsibilities
 
 - binary stage message and reply codecs
-- fixed-f32 activation framing
+- multipart typed activation framing and codec policy
 - ready handshake encoding
 - stage config fields that must survive JSON generation, including K/V cache
   type strings consumed by the runtime layer

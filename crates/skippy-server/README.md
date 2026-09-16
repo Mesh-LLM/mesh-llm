@@ -17,7 +17,7 @@ the first stage.
 The full request/reply path is tip-to-tip: token IDs enter at the driver-facing
 tip, and activations flow through the stage chain. Generation 7 introduced
 direct prediction return from the final/readout tip to the driver-facing stage.
-Generation 9 retains that path and requires mandatory canonical stage-admission
+Generation 10 retains that path and requires mandatory canonical stage-admission
 descriptors with exact participant echo before topology publication. Middle-out
 is the prefill optimization inside that path, where internal boundary
 activations are handed downstream while local compute advances.
@@ -126,11 +126,11 @@ deadline handling.
 ## Notes
 
 - `serve-binary` is the tuned binary stage-to-stage path.
-- `serve-binary` participates in the breaking generation-9 stage protocol.
-  Stage compatibility requires the complete `stage-generation-9` control,
+- `serve-binary` participates in the breaking generation-10 stage protocol.
+  Stage compatibility requires the complete `stage-generation-10` control,
   status-list, strict-content-identity, and stage-admission bundle. Older peers,
   including generation 7 peers, are rejected during split planning rather than
-  being mixed into a generation-9 topology.
+  being mixed into a generation-10 topology.
 - `serve-binary` accepts upstream protocol connections concurrently. Model
   execution remains serialized by the per-process runtime lock, but readiness,
   abandoned, or broken connections do not monopolize the listener and block the

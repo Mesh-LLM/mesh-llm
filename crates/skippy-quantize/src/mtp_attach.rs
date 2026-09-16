@@ -50,7 +50,7 @@ pub(crate) fn run_validate_mtp_attach(args: ValidateMtpAttachArgs) -> Result<()>
     );
     let abi_features = skippy_ffi::try_abi_features()
         .context("loaded native runtime does not expose Skippy ABI feature probing")?;
-    let native_mtp_multimodal_feature = abi_features & skippy_ffi::FEATURE_INKLING_MTP_MM != 0;
+    let native_mtp_multimodal_feature = abi_features & skippy_ffi::FEATURE_MTP_MULTIMODAL != 0;
     ensure!(
         native_mtp_multimodal_feature,
         "native runtime does not advertise Inkling multimodal MTP support"
@@ -201,6 +201,10 @@ fn runtime_config(
         mtp_source,
         filter_tensors_on_load: false,
         resident_tensor_names: Vec::new(),
+        activation_import_identities: Vec::new(),
+        activation_import_bindings: Vec::new(),
+        activation_export_identities: Vec::new(),
+        activation_export_bindings: Vec::new(),
         kv_offload: None,
         kv_unified: None,
         swa_full: None,

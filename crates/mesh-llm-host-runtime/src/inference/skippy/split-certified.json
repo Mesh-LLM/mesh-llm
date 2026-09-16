@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "native_recipe": {
-    "llama_upstream_sha": "3057bb66c86c46d5781e50e85462a760ba7d1feb",
-    "skippy_abi": "0.1.55",
-    "patch_queue_sha256": "73a98f4e9725d4018b3dc83fe724af882b0790bb2304ae7b35088869d31fd8b4"
+    "llama_upstream_sha": "661643e43079a4ee6faab4c1895291767b67ea8d",
+    "skippy_abi": "0.1.57",
+    "patch_queue_sha256": "b00c45d08f1b8fa0cfffda1e2219597a80b614a93e5a0a4728cc2d274ab10c19"
   },
   "models": [
     {

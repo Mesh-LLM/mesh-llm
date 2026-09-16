@@ -2,7 +2,7 @@ From a347b8f31a7446b61c02559145735105949385cd Mon Sep 17 00:00:00 2001
 From: scama
  <a1860575018c4680d5669dd7bc3bd356b478bccb8d42e194df46304a5e25f49a@meshllm.local>
 Date: Sat, 12 Sep 2026 01:00:00 +1000
-Subject: [PATCH 47/50] ggml-metal: stage CacheGen payloads directly
+Subject: [PATCH 66/69] ggml-metal: stage CacheGen payloads directly
 
 Avoid building each CacheGen job in NSMutableData and then copying the same
 bytes again into shared Metal buffers. Validate and size the job first, then

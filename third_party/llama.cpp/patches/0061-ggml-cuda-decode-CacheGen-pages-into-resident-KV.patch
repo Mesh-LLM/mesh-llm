@@ -1,7 +1,7 @@
 From 62b87b9c385e333765835739e38eead150a47dae Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 11 Sep 2026 16:58:10 +1000
-Subject: [PATCH 42/50] ggml-cuda: decode CacheGen pages into resident KV
+Subject: [PATCH 61/69] ggml-cuda: decode CacheGen pages into resident KV
 
 Share the F16 decoder across CUDA and HIP, batch launches before synchronization, and write directly into the allocated Skippy cell layout.
 

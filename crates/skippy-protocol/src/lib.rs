@@ -40,7 +40,7 @@ pub use validation::{
     STAGE_STREAM_TRANSPORT, STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER,
     STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1, STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
     STAGE_SUBPROTOCOL_FEATURE_STAGE_GENERATION,
-    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V9, STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
+    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V10, STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
     STAGE_SUBPROTOCOL_MAJOR, STAGE_SUBPROTOCOL_NAME, StageFrameError,
     validate_stage_admission_descriptor, validate_stage_artifact_transfer_request,
     validate_stage_artifact_transfer_response, validate_stage_control_request,
@@ -82,6 +82,10 @@ mod tests {
                 source_snapshot_identity: "snapshot-a".to_string(),
                 graph_configuration_id: "graph-config-a".to_string(),
                 backend_id: "cpu".to_string(),
+                activation_imports: Vec::new(),
+                activation_exports: Vec::new(),
+                activation_import_bindings: Vec::new(),
+                activation_export_bindings: Vec::new(),
             }],
         }
     }
@@ -206,7 +210,7 @@ mod tests {
         );
     }
     use super::{
-        STAGE_PROTOCOL_GENERATION, STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V9,
+        STAGE_PROTOCOL_GENERATION, STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V10,
         StageFrameError, validate_stage_admission_descriptor,
         validate_stage_artifact_transfer_request, validate_stage_artifact_transfer_response,
         validate_stage_control_request, validate_stage_control_response,
@@ -216,7 +220,7 @@ mod tests {
     #[test]
     fn stage_protocol_generation_feature_names_current_generation() {
         assert_eq!(
-            STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V9,
+            STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V10,
             format!("stage-generation-{STAGE_PROTOCOL_GENERATION}")
         );
     }
@@ -248,6 +252,17 @@ mod tests {
 
         let mut invalid = descriptor.clone();
         invalid.profiles[0].graph_identity.clear();
+        assert!(validate_stage_admission_descriptor(&invalid).is_err());
+
+        let mut invalid = descriptor.clone();
+        invalid.profiles[0].activation_imports = vec!["frontier-a".to_string()];
+        assert!(validate_stage_admission_descriptor(&invalid).is_err());
+
+        let mut invalid = descriptor.clone();
+        invalid.profiles[0].activation_exports =
+            vec!["frontier-a".to_string(), "frontier-b".to_string()];
+        invalid.profiles[0].activation_export_bindings =
+            vec!["live-output".to_string(), "live-output".to_string()];
         assert!(validate_stage_admission_descriptor(&invalid).is_err());
 
         let mut invalid = descriptor;

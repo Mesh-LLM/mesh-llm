@@ -4073,7 +4073,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 162537607392,
+          "estimated_model_bytes": 162524557480,
           "startup_timeout_secs": 1800
         },
         "notes": "Inkling-Small MoE with per-layer short-convolution state and real split image-projector coverage"
@@ -4122,7 +4122,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 65359900352,
+          "estimated_model_bytes": 65346798336,
           "startup_timeout_secs": 1800
         },
         "notes": "Llama 4 Scout MoE with single-split, chained-split, and exact-state certification"

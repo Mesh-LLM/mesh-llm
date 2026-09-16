@@ -135,12 +135,7 @@ impl StageOpenAiBackend {
         let stats = StageReplyStats::default();
         let stage0_timer = PhaseTimer::start();
         let target_token_count = message.authoritative_session_position();
-        let output_capacity = stage_output_activation_capacity(
-            request.config,
-            message.token_count,
-            request.activation_width,
-        )
-        .map_err(openai_backend_error)?;
+        let has_downstream = request.config.downstream.is_some();
         let scheduler_session_key = session_key.to_string();
         let scheduler_message = message.clone();
         let scheduler_token_ids = token_ids.to_vec();
@@ -149,6 +144,12 @@ impl StageOpenAiBackend {
         let scheduler_outcome = self.iteration_scheduler.execute_runtime_timed(
             "embedded-stage-execute",
             move |runtime| {
+                let output_capacity = stage_output_activation_capacity(
+                    has_downstream,
+                    scheduler_message.token_count,
+                    runtime.output_activation_boundary(),
+                )
+                .map_err(openai_backend_error)?;
                 let align = target_token_count
                     .map(|target_token_count| {
                         runtime

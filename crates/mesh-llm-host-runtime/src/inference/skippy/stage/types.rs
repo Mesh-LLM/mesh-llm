@@ -136,6 +136,10 @@ pub(crate) fn test_stage_admission(
             source_snapshot_identity: "snapshot".to_string(),
             graph_configuration_id: "graph-config".to_string(),
             backend_id: "backend".to_string(),
+            activation_imports: Vec::new(),
+            activation_exports: Vec::new(),
+            activation_import_bindings: Vec::new(),
+            activation_export_bindings: Vec::new(),
         }],
     }
 }

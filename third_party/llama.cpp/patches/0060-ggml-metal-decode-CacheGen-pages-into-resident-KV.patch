@@ -1,7 +1,7 @@
 From 24cd07b947867a3e511941de4ce53836b9c7d0f1 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 11 Sep 2026 16:42:09 +1000
-Subject: [PATCH 41/50] ggml-metal: decode CacheGen pages into resident KV
+Subject: [PATCH 60/69] ggml-metal: decode CacheGen pages into resident KV
 
 Assisted-by: scama
 ---

@@ -2,7 +2,7 @@ From 44481189f0473e079d70bf157d6cd14f9c6c9194 Mon Sep 17 00:00:00 2001
 From: scama
  <a1860575018c4680d5669dd7bc3bd356b478bccb8d42e194df46304a5e25f49a@meshllm.communities.buzz.xyz>
 Date: Sat, 12 Sep 2026 08:45:00 +1000
-Subject: [PATCH 49/50] ggml-cuda: stage CacheGen payloads directly
+Subject: [PATCH 68/69] ggml-cuda: stage CacheGen payloads directly
 
 ---
  ggml/src/ggml-cuda/ggml-cuda.cu | 36 +++++++++++++++++++++++----------

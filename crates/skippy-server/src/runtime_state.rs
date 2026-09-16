@@ -455,6 +455,10 @@ fn runtime_config_from_stage_config(
         mtp_source: overrides.mtp_source,
         filter_tensors_on_load: config.filter_tensors_on_load,
         resident_tensor_names: config.resident_tensor_names.clone(),
+        activation_import_identities: config.activation_import_identities.clone(),
+        activation_import_bindings: config.activation_import_bindings.clone(),
+        activation_export_identities: config.activation_export_identities.clone(),
+        activation_export_bindings: config.activation_export_bindings.clone(),
         checkpoint_quantization: config
             .checkpoint_quantization
             .as_deref()
@@ -515,9 +519,8 @@ mod tests {
         FlashAttentionType, LoadMode, PeerConfig, SplitMode, StageConfig, StageDevice,
     };
     use skippy_runtime::{
-        ActivationDesc, ActivationFrame, CheckpointQuantization,
-        FlashAttentionType as RuntimeFlashAttentionType, MtpSource, RuntimeActivationDType,
-        RuntimeActivationLayout, RuntimeConfig, SamplingConfig,
+        ActivationFrame, CheckpointQuantization, FlashAttentionType as RuntimeFlashAttentionType,
+        MtpSource, RuntimeConfig, SamplingConfig,
     };
 
     use super::{
@@ -935,21 +938,19 @@ mod tests {
 
     fn glm52_mtp_input(token_count: u32) -> ActivationFrame {
         let hidden_bytes = 6144 * token_count as usize * std::mem::size_of::<f32>();
-        ActivationFrame {
-            desc: ActivationDesc {
-                version: 1,
-                dtype: RuntimeActivationDType::F32,
-                layout: RuntimeActivationLayout::TokenMajor,
-                producer_stage_index: 0,
-                layer_start: 0,
-                layer_end: 74,
-                token_count,
-                sequence_count: 1,
-                payload_bytes: hidden_bytes as u64,
+        let mut frame = crate::test_activation::frame(
+            token_count,
+            vec![crate::test_activation::PartBytes {
+                identity: 1,
+                ggml_type: skippy_runtime::GGML_TYPE_F32,
                 flags: 0,
-            },
-            payload: vec![0; hidden_bytes],
-        }
+                bytes: vec![0; hidden_bytes],
+            }],
+        );
+        frame.desc.producer_stage_index = 0;
+        frame.desc.layer_start = 0;
+        frame.desc.layer_end = 74;
+        frame
     }
 
     #[test]

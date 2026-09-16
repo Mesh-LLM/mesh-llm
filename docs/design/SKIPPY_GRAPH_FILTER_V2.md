@@ -380,37 +380,30 @@ negative fixtures fail before topology publication.
 
 - Do not block the internal graph design on a wire change.
 - At the atomic v2-only cutover, advance the stage control protocol to
-  generation 9 and require a versioned stage-plan admission descriptor carrying
+  generation 10 and require a versioned stage-plan admission descriptor carrying
   `package_id`, the content-derived native `plan_id`, the exact stage range, strictly
   sorted resident tensor ids, typed sidecars, and all guarded profile/slice
   identities. Generation-7 nodes may remain visible to mesh discovery but
-  cannot join, coordinate, source artifacts for, or receive a generation-9
+  cannot join, coordinate, source artifacts for, or receive a generation-10
   topology. There is no downgrade or v1/direct-GGUF fallback.
-- Keep the current activation and KV data framing unchanged for boundaries
-  exactly representable as the existing single raw-F32 activation plus
-  supported flags. Fail closed before topology publication when a derived
-  boundary is not representable.
-- In a separate reviewed workstream, add a negotiated data-plane generation for
-  typed activation bundles:
+- Carry graph-described activation frontiers in the generation-10 multipart
+  frame. Each part includes:
   - repeated plane descriptors with stable semantic ids;
   - dtype, layout, dimensions/strides, byte offset, and byte length;
   - bounded payload framing and integrity validation;
   - exact producer/consumer descriptor matching.
+- Select the configured codec, or a lossless codec under the lossless policy,
+  while forwarding. Raw F32 remains a supported codec and fallback. Receivers
+  decode under the same policy and validate the complete typed descriptor.
 - Preserve discovery-level mixed-version visibility, but reject
   mixed-generation split topologies through capability negotiation at the
   coordinated v2-only cutoff. Package v1 compatibility is intentionally not
   retained.
-- The transport workstream may proceed independently, but it must land before
-  graph-filter-v2 cutover if the frozen expected support matrix contains any
-  required model or cut whose boundary the current data framing cannot
-  represent. Reduced support requires an explicit, separately reviewed product
-  decision.
-
-**Exit gate:** current single-plane activation/KV framing runs unchanged behind
-generation-9 control admission; every participant echoes and verifies the same
-package/plan/stage descriptor, multi-plane obligations in the frozen support
-matrix are negotiated correctly before cutover, and other unsupported
-boundaries reject before topology publication.
+**Exit gate:** graph-described multipart activation framing runs behind
+generation-10 control admission; every participant echoes and verifies the same
+package/plan/stage descriptor, typed frontier obligations in the frozen support
+matrix are validated before execution, and unsupported boundaries reject before
+topology publication.
 
 ## Workstream 7: Migration and Deletion
 
@@ -433,8 +426,8 @@ no release in which v1 and v2 serving paths coexist.
    linked or invoked as a serving fallback or runtime compatibility mode.
 5. Run the full frozen-matrix, every-cut, composed-product, recurrent-KV, and
    staged CPU/CUDA/Metal qualification gates against the converted v2 corpus.
-6. Land typed boundary transport first if any frozen baseline obligation cannot
-   be represented by the current single-plane data framing.
+6. Land typed boundary transport before cutover and certify every frozen
+   baseline obligation against the graph-described multipart framing.
 7. Ship one atomic release that accepts only package v2 and executes only the
    graph-derived plan.
 8. In that same cutover, delete:
@@ -736,7 +729,7 @@ cannot be assigned contradictory lane letters across handoffs.
 | B. Package v2 and conversion | Workstream 1: catalog/schema, writer/reader, independent source-inventory proof, integrity checks, and malformed-package tests | Schema work can begin with A and implementation can proceed independently after the minimal catalog contract is agreed. |
 | C. Realization and host admission | Workstream 5 plus the native ABI portion of Workstream 6: selected-weight allocation, runtime contract checks, realized descriptor/FFI, neighboring-stage validation, and readiness | May scaffold against contract fixtures; integration requires A and B. Native reports local facts and the host validates composed topology. |
 | D. Independent acceptance harness | Workstreams 0 and 8: frozen support baseline, the shared backend-parameterized product integration runner, strict dense/recurrent KV gates, fixed-hardware performance certification, expansion of the existing canary harness, complete Mic Studio roster, plan/execution reconciliation, unsplit oracle, multi-stage/state/negative tests, and resource evidence | Baseline and harness work can start with A. Final acceptance consumes A, B, C, and E where required. The expected-support set must remain independent of planner rejection results, the five CI entrypoints stay visible, and no second canary orchestration or roster is introduced. |
-| E. Boundary transport | Network portion of Workstream 6: current single-plane representability, typed bundles, semantic ids, shape constraints, bounded framing, and negotiation | Proceeds after boundary-contract agreement and coordinates with existing activation-plane work. Required before cutover for any baseline obligation that needs it. |
+| E. Boundary transport | Network portion of Workstream 6: graph-described typed bundles, semantic ids, shape constraints, bounded framing, and negotiation | Proceeds after boundary-contract agreement and coordinates with existing activation work. Required before cutover. |
 
 The integration owner owns Workstream 7, serializes shared llama.cpp patch-queue
 changes, and prevents lane-local adapters from becoming competing sources of
@@ -833,7 +826,7 @@ The project is complete only when all of the following are true:
 - unsupported models/cuts fail before topology publication with structured
   reasons;
 - planning reads metadata only and does not allocate full-model weights or KV;
-- generation-9 control admission preserves the current single-plane activation
+- generation-10 control admission requires the graph-described multipart activation
   and KV framing, and any typed-plane data-protocol generation required by the
   frozen support matrix lands before cutover with explicit compatibility
   evidence;
@@ -907,11 +900,9 @@ Approval is requested for these decisions:
       resident parameter requirements are unioned.
 - [ ] The plan digest covers graph/planner semantics and graph-affecting
       configuration, and every runtime graph is checked against it.
-- [ ] Generation-9 control admission is required for the atomic v2-only
-      cutover; existing single-plane activation/KV framing remains unchanged,
-      while typed activation planes are a separate negotiated data-protocol
-      change that lands before cutover if a frozen baseline obligation requires
-      it.
+- [ ] Generation-10 control admission is required for the atomic v2-only
+      cutover; graph-described multipart activation framing and its typed part
+      directory land as the required data protocol.
 - [ ] Old split logic is deleted only after shadow comparison and the full
       cross-family every-cut gate passes.
 - [ ] The final llama.cpp patch queue is recreated from the pinned upstream,

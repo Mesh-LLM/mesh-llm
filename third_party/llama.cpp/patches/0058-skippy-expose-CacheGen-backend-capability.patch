@@ -1,7 +1,7 @@
 From 0cdb0f1be47bc93dbedd86c2aa683f519edc45fb Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 11 Sep 2026 16:02:47 +1000
-Subject: [PATCH 39/50] skippy: expose CacheGen backend capability
+Subject: [PATCH 58/69] skippy: expose CacheGen backend capability
 
 Advertise the compressed-page contract and return an explicit unsupported status until a resident backend decoder is available.
 
