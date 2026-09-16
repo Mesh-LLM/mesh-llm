@@ -27,9 +27,12 @@ does not fit locally uses the same gate.
 
 The llama canary regenerates the roster after its complete staged correctness
 battery passes. Each roster is bound to the llama.cpp upstream pin, the Skippy
-ABI, and the ordered patch queue. Direct GGUF entries use the path-independent
-aggregate source digest; package-v2 entries additionally require the exact
-manifest digest.
+ABI, and the ordered patch queue. Direct local GGUF entries use the
+path-independent aggregate source digest computed from their bytes. Cached
+Hugging Face GGUFs use a versioned canonical digest of the repository,
+immutable commit, and ordered Hub filenames, sizes, and blob SHA-256 values, so
+startup does not reread the weight payload merely to establish mesh identity.
+Package-v2 entries additionally require the exact manifest digest.
 
 An operator can explicitly run an uncertified artifact for development:
 
@@ -257,6 +260,14 @@ mesh-llm serve --gguf ~/models/model.gguf
 Internally, direct GGUF serving materializes through the same package-backed
 stage machinery as a synthetic single-stage package. That keeps the runtime path
 consistent without requiring you to publish a package repository first.
+
+An explicit local path has no upstream identity, so Mesh LLM hashes its ordered
+GGUF shards. A Hugging Face reference resolves to an immutable commit and exact
+ordered shard set instead. Mesh LLM reads each managed blob's authoritative
+SHA-256 and size from cache metadata, using a metadata-only Hub request when the
+platform cache cannot preserve snapshot symlinks. Artifact integrity remains a
+download, materialization, and load concern rather than a full payload scan on
+every startup.
 
 ## Check readiness
 

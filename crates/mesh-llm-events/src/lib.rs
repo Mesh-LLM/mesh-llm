@@ -8,6 +8,7 @@ use std::pin::Pin;
 use std::sync::{Arc, OnceLock, RwLock};
 
 pub mod audit;
+pub mod console;
 pub mod logging;
 pub mod terminal_progress;
 
@@ -17,6 +18,7 @@ pub use command_lifecycle::{
     CliCommandFamily, CliCommandOutcome, CliCommandSummary, emit_cli_command_event,
     set_cli_command_event_verbose,
 };
+pub use console::{ConsoleWriter, console_err, console_out, machine_out};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 pub enum LogFormat {
@@ -228,6 +230,9 @@ pub trait OutputSink: Send + Sync {
 }
 
 static OUTPUT_SINK: OnceLock<RwLock<Option<Arc<dyn OutputSink>>>> = OnceLock::new();
+
+#[cfg(test)]
+pub(crate) static OUTPUT_SINK_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn output_sink_slot() -> &'static RwLock<Option<Arc<dyn OutputSink>>> {
     OUTPUT_SINK.get_or_init(|| RwLock::new(None))
@@ -566,6 +571,13 @@ pub enum OutputEvent {
         model: String,
         target: String,
     },
+    NostrPublishing {
+        message: String,
+    },
+    AutoUpdate {
+        message: String,
+        version: Option<String>,
+    },
     Warning {
         message: String,
         context: Option<String>,
@@ -631,6 +643,8 @@ impl OutputEvent {
             OutputEvent::RuntimeReady { .. } => "ready",
             OutputEvent::ModelDownloadProgress { .. } => "model_download_progress",
             OutputEvent::RequestRouted { .. } => "request_routed",
+            OutputEvent::NostrPublishing { .. } => "nostr_publishing",
+            OutputEvent::AutoUpdate { .. } => "auto_update",
             OutputEvent::Warning { .. } => "warning",
             OutputEvent::Error { .. } => "error",
             OutputEvent::Fatal { .. } => "fatal",
@@ -652,6 +666,8 @@ impl OutputEvent {
             OutputEvent::Warning { .. } => OutputLevel::Warn,
             OutputEvent::Error { .. } => OutputLevel::Error,
             OutputEvent::Fatal { .. } => OutputLevel::Fatal,
+            OutputEvent::NostrPublishing { .. } => OutputLevel::Info,
+            OutputEvent::AutoUpdate { .. } => OutputLevel::Info,
             _ => OutputLevel::Info,
         }
     }
@@ -810,6 +826,8 @@ impl OutputEvent {
             OutputEvent::RequestRouted { model, target } => {
                 format!("routed request for {model} to {target}")
             }
+            OutputEvent::NostrPublishing { message } => message.clone(),
+            OutputEvent::AutoUpdate { message, .. } => message.clone(),
             OutputEvent::Warning { message, .. } => message.clone(),
             OutputEvent::Error { message, .. } => message.clone(),
             OutputEvent::Fatal { message, .. } => message.clone(),

@@ -18,6 +18,7 @@ use crate::runtime_native::{
 };
 use anyhow::{Result, anyhow};
 use std::future::Future;
+use std::io::Write;
 use std::pin::Pin;
 
 #[derive(Clone, Copy, Debug)]
@@ -155,14 +156,16 @@ impl<'a> CliSetupActions<'a> {
             .runtime_outcome
             .as_ref()
             .ok_or_else(|| anyhow!("setup runtime prune step ran before runtime install"))?;
+        let mut err = mesh_llm_events::console_err();
         match &outcome.prune {
             SetupNativeRuntimePruneResult::Skipped => {}
             SetupNativeRuntimePruneResult::Pruned(plan) => {
                 if self.verbose {
                     if plan.remove_dirs.is_empty() {
-                        eprintln!("Native runtime cache is already clean");
+                        writeln!(err, "Native runtime cache is already clean")?;
                     } else {
-                        eprintln!(
+                        writeln!(
+                            err,
                             "Pruned {} inactive native runtime cache entr{}",
                             plan.remove_dirs.len(),
                             if plan.remove_dirs.len() == 1 {
@@ -170,12 +173,15 @@ impl<'a> CliSetupActions<'a> {
                             } else {
                                 "ies"
                             }
-                        );
+                        )?;
                     }
                 }
             }
             SetupNativeRuntimePruneResult::Warning(warning) => {
-                eprintln!("warning: native runtime installed, but cache pruning failed: {warning}");
+                writeln!(
+                    err,
+                    "warning: native runtime installed, but cache pruning failed: {warning}"
+                )?;
             }
         }
         Ok(())
@@ -193,7 +199,11 @@ impl<'a> CliSetupActions<'a> {
     }
 
     fn print_service_guidance(&self) {
-        eprintln!("Service not installed. Run `mesh-llm setup --service` to enable it later.");
+        let mut err = mesh_llm_events::console_err();
+        let _ = writeln!(
+            err,
+            "Service not installed. Run `mesh-llm setup --service` to enable it later."
+        );
     }
 }
 

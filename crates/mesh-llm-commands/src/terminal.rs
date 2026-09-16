@@ -28,16 +28,16 @@ pub(crate) fn confirm_yes_no(message: &str, default: ConfirmDefault) -> Result<O
         return Ok(None);
     }
 
+    let mut err = mesh_llm_events::console_err();
     loop {
-        eprint!(
+        write!(
+            err,
             "{} {} {} ",
             prompt_marker(),
             message,
             default.prompt_suffix()
-        );
-        io::stderr()
-            .flush()
-            .context("failed to flush confirmation prompt")?;
+        )?;
+        err.flush().context("failed to flush confirmation prompt")?;
 
         let mut reply = String::new();
         let bytes_read = io::stdin()
@@ -51,7 +51,7 @@ pub(crate) fn confirm_yes_no(message: &str, default: ConfirmDefault) -> Result<O
             "" => return Ok(Some(default.empty_reply())),
             "y" | "yes" => return Ok(Some(true)),
             "n" | "no" => return Ok(Some(false)),
-            _ => eprintln!("Please answer y or n."),
+            _ => writeln!(err, "Please answer y or n.")?,
         }
     }
 }

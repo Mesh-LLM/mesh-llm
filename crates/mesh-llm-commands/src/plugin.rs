@@ -86,10 +86,12 @@ async fn install(
     };
     progress.finish();
     if outcome.changed {
-        eprintln!(
+        let mut err = mesh_llm_events::console_err();
+        writeln!(
+            err,
             "✅ Installed {} {}",
             outcome.metadata.name, outcome.metadata.installed_version
-        );
+        )?;
     }
     Ok(())
 }
@@ -100,10 +102,12 @@ async fn update(name: &str) -> Result<()> {
     let outcome = update_plugin(name, &options, &mut progress).await?;
     progress.finish();
     if outcome.changed {
-        eprintln!(
+        let mut err = mesh_llm_events::console_err();
+        writeln!(
+            err,
             "✅ Updated {} to {}",
             outcome.metadata.name, outcome.metadata.installed_version
-        );
+        )?;
     }
     Ok(())
 }
@@ -111,10 +115,11 @@ async fn update(name: &str) -> Result<()> {
 fn set_enabled(name: &str, enabled: bool) -> Result<()> {
     let store = PluginStore::new(default_store_root()?);
     let metadata = store.set_enabled(name, enabled)?;
+    let mut err = mesh_llm_events::console_err();
     if metadata.enabled {
-        eprintln!("✅ Enabled {}", metadata.name);
+        writeln!(err, "✅ Enabled {}", metadata.name)?;
     } else {
-        eprintln!("⏸️  Disabled {}", metadata.name);
+        writeln!(err, "⏸️  Disabled {}", metadata.name)?;
     }
     Ok(())
 }
@@ -122,28 +127,30 @@ fn set_enabled(name: &str, enabled: bool) -> Result<()> {
 fn delete(name: &str) -> Result<()> {
     let store = PluginStore::new(default_store_root()?);
     store.delete(name)?;
-    eprintln!("🗑️  Deleted {name}");
+    let mut err = mesh_llm_events::console_err();
+    writeln!(err, "🗑️  Deleted {name}")?;
     Ok(())
 }
 
 fn info(name: &str, runtime_rows: Option<&PluginListRows>) -> Result<bool> {
     let store = PluginStore::new(default_store_root()?);
+    let mut out = mesh_llm_events::console_out();
     if let Some(metadata) = store.load_optional(name)? {
-        println!("name\t{}", metadata.name);
-        println!("version\t{}", metadata.installed_version);
-        println!("enabled\t{}", metadata.enabled);
-        println!("source\t{}", metadata.source_repository);
-        println!("target\t{}", metadata.target_triple);
-        println!("asset\t{}", metadata.downloaded_asset_name);
-        println!("path\t{}", metadata.install_path.display());
+        writeln!(out, "name\t{}", metadata.name)?;
+        writeln!(out, "version\t{}", metadata.installed_version)?;
+        writeln!(out, "enabled\t{}", metadata.enabled)?;
+        writeln!(out, "source\t{}", metadata.source_repository)?;
+        writeln!(out, "target\t{}", metadata.target_triple)?;
+        writeln!(out, "asset\t{}", metadata.downloaded_asset_name)?;
+        writeln!(out, "path\t{}", metadata.install_path.display())?;
         if let Some(protocol) = metadata.last_protocol_version {
-            println!("protocol\t{protocol}");
+            writeln!(out, "protocol\t{protocol}")?;
         }
         if let Some(status) = metadata.last_status {
-            println!("status\t{status}");
+            writeln!(out, "status\t{status}")?;
         }
         if let Some(error) = metadata.last_error {
-            println!("error\t{error}");
+            writeln!(out, "error\t{error}")?;
         }
         return Ok(true);
     }
@@ -152,13 +159,13 @@ fn info(name: &str, runtime_rows: Option<&PluginListRows>) -> Result<bool> {
     };
     if let Some(row) = runtime_rows.externals.iter().find(|row| row.name == name) {
         for line in runtime_plugin_info_lines(row) {
-            println!("{line}");
+            writeln!(out, "{line}")?;
         }
         return Ok(true);
     }
     if let Some(row) = runtime_rows.inactive.iter().find(|row| row.name == name) {
         for line in inactive_plugin_info_lines(row) {
-            println!("{line}");
+            writeln!(out, "{line}")?;
         }
         return Ok(true);
     }
@@ -192,48 +199,55 @@ async fn search(query: Option<&str>) -> Result<()> {
     let catalog = catalog?;
     let hits = catalog.search(query);
     if hits.is_empty() {
-        eprintln!("🔎 No plugins found");
+        let mut err = mesh_llm_events::console_err();
+        writeln!(err, "🔎 No plugins found")?;
         return Ok(());
     }
+    let mut out = mesh_llm_events::console_out();
     for entry in hits {
-        println!(
+        writeln!(
+            out,
             "{}\t{}\t{}\t{} <{}>",
             entry.name, entry.description, entry.github_url, entry.author_name, entry.author_email
-        );
+        )?;
     }
     Ok(())
 }
 
 fn list(runtime_rows: &PluginListRows) -> Result<()> {
     let store = PluginStore::new(default_store_root()?);
+    let mut out = mesh_llm_events::console_out();
     for metadata in store.list()? {
         let state = if metadata.enabled {
             "enabled"
         } else {
             "disabled"
         };
-        println!(
+        writeln!(
+            out,
             "{}\tversion={}\tstate={}\tsource={}",
             metadata.name, metadata.installed_version, state, metadata.source_repository
-        );
+        )?;
     }
 
     for spec in &runtime_rows.externals {
-        println!(
+        writeln!(
+            out,
             "{}\tkind=runtime\tcommand={}\targs={}",
             spec.name,
             spec.command,
             spec.args.join(" ")
-        );
+        )?;
     }
     for summary in &runtime_rows.inactive {
-        println!(
+        writeln!(
+            out,
             "{}\tkind={}\tstate={}\terror={}",
             summary.name,
             summary.kind,
             summary.status,
             summary.error.clone().unwrap_or_default()
-        );
+        )?;
     }
     Ok(())
 }
@@ -264,9 +278,10 @@ impl CliPluginProgress {
         self.finish();
         self.active_download = Some(asset.clone());
         self.last_percent = None;
-        eprintln!("⬇️  Downloading {asset}");
+        let mut err = mesh_llm_events::console_err();
+        let _ = writeln!(err, "⬇️  Downloading {asset}");
         if let Some(total) = total_bytes {
-            eprintln!("   size: {}", format_bytes(total));
+            let _ = writeln!(err, "   size: {}", format_bytes(total));
         }
     }
 
@@ -290,8 +305,9 @@ impl CliPluginProgress {
                     percent
                 ),
             );
-            eprint!("\r\x1b[2K{gauge}");
-            let _ = std::io::stderr().flush();
+            let mut err = mesh_llm_events::console_err();
+            let _ = write!(err, "\r\x1b[2K{gauge}");
+            let _ = err.flush();
         }
     }
 }
@@ -317,22 +333,26 @@ impl PluginProgressReporter for CliPluginProgress {
             } => self.download_progress(downloaded_bytes, total_bytes),
             PluginProgressEvent::DownloadFinished { asset } => {
                 self.finish();
-                eprintln!("✅ Downloaded {asset}");
+                let mut err = mesh_llm_events::console_err();
+                let _ = writeln!(err, "✅ Downloaded {asset}");
             }
             PluginProgressEvent::Extracting { asset } => {
                 self.spinner(format!("Installing {asset}"));
             }
             PluginProgressEvent::Installed { name, version } => {
                 self.finish();
-                eprintln!("📦 Installed {name} {version}");
+                let mut err = mesh_llm_events::console_err();
+                let _ = writeln!(err, "📦 Installed {name} {version}");
             }
             PluginProgressEvent::Updated { name, from, to } => {
                 self.finish();
-                eprintln!("⬆️  Updated {name} {from} -> {to}");
+                let mut err = mesh_llm_events::console_err();
+                let _ = writeln!(err, "⬆️  Updated {name} {from} -> {to}");
             }
             PluginProgressEvent::AlreadyCurrent { name, version } => {
                 self.finish();
-                eprintln!("✅ {name} is up to date ({version})");
+                let mut err = mesh_llm_events::console_err();
+                let _ = writeln!(err, "✅ {name} is up to date ({version})");
             }
         }
     }

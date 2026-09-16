@@ -71,7 +71,7 @@ fn run_downstream_preconnector(
             &shutdown,
         ) {
             Ok(Some(stream)) => {
-                eprintln!(
+                tracing::info!(
                     "downstream warm preconnect ready: stage_id={} local={:?} remote={:?}",
                     config.stage_id,
                     stream.local_addr().ok(),
@@ -84,7 +84,7 @@ fn run_downstream_preconnector(
                 if shutdown.load(Ordering::SeqCst) {
                     return;
                 }
-                eprintln!(
+                tracing::warn!(
                     "downstream warm preconnect failed: stage_id={} error={error:#}",
                     config.stage_id,
                 );

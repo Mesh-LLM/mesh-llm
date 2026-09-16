@@ -288,7 +288,7 @@ pub(in crate::binary_transport) fn consume_optional_client_ready_hello(
         Ok(4) if i32::from_le_bytes(bytes) == READY_MAGIC => {
             skippy_protocol::binary::recv_ready(&mut *stream)
                 .context("consume client ready hello")?;
-            eprintln!("binary consumed client ready hello");
+            tracing::debug!("binary consumed client ready hello");
         }
         Ok(_) => {}
         Err(error)

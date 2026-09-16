@@ -73,12 +73,13 @@ if [[ ! -s "$MODEL_PATH" ]]; then
     exit 1
 fi
 
-# Cargo runs integration-test binaries from the package directory. Resolve a
-# caller-relative evidence path before invoking Cargo so the test and this
-# wrapper always read the same file.
-if [[ "$EVIDENCE_FILE" != /* ]]; then
-    EVIDENCE_FILE="$PWD/$EVIDENCE_FILE"
-fi
+# Resolve caller-relative paths before entering the workspace. Cargo runs
+# integration tests from the package directory, so every process must receive
+# the same absolute paths, including the evidence file checked below.
+[[ "$BUNDLE_DIR" = /* ]] || BUNDLE_DIR="$PWD/$BUNDLE_DIR"
+[[ "$MODEL_PATH" = /* ]] || MODEL_PATH="$PWD/$MODEL_PATH"
+[[ "$EVIDENCE_FILE" = /* ]] || EVIDENCE_FILE="$PWD/$EVIDENCE_FILE"
+
 mkdir -p "$(dirname "$EVIDENCE_FILE")"
 # Cargo runs integration tests from the crate directory. Keep the writer and
 # the check below pointed at the same file regardless of that working directory.

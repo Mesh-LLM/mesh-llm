@@ -1,3 +1,22 @@
+//! Inline terminal progress rendering for one-shot commands.
+//!
+//! This module is an implementation of the console output facility itself, so
+//! it is one of the few places allowed to hold a `std::io::stderr()` handle
+//! directly. Library code elsewhere must route operational output through
+//! `OutputEvent`, `tracing`, or the sink-aware console writer; writing straight
+//! to the terminal there would bypass the TUI and corrupt the dashboard, and
+//! would put free-form text on the stream while a JSON sink is installed.
+//!
+//! The direct writes here are legitimate because:
+//!
+//! - every entry point early-returns on [`crate::json_mode_enabled`], so no
+//!   progress bytes are emitted while a JSON sink is installed;
+//! - progress is a transient, cursor-addressed redraw (`\r` + `\x1b[2K`) rather
+//!   than a log record, so it has no meaningful structured representation and
+//!   must not be routed back through the sink that would render it;
+//! - routing this module's output through the writer would be circular — the
+//!   writer is the consumer of this renderer, not the other way round.
+
 use anyhow::{Context, Result};
 use crossterm::terminal::size as terminal_size;
 use ratatui::{
@@ -22,10 +41,9 @@ pub fn clear_stderr_line() -> Result<()> {
     if crate::json_mode_enabled() {
         return Ok(());
     }
-    eprint!("\r\x1b[2K");
-    std::io::stderr()
-        .flush()
-        .context("Flush terminal progress clear")?;
+    let mut stderr = std::io::stderr();
+    write!(stderr, "\r\x1b[2K").context("Write terminal progress clear")?;
+    stderr.flush().context("Flush terminal progress clear")?;
     Ok(())
 }
 
@@ -69,8 +87,14 @@ pub fn start_spinner(message: &str) -> SpinnerHandle {
                 .lock()
                 .map(|guard| guard.clone())
                 .unwrap_or_else(|_| "Working".to_string());
-            eprint!("\r\x1b[2K{} {}", frames[index % frames.len()], current);
-            let _ = std::io::stderr().flush();
+            let mut stderr = std::io::stderr();
+            let _ = write!(
+                stderr,
+                "\r\x1b[2K{} {}",
+                frames[index % frames.len()],
+                current
+            );
+            let _ = stderr.flush();
             index += 1;
             thread::sleep(Duration::from_millis(120));
         }
@@ -115,10 +139,9 @@ impl DeterminateProgressLine {
                 self.prefix, label, percent, current, total, detail
             ),
         );
-        eprint!("\r\x1b[2K{gauge}");
-        std::io::stderr()
-            .flush()
-            .context("Flush determinate progress")?;
+        let mut stderr = std::io::stderr();
+        write!(stderr, "\r\x1b[2K{gauge}").context("Write determinate progress")?;
+        stderr.flush().context("Flush determinate progress")?;
         Ok(())
     }
 }
