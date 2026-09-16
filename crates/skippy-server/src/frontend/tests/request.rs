@@ -277,10 +277,11 @@ fn ignore_eos_is_accepted_and_forwarded() {
     }))
     .unwrap();
 
-    let sampling =
+    let mut sampling =
         chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
     assert!(sampling.enabled);
     assert!(sampling.ignore_eos);
+    sampling.resolve_reasoning_budget(4_096);
     let wire = wire_sampling_config(&sampling).unwrap();
     assert_ne!(
         wire.flags & skippy_protocol::binary::sampling_flags::IGNORE_EOS,
