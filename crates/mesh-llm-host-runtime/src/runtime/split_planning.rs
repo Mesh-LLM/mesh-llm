@@ -54,6 +54,17 @@ pub(super) struct SplitTopologyPlanInput {
     pub(super) target_decode_tpot_ms: Option<u32>,
     pub(super) minimum_nodes: usize,
     pub(super) nodes: Vec<SplitTopologyPlanNode>,
+    pub(super) edges: Vec<SplitTopologyPlanEdge>,
+    pub(super) activation_frame_bytes: u64,
+}
+
+/// Directed link measurement carried into the coordinator planner.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct SplitTopologyPlanEdge {
+    pub(super) source_node_id: String,
+    pub(super) target_node_id: String,
+    pub(super) rtt_ms: u32,
+    pub(super) large_frame_mib_per_s: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -63,6 +74,9 @@ pub(super) struct SplitTopologyPlanNode {
     pub(super) max_vram_bytes: Option<u64>,
     pub(super) runtime_headroom_bytes: u64,
     pub(super) stage_transfer_latency_ms: Option<u32>,
+    pub(super) sustained_mem_bandwidth_mib_per_s: Option<u32>,
+    pub(super) sustained_compute_gflop_per_s: Option<u32>,
+    pub(super) observed_decode_us_per_layer: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -146,11 +160,28 @@ fn topology_planning_input(input: SplitTopologyPlanInput) -> TopologyPlanningInp
                 max_vram_bytes: node.max_vram_bytes,
                 runtime_headroom_bytes: node.runtime_headroom_bytes,
                 stage_transfer_latency_ms: node.stage_transfer_latency_ms,
+                sustained_mem_bandwidth_mib_per_s: node.sustained_mem_bandwidth_mib_per_s,
+                sustained_compute_gflop_per_s: node.sustained_compute_gflop_per_s,
+                observed_decode_us_per_layer: node.observed_decode_us_per_layer,
             })
             .collect(),
         context_length_override: input.context_length_override,
         parallel_lanes_override: input.parallel_lanes_override,
         target_decode_tpot_ms: input.target_decode_tpot_ms,
+        // MoE active-fraction metadata is not yet plumbed from the package
+        // identity; dense (1000 permil) is the conservative default.
+        active_weight_fraction_permil: 1000,
+        edges: input
+            .edges
+            .into_iter()
+            .map(|edge| skippy_coordinator::topology::TopologyEdge {
+                source_node_id: edge.source_node_id,
+                target_node_id: edge.target_node_id,
+                rtt_ms: edge.rtt_ms,
+                large_frame_mib_per_s: edge.large_frame_mib_per_s,
+            })
+            .collect(),
+        activation_frame_bytes: input.activation_frame_bytes,
     }
 }
 
@@ -352,6 +383,20 @@ fn runtime_slice_plan_input(
     participants: &[SplitParticipant],
     resources: SplitTopologyResourceInputs,
 ) -> SplitTopologyPlanInput {
+    let mut plan_input = runtime_slice_plan_input_unfiltered(package, participants, resources);
+
+    if !perf_aware_placement_enabled() {
+        strip_perf_aware_signals(&mut plan_input);
+    }
+
+    plan_input
+}
+
+fn runtime_slice_plan_input_unfiltered(
+    package: &skippy::SkippyPackageIdentity,
+    participants: &[SplitParticipant],
+    resources: SplitTopologyResourceInputs,
+) -> SplitTopologyPlanInput {
     SplitTopologyPlanInput {
         native_context_length: resources.native_context_length,
         layer_count: package.layer_count,
@@ -372,9 +417,96 @@ fn runtime_slice_plan_input(
                 max_vram_bytes: Some(participant.vram_bytes),
                 runtime_headroom_bytes: default_runtime_headroom_bytes(participant.vram_bytes),
                 stage_transfer_latency_ms: participant.rtt_ms,
+                sustained_mem_bandwidth_mib_per_s: participant.sustained_mem_bandwidth_mib_per_s,
+                sustained_compute_gflop_per_s: participant.sustained_compute_gflop_per_s,
+                observed_decode_us_per_layer: participant.observed_decode_us_per_layer,
             })
             .collect(),
+        edges: participant_edges(participants),
+        // The stage wire protocol carries raw f32 activations. Family-specific
+        // sidebands can multiply this at particular boundaries; until the
+        // automatic planner consumes that legality metadata, use the exact
+        // dense-boundary payload instead of the stale f16 assumption.
+        activation_frame_bytes: skippy_topology::wire_payload_bytes_per_token(
+            package.activation_width,
+        ),
     }
+}
+
+/// Strip performance-aware planning signals when the experimental mode is not
+/// explicitly enabled. Fields that pre-date
+/// perf-aware planning — per-node RTT (`stage_transfer_latency_ms`) and the
+/// decode TPOT target — are deliberately kept: the legacy planner consumed
+/// both, so stripping them would change capacity-only placement instead of
+/// reproducing it. Tested by `kill_switch_strip_keeps_pre_perf_aware_fields`.
+fn strip_perf_aware_signals(plan_input: &mut SplitTopologyPlanInput) {
+    for node in &mut plan_input.nodes {
+        node.sustained_mem_bandwidth_mib_per_s = None;
+        node.sustained_compute_gflop_per_s = None;
+        node.observed_decode_us_per_layer = None;
+    }
+    plan_input.edges = Vec::new();
+    plan_input.activation_frame_bytes = 0;
+}
+
+/// Whether performance-aware placement is enabled. The optimizer remains an
+/// explicit opt-in while its measurement trust and replan-adoption contracts
+/// are being hardened: only `1`, `true`, `on`, or `yes` enables it. Unset,
+/// disable spellings, and unknown values preserve capacity-only placement.
+/// The value is read afresh on every planning attempt.
+pub(super) fn perf_aware_placement_enabled() -> bool {
+    perf_aware_enabled_from_value(std::env::var("MESH_TOPOLOGY_PERF_AWARE").ok().as_deref())
+}
+
+fn perf_aware_enabled_from_value(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "on" | "yes"
+        )
+    })
+}
+
+/// Directed edge measurements between participants. The mesh does not relay
+/// peer-to-peer pair measurements, so both RTT and bandwidth are synthesized
+/// from each participant's coordinator-observed link (RTT from gossip round
+/// trips; bandwidth from passive artifact-transfer observation). RTT takes the
+/// conservative `max` of the two sides so the estimate can never
+/// underestimate a real hop; bandwidth takes the conservative `min` (a
+/// stage's egress is limited by the slower direction's sustain). Missing
+/// observations fall back per-signal: no RTT on either side ⇒ no edge; no
+/// bandwidth ⇒ latency-only edge, preserving pre-probing behavior.
+fn participant_edges(participants: &[SplitParticipant]) -> Vec<SplitTopologyPlanEdge> {
+    let mut edges = Vec::new();
+    for (index, source) in participants.iter().enumerate() {
+        for target in participants.iter().skip(index + 1) {
+            let Some(rtt_ms) = source.rtt_ms.into_iter().chain(target.rtt_ms).max() else {
+                continue;
+            };
+            let large_frame_mib_per_s = source
+                .large_frame_mib_per_s
+                .into_iter()
+                .chain(target.large_frame_mib_per_s)
+                .min();
+            let (forward, reverse) = (
+                SplitTopologyPlanEdge {
+                    source_node_id: source.node_id.to_string(),
+                    target_node_id: target.node_id.to_string(),
+                    rtt_ms,
+                    large_frame_mib_per_s,
+                },
+                SplitTopologyPlanEdge {
+                    source_node_id: target.node_id.to_string(),
+                    target_node_id: source.node_id.to_string(),
+                    rtt_ms,
+                    large_frame_mib_per_s,
+                },
+            );
+            edges.push(forward);
+            edges.push(reverse);
+        }
+    }
+    edges
 }
 
 fn package_layer_weight_bytes(package: &skippy::SkippyPackageIdentity) -> Vec<u64> {
@@ -524,12 +656,20 @@ pub(super) fn split_participant_labels(participants: &[SplitParticipant]) -> Vec
         .iter()
         .map(|participant| {
             format!(
-                "{}:{} cached={} missing={} rtt={}ms transfer={}",
+                "{}:{} cached={} missing={} rtt={}ms rtt_samples={} rtt_first_age={}ms rtt_last_age={}ms rtt_corroborated={} transfer={}",
                 participant.node_id.fmt_short(),
                 format_gb(participant.vram_bytes),
                 format_gb(participant.cached_slice_bytes),
                 format_gb(participant.missing_artifact_bytes),
                 participant.rtt_ms.unwrap_or_default(),
+                participant.rtt_sample_count,
+                participant
+                    .rtt_first_sample_age_ms
+                    .map_or_else(|| "-".to_string(), |age| age.to_string()),
+                participant
+                    .rtt_last_sample_age_ms
+                    .map_or_else(|| "-".to_string(), |age| age.to_string()),
+                participant.rtt_corroborated,
                 participant.artifact_transfer_supported
             )
         })
@@ -714,6 +854,18 @@ mod tests {
     fn participant_with_rtt(seed: u8, vram_bytes: u64, rtt_ms: u32) -> SplitParticipant {
         let mut participant = participant(seed, vram_bytes);
         participant.rtt_ms = Some(rtt_ms);
+        participant
+    }
+
+    fn participant_with_perf(
+        seed: u8,
+        vram_bytes: u64,
+        rtt_ms: u32,
+        bandwidth_mib_per_s: u32,
+    ) -> SplitParticipant {
+        let mut participant = participant_with_rtt(seed, vram_bytes, rtt_ms);
+        participant.sustained_mem_bandwidth_mib_per_s = Some(bandwidth_mib_per_s);
+        participant.sustained_compute_gflop_per_s = Some(15_000);
         participant
     }
 
@@ -971,5 +1123,129 @@ mod tests {
         assert!(reason.contains("participants ["));
         assert!(reason.contains("max_layers=0"));
         assert!(reason.contains("missing_model_source"));
+    }
+
+    #[test]
+    fn perf_aware_planning_requires_explicit_enable_value() {
+        assert!(!perf_aware_enabled_from_value(None));
+        assert!(!perf_aware_enabled_from_value(Some("0")));
+        assert!(!perf_aware_enabled_from_value(Some("false")));
+        assert!(!perf_aware_enabled_from_value(Some("off")));
+        assert!(!perf_aware_enabled_from_value(Some("no")));
+        assert!(!perf_aware_enabled_from_value(Some("perf")));
+        assert!(!perf_aware_enabled_from_value(Some("")));
+
+        assert!(perf_aware_enabled_from_value(Some("1")));
+        assert!(perf_aware_enabled_from_value(Some("true")));
+        assert!(perf_aware_enabled_from_value(Some("on")));
+        assert!(perf_aware_enabled_from_value(Some("yes")));
+        assert!(perf_aware_enabled_from_value(Some("ON")));
+        assert!(perf_aware_enabled_from_value(Some("  yes  ")));
+    }
+
+    #[test]
+    fn disabled_mode_strip_keeps_pre_perf_aware_fields() {
+        // The default-off parity contract reproduces pre-PR capacity-only
+        // placement, which consumed per-node RTT and the decode TPOT target.
+        // The strip removes only signals introduced by perf-aware planning.
+        let mut plan_input = runtime_slice_plan_input_unfiltered(
+            &package(40, 40_000_000_000),
+            &[
+                participant_with_perf(1, 26_000_000_000, 5, 400_000),
+                participant_with_perf(2, 26_000_000_000, 9, 120_000),
+            ],
+            SplitTopologyResourceInputs {
+                native_context_length: 262_144,
+                kv_bytes_per_token: 64 * 1024,
+                recurrent_bytes_per_sequence_by_layer: Vec::new(),
+                ctx_size_override: None,
+                parallel_override: None,
+            },
+        );
+        assert!(
+            plan_input.target_decode_tpot_ms.is_some(),
+            "fixture must set the TPOT target for the assertion to mean anything"
+        );
+        assert!(
+            plan_input
+                .nodes
+                .iter()
+                .all(|node| node.stage_transfer_latency_ms.is_some()),
+            "fixture must set RTT for the assertion to mean anything"
+        );
+        assert_eq!(
+            plan_input.activation_frame_bytes,
+            u64::from(896_u32) * 4,
+            "automatic planning must price the raw-f32 wire payload"
+        );
+
+        strip_perf_aware_signals(&mut plan_input);
+
+        // Pre-perf-aware fields survive the strip.
+        assert!(plan_input.target_decode_tpot_ms.is_some());
+        assert!(
+            plan_input
+                .nodes
+                .iter()
+                .all(|node| node.stage_transfer_latency_ms.is_some())
+        );
+        // Perf-aware signals are stripped.
+        assert!(plan_input.nodes.iter().all(
+            |node| node.sustained_mem_bandwidth_mib_per_s.is_none()
+                && node.sustained_compute_gflop_per_s.is_none()
+                && node.observed_decode_us_per_layer.is_none()
+        ));
+        assert!(plan_input.edges.is_empty());
+        assert_eq!(plan_input.activation_frame_bytes, 0);
+    }
+
+    #[test]
+    fn participant_edges_take_conservative_rtt_max_and_bandwidth_min() {
+        let mut fast_link = participant_with_rtt(1, 40_000_000_000, 5);
+        fast_link.large_frame_mib_per_s = Some(800);
+        let mut slow_link = participant_with_rtt(2, 40_000_000_000, 25);
+        slow_link.large_frame_mib_per_s = Some(120);
+
+        let edges = participant_edges(&[fast_link, slow_link]);
+        assert_eq!(edges.len(), 2, "one edge per direction");
+        // RTT is the max of the two sides' coordinator observations; the
+        // estimate must never under-estimate a real hop.
+        assert_eq!(edges[0].rtt_ms, 25);
+        assert_eq!(edges[1].rtt_ms, 25);
+        // Bandwidth is the min of the two directions' sustained throughput:
+        // the link runs at the slower side's pace.
+        assert_eq!(edges[0].large_frame_mib_per_s, Some(120));
+        assert_eq!(edges[1].large_frame_mib_per_s, Some(120));
+        assert_eq!(edges[0].source_node_id, edges[1].target_node_id);
+        assert_eq!(edges[0].target_node_id, edges[1].source_node_id);
+    }
+
+    #[test]
+    fn participant_edges_without_bandwidth_stay_latency_only() {
+        // No passive observation on either side: latency-only edges,
+        // exactly the pre-probing behavior.
+        let participants = vec![
+            participant_with_rtt(1, 40_000_000_000, 5),
+            participant_with_rtt(2, 40_000_000_000, 8),
+        ];
+        let edges = participant_edges(&participants);
+        assert_eq!(edges.len(), 2);
+        assert!(
+            edges
+                .iter()
+                .all(|edge| edge.large_frame_mib_per_s.is_none())
+        );
+        assert_eq!(edges[0].rtt_ms, 8);
+
+        // A single observed side propagates to the pair (the mesh only
+        // observes coordinator links, so partial coverage is the norm).
+        let mut one_sided = participants;
+        one_sided[0].large_frame_mib_per_s = Some(400);
+        let edges = participant_edges(&one_sided);
+        assert!(
+            edges
+                .iter()
+                .all(|edge| edge.large_frame_mib_per_s == Some(400))
+        );
     }
 }

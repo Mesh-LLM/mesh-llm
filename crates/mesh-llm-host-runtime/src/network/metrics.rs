@@ -18,6 +18,8 @@ pub(crate) const MAX_ADVERTISED_MODEL_THROUGHPUT_HINTS: usize = 64;
 pub(crate) const MAX_ADVERTISED_MODEL_NAME_BYTES: usize = 256;
 pub(crate) const MAX_ADVERTISED_TPS_MILLI: u64 = 100_000 * THROUGHPUT_SCALE_MILLI;
 pub(crate) const MAX_ADVERTISED_THROUGHPUT_SAMPLES: u64 = 256;
+pub(crate) const MAX_ADVERTISED_STAGE_US_PER_LAYER: u64 = 10_000_000;
+pub(crate) const MAX_ADVERTISED_STAGE_TIMING_AGE_MS: u64 = 30 * 60 * 1_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MetricLayer {
@@ -215,16 +217,23 @@ pub(crate) struct RoutingCollectorSnapshot {
     pub models: HashMap<String, ModelRoutingMetricsSnapshot>,
 }
 
-/// Soft peer-advertised model throughput hint.
+/// Soft peer-advertised model performance hint.
 ///
 /// Values are fixed-point milli tokens/second to keep gossip deterministic and
-/// avoid protobuf floating-point edge cases. They are advisory only; routing
-/// clamps and local observations take precedence.
+/// avoid protobuf floating-point edge cases. Staged runtimes can additionally
+/// attach observed steady-decode work normalized per loaded layer; placement
+/// uses that as a measured floor on the analytical stage model.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct ModelThroughputHint {
     pub(crate) model_name: String,
     pub(crate) avg_tokens_per_second_milli: u64,
     pub(crate) throughput_samples: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) observed_stage_us_per_layer: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) stage_timing_samples: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) stage_timing_age_ms: Option<u64>,
 }
 
 pub(crate) fn sanitize_model_throughput_hints<I>(hints: I) -> Vec<ModelThroughputHint>
@@ -235,10 +244,17 @@ where
     let mut sanitized = Vec::new();
     for mut hint in hints {
         hint.model_name = hint.model_name.trim().to_string();
+        let throughput_valid = hint.avg_tokens_per_second_milli > 0 && hint.throughput_samples > 0;
+        let stage_timing_valid = hint
+            .observed_stage_us_per_layer
+            .is_some_and(|value| value > 0)
+            && hint.stage_timing_samples.is_some_and(|samples| samples > 0)
+            && hint
+                .stage_timing_age_ms
+                .is_some_and(|age| age <= MAX_ADVERTISED_STAGE_TIMING_AGE_MS);
         if hint.model_name.is_empty()
             || hint.model_name.len() > MAX_ADVERTISED_MODEL_NAME_BYTES
-            || hint.avg_tokens_per_second_milli == 0
-            || hint.throughput_samples == 0
+            || (!throughput_valid && !stage_timing_valid)
             || !seen.insert(hint.model_name.clone())
         {
             continue;
@@ -249,6 +265,18 @@ where
         hint.throughput_samples = hint
             .throughput_samples
             .min(MAX_ADVERTISED_THROUGHPUT_SAMPLES);
+        if stage_timing_valid {
+            hint.observed_stage_us_per_layer = hint
+                .observed_stage_us_per_layer
+                .map(|value| value.min(MAX_ADVERTISED_STAGE_US_PER_LAYER));
+            hint.stage_timing_samples = hint
+                .stage_timing_samples
+                .map(|samples| samples.min(MAX_ADVERTISED_THROUGHPUT_SAMPLES));
+        } else {
+            hint.observed_stage_us_per_layer = None;
+            hint.stage_timing_samples = None;
+            hint.stage_timing_age_ms = None;
+        }
         sanitized.push(hint);
         if sanitized.len() >= MAX_ADVERTISED_MODEL_THROUGHPUT_HINTS {
             break;
@@ -546,6 +574,9 @@ impl RoutingMetrics {
                 avg_tokens_per_second_milli: avg_tokens_per_second_milli
                     .min(MAX_ADVERTISED_TPS_MILLI),
                 throughput_samples: samples.min(MAX_ADVERTISED_THROUGHPUT_SAMPLES),
+                observed_stage_us_per_layer: None,
+                stage_timing_samples: None,
+                stage_timing_age_ms: None,
             });
             if hints.len() >= MAX_ADVERTISED_MODEL_THROUGHPUT_HINTS {
                 break;
@@ -577,6 +608,9 @@ impl RoutingMetrics {
             model_name: model.to_string(),
             avg_tokens_per_second_milli,
             throughput_samples: samples,
+            observed_stage_us_per_layer: None,
+            stage_timing_samples: None,
+            stage_timing_age_ms: None,
         })
     }
 
@@ -1605,35 +1639,61 @@ mod tests {
                 model_name: "  qwen  ".to_string(),
                 avg_tokens_per_second_milli: MAX_ADVERTISED_TPS_MILLI + 1,
                 throughput_samples: MAX_ADVERTISED_THROUGHPUT_SAMPLES + 1,
+                observed_stage_us_per_layer: Some(MAX_ADVERTISED_STAGE_US_PER_LAYER + 1),
+                stage_timing_samples: Some(MAX_ADVERTISED_THROUGHPUT_SAMPLES + 1),
+                stage_timing_age_ms: Some(MAX_ADVERTISED_STAGE_TIMING_AGE_MS + 1),
             },
             ModelThroughputHint {
                 model_name: "qwen".to_string(),
                 avg_tokens_per_second_milli: 42_000,
                 throughput_samples: 7,
+                observed_stage_us_per_layer: None,
+                stage_timing_samples: None,
+                stage_timing_age_ms: None,
             },
             ModelThroughputHint {
                 model_name: "".to_string(),
                 avg_tokens_per_second_milli: 42_000,
                 throughput_samples: 7,
+                observed_stage_us_per_layer: None,
+                stage_timing_samples: None,
+                stage_timing_age_ms: None,
             },
             ModelThroughputHint {
                 model_name: "x".repeat(MAX_ADVERTISED_MODEL_NAME_BYTES + 1),
                 avg_tokens_per_second_milli: 42_000,
                 throughput_samples: 7,
+                observed_stage_us_per_layer: None,
+                stage_timing_samples: None,
+                stage_timing_age_ms: None,
             },
             ModelThroughputHint {
                 model_name: "empty-speed".to_string(),
                 avg_tokens_per_second_milli: 0,
                 throughput_samples: 7,
+                observed_stage_us_per_layer: None,
+                stage_timing_samples: None,
+                stage_timing_age_ms: None,
             },
             ModelThroughputHint {
                 model_name: "empty-samples".to_string(),
                 avg_tokens_per_second_milli: 42_000,
                 throughput_samples: 0,
+                observed_stage_us_per_layer: None,
+                stage_timing_samples: None,
+                stage_timing_age_ms: None,
+            },
+            ModelThroughputHint {
+                model_name: "timing-only".to_string(),
+                avg_tokens_per_second_milli: 0,
+                throughput_samples: 0,
+                observed_stage_us_per_layer: Some(2_500),
+                stage_timing_samples: Some(12),
+                stage_timing_age_ms: Some(500),
             },
         ]);
 
-        assert_eq!(hints.len(), 1);
+        assert_eq!(hints.len(), 2);
         assert_eq!(hints[0].model_name, "qwen");
         assert_eq!(
             hints[0].avg_tokens_per_second_milli,
@@ -1643,6 +1703,8 @@ mod tests {
             hints[0].throughput_samples,
             MAX_ADVERTISED_THROUGHPUT_SAMPLES
         );
+        assert_eq!(hints[1].model_name, "timing-only");
+        assert_eq!(hints[1].observed_stage_us_per_layer, Some(2_500));
     }
 
     #[test]

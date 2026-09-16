@@ -314,7 +314,7 @@ fn split_membership_node_ids(participants: &[SplitParticipant]) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::runtime::local_package::{
-        SplitParticipantPackageSignal, split_participant_signature,
+        SplitParticipantPackageSignal, SplitParticipantPerf, split_participant_signature,
     };
 
     fn make_id(seed: u8) -> iroh::EndpointId {
@@ -379,6 +379,7 @@ mod tests {
             },
             Some(80),
             true,
+            SplitParticipantPerf::default(),
         );
         participants[1] = participants[1].with_package_signals(
             SplitParticipantPackageSignal {
@@ -388,6 +389,7 @@ mod tests {
             },
             Some(4),
             true,
+            SplitParticipantPerf::default(),
         );
 
         assert!(barrier.observe(&participants, start + Duration::from_secs(8)));
