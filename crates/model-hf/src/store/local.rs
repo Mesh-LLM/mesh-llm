@@ -46,6 +46,17 @@ fn remembered_model_ref_path(model_ref: &str) -> Option<PathBuf> {
         .ok()
         .and_then(|paths| paths.get(model_ref).cloned())
         .filter(|path| path.exists())
+        .map(|path| first_available_multipart_gguf_shard(&path).unwrap_or(path))
+}
+
+fn first_available_multipart_gguf_shard(path: &Path) -> Option<PathBuf> {
+    let file_name = path.file_name()?.to_str()?;
+    let shard = model_ref::split_gguf_shard_info(file_name)?;
+    if shard.part == "00001" {
+        return Some(path.to_path_buf());
+    }
+    let first = path.with_file_name(format!("{}-00001-of-{}.gguf", shard.prefix, shard.total));
+    first.exists().then_some(first)
 }
 
 impl HuggingFaceModelIdentity {
@@ -409,20 +420,39 @@ fn layered_package_relative_preference(relative_file: &str) -> u8 {
     }
 }
 
-fn model_ref_path_preference_key(path: &Path) -> (u8, String) {
-    let rank = huggingface_identity_for_path(path)
-        .filter(|identity| identity.repo_id.ends_with("-layers"))
-        .map(|identity| layered_package_relative_preference(&identity.file))
-        .unwrap_or(0);
-    (rank, path.to_string_lossy().to_string())
+fn multipart_gguf_preference(path: &Path) -> u8 {
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return 1;
+    };
+    match model_ref::split_gguf_shard_info(file_name) {
+        Some(shard) if shard.part == "00001" => 0,
+        Some(_) => 2,
+        None => 1,
+    }
 }
 
-fn model_ref_path_preference_key_for_cache_root(root: &Path, path: &Path) -> (u8, String) {
-    let rank = identity_from_cache_snapshot_path(path, root)
+fn model_ref_path_preference_key(path: &Path) -> (u8, u8, String) {
+    let package_rank = huggingface_identity_for_path(path)
         .filter(|identity| identity.repo_id.ends_with("-layers"))
         .map(|identity| layered_package_relative_preference(&identity.file))
         .unwrap_or(0);
-    (rank, path.to_string_lossy().to_string())
+    (
+        package_rank,
+        multipart_gguf_preference(path),
+        path.to_string_lossy().to_string(),
+    )
+}
+
+fn model_ref_path_preference_key_for_cache_root(root: &Path, path: &Path) -> (u8, u8, String) {
+    let package_rank = identity_from_cache_snapshot_path(path, root)
+        .filter(|identity| identity.repo_id.ends_with("-layers"))
+        .map(|identity| layered_package_relative_preference(&identity.file))
+        .unwrap_or(0);
+    (
+        package_rank,
+        multipart_gguf_preference(path),
+        path.to_string_lossy().to_string(),
+    )
 }
 
 fn push_model_name(
@@ -920,6 +950,72 @@ mod tests {
         assert_eq!(split_gguf_base_name("Qwen3-8B-Q4_K_M"), None);
         assert_eq!(split_gguf_base_name("model-001-of-003"), None);
         assert_eq!(split_gguf_base_name("model-00001-of-00003"), Some("model"));
+    }
+
+    #[test]
+    #[serial]
+    fn local_model_scan_remembers_first_multipart_shard() {
+        if let Ok(mut paths) = model_ref_paths().lock() {
+            paths.clear();
+        }
+        let prev_hub_cache = std::env::var_os("HF_HUB_CACHE");
+        let prev_hf_home = std::env::var_os("HF_HOME");
+        let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
+
+        let temp = tempfile::tempdir().unwrap();
+        let snapshot = temp
+            .path()
+            .join("models--unsloth--inkling-GGUF")
+            .join("snapshots")
+            .join("deadbeef");
+        std::fs::create_dir_all(&snapshot).unwrap();
+        std::fs::create_dir_all(
+            temp.path()
+                .join("models--unsloth--inkling-GGUF")
+                .join("refs"),
+        )
+        .unwrap();
+        std::fs::write(
+            temp.path()
+                .join("models--unsloth--inkling-GGUF")
+                .join("refs")
+                .join("main"),
+            "deadbeef",
+        )
+        .unwrap();
+
+        let shard_one = snapshot.join("inkling-UD-Q2_K_XL-00001-of-00008.gguf");
+        let shard_two = snapshot.join("inkling-UD-Q2_K_XL-00002-of-00008.gguf");
+        std::fs::File::create(&shard_one)
+            .unwrap()
+            .set_len(13_000_000)
+            .unwrap();
+        std::fs::File::create(&shard_two)
+            .unwrap()
+            .set_len(501_000_000)
+            .unwrap();
+
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
+        unsafe { std::env::set_var("HF_HUB_CACHE", temp.path()) };
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
+        unsafe { std::env::remove_var("HF_HOME") };
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
+        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+
+        let installed = scan_local_models();
+        assert_eq!(
+            installed,
+            vec!["unsloth/inkling-GGUF:UD-Q2_K_XL".to_string()]
+        );
+
+        assert_eq!(find_model_path(&installed[0]), shard_one);
+
+        restore_env("HF_HUB_CACHE", prev_hub_cache);
+        restore_env("HF_HOME", prev_hf_home);
+        restore_env("XDG_CACHE_HOME", prev_xdg);
     }
 
     #[test]
