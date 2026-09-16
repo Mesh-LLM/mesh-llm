@@ -83,6 +83,7 @@ class GateScriptBehaviorTests(unittest.TestCase):
         bundle: str | None = None,
         model: str | None = None,
         evidence_seed: str | None = None,
+        relative_evidence: bool = False,
         evidence_path: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         stub_bin = root / "stub-bin"
@@ -103,6 +104,7 @@ class GateScriptBehaviorTests(unittest.TestCase):
         evidence = root / "evidence.txt"
         if evidence_seed is not None:
             evidence.write_text(evidence_seed, encoding="utf-8")
+        evidence_arg = evidence.name if relative_evidence else str(evidence)
 
         return subprocess.run(
             [
@@ -113,7 +115,7 @@ class GateScriptBehaviorTests(unittest.TestCase):
                 "--model",
                 model,
                 "--evidence",
-                evidence_path if evidence_path is not None else str(evidence),
+                evidence_path if evidence_path is not None else evidence_arg,
             ],
             cwd=root,
             capture_output=True,
@@ -161,6 +163,21 @@ class GateScriptBehaviorTests(unittest.TestCase):
                 (root / "nested evidence/result.txt").read_text(), "executed\n"
             )
             self.assertFalse((root / "stub-bin/nested evidence").exists())
+
+    def test_a_relative_evidence_path_is_resolved_before_cargo_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = self.run_gate(
+                root,
+                cargo_body=(
+                    "#!/usr/bin/env bash\n"
+                    'case "$MESH_LLM_RUNTIME_EVENTS_EVIDENCE_FILE" in /*) ;; *) exit 2 ;; esac\n'
+                    'printf \'executed\\n\' >> "$MESH_LLM_RUNTIME_EVENTS_EVIDENCE_FILE"\n'
+                ),
+                relative_evidence=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual((root / "evidence.txt").read_text(), "executed\n")
 
     def test_a_blocked_gate_fails_even_though_the_test_exits_zero(self) -> None:
         """The whole reason the script checks the marker.
@@ -343,6 +360,16 @@ class LinuxRuntimeSliceTests(unittest.TestCase):
         manifest = json.loads((ROOT / "ci/llama-canary/family-certified.json").read_text())
         self.assertEqual(83, len(manifest["models"]))
         self.assertTrue(all("cadences" not in model for model in manifest["models"]))
+
+    def test_gate_model_cadences_cover_pr_and_main(self) -> None:
+        step = self.steps["Restore runtime-event gate model"]
+        manifest = yaml.safe_load((ROOT / step["with"]["model_manifest"]).read_text())
+        artifact = next(
+            artifact
+            for artifact in manifest["artifacts"]
+            if artifact["id"] == step["with"]["model_artifact_id"]
+        )
+        self.assertTrue({"pull-request", "main"}.issubset(artifact["cadences"]))
 
     def test_evidence_is_uploaded_even_when_the_gate_fails(self) -> None:
         """The evidence file is how a failure is diagnosed, so it must

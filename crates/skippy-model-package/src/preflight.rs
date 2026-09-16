@@ -680,6 +680,7 @@ mod tests {
                 explicit: explicit(&source),
                 generation_defaults: None,
                 resume_existing_artifacts: false,
+                max_artifact_bytes: None,
             },
         )
         .unwrap();

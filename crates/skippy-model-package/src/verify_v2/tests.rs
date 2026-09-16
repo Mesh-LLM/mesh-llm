@@ -38,6 +38,7 @@ impl Case {
                 explicit: explicit(&self.source),
                 generation_defaults: None,
                 resume_existing_artifacts: false,
+                max_artifact_bytes: None,
             },
         )
         .unwrap();
