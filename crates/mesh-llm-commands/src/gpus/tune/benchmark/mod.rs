@@ -8,6 +8,8 @@ mod tests;
 mod trial;
 mod trial_config;
 
+use std::io::Write;
+
 const MAX_BENCHMARK_TRIALS_PER_TARGET: usize = 512;
 
 pub(crate) use candidates::*;
@@ -88,12 +90,14 @@ fn run_target_benchmarks(
             MAX_BENCHMARK_TRIALS_PER_TARGET
         );
     }
-    eprintln!(
+    let mut err = mesh_llm_events::console_err();
+    writeln!(
+        err,
         "benchmark tune: target `{}` running {} trials (throughput tolerance {:.2}%)",
         prepared.target.requested_input,
         candidates.len(),
         request.throughput_tolerance_pct,
-    );
+    )?;
     let total = candidates.len();
     let trials = candidates
         .into_iter()

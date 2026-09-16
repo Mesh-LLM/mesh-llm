@@ -714,6 +714,7 @@ async fn resolve_model_accepts_non_catalog_name_from_hf_cache() {
     let _ = std::fs::remove_dir_all(&cache_root);
 }
 
+#[cfg(unix)]
 #[tokio::test]
 #[serial_test::serial]
 async fn cached_hf_gguf_is_preindexed_for_split_standby_inventory() {
@@ -730,20 +731,19 @@ async fn cached_hf_gguf_is_preindexed_for_split_standby_inventory() {
     let _xdg_cache_home = EnvVarGuard::remove("XDG_CACHE_HOME");
 
     let repo_id = "someone/Standby-Inventory-GGUF";
+    let revision = "b".repeat(40);
+    let blob_sha256 = "a".repeat(64);
     let repo_dir = cache_root.join(huggingface_repo_folder_name(repo_id, RepoTypeModel));
     std::fs::create_dir_all(repo_dir.join("refs")).unwrap();
-    std::fs::write(repo_dir.join("refs").join("main"), "test-commit").unwrap();
-    let snapshot_path = huggingface_snapshot_path(repo_id, RepoTypeModel, "test-commit")
+    std::fs::write(repo_dir.join("refs").join("main"), &revision).unwrap();
+    let snapshot_path = huggingface_snapshot_path(repo_id, RepoTypeModel, &revision)
         .join("Standby-Inventory-Q4_K_M.gguf");
     std::fs::create_dir_all(snapshot_path.parent().unwrap()).unwrap();
     let blob_dir = repo_dir.join("blobs");
     std::fs::create_dir_all(&blob_dir).unwrap();
-    let blob_path = blob_dir.join("content-blob");
+    let blob_path = blob_dir.join(&blob_sha256);
     write_identity_test_gguf(&blob_path, 4096);
-    #[cfg(unix)]
-    std::os::unix::fs::symlink("../../blobs/content-blob", &snapshot_path).unwrap();
-    #[cfg(not(unix))]
-    std::fs::copy(&blob_path, &snapshot_path).unwrap();
+    std::os::unix::fs::symlink(format!("../../blobs/{blob_sha256}"), &snapshot_path).unwrap();
 
     let plans = resolve_startup_models(
         &[direct_gguf_startup_spec(
@@ -761,6 +761,8 @@ async fn cached_hf_gguf_is_preindexed_for_split_standby_inventory() {
         .preindexed_split_package
         .as_ref()
         .expect("cached Hugging Face GGUF must be indexed before election");
+    assert_eq!(package.source_files[0].sha256, blob_sha256);
+    assert_ne!(package.source_model_sha256, package.source_files[0].sha256);
     let verified = crate::inference::skippy::verify_registered_content_source(
         &plans[0].declared_ref,
         &package.package_ref,
@@ -769,6 +771,75 @@ async fn cached_hf_gguf_is_preindexed_for_split_standby_inventory() {
     )
     .expect("standby inventory can verify its registered cached source");
     assert_eq!(verified.package_ref, package.package_ref);
+
+    let _ = std::fs::remove_dir_all(&cache_root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[serial_test::serial]
+async fn cached_hf_multipart_gguf_uses_ordered_blob_identities() {
+    let cache_root = std::env::temp_dir().join(format!(
+        "mesh-llm-preindex-hf-multipart-cache-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&cache_root).unwrap();
+    let _hub_cache = EnvVarGuard::set_path("HF_HUB_CACHE", &cache_root);
+    let _hf_home = EnvVarGuard::remove("HF_HOME");
+    let _xdg_cache_home = EnvVarGuard::remove("XDG_CACHE_HOME");
+
+    let repo_id = "someone/Standby-Multipart-GGUF";
+    let revision = "d".repeat(40);
+    let shard_sha256 = ["a".repeat(64), "c".repeat(64)];
+    let repo_dir = cache_root.join(huggingface_repo_folder_name(repo_id, RepoTypeModel));
+    std::fs::create_dir_all(repo_dir.join("refs")).unwrap();
+    std::fs::write(repo_dir.join("refs").join("main"), &revision).unwrap();
+    let snapshot_root = huggingface_snapshot_path(repo_id, RepoTypeModel, &revision);
+    std::fs::create_dir_all(&snapshot_root).unwrap();
+    let blob_dir = repo_dir.join("blobs");
+    std::fs::create_dir_all(&blob_dir).unwrap();
+
+    for (index, sha256) in shard_sha256.iter().enumerate() {
+        let blob_path = blob_dir.join(sha256);
+        write_identity_test_gguf(&blob_path, 4096);
+        let shard_name = format!("Standby-Multipart-Q4_K_M-{:05}-of-00002.gguf", index + 1);
+        std::os::unix::fs::symlink(
+            format!("../../blobs/{sha256}"),
+            snapshot_root.join(shard_name),
+        )
+        .unwrap();
+    }
+
+    let plan = resolve_startup_models(
+        &[direct_gguf_startup_spec(
+            Path::new("Standby-Multipart-Q4_K_M"),
+            None,
+        )],
+        true,
+    )
+    .await
+    .expect("cached multipart Hugging Face GGUF resolves")
+    .remove(0);
+    let package = plan
+        .preindexed_split_package
+        .expect("cached multipart Hugging Face GGUF must be indexed");
+
+    assert_eq!(
+        package
+            .source_files
+            .iter()
+            .map(|file| file.sha256.as_str())
+            .collect::<Vec<_>>(),
+        shard_sha256.iter().map(String::as_str).collect::<Vec<_>>()
+    );
+    assert!(
+        package
+            .source_model_path
+            .ends_with("Standby-Multipart-Q4_K_M-00001-of-00002.gguf")
+    );
 
     let _ = std::fs::remove_dir_all(&cache_root);
 }

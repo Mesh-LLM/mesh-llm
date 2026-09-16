@@ -16,6 +16,7 @@ use mesh_llm_system::backend::BinaryFlavor;
 use mesh_llm_tui::terminal_progress::{
     ratio_complete_u64, render_inline_gauge_with_reserved_width,
 };
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -66,7 +67,8 @@ pub async fn run_native_runtime_list(
         let discovered_bundle_dirs = discover_native_runtime_bundle_dirs(bundle_dirs)?;
         print_configured_selector(configured, json_output);
         if !json_output && manifest_path.is_none() {
-            eprintln!("🔎 Loading native runtime release manifest");
+            let mut err = mesh_llm_events::console_err();
+            writeln!(err, "🔎 Loading native runtime release manifest")?;
         }
         let (manifest, sources) =
             load_release_manifest_with_sources(NativeRuntimeManifestOptions {
@@ -164,11 +166,12 @@ pub async fn run_native_runtime_install(
     json_output: bool,
 ) -> Result<()> {
     let resolved_selection = resolve_runtime_selection(requested_runtime, configured)?;
+    let mut err = mesh_llm_events::console_err();
     if !json_output && manifest_path.is_none() {
-        eprintln!("🔎 Loading native runtime release manifest");
+        writeln!(err, "🔎 Loading native runtime release manifest")?;
     }
     if !json_output {
-        eprintln!("🔎 Detecting host runtime profile");
+        writeln!(err, "🔎 Detecting host runtime profile")?;
     }
     print_configured_selector(
         NativeRuntimeConfigSelection {
@@ -213,13 +216,14 @@ fn print_configured_selector(configured: NativeRuntimeConfigSelection<'_>, json_
         return;
     }
     let mesh_version = configured.mesh_version_or_current();
-    eprintln!("🔒 Using native runtime selector");
-    eprintln!("   mesh version: {mesh_version}");
+    let mut err = mesh_llm_events::console_err();
+    let _ = writeln!(err, "🔒 Using native runtime selector");
+    let _ = writeln!(err, "   mesh version: {mesh_version}");
     if let Some(skippy_abi_version) = configured.skippy_abi_version {
-        eprintln!("   Skippy ABI: {skippy_abi_version}");
+        let _ = writeln!(err, "   Skippy ABI: {skippy_abi_version}");
     }
     if let Some(configured_selection) = configured.selection {
-        eprintln!("   selection: {configured_selection}");
+        let _ = writeln!(err, "   selection: {configured_selection}");
     }
 }
 
@@ -245,9 +249,10 @@ impl DownloadProgress {
         total: Option<u64>,
         finished: bool,
     ) {
+        let mut err = mesh_llm_events::console_err();
         if self.native_runtime_id.is_none() {
             self.native_runtime_id = Some(native_runtime_id.to_string());
-            eprintln!("⬇️  Downloading native runtime {native_runtime_id}");
+            let _ = writeln!(err, "⬇️  Downloading native runtime {native_runtime_id}");
         }
         if finished {
             self.finish(downloaded);
@@ -283,19 +288,20 @@ impl DownloadProgress {
                         ),
                         3,
                     );
-                    eprint!("\r\x1b[2K   {gauge}");
-                    let _ = std::io::Write::flush(&mut std::io::stderr());
+                    let _ = write!(err, "\r\x1b[2K   {gauge}");
+                    let _ = err.flush();
                 }
                 _ => {
-                    eprint!("\r\x1b[2K   downloaded {}", human_bytes(downloaded));
-                    let _ = std::io::Write::flush(&mut std::io::stderr());
+                    let _ = write!(err, "\r\x1b[2K   downloaded {}", human_bytes(downloaded));
+                    let _ = err.flush();
                 }
             }
         }
     }
 
     fn finish(&mut self, downloaded: u64) {
-        eprintln!("\r\x1b[2K   downloaded {}", human_bytes(downloaded));
+        let mut err = mesh_llm_events::console_err();
+        let _ = writeln!(err, "\r\x1b[2K   downloaded {}", human_bytes(downloaded));
     }
 }
 

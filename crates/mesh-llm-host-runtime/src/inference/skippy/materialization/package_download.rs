@@ -156,11 +156,13 @@ impl LayerPackageDownloadScope {
         bytes_per_sec: Option<f64>,
         force: bool,
     ) {
+        let mut err = mesh_llm_events::console_err();
         let Ok(mut scope_state) = self.state.lock() else {
             return;
         };
         if !scope_state.announced {
-            eprintln!(
+            let _ = writeln!(
+                err,
                 "\r\x1b[K📦 Downloading layer package {} ({} file(s))",
                 self.package, self.total_files
             );
@@ -204,11 +206,11 @@ impl LayerPackageDownloadScope {
             ),
             3,
         );
-        eprint!("\r\x1b[K   {gauge}");
-        let _ = std::io::stderr().flush();
+        let _ = write!(err, "\r\x1b[K   {gauge}");
+        let _ = err.flush();
         scope_state.drawn_line = true;
         if force {
-            eprintln!();
+            let _ = writeln!(err);
             scope_state.drawn_line = false;
         }
     }
@@ -275,6 +277,7 @@ impl LayerPackageDownloadProgress {
     }
 
     fn emit_ready(&self, path: &Path) {
+        let mut err = mesh_llm_events::console_err();
         let total = fs::metadata(path)
             .ok()
             .map(|metadata| metadata.len())
@@ -313,12 +316,17 @@ impl LayerPackageDownloadProgress {
         if !showed_progress {
             let file = layer_package_artifact_display(&self.label, &self.file);
             match total {
-                Some(total) if total > 0 => eprintln!(
-                    "   ✅ Ready {} ({})",
-                    file,
-                    format_layer_package_download_bytes(total)
-                ),
-                _ => eprintln!("   ✅ Ready {}", file),
+                Some(total) if total > 0 => {
+                    let _ = writeln!(
+                        err,
+                        "   ✅ Ready {} ({})",
+                        file,
+                        format_layer_package_download_bytes(total)
+                    );
+                }
+                _ => {
+                    let _ = writeln!(err, "   ✅ Ready {}", file);
+                }
             }
         }
     }
@@ -479,6 +487,7 @@ fn draw_layer_package_file_progress(
     bytes_per_sec: Option<f64>,
     force: bool,
 ) {
+    let mut err = mesh_llm_events::console_err();
     let percent = if total == 0 {
         0
     } else {
@@ -515,10 +524,10 @@ fn draw_layer_package_file_progress(
         ),
         3,
     );
-    eprint!("\r\x1b[K   {gauge}");
-    let _ = std::io::stderr().flush();
+    let _ = write!(err, "\r\x1b[K   {gauge}");
+    let _ = err.flush();
     if force {
-        eprintln!();
+        let _ = writeln!(err);
     }
 }
 

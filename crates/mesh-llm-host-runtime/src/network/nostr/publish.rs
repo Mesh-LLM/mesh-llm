@@ -4,6 +4,7 @@ use super::contracts::{DiscoveredMesh, MESH_SERVICE_KIND, MeshListing};
 use super::discovery::{DiscoveryClient, MeshFilter, discover};
 use super::keys::load_or_create_keys;
 use anyhow::Result;
+use mesh_llm_events::{OutputEvent, emit_event};
 use nostr_sdk::prelude::*;
 use std::time::Duration;
 
@@ -127,11 +128,13 @@ pub async fn publish_loop(node: crate::mesh::Node, keys: Keys, config: PublishLo
 
     // Wait for local serving to be ready before first publish (up to 60s).
     wait_for_local_serving_ready(&node).await;
-    eprintln!(
-        "📡 Publishing mesh to Nostr (npub: {}...{})",
-        &npub[..12],
-        &npub[npub.len() - 8..]
-    );
+    let _ = emit_event(OutputEvent::NostrPublishing {
+        message: format!(
+            "📡 Publishing mesh to Nostr (npub: {}...{})",
+            &npub[..12],
+            &npub[npub.len() - 8..]
+        ),
+    });
 
     let mut delisted = false;
 
@@ -237,7 +240,9 @@ pub async fn publish_watchdog(
                         continue;
                     }
 
-                    eprintln!("📡 Taking over Nostr publishing for the mesh");
+                    let _ = emit_event(OutputEvent::NostrPublishing {
+                        message: "📡 Taking over Nostr publishing for the mesh".to_string(),
+                    });
                     let Some(keys) = load_watchdog_publish_keys(check_interval_secs).await else {
                         continue;
                     };
@@ -338,7 +343,9 @@ async fn create_publish_loop_publisher(
 
 fn log_publish_client_cap(max_clients: Option<usize>) {
     if let Some(cap) = max_clients {
-        eprintln!("   Will delist when {} clients connected", cap);
+        let _ = emit_event(OutputEvent::NostrPublishing {
+            message: format!("   Will delist when {} clients connected", cap),
+        });
     }
 }
 
@@ -396,7 +403,11 @@ async fn confirm_missing_listing_after_backoff(
     node: &crate::mesh::Node,
 ) -> bool {
     let backoff = (rand::random::<u64>() % 7) + 3;
-    eprintln!("📡 Mesh listing missing from Nostr — waiting {backoff}s before taking over...");
+    let _ = emit_event(OutputEvent::NostrPublishing {
+        message: format!(
+            "📡 Mesh listing missing from Nostr — waiting {backoff}s before taking over..."
+        ),
+    });
     tokio::time::sleep(Duration::from_secs(backoff)).await;
 
     let Ok(recheck) = discover(relays, filter, disco).await else {
@@ -406,7 +417,9 @@ async fn confirm_missing_listing_after_backoff(
     let our_mesh_id = node.mesh_id().await;
     let still_missing = !mesh_listing_present(&recheck, our_mesh_id.as_deref(), &served);
     if !still_missing {
-        eprintln!("📡 Someone else took over publishing — standing down");
+        let _ = emit_event(OutputEvent::NostrPublishing {
+            message: "📡 Someone else took over publishing — standing down".to_string(),
+        });
     }
     still_missing
 }
@@ -451,18 +464,22 @@ async fn rejoin_larger_mesh_target(
     my_node_count: usize,
     interval_secs: u64,
 ) -> bool {
-    eprintln!(
-        "📡 Found larger mesh '{}' ({} nodes vs our {}) — rejoining",
-        target.listing.name.as_deref().unwrap_or("unnamed"),
-        target.listing.node_count,
-        my_node_count
-    );
+    let _ = emit_event(OutputEvent::NostrPublishing {
+        message: format!(
+            "📡 Found larger mesh '{}' ({} nodes vs our {}) — rejoining",
+            target.listing.name.as_deref().unwrap_or("unnamed"),
+            target.listing.node_count,
+            my_node_count
+        ),
+    });
     unpublish_before_rejoin(publisher).await;
     if join_larger_mesh(node, target).await.is_err() {
         tokio::time::sleep(Duration::from_secs(interval_secs)).await;
         return true;
     }
-    eprintln!("📡 Merged into mesh — resuming publish as member");
+    let _ = emit_event(OutputEvent::NostrPublishing {
+        message: "📡 Merged into mesh — resuming publish as member".to_string(),
+    });
     tokio::time::sleep(Duration::from_secs(30)).await;
     true
 }
@@ -634,19 +651,23 @@ async fn update_delisted_state(
         if let Err(e) = publisher.unpublish().await {
             tracing::warn!("Failed to unpublish from Nostr: {e}");
         }
-        eprintln!(
-            "📡 Delisted from Nostr ({} clients, cap is {})",
-            client_count, cap
-        );
+        let _ = emit_event(OutputEvent::NostrPublishing {
+            message: format!(
+                "📡 Delisted from Nostr ({} clients, cap is {})",
+                client_count, cap
+            ),
+        });
         *delisted = true;
         tokio::time::sleep(Duration::from_secs(interval_secs)).await;
         return true;
     }
     if client_count < cap && *delisted {
-        eprintln!(
-            "📡 Re-publishing to Nostr ({} clients, cap is {})",
-            client_count, cap
-        );
+        let _ = emit_event(OutputEvent::NostrPublishing {
+            message: format!(
+                "📡 Re-publishing to Nostr ({} clients, cap is {})",
+                client_count, cap
+            ),
+        });
         *delisted = false;
     }
     false

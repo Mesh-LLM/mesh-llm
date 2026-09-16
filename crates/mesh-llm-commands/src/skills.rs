@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use anyhow::Result;
 use mesh_llm_plugin_manager::{
     PluginSkillInstallOptions, SkillAgent, SkillInstallReport, SkillInstallStatus,
@@ -25,7 +27,9 @@ pub fn install_skills_for_agent(agent: SkillAgent) {
     }) {
         Ok(report) => print_agent_install_summary(agent, &report),
         Err(error) if !json_mode_enabled() => {
-            eprintln!(
+            let mut err = mesh_llm_events::console_err();
+            let _ = writeln!(
+                err,
                 "Could not install mesh plugin skills for {}: {error}",
                 agent.as_str()
             );
@@ -80,7 +84,9 @@ fn print_agent_install_summary(agent: SkillAgent, report: &SkillInstallReport) {
         })
         .count();
     if changed > 0 {
-        eprintln!(
+        let mut err = mesh_llm_events::console_err();
+        let _ = writeln!(
+            err,
             "✅ Installed {changed} mesh plugin skill(s) for {}",
             agent.as_str()
         );
@@ -89,61 +95,71 @@ fn print_agent_install_summary(agent: SkillAgent, report: &SkillInstallReport) {
 
 fn print_install_report(report: &SkillInstallReport, dry_run: bool) -> Result<()> {
     if json_mode_enabled() {
-        println!("{}", serde_json::to_string_pretty(report)?);
+        let mut out = mesh_llm_events::machine_out();
+        writeln!(out, "{}", serde_json::to_string_pretty(report)?)?;
         return Ok(());
     }
+
+    let mut err = mesh_llm_events::console_err();
 
     let heading = if dry_run {
         "🧪 Mesh plugin skill install preview"
     } else {
         "🧠 Installing mesh plugin skills"
     };
-    eprintln!("{heading}");
+    writeln!(err, "{heading}")?;
 
     if report.available_skills == 0 {
-        eprintln!("🔎 No plugin skills found in installed plugins.");
-        eprintln!("📦 Plugins can expose skills with skills/<name>/SKILL.md.");
+        writeln!(err, "🔎 No plugin skills found in installed plugins.")?;
+        writeln!(
+            err,
+            "📦 Plugins can expose skills with skills/<name>/SKILL.md."
+        )?;
         return Ok(());
     }
 
-    eprintln!(
+    writeln!(
+        err,
         "📦 Found {}",
         plural_count(report.available_skills, "plugin skill")
-    );
+    )?;
 
     if report.targets.is_empty() {
-        eprintln!("🔎 No supported agent skill targets detected.");
-        eprintln!("💡 Use --agent <agent> or --all to install anyway.");
+        writeln!(err, "🔎 No supported agent skill targets detected.")?;
+        writeln!(err, "💡 Use --agent <agent> or --all to install anyway.")?;
         return Ok(());
     }
 
-    eprintln!(
+    writeln!(
+        err,
         "🎯 Targeting {}:",
         plural_count(report.targets.len(), "agent")
-    );
+    )?;
     for target in &report.targets {
         let reason = target
             .detection_reason
             .as_deref()
             .unwrap_or("explicit target");
-        eprintln!(
+        writeln!(
+            err,
             "   • {:<8} {} ({reason})",
             target.agent.as_str(),
             target.root.display()
-        );
+        )?;
     }
 
-    eprintln!("🛠️  Applying skills:");
+    writeln!(err, "🛠️  Applying skills:")?;
     for action in &report.actions {
         let Some(label) = action_status_label(&action.status, dry_run) else {
             continue;
         };
-        eprintln!(
+        writeln!(
+            err,
             "   {label:<17} {:<28} -> {:<8} {}",
             skill_display_name(action),
             action.agent.as_str(),
             action.destination_dir.display()
-        );
+        )?;
     }
 
     print_install_summary(report, dry_run);
@@ -177,7 +193,8 @@ fn print_install_summary(report: &SkillInstallReport, dry_run: bool) {
     if conflicts > 0 {
         parts.push(count_label(conflicts, "conflict", "conflicts"));
     }
-    eprintln!("✅ Skill install {verb}: {}", parts.join(", "));
+    let mut err = mesh_llm_events::console_err();
+    let _ = writeln!(err, "✅ Skill install {verb}: {}", parts.join(", "));
 }
 
 fn action_status_label(status: &SkillInstallStatus, dry_run: bool) -> Option<&'static str> {
