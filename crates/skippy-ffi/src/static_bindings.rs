@@ -636,6 +636,13 @@ unsafe extern "C" {
         out_error: *mut *mut Error,
     ) -> Status;
 
+    pub fn skippy_write_gguf_from_parts_consuming(
+        input_paths: *const *const c_char,
+        input_count: usize,
+        output_path: *const c_char,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
     pub fn skippy_stage_planner_create_v1(
         config: *const StagePlannerConfigV1,
         out_planner: *mut *mut StagePlanner,
