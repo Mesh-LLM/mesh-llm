@@ -282,6 +282,7 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
         for job_name in (
             "quality_contracts",
             "rust_fmt",
+            "cargo_machete",
             "rust_clippy",
             "cli_docs_sync",
         ):
@@ -639,6 +640,7 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
             "runner_policy": "runs-on: ubuntu-24.04",
             "quality_contracts": "runs-on: ${{ needs.runner_policy.outputs.runner_4 }}",
             "rust_fmt": "runs-on: ${{ needs.runner_policy.outputs.runner_4 }}",
+            "cargo_machete": "runs-on: ${{ needs.runner_policy.outputs.runner_4 }}",
             "rust_clippy": "runs-on: ${{ needs.runner_policy.outputs.runner_8 }}",
             "cli_docs_sync": "runs-on: ${{ needs.runner_policy.outputs.runner_4 }}",
             "authority_sentinel": "runs-on: ${{ needs.runner_policy.outputs.authority_sentinel_runner }}",
@@ -652,6 +654,7 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
             "commit_convention",
             "quality_contracts",
             "rust_fmt",
+            "cargo_machete",
             "rust_clippy",
             "cli_docs_sync",
         ):

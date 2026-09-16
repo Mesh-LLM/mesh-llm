@@ -602,6 +602,10 @@ def _signal_value(
             or path.startswith("website/src/_includes/")
             for path in changed_files
         )
+    if name == "plugin_exemplars_changed":
+        return any(
+            path.startswith("docs/plugins/exemplars/") for path in changed_files
+        )
     if name == "cli_surface_changed":
         return "cli" in domains
     if name == "docs_only":
@@ -778,6 +782,7 @@ def _validate_plan(plan: dict[str, Any], slices: dict[str, Any], packages: list[
         "ui_changed",
         "website_changed",
         "website_docs_changed",
+        "plugin_exemplars_changed",
         "cli_surface_changed",
         "docs_only",
         "backend_changed",
@@ -859,6 +864,7 @@ def build_plan(
         "ui_changed",
         "website_changed",
         "website_docs_changed",
+        "plugin_exemplars_changed",
         "cli_surface_changed",
         "docs_only",
         "backend_changed",

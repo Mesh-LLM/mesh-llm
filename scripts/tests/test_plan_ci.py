@@ -211,6 +211,7 @@ class PlanCiTests(unittest.TestCase):
                 "ui_changed": False,
                 "website_changed": False,
                 "website_docs_changed": False,
+                "plugin_exemplars_changed": False,
                 "cli_surface_changed": False,
                 "docs_only": True,
                 "backend_changed": False,
@@ -298,6 +299,17 @@ class PlanCiTests(unittest.TestCase):
         self.assertNotIn("web", plan["required_slices"])
         self.assertTrue(plan["signals"]["cli_surface_changed"])
         self.assertFalse(plan["signals"]["website_docs_changed"])
+
+    def test_plugin_exemplar_change_sets_its_signal(self) -> None:
+        payload = fixture("docs-only.json")
+        payload["changed_files"] = ["docs/plugins/exemplars/web-ui/Cargo.toml"]
+
+        plan = PLANNER.build_plan(payload, root=ROOT)
+
+        self.assertEqual(plan["domains"], ["docs"])
+        self.assertIn("quality", plan["required_slices"])
+        self.assertFalse(plan["signals"]["rust_changed"])
+        self.assertTrue(plan["signals"]["plugin_exemplars_changed"])
 
     def test_backend_change_adds_only_the_owned_backend_rows(self) -> None:
         payload = fixture("runtime.json")

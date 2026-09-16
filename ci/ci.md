@@ -351,7 +351,8 @@ runtime, composition and smoke dependency chain inside one run, so native
 runtime producers are not duplicated.
 
 - `ci-quality-slice.yml` — action/packaging/consistency contracts, format,
-  bounded Clippy batches and generated CLI inventory freshness.
+  unused-dependency check (cargo-machete), bounded Clippy batches and
+  generated CLI inventory freshness.
 - `ci-web-slice.yml` — console lint/type/test, console Playwright E2E, public
   website build, and CLI explorer browser validation.
 - `ci-ui-artifact-slice.yml` — one immutable console `dist` producer.

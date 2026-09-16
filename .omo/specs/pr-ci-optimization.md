@@ -150,7 +150,7 @@ credentials may differ.
 
 ## Slice catalog
 
-- ci-quality-slice.yml: contracts, formatting, bounded Clippy and CLI docs.
+- ci-quality-slice.yml: contracts, formatting, unused-dependency check, bounded Clippy and CLI docs.
 - ci-web-slice.yml: console lint/type/test and public website build.
 - ci-ui-artifact-slice.yml: one immutable console distribution producer.
 - static-abi-artifact.yml: one verified portable static llama ABI producer.
