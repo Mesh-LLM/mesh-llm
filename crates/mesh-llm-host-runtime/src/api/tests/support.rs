@@ -1134,6 +1134,10 @@ fn assert_runtime_status_payload(status_body: &serde_json::Value) {
         json!("hf://mesh/test-model")
     );
     assert_eq!(
+        status_body["runtime"]["stages"][0]["split_certification"],
+        json!("certified")
+    );
+    assert_eq!(
         status_body["runtime"]["stages"][0]["materialized_pinned"],
         json!(true)
     );
