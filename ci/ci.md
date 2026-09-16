@@ -753,10 +753,10 @@ missing seed is explicitly cold and does not fail. The seed key fingerprints
 the warmer container image and toolchain epoch. Production runtime rows
 explicitly skip seed restoration after three verified CPU warm samples observed
 zero reuse in run `34272984200/1`.
-The warmer's `just ci-sccache-seed-build` recipe covers both the dominant
-`mesh-llm` Clippy graph and the isolated `mesh-llm-cli` test graph used by the
-Rust-test matrix; its `Justfile` and `just/**` inputs are part of the exact
-seed key.
+The warmer's `just ci-sccache-seed-build` recipe covers the dominant
+`mesh-llm` Clippy graph, the release-profile backend-neutral `mesh-llm` host
+graph, and the isolated `mesh-llm-cli` test graph used by the Rust-test matrix;
+its `Justfile` and `just/**` inputs are part of the exact seed key.
 `ci/runner-images.json` and `scripts/runner-image-identity.py check` make the
 current image, native epoch, compiler-seed and SDK Rust identities auditable
 without changing execution. The existing Python test discovery verifies the
