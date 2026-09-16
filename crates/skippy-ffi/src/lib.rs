@@ -5,7 +5,12 @@ mod dynamic_library;
 // without compiling the crate to determine native-runtime compatibility.
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 54;
+pub const ABI_VERSION_PATCH: u32 = 57;
+
+// Propagate static native archive changes through Cargo dependency metadata so
+// final binaries are relinked after CMake rebuilds llama.cpp.
+#[doc(hidden)]
+pub const NATIVE_LINK_FINGERPRINT: &str = env!("SKIPPY_NATIVE_LINK_FINGERPRINT");
 
 mod abi;
 mod activation;
@@ -28,21 +33,22 @@ pub use abi::{
     BACKEND_DEVICE_CAP_BUFFER_FROM_HOST_PTR, BACKEND_DEVICE_CAP_EVENTS,
     BACKEND_DEVICE_CAP_HOST_BUFFER, BackendDevice, BackendDeviceType, Error,
     FEATURE_ACTIVATION_BOUNDARY, FEATURE_BACKEND_DEVICES, FEATURE_DEVICE_EVENTS,
-    FEATURE_DIAGNOSTIC_EVENTS, FEATURE_INKLING_MTP_MM, FEATURE_ITERATION_BATCH, FEATURE_KV_EVENTS,
-    FEATURE_MODEL_LOAD_EVENTS_V2, FEATURE_MODEL_SOURCE, FEATURE_NATIVE_MTP_N1,
-    FEATURE_NGRAM_CACHE_DRAFT, FEATURE_RUNTIME_EVENT_REPORTER, FEATURE_RUNTIME_EVENTS,
-    FEATURE_STAGE_PLAN, FEATURE_UNLOAD_EVENTS, IterationRequest, LlamaLogCallback, LoadMode,
-    MODEL_TENSOR_SOURCE_V1_ABI_VERSION, Model, ModelImatrixEntryV1, ModelInfo,
-    ModelReadTensorF32Callback, ModelTensorSourceV1, MtmdProgressCallback, MtpSource, NgramCache,
-    Opaque, RuntimeConfig, Session, SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn,
-    SkippyRuntimeEventCallback, SkippyRuntimeEventCategory, SkippyRuntimeEventEmitterKind,
-    SkippyRuntimeEventFailureCode, SkippyRuntimeEventKind, SkippyRuntimeEventProgressUnit,
-    SkippyRuntimeEventReporterV1, SkippyRuntimeEventV1, SlicePlan, Status, TRISTATE_AUTO,
-    TRISTATE_FALSE, TRISTATE_TRUE, TensorRole, runtime_abi_supported,
+    FEATURE_DIAGNOSTIC_EVENTS, FEATURE_ITERATION_BATCH, FEATURE_KV_EVENTS,
+    FEATURE_MODEL_LOAD_EVENTS_V2, FEATURE_MODEL_SOURCE, FEATURE_MTP_MULTIMODAL,
+    FEATURE_NATIVE_MTP_N1, FEATURE_NGRAM_CACHE_DRAFT, FEATURE_RUNTIME_EVENT_REPORTER,
+    FEATURE_RUNTIME_EVENTS, FEATURE_STAGE_PLAN, FEATURE_UNLOAD_EVENTS, IterationRequest,
+    LlamaLogCallback, LoadMode, MODEL_TENSOR_SOURCE_V1_ABI_VERSION, Model, ModelImatrixEntryV1,
+    ModelInfo, ModelReadTensorF32Callback, ModelTensorSourceV1, MtmdProgressCallback, MtpSource,
+    NgramCache, Opaque, RuntimeConfig, Session, SkippyDecodeStepSampledMtpFn,
+    SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventCallback, SkippyRuntimeEventCategory,
+    SkippyRuntimeEventEmitterKind, SkippyRuntimeEventFailureCode, SkippyRuntimeEventKind,
+    SkippyRuntimeEventProgressUnit, SkippyRuntimeEventReporterV1, SkippyRuntimeEventV1, SlicePlan,
+    Status, TRISTATE_AUTO, TRISTATE_FALSE, TRISTATE_TRUE, TensorRole, runtime_abi_supported,
 };
 pub use activation::{
-    ACTIVATION_FLAG_GEMMA3N_ALTUP, ACTIVATION_FLAG_INKLING_MTP_EMBD, ACTIVATION_SIDEBAND_TOKEN_IDS,
-    ActivationBoundaryDesc, ActivationDesc, LogitBias, TensorInfo,
+    ACTIVATION_BOUNDARY_DESC_VERSION, ACTIVATION_FRAME_VERSION, ACTIVATION_IDENTITY_BYTES,
+    ACTIVATION_MAX_DIMS, ACTIVATION_MAX_PARTS, ACTIVATION_PART_OPTIONAL, ActivationBoundaryDesc,
+    ActivationDesc, ActivationPartDesc, LogitBias, TensorInfo,
 };
 pub use model::{
     GgmlType, LlamaFileType, LlamaModelImatrixData, LlamaModelKvOverride, LlamaModelKvOverrideType,
@@ -129,7 +135,8 @@ pub use dynamic::{
     skippy_stage_planner_create_v1, skippy_stage_planner_free, skippy_stage_planner_realize_v1,
     skippy_token_is_eog, skippy_tokenize, skippy_trim_session, skippy_verify_tokens,
     skippy_verify_tokens_frame_sampled, skippy_write_gguf_from_parts,
-    skippy_write_gguf_metadata_from_parts, skippy_write_slice_gguf,
+    skippy_write_gguf_from_parts_consuming, skippy_write_gguf_metadata_from_parts,
+    skippy_write_slice_gguf,
 };
 
 #[cfg(feature = "dynamic-runtime")]
@@ -179,5 +186,6 @@ pub use static_bindings::{
     skippy_stage_planner_create_v1, skippy_stage_planner_free, skippy_stage_planner_realize_v1,
     skippy_token_is_eog, skippy_tokenize, skippy_trim_session, skippy_verify_tokens,
     skippy_verify_tokens_frame_sampled, skippy_write_gguf_from_parts,
-    skippy_write_gguf_metadata_from_parts, skippy_write_slice_gguf,
+    skippy_write_gguf_from_parts_consuming, skippy_write_gguf_metadata_from_parts,
+    skippy_write_slice_gguf,
 };

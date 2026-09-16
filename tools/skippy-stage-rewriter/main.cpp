@@ -173,6 +173,8 @@ struct PerLayerTokenProjection {
   const CallExpr *build_call = nullptr;
   const CallExpr *project_call = nullptr;
   const Stmt *build_statement = nullptr;
+  const IfStmt *owner = nullptr;
+  std::string variable;
 };
 
 struct RangeAwareInput {
@@ -922,7 +924,8 @@ altupPrelude(const CompoundStmt *constructor_body, const ForStmt *loop,
 std::optional<PerLayerTokenProjection>
 perLayerTokenProjection(const CompoundStmt *constructor_body,
                         const ForStmt *loop, llvm::StringRef activation,
-                        const FactVisitor &facts, const SourceManager &sm,
+                        const FactVisitor &facts, ASTContext &context,
+                        const SourceManager &sm,
                         const clang::LangOptions &lang) {
   const auto loop_offset = fileOffset(loop->getBeginLoc(), sm);
   if (!loop_offset || facts.calls.count("project_per_layer_inputs") == 0 ||
@@ -945,11 +948,13 @@ perLayerTokenProjection(const CompoundStmt *constructor_body,
   }
   const Stmt *build_statement =
       directChildContaining(constructor_body, build_calls.front(), sm, lang);
-  if (build_statement == nullptr) {
+  const auto *owner = llvm::dyn_cast_or_null<IfStmt>(build_statement);
+  const auto variable = assignedName(build_calls.front(), context);
+  if (build_statement == nullptr || !variable) {
     return std::nullopt;
   }
   return PerLayerTokenProjection{build_calls.front(), project_calls.front(),
-                                 build_statement};
+                                 build_statement, owner, *variable};
 }
 
 std::optional<RangeAwareInput>
@@ -1386,7 +1391,13 @@ public:
     const auto altup =
         altupPrelude(constructor_body, loop, *activation, *carried, sm, lang);
     const auto per_layer_projection = perLayerTokenProjection(
-        constructor_body, loop, *activation, facts, sm, lang);
+        constructor_body, loop, *activation, facts, context, sm, lang);
+    if (per_layer_projection && !altup &&
+        per_layer_projection->owner == nullptr) {
+      refuse(report, "per-layer projection is not owned by a guarded block");
+      reports_.push_back(std::move(report));
+      return;
+    }
     const auto attention_positions =
         rangeAwareInput(constructor_body, loop, loop_body, facts,
                         "build_inp_pos", "is_recr", context, sm, lang);
@@ -1398,6 +1409,14 @@ public:
                         "build_inp_ple", "is_ple", context, sm, lang);
     const auto rwkv_first =
         rwkvFirstValue(constructor_body, loop_body, facts, sm, lang);
+    const bool kimi_k3_residual_sideband =
+        llvm::StringRef(report.file).ends_with("src/models/kimi-k3.cpp") &&
+        containsName(constructor_body, "res_bs") &&
+        containsName(constructor_body, "use_attn_res");
+    const bool glm_dsa_top_k_sideband =
+        facts.calls.count("build_attn_inp_k_dsa") != 0 &&
+        containsName(constructor_body, "prev_top_k") &&
+        containsName(constructor_body, "is_indexer_full");
     const auto stage_zero_sidebands =
         stageZeroSidebands(loop_body, report.proof.loop_var);
     const auto stage_zero_embedding_checks = stageZeroEmbeddingModeChecks(
@@ -1432,6 +1451,12 @@ public:
     }
     if (rwkv_first) {
       report.proof.scope_evidence.emplace_back("rwkv_first_value_sideband");
+    }
+    if (kimi_k3_residual_sideband) {
+      report.proof.scope_evidence.emplace_back("kimi_k3_residual_sideband");
+    }
+    if (glm_dsa_top_k_sideband) {
+      report.proof.scope_evidence.emplace_back("glm_dsa_top_k_sideband");
     }
     if (!stage_zero_sidebands.empty()) {
       report.proof.scope_evidence.emplace_back("stage_zero_loop_sideband");
@@ -1567,7 +1592,7 @@ public:
             expression_indent +
             "    ggml_tensor * values = stage_inp->values;\n" +
             expression_indent +
-            "    res->t_skippy_activation_input = values;\n" +
+            "    res->add_skippy_activation_import(values, 1);\n" +
             expression_indent + "    res->add_input(std::move(stage_inp));\n" +
             expression_indent + "    return values;\n" + expression_indent +
             "}\n" + expression_indent + "return " + original_embedding + ";\n" +
@@ -1634,8 +1659,8 @@ public:
             "    cb(stage_inp->values, \"hc_stage_input\", -1);\n" +
             repeat_indent + "    ggml_set_input(stage_inp->values);\n" +
             repeat_indent + "    " + *carried + " = stage_inp->values;\n" +
-            repeat_indent + "    res->t_skippy_activation_input = " + *carried +
-            ";\n" + repeat_indent +
+            repeat_indent + "    res->add_skippy_activation_import(" + *carried +
+            ", 2);\n" + repeat_indent +
             "    res->add_input(std::move(stage_inp));\n" + repeat_indent +
             "}\n" + repeat_indent;
         if (hyperconnection->repeat_is_initializer) {
@@ -1684,78 +1709,106 @@ public:
       if (per_layer_projection) {
         const std::string sideband_indent = indentationAt(
             per_layer_projection->build_statement->getBeginLoc(), sm);
-        const std::string projection_fallback =
-            altup ? "stage_filtered && il_start > 0 ? " +
-                        altup->slice_helper + "(ctx0, " + *carried +
-                        ", i_altup_act) : " + *activation
-                  : *activation;
-        const std::string sideband =
-            "ggml_tensor * inp_per_layer_proj = " + projection_fallback +
-            ";\n" + sideband_indent +
-            "ggml_tensor * inp_per_layer_sideband = nullptr;\n" +
-            sideband_indent + "ggml_tensor * inp_stage_tokens = nullptr;\n" +
-            sideband_indent +
-            "const skippy_activation_tokens & activation_tokens = "
-            "build_inputs.activation_tokens;\n" +
-            sideband_indent + "const bool use_activation_token_sideband =\n" +
-            sideband_indent + "    stage_filtered && il_start > 0 &&\n" +
-            sideband_indent + "    activation_tokens.tokens != nullptr &&\n" +
-            sideband_indent +
-            "    activation_tokens.token_count == ubatch.n_tokens &&\n" +
-            sideband_indent + "    model.per_layer_tok_embd != nullptr &&\n" +
-            sideband_indent + "    model.tok_embd != nullptr;\n" +
-            sideband_indent + "if (use_activation_token_sideband) {\n" +
-            sideband_indent +
-            "    auto stage_inp = "
-            "std::make_unique<llm_graph_input_stage_tokens>();\n" +
-            sideband_indent +
-            "    stage_inp->tokens = ggml_new_tensor_1d(ctx0, "
-            "GGML_TYPE_I32, ubatch.n_tokens);\n" +
-            sideband_indent +
-            "    cb(stage_inp->tokens, \"inp_stage_tokens\", -1);\n" +
-            sideband_indent + "    ggml_set_input(stage_inp->tokens);\n" +
-            sideband_indent + "    inp_stage_tokens = stage_inp->tokens;\n" +
-            sideband_indent +
-            "    inp_per_layer_sideband = ggml_get_rows(ctx0, "
-            "model.per_layer_tok_embd, inp_stage_tokens);\n" +
-            sideband_indent +
-            "    const int64_t per_layer_width = "
-            "model.per_layer_tok_embd->ne[0] / n_layer;\n" +
-            sideband_indent +
-            "    inp_per_layer_sideband = ggml_reshape_3d(ctx0, "
-            "inp_per_layer_sideband, per_layer_width, n_layer, n_tokens);\n" +
-            sideband_indent +
-            "    inp_per_layer_sideband = ggml_scale(ctx0, "
-            "inp_per_layer_sideband, sqrtf((float) per_layer_width));\n" +
-            sideband_indent +
-            "    cb(inp_per_layer_sideband, \"inp_per_layer_selected\", "
-            "-1);\n" +
-            sideband_indent +
-            "    inp_per_layer_proj = ggml_get_rows(ctx0, model.tok_embd, "
-            "inp_stage_tokens);\n" +
-            sideband_indent +
-            "    inp_per_layer_proj = ggml_scale(ctx0, "
-            "inp_per_layer_proj, sqrtf(n_embd));\n" +
-            sideband_indent +
-            "    cb(inp_per_layer_proj, \"inp_per_layer_proj_embd\", "
-            "-1);\n" +
-            sideband_indent + "    res->add_input(std::move(stage_inp));\n" +
-            sideband_indent + "}\n\n" + sideband_indent;
-        valid &= addInsert(
-            report.edits, "insert_per_layer_token_sideband", report.file,
-            per_layer_projection->build_statement->getBeginLoc(), sideband, sm);
-        const std::string original_build = sourceText(
-            per_layer_projection->build_call->getSourceRange(), sm, lang);
-        valid &= addReplace(
-            report.edits, "rewrite_per_layer_token_input", report.file,
-            per_layer_projection->build_call->getSourceRange(),
-            "use_activation_token_sideband ? inp_per_layer_sideband : " +
-                original_build,
-            sm, lang);
-        valid &= addReplace(
-            report.edits, "rewrite_per_layer_projection_source", report.file,
-            per_layer_projection->project_call->getArg(0)->getSourceRange(),
-            "inp_per_layer_proj", sm, lang);
+        if (!altup) {
+          const std::string &variable = per_layer_projection->variable;
+          const std::string frontier =
+              "if (stage_filtered && il_start > 0 && "
+              "model.per_layer_tok_embd != nullptr) {\n" +
+              sideband_indent + "    " + variable +
+              " = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, "
+              "model.per_layer_tok_embd->ne[0] / n_layer, n_tokens, "
+              "n_layer);\n" + sideband_indent + "    cb(" + variable +
+              ", \"inp_per_layer_stage\", -1);\n" + sideband_indent +
+              "    ggml_set_input(" + variable + ");\n" + sideband_indent +
+              "    res->add_skippy_activation_import(" + *carried +
+              ", 1);\n" + sideband_indent +
+              "    res->add_skippy_activation_import(" + variable +
+              ", 1);\n" + sideband_indent + "}\n\n" + sideband_indent;
+          valid &= addInsert(
+              report.edits, "insert_per_layer_activation_frontier", report.file,
+              per_layer_projection->owner->getBeginLoc(), frontier, sm);
+          const std::string owner_condition = sourceText(
+              per_layer_projection->owner->getCond()->getSourceRange(), sm,
+              lang);
+          valid &= addReplace(
+              report.edits, "guard_per_layer_activation_owner", report.file,
+              per_layer_projection->owner->getCond()->getSourceRange(),
+              "(" + owner_condition +
+                  ") && (!stage_filtered || il_start == 0)",
+              sm, lang);
+        } else {
+          const std::string projection_fallback =
+              "stage_filtered && il_start > 0 ? " + altup->slice_helper +
+              "(ctx0, " + *carried + ", i_altup_act) : " + *activation;
+          const std::string sideband =
+              "ggml_tensor * inp_per_layer_proj = " + projection_fallback +
+              ";\n" + sideband_indent +
+              "ggml_tensor * inp_per_layer_sideband = nullptr;\n" +
+              sideband_indent + "ggml_tensor * inp_stage_tokens = nullptr;\n" +
+              sideband_indent +
+              "const skippy_activation_tokens & activation_tokens = "
+              "build_inputs.activation_tokens;\n" +
+              sideband_indent + "const bool use_activation_token_sideband =\n" +
+              sideband_indent + "    stage_filtered && il_start > 0 &&\n" +
+              sideband_indent + "    activation_tokens.tokens != nullptr &&\n" +
+              sideband_indent +
+              "    activation_tokens.token_count == ubatch.n_tokens &&\n" +
+              sideband_indent + "    model.per_layer_tok_embd != nullptr &&\n" +
+              sideband_indent + "    model.tok_embd != nullptr;\n" +
+              sideband_indent + "if (use_activation_token_sideband) {\n" +
+              sideband_indent +
+              "    auto stage_inp = "
+              "std::make_unique<llm_graph_input_stage_tokens>();\n" +
+              sideband_indent +
+              "    stage_inp->tokens = ggml_new_tensor_1d(ctx0, "
+              "GGML_TYPE_I32, ubatch.n_tokens);\n" +
+              sideband_indent +
+              "    cb(stage_inp->tokens, \"inp_stage_tokens\", -1);\n" +
+              sideband_indent + "    ggml_set_input(stage_inp->tokens);\n" +
+              sideband_indent + "    inp_stage_tokens = stage_inp->tokens;\n" +
+              sideband_indent +
+              "    inp_per_layer_sideband = ggml_get_rows(ctx0, "
+              "model.per_layer_tok_embd, inp_stage_tokens);\n" +
+              sideband_indent +
+              "    const int64_t per_layer_width = "
+              "model.per_layer_tok_embd->ne[0] / n_layer;\n" +
+              sideband_indent +
+              "    inp_per_layer_sideband = ggml_reshape_3d(ctx0, "
+              "inp_per_layer_sideband, per_layer_width, n_layer, n_tokens);\n" +
+              sideband_indent +
+              "    inp_per_layer_sideband = ggml_scale(ctx0, "
+              "inp_per_layer_sideband, sqrtf((float) per_layer_width));\n" +
+              sideband_indent +
+              "    cb(inp_per_layer_sideband, \"inp_per_layer_selected\", "
+              "-1);\n" +
+              sideband_indent +
+              "    inp_per_layer_proj = ggml_get_rows(ctx0, model.tok_embd, "
+              "inp_stage_tokens);\n" +
+              sideband_indent +
+              "    inp_per_layer_proj = ggml_scale(ctx0, "
+              "inp_per_layer_proj, sqrtf(n_embd));\n" +
+              sideband_indent +
+              "    cb(inp_per_layer_proj, \"inp_per_layer_proj_embd\", "
+              "-1);\n" +
+              sideband_indent + "    res->add_input(std::move(stage_inp));\n" +
+              sideband_indent + "}\n\n" + sideband_indent;
+          valid &= addInsert(
+              report.edits, "insert_per_layer_token_sideband", report.file,
+              per_layer_projection->build_statement->getBeginLoc(), sideband,
+              sm);
+          const std::string original_build = sourceText(
+              per_layer_projection->build_call->getSourceRange(), sm, lang);
+          valid &= addReplace(
+              report.edits, "rewrite_per_layer_token_input", report.file,
+              per_layer_projection->build_call->getSourceRange(),
+              "use_activation_token_sideband ? inp_per_layer_sideband : " +
+                  original_build,
+              sm, lang);
+          valid &= addReplace(
+              report.edits, "rewrite_per_layer_projection_source", report.file,
+              per_layer_projection->project_call->getArg(0)->getSourceRange(),
+              "inp_per_layer_proj", sm, lang);
+        }
       }
 
       if (attention_positions) {
@@ -1862,6 +1915,8 @@ public:
                 input_indent + "    ggml_set_input(stage_inp->values);\n" +
                 input_indent + "    " + rwkv_first->variable +
                 " = stage_inp->values;\n" + input_indent +
+                "    res->add_skippy_activation_import(" +
+                rwkv_first->variable + ", 1);\n" + input_indent +
                 "    res->add_input(std::move(stage_inp));\n" + input_indent +
                 "}\n\n" + input_indent;
             valid &=
@@ -1869,17 +1924,67 @@ public:
                           output_statement->getBeginLoc(), input, sm);
           }
         }
-        const std::string export_indent =
-            indentationAt(rwkv_first->next_statement->getBeginLoc(), sm);
-        const std::string output =
-            "if (stage_filtered && !stage_filter.include_output && "
-            "il_start == 0 && " +
-            report.proof.loop_var + " == 0) {\n" + export_indent +
-            "    res->t_skippy_rwkv7_v_first = " + rwkv_first->variable +
-            ";\n" + export_indent + "}\n\n" + export_indent;
-        valid &=
-            addInsert(report.edits, "insert_rwkv_first_output", report.file,
-                      rwkv_first->next_statement->getBeginLoc(), output, sm);
+      }
+
+      std::string family_sideband_input;
+      if (kimi_k3_residual_sideband) {
+        family_sideband_input +=
+            "if (stage_filtered && il_start > 0 && use_attn_res) {\n" +
+            indent +
+            "    const int64_t n_checkpoints = (il_start + "
+            "static_cast<int>(res_bs) - 1)/res_bs;\n" +
+            indent +
+            "    auto residual_input = "
+            "std::make_unique<llm_graph_input_kimi_k3_residual>(n_embd, "
+            "n_checkpoints);\n" +
+            indent +
+            "    residual_input->values = ggml_new_tensor_3d(ctx0, "
+            "GGML_TYPE_F32, n_embd, n_checkpoints, n_tokens);\n" +
+            indent + "    ggml_set_input(residual_input->values);\n" +
+            indent +
+            "    ggml_set_name(residual_input->values, "
+            "\"kimi_k3_residual_input\");\n" +
+            indent + "    resi_stack = residual_input->values;\n" +
+            indent + "    res->add_skippy_activation_import(resi_stack, 2);\n" +
+            indent + "    res->add_input(std::move(residual_input));\n" +
+            indent + "}\n\n" + indent;
+      }
+      if (glm_dsa_top_k_sideband) {
+        family_sideband_input +=
+            "if (stage_filtered && il_start > 0 && "
+            "!hparams.is_indexer_full(il_start)) {\n" +
+            indent +
+            "    const auto * mctx_lid = inp_attn_dsa->mctx->get_lid();\n" +
+            indent +
+            "    const int64_t n_stream = cparams.kv_unified ? 1 : "
+            "ubatch.n_seqs_unq;\n" +
+            indent +
+            "    const int64_t n_top_k = std::min<int64_t>(mctx_lid->get_n_kv(), "
+            "n_indexer_top_k);\n" +
+            indent +
+            "    GGML_ASSERT(n_stream > 0 && n_top_k > 0 && n_tokens % "
+            "n_stream == 0);\n\n" +
+            indent +
+            "    auto sideband = "
+            "std::make_unique<llm_graph_input_glm_dsa_top_k>(n_top_k, "
+            "n_stream);\n" +
+            indent +
+            "    sideband->values = ggml_new_tensor_4d(\n" + indent +
+            "            ctx0, GGML_TYPE_I32, n_top_k, n_tokens/n_stream, "
+            "1, n_stream);\n" +
+            indent + "    ggml_set_input(sideband->values);\n" +
+            indent +
+            "    ggml_set_name(sideband->values, "
+            "\"glm_dsa_top_k_input\");\n" +
+            indent + "    prev_top_k = sideband->values;\n" +
+            indent + "    res->add_skippy_activation_import(prev_top_k, 1);\n" +
+            indent + "    res->add_input(std::move(sideband));\n" +
+            indent + "}\n\n" + indent;
+      }
+      if (!family_sideband_input.empty()) {
+        valid &= addInsert(report.edits, "insert_family_sideband_input",
+                           report.file, loop->getBeginLoc(),
+                           family_sideband_input, sm);
       }
 
       for (const IfStmt *sideband : stage_zero_sidebands) {
@@ -2055,6 +2160,36 @@ public:
     if (!completing_filter) {
       const SourceLocation after_loop =
           clang::Lexer::getLocForEndOfToken(loop->getEndLoc(), 0, sm, lang);
+      std::string family_boundary_export;
+      if (rwkv_first) {
+        family_boundary_export +=
+            "    res->add_skippy_activation_export(" + rwkv_first->variable +
+            ", 1);\n" + indent;
+      }
+      if (kimi_k3_residual_sideband) {
+        family_boundary_export +=
+            "    GGML_ASSERT(!use_attn_res || resi_stack != nullptr);\n" +
+            indent +
+            "    res->add_skippy_activation_export(resi_stack, 2);\n" + indent;
+      }
+      if (glm_dsa_top_k_sideband) {
+        family_boundary_export +=
+            "    if (il_end < n_layer && "
+            "!hparams.is_indexer_full(il_end)) {\n" +
+            indent +
+            "        GGML_ASSERT(prev_top_k != nullptr && \"GLM-DSA "
+            "consumer group boundary requires top-k sideband\");\n" +
+            indent +
+            "        res->add_skippy_activation_export(prev_top_k, 1);\n" +
+            indent + "    }\n" + indent;
+      }
+      if (per_layer_projection && !altup) {
+        family_boundary_export +=
+            "    res->add_skippy_activation_export(" + *carried +
+            ", 1);\n" + indent +
+            "    res->add_skippy_activation_export(" +
+            per_layer_projection->variable + ", 1);\n" + indent;
+      }
       const std::string boundary =
           altup
               ? "\n" + indent +
@@ -2068,10 +2203,7 @@ public:
                     "il_end - "
                     "1);\n" +
                     indent +
-                    "    res->t_skippy_gemma3n_altup = stage_boundary;\n" +
-                    indent +
-                    "    res->t_skippy_activation_output = "
-                    "stage_boundary;\n" +
+                    "    res->add_skippy_activation_export(stage_boundary, 1);\n" +
                     indent +
                     "    res->t_embd = " + altup->slice_helper +
                     "(ctx0, stage_boundary, i_altup_act);\n" +
@@ -2084,10 +2216,11 @@ public:
                     indent + "    cb(" + *carried +
                     ", \"stage_boundary\", il_end - 1);\n" + indent +
                     (hyperconnection
-                         ? "    res->t_skippy_activation_output = " + *carried +
-                               ";\n" + indent
+                         ? "    res->add_skippy_activation_export(" + *carried +
+                               ", 2);\n" + indent
                          : "") +
                     "    res->t_embd = " + *carried + ";\n" + indent +
+                    family_boundary_export +
                     "    ggml_build_forward_expand(gf, " + *carried + ");\n" +
                     indent + "    return;\n" + indent + "}\n";
       valid &= addInsert(report.edits, "insert_stage_boundary", report.file,

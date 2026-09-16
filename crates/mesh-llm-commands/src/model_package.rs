@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use anyhow::{Context, Result, bail};
 use tokio_stream::StreamExt;
 
@@ -72,6 +74,7 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
     }
 
     // ── Submit flow (source ref required) ────────────────────────────
+    validate_submit_output_options(follow, json)?;
     let source_ref = source_repo.context(
         "Source repo is required for job submission.\n\
          Usage: mesh-llm models package <source_repo>:<quant>",
@@ -113,15 +116,18 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
         None
     };
 
+    let mut err = mesh_llm_events::console_err();
+    let mut machine = mesh_llm_events::machine_out();
+
     // Resolve permissions.
-    eprintln!("🔑 Checking permissions...");
+    writeln!(err, "🔑 Checking permissions...")?;
     let perms = permissions::check_permissions(&hf_client).await?;
 
     // Parse timeout.
     let timeout_seconds = parse_timeout(timeout)?;
 
     // Resolve source, target, and build job spec.
-    eprintln!("🔍 Resolving source...");
+    writeln!(err, "🔍 Resolving source...")?;
     let params = PrepareParams {
         source_repo: source_repo.to_string(),
         source_revision: source_model_ref.revision.clone(),
@@ -144,7 +150,8 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
     if !submitting {
         let redacted = redacted_spec(&job.spec);
         if json {
-            println!(
+            writeln!(
+                machine,
                 "{}",
                 serde_json::to_string_pretty(&json!({
                     "dryRun": true,
@@ -159,11 +166,14 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
                     "jobPlan": job.job_plan,
                     "spec": redacted,
                 }))?
-            );
+            )?;
         } else {
-            eprintln!();
-            eprintln!("🔍 Dry run — no HF Job was submitted. Add --confirm to submit.");
-            println!("{}", serde_json::to_string_pretty(&redacted)?);
+            writeln!(err)?;
+            writeln!(
+                err,
+                "🔍 Dry run — no HF Job was submitted. Add --confirm to submit."
+            )?;
+            writeln!(machine, "{}", serde_json::to_string_pretty(&redacted)?)?;
         }
         return Ok(());
     }
@@ -171,7 +181,7 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
     ensure_bucket_script_current(&hf_client).await?;
 
     // Submit.
-    eprintln!();
+    writeln!(err)?;
     let jobs_client = jobs_client.as_ref().expect("jobs client initialized");
     let info = jobs_client.submit(&job.namespace, &job.spec).await?;
     let job_url = format!(
@@ -180,13 +190,22 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
         job.namespace,
         info.id
     );
-    eprintln!("🚀 Submitted: {}", info.id);
-    eprintln!("   Console: {job_url}");
-    eprintln!("   Status:  mesh-llm models package --status {}", info.id);
-    eprintln!("   Logs:    mesh-llm models package --logs {}", info.id);
+    writeln!(err, "🚀 Submitted: {}", info.id)?;
+    writeln!(err, "   Console: {job_url}")?;
+    writeln!(
+        err,
+        "   Status:  mesh-llm models package --status {}",
+        info.id
+    )?;
+    writeln!(
+        err,
+        "   Logs:    mesh-llm models package --logs {}",
+        info.id
+    )?;
 
     if json {
-        println!(
+        writeln!(
+            machine,
             "{}",
             serde_json::to_string_pretty(&json!({
                 "submitted": true,
@@ -202,21 +221,32 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
                 "experimental": job.experimental,
                 "jobPlan": job.job_plan,
             }))?
-        );
+        )?;
     }
 
     // Follow logs if requested.
     if follow {
-        eprintln!();
-        eprintln!("📜 Following logs...");
-        eprintln!();
+        writeln!(err)?;
+        writeln!(err, "📜 Following logs...")?;
+        writeln!(err)?;
         follow_until_done(jobs_client, &job.namespace, &info.id).await?;
     }
 
     Ok(())
 }
 
+fn validate_submit_output_options(follow: bool, json: bool) -> Result<()> {
+    if follow && json {
+        bail!(
+            "--json cannot be combined with --follow: use the submitted job ID with \
+             `mesh-llm models package --logs <job-id> --json`"
+        );
+    }
+    Ok(())
+}
+
 fn print_prepare_job(job: &PrepareJob, perms: &permissions::PermissionCheck) {
+    let mut err = mesh_llm_events::console_err();
     let shard_info = model_ref::split_gguf_shard_info(&job.source_file);
     let shard_str = if let Some(shard) = shard_info {
         format!(" ({} shards)", shard.total)
@@ -224,14 +254,15 @@ fn print_prepare_job(job: &PrepareJob, perms: &permissions::PermissionCheck) {
         String::new()
     };
 
-    eprintln!("   Repo:   {}", job.source_repo);
-    eprintln!("   Commit: {}", job.source_revision);
-    eprintln!("   File:   {}{}", job.source_file, shard_str);
+    let _ = writeln!(err, "   Repo:   {}", job.source_repo);
+    let _ = writeln!(err, "   Commit: {}", job.source_revision);
+    let _ = writeln!(err, "   File:   {}{}", job.source_file, shard_str);
     for projector in &job.projectors {
-        eprintln!("   MMProj: {}", projector.path);
+        let _ = writeln!(err, "   MMProj: {}", projector.path);
     }
-    eprintln!();
-    eprintln!(
+    let _ = writeln!(err);
+    let _ = writeln!(
+        err,
         "🔑 Permissions: {} ({})",
         perms.username,
         if perms.is_meshllm_member {
@@ -240,8 +271,9 @@ fn print_prepare_job(job: &PrepareJob, perms: &permissions::PermissionCheck) {
             "not in meshllm org"
         }
     );
-    eprintln!("   Target:  {}", job.target_repo);
-    eprintln!(
+    let _ = writeln!(err, "   Target:  {}", job.target_repo);
+    let _ = writeln!(
+        err,
         "   Release: {}",
         if job.experimental {
             "experimental (public, not cataloged until HF PR merge)"
@@ -249,7 +281,8 @@ fn print_prepare_job(job: &PrepareJob, perms: &permissions::PermissionCheck) {
             "stable"
         }
     );
-    eprintln!(
+    let _ = writeln!(
+        err,
         "   Catalog: meshllm/catalog ({})",
         if job.catalog_create_pr {
             "will open PR"
@@ -257,8 +290,9 @@ fn print_prepare_job(job: &PrepareJob, perms: &permissions::PermissionCheck) {
             "direct commit"
         }
     );
-    eprintln!();
-    eprintln!(
+    let _ = writeln!(err);
+    let _ = writeln!(
+        err,
         "📋 Job: {}, timeout {}, mesh-llm@{}",
         job.spec.flavor,
         format_timeout(job.spec.timeout_seconds),
@@ -268,13 +302,15 @@ fn print_prepare_job(job: &PrepareJob, perms: &permissions::PermissionCheck) {
             .map(|s| s.as_str())
             .unwrap_or("main")
     );
-    eprintln!(
+    let _ = writeln!(
+        err,
         "   Hardware: {} {} ({})",
         job.job_plan.pretty_name,
         hardware_label(job.job_plan.cpu.as_deref(), job.job_plan.ram.as_deref()),
         job.job_plan.selection_reason
     );
-    eprintln!(
+    let _ = writeln!(
+        err,
         "   Pricing:  ${:.6}/{}, max {}",
         job.job_plan.unit_cost_usd,
         job.job_plan.unit_label,
@@ -288,11 +324,14 @@ async fn run_list_quants(
     source_revision: Option<&str>,
     json_output: bool,
 ) -> Result<()> {
+    let mut err = mesh_llm_events::console_err();
+    let mut machine = mesh_llm_events::machine_out();
     let inventory = prepare::list_inventory(client, source_repo, source_revision).await?;
     let quants = inventory.quants;
 
     if json_output {
-        println!(
+        writeln!(
+            machine,
             "{}",
             serde_json::to_string_pretty(&json!({
                 "sourceRepo": source_repo,
@@ -300,24 +339,25 @@ async fn run_list_quants(
                 "quants": quants,
                 "projectors": inventory.projectors,
             }))?
-        );
+        )?;
         return Ok(());
     }
 
     if quants.is_empty() {
-        eprintln!("No GGUF files found in {source_repo}");
+        writeln!(err, "No GGUF files found in {source_repo}")?;
         return Ok(());
     }
 
-    eprintln!("📦 Available quants in {source_repo}:");
-    eprintln!();
+    writeln!(err, "📦 Available quants in {source_repo}:")?;
+    writeln!(err)?;
     print_quant_table(&quants);
-    eprintln!();
-    eprintln!("Specify one as a model ref, e.g.:");
-    eprintln!(
+    writeln!(err)?;
+    writeln!(err, "Specify one as a model ref, e.g.:")?;
+    writeln!(
+        err,
         "   mesh-llm models package {}",
         source_quant_ref(source_repo, source_revision, &quants[0].name)
-    );
+    )?;
 
     Ok(())
 }
@@ -330,6 +370,7 @@ fn source_quant_ref(source_repo: &str, source_revision: Option<&str>, quant: &st
 }
 
 fn print_quant_table(quants: &[DiscoveredQuant]) {
+    let mut err = mesh_llm_events::console_err();
     // Find the longest name for alignment.
     let max_name = quants.iter().map(|q| q.name.len()).max().unwrap_or(0);
 
@@ -339,7 +380,8 @@ fn print_quant_table(quants: &[DiscoveredQuant]) {
         } else {
             format!("{} shards", q.shard_count)
         };
-        eprintln!(
+        let _ = writeln!(
+            err,
             "   {:<width$}   {:>9}, {}",
             q.name,
             shard_str,
@@ -350,7 +392,11 @@ fn print_quant_table(quants: &[DiscoveredQuant]) {
 }
 
 async fn run_update_script() -> Result<()> {
-    eprintln!("📤 Uploading embedded script to meshllm/layer-split-output bucket...");
+    let mut err = mesh_llm_events::console_err();
+    writeln!(
+        err,
+        "📤 Uploading embedded script to meshllm/layer-split-output bucket..."
+    )?;
     let client = ::model_package::build_hf_client()?;
 
     // Check permissions first.
@@ -364,33 +410,37 @@ async fn run_update_script() -> Result<()> {
     }
 
     script::update_bucket_script(&client).await?;
-    eprintln!(
+    writeln!(
+        err,
         "✅ Bucket script updated ({} bytes)",
         script::EMBEDDED_SCRIPT_SIZE
-    );
+    )?;
     Ok(())
 }
 
 async fn run_status(client: &HfJobsClient, job_id: &str, json_output: bool) -> Result<()> {
+    let mut err = mesh_llm_events::console_err();
+    let mut machine = mesh_llm_events::machine_out();
     let (namespace, id) = parse_job_id(job_id).await?;
     let info = client.inspect(&namespace, &id).await?;
     if json_output {
-        println!(
+        writeln!(
+            machine,
             "{}",
             serde_json::to_string_pretty(&json!({
                 "namespace": namespace,
                 "job": info,
             }))?
-        );
+        )?;
         return Ok(());
     }
-    eprintln!("Job:     {}", info.id);
-    eprintln!("Status:  {}", info.status.stage);
+    writeln!(err, "Job:     {}", info.id)?;
+    writeln!(err, "Status:  {}", info.status.stage)?;
     if let Some(msg) = &info.status.message {
-        eprintln!("Message: {msg}");
+        writeln!(err, "Message: {msg}")?;
     }
     if let Some(created) = &info.created_at {
-        eprintln!("Created: {created}");
+        writeln!(err, "Created: {created}")?;
     }
     Ok(())
 }
@@ -398,24 +448,38 @@ async fn run_status(client: &HfJobsClient, job_id: &str, json_output: bool) -> R
 async fn run_logs(client: &HfJobsClient, job_id: &str, json_output: bool) -> Result<()> {
     use ::model_package::jobs::JobStage;
 
+    let mut out = mesh_llm_events::console_out();
+    let mut err = mesh_llm_events::console_err();
+    let mut machine = mesh_llm_events::machine_out();
+
     let (namespace, id) = parse_job_id(job_id).await?;
 
     let info = client.inspect(&namespace, &id).await?;
     if matches!(info.status.stage, JobStage::Running) && !json_output {
-        eprintln!("Job is still running; draining currently buffered logs only.");
-        eprintln!("Use --follow when submitting to stream until completion.");
-        eprintln!();
+        writeln!(
+            err,
+            "Job is still running; draining currently buffered logs only."
+        )?;
+        writeln!(
+            err,
+            "Use --follow when submitting to stream until completion."
+        )?;
+        writeln!(err)?;
     }
 
     let mut stream = std::pin::pin!(client.stream_logs(&namespace, &id).await?);
     loop {
         match tokio::time::timeout(std::time::Duration::from_secs(5), stream.next()).await {
             Ok(Some(Ok(text))) if json_output => {
-                println!("{}", serde_json::to_string(&json!({ "data": text }))?);
+                writeln!(
+                    machine,
+                    "{}",
+                    serde_json::to_string(&json!({ "data": text }))?
+                )?;
             }
-            Ok(Some(Ok(text))) => println!("{text}"),
+            Ok(Some(Ok(text))) => writeln!(out, "{text}")?,
             Ok(Some(Err(e))) => {
-                eprintln!("Log stream error: {e}");
+                writeln!(err, "Log stream error: {e}")?;
                 break;
             }
             Ok(None) => break,
@@ -426,49 +490,55 @@ async fn run_logs(client: &HfJobsClient, job_id: &str, json_output: bool) -> Res
 }
 
 async fn run_cancel(client: &HfJobsClient, job_id: &str, json_output: bool) -> Result<()> {
+    let mut err = mesh_llm_events::console_err();
+    let mut machine = mesh_llm_events::machine_out();
     let (namespace, id) = parse_job_id(job_id).await?;
     client.cancel(&namespace, &id).await?;
     if json_output {
-        println!(
+        writeln!(
+            machine,
             "{}",
             serde_json::to_string_pretty(&json!({
                 "namespace": namespace,
                 "jobId": id,
                 "canceled": true,
             }))?
-        );
+        )?;
     } else {
-        eprintln!("✅ Job {id} canceled");
+        writeln!(err, "✅ Job {id} canceled")?;
     }
     Ok(())
 }
 
 async fn run_list(client: &HfJobsClient, json_output: bool) -> Result<()> {
+    let mut err = mesh_llm_events::console_err();
+    let mut machine = mesh_llm_events::machine_out();
     // We need to know the namespace — resolve via whoami.
     let hf_client = ::model_package::build_hf_client()?;
     let perms = permissions::check_permissions(&hf_client).await?;
 
     let jobs = client.list(&perms.namespace).await?;
     if json_output {
-        println!(
+        writeln!(
+            machine,
             "{}",
             serde_json::to_string_pretty(&json!({
                 "namespace": perms.namespace,
                 "jobs": jobs,
             }))?
-        );
+        )?;
         return Ok(());
     }
     if jobs.is_empty() {
-        eprintln!("No jobs found in namespace '{}'", perms.namespace);
+        writeln!(err, "No jobs found in namespace '{}'", perms.namespace)?;
         return Ok(());
     }
 
-    eprintln!("Recent jobs in '{}':", perms.namespace);
-    eprintln!();
+    writeln!(err, "Recent jobs in '{}':", perms.namespace)?;
+    writeln!(err)?;
     for job in &jobs {
         let created = job.created_at.as_deref().unwrap_or("?");
-        eprintln!("  {} {} {}", job.id, job.status.stage, created);
+        writeln!(err, "  {} {} {}", job.id, job.status.stage, created)?;
     }
     Ok(())
 }
@@ -477,18 +547,21 @@ async fn run_list(client: &HfJobsClient, json_output: bool) -> Result<()> {
 async fn follow_until_done(client: &HfJobsClient, namespace: &str, job_id: &str) -> Result<()> {
     use ::model_package::jobs::JobStage;
 
+    let mut out = mesh_llm_events::console_out();
+    let mut err = mesh_llm_events::console_err();
+
     loop {
         loop {
             let info = client.inspect(namespace, job_id).await?;
             match info.status.stage {
                 JobStage::Running => break,
                 JobStage::Completed => {
-                    eprintln!("Job {} finished: {}", job_id, info.status.stage);
+                    writeln!(err, "Job {} finished: {}", job_id, info.status.stage)?;
                     return Ok(());
                 }
                 JobStage::Error | JobStage::Canceled | JobStage::Deleted => {
                     if let Some(msg) = &info.status.message {
-                        eprintln!("Message: {msg}");
+                        writeln!(err, "Message: {msg}")?;
                     }
                     anyhow::bail!(
                         "Job {} finished unsuccessfully: {}",
@@ -503,9 +576,9 @@ async fn follow_until_done(client: &HfJobsClient, namespace: &str, job_id: &str)
         let mut stream = std::pin::pin!(client.stream_logs(namespace, job_id).await?);
         while let Some(line) = stream.next().await {
             match line {
-                Ok(text) => println!("{text}"),
+                Ok(text) => writeln!(out, "{text}")?,
                 Err(e) => {
-                    eprintln!("Log stream error: {e}");
+                    writeln!(err, "Log stream error: {e}")?;
                     break;
                 }
             }
@@ -514,13 +587,13 @@ async fn follow_until_done(client: &HfJobsClient, namespace: &str, job_id: &str)
         let info = client.inspect(namespace, job_id).await?;
         match info.status.stage {
             JobStage::Completed => {
-                eprintln!();
-                eprintln!("Job {} finished: {}", job_id, info.status.stage);
+                writeln!(err)?;
+                writeln!(err, "Job {} finished: {}", job_id, info.status.stage)?;
                 return Ok(());
             }
             JobStage::Error | JobStage::Canceled | JobStage::Deleted => {
                 if let Some(msg) = &info.status.message {
-                    eprintln!("Message: {msg}");
+                    writeln!(err, "Message: {msg}")?;
                 }
                 anyhow::bail!(
                     "Job {} finished unsuccessfully: {}",
@@ -529,10 +602,11 @@ async fn follow_until_done(client: &HfJobsClient, namespace: &str, job_id: &str)
                 );
             }
             _ => {
-                eprintln!(
+                writeln!(
+                    err,
                     "Log stream ended while job is still {}; reconnecting...",
                     info.status.stage
-                );
+                )?;
                 tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             }
         }
@@ -540,26 +614,29 @@ async fn follow_until_done(client: &HfJobsClient, namespace: &str, job_id: &str)
 }
 
 async fn ensure_bucket_script_current(client: &hf_hub::HFClient) -> Result<()> {
+    let mut stderr = mesh_llm_events::console_err();
     match script::check_bucket_script(client).await {
         Ok(freshness) if freshness.is_current => Ok(()),
         Ok(freshness) => {
-            eprintln!(
+            writeln!(
+                stderr,
                 "Bucket script is out of date ({}); updating it now...",
                 freshness
                     .mismatch_reason
                     .as_deref()
                     .unwrap_or("embedded script differs from bucket script")
-            );
+            )?;
             script::update_bucket_script(client).await?;
-            eprintln!("Bucket script updated.");
+            writeln!(stderr, "Bucket script updated.")?;
             Ok(())
         }
         Err(err) => {
-            eprintln!(
+            writeln!(
+                stderr,
                 "Could not check bucket script freshness ({err:#}); uploading current script..."
-            );
+            )?;
             script::update_bucket_script(client).await?;
-            eprintln!("Bucket script updated.");
+            writeln!(stderr, "Bucket script updated.")?;
             Ok(())
         }
     }
@@ -661,6 +738,16 @@ fn format_timeout(seconds: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_submit_rejects_follow_before_starting_a_job() {
+        let error = validate_submit_output_options(true, true)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("--json cannot be combined with --follow"));
+        assert!(validate_submit_output_options(false, true).is_ok());
+        assert!(validate_submit_output_options(true, false).is_ok());
+    }
 
     #[test]
     fn parse_timeout_hours() {

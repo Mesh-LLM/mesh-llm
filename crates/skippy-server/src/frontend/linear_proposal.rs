@@ -661,7 +661,7 @@ pub(crate) fn execute_linear_proposal_with_terminal_discard<T>(
                 .discard(decision_id, LinearProposalDiscardReason::ExecutionFailed)
                 .is_err()
             {
-                eprintln!(
+                tracing::warn!(
                     "linear proposal terminal discard failed; preserving the primary execution error"
                 );
             }

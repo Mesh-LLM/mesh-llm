@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use anyhow::Result;
 use clap::Parser;
 
@@ -13,7 +15,8 @@ async fn main() -> Result<()> {
         Command::ServeBinary(args) => serve_binary(args).await,
         Command::ServeOpenAi(args) => serve_openai(args).await,
         Command::ExampleConfig => {
-            println!("{}", serde_json::to_string_pretty(&example_config())?);
+            let mut out = mesh_llm_events::machine_out();
+            writeln!(out, "{}", serde_json::to_string_pretty(&example_config())?)?;
             Ok(())
         }
     }

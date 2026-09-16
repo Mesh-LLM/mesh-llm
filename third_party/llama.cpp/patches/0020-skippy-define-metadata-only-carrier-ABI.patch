@@ -1,8 +1,8 @@
-From 5b552f0e12e7173ddf3d12ea2d741532134a6912 Mon Sep 17 00:00:00 2001
+From c75da9e5031a4fbf27d27d1e8666eaeffec7a4c2 Mon Sep 17 00:00:00 2001
 From: scama
  <a1860575018c4680d5669dd7bc3bd356b478bccb8d42e194df46304a5e25f49a@meshllm.communities.buzz.xyz>
 Date: Wed, 9 Sep 2026 09:18:53 +1000
-Subject: [PATCH 20/23] skippy: define metadata-only carrier ABI
+Subject: [PATCH 020/113] skippy: define metadata-only carrier ABI
 
 Assisted-by: scama
 ---

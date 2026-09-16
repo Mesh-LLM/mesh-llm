@@ -1,0 +1,27 @@
+From dea7d1b3b77060840cfc5b3ec1ff9bc48a624f38 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Tue, 15 Sep 2026 16:47:35 +1000
+Subject: [PATCH] fix: instantiate legacy token array loader
+
+Signed-off-by: Mesh-LLM CI <ci@mesh-llm.local>
+---
+ src/llama-model-loader.cpp | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
+index 24a444a3b..77c8da7a2 100644
+--- a/src/llama-model-loader.cpp
++++ b/src/llama-model-loader.cpp
+@@ -367,6 +367,9 @@ namespace GGUFMeta {
+         return true;
+     }
+ 
++    template bool llama_model_loader::get_arr<int32_t>(
++            const std::string & key, std::vector<int32_t> & result, bool required);
++
+     template<typename T, size_t N_MAX>
+     bool llama_model_loader::get_arr(const std::string & key, std::array<T, N_MAX> & result, bool required) {
+         const gguf_context * ctx = metadata;
+-- 
+2.54.0 (Apple Git-157)
+

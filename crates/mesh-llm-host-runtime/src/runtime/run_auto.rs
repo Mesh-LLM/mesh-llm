@@ -1142,6 +1142,7 @@ pub(super) async fn advertise_run_auto_models(
     node.set_serving_models(all_declared.clone()).await;
     node.set_hosted_models(Vec::new()).await;
     node.set_models(all_declared).await;
+    super::model_presentation::advertise_startup_sources(node, startup_models).await;
     node.regossip().await;
 }
 

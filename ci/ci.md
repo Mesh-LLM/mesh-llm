@@ -753,10 +753,10 @@ missing seed is explicitly cold and does not fail. The seed key fingerprints
 the warmer container image and toolchain epoch. Production runtime rows
 explicitly skip seed restoration after three verified CPU warm samples observed
 zero reuse in run `34272984200/1`.
-The warmer's `just ci-sccache-seed-build` recipe covers both the dominant
-`mesh-llm` Clippy graph and the isolated `mesh-llm-cli` test graph used by the
-Rust-test matrix; its `Justfile` and `just/**` inputs are part of the exact
-seed key.
+The warmer's `just ci-sccache-seed-build` recipe covers the dominant
+`mesh-llm` Clippy graph, the release-profile backend-neutral `mesh-llm` host
+graph, and the isolated `mesh-llm-cli` test graph used by the Rust-test matrix;
+its `Justfile` and `just/**` inputs are part of the exact seed key.
 `ci/runner-images.json` and `scripts/runner-image-identity.py check` make the
 current image, native epoch, compiler-seed and SDK Rust identities auditable
 without changing execution. The existing Python test discovery verifies the
@@ -941,3 +941,37 @@ exact cause of misses is claimed. Whole-action C/C++ counts also include package
 tool dependencies. Global workload coverage stays unknown for other consumers.
 [Original retained evidence and hashes](runtime-seed-evidence/34272984200-1/README.md)
 preserve the basis beyond remote artifact expiry.
+
+## Console-print product scope
+
+`just no-console-print` forbids the print macros and direct `io::stdout()` /
+`io::stderr()` handles in product sources. There is no allowlist: every
+exemption is a category rule, so no individual call site can be approved. Its
+scope excludes test paths, parsed `#[cfg(test)]` modules, examples, benches,
+auxiliary `src/bin/` targets and the explicit `NON_PRODUCT_CRATES` list in
+`tools/xtask/src/no_console_print/scope.rs`. Build scripts remain excluded
+because their output contains Cargo directives. `mesh-llm/src/main.rs` and
+`mesh-client` remain in scope.
+
+The handle rule exempts only the files that implement the console output
+facility, listed as `CONSOLE_OUTPUT_OWNERS` in the same module: the sink-aware
+writer and its pre-sink CLI fallback, the inline progress renderers, the TUI
+output manager / fd capture / terminal backend, the runtime tracing writer,
+skippy-server's stderr telemetry sink, and the CLI presentation surfaces.
+A capability probe such as `io::stdout().is_terminal()` reads nothing and is
+not a handle.
+
+The gate checks Cargo metadata on every invocation and rejects an exempt crate
+that becomes a transitive normal dependency of `mesh-llm`, including optional
+and platform-specific dependencies. Tests cover that guard and the scope rules.
+The Quality workflow still invokes the same `just no-console-print` gate.
+
+The CPU native runtime-event gate selects `family-qwen3-dense` from the
+`skippy-ci-smoke` manifest for both `pull-request` and `main` cadences. The
+canonical artifact registry explicitly permits both uses, and the workflow
+contract test resolves its selected model through the real manifest resolver.
+
+The gate resolves bundle, model and evidence paths against the caller's working
+directory before invoking Cargo. Cargo starts the integration test in its crate
+directory; absolute paths keep its evidence writer and the wrapper's execution
+check on the same file.

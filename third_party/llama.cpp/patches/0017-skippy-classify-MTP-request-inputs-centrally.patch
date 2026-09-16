@@ -1,7 +1,7 @@
-From 99e9b560bfced7d13189081073d67772e2398ff8 Mon Sep 17 00:00:00 2001
+From e3e3f3af4bdfc6779712717414ef90cb6022fc4c Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 8 Sep 2026 00:57:55 +1000
-Subject: [PATCH 17/23] skippy: classify MTP request inputs centrally
+Subject: [PATCH 017/113] skippy: classify MTP request inputs centrally
 
 ---
  src/llama-graph.cpp                     | 24 ++++++++++++++++++++++++
@@ -9,7 +9,7 @@ Subject: [PATCH 17/23] skippy: classify MTP request inputs centrally
  2 files changed, 48 insertions(+)
 
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 05145d9f7..5d0d99f4f 100644
+index b66da8d3c..1a3491875 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -16,6 +16,7 @@

@@ -92,6 +92,10 @@ fn planned_profile(profile_id: &str) -> PlannedStageProfile {
         source_snapshot_identity: "snapshot-1".to_string(),
         graph_configuration_id: "graph-config-1".to_string(),
         backend_id: "backend-1".to_string(),
+        activation_imports: Vec::new(),
+        activation_exports: Vec::new(),
+        activation_import_bindings: Vec::new(),
+        activation_export_bindings: Vec::new(),
     }
 }
 
@@ -107,6 +111,8 @@ fn realized_profile(profile_id: &str) -> RealizedStageProfile {
         backend_id: planned.backend_id,
         activation_imports: Vec::new(),
         activation_exports: Vec::new(),
+        activation_import_bindings: Vec::new(),
+        activation_export_bindings: Vec::new(),
         request_inputs: Vec::new(),
         state_effects: Vec::new(),
     }
@@ -324,6 +330,25 @@ fn profile_identity_mismatch_rejects() {
         admit_stage_plan(&planned(&m, &["package.tensor.a"], &["batched"]), &r, &m),
         Err(StagePlanAdmissionError::ProfileIdentityMismatch {
             field: "graph_identity",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn live_frontier_binding_mismatch_rejects() {
+    let m = manifest();
+    let mut p = planned(&m, &["package.tensor.a"], &["batched"]);
+    p.profiles[0].activation_imports = vec!["frontier-a".to_string()];
+    p.profiles[0].activation_import_bindings = vec!["live-input-a".to_string()];
+    let mut r = realized(&m, &["package.tensor.a"], &["batched"]);
+    r.profiles[0].activation_imports = vec!["frontier-a".to_string()];
+    r.profiles[0].activation_import_bindings = vec!["live-input-b".to_string()];
+
+    assert!(matches!(
+        admit_stage_plan(&p, &r, &m),
+        Err(StagePlanAdmissionError::ProfileIdentityMismatch {
+            field: "activation_import_bindings",
             ..
         })
     ));

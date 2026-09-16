@@ -8,6 +8,7 @@ mod collector;
 mod event_cutover;
 mod inventory;
 mod metrics;
+mod model_labels;
 #[cfg(test)]
 mod plugin_tests;
 mod plugins;

@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -29,6 +30,34 @@ BENCH = load_module()
 
 
 class CompetitiveBenchmarkTest(unittest.TestCase):
+    def test_request_completion_records_cached_and_new_prompt_tokens(self) -> None:
+        class Response:
+            status = 200
+
+            @staticmethod
+            def read() -> bytes:
+                return json.dumps(
+                    {
+                        "choices": [{"message": {"content": "ok"}}],
+                        "usage": {
+                            "prompt_tokens": 4096,
+                            "prompt_tokens_details": {"cached_tokens": 3072},
+                            "completion_tokens": 1,
+                        },
+                    }
+                ).encode()
+
+        connection = mock.Mock()
+        connection.getresponse.return_value = Response()
+        with mock.patch.object(BENCH.http.client, "HTTPConnection", return_value=connection):
+            result = BENCH.request_completion(8080, "model", "prompt", 1, False)
+
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["prompt_tokens"], 4096)
+        self.assertEqual(result["cached_prompt_tokens"], 3072)
+        self.assertEqual(result["new_prompt_tokens"], 1024)
+        connection.close.assert_called_once_with()
+
     def test_checked_in_plan_covers_both_platforms_all_models_and_full_ladder(self) -> None:
         config = BENCH.load_config(CONFIG)
         plan = BENCH.build_plan(

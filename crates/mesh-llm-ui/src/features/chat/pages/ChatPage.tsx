@@ -194,7 +194,7 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
       AUTO_MODEL_OPTION,
       ...selectableModels.map((item) => ({
         value: item.name,
-        label: item.name,
+        label: item.displayName || item.name,
         meta: `${item.family} · ${item.context}`,
         status: modelStatusBadge(item)
       }))

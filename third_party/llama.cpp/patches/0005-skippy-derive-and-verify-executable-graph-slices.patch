@@ -1,7 +1,7 @@
-From 13ee77597ddd201be83dc2875977f3726725ffed Mon Sep 17 00:00:00 2001
+From 4c105ed21e3633b4e549f7109e141ccdb6a381c3 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 7 Sep 2026 06:23:09 +1000
-Subject: [PATCH 05/23] skippy: derive and verify executable graph slices
+Subject: [PATCH 005/113] skippy: derive and verify executable graph slices
 
 ---
  src/skippy/block_boundaries.cpp   |   64 ++
@@ -13,15 +13,15 @@ Subject: [PATCH 05/23] skippy: derive and verify executable graph slices
  src/skippy/graph_build_inputs.h   |  134 ++++
  src/skippy/graph_dependencies.cpp |   57 ++
  src/skippy/graph_dependencies.h   |   11 +
- src/skippy/graph_identity.cpp     | 1009 +++++++++++++++++++++++++++++
+ src/skippy/graph_identity.cpp     | 1020 +++++++++++++++++++++++++++++
  src/skippy/graph_identity.h       |   59 ++
  src/skippy/stage_plan.cpp         |  516 +++++++++++++++
  src/skippy/stage_slice_plan.cpp   |  748 +++++++++++++++++++++
  src/skippy/stage_slice_plan.h     |   98 +++
- src/skippy/state_effects.cpp      |  352 ++++++++++
+ src/skippy/state_effects.cpp      |  361 ++++++++++
  src/skippy/state_effects.h        |   68 ++
  src/skippy/verification.cpp       |  265 ++++++++
- 17 files changed, 4660 insertions(+)
+ 17 files changed, 4680 insertions(+)
  create mode 100644 src/skippy/block_boundaries.cpp
  create mode 100644 src/skippy/block_boundaries.h
  create mode 100644 src/skippy/executable_graph.cpp
@@ -1641,10 +1641,10 @@ index 000000000..d34f53fe4
 +        const llama_model * model);
 diff --git a/src/skippy/graph_identity.cpp b/src/skippy/graph_identity.cpp
 new file mode 100644
-index 000000000..e9db18dc8
+index 000000000..b9e394f0d
 --- /dev/null
 +++ b/src/skippy/graph_identity.cpp
-@@ -0,0 +1,1009 @@
+@@ -0,0 +1,1020 @@
 +#include "graph_identity.h"
 +
 +#include "block_boundaries.h"
@@ -2046,8 +2046,14 @@ index 000000000..e9db18dc8
 +
 +    bool bind_state() {
 +        std::map<std::pair<int32_t, int32_t>, uint32_t> ordinals;
++        std::set<const ggml_tensor *> bound_storages;
 +        for (const auto & effect : effects) {
 +            if (effect.access != skippy_state_access::read) {
++                continue;
++            }
++            // Architectures that share one KV cache tensor across layers bind
++            // the storage once; later readers resolve to the same leaf.
++            if (!bound_storages.insert(effect.storage).second) {
 +                continue;
 +            }
 +            leaf_identity leaf;
@@ -2162,6 +2168,11 @@ index 000000000..e9db18dc8
 +            return false;
 +        }
 +        for (int source = 0; source < GGML_MAX_SRC; ++source) {
++            // ggml_cast (and friends) point src[1] back at the node itself;
++            // that self-reference carries no semantic dependency.
++            if (node->src[source] == node) {
++                continue;
++            }
 +            if (!tensor_value(node->src[source], index, sources[source])) {
 +                return false;
 +            }
@@ -4101,10 +4112,10 @@ index 000000000..f5517646a
 +        std::string & error);
 diff --git a/src/skippy/state_effects.cpp b/src/skippy/state_effects.cpp
 new file mode 100644
-index 000000000..69db4f530
+index 000000000..e4778aff3
 --- /dev/null
 +++ b/src/skippy/state_effects.cpp
-@@ -0,0 +1,352 @@
+@@ -0,0 +1,361 @@
 +#include "state_effects.h"
 +
 +#include "block_boundaries.h"
@@ -4290,7 +4301,7 @@ index 000000000..69db4f530
 +    using owner = std::tuple<int32_t, int32_t, const ggml_tensor *>;
 +    std::set<owner> seen_reads;
 +    std::unordered_set<const ggml_tensor *> seen_write_nodes;
-+    std::unordered_map<const ggml_tensor *, owner> storage_owners;
++    std::unordered_map<const ggml_tensor *, std::set<owner>> storage_owners;
 +    std::set<owner> reads;
 +    std::map<owner, std::map<int64_t, int>> writes;
 +
@@ -4306,11 +4317,20 @@ index 000000000..69db4f530
 +            return false;
 +        }
 +        const owner key = {static_cast<int32_t>(effect.kind), effect.layer, effect.storage};
-+        const auto inserted = storage_owners.emplace(effect.storage, key);
-+        if (!inserted.second && inserted.first->second != key) {
-+            error = effect_error("state effect %zu conflicts with another storage owner", i);
-+            return false;
++        // Architectures may share one KV cache tensor across several attention
++        // layers (for example gemma3n's reused per-layer caches), so the same
++        // state kind may own a storage from several layers; a kind change on
++        // the same storage remains a conflict.
++        const auto existing = storage_owners.find(effect.storage);
++        if (existing != storage_owners.end()) {
++            for (const auto & prior : existing->second) {
++                if (std::get<0>(prior) != std::get<0>(key)) {
++                    error = effect_error("state effect %zu conflicts with another storage owner", i);
++                    return false;
++                }
++            }
 +        }
++        storage_owners[effect.storage].insert(key);
 +        if (effect.access == skippy_state_access::read) {
 +            if (effect.effect_node != nullptr || effect.write_ordinal != -1 ||
 +                    !seen_reads.insert(key).second) {

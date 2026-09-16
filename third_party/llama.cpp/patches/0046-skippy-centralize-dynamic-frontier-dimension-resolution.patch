@@ -1,0 +1,70 @@
+From 51a530246054c8fbd6f639d86bbb9251a492e6e1 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Tue, 15 Sep 2026 21:15:05 +1000
+Subject: [PATCH] skippy: centralize dynamic frontier dimension resolution
+
+---
+ src/skippy/activation.cpp        |  5 +++--
+ src/skippy/activation_internal.h |  5 +++++
+ src/skippy/activation_layout.cpp | 12 ++++++++++++
+ 3 files changed, 20 insertions(+), 2 deletions(-)
+
+diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
+index b3cb37958..92bce6e69 100644
+--- a/src/skippy/activation.cpp
++++ b/src/skippy/activation.cpp
+@@ -334,9 +334,10 @@ enum skippy_status skippy_prepare_output_activation_frame(
+                 if (part.dimensions[dimension] < 0) {
+                     const auto * forwarded = input_desc == nullptr ? nullptr : skippy_activation_find_part(input_desc, part.identity);
+                     if (forwarded != nullptr && forwarded->dimensions[dimension] > 0) part.dimensions[dimension] = forwarded->dimensions[dimension];
+-                    else if (part.ggml_type == GGML_TYPE_I32 && dimension == 0 && skippy_is_glm_dsa_activation_model(session))
+-                        part.dimensions[dimension] = skippy_glm_dsa_sideband_top_k_count(session, token_count);
+                     else {
++                        part.dimensions[dimension] = skippy_resolve_activation_part_dimension(
++                                session, part, dimension, token_count);
++                        if (part.dimensions[dimension] > 0) continue;
+                         skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "output frontier has an unresolved dynamic dimension");
+                         return SKIPPY_STATUS_RUNTIME_ERROR;
+                     }
+diff --git a/src/skippy/activation_internal.h b/src/skippy/activation_internal.h
+index 0950486db..08c84f473 100644
+--- a/src/skippy/activation_internal.h
++++ b/src/skippy/activation_internal.h
+@@ -34,6 +34,11 @@ bool skippy_glm_dsa_sideband_top_k_count_is_valid(
+         uint32_t actual_top_k,
+         uint32_t expected_top_k);
+ uint32_t skippy_glm_dsa_top_k_count_from_desc(const skippy_activation_desc * desc);
++int64_t skippy_resolve_activation_part_dimension(
++        const skippy_session * session,
++        const skippy_activation_part_desc & part,
++        uint32_t dimension,
++        size_t token_count);
+ bool skippy_has_activation_payload(const skippy_activation_desc * desc, const void * payload);
+ const skippy_activation_part_desc * skippy_activation_part_at(const skippy_activation_desc * desc, size_t index);
+ const skippy_activation_part_desc * skippy_activation_find_part(
+diff --git a/src/skippy/activation_layout.cpp b/src/skippy/activation_layout.cpp
+index 33bea8f07..6ab9df878 100644
+--- a/src/skippy/activation_layout.cpp
++++ b/src/skippy/activation_layout.cpp
+@@ -351,6 +351,18 @@ uint32_t skippy_glm_dsa_top_k_count_from_desc(const skippy_activation_desc * des
+     return static_cast<uint32_t>(std::min<int64_t>(part->dimensions[0], std::numeric_limits<uint32_t>::max()));
+ }
+ 
++int64_t skippy_resolve_activation_part_dimension(
++        const skippy_session * session,
++        const skippy_activation_part_desc & part,
++        uint32_t dimension,
++        size_t token_count) {
++    if (part.ggml_type == GGML_TYPE_I32 && dimension == 0 &&
++            skippy_is_glm_dsa_activation_model(session)) {
++        return skippy_glm_dsa_sideband_top_k_count(session, token_count);
++    }
++    return -1;
++}
++
+ bool skippy_has_activation_payload(const skippy_activation_desc * desc, const void * payload) {
+     return desc != nullptr && desc->payload_bytes > 0 && payload != nullptr;
+ }
+-- 
+2.54.0 (Apple Git-157)
+

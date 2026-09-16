@@ -3,6 +3,7 @@ use anyhow::{Context, Result};
 use hf_hub::{RepoTypeModel, repository::ModelInfo};
 use mesh_llm_events::terminal_progress::{DeterminateProgressLine, clear_stderr_line};
 use std::collections::BTreeSet;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 struct CachedRepo {
@@ -23,11 +24,12 @@ pub fn run_update(repo: Option<&str>, all: bool, check: bool) -> Result<()> {
 }
 
 fn run_update_sync(repo: Option<&str>, all: bool, check: bool) -> Result<()> {
+    let mut err = mesh_llm_events::console_err();
     let api = build_hf_api(!check)?;
     let repos = cached_repos()?;
     if repos.is_empty() {
-        eprintln!("📦 No cached Hugging Face model repos found");
-        eprintln!("   {}", huggingface_hub_cache_dir().display());
+        writeln!(err, "📦 No cached Hugging Face model repos found")?;
+        writeln!(err, "   {}", huggingface_hub_cache_dir().display())?;
         return Ok(());
     }
 
@@ -59,10 +61,10 @@ fn run_update_sync(repo: Option<&str>, all: bool, check: bool) -> Result<()> {
     };
 
     if !check {
-        eprintln!("🔄 Updating cached Hugging Face repos");
-        eprintln!("📁 Cache: {}", huggingface_hub_cache_dir().display());
-        eprintln!("📦 Selected: {}", selected.len());
-        eprintln!();
+        writeln!(err, "🔄 Updating cached Hugging Face repos")?;
+        writeln!(err, "📁 Cache: {}", huggingface_hub_cache_dir().display())?;
+        writeln!(err, "📦 Selected: {}", selected.len())?;
+        writeln!(err)?;
     }
     let mut updates = 0usize;
     let total_selected = selected.len();
@@ -73,48 +75,66 @@ fn run_update_sync(repo: Option<&str>, all: bool, check: bool) -> Result<()> {
             if let Some(remote_revision) = check_repo_update(&api, &repo)? {
                 updates += 1;
                 clear_progress_line()?;
-                eprintln!("🆕 [{}/{}] {}", index + 1, total_selected, repo.repo_id);
-                eprintln!("   ref: {}", repo.ref_name);
-                eprintln!("   local: {}", short_revision(&repo.local_revision));
-                eprintln!("   latest: {}", short_revision(&remote_revision));
-                eprintln!("   update: mesh-llm models updates {}", repo.repo_id);
-                eprintln!();
+                writeln!(
+                    err,
+                    "🆕 [{}/{}] {}",
+                    index + 1,
+                    total_selected,
+                    repo.repo_id
+                )?;
+                writeln!(err, "   ref: {}", repo.ref_name)?;
+                writeln!(err, "   local: {}", short_revision(&repo.local_revision))?;
+                writeln!(err, "   latest: {}", short_revision(&remote_revision))?;
+                writeln!(err, "   update: mesh-llm models updates {}", repo.repo_id)?;
+                writeln!(err)?;
             }
         } else {
-            eprintln!("🧭 [{}/{}] {}", index + 1, total_selected, repo.repo_id);
+            writeln!(
+                err,
+                "🧭 [{}/{}] {}",
+                index + 1,
+                total_selected,
+                repo.repo_id
+            )?;
             let counts = update_cached_repo(&api, &repo)?;
             refresh_totals.refreshed += counts.refreshed;
             refresh_totals.missing_meta += counts.missing_meta;
-            eprintln!();
+            writeln!(err)?;
         }
     }
     if check {
         clear_progress_line()?;
         if updates > 0 {
-            eprintln!("📬 Update summary");
-            eprintln!("   repos with updates: {updates}");
-            eprintln!("   update one: mesh-llm models updates <repo>");
-            eprintln!("   update all: mesh-llm models updates --all");
+            writeln!(err, "📬 Update summary")?;
+            writeln!(err, "   repos with updates: {updates}")?;
+            writeln!(err, "   update one: mesh-llm models updates <repo>")?;
+            writeln!(err, "   update all: mesh-llm models updates --all")?;
         }
     } else {
-        eprintln!();
-        eprintln!("✅ Update complete");
-        eprintln!("   refreshed files: {}", refresh_totals.refreshed);
+        writeln!(err)?;
+        writeln!(err, "✅ Update complete")?;
+        writeln!(err, "   refreshed files: {}", refresh_totals.refreshed)?;
         if refresh_totals.missing_meta > 0 {
-            eprintln!("   missing config.json: {}", refresh_totals.missing_meta);
+            writeln!(
+                err,
+                "   missing config.json: {}",
+                refresh_totals.missing_meta
+            )?;
         }
     }
     Ok(())
 }
 
 pub fn warn_about_updates_for_paths(paths: &[PathBuf]) {
+    let mut console = mesh_llm_events::console_err();
     let mut cache_models = Vec::new();
     let mut seen = BTreeSet::new();
     for path in paths {
         let Some(repo) = (match cached_repo_for_path(path) {
             Ok(repo) => repo,
             Err(err) => {
-                eprintln!(
+                let _ = writeln!(
+                    console,
                     "Warning: could not inspect cached Hugging Face repo for {}: {err}",
                     path.display()
                 );
@@ -132,19 +152,29 @@ pub fn warn_about_updates_for_paths(paths: &[PathBuf]) {
     }
 
     let result = run_hf_sync(move || {
+        let mut console = mesh_llm_events::console_err();
         let api = build_hf_api(false)?;
         for repo in cache_models {
             match check_repo_update(&api, &repo) {
                 Ok(Some(remote_revision)) => {
-                    eprintln!("🆕 Update available for {}", repo.repo_id);
-                    eprintln!("   local: {}", short_revision(&repo.local_revision));
-                    eprintln!("   latest: {}", short_revision(&remote_revision));
-                    eprintln!("   continuing with pinned local snapshot");
-                    eprintln!("   update: mesh-llm models updates {}", repo.repo_id);
+                    let _ = writeln!(console, "🆕 Update available for {}", repo.repo_id);
+                    let _ = writeln!(
+                        console,
+                        "   local: {}",
+                        short_revision(&repo.local_revision)
+                    );
+                    let _ = writeln!(console, "   latest: {}", short_revision(&remote_revision));
+                    let _ = writeln!(console, "   continuing with pinned local snapshot");
+                    let _ = writeln!(
+                        console,
+                        "   update: mesh-llm models updates {}",
+                        repo.repo_id
+                    );
                 }
                 Ok(None) => {}
                 Err(err) => {
-                    eprintln!(
+                    let _ = writeln!(
+                        console,
                         "Warning: could not check for updates for {}: {err}",
                         repo.repo_id
                     );
@@ -154,7 +184,10 @@ pub fn warn_about_updates_for_paths(paths: &[PathBuf]) {
         Ok(())
     });
     if let Err(err) = result {
-        eprintln!("Warning: could not initialize Hugging Face update checks: {err}");
+        let _ = writeln!(
+            console,
+            "Warning: could not initialize Hugging Face update checks: {err}"
+        );
     }
 }
 
@@ -340,6 +373,7 @@ fn check_repo_update(api: &hf_hub::HFClientSync, repo: &CachedRepo) -> Result<Op
 }
 
 fn update_cached_repo(api: &hf_hub::HFClientSync, repo: &CachedRepo) -> Result<UpdateCounts> {
+    let mut console = mesh_llm_events::console_err();
     let (owner, name) = repo
         .repo_id
         .split_once('/')
@@ -347,12 +381,20 @@ fn update_cached_repo(api: &hf_hub::HFClientSync, repo: &CachedRepo) -> Result<U
     let api_repo = api.model(owner, name);
     let files = cached_repo_files(repo)?;
     if files.is_empty() {
-        eprintln!("⚠️ {} has no cached files to refresh", repo.repo_id);
+        writeln!(
+            console,
+            "⚠️ {} has no cached files to refresh",
+            repo.repo_id
+        )?;
         return Ok(UpdateCounts::default());
     }
 
-    eprintln!("   ref: {}", repo.ref_name);
-    eprintln!("   current: {}", short_revision(&repo.local_revision));
+    writeln!(console, "   ref: {}", repo.ref_name)?;
+    writeln!(
+        console,
+        "   current: {}",
+        short_revision(&repo.local_revision)
+    )?;
     let mut counts = UpdateCounts::default();
     let mut downloaded = BTreeSet::new();
     let total_files = files.len() + 1;
@@ -365,7 +407,7 @@ fn update_cached_repo(api: &hf_hub::HFClientSync, repo: &CachedRepo) -> Result<U
             continue;
         }
         position += 1;
-        eprintln!("   ↻ [{}/{}] {}", position, total_files, file);
+        writeln!(console, "   ↻ [{}/{}] {}", position, total_files, file)?;
         match api_repo
             .download_file()
             .filename(file.clone())
@@ -373,14 +415,18 @@ fn update_cached_repo(api: &hf_hub::HFClientSync, repo: &CachedRepo) -> Result<U
             .send()
         {
             Ok(path) => {
-                eprintln!("   ✅ {}", path.display());
+                writeln!(console, "   ✅ {}", path.display())?;
                 counts.refreshed += 1;
             }
             Err(err) if file == "config.json" => {
                 if is_not_found_error(&err.to_string()) {
-                    eprintln!("   ℹ️ no config.json published for {}", repo.repo_id);
+                    writeln!(
+                        console,
+                        "   ℹ️ no config.json published for {}",
+                        repo.repo_id
+                    )?;
                 } else {
-                    eprintln!("   ⚠️ config.json: {err}");
+                    writeln!(console, "   ⚠️ config.json: {err}")?;
                 }
                 counts.missing_meta += 1;
             }

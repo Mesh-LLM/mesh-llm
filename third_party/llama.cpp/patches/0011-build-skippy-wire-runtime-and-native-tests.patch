@@ -1,7 +1,7 @@
-From 63c0e5b5ac8555a37302b2b2da812f9f0c62972b Mon Sep 17 00:00:00 2001
+From cf2d9dd373d6303075c37afc321808dd5c0d435b Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 7 Sep 2026 06:23:51 +1000
-Subject: [PATCH 11/23] build(skippy): wire runtime and native tests
+Subject: [PATCH 011/113] build(skippy): wire runtime and native tests
 
 ---
  CMakeLists.txt            | 17 +++++++++++++++++
@@ -11,7 +11,7 @@ Subject: [PATCH 11/23] build(skippy): wire runtime and native tests
  4 files changed, 31 insertions(+), 1 deletion(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 86b09dfd4..2ce07587c 100644
+index 4052fa3d6..99d46fb76 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -2,6 +2,18 @@ cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit
@@ -33,7 +33,7 @@ index 86b09dfd4..2ce07587c 100644
  ### llama.cpp version
  set(LLAMA_VERSION_MAJOR 0)
  set(LLAMA_VERSION_MINOR 4)
-@@ -271,6 +283,7 @@ set(LLAMA_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location o
+@@ -281,6 +293,7 @@ set(LLAMA_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location o
  
  set(LLAMA_PUBLIC_HEADERS
      ${CMAKE_CURRENT_SOURCE_DIR}/include/llama.h
@@ -41,7 +41,7 @@ index 86b09dfd4..2ce07587c 100644
      ${CMAKE_CURRENT_SOURCE_DIR}/include/llama-cpp.h)
  
  set_target_properties(llama
-@@ -278,6 +291,10 @@ set_target_properties(llama
+@@ -288,6 +301,10 @@ set_target_properties(llama
          PUBLIC_HEADER "${LLAMA_PUBLIC_HEADERS}")
  
  install(TARGETS llama LIBRARY PUBLIC_HEADER)
@@ -53,10 +53,10 @@ index 86b09dfd4..2ce07587c 100644
  if (LLAMA_BUILD_COMMON)
      install(TARGETS llama-common LIBRARY)
 diff --git a/common/CMakeLists.txt b/common/CMakeLists.txt
-index 9a43911d3..0c66e485f 100644
+index 38dab96ab..ae1bc1a0f 100644
 --- a/common/CMakeLists.txt
 +++ b/common/CMakeLists.txt
-@@ -103,6 +103,7 @@ add_library(${TARGET}
+@@ -105,6 +105,7 @@ add_library(${TARGET}
      reasoning-budget.h
      sampling.cpp
      sampling.h
@@ -64,7 +64,7 @@ index 9a43911d3..0c66e485f 100644
      speculative.cpp
      speculative.h
      subproc.cpp
-@@ -143,6 +144,7 @@ endif()
+@@ -145,6 +146,7 @@ endif()
  
  if (BUILD_SHARED_LIBS)
      set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)

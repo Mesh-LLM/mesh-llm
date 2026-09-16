@@ -12,7 +12,7 @@ use mesh_llm_host_runtime::command_support::models::{
     remote_catalog_model_ref,
 };
 use std::fmt::Write as FmtWrite;
-use std::io::{IsTerminal, Write};
+use std::io::Write;
 use std::time::Duration;
 use tabwriter::TabWriter;
 
@@ -186,12 +186,14 @@ impl SearchFormatter for ConsoleFormatter {
         filter: SearchArtifactFilter,
         sort: SearchSort,
     ) -> Result<()> {
-        eprintln!(
+        let mut err = mesh_llm_events::console_err();
+        writeln!(
+            err,
             "🔎 No {} catalog models matched '{}' (sorted by {}).",
             filter_label(filter),
             query,
             sort_label(sort)
-        );
+        )?;
         Ok(())
     }
 
@@ -239,12 +241,14 @@ impl SearchFormatter for ConsoleFormatter {
         filter: SearchArtifactFilter,
         sort: SearchSort,
     ) -> Result<()> {
-        eprintln!(
+        let mut err = mesh_llm_events::console_err();
+        writeln!(
+            err,
             "🔎 No Hugging Face {} matches for '{}' (sorted by {}).",
             filter_label(filter),
             query,
             sort_label(sort)
-        );
+        )?;
         Ok(())
     }
 
@@ -374,8 +378,9 @@ impl ModelsFormatter for ConsoleFormatter {
 
     fn render_installed(&self, rows: &[InstalledRow]) -> Result<()> {
         if rows.is_empty() {
-            println!("📦 No installed models found");
-            println!("   HF cache: {}", huggingface_cache_dir().display());
+            let mut out = mesh_llm_events::console_out();
+            writeln!(out, "📦 No installed models found")?;
+            writeln!(out, "   HF cache: {}", huggingface_cache_dir().display())?;
             return Ok(());
         }
 
@@ -459,56 +464,57 @@ impl ModelsFormatter for ConsoleFormatter {
     }
 
     fn render_show(&self, details: &ModelDetails, variants: Option<&[ModelDetails]>) -> Result<()> {
+        let mut out = mesh_llm_events::console_out();
         if model_kind_code(details.kind) == "mlx" {
-            println!("🔎 {}", details.exact_ref);
+            writeln!(out, "🔎 {}", details.exact_ref)?;
         } else {
-            println!("🔎 {}", details.display_name);
+            writeln!(out, "🔎 {}", details.display_name)?;
         }
         if let Some(summary) = super::formatters::local_capacity_summary() {
-            println!("{}", summary);
+            writeln!(out, "{}", summary)?;
         }
-        println!();
-        println!("Ref: {}", details.exact_ref);
-        println!("Type: {}", details.kind);
-        println!("Source: {}", format_source_label(details.source));
+        writeln!(out)?;
+        writeln!(out, "Ref: {}", details.exact_ref)?;
+        writeln!(out, "Type: {}", details.kind)?;
+        writeln!(out, "Source: {}", format_source_label(details.source))?;
         if let Some(size) = details.size_label.as_deref() {
-            println!("Size: {size}");
+            writeln!(out, "Size: {size}")?;
             if let Some(fit) = fit_hint_for_size_label(size) {
-                println!("Fit: {}", fit);
+                writeln!(out, "Fit: {}", fit)?;
             }
         }
         if let Some(description) = details.description.as_deref() {
-            println!("About: {description}");
+            writeln!(out, "About: {description}")?;
         }
         if let Some(draft) = details.draft.as_deref() {
-            println!("🧠 Draft: {draft}");
+            writeln!(out, "🧠 Draft: {draft}")?;
         }
-        println!("Capabilities:");
-        println!("  💬 text");
+        writeln!(out, "Capabilities:")?;
+        writeln!(out, "  💬 text")?;
         if details.capabilities.multimodal_label().is_some() {
-            println!("  🎛️ multimodal");
+            writeln!(out, "  🎛️ multimodal")?;
         }
         if let Some(label) = details.capabilities.vision_label() {
-            println!("  👁️ vision ({label})");
+            writeln!(out, "  👁️ vision ({label})")?;
         }
         if let Some(label) = details.capabilities.audio_label() {
-            println!("  🔊 audio ({label})");
+            writeln!(out, "  🔊 audio ({label})")?;
         }
         if let Some(label) = details.capabilities.reasoning_label() {
-            println!("  🧠 reasoning ({label})");
+            writeln!(out, "  🧠 reasoning ({label})")?;
         }
-        println!("📥 Download:");
+        writeln!(out, "📥 Download:")?;
         if model_kind_code(details.kind) == "mlx" {
-            println!("   mesh-llm models download {}", details.exact_ref);
+            writeln!(out, "   mesh-llm models download {}", details.exact_ref)?;
         } else {
-            println!("   {}", details.download_url);
+            writeln!(out, "   {}", details.download_url)?;
         }
 
         if let Some(variants) = variants
             && !variants.is_empty()
         {
-            println!();
-            println!("Variants:");
+            writeln!(out)?;
+            writeln!(out, "Variants:")?;
             let mut rows = Vec::new();
             for variant in variants {
                 let size = variant.size_label.as_deref().unwrap_or("-");
@@ -541,26 +547,32 @@ impl ModelsFormatter for ConsoleFormatter {
                 )?;
             }
             table.flush()?;
-            print!("{}", String::from_utf8_lossy(&table.into_inner()?));
+            write!(out, "{}", String::from_utf8_lossy(&table.into_inner()?))?;
         }
         Ok(())
     }
 
     fn render_download(&self, input: DownloadRenderInput<'_>) -> Result<()> {
-        let colors = std::io::stdout().is_terminal();
-        println!("{}", downloaded_model_headline(input.stats, colors));
-        println!();
+        let mut out = mesh_llm_events::console_out();
+        let colors = out.is_terminal();
+        writeln!(out, "{}", downloaded_model_headline(input.stats, colors))?;
+        writeln!(out)?;
         for line in download_summary_lines(&input, colors) {
-            println!("{line}");
+            writeln!(out, "{line}")?;
         }
         if let Some((_draft_name, draft_path)) = input.draft {
-            println!();
-            println!("{}", styled_download_success("✓ Downloaded draft", colors));
-            println!(
+            writeln!(out)?;
+            writeln!(
+                out,
+                "{}",
+                styled_download_success("✓ Downloaded draft", colors)
+            )?;
+            writeln!(
+                out,
                 "   {}   {}",
                 styled_label("path", colors),
                 draft_path.display()
-            );
+            )?;
         }
         Ok(())
     }
@@ -571,10 +583,11 @@ impl ModelsFormatter for ConsoleFormatter {
         package_ref: &str,
         path: &std::path::Path,
     ) -> Result<()> {
-        println!("✅ Downloaded layer package");
-        println!("   requested: {model_ref}");
-        println!("   package: {package_ref}");
-        println!("   {}", path.display());
+        let mut out = mesh_llm_events::console_out();
+        writeln!(out, "✅ Downloaded layer package")?;
+        writeln!(out, "   requested: {model_ref}")?;
+        writeln!(out, "   package: {package_ref}")?;
+        writeln!(out, "   {}", path.display())?;
         Ok(())
     }
 
@@ -583,68 +596,86 @@ impl ModelsFormatter for ConsoleFormatter {
     }
 
     fn render_delete_preview(&self, resolved: &CliResolvedModel) -> Result<()> {
-        println!("🗑️ Model delete preview");
-        println!();
-        println!("Name: {}", resolved.display_name);
+        let mut out = mesh_llm_events::console_out();
+        writeln!(out, "🗑️ Model delete preview")?;
+        writeln!(out)?;
+        writeln!(out, "Name: {}", resolved.display_name)?;
         if resolved.paths.len() > 1 {
-            println!("Paths ({}):", resolved.paths.len());
+            writeln!(out, "Paths ({}):", resolved.paths.len())?;
             for path in &resolved.paths {
-                println!("  {}", path.display());
+                writeln!(out, "  {}", path.display())?;
             }
         } else {
-            println!("Path: {}", resolved.path.display());
+            writeln!(out, "Path: {}", resolved.path.display())?;
         }
-        println!("Mode: installed model ref resolution");
+        writeln!(out, "Mode: installed model ref resolution")?;
         let file_size = resolved
             .paths
             .iter()
             .map(|path| std::fs::metadata(path).map(|m| m.len()).unwrap_or(0))
             .sum();
-        println!("Size: {}", format_installed_size(file_size));
+        writeln!(out, "Size: {}", format_installed_size(file_size))?;
         if resolved.derived_stage_paths.is_empty() {
-            println!("Derived stage cache files: 0");
+            writeln!(out, "Derived stage cache files: 0")?;
         } else {
-            println!(
+            writeln!(
+                out,
                 "Derived stage cache files ({}):",
                 resolved.derived_stage_paths.len()
-            );
+            )?;
             for path in &resolved.derived_stage_paths {
-                println!("  {}", path.display());
+                writeln!(out, "  {}", path.display())?;
             }
         }
         if !resolved.matched_records.is_empty() {
-            println!();
-            println!("{} usage record(s) found:", resolved.matched_records.len());
+            writeln!(out)?;
+            writeln!(
+                out,
+                "{} usage record(s) found:",
+                resolved.matched_records.len()
+            )?;
             for record in &resolved.matched_records {
-                println!(
+                writeln!(
+                    out,
                     "  - {} (last used: {})",
                     record.lookup_key, record.last_used_at
-                );
+                )?;
             }
         }
-        println!();
-        println!("To confirm deletion, run with --yes flag.");
+        writeln!(out)?;
+        writeln!(out, "To confirm deletion, run with --yes flag.")?;
         Ok(())
     }
 
     fn render_delete_result(&self, result: &CliDeleteResult) -> Result<()> {
-        println!("✅ Model deleted successfully");
-        println!();
-        println!("Deleted paths:");
+        let mut out = mesh_llm_events::console_out();
+        writeln!(out, "✅ Model deleted successfully")?;
+        writeln!(out)?;
+        writeln!(out, "Deleted paths:")?;
         for p in &result.deleted_paths {
-            println!("  {}", p.display());
+            writeln!(out, "  {}", p.display())?;
         }
-        println!();
-        println!(
+        writeln!(out)?;
+        writeln!(
+            out,
             "Reclaimed: {}",
             format_installed_size(result.reclaimed_bytes)
-        );
-        println!("Metadata files removed: {}", result.removed_metadata_files);
-        println!("Usage records purged: {}", result.removed_usage_records);
-        println!(
+        )?;
+        writeln!(
+            out,
+            "Metadata files removed: {}",
+            result.removed_metadata_files
+        )?;
+        writeln!(
+            out,
+            "Usage records purged: {}",
+            result.removed_usage_records
+        )?;
+        writeln!(
+            out,
             "Derived stage cache files removed: {}",
             result.removed_derived_cache_files
-        );
+        )?;
         Ok(())
     }
 }

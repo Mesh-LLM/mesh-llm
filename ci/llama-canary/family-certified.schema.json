@@ -122,7 +122,7 @@
             "runner_role": {"const": "family-certify"},
             "cache_policy": {"const": "immutable-local"},
             "estimated_model_bytes": {"type": "integer", "minimum": 1},
-            "startup_timeout_secs": {"type": "integer", "minimum": 180, "maximum": 900}
+            "startup_timeout_secs": {"type": "integer", "minimum": 180, "maximum": 1800}
           }
         },
         "notes": {"$ref": "#/$defs/singleLine"}

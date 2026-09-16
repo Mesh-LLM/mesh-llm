@@ -8,6 +8,7 @@ use mesh_llm_runtime_install::{
 };
 use serde::Serialize;
 use serde_json::json;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Serialize)]
@@ -91,9 +92,10 @@ impl RuntimeNativeFormatter for HumanFormatter {
         rows: &[AvailableRuntimeRow],
         sources: &NativeRuntimeCatalogSources,
     ) -> Result<()> {
-        eprintln!("🔎 Catalogs consulted");
+        let mut err = mesh_llm_events::console_err();
+        writeln!(err, "🔎 Catalogs consulted")?;
         for line in sources.describe() {
-            eprintln!("   {line}");
+            writeln!(err, "   {line}")?;
         }
         print_available_human(rows);
         Ok(())
@@ -114,21 +116,22 @@ impl RuntimeNativeFormatter for HumanFormatter {
     }
 
     fn render_install_error(&self, error: &Error) -> Result<()> {
-        eprintln!("❌ Native runtime install failed");
-        eprintln!("   Reason: {error}");
+        let mut err = mesh_llm_events::console_err();
+        writeln!(err, "❌ Native runtime install failed")?;
+        writeln!(err, "   Reason: {error}")?;
         // A resolution failure carries its explanation (catalogs consulted,
         // rejected candidates) as structure; the causes underneath, such as
         // the resolver's own verdict or a manifest that failed to parse, stay
         // one per line.
         if let Some(resolution) = error.downcast_ref::<NativeRuntimeResolutionError>() {
             for line in resolution.explanation_lines() {
-                eprintln!("   {line}");
+                writeln!(err, "   {line}")?;
             }
         }
         for cause in error.chain().skip(1) {
-            eprintln!("   cause: {cause}");
+            writeln!(err, "   cause: {cause}")?;
         }
-        eprintln!("   Try: mesh-llm runtime list --available");
+        writeln!(err, "   Try: mesh-llm runtime list --available")?;
         Ok(())
     }
 
@@ -138,26 +141,33 @@ impl RuntimeNativeFormatter for HumanFormatter {
         mesh_version: &str,
         removed: bool,
     ) -> Result<()> {
+        let mut err = mesh_llm_events::console_err();
         if removed {
-            eprintln!("✅ Removed native runtime {native_runtime_id} for MeshLLM {mesh_version}");
+            writeln!(
+                err,
+                "✅ Removed native runtime {native_runtime_id} for MeshLLM {mesh_version}"
+            )?;
         } else {
-            eprintln!(
+            writeln!(
+                err,
                 "🔎 Native runtime {native_runtime_id} for MeshLLM {mesh_version} was not installed"
-            );
+            )?;
         }
         Ok(())
     }
 
     fn render_prune(&self, plan: &CachePrunePlan) -> Result<()> {
+        let mut err = mesh_llm_events::console_err();
         if plan.remove_dirs.is_empty() {
-            eprintln!("✅ Native runtime cache already pruned");
+            writeln!(err, "✅ Native runtime cache already pruned")?;
         } else {
-            eprintln!(
+            writeln!(
+                err,
                 "✅ Pruned {} native runtime cache version(s)",
                 plan.remove_dirs.len()
-            );
+            )?;
             for dir in &plan.remove_dirs {
-                eprintln!("   removed: {}", dir.display());
+                writeln!(err, "   removed: {}", dir.display())?;
             }
         }
         Ok(())
@@ -236,7 +246,8 @@ impl RuntimeNativeFormatter for JsonFormatter {
 }
 
 fn print_json(value: &(impl Serialize + ?Sized)) -> Result<()> {
-    println!("{}", serde_json::to_string_pretty(value)?);
+    let mut out = mesh_llm_events::machine_out();
+    writeln!(out, "{}", serde_json::to_string_pretty(value)?)?;
     Ok(())
 }
 
@@ -248,12 +259,16 @@ fn install_status_label(status: NativeRuntimeInstallStatus) -> &'static str {
 }
 
 fn print_available_human(rows: &[AvailableRuntimeRow]) {
+    let mut out = mesh_llm_events::console_out();
     if rows.is_empty() {
-        println!("📦 No native runtime manifest entries found");
-        println!("   Pass --manifest or --bundle-dir to inspect available runtimes.");
+        let _ = writeln!(out, "📦 No native runtime manifest entries found");
+        let _ = writeln!(
+            out,
+            "   Pass --manifest or --bundle-dir to inspect available runtimes."
+        );
         return;
     }
-    println!("📦 Available native runtimes");
+    let _ = writeln!(out, "📦 Available native runtimes");
     for row in rows {
         let marker = if row.supported { "✅" } else { "⚠️" };
         let status = if row.supported {
@@ -261,90 +276,112 @@ fn print_available_human(rows: &[AvailableRuntimeRow]) {
         } else {
             "not compatible"
         };
-        println!(
+        let _ = writeln!(
+            out,
             "  - {marker} {} {status} ({}, {}/{})",
             row.id, row.backend, row.os, row.arch
         );
         if let Some(mesh_version) = row.mesh_version.as_deref() {
-            println!(
+            let _ = writeln!(
+                out,
                 "    MeshLLM: {mesh_version}; Skippy ABI: {}",
                 row.skippy_abi
             );
         } else {
-            println!("    MeshLLM: unspecified; Skippy ABI: {}", row.skippy_abi);
+            let _ = writeln!(
+                out,
+                "    MeshLLM: unspecified; Skippy ABI: {}",
+                row.skippy_abi
+            );
         }
         for reason in &row.rejection_reasons {
-            println!("    reason: {}", format_rejection(reason));
+            let _ = writeln!(out, "    reason: {}", format_rejection(reason));
         }
     }
 }
 
 fn print_installed_human(installed: &[InstalledNativeRuntime], cache_root: &Path) {
+    let mut out = mesh_llm_events::console_out();
     if installed.is_empty() {
-        println!("📦 No local native runtimes found");
-        println!("   cache: {}", cache_root.display());
+        let _ = writeln!(out, "📦 No local native runtimes found");
+        let _ = writeln!(out, "   cache: {}", cache_root.display());
         return;
     }
-    println!("📦 Local native runtimes");
-    println!("   cache: {}", cache_root.display());
+    let _ = writeln!(out, "📦 Local native runtimes");
+    let _ = writeln!(out, "   cache: {}", cache_root.display());
     for runtime in installed {
-        println!(
+        let _ = writeln!(
+            out,
             "  - ✅ {} {} ({})",
             runtime.native_runtime_id, runtime.mesh_version, runtime.flavor
         );
-        println!("    path: {}", runtime.path.display());
+        let _ = writeln!(out, "    path: {}", runtime.path.display());
     }
 }
 
 fn print_install_human(outcome: &NativeRuntimeInstallOutcome) {
+    let mut err = mesh_llm_events::console_err();
     match outcome.status {
         NativeRuntimeInstallStatus::AlreadyInstalled => {
-            eprintln!(
+            let _ = writeln!(
+                err,
                 "✅ Native runtime already installed: {}",
                 outcome.runtime.native_runtime_id
             );
-            eprintln!("   version: {}", outcome.runtime.mesh_version);
-            eprintln!("   flavor: {}", outcome.runtime.flavor);
-            eprintln!("   path: {}", outcome.runtime.path.display());
+            let _ = writeln!(err, "   version: {}", outcome.runtime.mesh_version);
+            let _ = writeln!(err, "   flavor: {}", outcome.runtime.flavor);
+            let _ = writeln!(err, "   path: {}", outcome.runtime.path.display());
         }
         NativeRuntimeInstallStatus::Installed => {
-            eprintln!("✅ Installed {}", outcome.runtime.native_runtime_id);
-            eprintln!("   version: {}", outcome.runtime.mesh_version);
-            eprintln!("   flavor: {}", outcome.runtime.flavor);
-            eprintln!("   path: {}", outcome.runtime.path.display());
+            let _ = writeln!(err, "✅ Installed {}", outcome.runtime.native_runtime_id);
+            let _ = writeln!(err, "   version: {}", outcome.runtime.mesh_version);
+            let _ = writeln!(err, "   flavor: {}", outcome.runtime.flavor);
+            let _ = writeln!(err, "   path: {}", outcome.runtime.path.display());
         }
     }
     for line in outcome.sources.describe() {
-        eprintln!("   catalog: {line}");
+        let _ = writeln!(err, "   catalog: {line}");
     }
 }
 
 fn print_doctor_human(report: &NativeRuntimeDoctorReport) {
-    println!("🩺 MeshLLM doctor");
-    println!();
-    println!("Native runtime:");
-    println!("  status: {}", report.status);
-    println!("  running MeshLLM version: {}", report.running_mesh_version);
-    println!(
+    let mut out = mesh_llm_events::console_out();
+    let _ = writeln!(out, "🩺 MeshLLM doctor");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "Native runtime:");
+    let _ = writeln!(out, "  status: {}", report.status);
+    let _ = writeln!(
+        out,
+        "  running MeshLLM version: {}",
+        report.running_mesh_version
+    );
+    let _ = writeln!(
+        out,
         "  selected runtime version: {}",
         report.selected_mesh_version
     );
     if report.selected_mesh_version != report.running_mesh_version {
-        println!("  version pin: native runtime version is pinned by config");
+        let _ = writeln!(
+            out,
+            "  version pin: native runtime version is pinned by config"
+        );
     }
     if let Some(skippy_abi) = &report.configured_skippy_abi {
-        println!("  configured Skippy ABI: {skippy_abi}");
+        let _ = writeln!(out, "  configured Skippy ABI: {skippy_abi}");
     }
     if let Some(selection) = &report.configured_selection {
-        println!("  configured selection: {selection}");
+        let _ = writeln!(out, "  configured selection: {selection}");
     }
     if let Some(selection) = &report.effective_selection
         && report.configured_selection.as_deref() != Some(selection.as_str())
     {
-        println!("  effective selection: {selection} (from --llama-flavor)");
+        let _ = writeln!(
+            out,
+            "  effective selection: {selection} (from --llama-flavor)"
+        );
     }
-    println!("  cache: {}", report.cache_path.display());
-    println!("  host: {}/{}", report.host.os, report.host.arch);
+    let _ = writeln!(out, "  cache: {}", report.cache_path.display());
+    let _ = writeln!(out, "  host: {}/{}", report.host.os, report.host.arch);
     let flavors = report
         .host
         .available_flavors
@@ -352,38 +389,39 @@ fn print_doctor_human(report: &NativeRuntimeDoctorReport) {
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(", ");
-    println!("  detected flavors: {flavors}");
+    let _ = writeln!(out, "  detected flavors: {flavors}");
     match &report.selected_runtime_id {
         Some(id) => {
-            println!("  selected: {id}");
+            let _ = writeln!(out, "  selected: {id}");
             if let Some(flavor) = &report.selected_runtime_flavor {
-                println!("  flavor: {flavor}");
+                let _ = writeln!(out, "  flavor: {flavor}");
             }
             if let Some(path) = &report.selected_runtime_path {
-                println!("  path: {}", path.display());
+                let _ = writeln!(out, "  path: {}", path.display());
             }
         }
         None => {
-            println!("  selected: none");
+            let _ = writeln!(out, "  selected: none");
         }
     }
-    println!("  installed: {}", report.installed_count);
-    println!(
+    let _ = writeln!(out, "  installed: {}", report.installed_count);
+    let _ = writeln!(
+        out,
         "  installed for selected version: {}",
         report.selected_version_installed_count
     );
     if !report.blockers.is_empty() {
-        println!();
-        println!("Blockers:");
+        let _ = writeln!(out);
+        let _ = writeln!(out, "Blockers:");
         for blocker in &report.blockers {
-            println!("  - {blocker}");
+            let _ = writeln!(out, "  - {blocker}");
         }
     }
     if !report.recommendations.is_empty() {
-        println!();
-        println!("Recommended next steps:");
+        let _ = writeln!(out);
+        let _ = writeln!(out, "Recommended next steps:");
         for recommendation in &report.recommendations {
-            println!("  - {recommendation}");
+            let _ = writeln!(out, "  - {recommendation}");
         }
     }
 }

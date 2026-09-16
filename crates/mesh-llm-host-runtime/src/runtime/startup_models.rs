@@ -73,6 +73,8 @@ impl StartupPinnedGpuTarget {
 
 #[derive(Clone, Debug)]
 pub(super) struct StartupModelPlan {
+    /// Original source, independent of the content-addressed split routing ID.
+    pub(super) model_source: String,
     pub(super) declared_ref: String,
     pub(super) config_model_id: Option<String>,
     pub(super) resolved_path: PathBuf,
@@ -1020,6 +1022,7 @@ pub(super) async fn resolve_local_model_only_startup_models(
             .clone()
             .unwrap_or_else(|| models::model_ref_for_path(&resolved_path));
         plans.push(StartupModelPlan {
+            model_source: crate::runtime::model_presentation::launch_source(&spec.model_ref),
             declared_ref,
             config_model_id: spec.config_model_id.clone(),
             resolved_path,
@@ -1112,9 +1115,9 @@ async fn resolve_startup_models_with_package_discovery(
             None => None,
         };
         // A remote model ref can resolve to a GGUF in the Hugging Face cache.
-        // Its synthetic split package is content-addressed just like an
-        // explicit local GGUF, so every participant must index its own cached
-        // bytes before coordinator election.
+        // Its synthetic split package keeps the same content-addressed shape
+        // as an explicit local GGUF, but derives the shard digests from the
+        // immutable Hub blob identities rather than rereading every payload.
         // Monolithic Hugging Face snapshot entries may already have been
         // canonicalized to an extensionless blob path by model resolution, so
         // the resolved filename cannot distinguish GGUF from SafeTensors.
@@ -1127,9 +1130,16 @@ async fn resolve_startup_models_with_package_discovery(
                 .unwrap_or(requested_ref.as_str())
                 .to_string();
             let model_path = resolved_path.clone();
+            let huggingface_identity = (!direct_local_gguf)
+                .then(|| models::huggingface_identity_for_path(&model_path))
+                .flatten();
             Some(
                 tokio::task::spawn_blocking(move || {
-                    skippy::synthetic_direct_gguf_package(&model_id, &model_path)
+                    if let Some(identity) = huggingface_identity {
+                        skippy::synthetic_huggingface_gguf_package(&model_id, &identity)
+                    } else {
+                        skippy::synthetic_direct_gguf_package(&model_id, &model_path)
+                    }
                 })
                 .await
                 .context("join direct GGUF indexing task")??,
@@ -1164,6 +1174,7 @@ async fn resolve_startup_models_with_package_discovery(
                 })
         };
         plans.push(StartupModelPlan {
+            model_source: crate::runtime::model_presentation::launch_source(&spec.model_ref),
             declared_ref,
             config_model_id: spec.config_model_id.clone(),
             resolved_path,

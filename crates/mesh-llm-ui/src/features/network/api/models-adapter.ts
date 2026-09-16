@@ -17,6 +17,7 @@ function mapModelStatus(status: 'warm' | 'cold'): ModelSummary['status'] {
 export function adaptModelsToSummary(models: MeshModelRaw[]): ModelSummary[] {
   return models.map((model) => ({
     name: model.name,
+    displayName: model.display_name?.trim() || undefined,
     family: model.family ?? model.name.split('/')[0] ?? 'unknown',
     size: formatModelSizeGB(model.size_gb),
     context: formatContext(model.context_length),

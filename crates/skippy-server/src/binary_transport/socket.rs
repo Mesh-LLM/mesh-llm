@@ -147,7 +147,7 @@ fn connect_downstream_socket_inner(
             match $connect {
                 Ok(stream) => return Ok(stream),
                 Err(error) => {
-                    eprintln!(
+                    tracing::debug!(
                         "downstream connect retry: source={source_ip:?} remote={downstream_addr} mode={} error={error}",
                         $mode
                     );
@@ -201,7 +201,7 @@ pub(super) fn connect_route_selected_with_timeout(
             ));
         }
     }
-    eprintln!(
+    tracing::debug!(
         "downstream connect succeeded: source={source_ip:?} remote={downstream_addr} mode=route-selected"
     );
     Ok(stream)
@@ -239,7 +239,7 @@ pub(super) fn validate_route_selected_stream(
             ));
         }
     }
-    eprintln!(
+    tracing::debug!(
         "downstream connect retry succeeded: source={source_ip:?} mode=blocking-route-selected"
     );
     Ok(stream)
