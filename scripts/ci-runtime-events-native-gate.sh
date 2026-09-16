@@ -73,6 +73,12 @@ if [[ ! -s "$MODEL_PATH" ]]; then
     exit 1
 fi
 
+# Cargo runs integration-test binaries from the package directory. Resolve a
+# caller-relative evidence path before invoking Cargo so the test and this
+# wrapper always read the same file.
+if [[ "$EVIDENCE_FILE" != /* ]]; then
+    EVIDENCE_FILE="$PWD/$EVIDENCE_FILE"
+fi
 mkdir -p "$(dirname "$EVIDENCE_FILE")"
 # Cargo runs integration tests from the crate directory. Keep the writer and
 # the check below pointed at the same file regardless of that working directory.

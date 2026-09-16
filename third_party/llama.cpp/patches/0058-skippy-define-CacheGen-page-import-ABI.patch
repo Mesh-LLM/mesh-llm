@@ -1,7 +1,7 @@
-From 7e1830a5596e6b2a15a98f6bb6a950edf6b9f862 Mon Sep 17 00:00:00 2001
+From c9e71c18d6d544d41ea2faec35e3bb422e48bbce Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 11 Sep 2026 16:02:11 +1000
-Subject: [PATCH 57/69] skippy: define CacheGen page import ABI
+Subject: [PATCH] skippy: define CacheGen page import ABI
 
 Expose validated record descriptors for direct decode into resident KV storage.
 
@@ -12,15 +12,15 @@ Assisted-by: scama
  2 files changed, 34 insertions(+), 1 deletion(-)
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 22a116414..ffef99c77 100644
+index f3eff344f..faacc6815 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 56
-+#define SKIPPY_ABI_VERSION_PATCH 57
+-#define SKIPPY_ABI_VERSION_PATCH 57
++#define SKIPPY_ABI_VERSION_PATCH 58
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -84,3 +84,4 @@ index aa698c124..7504e573c 100644
          struct skippy_session * session,
 -- 
 2.54.0 (Apple Git-157)
+

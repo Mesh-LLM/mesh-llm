@@ -39,6 +39,7 @@ impl Case {
             ArtifactHook { command: None },
             explicit(&self.source),
             false,
+            None,
         )
         .unwrap();
     }

@@ -9,6 +9,7 @@ mod hash;
 mod inspect;
 mod package;
 mod package_v2;
+mod part_writer;
 mod plan;
 mod preflight;
 mod progress;
@@ -105,6 +106,7 @@ fn run(args: Args) -> Result<()> {
             source_revision,
             source_file,
             resume_existing_artifacts,
+            max_artifact_bytes,
         } => package_v2::write_package(
             model,
             out_dir,
@@ -125,6 +127,7 @@ fn run(args: Args) -> Result<()> {
                 source_file,
             },
             resume_existing_artifacts,
+            max_artifact_bytes,
         ),
         Command::VerifyPackageV2 {
             package,
