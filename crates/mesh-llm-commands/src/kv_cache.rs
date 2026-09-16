@@ -148,8 +148,9 @@ fn confirm_destructive(action: &str, yes: bool) -> Result<()> {
     if !io::stdin().is_terminal() {
         bail!("{action} requires --yes when stdin is not interactive");
     }
-    eprint!("{action}? [y/N] ");
-    io::stderr().flush()?;
+    let mut err = mesh_llm_events::console_err();
+    let _ = write!(err, "{action}? [y/N] ");
+    let _ = err.flush();
     let mut response = String::new();
     io::stdin().read_line(&mut response)?;
     if !matches!(response.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
@@ -160,9 +161,11 @@ fn confirm_destructive(action: &str, yes: bool) -> Result<()> {
 
 fn print_response(value: &Value, json_output: bool) -> Result<()> {
     if json_output {
-        println!("{}", serde_json::to_string(value)?);
+        let mut machine = mesh_llm_events::machine_out();
+        writeln!(machine, "{}", serde_json::to_string(value)?)?;
         return Ok(());
     }
+    let mut err = mesh_llm_events::console_err();
     if let Some(results) = value.get("results").and_then(Value::as_array) {
         for result in results {
             let node = result
@@ -170,15 +173,16 @@ fn print_response(value: &Value, json_output: bool) -> Result<()> {
                 .and_then(Value::as_str)
                 .unwrap_or("unknown");
             if let Some(error) = result.get("error").filter(|value| !value.is_null()) {
-                println!(
+                writeln!(
+                    err,
                     "Node {node}: error: {}",
                     error
                         .get("message")
                         .and_then(Value::as_str)
                         .unwrap_or("unknown error")
-                );
+                )?;
             } else if let Some(freed) = result.get("freed_bytes").and_then(Value::as_u64) {
-                println!("Node {node}: freed {freed} bytes");
+                writeln!(err, "Node {node}: freed {freed} bytes")?;
             } else {
                 let state = result
                     .get("status")
@@ -186,32 +190,35 @@ fn print_response(value: &Value, json_output: bool) -> Result<()> {
                     .and_then(|effective| effective.get("state"))
                     .and_then(Value::as_str)
                     .unwrap_or("unknown");
-                println!("Node {node}: {state}");
+                writeln!(err, "Node {node}: {state}")?;
             }
         }
         return Ok(());
     }
     if let Some(freed) = value.get("freed_bytes").and_then(Value::as_u64) {
-        println!("Freed {freed} bytes");
+        writeln!(err, "Freed {freed} bytes")?;
         return Ok(());
     }
     let configured = &value["configured"];
     let effective = &value["effective"];
-    println!(
+    writeln!(
+        err,
         "Disk prompt cache: {} ({})",
         effective["state"].as_str().unwrap_or("unknown"),
         configured["mode"].as_str().unwrap_or("unknown")
-    );
-    println!(
+    )?;
+    writeln!(
+        err,
         "Root: {}",
         configured["directory"].as_str().unwrap_or("unknown")
-    );
+    )?;
     if let Some(usage) = value.get("usage").filter(|usage| !usage.is_null()) {
-        println!(
+        writeln!(
+            err,
             "Used: {} / {} bytes",
             usage["used_bytes"].as_u64().unwrap_or(0),
             usage["budget_bytes"].as_u64().unwrap_or(0)
-        );
+        )?;
     }
     Ok(())
 }
