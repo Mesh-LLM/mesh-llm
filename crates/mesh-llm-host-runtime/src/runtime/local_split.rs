@@ -162,16 +162,21 @@ pub(super) async fn start_runtime_split_model(
     spec.capacity_budget_bytes = spec.capacity_budget_bytes.filter(|bytes| *bytes > 0);
     let local_source_required = spec.local_source_required;
     skippy::register_local_source_policy(model_ref, spec.runtime_profile, local_source_required);
-    // Resolve the immutable identity and fail closed before coordinator
-    // election. This keeps unsupported artifacts out of topology planning and
-    // ensures every candidate coordinator applies the same admission policy.
+    // Resolve immutable identity and architecture, then fail closed before
+    // coordinator election. This keeps unsupported architectures out of
+    // topology planning and ensures every candidate applies the same policy.
     let preindexed_package = match spec.preindexed_split_package {
         Some(package) => package.clone(),
         None => {
             resolve_split_runtime_package(spec.model_path, model_ref, local_source_required).await?
         }
     };
-    skippy::require_split_certification(&preindexed_package, spec.allow_uncertified_split)?;
+    let preindexed_compact_meta = split_runtime_compact_meta(&preindexed_package).await?;
+    let split_certification = skippy::require_split_certification(
+        &preindexed_package,
+        &preindexed_compact_meta.architecture,
+        spec.allow_uncertified_split,
+    )?;
     let coordinator_start = elect_split_start_coordinator(
         &spec,
         model_ref,
@@ -195,7 +200,7 @@ pub(super) async fn start_runtime_split_model(
         &settled_membership,
         canonical_coordinator,
         Duration::from_secs(30),
-        Some(preindexed_package),
+        Some((preindexed_package, preindexed_compact_meta)),
     )
     .await?;
     let SplitRuntimeStartPreparation {
@@ -264,6 +269,7 @@ pub(super) async fn start_runtime_split_model(
         projector_path: projector_path.clone(),
         ctx_size,
         compact_meta: &compact_meta,
+        split_certification,
         capacity_budget_bytes: spec.capacity_budget_bytes,
         cache_type_k_override: spec.cache_type_k_override,
         cache_type_v_override: spec.cache_type_v_override,
@@ -292,6 +298,7 @@ pub(super) async fn start_runtime_split_model(
         runtime_profile: spec.runtime_profile.to_string(),
         package: package.clone(),
         compact_meta: compact_meta.clone(),
+        split_certification,
         active,
         projector_path,
         ctx_size,
@@ -347,13 +354,17 @@ async fn prepare_split_runtime_start(
     settled_membership: &[SplitParticipant],
     canonical_coordinator: iroh::EndpointId,
     timeout: Duration,
-    preindexed_package: Option<skippy::SkippyPackageIdentity>,
+    preindexed: Option<(skippy::SkippyPackageIdentity, models::gguf::GgufCompactMeta)>,
 ) -> Result<SplitRuntimeStartPreparation> {
     let local_source_required = spec.local_source_required;
-    let package = match preindexed_package {
-        Some(package) => package,
+    let (package, compact_meta) = match preindexed {
+        Some(preindexed) => preindexed,
         None => {
-            resolve_split_runtime_package(spec.model_path, model_ref, local_source_required).await?
+            let package =
+                resolve_split_runtime_package(spec.model_path, model_ref, local_source_required)
+                    .await?;
+            let compact_meta = split_runtime_compact_meta(&package).await?;
+            (package, compact_meta)
         }
     };
     let participant_snapshot = wait_for_split_participants(SplitParticipantWaitRequest {
@@ -368,7 +379,6 @@ async fn prepare_split_runtime_start(
         timeout,
     })
     .await?;
-    let compact_meta = split_runtime_compact_meta(&package).await?;
     let kv_bytes_per_token = split_runtime_kv_bytes_per_token(
         &package,
         &compact_meta,

@@ -14,6 +14,7 @@ fn test_stage_status(
         manifest_sha256: Some("direct-gguf:1:model.gguf".to_string()),
         source_model_path: Some("/model.gguf".to_string()),
         source_model_sha256: None,
+        split_certification: Some("certified".to_string()),
         source_model_bytes: Some(1),
         materialized_path: None,
         materialized_pinned: false,
@@ -83,6 +84,7 @@ fn test_stage_load_request() -> crate::inference::skippy::StageLoadRequest {
         model_path: Some("/model.gguf".to_string()),
         source_model_bytes: Some(123_456_789),
         source_model_sha256: None,
+        split_certification: Some("certified".to_string()),
         local_source_required: false,
         projector_path: None,
         projector_use_gpu: None,
@@ -433,6 +435,7 @@ fn stage_control_status_list_response_round_trips_all_statuses() {
     };
     assert_eq!(statuses.len(), 2);
     assert_eq!(statuses[0].stage_id, first.stage_id);
+    assert_eq!(statuses[0].split_certification.as_deref(), Some("certified"));
     assert_eq!(statuses[1].stage_id, second.stage_id);
     assert_eq!(statuses[1].bind_addr, "127.0.0.1:51235");
 }

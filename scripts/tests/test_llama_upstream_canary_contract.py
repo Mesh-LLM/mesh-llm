@@ -620,6 +620,7 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
     def _model(revision: str = "a" * 40) -> dict[str, object]:
         return {
             "family": "test-family",
+            "architecture": "test",
             "profile": "full",
             "artifact": {
                 "repo": "org/model",

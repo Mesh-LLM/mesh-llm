@@ -81,6 +81,7 @@ pub(super) struct SplitGenerationLoadSpec<'a> {
     pub(super) projector_path: Option<String>,
     pub(super) ctx_size: u32,
     pub(super) compact_meta: &'a models::gguf::GgufCompactMeta,
+    pub(super) split_certification: skippy::SplitCertificationAdmission,
     pub(super) capacity_budget_bytes: Option<u64>,
     pub(super) pinned_gpu: Option<&'a crate::runtime::StartupPinnedGpuTarget>,
     pub(super) device_override: Option<&'a str>,
@@ -765,6 +766,7 @@ pub(super) fn split_runtime_stage_load_request(
         }),
         source_model_bytes: Some(spec.package.source_model_bytes),
         source_model_sha256: Some(spec.package.source_model_sha256.clone()),
+        split_certification: Some(spec.split_certification.as_str().to_string()),
         local_source_required: spec.local_source_required,
         projector_path: (!spec.local_source_required || stage.stage_index == 0)
             .then(|| resolved_config.projector_path.clone())

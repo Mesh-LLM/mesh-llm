@@ -304,6 +304,7 @@ fn stage_load_request() -> crate::inference::skippy::StageLoadRequest {
         model_path: Some("/models/demo.gguf".to_string()),
         source_model_bytes: Some(123_456_789),
         source_model_sha256: None,
+        split_certification: Some("certified".to_string()),
         local_source_required: false,
         projector_path: None,
         projector_use_gpu: Some(false),

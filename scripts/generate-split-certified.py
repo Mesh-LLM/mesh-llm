@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the exact-artifact split-serving certification roster."""
+"""Generate the architecture split-serving certification roster."""
 
 from __future__ import annotations
 
@@ -60,37 +60,6 @@ def skippy_abi() -> str:
     return f"{values['MAJOR']}.{values['MINOR']}.{values['PATCH']}"
 
 
-def aggregate_source_sha256(files: list[str], integrity: dict[str, Any]) -> str:
-    if not files:
-        raise RosterError("certified artifact must contain at least one GGUF file")
-    records: list[tuple[int, str]] = []
-    for name in files:
-        record = integrity.get(name)
-        if not isinstance(record, dict):
-            raise RosterError(f"missing file_integrity for {name}")
-        size = record.get("size_bytes")
-        digest = record.get("blob_id")
-        if type(size) is not int or size <= 0:
-            raise RosterError(f"invalid size_bytes for {name}")
-        if (
-            not isinstance(digest, str)
-            or len(digest) != 64
-            or any(char not in "0123456789abcdef" for char in digest)
-        ):
-            raise RosterError(f"invalid blob_id for {name}")
-        records.append((size, digest))
-    if len(records) == 1:
-        return records[0][1]
-    hasher = hashlib.sha256()
-    hasher.update(b"mesh-llm-split-gguf-v1\0")
-    hasher.update(struct.pack("<Q", len(records)))
-    for index, (size, digest) in enumerate(records):
-        hasher.update(struct.pack("<Q", index))
-        hasher.update(struct.pack("<Q", size))
-        hasher.update(digest.encode())
-    return hasher.hexdigest()
-
-
 def build_roster(manifest: dict[str, Any]) -> dict[str, Any]:
     policy = manifest.get("policy")
     models = manifest.get("models")
@@ -100,8 +69,7 @@ def build_roster(manifest: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(profiles, dict):
         raise RosterError("family certification profiles are missing")
 
-    entries = []
-    seen_sources: set[str] = set()
+    architectures: set[str] = set()
     for model in models:
         if not isinstance(model, dict):
             raise RosterError("family certification model row must be an object")
@@ -116,42 +84,21 @@ def build_roster(manifest: dict[str, Any]) -> dict[str, Any]:
             "state-handoff",
         }.issubset(required_lanes):
             continue
-        family = model.get("family")
-        artifact = model.get("artifact")
-        if not isinstance(family, str) or not isinstance(artifact, dict):
-            raise RosterError("certified row is missing family or artifact")
-        files = artifact.get("files")
-        integrity = artifact.get("file_integrity")
-        if not isinstance(files, list) or not all(isinstance(item, str) for item in files):
-            raise RosterError(f"{family}: artifact.files must be strings")
-        if not isinstance(integrity, dict):
-            raise RosterError(f"{family}: artifact.file_integrity is missing")
-        source_sha = aggregate_source_sha256(files, integrity)
-        if source_sha in seen_sources:
-            raise RosterError(f"duplicate certified source identity: {source_sha}")
-        seen_sources.add(source_sha)
-        entries.append(
-            {
-                "family": family,
-                "repo": artifact.get("repo"),
-                "revision": artifact.get("revision"),
-                "files": files,
-                "package_kind": "content-addressed-direct-gguf",
-                "source_model_sha256": source_sha,
-            }
-        )
+        architecture = model.get("architecture")
+        if not isinstance(architecture, str) or not architecture:
+            raise RosterError("certified row is missing architecture")
+        architectures.add(architecture)
 
-    entries.sort(key=lambda entry: (entry["family"], entry["source_model_sha256"]))
-    if not entries:
-        raise RosterError("family manifest produced no split-certified models")
+    if not architectures:
+        raise RosterError("family manifest produced no split-certified architectures")
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "native_recipe": {
             "llama_upstream_sha": UPSTREAM_PIN.read_text(encoding="utf-8").strip(),
             "skippy_abi": skippy_abi(),
             "patch_queue_sha256": patch_queue_sha256(),
         },
-        "models": entries,
+        "architectures": sorted(architectures),
     }
 
 

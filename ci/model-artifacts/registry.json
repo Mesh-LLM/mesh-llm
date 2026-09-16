@@ -104,6 +104,7 @@
         ]
       },
       "certification": {
+        "architecture": "qwen3",
         "profile": "full",
         "execution": {
           "trunk_layers": 28,
@@ -150,6 +151,7 @@
         ]
       },
       "certification": {
+        "architecture": "llama",
         "profile": "full",
         "execution": {
           "trunk_layers": 16,
@@ -193,6 +195,7 @@
         ]
       },
       "certification": {
+        "architecture": "deepseek2",
         "profile": "full",
         "execution": {
           "trunk_layers": 47,
@@ -235,6 +238,7 @@
         ]
       },
       "certification": {
+        "architecture": "chatglm",
         "profile": "full",
         "execution": {
           "trunk_layers": 40,
@@ -284,6 +288,7 @@
         ]
       },
       "certification": {
+        "architecture": "glm4moe",
         "profile": "full",
         "execution": {
           "trunk_layers": 46,
@@ -330,6 +335,7 @@
         ]
       },
       "certification": {
+        "architecture": "deepseek2",
         "profile": "full",
         "execution": {
           "trunk_layers": 27,
@@ -373,6 +379,7 @@
         ]
       },
       "certification": {
+        "architecture": "gpt-oss",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -415,6 +422,7 @@
         ]
       },
       "certification": {
+        "architecture": "qwen3moe",
         "profile": "full",
         "execution": {
           "trunk_layers": 48,
@@ -457,6 +465,7 @@
         ]
       },
       "certification": {
+        "architecture": "qwen2moe",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -506,6 +515,7 @@
         ]
       },
       "certification": {
+        "architecture": "falcon-h1",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -549,6 +559,7 @@
         ]
       },
       "certification": {
+        "architecture": "jamba",
         "profile": "full",
         "execution": {
           "trunk_layers": 28,
@@ -593,6 +604,7 @@
         ]
       },
       "certification": {
+        "architecture": "kimi-linear",
         "profile": "full",
         "execution": {
           "trunk_layers": 27,
@@ -638,6 +650,7 @@
         ]
       },
       "certification": {
+        "architecture": "qwen3next",
         "profile": "full",
         "execution": {
           "trunk_layers": 48,
@@ -692,6 +705,7 @@
         ]
       },
       "certification": {
+        "architecture": "qwen4exp",
         "profile": "full",
         "execution": {
           "trunk_layers": 48,
@@ -738,6 +752,7 @@
         ]
       },
       "certification": {
+        "architecture": "nemotron_h_moe",
         "profile": "full",
         "execution": {
           "trunk_layers": 52,
@@ -781,6 +796,7 @@
         ]
       },
       "certification": {
+        "architecture": "mamba",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -823,6 +839,7 @@
         ]
       },
       "certification": {
+        "architecture": "mamba",
         "profile": "full",
         "execution": {
           "trunk_layers": 64,
@@ -865,6 +882,7 @@
         ]
       },
       "certification": {
+        "architecture": "rwkv6",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -907,6 +925,7 @@
         ]
       },
       "certification": {
+        "architecture": "rwkv7",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -953,6 +972,7 @@
         ]
       },
       "certification": {
+        "architecture": "granitehybrid",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -996,6 +1016,7 @@
         ]
       },
       "certification": {
+        "architecture": "qwen35",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -1038,6 +1059,7 @@
         ]
       },
       "certification": {
+        "architecture": "granite",
         "profile": "full",
         "execution": {
           "trunk_layers": 40,
@@ -1081,6 +1103,7 @@
         ]
       },
       "certification": {
+        "architecture": "lfm2",
         "profile": "full",
         "execution": {
           "trunk_layers": 16,
@@ -1126,6 +1149,7 @@
         ]
       },
       "certification": {
+        "architecture": "lfm2",
         "profile": "full",
         "execution": {
           "trunk_layers": 16,
@@ -1180,6 +1204,7 @@
         ]
       },
       "certification": {
+        "architecture": "laguna",
         "profile": "full",
         "execution": {
           "trunk_layers": 40,
@@ -1223,6 +1248,7 @@
         ]
       },
       "certification": {
+        "architecture": "qwen2vl",
         "profile": "full",
         "execution": {
           "trunk_layers": 28,
@@ -1278,6 +1304,7 @@
         ]
       },
       "certification": {
+        "architecture": "qwen3vl",
         "profile": "full",
         "execution": {
           "trunk_layers": 36,
@@ -1333,6 +1360,7 @@
         ]
       },
       "certification": {
+        "architecture": "gemma2",
         "profile": "full",
         "execution": {
           "trunk_layers": 26,
@@ -1375,6 +1403,7 @@
         ]
       },
       "certification": {
+        "architecture": "phi3",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -1417,6 +1446,7 @@
         ]
       },
       "certification": {
+        "architecture": "llama",
         "profile": "full",
         "execution": {
           "trunk_layers": 40,
@@ -1459,6 +1489,7 @@
         ]
       },
       "certification": {
+        "architecture": "falcon",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -1501,6 +1532,7 @@
         ]
       },
       "certification": {
+        "architecture": "internlm2",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -1543,6 +1575,7 @@
         ]
       },
       "certification": {
+        "architecture": "llama",
         "profile": "full",
         "execution": {
           "trunk_layers": 40,
@@ -1585,6 +1618,7 @@
         ]
       },
       "certification": {
+        "architecture": "cohere2",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -1627,6 +1661,7 @@
         ]
       },
       "certification": {
+        "architecture": "smollm3",
         "profile": "full",
         "execution": {
           "trunk_layers": 36,
@@ -1819,6 +1854,7 @@
         ]
       },
       "certification": {
+        "architecture": "qwen2",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -1861,6 +1897,7 @@
         ]
       },
       "certification": {
+        "architecture": "bloom",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -1903,6 +1940,7 @@
         ]
       },
       "certification": {
+        "architecture": "gemma",
         "profile": "full",
         "execution": {
           "trunk_layers": 18,
@@ -1945,6 +1983,7 @@
         ]
       },
       "certification": {
+        "architecture": "gemma3",
         "profile": "full",
         "execution": {
           "trunk_layers": 26,
@@ -1987,6 +2026,7 @@
         ]
       },
       "certification": {
+        "architecture": "phi2",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -2029,6 +2069,7 @@
         ]
       },
       "certification": {
+        "architecture": "starcoder2",
         "profile": "full",
         "execution": {
           "trunk_layers": 30,
@@ -2071,6 +2112,7 @@
         ]
       },
       "certification": {
+        "architecture": "stablelm",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -2113,6 +2155,7 @@
         ]
       },
       "certification": {
+        "architecture": "olmo2",
         "profile": "full",
         "execution": {
           "trunk_layers": 16,
@@ -2155,6 +2198,7 @@
         ]
       },
       "certification": {
+        "architecture": "exaone4",
         "profile": "full",
         "execution": {
           "trunk_layers": 30,
@@ -2197,6 +2241,7 @@
         ]
       },
       "certification": {
+        "architecture": "minicpm3",
         "profile": "full",
         "execution": {
           "trunk_layers": 62,
@@ -2239,6 +2284,7 @@
         ]
       },
       "certification": {
+        "architecture": "nemotron",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -2281,6 +2327,7 @@
         ]
       },
       "certification": {
+        "architecture": "arcee",
         "profile": "full",
         "execution": {
           "trunk_layers": 36,
@@ -2323,6 +2370,7 @@
         ]
       },
       "certification": {
+        "architecture": "mpt",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -2365,6 +2413,7 @@
         ]
       },
       "certification": {
+        "architecture": "apertus",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -2407,6 +2456,7 @@
         ]
       },
       "certification": {
+        "architecture": "glm4",
         "profile": "full",
         "execution": {
           "trunk_layers": 40,
@@ -2449,6 +2499,7 @@
         ]
       },
       "certification": {
+        "architecture": "afmoe",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -2491,6 +2542,7 @@
         ]
       },
       "certification": {
+        "architecture": "arwkv7",
         "profile": "full",
         "execution": {
           "trunk_layers": 28,
@@ -2535,6 +2587,7 @@
         ]
       },
       "certification": {
+        "architecture": "bailingmoe3",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -2577,6 +2630,7 @@
         ]
       },
       "certification": {
+        "architecture": "chameleon",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -2620,6 +2674,7 @@
         ]
       },
       "certification": {
+        "architecture": "deepseek32",
         "profile": "full",
         "execution": {
           "trunk_layers": 4,
@@ -2662,6 +2717,7 @@
         ]
       },
       "certification": {
+        "architecture": "dots1",
         "profile": "full",
         "execution": {
           "trunk_layers": 27,
@@ -2704,6 +2760,7 @@
         ]
       },
       "certification": {
+        "architecture": "ernie4_5",
         "profile": "full",
         "execution": {
           "trunk_layers": 18,
@@ -2746,6 +2803,7 @@
         ]
       },
       "certification": {
+        "architecture": "ernie4_5-moe",
         "profile": "full",
         "execution": {
           "trunk_layers": 28,
@@ -2788,6 +2846,7 @@
         ]
       },
       "certification": {
+        "architecture": "gemma3n",
         "profile": "full",
         "execution": {
           "trunk_layers": 35,
@@ -2830,6 +2889,7 @@
         ]
       },
       "certification": {
+        "architecture": "gemma4",
         "profile": "full",
         "execution": {
           "trunk_layers": 42,
@@ -2884,6 +2944,7 @@
         ]
       },
       "certification": {
+        "architecture": "gptneox",
         "profile": "full",
         "execution": {
           "trunk_layers": 44,
@@ -2927,6 +2988,7 @@
         ]
       },
       "certification": {
+        "architecture": "granite_swa",
         "profile": "full",
         "execution": {
           "trunk_layers": 28,
@@ -2969,6 +3031,7 @@
         ]
       },
       "certification": {
+        "architecture": "granitemoe",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -3011,6 +3074,7 @@
         ]
       },
       "certification": {
+        "architecture": "graniteswitch",
         "profile": "full",
         "execution": {
           "trunk_layers": 40,
@@ -3053,6 +3117,7 @@
         ]
       },
       "certification": {
+        "architecture": "grovemoe",
         "profile": "full",
         "execution": {
           "trunk_layers": 48,
@@ -3095,6 +3160,7 @@
         ]
       },
       "certification": {
+        "architecture": "hunyuan-dense",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -3137,6 +3203,7 @@
         ]
       },
       "certification": {
+        "architecture": "hy_v3",
         "profile": "full",
         "execution": {
           "trunk_layers": 48,
@@ -3179,6 +3246,7 @@
         ]
       },
       "certification": {
+        "architecture": "jais",
         "profile": "full",
         "execution": {
           "trunk_layers": 40,
@@ -3221,6 +3289,7 @@
         ]
       },
       "certification": {
+        "architecture": "jais2",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -3265,6 +3334,7 @@
         ]
       },
       "certification": {
+        "architecture": "kimi-k3",
         "profile": "full",
         "execution": {
           "trunk_layers": 8,
@@ -3310,6 +3380,7 @@
         ]
       },
       "certification": {
+        "architecture": "lfm2moe",
         "profile": "full",
         "execution": {
           "trunk_layers": 24,
@@ -3352,6 +3423,7 @@
         ]
       },
       "certification": {
+        "architecture": "maincoder",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -3395,6 +3467,7 @@
         ]
       },
       "certification": {
+        "architecture": "mellum",
         "profile": "full",
         "execution": {
           "trunk_layers": 28,
@@ -3437,6 +3510,7 @@
         ]
       },
       "certification": {
+        "architecture": "minicpm",
         "profile": "full",
         "execution": {
           "trunk_layers": 32,
@@ -3481,6 +3555,7 @@
         ]
       },
       "certification": {
+        "architecture": "qwen35moe",
         "profile": "full",
         "execution": {
           "trunk_layers": 40,
@@ -3525,6 +3600,7 @@
         ]
       },
       "certification": {
+        "architecture": "qwen3vlmoe",
         "profile": "full",
         "execution": {
           "trunk_layers": 48,
@@ -3581,6 +3657,7 @@
         ]
       },
       "certification": {
+        "architecture": "mistral4",
         "profile": "full",
         "execution": {
           "trunk_layers": 36,
@@ -3622,6 +3699,7 @@
         ]
       },
       "certification": {
+        "architecture": "step35",
         "profile": "full",
         "execution": {
           "trunk_layers": 45,
@@ -3670,6 +3748,7 @@
         ]
       },
       "certification": {
+        "architecture": "mimo2",
         "profile": "full",
         "execution": {
           "trunk_layers": 48,
@@ -3727,6 +3806,7 @@
         ]
       },
       "certification": {
+        "architecture": "minimax-m3",
         "profile": "full",
         "execution": {
           "trunk_layers": 60,
@@ -3769,6 +3849,7 @@
         ]
       },
       "certification": {
+        "architecture": "spark2_5",
         "profile": "full",
         "execution": {
           "trunk_layers": 36,
@@ -4051,6 +4132,7 @@
         ]
       },
       "certification": {
+        "architecture": "inkling",
         "profile": "full",
         "execution": {
           "trunk_layers": 42,
@@ -4112,6 +4194,7 @@
         ]
       },
       "certification": {
+        "architecture": "llama4",
         "profile": "full",
         "execution": {
           "trunk_layers": 48,

@@ -173,9 +173,25 @@ def _validate_registry(raw: Any) -> dict[str, Any]:
             certification = _object(row.get("certification"), f"{field}.certification")
             _exact_keys(
                 certification,
-                {"profile", "execution", "resources", "notes", "draft_artifact", "mmproj_artifact"},
+                {
+                    "architecture",
+                    "profile",
+                    "execution",
+                    "resources",
+                    "notes",
+                    "draft_artifact",
+                    "mmproj_artifact",
+                },
                 f"{field}.certification",
             )
+            architecture = _string(
+                certification.get("architecture"),
+                f"{field}.certification.architecture",
+            )
+            if not ID_RE.fullmatch(architecture):
+                raise RegistryError(
+                    f"{field}.certification.architecture has invalid characters"
+                )
             profile = _string(certification.get("profile"), f"{field}.certification.profile")
             if profile not in profiles:
                 raise RegistryError(f"{field}.certification.profile is not a family profile")
@@ -221,6 +237,7 @@ def _family_manifest(registry: dict[str, Any]) -> dict[str, Any]:
         certification = row["certification"]
         model: dict[str, Any] = {
             "family": row["family"],
+            "architecture": certification["architecture"],
             "profile": certification["profile"],
             "artifact": _family_artifact(row["artifact"]),
         }
@@ -304,6 +321,7 @@ def _dump_family(value: dict[str, Any]) -> bytes:
             [
                 "    {",
                 f'      "family": {compact(model["family"])},',
+                f'      "architecture": {compact(model["architecture"])},',
                 f'      "profile": {compact(model["profile"])},',
                 f'      "artifact": {compact(model["artifact"])},',
             ]

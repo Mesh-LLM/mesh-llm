@@ -87,7 +87,7 @@ pub(crate) use resolver::{
     effective_safety_margin_bytes, resolve_skippy_config_for_selector,
 };
 pub(crate) use skippy_server::OpenAiGuardrailsStatus as SkippyOpenAiGuardrailsStatus;
-pub(crate) use split_certification::{require_split_certification, split_certification_label};
+pub(crate) use split_certification::{SplitCertificationAdmission, require_split_certification};
 #[cfg(test)]
 pub(crate) use stage::test_stage_admission;
 pub(crate) use stage::{

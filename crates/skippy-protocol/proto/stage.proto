@@ -104,6 +104,7 @@ message LoadStage {
   StageActivationCodec activation_codec = 49;
   StageActivationCodecPolicy activation_codec_policy = 50;
   repeated StageTopologyStage topology_stages = 51;
+  optional string split_certification = 52;
 }
 
 message StageTopologyStage {
@@ -240,6 +241,7 @@ message StageStatus {
     StageAdmissionIdle idle = 34;
     StageAdmissionAdmitted admitted = 35;
   }
+  optional string split_certification = 36;
 }
 
 message StageStatusList {

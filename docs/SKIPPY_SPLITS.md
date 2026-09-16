@@ -17,24 +17,25 @@ If one node can load the full model, Mesh LLM prefers the single-node path.
 Splitting is used when the model physically needs a split or when an explicit
 split run asks for it.
 
-## Certified artifact admission
+## Certified architecture admission
 
-Split startup fails closed unless the exact immutable model artifact appears in
-the bundled split certification roster. The check runs after package identity
-resolution and before coordinator election, topology planning, stage
-materialization, or native model loading. Automatic splitting because a model
-does not fit locally uses the same gate.
+Split startup fails closed unless the model's GGUF `general.architecture`
+appears in the bundled split certification roster. The check runs after
+package identity and compact GGUF metadata resolution and before coordinator
+election, topology planning, stage materialization, or native model loading.
+Automatic splitting because a model does not fit locally uses the same gate.
 
 The llama canary regenerates the roster after its complete staged correctness
 battery passes. Each roster is bound to the llama.cpp upstream pin, the Skippy
-ABI, and the ordered patch queue. Direct local GGUF entries use the
-path-independent aggregate source digest computed from their bytes. Cached
-Hugging Face GGUFs use a versioned canonical digest of the repository,
-immutable commit, and ordered Hub filenames, sizes, and blob SHA-256 values, so
-startup does not reread the weight payload merely to establish mesh identity.
-Package-v2 entries additionally require the exact manifest digest.
+ABI, and the ordered patch queue. A different quantization or immutable repack
+of a certified architecture is admitted; an architecture that has not passed
+the battery is rejected. Artifact digests remain the peer-to-peer identity and
+integrity boundary, independent of architecture admission. Cached Hugging Face
+GGUFs use a versioned canonical identity containing the repository, immutable
+commit, and ordered Hub filenames, sizes, and blob SHA-256 values, so startup
+does not reread the weight payload merely to establish mesh identity.
 
-An operator can explicitly run an uncertified artifact for development:
+An operator can explicitly run an uncertified architecture for development:
 
 ```bash
 mesh-llm serve \

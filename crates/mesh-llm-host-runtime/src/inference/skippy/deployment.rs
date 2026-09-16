@@ -70,6 +70,7 @@ pub(crate) fn remote_stage_load_request(
         model_path: Some(context.package.package_ref.clone()),
         source_model_bytes: context.package.source_model_bytes,
         source_model_sha256: Some(context.package.source_model_sha256.clone()),
+        split_certification: None,
         local_source_required: false,
         projector_path: None,
         projector_use_gpu: None,

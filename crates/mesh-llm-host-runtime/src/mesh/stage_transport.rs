@@ -440,6 +440,7 @@ pub struct StageRuntimeStatus {
     pub manifest_sha256: Option<String>,
     pub source_model_path: Option<String>,
     pub source_model_sha256: Option<String>,
+    pub split_certification: Option<String>,
     pub source_model_bytes: Option<u64>,
     pub materialized_path: Option<String>,
     pub materialized_pinned: bool,

@@ -10,6 +10,7 @@ fn stage_load_proto_roundtrip_preserves_source_model_bytes() {
 
 fn assert_encoded_stage_load(proto: &skippy_stage_proto::LoadStage) {
     assert_eq!(proto.source_model_bytes, Some(123_456_789));
+    assert_eq!(proto.split_certification.as_deref(), Some("certified"));
     assert!(!proto.continuous_batching);
     assert_eq!(proto.mmap, Some(false));
     assert_eq!(proto.mlock, Some(true));
@@ -24,6 +25,10 @@ fn assert_encoded_stage_load(proto: &skippy_stage_proto::LoadStage) {
 
 fn assert_decoded_stage_load(decoded: &crate::inference::skippy::StageLoadRequest) {
     assert_eq!(decoded.source_model_bytes, Some(123_456_789));
+    assert_eq!(
+        decoded.split_certification.as_deref(),
+        Some("certified")
+    );
     assert!(!decoded.continuous_batching);
     assert_eq!(decoded.model_path.as_deref(), Some("/models/demo.gguf"));
     assert_eq!(decoded.mmap, Some(false));

@@ -20,7 +20,7 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         path: Path,
         block_count: int | None,
         embedding_length: int | None = 1024,
-        architecture: str = "fixture",
+        architecture: str = "qwen3",
         hyper_connection_count: int | None = None,
         embedding_length_out: int | None = None,
     ) -> int:
@@ -63,7 +63,7 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         artifact: dict[str, object],
         block_counts: list[int | None],
         embedding_length: int = 1024,
-        architecture: str = "fixture",
+        architecture: str = "qwen3",
         hyper_connection_count: int | None = None,
         embedding_length_out: int | None = None,
     ) -> list[Path]:
@@ -295,12 +295,38 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         self.assertIn("plans activation width 1024", result.stderr)
         self.assertIn("declares 2048", result.stderr)
 
+    def test_cache_gate_rejects_architecture_drift_before_build(self) -> None:
+        source = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        source["models"] = [copy.deepcopy(source["models"][0])]
+        model = source["models"][0]
+        model["execution"]["trunk_layers"] = 3
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manifest = root / "manifest.json"
+            self._materialize_cached_artifact(
+                root,
+                model["artifact"],
+                [3],
+                architecture="different",
+            )
+            manifest.write_text(json.dumps(source), encoding="utf-8")
+            result = self._run(
+                manifest,
+                "--check-cache",
+                "--cache-root",
+                str(root / "cache"),
+            )
+        self.assertEqual(2, result.returncode)
+        self.assertIn("is certified for architecture qwen3", result.stderr)
+        self.assertIn("declares different", result.stderr)
+
     def test_cache_gate_derives_qwen4exp_hyper_connected_activation_width(self) -> None:
         source = json.loads(MANIFEST.read_text(encoding="utf-8"))
         source["models"] = [copy.deepcopy(source["models"][0])]
         model = source["models"][0]
         model["execution"]["trunk_layers"] = 3
         model["execution"]["activation_width"] = 4096
+        model["architecture"] = "qwen4exp"
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             manifest = root / "manifest.json"
@@ -328,6 +354,7 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         model = source["models"][0]
         model["execution"]["trunk_layers"] = 3
         model["execution"]["activation_width"] = 4096
+        model["architecture"] = "qwen4exp"
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             manifest = root / "manifest.json"
@@ -356,6 +383,7 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         model = source["models"][0]
         model["execution"]["trunk_layers"] = 3
         model["execution"]["activation_width"] = 4096
+        model["architecture"] = "dflash"
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             manifest = root / "manifest.json"
@@ -382,6 +410,7 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         model = source["models"][0]
         model["execution"]["trunk_layers"] = 3
         model["execution"]["activation_width"] = 4096
+        model["architecture"] = "qwen4exp"
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             manifest = root / "manifest.json"
@@ -408,6 +437,7 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         model = source["models"][0]
         model["execution"]["trunk_layers"] = 3
         model["execution"]["activation_width"] = 0x80000000
+        model["architecture"] = "qwen4exp"
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             manifest = root / "manifest.json"

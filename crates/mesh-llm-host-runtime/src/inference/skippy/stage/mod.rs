@@ -887,6 +887,7 @@ fn status_from_running(stage: &RunningStage) -> StageStatusSnapshot {
             .as_ref()
             .map(|package| package.source_model_sha256.clone())
             .or_else(|| stage.load.source_model_sha256.clone()),
+        split_certification: stage.load.split_certification.clone(),
         source_model_bytes: stage
             .package
             .as_ref()
@@ -932,6 +933,7 @@ fn stopped_status(stop: &StageStopRequest) -> StageStatusSnapshot {
         manifest_sha256: None,
         source_model_path: None,
         source_model_sha256: None,
+        split_certification: None,
         source_model_bytes: None,
         materialized_path: None,
         materialized_pinned: false,
@@ -975,6 +977,7 @@ fn failed_status_from_load(load: &StageLoadRequest, error: String) -> StageStatu
             .then(|| load.model_path.clone())
             .flatten(),
         source_model_sha256: load.source_model_sha256.clone(),
+        split_certification: load.split_certification.clone(),
         source_model_bytes: load.source_model_bytes,
         materialized_path: None,
         materialized_pinned: false,
