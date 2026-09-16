@@ -168,7 +168,7 @@ verify_repair_pin() {
 agent_prompt() {
   printf 'Complete the llama.cpp upstream update to %s as one developer task in this checkout.
 
-The trusted harness has already written third_party/llama.cpp/upstream.txt to the exact target and recorded it in .deps/llama-canary-target-sha. Read ci/llama-canary/agent-repair-prompt.md and every repository skill it names, then own the work end to end: reproduce the queue failure, deliberately rebase or regenerate the owned patches, fix any generated-family rewriter or Rust ABI fallout, and run the canonical prepare, build, smoke, and full supported-family certification commands. Inspect each failure and keep iterating until every required command passes.
+The trusted harness has already written third_party/llama.cpp/upstream.txt to the exact target and recorded it in .deps/llama-canary-target-sha. Read ci/llama-canary/agent-repair-prompt.md and every repository skill it names, then own the work end to end: reproduce the queue failure, deliberately rebase or regenerate the owned patches, fix any generated-family rewriter or Rust ABI fallout, and run the prepare, build, smoke, and focused reproductions needed to validate your repairs. Once those checks pass, return control to the trusted harness for the full supported-family battery. Do not start an additional full battery in the coding session; the wrapper and separate verifier each run all required gates.
 
 Do not weaken, skip, or narrow a gate. Do not edit the workflow, this wrapper, its publisher, the agent runbook, or their contract tests. Do not create or switch branches, commit, push, open a pull request, or use GitHub credentials. Leave the completed changes in this working tree. The harness will independently rerun the entire verification sequence and only a green exact tree can be published.' \
     "$UPSTREAM_SHA"
@@ -263,7 +263,7 @@ validate_agent_manifest_changes() {
 }
 
 agent_feedback_prompt() {
-  printf 'The trusted harness tested the current working tree and it is still red. Continue the same developer task in this session. Read the current failure logs at:\n\n- %s\n- %s\n- %s\n- %s\n\nFix the actual source or narrowly permitted manifest data, then rerun the affected command and keep going until the complete canonical path is green. Do not report completion while any required gate is red. The same control-file, Git, credential, and publication restrictions still apply.' \
+  printf 'The trusted harness tested the current working tree and it is still red. Continue the same developer task in this session. Read the current failure logs at:\n\n- %s\n- %s\n- %s\n- %s\n\nFix the actual source or narrowly permitted manifest data, then rerun the affected checks. Once the known failures are fixed and their reproductions pass, return control for the trusted full gates; do not repeat the full family battery inside the coding session. Report the exact checks run and any unresolved failures, without claiming certification. The same control-file, Git, credential, and publication restrictions still apply.' \
     "$PREPARE_LOG" "$MANIFEST_POLICY_LOG" "$BUILD_LOG" "$CERTIFY_LOG"
 }
 

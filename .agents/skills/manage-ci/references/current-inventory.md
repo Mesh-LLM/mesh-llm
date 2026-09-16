@@ -95,9 +95,11 @@ ceiling is 12 hours. For a changed pin, one non-interactive named Goose session
 `custom_z_ai_coding_plan`/`glm-5.3-flash`, overridable through
 `LLAMA_CANARY_GOOSE_PROVIDER`/`LLAMA_CANARY_GOOSE_MODEL`) receives the
 complete developer task:
-repair or regenerate the patch queue, address ABI fallout, and iterate through
-the canonical prepare, manifest-policy, build, smoke, and family-certification
-commands. The repair loop has an 11.5-hour deadline and independent verification
+repair or regenerate the patch queue, address ABI fallout, and validate repairs
+with prepare, build, smoke, and focused reproductions. The agent then returns
+control instead of starting an additional full battery. The trusted wrapper
+owns the complete candidate gates, and the separate verifier repeats them;
+focused agent results replace neither full pass. The repair loop has an 11.5-hour deadline and independent verification
 has a 12-hour deadline while the complete roster runtime is measured. The agent
 has no GitHub credentials. Ending one coding
 response is not success: the wrapper runs the candidate gates and returns their

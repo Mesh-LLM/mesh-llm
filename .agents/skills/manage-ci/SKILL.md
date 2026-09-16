@@ -372,6 +372,14 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Operational safety
 
+- Changed-pin llama canary agents use focused reproductions while repairing
+  source. They return control after those checks pass instead of running an
+  additional full family battery. The trusted repair wrapper still runs every
+  candidate gate over the complete roster, feeds failures back to the same
+  agent, and requires success before snapshotting. The separate verifier still
+  repeats all gates on the exact candidate in a fresh checkout. Agent test
+  results must never replace either trusted full pass.
+
 - Inspection, log reads, syntax validation, and dry-run planning are read-only.
   Dispatching, rerunning, cancelling, approving, deleting, changing variables
   or secrets, editing runner groups, changing Depot settings, publishing,

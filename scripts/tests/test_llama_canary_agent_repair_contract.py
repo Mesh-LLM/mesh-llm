@@ -277,7 +277,12 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
         runbook = RUNBOOK.read_text(encoding="utf-8")
         self.assertIn("# llama.cpp changed-pin canary developer task", runbook)
         self.assertIn("scripts/prepare-llama.sh pinned", runbook)
-        self.assertIn("Run the canonical path repeatedly until it is green", runbook)
+        self.assertIn("return control to the trusted harness", runbook)
+        self.assertIn("additional full family battery inside the coding session", runbook)
+        prompt = self.wrapper.split("agent_prompt() {", 1)[1].split("agent_session_step() {", 1)[0]
+        feedback = self.wrapper.split("agent_feedback_prompt() {", 1)[1].split("snapshot_candidate_tree() {", 1)[0]
+        self.assertIn("Do not start an additional full battery", prompt)
+        self.assertIn("do not repeat the full family battery", feedback)
         self.assertIn("Leave the finished changes uncommitted", runbook)
         self.assertIn("do not add Actions caching or download logic", runbook)
         for obsolete in ("failed phase", "agent turn", "uncertified draft", "terminal publication"):

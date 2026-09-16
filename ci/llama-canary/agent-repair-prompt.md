@@ -30,11 +30,15 @@ Own the repair end to end:
    requires it. Bump the prepare schema and ABI version together where the
    repository skills require that. A model row may change only when runtime
    evidence shows that its immutable manifest data is stale.
-5. Run the canonical path repeatedly until it is green: prepare, the complete
-   patched llama.cpp build with upstream tests, the generated-family check, all
-   five Rust package builds, Skippy smoke tests, parity validation, the
-   complete family plan and full family battery. Inspect failures and continue repairing rather than stopping after
-   the first partial pass.
+5. Run prepare, the complete patched llama.cpp build with upstream tests, the
+   generated-family check, affected Rust package checks, and focused smoke or
+   real-model reproductions for your repairs. Inspect failures and fix them.
+   Once those checks pass, return control to the trusted harness. Do not run
+   an additional full family battery inside the coding session: the wrapper
+   runs every canonical gate, including the complete roster, after you return.
+   If it finds a failure, use the supplied logs to reproduce and fix that
+   failure, then return for the next trusted pass. Report the exact checks you
+   ran and remaining uncertainties; a focused pass is not certification.
 
 The models are already available in the runner's `HF_CACHE`. Stay offline and
 do not add Actions caching or download logic. Full family certification must
