@@ -705,6 +705,15 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
         self.assertNotIn("--wire-dtypes", script)
         self.assertNotIn("--strict-dtype", script)
 
+    def test_large_family_certification_budget_is_not_truncated(self) -> None:
+        model = self._model()
+        model["resources"]["startup_timeout_secs"] = 1800
+
+        result = self._dry_run(models=[model])
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("startup_timeout=1800s cert_timeout=6600s", result.stdout)
+
     def test_dry_run_reconciles_every_planned_family(self) -> None:
         first = self._model()
         second = self._model()
