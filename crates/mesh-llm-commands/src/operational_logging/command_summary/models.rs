@@ -11,6 +11,7 @@ pub(super) fn format_models(
             quant,
             target,
             model_id,
+            generation_defaults,
             flavor,
             timeout,
             mesh_llm_ref,
@@ -30,6 +31,7 @@ pub(super) fn format_models(
             assembly.redact("--quant", quant.is_some());
             assembly.redact("--target", target.is_some());
             assembly.redact("--model-id", model_id.is_some());
+            assembly.redact("--generation-defaults", generation_defaults.is_some());
             assembly.redact("--flavor", flavor != "auto");
             assembly.redact("--timeout", timeout != "1h");
             assembly.redact("--mesh-llm-ref", mesh_llm_ref != "main");

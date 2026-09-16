@@ -656,7 +656,7 @@ fn partition_layers(layer_count: u32, stages: u32) -> Vec<(u32, u32)> {
 mod tests {
     use super::*;
     use crate::package::ArtifactHook;
-    use crate::package_v2::write_package;
+    use crate::package_v2::{PackageWriteOptions, write_package};
     use crate::test_gguf::{explicit, fixture, tensor};
 
     fn write_v2_fixture(root: &Path) -> std::path::PathBuf {
@@ -676,8 +676,11 @@ mod tests {
             Vec::new(),
             ArtifactHook { command: None },
             ArtifactHook { command: None },
-            explicit(&source),
-            false,
+            PackageWriteOptions {
+                explicit: explicit(&source),
+                generation_defaults: None,
+                resume_existing_artifacts: false,
+            },
         )
         .unwrap();
         package

@@ -125,6 +125,43 @@ Multiple projectors therefore require stable distinct names; the package writer
 uses each projector's deterministic artifact id as its name. Generation remains
 a typed manifest field rather than a generic sidecar.
 
+## Generation request defaults
+
+`generation.request_defaults` carries reviewed publisher recommendations for
+the package's exact model revision. It contains named profiles plus a selection
+record with a default profile and optional reasoning-enabled and
+reasoning-disabled profiles. A profile may declare the portable sampling fields
+supported by Mesh, `max_tokens`, and reasoning enablement, output format, and a
+numeric or semantic budget. Unknown values are omitted.
+
+Every profile includes provenance: official source repository, immutable
+40-character Git commit SHA, file, section, and a URL containing that exact SHA
+as a distinct path or query segment. The runtime consumes this typed package
+data and never downloads or parses model cards.
+
+Request fields resolve independently in this order:
+
+1. explicit request value;
+2. deployment or operator model default;
+3. selected package profile;
+4. Mesh fallback.
+
+When all higher layers omit limits, total output is capped at the lesser of
+8,192 tokens and the context remaining after the prompt. Reasoning receives the
+lesser of 4,096 tokens and half the effective output cap. Semantic reasoning
+levels map to 1,024 (`low`), 4,096 (`medium`), and 8,192 (`high`), then clamp to
+half the output cap. Numeric values are explicit and may exceed those
+interactive fallbacks. `auto` selects the Mesh fallback, so enabled reasoning
+resolves to the lesser of 4,096 tokens and half the effective output cap. Zero
+closes reasoning immediately; `unrestricted` disables the reasoning-only cap
+while retaining the total-output limit.
+
+The resolved numeric budget travels through the public Skippy sampling ABI.
+When the chat parser recognizes thinking start and end markers, llama.cpp forces
+a valid terminator at the cap and generation continues with the visible answer.
+Without recognized boundaries, Mesh skips the reasoning sampler and still
+enforces the finite total-output cap.
+
 ## Loading Rule
 
 The runtime validates the JSON root, fetches and verifies its declared metadata

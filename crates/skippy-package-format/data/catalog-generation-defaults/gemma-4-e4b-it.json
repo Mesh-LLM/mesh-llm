@@ -1,0 +1,19 @@
+{
+  "selection": {
+    "default": "recommended"
+  },
+  "profiles": {
+    "recommended": {
+      "temperature": 1,
+      "top_p": 0.95,
+      "top_k": 64,
+      "provenance": {
+        "source_repo": "google/gemma-4-E4B-it",
+        "revision": "ee0ef6023621cff504d758262d4e04895a5af4a2",
+        "file": "README.md",
+        "section": "Best Practices / Sampling Parameters",
+        "url": "https://huggingface.co/google/gemma-4-E4B-it/blob/ee0ef6023621cff504d758262d4e04895a5af4a2/README.md"
+      }
+    }
+  }
+}

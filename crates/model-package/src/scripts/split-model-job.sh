@@ -357,12 +357,21 @@ if [ -n "${ESTIMATED_BUCKET_BYTES:-}" ]; then
     fi
 fi
 echo "  Starting write-package at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+WRITE_PACKAGE_GENERATION_ARGS=()
+if [ -n "${GENERATION_DEFAULTS_JSON:-}" ]; then
+    GENERATION_DEFAULTS_FILE="$TMPDIR/generation-defaults.json"
+    printf '%s' "$GENERATION_DEFAULTS_JSON" > "$GENERATION_DEFAULTS_FILE"
+    WRITE_PACKAGE_GENERATION_ARGS+=(--generation-defaults "$GENERATION_DEFAULTS_FILE")
+    echo "  Generation defaults:"
+    python3 -m json.tool "$GENERATION_DEFAULTS_FILE"
+fi
 start_heartbeat "write-package"
 set +e
 time "$SLICER" write-package "$WRITE_PACKAGE_INPUT" \
     --out-dir "$PACKAGE_DIR" \
     --after-artifact-command "$ARTIFACT_UPLOAD_HOOK" \
     "${WRITE_PACKAGE_PROJECTOR_ARGS[@]}" \
+    "${WRITE_PACKAGE_GENERATION_ARGS[@]}" \
     "${WRITE_PACKAGE_IDENTITY_ARGS[@]}"
 WRITE_PACKAGE_STATUS=$?
 set -e
