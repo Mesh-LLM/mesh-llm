@@ -962,6 +962,7 @@ fn test_remote_peer(seed: u32, model: &str) -> mesh::PeerInfo {
         models: vec![model.to_string()],
         vram_bytes: 16 * 1024 * 1024 * 1024,
         rtt_ms: None,
+        rtt_observation_window: None,
         model_source: None,
         // admitted: true required for `is_admitted()`.
         admitted: true,
@@ -998,6 +999,7 @@ fn test_remote_peer(seed: u32, model: &str) -> mesh::PeerInfo {
         cache_affinity: None,
         display_rtt: None,
         selected_path: None,
+        observed_large_frame: None,
         propagated_latency: None,
         owner_summary: crate::crypto::OwnershipSummary::default(),
         inference_admission_state: None,
