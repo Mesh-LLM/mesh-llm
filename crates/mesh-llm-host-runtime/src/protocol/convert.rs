@@ -22,7 +22,7 @@ fn skippy_stage_subprotocols(
     }
     if stage_protocol_generation_supported {
         features.push(
-            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V9.to_string(),
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V10.to_string(),
         );
     }
     if artifact_transfer_supported {
@@ -61,7 +61,7 @@ fn supports_local_gguf_content_id(subprotocols: &[crate::proto::node::MeshSubpro
 
 fn supports_skippy_stage_generation(subprotocols: &[crate::proto::node::MeshSubprotocol]) -> bool {
     let required_features = [
-        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V9,
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V10,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1,
@@ -276,6 +276,13 @@ fn descriptor_identity_to_proto(
         artifact: identity.artifact.clone(),
         local_file_name: identity.local_file_name.clone(),
         identity_hash: identity.identity_hash.clone(),
+        // `weights_digest` deliberately does NOT cross the gossip wire: it is
+        // a hash of file bytes only THIS node can read, so a peer receiving
+        // it over gossip could never verify it against anything -- it would
+        // be a claim, not a locally-checkable fact. A future exchange-event
+        // consumer could carry it to whoever actually served the exchange
+        // instead, but no such consumer exists in this crate today -- see
+        // `runtime/local.rs::set_local_model_weights_digest`'s doc comment.
     }
 }
 
@@ -292,6 +299,10 @@ fn proto_identity_to_local(
         artifact: identity.artifact.clone(),
         local_file_name: identity.local_file_name.clone(),
         identity_hash: identity.identity_hash.clone(),
+        // Never carried on the gossip wire (see `descriptor_identity_to_proto`)
+        // -- a descriptor rebuilt from a peer's proto message has no
+        // load-time weights digest to report, honestly `None`.
+        weights_digest: None,
     }
 }
 
@@ -1205,6 +1216,7 @@ pub(crate) fn mesh_config_to_proto(
         plugins,
         config_toml: crate::plugin::config_to_toml(config).ok(),
         mesh_requirements,
+        lifecycle_log_parser: Some(config.runtime.lifecycle_log_parser.as_str().to_string()),
     }
 }
 
@@ -1304,7 +1316,7 @@ fn legacy_proto_config_to_mesh(
         .and_then(|proto| crate::MeshRequirements::from_proto(proto).ok())
         .map(|requirements| crate::plugin::mesh_requirements_config_from_runtime(&requirements))
         .unwrap_or_default();
-    MeshConfig {
+    let mut config = MeshConfig {
         version: Some(snapshot.version),
         gpu: GpuConfig {
             assignment,
@@ -1319,7 +1331,16 @@ fn legacy_proto_config_to_mesh(
         plugins,
         logging: Default::default(),
         extra: Default::default(),
+    };
+    if let Some(mode) = snapshot
+        .lifecycle_log_parser
+        .as_deref()
+        .and_then(|value| value.parse().ok())
+    {
+        config.runtime.lifecycle_log_parser = mode;
+        config.runtime.lifecycle_log_parser_source = mesh_llm_config::ConfigValueSource::Config;
     }
+    config
 }
 
 pub(crate) fn canonical_config_hash(snapshot: &crate::proto::node::NodeConfigSnapshot) -> [u8; 32] {

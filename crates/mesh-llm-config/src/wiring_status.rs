@@ -413,6 +413,13 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         behavior: WiringBehavior::None,
     },
     WiringEntry {
+        path: "runtime.lifecycle_log_parser",
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
+    },
+    WiringEntry {
         path: "runtime.drain_timeout_secs",
         status: WiringStatus::Wired,
         owner: "n/a",
@@ -1245,6 +1252,13 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
     },
     WiringEntry {
         path: "speculative.verify_window_pipeline_depth",
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
+    },
+    WiringEntry {
+        path: "speculative.verify_window_runahead_tokens",
         status: WiringStatus::Wired,
         owner: "n/a",
         reason: "",

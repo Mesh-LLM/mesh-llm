@@ -264,7 +264,7 @@ if [[ "$BUILD" == "1" ]]; then
             "$SCRIPT_DIR/build-llama.sh"
     fi
 
-    cargo_args=(build -p mesh-llm-ffi --no-default-features --features "host,embedded-runtime")
+    cargo_args=(build -p mesh-llm-ffi --no-default-features --features "embedded-runtime")
     if [[ "$PROFILE" == "release" ]]; then
         cargo_args+=(--release)
     fi

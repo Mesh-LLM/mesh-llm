@@ -9,9 +9,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 UI_DIR="$REPO_ROOT/crates/mesh-llm-ui"
 BUILD_PROFILE="${MESH_LLM_BUILD_PROFILE:-debug}"
 
-# shellcheck source=scripts/lib/lld.sh
-source "$SCRIPT_DIR/lib/lld.sh"
-
 usage() {
     echo "usage: scripts/build-host.sh [--profile debug|dev|release]" >&2
 }
@@ -40,48 +37,6 @@ case "$BUILD_PROFILE" in
         exit 1
         ;;
 esac
-
-append_rustflag() {
-    local flag="$1"
-    case " ${RUSTFLAGS:-} " in
-        *" $flag "*) ;;
-        *) export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }$flag" ;;
-    esac
-}
-
-configure_lld_linker() {
-    case "$(uname -s)" in
-        Linux | Darwin) ;;
-        *)
-            echo "unsupported OS for a dynamic host build: $(uname -s)" >&2
-            exit 1
-            ;;
-    esac
-    local lld
-    lld="$(find_lld)"
-    if [[ -z "$lld" ]]; then
-        if [[ "$(uname -s)" == "Darwin" ]]; then
-            echo "Error: LLVM ld64.lld was not found; run 'brew install lld'." >&2
-        else
-            echo "Error: LLVM ld.lld was not found; install lld and retry." >&2
-        fi
-        exit 1
-    fi
-    # Installed but unable to link is a slower build, not a broken one; see
-    # scripts/lib/lld.sh.
-    if lld_links "$lld"; then
-        append_rustflag "-C link-arg=-fuse-ld=$lld"
-    else
-        report_lld_fallback "$lld"
-    fi
-}
-
-configure_rust_cache() {
-    if [[ -z "${RUSTC_WRAPPER:-}" ]] && command -v sccache >/dev/null 2>&1; then
-        RUSTC_WRAPPER="$(command -v sccache)"
-        export RUSTC_WRAPPER
-    fi
-}
 
 stamp_build_version() {
     local release_version=""
@@ -141,9 +96,6 @@ if [[ "${MESH_LLM_DYNAMIC_NATIVE_RUNTIME:-1}" != "1" ]]; then
     echo "Host builds must use dynamic native runtimes; MESH_LLM_DYNAMIC_NATIVE_RUNTIME=0 is unsupported." >&2
     exit 1
 fi
-
-configure_lld_linker
-configure_rust_cache
 
 echo "Building backend-neutral MeshLLM host (profile: $BUILD_PROFILE)."
 if [[ "${MESH_LLM_SKIP_UI:-0}" != "1" ]]; then

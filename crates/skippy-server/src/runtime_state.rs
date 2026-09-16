@@ -18,6 +18,11 @@ use skippy_runtime::{
 
 mod frame_operations;
 mod lane_lifecycle;
+pub mod lifecycle;
+mod restore_transaction;
+mod state_transfer;
+
+pub use lifecycle::{SessionLifecycleEvent, SessionLifecycleObserver};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RuntimeLaunchOverrides {
@@ -59,6 +64,7 @@ pub struct RuntimeState {
     max_idle_sessions: Option<usize>,
     session_token_counts: BTreeMap<String, u64>,
     session_resident_prefixes: BTreeMap<String, ResidentLanePrefix>,
+    session_lifecycle_observer: Option<Arc<dyn SessionLifecycleObserver>>,
     #[cfg(test)]
     modelless_for_test: bool,
 }
@@ -174,7 +180,25 @@ impl RuntimeState {
             max_idle_sessions: None,
             session_token_counts: BTreeMap::new(),
             session_resident_prefixes: BTreeMap::new(),
+            session_lifecycle_observer: None,
             modelless_for_test: true,
+        }
+    }
+
+    /// Attaches an optional session-lifecycle observer. Never required;
+    /// a runtime with no observer behaves identically.
+    #[must_use]
+    pub fn with_session_lifecycle_observer(
+        mut self,
+        observer: Arc<dyn SessionLifecycleObserver>,
+    ) -> Self {
+        self.session_lifecycle_observer = Some(observer);
+        self
+    }
+
+    pub(crate) fn notify_session_lifecycle(&self, event: SessionLifecycleEvent) {
+        if let Some(observer) = self.session_lifecycle_observer.as_ref() {
+            observer.observe(event);
         }
     }
 
@@ -216,7 +240,7 @@ impl Drop for RuntimeState {
 }
 
 pub fn load_runtime(config: &StageConfig) -> Result<Option<Arc<Mutex<RuntimeState>>>> {
-    load_runtime_with_overrides(config, &RuntimeLaunchOverrides::default())
+    load_runtime_with_overrides(config, &RuntimeLaunchOverrides::default(), None)
 }
 
 /// Return the state semantics captured from the model that was actually
@@ -238,6 +262,7 @@ pub fn loaded_model_state_kind(
 pub fn load_runtime_with_overrides(
     config: &StageConfig,
     overrides: &RuntimeLaunchOverrides,
+    session_lifecycle_observer: Option<Arc<dyn SessionLifecycleObserver>>,
 ) -> Result<Option<Arc<Mutex<RuntimeState>>>> {
     reject_legacy_serving_package(config)?;
     let runtime_config = runtime_config_from_stage_config(config, overrides)?;
@@ -275,6 +300,7 @@ pub fn load_runtime_with_overrides(
         max_idle_sessions: max_idle_sessions_from_stage_config(config),
         session_token_counts: BTreeMap::new(),
         session_resident_prefixes: BTreeMap::new(),
+        session_lifecycle_observer,
         #[cfg(test)]
         modelless_for_test: false,
     }))))
@@ -283,7 +309,9 @@ pub fn load_runtime_with_overrides(
 pub fn load_runtime_with_overrides_and_open_events(
     config: &StageConfig,
     overrides: &RuntimeLaunchOverrides,
+    operation_id: skippy_runtime::OperationId,
     model_open_event_reporter: Option<&mut (dyn FnMut(skippy_runtime::RuntimeEvent) + Send)>,
+    session_lifecycle_observer: Option<Arc<dyn SessionLifecycleObserver>>,
 ) -> Result<Option<Arc<Mutex<RuntimeState>>>> {
     reject_legacy_serving_package(config)?;
     let runtime_config = runtime_config_from_stage_config(config, overrides)?;
@@ -300,13 +328,19 @@ pub fn load_runtime_with_overrides_and_open_events(
         _ if !admitted_model_parts.is_empty() => open_stage_model_from_parts_with_events(
             &admitted_model_parts,
             &runtime_config,
+            operation_id,
             model_open_event_reporter,
         )?,
         _ => {
             let Some(model_path) = config.model_path.as_ref().map(std::path::Path::new) else {
                 return Ok(None);
             };
-            open_stage_model_with_events(model_path, &runtime_config, model_open_event_reporter)?
+            open_stage_model_with_events(
+                model_path,
+                &runtime_config,
+                operation_id,
+                model_open_event_reporter,
+            )?
         }
     };
 
@@ -323,6 +357,7 @@ pub fn load_runtime_with_overrides_and_open_events(
         max_idle_sessions: max_idle_sessions_from_stage_config(config),
         session_token_counts: BTreeMap::new(),
         session_resident_prefixes: BTreeMap::new(),
+        session_lifecycle_observer,
         #[cfg(test)]
         modelless_for_test: false,
     }))))
@@ -420,6 +455,10 @@ fn runtime_config_from_stage_config(
         mtp_source: overrides.mtp_source,
         filter_tensors_on_load: config.filter_tensors_on_load,
         resident_tensor_names: config.resident_tensor_names.clone(),
+        activation_import_identities: config.activation_import_identities.clone(),
+        activation_import_bindings: config.activation_import_bindings.clone(),
+        activation_export_identities: config.activation_export_identities.clone(),
+        activation_export_bindings: config.activation_export_bindings.clone(),
         checkpoint_quantization: config
             .checkpoint_quantization
             .as_deref()
@@ -439,10 +478,13 @@ fn open_stage_model(path: &std::path::Path, runtime_config: &RuntimeConfig) -> R
 fn open_stage_model_with_events(
     path: &std::path::Path,
     runtime_config: &RuntimeConfig,
+    operation_id: skippy_runtime::OperationId,
     model_open_event_reporter: Option<&mut (dyn FnMut(skippy_runtime::RuntimeEvent) + Send)>,
 ) -> Result<StageModel> {
     match model_open_event_reporter {
-        Some(event_reporter) => StageModel::open_with_events(path, runtime_config, event_reporter),
+        Some(event_reporter) => {
+            StageModel::open_with_events(path, runtime_config, operation_id, event_reporter)
+        }
         None => StageModel::open(path, runtime_config),
     }
 }
@@ -457,12 +499,16 @@ fn open_stage_model_from_parts(
 fn open_stage_model_from_parts_with_events(
     paths: &[std::path::PathBuf],
     runtime_config: &RuntimeConfig,
+    operation_id: skippy_runtime::OperationId,
     model_open_event_reporter: Option<&mut (dyn FnMut(skippy_runtime::RuntimeEvent) + Send)>,
 ) -> Result<StageModel> {
     match model_open_event_reporter {
-        Some(event_reporter) => {
-            StageModel::open_from_parts_with_events(paths, runtime_config, event_reporter)
-        }
+        Some(event_reporter) => StageModel::open_from_parts_with_events(
+            paths,
+            runtime_config,
+            operation_id,
+            event_reporter,
+        ),
         None => StageModel::open_from_parts(paths, runtime_config),
     }
 }
@@ -473,9 +519,8 @@ mod tests {
         FlashAttentionType, LoadMode, PeerConfig, SplitMode, StageConfig, StageDevice,
     };
     use skippy_runtime::{
-        ActivationDesc, ActivationFrame, CheckpointQuantization,
-        FlashAttentionType as RuntimeFlashAttentionType, MtpSource, RuntimeActivationDType,
-        RuntimeActivationLayout, RuntimeConfig, SamplingConfig,
+        ActivationFrame, CheckpointQuantization, FlashAttentionType as RuntimeFlashAttentionType,
+        MtpSource, RuntimeConfig, SamplingConfig,
     };
 
     use super::{
@@ -893,21 +938,19 @@ mod tests {
 
     fn glm52_mtp_input(token_count: u32) -> ActivationFrame {
         let hidden_bytes = 6144 * token_count as usize * std::mem::size_of::<f32>();
-        ActivationFrame {
-            desc: ActivationDesc {
-                version: 1,
-                dtype: RuntimeActivationDType::F32,
-                layout: RuntimeActivationLayout::TokenMajor,
-                producer_stage_index: 0,
-                layer_start: 0,
-                layer_end: 74,
-                token_count,
-                sequence_count: 1,
-                payload_bytes: hidden_bytes as u64,
+        let mut frame = crate::test_activation::frame(
+            token_count,
+            vec![crate::test_activation::PartBytes {
+                identity: 1,
+                ggml_type: skippy_runtime::GGML_TYPE_F32,
                 flags: 0,
-            },
-            payload: vec![0; hidden_bytes],
-        }
+                bytes: vec![0; hidden_bytes],
+            }],
+        );
+        frame.desc.producer_stage_index = 0;
+        frame.desc.layer_start = 0;
+        frame.desc.layer_end = 74;
+        frame
     }
 
     #[test]
@@ -923,6 +966,7 @@ mod tests {
                 mtp_source: MtpSource::Integrated,
                 ..RuntimeLaunchOverrides::default()
             },
+            None,
         )?
         .expect("GLM final stage should load from the package");
         let mut runtime = runtime.lock().expect("runtime mutex poisoned");
@@ -964,6 +1008,7 @@ mod tests {
                 mtp_source: MtpSource::Disabled,
                 ..RuntimeLaunchOverrides::default()
             },
+            None,
         )?
         .expect("GLM final stage should load from the package");
         let mut runtime = runtime.lock().expect("runtime mutex poisoned");
@@ -1014,6 +1059,7 @@ mod tests {
                 mtp_source: MtpSource::External,
                 ..RuntimeLaunchOverrides::default()
             },
+            None,
         )?
         .expect("GLM final stage should load from the package");
         let mut runtime = runtime.lock().expect("runtime mutex poisoned");

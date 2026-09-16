@@ -61,6 +61,10 @@ fn build_built_in_config_schema() -> ConfigSchema {
             "runtime.startup_failure_policy",
             string_enum(["best_effort", "fail_fast"]),
         ),
+        startup_runtime_setting(
+            "runtime.lifecycle_log_parser",
+            string_enum(["auto", "enabled", "disabled"]),
+        ),
         runtime_setting("runtime.drain_timeout_secs", ConfigValueSchema::Integer),
         runtime_setting("runtime.drain_timeout_max_secs", ConfigValueSchema::Integer),
         activity_runtime_setting("runtime.activity.enabled", ConfigValueSchema::Boolean),
@@ -748,6 +752,10 @@ fn speculative_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         ),
         basic_setting(
             &format!("{prefix}.verify_window_pipeline_depth"),
+            ConfigValueSchema::Integer,
+        ),
+        basic_setting(
+            &format!("{prefix}.verify_window_runahead_tokens"),
             ConfigValueSchema::Integer,
         ),
         basic_setting(&format!("{prefix}.spec_default"), bool_or_auto_schema()),

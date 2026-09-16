@@ -2,7 +2,7 @@
   "schema_version": 1,
   "manifest_kind": "test-model-artifacts",
   "suite": "product-integration-smoke",
-  "registry_sha256": "0fb272556fa31f2ab91d06c8265af82aa531c2001dbcbe6c3af3dab941140b3c",
+  "registry_sha256": "3ec400a7c819be588f7b9ea41ba2d9bc029dacab72865fe589ba99953a24aaa4",
   "artifacts": [
     {
       "id": "family-granite-hybrid",

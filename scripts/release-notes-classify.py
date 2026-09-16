@@ -94,6 +94,21 @@ def read_body_prs(path):
     return prs
 
 
+def body_has_entries(path):
+    """Return whether the release body contains an entry before its tail."""
+    return bool(read_body_prs(path))
+
+
+def load_links(path):
+    """Load commit records for pull requests the subject suffix cannot key.
+
+    scripts/release-notes-link.py establishes these through the GitHub API for
+    commits that reached the release without a "(#N)" suffix.
+    """
+    with open(path, encoding="utf-8") as handle:
+        return {int(pr): record for pr, record in json.load(handle).items()}
+
+
 def read_commits(git_range, repo_root=None):
     """Map PR number -> {subject, trailers} from the canonical commits."""
     result = subprocess.run(
@@ -249,17 +264,44 @@ def build_plan(prs, commits, version, date):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--body", required=True, help="published release body")
-    parser.add_argument("--range", required=True, help="git range, e.g. v0.75.1..v0.76.0")
-    parser.add_argument("--version", required=True)
-    parser.add_argument("--date", required=True)
-    parser.add_argument("--out", required=True)
+    parser.add_argument("--range", help="git range, e.g. v0.75.1..v0.76.0")
+    parser.add_argument("--version")
+    parser.add_argument("--date")
+    parser.add_argument("--out")
     parser.add_argument("--repo-root", default=None)
+    parser.add_argument(
+        "--has-entries",
+        action="store_true",
+        help="exit successfully when the body has an entry before its tail",
+    )
+    parser.add_argument(
+        "--links", help="extra commit records keyed by pull request number"
+    )
     args = parser.parse_args()
+
+    if args.has_entries:
+        return 0 if body_has_entries(args.body) else 1
+
+    missing = [
+        flag
+        for flag, value in (
+            ("--range", args.range),
+            ("--version", args.version),
+            ("--date", args.date),
+            ("--out", args.out),
+        )
+        if value is None
+    ]
+    if missing:
+        parser.error(f"the following arguments are required: {', '.join(missing)}")
 
     prs = read_body_prs(args.body)
     if not prs:
         sys.exit("error: no PR entries found in the release body")
     commits = read_commits(args.range, args.repo_root)
+    if args.links:
+        for pr, record in load_links(args.links).items():
+            commits.setdefault(pr, record)
     plan, unclassified = build_plan(prs, commits, args.version, args.date)
 
     with open(args.out, "w", encoding="utf-8") as handle:

@@ -22,6 +22,9 @@ use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 pub use skippy_protocol::FlashAttentionType;
 use std::collections::BTreeMap;
+use std::str::FromStr;
+
+use crate::ConfigValueSource;
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct MeshConfig {
@@ -96,6 +99,10 @@ pub struct RuntimeConfig {
     /// How the runtime reacts when a model fails to load during startup.
     #[serde(default)]
     pub startup_failure_policy: runtime::StartupFailurePolicy,
+    #[serde(default)]
+    pub lifecycle_log_parser: LifecycleLogParserMode,
+    #[serde(skip)]
+    pub lifecycle_log_parser_source: ConfigValueSource,
     /// Seconds before forcibly unloading a draining instance (default 30).
     #[serde(default = "default_drain_timeout_secs")]
     pub drain_timeout_secs: u64,
@@ -124,6 +131,8 @@ impl Default for RuntimeConfig {
             listen_all: false,
             mode: runtime::RuntimeMode::default(),
             startup_failure_policy: runtime::StartupFailurePolicy::default(),
+            lifecycle_log_parser: LifecycleLogParserMode::default(),
+            lifecycle_log_parser_source: ConfigValueSource::Default,
             drain_timeout_secs: runtime::DEFAULT_DRAIN_TIMEOUT_SECS,
             drain_timeout_max_secs: runtime::DEFAULT_DRAIN_TIMEOUT_MAX_SECS,
             activity: runtime::RuntimeActivityConfig::default(),
@@ -134,6 +143,38 @@ impl Default for RuntimeConfig {
                 DEFAULT_MODEL_TARGET_DEMAND_UPGRADE_MIN_REQUESTS,
             model_target_demand_upgrade_max_age_secs:
                 DEFAULT_MODEL_TARGET_DEMAND_UPGRADE_MAX_AGE_SECS,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LifecycleLogParserMode {
+    #[default]
+    Auto,
+    Enabled,
+    Disabled,
+}
+
+impl FromStr for LifecycleLogParserMode {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "auto" => Ok(Self::Auto),
+            "enabled" => Ok(Self::Enabled),
+            "disabled" => Ok(Self::Disabled),
+            _ => Err(()),
+        }
+    }
+}
+
+impl LifecycleLogParserMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Enabled => "enabled",
+            Self::Disabled => "disabled",
         }
     }
 }
@@ -560,6 +601,7 @@ pub struct SpeculativeConfig {
     pub verify_window_min_tokens: Option<u32>,
     pub verify_window_max_tokens: Option<u32>,
     pub verify_window_pipeline_depth: Option<u32>,
+    pub verify_window_runahead_tokens: Option<u32>,
     pub spec_default: Option<BoolOrAuto>,
     pub(crate) legacy_draft_model_path_used: bool,
 }
@@ -611,6 +653,7 @@ impl SpeculativeConfig {
             verify_window_min_tokens: pick!(verify_window_min_tokens),
             verify_window_max_tokens: pick!(verify_window_max_tokens),
             verify_window_pipeline_depth: pick!(verify_window_pipeline_depth),
+            verify_window_runahead_tokens: pick!(verify_window_runahead_tokens),
             spec_default: pick!(spec_default),
             legacy_draft_model_path_used: overrides
                 .filter(|config| config.draft_model.is_some())
@@ -684,6 +727,8 @@ struct SpeculativeConfigRaw {
     #[serde(default)]
     verify_window_pipeline_depth: Option<u32>,
     #[serde(default)]
+    verify_window_runahead_tokens: Option<u32>,
+    #[serde(default)]
     spec_default: Option<BoolOrAuto>,
 }
 
@@ -728,6 +773,7 @@ impl<'de> Deserialize<'de> for SpeculativeConfig {
             verify_window_min_tokens: raw.verify_window_min_tokens,
             verify_window_max_tokens: raw.verify_window_max_tokens,
             verify_window_pipeline_depth: raw.verify_window_pipeline_depth,
+            verify_window_runahead_tokens: raw.verify_window_runahead_tokens,
             spec_default: raw.spec_default,
             legacy_draft_model_path_used: legacy_used,
         })
@@ -789,6 +835,10 @@ impl Serialize for SpeculativeConfig {
         map.serialize_entry(
             "verify_window_pipeline_depth",
             &self.verify_window_pipeline_depth,
+        )?;
+        map.serialize_entry(
+            "verify_window_runahead_tokens",
+            &self.verify_window_runahead_tokens,
         )?;
         map.serialize_entry("spec_default", &self.spec_default)?;
         map.end()

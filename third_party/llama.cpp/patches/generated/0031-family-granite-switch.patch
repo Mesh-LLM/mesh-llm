@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/granite-switch.cpp b/src/models/granite-switch.cpp
-index 7c9a901c8a4352c11232f6ff4f95ed4fa43c84a3..f4e9a216854694ca7ae8df336fa0fb6cacc7dd0f 100644
+index a5c6a7c4f4cbdaa8688bf07c49f6f679b5d02750..5be27e45775a4c9feeb4d5e2d5f620be9aa880dc 100644
 --- a/src/models/granite-switch.cpp
 +++ b/src/models/granite-switch.cpp
-@@ -248,8 +248,13 @@ llama_model_granite_switch::graph::graph(
+@@ -272,8 +272,13 @@ llama_model_granite_switch::graph::graph(
      res->add_input(std::move(inp_switch));
  
      // embed the substituted ids directly; build_inp_embd would embed the raw tokens
@@ -28,7 +28,7 @@ index 7c9a901c8a4352c11232f6ff4f95ed4fa43c84a3..f4e9a216854694ca7ae8df336fa0fb6c
          inpL = ggml_scale(ctx0, inpL, hparams.f_embedding_scale);
      }
      cb(inpL, "inp_embd", -1);
-@@ -286,11 +291,13 @@ llama_model_granite_switch::graph::graph(
+@@ -310,11 +315,13 @@ llama_model_granite_switch::graph::graph(
      ggml_tensor * adapter_ids = ggml_cast(ctx0, slot_f, GGML_TYPE_I32);
      cb(adapter_ids, "adapter_ids", -1);
  
@@ -44,7 +44,7 @@ index 7c9a901c8a4352c11232f6ff4f95ed4fa43c84a3..f4e9a216854694ca7ae8df336fa0fb6c
          ggml_tensor * inpSA = inpL;
  
          cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
-@@ -298,7 +305,7 @@ llama_model_granite_switch::graph::graph(
+@@ -322,7 +329,7 @@ llama_model_granite_switch::graph::graph(
  
          cur = build_attention_layer(cur, inp_pos, adapter_ids, inp_attn, model, n_embd_head, il);
  
@@ -53,7 +53,7 @@ index 7c9a901c8a4352c11232f6ff4f95ed4fa43c84a3..f4e9a216854694ca7ae8df336fa0fb6c
              cur   = ggml_get_rows(ctx0, cur,   inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
              // keep adapter_ids aligned to the kept rows (2D round-trip for get_rows)
-@@ -311,7 +318,15 @@ llama_model_granite_switch::graph::graph(
+@@ -335,7 +342,15 @@ llama_model_granite_switch::graph::graph(
          cur = build_layer_ffn(cur, inpSA, adapter_ids, model, il);
  
          inpL = cur;

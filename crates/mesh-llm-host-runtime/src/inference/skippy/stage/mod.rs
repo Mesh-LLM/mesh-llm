@@ -19,6 +19,7 @@ use tokio::{
 };
 
 mod inventory;
+mod runtime_events;
 #[cfg(test)]
 mod tests;
 mod types;
@@ -281,6 +282,12 @@ impl StageControlState {
                 error: Some(error),
             });
         }
+        let stage_op = runtime_events::StageLoadOperation::begin(
+            &load.topology_id,
+            &load.stage_id,
+            load.layer_start,
+            load.layer_end,
+        );
         load = tokio::task::spawn_blocking(move || {
             crate::inference::skippy::apply_verified_local_source(&mut load).map(|_| load)
         })
@@ -358,6 +365,7 @@ impl StageControlState {
                 last_error.as_deref(),
             );
             let _ = stage.server.shutdown().await;
+            stage_op.failed(mesh_llm_runtime_event_contracts::ReasonCode::ModelFormatOrLoadFailure);
             return Err(error.context(context));
         }
 
@@ -370,6 +378,7 @@ impl StageControlState {
             .into_iter()
             .next()
             .ok_or_else(|| anyhow!("stage status missing after load"))?;
+        stage_op.ready(effective_load.lane_count);
         Ok(StageReadyResponse {
             accepted: true,
             status,
@@ -409,11 +418,13 @@ impl StageControlState {
                 error: Some("stale shutdown generation".to_string()),
             });
         }
+        let stage_op = runtime_events::StageStopOperation::begin(&stop.topology_id, &stop.stage_id);
         let mut status = status_from_running(&existing);
         status.state = StageRuntimeState::Stopping;
         existing.server.shutdown().await?;
         status.state = StageRuntimeState::Stopped;
         status.shutdown_generation = stop.shutdown_generation;
+        stage_op.stopped();
         Ok(StageReadyResponse {
             accepted: true,
             status,
@@ -645,6 +656,7 @@ fn stage_config(
         );
     }
     let resident_tensor_names = admitted_resident_tensor_names(load, package)?;
+    let frontier_profile = admitted_activation_frontier(load)?;
     let mut config = StageConfig {
         run_id: load.run_id.clone(),
         topology_id: load.topology_id.clone(),
@@ -716,6 +728,10 @@ fn stage_config(
             LoadMode::RuntimeSlice | LoadMode::LayerPackage
         ),
         resident_tensor_names,
+        activation_import_identities: frontier_profile.activation_imports.clone(),
+        activation_import_bindings: frontier_profile.activation_import_bindings.clone(),
+        activation_export_identities: frontier_profile.activation_exports.clone(),
+        activation_export_bindings: frontier_profile.activation_export_bindings.clone(),
         checkpoint_quantization: None,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
@@ -735,6 +751,26 @@ fn stage_config(
         },
     );
     Ok(config)
+}
+
+pub(crate) fn admitted_activation_frontier(
+    load: &StageLoadRequest,
+) -> Result<&skippy_protocol::StageAdmissionProfile> {
+    let frontier = load
+        .admission
+        .profiles
+        .first()
+        .context("stage admission descriptor has no execution profiles")?;
+    anyhow::ensure!(
+        load.admission.profiles.iter().all(|profile| {
+            profile.activation_imports == frontier.activation_imports
+                && profile.activation_exports == frontier.activation_exports
+                && profile.activation_import_bindings == frontier.activation_import_bindings
+                && profile.activation_export_bindings == frontier.activation_export_bindings
+        }),
+        "stage admission execution profiles disagree on activation frontier identities"
+    );
+    Ok(frontier)
 }
 
 pub(crate) fn admitted_resident_tensor_names(

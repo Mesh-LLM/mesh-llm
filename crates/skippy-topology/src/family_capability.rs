@@ -559,6 +559,10 @@ pub fn gemma3_capability(layer_count: u32, activation_width: u32) -> FamilyCapab
 }
 
 pub fn gemma3n_capability(layer_count: u32, activation_width: u32) -> FamilyCapabilityRecord {
+    // llama.cpp fixes the first shared-KV consumer at layer 20 and maps those
+    // consumers back to producers 18/19. A downstream slice must therefore
+    // start no later than layer 18 so it owns both producers.
+    let shared_kv_start = layer_count.min(20).saturating_sub(2);
     FamilyCapabilityRecord {
         family_id: "gemma3n".to_string(),
         layer_count,
@@ -568,12 +572,12 @@ pub fn gemma3n_capability(layer_count: u32, activation_width: u32) -> FamilyCapa
         split_constraints: vec![SplitConstraint {
             kind: SplitConstraintKind::SharedKvProducerConsumer,
             range: LayerRange {
-                start: layer_count / 2,
+                start: shared_kv_start,
                 end: layer_count,
             },
-            forbidden_boundaries: vec![layer_count.saturating_mul(2) / 3],
-            reject_boundary_inside: false,
-            reason: "Gemma3n upper layers reuse KV owned by lower upper-stack layers; keep the final slice start on the reviewed KV-owner boundary unless KV replay or transfer is added".to_string(),
+            forbidden_boundaries: Vec::new(),
+            reject_boundary_inside: true,
+            reason: "Gemma3n layers 20+ reuse KV produced by layers 18/19; keep the final slice start at or before layer 18 unless KV replay or transfer is added".to_string(),
         }],
         sidebands: vec![SidebandRequirement {
             kind: SidebandKind::Gemma3nAltup,
@@ -782,6 +786,9 @@ pub fn rwkv7_capability(layer_count: u32, activation_width: u32) -> FamilyCapabi
 }
 
 pub fn gemma4_e4b_capability(layer_count: u32, activation_width: u32) -> FamilyCapabilityRecord {
+    // Current E4B artifacts start their shared-KV producer pair at the model
+    // midpoint. Later consumers must remain in the same final slice.
+    let shared_kv_start = layer_count / 2;
     FamilyCapabilityRecord {
         family_id: "gemma4_e4b".to_string(),
         layer_count,
@@ -790,10 +797,10 @@ pub fn gemma4_e4b_capability(layer_count: u32, activation_width: u32) -> FamilyC
         recurrent_ranges: Vec::new(),
         split_constraints: vec![SplitConstraint {
             kind: SplitConstraintKind::SharedKvProducerConsumer,
-            range: LayerRange { start: 0, end: 0 },
-            forbidden_boundaries: vec![12, 14, 24, 28],
-            reject_boundary_inside: false,
-            reason: "known-bad Gemma4 E4B shared-KV producer/consumer boundary; keep this cut rejected unless KV replay or KV transfer is added".to_string(),
+            range: LayerRange { start: shared_kv_start, end: layer_count },
+            forbidden_boundaries: vec![12, 14],
+            reject_boundary_inside: true,
+            reason: "Gemma4 E4B has reviewed unsafe cuts and upper layers reuse KV produced at the start of the upper stack; keep the final slice start on an accepted boundary at or before that producer pair unless KV replay or transfer is added".to_string(),
         }],
         sidebands: vec![SidebandRequirement {
             kind: SidebandKind::TokenIds,
@@ -1007,6 +1014,14 @@ fn infer_mistral_olmo_llama_capability(
     }
     if compact.contains("laguna") {
         return Some(laguna_capability(layer_count, activation_width));
+    }
+    if compact.contains("llama4") {
+        return Some(dense_family_capability(
+            "llama4",
+            layer_count,
+            activation_width,
+            ExactStateMobility::Untested,
+        ));
     }
     if compact.contains("llama") {
         return Some(llama_capability(layer_count, activation_width));

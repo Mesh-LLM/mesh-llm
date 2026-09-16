@@ -230,6 +230,7 @@
         "scripts/build-windows.ps1",
         "scripts/install-windows-sdk.ps1",
         "scripts/windows-native-runtime-deps.py",
+        ".github/actions/setup-windows-short-paths/**",
         ".github/workflows/windows-warm-caches.yml"
       ]
     },

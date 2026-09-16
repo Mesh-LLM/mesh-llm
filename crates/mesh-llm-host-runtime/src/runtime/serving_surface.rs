@@ -459,6 +459,7 @@ pub(crate) fn assert_startup_launch_plan_describes_planned_runtime_before_proces
 pub(super) fn startup_model_plan_fixture() -> Vec<StartupModelPlan> {
     vec![
         StartupModelPlan {
+            model_source: String::new(),
             declared_ref: "unsloth/Model-A-GGUF:Q4_K_M".to_string(),
             config_model_id: None,
             resolved_path: PathBuf::from("/tmp/Model-A-Q4_K_M.gguf"),
@@ -477,6 +478,7 @@ pub(super) fn startup_model_plan_fixture() -> Vec<StartupModelPlan> {
             profile: String::new(),
         },
         StartupModelPlan {
+            model_source: String::new(),
             declared_ref: "Model-B".to_string(),
             config_model_id: None,
             resolved_path: PathBuf::from("/tmp/Model-B.gguf"),
@@ -558,6 +560,7 @@ pub(super) fn assert_loaded_model_plan_row(
 #[test]
 pub(super) fn startup_launch_plan_uses_metal_device_fallback_for_unpinned_model() {
     let startup_models = vec![StartupModelPlan {
+        model_source: String::new(),
         declared_ref: "Qwen/Qwen2.5-0.5B-Instruct-GGUF:qwen2.5-0.5b-instruct-q4_k_m".to_string(),
         config_model_id: None,
         resolved_path: PathBuf::from("/tmp/qwen2.5-0.5b-instruct-q4_k_m.gguf"),
@@ -1229,6 +1232,7 @@ pub(super) async fn spawn_run_auto_additional_model_tasks(ctx: RunAutoAdditional
                 &ctx.config.gpu,
             ),
             local_source_required: extra_model.local_source_required,
+            allow_uncertified_split: ctx.options.allow_uncertified_split,
             split_topology_lock: ctx.options.split_topology_lock.clone(),
             resource_planning_profile: runtime_resource_planning_profile(ctx.options),
             openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),

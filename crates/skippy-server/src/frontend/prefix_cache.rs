@@ -97,7 +97,15 @@ fn estimated_activation_bytes(token_count: usize, activation_width: i32) -> usiz
     let Ok(token_count) = i32::try_from(token_count) else {
         return 0;
     };
-    skippy_protocol::binary::activation_wire_bytes(token_count, activation_width).unwrap_or(0)
+    usize::try_from(token_count)
+        .ok()
+        .and_then(|tokens| {
+            usize::try_from(activation_width)
+                .ok()
+                .and_then(|width| tokens.checked_mul(width))
+        })
+        .and_then(|elements| elements.checked_mul(std::mem::size_of::<f32>()))
+        .unwrap_or(0)
 }
 
 pub(super) fn request_allows_exact_replay(request: &EmbeddedStageZeroGeneration<'_>) -> bool {
@@ -1076,12 +1084,7 @@ impl StageOpenAiBackend {
             current,
             sampling: wire_sampling.clone(),
         })?;
-        let output_capacity = stage_output_activation_capacity(
-            request.config,
-            decode_message.token_count,
-            request.activation_width,
-        )
-        .map_err(openai_backend_error)?;
+        let has_downstream = request.config.downstream.is_some();
         let scheduler_kv = Arc::clone(kv);
         let scheduler_session_key = session_key.to_string();
         let scheduler_prefill_tokens = prefill_tokens.to_vec();
@@ -1094,6 +1097,12 @@ impl StageOpenAiBackend {
         let outcome = self.iteration_scheduler.execute_runtime_timed(
             "embedded-fused-prefix-decode",
             move |runtime| {
+                let output_capacity = stage_output_activation_capacity(
+                    has_downstream,
+                    scheduler_decode_message.token_count,
+                    runtime.output_activation_boundary(),
+                )
+                .map_err(openai_backend_error)?;
                 let local_restore = scheduler_kv
                     .restore_resident_prefix(
                         runtime,

@@ -21,7 +21,7 @@ use skippy_package_format::{PackageManifest, Sidecar};
 /// The planned admission expectations for one stage.
 ///
 /// This is carried by the planner on `RuntimeSliceStagePlan` from planning
-/// time and mirrored into the generation-9 control protocol descriptor.
+/// time and mirrored into the generation-10 control protocol descriptor.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlannedStageAdmission {
     /// Content-derived package identity (`sha256:...`).
@@ -48,6 +48,10 @@ pub struct PlannedStageProfile {
     pub source_snapshot_identity: String,
     pub graph_configuration_id: String,
     pub backend_id: String,
+    pub activation_imports: Vec<String>,
+    pub activation_exports: Vec<String>,
+    pub activation_import_bindings: Vec<String>,
+    pub activation_export_bindings: Vec<String>,
 }
 
 /// The realized native stage descriptor as returned through the ABI.
@@ -76,6 +80,8 @@ pub struct RealizedStageProfile {
     pub backend_id: String,
     pub activation_imports: Vec<String>,
     pub activation_exports: Vec<String>,
+    pub activation_import_bindings: Vec<String>,
+    pub activation_export_bindings: Vec<String>,
     pub request_inputs: Vec<String>,
     pub state_effects: Vec<RealizedStageStateEffect>,
 }
@@ -123,6 +129,10 @@ fn planned_admission_from_discovery(
                 source_snapshot_identity: profile.source_snapshot_identity.clone(),
                 graph_configuration_id: profile.graph_configuration_id.clone(),
                 backend_id: profile.backend_id.clone(),
+                activation_imports: profile.activation_imports.clone(),
+                activation_exports: profile.activation_exports.clone(),
+                activation_import_bindings: profile.activation_import_bindings.clone(),
+                activation_export_bindings: profile.activation_export_bindings.clone(),
             })
             .collect(),
     }
@@ -161,6 +171,10 @@ impl From<&PlannedStageAdmission> for skippy_protocol::StageAdmissionDescriptor 
                     source_snapshot_identity: profile.source_snapshot_identity.clone(),
                     graph_configuration_id: profile.graph_configuration_id.clone(),
                     backend_id: profile.backend_id.clone(),
+                    activation_imports: profile.activation_imports.clone(),
+                    activation_exports: profile.activation_exports.clone(),
+                    activation_import_bindings: profile.activation_import_bindings.clone(),
+                    activation_export_bindings: profile.activation_export_bindings.clone(),
                 })
                 .collect(),
         }
@@ -465,7 +479,7 @@ fn realize_native_stage_chain_from_manifest(
 }
 
 /// Realize, package-resolve, and admit every stage before a topology can be
-/// published. Returned descriptors are canonical generation-9 wire values.
+/// published. Returned descriptors are canonical generation-10 wire values.
 pub fn realize_stage_admissions(
     package_dir: &Path,
     ranges: &[(u32, u32)],
@@ -1037,13 +1051,13 @@ fn read_native_profile(
         "native stage profile {profile_index} has an invalid execution guard"
     );
 
-    let activation_imports = read_native_values(
+    let (activation_imports, activation_import_bindings) = read_native_frontier_values(
         raw,
         profile_index,
         skippy_ffi::StagePlanValueKind::ActivationImport,
         descriptor.activation_import_count,
     )?;
-    let activation_exports = read_native_values(
+    let (activation_exports, activation_export_bindings) = read_native_frontier_values(
         raw,
         profile_index,
         skippy_ffi::StagePlanValueKind::ActivationExport,
@@ -1136,9 +1150,30 @@ fn read_native_profile(
         backend_id: read_plan_string(raw, descriptor.backend_id)?,
         activation_imports,
         activation_exports,
+        activation_import_bindings,
+        activation_export_bindings,
         request_inputs,
         state_effects,
     })
+}
+
+fn read_native_frontier_values(
+    raw: *const skippy_ffi::StagePlan,
+    profile_index: usize,
+    kind: skippy_ffi::StagePlanValueKind,
+    count: u64,
+) -> anyhow::Result<(Vec<String>, Vec<String>)> {
+    let count = usize::try_from(count).context("native frontier value count exceeds usize")?;
+    let mut identities = Vec::with_capacity(count);
+    let mut bindings = Vec::with_capacity(count);
+    for index in 0..count {
+        let descriptor = read_native_value_descriptor(raw, profile_index, kind, index)?;
+        identities.push(read_plan_string(raw, descriptor.identity)?);
+        bindings.push(read_plan_string(raw, descriptor.binding)?);
+    }
+    ensure_unique_strings(&format!("native {kind:?} identities"), &identities)?;
+    ensure_unique_strings(&format!("native {kind:?} bindings"), &bindings)?;
+    Ok((identities, bindings))
 }
 
 fn read_native_values(
@@ -1150,32 +1185,42 @@ fn read_native_values(
     let count = usize::try_from(count).context("native stage value count exceeds usize")?;
     let mut values = Vec::with_capacity(count);
     for index in 0..count {
-        let mut descriptor = unsafe { std::mem::zeroed::<skippy_ffi::StagePlanValueDescV1>() };
-        let mut error = ptr::null_mut();
-        let status = unsafe {
-            skippy_ffi::skippy_stage_plan_value_at_v1(
-                raw,
-                profile_index,
-                kind,
-                index,
-                &mut descriptor,
-                &mut error,
-            )
-        };
-        ffi_result(status, error).with_context(|| {
-            format!("read native {kind:?} value {index} for profile {profile_index}")
-        })?;
-        ensure_descriptor_abi(
-            "stage plan value",
-            descriptor.abi_version,
-            skippy_ffi::STAGE_PLAN_VALUE_DESC_V1_ABI_VERSION,
-            descriptor.struct_size,
-            std::mem::size_of::<skippy_ffi::StagePlanValueDescV1>(),
-        )?;
+        let descriptor = read_native_value_descriptor(raw, profile_index, kind, index)?;
         values.push(read_plan_string(raw, descriptor.identity)?);
     }
     ensure_unique_strings(&format!("native {kind:?} identities"), &values)?;
     Ok(values)
+}
+
+fn read_native_value_descriptor(
+    raw: *const skippy_ffi::StagePlan,
+    profile_index: usize,
+    kind: skippy_ffi::StagePlanValueKind,
+    index: usize,
+) -> anyhow::Result<skippy_ffi::StagePlanValueDescV1> {
+    let mut descriptor = unsafe { std::mem::zeroed::<skippy_ffi::StagePlanValueDescV1>() };
+    let mut error = ptr::null_mut();
+    let status = unsafe {
+        skippy_ffi::skippy_stage_plan_value_at_v1(
+            raw,
+            profile_index,
+            kind,
+            index,
+            &mut descriptor,
+            &mut error,
+        )
+    };
+    ffi_result(status, error).with_context(|| {
+        format!("read native {kind:?} value {index} for profile {profile_index}")
+    })?;
+    ensure_descriptor_abi(
+        "stage plan value",
+        descriptor.abi_version,
+        skippy_ffi::STAGE_PLAN_VALUE_DESC_V1_ABI_VERSION,
+        descriptor.struct_size,
+        std::mem::size_of::<skippy_ffi::StagePlanValueDescV1>(),
+    )?;
+    Ok(descriptor)
 }
 
 fn read_plan_string(
@@ -1569,6 +1614,37 @@ fn admit_profiles(
                     field,
                     planned: planned_value.clone(),
                     realized: realized_value.clone(),
+                });
+            }
+        }
+        for (field, planned_values, realized_values) in [
+            (
+                "activation_imports",
+                &planned_profile.activation_imports,
+                &realized_profile.activation_imports,
+            ),
+            (
+                "activation_exports",
+                &planned_profile.activation_exports,
+                &realized_profile.activation_exports,
+            ),
+            (
+                "activation_import_bindings",
+                &planned_profile.activation_import_bindings,
+                &realized_profile.activation_import_bindings,
+            ),
+            (
+                "activation_export_bindings",
+                &planned_profile.activation_export_bindings,
+                &realized_profile.activation_export_bindings,
+            ),
+        ] {
+            if planned_values != realized_values {
+                return Err(StagePlanAdmissionError::ProfileIdentityMismatch {
+                    profile_id: realized_profile.profile_id.clone(),
+                    field,
+                    planned: format!("{planned_values:?}"),
+                    realized: format!("{realized_values:?}"),
                 });
             }
         }

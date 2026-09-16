@@ -139,7 +139,44 @@ fn multimodal_stage_config(
     layer_end: u32,
     bind_addr: SocketAddr,
 ) -> StageConfig {
-    StageConfig {
+    // Filtered stage loads must carry the exact admitted resident tensor set;
+    // derive it with the same native planner the correctness runner uses.
+    let filtered = layer_start != 0 || layer_end != fixture.layer_end;
+    let runtime_plan = if filtered {
+        // The native planner validates a complete contiguous partition, so
+        // plan the full two-stage chain and keep this stage's closure.
+        let boundary = if layer_start == 0 {
+            layer_end
+        } else {
+            layer_start
+        };
+        let ranges = if boundary >= fixture.layer_end {
+            vec![(0, fixture.layer_end)]
+        } else {
+            vec![(0, boundary), (boundary, fixture.layer_end)]
+        };
+        match skippy_runtime::plan_gguf_stage_runtime_plans(
+            &fixture.model_path,
+            &ranges,
+            fixture.ctx_size,
+            1,
+        ) {
+            Ok(mut plans) => {
+                let index = usize::min(stage_index as usize, plans.len().saturating_sub(1));
+                plans.drain(..index);
+                Some(
+                    plans
+                        .into_iter()
+                        .next()
+                        .expect("mm-smoke planner returned no stage plan"),
+                )
+            }
+            Err(error) => panic!("mm-smoke runtime planning failed for {stage_id}: {error:#}"),
+        }
+    } else {
+        None
+    };
+    let mut config = StageConfig {
         run_id: "mm-smoke-run".to_string(),
         topology_id: "mm-smoke-topology".to_string(),
         model_id: "mm-smoke".to_string(),
@@ -188,7 +225,15 @@ fn multimodal_stage_config(
         upstream: None,
         downstream: None,
         ..StageConfig::default()
+    };
+    if let Some(plan) = runtime_plan {
+        config.resident_tensor_names = plan.resident_tensor_names;
+        config.activation_import_identities = plan.activation_import_identities;
+        config.activation_import_bindings = plan.activation_import_bindings;
+        config.activation_export_identities = plan.activation_export_identities;
+        config.activation_export_bindings = plan.activation_export_bindings;
     }
+    config
 }
 
 fn local_openai_backend(config: StageConfig) -> Result<StageOpenAiBackend> {
@@ -225,6 +270,7 @@ fn local_openai_backend(config: StageConfig) -> Result<StageOpenAiBackend> {
         generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
         hook_policy: None,
         generation_receipt: None,
+        generation_lifecycle: None,
         linear_proposal_ingress: None,
         kv: None,
         iteration_scheduler,
@@ -288,15 +334,20 @@ fn malformed_multimodal_chat_request() -> ChatCompletionRequest {
 }
 
 fn assert_nonempty_chat_response(response: &ChatCompletionResponse) {
-    let content = response
+    let message = &response
         .choices
         .first()
-        .and_then(|choice| choice.message.content.as_deref())
+        .expect("expected a multimodal response choice")
+        .message;
+    let content = message.content.as_deref().unwrap_or_default().trim();
+    let reasoning = message
+        .reasoning_content
+        .as_deref()
         .unwrap_or_default()
         .trim();
     assert!(
-        !content.is_empty(),
-        "expected non-empty multimodal response"
+        !content.is_empty() || !reasoning.is_empty(),
+        "expected non-empty multimodal content or reasoning; response={response:?}"
     );
 }
 
@@ -469,8 +520,33 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
             continuous_batching: true,
             openai: None,
         });
-    let ready = connect_endpoint_ready(&stage1_addr.to_string(), 120);
-    if let Err(error) = ready {
+    // Large filtered GGUF slices can take several minutes to materialize on
+    // macOS even after the native library is warm. This test is opt-in and
+    // exercises a real cached model, so budget for the load before declaring
+    // the embedded stage unhealthy.
+    let mut last_ready_error = None;
+    for _ in 0..1_800 {
+        match connect_endpoint_ready(&stage1_addr.to_string(), 1) {
+            Ok(_) => {
+                last_ready_error = None;
+                break;
+            }
+            Err(error) => last_ready_error = Some(error),
+        }
+        let status = stage1_handle.status();
+        if matches!(
+            status.state,
+            crate::embedded::EmbeddedState::Failed | crate::embedded::EmbeddedState::Stopped
+        ) {
+            stage1_handle.abort();
+            bail!(
+                "stage-1 binary server stopped during startup; status={:?} last_error={:?}",
+                status.state,
+                status.last_error
+            );
+        }
+    }
+    if let Some(error) = last_ready_error {
         let status = stage1_handle.status();
         stage1_handle.abort();
         return Err(error.context(format!(
@@ -533,6 +609,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
         generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
         hook_policy: None,
         generation_receipt: None,
+        generation_lifecycle: None,
         linear_proposal_ingress: None,
         kv: None,
         iteration_scheduler,

@@ -23,7 +23,8 @@ struct build_inputs_type {
 };
 struct graph_result {
   ggml_tensor *t_embd;
-  ggml_tensor *t_skippy_rwkv7_v_first;
+  void add_skippy_activation_import(ggml_tensor *, int) {}
+  void add_skippy_activation_export(ggml_tensor *, int) {}
   template <typename T> void add_input(std::unique_ptr<T>) {}
 };
 struct model_type {

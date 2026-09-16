@@ -82,6 +82,31 @@ fn update_layout_identity(hasher: &mut blake3::Hasher, config: &StageConfig) {
             .identity(config.activation_codec)
             .as_bytes(),
     );
+    for (tag, values) in [
+        (
+            &b"activation-import-identities:"[..],
+            &config.activation_import_identities,
+        ),
+        (
+            &b"activation-import-bindings:"[..],
+            &config.activation_import_bindings,
+        ),
+        (
+            &b"activation-export-identities:"[..],
+            &config.activation_export_identities,
+        ),
+        (
+            &b"activation-export-bindings:"[..],
+            &config.activation_export_bindings,
+        ),
+    ] {
+        hasher.update(tag);
+        hasher.update(&(values.len() as u64).to_le_bytes());
+        for value in values {
+            hasher.update(&(value.len() as u64).to_le_bytes());
+            hasher.update(value.as_bytes());
+        }
+    }
     hasher.update(config.cache_type_k.as_bytes());
     hasher.update(b"/");
     hasher.update(config.cache_type_v.as_bytes());
@@ -293,6 +318,10 @@ mod identity_completeness_tests {
             generation_signal_window: None,
             activation_codec: Default::default(),
             activation_codec_policy: Default::default(),
+            activation_import_identities: Vec::new(),
+            activation_import_bindings: Vec::new(),
+            activation_export_identities: Vec::new(),
+            activation_export_bindings: Vec::new(),
             stage_id: "stage-0".to_string(),
             stage_index: 0,
             layer_start: 0,
@@ -371,6 +400,43 @@ mod identity_completeness_tests {
             prefix_identity(&f16, 0, &[1, 2, 3, 4]).page_id,
             prefix_identity(&exact, 0, &[1, 2, 3, 4]).page_id
         );
+    }
+
+    #[test]
+    fn activation_frontier_changes_page_identity() {
+        let baseline = test_config();
+        let cases = [
+            StageConfig {
+                activation_import_identities: vec!["import-id".to_string()],
+                ..test_config()
+            },
+            StageConfig {
+                activation_import_bindings: vec!["import-binding".to_string()],
+                ..test_config()
+            },
+            StageConfig {
+                activation_export_identities: vec!["export-id".to_string()],
+                ..test_config()
+            },
+            StageConfig {
+                activation_export_bindings: vec!["export-binding".to_string()],
+                ..test_config()
+            },
+        ];
+
+        for config in cases {
+            assert_ne!(hash_of(&baseline), hash_of(&config));
+        }
+
+        let split = StageConfig {
+            activation_export_bindings: vec!["a".to_string(), "bc".to_string()],
+            ..test_config()
+        };
+        let joined = StageConfig {
+            activation_export_bindings: vec!["ab".to_string(), "c".to_string()],
+            ..test_config()
+        };
+        assert_ne!(hash_of(&split), hash_of(&joined));
     }
 
     #[test]
@@ -596,6 +662,10 @@ mod identity_stability_tests {
             generation_signal_window: None,
             activation_codec: Default::default(),
             activation_codec_policy: Default::default(),
+            activation_import_identities: Vec::new(),
+            activation_import_bindings: Vec::new(),
+            activation_export_identities: Vec::new(),
+            activation_export_bindings: Vec::new(),
             stage_id: "stage-0".to_string(),
             stage_index: 0,
             layer_start: 0,

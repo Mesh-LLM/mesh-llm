@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use model_ref::split_gguf_shard_info;
 use sha2::{Digest, Sha256};
 
-use crate::{ModelInfo, ensure_ok};
+use crate::{ModelInfo, RuntimeConfig, ensure_ok};
 
 struct Planner(*mut skippy_ffi::StagePlanner);
 
@@ -38,6 +38,31 @@ struct TensorDescriptor {
     stored_length: u64,
 }
 
+/// Native planner output required to load and execute one filtered stage.
+///
+/// The resident tensor names define the GGUF storage closure. The activation
+/// identities and bindings define the live graph frontier used by the typed
+/// activation transport. They must be carried together from the same plan.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GgufStageRuntimePlan {
+    pub resident_tensor_names: Vec<String>,
+    pub activation_import_identities: Vec<String>,
+    pub activation_import_bindings: Vec<String>,
+    pub activation_export_identities: Vec<String>,
+    pub activation_export_bindings: Vec<String>,
+}
+
+impl GgufStageRuntimePlan {
+    /// Install this planner result into the runtime configuration it describes.
+    pub fn apply_to(self, config: &mut RuntimeConfig) {
+        config.resident_tensor_names = self.resident_tensor_names;
+        config.activation_import_identities = self.activation_import_identities;
+        config.activation_import_bindings = self.activation_import_bindings;
+        config.activation_export_identities = self.activation_export_identities;
+        config.activation_export_bindings = self.activation_export_bindings;
+    }
+}
+
 /// Derive each stage's exact resident tensor closure with the native graph
 /// planner. This is the same source-of-truth planner used by production stage
 /// admission; callers receive native GGUF names suitable for
@@ -48,6 +73,64 @@ pub fn plan_gguf_stage_resident_tensor_names(
     ctx_size: u32,
     lane_count: u32,
 ) -> Result<Vec<Vec<String>>> {
+    Ok(
+        plan_gguf_stage_runtime_plans(model_path, ranges, ctx_size, lane_count)?
+            .into_iter()
+            .map(|plan| plan.resident_tensor_names)
+            .collect(),
+    )
+}
+
+/// Derive each stage's exact filtered-load closure and activation frontier.
+///
+/// All guarded execution profiles must expose the same frontier identities and
+/// live tensor bindings. A disagreement fails planning before any model loads.
+pub fn plan_gguf_stage_runtime_plans(
+    model_path: &Path,
+    ranges: &[(u32, u32)],
+    ctx_size: u32,
+    lane_count: u32,
+) -> Result<Vec<GgufStageRuntimePlan>> {
+    plan_gguf_stage_runtime_plans_impl(model_path, ranges, ctx_size, lane_count, true)
+}
+
+/// Derive the exact resident tensor closure for one independently loaded slice.
+///
+/// This does not require the requested range to form a complete model partition.
+pub fn plan_gguf_stage_resident_tensor_names_for_range(
+    model_path: &Path,
+    range: (u32, u32),
+    ctx_size: u32,
+    lane_count: u32,
+) -> Result<Vec<String>> {
+    Ok(
+        plan_gguf_stage_runtime_plan_for_range(model_path, range, ctx_size, lane_count)?
+            .resident_tensor_names,
+    )
+}
+
+/// Derive one independently loaded stage's filtered-load closure and frontier.
+///
+/// This does not require the requested range to form a complete model partition.
+pub fn plan_gguf_stage_runtime_plan_for_range(
+    model_path: &Path,
+    range: (u32, u32),
+    ctx_size: u32,
+    lane_count: u32,
+) -> Result<GgufStageRuntimePlan> {
+    plan_gguf_stage_runtime_plans_impl(model_path, &[range], ctx_size, lane_count, false)?
+        .into_iter()
+        .next()
+        .context("native stage planner returned no resident tensor closure")
+}
+
+fn plan_gguf_stage_runtime_plans_impl(
+    model_path: &Path,
+    ranges: &[(u32, u32)],
+    ctx_size: u32,
+    lane_count: u32,
+    validate_chain: bool,
+) -> Result<Vec<GgufStageRuntimePlan>> {
     anyhow::ensure!(!ranges.is_empty(), "stage plan chain is empty");
     anyhow::ensure!(ctx_size > 0, "stage planning context size must be positive");
     anyhow::ensure!(lane_count > 0, "stage planning lane count must be positive");
@@ -193,56 +276,61 @@ pub fn plan_gguf_stage_resident_tensor_names(
         .iter()
         .map(|(layer_start, layer_end)| realize_plan(&planner, *layer_start, *layer_end))
         .collect::<Result<Vec<_>>>()?;
-    let plan_ptrs = plans
-        .iter()
-        .map(|plan| plan.0.cast_const())
-        .collect::<Vec<_>>();
-    let mut error = ptr::null_mut();
-    let status = unsafe {
-        skippy_ffi::skippy_stage_plan_validate_chain_v1(
-            plan_ptrs.as_ptr(),
-            plan_ptrs.len(),
-            &mut error,
-        )
-    };
-    ensure_ok(status, error).context("validate native stage plan chain")?;
+    if validate_chain {
+        let plan_ptrs = plans
+            .iter()
+            .map(|plan| plan.0.cast_const())
+            .collect::<Vec<_>>();
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_stage_plan_validate_chain_v1(
+                plan_ptrs.as_ptr(),
+                plan_ptrs.len(),
+                &mut error,
+            )
+        };
+        ensure_ok(status, error).context("validate native stage plan chain")?;
+    }
 
     plans
         .iter()
         .enumerate()
         .map(|(index, plan)| {
-            resident_tensor_names(plan)
-                .with_context(|| format!("read stage {index} resident tensor closure"))
+            runtime_plan(plan).with_context(|| format!("read stage {index} runtime plan"))
         })
         .collect()
 }
 
-fn gguf_shard_paths(model_path: &Path) -> Result<Vec<PathBuf>> {
-    let canonical = model_path
-        .canonicalize()
-        .with_context(|| format!("canonicalize GGUF path {}", model_path.display()))?;
-    let Some(file_name) = canonical.file_name().and_then(|name| name.to_str()) else {
-        anyhow::bail!("GGUF path has no UTF-8 filename: {}", canonical.display());
+pub fn gguf_shard_paths(model_path: &Path) -> Result<Vec<PathBuf>> {
+    let Some(file_name) = model_path.file_name().and_then(|name| name.to_str()) else {
+        anyhow::bail!("GGUF path has no UTF-8 filename: {}", model_path.display());
     };
     let Some(shard) = split_gguf_shard_info(file_name) else {
+        let canonical = model_path
+            .canonicalize()
+            .with_context(|| format!("canonicalize GGUF path {}", model_path.display()))?;
         return Ok(vec![canonical]);
     };
     anyhow::ensure!(
         shard.part == "00001",
         "split GGUF inputs must point at the first shard, got {}",
-        canonical.display()
+        model_path.display()
     );
     let total = shard
         .total
         .parse::<u32>()
         .context("parse split GGUF shard count")?;
     anyhow::ensure!(total > 0, "split GGUF shard count must be positive");
-    let parent = canonical
+    // Resolve siblings in the referenced directory: HF caches expose snapshot
+    // files as per-file symlinks into blobs/, so canonicalizing the input
+    // first would erase the shard name pattern.
+    let directory = model_path
         .parent()
-        .context("split GGUF shard has no parent")?;
+        .map(|parent| parent.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
     (1..=total)
         .map(|index| {
-            parent
+            directory
                 .join(format!("{}-{index:05}-of-{:05}.gguf", shard.prefix, total))
                 .canonicalize()
                 .with_context(|| format!("resolve split GGUF shard {index}/{total}"))
@@ -364,17 +452,7 @@ fn realize_plan(planner: &Planner, layer_start: u32, layer_end: u32) -> Result<P
 }
 
 fn resident_tensor_names(plan: &Plan) -> Result<Vec<String>> {
-    let mut descriptor = unsafe { std::mem::zeroed::<skippy_ffi::StagePlanDescV1>() };
-    let mut error = ptr::null_mut();
-    let status =
-        unsafe { skippy_ffi::skippy_stage_plan_describe_v1(plan.0, &mut descriptor, &mut error) };
-    ensure_ok(status, error).context("describe native stage plan")?;
-    anyhow::ensure!(
-        descriptor.abi_version == skippy_ffi::STAGE_PLAN_DESC_V1_ABI_VERSION
-            && usize::try_from(descriptor.struct_size).ok()
-                == Some(std::mem::size_of::<skippy_ffi::StagePlanDescV1>()),
-        "native stage plan descriptor ABI mismatch"
-    );
+    let descriptor = plan_descriptor(plan)?;
     let count = usize::try_from(descriptor.resident_tensor_count)
         .context("native resident tensor count exceeds usize")?;
     anyhow::ensure!(count > 0, "native stage plan has no resident tensors");
@@ -401,6 +479,142 @@ fn resident_tensor_names(plan: &Plan) -> Result<Vec<String>> {
         "native resident tensor names are not strictly sorted and unique"
     );
     Ok(names)
+}
+
+fn runtime_plan(plan: &Plan) -> Result<GgufStageRuntimePlan> {
+    let descriptor = plan_descriptor(plan)?;
+    let profile_count = usize::try_from(descriptor.profile_count)
+        .context("native stage profile count exceeds usize")?;
+    anyhow::ensure!(profile_count > 0, "native stage plan has no profiles");
+
+    let mut frontier = None;
+    for profile_index in 0..profile_count {
+        let current = read_profile_frontier(plan, profile_index)?;
+        if let Some(expected) = &frontier {
+            anyhow::ensure!(
+                expected == &current,
+                "native stage execution profile {profile_index} disagrees on activation frontier identities and bindings: expected {expected:?}, got {current:?}"
+            );
+        } else {
+            frontier = Some(current);
+        }
+    }
+    let (
+        activation_import_identities,
+        activation_import_bindings,
+        activation_export_identities,
+        activation_export_bindings,
+    ) = frontier.expect("validated nonempty native stage profile set");
+    Ok(GgufStageRuntimePlan {
+        resident_tensor_names: resident_tensor_names(plan)?,
+        activation_import_identities,
+        activation_import_bindings,
+        activation_export_identities,
+        activation_export_bindings,
+    })
+}
+
+fn plan_descriptor(plan: &Plan) -> Result<skippy_ffi::StagePlanDescV1> {
+    let mut descriptor = unsafe { std::mem::zeroed::<skippy_ffi::StagePlanDescV1>() };
+    let mut error = ptr::null_mut();
+    let status =
+        unsafe { skippy_ffi::skippy_stage_plan_describe_v1(plan.0, &mut descriptor, &mut error) };
+    ensure_ok(status, error).context("describe native stage plan")?;
+    anyhow::ensure!(
+        descriptor.abi_version == skippy_ffi::STAGE_PLAN_DESC_V1_ABI_VERSION
+            && usize::try_from(descriptor.struct_size).ok()
+                == Some(std::mem::size_of::<skippy_ffi::StagePlanDescV1>()),
+        "native stage plan descriptor ABI mismatch"
+    );
+    Ok(descriptor)
+}
+
+type ActivationFrontier = (Vec<String>, Vec<String>, Vec<String>, Vec<String>);
+
+fn read_profile_frontier(plan: &Plan, profile_index: usize) -> Result<ActivationFrontier> {
+    let mut descriptor = unsafe { std::mem::zeroed::<skippy_ffi::StagePlanProfileDescV1>() };
+    let mut error = ptr::null_mut();
+    let status = unsafe {
+        skippy_ffi::skippy_stage_plan_profile_at_v1(
+            plan.0,
+            profile_index,
+            &mut descriptor,
+            &mut error,
+        )
+    };
+    ensure_ok(status, error)
+        .with_context(|| format!("read native stage profile {profile_index}"))?;
+    anyhow::ensure!(
+        descriptor.abi_version == skippy_ffi::STAGE_PLAN_PROFILE_DESC_V1_ABI_VERSION
+            && usize::try_from(descriptor.struct_size).ok()
+                == Some(std::mem::size_of::<skippy_ffi::StagePlanProfileDescV1>()),
+        "native stage plan profile descriptor ABI mismatch"
+    );
+    let (imports, import_bindings) = read_frontier_values(
+        plan,
+        profile_index,
+        skippy_ffi::StagePlanValueKind::ActivationImport,
+        descriptor.activation_import_count,
+    )?;
+    let (exports, export_bindings) = read_frontier_values(
+        plan,
+        profile_index,
+        skippy_ffi::StagePlanValueKind::ActivationExport,
+        descriptor.activation_export_count,
+    )?;
+    Ok((imports, import_bindings, exports, export_bindings))
+}
+
+fn read_frontier_values(
+    plan: &Plan,
+    profile_index: usize,
+    kind: skippy_ffi::StagePlanValueKind,
+    count: u64,
+) -> Result<(Vec<String>, Vec<String>)> {
+    let count = usize::try_from(count).context("native frontier value count exceeds usize")?;
+    let mut identities = Vec::with_capacity(count);
+    let mut bindings = Vec::with_capacity(count);
+    for index in 0..count {
+        let mut descriptor = unsafe { std::mem::zeroed::<skippy_ffi::StagePlanValueDescV1>() };
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_stage_plan_value_at_v1(
+                plan.0,
+                profile_index,
+                kind,
+                index,
+                &mut descriptor,
+                &mut error,
+            )
+        };
+        ensure_ok(status, error).with_context(|| {
+            format!("read native {kind:?} value {index} for profile {profile_index}")
+        })?;
+        anyhow::ensure!(
+            descriptor.abi_version == skippy_ffi::STAGE_PLAN_VALUE_DESC_V1_ABI_VERSION
+                && usize::try_from(descriptor.struct_size).ok()
+                    == Some(std::mem::size_of::<skippy_ffi::StagePlanValueDescV1>()),
+            "native stage plan value descriptor ABI mismatch"
+        );
+        identities.push(read_plan_string(plan.0, descriptor.identity)?);
+        bindings.push(read_plan_string(plan.0, descriptor.binding)?);
+    }
+    anyhow::ensure!(
+        identities.iter().all(|identity| !identity.is_empty())
+            && bindings.iter().all(|binding| !binding.is_empty()),
+        "native activation frontier contains an empty identity or binding"
+    );
+    let mut unique_identities = identities.clone();
+    unique_identities.sort();
+    unique_identities.dedup();
+    let mut unique_bindings = bindings.clone();
+    unique_bindings.sort();
+    unique_bindings.dedup();
+    anyhow::ensure!(
+        unique_identities.len() == identities.len() && unique_bindings.len() == bindings.len(),
+        "native activation frontier contains duplicate identities or bindings"
+    );
+    Ok((identities, bindings))
 }
 
 fn read_plan_string(

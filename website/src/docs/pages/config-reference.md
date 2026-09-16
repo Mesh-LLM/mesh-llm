@@ -30,6 +30,7 @@ built-in runtime default.
 | Variable | Effect |
 |---|---|
 | `MESH_LLM_CONFIG` | Full path to the config file, instead of `~/.mesh-llm/config.toml` |
+| `MESH_LLM_LIFECYCLE_LOG_PARSER` | Overrides `runtime.lifecycle_log_parser`; accepts `auto`, `enabled`, or `disabled` |
 
 ## Managing config via CLI
 
@@ -104,6 +105,7 @@ produces a clear startup error rather than a partial start.
 | `runtime.listen_all` | boolean | `false` | node-level | process restart | wired | none |
 | `runtime.mode` | enum | `serve` (default), `on_demand`, `client` | node-level | process restart | wired | none |
 | `runtime.startup_failure_policy` | enum | `best_effort` (default), `fail_fast` | node-level | process restart | wired | none |
+| `runtime.lifecycle_log_parser` | enum | `auto` (default), `enabled`, `disabled`; `auto` keeps only parser categories without equivalent native lifecycle events | node-level | process restart | wired | none |
 | `runtime.drain_timeout_secs` | integer | `30`; 1–3600, must not exceed the max | node-level | process restart | wired | none |
 | `runtime.drain_timeout_max_secs` | integer | `300`; 1–3600 | node-level | process restart | wired | none |
 | `runtime.activity.enabled` | boolean | `false` | node-level | process restart | wired | none |
@@ -261,6 +263,7 @@ configuration should use typed per-model `topology`; explicit `--model` and
 | `speculative.extension_max_tokens` | integer | N-gram output budget | both | model reload | wired (requires native MTP plus an N-gram proposer) | none |
 | `speculative.native_mtp_reject_cooldown_tokens`<br>`speculative.native_mtp_suppress_cooldown_drafts`<br>`speculative.native_mtp_suppress_cooldown_draft_limit` | integer / boolean | runtime defaults | both | model reload | wired | none |
 | `speculative.verify_window_min_tokens`<br>`speculative.verify_window_max_tokens`<br>`speculative.verify_window_pipeline_depth` | integer | package policy or runtime defaults; `min <= max` | both | model reload | wired | none |
+| `speculative.verify_window_runahead_tokens` | integer | `0` (fixed-depth admission); `0..=4096`, where a positive budget admits verify windows by speculative-token budget instead of a fixed window count | both | model reload | wired (capped by the native checkpoint-retention bound of 64 windows) | none |
 | `speculative.spec_default` | bool-or-`auto` | `auto` | both | model reload | wired (`false` disables automatic speculation; `true`, `auto`, and omission enable supported automatic defaults) | none |
 
 ## Group 8: sampling, chat templates, reasoning, and request defaults

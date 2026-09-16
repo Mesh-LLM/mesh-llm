@@ -275,6 +275,31 @@ run_logged() {
   printf '%s: %s (exit %s)\n' "$name" "$status" "$exit_code"
 }
 
+run_logged_core_parity() {
+  local single_report="$1"
+  local chain_report="$2"
+  shift 2
+  local log="$LOG_DIR/core-parity.log"
+  local exit_code=0
+  local command
+  command="$(quote_cmd "$@")"
+  {
+    printf '+ %s\n\n' "$command"
+    "$@"
+  } >"$log" 2>&1 || exit_code=$?
+  local single_status="pass"
+  local chain_status="pass"
+  [[ -f "$single_report" ]] || single_status="fail"
+  [[ -f "$chain_report" ]] || chain_status="fail"
+  if (( exit_code != 0 )); then
+    single_status="fail"
+    chain_status="fail"
+  fi
+  record_event "single-step" "$single_status" "$exit_code" "$log" "$single_report" "shared monolithic oracle"
+  record_event "chain" "$chain_status" "$exit_code" "$log" "$chain_report" "shared monolithic oracle"
+  printf 'core-parity: %s (exit %s)\n' "$(if (( exit_code == 0 )); then printf pass; else printf fail; fi)" "$exit_code"
+}
+
 model_identity_json() {
   local model_id="$1"
   local model_path="$2"
@@ -362,47 +387,37 @@ maybe_build
 if (( SKIP_CORRECTNESS != 0 )); then
   record_event "correctness" "skipped" 0 "" "" "--skip-correctness"
 else
-  if [[ -n "$SPLIT_LAYER" && -n "$LAYER_END" ]]; then
-    single_args=(
-      "$ROOT/target/debug/skippy-correctness"
-      single-step
-      "${correctness_common[@]}"
-      --split-layer "$SPLIT_LAYER"
-      --stage1-bind-addr "127.0.0.1:$((PORT_BASE + 1))"
-      --report-out "$REPORT_DIR/single-step.json"
-      "${native_mtp_args[@]}"
-    )
-    if (( ALLOW_MISMATCH != 0 )); then
-      single_args+=(--allow-mismatch)
-    fi
-    run_logged "single-step" "$REPORT_DIR/single-step.json" "${single_args[@]}"
-  else
-    record_event "single-step" "skipped" 0 "" "" "requires --split-layer and --layer-end"
-  fi
-
-  if [[ -n "$SPLITS" && -n "$LAYER_END" ]]; then
+  if [[ -n "$SPLIT_LAYER" && -n "$SPLITS" && -n "$LAYER_END" ]]; then
     IFS=',' read -r -a chain_split_parts <<< "$SPLITS"
     if (( ${#chain_split_parts[@]} != 2 )); then
-      record_event "chain" "skipped" 0 "" "" "chain requires exactly two split indexes; single-step covers two-stage boundaries"
-      printf 'chain: skipped (requires exactly two split indexes)\n'
+      record_event "single-step" "skipped" 0 "" "" "core parity requires exactly two chain split indexes"
+      record_event "chain" "skipped" 0 "" "" "chain requires exactly two split indexes"
+      printf 'core-parity: skipped (requires exactly two chain split indexes)\n'
     else
-      chain_args=(
-        "$ROOT/target/debug/skippy-correctness"
-        chain
-        "${correctness_common[@]}"
-        --splits "$SPLITS"
-        --stage1-bind-addr "127.0.0.1:$((PORT_BASE + 11))"
-        --stage2-bind-addr "127.0.0.1:$((PORT_BASE + 12))"
-        --report-out "$REPORT_DIR/chain.json"
-        "${native_mtp_args[@]}"
+      core_args=(
+      "$ROOT/target/debug/skippy-correctness"
+      core-parity
+      "${correctness_common[@]}"
+      --split-layer "$SPLIT_LAYER"
+      --splits "$SPLITS"
+      --single-stage1-bind-addr "127.0.0.1:$((PORT_BASE + 1))"
+      --chain-stage1-bind-addr "127.0.0.1:$((PORT_BASE + 11))"
+      --chain-stage2-bind-addr "127.0.0.1:$((PORT_BASE + 12))"
+      --single-report-out "$REPORT_DIR/single-step.json"
+      --chain-report-out "$REPORT_DIR/chain.json"
       )
-      if (( ALLOW_MISMATCH != 0 )); then
-        chain_args+=(--allow-mismatch)
+      # macOS Bash 3.2 treats an empty array expansion as unbound under set -u.
+      if (( ${#native_mtp_args[@]} != 0 )); then
+        core_args+=("${native_mtp_args[@]}")
       fi
-      run_logged "chain" "$REPORT_DIR/chain.json" "${chain_args[@]}"
+      if (( ALLOW_MISMATCH != 0 )); then
+        core_args+=(--allow-mismatch)
+      fi
+      run_logged_core_parity "$REPORT_DIR/single-step.json" "$REPORT_DIR/chain.json" "${core_args[@]}"
     fi
   else
-    record_event "chain" "skipped" 0 "" "" "requires --splits and --layer-end"
+    record_event "single-step" "skipped" 0 "" "" "requires --split-layer, --splits, and --layer-end"
+    record_event "chain" "skipped" 0 "" "" "requires --split-layer, --splits, and --layer-end"
   fi
 
   # The state-handoff lane (which carries the in-run KV cache-hit oracle)
@@ -512,14 +527,22 @@ jq -n \
       | split(",")
       | map(capture("^(?<start>[0-9]+)(\\.\\.|-)(?<end>[0-9]+)$") | {start:(.start|tonumber), end:(.end|tonumber)})
     end;
-  def family_split_constraints($family_id):
+  def family_split_constraints($family_id; $layer_count):
     if $family_id == "gemma4_e4b" then
       [{
         kind:"shared_kv_producer_consumer",
-        range:{start:0,end:0},
-        forbidden_boundaries:[12,14,24,28],
-        reject_boundary_inside:false,
-        reason:"known-bad Gemma4 E4B shared-KV producer/consumer boundary; keep this cut rejected unless KV replay or KV transfer is added"
+        range:{start:($layer_count / 2 | floor),end:$layer_count},
+        forbidden_boundaries:[12,14],
+        reject_boundary_inside:true,
+        reason:"Gemma4 E4B has reviewed unsafe cuts and upper layers reuse KV produced at the start of the upper stack; keep the final slice start on an accepted boundary at or before that producer pair unless KV replay or transfer is added"
+      }]
+    elif $family_id == "gemma3n" then
+      [{
+        kind:"shared_kv_producer_consumer",
+        range:{start:(([20,$layer_count] | min) - 2),end:$layer_count},
+        forbidden_boundaries:[],
+        reject_boundary_inside:true,
+        reason:"Gemma3n layers 20+ reuse KV produced by layers 18/19; keep the final slice start at or before layer 18 unless KV replay or transfer is added"
       }]
     else [] end;
   def family_sidebands($family_id; $layer_count):
@@ -561,7 +584,7 @@ jq -n \
           activation_width:$activation_width,
           exact_state_mobility:$state_mobility,
           recurrent_ranges:$ranges,
-          split_constraints:family_split_constraints($family_id),
+          split_constraints:family_split_constraints($family_id; $layer_count),
           sidebands:family_sidebands($family_id; $layer_count)
         }
         end

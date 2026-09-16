@@ -707,6 +707,29 @@ class CiArtifactActionTests(unittest.TestCase):
             action,
         )
 
+    def test_exact_cache_publication_retries_after_service_cooldown(self) -> None:
+        action = self.read_action("save-and-verify-actions-cache")
+        cache_save = (
+            "uses: actions/cache/save@"
+            "caa296126883cff596d87d8935842f9db880ef25 # v5.1.0"
+        )
+
+        self.assertEqual(action.count(cache_save), 2)
+        self.assertIn("id: initial-publication", action)
+        self.assertIn("for (let attempt = 1; attempt <= 13; attempt++)", action)
+        self.assertIn("return 'published';", action)
+        self.assertIn("return 'missing';", action)
+        self.assertIn(
+            "if: steps.initial-publication.outputs.result != 'published'",
+            action,
+        )
+        self.assertIn(
+            "The initial ${label} cache save was not published; retrying once.",
+            action,
+        )
+        self.assertIn("for (let attempt = 1; attempt <= 12; attempt++)", action)
+        self.assertIn("!existingIds.has(String(candidate.id))", action)
+
     def test_windows_native_cache_inputs_fail_closed_and_callers_opt_in(
         self,
     ) -> None:
@@ -1078,7 +1101,7 @@ class CiArtifactActionTests(unittest.TestCase):
             with self.subTest(workflow=workflow):
                 source = (workflow_dir / workflow).read_text(encoding="utf-8")
                 self.assertIn(
-                    "hashFiles('Cargo.lock', '.github/cache-version.txt', 'Justfile', 'just/**')",
+                    "hashFiles('Cargo.lock', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', 'Justfile', 'just/**')",
                     source,
                 )
 
@@ -1293,12 +1316,12 @@ class CiArtifactActionTests(unittest.TestCase):
         )
         self.assertIn(
             "mesh-llm-cuda-runner-sha256-"
-            "8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d",
+            "f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7",
             producer,
         )
         epoch = (
             "mesh-llm-cuda-runner-sha256-"
-            "8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d"
+            "f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7"
         )
         for consumer in (native_sdk_producer,):
             self.assertIn(epoch, consumer)
@@ -2134,8 +2157,15 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn("scripts/verify-native-runtime-package.sh", action)
         self.assertIn("--check", action)
 
-    def test_smoke_restore_model_is_optional(self) -> None:
-        action = self.read_action("restore-smoke-inputs")
+    def test_test_model_restore_is_optional_and_verified(self) -> None:
+        """The shared model action: resolve, cache, download, verify.
+
+        This used to live inside `restore-smoke-inputs`. It moved out so a
+        lane that needs a model but not a built product artifact -- the
+        native runtime-event gate -- uses the same sequence instead of a
+        second copy of it.
+        """
+        action = self.read_action("restore-test-model")
         model_inputs_present = (
             "steps.resolve-model.outputs.url != '' && "
             "steps.resolve-model.outputs.file != ''"
@@ -2167,6 +2197,53 @@ class CiArtifactActionTests(unittest.TestCase):
             "      id: model-file",
             action,
         )
+
+    def test_test_model_restore_selects_one_artifact_from_a_multi_artifact_manifest(
+        self,
+    ) -> None:
+        """`skippy-ci-smoke.json` holds two artifacts, so the gate has to
+        name the one it wants. Selection must reach BOTH the resolve and
+        the verify call, or verification would check a different file than
+        the one that was downloaded."""
+        action = self.read_action("restore-test-model")
+
+        self.assertIn("model_artifact_id:", action)
+        self.assertIn("MODEL_ARTIFACT_ID: ${{ inputs.model_artifact_id }}", action)
+        self.assertEqual(
+            action.count('artifact_args+=(--artifact-id "$MODEL_ARTIFACT_ID")'), 2
+        )
+        # `--cadence` must stay literal on both invocations: a manifest
+        # consumer declares the cadence it is authorized for, and
+        # `test_model_artifact_registry` verifies that by reading the call
+        # site rather than tracing an array.
+        self.assertEqual(action.count('--cadence "$MODEL_CADENCE"'), 2)
+
+    def test_smoke_restore_delegates_model_restore_to_the_shared_action(self) -> None:
+        """One implementation, not two. A second copy of the
+        resolve/cache/download/verify sequence would drift silently."""
+        action = self.read_action("restore-smoke-inputs")
+
+        self.assertIn("uses: ./.github/actions/restore-test-model", action)
+        self.assertNotIn("actions/cache/restore@", action)
+        self.assertNotIn("scripts/resolve-test-model-manifest.py", action)
+        for forwarded in (
+            "model_url: ${{ inputs.model_url }}",
+            "model_file: ${{ inputs.model_file }}",
+            "model_manifest: ${{ inputs.model_manifest }}",
+            "model_cadence: ${{ inputs.model_cadence }}",
+            "model_cache_scope: ${{ inputs.model_cache_scope }}",
+            "save_model_cache: ${{ inputs.save_model_cache }}",
+        ):
+            self.assertIn(forwarded, action)
+        # The outputs it re-exports must come from the nested action's own
+        # names, not the ones the inlined step used to publish.
+        for exported in (
+            "value: ${{ steps.resolve-model.outputs.model_url }}",
+            "value: ${{ steps.resolve-model.outputs.model_file }}",
+            "value: ${{ steps.resolve-model.outputs.model_sha256 }}",
+            "value: ${{ steps.resolve-model.outputs.model_size_bytes }}",
+        ):
+            self.assertIn(exported, action)
 
     def test_product_action_rejects_destructive_output_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
