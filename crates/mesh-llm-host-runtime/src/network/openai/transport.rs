@@ -66,6 +66,13 @@ pub(crate) enum RouteDispatchOutcome {
     RespondedWithUsage {
         status_code: u16,
         usage: TokenUsage,
+        /// Digests over the REAL served response body (response / tool_calls
+        /// / reasoning), lifted from [`RouteAttemptResult::Delivered`]'s own
+        /// field of the same name. `Copy` (raw sha-256 bytes) so this outcome
+        /// stays `Copy`. Default (all-`None`) wherever no such body was
+        /// captured or assembled, so the terminal event simply omits those
+        /// digests rather than fabricating any.
+        output_digests: crate::plugin::openai_exchange::ExchangeOutputDigests,
     },
     Failed(&'static str),
     FailedWithStatus {
@@ -91,6 +98,7 @@ pub(super) fn record_moa_stream_lifecycle(
         RouteDispatchOutcome::RespondedWithUsage {
             status_code: 200..=299,
             usage,
+            ..
         } => observer.stream_completed(Some(usage)),
         RouteDispatchOutcome::Responded(200..=299) => observer.stream_completed(None),
         RouteDispatchOutcome::Failed(_)
@@ -111,7 +119,9 @@ impl RouteDispatchOutcome {
             Self::Responded(status @ 200..=299) => {
                 crate::logging::TerminalOutcome::CompletedWithStatus(status)
             }
-            Self::RespondedWithUsage { status_code, usage } => match status_code {
+            Self::RespondedWithUsage {
+                status_code, usage, ..
+            } => match status_code {
                 200..=299 => {
                     crate::logging::TerminalOutcome::CompletedWithUsage { status_code, usage }
                 }
@@ -455,7 +465,13 @@ async fn route_mesh_moa_or_passthrough(
         crate::network::openai::moa_gateway::MoaDispatchResult::RespondedWithUsage {
             status_code,
             usage,
-        } => Err(RouteDispatchOutcome::RespondedWithUsage { status_code, usage }),
+        } => Err(RouteDispatchOutcome::RespondedWithUsage {
+            status_code,
+            usage,
+            // The MoA gateway aggregates across sub-calls; no single buffered
+            // response body is captured here to digest.
+            output_digests: Default::default(),
+        }),
         crate::network::openai::moa_gateway::MoaDispatchResult::FailedWithStatus {
             status_code,
             reason,
@@ -919,6 +935,7 @@ fn handle_mesh_attempt_result(
             status_code,
             usage,
             cache_cost,
+            output_digests,
         } => {
             let outcome = request_outcome_for_status(
                 status_code,
@@ -937,6 +954,7 @@ fn handle_mesh_attempt_result(
                 status_code,
                 usage,
                 cache_cost,
+                output_digests,
             })
         }
         RouteAttemptResult::RetryableContextOverflow => handle_retryable_context_overflow(context),
@@ -1543,7 +1561,10 @@ pub async fn route_to_target(
     );
     match result {
         RouteAttemptResult::Delivered {
-            status_code, usage, ..
+            status_code,
+            usage,
+            output_digests,
+            ..
         } => {
             let service = request_service_for_target(&target);
             let outcome = request_outcome_for_status(status_code, service);
@@ -1557,7 +1578,11 @@ pub async fn route_to_target(
             }
             node.record_routed_request(model, 1, outcome);
             usage.map_or(RouteDispatchOutcome::Responded(status_code), |usage| {
-                RouteDispatchOutcome::RespondedWithUsage { status_code, usage }
+                RouteDispatchOutcome::RespondedWithUsage {
+                    status_code,
+                    usage,
+                    output_digests,
+                }
             })
         }
         RouteAttemptResult::RetryableTimeout
@@ -1643,7 +1668,10 @@ pub async fn route_http_endpoint_request(
     );
     match result {
         RouteAttemptResult::Delivered {
-            status_code, usage, ..
+            status_code,
+            usage,
+            output_digests,
+            ..
         } => {
             let outcome = request_outcome_for_status(
                 status_code,
@@ -1659,7 +1687,11 @@ pub async fn route_http_endpoint_request(
             }
             node.record_routed_request(model, 1, outcome);
             usage.map_or(RouteDispatchOutcome::Responded(status_code), |usage| {
-                RouteDispatchOutcome::RespondedWithUsage { status_code, usage }
+                RouteDispatchOutcome::RespondedWithUsage {
+                    status_code,
+                    usage,
+                    output_digests,
+                }
             })
         }
         RouteAttemptResult::RetryableTimeout

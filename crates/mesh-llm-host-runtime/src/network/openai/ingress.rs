@@ -187,7 +187,35 @@ async fn publish_raw_proxy_terminal(
     if let Some(digest) = request_digest {
         envelope = envelope.with_request_digest(digest.to_string());
     }
+    // The digests over the REAL served response (response body / tool_calls /
+    // reasoning), computed at the JSON-relay delivery point — or, on a
+    // streamed delivery, assembled from the chunks actually sent to the
+    // client — and carried up on the dispatch outcome. A no-op for an
+    // all-`None` bundle (nothing was captured or assembled), so nothing is
+    // fabricated. Unlike `serving_provenance`, this is not gated on
+    // `served_locally`/2xx: a digest of what the host actually returned is
+    // defined on every outcome that had a body, plugin-served included;
+    // absent exactly when there was no body to digest.
+    let output_digests = exchange_output_digests_from_outcome(final_outcome);
+    if output_digests.has_any() {
+        envelope = envelope.with_output_digests(output_digests);
+    }
     channel.publish(&envelope).await;
+}
+
+/// Lift the response / tool_calls / reasoning digests off a dispatch outcome.
+/// Only `RespondedWithUsage` carries them (the outcome the host-served
+/// `route_model_request` returns after the JSON-relay delivery point, or the
+/// streaming assembler, computed them); every other outcome yields an
+/// all-`None` bundle, so the terminal envelope simply omits those digests
+/// rather than fabricating any.
+fn exchange_output_digests_from_outcome(
+    outcome: &proxy::RouteDispatchOutcome,
+) -> crate::plugin::openai_exchange::ExchangeOutputDigests {
+    match outcome {
+        proxy::RouteDispatchOutcome::RespondedWithUsage { output_digests, .. } => *output_digests,
+        _ => Default::default(),
+    }
 }
 
 /// Path 2's own "effective request" moment: the plugin/endpoint is resolved
@@ -696,7 +724,15 @@ async fn try_pipeline_proxy(
             Some(proxy::RouteDispatchOutcome::Responded(status))
         }
         proxy::PipelineProxyResult::RespondedWithUsage { status_code, usage } => {
-            Some(proxy::RouteDispatchOutcome::RespondedWithUsage { status_code, usage })
+            Some(proxy::RouteDispatchOutcome::RespondedWithUsage {
+                status_code,
+                usage,
+                // The pipeline (planner+strong-model) proxy path does not yet
+                // forward response-body output digests; the primary
+                // host-served path (`route_model_request`) does. Honest
+                // absence here until the pipeline path threads them too.
+                output_digests: Default::default(),
+            })
         }
         proxy::PipelineProxyResult::Dropped => Some(proxy::RouteDispatchOutcome::Dropped(
             "pipeline_response_write_failed",
@@ -1773,6 +1809,9 @@ async fn try_handle_moa_intercept(
             MoaInterceptResult::Handled(proxy::RouteDispatchOutcome::RespondedWithUsage {
                 status_code,
                 usage,
+                // The MoA gateway aggregation path: no single buffered
+                // response body is captured here to digest.
+                output_digests: Default::default(),
             })
         }
         crate::network::openai::moa_gateway::MoaDispatchResult::FailedWithStatus {

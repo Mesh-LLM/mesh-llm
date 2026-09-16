@@ -234,6 +234,7 @@ fn test_remote_retry_policy_only_retries_uncommitted_failures() {
             status_code: 200,
             usage: None,
             cache_cost: None,
+            output_digests: Default::default(),
         }
     ));
 }
@@ -659,6 +660,7 @@ async fn named_model_route_records_prompt_shape_from_usage() -> Result<()> {
                 completion_tokens: Some(5),
                 ..Default::default()
             },
+            output_digests: Default::default(),
         },
         &election::InferenceTarget::Local(9337),
     );

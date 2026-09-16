@@ -42,9 +42,19 @@ pub fn request_body_digest(body: &serde_json::Value, source_json: Option<&[u8]>)
     {
         return None;
     }
+    Some(hex::encode(canonical_digest_bytes(body)))
+}
+
+/// The raw SHA-256 bytes over `JCS(stringify_floats(value))` — the same
+/// construction [`request_body_digest`] hex-encodes, minus its safe-integer
+/// guard. Used for response-side digests (`ExchangeOutputDigests`, in
+/// `openai_exchange.rs`), which digest host-generated JSON rather than a
+/// client-controlled request body, so the oversized-integer refusal above
+/// does not apply.
+pub(crate) fn canonical_digest_bytes(value: &serde_json::Value) -> [u8; 32] {
     use sha2::{Digest, Sha256};
-    let canonical = jcs_bytes(&stringify_floats(body));
-    Some(hex::encode(Sha256::digest(&canonical)))
+    let canonical = jcs_bytes(&stringify_floats(value));
+    Sha256::digest(&canonical).into()
 }
 
 /// The reference's safe-integer boundary (`agent_action_capsule.canonical`

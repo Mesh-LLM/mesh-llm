@@ -163,6 +163,110 @@ pub struct ExchangeUsage {
     pub total_tokens: u64,
 }
 
+/// The digests a host-served exchange yields over its response, captured at
+/// the JSON-relay delivery point (or, on a streamed delivery, assembled from
+/// the chunks actually sent to the client — see the streaming relay's own
+/// doc comment for what "assembled" means there). Threaded as a `Copy` bundle
+/// of raw SHA-256 bytes so the outcome enums it rides stay `Copy`; hex-encoded
+/// only when attached to the wire envelope.
+///
+/// Every field is honest-optional: `tool_calls`/`reasoning` are `None` (never
+/// a digest over an empty list) when the response carried none. `response`
+/// is `None` only where no response body was captured to digest at all — a
+/// streamed delivery with nothing to assemble, or a non-JSON body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ExchangeOutputDigests {
+    /// Digest over the full response body JSON, same construction as
+    /// [`request_body_digest`] (`stringify_floats` + JCS + SHA-256, no
+    /// absent-field normalization) applied to the response instead of the
+    /// request.
+    pub response: Option<[u8; 32]>,
+    /// Digest over the flattened `tool_calls` array across the response's
+    /// assistant message(s) (or, on a streamed delivery, the tool-call deltas
+    /// assembled across chunks). `None` when the model emitted none — never a
+    /// digest over `[]`.
+    pub tool_calls: Option<[u8; 32]>,
+    /// Digest over the model's `reasoning_content` chunk(s), when the model
+    /// emitted any. `None` (honest absence) for a response that carried none.
+    pub reasoning: Option<[u8; 32]>,
+}
+
+impl ExchangeOutputDigests {
+    /// Compute the response / tool_calls / reasoning digests over a served
+    /// OpenAI chat-completion (or Responses-API) response body, at a point the
+    /// caller holds the whole body in hand. A body that does not parse as JSON
+    /// yields an all-`None` bundle rather than a fabricated digest.
+    pub fn from_response_body(body: &[u8]) -> Self {
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
+            return Self::default();
+        };
+        Self::from_response_value(&value)
+    }
+
+    /// As [`Self::from_response_body`], over an already-parsed response value
+    /// — the entry point the streaming assembler uses once it has built the
+    /// equivalent of a served response from the chunks it observed.
+    pub(crate) fn from_response_value(value: &serde_json::Value) -> Self {
+        let response = Some(canonical_digest_bytes(value));
+        let tool_calls = collect_response_tool_calls(value);
+        let reasoning = collect_response_reasoning(value);
+        Self {
+            response,
+            tool_calls: (!tool_calls.is_empty())
+                .then(|| canonical_digest_bytes(&serde_json::Value::Array(tool_calls))),
+            reasoning: (!reasoning.is_empty())
+                .then(|| canonical_digest_bytes(&serde_json::Value::Array(reasoning))),
+        }
+    }
+
+    /// True when the bundle carries at least one real digest — callers only
+    /// attach it to the terminal envelope then, so an all-`None` bundle never
+    /// adds empty fields.
+    pub fn has_any(&self) -> bool {
+        self.response.is_some() || self.tool_calls.is_some() || self.reasoning.is_some()
+    }
+}
+
+/// Flatten the `tool_calls` array across every assistant `choices[].message`
+/// (the host-served single response has one choice; this tolerates more).
+/// Returns an empty vec — never a synthetic entry — when the response has
+/// none.
+fn collect_response_tool_calls(response: &serde_json::Value) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    if let Some(choices) = response.get("choices").and_then(|c| c.as_array()) {
+        for choice in choices {
+            if let Some(tool_calls) = choice
+                .get("message")
+                .and_then(|m| m.get("tool_calls"))
+                .and_then(|t| t.as_array())
+            {
+                out.extend(tool_calls.iter().cloned());
+            }
+        }
+    }
+    out
+}
+
+/// Collect the `reasoning_content` chunks across every assistant
+/// `choices[].message`. Empty — yielding an absent digest — when no message
+/// surfaced reasoning, the honest case for a non-reasoning model.
+fn collect_response_reasoning(response: &serde_json::Value) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    if let Some(choices) = response.get("choices").and_then(|c| c.as_array()) {
+        for choice in choices {
+            if let Some(reasoning) = choice
+                .get("message")
+                .and_then(|m| m.get("reasoning_content"))
+                .filter(|r| !r.is_null())
+                .filter(|r| !matches!(r, serde_json::Value::String(s) if s.is_empty()))
+            {
+                out.push(reasoning.clone());
+            }
+        }
+    }
+    out
+}
+
 /// The wire shape both dispatch paths publish on [`OPENAI_EXCHANGE_CHANNEL`].
 /// Deliberately independent of `openai_frontend`'s typed request/response —
 /// the raw-proxy path never has one — so one shape covers both paths without
@@ -233,6 +337,30 @@ pub struct OpenAiExchangeEnvelope {
     /// digest). No raw prompt text is carried — only its digest.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_digest: Option<String>,
+    /// The canonical JSON-DIGEST of the REAL response body the host served for
+    /// this exchange — same construction as [`request_digest`](Self::request_digest)
+    /// applied to the response instead of the request. On a streamed delivery
+    /// this covers the response the host actually assembled from the chunks it
+    /// sent to the client, not a per-chunk partial (see the streaming relay's
+    /// own doc comment for how that assembly works). `None` on effective-request
+    /// envelopes and wherever the host captured no response body to digest —
+    /// never fabricated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_digest: Option<String>,
+    /// The canonical JSON-DIGEST of the flattened `tool_calls` array the model
+    /// emitted on this exchange, same construction as `request_digest`. Present
+    /// only when the model emitted at least one tool call; `None` — never a
+    /// digest over `[]` — when it emitted none, so a plugin can never misread
+    /// absence as "asserted zero tool calls". No raw arguments text is carried,
+    /// only the digest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls_digest: Option<String>,
+    /// The canonical JSON-DIGEST of the model's `reasoning_content` chunk(s) on
+    /// this exchange, same construction as `request_digest`. Present only when
+    /// the model surfaced reasoning; `None` (honest null) for a non-reasoning
+    /// model — never fabricated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_digest: Option<String>,
 }
 
 impl OpenAiExchangeEnvelope {
@@ -253,6 +381,9 @@ impl OpenAiExchangeEnvelope {
             serving_provenance: None,
             usage: None,
             request_digest: None,
+            response_digest: None,
+            tool_calls_digest: None,
+            reasoning_digest: None,
         }
     }
 
@@ -276,6 +407,9 @@ impl OpenAiExchangeEnvelope {
             serving_provenance: None,
             usage: None,
             request_digest: None,
+            response_digest: None,
+            tool_calls_digest: None,
+            reasoning_digest: None,
         }
     }
 
@@ -314,6 +448,26 @@ impl OpenAiExchangeEnvelope {
         self
     }
 
+    /// Attach the response / tool_calls / reasoning digests computed over the
+    /// REAL served response (see [`ExchangeOutputDigests`]). Hex-encodes each
+    /// raw digest onto the wire. Only the digests the bundle actually carries
+    /// are set — an absent tool_calls/reasoning digest stays absent (honest
+    /// null), never fabricated. A no-op for an all-`None` bundle, so a
+    /// non-JSON or unassembled body adds nothing.
+    #[must_use]
+    pub fn with_output_digests(mut self, digests: ExchangeOutputDigests) -> Self {
+        if let Some(digest) = digests.response {
+            self.response_digest = Some(hex::encode(digest));
+        }
+        if let Some(digest) = digests.tool_calls {
+            self.tool_calls_digest = Some(hex::encode(digest));
+        }
+        if let Some(digest) = digests.reasoning {
+            self.reasoning_digest = Some(hex::encode(digest));
+        }
+        self
+    }
+
     /// Effective-request envelope for the `RemoteMesh` dispatch path,
     /// carrying the nonce this node is about to forward to the peer
     /// unchanged — so a plugin observing only the effective event already
@@ -347,6 +501,9 @@ impl OpenAiExchangeEnvelope {
             serving_provenance: None,
             usage: None,
             request_digest: None,
+            response_digest: None,
+            tool_calls_digest: None,
+            reasoning_digest: None,
         }
     }
 
@@ -367,9 +524,10 @@ impl OpenAiExchangeEnvelope {
     /// `ClientSupplied` for the identical nonce. See
     /// [`OpenAiExchangeEnvelope::nonce_source`] for the full explanation.
     ///
-    /// `serving_provenance`/`usage`/`request_digest` are never attached on
-    /// this constructor — the raw-proxy host-served callsite that resolves
-    /// those (`network/openai/ingress.rs::publish_raw_proxy_terminal`) is a
+    /// `serving_provenance`/`usage`/`request_digest`/the output digests are
+    /// never attached on this constructor — the raw-proxy host-served
+    /// callsite that resolves those
+    /// (`network/openai/ingress.rs::publish_raw_proxy_terminal`) is a
     /// different dispatch path (`RawProxy`); a routing node forwarding to a
     /// peer never resolves them for itself.
     pub fn terminal_remote_mesh(
@@ -391,11 +549,15 @@ impl OpenAiExchangeEnvelope {
             serving_provenance: None,
             usage: None,
             request_digest: None,
+            response_digest: None,
+            tool_calls_digest: None,
+            reasoning_digest: None,
         }
     }
 }
 
 mod canonical_digest;
+use canonical_digest::canonical_digest_bytes;
 pub use canonical_digest::request_body_digest;
 
 /// Publishes [`OpenAiExchangeEnvelope`]s to whatever is subscribed on
@@ -1165,5 +1327,194 @@ mod tests {
         assert!(events[1].nonce.is_none());
         assert!(events[1].nonce_source.is_none());
         assert!(events[1].capsule_id.is_none());
+    }
+
+    /// A response with plain assistant content and no tool_calls/reasoning
+    /// yields a real response digest but honestly absent tool_calls/reasoning
+    /// digests — never a digest over an empty list. The response digest uses
+    /// the SAME construction as [`request_body_digest`]: computing it directly
+    /// over the parsed value must match what the bundle produced.
+    #[test]
+    fn output_digests_response_present_and_tool_calls_reasoning_absent_when_none() {
+        let body = br#"{"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}"#;
+        let value: serde_json::Value = serde_json::from_slice(body).unwrap();
+        let digests = ExchangeOutputDigests::from_response_body(body);
+        assert_eq!(
+            digests.response.map(hex::encode),
+            request_body_digest(&value, None),
+            "response digest must be the same construction as request_body_digest"
+        );
+        assert!(digests.tool_calls.is_none());
+        assert!(digests.reasoning.is_none());
+    }
+
+    /// When the model emits a tool call, `tool_calls` is present and equals the
+    /// same digest construction applied directly to the flattened tool_calls
+    /// array — proving the per-field digest is not some ad-hoc scheme.
+    #[test]
+    fn output_digests_tool_calls_present_when_model_emits_tool_calls() {
+        let tool_call = serde_json::json!({
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "web_search", "arguments": "{\"query\":\"mesh\"}"}
+        });
+        let body = serde_json::json!({
+            "id": "x",
+            "object": "chat.completion",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "", "tool_calls": [tool_call.clone()]},
+                "finish_reason": "tool_calls",
+            }],
+        });
+        let digests =
+            ExchangeOutputDigests::from_response_body(&serde_json::to_vec(&body).unwrap());
+        let expected = request_body_digest(&serde_json::Value::Array(vec![tool_call]), None)
+            .expect("tool_calls array digests");
+        assert_eq!(digests.tool_calls.map(hex::encode), Some(expected));
+    }
+
+    /// When the model surfaces `reasoning_content`, `reasoning` is present and
+    /// equals the same construction applied to the collected reasoning chunks.
+    #[test]
+    fn output_digests_reasoning_present_when_model_emits_reasoning() {
+        let body = serde_json::json!({
+            "id": "x",
+            "object": "chat.completion",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "42", "reasoning_content": "let me think"},
+                "finish_reason": "stop",
+            }],
+        });
+        let digests =
+            ExchangeOutputDigests::from_response_body(&serde_json::to_vec(&body).unwrap());
+        let expected = request_body_digest(
+            &serde_json::Value::Array(vec![serde_json::json!("let me think")]),
+            None,
+        )
+        .expect("reasoning array digests");
+        assert_eq!(digests.reasoning.map(hex::encode), Some(expected));
+    }
+
+    /// A response body carrying an explicit `null` for an optional field must
+    /// digest to a DIFFERENT `response` value than the same body with that
+    /// field omitted — the `request_body_digest_does_not_normalize_absent_fields`
+    /// pattern, applied to the response side. Proves this digest does not
+    /// silently collapse "explicitly unset" and "never sent".
+    #[test]
+    fn output_digests_response_does_not_normalize_absent_fields() {
+        let with_null = br#"{"id":"x","choices":[{"index":0,"message":{"role":"assistant","content":"hi","tool_calls":null},"finish_reason":"stop"}]}"#;
+        let without = br#"{"id":"x","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}"#;
+        let with_null_digest = ExchangeOutputDigests::from_response_body(with_null).response;
+        let without_digest = ExchangeOutputDigests::from_response_body(without).response;
+        assert_ne!(
+            with_null_digest, without_digest,
+            "an explicit null field must not normalize away against an omitted field"
+        );
+    }
+
+    /// Same non-normalization property, one level down: two tool_calls arrays
+    /// differing only by an explicit `null` field inside one element vs that
+    /// field being omitted must produce different `tool_calls` digests.
+    #[test]
+    fn output_digests_tool_calls_does_not_normalize_absent_fields() {
+        let with_null = serde_json::json!({
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{}"}, "index_hint": null}
+            ]}, "finish_reason": "tool_calls"}]
+        });
+        let without = serde_json::json!({
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+            ]}, "finish_reason": "tool_calls"}]
+        });
+        let with_null_digest =
+            ExchangeOutputDigests::from_response_body(&serde_json::to_vec(&with_null).unwrap())
+                .tool_calls;
+        let without_digest =
+            ExchangeOutputDigests::from_response_body(&serde_json::to_vec(&without).unwrap())
+                .tool_calls;
+        assert_ne!(with_null_digest, without_digest);
+    }
+
+    /// `with_output_digests` on an all-`None` bundle (a non-JSON or unassembled
+    /// body) must leave all three envelope fields `None` — a builder that
+    /// unconditionally sets `Some(...)` regardless of the bundle's own
+    /// `None`s would fail this.
+    #[test]
+    fn with_output_digests_is_a_no_op_for_an_all_none_bundle() {
+        let envelope = OpenAiExchangeEnvelope::terminal(
+            "exch-nod",
+            OpenAiExchangeDispatchPath::RawProxy,
+            "m",
+            Some(200),
+            None,
+            None,
+        )
+        .with_output_digests(ExchangeOutputDigests::default());
+        assert!(envelope.response_digest.is_none());
+        assert!(envelope.tool_calls_digest.is_none());
+        assert!(envelope.reasoning_digest.is_none());
+    }
+
+    /// The three output digests round-trip onto a terminal envelope as
+    /// lowercase-hex, and an absent one (reasoning, here) is omitted entirely
+    /// rather than serialized as `null`.
+    #[test]
+    fn terminal_carries_output_digests_and_omits_absent_ones() {
+        let body = serde_json::json!({
+            "id": "x",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+            ]}, "finish_reason": "tool_calls"}]
+        });
+        let digests =
+            ExchangeOutputDigests::from_response_body(&serde_json::to_vec(&body).unwrap());
+        let envelope = OpenAiExchangeEnvelope::terminal(
+            "exch-od",
+            OpenAiExchangeDispatchPath::RawProxy,
+            "llama-3.2-3b-instruct",
+            Some(200),
+            None,
+            None,
+        )
+        .with_output_digests(digests);
+        let value = serde_json::to_value(&envelope).expect("serialize");
+        assert!(value["response_digest"].is_string());
+        assert_eq!(
+            value["tool_calls_digest"],
+            hex::encode(digests.tool_calls.expect("tool_calls digest present"))
+        );
+        assert!(value.get("reasoning_digest").is_none());
+    }
+
+    /// No output digests attached at all -> all three keys are omitted
+    /// entirely, the same honesty contract as `request_digest`/usage/provenance.
+    #[test]
+    fn terminal_omits_output_digests_when_none_attached() {
+        let envelope = OpenAiExchangeEnvelope::terminal(
+            "exch-no-od",
+            OpenAiExchangeDispatchPath::RawProxy,
+            "m",
+            Some(200),
+            None,
+            None,
+        );
+        let value = serde_json::to_value(&envelope).expect("serialize");
+        assert!(value.get("response_digest").is_none());
+        assert!(value.get("tool_calls_digest").is_none());
+        assert!(value.get("reasoning_digest").is_none());
+    }
+
+    /// An effective-request envelope never carries output digests — they are a
+    /// terminal-only, served-exchange fact.
+    #[test]
+    fn effective_envelope_has_no_output_digests() {
+        let envelope =
+            OpenAiExchangeEnvelope::effective("exch-1", OpenAiExchangeDispatchPath::RawProxy, "m");
+        assert!(envelope.response_digest.is_none());
+        assert!(envelope.tool_calls_digest.is_none());
+        assert!(envelope.reasoning_digest.is_none());
     }
 }

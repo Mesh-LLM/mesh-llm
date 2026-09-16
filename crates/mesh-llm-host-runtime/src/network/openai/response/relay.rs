@@ -157,6 +157,7 @@ pub(in crate::network::openai::response) async fn relay_error_response<R: AsyncR
         status_code,
         usage: None,
         cache_cost: None,
+        output_digests: Default::default(),
     })
 }
 
@@ -186,6 +187,12 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
             }
             let usage = parse_token_usage_from_json_body(body);
             let cache_cost = parse_cache_cost_from_json_body(body);
+            // The whole bounded body is in hand here too — the generic
+            // direct-proxy success path a host-served backend can also take.
+            // `from_response_body` yields an all-`None` bundle for a non-JSON
+            // body, so a non-chat response adds nothing.
+            let output_digests =
+                crate::plugin::openai_exchange::ExchangeOutputDigests::from_response_body(body);
             let body_len = body.len();
             let mut outgoing_end = body_end;
             if let Some(served_by) = served_by {
@@ -209,6 +216,7 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
                 status_code: probe.status_code,
                 usage,
                 cache_cost,
+                output_digests,
             });
         }
     }
@@ -232,6 +240,8 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
         status_code: probe.status_code,
         usage: None,
         cache_cost: None,
+        // Body was too large to bound/buffer for metrics; not digested.
+        output_digests: Default::default(),
     })
 }
 
