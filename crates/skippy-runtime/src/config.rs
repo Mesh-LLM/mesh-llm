@@ -13,6 +13,7 @@ pub const GGML_TYPE_F32: u32 = 0;
 pub const GGML_TYPE_F16: u32 = 1;
 pub const GGML_TYPE_Q4_0: u32 = 2;
 pub const GGML_TYPE_Q8_0: u32 = 8;
+pub const GGML_TYPE_I32: u32 = 26;
 pub const LLAMA_SERVER_DEFAULT_N_BATCH: u32 = 2048;
 pub const LLAMA_SERVER_DEFAULT_N_UBATCH: u32 = 512;
 /// Unified-KV prefill batch default. Keep llama-server's 2048-token batch so
@@ -106,6 +107,14 @@ pub struct RuntimeConfig {
     /// Exact native tensor names admitted for this stage. Empty preserves the
     /// legacy range-based loader filter.
     pub resident_tensor_names: Vec<String>,
+    /// Planner value identities imported by this stage, in native frontier order.
+    pub activation_import_identities: Vec<String>,
+    /// Stable live-graph tensor bindings paired with imported planner identities.
+    pub activation_import_bindings: Vec<String>,
+    /// Planner value identities exported by this stage, in native frontier order.
+    pub activation_export_identities: Vec<String>,
+    /// Stable live-graph tensor bindings paired with exported planner identities.
+    pub activation_export_bindings: Vec<String>,
     /// Tensor type policy used when `StageModel::open` receives a SafeTensors checkpoint.
     pub checkpoint_quantization: CheckpointQuantization,
     /// Importance matrix used by quantization recipes that require calibration data.
@@ -154,6 +163,25 @@ fn tristate(value: Option<bool>) -> i32 {
         None => TRISTATE_AUTO,
         Some(false) => TRISTATE_FALSE,
         Some(true) => TRISTATE_TRUE,
+    }
+}
+
+fn c_string_list(values: &[String], label: &str) -> Result<Vec<CString>> {
+    values
+        .iter()
+        .map(|value| {
+            anyhow::ensure!(!value.is_empty(), "{label} must not be empty");
+            CString::new(value.as_bytes())
+                .with_context(|| format!("{label} contains an interior NUL byte"))
+        })
+        .collect()
+}
+
+fn slice_ptr<T>(values: &[T]) -> *const T {
+    if values.is_empty() {
+        ptr::null()
+    } else {
+        values.as_ptr()
     }
 }
 
@@ -236,6 +264,46 @@ impl RuntimeConfig {
         } else {
             resident_tensor_name_ptrs.as_ptr()
         };
+        let activation_import_identities = c_string_list(
+            &self.activation_import_identities,
+            "activation import identity",
+        )?;
+        let activation_import_identity_ptrs = activation_import_identities
+            .iter()
+            .map(|identity| identity.as_ptr())
+            .collect::<Vec<_>>();
+        anyhow::ensure!(
+            self.activation_import_bindings.len() == self.activation_import_identities.len(),
+            "activation import bindings must match activation import identities"
+        );
+        let activation_import_bindings = c_string_list(
+            &self.activation_import_bindings,
+            "activation import binding",
+        )?;
+        let activation_import_binding_ptrs = activation_import_bindings
+            .iter()
+            .map(|binding| binding.as_ptr())
+            .collect::<Vec<_>>();
+        let activation_export_identities = c_string_list(
+            &self.activation_export_identities,
+            "activation export identity",
+        )?;
+        let activation_export_identity_ptrs = activation_export_identities
+            .iter()
+            .map(|identity| identity.as_ptr())
+            .collect::<Vec<_>>();
+        anyhow::ensure!(
+            self.activation_export_bindings.len() == self.activation_export_identities.len(),
+            "activation export bindings must match activation export identities"
+        );
+        let activation_export_bindings = c_string_list(
+            &self.activation_export_bindings,
+            "activation export binding",
+        )?;
+        let activation_export_binding_ptrs = activation_export_bindings
+            .iter()
+            .map(|binding| binding.as_ptr())
+            .collect::<Vec<_>>();
         Ok(RawRuntimeConfigParts {
             raw: RawRuntimeConfig {
                 stage_index: i32::try_from(self.stage_index).context("stage_index exceeds i32")?,
@@ -274,6 +342,12 @@ impl RuntimeConfig {
                 filter_tensors_on_load: self.filter_tensors_on_load,
                 resident_tensor_names: resident_tensor_names_ptr,
                 resident_tensor_name_count: resident_tensor_name_ptrs.len(),
+                activation_import_identities: slice_ptr(&activation_import_identity_ptrs),
+                activation_import_identity_count: activation_import_identity_ptrs.len(),
+                activation_import_bindings: slice_ptr(&activation_import_binding_ptrs),
+                activation_export_identities: slice_ptr(&activation_export_identity_ptrs),
+                activation_export_identity_count: activation_export_identity_ptrs.len(),
+                activation_export_bindings: slice_ptr(&activation_export_binding_ptrs),
                 include_embeddings: self.include_embeddings,
                 include_output: self.include_output,
                 mtp_source: self.mtp_source.as_raw(),
@@ -315,6 +389,14 @@ impl RuntimeConfig {
             _selected_backend_device: selected_backend_device,
             _resident_tensor_names: resident_tensor_names,
             _resident_tensor_name_ptrs: resident_tensor_name_ptrs,
+            _activation_import_identities: activation_import_identities,
+            _activation_import_identity_ptrs: activation_import_identity_ptrs,
+            _activation_import_bindings: activation_import_bindings,
+            _activation_import_binding_ptrs: activation_import_binding_ptrs,
+            _activation_export_identities: activation_export_identities,
+            _activation_export_identity_ptrs: activation_export_identity_ptrs,
+            _activation_export_bindings: activation_export_bindings,
+            _activation_export_binding_ptrs: activation_export_binding_ptrs,
         })
     }
 
@@ -364,6 +446,14 @@ pub(crate) struct RawRuntimeConfigParts {
     _selected_backend_device: Option<CString>,
     _resident_tensor_names: Vec<CString>,
     _resident_tensor_name_ptrs: Vec<*const std::ffi::c_char>,
+    _activation_import_identities: Vec<CString>,
+    _activation_import_identity_ptrs: Vec<*const std::ffi::c_char>,
+    _activation_import_bindings: Vec<CString>,
+    _activation_import_binding_ptrs: Vec<*const std::ffi::c_char>,
+    _activation_export_identities: Vec<CString>,
+    _activation_export_identity_ptrs: Vec<*const std::ffi::c_char>,
+    _activation_export_bindings: Vec<CString>,
+    _activation_export_binding_ptrs: Vec<*const std::ffi::c_char>,
 }
 
 impl Default for RuntimeConfig {
@@ -399,6 +489,10 @@ impl Default for RuntimeConfig {
             mtp_source: MtpSource::Disabled,
             filter_tensors_on_load: false,
             resident_tensor_names: Vec::new(),
+            activation_import_identities: Vec::new(),
+            activation_import_bindings: Vec::new(),
+            activation_export_identities: Vec::new(),
+            activation_export_bindings: Vec::new(),
             checkpoint_quantization: CheckpointQuantization::Preserve,
             checkpoint_imatrix: None,
             checkpoint_imatrix_sha256: None,

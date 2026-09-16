@@ -8,8 +8,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 use skippy_protocol::binary::{
-    activation_payload_multiplier_from_state_flags, activation_state_flags_from_frame_flags,
-    recv_ready,
+    StageActivationDesc, StageActivationPartDesc, encode_activation_frame, recv_ready,
 };
 
 pub struct ChildGuard {
@@ -95,26 +94,69 @@ fn connect_ready_until(
 }
 
 pub fn activation_width(frame: &skippy_runtime::ActivationFrame) -> Result<i32> {
-    if frame.desc.token_count == 0 {
-        bail!("activation frame token_count is zero");
-    }
-    let bytes_per_token = frame
-        .payload
-        .len()
-        .checked_div(frame.desc.token_count as usize)
-        .context("activation token_count overflow")?;
-    let payload_multiplier = activation_payload_multiplier_from_state_flags(
-        activation_state_flags_from_frame_flags(frame.desc.flags),
+    let primary = frame
+        .desc
+        .parts()?
+        .first()
+        .context("activation frame has no primary part")?;
+    anyhow::ensure!(
+        primary.ggml_type == skippy_runtime::GGML_TYPE_F32,
+        "primary activation part is not F32"
     );
-    let bytes_per_hidden_token = bytes_per_token
-        .checked_div(payload_multiplier)
-        .context("activation sideband multiplier overflow")?;
-    if !bytes_per_token.is_multiple_of(payload_multiplier)
-        || !bytes_per_hidden_token.is_multiple_of(4)
-    {
-        bail!("activation payload is not F32 aligned");
+    let rank = usize::try_from(primary.rank).context("primary activation rank exceeds usize")?;
+    anyhow::ensure!(
+        rank > 0 && rank <= primary.dimensions.len(),
+        "primary activation part has an invalid rank"
+    );
+    let token_axis = usize::try_from(primary.token_axis)
+        .context("primary activation part has a negative token axis")?;
+    anyhow::ensure!(
+        token_axis < rank,
+        "primary activation part has an invalid token axis"
+    );
+    let mut width = 1_u64;
+    for (axis, dimension) in primary.dimensions.iter().copied().enumerate().take(rank) {
+        if axis != token_axis {
+            width = width
+                .checked_mul(u64::try_from(dimension).context("invalid activation dimension")?)
+                .context("activation width overflow")?;
+        }
     }
-    i32::try_from(bytes_per_hidden_token / 4).context("activation width exceeds i32")
+    i32::try_from(width).context("activation width exceeds i32")
+}
+
+pub fn encode_runtime_activation(
+    codec: skippy_protocol::StageActivationCodec,
+    frame: &skippy_runtime::ActivationFrame,
+) -> Result<Vec<u8>> {
+    let desc = StageActivationDesc {
+        version: frame.desc.version,
+        producer_stage_index: frame.desc.producer_stage_index,
+        layer_start: frame.desc.layer_start,
+        layer_end: frame.desc.layer_end,
+        token_count: frame.desc.token_count,
+        sequence_count: frame.desc.sequence_count,
+        payload_bytes: frame.desc.payload_bytes,
+        frontier_identity: frame.desc.frontier_identity,
+        parts: frame
+            .desc
+            .parts()?
+            .iter()
+            .map(|part| StageActivationPartDesc {
+                identity: part.identity,
+                ggml_type: part.ggml_type,
+                rank: part.rank,
+                token_axis: part.token_axis,
+                flags: part.flags,
+                dimensions: part.dimensions,
+                byte_strides: part.byte_strides,
+                payload_offset: part.payload_offset,
+                payload_bytes: part.payload_bytes,
+            })
+            .collect(),
+    };
+    encode_activation_frame(codec, &desc, &frame.payload)
+        .context("failed to encode multipart activation frame")
 }
 
 pub fn generate_run_id() -> String {

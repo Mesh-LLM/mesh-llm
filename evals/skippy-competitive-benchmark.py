@@ -1265,6 +1265,13 @@ def request_completion(
         connection.close()
     finished = time.monotonic()
     text = "".join(content)
+    prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+    prompt_token_details = usage.get("prompt_tokens_details", {})
+    cached_prompt_tokens = int(
+        prompt_token_details.get("cached_tokens", 0)
+        if isinstance(prompt_token_details, dict)
+        else 0
+    )
     completion_tokens = int(usage.get("completion_tokens", 0) or 0)
     if error is None and not text:
         error = "response did not contain non-empty output"
@@ -1274,7 +1281,9 @@ def request_completion(
         "status": status,
         "content": text,
         "content_sha256": hashlib.sha256(text.encode()).hexdigest(),
-        "prompt_tokens": int(usage.get("prompt_tokens", 0) or 0),
+        "prompt_tokens": prompt_tokens,
+        "cached_prompt_tokens": cached_prompt_tokens,
+        "new_prompt_tokens": max(0, prompt_tokens - cached_prompt_tokens),
         "completion_tokens": completion_tokens,
         "requested_completion_tokens": output_tokens,
         "ttft_ms": None if first_token is None else (first_token - started) * 1000,
@@ -1671,6 +1680,10 @@ def run_trace_cell(
     measured = [record for record in records if record["phase"] == "measured-100"]
     successes = [record for record in measured if not record["error"]]
     output_count = sum(record["completion_tokens"] for record in successes)
+    prompt_token_count = sum(record["prompt_tokens"] for record in successes)
+    cached_prompt_token_count = sum(
+        record["cached_prompt_tokens"] for record in successes
+    )
     result = {
         "platform": args.platform,
         "model": model["key"],
@@ -1680,6 +1693,9 @@ def run_trace_cell(
         "successful_requests": len(successes),
         "failed_requests": len(measured) - len(successes),
         "output_tokens": output_count,
+        "prompt_tokens": prompt_token_count,
+        "cached_prompt_tokens": cached_prompt_token_count,
+        "new_prompt_tokens": prompt_token_count - cached_prompt_token_count,
         "measured_wall_ms": measured_wall_ms,
         "total_wall_ms": wall_ms,
         "output_tokens_per_second": (

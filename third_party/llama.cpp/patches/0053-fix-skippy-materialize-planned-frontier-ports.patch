@@ -1,0 +1,120 @@
+From 5076363f6de7ba2af5f2092b08cc861041a82fa0 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Wed, 16 Sep 2026 05:00:21 +1000
+Subject: [PATCH] fix(skippy): materialize planned frontier ports
+
+---
+ src/llama-graph.cpp                     | 19 ++++++++++--
+ src/skippy/activation_layout.cpp        |  2 +-
+ src/skippy/tests/graph_build_inputs.cpp | 39 +++++++++++++++++++++++++
+ 3 files changed, 57 insertions(+), 3 deletions(-)
+
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index dde82142e..c06a48645 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -1613,14 +1613,29 @@ void llm_graph_result::set_inputs(const llama_ubatch * ubatch) {
+ }
+ 
+ void llm_graph_result::set_outputs(const llm_graph_params & params) {
++    const auto same_tensor_or_view = [](const ggml_tensor * left, const ggml_tensor * right) {
++        const auto contains = [](const ggml_tensor * candidate, const ggml_tensor * tensor) {
++            while (tensor != nullptr) {
++                if (tensor == candidate) return true;
++                if (tensor->view_src == tensor) break;
++                tensor = tensor->view_src;
++            }
++            return false;
++        };
++        return contains(left, right) || contains(right, left);
++    };
+     if (params.build_inputs.filter.enabled && params.build_inputs.filter.layer_start > 0 && t_inp_embd != nullptr) {
+         const auto found = std::find_if(activation_imports.begin(), activation_imports.end(),
+-                [this](const skippy_activation_port & port) { return port.tensor == t_inp_embd; });
++                [this, &same_tensor_or_view](const skippy_activation_port & port) {
++                    return same_tensor_or_view(port.tensor, t_inp_embd);
++                });
+         if (found == activation_imports.end()) activation_imports.insert(activation_imports.begin(), {t_inp_embd, 1, false});
+     }
+     if (params.build_inputs.filter.enabled && !params.build_inputs.filter.include_output && t_embd != nullptr) {
+         const auto found = std::find_if(activation_exports.begin(), activation_exports.end(),
+-                [this](const skippy_activation_port & port) { return port.tensor == t_embd; });
++                [this, &same_tensor_or_view](const skippy_activation_port & port) {
++                    return same_tensor_or_view(port.tensor, t_embd);
++                });
+         if (found == activation_exports.end()) activation_exports.insert(activation_exports.begin(), {t_embd, 1, false});
+     }
+     const auto bind_ports = [](std::vector<skippy_activation_port> & ports,
+diff --git a/src/skippy/activation_layout.cpp b/src/skippy/activation_layout.cpp
+index 6ab9df878..a8fd81dde 100644
+--- a/src/skippy/activation_layout.cpp
++++ b/src/skippy/activation_layout.cpp
+@@ -218,7 +218,7 @@ bool skippy_is_kimi_k3_activation_model(const skippy_session * session) {
+ bool skippy_stage_requires_activation_tokens(const skippy_session * session) {
+     if (session == nullptr || session->stage_model == nullptr || session->stage_model->model == nullptr) return false;
+     const llm_arch arch = session->stage_model->model->arch;
+-    return arch == LLM_ARCH_GEMMA3N || arch == LLM_ARCH_GEMMA4 ||
++    return arch == LLM_ARCH_GEMMA3N ||
+            arch == LLM_ARCH_GRANITE_SWITCH || arch == LLM_ARCH_QWEN4EXP;
+ }
+ 
+diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
+index 8f2a28502..3d879cddc 100644
+--- a/src/skippy/tests/graph_build_inputs.cpp
++++ b/src/skippy/tests/graph_build_inputs.cpp
+@@ -238,6 +238,42 @@ static int check_activation_port_binding() {
+     return 0;
+ }
+ 
++static int check_activation_port_alias_is_not_duplicated() {
++    llm_graph_result result(64);
++    auto * storage = ggml_new_tensor_2d(result.get_ctx(), GGML_TYPE_F32, 4, 2);
++    auto * view = ggml_view_2d(result.get_ctx(), storage, 4, 2, storage->nb[1], 0);
++    result.add_skippy_activation_export(storage, 1);
++    result.t_embd = view;
++
++    llm_graph_params params{};
++    params.build_inputs.filter.enabled = true;
++    params.build_inputs.filter.include_output = false;
++    params.build_inputs.activation_export_bindings = {"stable_export"};
++    result.set_outputs(params);
++
++    const auto & ports = result.get_skippy_activation_exports();
++    if (ports.size() != 1 || ports[0].tensor != storage ||
++            ports[0].binding != "stable_export") {
++        return 22;
++    }
++
++    llm_graph_result siblings(64);
++    auto * sibling_storage = ggml_new_tensor_2d(siblings.get_ctx(), GGML_TYPE_F32, 4, 2);
++    auto * first = ggml_view_2d(siblings.get_ctx(), sibling_storage, 4, 1, sibling_storage->nb[1], 0);
++    auto * second = ggml_view_2d(siblings.get_ctx(), sibling_storage, 4, 1,
++            sibling_storage->nb[1], sibling_storage->nb[1]);
++    siblings.add_skippy_activation_export(first, 1);
++    siblings.t_embd = second;
++    params.build_inputs.activation_export_bindings = {"first", "second"};
++    siblings.set_outputs(params);
++    const auto & sibling_ports = siblings.get_skippy_activation_exports();
++    if (sibling_ports.size() != 2 || sibling_ports[0].tensor != second ||
++            sibling_ports[1].tensor != first) {
++        return 23;
++    }
++    return 0;
++}
++
+ static skippy_graph_build_inputs make_stage_inputs(
+         int32_t layer_start,
+         int32_t layer_end,
+@@ -376,6 +412,9 @@ int main(int argc, char ** argv) {
+     if (const int rc = check_activation_port_binding()) {
+         return rc;
+     }
++    if (const int rc = check_activation_port_alias_is_not_duplicated()) {
++        return rc;
++    }
+     llama_backend_init();
+     int rc = check_sched_reserve_and_memory_update(argv[1]);
+     if (rc == 0) {
+-- 
+2.54.0 (Apple Git-157)
+

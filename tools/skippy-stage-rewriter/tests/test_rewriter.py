@@ -90,7 +90,7 @@ def main() -> int:
         assert "llm_graph_input_kimi_k3_residual" in kimi_edits[
             "insert_family_sideband_input"
         ]
-        assert "t_skippy_kimi_k3_residual" in kimi_edits[
+        assert "add_skippy_activation_export(resi_stack, 2)" in kimi_edits[
             "insert_stage_boundary"
         ]
 
@@ -107,7 +107,7 @@ def main() -> int:
         assert "llm_graph_input_glm_dsa_top_k" in glm_edits[
             "insert_family_sideband_input"
         ]
-        assert "t_skippy_glm_dsa_top_k" in glm_edits[
+        assert "add_skippy_activation_export(prev_top_k, 1)" in glm_edits[
             "insert_stage_boundary"
         ]
 
@@ -417,8 +417,8 @@ def main() -> int:
             source_root / "src/models/hyperconnection.cpp"
         ).read_text(encoding="utf-8")
         assert "std::make_unique<llm_graph_input_hyperconnection>" in hyperconnection_source
-        assert "res->t_skippy_activation_input = inpL;" in hyperconnection_source
-        assert "res->t_skippy_activation_output = inpL;" in hyperconnection_source
+        assert "res->add_skippy_activation_import(inpL, 2);" in hyperconnection_source
+        assert "res->add_skippy_activation_export(inpL, 2);" in hyperconnection_source
         hyperconnection_second = run(
             tool,
             source_root,
@@ -454,7 +454,7 @@ def main() -> int:
         hyperconnection_initializer_source = (
             source_root / "src/models/hyperconnection-initializer.cpp"
         ).read_text(encoding="utf-8")
-        assert "res->t_skippy_activation_input = res_hc;" in hyperconnection_initializer_source
+        assert "res->add_skippy_activation_import(res_hc, 2);" in hyperconnection_initializer_source
         assert hyperconnection_initializer_source.count(
             "if (!stage_filtered || il_start == 0)"
         ) == 2
@@ -500,7 +500,7 @@ def main() -> int:
             source_root / "src/models/altup-sideband.cpp"
         ).read_text(encoding="utf-8")
         assert "std::make_unique<llm_graph_input_gemma3n_altup>" in altup_source
-        assert "res->t_skippy_gemma3n_altup = stage_boundary;" in altup_source
+        assert "res->add_skippy_activation_export(stage_boundary, 1);" in altup_source
         assert "if (!stage_filtered || il_start == 0)" in altup_source
         altup_second = run(
             tool,
@@ -532,8 +532,25 @@ def main() -> int:
         per_layer_source = (
             source_root / "src/models/per-layer-sideband.cpp"
         ).read_text(encoding="utf-8")
-        assert "std::make_unique<llm_graph_input_stage_tokens>" in per_layer_source
-        assert "project_per_layer_inputs(inp_per_layer_proj" in per_layer_source
+        assert "inp_per_layer_stage" in per_layer_source
+        assert "res->add_skippy_activation_import(inp_per_layer, 1);" in per_layer_source
+        assert "res->add_skippy_activation_import(inpL, 1);" in per_layer_source
+        assert "res->add_skippy_activation_export(inp_per_layer, 1);" in per_layer_source
+        assert "res->add_skippy_activation_export(inpL, 1);" in per_layer_source
+        assert per_layer_source.index(
+            "res->add_skippy_activation_import(inpL, 1);"
+        ) < per_layer_source.index(
+            "res->add_skippy_activation_import(inp_per_layer, 1);"
+        )
+        assert per_layer_source.index(
+            "res->add_skippy_activation_export(inpL, 1);"
+        ) < per_layer_source.index(
+            "res->add_skippy_activation_export(inp_per_layer, 1);"
+        )
+        assert (
+            "std::make_unique<llm_graph_input_stage_tokens>"
+            not in per_layer_source
+        )
         per_layer_second = run(
             tool,
             source_root,
@@ -640,7 +657,7 @@ def main() -> int:
         assert "rwkv_first_value_sideband" in (
             rwkv_first_value["proof"]["scope_evidence"]
         )
-        assert {"insert_rwkv_first_input", "insert_rwkv_first_output"}.issubset(
+        assert {"insert_rwkv_first_input", "insert_stage_boundary"}.issubset(
             {edit["kind"] for edit in rwkv_first_value["edits"]}
         )
         run(
@@ -654,7 +671,8 @@ def main() -> int:
             source_root / "src/models/rwkv-first-value.cpp"
         ).read_text(encoding="utf-8")
         assert "std::make_unique<llm_graph_input_rwkv7_v_first>" in rwkv_source
-        assert "res->t_skippy_rwkv7_v_first = v_first;" in rwkv_source
+        assert "res->add_skippy_activation_import(v_first, 1);" in rwkv_source
+        assert "res->add_skippy_activation_export(v_first, 1);" in rwkv_source
         rwkv_second = run(
             tool,
             source_root,

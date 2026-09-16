@@ -200,6 +200,10 @@ pub(in crate::frontend) fn draft_runtime_config(
         mtp_source,
         filter_tensors_on_load: false,
         resident_tensor_names: Vec::new(),
+        activation_import_identities: Vec::new(),
+        activation_import_bindings: Vec::new(),
+        activation_export_identities: Vec::new(),
+        activation_export_bindings: Vec::new(),
         checkpoint_quantization: config
             .checkpoint_quantization
             .as_deref()

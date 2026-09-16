@@ -5,7 +5,7 @@ use serde::Serialize;
 use serde_json::Value;
 use skippy_runtime::{
     ChatTemplateMessage, ChatTemplateOptions, MtpSource, RuntimeConfig, RuntimeLoadMode,
-    StageModel, suppress_native_logs,
+    StageModel, plan_gguf_stage_runtime_plan_for_range, suppress_native_logs,
 };
 
 use crate::cli::TokenLengthsArgs;
@@ -68,54 +68,63 @@ pub fn token_lengths(args: TokenLengthsArgs) -> Result<()> {
     }
 
     let cases = prompt_cases(&args.prompt_corpus)?;
-    let model = StageModel::open(
+    let plan = plan_gguf_stage_runtime_plan_for_range(
         &args.model_path,
-        &RuntimeConfig {
-            stage_index: 0,
-            layer_start: 0,
-            layer_end: args.layer_end,
-            ctx_size: args.ctx_size,
-            lane_count: 1,
-            n_batch: None,
-            n_ubatch: None,
-            n_threads: None,
-            n_threads_batch: None,
-            n_gpu_layers: args.n_gpu_layers,
-            mmap: None,
-            mlock: false,
-            repack: false,
-            op_offload: None,
-            no_host_buffer: false,
-            check_tensors: false,
-            direct_io: false,
-            main_gpu: None,
-            split_mode: skippy_runtime::SplitMode::Auto,
-            selected_backend_device: None,
-            cache_type_k: skippy_runtime::GGML_TYPE_F16,
-            cache_type_v: skippy_runtime::GGML_TYPE_F16,
-            flash_attn_type: skippy_runtime::FlashAttentionType::Auto,
-            load_mode: RuntimeLoadMode::RuntimeSlice,
-            projector_path: None,
-            projector_use_gpu: None,
-            media_marker: None,
-            image_min_tokens: None,
-            image_max_tokens: None,
-            batch_max_tokens: None,
-            glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
-            include_embeddings: true,
-            include_output: false,
-            mtp_source: MtpSource::Disabled,
-            filter_tensors_on_load: true,
-            resident_tensor_names: Vec::new(),
-            checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
-            checkpoint_imatrix: None,
-            checkpoint_imatrix_sha256: None,
-            kv_offload: None,
-            kv_unified: None,
-            swa_full: None,
-        },
-    )
-    .with_context(|| format!("open tokenizer model {}", args.model_path.display()))?;
+        (0, args.layer_end),
+        args.ctx_size,
+        1,
+    )?;
+    let mut config = RuntimeConfig {
+        stage_index: 0,
+        layer_start: 0,
+        layer_end: args.layer_end,
+        ctx_size: args.ctx_size,
+        lane_count: 1,
+        n_batch: None,
+        n_ubatch: None,
+        n_threads: None,
+        n_threads_batch: None,
+        n_gpu_layers: args.n_gpu_layers,
+        mmap: None,
+        mlock: false,
+        repack: false,
+        op_offload: None,
+        no_host_buffer: false,
+        check_tensors: false,
+        direct_io: false,
+        main_gpu: None,
+        split_mode: skippy_runtime::SplitMode::Auto,
+        selected_backend_device: None,
+        cache_type_k: skippy_runtime::GGML_TYPE_F16,
+        cache_type_v: skippy_runtime::GGML_TYPE_F16,
+        flash_attn_type: skippy_runtime::FlashAttentionType::Auto,
+        load_mode: RuntimeLoadMode::RuntimeSlice,
+        projector_path: None,
+        projector_use_gpu: None,
+        media_marker: None,
+        image_min_tokens: None,
+        image_max_tokens: None,
+        batch_max_tokens: None,
+        glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
+        include_embeddings: true,
+        include_output: true,
+        mtp_source: MtpSource::Disabled,
+        filter_tensors_on_load: true,
+        resident_tensor_names: Vec::new(),
+        activation_import_identities: Vec::new(),
+        activation_import_bindings: Vec::new(),
+        activation_export_identities: Vec::new(),
+        activation_export_bindings: Vec::new(),
+        checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
+        checkpoint_imatrix: None,
+        checkpoint_imatrix_sha256: None,
+        kv_offload: None,
+        kv_unified: None,
+        swa_full: None,
+    };
+    plan.apply_to(&mut config);
+    let model = StageModel::open(&args.model_path, &config)
+        .with_context(|| format!("open tokenizer model {}", args.model_path.display()))?;
 
     let mut rows = Vec::with_capacity(cases.len());
     for prompt_case in &cases {

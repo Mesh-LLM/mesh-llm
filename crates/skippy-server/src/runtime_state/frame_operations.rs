@@ -659,29 +659,97 @@ fn split_activation_frame(
             token_count
         );
     }
-    if input.payload.len() % token_count != 0 {
-        bail!(
-            "activation payload is not divisible by token count: payload={} tokens={}",
-            input.payload.len(),
-            token_count
-        );
-    }
-    let row_bytes = input.payload.len() / token_count;
-    let frames = input
-        .payload
-        .chunks(row_bytes)
-        .map(|row| {
-            let mut desc = input.desc;
-            desc.token_count = 1;
-            desc.sequence_count = 1;
-            desc.payload_bytes = row.len() as u64;
-            ActivationFrame {
-                desc,
-                payload: row.to_vec(),
-            }
-        })
-        .collect();
+    let frames = (0..token_count)
+        .map(|token_index| slice_activation_frame(input, token_index, 1))
+        .collect::<Result<Vec<_>>>()?;
     Ok(Some(frames))
+}
+
+fn slice_activation_frame(
+    input: &ActivationFrame,
+    token_start: usize,
+    token_count: usize,
+) -> Result<ActivationFrame> {
+    let source_tokens =
+        usize::try_from(input.desc.token_count).context("activation token count exceeds usize")?;
+    if token_count == 0
+        || token_start
+            .checked_add(token_count)
+            .is_none_or(|end| end > source_tokens)
+    {
+        bail!("activation token slice is outside the frame");
+    }
+    let mut payload = Vec::new();
+    let mut parts =
+        [skippy_runtime::ActivationPartDesc::default(); skippy_runtime::ACTIVATION_MAX_PARTS];
+    for (part_index, source) in input.desc.parts()?.iter().enumerate() {
+        let rank = usize::try_from(source.rank).context("activation part rank exceeds usize")?;
+        let token_axis =
+            usize::try_from(source.token_axis).context("activation part token axis is negative")?;
+        if rank == 0 || rank > source.dimensions.len() || token_axis >= rank {
+            bail!("activation part has an invalid token axis");
+        }
+        let inner_bytes = usize::try_from(source.byte_strides[token_axis])
+            .context("activation part token stride exceeds usize")?;
+        let plane_bytes = inner_bytes
+            .checked_mul(source_tokens)
+            .context("activation part plane size overflow")?;
+        let source_bytes = usize::try_from(source.payload_bytes)
+            .context("activation part payload size exceeds usize")?;
+        if plane_bytes == 0 || !source_bytes.is_multiple_of(plane_bytes) {
+            bail!("activation part is not aligned to its token axis");
+        }
+        let source_offset = usize::try_from(source.payload_offset)
+            .context("activation part offset exceeds usize")?;
+        let slice_offset = token_start
+            .checked_mul(inner_bytes)
+            .context("activation part slice offset overflow")?;
+        let slice_bytes = token_count
+            .checked_mul(inner_bytes)
+            .context("activation part slice size overflow")?;
+        let output_offset = payload.len();
+        for outer_index in 0..source_bytes / plane_bytes {
+            let start = source_offset
+                .checked_add(
+                    outer_index
+                        .checked_mul(plane_bytes)
+                        .context("activation part plane offset overflow")?,
+                )
+                .and_then(|value| value.checked_add(slice_offset))
+                .context("activation part slice offset overflow")?;
+            let end = start
+                .checked_add(slice_bytes)
+                .context("activation part slice range overflow")?;
+            payload.extend_from_slice(
+                input
+                    .payload
+                    .get(start..end)
+                    .context("activation part slice exceeds payload")?,
+            );
+        }
+        let mut output = *source;
+        output.dimensions[token_axis] =
+            i64::try_from(token_count).context("activation part token count exceeds i64")?;
+        for axis in token_axis + 1..rank {
+            output.byte_strides[axis] = output.byte_strides[axis - 1]
+                .checked_mul(
+                    u64::try_from(output.dimensions[axis - 1])
+                        .context("activation part dimension is unresolved")?,
+                )
+                .context("activation part output stride overflow")?;
+        }
+        output.payload_offset =
+            u64::try_from(output_offset).context("activation part output offset exceeds u64")?;
+        output.payload_bytes = u64::try_from(payload.len() - output_offset)
+            .context("activation part output size exceeds u64")?;
+        parts[part_index] = output;
+    }
+    let mut desc = input.desc;
+    desc.token_count = u32::try_from(token_count).context("activation token count exceeds u32")?;
+    desc.sequence_count = 1;
+    desc.payload_bytes = u64::try_from(payload.len()).context("activation payload exceeds u64")?;
+    desc.parts = parts;
+    Ok(ActivationFrame { desc, payload })
 }
 
 fn combine_activation_frames(frames: &[ActivationFrame]) -> Result<ActivationFrame> {
@@ -692,23 +760,116 @@ fn combine_activation_frames(frames: &[ActivationFrame]) -> Result<ActivationFra
     let mut payload = Vec::new();
     let mut token_count = 0u32;
     for frame in frames {
-        if frame.desc.dtype != desc.dtype
-            || frame.desc.layout != desc.layout
+        if frame.desc.version != desc.version
             || frame.desc.producer_stage_index != desc.producer_stage_index
             || frame.desc.layer_start != desc.layer_start
             || frame.desc.layer_end != desc.layer_end
             || frame.desc.sequence_count != desc.sequence_count
-            || frame.desc.flags != desc.flags
+            || frame.desc.frontier_identity != desc.frontier_identity
+            || frame.desc.part_count != desc.part_count
         {
             bail!("cannot combine incompatible activation frames");
         }
         token_count = token_count
             .checked_add(frame.desc.token_count)
             .context("combined activation token count overflow")?;
-        payload.extend_from_slice(&frame.payload);
+    }
+    let mut parts =
+        [skippy_runtime::ActivationPartDesc::default(); skippy_runtime::ACTIVATION_MAX_PARTS];
+    for (part_index, first_part) in first.desc.parts()?.iter().enumerate() {
+        let rank =
+            usize::try_from(first_part.rank).context("activation part rank exceeds usize")?;
+        let token_axis = usize::try_from(first_part.token_axis)
+            .context("activation part token axis is negative")?;
+        if rank == 0 || rank > first_part.dimensions.len() || token_axis >= rank {
+            bail!("cannot combine incompatible activation parts");
+        }
+        let inner_bytes = usize::try_from(first_part.byte_strides[token_axis])
+            .context("activation part token stride exceeds usize")?;
+        let mut frame_parts = Vec::with_capacity(frames.len());
+        let mut slab_bytes = Vec::with_capacity(frames.len());
+        let mut outer_count = None;
+        for frame in frames {
+            let part = *frame
+                .desc
+                .parts()?
+                .get(part_index)
+                .context("activation frame is missing a part")?;
+            if part.identity != first_part.identity
+                || part.ggml_type != first_part.ggml_type
+                || part.rank != first_part.rank
+                || part.token_axis != first_part.token_axis
+                || part.flags != first_part.flags
+                || part.dimensions[..rank]
+                    .iter()
+                    .enumerate()
+                    .any(|(axis, value)| {
+                        axis != token_axis && *value != first_part.dimensions[axis]
+                    })
+                || part.byte_strides[..=token_axis] != first_part.byte_strides[..=token_axis]
+            {
+                bail!("cannot combine incompatible activation parts");
+            }
+            let slab = inner_bytes
+                .checked_mul(frame.desc.token_count as usize)
+                .context("activation part slab size overflow")?;
+            let part_bytes = usize::try_from(part.payload_bytes)
+                .context("activation part payload size exceeds usize")?;
+            if slab == 0 || !part_bytes.is_multiple_of(slab) {
+                bail!("activation part is not aligned to its token axis");
+            }
+            let current_outer_count = part_bytes / slab;
+            if outer_count
+                .replace(current_outer_count)
+                .is_some_and(|value| value != current_outer_count)
+            {
+                bail!("activation parts have incompatible outer dimensions");
+            }
+            frame_parts.push(part);
+            slab_bytes.push(slab);
+        }
+        let output_offset = payload.len();
+        for outer_index in 0..outer_count.unwrap_or(0) {
+            for (frame_index, frame) in frames.iter().enumerate() {
+                let source_offset = usize::try_from(frame_parts[frame_index].payload_offset)
+                    .context("activation part offset exceeds usize")?;
+                let start = source_offset
+                    .checked_add(
+                        outer_index
+                            .checked_mul(slab_bytes[frame_index])
+                            .context("activation part plane offset overflow")?,
+                    )
+                    .context("activation part plane offset overflow")?;
+                let end = start
+                    .checked_add(slab_bytes[frame_index])
+                    .context("activation part range overflow")?;
+                payload.extend_from_slice(
+                    frame
+                        .payload
+                        .get(start..end)
+                        .context("activation part exceeds frame payload")?,
+                );
+            }
+        }
+        let mut output = *first_part;
+        output.dimensions[token_axis] = i64::from(token_count);
+        for axis in token_axis + 1..rank {
+            output.byte_strides[axis] = output.byte_strides[axis - 1]
+                .checked_mul(
+                    u64::try_from(output.dimensions[axis - 1])
+                        .context("activation part dimension is unresolved")?,
+                )
+                .context("activation part output stride overflow")?;
+        }
+        output.payload_offset =
+            u64::try_from(output_offset).context("activation part output offset exceeds u64")?;
+        output.payload_bytes = u64::try_from(payload.len() - output_offset)
+            .context("activation part output size exceeds u64")?;
+        parts[part_index] = output;
     }
     desc.token_count = token_count;
     desc.payload_bytes = payload.len() as u64;
+    desc.parts = parts;
     Ok(ActivationFrame { desc, payload })
 }
 
@@ -720,5 +881,19 @@ mod iteration_admission_tests {
     fn rejects_batch_before_partial_session_admission() {
         assert!(ensure_iteration_session_capacity(3, 2).is_err());
         assert!(ensure_iteration_session_capacity(2, 2).is_ok());
+    }
+
+    #[test]
+    fn rejects_invalid_activation_axis_before_combining() {
+        let mut frame = crate::test_activation::f32_frame(1, &[1.0]);
+        frame.desc.parts[0].token_axis = 4;
+
+        let error = combine_activation_frames(&[frame]).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("cannot combine incompatible activation parts")
+        );
     }
 }

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow, bail};
 use skippy_ffi::{
-    ActivationBoundaryDesc as RawActivationBoundaryDesc, ActivationDType,
-    ActivationDesc as RawActivationDesc, ActivationLayout,
+    ACTIVATION_MAX_PARTS, ActivationBoundaryDesc as RawActivationBoundaryDesc,
+    ActivationDesc as RawActivationDesc, ActivationPartDesc as RawActivationPartDesc,
     GenerationSignalWindow as RawGenerationSignalWindow,
     KvPageComponentDesc as RawKvPageComponentDesc, KvPageDesc as RawKvPageDesc,
     LogitBias as RawLogitBias, MAX_DRY_SEQUENCE_BREAKER_BYTES, MAX_DRY_SEQUENCE_BREAKERS,
@@ -9,14 +9,7 @@ use skippy_ffi::{
 };
 
 pub const MAX_LOGIT_BIAS: usize = 256;
-pub const ACTIVATION_BOUNDARY_DESC_VERSION: u32 = 1;
-pub const ACTIVATION_BOUNDARY_LAYOUT_TOKEN_MAJOR: u32 = 1;
-pub const ACTIVATION_BOUNDARY_SUPPORTED_REQUIRED_FRAME_FLAGS: u64 =
-    skippy_ffi::ACTIVATION_FLAG_GEMMA3N_ALTUP
-        | skippy_ffi::ACTIVATION_FLAG_GLM_DSA_TOP_K
-        | skippy_ffi::ACTIVATION_FLAG_KIMI_K3_RESIDUAL;
-pub const ACTIVATION_BOUNDARY_SUPPORTED_REQUIRED_SIDEBANDS: u64 =
-    skippy_ffi::ACTIVATION_SIDEBAND_TOKEN_IDS;
+pub const ACTIVATION_BOUNDARY_DESC_VERSION: u32 = skippy_ffi::ACTIVATION_BOUNDARY_DESC_VERSION;
 
 /// Runtime memory semantics reported by the loaded llama.cpp model.
 ///
@@ -37,89 +30,172 @@ pub struct LoadedModelCapability {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ActivationPartDesc {
+    pub identity: [u8; skippy_ffi::ACTIVATION_IDENTITY_BYTES],
+    pub ggml_type: u32,
+    pub rank: u32,
+    pub token_axis: i32,
+    pub flags: u32,
+    pub dimensions: [i64; skippy_ffi::ACTIVATION_MAX_DIMS],
+    pub byte_strides: [u64; skippy_ffi::ACTIVATION_MAX_DIMS],
+    pub payload_offset: u64,
+    pub payload_bytes: u64,
+}
+
+impl From<RawActivationPartDesc> for ActivationPartDesc {
+    fn from(raw: RawActivationPartDesc) -> Self {
+        Self {
+            identity: raw.identity,
+            ggml_type: raw.ggml_type,
+            rank: raw.rank,
+            token_axis: raw.token_axis,
+            flags: raw.flags,
+            dimensions: raw.dimensions,
+            byte_strides: raw.byte_strides,
+            payload_offset: raw.payload_offset,
+            payload_bytes: raw.payload_bytes,
+        }
+    }
+}
+
+impl ActivationPartDesc {
+    fn as_raw(self) -> RawActivationPartDesc {
+        RawActivationPartDesc {
+            identity: self.identity,
+            ggml_type: self.ggml_type,
+            rank: self.rank,
+            token_axis: self.token_axis,
+            flags: self.flags,
+            dimensions: self.dimensions,
+            byte_strides: self.byte_strides,
+            payload_offset: self.payload_offset,
+            payload_bytes: self.payload_bytes,
+        }
+    }
+
+    pub fn is_optional(self) -> bool {
+        self.flags & skippy_ffi::ACTIVATION_PART_OPTIONAL != 0
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ActivationBoundaryDesc {
     pub version: u32,
-    pub ggml_type: u32,
-    pub layout: u32,
-    pub elements_per_token: u64,
-    pub bytes_per_token: u64,
-    pub required_frame_flags: u64,
-    pub required_sidebands: u64,
+    pub part_count: u32,
+    pub frontier_identity: [u8; skippy_ffi::ACTIVATION_IDENTITY_BYTES],
+    pub parts: [ActivationPartDesc; ACTIVATION_MAX_PARTS],
 }
 
 impl From<RawActivationBoundaryDesc> for ActivationBoundaryDesc {
     fn from(raw: RawActivationBoundaryDesc) -> Self {
         Self {
             version: raw.version,
-            ggml_type: raw.ggml_type,
-            layout: raw.layout,
-            elements_per_token: raw.elements_per_token,
-            bytes_per_token: raw.bytes_per_token,
-            required_frame_flags: raw.required_frame_flags,
-            required_sidebands: raw.required_sidebands,
+            part_count: raw.part_count,
+            frontier_identity: raw.frontier_identity,
+            parts: raw.parts.map(ActivationPartDesc::from),
         }
     }
 }
 
 impl ActivationBoundaryDesc {
-    /// Validate the graph-observed contract against the currently supported
-    /// raw-F32 activation transport and return its element width.
-    pub fn raw_f32_width(self, edge: &str) -> Result<i32> {
+    pub fn parts(&self) -> Result<&[ActivationPartDesc]> {
         if self.version != ACTIVATION_BOUNDARY_DESC_VERSION {
             bail!(
-                "unsupported {edge} activation boundary descriptor version {}",
+                "unsupported activation boundary descriptor version {}",
                 self.version
             );
         }
-        if self.ggml_type != crate::GGML_TYPE_F32 {
-            bail!(
-                "raw activation transport requires graph-observed F32; {edge} boundary uses ggml type {}",
-                self.ggml_type
-            );
+        let count =
+            usize::try_from(self.part_count).context("activation part count exceeds usize")?;
+        if count == 0 || count > self.parts.len() {
+            bail!("activation boundary part count is invalid");
         }
-        if self.layout != ACTIVATION_BOUNDARY_LAYOUT_TOKEN_MAJOR {
-            bail!(
-                "raw activation transport requires token-major layout; {edge} boundary uses layout {}",
-                self.layout
-            );
+        Ok(&self.parts[..count])
+    }
+
+    /// Compatibility helper for consumers that still size the primary F32
+    /// tensor by width. Multipart bytes are accounted for by payload_bytes.
+    pub fn raw_f32_width(self, edge: &str) -> Result<i32> {
+        let primary = *self
+            .parts()?
+            .first()
+            .context("activation boundary has no primary part")?;
+        if primary.ggml_type != crate::GGML_TYPE_F32 || primary.token_axis < 0 {
+            bail!("{edge} primary activation part is not token-indexed F32");
         }
-        if self.elements_per_token == 0 {
-            bail!("graph-observed {edge} activation boundary has zero elements per token");
+        let rank = usize::try_from(primary.rank)
+            .with_context(|| format!("{edge} primary activation rank exceeds usize"))?;
+        let token_axis = usize::try_from(primary.token_axis)
+            .with_context(|| format!("{edge} primary activation token axis is negative"))?;
+        if rank == 0 || rank > primary.dimensions.len() || token_axis >= rank {
+            bail!("{edge} primary activation part has an invalid rank or token axis");
         }
-        let unsupported_required_frame_flags =
-            self.required_frame_flags & !ACTIVATION_BOUNDARY_SUPPORTED_REQUIRED_FRAME_FLAGS;
-        if unsupported_required_frame_flags != 0 {
-            bail!(
-                "graph-observed {edge} activation boundary requires unsupported frame flags {unsupported_required_frame_flags:#x}"
-            );
+        let mut elements = 1_u64;
+        for (axis, dimension) in primary.dimensions.iter().copied().enumerate().take(rank) {
+            if axis == token_axis {
+                continue;
+            }
+            let dimension = u64::try_from(dimension)
+                .with_context(|| format!("{edge} primary activation dimension is dynamic"))?;
+            elements = elements
+                .checked_mul(dimension)
+                .context("activation element count overflow")?;
         }
-        let unsupported_required_sidebands =
-            self.required_sidebands & !ACTIVATION_BOUNDARY_SUPPORTED_REQUIRED_SIDEBANDS;
-        if unsupported_required_sidebands != 0 {
-            bail!(
-                "graph-observed {edge} activation boundary requires unsupported sidebands {unsupported_required_sidebands:#x}"
-            );
-        }
-        let expected_bytes = self
-            .elements_per_token
-            .checked_mul(std::mem::size_of::<f32>() as u64)
-            .context("activation bytes per token overflow")?;
-        if self.bytes_per_token != expected_bytes {
-            bail!(
-                "graph-observed {edge} activation boundary reports {} bytes for {} F32 elements",
-                self.bytes_per_token,
-                self.elements_per_token
-            );
-        }
-        i32::try_from(self.elements_per_token)
+        i32::try_from(elements)
             .with_context(|| format!("graph-observed {edge} activation width exceeds i32"))
     }
 
+    pub fn payload_bytes_hint(self, edge: &str, token_count: u32) -> Result<Option<u64>> {
+        let mut total = 0_u64;
+        for part in self.parts()? {
+            if part.token_axis < 0
+                || part.token_axis as u32 >= part.rank
+                || part.rank == 0
+                || part.rank > 4
+            {
+                bail!("{edge} activation part has an invalid token axis");
+            }
+            let mut elements = 1_u64;
+            for (axis, dimension) in part
+                .dimensions
+                .iter()
+                .copied()
+                .enumerate()
+                .take(part.rank as usize)
+            {
+                let dimension = if axis == part.token_axis as usize {
+                    u64::from(token_count)
+                } else {
+                    match u64::try_from(dimension) {
+                        Ok(dimension) => dimension,
+                        Err(_) => return Ok(None),
+                    }
+                };
+                elements = elements
+                    .checked_mul(dimension)
+                    .context("activation element count overflow")?;
+            }
+            let bytes = elements
+                .checked_mul(ggml_type_bytes(part.ggml_type)?)
+                .context("activation payload bytes overflow")?;
+            total = total
+                .checked_add(bytes)
+                .context("activation payload bytes overflow")?;
+        }
+        Ok(Some(total))
+    }
+
     pub fn payload_bytes(self, edge: &str, token_count: u32) -> Result<u64> {
-        self.raw_f32_width(edge)?;
-        self.bytes_per_token
-            .checked_mul(u64::from(token_count))
-            .context("activation payload bytes overflow")
+        self.payload_bytes_hint(edge, token_count)?
+            .with_context(|| format!("{edge} activation part has an unresolved dynamic dimension"))
+    }
+}
+
+fn ggml_type_bytes(ggml_type: u32) -> Result<u64> {
+    match ggml_type {
+        crate::GGML_TYPE_F32 | crate::GGML_TYPE_I32 => Ok(4),
+        1 | 30 => Ok(2),
+        other => bail!("activation transport does not support ggml type {other}"),
     }
 }
 
@@ -136,30 +212,40 @@ pub struct TensorInfo {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ActivationDesc {
     pub version: u32,
-    pub dtype: ActivationDType,
-    pub layout: ActivationLayout,
     pub producer_stage_index: i32,
     pub layer_start: i32,
     pub layer_end: i32,
     pub token_count: u32,
     pub sequence_count: u32,
+    pub part_count: u32,
     pub payload_bytes: u64,
-    pub flags: u64,
+    pub frontier_identity: [u8; skippy_ffi::ACTIVATION_IDENTITY_BYTES],
+    pub parts: [ActivationPartDesc; ACTIVATION_MAX_PARTS],
 }
 
 impl ActivationDesc {
+    pub fn parts(&self) -> Result<&[ActivationPartDesc]> {
+        let count =
+            usize::try_from(self.part_count).context("activation part count exceeds usize")?;
+        if count > self.parts.len() {
+            bail!("activation part count exceeds maximum");
+        }
+        Ok(&self.parts[..count])
+    }
+
     pub(crate) fn as_raw(&self) -> RawActivationDesc {
         RawActivationDesc {
             version: self.version,
-            dtype: self.dtype,
-            layout: self.layout,
             producer_stage_index: self.producer_stage_index,
             layer_start: self.layer_start,
             layer_end: self.layer_end,
             token_count: self.token_count,
             sequence_count: self.sequence_count,
+            part_count: self.part_count,
+            reserved: 0,
             payload_bytes: self.payload_bytes,
-            flags: self.flags,
+            frontier_identity: self.frontier_identity,
+            parts: self.parts.map(ActivationPartDesc::as_raw),
         }
     }
 }
@@ -168,15 +254,15 @@ impl From<RawActivationDesc> for ActivationDesc {
     fn from(raw: RawActivationDesc) -> Self {
         Self {
             version: raw.version,
-            dtype: raw.dtype,
-            layout: raw.layout,
             producer_stage_index: raw.producer_stage_index,
             layer_start: raw.layer_start,
             layer_end: raw.layer_end,
             token_count: raw.token_count,
             sequence_count: raw.sequence_count,
+            part_count: raw.part_count,
             payload_bytes: raw.payload_bytes,
-            flags: raw.flags,
+            frontier_identity: raw.frontier_identity,
+            parts: raw.parts.map(ActivationPartDesc::from),
         }
     }
 }
@@ -184,15 +270,16 @@ impl From<RawActivationDesc> for ActivationDesc {
 pub(crate) fn empty_raw_activation_desc() -> RawActivationDesc {
     RawActivationDesc {
         version: 0,
-        dtype: ActivationDType::Unknown,
-        layout: ActivationLayout::Opaque,
         producer_stage_index: -1,
         layer_start: 0,
         layer_end: 0,
         token_count: 0,
         sequence_count: 0,
+        part_count: 0,
+        reserved: 0,
         payload_bytes: 0,
-        flags: 0,
+        frontier_identity: [0; skippy_ffi::ACTIVATION_IDENTITY_BYTES],
+        parts: [RawActivationPartDesc::default(); ACTIVATION_MAX_PARTS],
     }
 }
 
@@ -811,14 +898,21 @@ mod activation_boundary_descriptor_tests {
     use super::*;
 
     fn f32_boundary(elements_per_token: u64) -> ActivationBoundaryDesc {
+        let mut parts = [ActivationPartDesc::default(); ACTIVATION_MAX_PARTS];
+        parts[0] = ActivationPartDesc {
+            identity: [1; skippy_ffi::ACTIVATION_IDENTITY_BYTES],
+            ggml_type: crate::GGML_TYPE_F32,
+            rank: 2,
+            token_axis: 1,
+            dimensions: [elements_per_token as i64, -1, 0, 0],
+            byte_strides: [4, elements_per_token.saturating_mul(4), 0, 0],
+            ..ActivationPartDesc::default()
+        };
         ActivationBoundaryDesc {
             version: ACTIVATION_BOUNDARY_DESC_VERSION,
-            ggml_type: crate::GGML_TYPE_F32,
-            layout: ACTIVATION_BOUNDARY_LAYOUT_TOKEN_MAJOR,
-            elements_per_token,
-            bytes_per_token: elements_per_token.saturating_mul(std::mem::size_of::<f32>() as u64),
-            required_frame_flags: 0,
-            required_sidebands: 0,
+            part_count: 1,
+            frontier_identity: [2; skippy_ffi::ACTIVATION_IDENTITY_BYTES],
+            parts,
         }
     }
 
@@ -830,9 +924,8 @@ mod activation_boundary_descriptor_tests {
     }
 
     #[test]
-    fn raw_f32_boundary_accepts_kimi_k3_residual_flag_and_full_wire_width() {
-        let mut boundary = f32_boundary(3072);
-        boundary.required_frame_flags = skippy_ffi::ACTIVATION_FLAG_KIMI_K3_RESIDUAL;
+    fn raw_f32_boundary_sizes_the_full_graph_observed_width() {
+        let boundary = f32_boundary(3072);
         assert_eq!(boundary.raw_f32_width("input").unwrap(), 3072);
         assert_eq!(boundary.payload_bytes("input", 2).unwrap(), 24_576);
     }
@@ -846,37 +939,28 @@ mod activation_boundary_descriptor_tests {
         cases.push((unsupported_version, "descriptor version"));
 
         let mut unsupported_type = f32_boundary(1024);
-        unsupported_type.ggml_type = crate::GGML_TYPE_F16;
-        cases.push((unsupported_type, "requires graph-observed F32"));
+        unsupported_type.parts[0].ggml_type = crate::GGML_TYPE_F16;
+        cases.push((unsupported_type, "not token-indexed F32"));
 
-        let mut unsupported_layout = f32_boundary(1024);
-        unsupported_layout.layout += 1;
-        cases.push((unsupported_layout, "requires token-major layout"));
+        let mut invalid_axis = f32_boundary(1024);
+        invalid_axis.parts[0].token_axis = -1;
+        cases.push((invalid_axis, "not token-indexed F32"));
 
-        cases.push((f32_boundary(0), "zero elements"));
+        let mut axis_outside_rank = f32_boundary(1024);
+        axis_outside_rank.parts[0].token_axis = 2;
+        cases.push((axis_outside_rank, "invalid rank or token axis"));
 
-        let mut inconsistent_bytes = f32_boundary(1024);
-        inconsistent_bytes.bytes_per_token -= 1;
-        cases.push((inconsistent_bytes, "reports 4095 bytes"));
+        let mut zero_rank = f32_boundary(1024);
+        zero_rank.parts[0].rank = 0;
+        cases.push((zero_rank, "invalid rank or token axis"));
 
-        let mut unsupported_required_frame_flags = f32_boundary(1024);
-        unsupported_required_frame_flags.required_frame_flags = 1 << 63;
-        cases.push((
-            unsupported_required_frame_flags,
-            "requires unsupported frame flags",
-        ));
+        let mut excessive_rank = f32_boundary(1024);
+        excessive_rank.parts[0].rank = 5;
+        cases.push((excessive_rank, "invalid rank or token axis"));
 
-        let mut unsupported_required_sidebands = f32_boundary(1024);
-        unsupported_required_sidebands.required_sidebands = 1 << 63;
-        cases.push((
-            unsupported_required_sidebands,
-            "requires unsupported sidebands",
-        ));
-
-        let mut byte_overflow = f32_boundary(1);
-        byte_overflow.elements_per_token = u64::MAX;
-        byte_overflow.bytes_per_token = u64::MAX;
-        cases.push((byte_overflow, "bytes per token overflow"));
+        let mut invalid_count = f32_boundary(1024);
+        invalid_count.part_count = 0;
+        cases.push((invalid_count, "part count is invalid"));
 
         let too_wide = f32_boundary(i32::MAX as u64 + 1);
         cases.push((too_wide, "width exceeds i32"));
@@ -894,15 +978,29 @@ mod activation_boundary_descriptor_tests {
 
     #[test]
     fn payload_size_overflow_fails_closed() {
-        let boundary = ActivationBoundaryDesc {
-            elements_per_token: i32::MAX as u64,
-            bytes_per_token: i32::MAX as u64 * std::mem::size_of::<f32>() as u64,
-            ..f32_boundary(1)
-        };
+        let mut boundary = f32_boundary(1);
+        boundary.parts[0].dimensions[0] = i64::MAX;
         let error = boundary
             .payload_bytes("output", u32::MAX)
             .expect_err("overflowing payload size must fail");
-        assert!(error.to_string().contains("payload bytes overflow"));
+        assert!(error.to_string().contains("overflow"));
+    }
+
+    #[test]
+    fn payload_size_hint_defers_dynamic_non_token_dimensions() {
+        let mut boundary = f32_boundary(1024);
+        boundary.parts[0].rank = 3;
+        boundary.parts[0].token_axis = 2;
+        boundary.parts[0].dimensions = [1024, -1, -1, 0];
+
+        assert_eq!(boundary.payload_bytes_hint("output", 2).unwrap(), None);
+        assert!(
+            boundary
+                .payload_bytes("output", 2)
+                .unwrap_err()
+                .to_string()
+                .contains("unresolved dynamic dimension")
+        );
     }
 }
 

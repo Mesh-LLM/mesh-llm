@@ -1351,7 +1351,6 @@ impl Node {
         true
     }
 
-    #[cfg(test)]
     pub async fn upsert_served_model_descriptor(&self, descriptor: ServedModelDescriptor) {
         let mut descriptors = self.served_model_descriptors.lock().await;
         if let Some(existing) = descriptors

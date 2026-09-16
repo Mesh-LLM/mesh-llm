@@ -1,7 +1,7 @@
 From d5c31ea86b0f114b78930edfba5ea5d93b127255 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 11 Sep 2026 17:33:13 +1000
-Subject: [PATCH 24/24] skippy: consume merge parts during from-parts materialization
+Subject: [PATCH 57/57] skippy: consume merge parts during from-parts materialization
 
 HF Jobs pods are evicted once container-local ephemeral storage crosses 50G.
 The sharded split writer stages one per-shard part per layer (~16G for Kimi-K3)
@@ -12,7 +12,7 @@ materializing variant that unlinks each input part as soon as its tensors have
 been absorbed into the output, halving the staging peak. The default
 skippy_write_gguf_from_parts keeps its byte-identical, inputs-preserved
 behavior for bench materialization and metadata carriers. Bump
-SKIPPY_ABI_VERSION_PATCH 53->54.
+SKIPPY_ABI_VERSION_PATCH 56->57.
 ---
  include/skippy/common.h        |  2 +-
  include/skippy/model_package.h | 14 ++++++++++
@@ -27,8 +27,8 @@ index 65cfa2ce8..5853db327 100644
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 53
-+#define SKIPPY_ABI_VERSION_PATCH 54
+-#define SKIPPY_ABI_VERSION_PATCH 56
++#define SKIPPY_ABI_VERSION_PATCH 57
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
