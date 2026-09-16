@@ -3,15 +3,18 @@
 
 use anyhow::{Context, Result};
 use serde_json::Value;
+use std::io::Write;
 
 pub async fn run_network_doctor(port: u16, json_output: bool) -> Result<()> {
     let report = fetch_network_report(port).await?;
     if json_output {
-        println!("{}", serde_json::to_string_pretty(&report)?);
+        let mut out = mesh_llm_events::machine_out();
+        writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
         return Ok(());
     }
+    let mut out = mesh_llm_events::console_out();
     for line in network_report_lines(&report) {
-        println!("{line}");
+        writeln!(out, "{line}")?;
     }
     Ok(())
 }

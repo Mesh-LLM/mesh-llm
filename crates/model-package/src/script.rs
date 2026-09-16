@@ -165,11 +165,17 @@ mod tests {
         assert!(EMBEDDED_SCRIPT.contains("SOURCE_TOTAL_BYTES"));
         assert!(EMBEDDED_SCRIPT.contains("Estimated fallback /bucket cache needed"));
         assert!(EMBEDDED_SCRIPT.contains("estimate_bucket_workspace_bytes"));
-        assert!(EMBEDDED_SCRIPT.contains(r#"HF_HUB_CACHE="${HF_HUB_CACHE:-${HF_HOME}/hub}""#));
-        assert!(EMBEDDED_SCRIPT.contains(r#"HF_XET_CACHE="${HF_XET_CACHE:-${HF_HOME}/xet}""#));
         assert!(
             EMBEDDED_SCRIPT.contains(r#"PACKAGE_DIR="${PACKAGE_DIR:-${LOCAL_WORK_DIR}/package}""#)
         );
+        assert!(EMBEDDED_SCRIPT.contains(
+            "refusing to continue (unset PACKAGE_DIR_ALLOW_BUCKET to require local staging)"
+        ));
+        assert!(
+            EMBEDDED_SCRIPT
+                .contains(r#"HF_XET_CACHE="${HF_XET_CACHE:-${LOCAL_WORK_DIR}/xet-cache}""#)
+        );
+        assert!(EMBEDDED_SCRIPT.contains(r#"HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}""#));
         assert!(EMBEDDED_SCRIPT.contains(r#"JOB_TMP_DIR="${JOB_TMP_DIR:-${LOCAL_WORK_DIR}/tmp}""#));
         assert!(EMBEDDED_SCRIPT.contains(r#"LOCAL_WORK_DIR="${LOCAL_WORK_DIR:-/tmp/"#));
         assert!(
@@ -205,6 +211,9 @@ mod tests {
         assert!(EMBEDDED_SCRIPT.contains(r#"--after-artifact-command "$ARTIFACT_UPLOAD_HOOK""#));
         assert!(EMBEDDED_SCRIPT.contains("Uploaded and removed"));
         assert!(!EMBEDDED_SCRIPT.contains("api.upload_folder"));
+        assert!(EMBEDDED_SCRIPT.contains("TARGET_UPLOAD_REVISION"));
+        assert!(EMBEDDED_SCRIPT.contains("promote_layer_package_snapshot.py"));
+        assert!(EMBEDDED_SCRIPT.contains("Atomically promoted replacement snapshot to main"));
         assert!(EMBEDDED_SCRIPT.contains(r#"MOUNTED_SOURCE_PATH="/source/${SOURCE_FILE}""#));
         assert!(EMBEDDED_SCRIPT.contains(r#"WRITE_PACKAGE_INPUT="$MOUNTED_SOURCE_PATH""#));
         assert!(EMBEDDED_SCRIPT.contains(r#"--source-file "$SOURCE_FILE""#));

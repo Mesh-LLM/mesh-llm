@@ -23,7 +23,13 @@ static LOCAL_SOURCE_POLICIES: OnceLock<Mutex<HashMap<String, HashMap<String, boo
 #[derive(Clone)]
 struct VerifiedContentIdentity {
     identity: SkippyPackageIdentity,
-    fingerprint: Vec<VerifiedFileFingerprint>,
+    proof: VerifiedIdentityProof,
+}
+
+#[derive(Clone)]
+enum VerifiedIdentityProof {
+    FileFingerprint(Vec<VerifiedFileFingerprint>),
+    ImmutableSourceMetadata,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -137,6 +143,7 @@ pub(crate) fn is_content_addressed_gguf_ref(package_ref: &str) -> bool {
 pub(super) fn register_content_addressed_identity(
     identity: &SkippyPackageIdentity,
     fingerprint: Option<Vec<VerifiedFileFingerprint>>,
+    allow_immutable_source_metadata: bool,
 ) {
     if !is_content_addressed_gguf_ref(&identity.package_ref) {
         return;
@@ -149,17 +156,26 @@ pub(super) fn register_content_addressed_identity(
     }
     if let Ok(mut identities) = verified_identity_registry().lock() {
         let entries = identities.entry(identity.package_ref.clone()).or_default();
-        match fingerprint {
-            Some(fingerprint) => {
+        match (fingerprint, allow_immutable_source_metadata) {
+            (Some(fingerprint), _) => {
                 entries.insert(
                     identity.source_model_path.clone(),
                     VerifiedContentIdentity {
                         identity: identity.clone(),
-                        fingerprint,
+                        proof: VerifiedIdentityProof::FileFingerprint(fingerprint),
                     },
                 );
             }
-            None => {
+            (None, true) => {
+                entries.insert(
+                    identity.source_model_path.clone(),
+                    VerifiedContentIdentity {
+                        identity: identity.clone(),
+                        proof: VerifiedIdentityProof::ImmutableSourceMetadata,
+                    },
+                );
+            }
+            (None, false) => {
                 // A platform or transient filesystem state that cannot produce
                 // a complete fingerprint must invalidate any older cache entry.
                 entries.remove(&identity.source_model_path);
@@ -177,7 +193,7 @@ pub(crate) fn into_content_addressed_identity(
         fingerprint.is_some(),
         "content-addressed package source contains an unsupported file or symlink"
     );
-    register_content_addressed_identity(&identity, fingerprint);
+    register_content_addressed_identity(&identity, fingerprint, false);
     Ok(identity)
 }
 
@@ -247,7 +263,12 @@ fn cached_verified_identity(package_ref: &str, path: &Path) -> Option<SkippyPack
         .get(package_ref)?
         .get(path)?
         .clone();
-    (verified_file_fingerprint(&cached.identity)? == cached.fingerprint).then_some(cached.identity)
+    match cached.proof {
+        VerifiedIdentityProof::FileFingerprint(expected) => {
+            (verified_file_fingerprint(&cached.identity)? == expected).then_some(cached.identity)
+        }
+        VerifiedIdentityProof::ImmutableSourceMetadata => Some(cached.identity),
+    }
 }
 
 pub(super) fn registered_content_addressed_source(package_ref: &str) -> Option<PathBuf> {
@@ -271,9 +292,11 @@ fn registered_content_addressed_sources(package_ref: &str) -> Vec<PathBuf> {
 }
 
 /// Resolve a content-addressed source from this process's registry and verify
-/// its path-free synthetic manifest at the point of use. The first strict
-/// verification hashes every byte; later checks may reuse only the identity
-/// whose hash-bound strong file fingerprint is still unchanged.
+/// its path-free synthetic manifest at the point of use. Explicit local files
+/// are hashed on the first strict verification; later checks may reuse only the
+/// identity whose hash-bound strong file fingerprint is still unchanged.
+/// Immutable Hugging Face artifacts reuse the canonical Hub identity recorded
+/// during startup, keeping integrity verification separate from mesh identity.
 ///
 /// The registry is only a locator. It is never accepted as proof that a path
 /// still contains the content observed during startup or inventory.

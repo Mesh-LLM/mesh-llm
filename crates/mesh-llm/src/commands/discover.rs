@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use anyhow::Result;
 
 use mesh_llm_host_runtime::command_support::discovery::{self, nostr};
@@ -45,17 +47,19 @@ async fn run_nostr_discover(
 ) -> Result<()> {
     let relays = discovery::nostr_relays(&relays);
 
-    eprintln!("🔍 Searching Nostr relays for mesh-llm meshes...");
+    let mut err = mesh_llm_events::console_err();
+    writeln!(err, "🔍 Searching Nostr relays for mesh-llm meshes...")?;
     let meshes = nostr::discover(&relays, &filter, None).await?;
 
+    let mut err = mesh_llm_events::console_err();
     if meshes.is_empty() {
-        eprintln!("No meshes found.");
+        writeln!(err, "No meshes found.")?;
         if filter.name.is_some()
             || filter.model.is_some()
             || filter.min_vram_gb.is_some()
             || filter.region.is_some()
         {
-            eprintln!("Try broader filters or check relays.");
+            writeln!(err, "Try broader filters or check relays.")?;
         }
         return Ok(());
     }
@@ -66,7 +70,7 @@ async fn run_nostr_discover(
         .as_secs();
 
     let last_mesh_id = discovery::load_last_mesh_id();
-    eprintln!("Found {} mesh(es):\n", meshes.len());
+    writeln!(err, "Found {} mesh(es):\n", meshes.len())?;
     for (i, mesh) in meshes.iter().enumerate() {
         let score = nostr::score_mesh(mesh, now, last_mesh_id.as_deref());
         let age = now.saturating_sub(mesh.published_at);
@@ -85,14 +89,15 @@ async fn run_nostr_discover(
         } else {
             format!("{} clients", mesh.listing.client_count)
         };
-        eprintln!(
+        writeln!(
+            err,
             "  [{}] {} (score: {}, {}, {})",
             i + 1,
             mesh,
             score,
             freshness,
             capacity
-        );
+        )?;
         let token = &mesh.listing.invite_token;
         let display_token = if token.len() > 40 {
             format!("{}...{}", &token[..20], &token[token.len() - 12..])
@@ -100,23 +105,30 @@ async fn run_nostr_discover(
             token.clone()
         };
         if !mesh.listing.on_disk.is_empty() {
-            eprintln!("      on disk: {}", mesh.listing.on_disk.join(", "));
+            writeln!(err, "      on disk: {}", mesh.listing.on_disk.join(", "))?;
         }
-        eprintln!("      token: {}", display_token);
-        eprintln!();
+        writeln!(err, "      token: {}", display_token)?;
+        writeln!(err)?;
     }
 
     if auto_join {
         let best = &meshes[0];
-        eprintln!("Auto-joining best match: {}", best);
-        eprintln!("\nRun:");
-        eprintln!("  mesh-llm --join {}", best.listing.invite_token);
-        println!("{}", best.listing.invite_token);
+        writeln!(err, "Auto-joining best match: {}", best)?;
+        writeln!(err, "\nRun:")?;
+        writeln!(err, "  mesh-llm --join {}", best.listing.invite_token)?;
+        let mut out = mesh_llm_events::machine_out();
+        writeln!(out, "{}", best.listing.invite_token)?;
     } else {
-        eprintln!("To join a mesh:");
-        eprintln!("  mesh-llm --join <token>");
-        eprintln!("  mesh-llm --discover <name>       # join by mesh name");
-        eprintln!("  mesh-llm client --discover <name> # join as client by mesh name");
+        writeln!(err, "To join a mesh:")?;
+        writeln!(err, "  mesh-llm --join <token>")?;
+        writeln!(
+            err,
+            "  mesh-llm --discover <name>       # join by mesh name"
+        )?;
+        writeln!(
+            err,
+            "  mesh-llm client --discover <name> # join as client by mesh name"
+        )?;
     }
 
     Ok(())
@@ -128,10 +140,12 @@ async fn run_lan_discover(
     supplied_join_tokens: Vec<String>,
 ) -> Result<()> {
     let supplied_join_token = supplied_join_tokens.first().map(String::as_str);
-    eprintln!(
+    let mut err = mesh_llm_events::console_err();
+    writeln!(
+        err,
         "Searching local LAN for mesh-llm meshes via {}...",
         discovery::LAN_SERVICE_TYPE
-    );
+    )?;
     let meshes = discovery::discover_lan(
         &filter,
         supplied_join_token,
@@ -139,16 +153,23 @@ async fn run_lan_discover(
     )
     .await?;
 
+    let mut err = mesh_llm_events::console_err();
     if meshes.is_empty() {
-        eprintln!("No LAN meshes found.");
+        writeln!(err, "No LAN meshes found.")?;
         if supplied_join_token.is_none() {
-            eprintln!("mDNS advertisements do not include reusable invite tokens.");
-            eprintln!("Pass --join <token> to verify a LAN advertisement by token fingerprint.");
+            writeln!(
+                err,
+                "mDNS advertisements do not include reusable invite tokens."
+            )?;
+            writeln!(
+                err,
+                "Pass --join <token> to verify a LAN advertisement by token fingerprint."
+            )?;
         }
         return Ok(());
     }
 
-    eprintln!("Found {} LAN mesh(es):\n", meshes.len());
+    writeln!(err, "Found {} LAN mesh(es):\n", meshes.len())?;
     for (i, mesh) in meshes.iter().enumerate() {
         let vram_gb = mesh.listing.total_vram_bytes as f64 / 1e9;
         let models = if mesh.listing.serving.is_empty() {
@@ -161,38 +182,47 @@ async fn run_lan_discover(
         } else {
             "requires supplied token"
         };
-        eprintln!(
+        writeln!(
+            err,
             "  [{}] {}  {} node(s), {:.0}GB capacity  serving: {}",
             i + 1,
             mesh.listing.name.as_deref().unwrap_or("(unnamed)"),
             mesh.listing.node_count,
             vram_gb,
             models
-        );
-        eprintln!(
+        )?;
+        writeln!(
+            err,
             "      instance: {}  host: {}:{}  {}",
             mesh.instance_name, mesh.host, mesh.port, join_state
-        );
+        )?;
         if let Some(version) = &mesh.published_version {
-            eprintln!("      version: {version}");
+            writeln!(err, "      version: {version}")?;
         }
         if !mesh.listing.on_disk.is_empty() {
-            eprintln!("      on disk: {}", mesh.listing.on_disk.join(", "));
+            writeln!(err, "      on disk: {}", mesh.listing.on_disk.join(", "))?;
         }
-        eprintln!();
+        writeln!(err)?;
     }
 
     if auto_join {
         if let Some(token) = meshes.iter().find_map(|mesh| mesh.join_token()) {
-            println!("{token}");
+            let mut out = mesh_llm_events::machine_out();
+            writeln!(out, "{token}")?;
         } else {
-            eprintln!("No LAN mesh matched the supplied token fingerprint.");
-            eprintln!("mDNS intentionally does not advertise raw invite tokens.");
+            writeln!(err, "No LAN mesh matched the supplied token fingerprint.")?;
+            writeln!(
+                err,
+                "mDNS intentionally does not advertise raw invite tokens."
+            )?;
         }
     } else {
-        eprintln!("To join a LAN mesh:");
-        eprintln!("  mesh-llm --join <token>");
-        eprintln!("  mesh-llm --join <token> discover --mesh-discovery-mode mdns --auto");
+        writeln!(err, "To join a LAN mesh:")?;
+        writeln!(err, "  mesh-llm --join <token>")?;
+        writeln!(
+            err,
+            "  mesh-llm --join <token> discover --mesh-discovery-mode mdns --auto"
+        )?;
     }
 
     Ok(())
@@ -200,10 +230,11 @@ async fn run_lan_discover(
 
 /// Stop all mesh-llm instances tracked in the runtime root.
 pub(crate) fn run_stop() -> Result<()> {
+    let mut err = mesh_llm_events::console_err();
     let root = match discovery::runtime_root() {
         Ok(root) => root,
         Err(_) => {
-            eprintln!("Nothing running.");
+            writeln!(err, "Nothing running.")?;
             return Ok(());
         }
     };
@@ -219,19 +250,25 @@ pub(crate) fn run_stop() -> Result<()> {
         if outcome.is_success() {
             match outcome {
                 backend::TerminationOutcome::Graceful => {
-                    eprintln!(
+                    writeln!(
+                        err,
                         "  Terminated owner pid={} gracefully ({})",
                         target.pid, target.label
-                    );
+                    )?;
                 }
                 backend::TerminationOutcome::Killed => {
-                    eprintln!("  Force-killed owner pid={} ({})", target.pid, target.label);
+                    writeln!(
+                        err,
+                        "  Force-killed owner pid={} ({})",
+                        target.pid, target.label
+                    )?;
                 }
                 backend::TerminationOutcome::NotRunning => {
-                    eprintln!(
+                    writeln!(
+                        err,
                         "  Owner pid={} was already stopped ({})",
                         target.pid, target.label
-                    );
+                    )?;
                 }
                 backend::TerminationOutcome::Failed => unreachable!(),
             }
@@ -240,7 +277,7 @@ pub(crate) fn run_stop() -> Result<()> {
     }
 
     if killed == 0 {
-        eprintln!("Nothing running.");
+        writeln!(err, "Nothing running.")?;
     }
     Ok(())
 }

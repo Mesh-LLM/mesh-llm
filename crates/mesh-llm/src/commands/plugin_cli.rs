@@ -203,13 +203,15 @@ fn handle_plugin_cli_result(command: &str, result: plugin::ToolCallResult) -> Re
     match value {
         serde_json::Value::Null => Ok(()),
         serde_json::Value::String(text) => {
-            print!("{text}");
-            std::io::stdout().flush().ok();
+            let mut out = mesh_llm_events::console_out();
+            write!(out, "{text}")?;
+            let _ = out.flush();
             Ok(())
         }
         serde_json::Value::Object(_) => handle_structured_result(command, value),
         other => {
-            println!("{}", serde_json::to_string_pretty(&other)?);
+            let mut out = mesh_llm_events::console_out();
+            writeln!(out, "{}", serde_json::to_string_pretty(&other)?)?;
             Ok(())
         }
     }
@@ -229,12 +231,14 @@ fn handle_structured_result(command: &str, value: serde_json::Value) -> Result<(
     let response: PluginCliRunResponse =
         serde_json::from_value(value).context("Decode plugin CLI response")?;
     if let Some(stderr) = response.stderr {
-        eprint!("{stderr}");
-        std::io::stderr().flush().ok();
+        let mut err = mesh_llm_events::console_err();
+        write!(err, "{stderr}")?;
+        let _ = err.flush();
     }
     if let Some(stdout) = response.stdout {
-        print!("{stdout}");
-        std::io::stdout().flush().ok();
+        let mut out = mesh_llm_events::console_out();
+        write!(out, "{stdout}")?;
+        let _ = out.flush();
     }
     if let Some(code) = response.exit_code
         && code != 0

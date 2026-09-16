@@ -86,7 +86,7 @@ impl PredictionReturnListener {
                 match listener.accept() {
                     Ok((stream, _)) => {
                         if let Err(error) = stream.set_nonblocking(false) {
-                            eprintln!(
+                            tracing::warn!(
                                 "direct prediction return connection failed: set blocking: {error}"
                             );
                             continue;
@@ -94,7 +94,9 @@ impl PredictionReturnListener {
                         let hub = thread_hub.clone();
                         thread::spawn(move || {
                             if let Err(error) = handle_prediction_return_connection(hub, stream) {
-                                eprintln!("direct prediction return connection failed: {error:#}");
+                                tracing::warn!(
+                                    "direct prediction return connection failed: {error:#}"
+                                );
                             }
                         });
                     }
@@ -103,7 +105,7 @@ impl PredictionReturnListener {
                     }
                     Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                     Err(error) => {
-                        eprintln!("direct prediction return listener failed: {error}");
+                        tracing::warn!("direct prediction return listener failed: {error}");
                         break;
                     }
                 }
@@ -254,7 +256,7 @@ impl PredictionReturnReceiver {
         let key = self.key;
         thread::spawn(move || {
             if let Err(error) = hub.handle_return_stream(key, stream) {
-                eprintln!("direct prediction return reader failed: {error:#}");
+                tracing::warn!("direct prediction return reader failed: {error:#}");
             }
         });
     }

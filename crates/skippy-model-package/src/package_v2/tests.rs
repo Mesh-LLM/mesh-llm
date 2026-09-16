@@ -37,6 +37,7 @@ fn write(source: &Path, out: &Path, resume: bool) -> Result<()> {
         ArtifactHook { command: None },
         explicit(source),
         resume,
+        None,
     )
 }
 
@@ -374,6 +375,7 @@ fn refuses_transform_hooks_and_existing_completion_marker() {
         },
         explicit(&source),
         false,
+        None,
     );
     assert!(
         result
@@ -405,6 +407,7 @@ fn verified_resume_and_projector_sidecar_round_trip() {
         ArtifactHook { command: None },
         explicit(&source),
         true,
+        None,
     )
     .unwrap();
     let manifest = read_manifest(&out);
@@ -447,6 +450,7 @@ fn upload_hook_can_delete_verified_copies_without_losing_inventory() {
         ArtifactHook { command: None },
         explicit(&source),
         false,
+        None,
     )
     .unwrap();
     let manifest: PackageManifest =
@@ -461,4 +465,138 @@ fn upload_hook_can_delete_verified_copies_without_losing_inventory() {
             .all(|artifact| !out.join(&artifact.path).exists())
     );
     assert!(source.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn successful_artifact_hook_may_leave_verified_copies_for_rechecking() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.gguf");
+    fixture(&source, &[tensor("first", 0), tensor("second", 32)], None);
+    let out = temp.path().join("package");
+    write_package(
+        source.display().to_string(),
+        out.clone(),
+        Vec::new(),
+        ArtifactHook {
+            command: Some("/usr/bin/true".into()),
+        },
+        ArtifactHook { command: None },
+        explicit(&source),
+        false,
+        None,
+    )
+    .unwrap();
+    let manifest = read_manifest(&out);
+    manifest.validate().unwrap();
+    assert!(
+        manifest
+            .artifact_catalog
+            .entries
+            .iter()
+            .all(|artifact| out.join(&artifact.path).is_file())
+    );
+}
+
+#[test]
+fn hook_verification_treats_deleted_artifact_as_unchanged() {
+    use skippy_package_format::Artifact;
+
+    fn artifact_for(path: &std::path::Path) -> Artifact {
+        Artifact {
+            id: "artifact".to_string(),
+            path: path.display().to_string(),
+            byte_size: std::fs::metadata(path).unwrap().len(),
+            sha256: crate::hash::file_sha256(path).unwrap(),
+        }
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let present = temp.path().join("present.gguf");
+    let mutated = temp.path().join("mutated.gguf");
+    let gone = temp.path().join("gone.gguf");
+    fs::write(&present, b"payload").unwrap();
+    fs::write(&mutated, b"payload").unwrap();
+    fs::write(&gone, b"payload").unwrap();
+
+    let hook = ArtifactHook {
+        command: Some(temp.path().join("upload.sh")),
+    };
+
+    // Unchanged on disk -> unchanged.
+    let record = artifact_for(&present);
+    super::verify_hook_result(&record, &present, &hook).unwrap();
+
+    // Mutated after the hook -> rejected (content differs from the record).
+    fs::write(&mutated, b"tampered").unwrap();
+    let record = artifact_for(&gone);
+    let mut tampered_record = record.clone();
+    tampered_record.path = mutated.display().to_string();
+    assert!(super::verify_hook_result(&tampered_record, &mutated, &hook).is_err());
+
+    // Deleted by the hook (a FUSE attr cache can still report it present via
+    // path.exists()) -> opening it fails ENOENT, which must read as unchanged.
+    fs::remove_file(&gone).unwrap();
+    super::verify_hook_result(&record, &gone, &hook).unwrap();
+}
+
+#[test]
+fn oversized_layer_splits_into_verified_part_artifacts_end_to_end() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("model.gguf");
+    fixture(
+        &source,
+        &[
+            tensor("blk.0.attn_q.weight", 0),
+            tensor("blk.0.attn_k.weight", 32),
+            tensor("blk.0.attn_v.weight", 64),
+            tensor("unknown-global", 96),
+        ],
+        None,
+    );
+    let out = temp.path().join("package");
+    // 16-byte fixture tensors: a 17-byte budget forces the 48-byte layer to
+    // split into ceil(48/17)=3 single-tensor parts, each under budget.
+    write_package(
+        source.display().to_string(),
+        out.clone(),
+        Vec::new(),
+        ArtifactHook { command: None },
+        ArtifactHook { command: None },
+        explicit(&source),
+        false,
+        Some(17),
+    )
+    .unwrap();
+    let manifest = read_manifest(&out);
+    manifest.validate().unwrap();
+    let paths: Vec<&str> = manifest
+        .artifact_catalog
+        .entries
+        .iter()
+        .map(|artifact| artifact.path.as_str())
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "shared/metadata.gguf",
+            "shared/common.gguf",
+            "layers/layer-00000-part00.gguf",
+            "layers/layer-00000-part01.gguf",
+            "layers/layer-00000-part02.gguf",
+        ]
+    );
+    // Split-layer tensors keep their layer ordinal and resolve through the
+    // carrier to their physical part artifacts.
+    for tensor in &manifest.tensor_catalog.entries {
+        if tensor.layer_ordinal.is_some() {
+            assert_eq!(tensor.layer_ordinal, Some(0));
+            let TensorStorage::Owned { artifact_id, .. } = &tensor.storage else {
+                panic!("part tensors own storage");
+            };
+            assert!(artifact_id.starts_with("layer-00000-part"));
+        }
+    }
+    // The independent verifier accepts part artifacts and their paths.
+    crate::verify_v2::verify_package(&out, &source, None, &[]).unwrap();
 }

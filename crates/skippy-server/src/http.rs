@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     future::Future,
+    io::Write,
     net::SocketAddr,
     sync::{Arc, Mutex},
     time::Instant,
@@ -206,6 +207,7 @@ pub async fn serve_stage_http_with_shutdown(
     options: StageHttpOptions,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<()> {
+    let mut out = mesh_llm_events::console_out();
     let bind_addr = options.bind_addr;
     let stage_id = options.config.stage_id.clone();
     let layer_start = options.config.layer_start;
@@ -213,10 +215,11 @@ pub async fn serve_stage_http_with_shutdown(
     let load_mode = options.config.load_mode.clone();
     let app = stage_http_router(options)?;
 
-    println!(
+    writeln!(
+        out,
         "skippy-server listening: http={} stage_id={} layer_range={}..{} load_mode={:?}",
         bind_addr, stage_id, layer_start, layer_end, load_mode,
-    );
+    )?;
 
     let listener = bind_serve_listener(bind_addr)?;
     axum::serve(listener, app)

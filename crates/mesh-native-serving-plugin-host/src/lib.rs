@@ -613,7 +613,7 @@ impl ActivePlugin {
 impl Drop for ActivePlugin {
     fn drop(&mut self) {
         if let Err(error) = self.shutdown() {
-            eprintln!("native serving plugin shutdown failed: {error:#}");
+            tracing::warn!("native serving plugin shutdown failed: {error:#}");
         }
     }
 }

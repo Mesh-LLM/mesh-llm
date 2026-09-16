@@ -9,7 +9,7 @@ description: Generated reference for the capability-oriented Skippy C ABI.
 
 This reference is generated from the patched llama.cpp public headers. It documents the native C ABI used by Skippy's Rust FFI layer and staged runtime. The ABI is experimental and versioned for lockstep native/Rust builds.
 
-Current generated surface: **15 headers** and **99 exported functions**.
+Current generated surface: **15 headers** and **100 exported functions**.
 
 ## Quick navigation
 
@@ -74,7 +74,7 @@ Current generated surface: **15 headers** and **99 exported functions**.
       </div>
     </section>
     <section class="skippy-api-index__group">
-      <a class="skippy-api-index__group-title" href="#skippy-header-model-package-h"><code>model_package.h</code><span>10 functions</span></a>
+      <a class="skippy-api-index__group-title" href="#skippy-header-model-package-h"><code>model_package.h</code><span>11 functions</span></a>
       <div class="skippy-api-index__functions">
         <a href="#skippy-fn-skippy-model-info-open"><code>skippy_model_info_open</code></a>
         <a href="#skippy-fn-skippy-model-info-free"><code>skippy_model_info_free</code></a>
@@ -86,6 +86,7 @@ Current generated surface: **15 headers** and **99 exported functions**.
         <a href="#skippy-fn-skippy-write-slice-gguf"><code>skippy_write_slice_gguf</code></a>
         <a href="#skippy-fn-skippy-write-gguf-metadata-from-parts"><code>skippy_write_gguf_metadata_from_parts</code></a>
         <a href="#skippy-fn-skippy-write-gguf-from-parts"><code>skippy_write_gguf_from_parts</code></a>
+        <a href="#skippy-fn-skippy-write-gguf-from-parts-consuming"><code>skippy_write_gguf_from_parts_consuming</code></a>
       </div>
     </section>
     <section class="skippy-api-index__group">
@@ -807,6 +808,19 @@ Composes ordered GGUF parts into one output GGUF file.
 
 ```cpp
 LLAMA_API enum skippy_status skippy_write_gguf_from_parts(
+         const char * const * input_paths,
+        size_t input_count,
+        const char * output_path,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-write-gguf-from-parts-consuming"></a>
+#### `skippy_write_gguf_from_parts_consuming`
+
+Materialize a GGUF while consuming scratch input parts. Each input is unlinked after its last selected tensor is copied. If the operation fails, earlier inputs may already be deleted and the output may be incomplete; later inputs remain available. Use only with disposable staging parts, never published package files that must survive.
+
+```cpp
+LLAMA_API enum skippy_status skippy_write_gguf_from_parts_consuming(
          const char * const * input_paths,
         size_t input_count,
         const char * output_path,
@@ -1674,7 +1688,7 @@ SKIPPY_COMMON_API enum skippy_status skippy_parse_chat_response_json(
 The headers also define the following enums, structs, opaque handles, and ABI constants:
 
 - `activation.h`: `skippy_activation_part_desc`, `skippy_activation_boundary_desc`, `skippy_activation_desc`, `SKIPPY_ACTIVATION_FRAME_VERSION = 2`, `SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION = 2`, `SKIPPY_ACTIVATION_IDENTITY_BYTES = 32`, `SKIPPY_ACTIVATION_MAX_DIMS = 4`, `SKIPPY_ACTIVATION_MAX_PARTS = 16`, `SKIPPY_ACTIVATION_PART_OPTIONAL = (UINT32_C(1) << 0)`
-- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 56`, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER = ((uint64_t)1 << 31)`, `SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 = ((uint64_t)1 << 32)`, `SKIPPY_FEATURE_KV_EVENTS = ((uint64_t)1 << 33)`, `SKIPPY_FEATURE_DEVICE_EVENTS = ((uint64_t)1 << 34)`, `SKIPPY_FEATURE_DIAGNOSTIC_EVENTS = ((uint64_t)1 << 35)`, `SKIPPY_FEATURE_UNLOAD_EVENTS = ((uint64_t)1 << 36)`
+- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 57`, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER = ((uint64_t)1 << 31)`, `SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 = ((uint64_t)1 << 32)`, `SKIPPY_FEATURE_KV_EVENTS = ((uint64_t)1 << 33)`, `SKIPPY_FEATURE_DEVICE_EVENTS = ((uint64_t)1 << 34)`, `SKIPPY_FEATURE_DIAGNOSTIC_EVENTS = ((uint64_t)1 << 35)`, `SKIPPY_FEATURE_UNLOAD_EVENTS = ((uint64_t)1 << 36)`
 - `devices.h`: `skippy_backend_device_type`, `skippy_backend_device_cap`, `skippy_backend_device`
 - `events.h`: `skippy_runtime_event_v1`, `skippy_runtime_event_reporter_v1`, `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION = 1`
 - `execution.h`: `skippy_iteration_request`
