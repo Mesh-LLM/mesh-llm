@@ -49,10 +49,20 @@ caching). The runner preflight prepends `/Users/lab/.local/bin` and executes
 `goose --version`, so a missing, damaged, or non-executable agent binary fails
 before the changed-pin harness starts. Before native compilation,
 `scripts/plan-family-battery.py` validates the versioned JSON family policy,
-the mandatory three-lane contract for every certified profile, and every exact
-artifact revision/file in the immutable local cache. It reads only GGUF
-metadata headers, requires each artifact to have at least one metadata-bearing
-shard, and requires every shard that carries `*.block_count` and
+the three core parity lanes for certified causal rows, a class-specific
+smoke plus independent local-monolithic oracle pair for each of the six registry-generated non-chat rows
+(`embedding`, `rerank`, `encoder_decoder`, `ocr`, `speech_synthesis`, and
+`speech_recognition`): respectively `embedding-smoke`,
+`rerank-smoke`, `encoder-decoder-smoke`, `ocr-smoke`,
+`speech-synthesis-smoke`, and `speech-recognition-smoke`, each paired with its
+`-oracle` lane. These lanes exercise local full-model and HTTP behavior and
+independent equivalence. Workload readiness uses the planned per-model deadline
+for both servers; embedding certification requires the official Python SDK smoke.
+Dry-run planning needs no oracle tools; a missing execution prerequisite records
+failed lanes and does not discard later family results. It also
+checks every exact artifact revision/file in the immutable local cache. It
+reads only GGUF metadata headers, requires each artifact to have at least one
+metadata-bearing shard, and requires every shard that carries `*.block_count` and
 `*.embedding_length` to equal the planned runtime range and activation width
 before compilation; Qwen4 experimental artifacts derive their wider boundary
 from `hyper_connection.count * embedding_length`. It emits
@@ -68,16 +78,23 @@ local disk and moves each repo to NFS). On Apple Silicon, the wrapper and
 generated-family rewriter re-exec as native arm64 before creating build state;
 the rewriter discards a CMake cache for any other architecture. Correctness
 lanes derive filtered-load resident tensor names from the native stage graph
-planner, including GGUFs with non-finite metadata values. The workflow builds its five
+planner, including GGUFs with non-finite metadata values. The workflow builds the
 certification binaries before the manifest lanes; the family battery builds
-them once itself unless `--skip-build` is selected, in which case it verifies
-that every binary already exists. Before any certification starts, every GGUF is resolved
+its four required executables once unless `--skip-build` is selected, in which case it verifies
+that every binary already exists. Scheduled, changed-pin, and forced runs
+use the complete 83-target causal roster plus six non-chat workload rows.
+Both ordinary and independent changed-pin verification build a run-scoped
+CPU oracle closure with `just skippy-workload-oracles-build`. Generated
+`SKIPPY_WORKLOAD_*` paths select separate reference and candidate binaries
+without replacing Metal outputs; source- and executable-bound
+`producer.json` is verified before consumption. Non-chat rows require
+class-specific smoke and oracle evidence and never certify staged splits. Before any certification starts, every GGUF is resolved
 directly by the immutable snapshot SHA checked into
 `ci/llama-canary/family-certified.json`. The runtime preflight records the
 revisions, verifies all shard/tensor scans and declared runtime/MTP layer
-counts/model bytes, then uses the production topology capability rules to
+counts/model bytes, then uses, for causal rows, the production topology capability rules to
 classify every interior boundary and select accepted balanced two-stage and
-three-stage cuts. Each model runs one consolidated live certification and
+three-stage cuts. Each causal model runs one consolidated live certification and
 shares one unloaded monolithic token oracle between its single-step and chain
 lanes. Preflight also checks disk headroom and certification ports. Native MTP/NextN heads remain part of the
 single target model; the battery never reopens that model as a separate draft.
@@ -125,7 +142,7 @@ rewriter check because `GITHUB_ENV` state does not cross job boundaries. The
 wrapper owns the exact upstream selector, validates the prepared-upstream stamp,
 runs the patched llama.cpp/native-test and Rust build gates, and completes the
 full supported-family certification using new native-build and family-evidence
-directories. Before each changed-pin candidate gate, the trusted wrapper regenerates the exact-artifact split certification roster for the candidate recipe. Only a complete battery pass is snapshotted; the independent verifier and unchanged-pin canary reject a roster that is stale for the llama pin, Skippy ABI, or ordered patch queue. Only the passing bundle is uploaded as a one-day certified
+directories. Before each changed-pin candidate gate, the trusted wrapper regenerates the architecture split certification roster for the candidate recipe. Only a complete battery pass is snapshotted; the independent verifier and unchanged-pin canary reject a roster that is stale for the llama pin, Skippy ABI, or ordered patch queue. Only the passing bundle is uploaded as a one-day certified
 artifact. A separate success-gated job on a fresh
 GitHub-hosted runner receives the `CANARY_REPAIR_TOKEN`, validates the bundle,
 pushes the unique

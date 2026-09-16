@@ -60,12 +60,10 @@ async fn degrade_to_single_model(
     let mut candidates = targets
         .map(super::ingress::callable_models)
         .unwrap_or_default();
-    if candidates.is_empty() {
-        candidates = node.models_being_served().await;
-    }
-    if candidates.is_empty() {
-        candidates = node.serving_models().await;
-    }
+    candidates.extend(node.models_being_served().await);
+    candidates.extend(node.serving_models().await);
+    let descriptors = node.all_served_model_descriptors().await;
+    candidates.retain(|model| workload_admission::model_supports_committee(model, &descriptors));
     let runtimes = node.all_model_runtime_descriptors().await;
     let Some(target) =
         context_selection::select_degrade_model(candidates, &runtimes, required_tokens)
@@ -258,6 +256,7 @@ mod progress;
 mod self_fill;
 mod streaming;
 mod workers;
+mod workload_admission;
 
 async fn admitted_gateway_config(
     node: &mesh::Node,

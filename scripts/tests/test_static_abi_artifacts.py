@@ -112,6 +112,7 @@ class StaticAbiArtifactTests(unittest.TestCase):
         )
 
     def test_skippy_ffi_uses_the_native_build_scripts_canonical_directory(self) -> None:
+        """Rust FFI discovery must resolve the same backend and linkage directory as native preparation."""
         ffi_build = (ROOT / "crates" / "skippy-ffi" / "build.rs").read_text(
             encoding="utf-8",
         )
@@ -123,7 +124,9 @@ class StaticAbiArtifactTests(unittest.TestCase):
 
         for backend in ("cpu", "metal", "cuda", "rocm"):
             environment = os.environ.copy()
+            environment.pop("LLAMA_STAGE_BUILD_DIR", None)
             environment["LLAMA_STAGE_BACKEND"] = backend
+            environment["LLAMA_STAGE_LINK_MODE"] = "static"
             result = subprocess.run(
                 ["bash", str(ROOT / "scripts" / "build-llama.sh"), "--print-build-dir"],
                 cwd=ROOT,

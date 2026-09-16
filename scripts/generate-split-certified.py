@@ -6,11 +6,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from pathlib import Path
 import struct
 import sys
+from pathlib import Path
 from typing import Any
-
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "ci" / "llama-canary" / "family-certified.json"
@@ -61,6 +60,7 @@ def skippy_abi() -> str:
 
 
 def build_roster(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Bind only causal split-certified architectures to this exact native recipe."""
     policy = manifest.get("policy")
     models = manifest.get("models")
     if not isinstance(policy, dict) or not isinstance(models, list):
@@ -74,6 +74,18 @@ def build_roster(manifest: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(model, dict):
             raise RosterError("family certification model row must be an object")
         profile_name = model.get("profile")
+        model_class = model.get("class")
+        if model_class in (
+            "embedding", "rerank", "encoder_decoder", "ocr",
+            "speech_synthesis", "speech_recognition",
+        ):
+            if profile_name not in ("workload-smoke", "workload-oracle"):
+                raise RosterError("non-chat model cannot claim a split-certified profile")
+            continue
+        if model_class != "causal_generation":
+            raise RosterError("family certification row has a missing or unknown workload class")
+        if profile_name in ("workload-smoke", "workload-oracle"):
+            raise RosterError("causal model cannot use a non-chat workload profile")
         profile = profiles.get(profile_name)
         if not isinstance(profile, dict) or profile.get("status") != "certified":
             continue

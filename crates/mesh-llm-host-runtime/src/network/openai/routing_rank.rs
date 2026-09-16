@@ -358,13 +358,6 @@ pub(crate) fn capabilities_for_model(
         .unwrap_or_else(|| crate::models::installed_model_capabilities(model))
 }
 
-pub(crate) fn descriptor_metadata_for_model<'a>(
-    model: &str,
-    descriptors: &'a [mesh::ServedModelDescriptor],
-) -> Option<&'a mesh::ServedModelMetadata> {
-    descriptor_for_model(descriptors, model).and_then(|descriptor| descriptor.metadata.as_ref())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,6 +384,7 @@ mod tests {
             ..local_gguf_descriptor(model_name)
         }
     }
+
     #[test]
     fn test_cached_auto_model_rejects_text_model_for_image_request() {
         let body = serde_json::json!({

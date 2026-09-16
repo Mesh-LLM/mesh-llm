@@ -243,12 +243,14 @@ unsafe extern "C" fn fake_discard_proposal(
     event: *const abi::ProposalDiscard,
 ) -> abi::PluginStatus {
     let state = unsafe { &*instance.cast::<FakeState>() };
-    state.events.lock().unwrap().push("discard");
     state
         .discard_reasons
         .lock()
         .unwrap()
         .push(unsafe { (*event).reason });
+    // Publish the event only after its observation is complete: tests wait on
+    // this marker before reading the discard reason from another thread.
+    state.events.lock().unwrap().push("discard");
     thread::sleep(state.report_delay);
     abi::PluginStatus::OK
 }
