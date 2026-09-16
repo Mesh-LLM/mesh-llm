@@ -286,6 +286,18 @@ pub struct StageConfig {
     /// tensor IDs. Empty preserves the legacy range-based loader filter.
     #[serde(default)]
     pub resident_tensor_names: Vec<String>,
+    /// Planner value identities imported by this stage, in native frontier order.
+    #[serde(default)]
+    pub activation_import_identities: Vec<String>,
+    /// Stable live-graph bindings paired with imported planner identities.
+    #[serde(default)]
+    pub activation_import_bindings: Vec<String>,
+    /// Planner value identities exported by this stage, in native frontier order.
+    #[serde(default)]
+    pub activation_export_identities: Vec<String>,
+    /// Stable live-graph bindings paired with exported planner identities.
+    #[serde(default)]
+    pub activation_export_bindings: Vec<String>,
     #[serde(default)]
     pub selected_device: Option<StageDevice>,
     #[serde(default)]

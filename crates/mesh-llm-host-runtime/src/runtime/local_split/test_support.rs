@@ -881,14 +881,22 @@ pub(super) fn test_stage_status_from_load(
     load: &skippy::StageLoadRequest,
     state: skippy::StageRuntimeState,
 ) -> skippy::StageStatusSnapshot {
+    let mut parts =
+        [skippy_runtime::ActivationPartDesc::default(); skippy_runtime::ACTIVATION_MAX_PARTS];
+    parts[0] = skippy_runtime::ActivationPartDesc {
+        identity: [1; 32],
+        ggml_type: skippy_runtime::GGML_TYPE_F32,
+        rank: 2,
+        token_axis: 1,
+        dimensions: [4096, -1, 0, 0],
+        byte_strides: [4, 4096 * 4, 0, 0],
+        ..skippy_runtime::ActivationPartDesc::default()
+    };
     let boundary = Some(skippy_runtime::ActivationBoundaryDesc {
-        version: 1,
-        ggml_type: 0,
-        layout: 1,
-        elements_per_token: 4096,
-        bytes_per_token: 4096 * std::mem::size_of::<f32>() as u64,
-        required_frame_flags: 0,
-        required_sidebands: 0,
+        version: skippy_runtime::ACTIVATION_BOUNDARY_DESC_VERSION,
+        part_count: 1,
+        frontier_identity: [9; 32],
+        parts,
     });
     skippy::StageStatusSnapshot {
         topology_id: load.topology_id.clone(),

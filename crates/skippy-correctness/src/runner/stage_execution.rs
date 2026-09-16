@@ -13,13 +13,14 @@ use model_ref::ModelRef;
 use serde::Deserialize;
 use serde_json::json;
 use skippy_protocol::binary::{
-    StageReply, StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
-    activation_state_flags_from_frame_flags, recv_reply, write_stage_message,
+    StageReply, StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind, recv_reply,
+    write_stage_message,
 };
 use skippy_runtime::{
-    ActivationFrame, GGML_TYPE_F16, ModelInfo, MtpSource, RuntimeConfig, RuntimeLoadMode,
+    ActivationFrame, GGML_TYPE_F16, GgufStageRuntimePlan, ModelInfo, MtpSource, RuntimeConfig,
+    RuntimeLoadMode,
     package::{MaterializedPackage, PackageStageRequest, materialize_layer_package_details},
-    plan_gguf_stage_resident_tensor_names,
+    plan_gguf_stage_runtime_plans,
 };
 
 use crate::{
@@ -112,7 +113,6 @@ pub(in crate::runner) struct BinaryDecodeMessageArgs<'a> {
     pub(in crate::runner) decode_step: i32,
     pub(in crate::runner) source_stage_index: i32,
     pub(in crate::runner) boundary: &'a ActivationFrame,
-    pub(in crate::runner) activation_width: i32,
     pub(in crate::runner) request_id: u64,
     pub(in crate::runner) session_id: u64,
 }
@@ -125,15 +125,9 @@ pub(in crate::runner) fn binary_decode_message(
     state.decode_step = args.decode_step;
     state.current_token = args.token_id;
     state.source_stage_index = args.source_stage_index;
-    state.flags |= activation_state_flags(args.boundary);
-    let activation = skippy_protocol::binary::encode_activation_payload_with_state_flags(
-        state.activation_codec,
-        1,
-        args.activation_width,
-        &args.boundary.payload,
-        activation_state_flags(args.boundary),
-    )
-    .context("failed to encode boundary activation for wire")?;
+    let activation =
+        crate::support::encode_runtime_activation(state.activation_codec, args.boundary)
+            .context("failed to encode boundary activation for wire")?;
     Ok(StageWireMessage {
         kind: WireMessageKind::DecodeEmbd,
         pos_start: args.decode_step,
@@ -246,10 +240,6 @@ pub(in crate::runner) fn speedup(recompute_ms: f64, cache_ms: f64) -> f64 {
     }
     recompute_ms / cache_ms
 }
-pub(in crate::runner) fn activation_state_flags(frame: &ActivationFrame) -> i32 {
-    activation_state_flags_from_frame_flags(frame.desc.flags)
-}
-
 pub(in crate::runner) fn baseline_report(result: FullModelResult) -> BaselineReport {
     BaselineReport {
         token_id: result.token_id,
@@ -421,7 +411,7 @@ pub(in crate::runner) fn tokenizer_model_for_state_handoff(
             false,
         ),
     };
-    let resident_tensor_names = if filter_tensors_on_load {
+    let runtime_plan = if filter_tensors_on_load {
         let mut names = ModelInfo::open(&path)
             .context("open state handoff tokenizer tensor inventory")?
             .tensors()
@@ -435,9 +425,19 @@ pub(in crate::runner) fn tokenizer_model_for_state_handoff(
             !names.is_empty(),
             "state handoff tokenizer tensor inventory is empty"
         );
-        names
+        let mut plan = stage_runtime_plan_for_range(
+            args.stage_load_mode,
+            &args.model,
+            &path,
+            (0, layer_end),
+            args.layer_end,
+            args.ctx_size,
+            1,
+        )?;
+        plan.resident_tensor_names = names;
+        Some(plan)
     } else {
-        Vec::new()
+        None
     };
 
     Ok((
@@ -475,7 +475,21 @@ pub(in crate::runner) fn tokenizer_model_for_state_handoff(
             include_output: false,
             mtp_source: MtpSource::Disabled,
             filter_tensors_on_load,
-            resident_tensor_names,
+            resident_tensor_names: runtime_plan
+                .as_ref()
+                .map_or_else(Vec::new, |plan| plan.resident_tensor_names.clone()),
+            activation_import_identities: runtime_plan
+                .as_ref()
+                .map_or_else(Vec::new, |plan| plan.activation_import_identities.clone()),
+            activation_import_bindings: runtime_plan
+                .as_ref()
+                .map_or_else(Vec::new, |plan| plan.activation_import_bindings.clone()),
+            activation_export_identities: runtime_plan
+                .as_ref()
+                .map_or_else(Vec::new, |plan| plan.activation_export_identities.clone()),
+            activation_export_bindings: runtime_plan
+                .as_ref()
+                .map_or_else(Vec::new, |plan| plan.activation_export_bindings.clone()),
             checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
             checkpoint_imatrix: None,
             checkpoint_imatrix_sha256: None,
@@ -504,24 +518,22 @@ pub(in crate::runner) fn runtime_load_mode(stage_load_mode: StageLoadMode) -> Ru
     }
 }
 
-pub(in crate::runner) fn stage_resident_tensor_names(
+pub(crate) fn stage_runtime_plans(
     stage_load_mode: StageLoadMode,
     baseline_model: &Path,
     stage_paths: &[&Path],
     ranges: &[(u32, u32)],
     ctx_size: u32,
     lane_count: u32,
-) -> Result<Vec<Vec<String>>> {
+) -> Result<Vec<GgufStageRuntimePlan>> {
     anyhow::ensure!(
         stage_paths.len() == ranges.len(),
         "stage paths and layer ranges differ in length"
     );
-    match stage_load_mode {
-        StageLoadMode::RuntimeSlice => {
-            plan_gguf_stage_resident_tensor_names(baseline_model, ranges, ctx_size, lane_count)
-                .context("derive native resident tensor closures for correctness stages")
-        }
-        StageLoadMode::ArtifactSlice | StageLoadMode::LayerPackage => stage_paths
+    let mut plans = plan_gguf_stage_runtime_plans(baseline_model, ranges, ctx_size, lane_count)
+        .context("derive native runtime plans for correctness stages")?;
+    if stage_load_mode != StageLoadMode::RuntimeSlice {
+        let artifact_resident_names = stage_paths
             .iter()
             .enumerate()
             .map(|(index, path)| {
@@ -537,11 +549,15 @@ pub(in crate::runner) fn stage_resident_tensor_names(
                 anyhow::ensure!(!names.is_empty(), "stage {index} tensor inventory is empty");
                 Ok(names)
             })
-            .collect(),
+            .collect::<Result<Vec<_>>>()?;
+        for (plan, resident_tensor_names) in plans.iter_mut().zip(artifact_resident_names) {
+            plan.resident_tensor_names = resident_tensor_names;
+        }
     }
+    Ok(plans)
 }
 
-pub(crate) fn stage_resident_tensor_names_for_range(
+pub(crate) fn stage_runtime_plan_for_range(
     stage_load_mode: StageLoadMode,
     baseline_model: &Path,
     stage_path: &Path,
@@ -549,19 +565,7 @@ pub(crate) fn stage_resident_tensor_names_for_range(
     layer_end: u32,
     ctx_size: u32,
     lane_count: u32,
-) -> Result<Vec<String>> {
-    if stage_load_mode != StageLoadMode::RuntimeSlice {
-        return stage_resident_tensor_names(
-            stage_load_mode,
-            baseline_model,
-            &[stage_path],
-            &[range],
-            ctx_size,
-            lane_count,
-        )
-        .map(|mut stages| stages.remove(0));
-    }
-
+) -> Result<GgufStageRuntimePlan> {
     let mut ranges = Vec::with_capacity(3);
     if range.0 > 0 {
         ranges.push((0, range.0));
@@ -572,15 +576,29 @@ pub(crate) fn stage_resident_tensor_names_for_range(
         ranges.push((range.1, layer_end));
     }
     let stage_paths = vec![baseline_model; ranges.len()];
-    stage_resident_tensor_names(
-        stage_load_mode,
+    let mut plan = stage_runtime_plans(
+        StageLoadMode::RuntimeSlice,
         baseline_model,
         &stage_paths,
         &ranges,
         ctx_size,
         lane_count,
     )
-    .map(|stages| stages[target_index].clone())
+    .map(|stages| stages[target_index].clone())?;
+    if stage_load_mode != StageLoadMode::RuntimeSlice {
+        let mut names = ModelInfo::open(stage_path)
+            .context("open target stage tensor inventory")?
+            .tensors()
+            .context("read target stage tensor inventory")?
+            .into_iter()
+            .map(|tensor| tensor.name)
+            .collect::<Vec<_>>();
+        names.sort();
+        names.dedup();
+        anyhow::ensure!(!names.is_empty(), "target stage tensor inventory is empty");
+        plan.resident_tensor_names = names;
+    }
+    Ok(plan)
 }
 
 pub(in crate::runner) fn runtime_flash_attn(

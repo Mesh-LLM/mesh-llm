@@ -1,6 +1,6 @@
 {
-  "full_patch_sha256": "39cf8e94b2abd0ed2bdf0ce003ac08f15f6cb0d09f27189e13754f60f063a94c",
-  "generator_version": "0.3.0",
+  "full_patch_sha256": "5d2d2773717b8f05d925caa97253253d1357a44e56a3afcf79de07ad96455498",
+  "generator_version": "0.4.1",
   "schema_version": 1,
   "shards": [
     {
@@ -39,7 +39,7 @@
         "rwkv7"
       ],
       "file": "0004-family-arwkv7--rwkv7.patch",
-      "sha256": "e178f040e40fec48d7383d87ee1a44d5207e65ab8542fc4667d9a28f479ca459",
+      "sha256": "17e8703cdcf94ec31fdb71456c87d4664358a49cb8757e69fdade25d20aec0b4",
       "sources": [
         "src/models/arwkv7.cpp"
       ]
@@ -200,7 +200,7 @@
         "gemma3n"
       ],
       "file": "0020-family-gemma3n.patch",
-      "sha256": "e5b741ee8540948b9b921085314b232093f698d278d5790bd5f5c4fb3813d470",
+      "sha256": "25dfc3bc3e04c9d78c3ff052eef8db6f474d8bd7b9bee758286f89407ed37eb1",
       "sources": [
         "src/models/gemma3n.cpp"
       ]
@@ -210,7 +210,7 @@
         "gemma4"
       ],
       "file": "0021-family-gemma4.patch",
-      "sha256": "070f39678cefc14f1f19dae517868add1088ba172f63a89bdb97e51ae6bfd85a",
+      "sha256": "bd43c26e59eedcd7ac8cc4f1350d439a4748acdcbf852d771a5f062ff09cf565",
       "sources": [
         "src/models/gemma4.cpp"
       ]
@@ -220,7 +220,7 @@
         "glm-dsa"
       ],
       "file": "0022-family-glm-dsa.patch",
-      "sha256": "bac426d85367f3d36a039ddbfdfdc910c33c6d4600a0e96f7487238a292bb201",
+      "sha256": "49eadabe02e8dc62702cb3221fab7b0d2ca523dd7e2e2e7f23fe21bbd6fa56ee",
       "sources": [
         "src/models/glm-dsa.cpp"
       ]
@@ -404,7 +404,7 @@
         "kimi-k3"
       ],
       "file": "0040-family-kimi-k3.patch",
-      "sha256": "344d37e5cf88f2b14ccedad7dc72b893dc00efc4dfb66ceca5dfd529c3e01b0a",
+      "sha256": "2c731a30a34881e9f654a33dedd35479dbabd10982989df615448a1422d08390",
       "sources": [
         "src/models/kimi-k3.cpp"
       ]
@@ -699,7 +699,7 @@
         "qwen4exp"
       ],
       "file": "0069-family-qwen4exp.patch",
-      "sha256": "87f410f7e49b3a13c8fda5aa4b52db25b5c3cd9600fe76e501122909cd04c350",
+      "sha256": "913a1aa39a03904e6c79d7d04884bd161cfa2018574bd1e3d89f1188204893f4",
       "sources": [
         "src/models/qwen4exp.cpp"
       ]
@@ -720,7 +720,7 @@
         "rwkv7"
       ],
       "file": "0071-family-rwkv7.patch",
-      "sha256": "edbae949fb6764a77107cefa6107683306b6bfe35db21b40469936a962260718",
+      "sha256": "6dd4a587926267ddba91e15411e96c4252515ede8997d78b343bb560af5abfbd",
       "sources": [
         "src/models/rwkv7.cpp"
       ]
@@ -778,7 +778,7 @@
     {
       "families": [],
       "file": "0077-family-unmapped.patch",
-      "sha256": "88c3f2a1049af74850ef99f5afc5c8379b9e71ad47e8c14eabed2a6683465e96",
+      "sha256": "b6ca26538245311cc64e8ae4a9398f0cdd7ace061d5db34234d402024809ffd9",
       "sources": [
         "src/models/arctic.cpp",
         "src/models/baichuan.cpp",

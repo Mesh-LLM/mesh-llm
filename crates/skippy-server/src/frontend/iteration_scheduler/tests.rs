@@ -64,7 +64,7 @@ fn expired_direct_iteration_behind_blocked_worker_never_reaches_native_runtime()
     request.deadline = Some(deadline);
     request.reply = reply;
     commands
-        .send(SchedulerCommand::ExecuteIteration(request))
+        .send(SchedulerCommand::ExecuteIteration(Box::new(request)))
         .unwrap();
     thread::sleep(
         deadline

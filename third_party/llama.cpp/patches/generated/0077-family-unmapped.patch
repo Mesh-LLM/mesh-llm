@@ -746,7 +746,7 @@ index a47a9c3dafcafb1ca62ed749ed979caa6322cca1..e441b3506dff18ceed7a710c11f62796
  
      cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
 diff --git a/src/models/deepseek4.cpp b/src/models/deepseek4.cpp
-index 6bf9d34449426504cea436531118eb9b13941f20..8efb9a7eef8e929cabbcb1e99d10c0a4a42d2900 100644
+index 6bf9d34449426504cea436531118eb9b13941f20..ea23f2ebbf8977945ab96cba8686afd358e9598e 100644
 --- a/src/models/deepseek4.cpp
 +++ b/src/models/deepseek4.cpp
 @@ -1224,19 +1224,35 @@ llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_p
@@ -777,7 +777,7 @@ index 6bf9d34449426504cea436531118eb9b13941f20..8efb9a7eef8e929cabbcb1e99d10c0a4
 +        cb(stage_inp->values, "hc_stage_input", -1);
 +        ggml_set_input(stage_inp->values);
 +        inpL = stage_inp->values;
-+        res->t_skippy_activation_input = inpL;
++        res->add_skippy_activation_import(inpL, 2);
 +        res->add_input(std::move(stage_inp));
 +    }
 +    inpL = stage_filtered && il_start > 0 ? inpL : ggml_repeat_4d(ctx0, inpL, n_embd, hc, n_tokens, 1);
@@ -798,7 +798,7 @@ index 6bf9d34449426504cea436531118eb9b13941f20..8efb9a7eef8e929cabbcb1e99d10c0a4
 +    }
 +    if (stage_filtered && !stage_filter.include_output) {
 +        cb(inpL, "stage_boundary", il_end - 1);
-+        res->t_skippy_activation_output = inpL;
++        res->add_skippy_activation_export(inpL, 2);
 +        res->t_embd = inpL;
 +        ggml_build_forward_expand(gf, inpL);
 +        return;
@@ -1321,7 +1321,7 @@ index cedc3b53eba429f775dbf25e3c95692e7e64faa9..352caa0465b8e7c67af58987f73b43b3
  
      cur = build_norm(cur,
 diff --git a/src/models/hy-v4.cpp b/src/models/hy-v4.cpp
-index ee41787ba3e59d86dd7e660d63b1fc60e12a50fb..b8ec8ed772ef65631aee64252e2f0efa2262e8de 100644
+index ee41787ba3e59d86dd7e660d63b1fc60e12a50fb..ef20ab2bc987d6a550f7c16c5d379169ec1f67e7 100644
 --- a/src/models/hy-v4.cpp
 +++ b/src/models/hy-v4.cpp
 @@ -504,21 +504,37 @@ llama_model_hy_v4::graph::graph(const llama_model & model, const llm_graph_param
@@ -1354,7 +1354,7 @@ index ee41787ba3e59d86dd7e660d63b1fc60e12a50fb..b8ec8ed772ef65631aee64252e2f0efa
 +        cb(stage_inp->values, "hc_stage_input", -1);
 +        ggml_set_input(stage_inp->values);
 +        inpL = stage_inp->values;
-+        res->t_skippy_activation_input = inpL;
++        res->add_skippy_activation_import(inpL, 2);
 +        res->add_input(std::move(stage_inp));
 +    }
 +    inpL = stage_filtered && il_start > 0 ? inpL : ggml_repeat_4d(ctx0, inpL, n_embd, hc, n_tokens, 1);
@@ -1375,7 +1375,7 @@ index ee41787ba3e59d86dd7e660d63b1fc60e12a50fb..b8ec8ed772ef65631aee64252e2f0efa
      }
 +    if (stage_filtered && !stage_filter.include_output) {
 +        cb(inpL, "stage_boundary", il_end - 1);
-+        res->t_skippy_activation_output = inpL;
++        res->add_skippy_activation_export(inpL, 2);
 +        res->t_embd = inpL;
 +        ggml_build_forward_expand(gf, inpL);
 +        return;

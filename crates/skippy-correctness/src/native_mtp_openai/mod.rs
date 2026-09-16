@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use crate::{
     cli::{NativeMtpOpenAiAbArgs, StageLoadMode},
     report::{NativeMtpOpenAiAbReport, NativeMtpOpenAiCaseReport},
-    runner::native_mtp::normalize_runtime_layer_end,
+    runner::{native_mtp::normalize_runtime_layer_end, stage_runtime_plans},
     support::generate_run_id,
 };
 
@@ -54,6 +54,7 @@ struct OpenAiStageConfig<'a> {
     bind_addr: SocketAddr,
     upstream: Option<Value>,
     downstream: Option<Value>,
+    runtime_plan: &'a skippy_runtime::GgufStageRuntimePlan,
 }
 
 pub fn native_mtp_openai_ab(args: NativeMtpOpenAiAbArgs) -> Result<()> {
@@ -221,6 +222,17 @@ fn run_openai_case(
     let stage1_log = case.root.join("stage1.log");
     let stage0_model_path = args.stage0_model.as_deref().unwrap_or(&args.runtime.model);
     let stage1_model_path = args.stage1_model.as_deref().unwrap_or(&args.runtime.model);
+    let runtime_plans = stage_runtime_plans(
+        args.runtime.stage_load_mode,
+        &args.runtime.model,
+        &[stage0_model_path, stage1_model_path],
+        &[
+            (0, args.split_layer),
+            (args.split_layer, args.runtime.layer_end),
+        ],
+        args.runtime.ctx_size,
+        1,
+    )?;
 
     write_stage_config(
         &stage0_config_path,
@@ -241,6 +253,7 @@ fn run_openai_case(
                     "stage_index": 1,
                     "endpoint": format!("tcp://{}", case.stage1_endpoint_addr),
                 })),
+                runtime_plan: &runtime_plans[0],
             },
         ),
     )?;
@@ -263,6 +276,7 @@ fn run_openai_case(
                     "endpoint": format!("tcp://{}", case.stage0_endpoint_addr),
                 })),
                 downstream: None,
+                runtime_plan: &runtime_plans[1],
             },
         ),
     )?;
@@ -402,6 +416,11 @@ fn stage_config_json(args: &NativeMtpOpenAiAbArgs, stage: OpenAiStageConfig<'_>)
         "cache_type_v": "f16",
         "flash_attn_type": protocol_flash_attn(args.runtime.flash_attn),
         "filter_tensors_on_load": true,
+        "resident_tensor_names": stage.runtime_plan.resident_tensor_names,
+        "activation_import_identities": stage.runtime_plan.activation_import_identities,
+        "activation_import_bindings": stage.runtime_plan.activation_import_bindings,
+        "activation_export_identities": stage.runtime_plan.activation_export_identities,
+        "activation_export_bindings": stage.runtime_plan.activation_export_bindings,
         "load_mode": "runtime-slice",
         "bind_addr": stage.bind_addr,
         "upstream": stage.upstream,

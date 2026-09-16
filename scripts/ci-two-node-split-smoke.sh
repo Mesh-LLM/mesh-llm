@@ -332,11 +332,11 @@ cleanup() {
     kill_tree "$WORKER_PID"
     kill_tree "$SEED_PID"
     echo "--- seed log tail ---"
-    tail -160 "$SEED_LOG" 2>/dev/null || true
+    tail -1200 "$SEED_LOG" 2>/dev/null || true
     echo "--- worker log tail ---"
-    tail -160 "$WORKER_LOG" 2>/dev/null || true
+    tail -1200 "$WORKER_LOG" 2>/dev/null || true
     echo "--- client log tail ---"
-    tail -160 "$CLIENT_LOG" 2>/dev/null || true
+    tail -1200 "$CLIENT_LOG" 2>/dev/null || true
     echo "--- end logs ---"
     if [[ -z "${MESH_TWO_NODE_SPLIT_WORK_DIR:-}" ]]; then
         rm -rf "$WORK_DIR"
@@ -542,9 +542,9 @@ report_split_readiness_failure() {
     echo "--- split evidence reconciler error at timeout ---" >&2
     cat "$SPLIT_RECONCILE_LOG" >&2 2>/dev/null || true
     echo "--- seed log tail at timeout ---" >&2
-    tail -160 "$SEED_LOG" >&2 || true
+    tail -1200 "$SEED_LOG" >&2 || true
     echo "--- worker log tail at timeout ---" >&2
-    tail -160 "$WORKER_LOG" >&2 || true
+    tail -1200 "$WORKER_LOG" >&2 || true
 }
 
 wait_for_split_topology() {

@@ -1,0 +1,340 @@
+From c5ce2c67397820af6c4f66265ac434d2c360d7f1 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Tue, 15 Sep 2026 22:39:24 +1000
+Subject: [PATCH] skippy: stabilize activation port identities across profiles
+
+---
+ src/llama-context.cpp                         |  6 ++--
+ src/llama-graph.cpp                           | 30 +++++++++++++++++++
+ src/llama-graph.h                             |  4 +++
+ src/llama-model.cpp                           | 23 ++++++++------
+ src/skippy/graph_build_inputs.h               | 10 +++++++
+ src/skippy/graph_identity.cpp                 | 15 ++++++++++
+ src/skippy/graph_identity.h                   |  4 +++
+ src/skippy/model_loading.cpp                  |  5 +++-
+ src/skippy/stage_plan.cpp                     |  7 +++--
+ src/skippy/tests/graph_build_inputs.cpp       | 14 +++++++++
+ .../tests/renamed_multishard_planning.cpp     | 20 +++++++++++++
+ 11 files changed, 124 insertions(+), 14 deletions(-)
+
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 60a9674c3..67f1d2ffc 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -2623,13 +2623,15 @@ ggml_cgraph * llama_context::graph_reserve(
+                 return;
+             }
+             skippy_activation_port_shape shape;
+-            shape.binding = ggml_get_name(port.tensor);
++            shape.binding = port.binding.empty() ? ggml_get_name(port.tensor) : port.binding;
+             if (shape.binding.empty()) {
+                 stable = false;
+                 return;
+             }
+             shape.type = port.tensor->type;
+-            shape.rank = static_cast<uint32_t>(ggml_n_dims(port.tensor));
++            shape.rank = std::max<uint32_t>(
++                    static_cast<uint32_t>(ggml_n_dims(port.tensor)),
++                    static_cast<uint32_t>(port.token_axis + 1));
+             shape.token_axis = port.token_axis;
+             shape.optional = port.optional;
+             for (int dimension = 0; dimension < GGML_MAX_DIMS; ++dimension) {
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index c92489c7c..35f2dfdf2 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -26,6 +26,8 @@
+ #include <unordered_set>
+ 
+ bool skippy_graph_build_inputs::topology_equal(const skippy_graph_build_inputs & other) const {
++    if (activation_import_bindings != other.activation_import_bindings ||
++            activation_export_bindings != other.activation_export_bindings) return false;
+     if (activation_frontier.size() != other.activation_frontier.size()) return false;
+     for (size_t index = 0; index < activation_frontier.size(); ++index) {
+         const auto & left = activation_frontier[index];
+@@ -1621,6 +1623,34 @@ void llm_graph_result::set_outputs(const llm_graph_params & params) {
+                 [this](const skippy_activation_port & port) { return port.tensor == t_embd; });
+         if (found == activation_exports.end()) activation_exports.insert(activation_exports.begin(), {t_embd, 1, false});
+     }
++    const auto bind_ports = [](std::vector<skippy_activation_port> & ports,
++                               const std::vector<std::string> & expected) {
++        if (ports.empty() || ports.size() != expected.size()) return;
++        std::set<size_t> matched;
++        std::vector<size_t> unmatched_ports;
++        for (size_t port_index = 0; port_index < ports.size(); ++port_index) {
++            const char * name = ports[port_index].tensor == nullptr ? nullptr :
++                    ggml_get_name(ports[port_index].tensor);
++            const auto found = name == nullptr ? expected.end() :
++                    std::find(expected.begin(), expected.end(), name);
++            if (found == expected.end()) {
++                unmatched_ports.push_back(port_index);
++                continue;
++            }
++            const size_t binding_index = static_cast<size_t>(found - expected.begin());
++            if (!matched.insert(binding_index).second) return;
++            ports[port_index].binding = *found;
++        }
++        std::vector<size_t> unmatched_bindings;
++        for (size_t index = 0; index < expected.size(); ++index) {
++            if (matched.count(index) == 0) unmatched_bindings.push_back(index);
++        }
++        if (unmatched_ports.size() == 1 && unmatched_bindings.size() == 1) {
++            ports[unmatched_ports.front()].binding = expected[unmatched_bindings.front()];
++        }
++    };
++    bind_ports(activation_imports, params.build_inputs.activation_import_bindings);
++    bind_ports(activation_exports, params.build_inputs.activation_export_bindings);
+     if (t_logits != nullptr) {
+         ggml_set_output(t_logits);
+     }
+diff --git a/src/llama-graph.h b/src/llama-graph.h
+index 83385037f..8e6a50293 100644
+--- a/src/llama-graph.h
++++ b/src/llama-graph.h
+@@ -14,6 +14,7 @@
+ #include <vector>
+ #include <memory>
+ #include <set>
++#include <string>
+ #include <functional>
+ #include <map>
+ 
+@@ -90,6 +91,8 @@ struct skippy_graph_build_inputs {
+     skippy_activation_tokens activation_tokens;
+     skippy_activation_mtp_embeddings mtp_embeddings;
+     std::vector<skippy_activation_frontier_part_input> activation_frontier;
++    std::vector<std::string> activation_import_bindings;
++    std::vector<std::string> activation_export_bindings;
+ 
+     bool topology_equal(const skippy_graph_build_inputs & other) const;
+ };
+@@ -1075,6 +1078,7 @@ struct skippy_activation_port {
+     ggml_tensor * tensor = nullptr;
+     int32_t token_axis = -1;
+     bool optional = false;
++    std::string binding;
+ };
+ 
+ class llm_graph_result {
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index 487d0e269..5a53646fa 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -2842,17 +2842,22 @@ llama_memory_i * llama_model::create_memory(
+ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
+     std::unique_ptr<llm_graph_context> llm = build_arch_graph(params);
+ 
+-    // add on pooling layer
+-    llm->build_pooling(cls, cls_b, cls_out, cls_out_b, cls_norm);
++    const bool stage_boundary_output = params.build_inputs.filter.enabled &&
++            !params.build_inputs.filter.include_output;
+ 
+-    // add backend sampling layers (if any)
+-    llm->build_sampling();
++    if (!stage_boundary_output) {
++        // add on pooling layer
++        llm->build_pooling(cls, cls_b, cls_out, cls_out_b, cls_norm);
+ 
+-    // if the gguf model was converted with --sentence-transformers-dense-modules
+-    // there will be two additional dense projection layers
+-    // dense linear projections are applied after pooling
+-    // TODO: move reranking logic here and generalize
+-    llm->build_dense_out(dense_2_out_layers, dense_2_out_layers_b, dense_3_out_layers);
++        // add backend sampling layers (if any)
++        llm->build_sampling();
++
++        // if the gguf model was converted with --sentence-transformers-dense-modules
++        // there will be two additional dense projection layers
++        // dense linear projections are applied after pooling
++        // TODO: move reranking logic here and generalize
++        llm->build_dense_out(dense_2_out_layers, dense_2_out_layers_b, dense_3_out_layers);
++    }
+ 
+     llm->res->set_outputs(params);
+ 
+diff --git a/src/skippy/graph_build_inputs.h b/src/skippy/graph_build_inputs.h
+index b6af0650d..58f1e49e4 100644
+--- a/src/skippy/graph_build_inputs.h
++++ b/src/skippy/graph_build_inputs.h
+@@ -29,6 +29,16 @@ inline skippy_graph_build_inputs skippy_graph_build_inputs_from_config(
+             inputs.filter.glm_dsa_direct_sparse_decode_max_top_k = config->glm_dsa_direct_sparse_decode_max_top_k;
+             inputs.filter.glm_dsa_dense_sparse_mask_max_bytes = config->glm_dsa_dense_sparse_mask_max_bytes;
+             inputs.filter.glm_dsa_compact_flash_min_kv = config->glm_dsa_compact_flash_min_kv;
++            if (config->activation_import_bindings != nullptr) {
++                for (size_t index = 0; index < config->activation_import_identity_count; ++index) {
++                    inputs.activation_import_bindings.emplace_back(config->activation_import_bindings[index]);
++                }
++            }
++            if (config->activation_export_bindings != nullptr) {
++                for (size_t index = 0; index < config->activation_export_identity_count; ++index) {
++                    inputs.activation_export_bindings.emplace_back(config->activation_export_bindings[index]);
++                }
++            }
+         }
+         inputs.filter.glm_dsa_phase_hint = glm_dsa_phase_hint;
+     }
+diff --git a/src/skippy/graph_identity.cpp b/src/skippy/graph_identity.cpp
+index 778db99de..807118c9d 100644
+--- a/src/skippy/graph_identity.cpp
++++ b/src/skippy/graph_identity.cpp
+@@ -778,6 +778,21 @@ bool effect_identity(
+ 
+ }
+ 
++bool skippy_build_activation_port_identity(
++        const std::string & binding,
++        std::string & identity) {
++    if (binding.empty()) {
++        identity.clear();
++        return false;
++    }
++    encoding encoded;
++    encoded.text("skippy.activation.port");
++    encoded.u32(identity_version);
++    encoded.text(binding);
++    identity = encoded.digest("skippy-port");
++    return true;
++}
++
+ bool skippy_build_activation_frontier_identity(
+         const skippy_activation_part_desc * parts,
+         size_t part_count,
+diff --git a/src/skippy/graph_identity.h b/src/skippy/graph_identity.h
+index 7157ecf36..843c7ba7f 100644
+--- a/src/skippy/graph_identity.h
++++ b/src/skippy/graph_identity.h
+@@ -20,6 +20,10 @@ bool skippy_build_activation_frontier_identity(
+         size_t part_count,
+         uint8_t output[32]);
+ 
++bool skippy_build_activation_port_identity(
++        const std::string & binding,
++        std::string & identity);
++
+ struct skippy_parameter_binding {
+     const ggml_tensor * tensor = nullptr;
+     std::string identity;
+diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
+index 80eaf1c62..b2dcdba37 100644
+--- a/src/skippy/model_loading.cpp
++++ b/src/skippy/model_loading.cpp
+@@ -821,7 +821,10 @@ enum skippy_status skippy_finish_model_open(
+             }
+             if (binding_index == identity_count || !matched_bindings.insert(binding_index).second) return false;
+             auto & part = boundary.parts[index];
+-            if (!parse_identity(identities[binding_index], part.identity)) return false;
++            std::string stable_identity;
++            if (!skippy_build_activation_port_identity(bindings[binding_index], stable_identity) ||
++                    stable_identity != identities[binding_index] ||
++                    !parse_identity(identities[binding_index], part.identity)) return false;
+             part.ggml_type = static_cast<uint32_t>(shapes[index].type);
+             part.rank = shapes[index].rank;
+             part.token_axis = shapes[index].token_axis;
+diff --git a/src/skippy/stage_plan.cpp b/src/skippy/stage_plan.cpp
+index 2d022314d..fd63b4fd9 100644
+--- a/src/skippy/stage_plan.cpp
++++ b/src/skippy/stage_plan.cpp
+@@ -200,12 +200,15 @@ bool append_frontier_values(
+     std::set<std::string> bindings;
+     for (size_t index = 0; index < identities.size(); ++index) {
+         const char * binding = tensors[index] == nullptr ? nullptr : ggml_get_name(tensors[index]);
+-        if (binding == nullptr || binding[0] == '\0' || !bindings.insert(binding).second) {
++        std::string port_identity;
++        if (identities[index].empty() || binding == nullptr || binding[0] == '\0' ||
++                !bindings.insert(binding).second ||
++                !skippy_build_activation_port_identity(binding, port_identity)) {
+             error = "stage planner frontier tensors require unique stable names";
+             return false;
+         }
+         values.push_back({SKIPPY_STAGE_PLAN_VALUE_DESC_V1_ABI_VERSION,
+-            sizeof(skippy_stage_plan_value_desc_v1), plan.add_string(identities[index]),
++            sizeof(skippy_stage_plan_value_desc_v1), plan.add_string(port_identity),
+             plan.add_string(binding)});
+     }
+     return true;
+diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
+index 20a804d20..d9f0c170f 100644
+--- a/src/skippy/tests/graph_build_inputs.cpp
++++ b/src/skippy/tests/graph_build_inputs.cpp
+@@ -103,6 +103,8 @@ static int check_topology_reuse_guards() {
+     frontier.byte_strides[0] = 4;
+     frontier.byte_strides[1] = 32;
+     base.activation_frontier.push_back(frontier);
++    base.activation_import_bindings.push_back("l_out-3");
++    base.activation_export_bindings.push_back("l_out-7");
+     auto changed_pointer = base;
+     changed_pointer.activation_tokens.tokens = reinterpret_cast<const llama_token *>(static_cast<uintptr_t>(999));
+     if (!base.topology_equal(changed_pointer)) {
+@@ -132,6 +134,18 @@ static int check_topology_reuse_guards() {
+     if (base.topology_equal(changed_frontier_shape)) {
+         return 9;
+     }
++
++    auto changed_import_binding = base;
++    changed_import_binding.activation_import_bindings[0] = "l_out-4";
++    if (base.topology_equal(changed_import_binding)) {
++        return 10;
++    }
++
++    auto changed_export_binding = base;
++    changed_export_binding.activation_export_bindings[0] = "l_out-8";
++    if (base.topology_equal(changed_export_binding)) {
++        return 11;
++    }
+     return 0;
+ }
+ 
+diff --git a/src/skippy/tests/renamed_multishard_planning.cpp b/src/skippy/tests/renamed_multishard_planning.cpp
+index 48149e454..2089c3c12 100644
+--- a/src/skippy/tests/renamed_multishard_planning.cpp
++++ b/src/skippy/tests/renamed_multishard_planning.cpp
+@@ -774,6 +774,7 @@ bool check_public_stage_plan_abi(
+         skippy_error_free(error);
+         return false;
+     }
++    std::vector<std::pair<std::string, std::string>> stable_frontier;
+     for (size_t index = 0; index < profile.activation_export_count; ++index) {
+         skippy_stage_plan_value_desc_v1 exported{};
+         skippy_stage_plan_value_desc_v1 imported{};
+@@ -782,12 +783,15 @@ bool check_public_stage_plan_abi(
+                 skippy_stage_plan_value_at_v1(final, 0, SKIPPY_STAGE_PLAN_VALUE_ACTIVATION_IMPORT,
+                     index, &imported, &error) != SKIPPY_STATUS_OK ||
+                 plan_string(source, exported.identity) != plan_string(final, imported.identity) ||
++                plan_string(source, exported.identity).compare(0, 15, "skippy-port:v1:") != 0 ||
+                 plan_string(source, exported.binding).empty() ||
+                 plan_string(source, exported.binding) != plan_string(final, imported.binding)) {
+             std::fprintf(stderr, "public stage frontier bindings are incomplete\n");
+             skippy_error_free(error);
+             return false;
+         }
++        stable_frontier.emplace_back(
++                plan_string(source, exported.identity), plan_string(source, exported.binding));
+     }
+     for (size_t index = 0; index < profiles.size(); ++index) {
+         if (skippy_stage_plan_profile_at_v1(source, index, &profile, &error) != SKIPPY_STATUS_OK ||
+@@ -797,6 +801,22 @@ bool check_public_stage_plan_abi(
+             skippy_error_free(error);
+             return false;
+         }
++        if (profile.activation_export_count != stable_frontier.size()) {
++            std::fprintf(stderr, "public stage frontier count varies across execution profiles\n");
++            return false;
++        }
++        for (size_t frontier_index = 0; frontier_index < stable_frontier.size(); ++frontier_index) {
++            skippy_stage_plan_value_desc_v1 exported{};
++            if (skippy_stage_plan_value_at_v1(source, index,
++                        SKIPPY_STAGE_PLAN_VALUE_ACTIVATION_EXPORT, frontier_index,
++                        &exported, &error) != SKIPPY_STATUS_OK ||
++                    plan_string(source, exported.identity) != stable_frontier[frontier_index].first ||
++                    plan_string(source, exported.binding) != stable_frontier[frontier_index].second) {
++                std::fprintf(stderr, "public stage frontier identity varies across execution profiles\n");
++                skippy_error_free(error);
++                return false;
++            }
++        }
+     }
+     skippy_stage_plan * repeated = nullptr;
+     if (skippy_stage_planner_realize_v1(planner, 0, 1, &repeated, &error) != SKIPPY_STATUS_OK) {
+-- 
+2.54.0 (Apple Git-157)
+

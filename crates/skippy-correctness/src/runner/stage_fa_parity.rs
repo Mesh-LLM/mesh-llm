@@ -2,6 +2,7 @@ use anyhow::{Context, Result, bail};
 use skippy_runtime::{
     FlashAttentionType, GGML_TYPE_F16, MtpSource, RuntimeConfig, RuntimeLoadMode, StageModel,
     package::{PackageStageRequest, select_layer_package_parts},
+    plan_gguf_stage_runtime_plan_for_range,
 };
 
 use crate::cli::StageFaParityArgs;
@@ -65,7 +66,19 @@ fn decode_boundary(
     args: &StageFaParityArgs,
     flash_attn_type: FlashAttentionType,
 ) -> Result<skippy_runtime::ActivationFrame> {
-    let config = RuntimeConfig {
+    if !args.source_model.is_file() {
+        bail!(
+            "stage-fa-parity source GGUF is unavailable: {}",
+            args.source_model.display()
+        );
+    }
+    let plan = plan_gguf_stage_runtime_plan_for_range(
+        &args.source_model,
+        (args.layer_start, args.layer_end),
+        args.ctx_size,
+        1,
+    )?;
+    let mut config = RuntimeConfig {
         stage_index: 0,
         layer_start: args.layer_start,
         layer_end: args.layer_end,
@@ -102,6 +115,10 @@ fn decode_boundary(
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
         resident_tensor_names: Vec::new(),
+        activation_import_identities: Vec::new(),
+        activation_import_bindings: Vec::new(),
+        activation_export_identities: Vec::new(),
+        activation_export_bindings: Vec::new(),
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
@@ -109,6 +126,7 @@ fn decode_boundary(
         kv_unified: None,
         swa_full: None,
     };
+    plan.apply_to(&mut config);
     let selection = select_layer_package_parts(&PackageStageRequest {
         model_id: args.model_id.clone(),
         topology_id: "stage-fa-parity".to_string(),
