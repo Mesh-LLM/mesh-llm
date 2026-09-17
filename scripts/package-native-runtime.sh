@@ -198,26 +198,17 @@ python_bin() {
     exit 1
 }
 
-workspace_version() {
-    "$(python_bin)" - "$REPO_ROOT/Cargo.toml" <<'PY'
+skippy_runtime_version() {
+    "$(python_bin)" - "$REPO_ROOT/crates/skippy-native-runtime/RUNTIME_VERSION" <<'PYVERSION'
+import pathlib
 import re
 import sys
 
-in_workspace_package = False
-for line in open(sys.argv[1], encoding="utf-8"):
-    stripped = line.strip()
-    if stripped == "[workspace.package]":
-        in_workspace_package = True
-        continue
-    if stripped.startswith("[") and stripped != "[workspace.package]":
-        in_workspace_package = False
-    if in_workspace_package:
-        match = re.match(r'version\s*=\s*"([^"]+)"', stripped)
-        if match:
-            print(match.group(1))
-            raise SystemExit(0)
-raise SystemExit("workspace package version not found")
-PY
+version = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").strip()
+if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?", version):
+    raise SystemExit("invalid Skippy runtime release version")
+print(version)
+PYVERSION
 }
 
 skippy_abi_version() {
@@ -745,7 +736,7 @@ rewrite_linux_runtime_paths
 
 primary_library="lib/$primary_name"
 primary_sha="$(sha256_file "$stage_dir/$primary_library")"
-mesh_version="$(workspace_version)"
+runtime_release_version="$(skippy_runtime_version)"
 abi_version="$(skippy_abi_version)"
 cuda_major=""
 case "$BACKEND" in
@@ -889,7 +880,7 @@ elif kind == "vulkan":
 manifest = {
     "runtime": {
         "id": "$artifact_id",
-        "mesh_version": "$mesh_version",
+        "mesh_version": "$runtime_release_version",
         "skippy_abi": "$abi_version",
         "platform": {
             "os": "$runtime_os",
@@ -930,7 +921,7 @@ This artifact contains MeshLLM native runtime shared libraries for:
 - target: \`$TARGET_TRIPLE\`
 - backend: \`$BACKEND\`
 - flavor: \`$flavor\`
-- MeshLLM version: \`$mesh_version\`
+- Skippy runtime release: \`$runtime_release_version\`
 - Skippy ABI: \`$abi_version\`
 
 \`mesh-llm runtime install\` reads \`manifest.json\`, verifies the archive

@@ -12,6 +12,19 @@ environment variables retain their current spelling until the coordinated M2
 producer/consumer migration. This checkpoint does not establish independent
 runtime release or installation policy.
 
+## Runtime release source
+
+`RUNTIME_VERSION` owns the native artifact release independently of the Cargo
+workspace version. `runtime_release_version()` exposes it to Rust callers and
+`package-native-runtime.sh` stamps the same value into artifacts. Its initial
+value matches the existing release to preserve cache identity. Mesh version
+bumps do not update this file.
+
+The catalog generator still requires the supplied tag to match this runtime
+release. Separating product and runtime catalog publication and migrating the
+legacy `mesh_version` wire spelling remain part of the extraction; this source
+change alone does not establish an independent installation flow.
+
 ## Native Runtimes
 
 A native runtime is a release artifact containing patched llama.cpp/Skippy

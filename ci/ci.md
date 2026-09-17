@@ -1003,3 +1003,9 @@ permissions, runner selection, or CI topology changed for this source rehome.
 GPU benchmark library/native source ownership is `skippy-gpu-bench`. CI backend
 ownership rows, crate rosters and runtime packaging source paths follow the move;
 packaged helper names, native symbols and execution policy are unchanged.
+
+Native runtime packaging reads `crates/skippy-native-runtime/RUNTIME_VERSION`,
+not the Mesh workspace package version. The catalog generator still verifies
+that its supplied tag matches the stamped runtime release; product/runtime
+catalog publication separation remains pending. No workflow dispatch, runner,
+or publication permissions change with this source extraction.

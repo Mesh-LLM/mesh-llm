@@ -19,6 +19,40 @@ def write_failing_nvcc(path: Path) -> None:
 
 
 class PackageNativeRuntimeTests(unittest.TestCase):
+    def test_runtime_version_comes_from_skippy_not_workspace(self) -> None:
+        script = SCRIPT.read_text(encoding="utf-8")
+        start = script.index("skippy_runtime_version() {")
+        end = script.index("skippy_abi_version()", start)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            version = root / "crates/skippy-native-runtime/RUNTIME_VERSION"
+            version.parent.mkdir(parents=True)
+            (root / "Cargo.toml").write_text(
+                '[workspace.package]\nversion = "99.0.0"\n', encoding="utf-8"
+            )
+            harness = (
+                "set -euo pipefail\n"
+                + 'python_bin() { printf "python3\\n"; }\n'
+                + script[start:end]
+                + "skippy_runtime_version\n"
+            )
+            for release in ("1.2.3", "2.0.0-rc1", "bad\nversion"):
+                with self.subTest(release=release):
+                    version.write_text(release + "\n", encoding="utf-8")
+                    result = subprocess.run(
+                        ["bash", "-s"], input=harness,
+                        env={**os.environ, "REPO_ROOT": str(root)},
+                        text=True, capture_output=True, check=False,
+                    )
+                    if release.startswith("bad"):
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn("invalid Skippy", result.stderr)
+                    else:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(result.stdout.strip(), release)
+        self.assertIn('runtime_release_version="$(skippy_runtime_version)"', script)
+        self.assertIn('"mesh_version": "$runtime_release_version"', script)
+
     def test_linux_glibc_manifest_probe_pins_readelf_locale(self) -> None:
         script = SCRIPT.read_text(encoding="utf-8")
         start = script.index("def packaged_glibc_requirement(paths):")

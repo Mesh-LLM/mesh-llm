@@ -30,3 +30,11 @@ pub use resolver::{
     has_startup_compatibility_metadata, select_native_runtime,
     select_native_runtime_for_skippy_abi, select_native_runtime_from_artifacts,
 };
+
+/// Native runtime artifact release, independent of the Mesh workspace package version.
+///
+/// The packaging producer reads the same Skippy-owned version file. This is a
+/// release identity; native binary compatibility is checked separately by ABI.
+pub fn runtime_release_version() -> &'static str {
+    include_str!("../RUNTIME_VERSION").trim()
+}
