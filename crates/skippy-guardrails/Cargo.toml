@@ -1,9 +1,9 @@
 [package]
-name = "mesh-llm-guardrails"
+name = "skippy-guardrails"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
-description = "Reusable guardrail and compaction primitives for mesh-llm OpenAI-compatible paths"
+description = "Reusable guardrail and compaction primitives for Skippy OpenAI-compatible serving"
 repository = "https://github.com/Mesh-LLM/mesh-llm"
 homepage = "https://github.com/Mesh-LLM/mesh-llm"
 readme = "README.md"

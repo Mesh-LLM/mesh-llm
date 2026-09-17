@@ -142,7 +142,7 @@ The corpus should include a small set of prompts that cover:
 
 Context compaction now exists as a sibling hosted-model decorator instead of as
 part of the retry/validation guardrail engine. The pure compaction policy lives
-in `mesh-llm-guardrails`; the OpenAI-facing decorator is
+in `skippy-guardrails`; the OpenAI-facing decorator is
 `CompactingOpenAiBackend`. Requests can force the behavior with the
 `mesh_compact` extra field, while Skippy-hosted backends fill the runtime
 context limit from the loaded stage config before composing compaction with the

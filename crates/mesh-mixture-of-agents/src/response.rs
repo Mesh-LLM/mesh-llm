@@ -3,8 +3,8 @@
 use crate::MOA_ERR_NO_USABLE_ANSWER;
 use crate::VIRTUAL_MODEL_NAME;
 use crate::normalize::{self, WorkerOutput};
-use mesh_llm_guardrails::tool_arguments_wire_string;
 use serde_json::{Value, json};
+use skippy_guardrails::tool_arguments_wire_string;
 
 // ─── Response builders ───────────────────────────────────────────────
 

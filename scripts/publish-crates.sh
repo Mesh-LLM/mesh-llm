@@ -379,11 +379,12 @@ should_skip_initial_dry_run() {
 
 publish_crates=(
     mesh-llm-identity
+    skippy-events
     skippy-tokenizer
     mesh-llm-protocol
     mesh-llm-routing
     mesh-llm-types
-    mesh-llm-guardrails
+    skippy-guardrails
     mesh-llm-plugin
     mesh-native-serving-plugin-api
     mesh-llm-skills

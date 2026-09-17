@@ -979,3 +979,9 @@ The gate resolves bundle, model and evidence paths against the caller's working
 directory before invoking Cargo. Cargo starts the integration test in its crate
 directory; absolute paths keep its evidence writer and the wrapper's execution
 check on the same file.
+
+
+Skippy inference contracts are published as `skippy-events` and guardrail primitives
+as `skippy-guardrails`. Both appear in the affected-crate fallback roster and
+publish chain; `skippy-events` precedes its Mesh event consumers. Guardrail
+consumers use the Skippy package directly. CI lane topology is unchanged.

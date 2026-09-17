@@ -247,7 +247,7 @@ Shared foundations:
 - `mesh-llm-routing/` — routing primitives shared across host and client.
 - `mesh-llm-system/` — machine-local hardware, benchmark, autoupdate, process helpers.
 - `mesh-llm-identity/` — owner identity and envelope crypto primitives.
-- `mesh-llm-guardrails/` — guardrail and compaction primitives for OpenAI-compatible paths.
+- `skippy-guardrails/` — guardrail and compaction primitives for OpenAI-compatible paths.
 - `mesh-llm-hardware-profile/`, `mesh-llm-native-runtime/`, `mesh-llm-runtime-install/` — hardware profile detection, native runtime manifest/selection, runtime download/install/cache.
 - `mesh-llm-plugin/` — plugin runtime/DSL primitives.
 - `mesh-llm-plugin-manager/` — plugin package management (catalog, install, store).

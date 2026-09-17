@@ -1,4 +1,4 @@
-pub use mesh_llm_guardrails::{
+pub use skippy_guardrails::{
     GuardrailMode, GuardrailPolicy, GuardrailPolicyHandle, RetryExhaustionMode,
     StreamingGuardrailMode,
 };

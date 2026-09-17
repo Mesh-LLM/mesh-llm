@@ -9,8 +9,8 @@
 //! Anything the model returns is treated as dirty input.
 
 use crate::worker::WorkerRole;
-use mesh_llm_guardrails::{normalize_tool_arguments, strip_thinking_blocks};
 use serde_json::Value;
+use skippy_guardrails::{normalize_tool_arguments, strip_thinking_blocks};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputKind {

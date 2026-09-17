@@ -42,7 +42,7 @@ mesh-llm-identity = { path = "../mesh-llm-identity", version = "0.76.1", feature
 mesh-llm-native-runtime = { path = "../mesh-llm-native-runtime", version = "0.76.1"  }
 mesh-native-serving-plugin-host = { path = "../mesh-native-serving-plugin-host", version = "0.76.1" }
 mesh-llm-runtime-install = { path = "../mesh-llm-runtime-install", version = "0.76.1"  }
-mesh-llm-guardrails = { path = "../mesh-llm-guardrails", version = "0.76.1"  }
+skippy-guardrails = { path = "../skippy-guardrails", version = "0.76.1"  }
 mesh-llm-protocol = { path = "../mesh-llm-protocol", version = "0.76.1"  }
 mesh-llm-routing = { path = "../mesh-llm-routing", version = "0.76.1"  }
 mesh-llm-system = { path = "../mesh-llm-system", version = "0.76.1", features = ["skippy-devices"]  }

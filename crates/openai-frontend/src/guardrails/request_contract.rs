@@ -1,12 +1,12 @@
 use crate::chat::ChatCompletionRequest;
 
-pub use mesh_llm_guardrails::{
+pub use skippy_guardrails::{
     GuardrailRequestContract, MESH_GUARDRAILS_FIELD, MeshGuardrailsOverride, ParallelToolCalls,
     RawToolChoice,
 };
 
 #[cfg(test)]
-pub(crate) use mesh_llm_guardrails::{RawResponseFormat, RawToolSpec};
+pub(crate) use skippy_guardrails::{RawResponseFormat, RawToolSpec};
 
 pub fn from_request(request: &ChatCompletionRequest) -> GuardrailRequestContract {
     GuardrailRequestContract::from_parts(

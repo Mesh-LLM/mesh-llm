@@ -24,13 +24,13 @@ mod tools;
 mod validation;
 
 pub use compact::CompactingOpenAiBackend;
-pub use mesh_llm_guardrails::{
-    CompactionConfig, CompactionDecision, CompactionOverride, CompactionReport, MESH_COMPACT_FIELD,
-    MESH_RESPOND_TOOL_NAME,
-};
 pub use policy::{
     GuardrailMode, GuardrailPolicy, GuardrailPolicyHandle, RetryExhaustionMode,
     StreamingGuardrailMode,
+};
+pub use skippy_guardrails::{
+    CompactionConfig, CompactionDecision, CompactionOverride, CompactionReport, MESH_COMPACT_FIELD,
+    MESH_RESPOND_TOOL_NAME,
 };
 pub use telemetry::GuardrailTelemetrySink;
 

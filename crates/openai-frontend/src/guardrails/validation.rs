@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
-pub(crate) use mesh_llm_guardrails::strip_thinking_blocks;
 use serde_json::{Map, Value, json};
+pub(crate) use skippy_guardrails::strip_thinking_blocks;
 
 use crate::{chat::ChatCompletionResponse, common::FinishReason};
 

@@ -26,7 +26,8 @@ COPY crates/mesh-llm-identity/ crates/mesh-llm-identity/
 COPY crates/mesh-llm-protocol/ crates/mesh-llm-protocol/
 COPY crates/mesh-llm-release-footer/ crates/mesh-llm-release-footer/
 COPY crates/mesh-llm-routing/ crates/mesh-llm-routing/
-COPY crates/mesh-llm-guardrails/ crates/mesh-llm-guardrails/
+COPY crates/skippy-guardrails/ crates/skippy-guardrails/
+COPY crates/skippy-events/ crates/skippy-events/
 COPY crates/mesh-llm-system/ crates/mesh-llm-system/
 COPY crates/mesh-llm-types/ crates/mesh-llm-types/
 COPY crates/mesh-llm-config/ crates/mesh-llm-config/

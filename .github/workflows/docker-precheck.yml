@@ -76,7 +76,7 @@ jobs:
             crates/mesh-llm-routing/ \
             crates/mesh-llm-runtime-install/ \
             crates/mesh-llm-system/ \
-            crates/mesh-llm-guardrails/ \
+            crates/skippy-guardrails/ \
             crates/mesh-llm-types/ \
             crates/mesh-llm-config/ \
             crates/mesh-llm-console-server/ \

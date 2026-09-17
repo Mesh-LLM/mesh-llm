@@ -3810,13 +3810,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mesh-llm-guardrails"
-version = "0.76.1"
-dependencies = [
- "serde_json",
-]
-
-[[package]]
 name = "mesh-llm-hardware-profile"
 version = "0.76.1"
 dependencies = [
@@ -3879,7 +3872,6 @@ dependencies = [
  "mesh-llm-client",
  "mesh-llm-config",
  "mesh-llm-events",
- "mesh-llm-guardrails",
  "mesh-llm-hf-hub",
  "mesh-llm-identity",
  "mesh-llm-log-store",
@@ -3922,6 +3914,7 @@ dependencies = [
  "skippy-coordinator",
  "skippy-events",
  "skippy-ffi",
+ "skippy-guardrails",
  "skippy-model",
  "skippy-package-format",
  "skippy-protocol",
@@ -4223,10 +4216,10 @@ name = "mesh-mixture-of-agents"
 version = "0.76.1"
 dependencies = [
  "async-trait",
- "mesh-llm-guardrails",
  "reqwest",
  "serde",
  "serde_json",
+ "skippy-guardrails",
  "tokio",
  "tracing",
 ]
@@ -5182,10 +5175,10 @@ dependencies = [
  "futures-core",
  "futures-util",
  "http-body-util",
- "mesh-llm-guardrails",
  "serde",
  "serde_json",
  "skippy-events",
+ "skippy-guardrails",
  "tokio",
  "tower",
  "tracing",
@@ -7280,6 +7273,13 @@ name = "skippy-ffi"
 version = "0.76.1"
 dependencies = [
  "libloading",
+]
+
+[[package]]
+name = "skippy-guardrails"
+version = "0.76.1"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

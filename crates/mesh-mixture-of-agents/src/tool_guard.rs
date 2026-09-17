@@ -7,8 +7,8 @@
 //! get emitted as a `tool_call` to the client.
 
 use crate::normalize::{OutputKind, WorkerOutput};
-use mesh_llm_guardrails::sanitize_tool_arguments_for_tool;
 use serde_json::Value;
+use skippy_guardrails::sanitize_tool_arguments_for_tool;
 
 /// Enforce the caller's declared tool contract before arbitration.
 ///

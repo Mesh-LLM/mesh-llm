@@ -14,8 +14,8 @@ use crate::tool_result::handle_tool_result;
 use crate::turn::{DecisionResolution, ForcedToolChoice, TurnKind, TurnResult};
 use crate::worker;
 use crate::{MOA_ERR_ALL_WORKERS_FAILED, session, tool_turn};
-use mesh_llm_guardrails::sanitize_tool_arguments_for_tool;
 use serde_json::{Value, json};
+use skippy_guardrails::sanitize_tool_arguments_for_tool;
 use std::time::Instant;
 
 // ─── Gateway entry point ─────────────────────────────────────────────

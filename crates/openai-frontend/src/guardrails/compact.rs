@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use mesh_llm_guardrails::{
+use skippy_guardrails::{
     CompactionConfig, CompactionOverride, CompactionRequest, MESH_COMPACT_FIELD, compact_messages,
 };
 

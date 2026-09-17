@@ -1,1 +1,1 @@
-pub(crate) use mesh_llm_guardrails::StructuredOutputSpec;
+pub(crate) use skippy_guardrails::StructuredOutputSpec;

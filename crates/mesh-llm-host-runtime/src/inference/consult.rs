@@ -15,10 +15,10 @@
 use crate::mesh;
 use anyhow::Result;
 use iroh::EndpointId;
-use mesh_llm_guardrails::{
+use serde_json::Value;
+use skippy_guardrails::{
     extract_tool_name_and_arguments, normalize_tool_arguments, strip_thinking_blocks,
 };
-use serde_json::Value;
 
 // ---------------------------------------------------------------------------
 // Peer discovery
