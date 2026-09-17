@@ -102,3 +102,11 @@ reader. It never hardlinks, merges or overwrites an existing entry. An identical
 verified destination is idempotent; dry-run validates without creating paths.
 Legacy decoding and user-facing import commands are separate callers of this
 primitive; it does not scan or migrate caches automatically.
+
+`import_legacy_runtime_cache` is the explicit decoder for an unversioned
+`<release>/<runtime-id>/manifest.json` cache. It checks directory identities,
+reports missing/unknown entries as skips, and continues past per-runtime failures.
+ABI mismatches produce preservation warnings; imports do not override resolver
+eligibility. Callers must return failure when the report's `has_failures()` is
+true. Generation-marked manifests are not accepted by the legacy reader. The
+normal discovery path does not call this API.

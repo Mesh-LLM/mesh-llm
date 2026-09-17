@@ -2,6 +2,7 @@ mod cache;
 mod discovery;
 mod import;
 mod install;
+mod legacy_import;
 mod manifest;
 mod types;
 
@@ -22,6 +23,10 @@ pub use cache::{
     current_skippy_abi_version, default_native_runtime_cache, host_runtime_profile,
     native_runtime_cache, native_runtime_versions_match,
 };
+pub use legacy_import::{
+    LegacyRuntimeImportEntry, LegacyRuntimeImportReport, import_legacy_runtime_cache,
+};
+
 pub use import::{NativeRuntimeImportOutcome, NativeRuntimeImportStatus, import_runtime_copy};
 
 pub use install::{NativeRuntimeResolutionError, RejectedCandidate, install_native_runtime};

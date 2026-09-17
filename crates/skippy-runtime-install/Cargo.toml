@@ -20,6 +20,7 @@ hex = "0.4"
 skippy-hardware-profile = { path = "../skippy-hardware-profile", version = "0.76.1" }
 skippy-native-runtime = { path = "../skippy-native-runtime", version = "0.76.1" }
 reqwest = { version = "0.13", features = ["stream", "json"] }
+semver = "1"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
