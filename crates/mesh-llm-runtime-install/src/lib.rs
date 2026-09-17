@@ -186,6 +186,58 @@ mod tests {
     }
 
     #[test]
+    fn installed_runtime_reuses_requested_release_cache_without_rewriting_data() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = NativeRuntimeCache::new(root.path());
+        let release = "0.68.0";
+        assert_ne!(release, CURRENT_MESH_VERSION);
+        let mut artifact = artifact_with_sha(None);
+        artifact.mesh_version = Some(release.to_string());
+        let path = cache.runtime_dir(release, artifact.native_runtime_id());
+        std::fs::create_dir_all(path.join("lib")).unwrap();
+        let library = path.join("lib/libllama.so");
+        std::fs::write(&library, b"existing runtime").unwrap();
+        NativeRuntimeManifest {
+            runtime: artifact.clone(),
+        }
+        .write_to_dir(&path)
+        .unwrap();
+        let manifest_before = std::fs::read(path.join(NATIVE_RUNTIME_MANIFEST_FILE)).unwrap();
+
+        // A catalog may omit the artifact release; the request supplies the
+        // same release key that the resolver used to select the installed copy.
+        artifact.mesh_version = None;
+        let resolution = NativeRuntimeResolution {
+            selected: artifact,
+            source: NativeRuntimeSource::Installed { path: path.clone() },
+            evaluated: Vec::new(),
+        };
+        let outcome = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(install_resolved_runtime(
+                &cache,
+                resolution,
+                &NativeRuntimeInstallOptions {
+                    mesh_version: release.to_string(),
+                    allow_download: false,
+                    ..Default::default()
+                },
+            ))
+            .unwrap();
+        assert_eq!(outcome.status, NativeRuntimeInstallStatus::AlreadyInstalled);
+        assert_eq!(outcome.runtime.path, path);
+        assert_eq!(outcome.runtime.mesh_version, release);
+        assert_eq!(std::fs::read(&library).unwrap(), b"existing runtime");
+        assert_eq!(
+            std::fs::read(path.join(NATIVE_RUNTIME_MANIFEST_FILE)).unwrap(),
+            manifest_before
+        );
+        assert!(!root.path().join(CURRENT_MESH_VERSION).exists());
+    }
+
+    #[test]
     fn bundled_runtime_is_used_in_place_without_cache_copy() {
         let bundle = tempfile::tempdir().unwrap();
         let cache_root = tempfile::tempdir().unwrap();

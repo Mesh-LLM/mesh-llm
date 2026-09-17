@@ -265,7 +265,9 @@ pub(crate) async fn install_resolved_runtime(
     options: &NativeRuntimeInstallOptions,
 ) -> Result<NativeRuntimeInstallOutcome> {
     match resolution.source.clone() {
-        NativeRuntimeSource::Installed { path: _ } => installed_outcome(cache, resolution),
+        NativeRuntimeSource::Installed { path: _ } => {
+            installed_outcome(cache, resolution, &options.mesh_version)
+        }
         NativeRuntimeSource::Bundle { path } => {
             if should_install_explicit_bundle_into_cache(&path, options)? {
                 let runtime = cache.install_from_dir(&path)?;
@@ -363,10 +365,11 @@ pub(crate) fn in_place_bundle_outcome(
 pub(crate) fn installed_outcome(
     cache: &NativeRuntimeCache,
     resolution: skippy_native_runtime::NativeRuntimeResolution,
+    requested_release: &str,
 ) -> Result<NativeRuntimeInstallOutcome> {
     let runtime = cache
         .find_installed(
-            resolution.selected.mesh_version_or(CURRENT_MESH_VERSION),
+            resolution.selected.mesh_version_or(requested_release),
             resolution.selected.native_runtime_id(),
         )?
         .context("selected native runtime was not found in cache")?;
