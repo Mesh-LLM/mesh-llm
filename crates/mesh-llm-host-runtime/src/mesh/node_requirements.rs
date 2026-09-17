@@ -1,5 +1,7 @@
 use super::*;
-use crate::mesh::identity_persistence::{adopted_mesh_membership_path, mesh_genesis_policy_path};
+#[cfg(not(test))]
+use crate::mesh::identity_persistence::adopted_mesh_membership_path;
+use crate::mesh::identity_persistence::mesh_genesis_policy_path;
 use crate::mesh::node::RequirementAwareMeshState;
 
 fn same_requirement_mesh(
@@ -59,9 +61,8 @@ impl AdoptedMeshMembership {
     }
 }
 
-fn load_adopted_mesh_membership() -> Result<Option<AdoptedMeshMembership>> {
-    let path = adopted_mesh_membership_path()?;
-    let serialized = match std::fs::read(&path) {
+fn load_adopted_mesh_membership(path: &std::path::Path) -> Result<Option<AdoptedMeshMembership>> {
+    let serialized = match std::fs::read(path) {
         Ok(serialized) => serialized,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
@@ -83,6 +84,7 @@ fn preferred_adopted_peer_addrs(mut peer_addrs: Vec<EndpointAddr>) -> Vec<Endpoi
 }
 
 pub(crate) fn persist_adopted_mesh_membership(
+    path: &std::path::Path,
     state: &RequirementAwareMeshState,
     peer_addrs: Vec<EndpointAddr>,
 ) -> Result<()> {
@@ -99,15 +101,14 @@ pub(crate) fn persist_adopted_mesh_membership(
     membership
         .verify()
         .map_err(|reason| anyhow::anyhow!("verify adopted mesh membership: {reason:?}"))?;
-    let path = adopted_mesh_membership_path()?;
     let bytes = serde_json::to_vec_pretty(&membership).context("serialize adopted membership")?;
-    if std::fs::read(&path).is_ok_and(|existing| existing == bytes) {
+    if std::fs::read(path).is_ok_and(|existing| existing == bytes) {
         return Ok(());
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
-    crate::crypto::write_keystore_bytes_atomically(&path, &bytes)?;
+    crate::crypto::write_keystore_bytes_atomically(path, &bytes)?;
     Ok(())
 }
 
@@ -191,8 +192,36 @@ pub(crate) fn preflight_pushed_config_for_current_node_with_gpus(
 }
 
 impl Node {
+    fn membership_file(&self) -> Result<Option<std::path::PathBuf>> {
+        #[cfg(test)]
+        {
+            Ok(self.adopted_membership_file.clone())
+        }
+        #[cfg(not(test))]
+        {
+            adopted_mesh_membership_path().map(Some)
+        }
+    }
+
+    fn load_membership(&self) -> Result<Option<AdoptedMeshMembership>> {
+        match self.membership_file()? {
+            Some(path) => load_adopted_mesh_membership(&path),
+            None => Ok(None),
+        }
+    }
+
+    fn persist_membership(
+        &self,
+        state: &RequirementAwareMeshState,
+        peers: Vec<EndpointAddr>,
+    ) -> Result<()> {
+        if let Some(path) = self.membership_file()? {
+            persist_adopted_mesh_membership(&path, state, peers)?;
+        }
+        Ok(())
+    }
     pub(crate) async fn restore_adopted_mesh_membership(&self, join_tokens: &[String]) -> bool {
-        let membership = match load_adopted_mesh_membership() {
+        let membership = match self.load_membership() {
             Ok(Some(membership)) => membership,
             Ok(None) => return false,
             Err(error) => {
@@ -251,13 +280,13 @@ impl Node {
             .into_iter()
             .map(|peer| peer.addr)
             .collect();
-        if let Ok(Some(existing)) = load_adopted_mesh_membership()
+        if let Ok(Some(existing)) = self.load_membership()
             && existing.mesh_id == state.mesh_id
             && existing.policy_hash == state.policy_hash
         {
             peer_addrs.extend(existing.peer_addrs);
         }
-        if let Err(error) = persist_adopted_mesh_membership(&state, peer_addrs) {
+        if let Err(error) = self.persist_membership(&state, peer_addrs) {
             tracing::warn!(error = %error, "failed to refresh adopted mesh membership");
         }
     }
@@ -507,7 +536,7 @@ impl Node {
             Ok(()) => {}
             Err(MeshRequirementRejectReason::BootstrapTokenExpired) => {
                 token.verify_at(token.expires_at_unix_ms.unwrap_or_default())?;
-                let membership = load_adopted_mesh_membership()
+                let membership = self.load_membership()
                     .inspect_err(|error| {
                         tracing::warn!(error = %error, "ignoring invalid adopted mesh membership")
                     })
@@ -650,7 +679,7 @@ impl Node {
                         .map(|peer| peer.addr)
                         .collect();
                     peer_addrs.insert(0, ann.addr.clone());
-                    if let Err(error) = persist_adopted_mesh_membership(state, peer_addrs) {
+                    if let Err(error) = self.persist_membership(state, peer_addrs) {
                         tracing::warn!(error = %error, "failed to persist adopted mesh membership");
                     }
                 }

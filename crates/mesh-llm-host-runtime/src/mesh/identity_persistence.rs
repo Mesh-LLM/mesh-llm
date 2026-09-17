@@ -52,6 +52,7 @@ pub(crate) fn mesh_genesis_policy_path() -> Result<std::path::PathBuf> {
     Ok(identity_state_dir()?.join("mesh-genesis-policy.json"))
 }
 
+#[cfg(not(test))]
 pub(crate) fn adopted_mesh_membership_path() -> Result<std::path::PathBuf> {
     Ok(identity_state_dir()?.join("mesh-adopted-membership.json"))
 }
@@ -108,69 +109,10 @@ pub(crate) fn identity_state_dir() -> Result<std::path::PathBuf> {
 
 pub(crate) fn identity_home_dir() -> std::path::PathBuf {
     #[cfg(test)]
-    {
-        test_identity_home()
+    if let Some(home) = std::env::var_os("MESH_LLM_TEST_HOME") {
+        return home.into();
     }
-    #[cfg(not(test))]
-    {
-        dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."))
-    }
-}
-
-#[cfg(test)]
-thread_local! {
-    /// Explicit per-test override installed by [`set_test_identity_home`].
-    static TEST_IDENTITY_HOME_OVERRIDE: std::cell::RefCell<Option<std::path::PathBuf>> =
-        const { std::cell::RefCell::new(None) };
-    /// Lazily-created, per-thread fallback home, owned so it is deleted when the
-    /// thread exits. `cargo test` runs each test on its own thread, so this gives
-    /// every test an isolated identity home with no process-global state — even
-    /// tests that persist adopted membership without installing an explicit
-    /// override — and leaves no directories behind.
-    static TEST_IDENTITY_HOME_FALLBACK: tempfile::TempDir =
-        tempfile::Builder::new()
-            .prefix("mesh-llm-test-home-")
-            .tempdir()
-            .expect("create per-thread test identity home");
-}
-
-/// Resolve the identity home for the current test.
-///
-/// Order: an explicit thread-local override (see [`set_test_identity_home`]),
-/// then a per-thread owned temp directory. No process-global state (env vars) is
-/// ever consulted, so a value another test thread set cannot leak into this
-/// thread's persistence — that cross-thread leak was the source of the
-/// parallel-test failures in #1896.
-#[cfg(test)]
-fn test_identity_home() -> std::path::PathBuf {
-    if let Some(home) = TEST_IDENTITY_HOME_OVERRIDE.with(|home| home.borrow().clone()) {
-        return home;
-    }
-    TEST_IDENTITY_HOME_FALLBACK.with(|home| home.path().to_path_buf())
-}
-
-/// Redirect identity persistence for the current test thread to `path`.
-///
-/// The override is thread-local, so concurrently-running tests never observe
-/// each other's home. Restored on drop.
-#[cfg(test)]
-#[must_use]
-pub(crate) fn set_test_identity_home(path: &std::path::Path) -> TestIdentityHomeGuard {
-    let previous =
-        TEST_IDENTITY_HOME_OVERRIDE.with(|home| home.borrow_mut().replace(path.to_path_buf()));
-    TestIdentityHomeGuard { previous }
-}
-
-#[cfg(test)]
-pub(crate) struct TestIdentityHomeGuard {
-    previous: Option<std::path::PathBuf>,
-}
-
-#[cfg(test)]
-impl Drop for TestIdentityHomeGuard {
-    fn drop(&mut self) {
-        TEST_IDENTITY_HOME_OVERRIDE.with(|home| *home.borrow_mut() = self.previous.take());
-    }
+    dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
 fn identity_state_dir_for(
@@ -325,10 +267,9 @@ pub(crate) async fn load_or_create_key() -> Result<SecretKey> {
 
 pub fn default_node_key_path() -> Result<std::path::PathBuf> {
     #[cfg(test)]
-    if !std::env::var_os("MESH_LLM_NODE_KEY_PATH").is_some_and(|path| !path.is_empty()) {
-        // In tests the identity home is always an isolated per-test directory
-        // (explicit override, legacy env, or per-thread temp), so the default
-        // node key must live under it rather than the developer's real home.
+    if std::env::var_os("MESH_LLM_TEST_HOME").is_some()
+        && !std::env::var_os("MESH_LLM_NODE_KEY_PATH").is_some_and(|path| !path.is_empty())
+    {
         return Ok(identity_home_dir().join(".mesh-llm").join("key"));
     }
     let path = mesh_llm_identity::default_node_key_path()?;

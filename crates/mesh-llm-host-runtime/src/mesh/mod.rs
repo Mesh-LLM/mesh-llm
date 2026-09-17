@@ -88,7 +88,7 @@ mod direct_rescue;
 mod gossip;
 mod heartbeat;
 mod host_role_claims;
-pub(crate) mod identity_persistence;
+mod identity_persistence;
 mod lan_bootstrap;
 mod model_identity;
 mod node;

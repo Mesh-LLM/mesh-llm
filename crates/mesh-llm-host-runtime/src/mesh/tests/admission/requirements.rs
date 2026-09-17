@@ -1168,20 +1168,45 @@ pub(crate) fn assert_named_mesh_id_uses_documented_sha256_derivation() {
     );
 }
 
-/// Redirects identity persistence to an isolated per-test directory.
-///
-/// Uses a thread-local override rather than a process-global env var, so
-/// concurrently-running tests never share (or clobber) each other's identity
-/// home. This is what makes the adopted-membership persistence tests safe under
-/// the default parallel test runner.
-struct HomeGuard {
-    _guard: crate::mesh::identity_persistence::TestIdentityHomeGuard,
-}
+struct HomeGuard(Option<std::ffi::OsString>, Option<std::ffi::OsString>);
 
 impl HomeGuard {
     fn set(path: &std::path::Path) -> Self {
-        Self {
-            _guard: crate::mesh::identity_persistence::set_test_identity_home(path),
+        let previous = std::env::var_os("HOME");
+        let previous_test_home = std::env::var_os("MESH_LLM_TEST_HOME");
+        // SAFETY: requirement tests using this guard run serially, and Drop restores both.
+        unsafe {
+            std::env::set_var("HOME", path);
+            // SAFETY: requirement tests using this guard run serially, and Drop restores both.
+            // `dirs::home_dir()` ignores HOME on Windows, so the identity paths would
+            // resolve to the real home without this.
+            std::env::set_var("MESH_LLM_TEST_HOME", path);
+        };
+        Self(previous, previous_test_home)
+    }
+}
+
+impl Drop for HomeGuard {
+    fn drop(&mut self) {
+        match self.0.take() {
+            Some(value) => {
+                // SAFETY: this guard restores the process environment key it exclusively changed.
+                unsafe { std::env::set_var("HOME", value) }
+            }
+            None => {
+                // SAFETY: this guard restores the process environment key it exclusively changed.
+                unsafe { std::env::remove_var("HOME") }
+            }
+        }
+        match self.1.take() {
+            Some(value) => {
+                // SAFETY: this guard restores the process environment key it exclusively changed.
+                unsafe { std::env::set_var("MESH_LLM_TEST_HOME", value) }
+            }
+            None => {
+                // SAFETY: this guard restores the process environment key it exclusively changed.
+                unsafe { std::env::remove_var("MESH_LLM_TEST_HOME") }
+            }
         }
     }
 }
