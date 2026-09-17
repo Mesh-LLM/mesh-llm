@@ -28,10 +28,10 @@ pub use manifest::{
 };
 pub use types::{
     CURRENT_MESH_VERSION, NATIVE_RUNTIME_CACHE_DIR_ENV, NATIVE_RUNTIME_MANIFEST_URL_ENV,
-    NativeRuntimeBundleInstallPolicy, NativeRuntimeDownloadProgress,
+    NativeRuntimeBundleInstallPolicy, NativeRuntimeCatalog, NativeRuntimeDownloadProgress,
     NativeRuntimeDownloadProgressCallback, NativeRuntimeInstallOptions,
     NativeRuntimeInstallOutcome, NativeRuntimeInstallStatus, NativeRuntimeManifestOptions,
-    NativeRuntimeVerificationPolicy,
+    NativeRuntimeVerificationPolicy, mesh_native_runtime_catalog,
 };
 
 #[cfg(test)]
@@ -552,6 +552,50 @@ mod tests {
     }
 
     #[test]
+    fn explicit_catalog_controls_release_selection_without_mesh_build_metadata() {
+        let catalog = NativeRuntimeCatalog {
+            releases_url: "https://example.invalid/skippy/releases/".to_string(),
+            rolling_release: Some("standalone-dev".to_string()),
+        };
+        assert_eq!(
+            catalog.manifest_url("standalone-dev"),
+            "https://example.invalid/skippy/releases/latest/download/native-runtimes.json"
+        );
+        assert_eq!(
+            catalog.manifest_url("1.2.3"),
+            "https://example.invalid/skippy/releases/download/v1.2.3/native-runtimes.json"
+        );
+        let pinned = NativeRuntimeCatalog {
+            rolling_release: None,
+            ..catalog
+        };
+        assert_eq!(
+            pinned.manifest_url("standalone-dev"),
+            "https://example.invalid/skippy/releases/download/vstandalone-dev/native-runtimes.json"
+        );
+    }
+
+    #[test]
+    fn manifest_loading_uses_the_supplied_catalog() {
+        let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
+        }
+        let options = NativeRuntimeManifestOptions {
+            catalog: NativeRuntimeCatalog {
+                releases_url: "https://example.invalid/skippy/releases".to_string(),
+                rolling_release: None,
+            },
+            mesh_version: "1.2.3".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            manifest_url(&options).as_deref(),
+            Some("https://example.invalid/skippy/releases/download/v1.2.3/native-runtimes.json")
+        );
+    }
+
+    #[test]
     fn default_manifest_url_is_still_consulted_when_bundle_dirs_exist() {
         let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
         unsafe {
@@ -734,6 +778,7 @@ mod tests {
             .build()
             .unwrap()
             .block_on(load_release_manifest(NativeRuntimeManifestOptions {
+                catalog: mesh_native_runtime_catalog(),
                 mesh_version: "0.0.0+gLOCAL".to_string(),
                 manifest_path: Some(path),
                 manifest_url: Some("https://example.invalid/from-arg.json".to_string()),

@@ -25,17 +25,6 @@ pub fn default_manifest_url(build_version: &str, release_version: &str) -> Strin
     }
 }
 
-pub(crate) fn request_default_manifest_url(mesh_version: &str) -> String {
-    if mesh_version == mesh_llm_build_info::RELEASE_VERSION {
-        default_manifest_url(
-            mesh_llm_build_info::BUILD_VERSION,
-            mesh_llm_build_info::RELEASE_VERSION,
-        )
-    } else {
-        default_release_manifest_url(mesh_version)
-    }
-}
-
 /// Loads the merged runtime catalog for `options` and returns the manifest
 /// alone. See `load_release_manifest_with_sources` for the discovery rules.
 pub async fn load_release_manifest(
@@ -351,7 +340,7 @@ pub(crate) fn manifest_url(options: &NativeRuntimeManifestOptions) -> Option<Str
             // fails, see `load_release_manifest_with_sources`.
             options
                 .allow_default_manifest_url
-                .then(|| request_default_manifest_url(&options.mesh_version))
+                .then(|| options.catalog.manifest_url(&options.mesh_version))
         })
 }
 

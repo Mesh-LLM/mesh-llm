@@ -36,8 +36,41 @@ pub struct NativeRuntimeDownloadProgress {
     pub finished: bool,
 }
 
+/// Catalog location and release-channel selection supplied by the embedding product.
+/// Loading a catalog never consults compiled product build metadata.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NativeRuntimeCatalog {
+    /// Root containing `download/v<release>/native-runtimes.json`.
+    pub releases_url: String,
+    /// If set, requests for this release use `latest/download/native-runtimes.json`.
+    /// Other releases remain pinned. Standalone callers can leave this unset.
+    pub rolling_release: Option<String>,
+}
+
+impl NativeRuntimeCatalog {
+    pub fn manifest_url(&self, release: &str) -> String {
+        let root = self.releases_url.trim_end_matches('/');
+        if self.rolling_release.as_deref() == Some(release) {
+            format!("{root}/latest/download/native-runtimes.json")
+        } else {
+            format!("{root}/download/v{release}/native-runtimes.json")
+        }
+    }
+}
+
+/// Mesh's current catalog defaults. Kept at the compatibility boundary until
+/// the Mesh installer facade and standalone Skippy defaults are separated.
+pub fn mesh_native_runtime_catalog() -> NativeRuntimeCatalog {
+    NativeRuntimeCatalog {
+        releases_url: "https://github.com/Mesh-LLM/mesh-llm/releases".to_string(),
+        rolling_release: mesh_llm_build_info::is_sha_build(mesh_llm_build_info::BUILD_VERSION)
+            .then(|| CURRENT_MESH_VERSION.to_string()),
+    }
+}
+
 #[derive(Clone)]
 pub struct NativeRuntimeManifestOptions {
+    pub catalog: NativeRuntimeCatalog,
     pub mesh_version: String,
     pub manifest_path: Option<PathBuf>,
     pub manifest_url: Option<String>,
@@ -47,6 +80,7 @@ pub struct NativeRuntimeManifestOptions {
 
 #[derive(Clone)]
 pub struct NativeRuntimeInstallOptions {
+    pub catalog: NativeRuntimeCatalog,
     pub mesh_version: String,
     pub skippy_abi_version: Option<String>,
     pub selection: RuntimeSelection,
@@ -80,6 +114,7 @@ pub struct NativeRuntimeInstallOutcome {
 impl Default for NativeRuntimeManifestOptions {
     fn default() -> Self {
         Self {
+            catalog: mesh_native_runtime_catalog(),
             mesh_version: CURRENT_MESH_VERSION.to_string(),
             manifest_path: None,
             manifest_url: None,
@@ -92,6 +127,7 @@ impl Default for NativeRuntimeManifestOptions {
 impl Default for NativeRuntimeInstallOptions {
     fn default() -> Self {
         Self {
+            catalog: mesh_native_runtime_catalog(),
             mesh_version: CURRENT_MESH_VERSION.to_string(),
             skippy_abi_version: None,
             selection: RuntimeSelection::Recommended,

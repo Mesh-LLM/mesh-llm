@@ -17,6 +17,35 @@ Native runtime versions must match the Mesh LLM crate version exactly. The
 installer rejects incompatible release manifest entries instead of building
 native code through Cargo.
 
+## Explicit catalogs
+
+`NativeRuntimeInstallOptions::catalog` and `NativeRuntimeManifestOptions::catalog`
+carry a `NativeRuntimeCatalog`: a release URL root and an optional release that
+should track its latest catalog. Other releases use pinned version URLs. The
+loader uses these inputs; it does not infer release channels from Mesh build
+metadata. Explicit manifest files and URLs, environment overrides and download
+permissions keep their existing precedence.
+
+For an independently supplied Skippy runtime catalog:
+
+```rust
+use mesh_llm_runtime_install::{NativeRuntimeCatalog, NativeRuntimeInstallOptions};
+
+let options = NativeRuntimeInstallOptions {
+    mesh_version: "1.2.3".to_string(),
+    catalog: NativeRuntimeCatalog {
+        releases_url: "https://example.invalid/skippy/releases".to_string(),
+        rolling_release: None,
+    },
+    ..Default::default()
+};
+```
+
+The example URL is illustrative. This intermediate extraction still supplies
+Mesh defaults through `Default`; standalone Skippy release metadata, cache and
+bundle-discovery defaults must be provided by the standalone lifecycle layer.
+The `mesh_version` field retains its current wire/cache spelling for now.
+
 ## Example
 
 ```rust,no_run

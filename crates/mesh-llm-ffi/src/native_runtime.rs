@@ -77,6 +77,7 @@ fn runtime_install_options(
 ) -> Result<mesh_llm_sdk::native_runtime::NativeRuntimeInstallOptions, FfiError> {
     let progress = progress.map(runtime_progress_callback);
     Ok(mesh_llm_sdk::native_runtime::NativeRuntimeInstallOptions {
+        catalog: mesh_llm_sdk::native_runtime::mesh_native_runtime_catalog(),
         mesh_version: options
             .mesh_version
             .unwrap_or_else(|| mesh_llm_sdk::native_runtime::CURRENT_MESH_VERSION.to_string()),

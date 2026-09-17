@@ -25,6 +25,7 @@ pub async fn install_native_runtime(
     options: NativeRuntimeInstallOptions,
 ) -> Result<NativeRuntimeInstallOutcome> {
     let (manifest, sources) = load_release_manifest_with_sources(NativeRuntimeManifestOptions {
+        catalog: options.catalog.clone(),
         mesh_version: options.mesh_version.clone(),
         manifest_path: options.manifest_path.clone(),
         manifest_url: options.manifest_url.clone(),
