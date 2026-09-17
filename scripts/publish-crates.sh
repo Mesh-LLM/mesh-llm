@@ -413,6 +413,7 @@ publish_crates=(
     mesh-llm-console-server
     mesh-llm-tui
     mesh-llm-cli
+    skippy-hf-hub
     model-hf
     model-package
     mesh-llm-node

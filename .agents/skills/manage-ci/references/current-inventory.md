@@ -881,3 +881,7 @@ The runtime acquisition package is `skippy-runtime-install`; affected-crate,
 publish-order, environment-census and Docker precheck references follow that name.
 Mesh release policy is supplied by `mesh-llm-system`. This ownership change does
 not change native runtime artifact identities, runner policy or lane topology.
+
+The HF client path dependency is now `skippy-hf-hub`; Docker inputs and the
+publish dependency order include it before model acquisition. No workflow
+permissions, runner selection, or CI topology changed for this source rehome.

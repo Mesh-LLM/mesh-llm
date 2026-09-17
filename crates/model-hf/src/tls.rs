@@ -18,7 +18,7 @@ pub enum HfTlsProvider {
 
 /// Configure a CPU-safe process default before constructing Hugging Face clients.
 ///
-/// The published `mesh-llm-hf-hub` and `hf-xet` clients use reqwest 0.13's
+/// The `skippy-hf-hub` and `hf-xet` clients use reqwest 0.13's
 /// rustls backend. When no process provider is installed, reqwest selects its
 /// AWS-LC provider. AWS-LC's AArch64 SHA-512 path has caused illegal
 /// instructions on CPUs that do not advertise FEAT_SHA512. On those CPUs we

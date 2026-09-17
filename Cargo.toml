@@ -40,6 +40,7 @@ members = [
     "crates/model-ref",
     "crates/model-artifact",
     "crates/model-hf",
+    "crates/skippy-hf-hub",
     "crates/model-resolver",
     "crates/skippy-events",
     "crates/skippy-tokenizer",

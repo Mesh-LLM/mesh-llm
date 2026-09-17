@@ -995,3 +995,7 @@ Native runtime acquisition is now `skippy-runtime-install`. Mesh release/channel
 selection lives in `mesh-llm-system`; the installer has no Mesh build-info edge.
 CI crate selection, environment-mutation census, Docker copy checks and publishing
 use the Skippy package name. Artifact layout and workflow topology are unchanged.
+
+The HF client path dependency is now `skippy-hf-hub`; Docker inputs and the
+publish dependency order include it before model acquisition. No workflow
+permissions, runner selection, or CI topology changed for this source rehome.

@@ -58,3 +58,27 @@ not only workspace paths or Rust import names.
 Until these steps are complete, retain the current locked client and keep the
 full dependency gate open. This decision changes no dependency or download
 behavior and claims no M2 or standalone-serving acceptance result.
+
+## Rehome implementation
+
+The client is now imported as workspace package `skippy-hf-hub`; the four
+consumer manifests resolve their `hf_hub` alias to that path. This supersedes
+the instruction above to retain the registry package while evaluating options.
+The final acceptance gate remains open.
+
+The upstream v0.5.0 API does not provide the fork's typed HFClient/repository
+surface. Rehoming the pinned fork avoids rewriting acquisition consumers while
+preserving its Apache-2.0 license. `crates/skippy-hf-hub/SOURCE_PROVENANCE.json`
+records hashes of all 24 original Rust files, verified against the pinned Git
+blobs, and the imported hashes and explicit local changes.
+
+Besides formatting and subprocess isolation of eight token-precedence scenarios,
+the import boxes four inner download futures inside their existing async public
+methods. The retained future-size tests failed against both the unmodified
+pinned source and the initial import on this toolchain; boxing restores their
+original limits. This changes allocation and future representation, not the
+public async signatures. An uncalled private HEAD helper was removed and its
+independent relative-location predicate retained under test configuration.
+
+The imported suite and consumer checks are migration evidence, not a substitute
+for clean-install acquisition, cache reuse/removal, and standalone serving.

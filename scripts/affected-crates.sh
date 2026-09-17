@@ -49,6 +49,7 @@ WORKSPACE_MEMBERS=(
   "model-ref"
   "model-artifact"
   "model-hf"
+  "skippy-hf-hub"
   "model-resolver"
   "skippy-protocol"
   "skippy-events"

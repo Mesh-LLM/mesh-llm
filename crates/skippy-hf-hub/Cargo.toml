@@ -1,0 +1,55 @@
+[package]
+name = "skippy-hf-hub"
+version.workspace = true
+edition = "2024"
+description = "Rust client for the Hugging Face Hub API"
+license = "Apache-2.0"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+
+[lib]
+name = "hf_hub"
+
+[package.metadata.docs.rs]
+features = ["blocking"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+bytes = "1"
+reqwest = { version = "0.13", features = ["json", "stream", "multipart", "query"] }
+hyper = "1"
+tokio = { version = "1", features = ["io-util"] }
+tokio-retry = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+url = "2"
+futures = "0.3"
+bon = "3"
+globset = "0.4"
+base64 = "0.22"
+pathdiff = "0.2"
+percent-encoding = "2"
+tokio-util = { version = "0.7", features = ["io"] }
+tracing = "0.1"
+hf-xet = "1.5.3"
+sha2 = "0.11"
+
+[features]
+default = []
+blocking = ["tokio/rt"]
+rustls-tls = ["reqwest/rustls"]
+socks = ["reqwest/socks"]
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+# `tokio-retry` -> `rand` 0.8 -> `rand_core` 0.6 -> `getrandom` 0.2 transitively
+# needs the `js` feature on wasm32 to compile.
+getrandom = { version = "0.2", features = ["js"] }
+wasm-bindgen-futures = "0.4"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tempfile = "3"
+serial_test = "3"
+http = "1"

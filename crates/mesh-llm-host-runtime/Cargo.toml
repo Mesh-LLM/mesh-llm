@@ -107,7 +107,7 @@ axum = "0.8"
 schemars = "1"
 prost = "0.14"
 toml = "1.1"
-hf_hub = { package = "mesh-llm-hf-hub", version = "1.0.2", default-features = false, features = ["blocking"] }
+hf_hub = { package = "skippy-hf-hub", path = "../skippy-hf-hub", version = "0.76.1", default-features = false, features = ["blocking"] }
 tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]

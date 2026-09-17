@@ -3624,7 +3624,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "serial_test",
+ "serial_test 4.0.1",
  "tabwriter",
  "tempfile",
  "tokio",
@@ -3708,7 +3708,6 @@ dependencies = [
  "mesh-llm-cli",
  "mesh-llm-config",
  "mesh-llm-events",
- "mesh-llm-hf-hub",
  "mesh-llm-identity",
  "mesh-llm-plugin-manager",
  "mesh-llm-system",
@@ -3724,7 +3723,8 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
- "serial_test",
+ "serial_test 4.0.1",
+ "skippy-hf-hub",
  "skippy-native-runtime",
  "skippy-runtime-install",
  "strum",
@@ -3747,7 +3747,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "serial_test",
+ "serial_test 4.0.1",
  "skippy-native-runtime",
  "skippy-protocol",
  "tempfile",
@@ -3810,35 +3810,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mesh-llm-hf-hub"
-version = "1.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43088a838cf0c6715c65f65a5ac99045fd6d6e90949a8a4183b8104ab791e96b"
-dependencies = [
- "base64 0.22.1",
- "bon",
- "bytes",
- "futures",
- "getrandom 0.2.17",
- "globset",
- "hf-xet",
- "hyper",
- "pathdiff",
- "percent-encoding",
- "reqwest",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "thiserror 2.0.20",
- "tokio",
- "tokio-retry",
- "tokio-util",
- "tracing",
- "url",
- "wasm-bindgen-futures",
-]
-
-[[package]]
 name = "mesh-llm-host-runtime"
 version = "0.76.1"
 dependencies = [
@@ -3865,7 +3836,6 @@ dependencies = [
  "mesh-llm-client",
  "mesh-llm-config",
  "mesh-llm-events",
- "mesh-llm-hf-hub",
  "mesh-llm-identity",
  "mesh-llm-log-store",
  "mesh-llm-node",
@@ -3900,12 +3870,13 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "serial_test",
+ "serial_test 4.0.1",
  "sha2 0.11.0",
  "skippy-coordinator",
  "skippy-events",
  "skippy-ffi",
  "skippy-guardrails",
+ "skippy-hf-hub",
  "skippy-model",
  "skippy-native-runtime",
  "skippy-package-format",
@@ -3945,7 +3916,7 @@ dependencies = [
  "rand 0.10.2",
  "serde",
  "serde_json",
- "serial_test",
+ "serial_test 4.0.1",
  "sha2 0.11.0",
  "thiserror 2.0.20",
  "zeroize",
@@ -4117,7 +4088,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "serial_test",
+ "serial_test 4.0.1",
  "sha2 0.11.0",
  "skippy-native-runtime",
  "skippy-runtime",
@@ -4279,14 +4250,14 @@ dependencies = [
  "dirs",
  "hex",
  "libc",
- "mesh-llm-hf-hub",
  "model-artifact",
  "model-ref",
  "rustls",
  "serde",
  "serde_json",
- "serial_test",
+ "serial_test 4.0.1",
  "sha2 0.11.0",
+ "skippy-hf-hub",
  "tempfile",
  "tokio",
  "tracing",
@@ -4300,13 +4271,13 @@ dependencies = [
  "bytes",
  "chrono",
  "futures",
- "mesh-llm-hf-hub",
  "model-hf",
  "model-ref",
  "reqwest",
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "skippy-hf-hub",
  "tempfile",
  "tokio",
 ]
@@ -6986,6 +6957,20 @@ dependencies = [
 
 [[package]]
 name = "serial_test"
+version = "3.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "699f4197115b8a7e7ff19c9a315a4bd6fffec26cc4626ef45ecaea389e081c6d"
+dependencies = [
+ "futures-executor",
+ "futures-util",
+ "log",
+ "once_cell",
+ "parking_lot",
+ "serial_test_derive 3.5.0",
+]
+
+[[package]]
+name = "serial_test"
 version = "4.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6df5ed973ad8d834e09f824f9e9f449af6b9a3745f78dec7cc752770bd3bf11"
@@ -6995,7 +6980,18 @@ dependencies = [
  "log",
  "once_cell",
  "parking_lot",
- "serial_test_derive",
+ "serial_test_derive 4.0.1",
+]
+
+[[package]]
+name = "serial_test_derive"
+version = "3.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94e153fc76e1c6a068703d6d29c508a0b15c061c4b7e43da59cc097bc342673c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -7244,6 +7240,36 @@ name = "skippy-hardware-profile"
 version = "0.76.1"
 dependencies = [
  "skippy-native-runtime",
+]
+
+[[package]]
+name = "skippy-hf-hub"
+version = "0.76.1"
+dependencies = [
+ "base64 0.22.1",
+ "bon",
+ "bytes",
+ "futures",
+ "getrandom 0.2.17",
+ "globset",
+ "hf-xet",
+ "http",
+ "hyper",
+ "pathdiff",
+ "percent-encoding",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serial_test 3.5.0",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-retry",
+ "tokio-util",
+ "tracing",
+ "url",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]
