@@ -1,9 +1,9 @@
 [package]
-name = "mesh-llm-hardware-profile"
+name = "skippy-hardware-profile"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
-description = "Host hardware profile detection for Mesh LLM native runtime selection"
+description = "Host hardware profile detection for Skippy native runtime selection"
 repository = "https://github.com/Mesh-LLM/mesh-llm"
 homepage = "https://github.com/Mesh-LLM/mesh-llm"
 readme = "README.md"
@@ -12,4 +12,4 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
-mesh-llm-native-runtime = { path = "../mesh-llm-native-runtime", version = "0.76.1" }
+skippy-native-runtime = { path = "../skippy-native-runtime", version = "0.76.1" }

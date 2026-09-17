@@ -2,7 +2,7 @@
 
 use crate::environment::{env_string_set, env_u32, env_u32_set};
 use crate::platform::command_output;
-use mesh_llm_native_runtime::{HostCudaProfile, HostGpuProfile};
+use skippy_native_runtime::{HostCudaProfile, HostGpuProfile};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Read;

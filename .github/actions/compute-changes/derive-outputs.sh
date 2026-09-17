@@ -387,7 +387,7 @@ elif [[ -n "$CHANGED_FILES" ]]; then
   fi
   if [[ -n "$DIRECT_SDK_INPUTS" ]]; then
     SDK_SMOKE_REQUIRED="true"
-  elif echo "$AFFECTED_CRATES" | jq -e 'index("mesh-llm-client") or index("mesh-llm-api-client") or index("mesh-llm-api-server") or index("mesh-llm-config") or index("mesh-llm-console-server") or index("mesh-llm-ffi") or index("mesh-llm-native-runtime") or index("mesh-llm-protocol") or index("mesh-llm-routing") or index("mesh-llm-types")' >/dev/null; then
+  elif echo "$AFFECTED_CRATES" | jq -e 'index("mesh-llm-client") or index("mesh-llm-api-client") or index("mesh-llm-api-server") or index("mesh-llm-config") or index("mesh-llm-console-server") or index("mesh-llm-ffi") or index("skippy-native-runtime") or index("mesh-llm-protocol") or index("mesh-llm-routing") or index("mesh-llm-types")' >/dev/null; then
     SDK_SMOKE_REQUIRED="true"
   fi
 fi

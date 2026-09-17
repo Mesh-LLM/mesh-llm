@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use mesh_llm_native_runtime::{
+use skippy_native_runtime::{
     InstalledNativeRuntime, NATIVE_RUNTIME_MANIFEST_FILE, NativeRuntimeCache, NativeRuntimeManifest,
 };
 use std::collections::BTreeSet;
@@ -303,7 +303,7 @@ fn append_runtime_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mesh_llm_native_runtime::{
+    use skippy_native_runtime::{
         NativeRuntimeArtifact, NativeRuntimeBackend, NativeRuntimePlatform,
     };
 

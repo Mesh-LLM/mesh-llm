@@ -331,7 +331,7 @@ fn test_intel_benchmark_requires_a_packaged_intel_runtime_tool() {
 
 #[test]
 fn test_runtime_tool_selection_excludes_preferred_legacy_runtime_without_tool() {
-    use mesh_llm_native_runtime::{
+    use skippy_native_runtime::{
         InstalledNativeRuntime, NativeRuntimeArtifact, NativeRuntimeBackend, NativeRuntimeManifest,
         NativeRuntimePlatform,
     };

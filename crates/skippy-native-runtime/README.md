@@ -1,11 +1,16 @@
-# mesh-llm-native-runtime
+# skippy-native-runtime
 
 Shared native runtime manifest, host profile, resolver, cache, and load-plan
-policy for MeshLLM.
+policy owned by Skippy and consumed by Mesh.
 
 This crate is the source of truth for selecting native runtimes. CLI install,
 SDK serving install, dynamic loading, and autoupdate should all use this same
 contract instead of carrying their own CUDA/ROCm/Vulkan detection logic.
+
+The crate ownership has moved; manifest fields, artifact IDs, cache layout and
+environment variables retain their current spelling until the coordinated M2
+producer/consumer migration. This checkpoint does not establish independent
+runtime release or installation policy.
 
 ## Native Runtimes
 
@@ -121,7 +126,7 @@ Release jobs publish `native-runtimes.json`:
 Selection evaluates artifacts against `HostRuntimeProfile`:
 
 ```rust
-use mesh_llm_native_runtime::{
+use skippy_native_runtime::{
     HostCudaProfile, HostRuntimeProfile, NativeRuntimeBackendKind,
 };
 use std::collections::BTreeSet;
@@ -147,7 +152,7 @@ let profile = HostRuntimeProfile {
 };
 ```
 
-`mesh-llm-hardware-profile` builds this profile for real hosts. It supports
+`skippy-hardware-profile` builds this profile for real hosts. It supports
 explicit environment overrides for CI/release testing, including
 `MESH_LLM_CUDA_TOOLKIT_MAJOR`, `MESH_LLM_CUDA_TOOLKIT_MAJORS`,
 `MESH_LLM_CUDA_DRIVER_MAX_MAJOR`, `MESH_LLM_CUDA_GPU_ARCHES`,
@@ -179,14 +184,14 @@ Use `NativeRuntimeResolver` when the caller needs both the selected artifact and
 where it should come from:
 
 ```rust
-use mesh_llm_native_runtime::{
+use skippy_native_runtime::{
     NativeRuntimeCache, NativeRuntimeReleaseManifest, NativeRuntimeResolver,
     RuntimeSelection,
 };
 use std::path::PathBuf;
 
 # fn example(
-#     profile: mesh_llm_native_runtime::HostRuntimeProfile,
+#     profile: skippy_native_runtime::HostRuntimeProfile,
 #     manifest: NativeRuntimeReleaseManifest,
 # ) -> anyhow::Result<()> {
 let cache = NativeRuntimeCache::new("/tmp/mesh-llm/native-runtimes");
@@ -250,7 +255,7 @@ validates `runtime.libraries` and returns absolute paths for the Skippy FFI
 loader:
 
 ```rust
-# fn example(installed: mesh_llm_native_runtime::InstalledNativeRuntime) -> anyhow::Result<()> {
+# fn example(installed: skippy_native_runtime::InstalledNativeRuntime) -> anyhow::Result<()> {
 let plan = installed.load_plan()?;
 for library in plan.libraries {
     println!("load {}", library.display());

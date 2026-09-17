@@ -1,10 +1,10 @@
 use super::NativeRuntimeConfigSelection;
 use anyhow::Result;
-use mesh_llm_native_runtime::{CachePrunePlan, NativeRuntimePruneMode, RuntimeSelection};
 use mesh_llm_runtime_install::{
     NativeRuntimeDownloadProgressCallback, NativeRuntimeInstallOptions,
     NativeRuntimeInstallOutcome, install_native_runtime, native_runtime_cache,
 };
+use skippy_native_runtime::{CachePrunePlan, NativeRuntimePruneMode, RuntimeSelection};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 
@@ -154,13 +154,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mesh_llm_native_runtime::{
+    use mesh_llm_runtime_install::{
+        CURRENT_MESH_VERSION, NativeRuntimeBundleInstallPolicy, NativeRuntimeInstallStatus,
+    };
+    use skippy_native_runtime::{
         CachePrunePlan, InstalledNativeRuntime, NativeRuntimeArtifact, NativeRuntimeBackend,
         NativeRuntimeBackendKind, NativeRuntimePlatform, NativeRuntimeResolution,
         NativeRuntimeSource,
-    };
-    use mesh_llm_runtime_install::{
-        CURRENT_MESH_VERSION, NativeRuntimeBundleInstallPolicy, NativeRuntimeInstallStatus,
     };
     use std::sync::{
         Arc, Mutex,
@@ -374,7 +374,7 @@ mod tests {
                 native_runtime_id: artifact.id.clone(),
                 flavor: "cpu".to_string(),
                 path: PathBuf::from("/tmp/meshllm-runtime-linux-x86_64-cpu"),
-                manifest: mesh_llm_native_runtime::NativeRuntimeManifest {
+                manifest: skippy_native_runtime::NativeRuntimeManifest {
                     runtime: artifact.clone(),
                 },
             },

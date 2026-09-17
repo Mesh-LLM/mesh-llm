@@ -1,8 +1,8 @@
 //! GPU inventory and NVIDIA probe parsing.
 
 use crate::platform::{command_output, gpu_labels, looks_like_display_controller};
-use mesh_llm_native_runtime::HostGpuProfile;
-use mesh_llm_native_runtime::host::HostGpuProbe;
+use skippy_native_runtime::HostGpuProfile;
+use skippy_native_runtime::host::HostGpuProbe;
 use std::collections::BTreeMap;
 pub(crate) fn detect_gpus() -> Vec<HostGpuProfile> {
     merge_nvidia_and_fallback_gpus(detect_nvidia_gpu_profiles(), fallback_gpu_profiles())

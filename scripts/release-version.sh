@@ -262,7 +262,7 @@ update_gradle_project_version "$kotlin_build_file" "$version"
 versioned_files+=("$kotlin_build_file")
 
 literal_version_files=(
-    "crates/mesh-llm-native-runtime/README.md"
+    "crates/skippy-native-runtime/README.md"
     "crates/mesh-llm-sdk/README.md"
     "crates/mesh-llm-ui/package.json"
     "crates/mesh-llm-ui/package-lock.json"

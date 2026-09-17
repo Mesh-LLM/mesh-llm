@@ -37,8 +37,8 @@ pub(super) fn prepare_embedded_native_runtime(
 #[cfg(any(feature = "dynamic-native-runtime", test))]
 fn embedded_native_runtime_selection(
     config: &mesh_llm_config::NativeRuntimeConfig,
-) -> Result<mesh_llm_native_runtime::RuntimeSelection> {
-    mesh_llm_native_runtime::RuntimeSelection::parse(config.selection.as_deref())
+) -> Result<skippy_native_runtime::RuntimeSelection> {
+    skippy_native_runtime::RuntimeSelection::parse(config.selection.as_deref())
 }
 
 #[cfg(any(feature = "dynamic-native-runtime", test))]
@@ -121,8 +121,8 @@ mod tests {
 
         assert_eq!(
             selection,
-            mesh_llm_native_runtime::RuntimeSelection::Backend {
-                kind: mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan,
+            skippy_native_runtime::RuntimeSelection::Backend {
+                kind: skippy_native_runtime::NativeRuntimeBackendKind::Vulkan,
                 cuda_toolkit_major: None,
             }
         );
@@ -133,7 +133,7 @@ mod tests {
         assert_eq!(
             embedded_native_runtime_selection(&mesh_llm_config::NativeRuntimeConfig::default())
                 .expect("default selection should parse"),
-            mesh_llm_native_runtime::RuntimeSelection::Recommended
+            skippy_native_runtime::RuntimeSelection::Recommended
         );
     }
 }

@@ -27,7 +27,7 @@ mesh-llm-build-info.workspace = true
 mesh-llm-cli = { path = "../mesh-llm-cli", version = "0.76.1" }
 mesh-llm-config = { path = "../mesh-llm-config", version = "0.76.1" }
 mesh-llm-events = { path = "../mesh-llm-events", version = "0.76.1" }
-mesh-llm-native-runtime = { path = "../mesh-llm-native-runtime", version = "0.76.1" }
+skippy-native-runtime = { path = "../skippy-native-runtime", version = "0.76.1" }
 mesh-llm-plugin-manager = { path = "../mesh-llm-plugin-manager", version = "0.76.1" }
 mesh-llm-identity = { path = "../mesh-llm-identity", version = "0.76.1", features = ["host-io"] }
 mesh-llm-runtime-install = { path = "../mesh-llm-runtime-install", version = "0.76.1" }

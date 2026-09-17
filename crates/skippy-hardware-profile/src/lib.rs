@@ -1,4 +1,4 @@
-use mesh_llm_native_runtime::{
+use skippy_native_runtime::{
     HostCudaProfile, HostGpuProfile, HostRocmProfile, HostRuntimeProfile, HostVulkanProfile,
     NativeRuntimeBackendKind,
 };
@@ -258,7 +258,7 @@ mod tests {
 
     #[test]
     fn mi300x_kfd_evidence_selects_rocm_over_cpu_runtime() {
-        use mesh_llm_native_runtime::{
+        use skippy_native_runtime::{
             NativeRuntimeArtifact, NativeRuntimeBackend, NativeRuntimePlatform, RuntimeSelection,
             select_native_runtime_from_artifacts,
         };

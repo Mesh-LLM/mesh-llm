@@ -8,7 +8,7 @@ pub use discovery::{
     NATIVE_RUNTIME_BUNDLE_DIR_ENV, discover_local_native_runtimes,
     discover_local_native_runtimes_with_filter, discover_native_runtime_bundle_dirs,
 };
-pub use mesh_llm_native_runtime::{
+pub use skippy_native_runtime::{
     CachePrunePlan, CandidateEvaluation, CandidateRejection, HostGpuProfile, HostRuntimeProfile,
     InstalledNativeRuntime, NATIVE_RUNTIME_MANIFEST_FILE, NativeRuntimeArtifact,
     NativeRuntimeCache, NativeRuntimeCacheRoot, NativeRuntimeFlavor, NativeRuntimeFlavorParseError,
@@ -50,11 +50,11 @@ pub(crate) use manifest::{
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mesh_llm_native_runtime::{
+    use sha2::Digest;
+    use skippy_native_runtime::{
         CudaRuntimeRequirements, HostCudaProfile, NativeRuntimeBackend, NativeRuntimeBackendKind,
         NativeRuntimePlatform,
     };
-    use sha2::Digest;
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
 

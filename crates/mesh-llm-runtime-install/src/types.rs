@@ -1,7 +1,7 @@
 //! Native runtime install option and outcome types.
 
-use mesh_llm_native_runtime::{InstalledNativeRuntime, RuntimeSelection};
 use serde::{Deserialize, Serialize};
+use skippy_native_runtime::{InstalledNativeRuntime, RuntimeSelection};
 use std::path::PathBuf;
 use std::sync::Arc;
 pub const CURRENT_MESH_VERSION: &str = mesh_llm_build_info::RELEASE_VERSION;
@@ -71,7 +71,7 @@ pub enum NativeRuntimeInstallStatus {
 pub struct NativeRuntimeInstallOutcome {
     pub status: NativeRuntimeInstallStatus,
     pub runtime: InstalledNativeRuntime,
-    pub resolution: mesh_llm_native_runtime::NativeRuntimeResolution,
+    pub resolution: skippy_native_runtime::NativeRuntimeResolution,
     /// Which catalogs were consulted to reach this resolution.
     #[serde(default)]
     pub sources: crate::manifest::NativeRuntimeCatalogSources,

@@ -7,12 +7,12 @@ use crate::manifest::{
 use crate::types::*;
 use anyhow::{Context, Result, bail};
 use futures_util::StreamExt;
-use mesh_llm_native_runtime::{
+use sha2::Digest;
+use skippy_native_runtime::{
     CandidateEvaluation, CandidateRejection, InstalledNativeRuntime, NativeRuntimeArtifact,
     NativeRuntimeCache, NativeRuntimeManifest, NativeRuntimeResolver, NativeRuntimeSource,
     RuntimeSelection,
 };
-use sha2::Digest;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -261,7 +261,7 @@ fn candidate_is_plausible(candidate: &CandidateEvaluation) -> bool {
 
 pub(crate) async fn install_resolved_runtime(
     cache: &NativeRuntimeCache,
-    resolution: mesh_llm_native_runtime::NativeRuntimeResolution,
+    resolution: skippy_native_runtime::NativeRuntimeResolution,
     options: &NativeRuntimeInstallOptions,
 ) -> Result<NativeRuntimeInstallOutcome> {
     match resolution.source.clone() {
@@ -338,7 +338,7 @@ pub(crate) fn bundle_path_matches_explicit_root(
 
 pub(crate) fn in_place_bundle_outcome(
     path: &Path,
-    resolution: mesh_llm_native_runtime::NativeRuntimeResolution,
+    resolution: skippy_native_runtime::NativeRuntimeResolution,
 ) -> Result<NativeRuntimeInstallOutcome> {
     let manifest = NativeRuntimeManifest::read_from_dir(path)?;
     let runtime = InstalledNativeRuntime {
@@ -362,7 +362,7 @@ pub(crate) fn in_place_bundle_outcome(
 
 pub(crate) fn installed_outcome(
     cache: &NativeRuntimeCache,
-    resolution: mesh_llm_native_runtime::NativeRuntimeResolution,
+    resolution: skippy_native_runtime::NativeRuntimeResolution,
 ) -> Result<NativeRuntimeInstallOutcome> {
     let runtime = cache
         .find_installed(
@@ -539,7 +539,7 @@ pub(crate) fn collect_runtime_manifest_dirs(dir: &Path, matches: &mut Vec<PathBu
         let path = entry.path();
         if entry.file_type()?.is_dir() {
             if path
-                .join(mesh_llm_native_runtime::NATIVE_RUNTIME_MANIFEST_FILE)
+                .join(skippy_native_runtime::NATIVE_RUNTIME_MANIFEST_FILE)
                 .is_file()
             {
                 matches.push(path);

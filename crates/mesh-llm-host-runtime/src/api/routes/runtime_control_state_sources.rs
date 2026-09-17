@@ -3,8 +3,8 @@ use crate::api::MeshApi;
 use crate::mesh;
 use crate::models::LocalModelInventorySnapshot;
 use mesh_llm_config::{ConfigConditionValue, ConfigOptionsSource};
-use mesh_llm_native_runtime::NativeRuntimeBackendKind;
 use mesh_llm_plugin_manager::{InstalledPluginMetadata, PluginStore, default_store_root};
+use skippy_native_runtime::NativeRuntimeBackendKind;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RuntimeControlStateSources {

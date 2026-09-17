@@ -68,9 +68,9 @@ jobs:
             crates/mesh-llm-cli/ \
             crates/mesh-llm-commands/ \
             crates/mesh-llm-events/ \
-            crates/mesh-llm-hardware-profile/ \
+            crates/skippy-hardware-profile/ \
             crates/mesh-llm-identity/ \
-            crates/mesh-llm-native-runtime/ \
+            crates/skippy-native-runtime/ \
             crates/mesh-llm-release-footer/ \
             crates/mesh-llm-protocol/ \
             crates/mesh-llm-routing/ \

@@ -4,10 +4,10 @@ use crate::cache::current_skippy_abi_version;
 use crate::discovery::discover_native_runtime_bundle_dirs;
 use crate::types::{NATIVE_RUNTIME_MANIFEST_URL_ENV, NativeRuntimeManifestOptions};
 use anyhow::{Context, Result, bail};
-use mesh_llm_native_runtime::{
+use sha2::Digest;
+use skippy_native_runtime::{
     NativeRuntimeArtifact, NativeRuntimeManifest, NativeRuntimeReleaseManifest,
 };
-use sha2::Digest;
 use std::path::PathBuf;
 use std::time::Duration;
 pub fn default_release_manifest_url(mesh_version: &str) -> String {

@@ -20,7 +20,12 @@ A replacement must preserve the required client surface and those semantics;
 this audit does not establish equivalence with any upstream release.
 
 The locked `cargo metadata --locked --format-version 1` graph contains no other
-`mesh-*` package in this fork's 334-package transitive closure. A source scan of
+`mesh-*` package in this fork's transitive closure. The recorded count of 334
+uses unique package IDs reachable through `resolve.nodes[].dependencies`,
+starting with the fork's dependencies and excluding the fork itself, from the
+unfiltered default-feature metadata invocation above. Different target/feature
+or edge-kind filtering can produce different counts; the no-other-Mesh-package
+conclusion is the relevant result. A source scan of
 the installed 1.0.2 package for Mesh, Skippy and Iroh names finds only its own
 package installation example. This is a generic registry client fork, not a
 reverse call into Mesh discovery, plugins or serving. Its package identity still

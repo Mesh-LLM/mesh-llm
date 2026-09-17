@@ -1,6 +1,6 @@
 //! Platform GPU label discovery and backend flavor hints.
 
-use mesh_llm_native_runtime::NativeRuntimeBackendKind;
+use skippy_native_runtime::NativeRuntimeBackendKind;
 use std::collections::BTreeSet;
 use std::process::Command;
 

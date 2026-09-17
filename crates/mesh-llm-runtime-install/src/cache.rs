@@ -2,7 +2,7 @@
 
 use crate::types::{CURRENT_MESH_VERSION, NATIVE_RUNTIME_CACHE_DIR_ENV};
 use anyhow::{Context, Result};
-use mesh_llm_native_runtime::{HostRuntimeProfile, NativeRuntimeCache};
+use skippy_native_runtime::{HostRuntimeProfile, NativeRuntimeCache};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 pub fn current_skippy_abi_version() -> String {
@@ -50,5 +50,5 @@ pub fn native_runtime_cache(cache_dir: Option<&Path>) -> Result<NativeRuntimeCac
 }
 
 pub fn host_runtime_profile() -> HostRuntimeProfile {
-    mesh_llm_hardware_profile::host_runtime_profile()
+    skippy_hardware_profile::host_runtime_profile()
 }

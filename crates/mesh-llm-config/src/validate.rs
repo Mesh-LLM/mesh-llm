@@ -21,7 +21,7 @@ use crate::validation_support::{
 };
 use crate::*;
 use anyhow::Result;
-use mesh_llm_native_runtime::{NativeRuntimeBackendKind, RuntimeSelection};
+use skippy_native_runtime::{NativeRuntimeBackendKind, RuntimeSelection};
 
 pub fn validate_config_diagnostics(config: &MeshConfig) -> Vec<ConfigDiagnostic> {
     let mut diagnostics = Vec::new();

@@ -8,7 +8,7 @@
     "crates/mesh-llm-commands/src/runtime_native/formatters.rs",
     "crates/mesh-llm-commands/src/runtime_native/setup_helpers.rs",
     "crates/mesh-llm-host-runtime/src/system/native_runtime.rs",
-    "crates/mesh-llm-native-runtime/src/resolver.rs",
+    "crates/skippy-native-runtime/src/resolver.rs",
     "crates/mesh-llm-runtime-install/src/install.rs",
     "crates/mesh-llm-runtime-install/src/lib.rs",
     "crates/mesh-llm-runtime-install/src/manifest.rs",
@@ -22,7 +22,7 @@
     "mesh-llm",
     "mesh-llm-commands",
     "mesh-llm-host-runtime",
-    "mesh-llm-native-runtime",
+    "skippy-native-runtime",
     "mesh-llm-runtime-install"
   ],
   "workspace_packages": [
@@ -39,8 +39,8 @@
       "path": "crates/mesh-llm-host-runtime"
     },
     {
-      "name": "mesh-llm-native-runtime",
-      "path": "crates/mesh-llm-native-runtime"
+      "name": "skippy-native-runtime",
+      "path": "crates/skippy-native-runtime"
     },
     {
       "name": "mesh-llm-runtime-install",

@@ -6,7 +6,7 @@ mod dynamic {
         NativeRuntimeInstallOptions, NativeRuntimeInstallOutcome,
     };
     use anyhow::{Context, Result, bail};
-    use mesh_llm_native_runtime::{
+    use skippy_native_runtime::{
         CandidateRejection, HostRuntimeProfile, InstalledNativeRuntime, NativeRuntimeArtifact,
         NativeRuntimeCache, NativeRuntimeLoadPlan, NativeRuntimeManifest,
         NativeRuntimeReleaseManifest, RuntimeSelection, evaluate_native_runtime_artifact,
@@ -371,7 +371,7 @@ mod dynamic {
                         profile.arch
                     );
                 }
-                let evaluation = mesh_llm_native_runtime::evaluate_native_runtime_artifact(
+                let evaluation = skippy_native_runtime::evaluate_native_runtime_artifact(
                     &outcome.runtime.manifest.runtime,
                     &profile,
                     &startup_selection.mesh_version,
@@ -468,7 +468,7 @@ mod dynamic {
                 .map(|runtime| runtime.manifest.runtime.clone())
                 .collect(),
         };
-        let Some(candidate) = mesh_llm_native_runtime::select_native_runtime_from_artifacts(
+        let Some(candidate) = skippy_native_runtime::select_native_runtime_from_artifacts(
             &manifest.artifacts,
             profile,
             initial_cache_version,
@@ -501,7 +501,7 @@ mod dynamic {
             .iter()
             .map(|runtime| runtime.manifest.runtime.clone())
             .collect::<Vec<_>>();
-        let Some(candidate) = mesh_llm_native_runtime::select_native_runtime_from_artifacts(
+        let Some(candidate) = skippy_native_runtime::select_native_runtime_from_artifacts(
             &artifacts,
             profile,
             cache_mesh_version,
@@ -693,7 +693,7 @@ mod dynamic {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use mesh_llm_native_runtime::{
+        use skippy_native_runtime::{
             NativeRuntimeBackend, NativeRuntimeBackendKind, NativeRuntimeManifest,
             NativeRuntimePlatform,
         };
@@ -1219,8 +1219,8 @@ mod dynamic {
                         Ok(NativeRuntimeInstallOutcome {
                             status:
                                 crate::system::native_runtime_install::NativeRuntimeInstallStatus::Installed,
-                            resolution: mesh_llm_native_runtime::NativeRuntimeResolution {
-                                source: mesh_llm_native_runtime::NativeRuntimeSource::Download {
+                            resolution: skippy_native_runtime::NativeRuntimeResolution {
+                                source: skippy_native_runtime::NativeRuntimeSource::Download {
                                     url: "https://example.invalid/legacy-runtime.tar.gz".to_string(),
                                 },
                                 selected: runtime.manifest.runtime.clone(),
@@ -1289,8 +1289,8 @@ mod dynamic {
                         Ok(NativeRuntimeInstallOutcome {
                             status:
                                 crate::system::native_runtime_install::NativeRuntimeInstallStatus::Installed,
-                            resolution: mesh_llm_native_runtime::NativeRuntimeResolution {
-                                source: mesh_llm_native_runtime::NativeRuntimeSource::Download {
+                            resolution: skippy_native_runtime::NativeRuntimeResolution {
+                                source: skippy_native_runtime::NativeRuntimeSource::Download {
                                     url: "https://example.invalid/newer-glibc-runtime.tar.gz".to_string(),
                                 },
                                 selected: runtime.manifest.runtime.clone(),
@@ -1607,8 +1607,8 @@ mod dynamic {
                             Ok(NativeRuntimeInstallOutcome {
                                 status: crate::system::native_runtime_install::NativeRuntimeInstallStatus::Installed,
                                 runtime,
-                                resolution: mesh_llm_native_runtime::NativeRuntimeResolution {
-                                    source: mesh_llm_native_runtime::NativeRuntimeSource::Bundle {
+                                resolution: skippy_native_runtime::NativeRuntimeResolution {
+                                    source: skippy_native_runtime::NativeRuntimeSource::Bundle {
                                         path: source,
                                     },
                                     selected: NativeRuntimeManifest::read_from_dir(&bundle_dir)?
@@ -1733,7 +1733,7 @@ mod dynamic {
             assert_eq!(
                 selection.runtime_selection,
                 RuntimeSelection::Backend {
-                    kind: mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan,
+                    kind: skippy_native_runtime::NativeRuntimeBackendKind::Vulkan,
                     cuda_toolkit_major: None,
                 }
             );
@@ -1756,7 +1756,7 @@ mod dynamic {
             assert_eq!(
                 selection.runtime_selection,
                 RuntimeSelection::Backend {
-                    kind: mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan,
+                    kind: skippy_native_runtime::NativeRuntimeBackendKind::Vulkan,
                     cuda_toolkit_major: None,
                 }
             );
@@ -1777,7 +1777,7 @@ mod dynamic {
             assert_eq!(
                 selection.runtime_selection,
                 RuntimeSelection::Backend {
-                    kind: mesh_llm_native_runtime::NativeRuntimeBackendKind::Cuda,
+                    kind: skippy_native_runtime::NativeRuntimeBackendKind::Cuda,
                     cuda_toolkit_major: Some(13),
                 }
             );
@@ -1799,11 +1799,11 @@ mod dynamic {
             let vulkan_dir = cache.runtime_dir(&release_version, vulkan_id);
             let cuda_dir = cache.runtime_dir(&release_version, cuda_id);
             write_runtime_with_backend(&vulkan_dir, Some(&release_version), vulkan_id, |backend| {
-                backend.kind = mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan;
+                backend.kind = skippy_native_runtime::NativeRuntimeBackendKind::Vulkan;
             });
             write_runtime_with_backend(&cuda_dir, Some(&release_version), cuda_id, |backend| {
-                backend.kind = mesh_llm_native_runtime::NativeRuntimeBackendKind::Cuda;
-                backend.cuda = Some(mesh_llm_native_runtime::CudaRuntimeRequirements {
+                backend.kind = skippy_native_runtime::NativeRuntimeBackendKind::Cuda;
+                backend.cuda = Some(skippy_native_runtime::CudaRuntimeRequirements {
                     toolkit_major: 12,
                     min_driver: None,
                     gpu_arches: Vec::new(),
@@ -1857,17 +1857,17 @@ mod dynamic {
             // why an ignored flavor loaded CUDA on white.local. If this
             // ranking ever changes, revisit the regression's expectations.
             let profile = vulkan_capable_profile();
-            let recommended = mesh_llm_native_runtime::select_native_runtime_from_artifacts(
+            let recommended = skippy_native_runtime::select_native_runtime_from_artifacts(
                 &[
                     candidate_with_backend("meshllm-native-runtime-test-vulkan", {
                         let mut backend = NativeRuntimeBackend::cpu();
-                        backend.kind = mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan;
+                        backend.kind = skippy_native_runtime::NativeRuntimeBackendKind::Vulkan;
                         backend
                     }),
                     candidate_with_backend("meshllm-native-runtime-test-cuda", {
                         let mut backend = NativeRuntimeBackend::cpu();
-                        backend.kind = mesh_llm_native_runtime::NativeRuntimeBackendKind::Cuda;
-                        backend.cuda = Some(mesh_llm_native_runtime::CudaRuntimeRequirements {
+                        backend.kind = skippy_native_runtime::NativeRuntimeBackendKind::Cuda;
+                        backend.cuda = Some(skippy_native_runtime::CudaRuntimeRequirements {
                             toolkit_major: 12,
                             min_driver: None,
                             gpu_arches: Vec::new(),
@@ -1881,12 +1881,12 @@ mod dynamic {
                 &RuntimeSelection::Recommended,
             )
             .expect("recommended selection");
-            let vulkan = mesh_llm_native_runtime::select_native_runtime_from_artifacts(
+            let vulkan = skippy_native_runtime::select_native_runtime_from_artifacts(
                 &[candidate_with_backend(
                     "meshllm-native-runtime-test-vulkan",
                     {
                         let mut backend = NativeRuntimeBackend::cpu();
-                        backend.kind = mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan;
+                        backend.kind = skippy_native_runtime::NativeRuntimeBackendKind::Vulkan;
                         backend
                     },
                 )],
@@ -1894,7 +1894,7 @@ mod dynamic {
                 crate::RELEASE_VERSION,
                 None,
                 &RuntimeSelection::Backend {
-                    kind: mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan,
+                    kind: skippy_native_runtime::NativeRuntimeBackendKind::Vulkan,
                     cuda_toolkit_major: None,
                 },
             )
@@ -1914,17 +1914,17 @@ mod dynamic {
             let mut profile = HostRuntimeProfile::current_without_gpu_probe();
             profile
                 .available_flavors
-                .insert(mesh_llm_native_runtime::NativeRuntimeBackendKind::Cuda);
+                .insert(skippy_native_runtime::NativeRuntimeBackendKind::Cuda);
             profile
                 .available_flavors
-                .insert(mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan);
-            profile.cuda = Some(mesh_llm_native_runtime::HostCudaProfile {
+                .insert(skippy_native_runtime::NativeRuntimeBackendKind::Vulkan);
+            profile.cuda = Some(skippy_native_runtime::HostCudaProfile {
                 toolkit_majors: std::collections::BTreeSet::from([12]),
                 driver_max_major: Some(12),
                 driver_version: None,
                 gpu_arches: std::collections::BTreeSet::from(["sm_90".to_string()]),
             });
-            profile.vulkan = Some(mesh_llm_native_runtime::HostVulkanProfile::default());
+            profile.vulkan = Some(skippy_native_runtime::HostVulkanProfile::default());
             profile
         }
 
@@ -1972,8 +1972,8 @@ mod dynamic {
         fn candidate_with_backend(
             id: &str,
             backend: NativeRuntimeBackend,
-        ) -> mesh_llm_native_runtime::NativeRuntimeArtifact {
-            mesh_llm_native_runtime::NativeRuntimeArtifact {
+        ) -> skippy_native_runtime::NativeRuntimeArtifact {
+            skippy_native_runtime::NativeRuntimeArtifact {
                 id: id.to_string(),
                 mesh_version: Some(crate::RELEASE_VERSION.to_string()),
                 skippy_abi: crate::system::native_runtime_install::current_skippy_abi_version(),

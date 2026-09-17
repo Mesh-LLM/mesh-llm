@@ -2,11 +2,6 @@ mod formatters;
 mod setup_helpers;
 
 use anyhow::Result;
-use mesh_llm_native_runtime::{
-    CandidateEvaluation, NativeRuntimeArtifact, NativeRuntimePruneMode,
-    NativeRuntimeReleaseManifest, NativeRuntimeResolver, RuntimeSelection,
-    has_startup_compatibility_metadata,
-};
 use mesh_llm_runtime_install::{
     CURRENT_MESH_VERSION, NativeRuntimeBundleInstallPolicy, NativeRuntimeDownloadProgressCallback,
     NativeRuntimeInstallOptions, NativeRuntimeManifestOptions, current_skippy_abi_version,
@@ -17,6 +12,11 @@ use mesh_llm_runtime_install::{
 use mesh_llm_system::backend::BinaryFlavor;
 use mesh_llm_tui::terminal_progress::{
     ratio_complete_u64, render_inline_gauge_with_reserved_width,
+};
+use skippy_native_runtime::{
+    CandidateEvaluation, NativeRuntimeArtifact, NativeRuntimePruneMode,
+    NativeRuntimeReleaseManifest, NativeRuntimeResolver, RuntimeSelection,
+    has_startup_compatibility_metadata,
 };
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -395,7 +395,7 @@ pub fn run_native_runtime_doctor(
         .iter()
         .map(|runtime| runtime.manifest.runtime.clone())
         .collect::<Vec<_>>();
-    let selected_candidate = mesh_llm_native_runtime::select_native_runtime_from_artifacts(
+    let selected_candidate = skippy_native_runtime::select_native_runtime_from_artifacts(
         &installed_artifacts,
         &profile,
         selected_mesh_version,
@@ -486,7 +486,7 @@ fn native_runtime_doctor_readiness(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mesh_llm_native_runtime::{
+    use skippy_native_runtime::{
         CandidateEvaluation, CandidateRejection, NativeRuntimeArtifact, NativeRuntimeBackend,
         NativeRuntimeCache, NativeRuntimeManifest, NativeRuntimePlatform,
     };
@@ -649,7 +649,7 @@ mod tests {
         assert!(!stale_row.supported);
         assert!(stale_row.rejection_reasons.iter().any(|reason| matches!(
             reason,
-            mesh_llm_native_runtime::CandidateRejection::SkippyAbiMismatch { expected, actual }
+            skippy_native_runtime::CandidateRejection::SkippyAbiMismatch { expected, actual }
                 if expected == &current_abi && actual == stale_abi
         )));
     }
@@ -682,7 +682,7 @@ mod tests {
         assert_eq!(
             resolved.selection,
             RuntimeSelection::Backend {
-                kind: mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan,
+                kind: skippy_native_runtime::NativeRuntimeBackendKind::Vulkan,
                 cuda_toolkit_major: None,
             }
         );

@@ -1,13 +1,13 @@
 use anyhow::{Error, Result};
-use mesh_llm_native_runtime::{
-    CachePrunePlan, CandidateRejection, HostRuntimeProfile, InstalledNativeRuntime,
-};
 use mesh_llm_runtime_install::{
     NativeRuntimeCatalogSources, NativeRuntimeInstallOutcome, NativeRuntimeInstallStatus,
     NativeRuntimeResolutionError,
 };
 use serde::Serialize;
 use serde_json::json;
+use skippy_native_runtime::{
+    CachePrunePlan, CandidateRejection, HostRuntimeProfile, InstalledNativeRuntime,
+};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 

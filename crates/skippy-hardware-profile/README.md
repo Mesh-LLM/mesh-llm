@@ -1,6 +1,6 @@
-# mesh-llm-hardware-profile
+# skippy-hardware-profile
 
-`mesh-llm-hardware-profile` detects the local operating system, architecture,
+`skippy-hardware-profile` detects the local operating system, architecture,
 GPU labels, and compatible native runtime flavors used by Mesh LLM native
 runtime selection.
 

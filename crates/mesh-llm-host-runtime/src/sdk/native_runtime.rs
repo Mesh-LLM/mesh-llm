@@ -8,7 +8,7 @@ pub use crate::system::native_runtime_install::{
     default_release_manifest_url, host_runtime_profile, install_native_runtime,
     load_release_manifest, native_runtime_cache, native_runtime_versions_match_current_sdk,
 };
-pub use mesh_llm_native_runtime::{
+pub use skippy_native_runtime::{
     CachePrunePlan, CandidateEvaluation, CandidateRejection, HostGpuProfile, HostRuntimeProfile,
     InstalledNativeRuntime, NATIVE_RUNTIME_MANIFEST_FILE, NativeRuntimeArtifact,
     NativeRuntimeCache, NativeRuntimeCacheRoot, NativeRuntimeFlavor, NativeRuntimeFlavorParseError,

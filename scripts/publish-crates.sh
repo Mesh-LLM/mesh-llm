@@ -407,7 +407,7 @@ publish_crates=(
     mesh-llm-log-store
     mesh-llm-build-info
     mesh-llm-release-footer
-    mesh-llm-native-runtime
+    skippy-native-runtime
     mesh-llm-config
     mesh-llm-ui
     mesh-llm-console-server
@@ -417,7 +417,7 @@ publish_crates=(
     model-package
     mesh-llm-node
     mesh-llm-api-server
-    mesh-llm-hardware-profile
+    skippy-hardware-profile
     skippy-runtime
     skippy-scheduler
     openai-frontend

@@ -985,3 +985,8 @@ Skippy inference contracts are published as `skippy-events` and guardrail primit
 as `skippy-guardrails`. Both appear in the affected-crate fallback roster and
 publish chain; `skippy-events` precedes its Mesh event consumers. Guardrail
 consumers use the Skippy package directly. CI lane topology is unchanged.
+
+Native runtime policy and hardware detection are owned by `skippy-native-runtime`
+and `skippy-hardware-profile`. Crate-selection, SDK-smoke detection and publishing
+references use those names; runtime artifact IDs, manifests and lane topology
+retain their existing contracts during the ownership extraction.

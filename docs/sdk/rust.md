@@ -143,7 +143,7 @@ For app-managed caches and progress:
 ```rust
 let outcome = install_native_runtime(NativeRuntimeInstallOptions {
     selection: RuntimeSelection::Recommended,
-    cache_dir: Some(app_cache_dir.join("mesh-llm-native-runtimes")),
+    cache_dir: Some(app_cache_dir.join("skippy-native-runtimes")),
     bundle_dirs: vec![app_resources.join("meshllm-native-runtime")],
     progress: Some(std::sync::Arc::new(|event| {
         update_progress(event.downloaded_bytes, event.total_bytes);

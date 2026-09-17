@@ -1,14 +1,14 @@
 use anyhow::{Context, Result, anyhow, bail};
 pub use mesh_llm_gpu_bench::BenchmarkOutput;
-use mesh_llm_native_runtime::{
-    GPU_BENCHMARK_TOOL_PATH, InstalledNativeRuntime, NativeRuntimeBackendKind, RuntimeSelection,
-    has_startup_compatibility_metadata, select_native_runtime_from_artifacts,
-};
 use mesh_llm_runtime_install::{
     CURRENT_MESH_VERSION, current_skippy_abi_version, default_native_runtime_cache,
     discover_local_native_runtimes_with_filter, host_runtime_profile,
 };
 use serde::{Deserialize, Serialize};
+use skippy_native_runtime::{
+    GPU_BENCHMARK_TOOL_PATH, InstalledNativeRuntime, NativeRuntimeBackendKind, RuntimeSelection,
+    has_startup_compatibility_metadata, select_native_runtime_from_artifacts,
+};
 #[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
 use std::env;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
