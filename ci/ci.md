@@ -1013,3 +1013,9 @@ and compares its compiled required Skippy ABI to the runtime manifest. Missing
 product-version input defaults to the host version, never the runtime release.
 The product manifest records required and supplied ABI plus runtime release.
 No workflow dispatch, runner, or publication permissions change.
+
+Product schema coverage compares the composer's emitted root, host and runtime
+field sets with `schemas/product-v2.schema.json`, including required/supplied ABI
+and runtime release. Default bundled startup additionally verifies the complete
+runtime-tree digest using the composer's ordinal-path hashing contract; Rust and
+Python pin the same golden digest.

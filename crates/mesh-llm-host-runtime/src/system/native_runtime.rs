@@ -819,7 +819,8 @@ mod dynamic {
                     "schema_version": 2, "contract": "mesh-llm-product-v2",
                     "host": {"required_skippy_abi": abi},
                     "runtime": {"id": id, "path": format!("native-runtimes/{id}"),
-                        "release_version": release, "skippy_abi": abi, "manifest_sha256": digest}
+                        "release_version": release, "skippy_abi": abi, "manifest_sha256": digest,
+                        "sha256": crate::system::native_runtime_install::product_runtime_tree_sha256(&dir).unwrap()}
                 }))
                 .unwrap(),
             )
@@ -871,6 +872,11 @@ mod dynamic {
                     "identity disagrees",
                 ),
                 ("/runtime/skippy_abi", serde_json::json!("0.0.0"), "ABI"),
+                (
+                    "/runtime/sha256",
+                    serde_json::json!("0".repeat(64)),
+                    "tree checksum",
+                ),
                 ("/runtime/path", serde_json::json!("../elsewhere"), "unsafe"),
                 (
                     "/runtime/manifest_sha256",
@@ -894,6 +900,14 @@ mod dynamic {
                 .unwrap();
                 assert_eq!(pinned.mesh_version, "1.2.3");
             }
+            fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+            let extra = dirs[0].join("unlisted-payload");
+            fs::write(&extra, b"unexpected bytes").unwrap();
+            let error = NativeRuntimeStartupSelection::current()
+                .with_product_release(&dirs)
+                .unwrap_err();
+            assert!(format!("{error:#}").contains("tree checksum"));
+            fs::remove_file(extra).unwrap();
             fs::remove_file(path).unwrap();
             assert_eq!(
                 NativeRuntimeStartupSelection::current()

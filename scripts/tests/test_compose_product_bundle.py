@@ -37,6 +37,15 @@ class ComposeProductBundleTests(unittest.TestCase):
                             COMPOSE_PRODUCT_BUNDLE.compose_manifest(bundle, host, runtime, "9.0.0", "cpu")
                     else:
                         result = COMPOSE_PRODUCT_BUNDLE.compose_manifest(bundle, host, runtime, "9.0.0", "cpu")
+                        schema = json.loads((ROOT / "schemas" / "product-v2.schema.json").read_text())
+                        for actual, shape in (
+                            (result, schema),
+                            (result["host"], schema["$defs"]["host_artifact"]),
+                            (result["runtime"], schema["$defs"]["runtime_artifact"]),
+                        ):
+                            self.assertFalse(shape["additionalProperties"])
+                            self.assertEqual(set(actual), set(shape["properties"]))
+                            self.assertEqual(set(actual), set(shape["required"]))
                         self.assertEqual(result["mesh_version"], "9.0.0")
                         self.assertEqual(result["runtime"]["release_version"], "2.0.0")
                         self.assertEqual(result["runtime"]["skippy_abi"], "0.1.57")

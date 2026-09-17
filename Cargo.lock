@@ -4084,6 +4084,7 @@ dependencies = [
  "skippy-native-runtime",
  "skippy-runtime",
  "skippy-runtime-install",
+ "tempfile",
  "tracing",
  "zip",
 ]

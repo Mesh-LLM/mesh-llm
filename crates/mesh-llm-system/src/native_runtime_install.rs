@@ -1,7 +1,7 @@
 //! Mesh release policy over the runtime installer. Generic installation accepts explicit inputs.
 
 mod product;
-pub use product::product_runtime_release;
+pub use product::{product_runtime_release, product_runtime_tree_sha256};
 pub use skippy_runtime_install::discover_native_runtime_bundle_dirs as discover_native_runtime_bundle_dirs_for_release;
 pub use skippy_runtime_install::*;
 use std::path::PathBuf;

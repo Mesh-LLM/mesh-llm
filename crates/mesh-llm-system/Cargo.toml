@@ -36,3 +36,4 @@ dynamic-native-runtime = ["skippy-devices", "skippy-runtime/dynamic-native-runti
 
 [dev-dependencies]
 serial_test = "4"
+tempfile = "3"
