@@ -5,17 +5,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT=""
 REPO="${GITHUB_REPOSITORY:-Mesh-LLM/mesh-llm}"
 TAG="${RELEASE_TAG:-}"
+RUNTIME_VERSION=""
 TMP_ROOT=""
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
 usage() {
     cat >&2 <<'EOF'
-Usage: scripts/generate-native-runtime-release-manifest.sh --tag TAG --out FILE [--repo OWNER/REPO] <native-runtime.tar.gz> [...]
+Usage: scripts/generate-native-runtime-release-manifest.sh --tag TAG --out FILE [--repo OWNER/REPO] [--runtime-version VERSION] <native-runtime.tar.gz> [...]
 
 Generates native-runtimes.json for a GitHub release from packaged native
 runtime artifacts. Each artifact archive must have its canonical .sha256
 sidecar and contain a manifest.json with the native runtime resolver fields
-emitted by package-native-runtime.sh.
+emitted by package-native-runtime.sh. The tag locates the published archives;
+--runtime-version selects their required runtime release (defaults to Skippy
+RUNTIME_VERSION), independently of the product publication tag.
 EOF
 }
 
@@ -27,6 +30,10 @@ while [[ "$#" -gt 0 ]]; do
             ;;
         --repo)
             REPO="${2:?missing repo}"
+            shift 2
+            ;;
+        --runtime-version)
+            RUNTIME_VERSION="${2:?missing runtime version}"
             shift 2
             ;;
         --tag)
@@ -57,6 +64,14 @@ if [[ -z "$OUT" || -z "$TAG" || "$#" -lt 1 ]]; then
     exit 1
 fi
 
+if [[ -z "$RUNTIME_VERSION" ]]; then
+    RUNTIME_VERSION="$(cat "$SCRIPT_DIR/../crates/skippy-native-runtime/RUNTIME_VERSION")"
+fi
+if [[ ! "$RUNTIME_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+    echo "invalid Skippy runtime release version: $RUNTIME_VERSION" >&2
+    exit 1
+fi
+
 if [[ -z "$TMP_ROOT" ]]; then
     TMP_ROOT="$(mktemp -d)"
 fi
@@ -69,6 +84,7 @@ python3 - \
     "$OUT" \
     "$REPO" \
     "$TAG" \
+    "$RUNTIME_VERSION" \
     "$TMP_ROOT" \
     "$SCRIPT_DIR/safe-extract-tar.py" \
     "$@" <<'PY'
@@ -82,6 +98,7 @@ import sys
     out,
     repo,
     tag,
+    release_version,
     tmp_root,
     safe_extractor,
     *archives,
@@ -89,9 +106,6 @@ import sys
 artifacts = []
 mesh_version = None
 skippy_abi = None
-release_version = tag[1:] if tag.startswith("v") else tag
-if not release_version:
-    raise SystemExit("release tag must contain a version")
 
 required = {
     "id",
@@ -151,7 +165,7 @@ for index, archive in enumerate(archives):
     if normalized_runtime_version != release_version:
         raise SystemExit(
             f"{archive} mesh_version {runtime_version} does not match "
-            f"release tag {tag}"
+            f"requested runtime release {release_version}"
         )
 
     if mesh_version is None:

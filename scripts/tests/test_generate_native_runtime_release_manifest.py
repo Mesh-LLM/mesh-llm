@@ -15,7 +15,7 @@ SCRIPT = (
 
 
 class GenerateNativeRuntimeReleaseManifestTests(unittest.TestCase):
-    def create_archive(self, root: pathlib.Path) -> pathlib.Path:
+    def create_archive(self, root: pathlib.Path, runtime_version: str = "0.68.0") -> pathlib.Path:
         package_dir = root / "meshllm-native-runtime-linux-aarch64-cpu"
         package_dir.mkdir()
         library = package_dir / "lib" / "runtime.bin"
@@ -27,7 +27,7 @@ class GenerateNativeRuntimeReleaseManifestTests(unittest.TestCase):
                 {
                     "runtime": {
                         "id": "meshllm-native-runtime-linux-aarch64-cpu",
-                        "mesh_version": "0.68.0",
+                        "mesh_version": runtime_version,
                         "skippy_abi": "0.1.25",
                         "platform": {
                             "os": "linux",
@@ -72,12 +72,15 @@ class GenerateNativeRuntimeReleaseManifestTests(unittest.TestCase):
         out: pathlib.Path,
         *,
         tag: str = "v0.68.0",
+        runtime_version: str = "0.68.0",
     ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [
                 str(SCRIPT),
                 "--tag",
                 tag,
+                "--runtime-version",
+                runtime_version,
                 "--out",
                 str(out),
                 str(archive),
@@ -102,6 +105,35 @@ class GenerateNativeRuntimeReleaseManifestTests(unittest.TestCase):
 
             self.assertEqual(manifest["mesh_version"], "0.68.0")
             self.assertEqual(len(manifest["artifacts"]), 1)
+
+    def test_publication_tag_is_independent_of_runtime_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            archive = self.create_archive(root)
+            self.write_sidecar(archive)
+            out = root / "native-runtimes.json"
+            result = self.run_generator(archive, out, tag="v99.0.0")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["mesh_version"], "0.68.0")
+            self.assertEqual(manifest["artifacts"][0]["mesh_version"], "0.68.0")
+            self.assertIn("/download/v99.0.0/", manifest["artifacts"][0]["url"])
+
+    def test_default_runtime_release_comes_from_skippy_metadata(self):
+        expected = (SCRIPT.parent.parent / "crates/skippy-native-runtime/RUNTIME_VERSION").read_text().strip()
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            archive = self.create_archive(root, runtime_version=expected)
+            self.write_sidecar(archive)
+            out = root / "native-runtimes.json"
+            result = subprocess.run(
+                [str(SCRIPT), "--tag", "product-test", "--out", str(out), str(archive)],
+                check=False, text=True, capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["mesh_version"], expected)
+            self.assertIn("/download/product-test/", manifest["artifacts"][0]["url"])
 
     def test_requires_valid_canonical_sidecar(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -142,7 +174,7 @@ class GenerateNativeRuntimeReleaseManifestTests(unittest.TestCase):
             self.assertFalse((root / "escaped").exists())
             self.assertFalse(out.exists())
 
-    def test_rejects_runtime_version_that_does_not_match_tag(self):
+    def test_rejects_runtime_version_that_does_not_match_requested_release(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             archive = self.create_archive(root)
@@ -152,13 +184,13 @@ class GenerateNativeRuntimeReleaseManifestTests(unittest.TestCase):
             result = self.run_generator(
                 archive,
                 out,
-                tag="v0.69.0-rc1",
+                runtime_version="0.69.0-rc1",
             )
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(
                 "mesh_version 0.68.0 does not match "
-                "release tag v0.69.0-rc1",
+                "requested runtime release 0.69.0-rc1",
                 result.stderr,
             )
             self.assertFalse(out.exists())

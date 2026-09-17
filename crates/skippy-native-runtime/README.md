@@ -20,10 +20,11 @@ workspace version. `runtime_release_version()` exposes it to Rust callers and
 value matches the existing release to preserve cache identity. Mesh version
 bumps do not update this file.
 
-The catalog generator still requires the supplied tag to match this runtime
-release. Separating product and runtime catalog publication and migrating the
-legacy `mesh_version` wire spelling remain part of the extraction; this source
-change alone does not establish an independent installation flow.
+The catalog generator verifies every artifact against this runtime release (or
+an explicit `--runtime-version`). Its `--tag` locates archive downloads and may
+name a different product release. Product composition and migration of the
+legacy `mesh_version` wire spelling remain part of the extraction; these source
+changes alone do not establish an independent installation flow.
 
 ## Native Runtimes
 
