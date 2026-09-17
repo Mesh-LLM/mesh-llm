@@ -286,7 +286,7 @@ build_gpu_benchmark_tool() {
 
     tool_rel="$(gpu_benchmark_tool_path)"
     tool_path="$stage_dir/$tool_rel"
-    source_root="$REPO_ROOT/crates/mesh-llm-gpu-bench/native"
+    source_root="$REPO_ROOT/crates/skippy-gpu-bench/native"
     mkdir -p "$(dirname "$tool_path")"
 
     case "$BACKEND" in

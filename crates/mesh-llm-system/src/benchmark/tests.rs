@@ -90,7 +90,7 @@ fn write_test_child(root: &Path, name: &str, body: &str) -> PathBuf {
 #[test]
 fn runtime_benchmark_library_lookup_uses_sibling_lib_and_preserves_existing_entries() {
     let runtime = Path::new("/tmp/mesh-runtime");
-    let binary = runtime.join("tools/mesh-llm-gpu-benchmark");
+    let binary = runtime.join("tools/skippy-gpu-benchmark");
     let existing = std::env::join_paths([Path::new("/existing/one"), Path::new("/existing/two")])
         .expect("construct existing library path");
 
@@ -289,9 +289,9 @@ fn test_detect_benchmark_binary_gpu_count_zero() {
 fn test_runner_for_windows_cuda() {
     let hw = make_survey(1, vec![24_000_000_000], Some("NVIDIA RTX 4090"), false);
     let runner =
-        mesh_llm_gpu_bench::runner_for("windows", hw.gpu_count, hw.gpu_name.as_deref(), hw.is_soc)
+        skippy_gpu_bench::runner_for("windows", hw.gpu_count, hw.gpu_name.as_deref(), hw.is_soc)
             .expect("CUDA runner");
-    assert_eq!(runner.backend, mesh_llm_gpu_bench::BenchmarkBackend::Cuda);
+    assert_eq!(runner.backend, skippy_gpu_bench::BenchmarkBackend::Cuda);
 }
 
 #[test]
@@ -303,22 +303,22 @@ fn test_runner_for_windows_hip() {
         false,
     );
     let runner =
-        mesh_llm_gpu_bench::runner_for("windows", hw.gpu_count, hw.gpu_name.as_deref(), hw.is_soc)
+        skippy_gpu_bench::runner_for("windows", hw.gpu_count, hw.gpu_name.as_deref(), hw.is_soc)
             .expect("HIP runner");
-    assert_eq!(runner.backend, mesh_llm_gpu_bench::BenchmarkBackend::Hip);
+    assert_eq!(runner.backend, skippy_gpu_bench::BenchmarkBackend::Hip);
 }
 
 #[test]
 fn test_runner_for_windows_intel() {
     let hw = make_survey(1, vec![16_000_000_000], Some("Intel Arc A770"), false);
     let runner =
-        mesh_llm_gpu_bench::runner_for("windows", hw.gpu_count, hw.gpu_name.as_deref(), hw.is_soc);
+        skippy_gpu_bench::runner_for("windows", hw.gpu_count, hw.gpu_name.as_deref(), hw.is_soc);
     assert!(runner.is_none(), "Intel runner should be de-advertised");
 }
 
 #[test]
 fn test_intel_benchmark_requires_a_packaged_intel_runtime_tool() {
-    let error = runtime_selection_for_benchmark(mesh_llm_gpu_bench::BenchmarkBackend::Intel)
+    let error = runtime_selection_for_benchmark(skippy_gpu_bench::BenchmarkBackend::Intel)
         .expect_err("Intel has no published native runtime packaging lane");
 
     assert!(
@@ -383,18 +383,18 @@ fn test_runtime_tool_selection_excludes_preferred_legacy_runtime_without_tool() 
 fn test_runner_for_linux_cuda() {
     let hw = make_survey(1, vec![24_000_000_000], Some("NVIDIA RTX 4090"), false);
     let runner =
-        mesh_llm_gpu_bench::runner_for("linux", hw.gpu_count, hw.gpu_name.as_deref(), hw.is_soc)
+        skippy_gpu_bench::runner_for("linux", hw.gpu_count, hw.gpu_name.as_deref(), hw.is_soc)
             .expect("CUDA runner");
-    assert_eq!(runner.backend, mesh_llm_gpu_bench::BenchmarkBackend::Cuda);
+    assert_eq!(runner.backend, skippy_gpu_bench::BenchmarkBackend::Cuda);
 }
 
 #[test]
 fn test_runner_for_macos_soc() {
     let hw = make_survey(1, vec![24_000_000_000], Some("Apple M4 Pro"), true);
     let runner =
-        mesh_llm_gpu_bench::runner_for("macos", hw.gpu_count, hw.gpu_name.as_deref(), hw.is_soc)
+        skippy_gpu_bench::runner_for("macos", hw.gpu_count, hw.gpu_name.as_deref(), hw.is_soc)
             .expect("Metal runner");
-    assert_eq!(runner.backend, mesh_llm_gpu_bench::BenchmarkBackend::Metal);
+    assert_eq!(runner.backend, skippy_gpu_bench::BenchmarkBackend::Metal);
 }
 
 // 13. hardware_changed: same VRAM, different GPU name → true

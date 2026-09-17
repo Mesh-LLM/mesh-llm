@@ -885,3 +885,7 @@ not change native runtime artifact identities, runner policy or lane topology.
 The HF client path dependency is now `skippy-hf-hub`; Docker inputs and the
 publish dependency order include it before model acquisition. No workflow
 permissions, runner selection, or CI topology changed for this source rehome.
+
+GPU benchmark library/native source ownership is `skippy-gpu-bench`. CI backend
+ownership rows, crate rosters and runtime packaging source paths follow the move;
+packaged helper names, native symbols and execution policy are unchanged.

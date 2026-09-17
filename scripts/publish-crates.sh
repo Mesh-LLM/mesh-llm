@@ -388,7 +388,7 @@ publish_crates=(
     mesh-llm-plugin
     mesh-native-serving-plugin-api
     mesh-llm-skills
-    mesh-llm-gpu-bench
+    skippy-gpu-bench
     skippy-ffi
     skippy-package-format
     skippy-model

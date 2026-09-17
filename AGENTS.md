@@ -275,7 +275,7 @@ Embedded staged runtime (skippy):
 Tools and benchmarks:
 
 - `metrics-server/` — standalone metrics collector binary.
-- `mesh-llm-gpu-bench/`, `llama-spec-bench/`, `mesh-llm-test-harness/` — benchmarking and test harness binaries.
+- `skippy-gpu-bench/`, `llama-spec-bench/`, `mesh-llm-test-harness/` — benchmarking and test harness binaries.
 
 This list covers the crates you are most likely to touch; check `crates/` and each crate's `Cargo.toml` description for anything not listed.
 

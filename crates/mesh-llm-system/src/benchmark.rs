@@ -3,8 +3,8 @@ use crate::native_runtime_install::{
     discover_local_native_runtimes_with_filter, host_runtime_profile,
 };
 use anyhow::{Context, Result, anyhow, bail};
-pub use mesh_llm_gpu_bench::BenchmarkOutput;
 use serde::{Deserialize, Serialize};
+pub use skippy_gpu_bench::BenchmarkOutput;
 use skippy_native_runtime::{
     GPU_BENCHMARK_TOOL_PATH, InstalledNativeRuntime, NativeRuntimeBackendKind, RuntimeSelection,
     has_startup_compatibility_metadata, select_native_runtime_from_artifacts,
@@ -57,37 +57,37 @@ pub const BENCHMARK_TIMEOUT: Duration = Duration::from_secs(25);
 #[cfg(test)]
 const BENCHMARK_TOOL_TEST_OVERRIDE_ENV: &str = "MESH_LLM_BENCHMARK_TOOL_TEST_OVERRIDE";
 
-fn benchmark_backend_name(backend: mesh_llm_gpu_bench::BenchmarkBackend) -> &'static str {
+fn benchmark_backend_name(backend: skippy_gpu_bench::BenchmarkBackend) -> &'static str {
     match backend {
-        mesh_llm_gpu_bench::BenchmarkBackend::Metal => "metal",
-        mesh_llm_gpu_bench::BenchmarkBackend::Cuda => "cuda",
-        mesh_llm_gpu_bench::BenchmarkBackend::Hip => "hip",
-        mesh_llm_gpu_bench::BenchmarkBackend::Intel => "intel",
+        skippy_gpu_bench::BenchmarkBackend::Metal => "metal",
+        skippy_gpu_bench::BenchmarkBackend::Cuda => "cuda",
+        skippy_gpu_bench::BenchmarkBackend::Hip => "hip",
+        skippy_gpu_bench::BenchmarkBackend::Intel => "intel",
     }
 }
 
-fn parse_benchmark_backend(name: &str) -> Option<mesh_llm_gpu_bench::BenchmarkBackend> {
+fn parse_benchmark_backend(name: &str) -> Option<skippy_gpu_bench::BenchmarkBackend> {
     if name.eq_ignore_ascii_case("metal") {
-        Some(mesh_llm_gpu_bench::BenchmarkBackend::Metal)
+        Some(skippy_gpu_bench::BenchmarkBackend::Metal)
     } else if name.eq_ignore_ascii_case("cuda") {
-        Some(mesh_llm_gpu_bench::BenchmarkBackend::Cuda)
+        Some(skippy_gpu_bench::BenchmarkBackend::Cuda)
     } else if name.eq_ignore_ascii_case("hip") {
-        Some(mesh_llm_gpu_bench::BenchmarkBackend::Hip)
+        Some(skippy_gpu_bench::BenchmarkBackend::Hip)
     } else if name.eq_ignore_ascii_case("intel") {
-        Some(mesh_llm_gpu_bench::BenchmarkBackend::Intel)
+        Some(skippy_gpu_bench::BenchmarkBackend::Intel)
     } else {
         None
     }
 }
 
 fn runtime_selection_for_benchmark(
-    backend: mesh_llm_gpu_bench::BenchmarkBackend,
+    backend: skippy_gpu_bench::BenchmarkBackend,
 ) -> Result<RuntimeSelection> {
     let kind = match backend {
-        mesh_llm_gpu_bench::BenchmarkBackend::Metal => NativeRuntimeBackendKind::Metal,
-        mesh_llm_gpu_bench::BenchmarkBackend::Cuda => NativeRuntimeBackendKind::Cuda,
-        mesh_llm_gpu_bench::BenchmarkBackend::Hip => NativeRuntimeBackendKind::Rocm,
-        mesh_llm_gpu_bench::BenchmarkBackend::Intel => {
+        skippy_gpu_bench::BenchmarkBackend::Metal => NativeRuntimeBackendKind::Metal,
+        skippy_gpu_bench::BenchmarkBackend::Cuda => NativeRuntimeBackendKind::Cuda,
+        skippy_gpu_bench::BenchmarkBackend::Hip => NativeRuntimeBackendKind::Rocm,
+        skippy_gpu_bench::BenchmarkBackend::Intel => {
             bail!(
                 "Intel GPU benchmarking has no published native-runtime tool; use a supported \
                  CUDA, ROCm, or Metal runtime instead"
@@ -118,9 +118,7 @@ fn runtimes_with_benchmark_tools(
 /// Resolve the selected installed native runtime's manifest-verified benchmark
 /// tool. The neutral host never executes a benchmark binary from its own
 /// directory or an unverified search path.
-fn resolve_runtime_benchmark_tool(
-    backend: mesh_llm_gpu_bench::BenchmarkBackend,
-) -> Result<PathBuf> {
+fn resolve_runtime_benchmark_tool(backend: skippy_gpu_bench::BenchmarkBackend) -> Result<PathBuf> {
     #[cfg(test)]
     if let Some(path) = env::var_os(BENCHMARK_TOOL_TEST_OVERRIDE_ENV) {
         return Ok(PathBuf::from(path));
@@ -400,7 +398,7 @@ pub fn try_save_fingerprint(path: &Path, fp: &BenchmarkFingerprint) -> Result<()
 
 /// Determine whether this hardware maps to a benchmark backend.
 pub fn detect_benchmark_binary(hw: &HardwareSurvey, _bin_dir: &Path) -> Option<PathBuf> {
-    let runner = mesh_llm_gpu_bench::runner_for(
+    let runner = skippy_gpu_bench::runner_for(
         std::env::consts::OS,
         hw.gpu_count,
         hw.gpu_name.as_deref(),
@@ -414,7 +412,7 @@ pub fn detect_benchmark_binary(hw: &HardwareSurvey, _bin_dir: &Path) -> Option<P
 /// Expects a JSON array of [`BenchmarkOutput`].  Returns `None` on any parse
 /// failure or if the device list is empty.
 pub fn parse_benchmark_output(stdout: &[u8]) -> Option<Vec<BenchmarkOutput>> {
-    mesh_llm_gpu_bench::parse_benchmark_output(stdout)
+    skippy_gpu_bench::parse_benchmark_output(stdout)
 }
 
 /// Run a manifest-verified native-runtime benchmark tool and return per-device outputs.

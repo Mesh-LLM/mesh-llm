@@ -79,7 +79,7 @@ test-all:
     just with-lld cargo fmt --all -- --check
     echo ""
     echo "=== 3/11 GPU bench crate check ==="
-    just with-lld cargo check -p mesh-llm-gpu-bench
+    just with-lld cargo check -p skippy-gpu-bench
     echo ""
     echo "=== 4-5/11 Rust validation ==="
     # Keep Clippy and tests adjacent for each compatible feature graph. Switching

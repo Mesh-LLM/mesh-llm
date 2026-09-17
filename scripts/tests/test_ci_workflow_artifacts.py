@@ -209,7 +209,7 @@ class CiWorkflowArtifactTests(unittest.TestCase):
 
         cuda_benchmark = (
             ROOT
-            / "crates/mesh-llm-gpu-bench/native/cuda/membench-fingerprint.cu"
+            / "crates/skippy-gpu-bench/native/cuda/membench-fingerprint.cu"
         ).read_text()
         self.assertIn('strcmp(argv[i], "--probe")', cuda_benchmark)
         self.assertIn("if (probeMode)", cuda_benchmark)

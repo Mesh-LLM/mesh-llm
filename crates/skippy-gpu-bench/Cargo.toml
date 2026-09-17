@@ -1,9 +1,9 @@
 [package]
-name = "mesh-llm-gpu-bench"
+name = "skippy-gpu-bench"
 version.workspace = true
 edition = "2024"
 license.workspace = true
-description = "Local GPU bandwidth benchmark helpers for mesh-llm"
+description = "Local GPU bandwidth benchmark helpers for Skippy"
 repository = "https://github.com/Mesh-LLM/mesh-llm"
 homepage = "https://github.com/Mesh-LLM/mesh-llm"
 readme = "README.md"
