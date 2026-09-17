@@ -248,7 +248,7 @@ Shared foundations:
 - `mesh-llm-system/` — machine-local hardware, benchmark, autoupdate, process helpers.
 - `mesh-llm-identity/` — owner identity and envelope crypto primitives.
 - `skippy-guardrails/` — guardrail and compaction primitives for OpenAI-compatible paths.
-- `skippy-hardware-profile/`, `skippy-native-runtime/`, `mesh-llm-runtime-install/` — hardware profile detection, native runtime manifest/selection, runtime download/install/cache.
+- `skippy-hardware-profile/`, `skippy-native-runtime/`, `skippy-runtime-install/` — hardware profile detection, native runtime manifest/selection, runtime download/install/cache.
 - `mesh-llm-plugin/` — plugin runtime/DSL primitives.
 - `mesh-llm-plugin-manager/` — plugin package management (catalog, install, store).
 - `mesh-llm-skills/` — agent skill data model and installer primitives.

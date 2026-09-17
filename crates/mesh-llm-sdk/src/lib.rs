@@ -56,7 +56,7 @@ pub mod native_runtime {
         mesh_native_runtime_install_options, mesh_native_runtime_manifest_options,
         native_runtime_versions_match_current_sdk,
     };
-    pub use mesh_llm_runtime_install::*;
+    pub use skippy_runtime_install::*;
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

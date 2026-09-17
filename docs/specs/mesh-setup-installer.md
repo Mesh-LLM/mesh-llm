@@ -76,7 +76,7 @@ Unsupported in v1:
 Unless `--skip-runtime` is passed, setup installs the recommended or configured
 native runtime and then prunes inactive runtime artifacts.
 
-Runtime selection must reuse `mesh-llm-runtime-install` and the existing
+Runtime selection must reuse `skippy-runtime-install` and the existing
 `runtime_native` resolver/config-selection plumbing. Setup and scripts must not
 duplicate native runtime candidate scoring or hardware detection.
 

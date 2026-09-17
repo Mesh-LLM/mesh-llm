@@ -5,7 +5,7 @@ use crate::runtime_native::{
     SetupNativeRuntimeOutcome, SetupNativeRuntimePruneResult, SetupNativeRuntimeStatus,
 };
 use crate::terminal::{style_muted, style_ok, style_warn};
-use mesh_llm_runtime_install::NativeRuntimeInstallStatus;
+use skippy_runtime_install::NativeRuntimeInstallStatus;
 use std::io::Write;
 
 pub(crate) fn print_runtime_install_result(outcome: &SetupNativeRuntimeOutcome) {

@@ -1,6 +1,6 @@
 //! Mesh release policy over the runtime installer. Generic installation accepts explicit inputs.
 
-pub use mesh_llm_runtime_install::*;
+pub use skippy_runtime_install::*;
 use std::path::PathBuf;
 
 pub const CURRENT_MESH_VERSION: &str = mesh_llm_build_info::RELEASE_VERSION;
@@ -42,17 +42,14 @@ pub fn mesh_native_runtime_manifest_options() -> NativeRuntimeManifestOptions {
 pub fn discover_native_runtime_bundle_dirs(
     explicit_dirs: &[PathBuf],
 ) -> anyhow::Result<Vec<PathBuf>> {
-    mesh_llm_runtime_install::discover_native_runtime_bundle_dirs(
-        explicit_dirs,
-        CURRENT_MESH_VERSION,
-    )
+    skippy_runtime_install::discover_native_runtime_bundle_dirs(explicit_dirs, CURRENT_MESH_VERSION)
 }
 
 pub fn discover_local_native_runtimes(
     explicit_dirs: &[PathBuf],
     cache: &NativeRuntimeCache,
 ) -> anyhow::Result<Vec<InstalledNativeRuntime>> {
-    mesh_llm_runtime_install::discover_local_native_runtimes(
+    skippy_runtime_install::discover_local_native_runtimes(
         explicit_dirs,
         cache,
         CURRENT_MESH_VERSION,
@@ -64,7 +61,7 @@ pub fn discover_local_native_runtimes_with_filter(
     cache: &NativeRuntimeCache,
     include: impl Fn(&InstalledNativeRuntime) -> bool,
 ) -> anyhow::Result<Vec<InstalledNativeRuntime>> {
-    mesh_llm_runtime_install::discover_local_native_runtimes_with_filter(
+    skippy_runtime_install::discover_local_native_runtimes_with_filter(
         explicit_dirs,
         cache,
         CURRENT_MESH_VERSION,

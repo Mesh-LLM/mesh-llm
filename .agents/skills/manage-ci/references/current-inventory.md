@@ -876,3 +876,8 @@ Native runtime policy and hardware detection are owned by `skippy-native-runtime
 and `skippy-hardware-profile`. Crate-selection, SDK-smoke detection and publishing
 references use those names; runtime artifact IDs, manifests and lane topology
 retain their existing contracts during the ownership extraction.
+
+The runtime acquisition package is `skippy-runtime-install`; affected-crate,
+publish-order, environment-census and Docker precheck references follow that name.
+Mesh release policy is supplied by `mesh-llm-system`. This ownership change does
+not change native runtime artifact identities, runner policy or lane topology.

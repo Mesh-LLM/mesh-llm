@@ -306,7 +306,7 @@ pub(super) fn runtime_tracing_subscriber()
                 .add_directive("noq_proto::connection=warn".parse()?)
                 .add_directive("skippy_server=warn".parse()?)
                 .add_directive("mesh_native_serving_plugin_host=warn".parse()?)
-                .add_directive("mesh_llm_runtime_install=warn".parse()?),
+                .add_directive("skippy_runtime_install=warn".parse()?),
         )
         .with_writer(MeshTracingStderr)
         .finish())

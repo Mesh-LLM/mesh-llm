@@ -1,9 +1,9 @@
 [package]
-name = "mesh-llm-runtime-install"
+name = "skippy-runtime-install"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
-description = "Native runtime manifest discovery, download, installation, and cache management for Mesh LLM"
+description = "Skippy native runtime discovery, download, installation, and cache management"
 repository = "https://github.com/Mesh-LLM/mesh-llm"
 homepage = "https://github.com/Mesh-LLM/mesh-llm"
 readme = "README.md"

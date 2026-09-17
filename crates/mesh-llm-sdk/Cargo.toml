@@ -19,7 +19,7 @@ serving = [
     "node",
     "dep:anyhow",
     "dep:mesh-llm-embedded-runtime",
-    "dep:mesh-llm-runtime-install",
+    "dep:skippy-runtime-install",
     "mesh-llm-embedded-runtime/dynamic-native-runtime",
     "dep:reqwest",
     "dep:serde",
@@ -35,7 +35,7 @@ mesh-llm-api-client = { path = "../mesh-llm-api-client", version = "0.76.1", opt
 mesh-llm-api-server = { path = "../mesh-llm-api-server", version = "0.76.1", optional = true }
 mesh-llm-console-server = { path = "../mesh-llm-console-server", version = "0.76.1", optional = true }
 mesh-llm-embedded-runtime = { path = "../mesh-llm-embedded-runtime", version = "0.76.1", optional = true }
-mesh-llm-runtime-install = { path = "../mesh-llm-runtime-install", version = "0.76.1", optional = true }
+skippy-runtime-install = { path = "../skippy-runtime-install", version = "0.76.1", optional = true }
 reqwest = { version = "0.13", features = ["json"], optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }

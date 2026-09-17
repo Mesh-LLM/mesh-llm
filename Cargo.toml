@@ -15,7 +15,7 @@ members = [
     "crates/mesh-llm-protocol",
     "crates/mesh-llm-release-footer",
     "crates/mesh-llm-routing",
-    "crates/mesh-llm-runtime-install",
+    "crates/skippy-runtime-install",
     "crates/mesh-llm-runtime-event-contracts",
     "crates/mesh-llm-sdk",
     "crates/skippy-guardrails",

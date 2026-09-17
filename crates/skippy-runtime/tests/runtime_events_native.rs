@@ -245,7 +245,7 @@ fn run_real_native_gate(evidence_path: Option<PathBuf>) {
 /// Resolves the real installed-runtime layout: `MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR`
 /// names the PARENT of one or more `<runtime-id>/{manifest.json,lib/*}`
 /// subdirectories (see `dist/native-runtimes/README.md` and
-/// `mesh-llm-runtime-install`'s own discovery convention), not a flat
+/// `skippy-runtime-install`'s own discovery convention), not a flat
 /// directory of libraries. Prefers each candidate's own `manifest.json`
 /// `runtime.libraries` ORDER — dependencies before the primary
 /// `libllama.dylib` — over a lexicographic guess, since symbol-search order

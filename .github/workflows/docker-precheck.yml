@@ -74,7 +74,7 @@ jobs:
             crates/mesh-llm-release-footer/ \
             crates/mesh-llm-protocol/ \
             crates/mesh-llm-routing/ \
-            crates/mesh-llm-runtime-install/ \
+            crates/skippy-runtime-install/ \
             crates/mesh-llm-system/ \
             crates/skippy-guardrails/ \
             crates/mesh-llm-types/ \

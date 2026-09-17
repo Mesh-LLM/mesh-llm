@@ -94,11 +94,8 @@ pub async fn run_native_runtime_list(
         return formatter.render_available(&rows, &sources);
     }
 
-    let installed = mesh_llm_runtime_install::discover_local_native_runtimes(
-        bundle_dirs,
-        &cache,
-        mesh_version,
-    )?;
+    let installed =
+        skippy_runtime_install::discover_local_native_runtimes(bundle_dirs, &cache, mesh_version)?;
     formatter.render_installed(&installed, cache.root())
 }
 

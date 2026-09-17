@@ -592,25 +592,6 @@ mod tests {
     }
 
     #[test]
-    fn manifest_loading_uses_the_supplied_catalog() {
-        let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
-        unsafe {
-            std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
-        }
-        let options = NativeRuntimeManifestOptions::new(
-            "1.2.3",
-            NativeRuntimeCatalog {
-                releases_url: "https://example.invalid/skippy/releases".to_string(),
-                rolling_release: None,
-            },
-        );
-        assert_eq!(
-            manifest_url(&options).as_deref(),
-            Some("https://example.invalid/skippy/releases/download/v1.2.3/native-runtimes.json")
-        );
-    }
-
-    #[test]
     fn default_manifest_url_is_still_consulted_when_bundle_dirs_exist() {
         let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
         unsafe {
@@ -629,6 +610,19 @@ mod tests {
             Some(
                 "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.67.0/native-runtimes.json"
             )
+        );
+
+        // Exercise the standalone catalog with the same scoped environment setup.
+        let options = NativeRuntimeManifestOptions::new(
+            "1.2.3",
+            NativeRuntimeCatalog {
+                releases_url: "https://example.invalid/skippy/releases".to_string(),
+                rolling_release: None,
+            },
+        );
+        assert_eq!(
+            manifest_url(&options).as_deref(),
+            Some("https://example.invalid/skippy/releases/download/v1.2.3/native-runtimes.json")
         );
     }
 

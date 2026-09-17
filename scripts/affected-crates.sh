@@ -24,7 +24,7 @@ WORKSPACE_MEMBERS=(
   "mesh-llm-release-footer"
   "mesh-llm-routing"
   "mesh-llm-runtime-event-contracts"
-  "mesh-llm-runtime-install"
+  "skippy-runtime-install"
   "mesh-llm-sdk"
   "skippy-guardrails"
   "mesh-llm-system"

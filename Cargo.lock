@@ -3711,7 +3711,6 @@ dependencies = [
  "mesh-llm-hf-hub",
  "mesh-llm-identity",
  "mesh-llm-plugin-manager",
- "mesh-llm-runtime-install",
  "mesh-llm-system",
  "mesh-llm-tui",
  "model-artifact",
@@ -3727,6 +3726,7 @@ dependencies = [
  "serde_yaml_ng",
  "serial_test",
  "skippy-native-runtime",
+ "skippy-runtime-install",
  "strum",
  "tempfile",
  "tokio",
@@ -3874,7 +3874,6 @@ dependencies = [
  "mesh-llm-protocol",
  "mesh-llm-routing",
  "mesh-llm-runtime-event-contracts",
- "mesh-llm-runtime-install",
  "mesh-llm-system",
  "mesh-llm-types",
  "mesh-llm-ui",
@@ -4074,28 +4073,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mesh-llm-runtime-install"
-version = "0.76.1"
-dependencies = [
- "anyhow",
- "dirs",
- "flate2",
- "futures-util",
- "hex",
- "reqwest",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "skippy-ffi",
- "skippy-hardware-profile",
- "skippy-native-runtime",
- "tar",
- "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "mesh-llm-sdk"
 version = "0.76.1"
 dependencies = [
@@ -4104,10 +4081,10 @@ dependencies = [
  "mesh-llm-api-server",
  "mesh-llm-console-server",
  "mesh-llm-embedded-runtime",
- "mesh-llm-runtime-install",
  "reqwest",
  "serde",
  "serde_json",
+ "skippy-runtime-install",
 ]
 
 [[package]]
@@ -4136,7 +4113,6 @@ dependencies = [
  "mesh-llm-events",
  "mesh-llm-gpu-bench",
  "mesh-llm-release-footer",
- "mesh-llm-runtime-install",
  "reqwest",
  "semver",
  "serde",
@@ -4145,6 +4121,7 @@ dependencies = [
  "sha2 0.11.0",
  "skippy-native-runtime",
  "skippy-runtime",
+ "skippy-runtime-install",
  "tracing",
  "zip",
 ]
@@ -7391,6 +7368,28 @@ dependencies = [
  "skippy-model",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "skippy-runtime-install"
+version = "0.76.1"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "flate2",
+ "futures-util",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "skippy-ffi",
+ "skippy-hardware-profile",
+ "skippy-native-runtime",
+ "tar",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

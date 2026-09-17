@@ -1,6 +1,6 @@
-# mesh-llm-runtime-install
+# skippy-runtime-install
 
-`mesh-llm-runtime-install` owns the public native runtime installation flow for
+`skippy-runtime-install` owns the public native runtime installation flow for
 callers supplying a runtime release and catalog policy. Mesh defaults live in
 `mesh_llm_system::native_runtime_install`.
 
@@ -30,7 +30,7 @@ permissions keep their existing precedence.
 For an independently supplied Skippy runtime catalog:
 
 ```rust
-use mesh_llm_runtime_install::{NativeRuntimeCatalog, NativeRuntimeInstallOptions};
+use skippy_runtime_install::{NativeRuntimeCatalog, NativeRuntimeInstallOptions};
 
 let options = NativeRuntimeInstallOptions::new(
     "1.2.3",
@@ -49,10 +49,23 @@ lifecycle layer. Bundle discovery takes an explicit release; existing Mesh path
 and environment names remain pending the coordinated packaging migration.
 The `mesh_version` field retains its current wire/cache spelling for now.
 
+## Migrating callers
+
+The package replaces `mesh-llm-runtime-install`; Rust imports use
+`skippy_runtime_install`. Construct options with `new(release, catalog)` instead
+of `Default`. Bundle discovery and `discover_local_native_runtimes` now require
+an explicit release argument so discovery and installation select the same
+version. These are source API changes.
+
+Mesh callers can use `mesh_llm_system::native_runtime_install` for Mesh policy
+defaults and compatibility discovery helpers. The Mesh SDK re-exports those
+helpers. This package move does not migrate existing cache data or change
+runtime manifest fields, artifact names, or environment variables.
+
 ## Example
 
 ```rust,no_run
-use mesh_llm_runtime_install::{
+use skippy_runtime_install::{
     NativeRuntimeCatalog, NativeRuntimeInstallOptions, RuntimeSelection, install_native_runtime,
 };
 
@@ -71,4 +84,3 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 ```
-
