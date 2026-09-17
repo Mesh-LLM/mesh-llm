@@ -111,11 +111,12 @@ pub struct NativeRuntimeInstallOutcome {
     pub sources: crate::manifest::NativeRuntimeCatalogSources,
 }
 
-impl Default for NativeRuntimeManifestOptions {
-    fn default() -> Self {
+impl NativeRuntimeManifestOptions {
+    /// Construct options from explicit runtime release metadata and catalog policy.
+    pub fn new(release_version: impl Into<String>, catalog: NativeRuntimeCatalog) -> Self {
         Self {
-            catalog: mesh_native_runtime_catalog(),
-            mesh_version: CURRENT_MESH_VERSION.to_string(),
+            catalog,
+            mesh_version: release_version.into(),
             manifest_path: None,
             manifest_url: None,
             bundle_dirs: Vec::new(),
@@ -124,11 +125,12 @@ impl Default for NativeRuntimeManifestOptions {
     }
 }
 
-impl Default for NativeRuntimeInstallOptions {
-    fn default() -> Self {
+impl NativeRuntimeInstallOptions {
+    /// Construct options without consulting an embedding product's build metadata.
+    pub fn new(release_version: impl Into<String>, catalog: NativeRuntimeCatalog) -> Self {
         Self {
-            catalog: mesh_native_runtime_catalog(),
-            mesh_version: CURRENT_MESH_VERSION.to_string(),
+            catalog,
+            mesh_version: release_version.into(),
             skippy_abi_version: None,
             selection: RuntimeSelection::Recommended,
             manifest_path: None,
@@ -140,5 +142,17 @@ impl Default for NativeRuntimeInstallOptions {
             progress: None,
             allow_download: true,
         }
+    }
+}
+
+impl Default for NativeRuntimeManifestOptions {
+    fn default() -> Self {
+        Self::new(CURRENT_MESH_VERSION, mesh_native_runtime_catalog())
+    }
+}
+
+impl Default for NativeRuntimeInstallOptions {
+    fn default() -> Self {
+        Self::new(CURRENT_MESH_VERSION, mesh_native_runtime_catalog())
     }
 }

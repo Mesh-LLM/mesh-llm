@@ -581,14 +581,13 @@ mod tests {
         unsafe {
             std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
         }
-        let options = NativeRuntimeManifestOptions {
-            catalog: NativeRuntimeCatalog {
+        let options = NativeRuntimeManifestOptions::new(
+            "1.2.3",
+            NativeRuntimeCatalog {
                 releases_url: "https://example.invalid/skippy/releases".to_string(),
                 rolling_release: None,
             },
-            mesh_version: "1.2.3".to_string(),
-            ..Default::default()
-        };
+        );
         assert_eq!(
             manifest_url(&options).as_deref(),
             Some("https://example.invalid/skippy/releases/download/v1.2.3/native-runtimes.json")

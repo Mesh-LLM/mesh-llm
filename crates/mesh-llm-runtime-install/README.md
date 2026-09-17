@@ -31,14 +31,13 @@ For an independently supplied Skippy runtime catalog:
 ```rust
 use mesh_llm_runtime_install::{NativeRuntimeCatalog, NativeRuntimeInstallOptions};
 
-let options = NativeRuntimeInstallOptions {
-    mesh_version: "1.2.3".to_string(),
-    catalog: NativeRuntimeCatalog {
+let options = NativeRuntimeInstallOptions::new(
+    "1.2.3",
+    NativeRuntimeCatalog {
         releases_url: "https://example.invalid/skippy/releases".to_string(),
         rolling_release: None,
     },
-    ..Default::default()
-};
+);
 ```
 
 The example URL is illustrative. This intermediate extraction still supplies
