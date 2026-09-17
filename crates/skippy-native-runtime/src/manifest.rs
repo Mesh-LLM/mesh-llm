@@ -104,6 +104,14 @@ impl NativeRuntimeManifest {
         validate_artifact(&self.runtime)
     }
 
+    /// Validate this manifest and verify its declared payload at an explicit root.
+    /// Importers can use this after decoding legacy metadata without asking the
+    /// normal manifest reader to accept that legacy wire format.
+    pub fn verify_payload(&self, dir: &Path) -> Result<()> {
+        self.validate()?;
+        self.verify_contents(dir)
+    }
+
     fn verify_contents(&self, dir: &Path) -> Result<()> {
         if self.runtime.files.is_empty() {
             bail!(

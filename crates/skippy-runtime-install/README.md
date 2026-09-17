@@ -94,3 +94,11 @@ Catalog `release_tags` explicitly maps runtime releases to publication tags. Tag
 include their own prefix (for example `v99.0.0`); unmapped releases retain the
 `v<release>` convention. A matching `rolling_release` takes precedence. This
 keeps runtime identity independent of the product hosting its release assets.
+
+Explicit cache migration can use `import_runtime_copy` after decoding source
+metadata into a typed manifest. It verifies payloads, copies into a newly claimed
+entry, writes current metadata, and verifies the result through the normal
+reader. It never hardlinks, merges or overwrites an existing entry. An identical
+verified destination is idempotent; dry-run validates without creating paths.
+Legacy decoding and user-facing import commands are separate callers of this
+primitive; it does not scan or migrate caches automatically.
