@@ -1057,7 +1057,6 @@ pub(super) async fn run_auto_join_existing_mesh(
     node: &mesh::Node,
     auto_join_candidates: &[(String, Option<String>)],
 ) {
-    node.restore_adopted_mesh_membership(&options.join).await;
     let join_attempts: Vec<(String, Option<String>)> = if !options.join.is_empty() {
         options
             .join
