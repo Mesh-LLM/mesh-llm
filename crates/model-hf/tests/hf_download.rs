@@ -444,3 +444,119 @@ async fn download_nonexistent_file_returns_error() {
     assert!(result.is_err(), "expected error for nonexistent file");
     eprintln!("got expected error: {}", result.unwrap_err());
 }
+
+// These exercises run in child processes so the store's environment-selected
+// cache and the client's explicit cache point to the same private directory.
+fn run_cache_lifecycle_child(mode: &str) {
+    let root = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "cache_lifecycle_child", "--nocapture"])
+        .env("SKIPPY_HF_CACHE_TEST_MODE", mode)
+        .env("HOME", root.path())
+        .env("HF_HOME", root.path().join("hf"))
+        .env("HF_HUB_CACHE", root.path().join("hub"))
+        .env("HF_XET_CACHE", root.path().join("xet"))
+        .env("XDG_CACHE_HOME", root.path().join("cache"))
+        .env("MESH_LLM_DATA_DIR", root.path().join("data"))
+        .env_remove("HF_TOKEN")
+        .env_remove("HF_TOKEN_PATH")
+        .env_remove("HF_ENDPOINT")
+        .env_remove("HF_HUB_OFFLINE")
+        .env_remove("HUGGINGFACE_HUB_CACHE")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{mode} cache lifecycle failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+}
+
+#[test]
+#[ignore = "downloads the pinned public GGUF into an isolated cache"]
+fn async_download_cache_reuse_and_remove() {
+    run_cache_lifecycle_child("async");
+}
+
+#[test]
+#[ignore = "downloads the pinned public GGUF into an isolated cache"]
+fn blocking_download_cache_reuse_and_remove() {
+    run_cache_lifecycle_child("blocking");
+}
+
+#[test]
+fn cache_lifecycle_child() {
+    let Ok(mode) = std::env::var("SKIPPY_HF_CACHE_TEST_MODE") else {
+        return;
+    };
+    assert!(matches!(mode.as_str(), "async" | "blocking"));
+    let fixture = single_download_fixture("smollm2-q4-download");
+    let cache = model_hf::huggingface_hub_cache_dir();
+    assert!(!cache.exists(), "exercise must start with an empty cache");
+    model_hf::configure_hf_tls_provider();
+    let client = hf_hub::HFClient::builder()
+        .cache_dir(cache.clone())
+        .build()
+        .unwrap();
+    let (owner, name) = fixture.repo.split_once('/').unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let download = |offline: bool| {
+        if mode == "blocking" {
+            hf_hub::HFClientSync::from_inner(client.clone())
+                .unwrap()
+                .model(owner, name)
+                .download_file()
+                .filename(&fixture.file)
+                .revision(&fixture.revision)
+                .local_files_only(offline)
+                .send()
+        } else {
+            runtime.block_on(
+                client
+                    .model(owner, name)
+                    .download_file()
+                    .filename(&fixture.file)
+                    .revision(&fixture.revision)
+                    .local_files_only(offline)
+                    .send(),
+            )
+        }
+    };
+    assert!(download(true).is_err(), "empty cache must miss offline");
+    let path = download(false).expect("real download");
+    let blob = std::fs::canonicalize(&path).unwrap();
+    assert!(blob.starts_with(std::fs::canonicalize(&cache).unwrap()));
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(bytes.len() as u64, fixture.size_bytes);
+    assert_eq!(hex::encode(Sha256::digest(&bytes)), fixture.sha256);
+    let modified = std::fs::metadata(&blob).unwrap().modified().unwrap();
+    assert_eq!(download(true).expect("offline cache reuse"), path);
+    assert_eq!(
+        std::fs::metadata(&blob).unwrap().modified().unwrap(),
+        modified
+    );
+    let sentinel = cache.join("unrelated-sentinel");
+    std::fs::write(&sentinel, b"keep").unwrap();
+    let identifier = format!("{}@{}/{}", fixture.repo, fixture.revision, fixture.file);
+    let result = runtime
+        .block_on(model_hf::store::delete_model_by_identifier(&identifier))
+        .expect("model-store deletion");
+    assert!(result.reclaimed_bytes >= fixture.size_bytes);
+    assert!(!blob.exists());
+    assert!(!path.exists());
+    assert_eq!(std::fs::read(&sentinel).unwrap(), b"keep");
+    assert!(
+        download(true).is_err(),
+        "deleted artifact must miss offline"
+    );
+    let restored = download(false).expect("download again after deletion");
+    assert_eq!(
+        hex::encode(Sha256::digest(std::fs::read(restored).unwrap())),
+        fixture.sha256
+    );
+}
