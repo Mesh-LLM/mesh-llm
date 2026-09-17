@@ -50,11 +50,11 @@ pub mod embedded_runtime {
 #[cfg(feature = "serving")]
 pub mod native_runtime {
     pub use mesh_llm_embedded_runtime::native_runtime::{
-        CURRENT_MESH_VERSION, default_manifest_url, default_release_manifest_url,
-        discover_local_native_runtimes, discover_local_native_runtimes_with_filter,
-        discover_native_runtime_bundle_dirs, mesh_native_runtime_catalog,
-        mesh_native_runtime_install_options, mesh_native_runtime_manifest_options,
-        native_runtime_versions_match_current_sdk,
+        CURRENT_MESH_VERSION, current_runtime_release, default_manifest_url,
+        default_release_manifest_url, discover_local_native_runtimes,
+        discover_local_native_runtimes_with_filter, discover_native_runtime_bundle_dirs,
+        mesh_native_runtime_catalog, mesh_native_runtime_install_options,
+        mesh_native_runtime_manifest_options, native_runtime_versions_match_current_sdk,
     };
     pub use skippy_runtime_install::*;
 }

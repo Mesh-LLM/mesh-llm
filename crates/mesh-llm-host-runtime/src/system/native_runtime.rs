@@ -51,7 +51,7 @@ mod dynamic {
     impl NativeRuntimeStartupSelection {
         pub(crate) fn current() -> Self {
             Self {
-                mesh_version: crate::RELEASE_VERSION.to_string(),
+                mesh_version: skippy_native_runtime::runtime_release_version().to_string(),
                 skippy_abi: Some(
                     crate::system::native_runtime_install::current_skippy_abi_version(),
                 ),
@@ -117,7 +117,7 @@ mod dynamic {
             &local_runtimes,
             &profile,
             crate::BUILD_VERSION,
-            crate::RELEASE_VERSION,
+            skippy_native_runtime::runtime_release_version(),
             Some(&crate::system::native_runtime_install::current_skippy_abi_version()),
             runtime_selection,
         )?
@@ -675,7 +675,7 @@ mod dynamic {
 
     fn default_install_options() -> NativeRuntimeInstallOptions {
         NativeRuntimeInstallOptions {
-            release_version: crate::RELEASE_VERSION.to_string(),
+            release_version: skippy_native_runtime::runtime_release_version().to_string(),
             skippy_abi_version: Some(
                 crate::system::native_runtime_install::current_skippy_abi_version(),
             ),
@@ -1725,7 +1725,10 @@ mod dynamic {
             )
             .expect("Vulkan CLI flavor should resolve");
 
-            assert_eq!(selection.mesh_version, crate::RELEASE_VERSION);
+            assert_eq!(
+                selection.mesh_version,
+                skippy_native_runtime::runtime_release_version()
+            );
             assert_eq!(
                 selection.skippy_abi.as_deref(),
                 Some(crate::system::native_runtime_install::current_skippy_abi_version().as_str())
@@ -1793,7 +1796,7 @@ mod dynamic {
         async fn vulkan_flavor_loads_vulkan_runtime_over_higher_ranked_cuda() {
             let temp = tempfile::tempdir().unwrap();
             let cache = NativeRuntimeCache::new(temp.path().join("cache"));
-            let release_version = crate::RELEASE_VERSION.to_string();
+            let release_version = skippy_native_runtime::runtime_release_version().to_string();
             let vulkan_id = "meshllm-native-runtime-test-vulkan";
             let cuda_id = "meshllm-native-runtime-test-cuda";
             let vulkan_dir = cache.runtime_dir(&release_version, vulkan_id);
@@ -1876,7 +1879,7 @@ mod dynamic {
                     }),
                 ],
                 &profile,
-                crate::RELEASE_VERSION,
+                skippy_native_runtime::runtime_release_version(),
                 None,
                 &RuntimeSelection::Recommended,
             )
@@ -1891,7 +1894,7 @@ mod dynamic {
                     },
                 )],
                 &profile,
-                crate::RELEASE_VERSION,
+                skippy_native_runtime::runtime_release_version(),
                 None,
                 &RuntimeSelection::Backend {
                     kind: skippy_native_runtime::NativeRuntimeBackendKind::Vulkan,
@@ -1975,7 +1978,7 @@ mod dynamic {
         ) -> skippy_native_runtime::NativeRuntimeArtifact {
             skippy_native_runtime::NativeRuntimeArtifact {
                 id: id.to_string(),
-                mesh_version: Some(crate::RELEASE_VERSION.to_string()),
+                mesh_version: Some(skippy_native_runtime::runtime_release_version().to_string()),
                 skippy_abi: crate::system::native_runtime_install::current_skippy_abi_version(),
                 platform: NativeRuntimePlatform {
                     os: std::env::consts::OS.to_string(),

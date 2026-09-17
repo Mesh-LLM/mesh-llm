@@ -155,7 +155,7 @@ where
 mod tests {
     use super::*;
     use mesh_llm_system::native_runtime_install::{
-        CURRENT_MESH_VERSION, NativeRuntimeBundleInstallPolicy, NativeRuntimeInstallStatus,
+        NativeRuntimeBundleInstallPolicy, NativeRuntimeInstallStatus, current_runtime_release,
     };
     use skippy_native_runtime::{
         CachePrunePlan, InstalledNativeRuntime, NativeRuntimeArtifact, NativeRuntimeBackend,
@@ -253,7 +253,7 @@ mod tests {
                     .lock()
                     .expect("lock install calls")
                     .push(options.clone());
-                async move { Ok(fake_install_outcome(CURRENT_MESH_VERSION)) }
+                async move { Ok(fake_install_outcome(current_runtime_release())) }
             },
             |_mesh_version, _cache_dir| {
                 Ok(CachePrunePlan {
@@ -292,7 +292,7 @@ mod tests {
             },
             |_options| {
                 install_called.store(true, Ordering::SeqCst);
-                async move { Ok(fake_install_outcome(CURRENT_MESH_VERSION)) }
+                async move { Ok(fake_install_outcome(current_runtime_release())) }
             },
             |_mesh_version, _cache_dir| {
                 prune_called.store(true, Ordering::SeqCst);

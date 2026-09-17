@@ -35,6 +35,7 @@ use skippy_runtime_install::{NativeRuntimeCatalog, NativeRuntimeInstallOptions};
 let options = NativeRuntimeInstallOptions::new(
     "1.2.3",
     NativeRuntimeCatalog {
+        release_tags: Default::default(),
         releases_url: "https://example.invalid/skippy/releases".to_string(),
         rolling_release: None,
     },
@@ -77,6 +78,7 @@ async fn main() -> anyhow::Result<()> {
     let outcome = install_native_runtime(NativeRuntimeInstallOptions {
         selection: RuntimeSelection::Recommended,
         ..NativeRuntimeInstallOptions::new("1.2.3", NativeRuntimeCatalog {
+            release_tags: Default::default(),
             releases_url: "https://example.invalid/skippy/releases".to_string(),
             rolling_release: None,
         })
@@ -87,3 +89,8 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 ```
+
+Catalog `release_tags` explicitly maps runtime releases to publication tags. Tags
+include their own prefix (for example `v99.0.0`); unmapped releases retain the
+`v<release>` convention. A matching `rolling_release` takes precedence. This
+keeps runtime identity independent of the product hosting its release assets.

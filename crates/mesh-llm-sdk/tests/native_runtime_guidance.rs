@@ -1,14 +1,14 @@
 #![cfg(feature = "serving")]
 
 use mesh_llm_sdk::native_runtime::{
-    CURRENT_MESH_VERSION, current_skippy_abi_version, native_runtime_versions_match_current_sdk,
+    current_runtime_release, current_skippy_abi_version, native_runtime_versions_match_current_sdk,
 };
 
 #[test]
 fn documented_version_check_tracks_sdk_release_and_skippy_abi() {
     let required_abi = current_skippy_abi_version();
     assert!(native_runtime_versions_match_current_sdk(
-        CURRENT_MESH_VERSION,
+        current_runtime_release(),
         &required_abi
     ));
     assert!(!native_runtime_versions_match_current_sdk(
@@ -16,7 +16,7 @@ fn documented_version_check_tracks_sdk_release_and_skippy_abi() {
         &required_abi
     ));
     assert!(!native_runtime_versions_match_current_sdk(
-        CURRENT_MESH_VERSION,
+        current_runtime_release(),
         "previous-skippy-abi"
     ));
 }

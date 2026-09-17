@@ -39,6 +39,9 @@ pub struct NativeRuntimeDownloadProgress {
 /// Loading a catalog never consults compiled product build metadata.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NativeRuntimeCatalog {
+    /// Explicit runtime-release to publication-tag mapping (tags include any `v` prefix).
+    /// Unmapped releases use `v<release>`; rolling selection takes precedence.
+    pub release_tags: std::collections::BTreeMap<String, String>,
     /// Root containing `download/v<release>/native-runtimes.json`.
     pub releases_url: String,
     /// If set, requests for this release use `latest/download/native-runtimes.json`.
@@ -52,7 +55,12 @@ impl NativeRuntimeCatalog {
         if self.rolling_release.as_deref() == Some(release) {
             format!("{root}/latest/download/native-runtimes.json")
         } else {
-            format!("{root}/download/v{release}/native-runtimes.json")
+            let tag = self
+                .release_tags
+                .get(release)
+                .cloned()
+                .unwrap_or_else(|| format!("v{release}"));
+            format!("{root}/download/{tag}/native-runtimes.json")
         }
     }
 }

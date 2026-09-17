@@ -71,10 +71,10 @@ node.shutdown().await?;
 
 ## Check and Install the Required Native Runtime
 
-Embedded serving requires a native runtime matching both the exact
-`mesh-llm-sdk` release and its linked Skippy ABI. Re-run this check whenever the
-SDK is upgraded: `CURRENT_MESH_VERSION` changes with the crate release, so a
-runtime cached for the previous SDK version is not sufficient.
+Embedded serving requires a native runtime matching the Skippy release selected
+by `current_runtime_release()` and its linked Skippy ABI. These requirements are
+independent of the Mesh SDK product version. Re-run this check when upgrading
+the SDK; an existing runtime can be reused when both requirements still match.
 
 Enable `serving` to use native-runtime cache and install APIs:
 
@@ -85,7 +85,7 @@ mesh-llm-sdk = { version = "0.76.1", features = ["serving"] }
 
 ```rust,no_run
 use mesh_llm_sdk::native_runtime::{
-    CURRENT_MESH_VERSION, NativeRuntimeInstallOptions, RuntimeSelection,
+    current_runtime_release, NativeRuntimeInstallOptions, RuntimeSelection,
     current_skippy_abi_version, install_native_runtime, native_runtime_versions_match_current_sdk,
     mesh_native_runtime_install_options,
 };
@@ -95,7 +95,7 @@ use mesh_llm_sdk::{MeshNode, initialize_host_runtime};
 async fn main() -> anyhow::Result<()> {
     let required_abi = current_skippy_abi_version();
     let outcome = install_native_runtime(NativeRuntimeInstallOptions {
-        release_version: CURRENT_MESH_VERSION.to_string(),
+        release_version: current_runtime_release().to_string(),
         skippy_abi_version: Some(required_abi),
         selection: RuntimeSelection::Recommended,
         ..mesh_native_runtime_install_options()

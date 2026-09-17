@@ -47,7 +47,7 @@ pub enum RuntimeCommand {
     Remove {
         /// Native runtime ID to remove.
         native_runtime_id: String,
-        /// MeshLLM version. Defaults to the running MeshLLM version.
+        /// Runtime release. Defaults to the Skippy release required by this build.
         #[arg(long)]
         mesh_version: Option<String>,
         /// Override the native runtime cache root.
@@ -59,10 +59,10 @@ pub enum RuntimeCommand {
     },
     /// Prune old native runtimes from the cache.
     Prune {
-        /// Remove every runtime not matching the active MeshLLM version.
+        /// Remove every runtime not matching the active runtime release.
         #[arg(long)]
         active_only: bool,
-        /// Override the active MeshLLM version. Defaults to the running version.
+        /// Override the active runtime release. Defaults to the required Skippy release.
         #[arg(long)]
         mesh_version: Option<String>,
         /// Override the native runtime cache root.

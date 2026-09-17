@@ -5,10 +5,10 @@ use anyhow::Result;
 use mesh_llm_system::backend::BinaryFlavor;
 use mesh_llm_system::native_runtime_install::{
     CURRENT_MESH_VERSION, NativeRuntimeBundleInstallPolicy, NativeRuntimeDownloadProgressCallback,
-    NativeRuntimeInstallOptions, NativeRuntimeManifestOptions, current_skippy_abi_version,
-    discover_local_native_runtimes, discover_local_native_runtimes_with_filter,
-    host_runtime_profile, install_native_runtime, load_release_manifest_with_sources,
-    native_runtime_cache,
+    NativeRuntimeInstallOptions, NativeRuntimeManifestOptions, current_runtime_release,
+    current_skippy_abi_version, discover_local_native_runtimes,
+    discover_local_native_runtimes_with_filter, host_runtime_profile, install_native_runtime,
+    load_release_manifest_with_sources, native_runtime_cache,
 };
 use mesh_llm_tui::terminal_progress::{
     ratio_complete_u64, render_inline_gauge_with_reserved_width,
@@ -49,7 +49,7 @@ pub struct NativeRuntimeConfigSelection<'a> {
 
 impl<'a> NativeRuntimeConfigSelection<'a> {
     fn mesh_version_or_current(self) -> &'a str {
-        self.mesh_version.unwrap_or(CURRENT_MESH_VERSION)
+        self.mesh_version.unwrap_or(current_runtime_release())
     }
 }
 
@@ -122,7 +122,7 @@ fn listing_skippy_abi_version(
         .skippy_abi_version
         .map(ToString::to_string)
         .unwrap_or_else(|| {
-            if mesh_version == CURRENT_MESH_VERSION {
+            if mesh_version == current_runtime_release() {
                 current_skippy_abi_version()
             } else {
                 manifest.skippy_abi.clone()
@@ -363,7 +363,7 @@ pub fn run_native_runtime_remove(
     cache_dir: Option<&Path>,
     json_output: bool,
 ) -> Result<()> {
-    let version = mesh_version.unwrap_or(CURRENT_MESH_VERSION);
+    let version = mesh_version.unwrap_or(current_runtime_release());
     let cache = native_runtime_cache(cache_dir)?;
     let removed = cache.remove(version, native_runtime_id)?;
     runtime_native_formatter(json_output).render_remove(native_runtime_id, version, removed)
@@ -375,7 +375,7 @@ pub fn run_native_runtime_prune(
     cache_dir: Option<&Path>,
     json_output: bool,
 ) -> Result<()> {
-    let version = mesh_version.unwrap_or(CURRENT_MESH_VERSION);
+    let version = mesh_version.unwrap_or(current_runtime_release());
     let mode = if active_only {
         NativeRuntimePruneMode::ActiveOnly
     } else {
@@ -399,7 +399,7 @@ pub fn run_native_runtime_doctor(
     let eligible_installed = discover_local_native_runtimes_with_filter(&[], &cache, |runtime| {
         has_startup_compatibility_metadata(&runtime.manifest.runtime, &profile)
     })?;
-    let selected_mesh_version = mesh_version.unwrap_or(CURRENT_MESH_VERSION);
+    let selected_mesh_version = mesh_version.unwrap_or(current_runtime_release());
     let runtime_selection = RuntimeSelection::parse(effective_selection)?;
     let selected_version_runtimes = eligible_installed
         .iter()
@@ -537,7 +537,7 @@ mod tests {
         NativeRuntimeManifest {
             runtime: NativeRuntimeArtifact {
                 id: runtime_id.to_string(),
-                mesh_version: Some(CURRENT_MESH_VERSION.to_string()),
+                mesh_version: Some(current_runtime_release().to_string()),
                 skippy_abi: "0.1.25".to_string(),
                 platform: NativeRuntimePlatform {
                     os: std::env::consts::OS.to_string(),
@@ -588,7 +588,7 @@ mod tests {
     #[test]
     fn current_listing_defaults_to_the_build_skippy_abi() {
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: CURRENT_MESH_VERSION.to_string(),
+            mesh_version: current_runtime_release().to_string(),
             skippy_abi: "0.1.44".to_string(),
             artifacts: Vec::new(),
         };
@@ -596,7 +596,7 @@ mod tests {
         assert_eq!(
             listing_skippy_abi_version(
                 NativeRuntimeConfigSelection::default(),
-                CURRENT_MESH_VERSION,
+                current_runtime_release(),
                 &manifest,
             ),
             current_skippy_abi_version()
@@ -629,16 +629,16 @@ mod tests {
         let current_abi = current_skippy_abi_version();
         let stale_abi = "0.1.44";
         let runtime_id = "meshllm-runtime-macos-arm64-cpu";
-        let current = test_artifact(runtime_id, CURRENT_MESH_VERSION, &current_abi);
-        let stale = test_artifact(runtime_id, CURRENT_MESH_VERSION, stale_abi);
+        let current = test_artifact(runtime_id, current_runtime_release(), &current_abi);
+        let stale = test_artifact(runtime_id, current_runtime_release(), stale_abi);
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: CURRENT_MESH_VERSION.to_string(),
+            mesh_version: current_runtime_release().to_string(),
             skippy_abi: stale_abi.to_string(),
             artifacts: vec![stale.clone(), current.clone()],
         };
         let cache = tempfile::tempdir().unwrap();
         let evaluated = NativeRuntimeResolver::new(
-            CURRENT_MESH_VERSION,
+            current_runtime_release(),
             host_runtime_profile(),
             manifest.clone(),
             NativeRuntimeCache::new(cache.path()),
@@ -741,14 +741,14 @@ mod tests {
     fn available_runtime_rows_match_runtime_identity_not_id_only() {
         let release_artifact = available_runtime_artifact("runtime", None, "0.1.44");
         let bundled_artifact =
-            available_runtime_artifact("runtime", Some(CURRENT_MESH_VERSION), "0.1.49");
+            available_runtime_artifact("runtime", Some(current_runtime_release()), "0.1.49");
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: CURRENT_MESH_VERSION.to_string(),
+            mesh_version: current_runtime_release().to_string(),
             skippy_abi: "0.1.44".to_string(),
             artifacts: vec![release_artifact.clone(), bundled_artifact.clone()],
         };
         let mut evaluated_release_artifact = release_artifact;
-        evaluated_release_artifact.mesh_version = Some(CURRENT_MESH_VERSION.to_string());
+        evaluated_release_artifact.mesh_version = Some(current_runtime_release().to_string());
         let evaluated = vec![
             CandidateEvaluation {
                 artifact: evaluated_release_artifact,

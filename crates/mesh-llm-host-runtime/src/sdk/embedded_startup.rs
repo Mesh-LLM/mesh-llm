@@ -14,7 +14,7 @@ pub(super) fn prepare_embedded_native_runtime(
         let cache = crate::system::native_runtime_install::default_native_runtime_cache()?;
         let skippy_abi = crate::system::native_runtime_install::current_skippy_abi_version();
         let requirement = EmbeddedNativeRuntimeRequirement {
-            mesh_version: crate::RELEASE_VERSION,
+            mesh_version: skippy_native_runtime::runtime_release_version(),
             skippy_abi: &skippy_abi,
             cache_root: cache.root(),
         };
@@ -63,7 +63,7 @@ fn ensure_embedded_native_runtime_ready(
 #[cfg(any(feature = "dynamic-native-runtime", test))]
 fn missing_native_runtime_message(requirement: EmbeddedNativeRuntimeRequirement<'_>) -> String {
     format!(
-        "embedded serving requires a compatible MeshLLM native runtime for MeshLLM {} / Skippy ABI {}, but none is loaded, packaged beside the host, or installed in {}; install it explicitly with `mesh_llm_sdk::native_runtime::install_native_runtime(NativeRuntimeInstallOptions {{ release_version: CURRENT_MESH_VERSION.to_string(), skippy_abi_version: Some(current_skippy_abi_version()), ..mesh_llm_sdk::native_runtime::mesh_native_runtime_install_options() }})`, then retry embedded serving (embedded startup never downloads native runtimes automatically)",
+        "embedded serving requires a compatible MeshLLM native runtime for Skippy runtime {} / ABI {}, but none is loaded, packaged beside the host, or installed in {}; install it explicitly with `mesh_llm_sdk::native_runtime::install_native_runtime(NativeRuntimeInstallOptions {{ release_version: current_runtime_release().to_string(), skippy_abi_version: Some(current_skippy_abi_version()), ..mesh_llm_sdk::native_runtime::mesh_native_runtime_install_options() }})`, then retry embedded serving (embedded startup never downloads native runtimes automatically)",
         requirement.mesh_version,
         requirement.skippy_abi,
         requirement.cache_root.display()
@@ -92,10 +92,10 @@ mod tests {
         .expect_err("missing native runtime should fail before embedded serving starts");
         let message = error.to_string();
 
-        assert!(message.contains("MeshLLM 0.72.1 / Skippy ABI 0.1.26"));
+        assert!(message.contains("Skippy runtime 0.72.1 / ABI 0.1.26"));
         assert!(message.contains("/cache/mesh-llm/native-runtimes"));
         assert!(message.contains("install_native_runtime"));
-        assert!(message.contains("CURRENT_MESH_VERSION"));
+        assert!(message.contains("current_runtime_release()"));
         assert!(message.contains("embedded startup never downloads"));
     }
 

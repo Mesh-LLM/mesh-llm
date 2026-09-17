@@ -1,5 +1,5 @@
 use crate::native_runtime_install::{
-    CURRENT_MESH_VERSION, current_skippy_abi_version, default_native_runtime_cache,
+    current_runtime_release, current_skippy_abi_version, default_native_runtime_cache,
     discover_local_native_runtimes_with_filter, host_runtime_profile,
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -131,7 +131,7 @@ fn resolve_runtime_benchmark_tool(backend: skippy_gpu_bench::BenchmarkBackend) -
     })?;
     let installed_for_version = installed
         .iter()
-        .filter(|runtime| runtime.mesh_version == CURRENT_MESH_VERSION)
+        .filter(|runtime| runtime.mesh_version == current_runtime_release())
         .cloned()
         .collect::<Vec<_>>();
     let installed_with_tools = runtimes_with_benchmark_tools(&installed_for_version);
@@ -143,7 +143,7 @@ fn resolve_runtime_benchmark_tool(backend: skippy_gpu_bench::BenchmarkBackend) -
     let selected = select_native_runtime_from_artifacts(
         &artifacts,
         &profile,
-        CURRENT_MESH_VERSION,
+        current_runtime_release(),
         Some(&current_skippy_abi_version()),
         &selection,
     )

@@ -61,6 +61,7 @@ mod tests {
 
     fn test_catalog() -> NativeRuntimeCatalog {
         NativeRuntimeCatalog {
+            release_tags: Default::default(),
             releases_url: "https://github.com/Mesh-LLM/mesh-llm/releases".to_string(),
             rolling_release: None,
         }
@@ -570,6 +571,7 @@ mod tests {
     #[test]
     fn explicit_catalog_controls_release_selection_without_mesh_build_metadata() {
         let catalog = NativeRuntimeCatalog {
+            release_tags: Default::default(),
             releases_url: "https://example.invalid/skippy/releases/".to_string(),
             rolling_release: Some("standalone-dev".to_string()),
         };
@@ -580,6 +582,25 @@ mod tests {
         assert_eq!(
             catalog.manifest_url("1.2.3"),
             "https://example.invalid/skippy/releases/download/v1.2.3/native-runtimes.json"
+        );
+        let mapped = NativeRuntimeCatalog {
+            release_tags: [
+                ("1.2.3".to_string(), "product-99".to_string()),
+                (
+                    "standalone-dev".to_string(),
+                    "ignored-while-rolling".to_string(),
+                ),
+            ]
+            .into(),
+            ..catalog.clone()
+        };
+        assert_eq!(
+            mapped.manifest_url("1.2.3"),
+            "https://example.invalid/skippy/releases/download/product-99/native-runtimes.json"
+        );
+        assert_eq!(
+            mapped.manifest_url("standalone-dev"),
+            catalog.manifest_url("standalone-dev")
         );
         let pinned = NativeRuntimeCatalog {
             rolling_release: None,
@@ -616,6 +637,7 @@ mod tests {
         let options = NativeRuntimeManifestOptions::new(
             "1.2.3",
             NativeRuntimeCatalog {
+                release_tags: Default::default(),
                 releases_url: "https://example.invalid/skippy/releases".to_string(),
                 rolling_release: None,
             },

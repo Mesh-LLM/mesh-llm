@@ -81,7 +81,7 @@ pub fn prune_native_runtimes_json(
     mode: Option<String>,
 ) -> Result<String> {
     let active_mesh_version = active_mesh_version
-        .unwrap_or_else(|| mesh_llm_sdk::native_runtime::CURRENT_MESH_VERSION.to_string());
+        .unwrap_or_else(|| mesh_llm_sdk::native_runtime::current_runtime_release().to_string());
     let mode = parse_native_runtime_prune_mode(mode.as_deref())?;
     let plan = native_runtime_cache(cache_dir)?
         .prune(&active_mesh_version, mode)
@@ -714,7 +714,7 @@ fn parse_native_runtime_install_options(
     Ok(mesh_llm_sdk::native_runtime::NativeRuntimeInstallOptions {
         catalog: mesh_llm_sdk::native_runtime::mesh_native_runtime_catalog(),
         release_version: optional_string(&value, "meshVersion")
-            .unwrap_or_else(|| mesh_llm_sdk::native_runtime::CURRENT_MESH_VERSION.to_string()),
+            .unwrap_or_else(|| mesh_llm_sdk::native_runtime::current_runtime_release().to_string()),
         skippy_abi_version: optional_string(&value, "skippyAbiVersion"),
         selection: mesh_llm_sdk::native_runtime::RuntimeSelection::parse(
             optional_string(&value, "selection").as_deref(),
