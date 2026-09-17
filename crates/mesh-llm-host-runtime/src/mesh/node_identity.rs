@@ -468,6 +468,12 @@ impl Node {
                 })?;
                 self.reject_join_to_own_identity(&addr).await?;
                 if token_is_expired {
+                    if !self
+                        .restore_adopted_mesh_membership(&[invite_token.to_owned()])
+                        .await
+                    {
+                        anyhow::bail!("join rejected: could not restore adopted mesh membership");
+                    }
                     tracing::info!("join_token_expired_using_persisted_membership");
                 } else {
                     self.install_requirement_aware_mesh_state(

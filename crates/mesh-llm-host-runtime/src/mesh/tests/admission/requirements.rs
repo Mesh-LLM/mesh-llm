@@ -1,3 +1,7 @@
+#[path = "requirements/adopted_membership.rs"]
+mod adopted_membership;
+pub(crate) use adopted_membership::*;
+
 use super::*;
 
 pub(crate) fn assert_mesh_requirements_outbound_admits_compliant_peer_after_requirements_pass() {
@@ -1153,131 +1157,6 @@ pub(crate) fn assert_mesh_requirements_unrestricted_legacy_mesh_join_stays_compa
     });
 }
 
-pub(crate) fn assert_expired_bootstrap_token_requires_matching_adopted_membership() {
-    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-    runtime.block_on(async {
-        let temp = tempfile::tempdir().expect("temp home");
-        let _home = HomeGuard::set(temp.path());
-        let owner = requirement_policy_owner();
-        let policy = requirement_policy_without_release_attestation();
-        let signed_policy =
-            crate::SignedMeshGenesisPolicy::sign(policy.clone(), &owner).expect("signed policy");
-        let node = make_test_node_with_requirements(
-            super::super::NodeRole::Worker,
-            policy.requirements.clone(),
-        )
-        .await
-        .expect("joiner node");
-        let expired = crate::SignedBootstrapToken::sign(
-            vec![
-                serde_json::to_vec(&node.endpoint_addr_for_advertisement())
-                    .expect("serializable addr"),
-            ],
-            &signed_policy,
-            Some(current_time_unix_ms().saturating_sub(1)),
-            &owner,
-        )
-        .expect("expired token can be constructed");
-
-        assert_eq!(
-            node.validate_bootstrap_token(&expired).await,
-            Err(crate::MeshRequirementRejectReason::BootstrapTokenExpired),
-            "a fresh node must not use an expired bearer token"
-        );
-
-        let adopted = crate::mesh::node::RequirementAwareMeshState {
-            mesh_id: expired.mesh_id.clone(),
-            policy_hash: expired.policy_hash.clone(),
-            policy: policy.clone(),
-            signed_policy: Some(signed_policy.clone()),
-            bootstrap_token: Some(expired.clone()),
-        };
-        let saved_addr = node.endpoint_addr_for_advertisement();
-        crate::mesh::node_requirements::persist_adopted_mesh_membership(
-            &adopted,
-            vec![saved_addr.clone()],
-        )
-        .expect("persist adopted membership");
-        node.validate_bootstrap_token(&expired)
-            .await
-            .expect("matching adopted membership may reuse the dial target");
-
-        let restored = make_test_node_with_requirements(
-            super::super::NodeRole::Worker,
-            policy.requirements.clone(),
-        )
-        .await
-        .expect("restart node");
-        let encoded_expired = super::super::encode_signed_bootstrap_token(&expired);
-        restored
-            .restore_adopted_mesh_membership(std::slice::from_ref(&encoded_expired))
-            .await;
-        let restored_state = restored
-            .active_mesh_policy_state()
-            .await
-            .expect("matching token restores persisted membership");
-        assert_eq!(restored_state.mesh_id, expired.mesh_id);
-        assert_eq!(
-            restored.join_targets.lock().await.as_slice(),
-            std::slice::from_ref(&saved_addr),
-            "startup restore seeds persisted dial targets"
-        );
-
-        let other_owner = crate::crypto::OwnerKeypair::generate();
-        let other_policy = crate::MeshGenesisPolicy::new(
-            other_owner.owner_id(),
-            policy.created_at_unix_ms,
-            policy.requirements.clone(),
-        )
-        .expect("other policy");
-        let other_signed = crate::SignedMeshGenesisPolicy::sign(other_policy, &other_owner)
-            .expect("other signed policy");
-        let mismatched = crate::SignedBootstrapToken::sign(
-            expired.serialized_addrs.clone(),
-            &other_signed,
-            Some(current_time_unix_ms().saturating_sub(1)),
-            &other_owner,
-        )
-        .expect("mismatched expired token");
-        assert_eq!(
-            node.validate_bootstrap_token(&mismatched).await,
-            Err(crate::MeshRequirementRejectReason::MeshPolicyMismatch)
-        );
-        let fresh_other = crate::SignedBootstrapToken::sign(
-            mismatched.serialized_addrs.clone(),
-            &other_signed,
-            Some(current_time_unix_ms().saturating_add(60_000)),
-            &other_owner,
-        )
-        .expect("fresh other-mesh token");
-        let fresh_other_encoded = super::super::encode_signed_bootstrap_token(&fresh_other);
-        let switching = make_test_node_with_requirements(
-            super::super::NodeRole::Worker,
-            policy.requirements.clone(),
-        )
-        .await
-        .expect("switching node");
-        switching
-            .restore_adopted_mesh_membership(std::slice::from_ref(&fresh_other_encoded))
-            .await;
-        assert!(
-            switching.active_mesh_policy_state().await.is_none(),
-            "a persisted mesh must not block a fresh invite for another mesh"
-        );
-        switching
-            .validate_bootstrap_token(&fresh_other)
-            .await
-            .expect("fresh other-mesh token remains valid");
-
-        let mut tampered = expired;
-        tampered.signature[0] ^= 1;
-        assert_eq!(
-            node.validate_bootstrap_token(&tampered).await,
-            Err(crate::MeshRequirementRejectReason::BootstrapTokenInvalid)
-        );
-    });
-}
-
 pub(crate) fn assert_named_mesh_id_uses_documented_sha256_derivation() {
     let mesh_id =
         crate::mesh::identity_persistence::generate_mesh_id(Some("alpha"), Some("nostr-pubkey"))
@@ -1289,45 +1168,20 @@ pub(crate) fn assert_named_mesh_id_uses_documented_sha256_derivation() {
     );
 }
 
-struct HomeGuard(Option<std::ffi::OsString>, Option<std::ffi::OsString>);
+/// Redirects identity persistence to an isolated per-test directory.
+///
+/// Uses a thread-local override rather than a process-global env var, so
+/// concurrently-running tests never share (or clobber) each other's identity
+/// home. This is what makes the adopted-membership persistence tests safe under
+/// the default parallel test runner.
+struct HomeGuard {
+    _guard: crate::mesh::identity_persistence::TestIdentityHomeGuard,
+}
 
 impl HomeGuard {
     fn set(path: &std::path::Path) -> Self {
-        let previous = std::env::var_os("HOME");
-        let previous_test_home = std::env::var_os("MESH_LLM_TEST_HOME");
-        // SAFETY: requirement tests using this guard run serially, and Drop restores both.
-        unsafe {
-            std::env::set_var("HOME", path);
-            // SAFETY: requirement tests using this guard run serially, and Drop restores both.
-            // `dirs::home_dir()` ignores HOME on Windows, so the identity paths would
-            // resolve to the real home without this.
-            std::env::set_var("MESH_LLM_TEST_HOME", path);
-        };
-        Self(previous, previous_test_home)
-    }
-}
-
-impl Drop for HomeGuard {
-    fn drop(&mut self) {
-        match self.0.take() {
-            Some(value) => {
-                // SAFETY: this guard restores the process environment key it exclusively changed.
-                unsafe { std::env::set_var("HOME", value) }
-            }
-            None => {
-                // SAFETY: this guard restores the process environment key it exclusively changed.
-                unsafe { std::env::remove_var("HOME") }
-            }
-        }
-        match self.1.take() {
-            Some(value) => {
-                // SAFETY: this guard restores the process environment key it exclusively changed.
-                unsafe { std::env::set_var("MESH_LLM_TEST_HOME", value) }
-            }
-            None => {
-                // SAFETY: this guard restores the process environment key it exclusively changed.
-                unsafe { std::env::remove_var("MESH_LLM_TEST_HOME") }
-            }
+        Self {
+            _guard: crate::mesh::identity_persistence::set_test_identity_home(path),
         }
     }
 }

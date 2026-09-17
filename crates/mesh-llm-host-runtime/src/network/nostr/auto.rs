@@ -408,23 +408,21 @@ mod smart_auto_tests {
 
     struct HomeEnvGuard {
         previous: Option<OsString>,
-        previous_test_home: Option<OsString>,
+        // Redirects identity paths for this thread only; restored on drop. HOME is
+        // an unrelated process environment requirement kept separate below.
+        _identity_home: crate::mesh::identity_persistence::TestIdentityHomeGuard,
     }
 
     impl HomeEnvGuard {
         fn set(path: &std::path::Path) -> Self {
             let previous = std::env::var_os("HOME");
-            let previous_test_home = std::env::var_os("MESH_LLM_TEST_HOME");
             unsafe {
+                // SAFETY: this guard is used only by #[serial] tests and restores the value.
                 std::env::set_var("HOME", path);
-                // SAFETY: this guard is used only by #[serial] tests and restores both values.
-                // `dirs::home_dir()` ignores HOME on Windows, so the identity paths would
-                // resolve to the real home without this.
-                std::env::set_var("MESH_LLM_TEST_HOME", path);
             };
             Self {
                 previous,
-                previous_test_home,
+                _identity_home: crate::mesh::identity_persistence::set_test_identity_home(path),
             }
         }
     }
@@ -432,12 +430,10 @@ mod smart_auto_tests {
     impl Drop for HomeEnvGuard {
         fn drop(&mut self) {
             match self.previous.take() {
+                // SAFETY: this guard is used only by #[serial] tests and restores the value.
                 Some(value) => unsafe { std::env::set_var("HOME", value) },
+                // SAFETY: this guard is used only by #[serial] tests and restores the value.
                 None => unsafe { std::env::remove_var("HOME") },
-            }
-            match self.previous_test_home.take() {
-                Some(value) => unsafe { std::env::set_var("MESH_LLM_TEST_HOME", value) },
-                None => unsafe { std::env::remove_var("MESH_LLM_TEST_HOME") },
             }
         }
     }

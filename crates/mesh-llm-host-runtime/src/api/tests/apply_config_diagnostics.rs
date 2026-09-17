@@ -2,23 +2,21 @@ use super::*;
 
 struct HomeEnvGuard {
     original_home: Option<std::ffi::OsString>,
-    original_test_home: Option<std::ffi::OsString>,
+    // Redirects identity paths for this thread only; restored on drop. HOME is an
+    // unrelated process environment requirement kept separate below.
+    _identity_home: crate::mesh::identity_persistence::TestIdentityHomeGuard,
 }
 
 impl HomeEnvGuard {
     fn set(home: &std::path::Path) -> Self {
         let original_home = std::env::var_os("HOME");
-        let original_test_home = std::env::var_os("MESH_LLM_TEST_HOME");
+        // SAFETY: callers use `#[serial]`, and Drop restores the previous value.
         unsafe {
             std::env::set_var("HOME", home);
-            // SAFETY: callers use `#[serial]`, and Drop restores the previous values.
-            // `dirs::home_dir()` ignores HOME on Windows, so the identity paths would
-            // resolve to the real home without this.
-            std::env::set_var("MESH_LLM_TEST_HOME", home);
         };
         Self {
             original_home,
-            original_test_home,
+            _identity_home: crate::mesh::identity_persistence::set_test_identity_home(home),
         }
     }
 }
@@ -26,12 +24,10 @@ impl HomeEnvGuard {
 impl Drop for HomeEnvGuard {
     fn drop(&mut self) {
         match &self.original_home {
+            // SAFETY: callers use `#[serial]`, and this restores the saved value.
             Some(home) => unsafe { std::env::set_var("HOME", home) },
+            // SAFETY: callers use `#[serial]`, and HOME was originally unset.
             None => unsafe { std::env::remove_var("HOME") },
-        }
-        match &self.original_test_home {
-            Some(home) => unsafe { std::env::set_var("MESH_LLM_TEST_HOME", home) },
-            None => unsafe { std::env::remove_var("MESH_LLM_TEST_HOME") },
         }
     }
 }

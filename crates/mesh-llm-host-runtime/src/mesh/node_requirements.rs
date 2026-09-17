@@ -74,6 +74,14 @@ fn load_adopted_mesh_membership() -> Result<Option<AdoptedMeshMembership>> {
     Ok(Some(membership))
 }
 
+fn preferred_adopted_peer_addrs(mut peer_addrs: Vec<EndpointAddr>) -> Vec<EndpointAddr> {
+    // Callers put current addresses first; keep their priority and freshest value.
+    let mut seen = std::collections::HashSet::new();
+    peer_addrs.retain(|addr| seen.insert(addr.id));
+    peer_addrs.truncate(MAX_ADOPTED_PEER_ADDRS);
+    peer_addrs
+}
+
 pub(crate) fn persist_adopted_mesh_membership(
     state: &RequirementAwareMeshState,
     peer_addrs: Vec<EndpointAddr>,
@@ -81,10 +89,7 @@ pub(crate) fn persist_adopted_mesh_membership(
     let Some(signed_policy) = state.signed_policy.clone() else {
         return Ok(());
     };
-    let mut peer_addrs = peer_addrs;
-    peer_addrs.sort_by_key(|addr| addr.id);
-    peer_addrs.dedup_by_key(|addr| addr.id);
-    peer_addrs.truncate(MAX_ADOPTED_PEER_ADDRS);
+    let peer_addrs = preferred_adopted_peer_addrs(peer_addrs);
     let membership = AdoptedMeshMembership {
         mesh_id: state.mesh_id.clone(),
         policy_hash: state.policy_hash.clone(),
@@ -186,22 +191,23 @@ pub(crate) fn preflight_pushed_config_for_current_node_with_gpus(
 }
 
 impl Node {
-    pub(crate) async fn restore_adopted_mesh_membership(&self, join_tokens: &[String]) {
+    pub(crate) async fn restore_adopted_mesh_membership(&self, join_tokens: &[String]) -> bool {
         let membership = match load_adopted_mesh_membership() {
             Ok(Some(membership)) => membership,
-            Ok(None) => return,
+            Ok(None) => return false,
             Err(error) => {
                 tracing::warn!(error = %error, "ignoring invalid adopted mesh membership");
-                return;
+                return false;
             }
         };
         if !join_tokens.iter().any(|encoded| {
             matches!(
                 parse_invite_token(encoded),
-                Ok(InviteTokenMaterial::Signed(token)) if membership.matches_token(&token)
+                Ok(InviteTokenMaterial::Signed(token)) if token.verify_at(token.expires_at_unix_ms.unwrap_or_else(current_time_unix_ms)).is_ok()
+                    && membership.matches_token(&token)
             )
         }) {
-            return;
+            return false;
         }
         let AdoptedMeshMembership {
             mesh_id,
@@ -221,11 +227,12 @@ impl Node {
             .await
         {
             tracing::warn!(error = %error, "failed to restore adopted mesh membership");
-            return;
+            return false;
         }
         for addr in peer_addrs {
             self.remember_join_target(addr).await;
         }
+        true
     }
 
     pub(crate) async fn refresh_adopted_mesh_membership(&self) {
@@ -636,12 +643,13 @@ impl Node {
                         .requirement_origin_owner(&state.policy, state.signed_policy.as_ref())
                         .is_none()
                 {
-                    let peer_addrs = self
+                    let mut peer_addrs: Vec<_> = self
                         .peers()
                         .await
                         .into_iter()
                         .map(|peer| peer.addr)
                         .collect();
+                    peer_addrs.insert(0, ann.addr.clone());
                     if let Err(error) = persist_adopted_mesh_membership(state, peer_addrs) {
                         tracing::warn!(error = %error, "failed to persist adopted mesh membership");
                     }
@@ -725,6 +733,28 @@ mod tests {
             signed_policy: None,
             bootstrap_token: None,
         }
+    }
+
+    #[test]
+    fn current_peer_precedes_history_and_keeps_latest_address() {
+        let mut addresses: Vec<_> = (0..=MAX_ADOPTED_PEER_ADDRS)
+            .map(|_| EndpointAddr::new(SecretKey::generate().public()))
+            .collect();
+        addresses.sort_by_key(|addr| addr.id);
+        let stale = addresses.pop().unwrap();
+        let mut current = stale.clone();
+        current
+            .addrs
+            .insert(TransportAddr::Ip("127.0.0.1:12345".parse().unwrap()));
+        let mut input = vec![current.clone(), stale];
+        input.extend(addresses);
+        let selected = preferred_adopted_peer_addrs(input);
+        assert_eq!(selected.len(), MAX_ADOPTED_PEER_ADDRS);
+        assert_eq!(selected[0], current);
+        assert_eq!(
+            selected.iter().filter(|addr| addr.id == current.id).count(),
+            1
+        );
     }
 
     #[test]
