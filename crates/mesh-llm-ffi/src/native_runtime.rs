@@ -78,7 +78,7 @@ fn runtime_install_options(
     let progress = progress.map(runtime_progress_callback);
     Ok(mesh_llm_sdk::native_runtime::NativeRuntimeInstallOptions {
         catalog: mesh_llm_sdk::native_runtime::mesh_native_runtime_catalog(),
-        mesh_version: options
+        release_version: options
             .mesh_version
             .unwrap_or_else(|| mesh_llm_sdk::native_runtime::CURRENT_MESH_VERSION.to_string()),
         skippy_abi_version: options.skippy_abi_version,

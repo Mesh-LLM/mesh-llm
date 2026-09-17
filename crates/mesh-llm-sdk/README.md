@@ -95,7 +95,7 @@ use mesh_llm_sdk::{MeshNode, initialize_host_runtime};
 async fn main() -> anyhow::Result<()> {
     let required_abi = current_skippy_abi_version();
     let outcome = install_native_runtime(NativeRuntimeInstallOptions {
-        mesh_version: CURRENT_MESH_VERSION.to_string(),
+        release_version: CURRENT_MESH_VERSION.to_string(),
         skippy_abi_version: Some(required_abi),
         selection: RuntimeSelection::Recommended,
         ..mesh_native_runtime_install_options()

@@ -326,7 +326,7 @@ mod dynamic {
         let cache = cache()?;
         let profile = profile();
         let mut options = install_options();
-        options.mesh_version = startup_selection.mesh_version.clone();
+        options.release_version = startup_selection.mesh_version.clone();
         options.skippy_abi_version = startup_selection.skippy_abi.clone();
         options.selection = startup_selection.runtime_selection.clone();
         if options.cache_dir.is_none() {
@@ -355,7 +355,7 @@ mod dynamic {
 
         tracing::info!(
             cache_root = %cache.root().display(),
-            mesh_version = %options.mesh_version,
+            mesh_version = %options.release_version,
             "{}",
             startup_install_message(discovered_bundle_dirs_empty)
         );
@@ -403,7 +403,7 @@ mod dynamic {
                 tracing::warn!(
                     error = %err,
                     cache_root = %cache.root().display(),
-                    mesh_version = %options.mesh_version,
+                    mesh_version = %options.release_version,
                     manifest_path = ?options.manifest_path,
                     manifest_url = ?options.manifest_url,
                     bundle_dirs = ?options.bundle_dirs,
@@ -422,7 +422,7 @@ mod dynamic {
             .unwrap_or("not configured");
         format!(
             "no compatible MeshLLM native runtime is installed or installable for MeshLLM {} / Skippy ABI {abi}; run `mesh-llm runtime install` or inspect available runtimes with `mesh-llm runtime list --available`",
-            options.mesh_version
+            options.release_version
         )
     }
 
@@ -675,7 +675,7 @@ mod dynamic {
 
     fn default_install_options() -> NativeRuntimeInstallOptions {
         NativeRuntimeInstallOptions {
-            mesh_version: crate::RELEASE_VERSION.to_string(),
+            release_version: crate::RELEASE_VERSION.to_string(),
             skippy_abi_version: Some(
                 crate::system::native_runtime_install::current_skippy_abi_version(),
             ),
@@ -775,7 +775,7 @@ mod dynamic {
 
         fn test_install_options() -> NativeRuntimeInstallOptions {
             NativeRuntimeInstallOptions {
-                mesh_version: "0.68.0".to_string(),
+                release_version: "0.68.0".to_string(),
                 allow_download: false,
                 ..crate::system::native_runtime_install::mesh_native_runtime_install_options()
             }
@@ -1096,7 +1096,7 @@ mod dynamic {
                 || Ok(cache.clone()),
                 || linux_host_profile(Some("2.35")),
                 move || NativeRuntimeInstallOptions {
-                    mesh_version: release_version.to_string(),
+                    release_version: release_version.to_string(),
                     skippy_abi_version: Some("0.1.25".to_string()),
                     bundle_dirs: vec![options_product_root.clone()],
                     cache_dir: Some(options_cache_root.clone()),
@@ -1150,7 +1150,7 @@ mod dynamic {
                 || Ok(cache.clone()),
                 || linux_host_profile(Some("2.39")),
                 move || NativeRuntimeInstallOptions {
-                    mesh_version: release_version.to_string(),
+                    release_version: release_version.to_string(),
                     skippy_abi_version: Some("0.1.25".to_string()),
                     bundle_dirs: vec![install_options_root.clone()],
                     cache_dir: Some(install_options_cache.clone()),
@@ -1204,7 +1204,7 @@ mod dynamic {
                 || Ok(cache.clone()),
                 || linux_host_profile(Some("2.39")),
                 || NativeRuntimeInstallOptions {
-                    mesh_version: release_version.to_string(),
+                    release_version: release_version.to_string(),
                     skippy_abi_version: Some("0.1.25".to_string()),
                     allow_download: true,
                     ..crate::system::native_runtime_install::mesh_native_runtime_install_options()
@@ -1276,7 +1276,7 @@ mod dynamic {
                 || Ok(cache.clone()),
                 || linux_host_profile(Some("2.35")),
                 || NativeRuntimeInstallOptions {
-                    mesh_version: release_version.to_string(),
+                    release_version: release_version.to_string(),
                     skippy_abi_version: Some("0.1.25".to_string()),
                     allow_download: true,
                     ..crate::system::native_runtime_install::mesh_native_runtime_install_options()
@@ -1526,7 +1526,7 @@ mod dynamic {
                 || Ok(cache.clone()),
                 HostRuntimeProfile::current_without_gpu_probe,
                 move || NativeRuntimeInstallOptions {
-                    mesh_version: release_version.to_string(),
+                    release_version: release_version.to_string(),
                     skippy_abi_version: Some("0.1.25".to_string()),
                     bundle_dirs: vec![options_product_root.clone()],
                     cache_dir: Some(options_cache_root.clone()),
@@ -1639,7 +1639,7 @@ mod dynamic {
 
             let recorded_options = install_calls.lock().unwrap();
             assert_eq!(recorded_options.len(), 1);
-            assert_eq!(recorded_options[0].mesh_version, "0.68.0");
+            assert_eq!(recorded_options[0].release_version, "0.68.0");
             assert_eq!(
                 recorded_options[0].skippy_abi_version.as_deref(),
                 Some("0.1.25")

@@ -145,13 +145,13 @@ pub async fn load_release_manifest_with_sources(
     mut options: NativeRuntimeManifestOptions,
 ) -> Result<(NativeRuntimeReleaseManifest, NativeRuntimeCatalogSources)> {
     options.bundle_dirs =
-        discover_native_runtime_bundle_dirs(&options.bundle_dirs, &options.mesh_version)?;
+        discover_native_runtime_bundle_dirs(&options.bundle_dirs, &options.release_version)?;
     let mut sources = NativeRuntimeCatalogSources {
         bundle_dirs: options.bundle_dirs.clone(),
         ..Default::default()
     };
     let mut artifacts = Vec::new();
-    let mut mesh_version = options.mesh_version.clone();
+    let mut mesh_version = options.release_version.clone();
     let mut skippy_abi = current_skippy_abi_version();
     let mut manifest_loaded = false;
     if let Some(path) = options.manifest_path.take() {
@@ -326,7 +326,7 @@ pub(crate) fn manifest_url(options: &NativeRuntimeManifestOptions) -> Option<Str
             // fails, see `load_release_manifest_with_sources`.
             options
                 .allow_default_manifest_url
-                .then(|| options.catalog.manifest_url(&options.mesh_version))
+                .then(|| options.catalog.manifest_url(&options.release_version))
         })
 }
 

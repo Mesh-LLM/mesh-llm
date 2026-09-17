@@ -47,13 +47,16 @@ callers must provide the release and catalog. Mesh callers use
 from the Mesh facade. Standalone Skippy release metadata must be supplied by its
 lifecycle layer. Bundle discovery takes an explicit release; existing Mesh path
 and environment names remain pending the coordinated packaging migration.
-The `mesh_version` field retains its current wire/cache spelling for now.
+Installer options name this input `release_version`. Serialized runtime manifests
+and cache inventory still use `mesh_version` until the coordinated packaging
+migration; the option field itself is not serialized.
 
 ## Migrating callers
 
 The package replaces `mesh-llm-runtime-install`; Rust imports use
 `skippy_runtime_install`. Construct options with `new(release, catalog)` instead
-of `Default`. Bundle discovery and `discover_local_native_runtimes` now require
+of `Default`, and use `release_version` instead of the former `mesh_version`
+option field. Bundle discovery and `discover_local_native_runtimes` now require
 an explicit release argument so discovery and installation select the same
 version. These are source API changes.
 

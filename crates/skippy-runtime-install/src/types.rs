@@ -60,7 +60,7 @@ impl NativeRuntimeCatalog {
 #[derive(Clone)]
 pub struct NativeRuntimeManifestOptions {
     pub catalog: NativeRuntimeCatalog,
-    pub mesh_version: String,
+    pub release_version: String,
     pub manifest_path: Option<PathBuf>,
     pub manifest_url: Option<String>,
     pub bundle_dirs: Vec<PathBuf>,
@@ -70,7 +70,7 @@ pub struct NativeRuntimeManifestOptions {
 #[derive(Clone)]
 pub struct NativeRuntimeInstallOptions {
     pub catalog: NativeRuntimeCatalog,
-    pub mesh_version: String,
+    pub release_version: String,
     pub skippy_abi_version: Option<String>,
     pub selection: RuntimeSelection,
     pub manifest_path: Option<PathBuf>,
@@ -105,7 +105,7 @@ impl NativeRuntimeManifestOptions {
     pub fn new(release_version: impl Into<String>, catalog: NativeRuntimeCatalog) -> Self {
         Self {
             catalog,
-            mesh_version: release_version.into(),
+            release_version: release_version.into(),
             manifest_path: None,
             manifest_url: None,
             bundle_dirs: Vec::new(),
@@ -119,7 +119,7 @@ impl NativeRuntimeInstallOptions {
     pub fn new(release_version: impl Into<String>, catalog: NativeRuntimeCatalog) -> Self {
         Self {
             catalog,
-            mesh_version: release_version.into(),
+            release_version: release_version.into(),
             skippy_abi_version: None,
             selection: RuntimeSelection::Recommended,
             manifest_path: None,

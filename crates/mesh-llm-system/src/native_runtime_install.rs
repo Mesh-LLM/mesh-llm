@@ -101,8 +101,8 @@ mod tests {
     fn mesh_options_supply_release_and_channel_to_both_operations() {
         let install = mesh_native_runtime_install_options();
         let manifest = mesh_native_runtime_manifest_options();
-        assert_eq!(install.mesh_version, CURRENT_MESH_VERSION);
-        assert_eq!(manifest.mesh_version, CURRENT_MESH_VERSION);
+        assert_eq!(install.release_version, CURRENT_MESH_VERSION);
+        assert_eq!(manifest.release_version, CURRENT_MESH_VERSION);
         assert_eq!(install.catalog, mesh_native_runtime_catalog());
         assert_eq!(manifest.catalog, install.catalog);
     }

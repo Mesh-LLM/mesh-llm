@@ -79,7 +79,7 @@ pub(super) fn native_runtime_install_options(
     progress: Option<NativeRuntimeDownloadProgressCallback>,
 ) -> NativeRuntimeInstallOptions {
     NativeRuntimeInstallOptions {
-        mesh_version: configured.mesh_version_or_current().to_string(),
+        release_version: configured.mesh_version_or_current().to_string(),
         skippy_abi_version: configured.skippy_abi_version.map(ToString::to_string),
         selection,
         manifest_path: manifest_path.map(Path::to_path_buf),
@@ -137,7 +137,7 @@ where
         options.configured,
         options.progress,
     );
-    let mesh_version = install_options.mesh_version.clone();
+    let mesh_version = install_options.release_version.clone();
     let cache_dir = install_options.cache_dir.clone();
     let outcome = install(install_options).await?;
     let prune = match prune(&mesh_version, cache_dir.as_deref()) {
@@ -204,7 +204,7 @@ mod tests {
 
         let calls = install_calls.lock().expect("lock install calls");
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].mesh_version, "0.68.0");
+        assert_eq!(calls[0].release_version, "0.68.0");
         assert_eq!(calls[0].skippy_abi_version.as_deref(), Some("0.1.25"));
         assert_eq!(
             calls[0].bundle_install_policy,

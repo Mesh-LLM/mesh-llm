@@ -713,7 +713,7 @@ fn parse_native_runtime_install_options(
     let value = parse_json(source)?;
     Ok(mesh_llm_sdk::native_runtime::NativeRuntimeInstallOptions {
         catalog: mesh_llm_sdk::native_runtime::mesh_native_runtime_catalog(),
-        mesh_version: optional_string(&value, "meshVersion")
+        release_version: optional_string(&value, "meshVersion")
             .unwrap_or_else(|| mesh_llm_sdk::native_runtime::CURRENT_MESH_VERSION.to_string()),
         skippy_abi_version: optional_string(&value, "skippyAbiVersion"),
         selection: mesh_llm_sdk::native_runtime::RuntimeSelection::parse(

@@ -26,7 +26,7 @@ pub async fn install_native_runtime(
 ) -> Result<NativeRuntimeInstallOutcome> {
     let (manifest, sources) = load_release_manifest_with_sources(NativeRuntimeManifestOptions {
         catalog: options.catalog.clone(),
-        mesh_version: options.mesh_version.clone(),
+        release_version: options.release_version.clone(),
         manifest_path: options.manifest_path.clone(),
         manifest_url: options.manifest_url.clone(),
         bundle_dirs: options.bundle_dirs.clone(),
@@ -49,7 +49,7 @@ pub async fn install_native_runtime(
         .unwrap_or_else(|| manifest.skippy_abi.clone());
     let cache = native_runtime_cache(options.cache_dir.as_deref())?;
     let resolver = NativeRuntimeResolver::new(
-        &options.mesh_version,
+        &options.release_version,
         host_runtime_profile(),
         manifest,
         cache.clone(),
@@ -267,7 +267,7 @@ pub(crate) async fn install_resolved_runtime(
 ) -> Result<NativeRuntimeInstallOutcome> {
     match resolution.source.clone() {
         NativeRuntimeSource::Installed { path: _ } => {
-            installed_outcome(cache, resolution, &options.mesh_version)
+            installed_outcome(cache, resolution, &options.release_version)
         }
         NativeRuntimeSource::Bundle { path } => {
             if should_install_explicit_bundle_into_cache(&path, options)? {

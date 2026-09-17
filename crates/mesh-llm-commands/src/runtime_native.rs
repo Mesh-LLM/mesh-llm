@@ -73,7 +73,7 @@ pub async fn run_native_runtime_list(
         }
         let (manifest, sources) =
             load_release_manifest_with_sources(NativeRuntimeManifestOptions {
-                mesh_version: mesh_version.to_string(),
+                release_version: mesh_version.to_string(),
                 manifest_path: manifest_path.map(Path::to_path_buf),
                 bundle_dirs: bundle_dirs.to_vec(),
                 ..mesh_llm_system::native_runtime_install::mesh_native_runtime_manifest_options()

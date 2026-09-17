@@ -236,7 +236,7 @@ mod tests {
                 &cache,
                 resolution,
                 &NativeRuntimeInstallOptions {
-                    mesh_version: release.to_string(),
+                    release_version: release.to_string(),
                     allow_download: false,
                     ..test_install_options()
                 },
@@ -599,7 +599,7 @@ mod tests {
         }
 
         let options = NativeRuntimeManifestOptions {
-            mesh_version: "0.67.0".to_string(),
+            release_version: "0.67.0".to_string(),
             bundle_dirs: vec![PathBuf::from("runtime-bundle")],
             allow_default_manifest_url: true,
             ..test_manifest_options()
@@ -697,7 +697,7 @@ mod tests {
         }
 
         let options = NativeRuntimeManifestOptions {
-            mesh_version: "0.67.0".to_string(),
+            release_version: "0.67.0".to_string(),
             allow_default_manifest_url: true,
             ..test_manifest_options()
         };
@@ -763,7 +763,7 @@ mod tests {
             .unwrap()
             .block_on(load_release_manifest(NativeRuntimeManifestOptions {
                 catalog: test_catalog(),
-                mesh_version: "0.0.0+gLOCAL".to_string(),
+                release_version: "0.0.0+gLOCAL".to_string(),
                 manifest_path: Some(path),
                 manifest_url: Some("https://example.invalid/from-arg.json".to_string()),
                 bundle_dirs: Vec::new(),
@@ -881,7 +881,7 @@ mod tests {
             release_manifest_file(temp.path(), vec![windows_cuda_release_artifact()]);
 
         let (manifest, sources) = block_on_load(NativeRuntimeManifestOptions {
-            mesh_version: TEST_RELEASE.to_string(),
+            release_version: TEST_RELEASE.to_string(),
             manifest_path: Some(manifest_path.clone()),
             bundle_dirs: vec![bundle.clone()],
             allow_default_manifest_url: true,
@@ -923,7 +923,7 @@ mod tests {
         write_bundle(&bundle, &bundled);
 
         let (manifest, sources) = block_on_load(NativeRuntimeManifestOptions {
-            mesh_version: TEST_RELEASE.to_string(),
+            release_version: TEST_RELEASE.to_string(),
             bundle_dirs: vec![bundle],
             allow_default_manifest_url: false,
             ..test_manifest_options()
@@ -948,7 +948,7 @@ mod tests {
         write_bundle(&bundle, &windows_cpu_bundle_artifact());
 
         let (manifest, sources) = block_on_load(NativeRuntimeManifestOptions {
-            mesh_version: TEST_RELEASE.to_string(),
+            release_version: TEST_RELEASE.to_string(),
             manifest_url: Some("http://127.0.0.1:9/native-runtimes.json?token=secret".to_string()),
             bundle_dirs: vec![bundle.clone()],
             allow_default_manifest_url: true,
@@ -978,7 +978,7 @@ mod tests {
         }
 
         let err = block_on_load(NativeRuntimeManifestOptions {
-            mesh_version: TEST_RELEASE.to_string(),
+            release_version: TEST_RELEASE.to_string(),
             manifest_url: Some("http://127.0.0.1:9/native-runtimes.json".to_string()),
             bundle_dirs: Vec::new(),
             allow_default_manifest_url: true,
@@ -1004,7 +1004,7 @@ mod tests {
         let manifest_path =
             release_manifest_file(temp.path(), vec![windows_cuda_release_artifact()]);
         let (manifest, sources) = block_on_load(NativeRuntimeManifestOptions {
-            mesh_version: TEST_RELEASE.to_string(),
+            release_version: TEST_RELEASE.to_string(),
             manifest_path: Some(manifest_path),
             bundle_dirs: vec![bundle],
             allow_default_manifest_url: true,
@@ -1088,7 +1088,7 @@ mod tests {
         );
 
         let (manifest, sources) = block_on_load(NativeRuntimeManifestOptions {
-            mesh_version: TEST_RELEASE.to_string(),
+            release_version: TEST_RELEASE.to_string(),
             manifest_path: Some(manifest_path),
             bundle_dirs: vec![bundle.clone()],
             allow_default_manifest_url: true,
@@ -1215,7 +1215,7 @@ mod tests {
         let manifest_path =
             release_manifest_file(temp.path(), vec![windows_cuda_release_artifact()]);
         let (manifest, sources) = block_on_load(NativeRuntimeManifestOptions {
-            mesh_version: TEST_RELEASE.to_string(),
+            release_version: TEST_RELEASE.to_string(),
             manifest_path: Some(manifest_path),
             bundle_dirs: vec![bundle],
             allow_default_manifest_url: true,
@@ -1327,7 +1327,7 @@ mod tests {
             vec![windows_cuda_release_artifact(), linux_cuda],
         );
         let (manifest, sources) = block_on_load(NativeRuntimeManifestOptions {
-            mesh_version: TEST_RELEASE.to_string(),
+            release_version: TEST_RELEASE.to_string(),
             manifest_path: Some(manifest_path),
             bundle_dirs: Vec::new(),
             allow_default_manifest_url: false,
@@ -1458,7 +1458,7 @@ mod tests {
             release_manifest_file(temp.path(), vec![windows_cuda_release_artifact()]);
 
         let (manifest, sources) = block_on_load(NativeRuntimeManifestOptions {
-            mesh_version: TEST_RELEASE.to_string(),
+            release_version: TEST_RELEASE.to_string(),
             manifest_path: Some(manifest_path),
             bundle_dirs: vec![first, second],
             allow_default_manifest_url: false,
