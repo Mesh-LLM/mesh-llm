@@ -441,12 +441,14 @@ fn verify_resident_ownership(
         return Ok(());
     }
     if cache_healthy.swap(false, std::sync::atomic::Ordering::AcqRel) {
-        let _ = mesh_llm_events::emit_event(mesh_llm_events::OutputEvent::Warning {
-            message: "Skippy KV cache disabled after resident ownership mismatch".to_string(),
-            context: Some(format!(
-                "radix_entries={resident_entries} allocated_sequences={allocated_sequences}"
-            )),
-        });
+        let _ = skippy_events::diagnostics::emit(
+            skippy_events::diagnostics::ServingDiagnostic::Warning {
+                message: "Skippy KV cache disabled after resident ownership mismatch".to_string(),
+                context: Some(format!(
+                    "radix_entries={resident_entries} allocated_sequences={allocated_sequences}"
+                )),
+            },
+        );
     }
     bail!(
         "resident cache ownership mismatch: radix_entries={resident_entries} allocated_sequences={allocated_sequences}"

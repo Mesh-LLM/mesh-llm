@@ -3,6 +3,7 @@
 mod certification;
 mod checkpoint;
 mod deployment;
+pub(crate) mod diagnostics;
 mod family_policy;
 mod hash_cache;
 mod hooks;

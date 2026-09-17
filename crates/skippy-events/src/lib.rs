@@ -4,3 +4,5 @@
 pub mod identifiers;
 pub mod lifecycle;
 pub mod usage;
+
+pub mod diagnostics;

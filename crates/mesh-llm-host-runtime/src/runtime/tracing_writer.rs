@@ -333,11 +333,13 @@ pub(super) fn init_embedded_runtime_tracing() -> Result<()> {
 
 pub(super) fn initialize_runtime_entrypoint() -> Result<()> {
     crate::system::backend::clear_runtime_shutting_down();
+    crate::inference::skippy::diagnostics::install();
     init_runtime_tracing()?;
     Ok(())
 }
 
 pub(super) fn initialize_embedded_runtime_entrypoint() -> Result<()> {
     crate::system::backend::clear_runtime_shutting_down();
+    crate::inference::skippy::diagnostics::install();
     init_embedded_runtime_tracing()
 }

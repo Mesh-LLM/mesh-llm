@@ -89,12 +89,15 @@ impl RuntimeState {
                 Err(reset_err) => {
                     lane_discarded = true;
                     let reason = format!("reset() failed ({reset_err:#})");
-                    let _ = mesh_llm_events::emit_event(mesh_llm_events::OutputEvent::Warning {
-                        message: "Discarding Skippy runtime lane after reset failure".to_string(),
-                        context: Some(format!(
-                            "lane_index={lane_index} session_id={session_id} reason={reason}"
-                        )),
-                    });
+                    let _ = skippy_events::diagnostics::emit(
+                        skippy_events::diagnostics::ServingDiagnostic::Warning {
+                            message: "Discarding Skippy runtime lane after reset failure"
+                                .to_string(),
+                            context: Some(format!(
+                                "lane_index={lane_index} session_id={session_id} reason={reason}"
+                            )),
+                        },
+                    );
                     lane_discard_reason = Some(reason);
                     drop(lane_session);
                     self.free_lane_indices.push(lane_index);

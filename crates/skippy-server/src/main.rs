@@ -1,4 +1,4 @@
-use std::io::Write;
+mod console;
 
 use anyhow::Result;
 use clap::Parser;
@@ -10,14 +10,11 @@ use skippy_server::{
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    console::install();
     match Cli::parse().command {
         Command::Serve(args) => serve(args).await,
         Command::ServeBinary(args) => serve_binary(args).await,
         Command::ServeOpenAi(args) => serve_openai(args).await,
-        Command::ExampleConfig => {
-            let mut out = mesh_llm_events::machine_out();
-            writeln!(out, "{}", serde_json::to_string_pretty(&example_config())?)?;
-            Ok(())
-        }
+        Command::ExampleConfig => console::write_json(&example_config()),
     }
 }

@@ -4,7 +4,6 @@ use std::{
 };
 
 use anyhow::Result;
-use mesh_llm_events::OutputEvent;
 use skippy_cache::{
     CacheBlobStore, ResidentActivationCache, ResidentCacheConfig, SparseCheckpointPolicy,
     UnifiedRadixCache,
@@ -221,13 +220,14 @@ impl KvStageIntegration {
 }
 
 fn emit_cache_disabled_warning(config: &StageConfig, reason: &str) {
-    let _ = mesh_llm_events::emit_event(OutputEvent::Warning {
-        message: "Skippy KV cache disabled for this model stage".to_string(),
-        context: Some(format!(
-            "stage_id={} model_id={} reason={reason}",
-            config.stage_id, config.model_id
-        )),
-    });
+    let _ =
+        skippy_events::diagnostics::emit(skippy_events::diagnostics::ServingDiagnostic::Warning {
+            message: "Skippy KV cache disabled for this model stage".to_string(),
+            context: Some(format!(
+                "stage_id={} model_id={} reason={reason}",
+                config.stage_id, config.model_id
+            )),
+        });
 }
 
 fn store_exact_radix_record(
