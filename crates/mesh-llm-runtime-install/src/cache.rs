@@ -1,6 +1,6 @@
 //! Native runtime cache and version helpers.
 
-use crate::types::{CURRENT_MESH_VERSION, NATIVE_RUNTIME_CACHE_DIR_ENV};
+use crate::types::NATIVE_RUNTIME_CACHE_DIR_ENV;
 use anyhow::{Context, Result};
 use skippy_native_runtime::{HostRuntimeProfile, NativeRuntimeCache};
 use std::ffi::OsString;
@@ -14,10 +14,14 @@ pub fn current_skippy_abi_version() -> String {
     )
 }
 
-/// Returns whether native-runtime metadata matches the exact MeshLLM and
-/// Skippy ABI versions linked into this SDK build.
-pub fn native_runtime_versions_match_current_sdk(mesh_version: &str, skippy_abi: &str) -> bool {
-    mesh_version == CURRENT_MESH_VERSION && skippy_abi == current_skippy_abi_version()
+/// Returns whether native-runtime metadata matches the caller's required release
+/// and the Skippy ABI linked into this installer.
+pub fn native_runtime_versions_match(
+    release_version: &str,
+    skippy_abi: &str,
+    required_release: &str,
+) -> bool {
+    release_version == required_release && skippy_abi == current_skippy_abi_version()
 }
 
 pub fn default_native_runtime_cache() -> Result<NativeRuntimeCache> {

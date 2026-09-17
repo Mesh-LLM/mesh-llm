@@ -49,6 +49,7 @@ pub mod embedded_runtime {
 
 #[cfg(feature = "serving")]
 pub mod native_runtime {
+    pub use mesh_llm_embedded_runtime::native_runtime::native_runtime_versions_match_current_sdk;
     pub use mesh_llm_runtime_install::*;
 }
 

@@ -19,7 +19,7 @@ pub use skippy_native_runtime::{
 
 pub use cache::{
     current_skippy_abi_version, default_native_runtime_cache, host_runtime_profile,
-    native_runtime_cache, native_runtime_versions_match_current_sdk,
+    native_runtime_cache, native_runtime_versions_match,
 };
 pub use install::{NativeRuntimeResolutionError, RejectedCandidate, install_native_runtime};
 pub use manifest::{
@@ -683,19 +683,24 @@ mod tests {
     }
 
     #[test]
-    fn sdk_runtime_version_check_requires_exact_mesh_and_skippy_versions() {
+    fn runtime_version_check_uses_explicit_release_and_linked_skippy_abi() {
         let current_abi = current_skippy_abi_version();
-        assert!(native_runtime_versions_match_current_sdk(
-            CURRENT_MESH_VERSION,
-            &current_abi
+        let requested_release = "0.68.0";
+        assert_ne!(requested_release, CURRENT_MESH_VERSION);
+        assert!(native_runtime_versions_match(
+            requested_release,
+            &current_abi,
+            requested_release
         ));
-        assert!(!native_runtime_versions_match_current_sdk(
+        assert!(!native_runtime_versions_match(
+            CURRENT_MESH_VERSION,
+            &current_abi,
+            requested_release
+        ));
+        assert!(!native_runtime_versions_match(
+            requested_release,
             "0.0.0",
-            &current_abi
-        ));
-        assert!(!native_runtime_versions_match_current_sdk(
-            CURRENT_MESH_VERSION,
-            "0.0.0"
+            requested_release
         ));
     }
 

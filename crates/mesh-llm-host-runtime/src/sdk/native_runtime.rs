@@ -6,7 +6,7 @@ pub use crate::system::native_runtime_install::{
     NativeRuntimeInstallOutcome, NativeRuntimeInstallStatus, NativeRuntimeManifestOptions,
     NativeRuntimeVerificationPolicy, current_skippy_abi_version, default_native_runtime_cache,
     default_release_manifest_url, host_runtime_profile, install_native_runtime,
-    load_release_manifest, native_runtime_cache, native_runtime_versions_match_current_sdk,
+    load_release_manifest, native_runtime_cache,
 };
 pub use skippy_native_runtime::{
     CachePrunePlan, CandidateEvaluation, CandidateRejection, HostGpuProfile, HostRuntimeProfile,
@@ -16,3 +16,13 @@ pub use skippy_native_runtime::{
     NativeRuntimeReleaseManifest, NativeRuntimeResolution, NativeRuntimeResolver,
     NativeRuntimeSource, RuntimeSelection, native_runtime_cache_root, select_native_runtime,
 };
+
+/// Returns whether runtime metadata matches this Mesh SDK release and its linked
+/// Skippy ABI. Product release selection stays at the Mesh boundary.
+pub fn native_runtime_versions_match_current_sdk(mesh_version: &str, skippy_abi: &str) -> bool {
+    crate::system::native_runtime_install::native_runtime_versions_match(
+        mesh_version,
+        skippy_abi,
+        crate::RELEASE_VERSION,
+    )
+}
