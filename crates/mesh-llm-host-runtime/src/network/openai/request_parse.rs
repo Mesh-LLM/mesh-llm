@@ -1,3 +1,4 @@
+pub(super) use super::model_names::public_model_id;
 use crate::mesh;
 use crate::plugin;
 use anyhow::{Context, Result, anyhow, bail};
@@ -1120,105 +1121,6 @@ fn internal_model_for_public_id(
         }
         None
     })
-}
-
-pub(super) fn public_model_id(
-    model_name: &str,
-    descriptor: Option<&mesh::ServedModelDescriptor>,
-    profile: &str,
-) -> String {
-    // A descriptor with an `artifact` field has enough information to
-    // produce a public ID that round-trips to the same model. Without
-    // it, the HuggingFace path collapses to just the repo name and
-    // silently drops the quant-tag suffix the resolver needs (PR #566
-    // review feedback — "some IDs in /v1/models dropped quant
-    // suffixes"). Only use the descriptor-derived id when it can be
-    // lossless; otherwise prefer the on-disk file (authoritative for
-    // local models), and finally the internal model_name (which
-    // always carries the quant suffix our resolver knows how to
-    // route).
-    let base_id = if let Some(descriptor) = descriptor
-        && descriptor_can_produce_lossless_id(&descriptor.identity)
-        && let Some(id) = public_model_id_from_identity(&descriptor.identity)
-    {
-        id
-    } else if let Some(id) = public_model_id_from_local_path(model_name) {
-        id
-    } else {
-        model_name.to_string()
-    };
-
-    // Append profile suffix for non-default profiles
-    if profile.is_empty() {
-        base_id
-    } else {
-        format!("{}#{}", base_id, profile)
-    }
-}
-
-/// A descriptor identity carries enough information for
-/// `public_model_id_from_identity` to produce an ID that round-trips
-/// to the same model. For HuggingFace that means the `artifact` field
-/// (the GGUF file name) is present so the quant selector can be
-/// derived. Catalog identities always carry a `canonical_ref` with the
-/// selector baked in.
-fn descriptor_can_produce_lossless_id(identity: &mesh::ServedModelIdentity) -> bool {
-    match identity.source_kind {
-        mesh::ModelSourceKind::HuggingFace => identity.artifact.is_some(),
-        mesh::ModelSourceKind::Catalog => identity.canonical_ref.is_some(),
-        mesh::ModelSourceKind::LocalGguf
-        | mesh::ModelSourceKind::DirectUrl
-        | mesh::ModelSourceKind::Unknown => false,
-    }
-}
-
-fn public_model_id_from_identity(identity: &mesh::ServedModelIdentity) -> Option<String> {
-    match identity.source_kind {
-        mesh::ModelSourceKind::HuggingFace => identity
-            .repository
-            .as_deref()
-            .and_then(|repo| public_huggingface_model_ref(repo, identity.artifact.as_deref()))
-            .or_else(|| {
-                identity
-                    .canonical_ref
-                    .as_deref()
-                    .and_then(|model_ref| model_ref::ModelRef::parse(model_ref).ok())
-                    .map(|model_ref| model_ref.display_id())
-            }),
-        mesh::ModelSourceKind::Catalog => identity
-            .canonical_ref
-            .as_deref()
-            .and_then(|model_ref| model_ref::ModelRef::parse(model_ref).ok())
-            .map(|model_ref| model_ref.display_id()),
-        mesh::ModelSourceKind::LocalGguf
-        | mesh::ModelSourceKind::DirectUrl
-        | mesh::ModelSourceKind::Unknown => None,
-    }
-}
-
-fn public_model_id_from_local_path(model_name: &str) -> Option<String> {
-    let path = crate::models::find_model_path(model_name);
-    if !path.is_file() {
-        return None;
-    }
-    if path.extension().and_then(|extension| extension.to_str()) != Some("gguf") {
-        return None;
-    }
-    Some(crate::models::model_ref_for_path(&path))
-}
-
-fn public_huggingface_model_ref(repo: &str, artifact: Option<&str>) -> Option<String> {
-    // `artifact` can be either a GGUF filename (e.g. `Falcon-Q4_K_M.gguf`)
-    // or an already-extracted quant selector (e.g. `Q4_K_M` or
-    // `qwen2.5-3b-instruct-q4_k_m`, when the descriptor was built from
-    // a parsed `ModelRef::selector`). Handle both — if the artifact
-    // looks like a quant selector use it directly; otherwise try to
-    // pull a selector out of the filename.
-    let selector = artifact.and_then(|a| {
-        model_ref::quant_selector_from_gguf_file(a)
-            .or_else(|| (!a.is_empty() && !a.ends_with(".gguf")).then(|| a.to_string()))
-    });
-    Some(model_ref::format_model_ref(repo, None, selector.as_deref()))
 }
 
 #[cfg(test)]

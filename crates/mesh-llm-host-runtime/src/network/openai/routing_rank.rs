@@ -337,6 +337,15 @@ pub(super) fn descriptor_for_model<'a>(
     descriptors
         .iter()
         .find(|descriptor| descriptor.identity.model_name == model_name)
+        .or_else(|| {
+            descriptors.iter().find(|descriptor| {
+                super::model_names::public_model_id(
+                    &descriptor.identity.model_name,
+                    Some(descriptor),
+                    "",
+                ) == model_name
+            })
+        })
 }
 
 pub(super) fn cached_auto_model_satisfies_media_requirements(
