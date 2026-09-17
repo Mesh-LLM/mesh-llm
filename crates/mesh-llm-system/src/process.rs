@@ -377,11 +377,34 @@ pub fn process_name_matches(pid: u32, expected_comm: &str) -> bool {
     process_executable_name(pid)
         .ok()
         .flatten()
-        .is_some_and(|name| name == expected_comm)
+        .is_some_and(|name| names_match(&name, expected_comm))
         || process_comm(pid)
             .ok()
             .flatten()
-            .is_some_and(|name| name == expected_comm)
+            .is_some_and(|name| names_match(&name, expected_comm))
+}
+
+/// Compares a live process name with the expected one.
+///
+/// The two sides reach the name through different APIs. The expected name is
+/// the file stem of what `owner.json` recorded from `std::env::current_exe`,
+/// which on Windows reports the path as it was handed to `CreateProcess`, so
+/// as the caller spelled it. The live name comes from
+/// `QueryFullProcessImageNameW`, which reports the canonical path on disk.
+/// Windows opens files without regard to case, so launching through a
+/// differently cased path is ordinary and makes the two disagree: measured
+/// here, one side answered `PYTHON` while the other answered `python` for the
+/// same process. Folding ASCII case covers that, the executable stems compared
+/// here being ASCII, and every other platform keeps the exact comparison its
+/// filesystem calls for.
+#[cfg(windows)]
+fn names_match(live: &str, expected: &str) -> bool {
+    live.eq_ignore_ascii_case(expected)
+}
+
+#[cfg(not(windows))]
+fn names_match(live: &str, expected: &str) -> bool {
+    live == expected
 }
 
 /// Returns true iff the live process matches the expected name and start time.
@@ -494,5 +517,19 @@ mod tests {
         // never name a process and OpenProcess rejects it as a bad parameter.
         assert_eq!(super::process_comm(999_999).unwrap(), None);
         assert_eq!(super::process_liveness(999_999), super::Liveness::Dead);
+    }
+
+    #[test]
+    fn a_name_that_differs_only_in_case_matches_where_the_filesystem_does() {
+        assert!(super::names_match("mesh-llm", "mesh-llm"));
+        assert!(!super::names_match("mesh-llm", "other"));
+        // `current_exe` spells the binary the way it was launched, so a
+        // Windows caller reaching it through an upper-cased path records a
+        // name the canonical one does not equal.
+        assert_eq!(
+            super::names_match("mesh-llm", "MESH-LLM"),
+            cfg!(windows),
+            "case folding must follow the platform's filesystem"
+        );
     }
 }
