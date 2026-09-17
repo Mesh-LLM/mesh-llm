@@ -25,6 +25,7 @@ class CiProductComposerTests(unittest.TestCase):
         workspace: Path,
         *,
         host_version: str = "1.2.3",
+        runtime_version: str = "1.2.3",
     ) -> tuple[Path, Path]:
         host_input = workspace / "host-input"
         runtime_input = workspace / "runtime-input"
@@ -34,7 +35,11 @@ class CiProductComposerTests(unittest.TestCase):
         host = host_input / "mesh-llm"
         host.write_text(
             "#!/usr/bin/env bash\n"
-            f"printf 'mesh-llm {host_version}\\n'\n",
+            'if [[ "$*" == *"--print-build-contract"* ]]; then\n'
+            f"printf '%s\\n' '{json.dumps({'schema_version': 1, 'product_version': host_version.split('+')[0], 'runtime_release': '1.2.3', 'skippy_abi': '1.0.0'})}'\n"
+            'else\n'
+            f"printf 'mesh-llm {host_version}\\n'\n"
+            'fi\n',
             encoding="utf-8",
         )
         host.chmod(0o755)
@@ -62,7 +67,7 @@ class CiProductComposerTests(unittest.TestCase):
         manifest = {
             "runtime": {
                 "id": runtime_id,
-                "mesh_version": "1.2.3",
+                "mesh_version": runtime_version,
                 "skippy_abi": "1.0.0",
                 "platform": {
                     "os": "macos",
@@ -113,6 +118,8 @@ class CiProductComposerTests(unittest.TestCase):
         workspace: Path,
         *,
         host_version: str = "1.2.3",
+        runtime_version: str = "1.2.3",
+        product_version: str = "1.2.3",
         runtime_archive: str | None = None,
         host_sidecar: str | None = None,
         attestation_sidecar: str | None = None,
@@ -120,6 +127,7 @@ class CiProductComposerTests(unittest.TestCase):
         host_input, runtime_input = self.write_fake_product_inputs(
             workspace,
             host_version=host_version,
+            runtime_version=runtime_version,
         )
         if host_sidecar is not None:
             self.write_noncanonical_sidecar(
@@ -160,7 +168,7 @@ class CiProductComposerTests(unittest.TestCase):
             "INPUT_RUNTIME_INPUT_DIR": str(runtime_input),
             "INPUT_OUTPUT_DIR": str(workspace / "product-input"),
             "INPUT_BACKEND": "cpu",
-            "INPUT_VERSION": "1.2.3",
+            "INPUT_VERSION": product_version,
             "INPUT_BINARY_NAME": "mesh-llm",
             "INPUT_READINESS_SMOKE": "false",
         }
@@ -184,6 +192,20 @@ class CiProductComposerTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
+
+    def test_default_product_version_comes_from_host_not_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_product_composer(
+                Path(directory), host_version="9.0.0", runtime_version="2.0.0",
+                product_version="",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            manifests = list(Path(directory).rglob("product-manifest.json"))
+            self.assertTrue(manifests)
+            for path in manifests:
+                manifest = json.loads(path.read_text())
+                self.assertEqual(manifest["mesh_version"], "9.0.0")
+                self.assertEqual(manifest["runtime"]["release_version"], "2.0.0")
 
     def test_product_action_only_composes_verified_inputs(self) -> None:
         action = self.read_action("compose-product-input")

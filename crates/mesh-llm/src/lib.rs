@@ -11,6 +11,28 @@ mod commands;
 
 pub use mesh_llm_host_runtime::*;
 
+/// Handle immutable build metadata before process-wide cache/TLS setup.
+pub fn run_build_contract_if_requested() -> Option<i32> {
+    let args: Vec<_> = std::env::args_os().collect();
+    if !args.iter().any(|arg| arg == "--print-build-contract") {
+        return None;
+    }
+    Some(match mesh_llm_cli::Cli::try_parse_from(args) {
+        Ok(_) => match mesh_llm_commands::runtime_native::print_build_contract() {
+            Ok(()) => 0,
+            Err(error) => {
+                let _ = writeln!(mesh_llm_events::console_err(), "{error:#}");
+                1
+            }
+        },
+        Err(error) => {
+            let code = error.exit_code();
+            let _ = error.print();
+            code
+        }
+    })
+}
+
 pub async fn run_main() -> i32 {
     match run_cli_entrypoint().await {
         Ok(()) => 0,
@@ -56,6 +78,9 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
             return Err(anyhow::Error::new(CliParseExit(exit_code)));
         }
     };
+    if cli.print_build_contract {
+        return mesh_llm_commands::runtime_native::print_build_contract();
+    }
     let warning = mesh_llm_cli::legacy_runtime_surface_warning(
         &cli,
         &normalized_args.original,

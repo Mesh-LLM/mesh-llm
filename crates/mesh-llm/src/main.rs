@@ -16,6 +16,10 @@ use std::io::Write;
 const DEFAULT_THREAD_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 fn main() {
+    if let Some(code) = mesh_llm::run_build_contract_if_requested() {
+        std::process::exit(code);
+    }
+
     mesh_llm_host_runtime::configure_hf_tls_provider();
     prepare_model_download_directories();
     configure_metal_pipeline_cache();

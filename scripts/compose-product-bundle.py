@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 from typing import NotRequired, TypedDict
 
@@ -18,6 +19,7 @@ class RuntimeBackend(TypedDict):
 class RuntimeData(TypedDict):
     id: str
     mesh_version: str
+    skippy_abi: str
     backend: RuntimeBackend
 
 
@@ -76,6 +78,20 @@ def validate_runtime_backend(
         )
 
 
+def read_host_build_contract(host: Path) -> dict[str, object]:
+    result = subprocess.run(
+        [str(host.resolve()), "--log-format", "json", "--print-build-contract"],
+        check=True, capture_output=True, text=True, timeout=30,
+    )
+    contract = json.loads(result.stdout)
+    if not isinstance(contract, dict) or contract.get("schema_version") != 1:
+        raise ValueError("unsupported host build contract schema")
+    for field in ("product_version", "runtime_release", "skippy_abi"):
+        if not isinstance(contract.get(field), str) or not contract[field].strip():
+            raise ValueError(f"host build contract is missing {field}")
+    return contract
+
+
 def compose_manifest(
     bundle: Path,
     host: Path,
@@ -90,13 +106,18 @@ def compose_manifest(
     )
     runtime_data = runtime_manifest["runtime"]
     runtime_id = runtime_data["id"]
-    runtime_mesh_version = runtime_data["mesh_version"].removeprefix("v")
-    if runtime_mesh_version != version:
-        raise ValueError(
-            f"native runtime {runtime_id} targets MeshLLM {runtime_mesh_version}, "
-            f"expected {version}"
-        )
     validate_runtime_backend(runtime_id, runtime_manifest, runtime_data, backend)
+    contract = read_host_build_contract(host)
+    if contract["product_version"] != version:
+        raise ValueError(
+            f"host build contract product version {contract['product_version']} "
+            f"does not match requested {version}"
+        )
+    if runtime_data["skippy_abi"] != contract["skippy_abi"]:
+        raise ValueError(
+            f"native runtime {runtime_id} ABI {runtime_data['skippy_abi']} "
+            f"does not match host-required ABI {contract['skippy_abi']}"
+        )
     return {
         "schema_version": 2,
         "contract": "mesh-llm-product-v2",
@@ -105,9 +126,12 @@ def compose_manifest(
         "host": {
             "path": host.relative_to(bundle).as_posix(),
             "sha256": file_sha256(host),
+            "required_skippy_abi": contract["skippy_abi"],
         },
         "runtime": {
             "id": runtime_id,
+            "release_version": runtime_data["mesh_version"],
+            "skippy_abi": runtime_data["skippy_abi"],
             "path": runtime.relative_to(bundle).as_posix(),
             "sha256": tree_sha256(runtime),
             "manifest_sha256": file_sha256(runtime_manifest_path),

@@ -114,6 +114,8 @@ class SdkJsonConsumerTests(unittest.TestCase):
             '  [[ -z "${MESH_LLM_CONFIG:-}" && -z "${MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR:-}" ]]\n'
             '  touch "$GITHUB_WORKSPACE/sdk-reader-ran"\n'
             f"  printf '%s\\n' '{json.dumps(reports[report_kind])}'\n"
+            'elif [[ "$*" == *"--print-build-contract"* ]]; then\n'
+            f"printf '%s\\n' '{json.dumps({'schema_version': 1, 'product_version': '1.2.3', 'runtime_release': '1.2.3', 'skippy_abi': runtime_tests.current_skippy_abi()})}'\n"
             'else\n  printf "mesh-llm 1.2.3\\n"\nfi\n'
         )
         digest = hashlib.sha256(host.read_bytes()).hexdigest()

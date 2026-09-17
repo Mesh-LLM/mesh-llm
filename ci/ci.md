@@ -1008,5 +1008,8 @@ Native runtime packaging reads `crates/skippy-native-runtime/RUNTIME_VERSION`,
 not the Mesh workspace package version. The catalog generator verifies the
 stamped runtime release against that source (or `--runtime-version`); its
 publication tag determines archive URLs independently. Product composition
-migration remains pending. No workflow dispatch, runner, or publication
-permissions change with this source extraction.
+reads the exact host executable with `--log-format json --print-build-contract`
+and compares its compiled required Skippy ABI to the runtime manifest. Missing
+product-version input defaults to the host version, never the runtime release.
+The product manifest records required and supplied ABI plus runtime release.
+No workflow dispatch, runner, or publication permissions change.

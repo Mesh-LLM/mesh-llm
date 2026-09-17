@@ -169,7 +169,11 @@ class CiArtifactActionTests(unittest.TestCase):
         host = host_input / "mesh-llm"
         host.write_text(
             "#!/usr/bin/env bash\n"
-            f"printf 'mesh-llm {host_version}\\n'\n",
+            'if [[ "$*" == *"--print-build-contract"* ]]; then\n'
+            f"printf '%s\\n' '{json.dumps({'schema_version': 1, 'product_version': host_version.split('+')[0], 'runtime_release': '1.2.3', 'skippy_abi': '1.0.0'})}'\n"
+            'else\n'
+            f"printf 'mesh-llm {host_version}\\n'\n"
+            'fi\n',
             encoding="utf-8",
         )
         host.chmod(0o755)

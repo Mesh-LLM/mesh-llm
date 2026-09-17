@@ -104,7 +104,13 @@ class PackageReleaseTests(unittest.TestCase):
             runtime_root = bundle / "native-runtimes"
             host = bundle / "mesh-llm"
             bundle.mkdir()
-            host.write_bytes(b"host")
+            host.write_text(
+                "#!/bin/sh\n" + "printf '%s\\n' '" + json.dumps({
+                    "schema_version": 1, "product_version": "0.73.1",
+                    "runtime_release": "0.73.1", "skippy_abi": "0.1.0",
+                }) + "'\n"
+            )
+            host.chmod(0o755)
             runtime = self.runtime(runtime_root, "linux-cpu", "cpu")
             result = run_bash(
                 (
@@ -130,7 +136,13 @@ class PackageReleaseTests(unittest.TestCase):
             runtime_root = bundle / "native-runtimes"
             host = bundle / "mesh-llm"
             bundle.mkdir()
-            host.write_bytes(b"host")
+            host.write_text(
+                "#!/bin/sh\n" + "printf '%s\\n' '" + json.dumps({
+                    "schema_version": 1, "product_version": "0.73.1",
+                    "runtime_release": "0.73.1", "skippy_abi": "0.1.0",
+                }) + "'\n"
+            )
+            host.chmod(0o755)
             runtime = self.runtime(runtime_root, "linux-vulkan", "vulkan")
             result = run_bash(
                 (
@@ -149,7 +161,13 @@ class PackageReleaseTests(unittest.TestCase):
             runtime_root = bundle / "native-runtimes"
             host = bundle / "mesh-llm"
             bundle.mkdir()
-            host.write_bytes(b"host")
+            host.write_text(
+                "#!/bin/sh\n" + "printf '%s\\n' '" + json.dumps({
+                    "schema_version": 1, "product_version": "0.73.1",
+                    "runtime_release": "0.73.1", "skippy_abi": "0.1.0",
+                }) + "'\n"
+            )
+            host.chmod(0o755)
             runtime = self.runtime(
                 runtime_root,
                 "linux-cuda13-sm120",
@@ -180,7 +198,13 @@ class PackageReleaseTests(unittest.TestCase):
             runtime_root = bundle / "native-runtimes"
             host = bundle / "mesh-llm"
             bundle.mkdir()
-            host.write_bytes(b"host")
+            host.write_text(
+                "#!/bin/sh\n" + "printf '%s\\n' '" + json.dumps({
+                    "schema_version": 1, "product_version": "0.73.1",
+                    "runtime_release": "0.73.1", "skippy_abi": "0.1.0",
+                }) + "'\n"
+            )
+            host.chmod(0o755)
             runtime = self.runtime(
                 runtime_root,
                 "linux-rocm",

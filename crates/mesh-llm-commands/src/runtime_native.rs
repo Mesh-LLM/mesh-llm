@@ -53,6 +53,20 @@ impl<'a> NativeRuntimeConfigSelection<'a> {
     }
 }
 
+/// Report the requirements compiled into this executable without runtime discovery.
+/// Packaging reads this from the exact host bytes it composes, not its checkout.
+pub fn print_build_contract() -> Result<()> {
+    let contract = serde_json::json!({
+        "schema_version": 1,
+        "product_version": mesh_llm_build_info::RELEASE_VERSION,
+        "skippy_abi": current_skippy_abi_version(),
+        "runtime_release": skippy_native_runtime::runtime_release_version(),
+    });
+    let mut out = mesh_llm_events::machine_out();
+    writeln!(out, "{}", serde_json::to_string(&contract)?)?;
+    Ok(())
+}
+
 pub async fn run_native_runtime_list(
     available: bool,
     manifest_path: Option<&Path>,
