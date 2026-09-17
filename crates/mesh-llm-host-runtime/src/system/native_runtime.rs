@@ -43,6 +43,7 @@ mod dynamic {
 
     #[derive(Clone, Debug, Eq, PartialEq)]
     pub(crate) struct NativeRuntimeStartupSelection {
+        release_is_explicit: bool,
         pub(crate) mesh_version: String,
         pub(crate) skippy_abi: Option<String>,
         pub(crate) runtime_selection: RuntimeSelection,
@@ -51,6 +52,7 @@ mod dynamic {
     impl NativeRuntimeStartupSelection {
         pub(crate) fn current() -> Self {
             Self {
+                release_is_explicit: false,
                 mesh_version: skippy_native_runtime::runtime_release_version().to_string(),
                 skippy_abi: Some(
                     crate::system::native_runtime_install::current_skippy_abi_version(),
@@ -65,10 +67,27 @@ mod dynamic {
             runtime_selection: RuntimeSelection,
         ) -> Self {
             Self {
+                release_is_explicit: true,
                 mesh_version,
                 skippy_abi,
                 runtime_selection,
             }
+        }
+
+        fn with_product_release(mut self, bundle_dirs: &[PathBuf]) -> Result<Self> {
+            if !self.release_is_explicit {
+                let required_abi =
+                    crate::system::native_runtime_install::current_skippy_abi_version();
+                if let Some(release) =
+                    crate::system::native_runtime_install::product_runtime_release(
+                        bundle_dirs,
+                        &required_abi,
+                    )?
+                {
+                    self.mesh_version = release;
+                }
+            }
+            Ok(self)
         }
 
         pub(crate) fn from_config(
@@ -93,7 +112,7 @@ mod dynamic {
     }
 
     pub(crate) fn load_local_native_runtime_for_embedded_serving(
-        runtime_selection: &RuntimeSelection,
+        startup_selection: &NativeRuntimeStartupSelection,
     ) -> Result<Option<LoadedNativeRuntime>> {
         if skippy_runtime::native_runtime_loaded() {
             return Ok(None);
@@ -107,9 +126,17 @@ mod dynamic {
         let resolution = crate::system::native_runtime_events::NativeRuntimeResolution::begin();
         let cache = default_native_runtime_cache()?;
         let profile = host_runtime_profile();
+        let bundle_dirs =
+            crate::system::native_runtime_install::discover_native_runtime_bundle_dirs_for_release(
+                &[],
+                &startup_selection.mesh_version,
+            )?;
+        let startup_selection = startup_selection
+            .clone()
+            .with_product_release(&bundle_dirs)?;
         let local_runtimes =
             crate::system::native_runtime_install::discover_local_native_runtimes_with_filter(
-                &[],
+                &bundle_dirs,
                 &cache,
                 |runtime| startup_runtime_is_eligible(runtime, &profile),
             )?;
@@ -117,9 +144,9 @@ mod dynamic {
             &local_runtimes,
             &profile,
             crate::BUILD_VERSION,
-            skippy_native_runtime::runtime_release_version(),
-            Some(&crate::system::native_runtime_install::current_skippy_abi_version()),
-            runtime_selection,
+            &startup_selection.mesh_version,
+            startup_selection.skippy_abi.as_deref(),
+            &startup_selection.runtime_selection,
         )?
         else {
             // No compatible plan found at all -- a real
@@ -333,9 +360,12 @@ mod dynamic {
             options.cache_dir = Some(cache.root().to_path_buf());
         }
         let discovered_bundle_dirs =
-            crate::system::native_runtime_install::discover_native_runtime_bundle_dirs(
+            crate::system::native_runtime_install::discover_native_runtime_bundle_dirs_for_release(
                 &options.bundle_dirs,
+                &startup_selection.mesh_version,
             )?;
+        let startup_selection = startup_selection.with_product_release(&discovered_bundle_dirs)?;
+        options.release_version = startup_selection.mesh_version.clone();
         let discovered_bundle_dirs =
             filter_startup_bundle_dirs(discovered_bundle_dirs, &profile, &startup_selection);
         let discovered_bundle_dirs_empty = discovered_bundle_dirs.is_empty();
@@ -771,6 +801,121 @@ mod dynamic {
                 "libmeshllm_ffi.so"
             };
             PathBuf::from("lib").join(file)
+        }
+
+        fn write_product_runtime(root: &Path, release: &str) -> PathBuf {
+            use sha2::{Digest, Sha256};
+            let id = "meshllm-native-runtime-product-test";
+            let dir = root.join("native-runtimes").join(id);
+            write_runtime(&dir, release, id);
+            let abi = crate::system::native_runtime_install::current_skippy_abi_version();
+            let mut manifest = NativeRuntimeManifest::read_from_dir(&dir).unwrap();
+            manifest.runtime.skippy_abi = abi.clone();
+            manifest.write_to_dir(&dir).unwrap();
+            let digest = hex::encode(Sha256::digest(fs::read(dir.join("manifest.json")).unwrap()));
+            fs::write(
+                root.join("product-manifest.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "schema_version": 2, "contract": "mesh-llm-product-v2",
+                    "host": {"required_skippy_abi": abi},
+                    "runtime": {"id": id, "path": format!("native-runtimes/{id}"),
+                        "release_version": release, "skippy_abi": abi, "manifest_sha256": digest}
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            dir
+        }
+
+        #[tokio::test]
+        async fn default_startup_selects_the_verified_product_runtime_release() {
+            let temp = tempfile::tempdir().unwrap();
+            let release = "99.123.456";
+            assert_ne!(release, skippy_native_runtime::runtime_release_version());
+            let bundle = write_product_runtime(temp.path(), release);
+            let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+            let plan = resolve_startup_native_runtime_plan_with(
+                || Ok(cache.clone()),
+                host_runtime_profile,
+                || NativeRuntimeInstallOptions {
+                    bundle_dirs: vec![bundle.clone()],
+                    allow_download: false,
+                    ..test_install_options()
+                },
+                default_install_executor,
+                NativeRuntimeStartupSelection::current(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(plan.cache_mesh_version, release);
+            assert_eq!(
+                plan.root.canonicalize().unwrap(),
+                bundle.canonicalize().unwrap()
+            );
+        }
+
+        #[test]
+        fn product_release_selection_preserves_pins_and_rejects_unverified_metadata() {
+            let temp = tempfile::tempdir().unwrap();
+            let bundle = write_product_runtime(temp.path(), "99.123.456");
+            let dirs = vec![bundle];
+            let path = temp.path().join("product-manifest.json");
+            let original: serde_json::Value =
+                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            for (pointer, value, expected) in [
+                ("/schema_version", serde_json::json!(999), "generation"),
+                (
+                    "/runtime/release_version",
+                    serde_json::json!("1.2.3"),
+                    "identity disagrees",
+                ),
+                ("/runtime/skippy_abi", serde_json::json!("0.0.0"), "ABI"),
+                ("/runtime/path", serde_json::json!("../elsewhere"), "unsafe"),
+                (
+                    "/runtime/manifest_sha256",
+                    serde_json::json!("0".repeat(64)),
+                    "checksum",
+                ),
+            ] {
+                let mut invalid = original.clone();
+                *invalid.pointer_mut(pointer).unwrap() = value;
+                fs::write(&path, serde_json::to_vec(&invalid).unwrap()).unwrap();
+                let error = NativeRuntimeStartupSelection::current()
+                    .with_product_release(&dirs)
+                    .unwrap_err();
+                assert!(format!("{error:#}").contains(expected), "{error:#}");
+                let pinned = NativeRuntimeStartupSelection::explicit(
+                    "1.2.3".into(),
+                    None,
+                    RuntimeSelection::Recommended,
+                )
+                .with_product_release(&dirs)
+                .unwrap();
+                assert_eq!(pinned.mesh_version, "1.2.3");
+            }
+            fs::remove_file(path).unwrap();
+            assert_eq!(
+                NativeRuntimeStartupSelection::current()
+                    .with_product_release(&dirs)
+                    .unwrap()
+                    .mesh_version,
+                skippy_native_runtime::runtime_release_version()
+            );
+        }
+
+        #[test]
+        fn conflicting_adjacent_products_do_not_choose_a_release_silently() {
+            let temp = tempfile::tempdir().unwrap();
+            let first = write_product_runtime(&temp.path().join("first"), "1.2.3");
+            let second = write_product_runtime(&temp.path().join("second"), "2.3.4");
+            let error = NativeRuntimeStartupSelection::current()
+                .with_product_release(&[first, second])
+                .unwrap_err();
+            let message = format!("{error:#}");
+            assert!(message.contains("conflicting"));
+            assert!(message.contains("first"));
+            assert!(message.contains("second"));
         }
 
         fn test_install_options() -> NativeRuntimeInstallOptions {

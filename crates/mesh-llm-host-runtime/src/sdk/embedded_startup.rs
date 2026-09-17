@@ -19,7 +19,10 @@ pub(super) fn prepare_embedded_native_runtime(
             cache_root: cache.root(),
         };
         let config = crate::plugin::load_config(config_path)?;
-        let selection = embedded_native_runtime_selection(&config.runtime.native_runtime)?;
+        let selection = crate::system::native_runtime::NativeRuntimeStartupSelection::from_config(
+            config.runtime.native_runtime.clone(),
+            None,
+        )?;
         let loaded = crate::system::native_runtime::load_local_native_runtime_for_embedded_serving(
             &selection,
         )?
@@ -34,7 +37,7 @@ pub(super) fn prepare_embedded_native_runtime(
     Ok(())
 }
 
-#[cfg(any(feature = "dynamic-native-runtime", test))]
+#[cfg(test)]
 fn embedded_native_runtime_selection(
     config: &mesh_llm_config::NativeRuntimeConfig,
 ) -> Result<skippy_native_runtime::RuntimeSelection> {

@@ -484,7 +484,7 @@ mod tests {
         #[cfg(feature = "dynamic-native-runtime")]
         {
             let _ = crate::system::native_runtime::load_local_native_runtime_for_embedded_serving(
-                &skippy_native_runtime::RuntimeSelection::Recommended,
+                &crate::system::native_runtime::NativeRuntimeStartupSelection::current(),
             );
             if !skippy_runtime::native_runtime_loaded() {
                 eprintln!(
