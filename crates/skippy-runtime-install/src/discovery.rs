@@ -51,7 +51,7 @@ pub fn discover_local_native_runtimes_with_filter(
                 continue;
             }
             let identity = (
-                runtime.mesh_version.clone(),
+                runtime.release_version.clone(),
                 runtime.native_runtime_id.clone(),
             );
             if seen.insert(identity) {
@@ -111,7 +111,7 @@ fn append_cache_runtimes_lenient(
                 continue;
             }
             let identity = (
-                runtime.mesh_version.clone(),
+                runtime.release_version.clone(),
                 runtime.native_runtime_id.clone(),
             );
             if seen.insert(identity) {
@@ -133,13 +133,13 @@ fn read_installed_runtime_lenient(path: &Path) -> Option<InstalledNativeRuntime>
             return None;
         }
     };
-    let mesh_version = manifest
+    let release_version = manifest
         .runtime
-        .mesh_version
+        .release_version
         .clone()
         .unwrap_or_else(|| "unknown".to_string());
     Some(InstalledNativeRuntime {
-        mesh_version,
+        release_version,
         native_runtime_id: manifest.runtime.id.clone(),
         flavor: manifest.runtime.backend.kind.to_string(),
         path: path.to_path_buf(),
@@ -327,7 +327,7 @@ mod tests {
         NativeRuntimeManifest {
             runtime: NativeRuntimeArtifact {
                 id: id.to_string(),
-                mesh_version: Some("0.75.0".to_string()),
+                release_version: Some("0.75.0".to_string()),
                 skippy_abi: "0.1.25".to_string(),
                 platform: NativeRuntimePlatform {
                     os: "linux".to_string(),

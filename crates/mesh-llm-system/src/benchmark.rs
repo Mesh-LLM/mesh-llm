@@ -131,7 +131,7 @@ fn resolve_runtime_benchmark_tool(backend: skippy_gpu_bench::BenchmarkBackend) -
     })?;
     let installed_for_version = installed
         .iter()
-        .filter(|runtime| runtime.mesh_version == current_runtime_release())
+        .filter(|runtime| runtime.release_version == current_runtime_release())
         .cloned()
         .collect::<Vec<_>>();
     let installed_with_tools = runtimes_with_benchmark_tools(&installed_for_version);

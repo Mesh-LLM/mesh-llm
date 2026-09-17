@@ -83,9 +83,10 @@ class CiPrepareNativeRuntimeTests(unittest.TestCase):
         library.write_bytes(b"verified runtime fixture")
         digest = hashlib.sha256(library.read_bytes()).hexdigest()
         manifest = {
+            "schema_version": 2,
             "runtime": {
                 "id": runtime_id,
-                "mesh_version": "0.72.1",
+                "release_version": "0.72.1",
                 "skippy_abi": skippy_abi or current_skippy_abi(),
                 "platform": {
                     "os": host_os(),
@@ -120,7 +121,7 @@ class CiPrepareNativeRuntimeTests(unittest.TestCase):
         rows = [
             {
                 "id": runtime_id,
-                "mesh_version": "0.72.1",
+                "release_version": "0.72.1",
                 "skippy_abi": current_skippy_abi(),
                 "backend": backend,
                 "os": host_os(),

@@ -326,7 +326,7 @@ impl From<mesh_llm_sdk::native_runtime::NativeRuntimeDownloadProgress>
 impl From<mesh_llm_sdk::native_runtime::InstalledNativeRuntime> for InstalledNativeRuntimeNative {
     fn from(value: mesh_llm_sdk::native_runtime::InstalledNativeRuntime) -> Self {
         Self {
-            mesh_version: value.mesh_version,
+            mesh_version: value.release_version,
             native_runtime_id: value.native_runtime_id,
             flavor: value.flavor,
             path: path_to_string(value.path),

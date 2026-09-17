@@ -2,6 +2,23 @@
 
 Status: accepted direction with an implemented resolver/install foundation.
 
+## Standalone extraction transition
+
+Native runtime artifacts and catalogs now require integer `schema_version: 2`
+and use `release_version` for Skippy runtime identity. Normal readers reject
+unversioned manifests; the separate `import_legacy_runtime_cache` API is the
+only legacy reader. Import copies verified payloads to an explicitly selected
+cache and writes current metadata, leaving source manifests and payloads intact.
+Installation reuses verified identical entries and refuses every differing or
+unreadable cache target; it never replaces an existing entry.
+
+Skippy's `RUNTIME_VERSION` owns the runtime release. Mesh product version and
+native-SDK package version remain separate product identities. Product composition
+and startup validate exact Skippy ABI compatibility and runtime checksums; product
+default selection takes the runtime release from the associated product bundle.
+Environment names, default cache root and packaged tool identities have not yet
+migrated. Clean standalone installation and serving remain acceptance work.
+
 ## Terminology
 
 Use **native runtime** for the platform-specific serving artifact that contains
@@ -16,9 +33,9 @@ consumer should be able to source Rust crates from crates.io without compiling
 llama.cpp or Skippy native code as a default side effect.
 
 Every native runtime declares the exact Skippy ABI it supports. Exact Skippy ABI
-is the compatibility boundary for loading. MeshLLM version is still recorded so
-release manifests, cache layout, and pruning can prefer the current release, but
-runtime loading must reject by Skippy ABI rather than by MeshLLM semver alone.
+is the compatibility boundary for loading. Skippy runtime release identity is recorded so catalogs, cache layout, and
+pruning select the requested release independently of the Mesh product version.
+Loading additionally requires the exact Skippy ABI.
 
 Release CI owns the normal native runtime build. It builds, verifies, and
 publishes the runtime artifacts for supported target/flavor combinations
@@ -59,7 +76,7 @@ A native runtime is identified by:
 The artifact manifest should include at least:
 
 - `id`
-- `mesh_version`
+- `release_version`
 - `skippy_abi`
 - `platform`
 - `backend`
@@ -147,7 +164,7 @@ SDK consumers must be able to control where native runtimes are stored. The
 default cache layout should be versioned:
 
 ```text
-<cache>/mesh-llm/native-runtimes/<mesh_version>/<native_runtime_id>/
+<cache>/mesh-llm/native-runtimes/<release_version>/<native_runtime_id>/
 ```
 
 The resolver API must allow:
@@ -172,7 +189,7 @@ The CLI and Rust SDK install API resolve manifests in this order:
 4. the default release URL:
 
 ```text
-https://github.com/Mesh-LLM/mesh-llm/releases/download/v<mesh_version>/native-runtimes.json
+https://github.com/Mesh-LLM/mesh-llm/releases/download/v<release_version>/native-runtimes.json
 ```
 
 Bundled runtime directories are always appended to the candidate manifest, and
@@ -189,7 +206,7 @@ downloadable GPU runtimes. The merged catalog follows these rules:
   carry the load and the failure is recorded in the catalog sources
   (`NativeRuntimeCatalogSources::remote_error`) instead of aborting. Without
   bundles the fetch failure is an error, as before.
-- The loaded manifest's `mesh_version` and `skippy_abi` describe the release; a
+- The loaded manifest's `release_version` and `skippy_abi` describe the release; a
   bundle's values only stand in when no manifest could be loaded at all.
 - Candidates present in several sources are deduplicated by identity by the
   resolver, which prefers a bundled copy, then the cache, then a download for
@@ -412,7 +429,7 @@ selection = "exact:meshllm-native-runtime-linux-x86_64-cuda12"
 
 `skippy_abi` may also be supplied for strict ABI selection; when omitted,
 install resolves the ABI from the selected release manifest. The configured
-`mesh_version` is honored by startup, `runtime install`, `runtime list
+`release_version` is honored by startup, `runtime install`, `runtime list
 --available`, `runtime prune`, and `mesh-llm doctor`, so autoupdate pruning does
 not remove a manually pinned runtime version.
 

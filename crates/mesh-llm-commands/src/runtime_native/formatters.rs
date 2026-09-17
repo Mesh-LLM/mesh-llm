@@ -313,7 +313,7 @@ fn print_installed_human(installed: &[InstalledNativeRuntime], cache_root: &Path
         let _ = writeln!(
             out,
             "  - ✅ {} {} ({})",
-            runtime.native_runtime_id, runtime.mesh_version, runtime.flavor
+            runtime.native_runtime_id, runtime.release_version, runtime.flavor
         );
         let _ = writeln!(out, "    path: {}", runtime.path.display());
     }
@@ -328,13 +328,13 @@ fn print_install_human(outcome: &NativeRuntimeInstallOutcome) {
                 "✅ Native runtime already installed: {}",
                 outcome.runtime.native_runtime_id
             );
-            let _ = writeln!(err, "   version: {}", outcome.runtime.mesh_version);
+            let _ = writeln!(err, "   version: {}", outcome.runtime.release_version);
             let _ = writeln!(err, "   flavor: {}", outcome.runtime.flavor);
             let _ = writeln!(err, "   path: {}", outcome.runtime.path.display());
         }
         NativeRuntimeInstallStatus::Installed => {
             let _ = writeln!(err, "✅ Installed {}", outcome.runtime.native_runtime_id);
-            let _ = writeln!(err, "   version: {}", outcome.runtime.mesh_version);
+            let _ = writeln!(err, "   version: {}", outcome.runtime.release_version);
             let _ = writeln!(err, "   flavor: {}", outcome.runtime.flavor);
             let _ = writeln!(err, "   path: {}", outcome.runtime.path.display());
         }

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct NativeRuntimeLoadPlan {
-    pub mesh_version: String,
+    pub release_version: String,
     pub native_runtime_id: String,
     pub root: PathBuf,
     pub libraries: Vec<PathBuf>,
@@ -32,7 +32,7 @@ impl InstalledNativeRuntime {
             }
         }
         Ok(NativeRuntimeLoadPlan {
-            mesh_version: self.mesh_version.clone(),
+            release_version: self.release_version.clone(),
             native_runtime_id: self.native_runtime_id.clone(),
             root: self.path.clone(),
             libraries,

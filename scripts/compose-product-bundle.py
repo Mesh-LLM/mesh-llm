@@ -18,7 +18,7 @@ class RuntimeBackend(TypedDict):
 
 class RuntimeData(TypedDict):
     id: str
-    mesh_version: str
+    release_version: str
     skippy_abi: str
     backend: RuntimeBackend
 
@@ -104,6 +104,8 @@ def compose_manifest(
     runtime_manifest: RuntimeManifest = json.loads(
         runtime_manifest_path.read_text(encoding="utf-8")
     )
+    if type(runtime_manifest.get("schema_version")) is not int or runtime_manifest["schema_version"] != 2:
+        raise ValueError("native runtime manifest requires schema_version 2; import legacy caches explicitly")
     runtime_data = runtime_manifest["runtime"]
     runtime_id = runtime_data["id"]
     validate_runtime_backend(runtime_id, runtime_manifest, runtime_data, backend)
@@ -130,7 +132,7 @@ def compose_manifest(
         },
         "runtime": {
             "id": runtime_id,
-            "release_version": runtime_data["mesh_version"],
+            "release_version": runtime_data["release_version"],
             "skippy_abi": runtime_data["skippy_abi"],
             "path": runtime.relative_to(bundle).as_posix(),
             "sha256": tree_sha256(runtime),

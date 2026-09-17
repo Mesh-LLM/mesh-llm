@@ -1019,3 +1019,10 @@ field sets with `schemas/product-v2.schema.json`, including required/supplied AB
 and runtime release. Default bundled startup additionally verifies the complete
 runtime-tree digest using the composer's ordinal-path hashing contract; Rust and
 Python pin the same golden digest.
+
+Native runtime artifacts and release catalogs now carry integer schema_version 2
+and release_version. Packaging, verification, catalog generation, CI cache
+installation and product composition reject legacy generations. Mesh product
+manifest mesh_version and the distinct native-SDK version contract remain
+product identities. Legacy runtime parsing is confined to the explicit cache
+importer; no alias or automatic migration is introduced.

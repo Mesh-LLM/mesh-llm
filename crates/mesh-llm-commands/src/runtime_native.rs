@@ -139,12 +139,12 @@ fn available_runtime_rows(
         .iter()
         .map(|artifact| {
             let evaluation = evaluated.iter().find(|candidate| {
-                runtime_artifact_identity(&candidate.artifact, &manifest.mesh_version)
-                    == runtime_artifact_identity(artifact, &manifest.mesh_version)
+                runtime_artifact_identity(&candidate.artifact, &manifest.release_version)
+                    == runtime_artifact_identity(artifact, &manifest.release_version)
             });
             AvailableRuntimeRow {
                 id: artifact.id.clone(),
-                mesh_version: artifact.mesh_version.clone(),
+                mesh_version: artifact.release_version.clone(),
                 skippy_abi: artifact.skippy_abi.clone(),
                 backend: artifact.backend.kind.to_string(),
                 os: artifact.platform.os.clone(),
@@ -166,7 +166,7 @@ fn runtime_artifact_identity<'a>(
     (
         artifact.id.as_str(),
         artifact
-            .mesh_version
+            .release_version
             .as_deref()
             .unwrap_or(manifest_mesh_version),
         artifact.skippy_abi.as_str(),
@@ -403,7 +403,7 @@ pub fn run_native_runtime_doctor(
     let runtime_selection = RuntimeSelection::parse(effective_selection)?;
     let selected_version_runtimes = eligible_installed
         .iter()
-        .filter(|runtime| runtime.mesh_version == selected_mesh_version)
+        .filter(|runtime| runtime.release_version == selected_mesh_version)
         .collect::<Vec<_>>();
     let installed_artifacts = selected_version_runtimes
         .iter()
@@ -424,7 +424,7 @@ pub fn run_native_runtime_doctor(
     });
     let selected_version_installed_count = installed
         .iter()
-        .filter(|runtime| runtime.mesh_version == selected_mesh_version)
+        .filter(|runtime| runtime.release_version == selected_mesh_version)
         .count();
     let readiness =
         native_runtime_doctor_readiness(selected.map(|runtime| runtime.native_runtime_id.as_str()));
@@ -512,7 +512,7 @@ mod tests {
     ) -> NativeRuntimeArtifact {
         NativeRuntimeArtifact {
             id: runtime_id.to_string(),
-            mesh_version: mesh_version.map(ToString::to_string),
+            release_version: mesh_version.map(ToString::to_string),
             skippy_abi: skippy_abi.to_string(),
             platform: NativeRuntimePlatform {
                 os: std::env::consts::OS.to_string(),
@@ -537,7 +537,7 @@ mod tests {
         NativeRuntimeManifest {
             runtime: NativeRuntimeArtifact {
                 id: runtime_id.to_string(),
-                mesh_version: Some(current_runtime_release().to_string()),
+                release_version: Some(current_runtime_release().to_string()),
                 skippy_abi: "0.1.25".to_string(),
                 platform: NativeRuntimePlatform {
                     os: std::env::consts::OS.to_string(),
@@ -566,7 +566,7 @@ mod tests {
     ) -> NativeRuntimeArtifact {
         NativeRuntimeArtifact {
             id: runtime_id.to_string(),
-            mesh_version: Some(mesh_version.to_string()),
+            release_version: Some(mesh_version.to_string()),
             skippy_abi: skippy_abi.to_string(),
             platform: NativeRuntimePlatform {
                 os: std::env::consts::OS.to_string(),
@@ -588,7 +588,7 @@ mod tests {
     #[test]
     fn current_listing_defaults_to_the_build_skippy_abi() {
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: current_runtime_release().to_string(),
+            release_version: current_runtime_release().to_string(),
             skippy_abi: "0.1.44".to_string(),
             artifacts: Vec::new(),
         };
@@ -606,7 +606,7 @@ mod tests {
     #[test]
     fn explicitly_selected_other_mesh_version_keeps_manifest_abi_default() {
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: "0.75.0".to_string(),
+            release_version: "0.75.0".to_string(),
             skippy_abi: "0.1.44".to_string(),
             artifacts: Vec::new(),
         };
@@ -632,7 +632,7 @@ mod tests {
         let current = test_artifact(runtime_id, current_runtime_release(), &current_abi);
         let stale = test_artifact(runtime_id, current_runtime_release(), stale_abi);
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: current_runtime_release().to_string(),
+            release_version: current_runtime_release().to_string(),
             skippy_abi: stale_abi.to_string(),
             artifacts: vec![stale.clone(), current.clone()],
         };
@@ -743,12 +743,12 @@ mod tests {
         let bundled_artifact =
             available_runtime_artifact("runtime", Some(current_runtime_release()), "0.1.49");
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: current_runtime_release().to_string(),
+            release_version: current_runtime_release().to_string(),
             skippy_abi: "0.1.44".to_string(),
             artifacts: vec![release_artifact.clone(), bundled_artifact.clone()],
         };
         let mut evaluated_release_artifact = release_artifact;
-        evaluated_release_artifact.mesh_version = Some(current_runtime_release().to_string());
+        evaluated_release_artifact.release_version = Some(current_runtime_release().to_string());
         let evaluated = vec![
             CandidateEvaluation {
                 artifact: evaluated_release_artifact,

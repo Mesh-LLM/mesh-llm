@@ -134,7 +134,7 @@ pub(crate) async fn load_release_manifest_with_bundle_dirs(
 ///    failure is recorded in `NativeRuntimeCatalogSources::remote_error`.
 ///    Without bundles the fetch failure is an error, as before.
 /// 3. Bundle artifacts are appended after the manifest artifacts. The
-///    manifest's `mesh_version` and `skippy_abi` win when a manifest was
+///    manifest's `release_version` and `skippy_abi` win when a manifest was
 ///    loaded; bundle values only describe the release when no manifest was
 ///    available at all.
 ///
@@ -151,13 +151,13 @@ pub async fn load_release_manifest_with_sources(
         ..Default::default()
     };
     let mut artifacts = Vec::new();
-    let mut mesh_version = options.release_version.clone();
+    let mut release_version = options.release_version.clone();
     let mut skippy_abi = current_skippy_abi_version();
     let mut manifest_loaded = false;
     if let Some(path) = options.manifest_path.take() {
         let manifest = NativeRuntimeReleaseManifest::read_from_path(&path)?;
         sources.manifest_path = Some(path);
-        mesh_version = manifest.mesh_version.clone();
+        release_version = manifest.release_version.clone();
         skippy_abi = manifest.skippy_abi.clone();
         artifacts.extend(manifest.artifacts);
         manifest_loaded = true;
@@ -165,7 +165,7 @@ pub async fn load_release_manifest_with_sources(
         sources.manifest_url = Some(url_without_query(&url));
         match download_release_manifest(&url).await {
             Ok(manifest) => {
-                mesh_version = manifest.mesh_version.clone();
+                release_version = manifest.release_version.clone();
                 skippy_abi = manifest.skippy_abi.clone();
                 artifacts.extend(manifest.artifacts);
                 manifest_loaded = true;
@@ -179,7 +179,7 @@ pub async fn load_release_manifest_with_sources(
     sources.manifest_artifacts = artifacts.len();
     let merged = append_bundle_artifacts(
         &mut artifacts,
-        &mut mesh_version,
+        &mut release_version,
         &mut skippy_abi,
         &options.bundle_dirs,
         manifest_loaded,
@@ -189,7 +189,7 @@ pub async fn load_release_manifest_with_sources(
     sources.bundle_duplicates_of_bundles = merged.duplicates_of_bundles;
     Ok((
         NativeRuntimeReleaseManifest {
-            mesh_version,
+            release_version,
             skippy_abi,
             artifacts,
         },
@@ -333,12 +333,12 @@ pub(crate) fn manifest_url(options: &NativeRuntimeManifestOptions) -> Option<Str
 /// Appends the runtime described by each bundle directory to `artifacts`.
 ///
 /// When no release manifest was loaded, the bundles also supply the release
-/// identity (`mesh_version` and `skippy_abi`). A runtime that is both bundled
+/// identity (`release_version` and `skippy_abi`). A runtime that is both bundled
 /// and already listed by the manifest is kept once; the resolver still serves
 /// that identity from the bundle directory.
 pub(crate) fn append_bundle_artifacts(
     artifacts: &mut Vec<NativeRuntimeArtifact>,
-    mesh_version: &mut String,
+    release_version: &mut String,
     skippy_abi: &mut String,
     bundle_dirs: &[PathBuf],
     manifest_loaded: bool,
@@ -353,8 +353,8 @@ pub(crate) fn append_bundle_artifacts(
         // A loaded release manifest describes the release; a bundle only
         // stands in for it when no manifest was available at all.
         if !manifest_loaded {
-            if let Some(version) = &manifest.runtime.mesh_version {
-                *mesh_version = version.clone();
+            if let Some(version) = &manifest.runtime.release_version {
+                *release_version = version.clone();
             }
             *skippy_abi = manifest.runtime.skippy_abi.clone();
         }
@@ -389,10 +389,10 @@ pub(crate) struct BundleMergeCounts {
 }
 
 /// Two catalog entries describe the same runtime when their id and release
-/// identity (`mesh_version`, `skippy_abi`) match, whichever source listed them.
+/// identity (`release_version`, `skippy_abi`) match, whichever source listed them.
 fn same_artifact_identity(left: &NativeRuntimeArtifact, right: &NativeRuntimeArtifact) -> bool {
     left.id == right.id
-        && left.mesh_version == right.mesh_version
+        && left.release_version == right.release_version
         && left.skippy_abi == right.skippy_abi
 }
 

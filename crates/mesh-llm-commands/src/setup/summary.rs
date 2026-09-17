@@ -19,7 +19,7 @@ pub(crate) fn print_runtime_install_result(outcome: &SetupNativeRuntimeOutcome) 
                     "{} Installed native runtime {} for mesh version {}",
                     style_ok("✓"),
                     installed.runtime.native_runtime_id,
-                    installed.runtime.mesh_version
+                    installed.runtime.release_version
                 );
             }
             NativeRuntimeInstallStatus::AlreadyInstalled => {
@@ -28,7 +28,7 @@ pub(crate) fn print_runtime_install_result(outcome: &SetupNativeRuntimeOutcome) 
                     "{} Native runtime {} is already installed for mesh version {}",
                     style_ok("✓"),
                     installed.runtime.native_runtime_id,
-                    installed.runtime.mesh_version
+                    installed.runtime.release_version
                 );
             }
         },

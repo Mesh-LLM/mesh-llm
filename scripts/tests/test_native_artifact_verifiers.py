@@ -102,9 +102,10 @@ class NativeArtifactVerifierTests(unittest.TestCase):
         tool.write_bytes(b"runtime tool")
         tool.chmod(0o755)
         manifest = {
+            "schema_version": 2,
             "runtime": {
                 "id": artifact.name,
-                "mesh_version": "0.75.0",
+                "release_version": "0.75.0",
                 "skippy_abi": "0.1.32",
                 "platform": {
                     "os": "macos",
@@ -694,9 +695,10 @@ class NativeArtifactVerifierTests(unittest.TestCase):
         self.write_manifest(
             artifact,
             {
+                "schema_version": 2,
                 "runtime": {
                     "id": artifact.name,
-                    "mesh_version": "0.75.0",
+                    "release_version": "0.75.0",
                     "skippy_abi": "0.1.32",
                     "platform": {
                         "os": "linux",

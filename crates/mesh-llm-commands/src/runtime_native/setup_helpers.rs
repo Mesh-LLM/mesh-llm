@@ -335,7 +335,7 @@ mod tests {
         match outcome.status {
             SetupNativeRuntimeStatus::Installed(ref installed) => {
                 assert_eq!(installed.status, NativeRuntimeInstallStatus::Installed);
-                assert_eq!(installed.runtime.mesh_version, "0.68.0");
+                assert_eq!(installed.runtime.release_version, "0.68.0");
             }
             SetupNativeRuntimeStatus::Skipped => panic!("install should have run"),
         }
@@ -349,7 +349,7 @@ mod tests {
     fn fake_install_outcome(mesh_version: &str) -> NativeRuntimeInstallOutcome {
         let artifact = NativeRuntimeArtifact {
             id: "meshllm-runtime-linux-x86_64-cpu".to_string(),
-            mesh_version: Some(mesh_version.to_string()),
+            release_version: Some(mesh_version.to_string()),
             skippy_abi: "0.1.25".to_string(),
             platform: NativeRuntimePlatform {
                 os: "linux".to_string(),
@@ -370,7 +370,7 @@ mod tests {
         NativeRuntimeInstallOutcome {
             status: NativeRuntimeInstallStatus::Installed,
             runtime: InstalledNativeRuntime {
-                mesh_version: mesh_version.to_string(),
+                release_version: mesh_version.to_string(),
                 native_runtime_id: artifact.id.clone(),
                 flavor: "cpu".to_string(),
                 path: PathBuf::from("/tmp/meshllm-runtime-linux-x86_64-cpu"),

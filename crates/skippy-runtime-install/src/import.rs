@@ -36,7 +36,7 @@ pub fn import_runtime_copy(
 ) -> Result<NativeRuntimeImportOutcome> {
     let release = manifest
         .runtime
-        .mesh_version
+        .release_version
         .as_deref()
         .context("runtime import requires an explicit release")?;
     single_component(release)?;
@@ -131,7 +131,8 @@ mod tests {
         fs::write(source.join("lib/runtime.bin"), b"verified runtime bytes").unwrap();
         let checksum = hex::encode(Sha256::digest(b"verified runtime bytes"));
         let manifest: NativeRuntimeManifest = serde_json::from_value(serde_json::json!({
-            "runtime": {"id": "test-runtime", "mesh_version": "1.2.3",
+            "schema_version": 2,
+            "runtime": {"id": "test-runtime", "release_version": "1.2.3",
                 "skippy_abi": "0.1.57", "platform": {"os": "macos", "arch": "aarch64"},
                 "backend": {"kind": "cpu"}, "libraries": ["lib/runtime.bin"],
                 "files": {"lib/runtime.bin": checksum}}
@@ -206,7 +207,7 @@ mod tests {
         assert!(format!("{error:#}").contains("collision"));
         assert_eq!(fs::read_dir(destination).unwrap().count(), 0);
         let mut unsafe_manifest = manifest;
-        unsafe_manifest.runtime.mesh_version = Some("../escape".into());
+        unsafe_manifest.runtime.release_version = Some("../escape".into());
         assert!(import_runtime_copy(&source, &unsafe_manifest, &cache, false).is_err());
         assert!(!temp.path().join("escape").exists());
     }

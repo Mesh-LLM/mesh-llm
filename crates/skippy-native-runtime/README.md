@@ -7,10 +7,10 @@ This crate is the source of truth for selecting native runtimes. CLI install,
 SDK serving install, dynamic loading, and autoupdate should all use this same
 contract instead of carrying their own CUDA/ROCm/Vulkan detection logic.
 
-The crate ownership has moved; manifest fields, artifact IDs, cache layout and
-environment variables retain their current spelling until the coordinated M2
-producer/consumer migration. This checkpoint does not establish independent
-runtime release or installation policy.
+Native artifact and catalog manifests require `schema_version: 2` and name
+runtime identity `release_version`. Normal readers reject unversioned legacy
+manifests; only the explicit legacy-cache importer interprets the old field.
+Artifact IDs and packaged tool names remain unchanged in this transition.
 
 ## Runtime release source
 
@@ -22,9 +22,8 @@ bumps do not update this file.
 
 The catalog generator verifies every artifact against this runtime release (or
 an explicit `--runtime-version`). Its `--tag` locates archive downloads and may
-name a different product release. Product composition and migration of the
-legacy `mesh_version` wire spelling remain part of the extraction; these source
-changes alone do not establish an independent installation flow.
+name a different product release. Product composition verifies exact Skippy
+ABI compatibility. This does not by itself prove a clean standalone install.
 
 ## Native Runtimes
 
@@ -39,7 +38,7 @@ matrix:
 - `rocm` with optional GFX targets
 - `vulkan`
 
-The hard compatibility boundary is exact Skippy ABI. `mesh_version` is still
+The hard compatibility boundary is exact Skippy ABI. `release_version` is still
 recorded and used for cache/prune layout, but a runtime is selected by
 `skippy_abi`, platform, and backend requirements.
 
@@ -49,9 +48,10 @@ Each packaged runtime directory contains `manifest.json`:
 
 ```json
 {
+  "schema_version": 2,
   "runtime": {
     "id": "meshllm-native-runtime-linux-x86_64-cuda13-sm120",
-    "mesh_version": "0.76.1",
+    "release_version": "0.76.1",
     "skippy_abi": "0.1.25",
     "platform": {
       "os": "linux",
@@ -117,12 +117,13 @@ Release jobs publish `native-runtimes.json`:
 
 ```json
 {
-  "mesh_version": "0.76.1",
+  "schema_version": 2,
+  "release_version": "0.76.1",
   "skippy_abi": "0.1.25",
   "artifacts": [
     {
       "id": "meshllm-native-runtime-linux-x86_64-cpu",
-      "mesh_version": "0.76.1",
+      "release_version": "0.76.1",
       "skippy_abi": "0.1.25",
       "platform": { "os": "linux", "arch": "x86_64" },
       "backend": { "kind": "cpu" },
@@ -253,14 +254,15 @@ diagnostics, and support output.
 Installed runtimes are stored under:
 
 ```text
-<cache-root>/<mesh_version>/<runtime-id>/
+<cache-root>/<release_version>/<runtime-id>/
   manifest.json
   lib/...
 ```
 
-`mesh_version` remains part of the cache layout and prune policy so upgrading
-MeshLLM can install the newly selected runtime, switch to it, and remove older
-runtime caches after success.
+`release_version` is part of the cache layout and prune policy. Import keeps
+the legacy release/id directory components and payload bytes unchanged while
+writing generation-2 metadata into the destination cache. Source metadata and
+payloads remain untouched.
 
 ## Load Plan Boundary
 

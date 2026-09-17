@@ -89,7 +89,7 @@ fn decode_legacy(path: &Path, release: &str, id: &str) -> Result<NativeRuntimeMa
     Ok(NativeRuntimeManifest {
         runtime: NativeRuntimeArtifact {
             id: old.id,
-            mesh_version: Some(old.mesh_version),
+            release_version: Some(old.mesh_version),
             skippy_abi: old.skippy_abi,
             platform: old.platform,
             backend: old.backend,

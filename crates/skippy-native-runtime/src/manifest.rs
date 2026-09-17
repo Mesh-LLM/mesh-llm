@@ -9,6 +9,8 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+mod wire;
+
 pub const NATIVE_RUNTIME_MANIFEST_FILE: &str = "manifest.json";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -23,10 +25,11 @@ pub struct NativeRuntimePlatform {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NativeRuntimeArtifact {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mesh_version: Option<String>,
+    pub release_version: Option<String>,
     pub skippy_abi: String,
     pub platform: NativeRuntimePlatform,
     pub backend: NativeRuntimeBackend,
@@ -46,15 +49,16 @@ pub struct NativeRuntimeArtifact {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "wire::Manifest", into = "wire::Manifest")]
 pub struct NativeRuntimeManifest {
     pub runtime: NativeRuntimeArtifact,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "wire::ReleaseManifest", into = "wire::ReleaseManifest")]
 pub struct NativeRuntimeReleaseManifest {
-    pub mesh_version: String,
+    pub release_version: String,
     pub skippy_abi: String,
-    #[serde(default)]
     pub artifacts: Vec<NativeRuntimeArtifact>,
 }
 
@@ -63,8 +67,8 @@ impl NativeRuntimeArtifact {
         &self.id
     }
 
-    pub fn mesh_version_or<'a>(&'a self, fallback: &'a str) -> &'a str {
-        self.mesh_version.as_deref().unwrap_or(fallback)
+    pub fn release_version_or<'a>(&'a self, fallback: &'a str) -> &'a str {
+        self.release_version.as_deref().unwrap_or(fallback)
     }
 }
 
@@ -149,8 +153,8 @@ impl NativeRuntimeReleaseManifest {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.mesh_version.trim().is_empty() {
-            bail!("native runtime release manifest mesh_version is empty");
+        if self.release_version.trim().is_empty() {
+            bail!("native runtime release manifest release_version is empty");
         }
         if self.skippy_abi.trim().is_empty() {
             bail!("native runtime release manifest skippy_abi is empty");
@@ -333,9 +337,10 @@ mod tests {
         fs::write(
             temp.path().join(NATIVE_RUNTIME_MANIFEST_FILE),
             r#"{
+  "schema_version": 2,
   "runtime": {
     "id": "meshllm-runtime-linux-x86_64-cuda12",
-    "mesh_version": "0.68.0",
+    "release_version": "0.68.0",
     "skippy_abi": "0.1.25",
     "platform": {
       "os": "linux",
@@ -370,12 +375,13 @@ mod tests {
     fn reads_release_manifest() {
         let manifest = NativeRuntimeReleaseManifest::from_json_str(
             r#"{
-  "mesh_version": "0.68.0",
+  "schema_version": 2,
+  "release_version": "0.68.0",
   "skippy_abi": "0.1.25",
   "artifacts": [
     {
       "id": "meshllm-runtime-linux-x86_64-cpu",
-      "mesh_version": "0.68.0",
+      "release_version": "0.68.0",
       "skippy_abi": "0.1.25",
       "platform": { "os": "linux", "arch": "x86_64" },
       "backend": { "kind": "cpu" },
@@ -400,7 +406,7 @@ mod tests {
         let manifest = NativeRuntimeManifest {
             runtime: NativeRuntimeArtifact {
                 id: "meshllm-runtime-linux-x86_64-cpu".to_string(),
-                mesh_version: Some("0.68.0".to_string()),
+                release_version: Some("0.68.0".to_string()),
                 skippy_abi: "0.1.25".to_string(),
                 platform: NativeRuntimePlatform {
                     os: "linux".to_string(),
@@ -439,7 +445,7 @@ mod tests {
         let manifest = NativeRuntimeManifest {
             runtime: NativeRuntimeArtifact {
                 id: "meshllm-runtime-linux-x86_64-cuda12".to_string(),
-                mesh_version: Some("0.68.0".to_string()),
+                release_version: Some("0.68.0".to_string()),
                 skippy_abi: "0.1.25".to_string(),
                 platform: NativeRuntimePlatform {
                     os: "linux".to_string(),
@@ -498,9 +504,10 @@ mod tests {
         fs::write(
             temp.path().join(NATIVE_RUNTIME_MANIFEST_FILE),
             r#"{
+  "schema_version": 2,
   "runtime": {
     "id": "meshllm-runtime-linux-x86_64-cpu",
-    "mesh_version": "0.68.0",
+    "release_version": "0.68.0",
     "skippy_abi": "0.1.25",
     "platform": {"os": "linux", "arch": "x86_64"},
     "backend": {"kind": "cpu"},
@@ -523,7 +530,7 @@ mod tests {
     fn rejects_runtime_checksum_path_traversal() {
         let artifact = NativeRuntimeArtifact {
             id: "meshllm-runtime-linux-x86_64-cpu".to_string(),
-            mesh_version: Some("0.68.0".to_string()),
+            release_version: Some("0.68.0".to_string()),
             skippy_abi: "0.1.25".to_string(),
             platform: NativeRuntimePlatform {
                 os: "linux".to_string(),
@@ -550,7 +557,8 @@ mod tests {
     fn legacy_manifest_without_glibc_metadata_is_accepted() {
         let manifest = NativeRuntimeReleaseManifest::from_json_str(
             r#"{
-  "mesh_version": "0.68.0",
+  "schema_version": 2,
+  "release_version": "0.68.0",
   "skippy_abi": "0.1.25",
   "artifacts": [{
     "id": "meshllm-runtime-linux-x86_64-cpu",
@@ -570,7 +578,8 @@ mod tests {
     fn invalid_manifest_glibc_metadata_is_rejected() {
         let error = NativeRuntimeReleaseManifest::from_json_str(
             r#"{
-  "mesh_version": "0.68.0",
+  "schema_version": 2,
+  "release_version": "0.68.0",
   "skippy_abi": "0.1.25",
   "artifacts": [{
     "id": "meshllm-runtime-linux-x86_64-cpu",
@@ -590,7 +599,8 @@ mod tests {
     fn non_linux_manifest_glibc_metadata_is_rejected() {
         let error = NativeRuntimeReleaseManifest::from_json_str(
             r#"{
-  "mesh_version": "0.68.0",
+  "schema_version": 2,
+  "release_version": "0.68.0",
   "skippy_abi": "0.1.25",
   "artifacts": [{
     "id": "meshllm-runtime-macos-aarch64-cpu",

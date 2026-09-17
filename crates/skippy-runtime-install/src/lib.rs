@@ -88,7 +88,7 @@ mod tests {
     fn artifact_with_sha(signature: Option<&str>) -> NativeRuntimeArtifact {
         NativeRuntimeArtifact {
             id: "meshllm-runtime-linux-x86_64-cpu".to_string(),
-            mesh_version: Some(TEST_RELEASE.to_string()),
+            release_version: Some(TEST_RELEASE.to_string()),
             skippy_abi: current_skippy_abi_version(),
             platform: NativeRuntimePlatform {
                 os: "linux".to_string(),
@@ -217,7 +217,7 @@ mod tests {
         let release = "0.68.0";
         assert_ne!(release, TEST_RELEASE);
         let mut artifact = artifact_with_sha(None);
-        artifact.mesh_version = Some(release.to_string());
+        artifact.release_version = Some(release.to_string());
         let path = cache.runtime_dir(release, artifact.native_runtime_id());
         std::fs::create_dir_all(path.join("lib")).unwrap();
         let library = path.join("lib/libllama.so");
@@ -231,7 +231,7 @@ mod tests {
 
         // A catalog may omit the artifact release; the request supplies the
         // same release key that the resolver used to select the installed copy.
-        artifact.mesh_version = None;
+        artifact.release_version = None;
         let resolution = NativeRuntimeResolution {
             selected: artifact,
             source: NativeRuntimeSource::Installed { path: path.clone() },
@@ -253,7 +253,7 @@ mod tests {
             .unwrap();
         assert_eq!(outcome.status, NativeRuntimeInstallStatus::AlreadyInstalled);
         assert_eq!(outcome.runtime.path, path);
-        assert_eq!(outcome.runtime.mesh_version, release);
+        assert_eq!(outcome.runtime.release_version, release);
         assert_eq!(std::fs::read(&library).unwrap(), b"existing runtime");
         assert_eq!(
             std::fs::read(path.join(NATIVE_RUNTIME_MANIFEST_FILE)).unwrap(),
@@ -304,7 +304,7 @@ mod tests {
         assert!(
             !cache
                 .runtime_dir(
-                    artifact.mesh_version.as_deref().unwrap(),
+                    artifact.release_version.as_deref().unwrap(),
                     artifact.native_runtime_id()
                 )
                 .exists()
@@ -355,7 +355,7 @@ mod tests {
         assert!(
             !cache
                 .runtime_dir(
-                    artifact.mesh_version.as_deref().unwrap(),
+                    artifact.release_version.as_deref().unwrap(),
                     artifact.native_runtime_id()
                 )
                 .exists()
@@ -405,12 +405,64 @@ mod tests {
             .unwrap();
 
         let cached_path = cache.runtime_dir(
-            artifact.mesh_version.as_deref().unwrap(),
+            artifact.release_version.as_deref().unwrap(),
             artifact.native_runtime_id(),
         );
         assert_eq!(outcome.status, NativeRuntimeInstallStatus::Installed);
         assert_eq!(outcome.runtime.path, cached_path);
         assert!(outcome.runtime.path.join("lib/libllama.so").exists());
+    }
+
+    #[test]
+    fn explicit_bundle_install_refuses_existing_cache_collisions_without_writes() {
+        let temp = tempfile::tempdir().unwrap();
+        let bundle = temp.path().join("bundle");
+        let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+        let mut artifact = artifact_with_sha(None);
+        artifact.url = None;
+        artifact.sha256 = None;
+        write_bundle(&bundle, &artifact);
+        let installed = cache.install_from_dir(&bundle).unwrap();
+        let metadata = std::fs::read(installed.path.join(NATIVE_RUNTIME_MANIFEST_FILE)).unwrap();
+        let library = installed.path.join(&artifact.libraries[0]);
+        let payload = std::fs::read(&library).unwrap();
+        artifact.rank += 1;
+        NativeRuntimeManifest {
+            runtime: artifact.clone(),
+        }
+        .write_to_dir(&bundle)
+        .unwrap();
+        let resolution = NativeRuntimeResolution {
+            selected: artifact,
+            source: NativeRuntimeSource::Bundle {
+                path: bundle.clone(),
+            },
+            evaluated: Vec::new(),
+        };
+        let error = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(install_resolved_runtime(
+                &cache,
+                resolution,
+                &NativeRuntimeInstallOptions {
+                    bundle_dirs: vec![bundle.clone()],
+                    bundle_install_policy:
+                        NativeRuntimeBundleInstallPolicy::InstallExplicitBundlesIntoCache,
+                    allow_download: false,
+                    ..test_install_options()
+                },
+            ))
+            .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains(&bundle.display().to_string()));
+        assert!(message.contains(&installed.path.display().to_string()));
+        assert_eq!(
+            std::fs::read(installed.path.join(NATIVE_RUNTIME_MANIFEST_FILE)).unwrap(),
+            metadata
+        );
+        assert_eq!(std::fs::read(library).unwrap(), payload);
     }
 
     #[test]
@@ -553,7 +605,7 @@ mod tests {
 
     #[test]
     fn matching_release_manifest_checksum_is_accepted() {
-        let manifest = b"{\"mesh_version\":\"0.73.1\"}";
+        let manifest = b"{\"release_version\":\"0.73.1\"}";
         let expected = hex::encode(sha2::Sha256::digest(manifest));
         verify_release_manifest_checksum(manifest, &format!("{expected}  native-runtimes.json"))
             .unwrap();
@@ -720,7 +772,7 @@ mod tests {
     }
 
     #[test]
-    fn non_default_mesh_version_request_uses_versioned_release_url() {
+    fn non_default_release_version_request_uses_versioned_release_url() {
         let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
@@ -778,7 +830,8 @@ mod tests {
             &path,
             format!(
                 r#"{{
-  "mesh_version": "0.68.0",
+  "schema_version": 2,
+  "release_version": "0.68.0",
   "skippy_abi": "{}",
   "artifacts": []
 }}"#,
@@ -801,7 +854,7 @@ mod tests {
             }))
             .unwrap();
 
-        assert_eq!(manifest.mesh_version, "0.68.0");
+        assert_eq!(manifest.release_version, "0.68.0");
         assert!(manifest.artifacts.is_empty());
 
         unsafe {
@@ -876,7 +929,7 @@ mod tests {
     fn release_manifest_file(dir: &Path, artifacts: Vec<NativeRuntimeArtifact>) -> PathBuf {
         let path = dir.join("native-runtimes.json");
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: TEST_RELEASE.to_string(),
+            release_version: TEST_RELEASE.to_string(),
             skippy_abi: current_skippy_abi_version(),
             artifacts,
         };
@@ -904,7 +957,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let bundle = temp.path().join("native-runtimes/cpu");
         let mut bundled = windows_cpu_bundle_artifact();
-        bundled.mesh_version = Some("0.1.0-stale".to_string());
+        bundled.release_version = Some("0.1.0-stale".to_string());
         bundled.skippy_abi = "0.0.1".to_string();
         write_bundle(&bundle, &bundled);
         let manifest_path =
@@ -929,7 +982,7 @@ mod tests {
         );
         // The release manifest describes the release; a stale bundle must not
         // rewrite its version or ABI once a manifest was loaded.
-        assert_eq!(manifest.mesh_version, TEST_RELEASE);
+        assert_eq!(manifest.release_version, TEST_RELEASE);
         assert_eq!(manifest.skippy_abi, current_skippy_abi_version());
         assert_eq!(
             sources.manifest_path.as_deref(),
@@ -948,7 +1001,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let bundle = temp.path().join("native-runtimes/cpu");
         let mut bundled = windows_cpu_bundle_artifact();
-        bundled.mesh_version = Some("0.66.0".to_string());
+        bundled.release_version = Some("0.66.0".to_string());
         bundled.skippy_abi = "0.1.9".to_string();
         write_bundle(&bundle, &bundled);
 
@@ -960,7 +1013,7 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(manifest.mesh_version, "0.66.0");
+        assert_eq!(manifest.release_version, "0.66.0");
         assert_eq!(manifest.skippy_abi, "0.1.9");
         assert_eq!(manifest.artifacts.len(), 1);
         assert!(sources.manifest_url.is_none());
@@ -1468,9 +1521,9 @@ mod tests {
     #[test]
     fn invalid_sha256_error_does_not_echo_the_value() {
         let err =
-            normalize_sha256("{\"mesh_version\": \"0.76.0\", \"artifacts\": []}").unwrap_err();
+            normalize_sha256("{\"release_version\": \"0.76.0\", \"artifacts\": []}").unwrap_err();
         let message = err.to_string();
-        assert!(!message.contains("mesh_version"), "{message}");
+        assert!(!message.contains("release_version"), "{message}");
         assert!(
             message.contains("expected 64 hexadecimal characters"),
             "{message}"

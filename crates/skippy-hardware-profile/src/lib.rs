@@ -279,7 +279,7 @@ mod tests {
         };
         let artifact = |id: &str, backend: NativeRuntimeBackend| NativeRuntimeArtifact {
             id: id.to_string(),
-            mesh_version: Some("test".to_string()),
+            release_version: Some("test".to_string()),
             skippy_abi: "test-abi".to_string(),
             platform: NativeRuntimePlatform {
                 os: "linux".to_string(),

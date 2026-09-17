@@ -104,12 +104,12 @@ import sys
     *archives,
 ) = sys.argv[1:]
 artifacts = []
-mesh_version = None
+catalog_runtime_version = None
 skippy_abi = None
 
 required = {
     "id",
-    "mesh_version",
+    "release_version",
     "skippy_abi",
     "platform",
     "backend",
@@ -149,6 +149,8 @@ for index, archive in enumerate(archives):
 
     with open(manifest_paths[0], encoding="utf-8") as fh:
         manifest = json.load(fh)
+    if type(manifest.get("schema_version")) is not int or manifest["schema_version"] != 2:
+        raise SystemExit(f"{archive} requires native runtime schema_version 2; import legacy caches explicitly")
     runtime = manifest.get("runtime")
     if not isinstance(runtime, dict):
         raise SystemExit(f"{archive} is missing runtime manifest")
@@ -156,7 +158,7 @@ for index, archive in enumerate(archives):
     if missing:
         raise SystemExit(f"{archive} is missing native runtime field(s): {', '.join(missing)}")
 
-    runtime_version = runtime["mesh_version"]
+    runtime_version = runtime["release_version"]
     normalized_runtime_version = (
         runtime_version[1:]
         if runtime_version.startswith("v")
@@ -164,15 +166,15 @@ for index, archive in enumerate(archives):
     )
     if normalized_runtime_version != release_version:
         raise SystemExit(
-            f"{archive} mesh_version {runtime_version} does not match "
+            f"{archive} release_version {runtime_version} does not match "
             f"requested runtime release {release_version}"
         )
 
-    if mesh_version is None:
-        mesh_version = runtime_version
-    elif runtime_version != mesh_version:
+    if catalog_runtime_version is None:
+        catalog_runtime_version = runtime_version
+    elif runtime_version != catalog_runtime_version:
         raise SystemExit(
-            f"mixed mesh versions in native runtime artifacts: {runtime_version} != {mesh_version}"
+            f"mixed runtime releases in native runtime artifacts: {runtime_version} != {catalog_runtime_version}"
         )
     if skippy_abi is None:
         skippy_abi = runtime["skippy_abi"]
@@ -188,12 +190,13 @@ for index, archive in enumerate(archives):
     artifact["sha256"] = archive_sha256
     artifacts.append(artifact)
 
-if mesh_version is None:
+if catalog_runtime_version is None:
     raise SystemExit("no native runtime artifacts supplied")
 
 artifacts.sort(key=lambda item: item["id"])
 release_manifest = {
-    "mesh_version": mesh_version,
+    "schema_version": 2,
+    "release_version": catalog_runtime_version,
     "skippy_abi": skippy_abi,
     "artifacts": artifacts,
 }

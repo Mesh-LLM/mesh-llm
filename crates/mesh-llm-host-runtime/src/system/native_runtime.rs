@@ -424,7 +424,7 @@ mod dynamic {
                 }
                 let load_plan = outcome.runtime.load_plan()?;
                 Ok(Some(startup_load_plan_from_installed(
-                    outcome.runtime.mesh_version.clone(),
+                    outcome.runtime.release_version.clone(),
                     load_plan,
                     NativeRuntimePlanSource::PostInstall,
                 )?))
@@ -491,7 +491,7 @@ mod dynamic {
         let initial_cache_version =
             startup_native_runtime_cache_version(build_version, target_mesh_version);
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: initial_cache_version.to_string(),
+            release_version: initial_cache_version.to_string(),
             skippy_abi: target_skippy_abi.unwrap_or_default().to_string(),
             artifacts: installed
                 .iter()
@@ -542,10 +542,10 @@ mod dynamic {
         };
         let selected_mesh_version = candidate
             .artifact
-            .mesh_version_or(cache_mesh_version)
+            .release_version_or(cache_mesh_version)
             .to_string();
         let Some(runtime) = eligible_runtimes.into_iter().find(|runtime| {
-            runtime.mesh_version == selected_mesh_version
+            runtime.release_version == selected_mesh_version
                 && runtime.native_runtime_id == candidate.artifact.native_runtime_id()
                 && runtime.manifest.runtime.skippy_abi == candidate.artifact.skippy_abi
         }) else {
@@ -660,7 +660,7 @@ mod dynamic {
         artifact: NativeRuntimeArtifact,
     ) -> Result<Option<NativeRuntimeStartupLoadPlan>> {
         let cache_mesh_version = artifact
-            .mesh_version_or(manifest.mesh_version.as_str())
+            .release_version_or(manifest.release_version.as_str())
             .to_string();
         let Some(installed) =
             cache.find_installed(&cache_mesh_version, artifact.native_runtime_id())?
@@ -771,7 +771,7 @@ mod dynamic {
             let manifest = NativeRuntimeManifest {
                 runtime: NativeRuntimeArtifact {
                     id: id.to_string(),
-                    mesh_version: version.map(ToString::to_string),
+                    release_version: version.map(ToString::to_string),
                     skippy_abi: "0.1.25".to_string(),
                     platform: NativeRuntimePlatform {
                         os: os.to_string(),
@@ -1516,7 +1516,7 @@ mod dynamic {
             let runtime_dir = temp.path().join(runtime_id);
             write_runtime(&runtime_dir, release_version, runtime_id);
             let load_plan = NativeRuntimeLoadPlan {
-                mesh_version: release_version.to_string(),
+                release_version: release_version.to_string(),
                 native_runtime_id: runtime_id.to_string(),
                 root: runtime_dir.clone(),
                 libraries: vec![runtime_dir.join(test_library_rel_path())],
@@ -1581,13 +1581,13 @@ mod dynamic {
             let runtime_id = "meshllm-native-runtime-test-cpu";
             let release_version = "0.68.0";
             let manifest = NativeRuntimeReleaseManifest {
-                mesh_version: release_version.to_string(),
+                release_version: release_version.to_string(),
                 skippy_abi: "0.1.25".to_string(),
                 artifacts: Vec::new(),
             };
             let artifact = NativeRuntimeArtifact {
                 id: runtime_id.to_string(),
-                mesh_version: Some(release_version.to_string()),
+                release_version: Some(release_version.to_string()),
                 skippy_abi: "0.1.25".to_string(),
                 platform: NativeRuntimePlatform {
                     os: std::env::consts::OS.to_string(),
@@ -2104,7 +2104,7 @@ mod dynamic {
             let manifest = NativeRuntimeManifest {
                 runtime: NativeRuntimeArtifact {
                     id: id.to_string(),
-                    mesh_version: version.map(ToString::to_string),
+                    release_version: version.map(ToString::to_string),
                     // Match the ABI the flavor-derived startup selection
                     // requests so the fixture is loadable in this build.
                     skippy_abi: crate::system::native_runtime_install::current_skippy_abi_version(),
@@ -2137,7 +2137,7 @@ mod dynamic {
         ) -> skippy_native_runtime::NativeRuntimeArtifact {
             skippy_native_runtime::NativeRuntimeArtifact {
                 id: id.to_string(),
-                mesh_version: Some(skippy_native_runtime::runtime_release_version().to_string()),
+                release_version: Some(skippy_native_runtime::runtime_release_version().to_string()),
                 skippy_abi: crate::system::native_runtime_install::current_skippy_abi_version(),
                 platform: NativeRuntimePlatform {
                     os: std::env::consts::OS.to_string(),

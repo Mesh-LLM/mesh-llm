@@ -25,9 +25,10 @@ class GenerateNativeRuntimeReleaseManifestTests(unittest.TestCase):
         (package_dir / "manifest.json").write_text(
             json.dumps(
                 {
+                    "schema_version": 2,
                     "runtime": {
                         "id": "meshllm-native-runtime-linux-aarch64-cpu",
-                        "mesh_version": runtime_version,
+                        "release_version": runtime_version,
                         "skippy_abi": "0.1.25",
                         "platform": {
                             "os": "linux",
@@ -103,7 +104,7 @@ class GenerateNativeRuntimeReleaseManifestTests(unittest.TestCase):
             with out.open(encoding="utf-8") as handle:
                 manifest = json.load(handle)
 
-            self.assertEqual(manifest["mesh_version"], "0.68.0")
+            self.assertEqual(manifest["release_version"], "0.68.0")
             self.assertEqual(len(manifest["artifacts"]), 1)
 
     def test_publication_tag_is_independent_of_runtime_release(self):
@@ -115,8 +116,8 @@ class GenerateNativeRuntimeReleaseManifestTests(unittest.TestCase):
             result = self.run_generator(archive, out, tag="v99.0.0")
             self.assertEqual(result.returncode, 0, result.stderr)
             manifest = json.loads(out.read_text(encoding="utf-8"))
-            self.assertEqual(manifest["mesh_version"], "0.68.0")
-            self.assertEqual(manifest["artifacts"][0]["mesh_version"], "0.68.0")
+            self.assertEqual(manifest["release_version"], "0.68.0")
+            self.assertEqual(manifest["artifacts"][0]["release_version"], "0.68.0")
             self.assertIn("/download/v99.0.0/", manifest["artifacts"][0]["url"])
 
     def test_default_runtime_release_comes_from_skippy_metadata(self):
@@ -132,7 +133,7 @@ class GenerateNativeRuntimeReleaseManifestTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             manifest = json.loads(out.read_text(encoding="utf-8"))
-            self.assertEqual(manifest["mesh_version"], expected)
+            self.assertEqual(manifest["release_version"], expected)
             self.assertIn("/download/product-test/", manifest["artifacts"][0]["url"])
 
     def test_requires_valid_canonical_sidecar(self):
@@ -189,7 +190,7 @@ class GenerateNativeRuntimeReleaseManifestTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(
-                "mesh_version 0.68.0 does not match "
+                "release_version 0.68.0 does not match "
                 "requested runtime release 0.69.0-rc1",
                 result.stderr,
             )

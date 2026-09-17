@@ -51,7 +51,7 @@ class PackageNativeRuntimeTests(unittest.TestCase):
                         self.assertEqual(result.returncode, 0, result.stderr)
                         self.assertEqual(result.stdout.strip(), release)
         self.assertIn('runtime_release_version="$(skippy_runtime_version)"', script)
-        self.assertIn('"mesh_version": "$runtime_release_version"', script)
+        self.assertIn('"release_version": "$runtime_release_version"', script)
 
     def test_linux_glibc_manifest_probe_pins_readelf_locale(self) -> None:
         script = SCRIPT.read_text(encoding="utf-8")

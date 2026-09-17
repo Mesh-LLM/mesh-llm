@@ -107,7 +107,7 @@ pub fn product_runtime_release(
             bail!("product runtime tree checksum mismatch: {}", path.display());
         }
         if manifest.runtime.id != runtime.id
-            || manifest.runtime.mesh_version.as_deref() != Some(runtime.release_version.as_str())
+            || manifest.runtime.release_version.as_deref() != Some(runtime.release_version.as_str())
             || manifest.runtime.skippy_abi != runtime.skippy_abi
         {
             bail!(

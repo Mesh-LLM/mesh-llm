@@ -142,12 +142,15 @@ def artifact_file(label, raw_path):
 with open(manifest_path, encoding="utf-8") as fh:
     manifest = json.load(fh)
 
+if type(manifest.get("schema_version")) is not int or manifest["schema_version"] != 2:
+    raise SystemExit("native runtime manifest requires schema_version 2; import legacy caches explicitly")
+
 if "runtime" not in manifest:
     raise SystemExit("missing manifest field: runtime")
 runtime = manifest["runtime"]
 required = {
     "id",
-    "mesh_version",
+    "release_version",
     "skippy_abi",
     "platform",
     "backend",
@@ -157,7 +160,7 @@ required = {
 missing = sorted(required - runtime.keys())
 if missing:
     raise SystemExit(f"missing runtime manifest field(s): {', '.join(missing)}")
-for field in ("id", "mesh_version", "skippy_abi"):
+for field in ("id", "release_version", "skippy_abi"):
     if not isinstance(runtime[field], str) or not runtime[field]:
         raise SystemExit(f"runtime {field} must be a non-empty string")
 if os.path.basename(os.path.normpath(artifact_dir)) != runtime["id"]:

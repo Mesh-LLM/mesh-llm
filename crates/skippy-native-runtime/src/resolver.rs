@@ -20,7 +20,7 @@ pub enum RuntimeSelection {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CandidateRejection {
-    MeshVersionMismatch { expected: String, actual: String },
+    ReleaseVersionMismatch { expected: String, actual: String },
     SkippyAbiMismatch { expected: String, actual: String },
     OsMismatch { expected: String, actual: String },
     ArchMismatch { expected: String, actual: String },
@@ -41,7 +41,7 @@ pub enum CandidateRejection {
 impl std::fmt::Display for CandidateRejection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::MeshVersionMismatch { expected, actual } => {
+            Self::ReleaseVersionMismatch { expected, actual } => {
                 write!(
                     f,
                     "MeshLLM version mismatch: expected {expected}, found {actual}"
@@ -168,7 +168,7 @@ pub struct NativeRuntimeResolution {
 }
 
 pub struct NativeRuntimeResolver {
-    mesh_version: String,
+    release_version: String,
     skippy_abi: Option<String>,
     profile: HostRuntimeProfile,
     release_manifest: NativeRuntimeReleaseManifest,
@@ -207,13 +207,13 @@ impl RuntimeSelection {
 
 impl NativeRuntimeResolver {
     pub fn new(
-        mesh_version: impl Into<String>,
+        release_version: impl Into<String>,
         profile: HostRuntimeProfile,
         release_manifest: NativeRuntimeReleaseManifest,
         cache: NativeRuntimeCache,
     ) -> Self {
         Self {
-            mesh_version: mesh_version.into(),
+            release_version: release_version.into(),
             skippy_abi: None,
             profile,
             release_manifest,
@@ -255,7 +255,7 @@ impl NativeRuntimeResolver {
         Ok(evaluate_candidates(
             &artifacts,
             &self.profile,
-            &self.mesh_version,
+            &self.release_version,
             Some(self.expected_skippy_abi()),
             selection,
         ))
@@ -271,9 +271,9 @@ impl NativeRuntimeResolver {
         let mut seen = BTreeSet::new();
         let mut artifacts = Vec::new();
         for artifact in &self.release_manifest.artifacts {
-            let artifact = artifact_with_manifest_mesh_version(
+            let artifact = artifact_with_manifest_release_version(
                 artifact,
-                self.release_manifest.mesh_version.as_str(),
+                self.release_manifest.release_version.as_str(),
             );
             seen.insert(artifact_key(&artifact));
             artifacts.push(artifact);
@@ -287,7 +287,7 @@ impl NativeRuntimeResolver {
         }
         // Older cache versions can contain pre-checksum manifests (#1162), and
         // they cannot satisfy this resolver's exact MeshLLM version anyway.
-        for installed in self.cache.installed_for_version(&self.mesh_version)? {
+        for installed in self.cache.installed_for_version(&self.release_version)? {
             let artifact = installed.manifest.runtime;
             if seen.insert(artifact_key(&artifact)) {
                 artifacts.push(artifact);
@@ -306,7 +306,7 @@ impl NativeRuntimeResolver {
             }
         }
         let installed = self.cache.find_installed(
-            artifact.mesh_version_or(&self.mesh_version),
+            artifact.release_version_or(&self.release_version),
             artifact.native_runtime_id(),
         )?;
         if let Some(installed) = installed {
@@ -330,7 +330,7 @@ fn artifact_key(artifact: &NativeRuntimeArtifact) -> String {
     format!(
         "{}\0{}\0{}",
         artifact.id,
-        artifact.mesh_version.as_deref().unwrap_or_default(),
+        artifact.release_version.as_deref().unwrap_or_default(),
         artifact.skippy_abi
     )
 }
@@ -338,13 +338,13 @@ fn artifact_key(artifact: &NativeRuntimeArtifact) -> String {
 pub fn select_native_runtime(
     release_manifest: &NativeRuntimeReleaseManifest,
     profile: &HostRuntimeProfile,
-    mesh_version: &str,
+    release_version: &str,
     selection: &RuntimeSelection,
 ) -> Option<CandidateEvaluation> {
     select_native_runtime_for_skippy_abi(
         release_manifest,
         profile,
-        mesh_version,
+        release_version,
         &release_manifest.skippy_abi,
         selection,
     )
@@ -353,7 +353,7 @@ pub fn select_native_runtime(
 pub fn select_native_runtime_for_skippy_abi(
     release_manifest: &NativeRuntimeReleaseManifest,
     profile: &HostRuntimeProfile,
-    mesh_version: &str,
+    release_version: &str,
     skippy_abi: &str,
     selection: &RuntimeSelection,
 ) -> Option<CandidateEvaluation> {
@@ -361,13 +361,16 @@ pub fn select_native_runtime_for_skippy_abi(
         .artifacts
         .iter()
         .map(|artifact| {
-            artifact_with_manifest_mesh_version(artifact, release_manifest.mesh_version.as_str())
+            artifact_with_manifest_release_version(
+                artifact,
+                release_manifest.release_version.as_str(),
+            )
         })
         .collect::<Vec<_>>();
     let evaluated = evaluate_candidates(
         &artifacts,
         profile,
-        mesh_version,
+        release_version,
         Some(skippy_abi),
         selection,
     );
@@ -377,11 +380,11 @@ pub fn select_native_runtime_for_skippy_abi(
 pub fn select_native_runtime_from_artifacts(
     artifacts: &[NativeRuntimeArtifact],
     profile: &HostRuntimeProfile,
-    mesh_version: &str,
+    release_version: &str,
     skippy_abi: Option<&str>,
     selection: &RuntimeSelection,
 ) -> Option<CandidateEvaluation> {
-    let evaluated = evaluate_candidates(artifacts, profile, mesh_version, skippy_abi, selection);
+    let evaluated = evaluate_candidates(artifacts, profile, release_version, skippy_abi, selection);
     best_candidate(&evaluated).cloned()
 }
 
@@ -390,11 +393,11 @@ pub fn select_native_runtime_from_artifacts(
 pub fn evaluate_native_runtime_artifact(
     artifact: &NativeRuntimeArtifact,
     profile: &HostRuntimeProfile,
-    mesh_version: &str,
+    release_version: &str,
     skippy_abi: Option<&str>,
     selection: &RuntimeSelection,
 ) -> CandidateEvaluation {
-    evaluate_artifact(artifact, profile, mesh_version, skippy_abi, selection)
+    evaluate_artifact(artifact, profile, release_version, skippy_abi, selection)
 }
 
 /// Returns whether a locally installed artifact has the metadata required by
@@ -413,23 +416,25 @@ pub fn has_startup_compatibility_metadata(
 fn evaluate_candidates(
     artifacts: &[NativeRuntimeArtifact],
     profile: &HostRuntimeProfile,
-    mesh_version: &str,
+    release_version: &str,
     skippy_abi: Option<&str>,
     selection: &RuntimeSelection,
 ) -> Vec<CandidateEvaluation> {
     artifacts
         .iter()
-        .map(|artifact| evaluate_artifact(artifact, profile, mesh_version, skippy_abi, selection))
+        .map(|artifact| {
+            evaluate_artifact(artifact, profile, release_version, skippy_abi, selection)
+        })
         .collect()
 }
 
-fn artifact_with_manifest_mesh_version(
+fn artifact_with_manifest_release_version(
     artifact: &NativeRuntimeArtifact,
-    manifest_mesh_version: &str,
+    manifest_release_version: &str,
 ) -> NativeRuntimeArtifact {
     let mut artifact = artifact.clone();
-    if artifact.mesh_version.is_none() {
-        artifact.mesh_version = Some(manifest_mesh_version.to_string());
+    if artifact.release_version.is_none() {
+        artifact.release_version = Some(manifest_release_version.to_string());
     }
     artifact
 }
@@ -437,18 +442,18 @@ fn artifact_with_manifest_mesh_version(
 fn evaluate_artifact(
     artifact: &NativeRuntimeArtifact,
     profile: &HostRuntimeProfile,
-    mesh_version: &str,
+    release_version: &str,
     skippy_abi: Option<&str>,
     selection: &RuntimeSelection,
 ) -> CandidateEvaluation {
     let mut reasons = Vec::new();
-    if artifact.mesh_version.as_deref() != Some(mesh_version) {
+    if artifact.release_version.as_deref() != Some(release_version) {
         let actual = artifact
-            .mesh_version
+            .release_version
             .clone()
             .unwrap_or_else(|| "unspecified".to_string());
-        reasons.push(CandidateRejection::MeshVersionMismatch {
-            expected: mesh_version.to_string(),
+        reasons.push(CandidateRejection::ReleaseVersionMismatch {
+            expected: release_version.to_string(),
             actual,
         });
     }
@@ -520,7 +525,7 @@ fn artifact_identity_matches(
     selected: &NativeRuntimeArtifact,
 ) -> bool {
     candidate.id == selected.id
-        && candidate.mesh_version.as_deref() == selected.mesh_version.as_deref()
+        && candidate.release_version.as_deref() == selected.release_version.as_deref()
         && candidate.skippy_abi == selected.skippy_abi
 }
 
@@ -728,7 +733,7 @@ mod tests {
     fn artifact(id: &str, backend: NativeRuntimeBackend) -> NativeRuntimeArtifact {
         NativeRuntimeArtifact {
             id: id.to_string(),
-            mesh_version: Some("0.68.0".to_string()),
+            release_version: Some("0.68.0".to_string()),
             skippy_abi: "0.1.25".to_string(),
             platform: NativeRuntimePlatform {
                 os: "linux".to_string(),
@@ -818,7 +823,7 @@ mod tests {
     #[test]
     fn recommended_prefers_compatible_cuda_over_cpu() {
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: "0.68.0".to_string(),
+            release_version: "0.68.0".to_string(),
             skippy_abi: "0.1.25".to_string(),
             artifacts: vec![
                 artifact(
@@ -842,7 +847,7 @@ mod tests {
     #[test]
     fn cuda13_runtime_is_rejected_on_cuda12_host() {
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: "0.68.0".to_string(),
+            release_version: "0.68.0".to_string(),
             skippy_abi: "0.1.25".to_string(),
             artifacts: vec![cuda_runtime(
                 "meshllm-runtime-linux-x86_64-cuda13",
@@ -957,7 +962,7 @@ mod tests {
         cuda.driver_max_major = Some(13);
 
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: "0.68.0".to_string(),
+            release_version: "0.68.0".to_string(),
             skippy_abi: "0.1.25".to_string(),
             artifacts: vec![
                 cuda_runtime("meshllm-runtime-linux-x86_64-cuda12", 12, &["sm_90"]),
@@ -992,7 +997,7 @@ mod tests {
         ]);
 
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: "0.68.0".to_string(),
+            release_version: "0.68.0".to_string(),
             skippy_abi: "0.1.25".to_string(),
             artifacts: vec![bundled],
         };
@@ -1022,7 +1027,7 @@ mod tests {
         partial.libraries.push("lib/cudart64_12.dll".to_string());
 
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: "0.68.0".to_string(),
+            release_version: "0.68.0".to_string(),
             skippy_abi: "0.1.25".to_string(),
             artifacts: vec![partial],
         };
@@ -1044,7 +1049,7 @@ mod tests {
         cuda.driver_max_major = Some(13);
 
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: "0.68.0".to_string(),
+            release_version: "0.68.0".to_string(),
             skippy_abi: "0.1.25".to_string(),
             artifacts: vec![cuda_runtime(
                 "meshllm-runtime-linux-x86_64-cuda12",
@@ -1073,7 +1078,7 @@ mod tests {
             "lib/libcublasLt.so.13".to_string(),
         ]);
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: "0.68.0".to_string(),
+            release_version: "0.68.0".to_string(),
             skippy_abi: "0.1.25".to_string(),
             artifacts: vec![bundled],
         };
@@ -1094,7 +1099,7 @@ mod tests {
         let mut partial = cuda_runtime("meshllm-runtime-linux-x86_64-cuda13", 13, &["sm_90"]);
         partial.libraries.push("lib/libcudart.so.13".to_string());
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: "0.68.0".to_string(),
+            release_version: "0.68.0".to_string(),
             skippy_abi: "0.1.25".to_string(),
             artifacts: vec![partial],
         };
@@ -1119,7 +1124,7 @@ mod tests {
             "lib/libcublasLt.so.12".to_string(),
         ]);
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: "0.68.0".to_string(),
+            release_version: "0.68.0".to_string(),
             skippy_abi: "0.1.25".to_string(),
             artifacts: vec![mismatched],
         };
@@ -1140,7 +1145,7 @@ mod tests {
         cuda.driver_max_major = Some(13);
 
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: "0.68.0".to_string(),
+            release_version: "0.68.0".to_string(),
             skippy_abi: "0.1.25".to_string(),
             artifacts: vec![
                 artifact(
@@ -1161,7 +1166,7 @@ mod tests {
     #[test]
     fn unsupported_cuda_gpu_arch_is_rejected() {
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: "0.68.0".to_string(),
+            release_version: "0.68.0".to_string(),
             skippy_abi: "0.1.25".to_string(),
             artifacts: vec![cuda_runtime(
                 "meshllm-runtime-linux-x86_64-cuda12-sm120",
@@ -1186,7 +1191,7 @@ mod tests {
         let mut host = profile();
         host.cuda.as_mut().unwrap().gpu_arches = BTreeSet::from(["61".to_string()]);
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: "0.68.0".to_string(),
+            release_version: "0.68.0".to_string(),
             skippy_abi: "0.1.25".to_string(),
             artifacts: vec![cuda_runtime(
                 "meshllm-runtime-linux-x86_64-cuda12",
@@ -1205,7 +1210,7 @@ mod tests {
     #[test]
     fn unsupported_rocm_apu_arch_falls_back_to_cpu() {
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: "0.68.0".to_string(),
+            release_version: "0.68.0".to_string(),
             skippy_abi: "0.1.25".to_string(),
             artifacts: vec![
                 artifact(
@@ -1236,7 +1241,7 @@ mod tests {
     #[test]
     fn rocm_runtime_without_packaged_arches_falls_back_to_cpu() {
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: "0.68.0".to_string(),
+            release_version: "0.68.0".to_string(),
             skippy_abi: "0.1.25".to_string(),
             artifacts: vec![
                 artifact(
@@ -1264,7 +1269,7 @@ mod tests {
     #[test]
     fn rocm_runtime_requires_complete_detected_arch_coverage() {
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: "0.68.0".to_string(),
+            release_version: "0.68.0".to_string(),
             skippy_abi: "0.1.25".to_string(),
             artifacts: vec![rocm_runtime(
                 "meshllm-runtime-linux-x86_64-rocm",
@@ -1287,7 +1292,7 @@ mod tests {
     #[test]
     fn rocm_runtime_accepts_rdna_apu_arches_when_both_are_packaged() {
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: "0.68.0".to_string(),
+            release_version: "0.68.0".to_string(),
             skippy_abi: "0.1.25".to_string(),
             artifacts: vec![rocm_runtime(
                 "meshllm-runtime-linux-x86_64-rocm",
@@ -1310,12 +1315,12 @@ mod tests {
     }
 
     #[test]
-    fn mesh_version_mismatch_rejects_matching_skippy_abi_candidate() {
+    fn release_version_mismatch_rejects_matching_skippy_abi_candidate() {
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: "0.67.0".to_string(),
+            release_version: "0.67.0".to_string(),
             skippy_abi: "0.1.25".to_string(),
             artifacts: vec![NativeRuntimeArtifact {
-                mesh_version: Some("0.67.0".to_string()),
+                release_version: Some("0.67.0".to_string()),
                 ..cuda_runtime("meshllm-runtime-linux-x86_64-cuda12", 12, &["sm_90"])
             }],
         };
@@ -1332,12 +1337,12 @@ mod tests {
     }
 
     #[test]
-    fn explicit_mesh_version_and_skippy_abi_select_matching_candidate() {
+    fn explicit_release_version_and_skippy_abi_select_matching_candidate() {
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: "0.67.0".to_string(),
+            release_version: "0.67.0".to_string(),
             skippy_abi: "0.1.25".to_string(),
             artifacts: vec![NativeRuntimeArtifact {
-                mesh_version: Some("0.67.0".to_string()),
+                release_version: Some("0.67.0".to_string()),
                 ..cuda_runtime("meshllm-runtime-linux-x86_64-cuda12", 12, &["sm_90"])
             }],
         };
@@ -1371,7 +1376,7 @@ mod tests {
                 ..profile()
             },
             NativeRuntimeReleaseManifest {
-                mesh_version: "0.68.0".to_string(),
+                release_version: "0.68.0".to_string(),
                 skippy_abi: "0.1.25".to_string(),
                 artifacts: Vec::new(),
             },
@@ -1409,7 +1414,7 @@ mod tests {
                 ..profile()
             },
             NativeRuntimeReleaseManifest {
-                mesh_version: "0.68.0".to_string(),
+                release_version: "0.68.0".to_string(),
                 skippy_abi: "0.1.25".to_string(),
                 artifacts: Vec::new(),
             },
@@ -1434,7 +1439,7 @@ mod tests {
         let cache_root = tempfile::tempdir().unwrap();
         let runtime_id = "meshllm-runtime-linux-x86_64-cpu";
         let stale_bundle_artifact = NativeRuntimeArtifact {
-            mesh_version: Some("0.67.0".to_string()),
+            release_version: Some("0.67.0".to_string()),
             ..artifact(runtime_id, NativeRuntimeBackend::cpu())
         };
         write_bundle_runtime(bundle.path(), stale_bundle_artifact);
@@ -1447,7 +1452,7 @@ mod tests {
                 ..profile()
             },
             NativeRuntimeReleaseManifest {
-                mesh_version: "0.68.0".to_string(),
+                release_version: "0.68.0".to_string(),
                 skippy_abi: "0.1.25".to_string(),
                 artifacts: vec![artifact(runtime_id, NativeRuntimeBackend::cpu())],
             },
@@ -1473,7 +1478,7 @@ mod tests {
             r#"{
   "runtime": {
     "id": "meshllm-runtime-linux-x86_64-cpu",
-    "mesh_version": "0.67.0",
+    "release_version": "0.67.0",
     "skippy_abi": "0.1.25",
     "platform": {"os": "linux", "arch": "x86_64"},
     "backend": {"kind": "cpu"},
@@ -1491,7 +1496,7 @@ mod tests {
                 ..profile()
             },
             NativeRuntimeReleaseManifest {
-                mesh_version: "0.68.0".to_string(),
+                release_version: "0.68.0".to_string(),
                 skippy_abi: "0.1.25".to_string(),
                 artifacts: vec![artifact(
                     "meshllm-runtime-linux-x86_64-cpu",

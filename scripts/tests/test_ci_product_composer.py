@@ -65,9 +65,10 @@ class CiProductComposerTests(unittest.TestCase):
         library_digest = hashlib.sha256(library.read_bytes()).hexdigest()
         tool_digest = hashlib.sha256(tool.read_bytes()).hexdigest()
         manifest = {
+            "schema_version": 2,
             "runtime": {
                 "id": runtime_id,
-                "mesh_version": runtime_version,
+                "release_version": runtime_version,
                 "skippy_abi": "1.0.0",
                 "platform": {
                     "os": "macos",

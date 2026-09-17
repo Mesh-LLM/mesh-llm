@@ -878,9 +878,10 @@ elif kind == "vulkan":
         backend_manifest["vulkan"]["min_api_version"] = min_api
 
 manifest = {
+    "schema_version": 2,
     "runtime": {
         "id": "$artifact_id",
-        "mesh_version": "$runtime_release_version",
+        "release_version": "$runtime_release_version",
         "skippy_abi": "$abi_version",
         "platform": {
             "os": "$runtime_os",

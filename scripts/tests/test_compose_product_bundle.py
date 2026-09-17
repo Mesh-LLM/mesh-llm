@@ -28,8 +28,8 @@ class ComposeProductBundleTests(unittest.TestCase):
             runtime.mkdir(parents=True)
             for abi in ("0.1.57", "0.1.58"):
                 with self.subTest(abi=abi):
-                    (runtime / "manifest.json").write_text(json.dumps({"runtime": {
-                        "id": "cpu", "mesh_version": "2.0.0", "skippy_abi": abi,
+                    (runtime / "manifest.json").write_text(json.dumps({"schema_version": 2, "runtime": {
+                        "id": "cpu", "release_version": "2.0.0", "skippy_abi": abi,
                         "backend": {"kind": "cpu"},
                     }}))
                     if abi != contract["skippy_abi"]:
@@ -65,6 +65,22 @@ class ComposeProductBundleTests(unittest.TestCase):
                     host.chmod(0o755)
                     with self.assertRaisesRegex(ValueError, message):
                         COMPOSE_PRODUCT_BUNDLE.read_host_build_contract(host)
+
+    def test_composer_rejects_legacy_and_unsupported_runtime_generations(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = pathlib.Path(directory)
+            runtime = bundle / "native-runtimes" / "cpu"
+            runtime.mkdir(parents=True)
+            for generation in (None, 1, 3, "2", 2.0, True):
+                with self.subTest(generation=generation):
+                    manifest = {"runtime": {"mesh_version": "1.2.3"}}
+                    if generation is not None:
+                        manifest["schema_version"] = generation
+                    (runtime / "manifest.json").write_text(json.dumps(manifest))
+                    with self.assertRaisesRegex(ValueError, "requires schema_version 2"):
+                        COMPOSE_PRODUCT_BUNDLE.compose_manifest(
+                            bundle, bundle / "unused-host", runtime, "9.0.0", "cpu"
+                        )
 
     def test_tree_hash_uses_ordinal_relative_path_order(self) -> None:
         class CaseInsensitivePath(type(pathlib.Path())):

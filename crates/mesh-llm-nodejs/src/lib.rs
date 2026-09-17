@@ -861,7 +861,7 @@ fn installed_native_runtime_json(
     runtime: mesh_llm_sdk::native_runtime::InstalledNativeRuntime,
 ) -> Value {
     json!({
-        "meshVersion": runtime.mesh_version,
+        "meshVersion": runtime.release_version,
         "nativeRuntimeId": runtime.native_runtime_id,
         "flavor": runtime.flavor,
         "path": path_to_string(runtime.path),

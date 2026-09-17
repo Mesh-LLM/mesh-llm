@@ -22,7 +22,7 @@ pub struct NativeRuntimeCacheRoot {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct InstalledNativeRuntime {
-    pub mesh_version: String,
+    pub release_version: String,
     pub native_runtime_id: String,
     pub flavor: String,
     pub path: PathBuf,
@@ -108,8 +108,8 @@ impl NativeRuntimeCache {
         &self.root
     }
 
-    pub fn runtime_dir(&self, mesh_version: &str, native_runtime_id: &str) -> PathBuf {
-        self.root.join(mesh_version).join(native_runtime_id)
+    pub fn runtime_dir(&self, release_version: &str, native_runtime_id: &str) -> PathBuf {
+        self.root.join(release_version).join(native_runtime_id)
     }
 
     pub fn installed(&self) -> Result<Vec<InstalledNativeRuntime>> {
@@ -127,8 +127,8 @@ impl NativeRuntimeCache {
             installed.extend(installed_in_version_dir(&version_entry.path())?);
         }
         installed.sort_by(|left, right| {
-            (&left.mesh_version, &left.native_runtime_id)
-                .cmp(&(&right.mesh_version, &right.native_runtime_id))
+            (&left.release_version, &left.native_runtime_id)
+                .cmp(&(&right.release_version, &right.native_runtime_id))
         });
         Ok(installed)
     }
@@ -232,8 +232,8 @@ impl NativeRuntimeCache {
             }
         }
         scan.runtimes.sort_by(|left, right| {
-            (&left.mesh_version, &left.native_runtime_id)
-                .cmp(&(&right.mesh_version, &right.native_runtime_id))
+            (&left.release_version, &left.native_runtime_id)
+                .cmp(&(&right.release_version, &right.native_runtime_id))
         });
         Ok(scan)
     }
@@ -245,17 +245,17 @@ impl NativeRuntimeCache {
     /// runtime caches, if full-cache resolver enumeration is safe again.
     pub(crate) fn installed_for_version(
         &self,
-        mesh_version: &str,
+        release_version: &str,
     ) -> Result<Vec<InstalledNativeRuntime>> {
-        installed_in_version_dir(&self.root.join(mesh_version))
+        installed_in_version_dir(&self.root.join(release_version))
     }
 
     pub fn find_installed(
         &self,
-        mesh_version: &str,
+        release_version: &str,
         native_runtime_id: &str,
     ) -> Result<Option<InstalledNativeRuntime>> {
-        let dir = self.runtime_dir(mesh_version, native_runtime_id);
+        let dir = self.runtime_dir(release_version, native_runtime_id);
         if !dir.join(NATIVE_RUNTIME_MANIFEST_FILE).exists() {
             return Ok(None);
         }
@@ -265,22 +265,48 @@ impl NativeRuntimeCache {
     pub fn install_from_dir(&self, source_dir: &Path) -> Result<InstalledNativeRuntime> {
         let manifest = NativeRuntimeManifest::read_from_dir(source_dir)?;
         manifest.validate()?;
-        let mesh_version = manifest
+        let release_version = manifest
             .runtime
-            .mesh_version
+            .release_version
             .as_deref()
             .unwrap_or("unknown");
-        let target = self.runtime_dir(mesh_version, manifest.runtime.native_runtime_id());
-        if target.exists() {
-            fs::remove_dir_all(&target)
-                .with_context(|| format!("replace native runtime {}", target.display()))?;
+        let target = self.runtime_dir(release_version, manifest.runtime.native_runtime_id());
+        let collision = || {
+            format!(
+                "refusing runtime cache collision: {} -> {}; preserve the existing entry and import legacy caches explicitly into a separate destination",
+                source_dir.display(),
+                target.display()
+            )
+        };
+        if target.try_exists()? {
+            let existing = installed_runtime_from_dir(&target)
+                .with_context(collision)?
+                .with_context(collision)?;
+            anyhow::ensure!(existing.manifest == manifest, "{}", collision());
+            return Ok(existing);
         }
-        copy_dir_recursive(source_dir, &target)?;
-        installed_runtime_from_dir(&target)?.context("installed native runtime manifest missing")
+        fs::create_dir_all(
+            target
+                .parent()
+                .context("runtime cache entry has no parent")?,
+        )?;
+        // Claim this entry atomically: a concurrent installer must not be overwritten.
+        fs::create_dir(&target).with_context(collision)?;
+        let result = (|| {
+            copy_dir_recursive(source_dir, &target)?;
+            installed_runtime_from_dir(&target)?
+                .context("installed native runtime manifest missing")
+        })();
+        if result.is_err() {
+            fs::remove_dir_all(&target).with_context(|| {
+                format!("clean failed runtime installation {}", target.display())
+            })?;
+        }
+        result
     }
 
-    pub fn remove(&self, mesh_version: &str, native_runtime_id: &str) -> Result<bool> {
-        let dir = self.runtime_dir(mesh_version, native_runtime_id);
+    pub fn remove(&self, release_version: &str, native_runtime_id: &str) -> Result<bool> {
+        let dir = self.runtime_dir(release_version, native_runtime_id);
         if !dir.exists() {
             return Ok(false);
         }
@@ -291,7 +317,7 @@ impl NativeRuntimeCache {
 
     pub fn prune_plan(
         &self,
-        active_mesh_version: &str,
+        active_release_version: &str,
         mode: NativeRuntimePruneMode,
     ) -> Result<CachePrunePlan> {
         let mut versions = self.installed_versions()?;
@@ -300,12 +326,12 @@ impl NativeRuntimeCache {
             NativeRuntimePruneMode::ActiveOnly => None,
             NativeRuntimePruneMode::KeepActiveAndPrevious => versions
                 .iter()
-                .rfind(|version| version.as_str() != active_mesh_version)
+                .rfind(|version| version.as_str() != active_release_version)
                 .cloned(),
         };
         let remove_dirs = versions
             .into_iter()
-            .filter(|version| version != active_mesh_version)
+            .filter(|version| version != active_release_version)
             .filter(|version| Some(version) != previous.as_ref())
             .map(|version| self.root.join(version))
             .collect();
@@ -314,10 +340,10 @@ impl NativeRuntimeCache {
 
     pub fn prune(
         &self,
-        active_mesh_version: &str,
+        active_release_version: &str,
         mode: NativeRuntimePruneMode,
     ) -> Result<CachePrunePlan> {
-        let plan = self.prune_plan(active_mesh_version, mode)?;
+        let plan = self.prune_plan(active_release_version, mode)?;
         for dir in &plan.remove_dirs {
             if dir.exists() {
                 fs::remove_dir_all(dir)
@@ -353,13 +379,13 @@ fn installed_runtime_from_dir(dir: &Path) -> Result<Option<InstalledNativeRuntim
         return Ok(None);
     }
     let manifest = NativeRuntimeManifest::read_from_dir(dir)?;
-    let mesh_version = manifest
+    let release_version = manifest
         .runtime
-        .mesh_version
+        .release_version
         .clone()
         .unwrap_or_else(|| "unknown".to_string());
     Ok(Some(InstalledNativeRuntime {
-        mesh_version,
+        release_version,
         native_runtime_id: manifest.runtime.id.clone(),
         flavor: manifest.runtime.backend.kind.to_string(),
         path: dir.to_path_buf(),
@@ -421,7 +447,7 @@ mod tests {
         let manifest = NativeRuntimeManifest {
             runtime: NativeRuntimeArtifact {
                 id: id.to_string(),
-                mesh_version: Some(version.to_string()),
+                release_version: Some(version.to_string()),
                 skippy_abi: "0.1.25".to_string(),
                 platform: NativeRuntimePlatform {
                     os: "linux".to_string(),
@@ -443,6 +469,61 @@ mod tests {
     }
 
     #[test]
+    fn installation_preserves_legacy_target_bytes_and_requires_explicit_import() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        write_runtime(&source, "1.2.3", "runtime-a");
+        let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+        let target = cache.runtime_dir("1.2.3", "runtime-a");
+        write_runtime(&target, "1.2.3", "runtime-a");
+        let path = target.join(NATIVE_RUNTIME_MANIFEST_FILE);
+        let mut legacy: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        legacy.as_object_mut().unwrap().remove("schema_version");
+        let fields = legacy["runtime"].as_object_mut().unwrap();
+        let release = fields.remove("release_version").unwrap();
+        fields.insert("mesh_version".into(), release);
+        let metadata = serde_json::to_vec(&legacy).unwrap();
+        fs::write(&path, &metadata).unwrap();
+        let payload = fs::read(target.join("lib/libmeshllm_ffi.so")).unwrap();
+        let error = cache.install_from_dir(&source).unwrap_err();
+        assert!(format!("{error:#}").contains("import legacy caches explicitly"));
+        assert_eq!(fs::read(&path).unwrap(), metadata);
+        assert_eq!(
+            fs::read(target.join("lib/libmeshllm_ffi.so")).unwrap(),
+            payload
+        );
+    }
+
+    #[test]
+    fn installation_reuses_identical_entries_and_refuses_current_generation_collisions() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        write_runtime(&source, "1.2.3", "runtime-a");
+        let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+        let installed = cache.install_from_dir(&source).unwrap();
+        let path = installed.path.join(NATIVE_RUNTIME_MANIFEST_FILE);
+        let before = fs::read(&path).unwrap();
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(
+            cache.install_from_dir(&source).unwrap().path,
+            installed.path
+        );
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
+        let mut different = NativeRuntimeManifest::read_from_dir(&source).unwrap();
+        different.runtime.rank += 1;
+        different.write_to_dir(&source).unwrap();
+        let error = format!("{:#}", cache.install_from_dir(&source).unwrap_err());
+        assert!(error.contains(&source.display().to_string()));
+        assert!(error.contains(&installed.path.display().to_string()));
+        assert_eq!(fs::read(path).unwrap(), before);
+        assert_eq!(
+            fs::read(installed.path.join("lib/libmeshllm_ffi.so")).unwrap(),
+            b"native runtime"
+        );
+    }
+
+    #[test]
     fn installs_bundle_runtime_into_versioned_cache() {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("source");
@@ -451,7 +532,7 @@ mod tests {
         let cache = NativeRuntimeCache::new(temp.path().join("cache"));
         let installed = cache.install_from_dir(&source).unwrap();
 
-        assert_eq!(installed.mesh_version, "0.68.0");
+        assert_eq!(installed.release_version, "0.68.0");
         assert!(installed.path.ends_with("meshllm-native-linux-x86_64-cpu"));
     }
 
@@ -486,7 +567,7 @@ mod tests {
         let installed = cache.installed_for_version("0.75.0").unwrap();
 
         assert_eq!(installed.len(), 1);
-        assert_eq!(installed[0].mesh_version, "0.75.0");
+        assert_eq!(installed[0].release_version, "0.75.0");
         assert!(cache.installed().is_err());
     }
 
@@ -521,11 +602,13 @@ mod tests {
         let scan = cache.installed_lenient().unwrap();
 
         assert_eq!(scan.runtimes.len(), 1);
-        assert_eq!(scan.runtimes[0].mesh_version, "0.75.0");
+        assert_eq!(scan.runtimes[0].release_version, "0.75.0");
         assert_eq!(scan.skipped.len(), 1);
         assert_eq!(scan.skipped[0].path, legacy);
         assert!(
-            scan.skipped[0].reason.contains("checksum"),
+            scan.skipped[0]
+                .reason
+                .contains("unknown field `mesh_version`"),
             "unexpected skip reason: {}",
             scan.skipped[0].reason
         );

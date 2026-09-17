@@ -48,9 +48,10 @@ callers must provide the release and catalog. Mesh callers use
 from the Mesh facade. Standalone Skippy release metadata must be supplied by its
 lifecycle layer. Bundle discovery takes an explicit release; existing Mesh path
 and environment names remain pending the coordinated packaging migration.
-Installer options name this input `release_version`. Serialized runtime manifests
-and cache inventory still use `mesh_version` until the coordinated packaging
-migration; the option field itself is not serialized.
+Installer options, runtime manifests, and cache inventory name runtime identity
+`release_version`. Artifact/catalog JSON requires `schema_version: 2`. Unversioned
+Mesh-era metadata is read only by `import_legacy_runtime_cache`; normal readers
+reject it instead of silently substituting a fallback release.
 
 ## Migrating callers
 
@@ -63,8 +64,9 @@ version. These are source API changes.
 
 Mesh callers can use `mesh_llm_system::native_runtime_install` for Mesh policy
 defaults and compatibility discovery helpers. The Mesh SDK re-exports those
-helpers. This package move does not migrate existing cache data or change
-runtime manifest fields, artifact names, or environment variables.
+helpers. Existing cache data is never migrated automatically. The explicit importer
+copies verified bytes and writes current metadata without changing its source.
+Artifact names and environment names are separate migration surfaces.
 
 ## Example
 

@@ -345,9 +345,9 @@ pub(crate) fn in_place_bundle_outcome(
 ) -> Result<NativeRuntimeInstallOutcome> {
     let manifest = NativeRuntimeManifest::read_from_dir(path)?;
     let runtime = InstalledNativeRuntime {
-        mesh_version: manifest
+        release_version: manifest
             .runtime
-            .mesh_version
+            .release_version
             .clone()
             .unwrap_or_else(|| "unknown".to_string()),
         native_runtime_id: manifest.runtime.id.clone(),
@@ -370,7 +370,7 @@ pub(crate) fn installed_outcome(
 ) -> Result<NativeRuntimeInstallOutcome> {
     let runtime = cache
         .find_installed(
-            resolution.selected.mesh_version_or(requested_release),
+            resolution.selected.release_version_or(requested_release),
             resolution.selected.native_runtime_id(),
         )?
         .context("selected native runtime was not found in cache")?;

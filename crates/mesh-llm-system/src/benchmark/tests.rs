@@ -338,14 +338,14 @@ fn test_runtime_tool_selection_excludes_preferred_legacy_runtime_without_tool() 
     use std::collections::BTreeMap;
 
     let runtime = |id: &str, rank: i64, tools: BTreeMap<String, String>| InstalledNativeRuntime {
-        mesh_version: "0.74.0".to_string(),
+        release_version: "0.74.0".to_string(),
         native_runtime_id: id.to_string(),
         flavor: "cuda".to_string(),
         path: PathBuf::from(format!("/test/{id}")),
         manifest: NativeRuntimeManifest {
             runtime: NativeRuntimeArtifact {
                 id: id.to_string(),
-                mesh_version: Some("0.74.0".to_string()),
+                release_version: Some("0.74.0".to_string()),
                 skippy_abi: "0.1.0".to_string(),
                 platform: NativeRuntimePlatform {
                     os: "linux".to_string(),
