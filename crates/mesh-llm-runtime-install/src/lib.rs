@@ -7,7 +7,6 @@ mod types;
 pub use discovery::{
     NATIVE_RUNTIME_BUNDLE_DIR_ENV, discover_local_native_runtimes,
     discover_local_native_runtimes_with_filter, discover_native_runtime_bundle_dirs,
-    discover_native_runtime_bundle_dirs_for_release,
 };
 pub use skippy_native_runtime::{
     CachePrunePlan, CandidateEvaluation, CandidateRejection, HostGpuProfile, HostRuntimeProfile,
@@ -24,15 +23,14 @@ pub use cache::{
 };
 pub use install::{NativeRuntimeResolutionError, RejectedCandidate, install_native_runtime};
 pub use manifest::{
-    NativeRuntimeCatalogSources, default_manifest_url, default_release_manifest_url,
-    load_release_manifest, load_release_manifest_with_sources,
+    NativeRuntimeCatalogSources, load_release_manifest, load_release_manifest_with_sources,
 };
 pub use types::{
-    CURRENT_MESH_VERSION, NATIVE_RUNTIME_CACHE_DIR_ENV, NATIVE_RUNTIME_MANIFEST_URL_ENV,
+    NATIVE_RUNTIME_CACHE_DIR_ENV, NATIVE_RUNTIME_MANIFEST_URL_ENV,
     NativeRuntimeBundleInstallPolicy, NativeRuntimeCatalog, NativeRuntimeDownloadProgress,
     NativeRuntimeDownloadProgressCallback, NativeRuntimeInstallOptions,
     NativeRuntimeInstallOutcome, NativeRuntimeInstallStatus, NativeRuntimeManifestOptions,
-    NativeRuntimeVerificationPolicy, mesh_native_runtime_catalog,
+    NativeRuntimeVerificationPolicy,
 };
 
 #[cfg(test)]
@@ -59,12 +57,29 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
 
+    const TEST_RELEASE: &str = "0.76.1";
+
+    fn test_catalog() -> NativeRuntimeCatalog {
+        NativeRuntimeCatalog {
+            releases_url: "https://github.com/Mesh-LLM/mesh-llm/releases".to_string(),
+            rolling_release: None,
+        }
+    }
+
+    fn test_install_options() -> NativeRuntimeInstallOptions {
+        NativeRuntimeInstallOptions::new(TEST_RELEASE, test_catalog())
+    }
+
+    fn test_manifest_options() -> NativeRuntimeManifestOptions {
+        NativeRuntimeManifestOptions::new(TEST_RELEASE, test_catalog())
+    }
+
     static MANIFEST_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn artifact_with_sha(signature: Option<&str>) -> NativeRuntimeArtifact {
         NativeRuntimeArtifact {
             id: "meshllm-runtime-linux-x86_64-cpu".to_string(),
-            mesh_version: Some(CURRENT_MESH_VERSION.to_string()),
+            mesh_version: Some(TEST_RELEASE.to_string()),
             skippy_abi: current_skippy_abi_version(),
             platform: NativeRuntimePlatform {
                 os: "linux".to_string(),
@@ -108,7 +123,7 @@ mod tests {
             progress: Some(Arc::new(move |progress| {
                 *captured_for_callback.lock().unwrap() = Some(progress);
             })),
-            ..Default::default()
+            ..test_install_options()
         };
 
         emit_download_progress(
@@ -156,7 +171,7 @@ mod tests {
                     bundle_install_policy:
                         NativeRuntimeBundleInstallPolicy::InstallExplicitBundlesIntoCache,
                     allow_download: false,
-                    ..Default::default()
+                    ..test_install_options()
                 }))
         };
 
@@ -191,7 +206,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let cache = NativeRuntimeCache::new(root.path());
         let release = "0.68.0";
-        assert_ne!(release, CURRENT_MESH_VERSION);
+        assert_ne!(release, TEST_RELEASE);
         let mut artifact = artifact_with_sha(None);
         artifact.mesh_version = Some(release.to_string());
         let path = cache.runtime_dir(release, artifact.native_runtime_id());
@@ -223,7 +238,7 @@ mod tests {
                 &NativeRuntimeInstallOptions {
                     mesh_version: release.to_string(),
                     allow_download: false,
-                    ..Default::default()
+                    ..test_install_options()
                 },
             ))
             .unwrap();
@@ -235,7 +250,7 @@ mod tests {
             std::fs::read(path.join(NATIVE_RUNTIME_MANIFEST_FILE)).unwrap(),
             manifest_before
         );
-        assert!(!root.path().join(CURRENT_MESH_VERSION).exists());
+        assert!(!root.path().join(TEST_RELEASE).exists());
     }
 
     #[test]
@@ -270,7 +285,7 @@ mod tests {
                 resolution,
                 &NativeRuntimeInstallOptions {
                     allow_download: false,
-                    ..Default::default()
+                    ..test_install_options()
                 },
             ))
             .unwrap();
@@ -321,7 +336,7 @@ mod tests {
                     bundle_install_policy:
                         NativeRuntimeBundleInstallPolicy::InstallExplicitBundlesIntoCache,
                     allow_download: false,
-                    ..Default::default()
+                    ..test_install_options()
                 },
             ))
             .unwrap();
@@ -375,7 +390,7 @@ mod tests {
                     bundle_install_policy:
                         NativeRuntimeBundleInstallPolicy::InstallExplicitBundlesIntoCache,
                     allow_download: false,
-                    ..Default::default()
+                    ..test_install_options()
                 },
             ))
             .unwrap();
@@ -606,7 +621,7 @@ mod tests {
             mesh_version: "0.67.0".to_string(),
             bundle_dirs: vec![PathBuf::from("runtime-bundle")],
             allow_default_manifest_url: true,
-            ..Default::default()
+            ..test_manifest_options()
         };
 
         assert_eq!(
@@ -627,7 +642,7 @@ mod tests {
         let options = NativeRuntimeManifestOptions {
             bundle_dirs: vec![PathBuf::from("runtime-bundle")],
             allow_default_manifest_url: false,
-            ..Default::default()
+            ..test_manifest_options()
         };
 
         assert!(manifest_url(&options).is_none());
@@ -645,7 +660,7 @@ mod tests {
 
         let options = NativeRuntimeManifestOptions {
             manifest_url: Some("https://example.invalid/from-arg.json".to_string()),
-            ..Default::default()
+            ..test_manifest_options()
         };
 
         assert_eq!(
@@ -668,7 +683,7 @@ mod tests {
             );
         }
 
-        let url = manifest_url(&NativeRuntimeManifestOptions::default());
+        let url = manifest_url(&test_manifest_options());
 
         assert_eq!(
             url.as_deref(),
@@ -681,26 +696,6 @@ mod tests {
     }
 
     #[test]
-    fn default_manifest_url_uses_release_download_for_release_builds() {
-        assert_eq!(
-            default_manifest_url("0.68.0", "0.68.0"),
-            "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.68.0/native-runtimes.json"
-        );
-    }
-
-    #[test]
-    fn default_manifest_url_uses_latest_download_for_sha_builds() {
-        assert_eq!(
-            default_manifest_url("0.68.0+gAB131C", "0.68.0"),
-            "https://github.com/Mesh-LLM/mesh-llm/releases/latest/download/native-runtimes.json"
-        );
-        assert_eq!(
-            default_manifest_url("0.68.0+gAB131C.dirty", "0.68.0"),
-            "https://github.com/Mesh-LLM/mesh-llm/releases/latest/download/native-runtimes.json"
-        );
-    }
-
-    #[test]
     fn non_default_mesh_version_request_uses_versioned_release_url() {
         let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
         unsafe {
@@ -710,7 +705,7 @@ mod tests {
         let options = NativeRuntimeManifestOptions {
             mesh_version: "0.67.0".to_string(),
             allow_default_manifest_url: true,
-            ..Default::default()
+            ..test_manifest_options()
         };
 
         assert_eq!(
@@ -722,22 +717,17 @@ mod tests {
     }
 
     #[test]
-    fn current_mesh_version_uses_release_version() {
-        assert_eq!(CURRENT_MESH_VERSION, mesh_llm_build_info::RELEASE_VERSION);
-    }
-
-    #[test]
     fn runtime_version_check_uses_explicit_release_and_linked_skippy_abi() {
         let current_abi = current_skippy_abi_version();
         let requested_release = "0.68.0";
-        assert_ne!(requested_release, CURRENT_MESH_VERSION);
+        assert_ne!(requested_release, TEST_RELEASE);
         assert!(native_runtime_versions_match(
             requested_release,
             &current_abi,
             requested_release
         ));
         assert!(!native_runtime_versions_match(
-            CURRENT_MESH_VERSION,
+            TEST_RELEASE,
             &current_abi,
             requested_release
         ));
@@ -778,7 +768,7 @@ mod tests {
             .build()
             .unwrap()
             .block_on(load_release_manifest(NativeRuntimeManifestOptions {
-                catalog: mesh_native_runtime_catalog(),
+                catalog: test_catalog(),
                 mesh_version: "0.0.0+gLOCAL".to_string(),
                 manifest_path: Some(path),
                 manifest_url: Some("https://example.invalid/from-arg.json".to_string()),
@@ -862,7 +852,7 @@ mod tests {
     fn release_manifest_file(dir: &Path, artifacts: Vec<NativeRuntimeArtifact>) -> PathBuf {
         let path = dir.join("native-runtimes.json");
         let manifest = NativeRuntimeReleaseManifest {
-            mesh_version: CURRENT_MESH_VERSION.to_string(),
+            mesh_version: TEST_RELEASE.to_string(),
             skippy_abi: current_skippy_abi_version(),
             artifacts,
         };
@@ -897,11 +887,11 @@ mod tests {
             release_manifest_file(temp.path(), vec![windows_cuda_release_artifact()]);
 
         let (manifest, sources) = block_on_load(NativeRuntimeManifestOptions {
-            mesh_version: CURRENT_MESH_VERSION.to_string(),
+            mesh_version: TEST_RELEASE.to_string(),
             manifest_path: Some(manifest_path.clone()),
             bundle_dirs: vec![bundle.clone()],
             allow_default_manifest_url: true,
-            ..Default::default()
+            ..test_manifest_options()
         })
         .unwrap();
 
@@ -915,7 +905,7 @@ mod tests {
         );
         // The release manifest describes the release; a stale bundle must not
         // rewrite its version or ABI once a manifest was loaded.
-        assert_eq!(manifest.mesh_version, CURRENT_MESH_VERSION);
+        assert_eq!(manifest.mesh_version, TEST_RELEASE);
         assert_eq!(manifest.skippy_abi, current_skippy_abi_version());
         assert_eq!(
             sources.manifest_path.as_deref(),
@@ -939,10 +929,10 @@ mod tests {
         write_bundle(&bundle, &bundled);
 
         let (manifest, sources) = block_on_load(NativeRuntimeManifestOptions {
-            mesh_version: CURRENT_MESH_VERSION.to_string(),
+            mesh_version: TEST_RELEASE.to_string(),
             bundle_dirs: vec![bundle],
             allow_default_manifest_url: false,
-            ..Default::default()
+            ..test_manifest_options()
         })
         .unwrap();
 
@@ -964,11 +954,11 @@ mod tests {
         write_bundle(&bundle, &windows_cpu_bundle_artifact());
 
         let (manifest, sources) = block_on_load(NativeRuntimeManifestOptions {
-            mesh_version: CURRENT_MESH_VERSION.to_string(),
+            mesh_version: TEST_RELEASE.to_string(),
             manifest_url: Some("http://127.0.0.1:9/native-runtimes.json?token=secret".to_string()),
             bundle_dirs: vec![bundle.clone()],
             allow_default_manifest_url: true,
-            ..Default::default()
+            ..test_manifest_options()
         })
         .expect("bundles must carry the load when the remote catalog is unreachable");
 
@@ -994,11 +984,11 @@ mod tests {
         }
 
         let err = block_on_load(NativeRuntimeManifestOptions {
-            mesh_version: CURRENT_MESH_VERSION.to_string(),
+            mesh_version: TEST_RELEASE.to_string(),
             manifest_url: Some("http://127.0.0.1:9/native-runtimes.json".to_string()),
             bundle_dirs: Vec::new(),
             allow_default_manifest_url: true,
-            ..Default::default()
+            ..test_manifest_options()
         })
         .unwrap_err();
 
@@ -1020,11 +1010,11 @@ mod tests {
         let manifest_path =
             release_manifest_file(temp.path(), vec![windows_cuda_release_artifact()]);
         let (manifest, sources) = block_on_load(NativeRuntimeManifestOptions {
-            mesh_version: CURRENT_MESH_VERSION.to_string(),
+            mesh_version: TEST_RELEASE.to_string(),
             manifest_path: Some(manifest_path),
             bundle_dirs: vec![bundle],
             allow_default_manifest_url: true,
-            ..Default::default()
+            ..test_manifest_options()
         })
         .unwrap();
 
@@ -1051,7 +1041,7 @@ mod tests {
             vulkan: None,
         };
         let cache = native_runtime_cache(Some(&temp.path().join("cache"))).unwrap();
-        let resolver = NativeRuntimeResolver::new(CURRENT_MESH_VERSION, profile, manifest, cache)
+        let resolver = NativeRuntimeResolver::new(TEST_RELEASE, profile, manifest, cache)
             .with_skippy_abi_version(current_skippy_abi_version())
             .with_bundle_dirs(sources.bundle_dirs);
 
@@ -1104,11 +1094,11 @@ mod tests {
         );
 
         let (manifest, sources) = block_on_load(NativeRuntimeManifestOptions {
-            mesh_version: CURRENT_MESH_VERSION.to_string(),
+            mesh_version: TEST_RELEASE.to_string(),
             manifest_path: Some(manifest_path),
             bundle_dirs: vec![bundle.clone()],
             allow_default_manifest_url: true,
-            ..Default::default()
+            ..test_manifest_options()
         })
         .unwrap();
 
@@ -1134,7 +1124,7 @@ mod tests {
             vulkan: None,
         };
         let cache = native_runtime_cache(Some(&temp.path().join("cache"))).unwrap();
-        let resolution = NativeRuntimeResolver::new(CURRENT_MESH_VERSION, profile, manifest, cache)
+        let resolution = NativeRuntimeResolver::new(TEST_RELEASE, profile, manifest, cache)
             .with_skippy_abi_version(current_skippy_abi_version())
             .with_bundle_dirs(sources.bundle_dirs)
             .resolve(&RuntimeSelection::Id(
@@ -1231,11 +1221,11 @@ mod tests {
         let manifest_path =
             release_manifest_file(temp.path(), vec![windows_cuda_release_artifact()]);
         let (manifest, sources) = block_on_load(NativeRuntimeManifestOptions {
-            mesh_version: CURRENT_MESH_VERSION.to_string(),
+            mesh_version: TEST_RELEASE.to_string(),
             manifest_path: Some(manifest_path),
             bundle_dirs: vec![bundle],
             allow_default_manifest_url: true,
-            ..Default::default()
+            ..test_manifest_options()
         })
         .unwrap();
         let profile = HostRuntimeProfile {
@@ -1262,7 +1252,7 @@ mod tests {
             kind: NativeRuntimeBackendKind::Cuda,
             cuda_toolkit_major: None,
         };
-        let resolver = NativeRuntimeResolver::new(CURRENT_MESH_VERSION, profile, manifest, cache)
+        let resolver = NativeRuntimeResolver::new(TEST_RELEASE, profile, manifest, cache)
             .with_skippy_abi_version(current_skippy_abi_version())
             .with_bundle_dirs(sources.bundle_dirs.clone());
         let resolver_error = resolver.resolve(&selection).unwrap_err();
@@ -1343,11 +1333,11 @@ mod tests {
             vec![windows_cuda_release_artifact(), linux_cuda],
         );
         let (manifest, sources) = block_on_load(NativeRuntimeManifestOptions {
-            mesh_version: CURRENT_MESH_VERSION.to_string(),
+            mesh_version: TEST_RELEASE.to_string(),
             manifest_path: Some(manifest_path),
             bundle_dirs: Vec::new(),
             allow_default_manifest_url: false,
-            ..Default::default()
+            ..test_manifest_options()
         })
         .unwrap();
         // A Windows host whose driver stops at CUDA 11: the Windows cuda12
@@ -1372,7 +1362,7 @@ mod tests {
             vulkan: None,
         };
         let cache = native_runtime_cache(Some(&temp.path().join("cache"))).unwrap();
-        let resolver = NativeRuntimeResolver::new(CURRENT_MESH_VERSION, profile, manifest, cache)
+        let resolver = NativeRuntimeResolver::new(TEST_RELEASE, profile, manifest, cache)
             .with_skippy_abi_version(current_skippy_abi_version());
         assert!(resolver.resolve(&RuntimeSelection::Recommended).is_err());
         let evaluated = resolver.evaluate(&RuntimeSelection::Recommended).unwrap();
@@ -1474,11 +1464,11 @@ mod tests {
             release_manifest_file(temp.path(), vec![windows_cuda_release_artifact()]);
 
         let (manifest, sources) = block_on_load(NativeRuntimeManifestOptions {
-            mesh_version: CURRENT_MESH_VERSION.to_string(),
+            mesh_version: TEST_RELEASE.to_string(),
             manifest_path: Some(manifest_path),
             bundle_dirs: vec![first, second],
             allow_default_manifest_url: false,
-            ..Default::default()
+            ..test_manifest_options()
         })
         .unwrap();
 

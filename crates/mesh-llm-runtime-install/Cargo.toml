@@ -17,7 +17,6 @@ dirs = "6.0.0"
 flate2 = "1"
 futures-util = "0.3"
 hex = "0.4"
-mesh-llm-build-info.workspace = true
 skippy-hardware-profile = { path = "../skippy-hardware-profile", version = "0.76.1" }
 skippy-native-runtime = { path = "../skippy-native-runtime", version = "0.76.1" }
 reqwest = { version = "0.13", features = ["stream", "json"] }

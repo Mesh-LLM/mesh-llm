@@ -1,6 +1,6 @@
 use super::NativeRuntimeConfigSelection;
 use anyhow::Result;
-use mesh_llm_runtime_install::{
+use mesh_llm_system::native_runtime_install::{
     NativeRuntimeDownloadProgressCallback, NativeRuntimeInstallOptions,
     NativeRuntimeInstallOutcome, install_native_runtime, native_runtime_cache,
 };
@@ -86,7 +86,7 @@ pub(super) fn native_runtime_install_options(
         bundle_dirs: bundle_dirs.to_vec(),
         cache_dir: cache_dir.map(Path::to_path_buf),
         progress,
-        ..Default::default()
+        ..mesh_llm_system::native_runtime_install::mesh_native_runtime_install_options()
     }
 }
 
@@ -154,7 +154,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mesh_llm_runtime_install::{
+    use mesh_llm_system::native_runtime_install::{
         CURRENT_MESH_VERSION, NativeRuntimeBundleInstallPolicy, NativeRuntimeInstallStatus,
     };
     use skippy_native_runtime::{

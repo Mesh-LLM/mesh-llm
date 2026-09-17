@@ -1,9 +1,9 @@
-use anyhow::{Context, Result, anyhow, bail};
-pub use mesh_llm_gpu_bench::BenchmarkOutput;
-use mesh_llm_runtime_install::{
+use crate::native_runtime_install::{
     CURRENT_MESH_VERSION, current_skippy_abi_version, default_native_runtime_cache,
     discover_local_native_runtimes_with_filter, host_runtime_profile,
 };
+use anyhow::{Context, Result, anyhow, bail};
+pub use mesh_llm_gpu_bench::BenchmarkOutput;
 use serde::{Deserialize, Serialize};
 use skippy_native_runtime::{
     GPU_BENCHMARK_TOOL_PATH, InstalledNativeRuntime, NativeRuntimeBackendKind, RuntimeSelection,

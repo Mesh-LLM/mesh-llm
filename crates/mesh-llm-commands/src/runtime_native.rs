@@ -2,14 +2,14 @@ mod formatters;
 mod setup_helpers;
 
 use anyhow::Result;
-use mesh_llm_runtime_install::{
+use mesh_llm_system::backend::BinaryFlavor;
+use mesh_llm_system::native_runtime_install::{
     CURRENT_MESH_VERSION, NativeRuntimeBundleInstallPolicy, NativeRuntimeDownloadProgressCallback,
     NativeRuntimeInstallOptions, NativeRuntimeManifestOptions, current_skippy_abi_version,
     discover_local_native_runtimes, discover_local_native_runtimes_with_filter,
-    discover_native_runtime_bundle_dirs, host_runtime_profile, install_native_runtime,
-    load_release_manifest_with_sources, native_runtime_cache,
+    host_runtime_profile, install_native_runtime, load_release_manifest_with_sources,
+    native_runtime_cache,
 };
-use mesh_llm_system::backend::BinaryFlavor;
 use mesh_llm_tui::terminal_progress::{
     ratio_complete_u64, render_inline_gauge_with_reserved_width,
 };
@@ -66,7 +66,6 @@ pub async fn run_native_runtime_list(
     let cache = native_runtime_cache(cache_dir)?;
     let formatter = runtime_native_formatter(json_output);
     if available {
-        let discovered_bundle_dirs = discover_native_runtime_bundle_dirs(bundle_dirs)?;
         print_configured_selector(configured, json_output);
         if !json_output && manifest_path.is_none() {
             let mut err = mesh_llm_events::console_err();
@@ -76,8 +75,8 @@ pub async fn run_native_runtime_list(
             load_release_manifest_with_sources(NativeRuntimeManifestOptions {
                 mesh_version: mesh_version.to_string(),
                 manifest_path: manifest_path.map(Path::to_path_buf),
-                bundle_dirs: discovered_bundle_dirs.clone(),
-                ..Default::default()
+                bundle_dirs: bundle_dirs.to_vec(),
+                ..mesh_llm_system::native_runtime_install::mesh_native_runtime_manifest_options()
             })
             .await?;
         let profile = host_runtime_profile();
@@ -95,7 +94,11 @@ pub async fn run_native_runtime_list(
         return formatter.render_available(&rows, &sources);
     }
 
-    let installed = discover_local_native_runtimes(bundle_dirs, &cache)?;
+    let installed = mesh_llm_runtime_install::discover_local_native_runtimes(
+        bundle_dirs,
+        &cache,
+        mesh_version,
+    )?;
     formatter.render_installed(&installed, cache.root())
 }
 
@@ -769,7 +772,10 @@ mod tests {
         write_test_runtime(&runtime_dir, "runtime-a");
 
         let discovered =
-            discover_native_runtime_bundle_dirs(std::slice::from_ref(&product_root)).unwrap();
+            mesh_llm_system::native_runtime_install::discover_native_runtime_bundle_dirs(
+                std::slice::from_ref(&product_root),
+            )
+            .unwrap();
 
         assert_eq!(discovered, vec![runtime_dir.canonicalize().unwrap()]);
     }

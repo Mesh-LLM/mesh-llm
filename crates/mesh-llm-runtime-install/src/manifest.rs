@@ -1,7 +1,7 @@
 //! Release manifest discovery, download, and verification.
 
 use crate::cache::current_skippy_abi_version;
-use crate::discovery::discover_native_runtime_bundle_dirs_for_release;
+use crate::discovery::discover_native_runtime_bundle_dirs;
 use crate::types::{NATIVE_RUNTIME_MANIFEST_URL_ENV, NativeRuntimeManifestOptions};
 use anyhow::{Context, Result, bail};
 use sha2::Digest;
@@ -10,21 +10,6 @@ use skippy_native_runtime::{
 };
 use std::path::PathBuf;
 use std::time::Duration;
-pub fn default_release_manifest_url(mesh_version: &str) -> String {
-    format!(
-        "https://github.com/Mesh-LLM/mesh-llm/releases/download/v{mesh_version}/native-runtimes.json"
-    )
-}
-
-pub fn default_manifest_url(build_version: &str, release_version: &str) -> String {
-    if mesh_llm_build_info::is_sha_build(build_version) {
-        "https://github.com/Mesh-LLM/mesh-llm/releases/latest/download/native-runtimes.json"
-            .to_string()
-    } else {
-        default_release_manifest_url(release_version)
-    }
-}
-
 /// Loads the merged runtime catalog for `options` and returns the manifest
 /// alone. See `load_release_manifest_with_sources` for the discovery rules.
 pub async fn load_release_manifest(
@@ -159,10 +144,8 @@ pub(crate) async fn load_release_manifest_with_bundle_dirs(
 pub async fn load_release_manifest_with_sources(
     mut options: NativeRuntimeManifestOptions,
 ) -> Result<(NativeRuntimeReleaseManifest, NativeRuntimeCatalogSources)> {
-    options.bundle_dirs = discover_native_runtime_bundle_dirs_for_release(
-        &options.bundle_dirs,
-        &options.mesh_version,
-    )?;
+    options.bundle_dirs =
+        discover_native_runtime_bundle_dirs(&options.bundle_dirs, &options.mesh_version)?;
     let mut sources = NativeRuntimeCatalogSources {
         bundle_dirs: options.bundle_dirs.clone(),
         ..Default::default()

@@ -10,3 +10,5 @@ pub mod process;
 pub mod release_target;
 pub mod util;
 pub mod vram;
+
+pub mod native_runtime_install;

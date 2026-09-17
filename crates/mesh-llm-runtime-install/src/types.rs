@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use skippy_native_runtime::{InstalledNativeRuntime, RuntimeSelection};
 use std::path::PathBuf;
 use std::sync::Arc;
-pub const CURRENT_MESH_VERSION: &str = mesh_llm_build_info::RELEASE_VERSION;
 pub const NATIVE_RUNTIME_CACHE_DIR_ENV: &str = "MESH_LLM_NATIVE_RUNTIME_CACHE_DIR";
 pub const NATIVE_RUNTIME_MANIFEST_URL_ENV: &str = "MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL";
 
@@ -55,16 +54,6 @@ impl NativeRuntimeCatalog {
         } else {
             format!("{root}/download/v{release}/native-runtimes.json")
         }
-    }
-}
-
-/// Mesh's current catalog defaults. Kept at the compatibility boundary until
-/// the Mesh installer facade and standalone Skippy defaults are separated.
-pub fn mesh_native_runtime_catalog() -> NativeRuntimeCatalog {
-    NativeRuntimeCatalog {
-        releases_url: "https://github.com/Mesh-LLM/mesh-llm/releases".to_string(),
-        rolling_release: mesh_llm_build_info::is_sha_build(mesh_llm_build_info::BUILD_VERSION)
-            .then(|| CURRENT_MESH_VERSION.to_string()),
     }
 }
 
@@ -142,17 +131,5 @@ impl NativeRuntimeInstallOptions {
             progress: None,
             allow_download: true,
         }
-    }
-}
-
-impl Default for NativeRuntimeManifestOptions {
-    fn default() -> Self {
-        Self::new(CURRENT_MESH_VERSION, mesh_native_runtime_catalog())
-    }
-}
-
-impl Default for NativeRuntimeInstallOptions {
-    fn default() -> Self {
-        Self::new(CURRENT_MESH_VERSION, mesh_native_runtime_catalog())
     }
 }

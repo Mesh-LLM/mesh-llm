@@ -4,9 +4,12 @@ pub use crate::system::native_runtime_install::{
     CURRENT_MESH_VERSION, NATIVE_RUNTIME_MANIFEST_URL_ENV, NativeRuntimeDownloadProgress,
     NativeRuntimeDownloadProgressCallback, NativeRuntimeInstallOptions,
     NativeRuntimeInstallOutcome, NativeRuntimeInstallStatus, NativeRuntimeManifestOptions,
-    NativeRuntimeVerificationPolicy, current_skippy_abi_version, default_native_runtime_cache,
-    default_release_manifest_url, host_runtime_profile, install_native_runtime,
-    load_release_manifest, native_runtime_cache,
+    NativeRuntimeVerificationPolicy, current_skippy_abi_version, default_manifest_url,
+    default_native_runtime_cache, default_release_manifest_url, discover_local_native_runtimes,
+    discover_local_native_runtimes_with_filter, discover_native_runtime_bundle_dirs,
+    host_runtime_profile, install_native_runtime, load_release_manifest,
+    mesh_native_runtime_catalog, mesh_native_runtime_install_options,
+    mesh_native_runtime_manifest_options, native_runtime_cache,
 };
 pub use skippy_native_runtime::{
     CachePrunePlan, CandidateEvaluation, CandidateRejection, HostGpuProfile, HostRuntimeProfile,

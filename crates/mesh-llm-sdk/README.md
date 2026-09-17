@@ -87,6 +87,7 @@ mesh-llm-sdk = { version = "0.76.1", features = ["serving"] }
 use mesh_llm_sdk::native_runtime::{
     CURRENT_MESH_VERSION, NativeRuntimeInstallOptions, RuntimeSelection,
     current_skippy_abi_version, install_native_runtime, native_runtime_versions_match_current_sdk,
+    mesh_native_runtime_install_options,
 };
 use mesh_llm_sdk::{MeshNode, initialize_host_runtime};
 
@@ -97,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
         mesh_version: CURRENT_MESH_VERSION.to_string(),
         skippy_abi_version: Some(required_abi),
         selection: RuntimeSelection::Recommended,
-        ..Default::default()
+        ..mesh_native_runtime_install_options()
     })
     .await?;
     let runtime = outcome.runtime;

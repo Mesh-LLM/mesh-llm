@@ -680,7 +680,7 @@ mod dynamic {
                 crate::system::native_runtime_install::current_skippy_abi_version(),
             ),
             selection: RuntimeSelection::Recommended,
-            ..Default::default()
+            ..crate::system::native_runtime_install::mesh_native_runtime_install_options()
         }
     }
 
@@ -777,7 +777,7 @@ mod dynamic {
             NativeRuntimeInstallOptions {
                 mesh_version: "0.68.0".to_string(),
                 allow_download: false,
-                ..Default::default()
+                ..crate::system::native_runtime_install::mesh_native_runtime_install_options()
             }
         }
 
@@ -1101,7 +1101,7 @@ mod dynamic {
                     bundle_dirs: vec![options_product_root.clone()],
                     cache_dir: Some(options_cache_root.clone()),
                     allow_download: false,
-                    ..Default::default()
+                    ..crate::system::native_runtime_install::mesh_native_runtime_install_options()
                 },
                 move |_| {
                     let install_calls = Arc::clone(&install_calls_for_executor);
@@ -1155,7 +1155,7 @@ mod dynamic {
                     bundle_dirs: vec![install_options_root.clone()],
                     cache_dir: Some(install_options_cache.clone()),
                     allow_download: false,
-                    ..Default::default()
+                    ..crate::system::native_runtime_install::mesh_native_runtime_install_options()
                 },
                 move |options| {
                     let install_calls = Arc::clone(&install_calls_for_executor);
@@ -1207,7 +1207,7 @@ mod dynamic {
                     mesh_version: release_version.to_string(),
                     skippy_abi_version: Some("0.1.25".to_string()),
                     allow_download: true,
-                    ..Default::default()
+                    ..crate::system::native_runtime_install::mesh_native_runtime_install_options()
                 },
                 move |_options| {
                     let install_calls = Arc::clone(&install_calls_for_executor);
@@ -1279,7 +1279,7 @@ mod dynamic {
                     mesh_version: release_version.to_string(),
                     skippy_abi_version: Some("0.1.25".to_string()),
                     allow_download: true,
-                    ..Default::default()
+                    ..crate::system::native_runtime_install::mesh_native_runtime_install_options()
                 },
                 move |_options| {
                     let cache = cache_for_executor.clone();
@@ -1531,7 +1531,7 @@ mod dynamic {
                     bundle_dirs: vec![options_product_root.clone()],
                     cache_dir: Some(options_cache_root.clone()),
                     allow_download: false,
-                    ..Default::default()
+                    ..crate::system::native_runtime_install::mesh_native_runtime_install_options()
                 },
                 {
                     let install_calls = Arc::clone(&install_calls);

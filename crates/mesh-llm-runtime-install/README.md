@@ -1,19 +1,20 @@
 # mesh-llm-runtime-install
 
 `mesh-llm-runtime-install` owns the public native runtime installation flow for
-Mesh LLM SDK consumers and command-line tools.
+callers supplying a runtime release and catalog policy. Mesh defaults live in
+`mesh_llm_system::native_runtime_install`.
 
 It provides:
 
 - release manifest loading from a file, URL, bundled runtime directory, or the
-  default Mesh LLM GitHub release URL
-- compatible runtime resolution for the current Mesh LLM version
+  explicitly configured release catalog
+- compatible runtime resolution for the requested release
 - cache path selection and installed runtime discovery
 - checksum enforcement before installing downloaded archives
 - download progress callbacks for SDK and CLI callers
 - stale runtime pruning through `NativeRuntimeCache`
 
-Native runtime versions must match the Mesh LLM crate version exactly. The
+Native runtime versions must match the requested release exactly. The
 installer rejects incompatible release manifest entries instead of building
 native code through Cargo.
 
@@ -40,23 +41,29 @@ let options = NativeRuntimeInstallOptions::new(
 );
 ```
 
-The example URL is illustrative. This intermediate extraction still supplies
-Mesh defaults through `Default`; standalone Skippy release metadata, cache and
-bundle-discovery defaults must be provided by the standalone lifecycle layer.
+The example URL is illustrative. Options have no `Default` implementation:
+callers must provide the release and catalog. Mesh callers use
+`mesh_native_runtime_install_options()` or `mesh_native_runtime_manifest_options()`
+from the Mesh facade. Standalone Skippy release metadata must be supplied by its
+lifecycle layer. Bundle discovery takes an explicit release; existing Mesh path
+and environment names remain pending the coordinated packaging migration.
 The `mesh_version` field retains its current wire/cache spelling for now.
 
 ## Example
 
 ```rust,no_run
 use mesh_llm_runtime_install::{
-    NativeRuntimeInstallOptions, RuntimeSelection, install_native_runtime,
+    NativeRuntimeCatalog, NativeRuntimeInstallOptions, RuntimeSelection, install_native_runtime,
 };
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let outcome = install_native_runtime(NativeRuntimeInstallOptions {
         selection: RuntimeSelection::Recommended,
-        ..Default::default()
+        ..NativeRuntimeInstallOptions::new("1.2.3", NativeRuntimeCatalog {
+            releases_url: "https://example.invalid/skippy/releases".to_string(),
+            rolling_release: None,
+        })
     })
     .await?;
 

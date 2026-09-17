@@ -9,12 +9,8 @@ use std::path::{Path, PathBuf};
 
 pub const NATIVE_RUNTIME_BUNDLE_DIR_ENV: &str = "MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR";
 
-pub fn discover_native_runtime_bundle_dirs(explicit_dirs: &[PathBuf]) -> Result<Vec<PathBuf>> {
-    discover_native_runtime_bundle_dirs_for_release(explicit_dirs, crate::CURRENT_MESH_VERSION)
-}
-
 /// Discovers bundles using the requested release for versioned installation paths.
-pub fn discover_native_runtime_bundle_dirs_for_release(
+pub fn discover_native_runtime_bundle_dirs(
     explicit_dirs: &[PathBuf],
     release: &str,
 ) -> Result<Vec<PathBuf>> {
@@ -32,8 +28,9 @@ pub fn discover_native_runtime_bundle_dirs_for_release(
 pub fn discover_local_native_runtimes(
     explicit_dirs: &[PathBuf],
     cache: &NativeRuntimeCache,
+    release: &str,
 ) -> Result<Vec<InstalledNativeRuntime>> {
-    discover_local_native_runtimes_with_filter(explicit_dirs, cache, |_| true)
+    discover_local_native_runtimes_with_filter(explicit_dirs, cache, release, |_| true)
 }
 
 /// Discovers local runtime bundles and cache entries, applying `include`
@@ -42,9 +39,10 @@ pub fn discover_local_native_runtimes(
 pub fn discover_local_native_runtimes_with_filter(
     explicit_dirs: &[PathBuf],
     cache: &NativeRuntimeCache,
+    release: &str,
     include: impl Fn(&InstalledNativeRuntime) -> bool,
 ) -> Result<Vec<InstalledNativeRuntime>> {
-    let bundle_dirs = discover_native_runtime_bundle_dirs_lenient(explicit_dirs)?;
+    let bundle_dirs = discover_native_runtime_bundle_dirs_lenient(explicit_dirs, release)?;
     let mut runtimes = Vec::new();
     let mut seen = BTreeSet::new();
     for path in bundle_dirs {
@@ -65,7 +63,10 @@ pub fn discover_local_native_runtimes_with_filter(
     Ok(runtimes)
 }
 
-fn discover_native_runtime_bundle_dirs_lenient(explicit_dirs: &[PathBuf]) -> Result<Vec<PathBuf>> {
+fn discover_native_runtime_bundle_dirs_lenient(
+    explicit_dirs: &[PathBuf],
+    release: &str,
+) -> Result<Vec<PathBuf>> {
     let environment_dirs = env::var_os(NATIVE_RUNTIME_BUNDLE_DIR_ENV)
         .map(|value| env::split_paths(&value).collect::<Vec<_>>())
         .unwrap_or_default();
@@ -73,7 +74,7 @@ fn discover_native_runtime_bundle_dirs_lenient(explicit_dirs: &[PathBuf]) -> Res
         explicit_dirs,
         &environment_dirs,
         env::current_exe().ok().as_deref(),
-        crate::CURRENT_MESH_VERSION,
+        release,
         InvalidManifestPolicy::WarnAndSkip,
     )
 }
@@ -371,12 +372,9 @@ mod tests {
         let adjacent = prefix.join("bin/native-runtimes/adjacent");
         let versioned_package =
             prefix.join("lib/mesh-llm/0.75.0/native-runtimes/versioned-package");
-        assert_ne!("0.75.0", crate::CURRENT_MESH_VERSION);
-        let compiled_release_package = prefix.join(format!(
-            "lib/mesh-llm/{}/native-runtimes/wrong-release",
-            crate::CURRENT_MESH_VERSION
-        ));
-        write_runtime(&compiled_release_package, "wrong-release");
+        let other_release_package =
+            prefix.join("lib/mesh-llm/0.76.1/native-runtimes/wrong-release");
+        write_runtime(&other_release_package, "wrong-release");
         let package = prefix.join("lib/mesh-llm/native-runtimes/package");
         let homebrew = prefix.join("libexec/native-runtimes/homebrew");
         fs::create_dir_all(executable.parent().unwrap()).unwrap();
@@ -453,7 +451,8 @@ mod tests {
         let cached = cache.install_from_dir(&cached_source).unwrap();
 
         let discovered =
-            discover_local_native_runtimes(std::slice::from_ref(&bundle), &cache).unwrap();
+            discover_local_native_runtimes(std::slice::from_ref(&bundle), &cache, "0.75.0")
+                .unwrap();
 
         assert_eq!(discovered.len(), 2);
         assert_eq!(discovered[0].native_runtime_id, "runtime-a");
@@ -486,8 +485,9 @@ mod tests {
         write_runtime(&valid_cache_source, "valid-cache");
         let valid_cache = cache.install_from_dir(&valid_cache_source).unwrap();
 
-        let discovered = discover_local_native_runtimes(std::slice::from_ref(&product), &cache)
-            .expect("valid inventory should remain available");
+        let discovered =
+            discover_local_native_runtimes(std::slice::from_ref(&product), &cache, "0.75.0")
+                .expect("valid inventory should remain available");
 
         assert_eq!(discovered.len(), 2);
         assert_eq!(discovered[0].native_runtime_id, "valid-bundle");
