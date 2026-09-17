@@ -22,34 +22,6 @@ pub const TOKENIZER_CAPABILITY_ABI: u32 = 1;
 pub const MAX_TOKENIZER_INVENTORY_ENTRIES: usize = 1_000_000;
 pub const MAX_TOKENIZER_INPUT_PIECES: usize = 4_096;
 
-/// Host-owned typed inventory. This Rust value never crosses the ABI directly.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenizerInventory {
-    pub schema_version: u32,
-    pub model_id: String,
-    pub source_model_sha256: String,
-    pub tokenizer_id: String,
-    pub tokens: Vec<TokenizerInventoryToken>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenizerInventoryToken {
-    pub id: u32,
-    pub piece: TokenizerInventoryPiece,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum TokenizerInventoryPiece {
-    Bytes {
-        bytes: Vec<u8>,
-    },
-    /// Opaque bytes for a native special-token descriptor. Mesh never parses
-    /// or names this value; the plugin owns its interpretation.
-    Control {
-        descriptor: Vec<u8>,
-    },
-}
-
 pub type PluginInstance = *mut c_void;
 pub type ProposalOperation = u64;
 

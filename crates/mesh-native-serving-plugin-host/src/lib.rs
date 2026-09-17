@@ -40,6 +40,16 @@ const _: () = assert!(
     "ABI and tokenizer piece bounds must match",
 );
 
+const _: () = assert!(
+    abi::TOKENIZER_INVENTORY_SCHEMA == skippy_tokenizer::inventory::TOKENIZER_INVENTORY_SCHEMA,
+    "ABI and tokenizer inventory schemas must match",
+);
+const _: () = assert!(
+    abi::MAX_TOKENIZER_INVENTORY_ENTRIES
+        == skippy_tokenizer::inventory::MAX_TOKENIZER_INVENTORY_ENTRIES,
+    "ABI and tokenizer inventory bounds must match",
+);
+
 /// Mesh-owned factory for one independently built native serving plugin.
 #[derive(Clone)]
 pub struct NativeServingPluginFactory {

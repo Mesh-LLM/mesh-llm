@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use mesh_llm_events::logging::events::TokenUsage;
+use skippy_events::usage::TokenUsage;
 
 use crate::lifecycle::{
     CLIENT_CLOSED_REQUEST_STATUS, OpenAiFailure, OpenAiLifecycleContext, OpenAiLifecycleEvent,

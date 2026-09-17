@@ -3,17 +3,17 @@ use std::{ffi::c_void, mem::size_of, sync::Arc};
 use anyhow::{Context, Result, anyhow, bail};
 use mesh_native_serving_plugin_api as abi;
 use skippy_server::tokenizer::TokenizerCapability;
-use skippy_tokenizer::{EncodeRequest, InputPiece};
+use skippy_tokenizer::{EncodeRequest, InputPiece, inventory};
 
 pub(super) struct ActivationInventory {
     entries: Vec<abi::TokenizerInventoryEntry>,
 }
 
 impl ActivationInventory {
-    fn from_inventory(inventory: &abi::TokenizerInventory) -> Result<Self> {
-        if inventory.schema_version != abi::TOKENIZER_INVENTORY_SCHEMA
+    fn from_inventory(inventory: &inventory::TokenizerInventory) -> Result<Self> {
+        if inventory.schema_version != inventory::TOKENIZER_INVENTORY_SCHEMA
             || inventory.tokens.is_empty()
-            || inventory.tokens.len() > abi::MAX_TOKENIZER_INVENTORY_ENTRIES
+            || inventory.tokens.len() > inventory::MAX_TOKENIZER_INVENTORY_ENTRIES
         {
             bail!("bound model exposes an unsupported or empty tokenizer inventory");
         }
@@ -22,7 +22,7 @@ impl ActivationInventory {
             .tokens
             .iter()
             .map(|entry| {
-                if entry.id > abi::MAX_TOKENIZER_INVENTORY_ENTRIES as u32 {
+                if entry.id > inventory::MAX_TOKENIZER_INVENTORY_ENTRIES as u32 {
                     return Err(anyhow!(
                         "native tokenizer ID exceeds the bounded inventory limit"
                     ));
@@ -34,10 +34,10 @@ impl ActivationInventory {
                 }
                 previous_id = Some(entry.id);
                 let (piece_kind, bytes) = match &entry.piece {
-                    abi::TokenizerInventoryPiece::Bytes { bytes } => {
+                    inventory::TokenizerInventoryPiece::Bytes { bytes } => {
                         (abi::TokenizerPieceKind::BYTES, bytes.as_slice())
                     }
-                    abi::TokenizerInventoryPiece::Control { descriptor } => {
+                    inventory::TokenizerInventoryPiece::Control { descriptor } => {
                         if descriptor.is_empty() {
                             return Err(anyhow!(
                                 "native tokenizer control descriptor must not be empty"
@@ -264,14 +264,14 @@ mod tests {
 
     #[test]
     fn tokenizer_inventory_view_borrows_host_owned_bytes_for_activation() {
-        let inventory = abi::TokenizerInventory {
-            schema_version: abi::TOKENIZER_INVENTORY_SCHEMA,
+        let inventory = inventory::TokenizerInventory {
+            schema_version: inventory::TOKENIZER_INVENTORY_SCHEMA,
             model_id: "glm".to_string(),
             source_model_sha256: "a".repeat(64),
             tokenizer_id: "gguf-source-sha256:test".to_string(),
-            tokens: vec![abi::TokenizerInventoryToken {
+            tokens: vec![inventory::TokenizerInventoryToken {
                 id: 0,
-                piece: abi::TokenizerInventoryPiece::Bytes {
+                piece: inventory::TokenizerInventoryPiece::Bytes {
                     bytes: b"hello".to_vec(),
                 },
             }],

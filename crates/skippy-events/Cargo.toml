@@ -1,0 +1,15 @@
+[package]
+name = "skippy-events"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Inference correlation, usage and lifecycle contracts for Skippy"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+
+[dependencies]
+serde.workspace = true
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+serde_json.workspace = true

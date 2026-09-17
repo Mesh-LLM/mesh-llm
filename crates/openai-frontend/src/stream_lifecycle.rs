@@ -15,7 +15,7 @@ use axum::response::{
     sse::{Event, KeepAlive, Sse},
 };
 use futures_util::{Stream, StreamExt};
-use mesh_llm_events::logging::events::TokenUsage;
+use skippy_events::usage::TokenUsage;
 
 use crate::{
     backend::{CancellationToken, OpenAiResult},

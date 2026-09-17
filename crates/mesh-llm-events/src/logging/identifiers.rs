@@ -44,7 +44,7 @@ macro_rules! define_branded_id {
     };
 }
 
-define_branded_id!(RequestId);
+pub use skippy_events::identifiers::RequestId;
 define_branded_id!(EventId);
 define_branded_id!(AttemptId);
 define_branded_id!(ArtifactId);

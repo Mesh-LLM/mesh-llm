@@ -10,9 +10,9 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
 };
-use mesh_native_serving_plugin_api as native_plugin_api;
 use serde::{Deserialize, Serialize};
 use skippy_protocol::StageConfig;
+use skippy_tokenizer::inventory;
 use skippy_tokenizer::{
     EncodeRequest, EncodeResponse, InputPiece, SpecialTokenPolicy, TokenizeBatchItem,
     TokenizeRequest, TokenizeResponse, Tokenizer, TokenizerError, TokenizerIdentity,
@@ -197,7 +197,7 @@ impl TokenizerSource for LoadedStageZeroTokenizer {
 pub struct TokenizerCapability {
     identity: TokenizerIdentity,
     source: Arc<dyn TokenizerSource>,
-    inventory: Option<Arc<native_plugin_api::TokenizerInventory>>,
+    inventory: Option<Arc<inventory::TokenizerInventory>>,
     binding_digest: Option<[u8; 32]>,
 }
 
@@ -244,7 +244,7 @@ impl TokenizerCapability {
     /// A fully materialized, immutable native vocabulary, when the stage was
     /// bound from a readable source GGUF. Inventory construction occurs while
     /// binding the model, never from the decode proposal path.
-    pub fn inventory(&self) -> Option<&native_plugin_api::TokenizerInventory> {
+    pub fn inventory(&self) -> Option<&inventory::TokenizerInventory> {
         self.inventory.as_deref()
     }
 

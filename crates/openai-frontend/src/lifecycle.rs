@@ -5,9 +5,9 @@
 //! types intentionally have no request or response payload fields.
 
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header::HeaderName};
-use mesh_llm_events::logging::events::TokenUsage;
-pub use mesh_llm_events::logging::identifiers::RequestId;
-use mesh_llm_events::logging::lifecycle::LifecycleState;
+pub use skippy_events::identifiers::RequestId;
+use skippy_events::lifecycle::LifecycleState;
+use skippy_events::usage::TokenUsage;
 use uuid::Uuid;
 
 use crate::{common::Usage, errors::OpenAiError};

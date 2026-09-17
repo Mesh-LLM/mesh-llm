@@ -3784,6 +3784,7 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
+ "skippy-events",
  "tempfile",
  "tracing",
  "uuid",
@@ -5180,10 +5181,10 @@ dependencies = [
  "futures-core",
  "futures-util",
  "http-body-util",
- "mesh-llm-events",
  "mesh-llm-guardrails",
  "serde",
  "serde_json",
+ "skippy-events",
  "tokio",
  "tower",
  "tracing",
@@ -7265,6 +7266,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "skippy-events"
+version = "0.76.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "skippy-ffi"
 version = "0.76.1"
 dependencies = [
@@ -7328,7 +7338,7 @@ dependencies = [
  "blake3",
  "clap",
  "ctrlc",
- "mesh-llm-client",
+ "model-artifact",
  "openai-frontend",
  "rustyline",
  "serde_json",
@@ -7408,7 +7418,6 @@ dependencies = [
  "futures-util",
  "libc",
  "mesh-llm-events",
- "mesh-native-serving-plugin-api",
  "model-artifact",
  "openai-frontend",
  "opentelemetry-proto",

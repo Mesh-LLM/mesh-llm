@@ -17,7 +17,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand, ValueEnum};
-use mesh_client::models::gguf::{GgufCompactMeta, scan_gguf_compact_meta};
+use model_artifact::gguf::{GgufCompactMeta, scan_gguf_compact_meta};
 use openai_frontend::{ReasoningConfig, normalize_reasoning_template_options};
 use rustyline::{DefaultEditor, error::ReadlineError};
 use serde_json::Value;

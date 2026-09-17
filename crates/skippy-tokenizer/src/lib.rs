@@ -4,6 +4,8 @@
 //! implementations bind it to an already-loaded tokenizer; they must not open
 //! another model on behalf of a caller.
 
+pub mod inventory;
+
 use std::{error::Error, fmt};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeStruct};

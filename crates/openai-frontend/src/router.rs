@@ -14,9 +14,9 @@ use axum::{
     routing::{get, post},
 };
 use futures_util::{StreamExt, stream};
-use mesh_llm_events::logging::events::TokenUsage;
 use serde::Serialize;
 use serde_json::Value;
+use skippy_events::usage::TokenUsage;
 
 use crate::{
     backend::{OpenAiBackend, OpenAiRequestContext, OpenAiResult, SharedBackend},
