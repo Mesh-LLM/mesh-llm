@@ -49,7 +49,7 @@ impl StageOpenAiBackend {
         prepared_text: Option<PreparedTextPrompt>,
         token_budget_stats: (usize, usize),
         stop: Option<&openai_frontend::StopSequence>,
-        sampling: SamplingConfig,
+        mut sampling: SamplingConfig,
         hook_request: Option<ChatCompletionRequest>,
         hook_runtime: Option<tokio::runtime::Handle>,
         cancellation: Option<&openai_frontend::CancellationToken>,
@@ -91,6 +91,7 @@ impl StageOpenAiBackend {
             Some(prepared) => prepared,
             None => self.prepare_text_prompt(&prompt, max_tokens, &ids)?,
         };
+        sampling.resolve_reasoning_budget(max_tokens);
         // This is an optional cache candidate. The already-rendered prompt is
         // valid even when its second, assistant-marker-free rendering cannot
         // be tokenized, so bypass the candidate rather than failing the chat

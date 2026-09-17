@@ -759,7 +759,7 @@ max_tokens = 222
     assert_eq!(resolved.model_id, "runtime/served-name");
     assert_eq!(resolved.throughput.threads, Some(9));
     assert_eq!(resolved.throughput.threads_batch, Some(5));
-    assert_eq!(resolved.request_defaults.max_tokens, 222);
+    assert_eq!(resolved.request_defaults.max_tokens, Some(222));
     assert_eq!(resolved.model_fit.ctx_size, 4096);
     assert_eq!(resolved.throughput.parallel, 3);
     assert_eq!(resolved.hardware.device.as_deref(), Some("CPU"));
@@ -807,10 +807,7 @@ max_tokens = 222
     assert_eq!(cli_resolved.hardware.resolved_model_path, cli_model_path);
     assert_eq!(cli_resolved.throughput.threads, None);
     assert_eq!(cli_resolved.throughput.threads_batch, None);
-    assert_eq!(
-        cli_resolved.request_defaults.max_tokens,
-        skippy_server::CONTEXT_BUDGET_MAX_TOKENS
-    );
+    assert_eq!(cli_resolved.request_defaults.max_tokens, None);
 }
 
 #[test]

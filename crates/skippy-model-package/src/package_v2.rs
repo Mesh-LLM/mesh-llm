@@ -9,8 +9,8 @@ use anyhow::{Context, Result, ensure};
 use skippy_model::gguf_catalog::read_gguf_metadata_catalog;
 use skippy_model::package_carrier::resolve_package_carrier;
 use skippy_package_format::{
-    Artifact, ArtifactCatalog, PACKAGE_SCHEMA_VERSION, PackageManifest, Sidecar, SidecarKind,
-    SourceModel, Tensor, TensorCatalog,
+    Artifact, ArtifactCatalog, Generation, GenerationRequestDefaults, PACKAGE_SCHEMA_VERSION,
+    PackageManifest, Sidecar, SidecarKind, SourceModel, Tensor, TensorCatalog,
 };
 use skippy_runtime::{ModelInfo, TensorInfo, write_gguf_metadata_from_parts};
 
@@ -28,28 +28,47 @@ mod layout;
 
 use layout::{PlannedArtifact, PlannedArtifactKind, plan_artifacts_with_budget};
 
-#[allow(clippy::too_many_arguments)]
+pub(crate) struct PackageWriteOptions {
+    pub explicit: ExplicitSourceIdentity,
+    pub generation_defaults: Option<PathBuf>,
+    pub resume_existing_artifacts: bool,
+    pub max_artifact_bytes: Option<u64>,
+}
+
 pub(crate) fn write_package(
     model: String,
     out_dir: PathBuf,
     projectors: Vec<PathBuf>,
     artifact_hook: ArtifactHook,
     artifact_transform: ArtifactHook,
-    explicit: ExplicitSourceIdentity,
-    resume_existing_artifacts: bool,
-    max_artifact_bytes: Option<u64>,
+    options: PackageWriteOptions,
 ) -> Result<()> {
     ensure!(
         artifact_transform.command.is_none(),
         "v2 creation preserves source bytes; transform the independent source before packaging, not package artifacts"
     );
-    let input = resolve_package_input(model, explicit)?;
+    let input = resolve_package_input(model, options.explicit)?;
     let inventory = SourceInventory::read(&input)?;
     let source = ModelSource::open(&input.model_path)?;
     ensure_native_inventory_matches(&inventory, &source)?;
-    let budget = max_artifact_bytes.unwrap_or(layout::DEFAULT_MAX_ARTIFACT_BYTES);
+    let budget = options
+        .max_artifact_bytes
+        .unwrap_or(layout::DEFAULT_MAX_ARTIFACT_BYTES);
     let planned = plan_artifacts_with_budget(&source.tensors, budget)?;
     let mut manifest = manifest_from_source(&input, &inventory)?;
+    if let Some(path) = options.generation_defaults {
+        let bytes = fs::read(&path)
+            .with_context(|| format!("read generation defaults {}", path.display()))?;
+        let request_defaults: GenerationRequestDefaults = serde_json::from_slice(&bytes)
+            .with_context(|| format!("parse generation defaults {}", path.display()))?;
+        request_defaults.validate().map_err(|error| {
+            anyhow::anyhow!("validate generation defaults {}: {error}", path.display())
+        })?;
+        manifest.generation = Some(Generation {
+            request_defaults: Some(request_defaults),
+            speculative_decoding: None,
+        });
+    }
     fs::create_dir_all(&out_dir)?;
     ensure!(
         !out_dir.join("model-package.json").exists(),
@@ -85,7 +104,7 @@ pub(crate) fn write_package(
             stage_index,
             &out_dir,
             &no_hook,
-            resume_existing_artifacts,
+            options.resume_existing_artifacts,
         )?;
         let path = out_dir.join(&artifact.path);
         // Capture the header stub before the upload hook can delete the part.
@@ -122,7 +141,7 @@ pub(crate) fn write_package(
         &manifest,
         &out_dir,
         &header_stubs,
-        resume_existing_artifacts,
+        options.resume_existing_artifacts,
     )?;
     progress.finish_step(&format!(
         "{} {}",
@@ -162,7 +181,12 @@ pub(crate) fn write_package(
         let _ = fs::remove_dir_all(&headers_dir);
     }
     for (index, projector) in projectors.iter().enumerate() {
-        let artifact = copy_projector(projector, index, &out_dir, resume_existing_artifacts)?;
+        let artifact = copy_projector(
+            projector,
+            index,
+            &out_dir,
+            options.resume_existing_artifacts,
+        )?;
         progress.start_step(&artifact.path)?;
         run_artifact_hook(
             &artifact_hook,

@@ -57,8 +57,9 @@ pub struct LayerPackageInfo {
     pub layers: Vec<LayerPackageLayerInfo>,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PackageGenerationInfo {
+    pub request_defaults: Option<skippy_package_format::GenerationRequestDefaults>,
     pub speculative_decoding: Option<PackageSpeculativeDecodingInfo>,
 }
 
@@ -224,6 +225,8 @@ struct PackageShared {
 
 #[derive(Debug, Deserialize)]
 struct PackageGeneration {
+    #[serde(default)]
+    request_defaults: Option<skippy_package_format::GenerationRequestDefaults>,
     #[serde(default)]
     speculative_decoding: Option<PackageSpeculativeDecoding>,
 }
@@ -593,6 +596,7 @@ pub fn inspect_layer_package(package_ref: &str) -> Result<LayerPackageInfo> {
 
 fn package_generation_info(generation: PackageGeneration) -> PackageGenerationInfo {
     PackageGenerationInfo {
+        request_defaults: generation.request_defaults,
         speculative_decoding: generation
             .speculative_decoding
             .map(package_speculative_decoding_info),
@@ -1523,6 +1527,33 @@ mod tests {
             dir.path().join("projectors/mmproj.gguf")
         );
         assert_eq!(info.manifest_sha256.len(), 64);
+    }
+
+    #[test]
+    fn legacy_generation_info_preserves_request_defaults() {
+        let generation: PackageGeneration = serde_json::from_value(serde_json::json!({
+            "request_defaults": {
+                "selection": {"default": "thinking"},
+                "profiles": {
+                    "thinking": {
+                        "temperature": 1.0,
+                        "provenance": {
+                            "source_repo": "Qwen/Qwen3.5-9B",
+                            "revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+                            "file": "README.md",
+                            "section": "Best Practices",
+                            "url": "https://huggingface.co/Qwen/Qwen3.5-9B/blob/c202236235762e1c871ad0ccb60c8ee5ba337b9a/README.md"
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let info = package_generation_info(generation);
+        let defaults = info.request_defaults.expect("request defaults");
+        assert_eq!(defaults.selection.default, "thinking");
+        assert_eq!(defaults.profiles["thinking"].temperature, Some(1.0));
     }
 
     #[test]

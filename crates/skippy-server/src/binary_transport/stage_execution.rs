@@ -795,6 +795,9 @@ pub(in crate::binary_transport) fn runtime_sampling_config(
         mirostat_entropy: sampling.mirostat_entropy,
         mirostat_learning_rate: sampling.mirostat_learning_rate,
         samplers: sampling.samplers.clone(),
+        reasoning_budget: skippy_runtime::ReasoningBudget::Resolved(
+            sampling.reasoning_budget_tokens,
+        ),
         ..SamplingConfig::default()
     };
     config.logit_bias = sampling

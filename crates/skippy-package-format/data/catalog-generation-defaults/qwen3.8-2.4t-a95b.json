@@ -1,0 +1,27 @@
+{
+  "selection": {
+    "default": "thinking",
+    "reasoning_enabled": "thinking"
+  },
+  "profiles": {
+    "thinking": {
+      "temperature": 1,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0,
+      "presence_penalty": 0,
+      "repeat_penalty": 1,
+      "reasoning": {
+        "enabled": "on",
+        "budget": "auto"
+      },
+      "provenance": {
+        "source_repo": "Qwen/Qwen3.8-2.4T-A95B",
+        "revision": "207bd685a7e3696cfaff12ded7c6a7ea0f88c996",
+        "file": "README.md",
+        "section": "Best Practices",
+        "url": "https://huggingface.co/Qwen/Qwen3.8-2.4T-A95B/blob/207bd685a7e3696cfaff12ded7c6a7ea0f88c996/README.md"
+      }
+    }
+  }
+}

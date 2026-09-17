@@ -14,6 +14,9 @@ pub(crate) const GLM_DSA_DENSE_MASK_MAX_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct PackageGeneration<S = serde_json::Value> {
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub(crate) request_defaults: Option<skippy_package_format::GenerationRequestDefaults>,
     #[serde(default)]
     pub(crate) policy: Option<PackageGenerationPolicy>,
     #[serde(default)]

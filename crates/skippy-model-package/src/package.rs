@@ -55,6 +55,8 @@ pub(crate) struct PackageShared {
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct PackageGeneration {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) request_defaults: Option<skippy_package_format::GenerationRequestDefaults>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) speculative_decoding: Option<PackageSpeculativeDecoding>,
 }
 
