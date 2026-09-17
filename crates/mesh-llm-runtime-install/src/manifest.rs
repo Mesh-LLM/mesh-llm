@@ -1,7 +1,7 @@
 //! Release manifest discovery, download, and verification.
 
 use crate::cache::current_skippy_abi_version;
-use crate::discovery::discover_native_runtime_bundle_dirs;
+use crate::discovery::discover_native_runtime_bundle_dirs_for_release;
 use crate::types::{NATIVE_RUNTIME_MANIFEST_URL_ENV, NativeRuntimeManifestOptions};
 use anyhow::{Context, Result, bail};
 use sha2::Digest;
@@ -159,7 +159,10 @@ pub(crate) async fn load_release_manifest_with_bundle_dirs(
 pub async fn load_release_manifest_with_sources(
     mut options: NativeRuntimeManifestOptions,
 ) -> Result<(NativeRuntimeReleaseManifest, NativeRuntimeCatalogSources)> {
-    options.bundle_dirs = discover_native_runtime_bundle_dirs(&options.bundle_dirs)?;
+    options.bundle_dirs = discover_native_runtime_bundle_dirs_for_release(
+        &options.bundle_dirs,
+        &options.mesh_version,
+    )?;
     let mut sources = NativeRuntimeCatalogSources {
         bundle_dirs: options.bundle_dirs.clone(),
         ..Default::default()

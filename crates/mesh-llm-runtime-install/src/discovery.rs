@@ -10,6 +10,14 @@ use std::path::{Path, PathBuf};
 pub const NATIVE_RUNTIME_BUNDLE_DIR_ENV: &str = "MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR";
 
 pub fn discover_native_runtime_bundle_dirs(explicit_dirs: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    discover_native_runtime_bundle_dirs_for_release(explicit_dirs, crate::CURRENT_MESH_VERSION)
+}
+
+/// Discovers bundles using the requested release for versioned installation paths.
+pub fn discover_native_runtime_bundle_dirs_for_release(
+    explicit_dirs: &[PathBuf],
+    release: &str,
+) -> Result<Vec<PathBuf>> {
     let environment_dirs = env::var_os(NATIVE_RUNTIME_BUNDLE_DIR_ENV)
         .map(|value| env::split_paths(&value).collect::<Vec<_>>())
         .unwrap_or_default();
@@ -17,6 +25,7 @@ pub fn discover_native_runtime_bundle_dirs(explicit_dirs: &[PathBuf]) -> Result<
         explicit_dirs,
         &environment_dirs,
         env::current_exe().ok().as_deref(),
+        release,
     )
 }
 
@@ -64,6 +73,7 @@ fn discover_native_runtime_bundle_dirs_lenient(explicit_dirs: &[PathBuf]) -> Res
         explicit_dirs,
         &environment_dirs,
         env::current_exe().ok().as_deref(),
+        crate::CURRENT_MESH_VERSION,
         InvalidManifestPolicy::WarnAndSkip,
     )
 }
@@ -140,11 +150,13 @@ fn discover_native_runtime_bundle_dirs_from(
     explicit_dirs: &[PathBuf],
     environment_dirs: &[PathBuf],
     executable_path: Option<&Path>,
+    release: &str,
 ) -> Result<Vec<PathBuf>> {
     discover_native_runtime_bundle_dirs_from_with_policy(
         explicit_dirs,
         environment_dirs,
         executable_path,
+        release,
         InvalidManifestPolicy::Reject,
     )
 }
@@ -159,6 +171,7 @@ fn discover_native_runtime_bundle_dirs_from_with_policy(
     explicit_dirs: &[PathBuf],
     environment_dirs: &[PathBuf],
     executable_path: Option<&Path>,
+    release: &str,
     invalid_manifest_policy: InvalidManifestPolicy,
 ) -> Result<Vec<PathBuf>> {
     let mut discovered = Vec::new();
@@ -182,7 +195,7 @@ fn discover_native_runtime_bundle_dirs_from_with_policy(
         )?;
     }
     if let Some(executable_path) = executable_path {
-        for path in executable_candidates(executable_path) {
+        for path in executable_candidates(executable_path, release) {
             append_candidate(
                 &path,
                 false,
@@ -195,7 +208,7 @@ fn discover_native_runtime_bundle_dirs_from_with_policy(
     Ok(discovered)
 }
 
-fn executable_candidates(executable_path: &Path) -> Vec<PathBuf> {
+fn executable_candidates(executable_path: &Path, release: &str) -> Vec<PathBuf> {
     let executable_path = executable_path
         .canonicalize()
         .unwrap_or_else(|_| executable_path.to_path_buf());
@@ -208,7 +221,7 @@ fn executable_candidates(executable_path: &Path) -> Vec<PathBuf> {
             prefix
                 .join("lib")
                 .join("mesh-llm")
-                .join(crate::CURRENT_MESH_VERSION)
+                .join(release)
                 .join("native-runtimes"),
         );
         candidates.push(prefix.join("lib").join("mesh-llm").join("native-runtimes"));
@@ -342,7 +355,8 @@ mod tests {
         let runtime = product.join("native-runtimes/runtime-a");
         write_runtime(&runtime, "runtime-a");
 
-        let discovered = discover_native_runtime_bundle_dirs_from(&[product], &[], None).unwrap();
+        let discovered =
+            discover_native_runtime_bundle_dirs_from(&[product], &[], None, "0.75.0").unwrap();
 
         assert_eq!(discovered, vec![runtime.canonicalize().unwrap()]);
     }
@@ -355,10 +369,14 @@ mod tests {
         let prefix = temp.path().join("prefix");
         let executable = prefix.join("bin/mesh-llm");
         let adjacent = prefix.join("bin/native-runtimes/adjacent");
-        let versioned_package = prefix.join(format!(
-            "lib/mesh-llm/{}/native-runtimes/versioned-package",
+        let versioned_package =
+            prefix.join("lib/mesh-llm/0.75.0/native-runtimes/versioned-package");
+        assert_ne!("0.75.0", crate::CURRENT_MESH_VERSION);
+        let compiled_release_package = prefix.join(format!(
+            "lib/mesh-llm/{}/native-runtimes/wrong-release",
             crate::CURRENT_MESH_VERSION
         ));
+        write_runtime(&compiled_release_package, "wrong-release");
         let package = prefix.join("lib/mesh-llm/native-runtimes/package");
         let homebrew = prefix.join("libexec/native-runtimes/homebrew");
         fs::create_dir_all(executable.parent().unwrap()).unwrap();
@@ -378,6 +396,7 @@ mod tests {
             std::slice::from_ref(&explicit),
             std::slice::from_ref(&environment),
             Some(&executable),
+            "0.75.0",
         )
         .unwrap();
 
@@ -399,7 +418,8 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let missing = temp.path().join("missing");
 
-        let error = discover_native_runtime_bundle_dirs_from(&[missing], &[], None).unwrap_err();
+        let error =
+            discover_native_runtime_bundle_dirs_from(&[missing], &[], None, "0.75.0").unwrap_err();
 
         assert!(error.to_string().contains("does not exist"), "{error:?}");
     }
@@ -414,6 +434,7 @@ mod tests {
             std::slice::from_ref(&runtime),
             std::slice::from_ref(&runtime),
             None,
+            "0.75.0",
         )
         .unwrap();
 
