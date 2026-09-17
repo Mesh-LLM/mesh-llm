@@ -513,10 +513,15 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_reports_a_missing_pid_as_dead() {
-        // Process IDs are multiples of four on Windows, so an odd value can
-        // never name a process and OpenProcess rejects it as a bad parameter.
-        assert_eq!(super::process_comm(999_999).unwrap(), None);
-        assert_eq!(super::process_liveness(999_999), super::Liveness::Dead);
+        // PID 0 names the System Idle Process, and `OpenProcess` documents
+        // that it fails there with `ERROR_INVALID_PARAMETER`, which this
+        // module reads as "no such process". An arbitrary large value would
+        // not do as well: the kernel allocates process ids through the handle
+        // manager, which ignores their low two bits, so a value like 999_999
+        // reaches 999_996 and would open it on a machine that happened to run
+        // it.
+        assert_eq!(super::process_comm(0).unwrap(), None);
+        assert_eq!(super::process_liveness(0), super::Liveness::Dead);
     }
 
     #[test]
