@@ -1,5 +1,7 @@
 use super::*;
 
+/// Proves owner-attestation fields survive a local-to-proto-to-local
+/// announcement round trip unchanged.
 #[test]
 fn owner_fields_roundtrip_through_proto_announcement() {
     let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xAB; 32]).public());
@@ -64,6 +66,7 @@ fn owner_fields_roundtrip_through_proto_announcement() {
         latency_age_ms: None,
         latency_observer_id: None,
         inference_admission_state: None,
+        claimed_log_head: None,
     };
     let proto_pa = local_ann_to_proto_ann(&ann);
     let skippy = proto_pa
@@ -134,6 +137,8 @@ pub(crate) fn assert_mixed_version_peer_ignores_missing_release_attestation() {
     assert!(!peer.release_attestation_summary.verified);
 }
 
+/// Proves advertised model-throughput hints survive a local-to-proto-to-local
+/// announcement round trip unchanged.
 #[test]
 fn advertised_model_throughput_roundtrips_through_proto_announcement() {
     let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xAC; 32]).public());
@@ -232,6 +237,7 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
         latency_age_ms: None,
         latency_observer_id: None,
         inference_admission_state: None,
+        claimed_log_head: None,
     };
 
     let mut proto_pa = local_ann_to_proto_ann(&ann);
@@ -349,6 +355,8 @@ fn stale_and_far_future_cache_affinity_are_dropped_at_ingest() {
     assert!(future.cache_affinity.is_none());
 }
 
+/// Proves the inference-admission-state field survives a
+/// local-to-proto-to-local announcement round trip unchanged.
 #[test]
 fn inference_admission_state_roundtrips_through_proto_announcement() {
     let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xAD; 32]).public());
@@ -401,6 +409,7 @@ fn inference_admission_state_roundtrips_through_proto_announcement() {
         latency_age_ms: None,
         latency_observer_id: None,
         inference_admission_state: Some(expected_state),
+        claimed_log_head: None,
     };
 
     let proto_pa = local_ann_to_proto_ann(&ann);
@@ -605,6 +614,8 @@ fn unknown_stage_feature_does_not_enable_local_gguf_content_id_support() {
     assert!(!ann.local_gguf_content_id_supported);
 }
 
+/// Proves GPU bandwidth and TFLOPS fields survive a local-to-proto-to-local
+/// announcement round trip unchanged.
 #[test]
 fn test_proto_round_trip_with_bandwidth_and_tflops() {
     let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xBC; 32]).public());
@@ -656,6 +667,7 @@ fn test_proto_round_trip_with_bandwidth_and_tflops() {
         latency_age_ms: None,
         latency_observer_id: None,
         inference_admission_state: None,
+        claimed_log_head: None,
     };
 
     let proto_pa = local_ann_to_proto_ann(&ann);
@@ -1000,4 +1012,389 @@ fn memory_block_exceeding_the_placement_budget_is_dropped_at_ingest() {
         ann.memory.is_some(),
         "usable equal to the budget is consistent"
     );
+}
+
+/// Builds a `PeerAnnouncement` fixture for `ClaimedLogHead` conversion
+/// tests: every field is empty/default except `claimed_log_head`.
+/// Deliberately not built from `mesh::gossip::tests::test_announcement`:
+/// that helper lives inside `gossip`'s private `#[cfg(test)] mod tests`, so
+/// `mesh::gossip::tests` is unreachable from here (a sibling module tree)
+/// regardless of the helper's own `pub(crate)` — verified with `cargo
+/// check`, not just asserted.
+fn claimed_log_head_test_announcement(
+    peer_id: EndpointId,
+    claimed_log_head: Option<crate::mesh::ClaimedLogHead>,
+) -> super::super::PeerAnnouncement {
+    super::super::PeerAnnouncement {
+        addr: iroh::EndpointAddr {
+            id: peer_id,
+            addrs: Default::default(),
+        },
+        role: super::super::NodeRole::Worker,
+        first_joined_mesh_ts: None,
+        models: vec![],
+        vram_bytes: 0,
+        model_source: None,
+        serving_models: vec![],
+        hosted_models: None,
+        available_models: vec![],
+        requested_models: vec![],
+        explicit_model_interests: vec![],
+        version: None,
+        model_demand: HashMap::new(),
+        mesh_id: None,
+        mesh_policy_hash: None,
+        gpu_name: None,
+        hostname: None,
+        is_soc: None,
+        gpu_vram: None,
+        gpu_reserved_bytes: None,
+        memory: None,
+        gpu_mem_bandwidth_gbps: None,
+        gpu_compute_tflops_fp32: None,
+        gpu_compute_tflops_fp16: None,
+        available_model_metadata: vec![],
+        experts_summary: None,
+        available_model_sizes: HashMap::new(),
+        served_model_descriptors: vec![],
+        served_model_runtime: vec![],
+        owner_attestation: None,
+        genesis_policy: None,
+        release_attestation: None,
+        direct_admission_proof: None,
+        artifact_transfer_supported: false,
+        stage_protocol_generation_supported: false,
+        stage_status_list_supported: false,
+        local_gguf_content_id_supported: false,
+        advertised_model_throughput: vec![],
+        cache_affinity: None,
+        latency_ms: None,
+        latency_source: None,
+        latency_age_ms: None,
+        latency_observer_id: None,
+        inference_admission_state: None,
+        claimed_log_head,
+    }
+}
+
+/// Builds a wire `PeerAnnouncement` carrying the given proto `ClaimedLogHead`,
+/// for tests that need to construct an out-of-bounds field directly on the
+/// wire type (the local type has no length limits of its own — the bound is
+/// enforced only when decoding untrusted remote bytes).
+fn proto_announcement_with_claimed_log_head(
+    peer_id: EndpointId,
+    head: crate::proto::node::ClaimedLogHead,
+) -> crate::proto::node::PeerAnnouncement {
+    let base = local_ann_to_proto_ann(&claimed_log_head_test_announcement(peer_id, None));
+    crate::proto::node::PeerAnnouncement {
+        claimed_log_head: Some(head),
+        ..base
+    }
+}
+
+/// Proves a `ClaimedLogHead` survives a full wire round trip: local → proto
+/// → encoded bytes → decoded proto → local. Exercises tag 51 serialization
+/// end-to-end, not just the in-memory conversion functions.
+#[test]
+fn claimed_log_head_roundtrips_through_proto_announcement() {
+    use prost::Message;
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xCF; 32]).public());
+    let expected = super::super::ClaimedLogHead {
+        log_id: "log-abc".to_string(),
+        size: 42,
+        root: vec![0xAA; 32],
+        timestamp_unix_ms: 1_725_000_000_000,
+        claimed_signature: vec![0xBB; 64],
+        signature_algorithm: "ed25519".to_string(),
+    };
+    let ann = claimed_log_head_test_announcement(peer_id, Some(expected.clone()));
+
+    let proto_pa = local_ann_to_proto_ann(&ann);
+    let encoded = proto_pa.encode_to_vec();
+    let decoded_proto = crate::proto::node::PeerAnnouncement::decode(encoded.as_slice())
+        .expect("claimed log head announcement must decode");
+    let proto_head = decoded_proto
+        .claimed_log_head
+        .as_ref()
+        .expect("claimed_log_head must be present on the wire announcement");
+    assert_eq!(proto_head.log_id, expected.log_id);
+    assert_eq!(proto_head.size, expected.size);
+    assert_eq!(proto_head.root, expected.root);
+    assert_eq!(proto_head.timestamp_unix_ms, expected.timestamp_unix_ms);
+    assert_eq!(proto_head.claimed_signature, expected.claimed_signature);
+    assert_eq!(proto_head.signature_algorithm, expected.signature_algorithm);
+
+    let (_, roundtripped) =
+        proto_ann_to_local(&decoded_proto).expect("proto_ann_to_local must succeed");
+    assert_eq!(roundtripped.claimed_log_head, Some(expected));
+}
+
+/// Proves backward compatibility at the wire level: encoding an announcement
+/// that has no `claimed_log_head` field and decoding it produces `None` for
+/// the field. This is the proto3 optional-field contract.
+#[test]
+fn proto_announcement_without_claimed_log_head_decodes_as_absent() {
+    use prost::Message;
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xD0; 32]).public());
+    // Build a local announcement with no claimed_log_head.
+    let ann = super::super::PeerAnnouncement {
+        addr: iroh::EndpointAddr {
+            id: peer_id,
+            addrs: Default::default(),
+        },
+        role: super::super::NodeRole::Worker,
+        first_joined_mesh_ts: None,
+        models: vec![],
+        vram_bytes: 0,
+        model_source: None,
+        serving_models: vec![],
+        hosted_models: None,
+        available_models: vec![],
+        requested_models: vec![],
+        explicit_model_interests: vec![],
+        version: None,
+        model_demand: HashMap::new(),
+        mesh_id: None,
+        mesh_policy_hash: None,
+        gpu_name: Some("NVIDIA A100".to_string()),
+        hostname: None,
+        is_soc: None,
+        gpu_vram: None,
+        gpu_reserved_bytes: None,
+        memory: None,
+        gpu_mem_bandwidth_gbps: None,
+        gpu_compute_tflops_fp32: None,
+        gpu_compute_tflops_fp16: None,
+        available_model_metadata: vec![],
+        experts_summary: None,
+        available_model_sizes: HashMap::new(),
+        served_model_descriptors: vec![],
+        served_model_runtime: vec![],
+        owner_attestation: None,
+        genesis_policy: None,
+        release_attestation: None,
+        direct_admission_proof: None,
+        artifact_transfer_supported: false,
+        stage_protocol_generation_supported: false,
+        stage_status_list_supported: false,
+        local_gguf_content_id_supported: false,
+        advertised_model_throughput: vec![],
+        cache_affinity: None,
+        latency_ms: None,
+        latency_source: None,
+        latency_age_ms: None,
+        latency_observer_id: None,
+        inference_admission_state: None,
+        claimed_log_head: None,
+    };
+    // Encode to wire bytes, then decode back — this is what an old peer's
+    // message looks like on the wire when it has never set tag 51.
+    let proto_pa = local_ann_to_proto_ann(&ann);
+    let mut buf = Vec::new();
+    proto_pa.encode(&mut buf).expect("encode must succeed");
+    let decoded_proto =
+        crate::proto::node::PeerAnnouncement::decode(buf.as_slice()).expect("decode must succeed");
+    let (_, roundtripped) =
+        proto_ann_to_local(&decoded_proto).expect("proto_ann_to_local must succeed");
+    assert_eq!(roundtripped.claimed_log_head, None);
+    assert_eq!(roundtripped.gpu_name.as_deref(), Some("NVIDIA A100"));
+}
+
+/// `ClaimedLogHead.log_id` is bounded by `MAX_CLAIMED_LOG_ID_BYTES` (512):
+/// exactly at the bound must still decode as present.
+#[test]
+fn claimed_log_head_log_id_at_limit_decodes_as_present() {
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xD2; 32]).public());
+    let head = crate::proto::node::ClaimedLogHead {
+        log_id: "x".repeat(512),
+        size: 1,
+        root: vec![0xAA; 32],
+        timestamp_unix_ms: 1,
+        claimed_signature: vec![0xBB; 64],
+        signature_algorithm: "ed25519".to_string(),
+    };
+    let proto_pa = proto_announcement_with_claimed_log_head(peer_id, head);
+    let (_, roundtripped) = proto_ann_to_local(&proto_pa).expect("proto_ann_to_local must succeed");
+    assert!(roundtripped.claimed_log_head.is_some());
+}
+
+/// One byte over `MAX_CLAIMED_LOG_ID_BYTES` must decode as absent — never
+/// a panic, never a partial struct.
+#[test]
+fn claimed_log_head_log_id_over_limit_decodes_as_absent() {
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xD3; 32]).public());
+    let head = crate::proto::node::ClaimedLogHead {
+        log_id: "x".repeat(513),
+        size: 1,
+        root: vec![0xAA; 32],
+        timestamp_unix_ms: 1,
+        claimed_signature: vec![0xBB; 64],
+        signature_algorithm: "ed25519".to_string(),
+    };
+    let proto_pa = proto_announcement_with_claimed_log_head(peer_id, head);
+    let (_, roundtripped) = proto_ann_to_local(&proto_pa).expect("proto_ann_to_local must succeed");
+    assert_eq!(roundtripped.claimed_log_head, None);
+}
+
+/// `ClaimedLogHead.root` is bounded at 64 bytes: exactly at the bound must
+/// still decode as present.
+#[test]
+fn claimed_log_head_root_at_limit_decodes_as_present() {
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xD4; 32]).public());
+    let head = crate::proto::node::ClaimedLogHead {
+        log_id: "log-abc".to_string(),
+        size: 1,
+        root: vec![0xAA; 64],
+        timestamp_unix_ms: 1,
+        claimed_signature: vec![0xBB; 64],
+        signature_algorithm: "ed25519".to_string(),
+    };
+    let proto_pa = proto_announcement_with_claimed_log_head(peer_id, head);
+    let (_, roundtripped) = proto_ann_to_local(&proto_pa).expect("proto_ann_to_local must succeed");
+    assert!(roundtripped.claimed_log_head.is_some());
+}
+
+/// One byte over the 64-byte `root` bound must decode as absent — never a
+/// panic, never a partial struct.
+#[test]
+fn claimed_log_head_root_over_limit_decodes_as_absent() {
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xD5; 32]).public());
+    let head = crate::proto::node::ClaimedLogHead {
+        log_id: "log-abc".to_string(),
+        size: 1,
+        root: vec![0xAA; 65],
+        timestamp_unix_ms: 1,
+        claimed_signature: vec![0xBB; 64],
+        signature_algorithm: "ed25519".to_string(),
+    };
+    let proto_pa = proto_announcement_with_claimed_log_head(peer_id, head);
+    let (_, roundtripped) = proto_ann_to_local(&proto_pa).expect("proto_ann_to_local must succeed");
+    assert_eq!(roundtripped.claimed_log_head, None);
+}
+
+/// `ClaimedLogHead.claimed_signature` is bounded at 128 bytes: exactly at
+/// the bound must still decode as present.
+#[test]
+fn claimed_log_head_claimed_signature_at_limit_decodes_as_present() {
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xD6; 32]).public());
+    let head = crate::proto::node::ClaimedLogHead {
+        log_id: "log-abc".to_string(),
+        size: 1,
+        root: vec![0xAA; 32],
+        timestamp_unix_ms: 1,
+        claimed_signature: vec![0xBB; 128],
+        signature_algorithm: "ed25519".to_string(),
+    };
+    let proto_pa = proto_announcement_with_claimed_log_head(peer_id, head);
+    let (_, roundtripped) = proto_ann_to_local(&proto_pa).expect("proto_ann_to_local must succeed");
+    assert!(roundtripped.claimed_log_head.is_some());
+}
+
+/// One byte over the 128-byte `claimed_signature` bound must decode as
+/// absent — never a panic, never a partial struct.
+#[test]
+fn claimed_log_head_claimed_signature_over_limit_decodes_as_absent() {
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xD7; 32]).public());
+    let head = crate::proto::node::ClaimedLogHead {
+        log_id: "log-abc".to_string(),
+        size: 1,
+        root: vec![0xAA; 32],
+        timestamp_unix_ms: 1,
+        claimed_signature: vec![0xBB; 129],
+        signature_algorithm: "ed25519".to_string(),
+    };
+    let proto_pa = proto_announcement_with_claimed_log_head(peer_id, head);
+    let (_, roundtripped) = proto_ann_to_local(&proto_pa).expect("proto_ann_to_local must succeed");
+    assert_eq!(roundtripped.claimed_log_head, None);
+}
+
+/// `MAX_CLAIMED_LOG_SIGNATURE_BYTES` (128) does **not** admit a real
+/// post-quantum signature: an ML-DSA-65 signature (3,309 bytes, NIST FIPS
+/// 204) must decode as absent, the same as any other oversized claim. This
+/// pins down the corrected rationale on the constant's doc comment — the
+/// bound is sized for Ed25519/classical schemes only, not "wide enough for
+/// post-quantum signatures" as an earlier (incorrect) comment claimed.
+#[test]
+fn claimed_log_head_claimed_signature_rejects_ml_dsa_65_size() {
+    const ML_DSA_65_SIGNATURE_BYTES: usize = 3_309;
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xDB; 32]).public());
+    let head = crate::proto::node::ClaimedLogHead {
+        log_id: "log-abc".to_string(),
+        size: 1,
+        root: vec![0xAA; 32],
+        timestamp_unix_ms: 1,
+        claimed_signature: vec![0xBB; ML_DSA_65_SIGNATURE_BYTES],
+        signature_algorithm: "ml-dsa-65".to_string(),
+    };
+    let proto_pa = proto_announcement_with_claimed_log_head(peer_id, head);
+    let (_, roundtripped) = proto_ann_to_local(&proto_pa).expect("proto_ann_to_local must succeed");
+    assert_eq!(
+        roundtripped.claimed_log_head, None,
+        "an ML-DSA-65-sized signature must decode as absent: the 128-byte \
+         bound does not admit post-quantum schemes"
+    );
+}
+
+/// `ClaimedLogHead.signature_algorithm` is bounded at 32 bytes: exactly at
+/// the bound must still decode as present.
+#[test]
+fn claimed_log_head_signature_algorithm_at_limit_decodes_as_present() {
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xD8; 32]).public());
+    let head = crate::proto::node::ClaimedLogHead {
+        log_id: "log-abc".to_string(),
+        size: 1,
+        root: vec![0xAA; 32],
+        timestamp_unix_ms: 1,
+        claimed_signature: vec![0xBB; 64],
+        signature_algorithm: "x".repeat(32),
+    };
+    let proto_pa = proto_announcement_with_claimed_log_head(peer_id, head);
+    let (_, roundtripped) = proto_ann_to_local(&proto_pa).expect("proto_ann_to_local must succeed");
+    assert!(roundtripped.claimed_log_head.is_some());
+}
+
+/// One byte over the 32-byte `signature_algorithm` bound must decode as
+/// absent — never a panic, never a partial struct.
+#[test]
+fn claimed_log_head_signature_algorithm_over_limit_decodes_as_absent() {
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xD9; 32]).public());
+    let head = crate::proto::node::ClaimedLogHead {
+        log_id: "log-abc".to_string(),
+        size: 1,
+        root: vec![0xAA; 32],
+        timestamp_unix_ms: 1,
+        claimed_signature: vec![0xBB; 64],
+        signature_algorithm: "x".repeat(33),
+    };
+    let proto_pa = proto_announcement_with_claimed_log_head(peer_id, head);
+    let (_, roundtripped) = proto_ann_to_local(&proto_pa).expect("proto_ann_to_local must succeed");
+    assert_eq!(roundtripped.claimed_log_head, None);
+}
+
+/// proto3 defaults `signature_algorithm` to `""`; an empty value must
+/// round-trip as empty and never be silently defaulted (e.g. to
+/// `"ed25519"`) anywhere in the conversion path. An empty `signature_algorithm`
+/// means the peer named no scheme — this is `ClaimedLogHead`'s field-level
+/// analogue of the house rule already enforced on
+/// `SignedMeshGenesisPolicy`/`SignedBootstrapToken`/`DirectNodeAdmissionProof`
+/// (`validate_unsigned_shape` / `validate_shape` in
+/// `mesh-llm-host-runtime/src/mesh/requirements.rs`), which reject an empty
+/// `signature_algorithm` rather than default it.
+#[test]
+fn claimed_log_head_empty_signature_algorithm_roundtrips_as_empty() {
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xDA; 32]).public());
+    let head = crate::proto::node::ClaimedLogHead {
+        log_id: "log-abc".to_string(),
+        size: 1,
+        root: vec![0xAA; 32],
+        timestamp_unix_ms: 1,
+        claimed_signature: vec![0xBB; 64],
+        signature_algorithm: String::new(),
+    };
+    let proto_pa = proto_announcement_with_claimed_log_head(peer_id, head);
+    let (_, roundtripped) = proto_ann_to_local(&proto_pa).expect("proto_ann_to_local must succeed");
+    let roundtripped_head = roundtripped
+        .claimed_log_head
+        .expect("empty signature_algorithm must not cause the whole head to be dropped");
+    assert_eq!(roundtripped_head.signature_algorithm, "");
 }

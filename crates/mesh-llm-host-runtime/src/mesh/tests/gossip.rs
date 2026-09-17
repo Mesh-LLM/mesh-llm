@@ -18,6 +18,9 @@ pub(crate) fn test_addr(seed: u8) -> EndpointAddr {
     }
 }
 
+/// Builds a minimal `PeerAnnouncement` fixture with the given
+/// `first_joined_mesh_ts`, for gossip tests that don't care about the rest
+/// of the announcement's fields.
 pub(crate) fn test_announcement(ts: Option<u64>) -> PeerAnnouncement {
     PeerAnnouncement {
         addr: test_addr(0x11),
@@ -64,6 +67,7 @@ pub(crate) fn test_announcement(ts: Option<u64>) -> PeerAnnouncement {
         latency_age_ms: None,
         latency_observer_id: None,
         inference_admission_state: None,
+        claimed_log_head: None,
     }
 }
 
