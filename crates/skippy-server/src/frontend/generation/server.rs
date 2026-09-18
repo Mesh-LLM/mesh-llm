@@ -341,13 +341,10 @@ pub async fn serve_embedded_openai(args: EmbeddedOpenAiArgs) -> Result<()> {
 pub(crate) async fn serve_embedded_openai_with_scheduler(
     args: EmbeddedOpenAiArgs,
     iteration_scheduler: IterationScheduler,
+    shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<()> {
-    serve_embedded_openai_with_shutdown_and_scheduler(
-        args,
-        std::future::pending::<()>(),
-        Some(iteration_scheduler),
-    )
-    .await
+    serve_embedded_openai_with_shutdown_and_scheduler(args, shutdown, Some(iteration_scheduler))
+        .await
 }
 
 pub async fn serve_embedded_openai_with_shutdown(
