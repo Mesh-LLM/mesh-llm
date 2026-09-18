@@ -211,3 +211,58 @@ fn model_remove_is_local_and_reports_repository_scope() {
     assert_eq!(run(false)["status"], "removed");
     assert!(!repo.exists());
 }
+
+#[test]
+fn runtime_install_requires_exactly_one_explicit_catalog() {
+    for args in [
+        vec!["runtime", "install"],
+        vec![
+            "runtime",
+            "install",
+            "--manifest",
+            "a.json",
+            "--manifest-url",
+            "https://example.invalid/catalog.json",
+        ],
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_skippy"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("error:"));
+    }
+}
+
+#[test]
+fn runtime_install_does_not_fall_back_from_explicit_empty_catalog_to_mesh_policy() {
+    let root = tempfile::tempdir().unwrap();
+    let catalog = root.path().join("catalog.json");
+    let empty = skippy_runtime_install::NativeRuntimeReleaseManifest {
+        release_version: skippy_runtime_install::runtime_release_version().into(),
+        skippy_abi: skippy_runtime_install::current_skippy_abi_version(),
+        artifacts: Vec::new(),
+    };
+    std::fs::write(&catalog, serde_json::to_vec(&empty).unwrap()).unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_skippy"))
+        .env(
+            "MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR",
+            "/nonexistent/mesh-bundle",
+        )
+        .env(
+            "MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL",
+            "http://127.0.0.1:1/forbidden-catalog.json",
+        )
+        .args(["--runtime-cache"])
+        .arg(root.path().join("cache"))
+        .args(["runtime", "install", "--manifest"])
+        .arg(&catalog)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("no native runtime manifest entries found")
+    );
+    assert!(!root.path().join("cache").exists());
+}

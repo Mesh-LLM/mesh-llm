@@ -2,7 +2,8 @@
 
 use crate::cache::{host_runtime_profile, native_runtime_cache};
 use crate::manifest::{
-    NativeRuntimeCatalogSources, load_release_manifest_with_sources, normalize_sha256,
+    NativeRuntimeCatalogSources, load_release_manifest_from_explicit_sources,
+    load_release_manifest_with_sources, normalize_sha256,
 };
 use crate::types::*;
 use anyhow::{Context, Result, bail};
@@ -24,7 +25,26 @@ use tokio::io::AsyncWriteExt;
 pub async fn install_native_runtime(
     options: NativeRuntimeInstallOptions,
 ) -> Result<NativeRuntimeInstallOutcome> {
-    let (manifest, sources) = load_release_manifest_with_sources(NativeRuntimeManifestOptions {
+    install_with_source_policy(options, false).await
+}
+
+/// Install using only explicit cache, bundle roots and catalog policy. Never
+/// consult Mesh environment settings or executable-adjacent bundle discovery.
+pub async fn install_native_runtime_explicit(
+    options: NativeRuntimeInstallOptions,
+) -> Result<NativeRuntimeInstallOutcome> {
+    anyhow::ensure!(
+        options.cache_dir.is_some(),
+        "explicit runtime installation requires a cache directory"
+    );
+    install_with_source_policy(options, true).await
+}
+
+async fn install_with_source_policy(
+    options: NativeRuntimeInstallOptions,
+    explicit_only: bool,
+) -> Result<NativeRuntimeInstallOutcome> {
+    let manifest_options = NativeRuntimeManifestOptions {
         catalog: options.catalog.clone(),
         release_version: options.release_version.clone(),
         manifest_path: options.manifest_path.clone(),
@@ -34,8 +54,12 @@ pub async fn install_native_runtime(
         // for the default catalog either; bundles and the cache are the
         // only sources then. Explicit manifest URLs are still honoured.
         allow_default_manifest_url: options.allow_download,
-    })
-    .await?;
+    };
+    let (manifest, sources) = if explicit_only {
+        load_release_manifest_from_explicit_sources(manifest_options).await?
+    } else {
+        load_release_manifest_with_sources(manifest_options).await?
+    };
     if manifest.artifacts.is_empty() {
         return Err(NativeRuntimeResolutionError::empty_catalog(
             sources,

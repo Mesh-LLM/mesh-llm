@@ -27,7 +27,7 @@ pub fn resolve_options(args: NativeRuntimeArgs) -> Result<NativeRuntimeOptions> 
     Ok(options)
 }
 
-pub fn run(command: RuntimeCommand, options: &NativeRuntimeOptions) -> Result<()> {
+pub async fn run(command: RuntimeCommand, options: &NativeRuntimeOptions) -> Result<()> {
     let cache = NativeRuntimeCache::new(
         options
             .cache_dir
@@ -36,6 +36,40 @@ pub fn run(command: RuntimeCommand, options: &NativeRuntimeOptions) -> Result<()
     );
     match command {
         RuntimeCommand::List => crate::console::write_json(&cache.installed()?),
+        RuntimeCommand::Install {
+            manifest,
+            manifest_url,
+        } => {
+            use skippy_runtime_install::{
+                NativeRuntimeBundleInstallPolicy, NativeRuntimeCatalog,
+                NativeRuntimeInstallOptions, RuntimeSelection,
+            };
+            anyhow::ensure!(
+                manifest.is_some() != manifest_url.is_some(),
+                "supply exactly one runtime catalog file or URL"
+            );
+            let release = options
+                .release
+                .as_deref()
+                .unwrap_or(skippy_runtime_install::runtime_release_version());
+            // The CLI requires an explicit catalog; this default URL is never used.
+            let catalog = NativeRuntimeCatalog {
+                releases_url: String::new(),
+                release_tags: Default::default(),
+                rolling_release: None,
+            };
+            let mut install = NativeRuntimeInstallOptions::new(release, catalog);
+            install.manifest_path = manifest;
+            install.manifest_url = manifest_url;
+            install.cache_dir = options.cache_dir.clone();
+            install.bundle_dirs = options.bundle_dirs.clone();
+            install.selection = RuntimeSelection::parse(options.selection.as_deref())?;
+            install.skippy_abi_version = Some(skippy_runtime_install::current_skippy_abi_version());
+            install.bundle_install_policy =
+                NativeRuntimeBundleInstallPolicy::InstallExplicitBundlesIntoCache;
+            let outcome = skippy_runtime_install::install_native_runtime_explicit(install).await?;
+            crate::console::write_json(&outcome)
+        }
         RuntimeCommand::Import { source, dry_run } => {
             let manifest = NativeRuntimeManifest::read_from_dir(&source)?;
             let outcome =

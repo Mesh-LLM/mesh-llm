@@ -18,7 +18,8 @@ pub use skippy_native_runtime::{
     NativeRuntimeCache, NativeRuntimeCacheRoot, NativeRuntimeFlavor, NativeRuntimeFlavorParseError,
     NativeRuntimeLoadPlan, NativeRuntimeManifest, NativeRuntimePruneMode,
     NativeRuntimeReleaseManifest, NativeRuntimeResolution, NativeRuntimeResolver,
-    NativeRuntimeSource, RuntimeSelection, native_runtime_cache_root, select_native_runtime,
+    NativeRuntimeSource, RuntimeSelection, native_runtime_cache_root, runtime_release_version,
+    select_native_runtime,
 };
 
 pub use cache::{
@@ -31,9 +32,13 @@ pub use legacy_import::{
 
 pub use import::{NativeRuntimeImportOutcome, NativeRuntimeImportStatus, import_runtime_copy};
 
-pub use install::{NativeRuntimeResolutionError, RejectedCandidate, install_native_runtime};
+pub use install::{
+    NativeRuntimeResolutionError, RejectedCandidate, install_native_runtime,
+    install_native_runtime_explicit,
+};
 pub use manifest::{
-    NativeRuntimeCatalogSources, load_release_manifest, load_release_manifest_with_sources,
+    NativeRuntimeCatalogSources, load_release_manifest,
+    load_release_manifest_from_explicit_sources, load_release_manifest_with_sources,
 };
 pub use types::{
     NATIVE_RUNTIME_CACHE_DIR_ENV, NATIVE_RUNTIME_MANIFEST_URL_ENV,
@@ -107,6 +112,66 @@ mod tests {
             sha256: Some("a".repeat(64)),
             signature: signature.map(str::to_string),
         }
+    }
+
+    #[test]
+    fn explicit_sources_ignore_product_environment() {
+        const CHILD: &str = "SKIPPY_TEST_EXPLICIT_BUNDLE";
+        if let Some(bundle) = std::env::var_os(CHILD) {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                let mut options = test_manifest_options();
+                options.allow_default_manifest_url = false;
+                let (manifest, sources) =
+                    load_release_manifest_from_explicit_sources(options.clone())
+                        .await
+                        .unwrap();
+                assert!(manifest.artifacts.is_empty());
+                assert!(sources.bundle_dirs.is_empty());
+                assert!(sources.manifest_url.is_none());
+                options.bundle_dirs = vec![PathBuf::from(bundle)];
+                let (manifest, sources) = load_release_manifest_from_explicit_sources(options)
+                    .await
+                    .unwrap();
+                assert_eq!(manifest.artifacts.len(), 1);
+                assert_eq!(sources.bundle_dirs.len(), 1);
+                let error = install_native_runtime_explicit(test_install_options())
+                    .await
+                    .unwrap_err();
+                assert!(error.to_string().contains("requires a cache directory"));
+            });
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let bundle = root.path().join("bundle");
+        write_bundle(&bundle, &artifact_with_sha(None));
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "tests::explicit_sources_ignore_product_environment",
+                "--exact",
+            ])
+            .env(CHILD, &bundle)
+            .env(NATIVE_RUNTIME_BUNDLE_DIR_ENV, &bundle)
+            .env(
+                NATIVE_RUNTIME_MANIFEST_URL_ENV,
+                "http://127.0.0.1:1/forbidden-catalog.json",
+            )
+            .env(
+                NATIVE_RUNTIME_CACHE_DIR_ENV,
+                root.path().join("forbidden-cache"),
+            )
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!root.path().join("forbidden-cache").exists());
     }
 
     #[test]

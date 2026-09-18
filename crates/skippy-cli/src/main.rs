@@ -51,7 +51,7 @@ async fn main() -> Result<()> {
         }
         Command::Models { cache_dir, command } => models::run(cache_dir, command).await,
         Command::PlanSplit(args) => split::run(args),
-        Command::Runtime { command } => runtime::run(command, &native_options),
+        Command::Runtime { command } => runtime::run(command, &native_options).await,
         Command::ExampleConfig => console::write_json(&skippy_server::config::example_config()),
     }
 }

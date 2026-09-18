@@ -1,7 +1,7 @@
 //! Release manifest discovery, download, and verification.
 
 use crate::cache::current_skippy_abi_version;
-use crate::discovery::discover_native_runtime_bundle_dirs;
+use crate::discovery::{discover_explicit_bundle_dirs, discover_native_runtime_bundle_dirs};
 use crate::types::{NATIVE_RUNTIME_MANIFEST_URL_ENV, NativeRuntimeManifestOptions};
 use anyhow::{Context, Result, bail};
 use sha2::Digest;
@@ -146,6 +146,29 @@ pub async fn load_release_manifest_with_sources(
 ) -> Result<(NativeRuntimeReleaseManifest, NativeRuntimeCatalogSources)> {
     options.bundle_dirs =
         discover_native_runtime_bundle_dirs(&options.bundle_dirs, &options.release_version)?;
+    let url = manifest_url(&options);
+    merge_release_manifest_sources(options, url).await
+}
+
+/// Load only caller-supplied roots/catalog policy, ignoring product environment
+/// variables and executable-adjacent discovery.
+pub async fn load_release_manifest_from_explicit_sources(
+    mut options: NativeRuntimeManifestOptions,
+) -> Result<(NativeRuntimeReleaseManifest, NativeRuntimeCatalogSources)> {
+    options.bundle_dirs =
+        discover_explicit_bundle_dirs(&options.bundle_dirs, &options.release_version)?;
+    let url = options.manifest_url.clone().or_else(|| {
+        options
+            .allow_default_manifest_url
+            .then(|| options.catalog.manifest_url(&options.release_version))
+    });
+    merge_release_manifest_sources(options, url).await
+}
+
+async fn merge_release_manifest_sources(
+    mut options: NativeRuntimeManifestOptions,
+    url: Option<String>,
+) -> Result<(NativeRuntimeReleaseManifest, NativeRuntimeCatalogSources)> {
     let mut sources = NativeRuntimeCatalogSources {
         bundle_dirs: options.bundle_dirs.clone(),
         ..Default::default()
@@ -161,7 +184,7 @@ pub async fn load_release_manifest_with_sources(
         skippy_abi = manifest.skippy_abi.clone();
         artifacts.extend(manifest.artifacts);
         manifest_loaded = true;
-    } else if let Some(url) = manifest_url(&options) {
+    } else if let Some(url) = url {
         sources.manifest_url = Some(url_without_query(&url));
         match download_release_manifest(&url).await {
             Ok(manifest) => {

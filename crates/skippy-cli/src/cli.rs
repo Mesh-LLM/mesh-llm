@@ -345,6 +345,21 @@ pub enum TelemetryLevel {
 #[derive(Subcommand)]
 pub enum RuntimeCommand {
     List,
+    /// Install a checksum-verified runtime from an explicit release catalog.
+    Install {
+        #[arg(
+            long,
+            required_unless_present = "manifest_url",
+            conflicts_with = "manifest_url"
+        )]
+        manifest: Option<PathBuf>,
+        #[arg(
+            long,
+            required_unless_present = "manifest",
+            conflicts_with = "manifest"
+        )]
+        manifest_url: Option<String>,
+    },
     /// Copy a verified bundle into the Skippy cache; leave the source unchanged.
     Import {
         source: PathBuf,

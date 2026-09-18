@@ -25,6 +25,14 @@ pub fn discover_native_runtime_bundle_dirs(
     )
 }
 
+/// Discover only the supplied roots; no environment or executable policy.
+pub(crate) fn discover_explicit_bundle_dirs(
+    explicit_dirs: &[PathBuf],
+    release: &str,
+) -> Result<Vec<PathBuf>> {
+    discover_native_runtime_bundle_dirs_from(explicit_dirs, &[], None, release)
+}
+
 pub fn discover_local_native_runtimes(
     explicit_dirs: &[PathBuf],
     cache: &NativeRuntimeCache,

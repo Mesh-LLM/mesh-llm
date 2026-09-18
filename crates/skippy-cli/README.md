@@ -18,8 +18,12 @@ Runtime management uses `--runtime-cache`, then `SKIPPY_NATIVE_RUNTIME_CACHE_DIR
 skippy runtime import /path/to/verified-bundle --dry-run
 skippy runtime import /path/to/verified-bundle
 skippy runtime list
+skippy runtime install --manifest /path/to/runtime-catalog.json
+skippy runtime install --manifest-url https://example.org/runtime-catalog.json
 skippy runtime import-legacy /path/to/old-cache --dry-run
 ```
+
+Catalog installation requires exactly one explicit catalog file or URL. It uses the selected Skippy runtime cache and explicit bundle roots; Mesh catalog and discovery environment settings are ignored. Downloaded archives retain the shared installer checksum and compatibility checks.
 
 Import copies verified payloads and leaves the source untouched. Legacy import reports every entry as JSON and returns a nonzero exit status if any entry failed.
 
