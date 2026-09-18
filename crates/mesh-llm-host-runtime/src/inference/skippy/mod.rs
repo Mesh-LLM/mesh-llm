@@ -1289,14 +1289,7 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
     };
     let config = skippy_api::single_stage_config(
         &prepared_options,
-        skippy_api::StageSourceIdentity {
-            package_ref: package_identity.package_ref,
-            manifest_sha256: package_identity.manifest_sha256,
-            source_model_path: package_identity.source_model_path,
-            source_model_sha256: package_identity.source_model_sha256,
-            source_model_bytes: package_identity.source_model_bytes,
-            layer_count: package_identity.layer_count,
-        },
+        package_identity.into(),
         format!("mesh-skippy-{}", now_unix_nanos()),
     )?;
     checkpoint::emit_load_notice(

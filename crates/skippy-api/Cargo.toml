@@ -14,3 +14,12 @@ sha2.workspace = true
 model-artifact = { path = "../model-artifact", version = "0.76.1" }
 skippy-protocol = { path = "../skippy-protocol", version = "0.76.1" }
 skippy-runtime = { path = "../skippy-runtime", version = "0.76.1" }
+serde.workspace = true
+serde_json.workspace = true
+tracing = "0.1"
+skippy-package-format = { path = "../skippy-package-format", version = "0.76.1" }
+skippy-model = { path = "../skippy-model", version = "0.76.1" }
+skippy-ffi = { path = "../skippy-ffi", version = "0.76.1" }
+
+[dev-dependencies]
+tempfile = "3"
