@@ -143,3 +143,71 @@ fn runtime_list_uses_skippy_cache_override_without_loading_native_code() {
     assert!(runtimes.is_empty());
     assert!(std::fs::read_dir(dir.path()).unwrap().next().is_none());
 }
+
+#[test]
+fn models_list_uses_explicit_cache_without_native_runtime_or_network() {
+    let root = tempfile::tempdir().unwrap();
+    let cache = root.path().join("models");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_skippy"))
+        .env("HF_ENDPOINT", "http://127.0.0.1:1")
+        .env("SKIPPY_MODEL_CACHE_DIR", root.path().join("ignored"))
+        .args(["models", "--cache-dir"])
+        .arg(&cache)
+        .arg("list")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["cache_dir"], cache.to_string_lossy().as_ref());
+    assert_eq!(value["repositories"], serde_json::json!([]));
+    assert!(!cache.exists());
+}
+
+#[test]
+fn model_pull_rejects_invalid_pin_without_contacting_hub() {
+    let root = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_skippy"))
+        .env("HF_ENDPOINT", "http://127.0.0.1:1")
+        .args(["models", "--cache-dir"])
+        .arg(root.path())
+        .args(["pull", "org/repo", "--sha256", "bad"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("64 hexadecimal"));
+    assert!(std::fs::read_dir(root.path()).unwrap().next().is_none());
+}
+
+#[test]
+fn model_remove_is_local_and_reports_repository_scope() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = root.path().join("models--org--model/snapshots/revision");
+    std::fs::create_dir_all(&repo).unwrap();
+    let run = |dry: bool| {
+        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_skippy"));
+        cmd.env("HF_ENDPOINT", "http://127.0.0.1:1")
+            .args(["models", "--cache-dir"])
+            .arg(root.path())
+            .args(["remove", "org/model"]);
+        if dry {
+            cmd.arg("--dry-run");
+        }
+        let output = cmd.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+    let preview = run(true);
+    assert_eq!(preview["scope"], "all-local-revisions");
+    assert_eq!(preview["status"], "planned");
+    assert!(repo.exists());
+    assert_eq!(run(false)["status"], "removed");
+    assert!(!repo.exists());
+}

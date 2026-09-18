@@ -39,3 +39,16 @@ Start downstream workers first. Each worker must have the exact verified source 
 Generated stage files are the artifact of record: workers load those configs and do not re-admit the diagnostic `admissions.json`. Regenerate a plan when changing it rather than editing stage files. The diagnostic envelope records `certification: certified` and each stage admission.
 
 The graph configuration identity binds the requested GPU-layer policy, context and lane count; it does not attest the actual selected device. Use a recognizable family name in `--model-id` to enable the topology planner's family-specific rules. A filename-derived default may select only intrinsic topology rules; native admission and certification still apply. Split planning currently accepts GGUF files, including the first shard of a multipart model, but not safetensors directories.
+
+Model downloads use `models --cache-dir`, then `SKIPPY_MODEL_CACHE_DIR`, then the platform cache directory under `skippy/models`. Hub endpoint and token settings remain standard Hugging Face settings. Model commands do not load a native runtime.
+
+```sh
+skippy models pull org/repo@revision:Q4_K_M --sha256 EXPECTED_SHA256 --size-bytes EXPECTED_BYTES
+skippy models list
+```
+
+Pull resolves an immutable Hub revision, downloads the selected artifact's file set and reports each file's SHA-256 and the primary path. Optional size and SHA-256 pins apply to the primary file and are checked even for cache hits. Without an expected digest, a reported digest records downloaded content rather than asserting an independently pinned checksum. Use the returned GGUF path with `serve-openai --model-path` or `plan-split --model-path`.
+
+`skippy models remove org/repo --dry-run` previews removal of **all local revisions** of that repository; omit `--dry-run` to remove them. Other repositories remain untouched and no remote Hub deletion is performed. Stop serving that model and stop external Hub downloads into the same cache before removal. Skippy pull/remove commands serialize their mutations with a cache lock; other Hub clients do not participate in it. Repository-root symlinks are rejected and nested symlinks are unlinked without following their targets.
+
+The standalone default model cache is separate from Mesh's cache; select an existing cache explicitly when sharing is intended. Each downloaded file is rehashed, but sidecars without catalog metadata receive only a measured digest, not independent checksum verification. Removing an absent repository succeeds with status `not-found`.

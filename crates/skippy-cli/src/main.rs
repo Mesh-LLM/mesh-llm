@@ -2,6 +2,7 @@ mod cli;
 mod console;
 mod conversion;
 mod local_model;
+mod models;
 mod runtime;
 mod split;
 
@@ -48,6 +49,7 @@ async fn main() -> Result<()> {
             )
             .await
         }
+        Command::Models { cache_dir, command } => models::run(cache_dir, command).await,
         Command::PlanSplit(args) => split::run(args),
         Command::Runtime { command } => runtime::run(command, &native_options),
         Command::ExampleConfig => console::write_json(&skippy_server::config::example_config()),

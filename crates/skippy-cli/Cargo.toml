@@ -31,6 +31,10 @@ skippy-events = { path = "../skippy-events", version = "0.76.1" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 uuid = { version = "1", features = ["v4"] }
 
+model-hf = { path = "../model-hf", version = "0.76.1" }
+model-artifact = { path = "../model-artifact", version = "0.76.1" }
+hf-hub = { package = "skippy-hf-hub", path = "../skippy-hf-hub", version = "0.76.1", default-features = false }
+
 [dev-dependencies]
 skippy-native-runtime = { path = "../skippy-native-runtime", version = "0.76.1" }
 skippy-runtime = { path = "../skippy-runtime", version = "0.76.1" }

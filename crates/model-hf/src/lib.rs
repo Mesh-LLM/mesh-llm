@@ -1,4 +1,5 @@
 mod cache_paths;
+pub mod local_cache;
 pub mod store;
 mod tls;
 

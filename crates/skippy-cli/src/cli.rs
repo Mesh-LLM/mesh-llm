@@ -20,6 +20,14 @@ pub enum Command {
     #[command(name = "serve-openai")]
     ServeOpenAi(ServeOpenAiArgs),
     ExampleConfig,
+    /// Download verified model artifacts or inspect the standalone model cache.
+    Models {
+        /// Override SKIPPY_MODEL_CACHE_DIR and the platform Skippy model cache.
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+        #[command(subcommand)]
+        command: ModelCommand,
+    },
     /// Plan and admit a direct GGUF split for explicit worker endpoints.
     PlanSplit(PlanSplitArgs),
     /// Inspect or explicitly import verified native runtime bundles.
@@ -467,4 +475,27 @@ mod tests {
             Some(PathBuf::from("decode-plan.json"))
         );
     }
+}
+
+#[derive(Subcommand)]
+pub enum ModelCommand {
+    /// Resolve a Hub revision and download its selected model files.
+    Pull {
+        /// Hub reference: org/repo@revision:filename-or-quantization.
+        model_ref: String,
+        /// Expected SHA-256 of the primary model file; checked on cache hits too.
+        #[arg(long)]
+        sha256: Option<String>,
+        /// Expected byte count of the primary model file.
+        #[arg(long)]
+        size_bytes: Option<u64>,
+    },
+    /// Remove all cached revisions of one local model repository; never deletes from the Hub.
+    Remove {
+        repo: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// List local model repositories and snapshots without contacting the Hub.
+    List,
 }
