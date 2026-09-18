@@ -99,11 +99,16 @@ repair or regenerate the patch queue, address ABI fallout, and validate repairs
 with prepare, build, smoke, and focused reproductions. The agent then returns
 control instead of starting an additional full battery. The trusted wrapper
 owns the complete candidate gates, and the separate verifier repeats them;
-focused agent results replace neither full pass. The repair loop has an 11.5-hour deadline and independent verification
-has a 12-hour deadline while the complete roster runtime is measured. The agent
+focused agent results replace neither full pass. The repair loop admits coding turns for 11.5 hours, including time spent in
+earlier gates. Each returned candidate receives a fresh 12-hour gate budget,
+even when the repair window is nearly exhausted. A failed pass after that
+window ends is terminal. The repair step is bounded at 1,420 minutes and its
+job at 1,430 minutes, covering the 23.5-hour maximum plus upload headroom.
+Independent verification retains its separate 12-hour deadline. The agent
 has no GitHub credentials. Ending one coding
 response is not success: the wrapper runs the candidate gates and returns their
-logs to the same Goose session until they pass or the deadline expires. The
+logs to the same Goose session while coding admission remains open. An
+already-admitted verification pass may finish after that window closes. The
 repair and independent-verifier checkouts configure the same repository-local
 `mesh-llama-canary-bot` identity before invoking the wrapper, so candidate
 commit creation never depends on persistent-runner global Git configuration.

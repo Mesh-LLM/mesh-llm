@@ -31,7 +31,8 @@ jobs:
       # discarding hours of agent and native-build work on the persistent runner.
       cancel-in-progress: false
     runs-on: [self-hosted, family-certify]
-    timeout-minutes: 780
+    # 11.5h repair admission + final 12h gate pass + setup/upload margin.
+    timeout-minutes: 1430
     outputs:
       changed: ${{ steps.sha.outputs.changed }}
       candidate_ready: ${{ steps.changed_result.outputs.ready }}
@@ -194,14 +195,15 @@ jobs:
       - name: Changed-pin agent developer task
         id: changed_canary
         if: steps.sha.outputs.changed == 'true'
-        timeout-minutes: 720
+        timeout-minutes: 1420
         continue-on-error: true
         env:
           CANARY_AGENT_PROVIDER: ${{ vars.LLAMA_CANARY_GOOSE_PROVIDER || 'custom_z_ai_coding_plan' }}
           CANARY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_GOOSE_MODEL || 'glm-5.3-flash' }}
-          # One agent receives the complete developer task. Verification runs
-          # later in a separate job after this process context has ended.
+          # Admit coding turns for 11.5h; each returned candidate gets a full
+          # 12h gate pass. Independent verification follows in its own job.
           CANARY_AGENT_TIMEOUT_SECONDS: "41400"
+          CANARY_VERIFICATION_TIMEOUT_SECONDS: "43200"
           CANARY_HARNESS_MODE: repair
           FAMILY_BATTERY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           UPSTREAM_SHA_INPUT: ${{ steps.sha.outputs.new_sha }}

@@ -306,7 +306,10 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertNotIn("Detect existing changed-pin canary PR", workflow)
         changed = _step_block(workflow, "Changed-pin agent developer task")
         self.assertIn("steps.sha.outputs.changed == 'true'", changed)
-        self.assertIn("timeout-minutes: 720", changed)
+        self.assertIn("timeout-minutes: 1420", changed)
+        self.assertIn('CANARY_VERIFICATION_TIMEOUT_SECONDS: "43200"', changed)
+        latest = workflow.split("  verify-changed-canary:", 1)[0]
+        self.assertIn("timeout-minutes: 1430", latest)
         self.assertIn("continue-on-error: true", changed)
         self.assertIn("LLAMA_CANARY_GOOSE_PROVIDER", changed)
         self.assertIn("custom_z_ai_coding_plan", changed)
