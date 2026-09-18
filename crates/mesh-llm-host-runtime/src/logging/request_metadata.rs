@@ -167,6 +167,8 @@ const fn openai_route_label(route: OpenAiFrontendRoute) -> Option<&'static str> 
         OpenAiFrontendRoute::ChatCompletions => Some("chat_completions"),
         OpenAiFrontendRoute::Completions => Some("completions"),
         OpenAiFrontendRoute::Responses => Some("responses"),
+        OpenAiFrontendRoute::Messages => Some("messages"),
+        OpenAiFrontendRoute::MessagesCountTokens => Some("messages_count_tokens"),
         OpenAiFrontendRoute::Unknown => None,
     }
 }

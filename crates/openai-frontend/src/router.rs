@@ -121,19 +121,19 @@ fn configured_agent_session_header() -> Option<HeaderName> {
 pub use crate::lifecycle::RequestId;
 
 #[derive(Clone)]
-struct FrontendState {
-    backend: SharedBackend,
-    config: OpenAiFrontendConfig,
+pub(crate) struct FrontendState {
+    pub(crate) backend: SharedBackend,
+    pub(crate) config: OpenAiFrontendConfig,
 }
 
 impl FrontendState {
-    fn observe(&self, event: OpenAiLifecycleEvent) {
+    pub(crate) fn observe(&self, event: OpenAiLifecycleEvent) {
         if let Some(observer) = &self.config.lifecycle_observer {
             observer.observe(&event);
         }
     }
 
-    fn stream_lifecycle(
+    pub(crate) fn stream_lifecycle(
         &self,
         context: OpenAiLifecycleContext,
         operation: OpenAiBackendOperation,
@@ -141,7 +141,7 @@ impl FrontendState {
         StreamLifecycle::new(self.config.lifecycle_observer.clone(), context, operation)
     }
 
-    fn response_completed(
+    pub(crate) fn response_completed(
         &self,
         context: &OpenAiLifecycleContext,
         operation: OpenAiBackendOperation,
@@ -162,7 +162,7 @@ pub struct OpenAiFrontendConfig {
     /// Header accepted as stable agent-session identity from the endpoint's
     /// trusted immediate upstream. `None` disables header-derived identity.
     pub agent_session_header: Option<HeaderName>,
-    lifecycle_observer: Option<Arc<dyn OpenAiLifecycleObserver>>,
+    pub(crate) lifecycle_observer: Option<Arc<dyn OpenAiLifecycleObserver>>,
 }
 
 impl std::fmt::Debug for OpenAiFrontendConfig {
@@ -258,6 +258,11 @@ pub fn router_for_with_config(
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/completions", post(completions))
         .route("/v1/responses", post(responses))
+        .route("/v1/messages", post(crate::anthropic::messages))
+        .route(
+            "/v1/messages/count_tokens",
+            post(crate::anthropic::messages_count_tokens),
+        )
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(not_found)
         .layer(middleware::from_fn_with_state(
@@ -813,7 +818,7 @@ fn json_response_with_usage<T: Serialize>(value: T, usage: &Usage) -> Response {
     response
 }
 
-fn agent_session_from_header(
+pub(crate) fn agent_session_from_header(
     config: &OpenAiFrontendConfig,
     headers: &HeaderMap,
 ) -> OpenAiResult<Option<AgentSessionIdentity>> {
@@ -848,7 +853,7 @@ fn resolve_agent_session(
     }
 }
 
-fn request_context(
+pub(crate) fn request_context(
     request_id: RequestId,
     trusted_agent_session: bool,
     observe_stream_usage: bool,
@@ -863,7 +868,9 @@ fn request_context(
     context
 }
 
-fn json_payload<T>(payload: Result<Json<T>, JsonRejection>) -> Result<Json<T>, OpenAiError> {
+pub(crate) fn json_payload<T>(
+    payload: Result<Json<T>, JsonRejection>,
+) -> Result<Json<T>, OpenAiError> {
     payload.map_err(|rejection| {
         if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
             return OpenAiError::payload_too_large(format!("request body too large: {rejection}"));
@@ -977,6 +984,8 @@ fn lifecycle_route(uri: &Uri) -> OpenAiFrontendRoute {
         "/v1/chat/completions" => OpenAiFrontendRoute::ChatCompletions,
         "/v1/completions" => OpenAiFrontendRoute::Completions,
         "/v1/responses" => OpenAiFrontendRoute::Responses,
+        "/v1/messages/count_tokens" => OpenAiFrontendRoute::MessagesCountTokens,
+        "/v1/messages" => OpenAiFrontendRoute::Messages,
         _ => OpenAiFrontendRoute::Unknown,
     }
 }
