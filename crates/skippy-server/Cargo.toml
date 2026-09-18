@@ -13,10 +13,11 @@ path = "src/lib.rs"
 
 [features]
 default = []
-dynamic-native-runtime = ["skippy-runtime/dynamic-native-runtime"]
+dynamic-native-runtime = ["skippy-runtime/dynamic-native-runtime", "skippy-api/dynamic-native-runtime"]
 test-support = []
 
 [dependencies]
+skippy-api = { path = "../skippy-api", version = "0.76.1" }
 ahash.workspace = true
 anyhow.workspace = true
 async-trait = "0.1"

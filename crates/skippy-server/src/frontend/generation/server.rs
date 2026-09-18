@@ -63,8 +63,7 @@ use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
 pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
-    let config = load_json::<StageConfig>(&args.config)
-        .with_context(|| format!("load stage config {}", args.config.display()))?;
+    let config = crate::local_model::prepare_openai_stage(&args)?;
     let topology = match args.topology.as_ref() {
         Some(path) => Some(
             load_json::<StageTopology>(path)

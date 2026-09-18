@@ -64,3 +64,5 @@ pub use frontend::{
 };
 pub use skippy_protocol::StageConfig;
 pub use tokenizer::{MAX_TOKENIZE_TOKENS, TokenizerCapability, TokenizerCapabilityError};
+
+mod local_model;

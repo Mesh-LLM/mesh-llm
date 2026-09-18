@@ -188,8 +188,30 @@ pub struct ServeBinaryArgs {
 
 #[derive(Parser)]
 pub struct ServeOpenAiArgs {
-    #[arg(long)]
-    pub config: PathBuf,
+    /// Prepared stage configuration; mutually exclusive with --model-path.
+    #[arg(
+        long,
+        required_unless_present = "model_path",
+        conflicts_with = "model_path"
+    )]
+    pub config: Option<PathBuf>,
+    /// Local GGUF (first shard) or safetensors checkpoint to prepare and serve.
+    #[arg(long, required_unless_present = "config", conflicts_with = "config")]
+    pub model_path: Option<PathBuf>,
+    /// Context size for a local model. Defaults to 4096.
+    #[arg(long, requires = "model_path", conflicts_with = "config")]
+    pub ctx_size: Option<u32>,
+    /// GPU layers for a local model; -1 offloads all supported layers.
+    #[arg(
+        long,
+        requires = "model_path",
+        conflicts_with = "config",
+        allow_hyphen_values = true
+    )]
+    pub n_gpu_layers: Option<i32>,
+    /// Optional advisory digest cache directory for local checkpoint files.
+    #[arg(long, requires = "model_path", conflicts_with = "config")]
+    pub hash_cache: Option<PathBuf>,
     #[arg(long)]
     pub topology: Option<PathBuf>,
     #[arg(long, default_value = "127.0.0.1:9337")]

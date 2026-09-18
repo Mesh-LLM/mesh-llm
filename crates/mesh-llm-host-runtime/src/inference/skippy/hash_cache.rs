@@ -1,5 +1,5 @@
 //! Mesh policy for the shared advisory source-digest cache.
-pub(crate) use skippy_api::hash_cache::{SidecarDigestCache, file_ctime_nanos, file_mtime_nanos};
+use skippy_api::hash_cache::SidecarDigestCache;
 use std::path::PathBuf;
 const CACHE_DIR_ENV: &str = "MESH_LLM_HASH_CACHE_DIR";
 /// Resolve the default cache location.

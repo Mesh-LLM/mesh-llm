@@ -928,3 +928,7 @@ CI lane selection or release publication.
 checkpoint preparation. The host consumes it; publish/affected-crate rosters and
 Linux Docker contexts include the new owner. Mesh rendering and hooks stay in
 the host. No external CI policy changes.
+
+Standalone local-model serving now consumes `skippy-api`; publish order places
+the API before `skippy-server`. Source identity and planning are shared with
+Mesh. CI topology and runner policy are unchanged.

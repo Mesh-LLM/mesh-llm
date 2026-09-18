@@ -15,6 +15,7 @@ default = ["web-ui", "dynamic-native-runtime"]
 # Propagates to `mesh-llm-ui/embed-assets`.
 web-ui = ["mesh-llm-ui/embed-assets"]
 dynamic-native-runtime = [
+    "skippy-api/dynamic-native-runtime",
     "mesh-llm-system/dynamic-native-runtime",
     "skippy-runtime/dynamic-native-runtime",
     "skippy-server/dynamic-native-runtime",

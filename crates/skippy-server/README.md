@@ -102,8 +102,19 @@ skippy-server example-config
 skippy-server serve --config stage.json
 skippy-server serve-binary --config stage.json
 skippy-server serve-openai --config stage.json --bind-addr 127.0.0.1:9337
+skippy-server --runtime-bundle /path/to/runtime serve-openai --model-path /models/model.gguf --model-id local-model --ctx-size 4096
 skippy-server serve-binary --config stage-0.json --topology topology.json --openai-bind-addr 127.0.0.1:9337 --generation-concurrency 1
 ```
+
+`serve-openai --model-path` prepares a local GGUF (including multipart sources)
+or safetensors checkpoint through the same `skippy-api` identity and stage
+builder used by Mesh. It does not require a stage JSON file or a Mesh process.
+Choose exactly one of `--model-path` and `--config`. For local preparation,
+`--n-gpu-layers` defaults to `-1`, `--ctx-size` to `4096`, and
+`--generation-concurrency` to `1`. `--hash-cache` explicitly selects an optional
+advisory checkpoint digest cache; strict local GGUF verification hashes its
+source bytes. This command prepares one complete local stage; split serving
+still requires graph-admitted stage configurations.
 
 ## Embedding API
 
