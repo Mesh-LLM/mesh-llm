@@ -595,3 +595,5 @@ async fn send_request_and_read_response(addr: SocketAddr, parts: Vec<Vec<u8>>) -
 
 include!("basic.rs");
 include!("routing.rs");
+
+include!("anthropic_agent.rs");

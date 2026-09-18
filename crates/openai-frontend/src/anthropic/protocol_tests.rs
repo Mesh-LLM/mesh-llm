@@ -86,6 +86,7 @@ fn response_serializes_anthropic_envelope() {
         stop_reason: Some(STOP_TOOL_USE),
         stop_sequence: None,
         usage: AnthropicUsage {
+            cache_read_input_tokens: None,
             input_tokens: 5,
             output_tokens: 7,
         },
@@ -122,6 +123,7 @@ fn stream_events_serialize_with_event_discriminants() {
             stop_reason: None,
             stop_sequence: None,
             usage: AnthropicUsage {
+                cache_read_input_tokens: None,
                 input_tokens: 1,
                 output_tokens: 0,
             },

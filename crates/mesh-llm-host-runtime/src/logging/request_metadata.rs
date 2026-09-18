@@ -91,6 +91,8 @@ impl RequestSummaryMetadata {
             "/v1/chat/completions" => Some("chat_completions"),
             "/v1/completions" => Some("completions"),
             "/v1/responses" => Some("responses"),
+            "/v1/messages" => Some("messages"),
+            "/v1/messages/count_tokens" => Some("messages_count_tokens"),
             _ => None,
         };
         Self::from_parts(route, None, None, None)

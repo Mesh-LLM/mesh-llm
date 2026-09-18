@@ -41,6 +41,11 @@ impl RecordingBackend {
 
 #[async_trait]
 impl OpenAiBackend for RecordingBackend {
+    async fn count_chat_tokens(&self, request: ChatCompletionRequest) -> OpenAiResult<u32> {
+        self.seen_requests.lock().expect("lock").push(request);
+        Ok(42)
+    }
+
     async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
         Ok(vec![ModelObject::new(MODEL_ID)])
     }
@@ -301,14 +306,23 @@ async fn unknown_route_and_method_still_render_anthropic_errors() {
         .await
         .expect("response");
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let error: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(error["type"], "error");
+    let (status, error) = post_json("/v1/messages/nope", messages_body()).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["type"], "error");
+    assert_eq!(error["error"]["type"], "not_found_error");
 }
 
 #[tokio::test]
-async fn count_tokens_returns_estimate() {
-    let (status, body) = post_json("/v1/messages/count_tokens", messages_body()).await;
+async fn count_tokens_uses_backend_without_generation_budget() {
+    let mut request = messages_body();
+    request.as_object_mut().unwrap().remove("max_tokens");
+    let (status, body) = post_json("/v1/messages/count_tokens", request).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let tokens = body["input_tokens"].as_u64().expect("input_tokens");
-    assert!(tokens > 0, "estimate should be positive: {body}");
+    assert_eq!(tokens, 42);
 }
 
 /// Build a chat chunk the way a provider emits streaming tool calls: an
@@ -364,7 +378,7 @@ fn sse_event_names(body: &str) -> Vec<&str> {
 /// Simulated tool executor: the claude-code-style agent loop answers a
 /// `tool_use` with a `tool_result` in the next user turn.
 #[tokio::test]
-async fn claude_agent_tool_use_loop_round_trips_over_streaming_messages() {
+async fn simulated_agent_tool_use_loop_round_trips_over_streaming_messages() {
     let backend = RecordingBackend::default();
     // LIFO queue: the turn-2 script goes in first so turn 1 pops first.
     backend.queue_stream(vec![
@@ -519,4 +533,198 @@ async fn claude_agent_tool_use_loop_round_trips_over_streaming_messages() {
     assert_eq!(names.last(), Some(&"message_stop"), "{names:?}");
     assert!(body.contains("\"stop_reason\":\"end_turn\""), "{body}");
     assert!(body.contains("It is sunny in Oslo."), "{body}");
+}
+
+#[test]
+fn review_preserves_mesh_hooks() {
+    let mut body = messages_body();
+    body["mesh_hooks"] = json!(true);
+    let req = openai_frontend::anthropic::messages_request_to_chat_request(
+        serde_json::from_value(body).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        openai_frontend::chat_mesh_hooks_enabled(&req),
+        "mesh_hooks flag discarded"
+    );
+}
+#[test]
+fn review_preserves_image_content() {
+    let mut body = messages_body();
+    body["messages"][0]["content"] = json!([{"type":"text","text":"describe"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}]);
+    let req = openai_frontend::anthropic::messages_request_to_chat_request(
+        serde_json::from_value(body).unwrap(),
+    )
+    .unwrap();
+    let wire = format!("{:?}", req.messages);
+    assert!(wire.to_string().contains("AAAA"), "image discarded: {wire}");
+}
+#[tokio::test]
+async fn review_count_tokens_without_max_tokens() {
+    let mut body = messages_body();
+    body.as_object_mut().unwrap().remove("max_tokens");
+    let (status, body) = post_json("/v1/messages/count_tokens", body).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+#[tokio::test]
+async fn review_two_streamed_tools_remain_distinct() {
+    let backend = RecordingBackend::default();
+    let first = tool_call_chunk(MODEL_ID, Some("toolu_a"), Some("alpha"), "{}");
+    let mut second = tool_call_chunk(MODEL_ID, Some("toolu_b"), Some("beta"), "{}");
+    second.choices[0].delta.tool_calls.as_mut().unwrap()[0]["index"] = json!(1);
+    backend.queue_stream(vec![
+        Ok(first),
+        Ok(second),
+        Ok(ChatCompletionChunk::done_with_reason(
+            MODEL_ID,
+            FinishReason::ToolCalls,
+        )),
+    ]);
+    let mut body = messages_body();
+    body["stream"] = json!(true);
+    let (_, wire) = post_stream_with("/v1/messages", body, app_with(backend)).await;
+    let starts = wire
+        .split("\n\n")
+        .filter(|b| b.contains("event: content_block_start") && b.contains("tool_use"))
+        .count();
+    assert_eq!(starts, 2, "{wire}");
+}
+#[tokio::test]
+async fn review_error_does_not_emit_success_end_turn() {
+    let backend = RecordingBackend::default();
+    backend.queue_stream(vec![
+        Ok(ChatCompletionChunk::delta(MODEL_ID, "partial")),
+        Err(openai_frontend::OpenAiError::internal("backend failed")),
+        Err(openai_frontend::OpenAiError::internal("second failure")),
+        Ok(ChatCompletionChunk::delta(MODEL_ID, "after failure")),
+    ]);
+    let mut body = messages_body();
+    body["stream"] = json!(true);
+    let (_, wire) = post_stream_with("/v1/messages", body, app_with(backend)).await;
+    assert!(!wire.contains("\"stop_reason\":\"end_turn\""), "{wire}");
+    assert_eq!(wire.matches("event: error").count(), 1, "{wire}");
+    assert!(!wire.contains("after failure"), "{wire}");
+}
+#[tokio::test]
+async fn review_usage_after_finish_is_reported() {
+    let backend = RecordingBackend::default();
+    backend.queue_stream(vec![
+        Ok(ChatCompletionChunk::delta(MODEL_ID, "ok")),
+        Ok(ChatCompletionChunk::done_with_reason(
+            MODEL_ID,
+            FinishReason::Stop,
+        )),
+        Ok(ChatCompletionChunk::usage(MODEL_ID, Usage::new(21, 14))),
+    ]);
+    let mut body = messages_body();
+    body["stream"] = json!(true);
+    let (_, wire) = post_stream_with("/v1/messages", body, app_with(backend)).await;
+    assert!(wire.contains("\"output_tokens\":14"), "{wire}");
+}
+
+#[derive(Default)]
+struct AnthropicObserver(Mutex<Vec<openai_frontend::OpenAiLifecycleEvent>>);
+impl openai_frontend::OpenAiLifecycleObserver for AnthropicObserver {
+    fn observe(&self, event: &openai_frontend::OpenAiLifecycleEvent) {
+        self.0.lock().unwrap().push(event.clone());
+    }
+}
+struct InjectingHook;
+#[async_trait]
+impl openai_frontend::OpenAiHookPolicy for InjectingHook {
+    async fn before_chat_completion(
+        &self,
+        request: &mut ChatCompletionRequest,
+    ) -> OpenAiResult<openai_frontend::ChatHookOutcome> {
+        assert_eq!(request.extra.get("mesh_hooks"), Some(&json!(true)));
+        Ok(openai_frontend::ChatHookOutcome::injected("hook-marker"))
+    }
+}
+
+#[tokio::test]
+async fn anthropic_and_chat_share_hooks_and_terminal_usage() {
+    use openai_frontend::{HookedOpenAiBackend, OpenAiLifecycleEvent};
+    let backend = Arc::new(RecordingBackend::default());
+    let observer = Arc::new(AnthropicObserver::default());
+    let app = router_for_with_config(
+        Arc::new(HookedOpenAiBackend::new(
+            backend.clone(),
+            Arc::new(InjectingHook),
+        )),
+        OpenAiFrontendConfig::default().with_lifecycle_observer(observer.clone()),
+    );
+    for path in ["/v1/messages", "/v1/chat/completions"] {
+        let body = json!({"model":MODEL_ID,"max_tokens":32,"mesh_hooks":true,"messages":[{"role":"user","content":"hello"}]});
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        response.into_body().collect().await.unwrap();
+    }
+    let requests = backend.seen_requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    let messages: Vec<Value> = requests
+        .iter()
+        .map(|request| serde_json::to_value(&request.messages).unwrap())
+        .collect();
+    assert_eq!(messages[0], messages[1]);
+    assert!(messages[0].to_string().contains("hook-marker"));
+    let events = observer.0.lock().unwrap();
+    let usages: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            OpenAiLifecycleEvent::ResponseCompleted { usage, .. } => Some(*usage),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(usages.len(), 2);
+    assert_eq!(usages[0], usages[1]);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, OpenAiLifecycleEvent::NonStreamTerminal { .. }))
+            .count(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn unsupported_semantics_are_rejected_before_backend_dispatch() {
+    for (key, value) in [
+        ("thinking", json!({"type":"enabled","budget_tokens":16})),
+        ("context_management", json!({"edits":[]})),
+        ("service_tier", json!("priority")),
+    ] {
+        let mut body = json!({"model":MODEL_ID,"max_tokens":32,"messages":[{"role":"user","content":"hello"}]});
+        body[key] = value;
+        let (status, error) = post_json("/v1/messages", body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+        assert_eq!(error["error"]["type"], "invalid_request_error");
+        assert!(error["error"]["message"].as_str().unwrap().contains(key));
+    }
+}
+
+#[test]
+fn translated_cached_usage_preserves_prompt_token_accounting() {
+    let response = ChatCompletionResponse::new(
+        MODEL_ID,
+        "cached answer",
+        Usage::new(20, 5).with_cached_tokens(12),
+    );
+    let translated =
+        openai_frontend::anthropic::messages_response_from_chat_response(&response).unwrap();
+    let usage = serde_json::to_value(translated.usage).unwrap();
+    assert_eq!(
+        usage,
+        json!({"input_tokens":8,"cache_read_input_tokens":12,"output_tokens":5})
+    );
 }

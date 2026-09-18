@@ -96,7 +96,13 @@ async fn non_streaming_messages(
     .await?;
     state.response_completed(&context, OpenAiBackendOperation::Messages, &response.usage);
     let translated = messages_response_from_chat_response(&response)?;
-    Ok(Json(translated).into_response())
+    let mut http_response = crate::router::json_response_with_usage(translated, &response.usage);
+    if let Some(marker) = response.capsule_marker {
+        http_response
+            .extensions_mut()
+            .insert(crate::router::CapsuleMarkerExtension(marker));
+    }
+    Ok(http_response)
 }
 
 async fn streaming_messages(
@@ -134,7 +140,10 @@ async fn streaming_messages(
     let assembler = Arc::new(Mutex::new(MessagesStreamAssembler::new()));
     let assembler_lifecycle = lifecycle.clone();
     let scan_assembler = Arc::clone(&assembler);
-    let body_events = stream.scan((), move |(): &mut (), item| {
+    let body_events = stream.scan(false, move |failed: &mut bool, item| {
+        if *failed {
+            return std::future::ready(None);
+        }
         let lifecycle = assembler_lifecycle.clone();
         let assembler = Arc::clone(&scan_assembler);
         let wire_events = match item {
@@ -143,17 +152,7 @@ async fn streaming_messages(
                     lifecycle.capture_usage(usage);
                 }
                 let events = match assembler.lock() {
-                    Ok(mut assembler) => {
-                        let mut events = assembler.absorb(&chunk);
-                        if let Some(finish) = chunk
-                            .choices
-                            .first()
-                            .and_then(|choice| choice.finish_reason)
-                        {
-                            events.extend(assembler.finish(Some(finish)));
-                        }
-                        events
-                    }
+                    Ok(mut assembler) => assembler.absorb(&chunk),
                     Err(_) => return std::future::ready(None),
                 };
                 events
@@ -162,6 +161,10 @@ async fn streaming_messages(
                     .collect::<Vec<_>>()
             }
             Err(error) => {
+                *failed = true;
+                if let Ok(mut assembler) = assembler.lock() {
+                    assembler.fail();
+                }
                 let body = serde_json::to_value(error.body()).unwrap_or(json!({}));
                 let error_event = translate_stream_error_body(&body);
                 vec![Ok::<_, std::convert::Infallible>(anthropic_event(
@@ -173,12 +176,8 @@ async fn streaming_messages(
     });
 
     let completion_lifecycle = lifecycle.clone();
-    // The Anthropic protocol has no `[DONE]` sentinel: `message_stop` closes
-    // the stream. The scan above only closes it when the backend sends a
-    // `finish_reason`, so an epilogue guarantees the terminator for backends
-    // that simply end their chunk stream (and no-ops otherwise — `finish` is
-    // idempotent). After a mid-stream `error` event the protocol is already
-    // broken, so no closing sequence is attempted.
+    // Wait for stream exhaustion so usage chunks after finish_reason are included.
+    // A backend error marks the assembler failed and suppresses the success tail.
     let epilogue_assembler = Arc::clone(&assembler);
     let events = prelude
         .chain(body_events.flatten())
@@ -188,7 +187,9 @@ async fn streaming_messages(
                     .lock()
                     .map(|mut assembler| assembler.finish(None))
                     .unwrap_or_default();
-                completion_lifecycle.mark_protocol_complete();
+                if !tail.is_empty() {
+                    completion_lifecycle.mark_protocol_complete();
+                }
                 stream::iter(
                     tail.iter()
                         .map(|event| Ok::<_, std::convert::Infallible>(anthropic_event(event)))
@@ -232,58 +233,31 @@ impl AnthropicMessagesStreamEvent {
     }
 }
 
-/// `POST /v1/messages/count_tokens`.
-///
-/// The frontend has no tokenizer handle, so the count is a documented
-/// chars/4 estimate over the serialized prompt; the response shape matches
-/// the Anthropic contract (`{"input_tokens": N}`).
+/// Count with the selected backend tokenizer and its generation chat template.
 pub(crate) async fn messages_count_tokens(
     State(state): State<FrontendState>,
     Extension(context): Extension<OpenAiLifecycleContext>,
     headers: HeaderMap,
     payload: Result<
-        Json<crate::anthropic::protocol::AnthropicMessagesRequest>,
+        Json<super::protocol::AnthropicCountTokensRequest>,
         axum::extract::rejection::JsonRejection,
     >,
 ) -> Result<Json<Value>, AnthropicRejection> {
-    let _ = (&state, &context);
     let Json(request) = json_payload(payload)?;
-    let header_session = agent_session_from_header(&state.config, &headers)?;
-    let _ = header_session;
-    let chat_request = messages_request_to_chat_request(request)?;
-    let mut serialized = String::new();
-    for message in &chat_request.messages {
-        if let Some(text) = message
-            .content
-            .as_ref()
-            .and_then(crate::message_content_to_text)
-        {
-            serialized.push_str(&text);
-            serialized.push('\n');
-        }
-        if let Some(tool_calls) = message.extra.get("tool_calls").and_then(Value::as_array) {
-            for call in tool_calls {
-                if let Some(name) = call
-                    .get("function")
-                    .and_then(|function| function.get("name"))
-                    .and_then(Value::as_str)
-                {
-                    serialized.push_str(name);
-                    serialized.push(' ');
-                }
-            }
-        }
-    }
-    if let Some(tools) = chat_request.tools.as_ref() {
-        serialized.push('\n');
-        serialized.push_str(&tools.to_string());
-    }
-    Ok(Json(
-        json!({ "input_tokens": estimate_tokens(&serialized) }),
-    ))
-}
-
-/// Conservative chars/4 estimate; matches the OpenAI-surface budget heuristic.
-fn estimate_tokens(text: &str) -> u32 {
-    u32::try_from(text.len().div_ceil(4)).unwrap_or(u32::MAX)
+    let session = agent_session_from_header(&state.config, &headers)?;
+    let backend_context = request_context(context.request_id, session.is_some(), false);
+    let mut chat = messages_request_to_chat_request(request.into_messages())?;
+    chat.set_agent_session(session);
+    chat.validate()?;
+    let count = call_backend_with_context(
+        state.config.lifecycle_observer.clone(),
+        &context,
+        OpenAiBackendOperation::MessagesCountTokens,
+        "messages_count_tokens",
+        state.config.backend_timeout,
+        &backend_context,
+        state.backend.count_chat_tokens(chat),
+    )
+    .await?;
+    Ok(Json(json!({"input_tokens": count})))
 }

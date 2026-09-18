@@ -788,7 +788,7 @@ struct TerminalUsage(TokenUsage);
 /// [`TerminalUsage`] already uses to get authoritative usage from inside the
 /// handler out to the one layer that can write response headers.
 #[derive(Clone)]
-struct CapsuleMarkerExtension(CapsuleMarker);
+pub(crate) struct CapsuleMarkerExtension(pub(crate) CapsuleMarker);
 
 /// The rung-ladder response-leg header: see
 /// `docs/plugins/openai-exchange-lifecycle-design-note.md`.
@@ -810,7 +810,7 @@ fn authoritative_usage(usage: &Usage) -> Option<TokenUsage> {
     })
 }
 
-fn json_response_with_usage<T: Serialize>(value: T, usage: &Usage) -> Response {
+pub(crate) fn json_response_with_usage<T: Serialize>(value: T, usage: &Usage) -> Response {
     let mut response = Json(value).into_response();
     if let Some(usage) = authoritative_usage(usage) {
         response.extensions_mut().insert(TerminalUsage(usage));
@@ -879,12 +879,20 @@ pub(crate) fn json_payload<T>(
     })
 }
 
-async fn not_found(uri: Uri) -> OpenAiError {
-    OpenAiError::route_not_found(uri)
+async fn not_found(uri: Uri) -> Response {
+    route_error(&uri, OpenAiError::route_not_found(&uri))
 }
 
-async fn method_not_allowed(method: Method) -> OpenAiError {
-    OpenAiError::method_not_allowed(method)
+async fn method_not_allowed(method: Method, uri: Uri) -> Response {
+    route_error(&uri, OpenAiError::method_not_allowed(method))
+}
+
+fn route_error(uri: &Uri, error: OpenAiError) -> Response {
+    if uri.path() == "/v1/messages" || uri.path().starts_with("/v1/messages/") {
+        crate::anthropic::AnthropicRejection::from(error).into_response()
+    } else {
+        error.into_response()
+    }
 }
 
 /// Ensure every request past this ingress carries a client nonce: forward one

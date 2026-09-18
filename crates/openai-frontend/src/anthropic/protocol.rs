@@ -39,8 +39,44 @@ pub struct AnthropicMessagesRequest {
     pub extra: BTreeMap<String, Value>,
 }
 
+/// Count requests have no generation budget. Keep their wire schema independent.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AnthropicCountTokensRequest {
+    pub model: String,
+    pub messages: Vec<AnthropicMessage>,
+    #[serde(default)]
+    pub system: Option<AnthropicSystemPrompt>,
+    #[serde(default)]
+    pub tools: Option<Vec<AnthropicToolDefinition>>,
+    #[serde(default)]
+    pub tool_choice: Option<AnthropicToolChoice>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl AnthropicCountTokensRequest {
+    pub fn into_messages(self) -> AnthropicMessagesRequest {
+        AnthropicMessagesRequest {
+            model: self.model,
+            messages: self.messages,
+            system: self.system,
+            tools: self.tools,
+            tool_choice: self.tool_choice,
+            extra: self.extra,
+            max_tokens: 1,
+            stream: false,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            metadata: None,
+        }
+    }
+}
+
 /// One conversation turn. `content` may be a plain string or a block array.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AnthropicMessage {
     pub role: String,
     pub content: AnthropicMessageContent,
@@ -71,17 +107,26 @@ pub struct AnthropicSystemBlock {
     pub extra: BTreeMap<String, Value>,
 }
 
-/// A content block inside a message. Untagged: dispatch on `type`.
-/// Variant order matters — the strict shapes (tool_use/tool_result) must be
-/// tried before the permissive text shape, whose flattened extra map would
-/// otherwise match any object.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
+/// A content block dispatched strictly by its `type` discriminator.
+#[derive(Debug, Clone)]
 pub enum AnthropicContentBlock {
     ToolUse(AnthropicToolUseContent),
     ToolResult(AnthropicToolResultContent),
     Text(AnthropicTextContent),
     Other(Value),
+}
+
+impl<'de> Deserialize<'de> for AnthropicContentBlock {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        match value.get("type").and_then(Value::as_str) {
+            Some("text") => serde_json::from_value(value).map(Self::Text),
+            Some("tool_use") => serde_json::from_value(value).map(Self::ToolUse),
+            Some("tool_result") => serde_json::from_value(value).map(Self::ToolResult),
+            _ => return Ok(Self::Other(value)),
+        }
+        .map_err(serde::de::Error::custom)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -152,6 +197,8 @@ pub struct AnthropicMetadata {
 pub struct AnthropicUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read_input_tokens: Option<u32>,
 }
 
 /// A block in a non-streaming response's `content` array.

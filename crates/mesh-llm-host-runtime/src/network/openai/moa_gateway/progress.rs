@@ -380,6 +380,9 @@ async fn write_progress_body(
     }
     let text_stream_mode = final_text_stream_mode_for_result(moa_result);
     match adapter {
+        proxy::ResponseAdapter::AnthropicMessagesStream => {
+            super::anthropic::send(tcp_stream, body, &[], true).await
+        }
         proxy::ResponseAdapter::OpenAiResponsesStream => {
             send_moa_as_responses_sse_inner(
                 tcp_stream,
@@ -426,6 +429,15 @@ async fn write_progress_event(
     completion_id: &str,
     sequence_number: &mut i32,
 ) -> std::io::Result<()> {
+    if adapter == proxy::ResponseAdapter::AnthropicMessagesStream {
+        crate::network::openai::response_adapter::write_chunked_sse_event(
+            stream,
+            Some("ping"),
+            r#"{"type":"ping"}"#,
+        )
+        .await?;
+        return stream.flush().await;
+    }
     let data = match adapter {
         proxy::ResponseAdapter::OpenAiResponsesStream => {
             // Responses-API: emit reasoning_text.delta so the UI
@@ -507,6 +519,19 @@ async fn write_failure_as_sse_tail(
         .and_then(|v| v.as_str())
         .unwrap_or("MoA failed after streaming headers were sent");
 
+    if adapter == proxy::ResponseAdapter::AnthropicMessagesStream {
+        let event = openai_frontend::anthropic::translate_stream_error_body(
+            &serde_json::json!({"error":{"message":err_msg}}),
+        );
+        crate::network::openai::response_adapter::write_chunked_sse_event(
+            stream,
+            Some("error"),
+            &serde_json::to_string(&event).map_err(std::io::Error::other)?,
+        )
+        .await?;
+        stream.write_all(b"0\r\n\r\n").await?;
+        return stream.shutdown().await;
+    }
     let data = match adapter {
         proxy::ResponseAdapter::OpenAiResponsesStream => {
             let ev = serde_json::json!({

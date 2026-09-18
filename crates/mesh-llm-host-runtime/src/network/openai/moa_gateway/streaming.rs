@@ -59,6 +59,36 @@ pub(super) async fn write_moa_response(
 ) -> std::io::Result<u16> {
     let body = &moa_result.response_body;
     let is_failure = is_moa_failure_body(body);
+    if matches!(
+        response_adapter,
+        proxy::ResponseAdapter::AnthropicMessagesJson
+            | proxy::ResponseAdapter::AnthropicMessagesStream
+    ) {
+        if was_streaming && !is_failure {
+            super::anthropic::send(tcp_stream, body, extra_headers, false).await?;
+            return Ok(200);
+        }
+        let normalized_error;
+        let source = if is_failure && body.get("error").is_none() {
+            normalized_error = serde_json::json!({"error":{"message":"MoA failed"}});
+            &normalized_error
+        } else {
+            body
+        };
+        let translated = openai_frontend::anthropic::translate_chat_value(source)
+            .map_err(std::io::Error::other)?;
+        let status = if is_failure { 502 } else { 200 };
+        proxy::send_json_with_status_and_headers_observed(
+            tcp_stream,
+            status,
+            &translated,
+            extra_headers,
+            route_observer,
+        )
+        .await?;
+        return Ok(status);
+    }
+
     // Streaming + failure: respond as non-streaming HTTP 502 with the
     // structured error body. Failure path doesn't go through SSE in any
     // adapter mode — callers want a clean connection-level error.
@@ -1242,5 +1272,60 @@ mod tests {
             delta_count, 1,
             "reducer output is intentionally not pseudo-streamed; raw: {raw}"
         );
+    }
+
+    #[tokio::test]
+    async fn anthropic_moa_writer_uses_messages_envelopes_for_success_and_failure() {
+        use tokio::io::AsyncReadExt;
+        for streaming in [false, true] {
+            for failed in [false, true] {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let address = listener.local_addr().unwrap();
+                let writer = tokio::spawn(async move {
+                    let (socket, _) = listener.accept().await.unwrap();
+                    let mut result = moa_turn_result_for_stream_mode(false);
+                    if failed {
+                        result.response_body = serde_json::json!({"error":{"type":"server_error","message":"worker failed"}});
+                    }
+                    let adapter = if streaming {
+                        proxy::ResponseAdapter::AnthropicMessagesStream
+                    } else {
+                        proxy::ResponseAdapter::AnthropicMessagesJson
+                    };
+                    write_moa_response(
+                        socket.into(),
+                        &result,
+                        &[],
+                        streaming,
+                        adapter,
+                        OpenAiRouteObserver::default(),
+                    )
+                    .await
+                    .unwrap()
+                });
+                let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+                let mut bytes = Vec::new();
+                client.read_to_end(&mut bytes).await.unwrap();
+                let response = String::from_utf8(bytes).unwrap();
+                let status = writer.await.unwrap();
+                if failed {
+                    assert_eq!(status, 502);
+                    assert!(response.starts_with("HTTP/1.1 502"), "{response}");
+                    assert!(response.contains("\"type\":\"error\""), "{response}");
+                    assert!(!response.contains("message_stop"));
+                } else if streaming {
+                    assert_eq!(status, 200);
+                    assert!(response.contains("event: message_start"), "{response}");
+                    assert!(response.contains("event: message_stop"), "{response}");
+                    assert!(!response.contains("[DONE]"));
+                } else {
+                    assert_eq!(status, 200);
+                    let body: serde_json::Value =
+                        serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+                    assert_eq!(body["type"], "message");
+                    assert_eq!(body["content"][0]["text"], "answer");
+                }
+            }
+        }
     }
 }

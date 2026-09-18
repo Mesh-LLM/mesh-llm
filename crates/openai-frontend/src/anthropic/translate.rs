@@ -23,7 +23,8 @@ use crate::anthropic::protocol::{
     AnthropicMessagesStreamEvent, AnthropicResponseBlock, AnthropicSystemPrompt, AnthropicUsage,
 };
 use crate::chat::{
-    ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ChatMessage, MessageContent,
+    ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ChatMessage,
+    MessageContent, MessageContentPart,
 };
 use crate::common::{FinishReason, Usage};
 use crate::errors::OpenAiError;
@@ -38,7 +39,7 @@ pub const STOP_REASON_REFUSAL: &str = "refusal";
 
 /// Translate a Messages request into the internal chat request.
 pub fn messages_request_to_chat_request(
-    request: AnthropicMessagesRequest,
+    mut request: AnthropicMessagesRequest,
 ) -> Result<ChatCompletionRequest, OpenAiError> {
     if request.model.trim().is_empty() {
         return Err(OpenAiError::invalid_request("model is required"));
@@ -49,6 +50,54 @@ pub fn messages_request_to_chat_request(
         ));
     }
 
+    super::validation::validate_request(&request)?;
+    if let Some(top_k) = request.top_k {
+        request.extra.insert("top_k".into(), json!(top_k));
+    }
+    let parallel_tool_calls = request
+        .tool_choice
+        .as_ref()
+        .and_then(|choice| choice.extra.get("disable_parallel_tool_use"))
+        .and_then(Value::as_bool)
+        .map(|disabled| !disabled);
+    let output_config = request.extra.remove("output_config").unwrap_or(json!({}));
+    let reasoning_effort = output_config
+        .get("effort")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|_| OpenAiError::invalid_request("unsupported output_config.effort"))?;
+    let response_format = match output_config.get("format") {
+        None => None,
+        Some(format)
+            if format["type"] == "json_schema"
+                && format["schema"].is_object()
+                && format.as_object().is_some_and(|object| {
+                    object.keys().all(|key| key == "type" || key == "schema")
+                }) =>
+        {
+            Some(
+                json!({"type":"json_schema","json_schema":{"name":"anthropic_output","strict":true,"schema":format["schema"]}}),
+            )
+        }
+        Some(_) => {
+            return Err(OpenAiError::invalid_request(
+                "output_config.format requires a json_schema object",
+            ));
+        }
+    };
+    let prompt_cache_key = request
+        .extra
+        .remove("prompt_cache_key")
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|_| OpenAiError::invalid_request("prompt_cache_key must be a string"))?;
+    let prompt_cache_retention = request
+        .extra
+        .remove("prompt_cache_retention")
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|_| OpenAiError::invalid_request("unsupported prompt_cache_retention"))?;
     let mut messages = Vec::new();
     if let Some(system) = request.system.as_ref() {
         let text = system_text(system);
@@ -58,9 +107,9 @@ pub fn messages_request_to_chat_request(
     }
     for (turn_index, message) in request.messages.iter().enumerate() {
         let role = message.role.as_str();
-        if role != "user" && role != "assistant" {
+        if role != "user" && role != "assistant" && role != "system" {
             return Err(OpenAiError::invalid_request(format!(
-                "messages[{turn_index}]: role must be `user` or `assistant`, got `{role}`"
+                "messages[{turn_index}]: role must be `user`, `assistant`, or the Claude Code `system` extension, got `{role}`"
             )));
         }
         expand_message(role, &message.content, &mut messages)?;
@@ -90,10 +139,10 @@ pub fn messages_request_to_chat_request(
         presence_penalty: None,
         frequency_penalty: None,
         logit_bias: None,
-        response_format: None,
+        response_format,
         tools,
         tool_choice,
-        parallel_tool_calls: None,
+        parallel_tool_calls,
         user: request.metadata.as_ref().and_then(|m| m.user_id.clone()),
         stop: request.stop_sequences.as_ref().map(|values| {
             if values.len() == 1 {
@@ -104,11 +153,14 @@ pub fn messages_request_to_chat_request(
         }),
         seed: None,
         reasoning: None,
-        reasoning_effort: None,
-        prompt_cache_key: None,
-        prompt_cache_retention: None,
-        stream_options: None,
-        extra: Default::default(),
+        reasoning_effort,
+        prompt_cache_key,
+        prompt_cache_retention,
+        stream_options: request.stream.then(|| crate::common::StreamOptions {
+            include_usage: Some(true),
+            extra: BTreeMap::new(),
+        }),
+        extra: request.extra,
     })
 }
 
@@ -139,6 +191,7 @@ fn expand_message(
         }
         AnthropicMessageContent::Blocks(blocks) => {
             let mut text_parts: Vec<String> = Vec::new();
+            let mut media_parts: Vec<MessageContentPart> = Vec::new();
             let mut tool_calls: Vec<Value> = Vec::new();
             let mut tool_results: Vec<ChatMessage> = Vec::new();
             for block in blocks {
@@ -148,6 +201,11 @@ fn expand_message(
                             && !text.is_empty()
                         {
                             text_parts.push(text.to_string());
+                            media_parts.push(MessageContentPart {
+                                content_type: "text".into(),
+                                text: Some(text.into()),
+                                extra: BTreeMap::new(),
+                            });
                         }
                     }
                     AnthropicContentBlock::ToolUse(tool_use) => {
@@ -162,17 +220,11 @@ fn expand_message(
                         }));
                     }
                     AnthropicContentBlock::ToolResult(tool_result) => {
-                        let content = if tool_result.is_error {
-                            format!(
-                                "tool error: {}",
-                                tool_result_content_text(&tool_result.content)
-                            )
-                        } else {
-                            tool_result_content_text(&tool_result.content)
-                        };
+                        let content =
+                            tool_result_content(&tool_result.content, tool_result.is_error)?;
                         tool_results.push(ChatMessage {
                             role: "tool".to_string(),
-                            content: Some(MessageContent::Text(content)),
+                            content: Some(content),
                             extra: BTreeMap::from([(
                                 "tool_call_id".to_string(),
                                 json!(tool_result.tool_use_id),
@@ -180,25 +232,26 @@ fn expand_message(
                         });
                     }
                     AnthropicContentBlock::Other(value) => {
-                        // Unrecognized block: preserve it so media detection
-                        // (media_url/media_data) can still see containers it
-                        // understands instead of silently dropping client
-                        // content.
-                        text_parts.push(value.to_string());
+                        media_parts.push(image_part(value)?);
                     }
                 }
             }
 
             match role {
                 "user" => {
-                    // Anthropic orders a user turn's non-tool content before
-                    // its tool results; both belong to the same turn.
+                    // Tool results must immediately follow the assistant's calls.
                     let has_tool_results = !tool_results.is_empty();
-                    if !text_parts.is_empty() {
+                    out.extend(tool_results);
+                    if media_parts.iter().any(|part| part.content_type != "text") {
+                        out.push(ChatMessage {
+                            role: "user".into(),
+                            content: Some(MessageContent::Parts(media_parts.clone())),
+                            extra: BTreeMap::new(),
+                        });
+                    } else if !text_parts.is_empty() {
                         out.push(text_message("user", &text_parts.join("\n")));
                     }
-                    out.extend(tool_results);
-                    if text_parts.is_empty() && !has_tool_results {
+                    if text_parts.is_empty() && media_parts.is_empty() && !has_tool_results {
                         return Err(OpenAiError::invalid_request(
                             "messages: user message has no content",
                         ));
@@ -210,7 +263,7 @@ fn expand_message(
                         extra.insert("tool_calls".to_string(), Value::Array(tool_calls));
                     }
                     out.push(ChatMessage {
-                        role: "assistant".to_string(),
+                        role: role.to_string(),
                         content: if text_parts.is_empty() {
                             None
                         } else {
@@ -225,6 +278,49 @@ fn expand_message(
     }
 }
 
+fn image_part(value: &Value) -> Result<MessageContentPart, OpenAiError> {
+    if value.get("type").and_then(Value::as_str) != Some("image") {
+        return Err(OpenAiError::invalid_request(
+            "unsupported Anthropic content block",
+        ));
+    }
+    if value
+        .as_object()
+        .is_none_or(|object| object.keys().any(|key| key != "type" && key != "source"))
+    {
+        return Err(OpenAiError::invalid_request("unsupported image field"));
+    }
+    let source = &value["source"];
+    if source.as_object().is_none_or(|object| {
+        object
+            .keys()
+            .any(|key| !["type", "url", "media_type", "data"].contains(&key.as_str()))
+    }) {
+        return Err(OpenAiError::invalid_request(
+            "unsupported image source field",
+        ));
+    }
+    let url = match source["type"].as_str() {
+        Some("url") => source["url"]
+            .as_str()
+            .filter(|url| !url.is_empty())
+            .map(str::to_owned),
+        Some("base64") => source["media_type"]
+            .as_str()
+            .zip(source["data"].as_str())
+            .map(|(mime, data)| format!("data:{mime};base64,{data}")),
+        _ => None,
+    }
+    .ok_or_else(|| {
+        OpenAiError::invalid_request("image source requires url or base64 media_type/data")
+    })?;
+    Ok(MessageContentPart {
+        content_type: "image_url".into(),
+        text: None,
+        extra: BTreeMap::from([("image_url".into(), json!({"url": url}))]),
+    })
+}
+
 fn text_message(role: &str, text: &str) -> ChatMessage {
     ChatMessage {
         role: role.to_string(),
@@ -233,16 +329,64 @@ fn text_message(role: &str, text: &str) -> ChatMessage {
     }
 }
 
-fn tool_result_content_text(content: &Option<Value>) -> String {
+fn tool_result_content(
+    content: &Option<Value>,
+    is_error: bool,
+) -> Result<MessageContent, OpenAiError> {
+    let mut parts = Vec::new();
+    if is_error {
+        parts.push(MessageContentPart {
+            content_type: "text".into(),
+            text: Some("tool error:".into()),
+            extra: BTreeMap::new(),
+        });
+    }
     match content {
-        None | Some(Value::Null) => String::new(),
-        Some(Value::String(text)) => text.clone(),
-        Some(Value::Array(blocks)) => blocks
-            .iter()
-            .filter_map(|block| block.get("text").and_then(Value::as_str))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        Some(other) => other.to_string(),
+        None | Some(Value::Null) => {}
+        Some(Value::String(text)) => parts.push(MessageContentPart {
+            content_type: "text".into(),
+            text: Some(text.clone()),
+            extra: BTreeMap::new(),
+        }),
+        Some(Value::Array(blocks)) => {
+            for block in blocks {
+                if block["type"] == "text" {
+                    if block.as_object().is_some_and(|object| {
+                        object.keys().any(|key| key != "type" && key != "text")
+                    }) {
+                        return Err(OpenAiError::invalid_request(
+                            "unsupported tool_result text field",
+                        ));
+                    }
+                    let text = block["text"].as_str().ok_or_else(|| {
+                        OpenAiError::invalid_request("tool_result text is required")
+                    })?;
+                    parts.push(MessageContentPart {
+                        content_type: "text".into(),
+                        text: Some(text.into()),
+                        extra: BTreeMap::new(),
+                    });
+                } else {
+                    parts.push(image_part(block)?);
+                }
+            }
+        }
+        _ => {
+            return Err(OpenAiError::invalid_request(
+                "tool_result content must be text or content blocks",
+            ));
+        }
+    }
+    if parts.iter().all(|part| part.content_type == "text") {
+        Ok(MessageContent::Text(
+            parts
+                .into_iter()
+                .filter_map(|part| part.text)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ))
+    } else {
+        Ok(MessageContent::Parts(parts))
     }
 }
 
@@ -278,6 +422,7 @@ fn translate_tool_choice(
 ) -> Result<Value, OpenAiError> {
     match choice.kind.as_str() {
         "auto" => Ok(json!("auto")),
+        "none" => Ok(json!("none")),
         "any" => Ok(json!("required")),
         "tool" => {
             let Some(name) = choice.name.as_deref() else {
@@ -361,10 +506,14 @@ fn tool_use_blocks(tool_calls: &[Value]) -> Result<Vec<AnthropicResponseBlock>, 
             .cloned()
             .unwrap_or_else(|| json!("{}"));
         let input = match arguments {
-            Value::String(text) => serde_json::from_str(&text).unwrap_or_else(|_| json!({})),
+            Value::String(text) => serde_json::from_str(&text)
+                .map_err(|_| OpenAiError::backend("tool arguments are not valid JSON"))?,
             Value::Object(_) => arguments,
-            _ => json!({}),
+            _ => return Err(OpenAiError::backend("tool arguments must be a JSON object")),
         };
+        if !input.is_object() {
+            return Err(OpenAiError::backend("tool arguments must be a JSON object"));
+        }
         blocks.push(AnthropicResponseBlock::ToolUse {
             id,
             name: name.to_string(),
@@ -384,8 +533,13 @@ pub fn stop_reason_from_finish(finish: Option<FinishReason>) -> &'static str {
 }
 
 fn anthropic_usage(usage: &Usage) -> AnthropicUsage {
+    let cached = usage
+        .prompt_tokens_details
+        .as_ref()
+        .map(|details| details.cached_tokens.min(usage.prompt_tokens));
     AnthropicUsage {
-        input_tokens: usage.prompt_tokens,
+        cache_read_input_tokens: cached,
+        input_tokens: usage.prompt_tokens.saturating_sub(cached.unwrap_or(0)),
         output_tokens: usage.completion_tokens,
     }
 }
@@ -403,6 +557,7 @@ pub fn message_start_event(id: &str, model: &str) -> AnthropicMessagesStreamEven
             stop_reason: None,
             stop_sequence: None,
             usage: AnthropicUsage {
+                cache_read_input_tokens: None,
                 input_tokens: 0,
                 output_tokens: 0,
             },
@@ -493,22 +648,25 @@ pub fn translate_stream_error_body(body: &Value) -> AnthropicMessagesStreamEvent
 /// Assistant-side accumulator: turns chat completion chunks into the
 /// Anthropic content-block event sequence.
 ///
-/// Chat chunks carry text deltas directly and tool-call fragments in the
-/// OpenAI `tool_calls` array shape. Tool fragments accumulate into a single
-/// OpenAI call; for the wire we mirror that accumulation: text streams into
-/// block 0 as it arrives, tool JSON streams into block 1 as fragments
-/// arrive, and [`Self::finish`] closes open blocks and emits the terminal
-/// `message_delta`/`message_stop` pair.
+/// Chat chunks carry text deltas directly. Tool fragments are accumulated independently by upstream tool-call index.
+/// Completion is deferred until terminal usage has arrived.
+#[derive(Debug, Default)]
+struct ToolStreamBlock {
+    wire_index: usize,
+    id: String,
+    name: String,
+    started: bool,
+    arguments: String,
+}
+
 #[derive(Debug, Default)]
 pub struct MessagesStreamAssembler {
     text_block_open: bool,
-    tool_block_open: bool,
     text_index: usize,
-    tool_index: usize,
     next_index: usize,
-    tool_id: Option<String>,
-    tool_name: Option<String>,
+    tools: BTreeMap<usize, ToolStreamBlock>,
     last_usage: Option<Usage>,
+    finish_reason: Option<FinishReason>,
     finished: bool,
 }
 
@@ -517,70 +675,81 @@ impl MessagesStreamAssembler {
         Self::default()
     }
 
-    /// Feed one chat chunk; returns the Anthropic events it produces.
+    pub fn fail(&mut self) {
+        self.finished = true;
+    }
+
     pub fn absorb(&mut self, chunk: &ChatCompletionChunk) -> Vec<AnthropicMessagesStreamEvent> {
         let mut events = Vec::new();
-        if let Some(usage) = chunk.usage.as_ref() {
+        if self.finished {
+            return events;
+        }
+        if let Some(usage) = &chunk.usage {
             self.last_usage = Some(usage.clone());
         }
         let Some(choice) = chunk.choices.first() else {
             return events;
         };
-        if let Some(text) = choice.delta.content.as_deref()
-            && !text.is_empty()
+        if let Some(reason) = choice.finish_reason {
+            self.finish_reason = Some(reason);
+        }
+        if let Some(text) = choice
+            .delta
+            .content
+            .as_deref()
+            .filter(|text| !text.is_empty())
         {
             if !self.text_block_open {
-                events.push(text_block_start(self.next_index));
                 self.text_index = self.next_index;
                 self.next_index += 1;
+                events.push(text_block_start(self.text_index));
                 self.text_block_open = true;
             }
             events.push(text_block_delta(self.text_index, text));
         }
-        if let Some(fragments) = choice.delta.tool_calls.as_ref().and_then(Value::as_array)
-            && !fragments.is_empty()
-        {
+        if let Some(fragments) = choice.delta.tool_calls.as_ref().and_then(Value::as_array) {
             for fragment in fragments {
-                if let Some(id) = fragment.get("id").and_then(Value::as_str) {
-                    self.tool_id = Some(id.to_string());
-                }
-                if let Some(name) = fragment
-                    .get("function")
-                    .and_then(|function| function.get("name"))
-                    .and_then(Value::as_str)
-                {
-                    self.tool_name = Some(name.to_string());
-                }
-                let arguments = fragment
-                    .get("function")
-                    .and_then(|function| function.get("arguments"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                if arguments.is_empty() {
-                    continue;
-                }
-                if !self.tool_block_open {
-                    events.push(tool_use_block_start(
-                        self.next_index,
-                        self.tool_id.as_deref().unwrap_or("toolu_stream"),
-                        self.tool_name.as_deref().unwrap_or("tool"),
-                    ));
-                    self.tool_index = self.next_index;
-                    self.next_index += 1;
-                    self.tool_block_open = true;
-                }
-                events.push(json_block_delta(self.tool_index, arguments));
+                self.absorb_tool(fragment, &mut events);
             }
         }
         events
     }
 
-    /// Emit the terminal events once the backend stream has ended.
-    ///
-    /// Idempotent: a stream whose final chunk already carried
-    /// `finish_reason` has closed the protocol, and a repeated `finish`
-    /// (epilogue after finish-reason chunk, or a backend that just ends)
-    /// produces no further events.
+    fn absorb_tool(&mut self, fragment: &Value, events: &mut Vec<AnthropicMessagesStreamEvent>) {
+        let index = fragment.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+        if self.text_block_open {
+            events.push(content_block_stop(self.text_index));
+            self.text_block_open = false;
+        }
+        let tool = self.tools.entry(index).or_insert_with(|| {
+            let wire_index = self.next_index;
+            self.next_index += 1;
+            ToolStreamBlock {
+                wire_index,
+                ..Default::default()
+            }
+        });
+        if let Some(id) = fragment.get("id").and_then(Value::as_str) {
+            tool.id.push_str(id);
+        }
+        if let Some(name) = fragment["function"]["name"].as_str() {
+            tool.name.push_str(name);
+        }
+        if let Some(arguments) = fragment["function"]["arguments"].as_str() {
+            tool.arguments.push_str(arguments);
+        }
+        if !tool.started && !tool.id.is_empty() && !tool.name.is_empty() {
+            events.push(tool_use_block_start(tool.wire_index, &tool.id, &tool.name));
+            tool.started = true;
+        }
+        if tool.started && !tool.arguments.is_empty() {
+            events.push(json_block_delta(
+                tool.wire_index,
+                &std::mem::take(&mut tool.arguments),
+            ));
+        }
+    }
+
     pub fn finish(
         &mut self,
         finish_reason: Option<FinishReason>,
@@ -590,15 +759,22 @@ impl MessagesStreamAssembler {
         }
         self.finished = true;
         let mut events = Vec::new();
-        if self.tool_block_open {
-            events.push(content_block_stop(self.tool_index));
-        }
         if self.text_block_open {
             events.push(content_block_stop(self.text_index));
         }
-        let stop_reason = stop_reason_from_finish(finish_reason);
-        let usage = self.last_usage.clone().unwrap_or_default();
-        events.push(message_delta_event(Some(stop_reason), &usage));
+        for tool in self.tools.values() {
+            if !tool.started {
+                return vec![translate_stream_error_body(
+                    &json!({"error":{"message":"upstream tool call is missing id or name"}}),
+                )];
+            }
+            events.push(content_block_stop(tool.wire_index));
+        }
+        let stop_reason = stop_reason_from_finish(finish_reason.or(self.finish_reason));
+        events.push(message_delta_event(
+            Some(stop_reason),
+            &self.last_usage.clone().unwrap_or_default(),
+        ));
         events.push(AnthropicMessagesStreamEvent::MessageStop {});
         events
     }

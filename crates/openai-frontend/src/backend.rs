@@ -142,6 +142,13 @@ impl Default for OpenAiRequestContext {
 pub trait OpenAiBackend: Send + Sync + 'static {
     async fn models(&self) -> OpenAiResult<Vec<ModelObject>>;
 
+    /// Count the model-rendered chat prompt without generating or running hooks.
+    async fn count_chat_tokens(&self, _request: ChatCompletionRequest) -> OpenAiResult<u32> {
+        Err(OpenAiError::unsupported(
+            "token counting is unavailable for this backend",
+        ))
+    }
+
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
