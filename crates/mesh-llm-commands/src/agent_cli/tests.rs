@@ -984,14 +984,23 @@ fn inventory_invalid_or_missing_windows_use_explicit_bounded_fallback() {
 
 #[tokio::test]
 async fn remote_inventory_fetch_preserves_context_with_served_id() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let mut buffer = [0; 4096];
-        let count = stream.read(&mut buffer).await.unwrap();
-        assert!(String::from_utf8_lossy(&buffer[..count]).starts_with("GET /v1/models "));
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        assert!(line.starts_with("GET /v1/models "));
+        loop {
+            line.clear();
+            assert!(reader.read_line(&mut line).await.unwrap() > 0);
+            if line == "\r\n" {
+                break;
+            }
+        }
+        let mut stream = reader.into_inner();
         let body = r#"{"data":[{"id":"org/remote:Q4","metadata":{"context_length":16384,"native_context_length":262144}}]}"#;
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
