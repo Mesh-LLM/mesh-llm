@@ -1,7 +1,7 @@
 //! Exercise the standalone command's output streams without loading a model.
 #[test]
 fn example_config_is_one_json_document_on_stdout() {
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_skippy-server"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_skippy"))
         .arg("example-config")
         .output()
         .expect("start standalone command");
@@ -16,7 +16,11 @@ fn example_config_is_one_json_document_on_stdout() {
 #[test]
 fn standalone_rejects_missing_runtime_before_reading_stage_config() {
     let temp = tempfile::tempdir().unwrap();
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_skippy-server"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_skippy"))
+        .env(
+            "MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR",
+            "/nonexistent/mesh-runtime",
+        )
         .args(["--runtime-release", "999.999.999-test", "--runtime-cache"])
         .arg(temp.path())
         .args(["serve-openai", "--config", "/nonexistent/skippy-stage.json"])
@@ -34,7 +38,7 @@ fn standalone_rejects_missing_runtime_before_reading_stage_config() {
 
 #[test]
 fn standalone_selection_uses_verified_bundle_and_rejects_abi_mismatch() {
-    use skippy_server::{cli::NativeRuntimeArgs, native_runtime::local_native_runtime_plan};
+    use skippy_server::native_runtime::{NativeRuntimeOptions, local_native_runtime_plan};
     let temp = tempfile::tempdir().unwrap();
     let bundle = temp.path().join("runtime");
     std::fs::create_dir_all(bundle.join("lib")).unwrap();
@@ -49,7 +53,7 @@ fn standalone_selection_uses_verified_bundle_and_rejects_abi_mismatch() {
         }})
     ).unwrap();
     manifest.write_to_dir(&bundle).unwrap();
-    let args = NativeRuntimeArgs {
+    let args = NativeRuntimeOptions {
         bundle_dirs: vec![bundle.clone()],
         cache_dir: Some(temp.path().join("empty-cache")),
         release: Some("999.999.999-test".into()),
@@ -65,9 +69,13 @@ fn standalone_selection_uses_verified_bundle_and_rejects_abi_mismatch() {
     #[cfg(feature = "dynamic-native-runtime")]
     {
         // A digest-valid non-library reaches the loader, then fails before model access.
-        let output = std::process::Command::new(env!("CARGO_BIN_EXE_skippy-server"))
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_skippy"))
             .arg("--runtime-bundle")
             .arg(&bundle)
+            .env(
+                "MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR",
+                "/nonexistent/mesh-runtime",
+            )
             .args(["--runtime-release", "999.999.999-test", "--runtime-cache"])
             .arg(temp.path().join("empty-cache"))
             .args(["serve-openai", "--config", "/nonexistent/skippy-stage.json"])
@@ -89,4 +97,49 @@ fn standalone_selection_uses_verified_bundle_and_rejects_abi_mismatch() {
             .to_string()
             .contains("no compatible local Skippy runtime")
     );
+}
+
+#[test]
+fn legacy_import_reports_entry_failures_with_nonzero_exit_and_preserves_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("legacy");
+    let broken = source.join("0.1.0/broken");
+    std::fs::create_dir_all(&broken).unwrap();
+    let manifest = broken.join("native-runtime.json");
+    // Use the reader's actual filename, so this is a failed entry rather than a skip.
+    let manifest = manifest.with_file_name(skippy_runtime_install::NATIVE_RUNTIME_MANIFEST_FILE);
+    std::fs::write(&manifest, b"{broken").unwrap();
+    let destination = dir.path().join("new-cache");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_skippy"))
+        .arg("--runtime-cache")
+        .arg(&destination)
+        .args(["runtime", "import-legacy"])
+        .arg(&source)
+        .arg("--dry-run")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["entries"][0]["status"], "failed", "{report}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("legacy runtime imports failed"));
+    assert_eq!(std::fs::read(manifest).unwrap(), b"{broken");
+    assert!(!destination.exists());
+}
+
+#[test]
+fn runtime_list_uses_skippy_cache_override_without_loading_native_code() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_skippy"))
+        .env("SKIPPY_NATIVE_RUNTIME_CACHE_DIR", dir.path().join("empty"))
+        .env(
+            "MESH_LLM_NATIVE_RUNTIME_CACHE_DIR",
+            "/nonexistent/mesh-cache",
+        )
+        .args(["runtime", "list"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{:?}", output);
+    let runtimes: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(runtimes.is_empty());
+    assert!(std::fs::read_dir(dir.path()).unwrap().next().is_none());
 }

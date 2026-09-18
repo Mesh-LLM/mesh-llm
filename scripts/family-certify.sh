@@ -353,7 +353,7 @@ maybe_build() {
   fi
   run_logged "build" "" \
     env LLAMA_STAGE_BUILD_DIR="${LLAMA_STAGE_BUILD_DIR:-$ROOT/.deps/llama-build/build-stage-abi-static}" \
-    cargo build -p skippy-correctness -p skippy-server -p llama-spec-bench
+    cargo build -p skippy-correctness -p skippy-cli -p llama-spec-bench
 }
 
 correctness_common=(
@@ -362,7 +362,7 @@ correctness_common=(
   --ctx-size "$CTX_SIZE"
   --n-gpu-layers "$N_GPU_LAYERS"
   --prompt "$PROMPT"
-  --stage-server-bin "$ROOT/target/debug/skippy-server"
+  --stage-server-bin "$ROOT/target/debug/skippy"
   --child-logs
 )
 native_mtp_args=()

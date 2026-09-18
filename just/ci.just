@@ -111,12 +111,15 @@ test-all:
         --exclude skippy-ffi \
         --exclude skippy-quantize \
         --exclude skippy-runtime \
-        --exclude skippy-server
+        --exclude skippy-server \
+        --exclude skippy-cli
     echo "--- Static Skippy runtime tests ---"
     just with-lld cargo test --package skippy-runtime --no-default-features --lib
     echo "--- Static Skippy server tests ---"
     just with-lld cargo test --package skippy-server --no-default-features --lib
     echo ""
+    echo "--- Static Skippy CLI tests ---"
+    just with-lld cargo test --package skippy-cli --no-default-features
     echo "=== 6/11 Plugin author exemplar ==="
     just with-lld cargo run --quiet --manifest-path docs/plugins/exemplars/web-ui/Cargo.toml -- --print-package-manifest > target/web-ui-exemplar-manifest.json
     diff -u <(jq -S . docs/plugins/exemplars/web-ui/plugin.package.json) <(jq -S . target/web-ui-exemplar-manifest.json)

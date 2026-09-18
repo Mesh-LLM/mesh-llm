@@ -114,7 +114,7 @@ python3 evals/skippy-competitive-benchmark.py run \
   --tokenizer-root /path/to/competitive/tokenizers \
   --manifest /path/to/competitive/thoughtworks-256.json \
   --mesh-root "$PWD" \
-  --mesh-binary "$PWD/target/release/skippy-server" \
+  --mesh-binary "$PWD/target/release/skippy" \
   --native-dir "$PWD/.deps/llama-build/build-stage-abi-static-metal" \
   --llama-root /path/to/pinned/llama.cpp \
   --llama-binary /path/to/pinned/llama.cpp/build/bin/llama-server \

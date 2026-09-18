@@ -7204,6 +7204,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "skippy-cli"
+version = "0.76.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dirs",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "skippy-api",
+ "skippy-events",
+ "skippy-native-runtime",
+ "skippy-protocol",
+ "skippy-runtime",
+ "skippy-runtime-install",
+ "skippy-server",
+ "skippy-topology",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "skippy-coordinator"
 version = "0.76.1"
 dependencies = [
@@ -7465,7 +7489,6 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "blake3",
- "clap",
  "futures-util",
  "libc",
  "model-artifact",

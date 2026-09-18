@@ -40,7 +40,7 @@ RECIPES_BY_FILE: Final = {
         "skippy-quantize-build",
         "skippy-quantize-release-build", "skippy-quantize-standalone-build",
         "skippy-quantize-standalone-release-build", "skippy-wan-lab-build-bins",
-        "skippy-server-build", "skippy-server-release-build",
+        "skippy-build", "skippy-release-build",
         "spec-bench",
     },
     "just/mesh.just": {"bundle", "download-model", "mesh-join", "mesh-worker"},

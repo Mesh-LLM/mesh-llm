@@ -96,7 +96,7 @@ pub enum FlashAttentionArg {
 
 #[derive(Args, Clone)]
 pub struct ServerArgs {
-    #[arg(long, default_value = "target/debug/skippy-server")]
+    #[arg(long, default_value = "target/debug/skippy")]
     pub stage_server_bin: PathBuf,
     #[arg(long)]
     pub child_logs: bool,

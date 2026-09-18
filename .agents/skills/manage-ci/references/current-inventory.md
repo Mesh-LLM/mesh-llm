@@ -919,8 +919,8 @@ server; the Linux test Docker context includes installer/native/hardware crates.
 Runtime selection is shared with Mesh embedded local startup; no runner or
 release publication policy changes.
 
-Unix standalone server host builds are exposed as `just skippy-server-build`
-and `just skippy-server-release-build`; both enable dynamic-native-runtime.
+Unix standalone server host builds are exposed as `just skippy-build`
+and `just skippy-release-build`; both enable dynamic-native-runtime.
 They consume a separately packaged runtime at execution time and do not alter
 CI lane selection or release publication.
 
@@ -936,3 +936,5 @@ Mesh. CI topology and runner policy are unchanged.
 Split-certification roster generation now targets `crates/skippy-api/src/split-certified.json`.
 The release-bound recipe build script and admission checks move with this neutral
 owner; canary generation/check commands and enforcement policy are unchanged.
+
+The standalone command now lives in `skippy-cli` (binary `skippy`); `skippy-server` is the Clap-free embedded service library. CLI source is included in Docker prechecks, affected-crate selection, split-serving ownership and the publish roster after its server dependency. Certification, benchmark, smoke and WAN lab launches use the new binary. `just skippy-build` and `just skippy-release-build` select the dynamic-runtime CLI.

@@ -1,4 +1,10 @@
-use crate::cli::OpenAiGuardrailsCliMode;
+/// Compatibility behavior selected by the embedding application.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OpenAiGuardrailsMode {
+    Disabled,
+    Metrics,
+    Enforce,
+}
 use openai_frontend::CompactingOpenAiBackend;
 use openai_frontend::CompactionConfig;
 use openai_frontend::GuardedOpenAiBackend;
@@ -54,11 +60,11 @@ impl OpenAiGuardrailsConfig {
         }
     }
 
-    pub fn for_standalone_mode(mode: OpenAiGuardrailsCliMode) -> Self {
+    pub fn for_standalone_mode(mode: OpenAiGuardrailsMode) -> Self {
         match mode {
-            OpenAiGuardrailsCliMode::Disabled => Self::disabled_for_skippy(),
-            OpenAiGuardrailsCliMode::Metrics => Self::compatibility_for_skippy(),
-            OpenAiGuardrailsCliMode::Enforce => Self {
+            OpenAiGuardrailsMode::Disabled => Self::disabled_for_skippy(),
+            OpenAiGuardrailsMode::Metrics => Self::compatibility_for_skippy(),
+            OpenAiGuardrailsMode::Enforce => Self {
                 target: OpenAiGuardrailsTarget::Skippy,
                 policy: GuardrailPolicy {
                     mode: GuardrailMode::Enforce,

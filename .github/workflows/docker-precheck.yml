@@ -102,6 +102,7 @@ jobs:
             crates/skippy-ffi/ \
             crates/skippy-runtime/ \
             crates/skippy-server/ \
+            crates/skippy-cli/ \
             crates/skippy-api/ \
             crates/skippy-model-package/ \
             crates/skippy-correctness/ \

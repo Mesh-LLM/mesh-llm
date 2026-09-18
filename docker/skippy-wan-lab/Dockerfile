@@ -46,7 +46,7 @@ RUN --mount=type=cache,id=mesh-llm-cargo-registry-debian-bookworm-rust-stable-${
     --mount=type=cache,id=mesh-llm-cargo-target-debian-bookworm-rust-stable-cpu-${TARGETARCH},target=/src/target,sharing=locked \
     just skippy-wan-lab-build-bins && \
     mkdir -p /out && \
-    cp /src/target/release/skippy-server /out/skippy-server && \
+    cp /src/target/release/skippy /out/skippy && \
     cp /src/target/release/skippy-prompt /out/skippy-prompt && \
     cp /src/target/release/metrics-server /out/metrics-server && \
     cp /src/target/release/skippy-model-package /out/skippy-model-package
@@ -71,7 +71,7 @@ RUN --mount=type=cache,id=mesh-llm-apt-lists-debian-bookworm-${TARGETARCH},targe
     python3 \
     tini
 
-COPY --from=builder /out/skippy-server /usr/local/bin/skippy-server
+COPY --from=builder /out/skippy /usr/local/bin/skippy
 COPY --from=builder /out/skippy-prompt /usr/local/bin/skippy-prompt
 COPY --from=builder /out/metrics-server /usr/local/bin/metrics-server
 COPY --from=builder /out/skippy-model-package /usr/local/bin/skippy-model-package

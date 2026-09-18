@@ -528,7 +528,7 @@ pub(super) fn execute_remote_plan(
                 Command::new("rsync")
                     .arg("-az")
                     .arg(&args.stage_server_bin)
-                    .arg(format!("{}:{remote_stage_dir}/skippy-server", stage.host)),
+                    .arg(format!("{}:{remote_stage_dir}/skippy", stage.host)),
             )
             .with_context(|| format!("rsync stage server to {}", stage.host))?;
 
@@ -555,7 +555,7 @@ pub(super) fn execute_remote_plan(
                 rsync_model_artifacts(args, stage)?;
             }
 
-            let remote_bin = format!("{remote_stage_dir}/skippy-server");
+            let remote_bin = format!("{remote_stage_dir}/skippy");
             let command = remote_start_command(args, plan, stage, &remote_bin);
             let mut ssh = Command::new("ssh");
             ssh.arg(&stage.host)
@@ -1473,7 +1473,7 @@ mod tests {
     fn builds_stable_stage_model_cache_key() {
         let args = RunArgs {
             metrics_server_bin: PathBuf::from("metrics-server"),
-            stage_server_bin: PathBuf::from("skippy-server"),
+            stage_server_bin: PathBuf::from("skippy"),
             hosts: "shadowfax.local,black.local".to_string(),
             run_id: Some("run-1".to_string()),
             topology_id: "quad/small".to_string(),
@@ -1647,7 +1647,7 @@ mod tests {
     fn remote_start_command_records_exit_code() {
         let args = RunArgs {
             metrics_server_bin: PathBuf::from("metrics-server"),
-            stage_server_bin: PathBuf::from("skippy-server"),
+            stage_server_bin: PathBuf::from("skippy"),
             hosts: "host.local".to_string(),
             run_id: Some("run-1".to_string()),
             topology_id: "topology".to_string(),
@@ -1787,7 +1787,7 @@ mod tests {
     fn test_run_args() -> RunArgs {
         RunArgs {
             metrics_server_bin: PathBuf::from("metrics-server"),
-            stage_server_bin: PathBuf::from("skippy-server"),
+            stage_server_bin: PathBuf::from("skippy"),
             hosts: "host.local".to_string(),
             run_id: Some("run-1".to_string()),
             topology_id: "topology".to_string(),

@@ -24,8 +24,7 @@ use skippy_protocol::{
 use tokio::net::TcpListener;
 
 use crate::{
-    cli::ServeArgs,
-    config::{load_json, validate_config},
+    config::validate_config,
     kv_integration::KvStageIntegration,
     runtime_state::{RuntimeState, load_runtime, loaded_model_state_kind},
     telemetry::{Telemetry, TelemetryLevel, TelemetryStats, lifecycle_attrs, now_unix_nanos},
@@ -169,33 +168,6 @@ pub struct StageHttpOptions {
     pub metrics_otlp_grpc: Option<String>,
     pub telemetry_queue_capacity: usize,
     pub telemetry_level: TelemetryLevel,
-}
-
-impl StageHttpOptions {
-    pub fn from_cli_args(args: ServeArgs) -> Result<Self> {
-        let config = load_json::<StageConfig>(&args.config)
-            .with_context(|| format!("load stage config {}", args.config.display()))?;
-        let topology = match args.topology.as_ref() {
-            Some(path) => Some(
-                load_json::<StageTopology>(path)
-                    .with_context(|| format!("load topology {}", path.display()))?,
-            ),
-            None => None,
-        };
-        let bind_addr = args.bind_addr.unwrap_or(config.bind_addr.parse()?);
-        Ok(Self {
-            config,
-            topology,
-            bind_addr,
-            metrics_otlp_grpc: args.metrics_otlp_grpc,
-            telemetry_queue_capacity: args.telemetry_queue_capacity,
-            telemetry_level: args.telemetry_level,
-        })
-    }
-}
-
-pub async fn serve(args: ServeArgs) -> Result<()> {
-    serve_stage_http(StageHttpOptions::from_cli_args(args)?).await
 }
 
 pub async fn serve_stage_http(options: StageHttpOptions) -> Result<()> {

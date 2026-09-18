@@ -43,6 +43,32 @@ pub fn discover_local_native_runtimes_with_filter(
     include: impl Fn(&InstalledNativeRuntime) -> bool,
 ) -> Result<Vec<InstalledNativeRuntime>> {
     let bundle_dirs = discover_native_runtime_bundle_dirs_lenient(explicit_dirs, release)?;
+    collect_local_native_runtimes(bundle_dirs, cache, include)
+}
+
+/// Discover only caller-supplied roots and cache entries, without product environment
+/// variables or executable-adjacent discovery. Roots can contain one bundle or a bundle set.
+pub fn discover_local_native_runtimes_in(
+    explicit_dirs: &[PathBuf],
+    cache: &NativeRuntimeCache,
+    release: &str,
+    include: impl Fn(&InstalledNativeRuntime) -> bool,
+) -> Result<Vec<InstalledNativeRuntime>> {
+    let bundle_dirs = discover_native_runtime_bundle_dirs_from_with_policy(
+        explicit_dirs,
+        &[],
+        None,
+        release,
+        InvalidManifestPolicy::WarnAndSkip,
+    )?;
+    collect_local_native_runtimes(bundle_dirs, cache, include)
+}
+
+fn collect_local_native_runtimes(
+    bundle_dirs: Vec<PathBuf>,
+    cache: &NativeRuntimeCache,
+    include: impl Fn(&InstalledNativeRuntime) -> bool,
+) -> Result<Vec<InstalledNativeRuntime>> {
     let mut runtimes = Vec::new();
     let mut seen = BTreeSet::new();
     for path in bundle_dirs {

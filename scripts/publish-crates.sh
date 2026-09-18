@@ -425,6 +425,7 @@ publish_crates=(
     skippy-runtime-install
     skippy-api
     skippy-server
+    skippy-cli
     mesh-native-serving-plugin-host
     mesh-llm-plugin-manager
     mesh-mixture-of-agents

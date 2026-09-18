@@ -67,7 +67,7 @@ DENSE_BINARY_STARTUP_TIMEOUT_SECS="${DENSE_BINARY_STARTUP_TIMEOUT_SECS:-${DENSE_
 RUN_DENSE_CHAIN_SMOKE="${RUN_DENSE_CHAIN_SMOKE:-${SKIPPY_SMOKE_ENABLE_DENSE_CHAIN:-0}}"
 # Dense local state handoff opens extra llama CPU lanes on Linux; keep it opt-in.
 SKIPPY_SMOKE_ENABLE_DENSE_STATE="${SKIPPY_SMOKE_ENABLE_DENSE_STATE:-0}"
-STAGE_SERVER_BIN="${STAGE_SERVER_BIN:-target/debug/skippy-server}"
+STAGE_SERVER_BIN="${STAGE_SERVER_BIN:-target/debug/skippy}"
 
 SERVER_PID=""
 
@@ -382,7 +382,7 @@ fi
 
 echo "building skippy smoke binaries"
 LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
-  cargo build -p skippy-server -p skippy-correctness -p skippy-model-package -p skippy-prompt
+  cargo build -p skippy-cli -p skippy-correctness -p skippy-model-package -p skippy-prompt
 
 DENSE_LAYER_END="$(model_layer_end "$DENSE_MODEL_PATH")"
 RECURRENT_LAYER_END="$(model_layer_end "$RECURRENT_MODEL_PATH")"

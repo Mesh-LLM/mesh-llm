@@ -155,7 +155,7 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertNotIn("-p skippy-ffi", build)
         for package in (
             "skippy-correctness",
-            "skippy-server",
+            "skippy-cli",
             "skippy-model-package",
         ):
             self.assertIn(f"-p {package}", build)
@@ -869,7 +869,7 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
                 "JSON\n",
                 encoding="utf-8",
             )
-            for name in ("skippy-correctness", "skippy-server", "skippy-topology-plan"):
+            for name in ("skippy-correctness", "skippy", "skippy-topology-plan"):
                 path = bin_dir / name
                 if not path.exists():
                     path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")

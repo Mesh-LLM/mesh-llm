@@ -1,8 +1,9 @@
 //! Prepare local models through the same API used by Mesh.
-use crate::{cli::ServeOpenAiArgs, config::load_json};
+use crate::cli::ServeOpenAiArgs;
 use anyhow::{Context, Result};
 use skippy_api::{SingleStageOptions, hash_cache::SidecarDigestCache};
 use skippy_protocol::StageConfig;
+use skippy_server::config::load_json;
 
 pub(crate) fn prepare_openai_stage(args: &ServeOpenAiArgs) -> Result<StageConfig> {
     match (&args.config, &args.model_path) {
@@ -66,9 +67,9 @@ mod tests {
     #[test]
     fn local_source_and_stage_config_are_exclusive() {
         for values in [
-            vec!["skippy-server", "serve-openai"],
+            vec!["skippy", "serve-openai"],
             vec![
-                "skippy-server",
+                "skippy",
                 "serve-openai",
                 "--config",
                 "stage.json",
@@ -76,7 +77,7 @@ mod tests {
                 "model.gguf",
             ],
             vec![
-                "skippy-server",
+                "skippy",
                 "serve-openai",
                 "--config",
                 "stage.json",
@@ -91,7 +92,7 @@ mod tests {
     #[test]
     fn local_model_rejects_invalid_options_before_reading_weights() {
         let args = args(&[
-            "skippy-server",
+            "skippy",
             "serve-openai",
             "--model-path",
             "missing.gguf",
@@ -132,7 +133,7 @@ mod tests {
         }
         std::fs::write(&path, bytes).unwrap();
         let args = args(&[
-            "skippy-server",
+            "skippy",
             "serve-openai",
             "--model-path",
             path.to_str().unwrap(),

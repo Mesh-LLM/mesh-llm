@@ -9,7 +9,8 @@ mod types;
 
 pub use discovery::{
     NATIVE_RUNTIME_BUNDLE_DIR_ENV, discover_local_native_runtimes,
-    discover_local_native_runtimes_with_filter, discover_native_runtime_bundle_dirs,
+    discover_local_native_runtimes_in, discover_local_native_runtimes_with_filter,
+    discover_native_runtime_bundle_dirs,
 };
 pub use skippy_native_runtime::{
     CachePrunePlan, CandidateEvaluation, CandidateRejection, HostGpuProfile, HostRuntimeProfile,

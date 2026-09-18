@@ -388,7 +388,7 @@ run_full_build() {
   run_verification_logged "generated model-family patch check" "$BUILD_LOG" \
     scripts/check-skippy-generated-family-patch.sh || return 1
   run_verification_logged "stage runtime crate build" "$BUILD_LOG" \
-    cargo build -p skippy-runtime -p skippy-server -p skippy-model-package -p skippy-correctness -p skippy-topology --bins \
+    cargo build -p skippy-runtime -p skippy-cli -p skippy-model-package -p skippy-correctness -p skippy-topology --bins \
     || return 1
   run_verification_logged "Skippy smoke tests" "$BUILD_LOG" \
     scripts/skippy-ci-smoke.sh || return 1

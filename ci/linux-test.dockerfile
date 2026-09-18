@@ -64,6 +64,7 @@ COPY crates/skippy-native-runtime/ crates/skippy-native-runtime/
 COPY crates/skippy-hardware-profile/ crates/skippy-hardware-profile/
 COPY crates/skippy-runtime-install/ crates/skippy-runtime-install/
 COPY crates/skippy-server/ crates/skippy-server/
+COPY crates/skippy-cli/ crates/skippy-cli/
 COPY crates/skippy-api/ crates/skippy-api/
 COPY crates/metrics-server/ crates/metrics-server/
 COPY crates/skippy-model-package/ crates/skippy-model-package/

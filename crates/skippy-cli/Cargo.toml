@@ -1,0 +1,37 @@
+[package]
+name = "skippy-cli"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Standalone Skippy model serving and management CLI"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+
+[[bin]]
+name = "skippy"
+path = "src/main.rs"
+
+[features]
+default = []
+dynamic-native-runtime = ["skippy-server/dynamic-native-runtime", "skippy-api/dynamic-native-runtime"]
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+dirs = "6"
+skippy-runtime-install = { path = "../skippy-runtime-install", version = "0.76.1" }
+skippy-api = { path = "../skippy-api", version = "0.76.1" }
+skippy-server = { path = "../skippy-server", version = "0.76.1" }
+skippy-protocol = { path = "../skippy-protocol", version = "0.76.1" }
+skippy-topology = { path = "../skippy-topology", version = "0.76.1" }
+sha2.workspace = true
+hex = "0.4"
+skippy-events = { path = "../skippy-events", version = "0.76.1" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+skippy-native-runtime = { path = "../skippy-native-runtime", version = "0.76.1" }
+skippy-runtime = { path = "../skippy-runtime", version = "0.76.1" }
+tempfile = "3"

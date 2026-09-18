@@ -18,8 +18,8 @@ pub use server::{
     EmbeddedReasoningBudget, EmbeddedReasoningEnabled, EmbeddedReasoningFormat,
 };
 pub use server::{
-    embedded_openai_backend, embedded_openai_router, serve_embedded_openai,
-    serve_embedded_openai_with_shutdown, serve_openai,
+    LocalOpenAiOptions, embedded_openai_backend, embedded_openai_router, serve_embedded_openai,
+    serve_embedded_openai_with_shutdown, serve_local_openai, serve_local_openai_with_shutdown,
 };
 
 pub(in crate::frontend) use cache_hints::{
@@ -37,14 +37,14 @@ pub(in crate::frontend) use streaming::*;
 pub(in crate::frontend) use timeouts::*;
 pub(in crate::frontend) use types::*;
 
-pub(crate) fn default_generation_queue_capacity(generation_concurrency: usize) -> usize {
+pub fn default_generation_queue_capacity(generation_concurrency: usize) -> usize {
     generation_concurrency.saturating_mul(8).clamp(16, 256)
 }
 
 /// Zero keeps accepted generation work queued until client cancellation.
 pub const DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS: u64 = 0;
 
-pub(crate) use server::resolve_adaptive_generation_min_concurrency;
+pub use server::resolve_adaptive_generation_min_concurrency;
 
 #[cfg(test)]
 mod admission_defaults_tests {

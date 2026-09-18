@@ -3,13 +3,13 @@
 Production stage service and embeddable staged runtime crate.
 
 `skippy-server` owns stage config, readiness, transport, runtime calls, and
-non-blocking telemetry emission. The CLI commands are wrappers around Rust
-entry points so mesh can host the same runtime in-process.
+non-blocking telemetry emission. Argument parsing and the `skippy` executable live
+in [`skippy-cli`](../skippy-cli/README.md); Mesh hosts the same service loops in-process.
 
 ## Native runtime startup
 
-On Unix, `just skippy-server-build` builds the dynamic standalone host for local
-iteration; `just skippy-server-release-build` builds the release host. Build its
+On Unix, `just skippy-build` builds the dynamic standalone host for local
+iteration; `just skippy-release-build` builds the release host. Build its
 matching native runtime with `just release-runtime-build <backend>` (for example,
 `metal` on Apple Silicon), then pass `--runtime-bundle dist/native-runtimes` to
 the serving command. Runtime packaging verifies the native payload separately

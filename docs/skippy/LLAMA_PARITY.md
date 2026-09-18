@@ -679,7 +679,7 @@ target/debug/skippy-correctness state-handoff \
   --ctx-size 128 \
   --n-gpu-layers 999 \
   --prompt Hello \
-  --stage-server-bin target/debug/skippy-server \
+  --stage-server-bin target/debug/skippy \
   --activation-width 896 \
   --source-bind-addr 127.0.0.1:19831 \
   --restore-bind-addr 127.0.0.1:19832 \

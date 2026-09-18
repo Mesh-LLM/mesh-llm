@@ -21,7 +21,6 @@ use super::{
     preconnect::DownstreamPreconnector,
 };
 use crate::{
-    cli::ServeBinaryArgs,
     config::validate_config,
     frontend::{self, EmbeddedOpenAiArgs, iteration_scheduler::IterationScheduler},
     kv_integration::KvStageIntegration,
@@ -222,10 +221,6 @@ fn finish_connection_workers(
             "connection worker shutdown also failed: {shutdown_error:#}"
         ))),
     }
-}
-
-pub async fn serve_binary(args: ServeBinaryArgs) -> Result<()> {
-    serve_binary_stage(BinaryStageOptions::from_cli_args(args)?).await
 }
 
 pub async fn serve_binary_stage(options: BinaryStageOptions) -> Result<()> {

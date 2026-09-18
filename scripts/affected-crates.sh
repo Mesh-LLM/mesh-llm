@@ -66,6 +66,7 @@ WORKSPACE_MEMBERS=(
   "skippy-scheduler"
   "skippy-api"
   "skippy-server"
+  "skippy-cli"
   "metrics-server"
   "skippy-model-package"
   "skippy-quantize"

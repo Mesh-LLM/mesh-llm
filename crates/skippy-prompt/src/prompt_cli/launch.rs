@@ -159,7 +159,7 @@ fn prompt_repl_launch(args: PromptArgs) -> Result<()> {
                 format!("{host}:{port}"),
                 Some(RemoteStage {
                     host,
-                    stage_server_bin: format!("{remote_binary_cache_dir}/skippy-server"),
+                    stage_server_bin: format!("{remote_binary_cache_dir}/skippy"),
                     model_path: remote_model_package_dir,
                     config_path: format!("{stage_dir}/stage-{index}.json"),
                     stage_log_path: format!("{stage_dir}/stage-{index}.log"),

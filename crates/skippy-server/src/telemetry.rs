@@ -11,7 +11,6 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use clap::ValueEnum;
 use opentelemetry_proto::tonic::{
     collector::trace::v1::{ExportTraceServiceRequest, trace_service_client::TraceServiceClient},
     common::v1::{AnyValue, InstrumentationScope, KeyValue, any_value},
@@ -74,7 +73,7 @@ pub struct Telemetry {
     level: TelemetryLevel,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TelemetryLevel {
     Off,
     Summary,

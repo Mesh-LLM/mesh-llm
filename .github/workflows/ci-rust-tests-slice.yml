@@ -208,7 +208,7 @@ jobs:
   safetensors_runtime_smoke:
     name: SafeTensors runtime smoke
     needs: runner_policy
-    if: ${{ inputs.original_event_name == 'pull_request' && (contains(inputs.rust_tests_matrix, 'skippy-model') || contains(inputs.rust_tests_matrix, 'skippy-runtime') || contains(inputs.rust_tests_matrix, 'skippy-quantize') || contains(inputs.rust_tests_matrix, 'skippy-ffi') || contains(inputs.rust_tests_matrix, 'skippy-server') || contains(inputs.rust_tests_matrix, 'skippy-protocol') || contains(inputs.rust_tests_matrix, 'skippy-cache') || contains(inputs.rust_tests_matrix, 'mesh-llm-config') || contains(inputs.rust_tests_matrix, 'mesh-llm-host-runtime') || contains(inputs.rust_tests_matrix, 'mesh-llm-cli')) }}
+    if: ${{ inputs.original_event_name == 'pull_request' && (contains(inputs.rust_tests_matrix, 'skippy-model') || contains(inputs.rust_tests_matrix, 'skippy-runtime') || contains(inputs.rust_tests_matrix, 'skippy-quantize') || contains(inputs.rust_tests_matrix, 'skippy-ffi') || contains(inputs.rust_tests_matrix, 'skippy-server') || contains(inputs.rust_tests_matrix, 'skippy-cli') || contains(inputs.rust_tests_matrix, 'skippy-protocol') || contains(inputs.rust_tests_matrix, 'skippy-cache') || contains(inputs.rust_tests_matrix, 'mesh-llm-config') || contains(inputs.rust_tests_matrix, 'mesh-llm-host-runtime') || contains(inputs.rust_tests_matrix, 'mesh-llm-cli')) }}
     runs-on: ${{ needs.runner_policy.outputs.runner }}
     timeout-minutes: 60
     container:

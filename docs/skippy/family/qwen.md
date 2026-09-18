@@ -197,7 +197,7 @@ gate for the Qwen3.6 `14,27` topology; `--allow-mismatch` is diagnostic-only
 and must not be used for promoted runs:
 
 ```bash
-cargo build -p skippy-server -p skippy-correctness
+cargo build -p skippy-cli -p skippy-correctness
 
 target/debug/skippy-correctness single-step \
   --model "$QWEN_MODEL_PATH" \

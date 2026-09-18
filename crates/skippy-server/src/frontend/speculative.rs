@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use openai_frontend::OpenAiError;
 use openai_frontend::OpenAiResult;
 use serde::{Deserialize, Serialize};
@@ -6,10 +6,8 @@ use serde_json::Value;
 use serde_json::json;
 use skippy_protocol::{MAX_VERIFY_WINDOW_PIPELINE_DEPTH, MAX_VERIFY_WINDOW_RUNAHEAD_TOKENS};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::time::Instant;
 
-use crate::config::load_json;
 use crate::frontend::util::openai_backend_error;
 
 mod standalone;
@@ -228,19 +226,6 @@ impl SpeculativeDecodeConfig {
             json!(self.effective_strategy),
         );
     }
-}
-
-/// Loads a speculative decode plan from JSON (or the default), then validates it.
-pub(super) fn load_standalone_speculative_config(
-    path: Option<&PathBuf>,
-) -> Result<SpeculativeDecodeConfig> {
-    let config = match path {
-        Some(path) => load_json(path)
-            .with_context(|| format!("load speculative decode config {}", path.display()))?,
-        None => SpeculativeDecodeConfig::default(),
-    };
-    config.validate()?;
-    Ok(config)
 }
 
 #[cfg(test)]

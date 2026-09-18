@@ -1280,7 +1280,7 @@ mod tests {
     fn test_run_args() -> RunArgs {
         RunArgs {
             metrics_server_bin: PathBuf::from("metrics-server"),
-            stage_server_bin: PathBuf::from("skippy-server"),
+            stage_server_bin: PathBuf::from("skippy"),
             hosts: "host.local".to_string(),
             run_id: Some("run-1".to_string()),
             topology_id: "topology".to_string(),

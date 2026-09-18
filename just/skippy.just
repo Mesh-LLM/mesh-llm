@@ -1,14 +1,14 @@
 # Build the standalone server host; supply a separately packaged native runtime
 # through --runtime-bundle when running a serving command.
 [unix]
-skippy-server-build:
+skippy-build:
     scripts/prepare-llama.sh pinned
-    just with-lld cargo build --locked -p skippy-server --features dynamic-native-runtime
+    just with-lld cargo build --locked -p skippy-cli --features dynamic-native-runtime
 
 [unix]
-skippy-server-release-build:
+skippy-release-build:
     scripts/prepare-llama.sh pinned
-    just with-lld cargo build --release --locked -p skippy-server --features dynamic-native-runtime
+    just with-lld cargo build --release --locked -p skippy-cli --features dynamic-native-runtime
 
 # Build the skippy benchmark/debug telemetry collector.
 [unix]
@@ -22,7 +22,7 @@ metrics-server-build:
 # Build the binaries copied into the Skippy WAN Docker lab image.
 [linux]
 skippy-wan-lab-build-bins:
-    cargo build --release --locked -p skippy-server -p skippy-prompt -p metrics-server -p skippy-model-package
+    cargo build --release --locked -p skippy-cli -p skippy-prompt -p metrics-server -p skippy-model-package
 
 # Build the resumable GGUF conversion/quantization replacement CLI.
 [unix]
@@ -88,7 +88,7 @@ skippy-openai-smoke *ARGS:
 # Build the OpenAI benchmark server against an explicitly selected native ABI.
 # Nightly runners provide LLAMA_STAGE_BUILD_DIR from their pre-baked image.
 competitive-benchmark-build:
-    just with-lld cargo build --release --locked -p skippy-server
+    just with-lld cargo build --release --locked -p skippy-cli
 
 # Run the skippy benchmark/debug telemetry collector.
 metrics-server db="/tmp/mesh-metrics.duckdb" http_addr="127.0.0.1:18080" otlp_addr="127.0.0.1:14317" *ARGS="": metrics-server-build

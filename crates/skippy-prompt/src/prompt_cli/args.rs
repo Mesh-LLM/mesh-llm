@@ -34,7 +34,7 @@ impl From<ReplLoadMode> for RuntimeLoadMode {
 pub struct PromptArgs {
     #[arg(long, default_value = "target/debug/metrics-server")]
     pub metrics_server_bin: PathBuf,
-    #[arg(long, default_value = "target/debug/skippy-server")]
+    #[arg(long, default_value = "target/debug/skippy")]
     pub stage_server_bin: PathBuf,
     #[arg(long, default_value = "target/debug/skippy-model-package")]
     pub model_slice_bin: PathBuf,

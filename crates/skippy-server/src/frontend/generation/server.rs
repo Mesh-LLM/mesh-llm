@@ -1,7 +1,5 @@
 use crate::binary_transport::PredictionReturnHub;
 use crate::binary_transport::WireCondition;
-use crate::cli::ServeOpenAiArgs;
-use crate::config::load_json;
 use crate::config::validate_config;
 use crate::frontend::GenerationLifecycleConfig;
 use crate::frontend::GenerationReceiptConfig;
@@ -22,9 +20,7 @@ use crate::frontend::generation::prewarm_generation_sessions;
 use crate::frontend::iteration_scheduler::IterationScheduler;
 use crate::frontend::prefill::PrefillChunkPolicy;
 use crate::frontend::prefill::PrefillChunkPolicyArgs;
-use crate::frontend::speculative::{
-    SpeculativeDecodeConfig, load_standalone_speculative_config, standalone_ngram_proposal_limit,
-};
+use crate::frontend::speculative::{SpeculativeDecodeConfig, standalone_ngram_proposal_limit};
 use crate::http::bind_serve_listener;
 use crate::kv_integration::KvStageIntegration;
 use crate::runtime_state::RuntimeState;
@@ -62,17 +58,43 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
-pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
-    let config = crate::local_model::prepare_openai_stage(&args)?;
-    let topology = match args.topology.as_ref() {
-        Some(path) => Some(
-            load_json::<StageTopology>(path)
-                .with_context(|| format!("load topology {}", path.display()))?,
-        ),
-        None => None,
-    };
+/// Prepared local OpenAI serving options. Model acquisition and argument parsing belong to callers.
+pub struct LocalOpenAiOptions {
+    pub config: StageConfig,
+    pub topology: Option<StageTopology>,
+    pub speculative: SpeculativeDecodeConfig,
+    pub bind_addr: SocketAddr,
+    pub model_id: Option<String>,
+    pub default_max_tokens: u32,
+    pub generation_concurrency: Option<usize>,
+    pub adaptive_generation_concurrency: bool,
+    pub adaptive_generation_min_concurrency: Option<usize>,
+    pub generation_queue_capacity: Option<usize>,
+    pub generation_admission_timeout_secs: u64,
+    pub prefill_chunk_size: usize,
+    pub prefill_chunk_policy: String,
+    pub prefill_chunk_schedule: Option<String>,
+    pub prefill_adaptive_start: usize,
+    pub prefill_adaptive_step: usize,
+    pub prefill_adaptive_max: usize,
+    pub prefill_adaptive_target_ms: f64,
+    pub metrics_otlp_grpc: Option<String>,
+    pub telemetry_queue_capacity: usize,
+    pub telemetry_level: crate::telemetry::TelemetryLevel,
+    pub openai_guardrails: crate::frontend::OpenAiGuardrailsMode,
+}
+pub async fn serve_local_openai(options: LocalOpenAiOptions) -> Result<()> {
+    serve_local_openai_with_shutdown(options, std::future::pending::<()>()).await
+}
+
+pub async fn serve_local_openai_with_shutdown(
+    args: LocalOpenAiOptions,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<()> {
+    let config = args.config;
+    let topology = args.topology;
     validate_config(&config, topology.as_ref())?;
-    if args.first_stage_addr.is_none() && config.downstream.is_some() {
+    if config.downstream.is_some() {
         bail!("serve-openai local backend requires a final/single-stage config with no downstream");
     }
     if args.prefill_chunk_size == 0 {
@@ -94,7 +116,8 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
         .generation_queue_capacity
         .unwrap_or_else(|| super::default_generation_queue_capacity(generation_concurrency));
     let generation_admission_timeout = Duration::from_secs(args.generation_admission_timeout_secs);
-    let speculative = load_standalone_speculative_config(args.speculative_config.as_ref())?;
+    let speculative = args.speculative;
+    speculative.validate()?;
 
     let runtime = load_runtime(&config)?.ok_or_else(|| {
         anyhow!("serve-openai requires a stage config with model_path for tokenization and decode")
@@ -102,11 +125,6 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
     let model_id = ModelId::new(args.model_id.unwrap_or_else(|| config.model_id.clone()))
         .map_err(|error| anyhow!("invalid OpenAI model id: {error}"))?
         .into_string();
-    if args.first_stage_addr.is_some() {
-        bail!(
-            "--first-stage-addr is no longer supported; direct prediction return requires embedded stage-0 OpenAI serving via serve-binary --openai-bind-addr"
-        );
-    }
     let mode = OpenAiBackendMode::LocalRuntime;
     let mode_label = mode.label();
     let telemetry = Telemetry::new(
@@ -207,7 +225,9 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
     })?;
 
     let listener = bind_serve_listener(args.bind_addr)?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown)
+        .await?;
     Ok(())
 }
 #[derive(Clone)]
@@ -589,7 +609,7 @@ fn validate_generation_receipt_topology(
     Ok(())
 }
 
-pub(crate) fn resolve_adaptive_generation_min_concurrency(
+pub fn resolve_adaptive_generation_min_concurrency(
     enabled: bool,
     configured_minimum: Option<usize>,
     hard_limit: usize,

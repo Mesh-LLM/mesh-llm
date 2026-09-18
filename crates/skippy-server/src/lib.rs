@@ -4,7 +4,6 @@
 //! or other host runtimes.
 
 pub mod binary_transport;
-pub mod cli;
 pub mod config;
 pub mod embedded;
 pub mod frontend;
@@ -42,8 +41,6 @@ pub mod telemetry;
 pub mod tokenizer;
 
 // Re-export key types for consumers
-pub use binary_transport::serve_binary;
-pub use cli::ServeBinaryArgs;
 pub use embedded::{
     EmbeddedRuntimeOptions, EmbeddedRuntimeStatus, EmbeddedServerHandle, EmbeddedServerStatus,
     EmbeddedState, SkippyRuntimeHandle, start_binary_stage, start_embedded_openai,
@@ -64,5 +61,3 @@ pub use frontend::{
 };
 pub use skippy_protocol::StageConfig;
 pub use tokenizer::{MAX_TOKENIZE_TOKENS, TokenizerCapability, TokenizerCapabilityError};
-
-mod local_model;

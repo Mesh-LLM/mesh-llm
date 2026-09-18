@@ -72,7 +72,7 @@ for host in "${HOST_ARRAY[@]}"; do
   remote_cmd="$(printf 'PORTS=%q KILL_STALE=%q CLEAN_TMP=%q MIN_FREE_GB=%q bash -s' "$PORTS" "$KILL_STALE" "$CLEAN_TMP" "$MIN_FREE_GB")"
   if ! ssh $SSH_OPTS "$host" "$remote_cmd" <<'REMOTE'
 set -euo pipefail
-PROCESS_PATTERN='(skippy-server|skippy-correctness|skippy-prompt|kv-server|/(llama-server|llama-cli|llama-bench|llama-run|main)( |$)|(^| )llama-(server|cli|bench|run)( |$)|mesh-llm|mesh-server|/(mesh)( |$)|(^| )mesh( |$)|ollama)'
+PROCESS_PATTERN='(skippy-server|/(skippy)( |$)|(^| )skippy( |$)|skippy-correctness|skippy-prompt|kv-server|/(llama-server|llama-cli|llama-bench|llama-run|main)( |$)|(^| )llama-(server|cli|bench|run)( |$)|mesh-llm|mesh-server|/(mesh)( |$)|(^| )mesh( |$)|ollama)'
 
 scan_processes() {
   ps -axo pid=,etime=,user=,command= \

@@ -63,7 +63,7 @@ skippy-bench eval run speed-bench --base-url http://127.0.0.1:9337/v1 --model or
 Benchmark-managed Skippy server runs require a release `skippy-server` binary.
 Run `just release-build` before `run`, `focused-runtime`, `local-single`, or
 local split binary benchmarks. These commands default to
-`target/release/skippy-server` and reject `target/debug/skippy-server` because
+`target/release/skippy` and reject `target/debug/skippy` because
 debug builds distort throughput and timeout behavior.
 
 The old standalone `kv-stage-integration` and `kv-hit-regression` commands are

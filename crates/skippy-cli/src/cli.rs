@@ -1,11 +1,11 @@
 use std::{net::SocketAddr, path::PathBuf};
 
-use crate::frontend::DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS;
-use crate::telemetry::TelemetryLevel;
+use skippy_server::frontend::DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS;
+
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
-#[command(about = "Llama staged-runtime server")]
+#[command(about = "Skippy model serving and runtime management")]
 pub struct Cli {
     #[command(flatten)]
     pub native_runtime: NativeRuntimeArgs,
@@ -20,6 +20,13 @@ pub enum Command {
     #[command(name = "serve-openai")]
     ServeOpenAi(ServeOpenAiArgs),
     ExampleConfig,
+    /// Plan and admit a direct GGUF split for explicit worker endpoints.
+    PlanSplit(PlanSplitArgs),
+    /// Inspect or explicitly import verified native runtime bundles.
+    Runtime {
+        #[command(subcommand)]
+        command: RuntimeCommand,
+    },
 }
 
 #[derive(Parser)]
@@ -304,14 +311,74 @@ pub enum OpenAiGuardrailsCliMode {
     Enforce,
 }
 
+#[derive(Clone, Debug, Default, clap::Args)]
+pub struct NativeRuntimeArgs {
+    /// Directory containing a verified native runtime bundle (repeatable).
+    #[arg(long = "runtime-bundle", global = true)]
+    pub bundle_dirs: Vec<PathBuf>,
+    /// Native runtime cache root; model caches are separate.
+    #[arg(long = "runtime-cache", global = true)]
+    pub cache_dir: Option<PathBuf>,
+    /// Required Skippy runtime release. Defaults to this build's runtime metadata.
+    #[arg(long = "runtime-release", global = true)]
+    pub release: Option<String>,
+    /// Runtime backend or exact artifact ID.
+    #[arg(long = "runtime-selection", global = true)]
+    pub selection: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum TelemetryLevel {
+    Off,
+    Summary,
+    Debug,
+}
+
+#[derive(Subcommand)]
+pub enum RuntimeCommand {
+    List,
+    /// Copy a verified bundle into the Skippy cache; leave the source unchanged.
+    Import {
+        source: PathBuf,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Explicitly migrate a Mesh-era runtime cache without modifying its contents.
+    ImportLegacy {
+        source: PathBuf,
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Parser)]
+pub struct PlanSplitArgs {
+    #[arg(long)]
+    pub model_path: PathBuf,
+    #[arg(long)]
+    pub model_id: Option<String>,
+    /// Ordered worker listen endpoints, one per stage. Use routable addresses across machines.
+    #[arg(long = "worker", required = true)]
+    pub workers: Vec<SocketAddr>,
+    #[arg(long, default_value_t = 512)]
+    pub ctx_size: u32,
+    #[arg(long, default_value_t = 1)]
+    pub lanes: u32,
+    #[arg(long, default_value_t = 0, allow_hyphen_values = true)]
+    pub n_gpu_layers: i32,
+    /// New directory for stage configs and their admission descriptors; never overwritten.
+    #[arg(long)]
+    pub output_dir: PathBuf,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn openai_prefill_policy_defaults_to_adaptive_ramp() {
-        let cli = Cli::try_parse_from(["skippy-server", "serve-binary", "--config", "stage.json"])
-            .unwrap();
+        let cli =
+            Cli::try_parse_from(["skippy", "serve-binary", "--config", "stage.json"]).unwrap();
 
         let Command::ServeBinary(args) = cli.command else {
             panic!("expected serve-binary command");
@@ -327,8 +394,8 @@ mod tests {
         assert_eq!(args.openai_generation_queue_capacity, None);
         assert_eq!(args.openai_generation_admission_timeout_secs, 0);
 
-        let cli = Cli::try_parse_from(["skippy-server", "serve-openai", "--config", "stage.json"])
-            .unwrap();
+        let cli =
+            Cli::try_parse_from(["skippy", "serve-openai", "--config", "stage.json"]).unwrap();
 
         let Command::ServeOpenAi(args) = cli.command else {
             panic!("expected serve-openai command");
@@ -349,7 +416,7 @@ mod tests {
     #[test]
     fn serve_openai_accepts_explicit_guardrail_mode() {
         let cli = Cli::try_parse_from([
-            "skippy-server",
+            "skippy",
             "serve-openai",
             "--config",
             "stage.json",
@@ -367,7 +434,7 @@ mod tests {
     #[test]
     fn standalone_commands_accept_resolved_speculative_config_files() {
         let cli = Cli::try_parse_from([
-            "skippy-server",
+            "skippy",
             "serve-binary",
             "--config",
             "stage.json",
@@ -384,7 +451,7 @@ mod tests {
         );
 
         let cli = Cli::try_parse_from([
-            "skippy-server",
+            "skippy",
             "serve-openai",
             "--config",
             "stage.json",
@@ -400,20 +467,4 @@ mod tests {
             Some(PathBuf::from("decode-plan.json"))
         );
     }
-}
-
-#[derive(Clone, Debug, Default, clap::Args)]
-pub struct NativeRuntimeArgs {
-    /// Directory containing a verified native runtime bundle (repeatable).
-    #[arg(long = "runtime-bundle", global = true)]
-    pub bundle_dirs: Vec<PathBuf>,
-    /// Native runtime cache root; model caches are separate.
-    #[arg(long = "runtime-cache", global = true)]
-    pub cache_dir: Option<PathBuf>,
-    /// Required Skippy runtime release. Defaults to this build's runtime metadata.
-    #[arg(long = "runtime-release", global = true)]
-    pub release: Option<String>,
-    /// Runtime backend or exact artifact ID.
-    #[arg(long = "runtime-selection", global = true)]
-    pub selection: Option<String>,
 }

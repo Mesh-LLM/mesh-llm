@@ -86,7 +86,7 @@ if [[ "$MODEL_IDENTITY_OVERRIDDEN" == "0" ]]; then
 fi
 
 echo "building skippy-server and skippy-model-package"
-LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" cargo build -p skippy-server -p skippy-model-package
+LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" cargo build -p skippy-cli -p skippy-model-package
 
 echo "inferring layer_end from $MODEL_PATH"
 LAYER_END="$(
@@ -142,7 +142,7 @@ fi
 SERVER_LOG="${WORK_DIR}/serve-openai.log"
 echo "starting serve-openai on ${BASE_URL}"
 SKIPPY_TELEMETRY_STDERR=1 LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
-  target/debug/skippy-server serve-openai \
+  target/debug/skippy serve-openai \
     --config "$CONFIG_PATH" \
     --bind-addr "${HOST}:${PORT}" \
     --default-max-tokens "$DEFAULT_MAX_TOKENS" \

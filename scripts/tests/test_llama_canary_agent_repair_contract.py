@@ -108,7 +108,7 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
         self.assertIn("scripts/check-skippy-generated-family-patch.sh", build)
         for package in (
             "skippy-runtime",
-            "skippy-server",
+            "skippy-cli",
             "skippy-model-package",
             "skippy-correctness",
         ):

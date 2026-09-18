@@ -435,6 +435,7 @@ def _make_batches(crates: list[str], bins: int) -> list[dict[str, Any]]:
         "mesh-llm-client": 6,
         "skippy-runtime": 5,
         "skippy-server": 5,
+        "skippy-cli": 5,
         "model-artifact": 4,
         "model-hf": 4,
         "openai-frontend": 4,

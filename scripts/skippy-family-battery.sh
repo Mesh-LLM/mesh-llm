@@ -298,19 +298,19 @@ resolve_pinned_model() {
 }
 
 build_certification_binaries() {
-  local bins=(skippy-correctness skippy-server skippy-model-package skippy-topology-plan)
+  local bins=(skippy-correctness skippy skippy-model-package skippy-topology-plan)
   local bin
 
   if (( DRY_RUN == 1 )); then
     if (( SKIP_BUILD == 0 )); then
-      echo "env LLAMA_STAGE_BUILD_DIR='<repo>/.deps/llama-build/build-stage-abi-static' cargo build -p skippy-correctness -p skippy-server -p skippy-model-package -p skippy-topology --bins"
+      echo "env LLAMA_STAGE_BUILD_DIR='<repo>/.deps/llama-build/build-stage-abi-static' cargo build -p skippy-correctness -p skippy-cli -p skippy-model-package -p skippy-topology --bins"
     fi
     return 0
   fi
 
   if (( SKIP_BUILD == 0 )); then
     env LLAMA_STAGE_BUILD_DIR="${LLAMA_STAGE_BUILD_DIR:-$ROOT/.deps/llama-build/build-stage-abi-static}" \
-      cargo build -p skippy-correctness -p skippy-server -p skippy-model-package -p skippy-topology --bins
+      cargo build -p skippy-correctness -p skippy-cli -p skippy-model-package -p skippy-topology --bins
     return 0
   fi
 
@@ -538,7 +538,7 @@ cleanup_certification_ports() {
     while IFS= read -r pid; do
       [[ -n "$pid" ]] || continue
       command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
-      if [[ "$command" != *"$BIN_DIR/skippy-server"* ]]; then
+      if [[ "$command" != *"$BIN_DIR/skippy"* ]]; then
         echo "port $port remains owned by unexpected process $pid: $command" >&2
         return 1
       fi

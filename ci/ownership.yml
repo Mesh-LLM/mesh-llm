@@ -175,6 +175,7 @@
         "crates/skippy-prompt/**",
         "crates/skippy-runtime/**",
         "crates/skippy-server/**",
+        "crates/skippy-cli/**",
         "crates/skippy-topology/**"
       ]
     },
@@ -300,6 +301,7 @@
         "skippy-prompt",
         "skippy-runtime",
         "skippy-server",
+        "skippy-cli",
         "skippy-topology"
       ]
     },

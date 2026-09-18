@@ -273,9 +273,6 @@ pub fn load_runtime_with_overrides(
         .map(std::path::PathBuf::from)
         .collect::<Vec<_>>();
     let model = match config.load_mode {
-        _ if std::env::var("MESH_LLM_BYPASS_SKIPPY_MODEL_LOAD").is_ok() => {
-            skippy_runtime::StageModel::new_dummy()
-        }
         _ if !admitted_model_parts.is_empty() => {
             open_stage_model_from_parts(&admitted_model_parts, &runtime_config)?
         }
@@ -322,9 +319,6 @@ pub fn load_runtime_with_overrides_and_open_events(
         .map(std::path::PathBuf::from)
         .collect::<Vec<_>>();
     let model = match config.load_mode {
-        _ if std::env::var("MESH_LLM_BYPASS_SKIPPY_MODEL_LOAD").is_ok() => {
-            skippy_runtime::StageModel::new_dummy()
-        }
         _ if !admitted_model_parts.is_empty() => open_stage_model_from_parts_with_events(
             &admitted_model_parts,
             &runtime_config,

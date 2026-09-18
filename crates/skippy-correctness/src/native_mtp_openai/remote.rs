@@ -245,7 +245,7 @@ mod tests {
     fn remote_stage_command_quotes_paths_and_sets_mtp_env() {
         let command = remote_stage_command(RemoteStageCommand {
             workdir: Some("/tmp/work dir"),
-            remote_bin: "target/debug/skippy-server",
+            remote_bin: "target/debug/skippy",
             remote_config: "/tmp/run/stage'1.json",
             remote_topology: "/tmp/run/topology.json",
             remote_log: "/tmp/run/stage1.log",
@@ -257,14 +257,14 @@ mod tests {
         assert!(command.contains("cd '/tmp/work dir' && "));
         assert!(command.contains("SKIPPY_NATIVE_MTP_ENABLED=1"));
         assert!(command.contains("SKIPPY_NATIVE_MTP_BATCHED_VERIFY=0"));
-        assert!(command.contains("'target/debug/skippy-server' serve-binary"));
+        assert!(command.contains("'target/debug/skippy' serve-binary"));
         assert!(command.contains("'/tmp/run/stage'\"'\"'1.json'"));
 
         let batched_command = remote_stage_command(RemoteStageCommand {
             batched_verify_enabled: true,
             ..RemoteStageCommand {
                 workdir: None,
-                remote_bin: "/bin/skippy-server",
+                remote_bin: "/bin/skippy",
                 remote_config: "/tmp/stage1.json",
                 remote_topology: "/tmp/topology.json",
                 remote_log: "/tmp/stage1.log",

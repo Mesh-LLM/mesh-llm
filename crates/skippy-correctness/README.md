@@ -98,7 +98,7 @@ skippy-correctness native-mtp-open-ai-ab \
   --stage1-model /Volumes/models/huggingface/.../model.gguf \
   --stage1-ssh-host micstudio \
   --stage1-remote-workdir /Users/micn/src/mesh-llm-codex \
-  --stage1-remote-stage-server-bin target/debug/skippy-server \
+  --stage1-remote-stage-server-bin target/debug/skippy \
   --openai-bind-addr 192.168.0.5:19170 \
   --stage0-bind-addr 192.168.0.5:19171 \
   --stage0-endpoint-addr 192.168.0.5:19171 \
@@ -114,7 +114,7 @@ skippy-correctness glm-dsa-stage0-trace \
   --stage-load-mode layer-package \
   --ctx-size 1024 \
   --n-gpu-layers 999 \
-  --stage-server-bin target/release/skippy-server \
+  --stage-server-bin target/release/skippy \
   --prompt-bin target/release/skippy-prompt \
   --report-out reports/glm-dsa-stage0-trace.json
 ```

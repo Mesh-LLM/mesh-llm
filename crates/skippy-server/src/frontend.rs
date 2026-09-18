@@ -32,18 +32,18 @@ use self::{
 };
 
 pub use self::admission::DECODE_BATCH_HEADROOM_TOKENS;
+pub(crate) use self::generation::serve_embedded_openai_with_scheduler;
 use self::generation::*;
 pub use self::generation::{
     CONTEXT_BUDGET_MAX_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS,
     DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS, EmbeddedOpenAiArgs, EmbeddedOpenAiBackend,
     EmbeddedOpenAiRequestDefaults, EmbeddedOpenAiRouter, EmbeddedReasoningBudget,
-    EmbeddedReasoningEnabled, EmbeddedReasoningFormat, embedded_openai_backend,
+    EmbeddedReasoningEnabled, EmbeddedReasoningFormat, LocalOpenAiOptions, embedded_openai_backend,
     embedded_openai_router, serve_embedded_openai, serve_embedded_openai_with_shutdown,
-    serve_openai,
+    serve_local_openai, serve_local_openai_with_shutdown,
 };
-pub(crate) use self::generation::{
+pub use self::generation::{
     default_generation_queue_capacity, resolve_adaptive_generation_min_concurrency,
-    serve_embedded_openai_with_scheduler,
 };
 pub use self::generation_receipt::{
     CompositeGenerationLifecycleIngress, GenerationAbort, GenerationCommit, GenerationCompletion,
@@ -52,7 +52,7 @@ pub use self::generation_receipt::{
     GenerationStateDigest, GenerationTermination, generation_token_id_digest,
 };
 pub use self::guardrails::{
-    OpenAiGuardrailsConfig, OpenAiGuardrailsStatus, OpenAiGuardrailsTarget,
+    OpenAiGuardrailsConfig, OpenAiGuardrailsMode, OpenAiGuardrailsStatus, OpenAiGuardrailsTarget,
 };
 pub use self::linear_proposal::{
     LinearProposal, LinearProposalDiscardReason, LinearProposalDisposition, LinearProposalIngress,

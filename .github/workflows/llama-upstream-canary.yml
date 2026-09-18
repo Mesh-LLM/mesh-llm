@@ -325,7 +325,7 @@ jobs:
         if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' && steps.family_patch.outcome == 'success'
         # Do not select skippy-ffi directly here: its default dynamic-runtime
         # feature would be unified into the statically linked certification binaries.
-        run: cargo build -p skippy-runtime -p skippy-server -p skippy-model-package -p skippy-correctness -p skippy-topology --bins
+        run: cargo build -p skippy-runtime -p skippy-cli -p skippy-model-package -p skippy-correctness -p skippy-topology --bins
 
       - name: Skippy smoke tests
         if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' && steps.family_patch.outcome == 'success' && env.LLAMA_UPSTREAM_CANARY_SMOKE != '0' && env.LLAMA_UPSTREAM_CANARY_SMOKE != 'false'

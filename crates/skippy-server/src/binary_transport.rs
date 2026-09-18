@@ -14,9 +14,7 @@ mod wire;
 
 pub(crate) use self::binary_messaging::async_forwarder::{AsyncForwardReceipt, AsyncForwarder};
 pub(crate) use self::binary_messaging::serve_binary_stage_with_shutdown_and_boundary_observer;
-pub use self::binary_messaging::{
-    serve_binary, serve_binary_stage, serve_binary_stage_with_shutdown,
-};
+pub use self::binary_messaging::{serve_binary_stage, serve_binary_stage_with_shutdown};
 pub use self::direct_return::PredictionReturnHub;
 pub use self::direct_return::PredictionReturnListener;
 pub(crate) use self::direct_return::PredictionReturnReceiver;
