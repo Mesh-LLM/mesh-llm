@@ -14,15 +14,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "ci" / "llama-canary" / "family-certified.json"
-DEFAULT_OUTPUT = (
-    ROOT
-    / "crates"
-    / "mesh-llm-host-runtime"
-    / "src"
-    / "inference"
-    / "skippy"
-    / "split-certified.json"
-)
+DEFAULT_OUTPUT = ROOT / "crates" / "skippy-api" / "src" / "split-certified.json"
 UPSTREAM_PIN = ROOT / "third_party" / "llama.cpp" / "upstream.txt"
 PATCH_DIR = ROOT / "third_party" / "llama.cpp" / "patches"
 ABI_SOURCE = ROOT / "crates" / "skippy-ffi" / "src" / "lib.rs"

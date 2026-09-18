@@ -32,3 +32,7 @@ same-file = "1.0.6"
 
 [dev-dependencies]
 tempfile = "3"
+
+[build-dependencies]
+serde_json = "1"
+sha2 = "0.11"

@@ -1046,3 +1046,7 @@ the host. No external CI policy changes.
 Standalone local-model serving now consumes `skippy-api`; publish order places
 the API before `skippy-server`. Source identity and planning are shared with
 Mesh. CI topology and runner policy are unchanged.
+
+Split-certification roster generation now targets `crates/skippy-api/src/split-certified.json`.
+The release-bound recipe build script and admission checks move with this neutral
+owner; canary generation/check commands and enforcement policy are unchanged.

@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow};
 use skippy_coordinator::{ClaimDecision, ClaimFence, LoadClaimRef};
-use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig, StageConfig};
+use skippy_protocol::{FlashAttentionType, PeerConfig, StageConfig};
 use skippy_server::{EmbeddedServerHandle, binary_transport::BinaryStageOptions};
 use tokio::{
     sync::{mpsc, oneshot},
@@ -639,56 +639,22 @@ fn stage_config(
     load: &StageLoadRequest,
     package: Option<&super::materialization::ResolvedStagePackage>,
 ) -> Result<StageConfig> {
-    anyhow::ensure!(!load.topology_id.is_empty(), "topology_id is required");
-    anyhow::ensure!(!load.run_id.is_empty(), "run_id is required");
-    anyhow::ensure!(!load.model_id.is_empty(), "model_id is required");
-    anyhow::ensure!(!load.stage_id.is_empty(), "stage_id is required");
-    anyhow::ensure!(
-        load.layer_start < load.layer_end,
-        "invalid stage layer range"
-    );
-    anyhow::ensure!(load.ctx_size > 0, "ctx_size must be greater than zero");
-    anyhow::ensure!(load.lane_count > 0, "lane_count must be greater than zero");
-    if let Some(device) = load.selected_device.as_ref() {
-        anyhow::ensure!(
-            !device.backend_device.is_empty(),
-            "selected backend device must not be empty"
-        );
-    }
-    let resident_tensor_names = admitted_resident_tensor_names(load, package)?;
-    let frontier_profile = admitted_activation_frontier(load)?;
-    let mut config = StageConfig {
-        run_id: load.run_id.clone(),
+    let options = skippy_api::stage_load::AdmittedStageOptions {
         topology_id: load.topology_id.clone(),
+        run_id: load.run_id.clone(),
         model_id: load.model_id.clone(),
-        package_ref: Some(load.package_ref.clone()),
-        manifest_sha256: Some(load.manifest_sha256.clone()),
-        source_model_path: package
-            .map(|package| package.source_model_path.clone())
-            .or_else(|| load.model_path.clone()),
-        source_model_sha256: package
-            .map(|package| package.source_model_sha256.clone())
-            .or_else(|| load.source_model_sha256.clone()),
-        source_model_bytes: package
-            .and_then(|package| package.source_model_bytes)
-            .or(load.source_model_bytes),
-        materialized_path: None,
-        materialized_pinned: false,
+        stage_id: load.stage_id.clone(),
+        layer_start: load.layer_start,
+        layer_end: load.layer_end,
+        ctx_size: load.ctx_size,
+        lane_count: load.lane_count,
+        selected_device: load.selected_device.clone(),
+        package_ref: load.package_ref.clone(),
+        manifest_sha256: load.manifest_sha256.clone(),
         model_path: load.model_path.clone(),
-        model_part_paths: package
-            .map(|package| {
-                package
-                    .model_part_paths
-                    .iter()
-                    .map(|path| path.to_string_lossy().into_owned())
-                    .collect()
-            })
-            .unwrap_or_default(),
-        projector_path: load.projector_path.clone().or_else(|| {
-            package
-                .and_then(|package| package.projector_path.as_ref())
-                .map(|path| path.to_string_lossy().into_owned())
-        }),
+        source_model_sha256: load.source_model_sha256.clone(),
+        source_model_bytes: load.source_model_bytes,
+        projector_path: load.projector_path.clone(),
         projector_use_gpu: load.projector_use_gpu,
         media_marker: load.media_marker.clone(),
         image_min_tokens: load.image_min_tokens,
@@ -698,79 +664,32 @@ fn stage_config(
         generation_signal_window: load.generation_signal_window,
         activation_codec: load.activation_codec,
         activation_codec_policy: load.activation_codec_policy,
-        stage_id: load.stage_id.clone(),
         stage_index: load.stage_index,
-        layer_start: load.layer_start,
-        layer_end: load.layer_end,
-        ctx_size: load.ctx_size,
-        lane_count: load.lane_count,
         n_batch: load.n_batch,
         n_ubatch: load.n_ubatch,
         n_gpu_layers: load.n_gpu_layers,
         mmap: load.mmap,
         mlock: load.mlock,
-        repack: load.runtime_settings.repack,
-        op_offload: load.runtime_settings.op_offload,
-        no_host_buffer: load.runtime_settings.no_host_buffer,
-        check_tensors: load.runtime_settings.check_tensors,
-        direct_io: load.runtime_settings.direct_io,
-        main_gpu: load.runtime_settings.main_gpu,
-        split_mode: load.runtime_settings.split_mode,
-        cache_type_k: empty_to_default(&load.cache_type_k, "f16"),
-        cache_type_v: empty_to_default(&load.cache_type_v, "f16"),
+        runtime_settings: load.runtime_settings,
+        cache_type_k: load.cache_type_k.clone(),
+        cache_type_v: load.cache_type_v.clone(),
         flash_attn_type: load.flash_attn_type,
-        kv_offload: load.runtime_settings.kv_offload,
-        kv_unified: load.runtime_settings.kv_unified,
-        swa_full: load.runtime_settings.swa_full,
-        cache_idle_slots: load.runtime_settings.cache_idle_slots,
-        filter_tensors_on_load: matches!(
-            load.load_mode,
-            LoadMode::RuntimeSlice | LoadMode::LayerPackage
-        ),
-        resident_tensor_names,
-        activation_import_identities: frontier_profile.activation_imports.clone(),
-        activation_import_bindings: frontier_profile.activation_import_bindings.clone(),
-        activation_export_identities: frontier_profile.activation_exports.clone(),
-        activation_export_bindings: frontier_profile.activation_export_bindings.clone(),
-        checkpoint_quantization: None,
-        checkpoint_imatrix: None,
-        checkpoint_imatrix_sha256: None,
-        selected_device: load.selected_device.clone(),
-        kv_cache: None,
-        native_mtp_enabled: load.native_mtp_enabled,
         load_mode: load.load_mode.clone(),
+        native_mtp_enabled: load.native_mtp_enabled,
         bind_addr: load.bind_addr.clone(),
         upstream: load.upstream.as_ref().map(peer_config),
         downstream: load.downstream.as_ref().map(peer_config),
+        admission: load.admission.clone(),
     };
-    let family_policy = super::family_policy_for_stage_config(&config);
-    config.kv_cache = package.map_or_else(
-        || family_policy.stage_kv_cache_config_for_stage(&config),
-        |package| {
-            family_policy.stage_kv_cache_config_for_package(&config, Path::new(&package.local_ref))
-        },
-    );
-    Ok(config)
+    options.validate()?;
+    let resident_tensor_names = admitted_resident_tensor_names(load, package)?;
+    skippy_api::stage_load::admitted_stage_config(&options, package, resident_tensor_names)
 }
 
 pub(crate) fn admitted_activation_frontier(
     load: &StageLoadRequest,
 ) -> Result<&skippy_protocol::StageAdmissionProfile> {
-    let frontier = load
-        .admission
-        .profiles
-        .first()
-        .context("stage admission descriptor has no execution profiles")?;
-    anyhow::ensure!(
-        load.admission.profiles.iter().all(|profile| {
-            profile.activation_imports == frontier.activation_imports
-                && profile.activation_exports == frontier.activation_exports
-                && profile.activation_import_bindings == frontier.activation_import_bindings
-                && profile.activation_export_bindings == frontier.activation_export_bindings
-        }),
-        "stage admission execution profiles disagree on activation frontier identities"
-    );
-    Ok(frontier)
+    skippy_api::stage_load::admitted_activation_frontier(&load.admission)
 }
 
 pub(crate) fn admitted_resident_tensor_names(
@@ -818,25 +737,7 @@ pub(crate) fn admitted_resident_tensor_names(
     } else {
         return Ok(Vec::new());
     };
-    let package_id = manifest
-        .computed_package_id()
-        .context("compute planning identity for resident tensor binding")?;
-    anyhow::ensure!(
-        package_id == load.admission.package_id,
-        "stage admission package identity differs from the local planning manifest"
-    );
-    let mut names = manifest
-        .materialization_tensors(&load.admission.resident_tensor_ids)
-        .map_err(|error| anyhow!(error.to_string()))?
-        .into_iter()
-        .map(|tensor| tensor.native_name.to_string())
-        .collect::<Vec<_>>();
-    names.sort();
-    anyhow::ensure!(
-        !names.is_empty() && names.windows(2).all(|window| window[0] < window[1]),
-        "admitted resident tensor names must be non-empty, strictly sorted, and unique"
-    );
-    Ok(names)
+    skippy_api::stage_load::admitted_resident_tensor_names(&load.admission, &manifest)
 }
 
 fn peer_config(peer: &StagePeerDescriptor) -> PeerConfig {
@@ -844,14 +745,6 @@ fn peer_config(peer: &StagePeerDescriptor) -> PeerConfig {
         stage_id: peer.stage_id.clone(),
         stage_index: peer.stage_index,
         endpoint: peer.endpoint.clone(),
-    }
-}
-
-fn empty_to_default(value: &str, default: &str) -> String {
-    if value.is_empty() {
-        default.to_string()
-    } else {
-        value.to_string()
     }
 }
 

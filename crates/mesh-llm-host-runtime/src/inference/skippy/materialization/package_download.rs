@@ -1,16 +1,16 @@
+use skippy_api::materialization::{safe_manifest_file_path, verify_package_v2_artifact};
 use std::{
     fs,
-    io::{Read, Write},
-    path::{Component, Path, PathBuf},
+    io::Write,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, bail};
 use hf_hub::progress::{DownloadEvent, Progress, ProgressEvent, ProgressHandler};
-use sha2::{Digest, Sha256};
 use skippy_package_format::{
-    Artifact as PackageV2Artifact, PackageManifest as PackageManifestV2,
+    PackageManifest as PackageManifestV2,
     stage_admission::StageAdmissionDescriptor as PackageV2StageAdmissionDescriptor,
 };
 use skippy_runtime::package::{self, PackageIntegrityOptions, PackageStageRequest};
@@ -1127,43 +1127,6 @@ fn verify_package_v2_metadata(package_dir: &Path, manifest_bytes: &[u8]) -> Resu
     Ok(())
 }
 
-fn verify_package_v2_artifact(package_dir: &Path, artifact: &PackageV2Artifact) -> Result<()> {
-    let relative = safe_manifest_file_path(&artifact.path)?;
-    let path = package_dir.join(&relative);
-    let metadata = fs::metadata(&path)
-        .with_context(|| format!("stat package-v2 artifact {}", relative.display()))?;
-    anyhow::ensure!(
-        metadata.is_file(),
-        "package-v2 artifact is not a file: {}",
-        relative.display()
-    );
-    anyhow::ensure!(
-        metadata.len() == artifact.byte_size,
-        "package-v2 artifact {} size differs from manifest",
-        relative.display()
-    );
-    let mut file = fs::File::open(&path)
-        .with_context(|| format!("open package-v2 artifact {}", relative.display()))?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let count = file
-            .read(&mut buffer)
-            .with_context(|| format!("hash package-v2 artifact {}", relative.display()))?;
-        if count == 0 {
-            break;
-        }
-        hasher.update(&buffer[..count]);
-    }
-    let actual = hex::encode(hasher.finalize());
-    anyhow::ensure!(
-        actual.eq_ignore_ascii_case(&artifact.sha256),
-        "package-v2 artifact {} SHA-256 differs from manifest",
-        relative.display()
-    );
-    Ok(())
-}
-
 pub fn resolve_package_v2_stage_to_local(
     package_ref: &str,
     admission: &PackageV2StageAdmissionDescriptor,
@@ -1224,36 +1187,7 @@ pub fn resolve_package_v2_stage_to_local(
             })?;
         }
     }
-    for artifact in &required {
-        verify_package_v2_artifact(&package_dir, artifact)?;
-    }
-
-    let sidecar_ids = resolved
-        .sidecars
-        .iter()
-        .map(|sidecar| sidecar.artifact.id.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    let mut model_artifacts = required
-        .iter()
-        .filter(|artifact| !sidecar_ids.contains(artifact.id.as_str()))
-        .collect::<Vec<_>>();
-    model_artifacts.sort_by(|left, right| {
-        let left_primary = left.id == manifest.source_model.metadata_artifact_id;
-        let right_primary = right.id == manifest.source_model.metadata_artifact_id;
-        right_primary
-            .cmp(&left_primary)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    let model_parts = model_artifacts
-        .into_iter()
-        .map(|artifact| package_dir.join(&artifact.path))
-        .collect::<Vec<_>>();
-    let projector = resolved
-        .sidecars
-        .iter()
-        .find(|sidecar| sidecar.kind == skippy_package_format::SidecarKind::Mmproj)
-        .map(|sidecar| package_dir.join(&sidecar.artifact.path));
-    Ok((local_ref, model_parts, projector))
+    skippy_api::materialization::resolve_local_package_stage(&package_dir, admission)
 }
 
 /// Resolve the complete tensor closure for single-node package-v2 serving.
@@ -1310,22 +1244,6 @@ fn resolve_package_v2_full_model_with_root(
     };
     let (_, model_parts, projector) = resolve_package_v2_stage_to_local(package_ref, &admission)?;
     Ok((PathBuf::from(local_ref), model_parts, projector))
-}
-
-fn safe_manifest_file_path(path: &str) -> Result<PathBuf> {
-    anyhow::ensure!(!path.is_empty(), "manifest file path is empty");
-    let path = Path::new(path);
-    let mut components = path.components();
-    let Some(first) = components.next() else {
-        bail!("manifest file path is empty");
-    };
-    anyhow::ensure!(
-        matches!(first, Component::Normal(_))
-            && components.all(|component| matches!(component, Component::Normal(_))),
-        "manifest file path must be a safe relative path: {}",
-        path.display()
-    );
-    Ok(path.to_path_buf())
 }
 
 #[cfg(test)]

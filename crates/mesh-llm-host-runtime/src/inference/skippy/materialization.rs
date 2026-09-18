@@ -1,9 +1,9 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+#[cfg(test)]
+use std::path::Path;
+use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result};
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 use skippy_package_format::{PackageManifest as PackageManifestV2, TensorStorage};
 use skippy_protocol::LoadMode;
@@ -63,33 +63,7 @@ pub struct StagePackageLayerInfo {
     pub artifact_bytes: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ResolvedStagePackage {
-    pub local_ref: String,
-    pub source_model_path: String,
-    pub source_model_sha256: String,
-    pub source_model_bytes: Option<u64>,
-    pub model_part_paths: Vec<PathBuf>,
-    pub projector_path: Option<PathBuf>,
-}
-
-pub fn ensure_package_manifest_sha(package_ref: &str, expected_sha256: &str) -> Result<()> {
-    if expected_sha256.trim().is_empty() {
-        return Ok(());
-    }
-    anyhow::ensure!(
-        expected_sha256.len() == 64 && expected_sha256.chars().all(|ch| ch.is_ascii_hexdigit()),
-        "package manifest sha256 must be a hex SHA-256 digest"
-    );
-    let manifest_path = Path::new(package_ref).join("model-package.json");
-    let manifest_contents = fs::read(&manifest_path).context("read package manifest")?;
-    let actual_sha = hex::encode(Sha256::digest(&manifest_contents));
-    anyhow::ensure!(
-        actual_sha.eq_ignore_ascii_case(expected_sha256),
-        "package manifest sha256 mismatch"
-    );
-    Ok(())
-}
+pub use skippy_api::stage_load::ResolvedStagePackage;
 
 pub fn inspect_stage_package(package_ref: &str) -> Result<StagePackageInfo> {
     // Resolve hf:// to local for inspection, downloading the manifest and any
@@ -202,53 +176,18 @@ fn stage_package_info_v2(package_ref: &str, local_ref: &str) -> Result<StagePack
 /// if it was already local / not a layer package.
 pub fn resolve_stage_load_package(load: &StageLoadRequest) -> Result<Option<ResolvedStagePackage>> {
     if load.load_mode == LoadMode::RuntimeSlice && is_layer_package_ref(&load.package_ref) {
-        let descriptor = skippy_package_format::stage_admission::StageAdmissionDescriptor {
-            package_id: load.admission.package_id.clone(),
-            resident_tensor_ids: load.admission.resident_tensor_ids.clone(),
-            sidecars: load
-                .admission
-                .sidecars
-                .iter()
-                .map(|sidecar| skippy_package_format::Sidecar {
-                    kind: match sidecar.kind {
-                        skippy_protocol::StageAdmissionSidecarKind::Mmproj => {
-                            skippy_package_format::SidecarKind::Mmproj
-                        }
-                    },
-                    artifact_id: sidecar.artifact_id.clone(),
-                    name: sidecar.name.clone(),
-                })
-                .collect(),
-        };
+        let descriptor = skippy_api::materialization::package_admission_descriptor(&load.admission);
         let (local_ref, model_part_paths, projector_path) =
             resolve_package_v2_stage_to_local(&load.package_ref, &descriptor)?;
-        ensure_package_manifest_sha(&local_ref, &load.manifest_sha256)?;
-        let manifest_path = Path::new(&local_ref).join("model-package.json");
-        let manifest: skippy_package_format::PackageManifest =
-            serde_json::from_slice(&fs::read(&manifest_path).with_context(|| {
-                format!("read package-v2 manifest {}", manifest_path.display())
-            })?)
-            .with_context(|| format!("parse package-v2 manifest {}", manifest_path.display()))?;
-        let source_model_bytes = manifest
-            .source_model
-            .files
-            .iter()
-            .try_fold(0_u64, |total, file| total.checked_add(file.byte_size))
-            .context("package-v2 source byte count overflow")?;
-        let source_model_path = model_part_paths
-            .first()
-            .context("package-v2 admission selected no model artifacts")?
-            .to_string_lossy()
-            .into_owned();
-        return Ok(Some(ResolvedStagePackage {
+        return skippy_api::materialization::stage_package_from_verified_parts(
             local_ref,
-            source_model_path,
-            source_model_sha256: manifest.source_model.sha256,
-            source_model_bytes: Some(source_model_bytes),
+            &load.manifest_sha256,
             model_part_paths,
             projector_path,
-        }));
+        )
+        .map(Some);
     }
+
     anyhow::ensure!(
         load.load_mode != LoadMode::LayerPackage,
         "layer-package schema v1 is offline-only; split serving requires package-v2 graph admission"

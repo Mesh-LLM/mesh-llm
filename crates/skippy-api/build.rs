@@ -8,7 +8,7 @@ fn frame(hasher: &mut Sha256, value: &[u8]) {
 }
 
 fn bundled_recipe(crate_dir: &std::path::Path) -> (String, String) {
-    let roster_path = crate_dir.join("src/inference/skippy/split-certified.json");
+    let roster_path = crate_dir.join("src/split-certified.json");
     println!("cargo:rerun-if-changed={}", roster_path.display());
     let roster: serde_json::Value = serde_json::from_slice(
         &fs::read(&roster_path).expect("read bundled split certification roster"),
@@ -38,8 +38,8 @@ fn main() {
         // repository CI validates the source recipe before packaging; a
         // packaged crate retains the exact recipe embedded in its roster.
         let (upstream, patch_digest) = bundled_recipe(&crate_dir);
-        println!("cargo:rustc-env=MESH_LLAMA_UPSTREAM_SHA={upstream}");
-        println!("cargo:rustc-env=MESH_SKIPPY_PATCH_QUEUE_SHA256={patch_digest}");
+        println!("cargo:rustc-env=SKIPPY_LLAMA_UPSTREAM_SHA={upstream}");
+        println!("cargo:rustc-env=SKIPPY_PATCH_QUEUE_SHA256={patch_digest}");
         return;
     }
     assert!(
@@ -76,10 +76,10 @@ fn main() {
         );
         frame(&mut hasher, &fs::read(&path).expect("read llama.cpp patch"));
     }
-    println!("cargo:rustc-env=MESH_LLAMA_UPSTREAM_SHA={upstream}");
+    println!("cargo:rustc-env=SKIPPY_LLAMA_UPSTREAM_SHA={upstream}");
     let mut patch_digest = String::with_capacity(64);
     for byte in hasher.finalize() {
         write!(&mut patch_digest, "{byte:02x}").expect("write patch digest");
     }
-    println!("cargo:rustc-env=MESH_SKIPPY_PATCH_QUEUE_SHA256={patch_digest}");
+    println!("cargo:rustc-env=SKIPPY_PATCH_QUEUE_SHA256={patch_digest}");
 }
