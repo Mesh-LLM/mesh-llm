@@ -6,6 +6,22 @@ Production stage service and embeddable staged runtime crate.
 non-blocking telemetry emission. The CLI commands are wrappers around Rust
 entry points so mesh can host the same runtime in-process.
 
+## Native runtime startup
+
+With `dynamic-native-runtime`, serving commands resolve and load a verified local
+native runtime before opening any model. `--runtime-bundle` accepts a bundle root
+(repeatable), `--runtime-cache` selects a cache, and `--runtime-release` defaults
+to Skippy's `RUNTIME_VERSION`. `--runtime-selection` accepts a backend or exact
+artifact ID. These global flags work with `serve`, `serve-binary`, and
+`serve-openai`; `example-config` does not load native code.
+
+Selection uses `skippy_runtime_install::startup::select_local_native_runtime_plan`,
+also used by Mesh's embedded local startup. Release, compiled Skippy ABI,
+platform and payload verification must succeed. The loader checks the actual
+library's ABI as well. This entry point uses local bundles/cache only; acquisition
+is explicit. Static native test builds retain their existing linked-runtime path.
+This adds native startup, not model-reference resolution or clean-install proof.
+
 ## Architecture Role
 
 Each embedded server or server process owns one contiguous layer range. Mesh

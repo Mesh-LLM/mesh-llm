@@ -518,42 +518,21 @@ mod dynamic {
         target_skippy_abi: Option<&str>,
         selection: &RuntimeSelection,
     ) -> Result<Option<NativeRuntimeStartupLoadPlan>> {
-        let eligible_runtimes = runtimes
-            .iter()
-            .filter(|runtime| startup_runtime_is_eligible(runtime, profile))
-            .collect::<Vec<_>>();
-        if eligible_runtimes.is_empty() {
-            return Ok(None);
-        }
-        let cache_mesh_version =
-            startup_native_runtime_cache_version(build_version, target_mesh_version);
-        let artifacts = eligible_runtimes
-            .iter()
-            .map(|runtime| runtime.manifest.runtime.clone())
-            .collect::<Vec<_>>();
-        let Some(candidate) = skippy_native_runtime::select_native_runtime_from_artifacts(
-            &artifacts,
-            profile,
-            cache_mesh_version,
-            target_skippy_abi,
-            selection,
-        ) else {
-            return Ok(None);
-        };
-        let selected_mesh_version = candidate
-            .artifact
-            .release_version_or(cache_mesh_version)
-            .to_string();
-        let Some(runtime) = eligible_runtimes.into_iter().find(|runtime| {
-            runtime.release_version == selected_mesh_version
-                && runtime.native_runtime_id == candidate.artifact.native_runtime_id()
-                && runtime.manifest.runtime.skippy_abi == candidate.artifact.skippy_abi
-        }) else {
+        let release = startup_native_runtime_cache_version(build_version, target_mesh_version);
+        let Some(plan) =
+            crate::system::native_runtime_install::startup::select_local_native_runtime_plan(
+                runtimes,
+                profile,
+                release,
+                target_skippy_abi,
+                selection,
+            )?
+        else {
             return Ok(None);
         };
         Ok(Some(startup_load_plan_from_installed(
-            selected_mesh_version,
-            runtime.load_plan()?,
+            plan.release_version.clone(),
+            plan,
             NativeRuntimePlanSource::LocalDiscovery,
         )?))
     }

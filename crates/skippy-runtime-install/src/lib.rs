@@ -4,6 +4,7 @@ mod import;
 mod install;
 mod legacy_import;
 mod manifest;
+pub mod startup;
 mod types;
 
 pub use discovery::{

@@ -11,7 +11,12 @@ use skippy_server::{
 #[tokio::main]
 async fn main() -> Result<()> {
     console::install();
-    match Cli::parse().command {
+    let cli = Cli::parse();
+    #[cfg(feature = "dynamic-native-runtime")]
+    if !matches!(&cli.command, Command::ExampleConfig) {
+        skippy_server::native_runtime::load_local_native_runtime(&cli.native_runtime)?;
+    }
+    match cli.command {
         Command::Serve(args) => serve(args).await,
         Command::ServeBinary(args) => serve_binary(args).await,
         Command::ServeOpenAi(args) => serve_openai(args).await,

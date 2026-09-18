@@ -25,6 +25,8 @@ base64 = "0.23"
 blake3.workspace = true
 clap.workspace = true
 futures-util = "0.3"
+skippy-runtime-install = { path = "../skippy-runtime-install", version = "0.76.1" }
+skippy-native-runtime = { path = "../skippy-native-runtime", version = "0.76.1" }
 skippy-runtime = { path = "../skippy-runtime", version = "0.76.1"  }
 skippy-scheduler = { path = "../skippy-scheduler", version = "0.76.1" }
 skippy-tokenizer = { path = "../skippy-tokenizer", version = "0.76.1" }

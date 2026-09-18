@@ -7,6 +7,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[derive(Parser)]
 #[command(about = "Llama staged-runtime server")]
 pub struct Cli {
+    #[command(flatten)]
+    pub native_runtime: NativeRuntimeArgs,
     #[command(subcommand)]
     pub command: Command,
 }
@@ -376,4 +378,20 @@ mod tests {
             Some(PathBuf::from("decode-plan.json"))
         );
     }
+}
+
+#[derive(Clone, Debug, Default, clap::Args)]
+pub struct NativeRuntimeArgs {
+    /// Directory containing a verified native runtime bundle (repeatable).
+    #[arg(long = "runtime-bundle", global = true)]
+    pub bundle_dirs: Vec<PathBuf>,
+    /// Native runtime cache root; model caches are separate.
+    #[arg(long = "runtime-cache", global = true)]
+    pub cache_dir: Option<PathBuf>,
+    /// Required Skippy runtime release. Defaults to this build's runtime metadata.
+    #[arg(long = "runtime-release", global = true)]
+    pub release: Option<String>,
+    /// Runtime backend or exact artifact ID.
+    #[arg(long = "runtime-selection", global = true)]
+    pub selection: Option<String>,
 }

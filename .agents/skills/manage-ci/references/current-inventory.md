@@ -912,3 +912,9 @@ installation and product composition reject legacy generations. Mesh product
 manifest mesh_version and the distinct native-SDK version contract remain
 product identities. Legacy runtime parsing is confined to the explicit cache
 importer; no alias or automatic migration is introduced.
+
+Standalone dynamic server startup now depends on skippy-runtime-install and
+skippy-native-runtime. The publish roster orders the installer before the
+server; the Linux test Docker context includes installer/native/hardware crates.
+Runtime selection is shared with Mesh embedded local startup; no runner or
+release publication policy changes.

@@ -60,6 +60,9 @@ COPY crates/openai-frontend/ crates/openai-frontend/
 COPY crates/skippy-ffi/ crates/skippy-ffi/
 COPY crates/skippy-model/ crates/skippy-model/
 COPY crates/skippy-runtime/ crates/skippy-runtime/
+COPY crates/skippy-native-runtime/ crates/skippy-native-runtime/
+COPY crates/skippy-hardware-profile/ crates/skippy-hardware-profile/
+COPY crates/skippy-runtime-install/ crates/skippy-runtime-install/
 COPY crates/skippy-server/ crates/skippy-server/
 COPY crates/metrics-server/ crates/metrics-server/
 COPY crates/skippy-model-package/ crates/skippy-model-package/
