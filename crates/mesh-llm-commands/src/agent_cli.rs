@@ -657,6 +657,35 @@ pub async fn run_claude(model: Option<String>, port: u16) -> Result<()> {
     let (_models, chosen, mut mesh_child) = check_mesh(&client, port, &model).await?;
 
     let base_url = format!("http://127.0.0.1:{port}");
+    // Claude Code speaks the Anthropic Messages protocol and POSTs
+    // /v1/messages, which the mesh inference API does not serve (only
+    // /v1/models, /v1/chat/completions, /v1/completions, /v1/responses).
+    // Probe once so the failure is explained at launch instead of an
+    // instant is_error result on the session's first request.
+    let messages_url = format!("{base_url}/v1/messages");
+    match client
+        .post(&messages_url)
+        .json(&serde_json::json!({
+            "model": &chosen,
+            "max_tokens": 1,
+            "messages": [{"role": "user", "content": "ping"}]
+        }))
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().as_u16() == 404 => {
+            let mut err = mesh_llm_events::console_err();
+            writeln!(
+                err,
+                "⚠️  This mesh node does not serve /v1/messages (Anthropic Messages API).\n\
+                 \x20  Claude Code speaks that protocol, so its first request will fail.\n\
+                 \x20  Launching anyway — use `mesh-llm opencode` or `mesh-llm pi` for a working session."
+            )?;
+        }
+        Ok(_) => {}
+        Err(_) => {}
+    }
+
     let settings = serde_json::json!({
         "env": {
             "ANTHROPIC_BASE_URL": &base_url,

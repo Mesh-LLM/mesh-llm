@@ -66,6 +66,15 @@ Use a specific model:
 mesh-llm claude --model MiniMax-M2.5-Q4_K_M
 ```
 
+> **Note:** Claude Code speaks the Anthropic Messages API
+> (`POST /v1/messages`). The mesh inference API currently serves the
+> OpenAI-compatible routes (`/v1/chat/completions`, `/v1/completions`,
+> `/v1/responses`) but not `/v1/messages`, so a Claude Code session fails on
+> its first request. The launcher probes for the route and warns when it is
+> missing. Until `/v1/messages` is served, use `mesh-llm opencode` or
+> `mesh-llm pi`, or put an Anthropic-to-OpenAI translating proxy in front of
+> the node.
+
 ## OpenCode
 
 Launch OpenCode directly through Mesh LLM:
