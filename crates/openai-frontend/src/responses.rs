@@ -12,6 +12,8 @@ pub enum ResponseAdapterMode {
     None,
     OpenAiResponsesJson,
     OpenAiResponsesStream,
+    AnthropicMessagesJson,
+    AnthropicMessagesStream,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -402,7 +404,7 @@ pub fn request_body_requires_json_normalization(path: &str, body: &[u8]) -> bool
         return false;
     }
     let path_only = path_only(path);
-    if path_only == "/v1/responses" {
+    if matches!(path_only, "/v1/responses" | "/v1/messages") {
         return true;
     }
     if path_only != "/v1/chat/completions" {
@@ -427,6 +429,20 @@ pub fn normalize_openai_compat_request(
     path: &str,
     body: &mut Value,
 ) -> Result<NormalizationOutcome, OpenAiError> {
+    if path_only(path) == "/v1/messages" {
+        crate::anthropic::normalize_messages_request(body)?;
+        let stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
+        return Ok(NormalizationOutcome {
+            changed: true,
+            rewritten_path: Some(rewrite_path_preserving_query(path, "/v1/chat/completions")),
+            response_adapter: if stream {
+                ResponseAdapterMode::AnthropicMessagesStream
+            } else {
+                ResponseAdapterMode::AnthropicMessagesJson
+            },
+            agent_session_id: None,
+        });
+    }
     let Some(object) = body.as_object_mut() else {
         return Ok(NormalizationOutcome {
             changed: false,

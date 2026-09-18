@@ -1,3 +1,4 @@
+pub mod anthropic;
 pub mod backend;
 mod backend_lifecycle;
 pub mod chat;

@@ -303,6 +303,7 @@ mod tests {
                     retryable_context_overflow: false,
                 },
                 ParsedResponseHeaders {
+                    chunked: false,
                     header_end: header.len(),
                     status_code: 200,
                     content_length: Some(body.len()),
@@ -362,6 +363,7 @@ mod tests {
                     retryable_context_overflow: false,
                 },
                 ParsedResponseHeaders {
+                    chunked: false,
                     header_end: task_header.len(),
                     status_code: 200,
                     content_length: Some(body.len()),

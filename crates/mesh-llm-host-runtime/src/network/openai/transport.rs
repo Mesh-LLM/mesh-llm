@@ -24,9 +24,10 @@ pub use super::request_parse::{
     BufferedHttpRequest, inject_mesh_hooks_flag, is_legacy_lifecycle_path, is_models_list_request,
     read_http_request, rewrite_model_field, rewrite_public_model_alias,
 };
+pub(super) use super::response::pipeline_proxy_local;
 pub(crate) use super::response::{
-    PipelineCapsuleNonce, PipelineProxyResult, append_safe_header, pipeline_proxy_local,
-    send_400_observed, send_503_observed, send_error_observed, send_json_ok_with_headers,
+    PipelineCapsuleNonce, PipelineProxyResult, append_safe_header, send_400_observed,
+    send_503_observed, send_error_observed, send_json_ok_with_headers,
     send_json_with_status_and_headers_observed, send_models_list_with_descriptors,
 };
 pub(crate) use super::routing_rank::{
@@ -81,7 +82,9 @@ pub(super) fn record_moa_stream_lifecycle(
 ) {
     if !matches!(
         adapter,
-        ResponseAdapter::OpenAiChatCompletionsStream | ResponseAdapter::OpenAiResponsesStream
+        ResponseAdapter::OpenAiChatCompletionsStream
+            | ResponseAdapter::OpenAiResponsesStream
+            | ResponseAdapter::AnthropicMessagesStream
     ) {
         return;
     }
@@ -847,6 +850,8 @@ fn proxy_provider_for_target(target: &'static str) -> Option<&'static str> {
 
 fn proxy_engine_for_response_adapter(adapter: ResponseAdapter) -> Option<&'static str> {
     match adapter {
+        ResponseAdapter::AnthropicMessagesJson => Some("messages"),
+        ResponseAdapter::AnthropicMessagesStream => Some("messages_stream"),
         ResponseAdapter::None => None,
         ResponseAdapter::OpenAiChatCompletionsJson => Some("chat_completion"),
         ResponseAdapter::OpenAiChatCompletionsStream => Some("chat_completion_stream"),

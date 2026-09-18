@@ -794,6 +794,10 @@ where
 
 #[async_trait]
 impl OpenAiBackend for StageOpenAiBackend {
+    async fn count_chat_tokens(&self, request: ChatCompletionRequest) -> OpenAiResult<u32> {
+        self.count_prompt_tokens(request).await
+    }
+
     async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
         Ok(vec![ModelObject::new(self.model_id.clone())])
     }

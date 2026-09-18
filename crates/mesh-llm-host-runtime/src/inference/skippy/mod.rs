@@ -1208,6 +1208,10 @@ fn wrap_host_guardrail_backend(
 
 #[async_trait]
 impl OpenAiBackend for SkippyModelHandle {
+    async fn count_chat_tokens(&self, request: ChatCompletionRequest) -> OpenAiResult<u32> {
+        self.backend.count_chat_tokens(request).await
+    }
+
     async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
         self.backend.models().await
     }

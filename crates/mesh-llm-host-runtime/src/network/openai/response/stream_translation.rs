@@ -1,20 +1,17 @@
 use super::cache_cost::{CacheCostObservation, parse_cache_cost_from_json_body};
-use super::common::{ResponseRetryPolicy, RouteAttemptResult, parse_token_usage_from_json_body};
-use super::probe::{
-    ResponseProbe, append_capsule_nonce_headers, response_is_event_stream,
-    try_parse_response_headers,
-};
-use super::relay::{relay_error_response, relay_success_response};
+use super::common::{ResponseRetryPolicy, RouteAttemptResult};
+use super::probe::{ResponseProbe, append_capsule_nonce_headers, try_parse_response_headers};
+use super::relay::relay_error_response;
 use crate::logging::{OpenAiRouteObserver, OpenAiStreamArtifactCapture};
 use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::response::common::sse_data_frame_is_openai_error;
 use crate::network::openai::response_adapter;
-use crate::network::openai::tool_call_ids::ChatStreamNormalizationState;
+
 use anyhow::{Context, Result, anyhow};
 use mesh_llm_events::logging::events::TokenUsage;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
-async fn write_captured_sse_event(
+pub(super) async fn write_captured_sse_event(
     tcp_stream: &mut ClientStream,
     capture: &mut Option<OpenAiStreamArtifactCapture>,
     event: Option<&str>,
@@ -65,148 +62,6 @@ impl ResponsesStreamRelayState {
         self.sequence_number = self.sequence_number.saturating_add(1);
         self.sequence_number
     }
-}
-
-pub(in crate::network::openai::response) async fn relay_normalized_chat_completion_stream<
-    R: AsyncRead + Unpin,
->(
-    tcp_stream: &mut ClientStream,
-    reader: &mut R,
-    probe: ResponseProbe,
-    retry_policy: ResponseRetryPolicy,
-    route_observer: OpenAiRouteObserver<'_>,
-) -> Result<RouteAttemptResult> {
-    if retry_policy.context_overflow && probe.retryable_context_overflow {
-        return Ok(RouteAttemptResult::RetryableContextOverflow);
-    }
-
-    if !(200..300).contains(&probe.status_code) {
-        route_observer.stream_error("upstream_status");
-        return relay_error_response(tcp_stream, reader, probe, route_observer).await;
-    }
-
-    let parsed = try_parse_response_headers(&probe.buffered)?
-        .ok_or_else(|| anyhow!("incomplete HTTP response"))?;
-    if !response_is_event_stream(&parsed) {
-        return relay_success_response(
-            tcp_stream,
-            reader,
-            probe,
-            parsed,
-            retry_policy,
-            route_observer,
-        )
-        .await;
-    }
-
-    let mut carry = String::from_utf8_lossy(&probe.buffered[parsed.header_end..]).to_string();
-    let mut state = ChatStreamNormalizationState::default();
-    let mut observed_usage = None;
-    let mut observed_cache_cost = None;
-    let mut header = String::from(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\n",
-    );
-    append_capsule_nonce_headers(
-        &mut header,
-        parsed.client_nonce.as_deref(),
-        parsed.nonce_origin.as_deref(),
-    );
-    header.push_str("Connection: close\r\n\r\n");
-    tcp_stream.write_all(header.as_bytes()).await?;
-    let mut response_capture = route_observer.begin_stream_response_capture();
-    route_observer.stream_started(None);
-
-    let mut done_seen = false;
-    let mut first_chunk_seen = false;
-    let mut upstream_error_seen = false;
-    loop {
-        let mut processed = 0usize;
-        while let Some(frame_end_rel) = carry[processed..].find("\n\n") {
-            let frame_end = processed + frame_end_rel;
-            let frame = &carry[processed..frame_end];
-            processed = frame_end + 2;
-            let data_lines = frame
-                .lines()
-                .filter_map(|line| line.strip_prefix("data:"))
-                .map(str::trim_start)
-                .collect::<Vec<_>>();
-            if data_lines.is_empty() {
-                continue;
-            }
-            let data = data_lines.join("\n");
-            if data == "[DONE]" {
-                done_seen = true;
-                write_captured_sse_event(tcp_stream, &mut response_capture, None, "[DONE]").await?;
-                break;
-            }
-
-            if !upstream_error_seen && sse_data_frame_is_openai_error(&data) {
-                // The upstream backend frames failures as OpenAI error bodies
-                // inside a 200 stream. Relay the frame untouched, but do not
-                // let it count as stream progress or terminal success.
-                upstream_error_seen = true;
-            }
-            if let Some(usage) = parse_token_usage_from_json_body(data.as_bytes()) {
-                observed_usage = Some(usage);
-            }
-            observed_cache_cost =
-                observed_cache_cost.or_else(|| parse_cache_cost_from_json_body(data.as_bytes()));
-            let normalized = state.normalize_data(&data);
-            write_captured_sse_event(tcp_stream, &mut response_capture, None, &normalized).await?;
-            if upstream_error_seen {
-                continue;
-            }
-            if first_chunk_seen {
-                route_observer.stream_chunk();
-            } else {
-                route_observer.stream_first_token();
-                first_chunk_seen = true;
-            }
-        }
-        if processed > 0 {
-            carry = carry[processed..].to_string();
-        }
-
-        if done_seen {
-            break;
-        }
-
-        let mut chunk = [0u8; 8192];
-        let n = reader.read(&mut chunk).await?;
-        if n == 0 {
-            break;
-        }
-        let new_data = String::from_utf8_lossy(&chunk[..n]);
-        carry.push_str(&new_data);
-        if carry.contains('\r') {
-            carry = carry.replace("\r\n", "\n");
-        }
-    }
-
-    let _ = tcp_stream.write_all(b"0\r\n\r\n").await;
-    let _ = tcp_stream.shutdown().await;
-    if upstream_error_seen {
-        // An embedded upstream error frame is terminal even when the upstream
-        // never sent [DONE]: report the failure reason it carried rather than
-        // a generic incomplete-stream truncation.
-        route_observer.stream_error("upstream_stream_error");
-        return Ok(RouteAttemptResult::Delivered {
-            status_code: 200,
-            usage: None,
-            cache_cost: None,
-        });
-    }
-    if !done_seen {
-        route_observer.stream_error("upstream_stream_incomplete");
-        return Err(anyhow!("upstream chat stream ended before [DONE]"));
-    }
-    route_observer.complete_stream_response_capture(response_capture);
-    route_observer.stream_completed(observed_usage);
-    Ok(RouteAttemptResult::Delivered {
-        status_code: 200,
-        usage: observed_usage,
-        cache_cost: observed_cache_cost,
-    })
 }
 
 pub(in crate::network::openai::response) async fn relay_translated_responses_stream<
@@ -657,6 +512,7 @@ async fn emit_translated_stream_done_event(
 
 #[cfg(test)]
 mod tests {
+    use super::super::chat_stream::relay_normalized_chat_completion_stream;
     use super::*;
     use crate::logging::{ArtifactUnavailableReason, OpenAiArtifactCapture};
     use crate::network::openai::response::common::sse_data_frame_is_openai_error;
@@ -714,8 +570,8 @@ mod tests {
             let (client_socket, _) = listener.accept().await.unwrap();
             let mut client_socket: ClientStream = client_socket.into();
             let probe = ResponseProbe {
-                buffered: b"HTTP/1.1 201 Created\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec(),
-                header_end: b"HTTP/1.1 201 Created\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n".len(),
+                buffered: b"HTTP/1.1 201 Created\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n".to_vec(),
+                header_end: b"HTTP/1.1 201 Created\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n".len(),
                 status_code: 201,
                 retryable_context_overflow: false,
             };
@@ -795,7 +651,8 @@ mod tests {
         let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let header = b"HTTP/1.1 201 Created\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let header =
+            b"HTTP/1.1 201 Created\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
         let capture = Arc::new(Captures::default());
         let observer_capture: Arc<dyn OpenAiArtifactCapture> = capture.clone();
         let server_task = tokio::spawn(async move {
@@ -872,7 +729,7 @@ mod tests {
         let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let header = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nx-capsule-client-nonce: nonce-under-test\r\nx-capsule-nonce-origin: frontend\r\n\r\n";
+        let header = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nx-capsule-client-nonce: nonce-under-test\r\nx-capsule-nonce-origin: frontend\r\n\r\n";
         let server_task = tokio::spawn(async move {
             let (client_socket, _) = listener.accept().await.unwrap();
             let mut client_socket: ClientStream = client_socket.into();
@@ -922,7 +779,8 @@ mod tests {
         let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let header = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let header =
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
         let server_task = tokio::spawn(async move {
             let (client_socket, _) = listener.accept().await.unwrap();
             let mut client_socket: ClientStream = client_socket.into();
@@ -974,7 +832,8 @@ mod tests {
         let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let header = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let header =
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
         let server_task = tokio::spawn(async move {
             let (client_socket, _) = listener.accept().await.unwrap();
             let mut client_socket: ClientStream = client_socket.into();
@@ -1022,8 +881,8 @@ mod tests {
             let (client_socket, _) = listener.accept().await.unwrap();
             let mut client_socket: ClientStream = client_socket.into();
             let probe = ResponseProbe {
-                buffered: b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec(),
-                header_end: b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n".len(),
+                buffered: b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n".to_vec(),
+                header_end: b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n".len(),
                 status_code: 200,
                 retryable_context_overflow: false,
             };
@@ -1081,8 +940,8 @@ mod tests {
             let (client_socket, _) = listener.accept().await.unwrap();
             let mut client_socket: ClientStream = client_socket.into();
             let probe = ResponseProbe {
-                buffered: b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec(),
-                header_end: b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n".len(),
+                buffered: b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n".to_vec(),
+                header_end: b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n".len(),
                 status_code: 200,
                 retryable_context_overflow: false,
             };
@@ -1133,7 +992,8 @@ mod tests {
         let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let header = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let header =
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
         let server_task = tokio::spawn(async move {
             let (client_socket, _) = listener.accept().await.unwrap();
             let mut client_socket: ClientStream = client_socket.into();
