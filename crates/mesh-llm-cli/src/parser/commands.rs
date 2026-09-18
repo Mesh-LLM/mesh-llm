@@ -958,6 +958,10 @@ pub enum Command {
     /// Launch Claude Code with mesh-llm as the inference provider.
     ///
     /// If no mesh is running on --port, this auto-joins the mesh as a client.
+    /// Claude Code speaks the Anthropic Messages protocol (/v1/messages),
+    /// which the mesh inference API does not serve yet; the launcher warns
+    /// when the route is missing and the session will fail on its first
+    /// request.
     #[command(name = "claude")]
     Claude {
         /// Model id to use from /v1/models (default: auto = mesh picks best)
