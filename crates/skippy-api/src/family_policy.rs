@@ -2,31 +2,31 @@ use std::path::Path;
 
 use skippy_protocol::{StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload};
 
-use crate::models::gguf::{GgufCompactMeta, scan_gguf_compact_meta};
+use model_artifact::gguf::{GgufCompactMeta, scan_gguf_compact_meta};
 
 const DEFAULT_PREFIX_CACHE_MIN_TOKENS: u64 = 256;
 const DEFAULT_PREFIX_CACHE_MAX_ENTRIES: usize = 512;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct FamilyPolicy {
-    pub(crate) default_kv_cache_type: Option<&'static str>,
-    pub(crate) prefix_cache: FamilyPrefixCachePolicy,
+pub struct FamilyPolicy {
+    pub default_kv_cache_type: Option<&'static str>,
+    pub prefix_cache: FamilyPrefixCachePolicy,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum FamilyPrefixCachePolicy {
+pub enum FamilyPrefixCachePolicy {
     Auto { min_tokens: u64, max_entries: usize },
 }
 
 impl FamilyPolicy {
-    pub(crate) fn stage_kv_cache_config_for_stage(
+    pub fn stage_kv_cache_config_for_stage(
         &self,
         config: &StageConfig,
     ) -> Option<StageKvCacheConfig> {
         self.stage_kv_cache_config_for_stage_with_meta(config, None)
     }
 
-    pub(crate) fn stage_kv_cache_config_for_package(
+    pub fn stage_kv_cache_config_for_package(
         &self,
         config: &StageConfig,
         package_dir: &Path,
@@ -86,7 +86,7 @@ fn derive_max_entries_from_kv_cells(
     kv_capped.clamp(1, policy_default)
 }
 
-pub(crate) fn family_policy_for_stage_config(config: &StageConfig) -> FamilyPolicy {
+pub fn family_policy_for_stage_config(config: &StageConfig) -> FamilyPolicy {
     let metadata = [
         config.materialized_path.as_deref(),
         config.source_model_path.as_deref(),
@@ -98,11 +98,11 @@ pub(crate) fn family_policy_for_stage_config(config: &StageConfig) -> FamilyPoli
     generic_model_policy(metadata.as_ref())
 }
 
-pub(crate) fn family_policy_for_compact_meta(meta: &GgufCompactMeta) -> FamilyPolicy {
+pub fn family_policy_for_compact_meta(meta: &GgufCompactMeta) -> FamilyPolicy {
     generic_model_policy(Some(meta))
 }
 
-pub(crate) fn family_policy_for_model_path(path: impl AsRef<Path>) -> FamilyPolicy {
+pub fn family_policy_for_model_path(path: impl AsRef<Path>) -> FamilyPolicy {
     let metadata = scan_stage_cache_meta(path.as_ref());
     generic_model_policy(metadata.as_ref())
 }

@@ -4,7 +4,6 @@ mod certification;
 mod checkpoint;
 mod deployment;
 pub(crate) mod diagnostics;
-mod family_policy;
 mod hash_cache;
 mod hooks;
 mod kv_cache;
@@ -52,9 +51,6 @@ use skippy_server::{
 pub use certification::{
     CertificationGateStatus, SkippyCertificationRequest, certify_layer_package,
 };
-pub(crate) use family_policy::{
-    family_policy_for_compact_meta, family_policy_for_model_path, family_policy_for_stage_config,
-};
 pub(crate) use hooks::MeshAutoHookPolicy;
 pub(crate) use kv_cache::KvCachePolicy;
 #[cfg(test)]
@@ -86,6 +82,10 @@ pub(crate) use package::{
 pub(crate) use resolver::{
     ResolvedEmbeddedOpenAiArgs, ResolvedSkippyConfig, SkippyConfigResolveRequest,
     effective_safety_margin_bytes, resolve_skippy_config_for_selector,
+};
+pub(crate) use skippy_api::family_policy;
+pub(crate) use skippy_api::family_policy::{
+    family_policy_for_compact_meta, family_policy_for_model_path, family_policy_for_stage_config,
 };
 pub(crate) use skippy_server::OpenAiGuardrailsStatus as SkippyOpenAiGuardrailsStatus;
 pub(crate) use split_certification::{SplitCertificationAdmission, require_split_certification};
@@ -1242,59 +1242,15 @@ impl OpenAiBackend for SkippyModelHandle {
 }
 
 pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<StageConfig> {
-    anyhow::ensure!(
-        options.ctx_size > 0,
-        "skippy ctx_size must be greater than zero"
-    );
-    anyhow::ensure!(
-        options.generation_concurrency > 0,
-        "skippy generation_concurrency must be greater than zero"
-    );
-    if let Some(device) = options.selected_device.as_ref() {
-        anyhow::ensure!(
-            !device.backend_device.is_empty(),
-            "skippy selected backend device must not be empty"
-        );
-    }
-    let package_identity = match options.package_identity.as_ref() {
-        Some(identity) => identity.clone(),
-        None => synthetic_direct_gguf_package(&options.model_id, &options.model_path)?,
-    };
-    let layer_start = options.layer_start;
-    let layer_end = options.layer_end.unwrap_or(package_identity.layer_count);
-    anyhow::ensure!(
-        layer_end > 0,
-        "skippy stage layer_end must be greater than zero"
-    );
-    anyhow::ensure!(
-        layer_start < layer_end,
-        "skippy stage layer range must satisfy layer_start < layer_end"
-    );
-    let run_id = format!("mesh-skippy-{}", now_unix_nanos());
-    let family_policy = family_policy_for_model_path(&options.model_path);
-    let checkpoint = checkpoint::prepare(options)?;
-    let mut config = StageConfig {
-        run_id: run_id.clone(),
-        topology_id: format!("topology-{run_id}"),
+    let prepared_options = skippy_api::SingleStageOptions {
+        ctx_size: options.ctx_size,
+        generation_concurrency: options.generation_concurrency,
+        selected_device: options.selected_device.clone().map(Into::into),
         model_id: options.model_id.clone(),
-        package_ref: Some(package_identity.package_ref),
-        manifest_sha256: Some(package_identity.manifest_sha256),
-        source_model_path: Some(
-            package_identity
-                .source_model_path
-                .to_string_lossy()
-                .to_string(),
-        ),
-        source_model_sha256: Some(package_identity.source_model_sha256),
-        source_model_bytes: Some(package_identity.source_model_bytes),
-        materialized_path: None,
-        materialized_pinned: false,
-        model_path: Some(options.model_path.to_string_lossy().to_string()),
-        model_part_paths: Vec::new(),
-        projector_path: options
-            .projector_path
-            .as_ref()
-            .map(|path| path.to_string_lossy().to_string()),
+        model_path: options.model_path.clone(),
+        layer_start: options.layer_start,
+        layer_end: options.layer_end,
+        projector_path: options.projector_path.clone(),
         projector_use_gpu: options.projector_use_gpu,
         media_marker: options.media_marker.clone(),
         image_min_tokens: options.image_min_tokens,
@@ -1302,14 +1258,6 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
         batch_max_tokens: options.batch_max_tokens,
         glm_dsa_policy: options.glm_dsa_policy,
         generation_signal_window: options.generation_signal_window,
-        activation_codec: skippy_protocol::StageActivationCodec::default(),
-        activation_codec_policy: skippy_protocol::StageActivationCodecPolicy::default(),
-        stage_id: "stage-0".to_string(),
-        stage_index: 0,
-        layer_start,
-        layer_end,
-        ctx_size: options.ctx_size,
-        lane_count: options.generation_concurrency as u32,
         n_batch: options.n_batch,
         n_ubatch: options.n_ubatch,
         n_gpu_layers: options.n_gpu_layers,
@@ -1329,33 +1277,36 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
         kv_unified: options.kv_unified,
         swa_full: options.swa_full,
         cache_idle_slots: options.cache_idle_slots,
-        filter_tensors_on_load: false,
-        resident_tensor_names: Vec::new(),
-        activation_import_identities: Vec::new(),
-        activation_import_bindings: Vec::new(),
-        activation_export_identities: Vec::new(),
-        activation_export_bindings: Vec::new(),
-        checkpoint_quantization: options
-            .checkpoint_quantization
-            .as_ref()
-            .map(|_| checkpoint.quantization.canonical_name().to_string()),
-        checkpoint_imatrix: checkpoint.imatrix,
-        checkpoint_imatrix_sha256: checkpoint.imatrix_sha256,
-        selected_device: options.selected_device.clone().map(Into::into),
-        kv_cache: None,
+        checkpoint_quantization: options.checkpoint_quantization.clone(),
+        checkpoint_imatrix: options.checkpoint_imatrix.clone(),
         native_mtp_enabled: options.native_mtp_enabled,
-        load_mode: LoadMode::RuntimeSlice,
-        bind_addr: "127.0.0.1:0".to_string(),
-        upstream: None,
-        downstream: None,
+        kv_cache: options.kv_cache.clone(),
     };
-    config.kv_cache = options
-        .kv_cache
-        .clone()
-        .or_else(|| family_policy.stage_kv_cache_config_for_stage(&config));
+    prepared_options.validate()?;
+    let package_identity = match options.package_identity.as_ref() {
+        Some(identity) => identity.clone(),
+        None => synthetic_direct_gguf_package(&options.model_id, &options.model_path)?,
+    };
+    let config = skippy_api::single_stage_config(
+        &prepared_options,
+        skippy_api::StageSourceIdentity {
+            package_ref: package_identity.package_ref,
+            manifest_sha256: package_identity.manifest_sha256,
+            source_model_path: package_identity.source_model_path,
+            source_model_sha256: package_identity.source_model_sha256,
+            source_model_bytes: package_identity.source_model_bytes,
+            layer_count: package_identity.layer_count,
+        },
+        format!("mesh-skippy-{}", now_unix_nanos()),
+    )?;
     checkpoint::emit_load_notice(
         &options.model_path,
-        checkpoint.quantization,
+        config
+            .checkpoint_quantization
+            .as_deref()
+            .unwrap_or("preserve")
+            .parse()
+            .map_err(anyhow::Error::msg)?,
         config.checkpoint_imatrix.is_some(),
     );
     Ok(config)

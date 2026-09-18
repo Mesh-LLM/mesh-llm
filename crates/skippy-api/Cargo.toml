@@ -1,0 +1,16 @@
+[package]
+name = "skippy-api"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Shared Skippy model preparation and serving lifecycle API"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+
+[dependencies]
+anyhow.workspace = true
+hex = "0.4"
+sha2.workspace = true
+model-artifact = { path = "../model-artifact", version = "0.76.1" }
+skippy-protocol = { path = "../skippy-protocol", version = "0.76.1" }
+skippy-runtime = { path = "../skippy-runtime", version = "0.76.1" }

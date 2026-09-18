@@ -1037,3 +1037,8 @@ Unix standalone server host builds are exposed as `just skippy-server-build`
 and `just skippy-server-release-build`; both enable dynamic-native-runtime.
 They consume a separately packaged runtime at execution time and do not alter
 CI lane selection or release publication.
+
+`skippy-api` owns shared single-stage configuration, family cache policy and
+checkpoint preparation. The host consumes it; publish/affected-crate rosters and
+Linux Docker contexts include the new owner. Mesh rendering and hooks stay in
+the host. No external CI policy changes.
