@@ -419,6 +419,20 @@ pub(crate) fn llama_model_is_diffusion_fn() -> Option<LlamaModelStateFn> {
     })
 }
 
+type LlamaModelMetaValStrFn = unsafe extern "C" fn(
+    model: *const Opaque,
+    key: *const c_char,
+    buf: *mut c_char,
+    buf_size: usize,
+) -> c_int;
+
+pub(crate) fn llama_model_meta_val_str_fn() -> Option<LlamaModelMetaValStrFn> {
+    static CACHE: OnceLock<Option<LlamaModelMetaValStrFn>> = OnceLock::new();
+    *CACHE.get_or_init(|| {
+        symbols().lookup_optional::<LlamaModelMetaValStrFn>(b"llama_model_meta_val_str\0")
+    })
+}
+
 pub fn skippy_model_open_with_events_fn() -> Option<SkippyModelOpenWithEventsFn> {
     static CACHE: OnceLock<Option<SkippyModelOpenWithEventsFn>> = OnceLock::new();
     *CACHE.get_or_init(|| {

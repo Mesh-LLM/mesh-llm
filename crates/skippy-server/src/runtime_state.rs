@@ -259,6 +259,22 @@ pub fn loaded_model_state_kind(
     })
 }
 
+/// Return whether the loaded model builds a separate indexer memory tier
+/// (upstream `needs_mem_idx` allowlist, e.g. qwen4exp). Indexer state is only
+/// serialized by full-state snapshots, so cache payload selection downgrades
+/// lossy payload families when this is set. `None` fails closed: an older
+/// runtime without the metadata accessor must not silently claim safety.
+pub fn loaded_model_has_indexer_memory(runtime: Option<&Arc<Mutex<RuntimeState>>>) -> Option<bool> {
+    runtime.and_then(|runtime| {
+        runtime
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .model
+            .capability()
+            .map(|capability| capability.has_indexer_memory)
+    })
+}
+
 pub fn load_runtime_with_overrides(
     config: &StageConfig,
     overrides: &RuntimeLaunchOverrides,

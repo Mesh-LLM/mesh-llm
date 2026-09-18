@@ -113,6 +113,13 @@ unsafe extern "C" {
 
     pub fn llama_model_is_diffusion(model: *const Opaque) -> bool;
 
+    pub fn llama_model_meta_val_str(
+        model: *const Opaque,
+        key: *const c_char,
+        buf: *mut c_char,
+        buf_size: usize,
+    ) -> c_int;
+
     pub fn skippy_model_output_activation_boundary(
         model: *const Model,
         out_desc: *mut ActivationBoundaryDesc,
