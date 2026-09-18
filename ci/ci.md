@@ -390,8 +390,8 @@ runtime producers are not duplicated.
   evidence.
 - `ci-{linux,macos,windows}-product-slice.yml` — composition-only consumers
   that join only their matching immutable host and runtime artifacts.
-- `ci-platform-checks-slice.yml` — macOS portable/unit, Windows portable, and
-  focused Windows log-store privacy ACL checks.
+- `ci-platform-checks-slice.yml` — macOS portable/unit, Windows portable/unit,
+  and focused Windows log-store privacy ACL checks.
 - `ci-linux-product-smoke-slice.yml` and
   `ci-macos-product-smoke-slice.yml` — platform-local callers of the typed
   product-integration suite and the model-download consumer. The suite stages
