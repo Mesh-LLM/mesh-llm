@@ -8,6 +8,13 @@ entry points so mesh can host the same runtime in-process.
 
 ## Native runtime startup
 
+On Unix, `just skippy-server-build` builds the dynamic standalone host for local
+iteration; `just skippy-server-release-build` builds the release host. Build its
+matching native runtime with `just release-runtime-build <backend>` (for example,
+`metal` on Apple Silicon), then pass `--runtime-bundle dist/native-runtimes` to
+the serving command. Runtime packaging verifies the native payload separately
+from the host build.
+
 With `dynamic-native-runtime`, serving commands resolve and load a verified local
 native runtime before opening any model. `--runtime-bundle` accepts a bundle root
 (repeatable), `--runtime-cache` selects a cache, and `--runtime-release` defaults

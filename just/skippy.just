@@ -1,3 +1,15 @@
+# Build the standalone server host; supply a separately packaged native runtime
+# through --runtime-bundle when running a serving command.
+[unix]
+skippy-server-build:
+    scripts/prepare-llama.sh pinned
+    just with-lld cargo build --locked -p skippy-server --features dynamic-native-runtime
+
+[unix]
+skippy-server-release-build:
+    scripts/prepare-llama.sh pinned
+    just with-lld cargo build --release --locked -p skippy-server --features dynamic-native-runtime
+
 # Build the skippy benchmark/debug telemetry collector.
 [unix]
 metrics-server-build:

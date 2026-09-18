@@ -1032,3 +1032,8 @@ skippy-native-runtime. The publish roster orders the installer before the
 server; the Linux test Docker context includes installer/native/hardware crates.
 Runtime selection is shared with Mesh embedded local startup; no runner or
 release publication policy changes.
+
+Unix standalone server host builds are exposed as `just skippy-server-build`
+and `just skippy-server-release-build`; both enable dynamic-native-runtime.
+They consume a separately packaged runtime at execution time and do not alter
+CI lane selection or release publication.
