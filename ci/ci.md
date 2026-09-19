@@ -442,7 +442,8 @@ runtime producers are not duplicated.
   logs on success or failure. The existing Qwen3.5 recurrent job remains
   required until Granite passes that live contract. The typed runner supports
   CPU, CUDA, Metal, Vulkan, and ROCm,
-  but only CPU is selected during the first qualification stage; the existing
+  and the checked planner selects only CPU during the first qualification
+  stage for exhaustive main and manual-full runs; the existing
   CUDA inference and Metal model-load signals remain required until their typed
   product rows pass live qualification in that order. CUDA and Metal request
   their explicit accelerator device and reject unsupported typed selections.

@@ -391,6 +391,7 @@ class PlanCiTests(unittest.TestCase):
                 "two-node-client",
                 "two-node-split",
                 "model-download",
+                "product-integration-cpu",
                 "metal-model-load",
             },
         )
@@ -426,6 +427,10 @@ class PlanCiTests(unittest.TestCase):
 
                 plan = PLANNER.build_plan(payload, root=ROOT)
 
+                self.assertIn(
+                    "product-integration-cpu",
+                    {row["id"] for row in plan["matrices"]["smoke"]},
+                )
                 tested = {
                     crate
                     for batch in plan["matrices"]["rust_tests"]
