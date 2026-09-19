@@ -1,0 +1,696 @@
+From c0474b2654f83db0d33e357d538ef973053a0273 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Sat, 19 Sep 2026 09:52:12 +1000
+Subject: [PATCH] fix(skippy): preserve stage and MTP activation row widths
+
+---
+ src/CMakeLists.txt                      |  12 +++
+ src/llama-context.cpp                   |  24 ++++-
+ src/llama-context.h                     |   5 +
+ src/models/deepseek4.cpp                |   9 +-
+ src/skippy/session.cpp                  |   1 -
+ src/skippy/speculative_decoding.cpp     |  49 ++++++----
+ src/skippy/tests/graph_build_inputs.cpp |  59 ++++++++++++
+ tests/test-deepseek4-mtp.h              |  90 ++++++++++++++++++
+ tests/test-llama-archs.cpp              |  56 +++++++++++-
+ tests/test-skippy-deepstack-width.h     | 116 ++++++++++++++++++++++++
+ 10 files changed, 393 insertions(+), 28 deletions(-)
+ create mode 100644 tests/test-deepseek4-mtp.h
+ create mode 100644 tests/test-skippy-deepstack-width.h
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 74b6d335e..5e90ce201 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -153,7 +153,18 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     add_executable(skippy-model-fixture-generator
+         ../tests/test-llama-archs.cpp)
+     target_compile_features(skippy-model-fixture-generator PRIVATE cxx_std_17)
++    target_include_directories(skippy-model-fixture-generator PRIVATE .)
+     target_link_libraries(skippy-model-fixture-generator PRIVATE llama-common)
++    add_test(NAME skippy_deepstack_width COMMAND skippy-model-fixture-generator --skippy-deepstack-width)
++    set(MTP_WIDTH_FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/mtp-width-models")
++    file(MAKE_DIRECTORY "${MTP_WIDTH_FIXTURE_DIR}")
++    add_test(NAME skippy_generate_mtp_width COMMAND skippy-model-fixture-generator
++        --arch deepseek4 --seed 42 --deepseek4-mtp --out "${MTP_WIDTH_FIXTURE_DIR}")
++    set_tests_properties(skippy_generate_mtp_width PROPERTIES FIXTURES_SETUP mtp-width-model)
++    add_test(NAME skippy_mtp_width COMMAND skippy-model-fixture-generator
++        --test-mtp-model "${MTP_WIDTH_FIXTURE_DIR}/deepseek4-mtp-moe.gguf")
++    set_tests_properties(skippy_mtp_width PROPERTIES FIXTURES_REQUIRED mtp-width-model)
++
+ 
+     add_executable(skippy-model-loader-accounting
+         ../tests/test-skippy-model-loader-accounting.cpp)
+@@ -212,6 +223,7 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     target_compile_features(skippy-graph-build-inputs PRIVATE cxx_std_17)
+     target_link_libraries(skippy-graph-build-inputs PRIVATE llama)
+     add_dependencies(skippy-stage-slice-plan skippy-graph-build-inputs)
++    add_test(NAME skippy_decode_input_width COMMAND skippy-graph-build-inputs --input-width)
+ 
+     add_test(
+         NAME skippy_graph_build_inputs
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 67f1d2ffc..52b40c179 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -26,6 +26,25 @@
+ // llama_context
+ //
+ 
++int64_t llama_decode_input_width(
++        const llama_hparams & hparams, llm_arch arch, llama_context_type ctx_type,
++        const skippy_graph_build_inputs & inputs, bool has_embeddings) {
++    if (has_embeddings) {
++        // Fused DFlash features and MTP hidden rows precede stage slicing.
++        if (arch == LLM_ARCH_DFLASH) {
++            return hparams.n_embd_inp_enc();
++        }
++        if (ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
++            return hparams.n_embd_out();
++        }
++        if (inputs.filter.enabled && inputs.filter.layer_start > 0) {
++            return hparams.n_embd;
++        }
++    }
++    // Stage zero still consumes the complete projector input, including deepstack.
++    return hparams.n_embd_inp();
++}
++
+ static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
+     switch (ctx_type) {
+         case LLAMA_CONTEXT_TYPE_DEFAULT: return LLM_GRAPH_TYPE_DEFAULT;
+@@ -1749,9 +1768,8 @@ int llama_context::decode(
+     const auto & hparams = model.hparams;
+ 
+     const int64_t n_vocab = vocab.n_tokens();
+-    // DFlash embd batches carry the fused target features at the encoder input width
+-    const bool    dflash_embd = model.arch == LLM_ARCH_DFLASH && batch_inp.embd;
+-    const int64_t n_embd  = dflash_embd ? hparams.n_embd_inp_enc() : hparams.n_embd_inp();
++    const int64_t n_embd = llama_decode_input_width(
++            hparams, model.arch, cparams.ctx_type, graph_build_inputs, batch_inp.embd != nullptr);
+ 
+     // when computing embeddings, all tokens are output
+     const bool output_all   = cparams.embeddings;
+diff --git a/src/llama-context.h b/src/llama-context.h
+index 40e55583b..3fd34df56 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -30,6 +30,11 @@ struct skippy_activation_port_shape {
+ class llama_io_read_i;
+ class llama_io_write_i;
+ 
++// Internal decode contract; embedding batches have protocol-specific row widths.
++int64_t llama_decode_input_width(
++        const llama_hparams & hparams, llm_arch arch, llama_context_type ctx_type,
++        const skippy_graph_build_inputs & inputs, bool has_embeddings);
++
+ int skippy_external_decode_observe(llama_context * ctx, const llama_batch & batch);
+ skippy_graph_build_inputs skippy_external_decode_build_inputs(llama_context * ctx);
+ llama_context * llama_init_from_model_with_graph_inputs(
+diff --git a/src/models/deepseek4.cpp b/src/models/deepseek4.cpp
+index ea23f2ebb..e9fa36cdc 100644
+--- a/src/models/deepseek4.cpp
++++ b/src/models/deepseek4.cpp
+@@ -20,7 +20,8 @@ void llama_model_deepseek4::load_arch_hparams(llama_model_loader & ml) {
+     if (hparams.n_layer_nextn > 0) {
+         const uint32_t n_layer_main = hparams.n_layer_all - hparams.n_layer_nextn;
+         const std::string mtp_probe = "blk." + std::to_string(n_layer_main) + ".nextn.eh_proj.weight";
+-        if (ml.get_weight(mtp_probe.c_str()) == nullptr) {
++        if (ml.get_weight(mtp_probe.c_str()) == nullptr &&
++                !(ml.files.empty() && gguf_find_tensor(ml.metadata, mtp_probe.c_str()) >= 0)) {
+             hparams.n_layer_nextn = 0;
+         }
+     }
+@@ -1502,11 +1503,13 @@ llama_model_deepseek4::graph_mtp::graph_mtp(const llama_model & model, const llm
+     cb(inpL, "mtp_l_out", il);
+ 
+     ggml_tensor * flat = ggml_reshape_2d(ctx0, inpL, n_embd*hc, n_tokens);
+-    ggml_tensor * h_nextn = ggml_get_rows(ctx0, flat, inp_out_ids);
++    ggml_tensor * flat_out = ggml_get_rows(ctx0, flat, inp_out_ids);
++    ggml_tensor * h_nextn = cparams.embeddings_nextn_masked ? flat_out : flat;
+     cb(h_nextn, "h_nextn", -1);
+     res->t_h_nextn = h_nextn;
++    ggml_build_forward_expand(gf, h_nextn);
+ 
+-    inpL = ggml_reshape_3d(ctx0, h_nextn, n_embd, hc, n_outputs);
++    inpL = ggml_reshape_3d(ctx0, flat_out, n_embd, hc, n_outputs);
+ 
+     cur = build_hc_head(inpL, model.hc_head_fn, model.hc_head_scale, model.hc_head_base);
+     cb(cur, "mtp_hc_head", -1);
+diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
+index 10135b056..d5cce47f2 100644
+--- a/src/skippy/session.cpp
++++ b/src/skippy/session.cpp
+@@ -159,7 +159,6 @@ enum skippy_status skippy_session_create(
+     session->n_past = 0;
+     session->mtp_next_pos = 0;
+     if (skippy_mtp_available(session)) {
+-        session->mtp_pending_h.assign(static_cast<size_t>(llama_model_n_embd(model->model)), 0.0f);
+         skippy_mtp_clear_session_state(session);
+     }
+     if (static_cast<size_t>(seq_id) < model->lane_resident_prefix_tokens.size()) {
+diff --git a/src/skippy/speculative_decoding.cpp b/src/skippy/speculative_decoding.cpp
+index 2d81379e9..491434ccb 100644
+--- a/src/skippy/speculative_decoding.cpp
++++ b/src/skippy/speculative_decoding.cpp
+@@ -154,10 +154,16 @@ enum skippy_status skippy_mtp_sync_target_inputs(
+     const bool mtp_shares_target_memory = skippy_mtp_shares_target_memory(mtp_ctx, session->ctx);
+     const bool chain_heads = mtp_depth_scope.chains_heads();
+     const bool chain_at_same_position = mtp_depth_scope.chains_at_same_position();
+-    const int32_t n_embd = llama_model_n_embd(session->stage_model->model);
+-    const size_t row_bytes = static_cast<size_t>(n_embd)*sizeof(float);
+-    if (session->mtp_pending_h.size() != static_cast<size_t>(n_embd)) {
+-        session->mtp_pending_h.assign(static_cast<size_t>(n_embd), 0.0f);
++    // MTP consumes complete pre-norm output rows, which can be wider than
++    // token embeddings (for example DeepSeek4 hyperconnections).
++    const int32_t n_hidden = llama_model_n_embd_out(session->stage_model->model);
++    if (n_hidden <= 0 || n_hidden != llama_model_n_embd_out(llama_get_model(mtp_ctx))) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "target and MTP hidden widths differ");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    const size_t row_bytes = static_cast<size_t>(n_hidden)*sizeof(float);
++    if (session->mtp_pending_h.size() != static_cast<size_t>(n_hidden)) {
++        session->mtp_pending_h.assign(static_cast<size_t>(n_hidden), 0.0f);
+         session->mtp_has_pending_h = false;
+     }
+ 
+@@ -233,7 +239,7 @@ enum skippy_status skippy_mtp_sync_target_inputs(
+ 
+     const int32_t n_decode = static_cast<int32_t>(token_count - first_index);
+     if (!mtp_shares_target_memory && n_decode > 0) {
+-        llama_batch batch = llama_batch_init(n_decode, n_embd, 1);
++        llama_batch batch = llama_batch_init(n_decode, n_hidden, 1);
+         if (token_ids != nullptr) {
+             batch.token = static_cast<llama_token *>(std::malloc(sizeof(llama_token)*static_cast<size_t>(n_decode)));
+             if (batch.token == nullptr) {
+@@ -254,7 +260,7 @@ enum skippy_status skippy_mtp_sync_target_inputs(
+             batch.seq_id[out_i][0] = session->seq_id;
+             batch.logits[out_i] = chain_at_same_position && out_i == n_decode - 1 ? 1 : 0;
+ 
+-            float * dst = batch.embd + static_cast<size_t>(out_i)*n_embd;
++            float * dst = batch.embd + static_cast<size_t>(out_i)*n_hidden;
+             if (src_i == 0) {
+                 std::memcpy(dst, session->mtp_pending_h.data(), row_bytes);
+             } else {
+@@ -272,15 +278,16 @@ enum skippy_status skippy_mtp_sync_target_inputs(
+ 
+         int32_t rc = 0;
+         const uint32_t sync_depth_count = chain_heads ? mtp_depth_scope.depth_count : 1;
++        const int32_t n_input = llama_model_n_embd(session->stage_model->model);
+         const float * mtp_embeddings = input_embeddings != nullptr ?
+-                input_embeddings + first_index*static_cast<size_t>(n_embd) : nullptr;
++                input_embeddings + first_index*static_cast<size_t>(n_input) : nullptr;
+         skippy_graph_build_inputs graph_build_inputs = skippy_graph_build_inputs_from_config(
+                 &session->stage_model->config);
+         skippy_graph_build_inputs_set_mtp_embeddings(
+                 graph_build_inputs,
+                 mtp_embeddings,
+                 static_cast<uint32_t>(n_decode),
+-                static_cast<uint32_t>(n_embd),
++                static_cast<uint32_t>(n_input),
+                 token_start + static_cast<llama_pos>(first_index));
+         for (uint32_t depth = 0; depth < sync_depth_count; ++depth) {
+             if (chain_heads) {
+@@ -308,7 +315,7 @@ enum skippy_status skippy_mtp_sync_target_inputs(
+                     rc = -1;
+                     break;
+                 }
+-                std::memcpy(batch.embd + static_cast<size_t>(out_i)*n_embd, h_next, row_bytes);
++                std::memcpy(batch.embd + static_cast<size_t>(out_i)*n_hidden, h_next, row_bytes);
+             }
+             if (rc != 0) {
+                 break;
+@@ -433,8 +440,14 @@ enum skippy_status skippy_mtp_propose_next(
+     llama_context * mtp_ctx = session->stage_model->mtp_ctx;
+     skippy_mtp_depth_scope mtp_depth_scope(mtp_ctx);
+     const bool mtp_shares_target_memory = skippy_mtp_shares_target_memory(mtp_ctx, session->ctx);
+-    const int32_t n_embd = llama_model_n_embd(session->stage_model->model);
+-    if (session->mtp_pending_h.size() != static_cast<size_t>(n_embd)) {
++    // MTP consumes complete pre-norm output rows, which can be wider than
++    // token embeddings (for example DeepSeek4 hyperconnections).
++    const int32_t n_hidden = llama_model_n_embd_out(session->stage_model->model);
++    if (n_hidden <= 0 || n_hidden != llama_model_n_embd_out(llama_get_model(mtp_ctx))) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "target and MTP hidden widths differ");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (session->mtp_pending_h.size() != static_cast<size_t>(n_hidden)) {
+         return skippy_success(out_error);
+     }
+ 
+@@ -457,11 +470,11 @@ enum skippy_status skippy_mtp_propose_next(
+         std::vector<llama_token> prefix_tokens = { predicted_token };
+         prefix_tokens.reserve(draft_limit + 1);
+         std::vector<float> prefix_hidden = session->mtp_pending_h;
+-        prefix_hidden.reserve((draft_limit + 1)*static_cast<size_t>(n_embd));
++        prefix_hidden.reserve((draft_limit + 1)*static_cast<size_t>(n_hidden));
+ 
+         for (size_t depth = 0; depth < draft_limit; ++depth) {
+             const int32_t n_rows = static_cast<int32_t>(prefix_tokens.size());
+-            llama_batch batch = llama_batch_init(n_rows, n_embd, 1);
++            llama_batch batch = llama_batch_init(n_rows, n_hidden, 1);
+             batch.token = static_cast<llama_token *>(std::malloc(sizeof(llama_token)*static_cast<size_t>(n_rows)));
+             if (batch.token == nullptr) {
+                 llama_batch_free(batch);
+@@ -476,9 +489,9 @@ enum skippy_status skippy_mtp_propose_next(
+                 batch.seq_id[row][0] = session->seq_id;
+                 batch.logits[row] = row == n_rows - 1 ? 1 : 0;
+                 std::memcpy(
+-                        batch.embd + static_cast<size_t>(row)*n_embd,
+-                        prefix_hidden.data() + static_cast<size_t>(row)*n_embd,
+-                        static_cast<size_t>(n_embd)*sizeof(float));
++                        batch.embd + static_cast<size_t>(row)*n_hidden,
++                        prefix_hidden.data() + static_cast<size_t>(row)*n_hidden,
++                        static_cast<size_t>(n_hidden)*sizeof(float));
+             }
+ 
+             if (llama_memory_t memory = mtp_ctx->get_memory()) {
+@@ -506,7 +519,7 @@ enum skippy_status skippy_mtp_propose_next(
+             const float * h_next = llama_get_embeddings_nextn_ith(mtp_ctx, n_rows - 1);
+             if (h_next != nullptr && depth + 1 < draft_limit) {
+                 prefix_tokens.push_back(token);
+-                prefix_hidden.insert(prefix_hidden.end(), h_next, h_next + n_embd);
++                prefix_hidden.insert(prefix_hidden.end(), h_next, h_next + n_hidden);
+             }
+             std::free(batch.token);
+             batch.token = nullptr;
+@@ -570,7 +583,7 @@ enum skippy_status skippy_mtp_propose_next(
+             if (h_next == nullptr) {
+                 break;
+             }
+-            std::memcpy(proposal_h.data(), h_next, static_cast<size_t>(n_embd)*sizeof(float));
++            std::memcpy(proposal_h.data(), h_next, static_cast<size_t>(n_hidden)*sizeof(float));
+         }
+         if (!mtp_shares_target_memory && !chain_at_same_position) {
+             proposal_end_pos = pos;
+diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
+index c4b43a65a..420dd7a90 100644
+--- a/src/skippy/tests/graph_build_inputs.cpp
++++ b/src/skippy/tests/graph_build_inputs.cpp
+@@ -6,6 +6,8 @@
+ 
+ #include <atomic>
+ #include <cstdint>
++#include <cstdio>
++#include <cstring>
+ #include <memory>
+ #include <thread>
+ #include <vector>
+@@ -403,7 +405,64 @@ static int check_decode_encode_fallback(const char * model_path) {
+     return 0;
+ }
+ 
++// No model files, backend, allocation or graph execution required.
++static int check_decode_input_width() {
++    llama_hparams hp = {};
++    hp.n_embd = 256;
++    hp.n_deepstack_layers = 1;
++    hp.n_embd_out_impl = 1024;
++    hp.n_embd_inp_enc_impl = 1536;
++    struct width_case {
++        const char * name;
++        llm_arch arch;
++        llama_context_type context;
++        bool embeddings;
++        bool filtered;
++        int32_t layer_start;
++        int64_t expected;
++    };
++    const width_case cases[] = {
++        {"ordinary projector", LLM_ARCH_QWEN3VL, LLAMA_CONTEXT_TYPE_DEFAULT, true, false, 0, 512},
++        {"first stage projector", LLM_ARCH_QWEN3VL, LLAMA_CONTEXT_TYPE_DEFAULT, true, true, 0, 512},
++        {"downstream dense", LLM_ARCH_QWEN3VL, LLAMA_CONTEXT_TYPE_DEFAULT, true, true, 1, 256},
++        {"downstream MoE", LLM_ARCH_QWEN3VLMOE, LLAMA_CONTEXT_TYPE_DEFAULT, true, true, 1, 256},
++        {"disabled filter", LLM_ARCH_QWEN3VL, LLAMA_CONTEXT_TYPE_DEFAULT, true, false, 1, 512},
++        {"token batch", LLM_ARCH_QWEN3VL, LLAMA_CONTEXT_TYPE_DEFAULT, false, true, 1, 512},
++        {"MTP hidden", LLM_ARCH_DEEPSEEK4, LLAMA_CONTEXT_TYPE_MTP, true, false, 0, 1024},
++        {"MTP before stage", LLM_ARCH_DEEPSEEK4, LLAMA_CONTEXT_TYPE_MTP, true, true, 1, 1024},
++        {"MTP token batch", LLM_ARCH_DEEPSEEK4, LLAMA_CONTEXT_TYPE_MTP, false, true, 1, 512},
++        {"DFlash encoder", LLM_ARCH_DFLASH, LLAMA_CONTEXT_TYPE_DEFAULT, true, false, 0, 1536},
++        {"DFlash before stage", LLM_ARCH_DFLASH, LLAMA_CONTEXT_TYPE_DEFAULT, true, true, 1, 1536},
++        {"DFlash token batch", LLM_ARCH_DFLASH, LLAMA_CONTEXT_TYPE_DEFAULT, false, true, 1, 512},
++    };
++    for (const auto & test : cases) {
++        skippy_graph_build_inputs inputs;
++        inputs.filter.enabled = test.filtered;
++        inputs.filter.layer_start = test.layer_start;
++        const auto actual = llama_decode_input_width(hp, test.arch, test.context, inputs, test.embeddings);
++        if (actual != test.expected) {
++            fprintf(stderr, "decode width contract failed: %s\n", test.name);
++            return 20;
++        }
++    }
++    // Equal-width models retain the ordinary fallback in all relevant modes.
++    hp.n_deepstack_layers = 0;
++    hp.n_embd_out_impl = hp.n_embd_inp_enc_impl = 0;
++    for (const auto & test : cases) {
++        skippy_graph_build_inputs inputs;
++        inputs.filter.enabled = test.filtered;
++        inputs.filter.layer_start = test.layer_start;
++        if (llama_decode_input_width(hp, test.arch, test.context, inputs, test.embeddings) != 256) {
++            return 21;
++        }
++    }
++    return 0;
++}
++
+ int main(int argc, char ** argv) {
++    if (argc == 2 && std::strcmp(argv[1], "--input-width") == 0) {
++        return check_decode_input_width();
++    }
+     if (argc != 3) {
+         return 64;
+     }
+diff --git a/tests/test-deepseek4-mtp.h b/tests/test-deepseek4-mtp.h
+new file mode 100644
+index 000000000..3b039c202
+--- /dev/null
++++ b/tests/test-deepseek4-mtp.h
+@@ -0,0 +1,90 @@
++#pragma once
++
++#include "skippy.h"
++#include "../src/llama-model.h"
++#include "../src/llama-context.h"
++#include "../src/skippy/runtime_types.h"
++#include "../src/skippy/speculative_internal.h"
++
++#include <cmath>
++
++static void test_deepseek4_mtp_rows(const std::string & path, int n_rows) {
++    auto config = skippy_runtime_config_default();
++    config.include_embeddings = true;
++    config.include_output = true;
++    config.mtp_source = SKIPPY_MTP_SOURCE_INTEGRATED;
++    config.n_gpu_layers = 0;
++    config.selected_backend_device = "CPU";
++    config.ctx_size = 256;
++    config.n_batch = 16;
++    config.n_ubatch = 4;
++    config.n_threads = config.n_threads_batch = 2;
++    skippy_model * model = nullptr;
++    if (skippy_model_open(path.c_str(), &config, &model, nullptr) != SKIPPY_STATUS_OK || !model) {
++        throw std::runtime_error("production model open failed");
++    }
++    std::unique_ptr<skippy_model, void(*)(skippy_model *)> model_guard(model, [](skippy_model * m) {
++        skippy_model_free(m, nullptr);
++    });
++    if (model->model->hparams.n_embd != 512 || model->model->hparams.n_embd_out() != 2048 ||
++            model->model->hparams.n_layer_nextn != 1 || !model->mtp_ctx) {
++        throw std::runtime_error("required 512/2048 integrated MTP fixture unavailable");
++    }
++    skippy_session * session = nullptr;
++    if (skippy_session_create(model, &session, nullptr) != SKIPPY_STATUS_OK || !session) {
++        throw std::runtime_error("session creation failed");
++    }
++    std::unique_ptr<skippy_session, void(*)(skippy_session *)> session_guard(session, [](skippy_session * s) {
++        skippy_session_free(s, nullptr);
++    });
++    if (!session->mtp_pending_h.empty() || session->mtp_has_pending_h) {
++        throw std::runtime_error("new MTP session must not contain a pending hidden row");
++    }
++    llama_set_embeddings_nextn(session->ctx, true, false);
++    for (int block = 0; block < 2; ++block) {
++        llama_token tokens[] = { 3 + block*11, 7 + block*13, 19 + block*17, 41 + block*5, 59 + block*5 };
++        llama_batch batch = llama_batch_init(n_rows, 0, 1);
++        batch.n_tokens = n_rows;
++        for (int row = 0; row < n_rows; ++row) {
++            batch.token[row] = tokens[row];
++            batch.pos[row] = block*n_rows + row;
++            batch.n_seq_id[row] = 1;
++            batch.seq_id[row][0] = session->seq_id;
++            batch.logits[row] = 1;
++        }
++        const int rc = llama_decode(session->ctx, batch);
++        llama_batch_free(batch);
++        if (rc != 0) {
++            throw std::runtime_error("production target decode failed");
++        }
++        fprintf(stderr, "MTP sync block=%d rows=%d n_ubatch=4 decoder=512 hidden=2048\n", block, n_rows);
++        fflush(stderr);
++        if (skippy_mtp_sync_target_inputs(session, tokens, nullptr, n_rows, block*n_rows, nullptr) != SKIPPY_STATUS_OK) {
++            throw std::runtime_error("production MTP sync failed");
++        }
++        session->n_past = (block + 1)*n_rows;
++    }
++    fprintf(stderr, "MTP production draft begin\n");
++    fflush(stderr);
++    skippy_native_mtp_draft draft = {};
++    if (skippy_mtp_propose_next(session, 31, 2, &draft, nullptr) != SKIPPY_STATUS_OK || draft.token_count != 2) {
++        throw std::runtime_error("production MTP draft did not execute two steps");
++    }
++    const float * hidden = llama_get_embeddings_nextn_ith(session->ctx, n_rows - 1);
++    if (!hidden || session->mtp_pending_h.size() != 2048) {
++        throw std::runtime_error("pending hidden row is truncated");
++    }
++    for (size_t col = 0; col < 2048; ++col) {
++        if (!std::isfinite(hidden[col]) || session->mtp_pending_h[col] != hidden[col]) {
++            throw std::runtime_error("pending hidden row differs from full target output");
++        }
++    }
++    fprintf(stderr, "MTP production sync/draft PASS\n");
++}
++
++static int test_deepseek4_mtp(const std::string & path) {
++    for (int n_rows : {1, 2, 5}) {
++        test_deepseek4_mtp_rows(path, n_rows);
++    }
++    return 0;
++}
+diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
+index f01995dad..951c88867 100644
+--- a/tests/test-llama-archs.cpp
++++ b/tests/test-llama-archs.cpp
+@@ -94,7 +94,9 @@ static gguf_context_ptr get_gguf_ctx(
+         const bool moe,
+         const glm_dsa_indexshare_fixture glm_dsa_indexshare = glm_dsa_indexshare_fixture::DEFAULT,
+         const uint32_t context_length = 256,
+-        const uint32_t glm_dsa_indexer_top_k = 8) {
++        const uint32_t glm_dsa_indexer_top_k = 8,
++        const bool deepseek4_mtp = false) {
++    (void) glm_dsa_indexshare;
+     gguf_context_ptr ret(gguf_init_empty());
+     llama_model_saver ms(arch, ret.get());
+     const uint32_t n_ctx = context_length;
+@@ -121,7 +123,7 @@ static gguf_context_ptr get_gguf_ctx(
+         n_embd  = 512;
+         n_head  = 8;
+         n_ff    = 1024;
+-        n_layer = 4;
++        n_layer = deepseek4_mtp ? 5 : 4;
+     } else if (arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_LAGUNA) {
+         n_embd = 160; // exercise per-head tensor split granularity with head size 80
+     } else if (arch == LLM_ARCH_QWEN3 || arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_AFMOE) {
+@@ -338,7 +340,7 @@ static gguf_context_ptr get_gguf_ctx(
+     if (arch == LLM_ARCH_DEEPSEEK4) {
+         ms.add_kv(LLM_KV_ATTENTION_OUTPUT_GROUP_COUNT,         uint32_t(8));
+         ms.add_kv(LLM_KV_ATTENTION_OUTPUT_LORA_RANK,           uint32_t(32));
+-        ms.add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,            std::vector<uint32_t>({0, 0, 4, 128}));
++        ms.add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,            deepseek4_mtp ? std::vector<uint32_t>({0, 0, 4, 128, 0}) : std::vector<uint32_t>({0, 0, 4, 128}));
+         ms.add_kv(LLM_KV_ATTENTION_COMPRESS_ROPE_FREQ_BASE,    160000.0f);
+         ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,               uint32_t(4));
+         ms.add_kv(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, uint32_t(2));
+@@ -406,6 +408,16 @@ static gguf_context_ptr get_gguf_ctx(
+         ggml_format_name(&t, "convnext.%" PRIu32 ".dw.weight", il);
+         gguf_add_tensor(ms.gguf_ctx, &t);
+     }
++    if (deepseek4_mtp) {
++        ms.add_kv(LLM_KV_NEXTN_PREDICT_LAYERS, uint32_t(1));
++        ggml_tensor probe = {};
++        probe.type = GGML_TYPE_F16;
++        probe.ne[0] = 2*n_embd;
++        probe.ne[1] = n_embd;
++        probe.ne[2] = probe.ne[3] = 1;
++        ggml_set_name(&probe, "blk.4.nextn.eh_proj.weight");
++        gguf_add_tensor(ms.gguf_ctx, &probe);
++    }
+     return ret;
+ }
+ 
+@@ -923,6 +935,9 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
+     return all_ok ? 0 : 1;
+ }
+ 
++#include "test-skippy-deepstack-width.h"
++#include "test-deepseek4-mtp.h"
++
+ int main(int argc, char ** argv) {
+     // init the logger at max verbosity. filter with a custom callback respecting the user-configure verbosity
+     common_log_set_verbosity_thold(LOG_LEVEL_DEBUG);
+@@ -933,10 +948,23 @@ int main(int argc, char ** argv) {
+     llm_arch arch = LLM_ARCH_UNKNOWN;
+     size_t seed = rd();
+     std::string out;
++    bool test_deepstack_width = false;
++    bool deepseek4_mtp = false;
++    std::string mtp_model;
+ 
+     int verbosity = LOG_LEVEL_ERROR;
+ 
+     for (int i = 1; i < argc; i++) {
++        if (strcmp(argv[i], "--deepseek4-mtp") == 0) {
++            deepseek4_mtp = true;
++        }
++        if (strcmp(argv[i], "--test-mtp-model") == 0 && i + 1 < argc) {
++            mtp_model = argv[++i];
++        }
++
++        if (strcmp(argv[i], "--skippy-deepstack-width") == 0) {
++            test_deepstack_width = true;
++        }
+         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+             usage(argv);
+             return 0;
+@@ -982,6 +1010,28 @@ int main(int argc, char ** argv) {
+     printf("%s: using seed %zu\n", __func__, seed);
+ 
+     try {
++        if (test_deepstack_width) {
++            return test_skippy_deepstack_width();
++        }
++        if (!mtp_model.empty()) {
++            return test_deepseek4_mtp(mtp_model);
++        }
++        if (deepseek4_mtp) {
++            if (arch != LLM_ARCH_DEEPSEEK4 || out.empty()) {
++                throw std::runtime_error("--deepseek4-mtp requires -a deepseek4 and -o directory");
++            }
++            auto gguf = get_gguf_ctx(arch, true, glm_dsa_indexshare_fixture::DEFAULT, 256, 8, true);
++            auto params = llama_model_default_params();
++            params.n_gpu_layers = 0;
++            params.load_mtp = true;
++            llama_model_ptr model(llama_model_init_from_user(gguf.get(), set_tensor_data, &seed, params));
++            if (!model || model->hparams.n_layer_nextn != 1 || model->hparams.n_embd_out() != 2048) {
++                throw std::runtime_error("failed to generate wide DeepSeek4 MTP fixture");
++            }
++            const std::string path = out + "/deepseek4-mtp-moe.gguf";
++            llama_model_save_to_file(model.get(), path.c_str());
++            return 0;
++        }
+         if (!out.empty()) {
+             return save_models(arch, seed, verbosity, out);
+         }
+diff --git a/tests/test-skippy-deepstack-width.h b/tests/test-skippy-deepstack-width.h
+new file mode 100644
+index 000000000..b6336a161
+--- /dev/null
++++ b/tests/test-skippy-deepstack-width.h
+@@ -0,0 +1,116 @@
++#pragma once
++
++#include "../src/llama-context.h"
++#include "../src/llama-model.h"
++#include "../src/skippy/activation_internal.h"
++
++// Run the actual activation row packer, decode allocator, microbatch splitter
++// and graph input. Deepstack makes raw projector rows wider than stage rows.
++static std::vector<float> deepstack_decode(
++        llama_model * model, size_t tokens, bool downstream, bool one_at_a_time) {
++    auto params = llama_context_default_params();
++    params.n_ctx = 32;
++    params.n_batch = 8;
++    params.n_ubatch = 2;
++    params.n_threads = 2;
++    params.n_threads_batch = 2;
++    params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
++    llama_context_ptr ctx(llama_init_from_model(model, params));
++    if (!ctx) throw std::runtime_error("deepstack context creation failed");
++    const size_t width = downstream ? model->hparams.n_embd : model->hparams.n_embd_inp();
++    const size_t stride = width + 3;
++    const size_t vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
++    std::vector<float> source(tokens * stride, -999.0f);
++    for (size_t row = 0; row < tokens; ++row) {
++        for (size_t col = 0; col < width; ++col) {
++            source[row * stride + col] = std::sin(float(row * 13 + col) * 0.07f);
++        }
++    }
++    std::vector<float> result;
++    for (size_t start = 0; start < tokens;) {
++        const size_t count = one_at_a_time ? 1 : tokens;
++        // Deliberately exact-sized: ASan must catch copying raw-input-width
++        // rows from packed downstream decoder-width storage.
++        std::vector<float> packed(count * width);
++        skippy_activation_desc desc = {};
++        desc.part_count = 1;
++        desc.token_count = count;
++        desc.payload_bytes = count * stride * sizeof(float);
++        auto & part = desc.parts[0];
++        part.ggml_type = GGML_TYPE_F32;
++        part.rank = 2;
++        part.token_axis = 1;
++        part.dimensions[0] = width;
++        part.dimensions[1] = count;
++        part.byte_strides[0] = sizeof(float);
++        part.byte_strides[1] = stride * sizeof(float);
++        part.payload_bytes = desc.payload_bytes;
++        if (skippy_copy_primary_activation_rows(&desc, source.data() + start * stride,
++                    count, width, packed.data(), packed.size(), nullptr) != SKIPPY_STATUS_OK) {
++            throw std::runtime_error("deepstack activation packing failed");
++        }
++        std::vector<llama_pos> positions(count * 4);
++        std::vector<int32_t> n_seq(count, 1);
++        llama_seq_id sequence = 0;
++        std::vector<llama_seq_id *> seq(count, &sequence);
++        std::vector<int8_t> logits(count, 1);
++        for (size_t i = 0; i < count; ++i) {
++            positions[i] = positions[count + i] = positions[2 * count + i] = start + i;
++            positions[3 * count + i] = 0;
++        }
++        llama_batch batch = {};
++        batch.n_tokens = count;
++        batch.embd = packed.data();
++        batch.pos = positions.data();
++        batch.n_seq_id = n_seq.data();
++        batch.seq_id = seq.data();
++        batch.logits = logits.data();
++        skippy_graph_build_inputs inputs;
++        inputs.filter.enabled = true;
++        inputs.filter.layer_start = downstream ? 1 : 0;
++        inputs.filter.layer_end = model->hparams.n_layer();
++        inputs.filter.include_embeddings = !downstream;
++        inputs.filter.include_output = true;
++        if (ctx->decode(batch, inputs) != 0) throw std::runtime_error("deepstack decode failed");
++        for (size_t i = 0; i < count; ++i) {
++            const float * row = llama_get_logits_ith(ctx.get(), i);
++            if (!row) throw std::runtime_error("deepstack logits absent");
++            for (size_t j = 0; j < vocab; ++j) {
++                if (!std::isfinite(row[j])) throw std::runtime_error("deepstack nonfinite logits");
++                result.push_back(row[j]);
++            }
++        }
++        start += count;
++    }
++    return result;
++}
++
++static int test_skippy_deepstack_width() {
++    for (auto arch : {LLM_ARCH_QWEN3VL, LLM_ARCH_QWEN3VLMOE}) {
++        const bool moe = arch == LLM_ARCH_QWEN3VLMOE;
++        auto metadata = get_gguf_ctx(arch, moe);
++        llama_model_saver saver(arch, metadata.get());
++        saver.add_kv(LLM_KV_NUM_DEEPSTACK_LAYERS, uint32_t(1));
++        auto model_and_context = get_model_and_ctx(metadata.get(), nullptr, 1234, {});
++        model_and_context.second.reset();
++        auto * model = model_and_context.first.get();
++        if (model->hparams.n_embd_inp() <= model->hparams.n_embd) {
++            throw std::runtime_error("deepstack fixture lost unequal widths");
++        }
++        for (bool downstream : {true, false}) {
++            for (size_t rows : {size_t(1), size_t(2), size_t(5)}) {
++                auto batched = deepstack_decode(model, rows, downstream, false);
++                auto scalar = deepstack_decode(model, rows, downstream, true);
++                if (batched.size() != scalar.size()) throw std::runtime_error("deepstack logits size mismatch");
++                for (size_t i = 0; i < batched.size(); ++i) {
++                    if (std::abs(batched[i] - scalar[i]) > 1e-4f * (1.0f + std::abs(scalar[i]))) {
++                        throw std::runtime_error("deepstack microbatch row parity mismatch");
++                    }
++                }
++            }
++        }
++        std::printf("deepstack width regression passed: %s (raw=%d decoder=%u)\n",
++                llm_arch_name(arch), model->hparams.n_embd_inp(), model->hparams.n_embd);
++    }
++    return 0;
++}
+-- 
+2.54.0 (Apple Git-157)
+
