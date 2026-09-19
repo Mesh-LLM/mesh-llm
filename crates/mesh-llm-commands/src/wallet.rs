@@ -59,7 +59,15 @@ fn control_command(command: &WalletCommand) -> Result<ControlCommand> {
     Ok(match command {
         WalletCommand::GetBalance => ControlCommand::Balance,
         WalletCommand::GetTransactions { limit } => ControlCommand::Transactions { limit: *limit },
-        WalletCommand::FundWallet => ControlCommand::Fund,
+        WalletCommand::FundWallet { amount_sats } => ControlCommand::Fund {
+            amount_msat: match amount_sats {
+                Some(sats) => Some(
+                    sats.checked_mul(1000)
+                        .context("amount-sats is too large to express in millisatoshis")?,
+                ),
+                None => None,
+            },
+        },
         WalletCommand::Send {
             invoice,
             amount_msat,

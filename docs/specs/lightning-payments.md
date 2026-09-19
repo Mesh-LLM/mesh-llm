@@ -195,6 +195,7 @@ below. This does not certify every older release.
 mesh-llm wallet get-balance
 mesh-llm wallet get-transactions --limit 20
 mesh-llm wallet fund-wallet
+mesh-llm wallet fund-wallet --amount-sats 10000
 mesh-llm wallet send lnbc... --max-fee-msat 1000
 mesh-llm wallet send lnbc... --amount-msat 10000 --max-fee-msat 1000
 mesh-llm wallet pending

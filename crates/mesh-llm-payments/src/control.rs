@@ -19,7 +19,10 @@ pub enum ControlCommand {
     Transactions {
         limit: usize,
     },
-    Fund,
+    Fund {
+        #[serde(default)]
+        amount_msat: Option<u64>,
+    },
     Send {
         invoice: String,
         amount_msat: Option<u64>,
@@ -66,9 +69,14 @@ impl PaymentService {
                     self.wallet().await?.transactions(limit).await?,
                 )?)
             }
-            ControlCommand::Fund => Ok(serde_json::to_value(
-                self.wallet().await?.create_invoice(None).await?,
-            )?),
+            ControlCommand::Fund { amount_msat } => {
+                if let Some(amount_msat) = amount_msat {
+                    ensure!(amount_msat > 0, "amount must be greater than zero");
+                }
+                Ok(serde_json::to_value(
+                    self.wallet().await?.create_invoice(amount_msat).await?,
+                )?)
+            }
             ControlCommand::Send {
                 invoice,
                 amount_msat,

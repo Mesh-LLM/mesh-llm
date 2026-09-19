@@ -300,3 +300,32 @@ async fn failed_charge_does_not_release_an_uncertain_sibling() -> Result<()> {
     assert_eq!(service.ledger.requests()?[0].state, "failed");
     Ok(())
 }
+
+#[tokio::test]
+async fn fund_honors_fixed_amount_and_rejects_zero() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let wallet = Arc::new(MockWallet::default());
+    let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
+
+    let amountless = service
+        .control(ControlCommand::Fund { amount_msat: None })
+        .await?;
+    assert_eq!(amountless["amount_msat"], 1000);
+
+    let fixed = service
+        .control(ControlCommand::Fund {
+            amount_msat: Some(10_000_000),
+        })
+        .await?;
+    assert_eq!(fixed["amount_msat"], 10_000_000);
+
+    assert!(
+        service
+            .control(ControlCommand::Fund {
+                amount_msat: Some(0)
+            })
+            .await
+            .is_err()
+    );
+    Ok(())
+}

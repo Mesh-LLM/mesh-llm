@@ -17,9 +17,13 @@ pub enum WalletCommand {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
-    /// Create an amount-less mainnet BOLT11 invoice.
+    /// Create a mainnet BOLT11 invoice, amount-less unless --amount-sats is given.
     #[command(alias = "fund")]
-    FundWallet,
+    FundWallet {
+        /// Fixed invoice amount in satoshis, for payers that reject amount-less invoices.
+        #[arg(long)]
+        amount_sats: Option<u64>,
+    },
     /// Pay a mainnet BOLT11 invoice with a bounded routing fee.
     Send {
         invoice: String,
