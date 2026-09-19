@@ -38,6 +38,9 @@ def _frame(hasher: Any, value: bytes) -> None:
 
 
 def _series_patches(directory: Path) -> list[Path]:
+    # Keep this series validation and ordering contract in lockstep with
+    # crates/mesh-llm-host-runtime/build.rs::series_patches. Together they
+    # define the v2 patch_queue_sha256 embedded in the generated roster.
     if not directory.exists():
         return []
     series = directory / "series"
