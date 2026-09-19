@@ -10,6 +10,8 @@ use super::*;
 use crate::logging::operator_audit::OperatorAuditWriter;
 
 const NOW: &str = "2026-08-04T12:00:00Z";
+/// Largest transport timeout `WebhookDeliveryWorker::from_config` accepts.
+const MAX_WEBHOOK_TIMEOUT_SECS: u64 = 60;
 
 #[derive(Clone)]
 struct FixedClock;
@@ -436,6 +438,15 @@ fn real_http_worker(
     endpoint: String,
     clock: AdjustableClock,
 ) -> WebhookDeliveryWorker {
+    real_http_worker_with_timeout(store, endpoint, clock, 1)
+}
+
+fn real_http_worker_with_timeout(
+    store: Arc<LogStore>,
+    endpoint: String,
+    clock: AdjustableClock,
+    timeout_secs: u64,
+) -> WebhookDeliveryWorker {
     let transport: Arc<dyn WebhookTransport> =
         Arc::new(ReqwestWebhookTransport::new().expect("real webhook transport"));
     WebhookDeliveryWorker::from_config(
@@ -444,7 +455,7 @@ fn real_http_worker(
             enabled: true,
             url: Some(endpoint),
             max_attempts: 3,
-            timeout_secs: 1,
+            timeout_secs,
             dead_letter_retention_secs: 3_600,
         },
         transport,
@@ -641,26 +652,56 @@ async fn real_http_timeout_keeps_terminal_persistence_off_the_delivery_path() {
     let (store, _root) = open_adjustable_store(&clock);
     let server = LocalFakeHttpServer::start([LocalHttpReply::Stall]).await;
     seed_terminal_delivery_with_private_event(&store, "real-timeout", NOW, 2);
-    let worker = real_http_worker(Arc::clone(&store), server.endpoint.clone(), clock.clone());
+    // The maximum permitted transport timeout keeps the in-flight delivery
+    // unresolved for the whole test, so "persistence finished while HTTP was
+    // still pending" is an ordering fact observed from the worker task rather
+    // than a wall-clock deadline that a loaded CI runner can miss.
+    let worker = real_http_worker_with_timeout(
+        Arc::clone(&store),
+        server.endpoint.clone(),
+        clock.clone(),
+        MAX_WEBHOOK_TIMEOUT_SECS,
+    );
     let worker_task = tokio::spawn(async move { worker.process_next().await });
 
     server.wait_for_requests(1).await;
-    tokio::time::timeout(Duration::from_millis(250), {
+    tokio::task::spawn_blocking({
         let store = Arc::clone(&store);
-        tokio::task::spawn_blocking(move || {
+        move || {
             seed_terminal_delivery_with_private_event(&store, "terminal-while-http-stalls", NOW, 1)
-        })
+        }
     })
     .await
-    .expect("terminal persistence is not delayed by HTTP")
     .expect("terminal persistence task");
 
+    assert!(
+        !worker_task.is_finished(),
+        "terminal persistence completed while the HTTP delivery was still in flight"
+    );
+    assert!(
+        store
+            .webhook_delivery("terminal-while-http-stalls")
+            .unwrap()
+            .is_some(),
+        "terminal persistence remains durable while HTTP is pending"
+    );
+    assert_private_delivery_storage(&store, "terminal-while-http-stalls");
+
+    worker_task.abort();
+    let _ = worker_task.await;
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn real_http_timeout_schedules_a_bounded_retry_without_error_text() {
+    let clock = AdjustableClock::new(NOW);
+    let (store, _root) = open_adjustable_store(&clock);
+    let server = LocalFakeHttpServer::start([LocalHttpReply::Stall]).await;
+    seed_terminal_delivery_with_private_event(&store, "real-timeout", NOW, 2);
+    let worker = real_http_worker(Arc::clone(&store), server.endpoint.clone(), clock.clone());
+
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(2), worker_task)
-            .await
-            .expect("HTTP timeout is bounded")
-            .expect("worker task")
-            .expect("timeout worker result"),
+        worker.process_next().await.expect("timeout worker result"),
         WebhookWorkerOutcome::RetryScheduled {
             delivery_id: "real-timeout".to_owned(),
         }
@@ -670,13 +711,6 @@ async fn real_http_timeout_keeps_terminal_persistence_off_the_delivery_path() {
     assert_eq!(
         timeout_record.last_error_code,
         Some(WebhookDeliveryErrorCode::Timeout)
-    );
-    assert!(
-        store
-            .webhook_delivery("terminal-while-http-stalls")
-            .unwrap()
-            .is_some(),
-        "terminal persistence remains durable while HTTP is pending"
     );
     assert_private_delivery_storage(&store, "real-timeout");
     server.shutdown().await;
