@@ -28,7 +28,6 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tokio = { version = "1", features = ["sync", "time", "rt", "io-util"] }
-uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 bitcoin = { version = "0.32", features = ["secp-recovery"] }
