@@ -52,7 +52,7 @@ same Rust crate.
 
 ## ABI Contract
 
-The staged ABI is versioned as `0.1.31`. The patch header in
+The staged ABI is versioned as `0.1.59`. The patch header in
 `third_party/llama.cpp/patches/` and the Rust constants in
 `crates/skippy-ffi/src/lib.rs` are the source of truth, so keep this README
 aligned with those files instead of treating it as canonical prose.

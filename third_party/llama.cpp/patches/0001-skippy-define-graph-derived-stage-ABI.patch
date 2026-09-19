@@ -868,7 +868,7 @@ index 000000000..75df15827
 +
 +/**
 + * @file skippy/model_package.h
-+ * @brief Inspects GGUF tensors and writes layer-range or multi-part packages.
++ * @brief Inspects GGUF tensors and writes metadata and multi-part packages.
 + */
 +
 +#include "common.h"
@@ -2074,4 +2074,3 @@ index 000000000..c9697cf6c
 +#endif // SKIPPY_TOKENIZATION_H
 -- 
 2.54.0 (Apple Git-157)
-

@@ -47,19 +47,21 @@ artifact file set in `model-package.json`.
 ### Package v2 writer
 
 `write-package` emits the shared `skippy-package-format` schema v2. It captures
-all source GGUF directories and native stored sizes before writing, copies whole
-source shards into generic `artifacts/source-NNNNN.gguf` containers, reopens each
-copy, and compares exact names, types, dimensions, absolute offsets, lengths,
-alignment and file SHA-256 against that independent inventory. Padding is not
-counted as tensor storage. Shard counts and total tensors are checked against
-GGUF split metadata; duplicate source names and missing source files fail closed.
-No stage count, tensor role, endpoint, or tensor-name predicate selects content.
+all source GGUF directories and native stored sizes before writing. The native
+role classifier assigns every tensor exactly once to a shared common group or a
+layer group. The writer emits `shared/common.gguf` and
+`layers/layer-NNNNN.gguf`, subdividing an oversized group into stable
+`*-partNN.gguf` artifacts. It then emits the metadata-only carrier
+`shared/metadata.gguf`, whose descriptors and payload locators cover the
+verified artifact catalog.
 
-Whole-shard copying preserves the original typed model and tokenizer metadata;
-the manifest also records the decoded metadata map. This first writer unit does
-not optimize physical grouping into per-layer files. Layer ordinals are absent
-because GGUF directories do not contain a structural per-tensor layer field;
-the native inspector's name-derived layer index is deliberately not reused.
+The writer reopens every payload and compares exact names, types, dimensions,
+stored lengths, alignment, and file SHA-256 against the independent inventory.
+Padding is not counted as tensor storage. Shard counts and total tensors are
+checked against GGUF split metadata; duplicate source names, missing source
+files, unbound tensors, and unexpected tensor copies fail closed. Physical
+grouping does not assign stage ownership: runtime admission derives each
+executable slice and exact tensor closure from the native graph plan.
 
 The catalog supports explicit storage aliases. The pinned native GGUF inspector
 currently rejects shared-offset tensor directories, so such sources are rejected

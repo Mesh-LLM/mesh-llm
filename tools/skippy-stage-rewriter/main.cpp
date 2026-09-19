@@ -94,7 +94,6 @@ struct Proof {
   std::string activation_out;
   bool embedding_owner = false;
   bool output_owner = false;
-  std::vector<std::string> terminal_predicates;
   std::vector<std::string> nonlocal_exits;
   std::string execution_scope = "partitioned_decoder";
   std::vector<std::string> scope_evidence;
@@ -1258,8 +1257,6 @@ public:
       reports_.push_back(std::move(report));
       return;
     }
-    const bool completing_filter = false;
-
     const auto &embedding_calls = facts.calls["build_inp_embd"];
     const CallExpr *embedding = nullptr;
     bool standard_embedding = false;
@@ -1357,10 +1354,7 @@ public:
     report.proof.loop_start =
         sourceText(loop_var->getInit()->getSourceRange(), sm, lang);
     report.proof.loop_end = stableLoopEnd(condition->getRHS(), sm, lang);
-    const std::string expected_loop_start =
-        completing_filter ? "il_start" : "0";
-    if (loop_body == nullptr ||
-        report.proof.loop_start != expected_loop_start) {
+    if (loop_body == nullptr || report.proof.loop_start != "0") {
       refuse(report,
              loop_body == nullptr
                  ? "block loop body is not compound"
@@ -1424,7 +1418,7 @@ public:
         stageZeroSidebands(loop_body, report.proof.loop_var);
     const auto stage_zero_embedding_checks = stageZeroEmbeddingModeChecks(
         constructor_body, embedding_statement, loop, *carried, sm, lang);
-    if (!completing_filter && *activation != *carried && !hyperconnection) {
+    if (*activation != *carried && !hyperconnection) {
       refuse(report,
              "layer-carried activation differs from the embedding without a "
              "proven hyperconnection prelude");
@@ -1470,7 +1464,7 @@ public:
     }
 
     std::vector<const BinaryOperator *> preloop_activation_assignments;
-    if (!completing_filter && !hyperconnection && *activation == *carried) {
+    if (!hyperconnection && *activation == *carried) {
       const auto embedding_end =
           tokenRange(embedding_statement->getSourceRange(), sm, lang);
       const auto loop_begin = fileOffset(loop->getBeginLoc(), sm);
@@ -1510,7 +1504,7 @@ public:
     const CallExpr *output_call = nullptr;
     if (output_calls.size() == 1) {
       output_call = output_calls.front();
-    } else if (output_calls.size() > 1 && !completing_filter) {
+    } else if (output_calls.size() > 1) {
       const auto loop_end_offset = fileOffset(loop->getEndLoc(), sm);
       std::vector<const CallExpr *> postloop_output_calls;
       for (const CallExpr *candidate : output_calls) {
@@ -1706,10 +1700,6 @@ private:
             {"text", edit.text},
         });
       }
-      llvm::json::Array predicates;
-      for (const auto &predicate : report.proof.terminal_predicates) {
-        predicates.push_back(predicate);
-      }
       llvm::json::Array exits;
       for (const auto &exit : report.proof.nonlocal_exits) {
         exits.push_back(exit);
@@ -1732,7 +1722,7 @@ private:
              return evidence;
            }()},
           {"output_owner", report.proof.output_owner},
-          {"terminal_predicates", std::move(predicates)},
+          {"terminal_predicates", llvm::json::Array{}},
       };
       builders.push_back(llvm::json::Object{
           {"constructor", report.constructor},
@@ -1774,7 +1764,6 @@ private:
     return 0;
   }
 
-  std::vector<const Expr *> n_layer_refs_;
   std::vector<BuilderReport> reports_;
 };
 

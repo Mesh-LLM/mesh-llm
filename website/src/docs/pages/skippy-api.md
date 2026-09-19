@@ -204,7 +204,7 @@ Capability consumers can include a narrower header:
 | `include/skippy/devices.h` | Enumerates backend devices available to the staged runtime. |
 | `include/skippy/events.h` | Versioned callbacks for model-open and runtime lifecycle progress. Event reporters are optional and operation-scoped. A reporter must remain valid until the corresponding model-open call returns. |
 | `include/skippy/execution.h` | Prefill, decode, verification, activation-frame, and batched execution. |
-| `include/skippy/model_package.h` | Inspects GGUF tensors and writes layer-range or multi-part packages. |
+| `include/skippy/model_package.h` | Inspects GGUF tensors and writes metadata and multi-part packages. |
 | `include/skippy/model_source.h` | Callback-backed model construction and load-time quantization. |
 | `include/skippy/runtime.h` | Model loading, session lifecycle, and llama.cpp context access. |
 | `include/skippy/sampling.h` | Sampling parameters shared by single-token and batched decode calls. |

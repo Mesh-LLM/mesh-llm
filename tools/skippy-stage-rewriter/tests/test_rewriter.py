@@ -135,6 +135,36 @@ def main() -> int:
         )
         assert "end_block(inpL, il);\n      continue;" in continued_source
 
+        unbraced_continue = builder(
+            run(
+                tool,
+                source_root,
+                report_root / "continue-unbraced.json",
+                source_name="continue-unbraced.cpp",
+            )
+        )
+        assert unbraced_continue["verdict"] == "transformable"
+        assert (
+            edit_kinds(unbraced_continue).count("wrap_end_block_before_continue")
+            == 1
+        )
+        run(
+            tool,
+            source_root,
+            report_root / "continue-unbraced-applied.json",
+            source_name="continue-unbraced.cpp",
+            apply=True,
+        )
+        unbraced_source = (
+            source_root / "src/models/continue-unbraced.cpp"
+        ).read_text(encoding="utf-8")
+        assert (
+            "if (il == 2) {\n"
+            "        end_block(inpL, il);\n"
+            "        continue;\n"
+            "    }"
+        ) in unbraced_source
+
         for source_name, evidence in (
             ("glm-dsa.cpp", "glm_dsa_top_k_sideband"),
             ("kimi-k3.cpp", "kimi_k3_residual_sideband"),
