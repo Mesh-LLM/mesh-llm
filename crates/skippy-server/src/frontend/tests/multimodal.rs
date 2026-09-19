@@ -236,7 +236,7 @@ fn multimodal_stage_config(
     config
 }
 
-fn local_openai_backend(config: StageConfig) -> Result<StageOpenAiBackend> {
+pub(super) fn local_openai_backend(config: StageConfig) -> Result<StageOpenAiBackend> {
     let runtime = load_runtime(&config)?.context("load smoke runtime")?;
     let ctx_size = usize::try_from(config.ctx_size).unwrap_or(usize::MAX);
     let telemetry = Telemetry::new(

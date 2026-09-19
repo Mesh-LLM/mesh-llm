@@ -56,6 +56,15 @@ impl StageOpenAiBackend {
         ids: OpenAiGenerationIds,
         on_text_chunk: impl FnMut(&str) -> OpenAiResult<()>,
     ) -> OpenAiResult<GeneratedText> {
+        let payment_gate = crate::frontend::generation_gate::find(ids.frontend_request_id)?;
+        if payment_gate.is_some()
+            && (prompt.has_media()
+                || matches!(&self.mode, OpenAiBackendMode::EmbeddedStageZero { config, .. } if config.downstream.is_some()))
+        {
+            return Err(OpenAiError::unsupported(
+                "paid inference currently requires a single-node text model",
+            ));
+        }
         let generation_timer = PhaseTimer::start();
         if cancellation.is_some_and(openai_frontend::CancellationToken::is_cancelled) {
             return Err(OpenAiError::backend("request cancelled"));
@@ -167,7 +176,8 @@ impl StageOpenAiBackend {
         let mut collector =
             TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk)?
                 .with_emulation_stop(emulation_active)
-                .with_ignore_eos(sampling.ignore_eos);
+                .with_ignore_eos(sampling.ignore_eos)
+                .with_generation_gate(payment_gate);
         let cache_stats = match self.mode.clone() {
             OpenAiBackendMode::LocalRuntime => self.generate_local_tokens(
                 LocalGeneration {
