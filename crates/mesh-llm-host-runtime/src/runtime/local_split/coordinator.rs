@@ -147,6 +147,9 @@ pub(super) struct SplitTopologyCoordinator {
     pub(super) topology_locked: bool,
     pub(super) local_source_required: bool,
     pub(super) health_interval: Duration,
+    /// `--performance-aware` closed-loop rebalancing; `None` when off or the
+    /// topology is locked.
+    pub(super) performance: Option<super::performance::PerformanceController>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -186,6 +189,7 @@ impl SplitTopologyCoordinator {
                     if !self.evaluate_replan("periodic_check").await {
                         break;
                     }
+                    self.evaluate_performance().await;
                 }
             }
         }
@@ -834,6 +838,306 @@ fn split_candidate_stage0_is_local(
         .stages
         .first()
         .is_some_and(|stage0| stage0.node_id == local_node_id)
+}
+
+/// Longest a planned performance cutover waits for in-flight requests.
+const PERFORMANCE_DRAIN_TIMEOUT: Duration = Duration::from_secs(180);
+/// Smallest predicted bottleneck improvement worth a cutover.
+const PERFORMANCE_MIN_PREDICTED_GAIN: f64 = 0.05;
+
+impl SplitTopologyCoordinator {
+    /// Sample stage busy time and let the performance controller decide.
+    async fn evaluate_performance(&mut self) {
+        if self.performance.is_none() {
+            return;
+        }
+        let Some(sample) = self.performance_sample().await else {
+            return;
+        };
+        let decision = match self.performance.as_mut() {
+            Some(controller) => controller.observe(sample),
+            None => return,
+        };
+        match decision {
+            super::performance::PerformanceDecision::Hold { why } => {
+                tracing::debug!(
+                    model_ref = self.model_ref,
+                    why,
+                    "performance rebalance holding"
+                );
+            }
+            super::performance::PerformanceDecision::Accept { baseline, observed } => {
+                tracing::info!(
+                    model_ref = self.model_ref,
+                    baseline_tokens_per_second = baseline,
+                    observed_tokens_per_second = observed,
+                    stages = ?split_stage_plan_labels(&self.active.stages),
+                    "performance rebalance kept"
+                );
+            }
+            super::performance::PerformanceDecision::Rebalance { measurement } => {
+                self.try_performance_rebalance(measurement).await;
+            }
+            super::performance::PerformanceDecision::Rollback {
+                boundaries,
+                baseline,
+                observed,
+            } => {
+                self.apply_performance_rollback(boundaries, baseline, observed)
+                    .await;
+            }
+        }
+    }
+
+    async fn apply_performance_rollback(
+        &mut self,
+        boundaries: Vec<(u32, u32)>,
+        baseline: f64,
+        observed: f64,
+    ) {
+        tracing::warn!(
+            model_ref = self.model_ref,
+            baseline_tokens_per_second = baseline,
+            observed_tokens_per_second = observed,
+            "performance rebalance lowered throughput; restoring previous layer boundaries"
+        );
+        let mut stages = self.active.stages.clone();
+        stages.sort_by_key(|stage| stage.stage_index);
+        let restore = stages
+            .iter()
+            .zip(boundaries)
+            .map(|(stage, (start, end))| (stage.node_id, start, end))
+            .collect::<Vec<_>>();
+        let _ = self
+            .cut_over_to_boundaries("performance_rollback", restore)
+            .await;
+        if let Some(controller) = self.performance.as_mut() {
+            controller.note_rolled_back(Instant::now());
+        }
+    }
+
+    /// Cumulative busy time per active stage plus stage-0 decode tokens.
+    async fn performance_sample(&self) -> Option<super::performance::PerformanceSample> {
+        let stage0 = skippy::stage0_compute_meter(&self.active.run_id)?.snapshot();
+        let statuses = self.node.stage_runtime_statuses().await;
+        let mut stages = self.active.stages.clone();
+        stages.sort_by_key(|stage| stage.stage_index);
+        let mut busy = Vec::with_capacity(stages.len());
+        for stage in &stages {
+            let busy_nanos = if stage.stage_index == 0 {
+                stage0.busy_nanos
+            } else {
+                statuses
+                    .iter()
+                    .find(|status| {
+                        status.run_id == self.active.run_id && status.stage_id == stage.stage_id
+                    })?
+                    .compute_busy_nanos
+            };
+            busy.push(super::performance::StageBusy {
+                layer_start: stage.layer_start,
+                layer_end: stage.layer_end,
+                weight_bytes: stage.parameter_bytes,
+                busy_nanos,
+            });
+        }
+        Some(super::performance::PerformanceSample {
+            at: Instant::now(),
+            stages: busy,
+            decode_tokens: stage0.decode_tokens,
+        })
+    }
+
+    async fn try_performance_rebalance(
+        &mut self,
+        measurement: super::performance::WindowMeasurement,
+    ) {
+        let mut stages = self.active.stages.clone();
+        stages.sort_by_key(|stage| stage.stage_index);
+        let rates = stages
+            .iter()
+            .zip(&measurement.bytes_per_second)
+            .map(|(stage, rate)| (stage.node_id, *rate))
+            .collect::<std::collections::HashMap<_, _>>();
+        let resources = SplitTopologyResourceInputs {
+            ctx_size_override: Some(self.ctx_size),
+            parallel_override: Some(self.slots),
+            ..self.topology_resources.clone()
+        };
+        let proposal = crate::runtime::split_planning::measured_rebalance(
+            &self.package,
+            &self.active.participants,
+            resources,
+            &stages,
+            self.ctx_size,
+            self.slots,
+            &rates,
+        );
+        let Some(proposal) = proposal else {
+            tracing::info!(
+                model_ref = self.model_ref,
+                utilization = ?measurement.utilization,
+                "performance rebalance found no better cut"
+            );
+            if let Some(controller) = self.performance.as_mut() {
+                controller.note_not_moved(Instant::now());
+            }
+            return;
+        };
+        let gain = proposal.bottleneck_before_nanos as f64
+            / proposal.bottleneck_after_nanos.max(1) as f64
+            - 1.0;
+        tracing::info!(
+            model_ref = self.model_ref,
+            decode_tokens_per_second = measurement.decode_tokens_per_second,
+            utilization = ?measurement.utilization,
+            current = ?split_stage_plan_labels(&stages),
+            proposed = ?proposal
+                .boundaries
+                .iter()
+                .map(|(_, start, end)| format!("{start}..{end}"))
+                .collect::<Vec<_>>(),
+            predicted_gain_pct = gain * 100.0,
+            "performance rebalance proposed from measured stage busy time"
+        );
+        if gain < PERFORMANCE_MIN_PREDICTED_GAIN {
+            if let Some(controller) = self.performance.as_mut() {
+                controller.note_not_moved(Instant::now());
+            }
+            return;
+        }
+        let previous = stages
+            .iter()
+            .map(|stage| (stage.layer_start, stage.layer_end))
+            .collect::<Vec<_>>();
+        let moved = self
+            .cut_over_to_boundaries("performance_rebalance", proposal.boundaries)
+            .await;
+        if let Some(controller) = self.performance.as_mut() {
+            if moved {
+                controller.note_moved(measurement.decode_tokens_per_second, previous);
+            } else {
+                controller.note_not_moved(Instant::now());
+            }
+        }
+    }
+
+    /// Drain the serving generation, load one with `boundaries` (same nodes
+    /// and order), and cut over. Returns whether the cutover completed.
+    async fn cut_over_to_boundaries(
+        &mut self,
+        reason: &'static str,
+        boundaries: Vec<(iroh::EndpointId, u32, u32)>,
+    ) -> bool {
+        let candidate = match self.plan_boundary_candidate(&boundaries) {
+            Ok(candidate) => candidate,
+            Err(error) => {
+                tracing::warn!(model_ref = self.model_ref, reason, %error, "performance cutover plan failed");
+                return false;
+            }
+        };
+        let Some(lifecycle) = self.drain_serving_generation(reason).await else {
+            return false;
+        };
+        let previous_run_id = self.active.run_id.clone();
+        match self.load_and_publish_candidate(reason, candidate).await {
+            Ok(()) => {
+                skippy::forget_stage0_compute_meter(&previous_run_id);
+                true
+            }
+            Err(error) => {
+                tracing::warn!(
+                    model_ref = self.model_ref,
+                    reason,
+                    %error,
+                    "performance cutover load failed; resuming the current generation"
+                );
+                crate::runtime::startup_handles::rearm_lifecycle_for_cutover(&lifecycle).await;
+                let _ = lifecycle.lock().await.transition_to(
+                    crate::runtime::instance_lifecycle::InstanceLifecycleState::Serving,
+                );
+                false
+            }
+        }
+    }
+
+    /// Stop new admissions and wait (bounded) for in-flight requests.
+    async fn drain_serving_generation(
+        &self,
+        reason: &'static str,
+    ) -> Option<
+        std::sync::Arc<
+            tokio::sync::Mutex<crate::runtime::instance_lifecycle::InstanceLifecycleRecord>,
+        >,
+    > {
+        let (ack, ack_rx) = tokio::sync::oneshot::channel();
+        let event = SplitCoordinatorEvent::Drain(super::SplitCoordinatorDrainEvent {
+            reason,
+            deadline: Instant::now() + PERFORMANCE_DRAIN_TIMEOUT,
+            ack,
+        });
+        self.event_tx.send(event).await.ok()?;
+        let lifecycle = ack_rx.await.ok()??;
+        let started = Instant::now();
+        let result = crate::runtime::instance_lifecycle::DrainCoordinator::default()
+            .wait_for_unload_ready(&lifecycle)
+            .await;
+        tracing::info!(
+            model_ref = self.model_ref,
+            reason,
+            drain_ms = started.elapsed().as_millis() as u64,
+            graceful = matches!(
+                result,
+                crate::runtime::instance_lifecycle::DrainResult::Graceful
+            ),
+            "split generation drained for a planned cutover"
+        );
+        Some(lifecycle)
+    }
+
+    fn plan_boundary_candidate(
+        &self,
+        boundaries: &[(iroh::EndpointId, u32, u32)],
+    ) -> Result<SplitTopologyGeneration> {
+        let generation = self.active.generation.saturating_add(1);
+        let run_id = format!("mesh-split-{}-g{}", now_unix_nanos(), generation);
+        let topology_id = format!("topology-{run_id}");
+        let resources = SplitTopologyResourceInputs {
+            ctx_size_override: Some(self.ctx_size),
+            parallel_override: Some(self.slots),
+            ..self.topology_resources.clone()
+        };
+        let locked = boundaries
+            .iter()
+            .map(|(node_id, layer_start, layer_end)| {
+                crate::runtime::split_topology_lock::LockedSplitStageAssignment {
+                    node_id: *node_id,
+                    layer_start: *layer_start,
+                    layer_end: *layer_end,
+                }
+            })
+            .collect::<Vec<_>>();
+        let planned = super::plan_locked_runtime_slice_topology_with_resources(
+            &topology_id,
+            &self.model_ref,
+            &self.package,
+            &self.active.participants,
+            &[],
+            resources,
+            &locked,
+        )?;
+        let admissions = super::realize_split_stage_admissions(
+            &self.model_path,
+            &self.model_ref,
+            &self.package,
+            &planned,
+            &self.runtime_profile,
+        )?;
+        let stages = planned.stages;
+        let participants = split_participants_for_stages(&self.active.participants, &stages);
+        SplitTopologyGeneration::new(topology_id, run_id, generation, participants, stages)
+            .with_admissions(admissions)
+    }
 }
 
 #[cfg(test)]

@@ -92,6 +92,10 @@ pub(super) fn estimate_throughput(
 /// Returns `None` when a node lacks a speed estimate or no feasible cut exists;
 /// callers keep the memory-only placement in that case. The result is exact:
 /// a dynamic program over contiguous partitions, `O(stages · layers²)`.
+#[allow(
+    clippy::needless_range_loop,
+    reason = "the dynamic program indexes the cost, cut and prefix tables by the same layer boundary"
+)]
 pub(super) fn balance_stages(
     stages: &[TopologyStagePlan],
     nodes: &[UsableNode],

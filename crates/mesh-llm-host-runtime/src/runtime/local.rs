@@ -35,10 +35,10 @@ pub(super) use super::local_package::{
     runtime_model_planning_bytes, scan_layer_package_metadata,
 };
 pub(super) use super::local_split::{
-    SplitCoordinatorAck, SplitCoordinatorEvent, SplitCoordinatorLocalFallbackEvent,
-    SplitCoordinatorReplaceEvent, SplitGenerationCleanup, SplitRuntimeReason, SplitRuntimeStart,
-    StartupRuntimePlan, now_unix_nanos, start_runtime_split_model, startup_runtime_plan,
-    stop_split_generation_cleanup,
+    SplitCoordinatorAck, SplitCoordinatorDrainEvent, SplitCoordinatorEvent,
+    SplitCoordinatorLocalFallbackEvent, SplitCoordinatorReplaceEvent, SplitGenerationCleanup,
+    SplitRuntimeReason, SplitRuntimeStart, StartupRuntimePlan, now_unix_nanos,
+    start_runtime_split_model, startup_runtime_plan, stop_split_generation_cleanup,
 };
 pub(super) fn skippy_native_model_open_event_reporter(
     model_name: String,

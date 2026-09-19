@@ -1378,6 +1378,10 @@ impl SchedulerWorker {
             return;
         }
         let batch_size = runnable.len();
+        let decode_steps = runnable
+            .iter()
+            .filter(|(request, _)| request.phase == IterationBatchPhase::Decode)
+            .count();
         let token_count = runnable
             .iter()
             .map(|(request, _)| request.token_ids.len())
@@ -1405,6 +1409,7 @@ impl SchedulerWorker {
         let runtime_lock_hold_ms = hold.as_secs_f64() * 1_000.0;
         drop(runtime);
         self.record_compute(hold);
+        self.compute_meter.record_decode_tokens(decode_steps as u64);
         if let Some(telemetry) = self.telemetry.as_ref() {
             telemetry.emit_debug(
                 "stage.scheduler_feature_iteration",
@@ -1757,6 +1762,12 @@ impl SchedulerWorker {
         let result = runtime.iteration_batch_sampled(&requests);
         drop(runtime);
         self.record_compute(hold_started.elapsed());
+        let decode_steps = plan
+            .work
+            .iter()
+            .filter(|work| work.phase == IterationPhase::Decode)
+            .count();
+        self.compute_meter.record_decode_tokens(decode_steps as u64);
         result
             .map(|outputs| {
                 outputs

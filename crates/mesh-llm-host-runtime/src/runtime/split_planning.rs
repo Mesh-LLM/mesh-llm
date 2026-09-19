@@ -1,9 +1,9 @@
 use crate::inference::skippy;
 use anyhow::{Context, Result};
 use skippy_coordinator::topology::{
-    LockedTopologyStage, ThroughputEstimate, TopologyNode, TopologyPlanningInput,
-    TopologyStagePlan, minimum_valid_context, plan_locked_topology, plan_topology,
-    plan_topology_with_stage0,
+    LockedTopologyStage, ThroughputEstimate, TopologyNode, TopologyPlan, TopologyPlanningInput,
+    TopologyStagePlan, estimate_plan_throughput, minimum_valid_context, plan_locked_topology,
+    plan_topology, plan_topology_with_stage0, rebalance_topology,
 };
 use std::collections::HashMap;
 
@@ -352,6 +352,75 @@ fn plan_runtime_slice_topology_result(
     }
 }
 
+/// A throughput re-cut of a running split, from measured per-node rates.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct MeasuredRebalance {
+    pub(super) boundaries: Vec<(iroh::EndpointId, u32, u32)>,
+    pub(super) bottleneck_before_nanos: u64,
+    pub(super) bottleneck_after_nanos: u64,
+}
+
+/// Re-cut `stages` (same nodes, same order) so stage decode times balance
+/// under `measured_rates` (weight bytes per busy second, per stage node).
+/// `None` when a node has no measurement, no feasible cut exists, or the
+/// current cut is already the balanced one.
+pub(super) fn measured_rebalance(
+    package: &skippy::SkippyPackageIdentity,
+    participants: &[SplitParticipant],
+    resources: SplitTopologyResourceInputs,
+    stages: &[RuntimeSliceStagePlan],
+    context_length: u32,
+    parallel_lanes: usize,
+    measured_rates: &HashMap<iroh::EndpointId, u64>,
+) -> Option<MeasuredRebalance> {
+    let measured = participants
+        .iter()
+        .map(|participant| {
+            participant.with_decode_speed(measured_rates.get(&participant.node_id).copied())
+        })
+        .collect::<Vec<_>>();
+    let input = topology_planning_input(runtime_slice_plan_input(package, &measured, resources));
+    let current = TopologyPlan {
+        context_length,
+        parallel_lanes,
+        stages: stages
+            .iter()
+            .map(|stage| TopologyStagePlan {
+                stage_id: stage.stage_id.clone(),
+                stage_index: stage.stage_index,
+                node_id: stage.node_id.to_string(),
+                layer_start: stage.layer_start,
+                layer_end: stage.layer_end,
+                parameter_bytes: stage.parameter_bytes,
+            })
+            .collect(),
+        estimated_decode_network_ms_per_token: None,
+        decode_tpot_target_met: None,
+        throughput: None,
+    };
+    let before = estimate_plan_throughput(&input, &current)?;
+    let rebalanced = rebalance_topology(&input, &current)?;
+    let after = rebalanced.throughput.as_ref()?;
+    let node_by_id = stages
+        .iter()
+        .map(|stage| (stage.node_id.to_string(), stage.node_id))
+        .collect::<HashMap<_, _>>();
+    let boundaries = rebalanced
+        .stages
+        .iter()
+        .map(|stage| {
+            node_by_id
+                .get(&stage.node_id)
+                .map(|node| (*node, stage.layer_start, stage.layer_end))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(MeasuredRebalance {
+        boundaries,
+        bottleneck_before_nanos: before.bottleneck_decode_nanos,
+        bottleneck_after_nanos: after.bottleneck_decode_nanos,
+    })
+}
+
 /// `stage-N@node:ms` per stage, for plan logs.
 pub(super) fn stage_decode_ms_labels(throughput: &ThroughputEstimate) -> Vec<String> {
     throughput
@@ -415,7 +484,10 @@ fn runtime_slice_plan_input(
                 decode_bytes_per_second: participant.decode_bytes_per_second,
             })
             .collect(),
-        performance_aware: resources.performance_aware,
+        // `MESH_LLM_PERFORMANCE_INITIAL_CUT=memory` starts from the memory-only
+        // cut so runtime rebalancing can be exercised from a poor placement.
+        performance_aware: resources.performance_aware
+            && std::env::var("MESH_LLM_PERFORMANCE_INITIAL_CUT").as_deref() != Ok("memory"),
     }
 }
 

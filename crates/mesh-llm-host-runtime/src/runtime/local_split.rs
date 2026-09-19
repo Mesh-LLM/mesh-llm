@@ -1,6 +1,7 @@
 mod attestation;
 mod coordinator;
 mod loading;
+mod performance;
 mod recovery;
 #[cfg(test)]
 mod test_support;
@@ -86,9 +87,24 @@ pub(super) struct SplitRuntimeGenerationHandle {
 }
 
 pub(super) enum SplitCoordinatorEvent {
+    /// Stop admitting new requests to the serving generation and hand back its
+    /// lifecycle record so the coordinator can wait for in-flight work before
+    /// a planned cutover. Admission resumes when the next `Replace` re-arms
+    /// the record, or when the coordinator re-arms it after a failed load.
+    Drain(SplitCoordinatorDrainEvent),
     Replace(Box<SplitCoordinatorReplaceEvent>),
     LocalFallback(SplitCoordinatorLocalFallbackEvent),
     Withdraw(SplitCoordinatorWithdrawEvent),
+}
+
+pub(super) struct SplitCoordinatorDrainEvent {
+    pub(super) reason: &'static str,
+    pub(super) deadline: std::time::Instant,
+    pub(super) ack: tokio::sync::oneshot::Sender<
+        Option<
+            std::sync::Arc<tokio::sync::Mutex<super::instance_lifecycle::InstanceLifecycleRecord>>,
+        >,
+    >,
 }
 
 pub(super) struct SplitCoordinatorReplaceEvent {
@@ -326,6 +342,11 @@ pub(super) async fn start_runtime_split_model(
         event_tx: coordinator_tx,
         stage_loss_first_seen: None,
         previously_unavailable_stage_nodes: Vec::new(),
+        performance: (spec.performance_aware && !topology_locked).then(|| {
+            performance::PerformanceController::new(
+                performance::PerformanceControllerConfig::from_env(),
+            )
+        }),
         topology_locked,
         local_source_required,
         health_interval: loading::configured_stage_lifecycle_intervals(
