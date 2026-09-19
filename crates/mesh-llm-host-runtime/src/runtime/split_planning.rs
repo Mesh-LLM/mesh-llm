@@ -1,8 +1,9 @@
 use crate::inference::skippy;
 use anyhow::{Context, Result};
 use skippy_coordinator::topology::{
-    LockedTopologyStage, TopologyNode, TopologyPlanningInput, TopologyStagePlan,
-    minimum_valid_context, plan_locked_topology, plan_topology, plan_topology_with_stage0,
+    LockedTopologyStage, ThroughputEstimate, TopologyNode, TopologyPlanningInput,
+    TopologyStagePlan, minimum_valid_context, plan_locked_topology, plan_topology,
+    plan_topology_with_stage0,
 };
 use std::collections::HashMap;
 
@@ -54,6 +55,7 @@ pub(super) struct SplitTopologyPlanInput {
     pub(super) target_decode_tpot_ms: Option<u32>,
     pub(super) minimum_nodes: usize,
     pub(super) nodes: Vec<SplitTopologyPlanNode>,
+    pub(super) performance_aware: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -63,6 +65,7 @@ pub(super) struct SplitTopologyPlanNode {
     pub(super) max_vram_bytes: Option<u64>,
     pub(super) runtime_headroom_bytes: u64,
     pub(super) stage_transfer_latency_ms: Option<u32>,
+    pub(super) decode_bytes_per_second: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -72,6 +75,7 @@ pub(super) struct SplitTopologyPlan {
     pub(super) estimated_decode_network_ms_per_token: Option<u32>,
     pub(super) decode_tpot_target_met: Option<bool>,
     pub(super) stages: Vec<TopologyStagePlan>,
+    pub(super) throughput: Option<ThroughputEstimate>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -91,6 +95,8 @@ pub(super) struct SplitTopologyResourceInputs {
     pub(super) recurrent_bytes_per_sequence_by_layer: Vec<u64>,
     pub(super) ctx_size_override: Option<u32>,
     pub(super) parallel_override: Option<usize>,
+    /// Balance layer boundaries by node decode speed (`--performance-aware`).
+    pub(super) performance_aware: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -124,6 +130,7 @@ fn split_topology_plan(plan: skippy_coordinator::topology::TopologyPlan) -> Spli
         estimated_decode_network_ms_per_token: plan.estimated_decode_network_ms_per_token,
         decode_tpot_target_met: plan.decode_tpot_target_met,
         stages: plan.stages,
+        throughput: plan.throughput,
     }
 }
 
@@ -146,11 +153,13 @@ fn topology_planning_input(input: SplitTopologyPlanInput) -> TopologyPlanningInp
                 max_vram_bytes: node.max_vram_bytes,
                 runtime_headroom_bytes: node.runtime_headroom_bytes,
                 stage_transfer_latency_ms: node.stage_transfer_latency_ms,
+                decode_bytes_per_second: node.decode_bytes_per_second,
             })
             .collect(),
         context_length_override: input.context_length_override,
         parallel_lanes_override: input.parallel_lanes_override,
         target_decode_tpot_ms: input.target_decode_tpot_ms,
+        performance_aware: input.performance_aware,
     }
 }
 
@@ -213,6 +222,7 @@ pub(super) fn plan_runtime_slice_topology_with_resources_and_stage0(
     );
 
     let participant_by_id = participant_index_by_id(participants);
+    let plan_performance_aware = resources.performance_aware;
     let plan_input = runtime_slice_plan_input(package, participants, resources.clone());
     let plan = plan_runtime_slice_topology_result(
         SplitPlanAttempt {
@@ -238,6 +248,9 @@ pub(super) fn plan_runtime_slice_topology_with_resources_and_stage0(
         estimated_decode_network_ms_per_token = plan.estimated_decode_network_ms_per_token,
         decode_tpot_target_met = plan.decode_tpot_target_met,
         stages = ?split_stage_plan_labels(&stages),
+        performance_aware = plan_performance_aware,
+        stage_decode_ms = ?plan.throughput.as_ref().map(stage_decode_ms_labels),
+        stage_idle_pct = ?plan.throughput.as_ref().map(stage_idle_pct_labels),
         "planned resource-aware split runtime topology"
     );
     Ok(PlannedRuntimeSliceTopology {
@@ -339,6 +352,33 @@ fn plan_runtime_slice_topology_result(
     }
 }
 
+/// `stage-N@node:ms` per stage, for plan logs.
+pub(super) fn stage_decode_ms_labels(throughput: &ThroughputEstimate) -> Vec<String> {
+    throughput
+        .stages
+        .iter()
+        .map(|stage| {
+            format!(
+                "stage-{}:{}..{}:{:.1}ms",
+                stage.stage_index,
+                stage.layer_start,
+                stage.layer_end,
+                stage.decode_nanos as f64 / 1_000_000.0
+            )
+        })
+        .collect()
+}
+
+/// Share of each pipeline cycle a stage waits on the bottleneck, as percent.
+pub(super) fn stage_idle_pct_labels(throughput: &ThroughputEstimate) -> Vec<String> {
+    throughput
+        .idle_basis_points()
+        .into_iter()
+        .enumerate()
+        .map(|(index, idle)| format!("stage-{index}:{:.0}%", f64::from(idle) / 100.0))
+        .collect()
+}
+
 fn participant_index_by_id(participants: &[SplitParticipant]) -> HashMap<String, SplitParticipant> {
     participants
         .iter()
@@ -372,8 +412,10 @@ fn runtime_slice_plan_input(
                 max_vram_bytes: Some(participant.vram_bytes),
                 runtime_headroom_bytes: default_runtime_headroom_bytes(participant.vram_bytes),
                 stage_transfer_latency_ms: participant.rtt_ms,
+                decode_bytes_per_second: participant.decode_bytes_per_second,
             })
             .collect(),
+        performance_aware: resources.performance_aware,
     }
 }
 
@@ -799,6 +841,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: None,
                 parallel_override: None,
+                performance_aware: false,
             },
         )
         .expect("resource-aware topology");
@@ -829,6 +872,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: Some(1),
                 parallel_override: Some(1),
+                performance_aware: false,
             },
         )
         .expect("resource-aware topology with exact layer weights");
@@ -864,6 +908,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: Some(1),
                 parallel_override: Some(1),
+                performance_aware: false,
             },
         )
         .expect("MI300X and smaller accelerator should form a valid topology");
@@ -907,6 +952,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: None,
                 parallel_override: None,
+                performance_aware: false,
             },
         )
         .expect("latency-aware runtime topology");
@@ -960,6 +1006,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: None,
                 parallel_override: None,
+                performance_aware: false,
             },
         );
 

@@ -309,6 +309,7 @@ pub(super) async fn start_runtime_split_model(
                 .recurrent_bytes_per_configured_lane_by_layer(),
             ctx_size_override: spec.ctx_size_override,
             parallel_override: spec.parallel_override,
+            performance_aware: spec.performance_aware,
         },
         cache_type_k_override: spec.cache_type_k_override.map(str::to_string),
         cache_type_v_override: spec.cache_type_v_override.map(str::to_string),
@@ -392,6 +393,7 @@ async fn prepare_split_runtime_start(
             .recurrent_bytes_per_configured_lane_by_layer(),
         ctx_size_override: spec.ctx_size_override,
         parallel_override: spec.parallel_override,
+        performance_aware: spec.performance_aware,
     };
     let configured_locked_stages = load_configured_split_assignments(
         spec.mesh_config,

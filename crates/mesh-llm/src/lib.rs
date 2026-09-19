@@ -471,6 +471,7 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         split: cli.split,
         allow_uncertified_split: cli.allow_uncertified_split,
         split_topology_lock: cli.split_topology_lock,
+        performance_aware: cli.performance_aware,
         ctx_size: cli.ctx_size,
         max_vram: cli.max_vram,
         no_enumerate_host: cli.no_enumerate_host,
