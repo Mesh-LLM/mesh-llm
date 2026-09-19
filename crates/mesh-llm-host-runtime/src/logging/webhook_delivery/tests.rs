@@ -541,10 +541,17 @@ async fn real_http_timeout_keeps_terminal_persistence_off_the_delivery_path() {
     .await
     .expect("terminal persistence task");
 
-    assert!(
-        !worker_task.is_finished(),
-        "terminal persistence completed while the HTTP delivery was still in flight"
+    // The stalled connection is never answered, so the first delivery is still
+    // claimed and unresolved. Reading that from the store is a durable fact,
+    // unlike polling the worker task, which only reports scheduler progress.
+    let in_flight = store.webhook_delivery("real-timeout").unwrap().unwrap();
+    assert_eq!(
+        in_flight.state,
+        WebhookDeliveryState::InFlight,
+        "the first delivery is still in flight while the second one persisted"
     );
+    assert_eq!(in_flight.last_error_code, None);
+    assert_eq!(in_flight.response_status_code, None);
     assert!(
         store
             .webhook_delivery("terminal-while-http-stalls")
