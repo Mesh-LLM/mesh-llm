@@ -15,6 +15,7 @@ publish = false
 workspace = true
 
 [dependencies]
+mesh-llm-payments = { path = "../mesh-llm-payments", version = "0.76.1" }
 anyhow.workspace = true
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6.0.0"

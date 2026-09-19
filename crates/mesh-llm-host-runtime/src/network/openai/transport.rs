@@ -531,7 +531,7 @@ async fn build_mesh_request_plan(
         &resolved_hosts,
         affinity,
     );
-    let (target_hosts, equivalent_hosts) = order_mesh_target_hosts(
+    let (mut target_hosts, mut equivalent_hosts) = order_mesh_target_hosts(
         node,
         effective_model.as_deref(),
         required_tokens,
@@ -539,6 +539,36 @@ async fn build_mesh_request_plan(
         affinity,
     )
     .await;
+    if let Some(model) = effective_model.as_deref() {
+        let mut ranked = super::routing_rank::RankedCandidates {
+            ordered: target_hosts
+                .iter()
+                .copied()
+                .map(election::InferenceTarget::Remote)
+                .collect(),
+            equivalent_prefix: equivalent_hosts,
+        };
+        if super::payment_routing::rank(
+            node,
+            model,
+            (request.body_len_bytes as u64).div_ceil(4),
+            u64::from(request.completion_tokens.unwrap_or(256)),
+            &mut ranked,
+        )
+        .await
+        {
+            target_hosts = ranked
+                .ordered
+                .into_iter()
+                .filter_map(|target| match target {
+                    election::InferenceTarget::Remote(peer) => Some(peer),
+                    _ => None,
+                })
+                .collect();
+            equivalent_hosts = ranked.equivalent_prefix;
+            prepared.affinity_applied = true;
+        }
+    }
     Ok(MeshRequestPlan {
         effective_model,
         auto_session_key,

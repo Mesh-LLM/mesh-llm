@@ -61,3 +61,5 @@ mod prompting;
 mod request;
 mod support;
 mod wire_messages;
+
+mod payment_gate;

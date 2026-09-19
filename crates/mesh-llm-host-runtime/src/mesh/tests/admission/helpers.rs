@@ -46,6 +46,7 @@ pub(super) fn make_test_peer(id: EndpointId, rtt_ms: Option<u32>, vram_gb: u64) 
         local_gguf_content_id_supported: false,
         owner_summary: OwnershipSummary::default(),
         advertised_model_throughput: vec![],
+        lightning_offers: Default::default(),
         cache_affinity: None,
 
         display_rtt: None,
@@ -422,6 +423,7 @@ pub(super) fn requirement_peer_announcement(
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
         advertised_model_throughput: vec![],
+        lightning_offers: Default::default(),
         cache_affinity: None,
         latency_ms: None,
         latency_source: None,

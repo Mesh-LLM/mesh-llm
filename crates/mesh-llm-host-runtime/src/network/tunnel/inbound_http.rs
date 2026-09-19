@@ -42,6 +42,31 @@ pub(super) async fn handle_inbound_http_stream(
     // private assertion. Direct API requests have it stripped before they can
     // reach this tunnel, so they retain normal target frontend ownership.
     let prefix = read_tunneled_http_header_prefix(&mut quic_recv).await?;
+    if crate::network::payments::is_payment_upgrade(&prefix) {
+        let (offset, _) = crate::network::openai::request_parse::http_header_terminator(&prefix)
+            .context("incomplete payment upgrade")?;
+        let remainder = std::io::Cursor::new(prefix[offset..].to_vec());
+        let targets = ingress
+            .as_ref()
+            .context("payment ingress unavailable")?
+            .targets
+            .borrow()
+            .clone();
+        return crate::network::payments::serve(
+            node,
+            remote,
+            remainder.chain(quic_recv),
+            quic_send,
+            targets,
+        )
+        .await;
+    }
+    // Legacy bridge callers cannot bypass seller payment enforcement.
+    if ingress.is_none() && legacy_bridge_requires_payment_ingress(&node).await? {
+        let stream = ClientStream::from_quic_with_prefix(quic_recv, quic_send, prefix);
+        crate::network::openai::send_error(stream, 402, "payment-capable peer required").await?;
+        return Ok(());
+    }
     let (prefix, _) =
         crate::network::openai::request_parse::ensure_canonical_request_id_in_header_prefix(prefix);
     let caller_metadata =
@@ -73,10 +98,27 @@ pub(super) async fn handle_inbound_http_stream(
 
     // Compatibility for embedders/tests that only configure the legacy port.
     let mut tcp_stream = TcpStream::connect(format!("127.0.0.1:{http_port}")).await?;
+    let _remote_origin = super::remote_origin::RemoteBridge::register(tcp_stream.local_addr()?)?;
     tcp_stream.set_nodelay(true)?;
     tcp_stream.write_all(&prefix).await?;
     let (tcp_read, tcp_write) = tokio::io::split(tcp_stream);
     super::relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv).await
+}
+
+async fn legacy_bridge_requires_payment_ingress(node: &Node) -> Result<bool> {
+    if !node.advertised_payment_offers().await?.is_empty() {
+        return Ok(true);
+    }
+    // A loopback TCP bridge loses remote provenance. A wallet-enabled node
+    // must use direct QUIC ingress, where spending authority remains remote.
+    let directory = node.config_state.lock().await.payment_directory();
+    if directory.join("lexe/seedphrase.txt").exists() {
+        return Ok(true);
+    }
+    Ok(node
+        .payments
+        .get()
+        .is_some_and(|service| service.has_wallet()))
 }
 
 fn remote_tunnel_request_ids(

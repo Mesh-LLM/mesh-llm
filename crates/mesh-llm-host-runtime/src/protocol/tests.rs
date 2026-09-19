@@ -181,6 +181,7 @@ fn make_test_peer_info(peer_id: EndpointId) -> PeerInfo {
         local_gguf_content_id_supported: false,
         owner_summary: OwnershipSummary::default(),
         advertised_model_throughput: vec![],
+        lightning_offers: Default::default(),
         cache_affinity: None,
 
         display_rtt: None,

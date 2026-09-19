@@ -15,3 +15,5 @@ pub mod skills;
 mod terminal;
 pub mod uninstall;
 pub mod update;
+
+pub mod wallet;

@@ -11,3 +11,5 @@ pub(crate) mod reservations;
 pub(crate) mod router;
 pub(crate) mod target_health;
 pub(crate) mod tunnel;
+
+pub(crate) mod payments;

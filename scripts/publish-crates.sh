@@ -378,6 +378,7 @@ should_skip_initial_dry_run() {
 }
 
 publish_crates=(
+    mesh-llm-payments
     mesh-llm-identity
     skippy-tokenizer
     mesh-llm-protocol

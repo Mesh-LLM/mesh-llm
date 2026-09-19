@@ -95,8 +95,16 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
     } = args;
     let route_started = Instant::now();
     let mut tcp_stream = tcp_stream;
-    let ranked =
+    let mut ranked =
         rank_targets_by_context(&node, model, required_tokens, &targets.candidates(model)).await;
+    let payment_ranked = crate::network::openai::payment_routing::rank(
+        &node,
+        model,
+        (request.body_len_bytes as u64).div_ceil(4),
+        u64::from(request.completion_tokens.unwrap_or(256)),
+        &mut ranked,
+    )
+    .await;
     let ordered_candidates = affinity.route_eligible_candidates(model, &ranked.ordered);
     if ordered_candidates.is_empty() {
         record_route_model_unavailable(&node, model, 0);
@@ -109,8 +117,19 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
     route_observer.route_selected(Some(model));
 
     let prefix_hash = crate::network::affinity::cache_prefix_hash(request.body_json.as_ref());
+    let cache_candidates = if payment_ranked {
+        &ranked.ordered[..ranked.equivalent_prefix]
+    } else {
+        &ordered_candidates
+    };
     let cache_target =
-        cache_target_for_request(&node, affinity, model, prefix_hash, &ordered_candidates).await;
+        cache_target_for_request(&node, affinity, model, prefix_hash, cache_candidates).await;
+    // A remembered free or more expensive route must not override the price tier.
+    let cache_target = if payment_ranked {
+        cache_target.or_else(|| ranked.ordered.first().cloned())
+    } else {
+        cache_target
+    };
     let Some(ReservedModelRoute {
         selection,
         ordered,

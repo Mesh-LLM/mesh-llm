@@ -1,0 +1,369 @@
+use std::sync::Arc;
+
+use anyhow::{Context, Result, bail, ensure};
+use mesh_llm_payments::{
+    ledger::{Charge, RequestTerms},
+    pricing::{FEE_ALLOWANCE_MSAT, Pricing},
+    service::PaymentService,
+    wire::{self, Frame},
+};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, DuplexStream};
+
+use super::{
+    common::{ResponseRetryPolicy, RouteAttemptLoggingContext, RouteAttemptResult},
+    routing::route_local_attempt_after_forward,
+};
+use crate::network::payments::request::PaidRequest;
+use crate::{mesh::Node, network::openai::client_stream::ClientStream};
+
+pub(super) async fn route(
+    node: &Node,
+    client: &mut ClientStream,
+    peer: iroh::EndpointId,
+    raw: &[u8],
+    price: Pricing,
+    logging: RouteAttemptLoggingContext<'_>,
+) -> RouteAttemptResult {
+    if !is_local_origin(client) || !trusted_payment_headers(client.peer_addr().ok(), raw) {
+        return payment_error(
+            client,
+            "only locally originated requests may spend this wallet",
+        )
+        .await;
+    }
+    let (pipe, mut ready, cancel) = match start(node, peer, raw, price).await {
+        Ok(pipe) => pipe,
+        Err(_) => return payment_error(client, "could not start paid inference").await,
+    };
+    let _cancel_on_drop = CancelOnDrop(cancel);
+    tokio::select! {
+        result = &mut ready => if result.is_err() { return payment_error(client, "payment was not authorized").await; },
+        _ = client.wait_for_response_disconnect() => return RouteAttemptResult::ClientDisconnected,
+    }
+    let mut pipe = pipe;
+    let result = route_local_attempt_after_forward(
+        client,
+        &mut pipe,
+        0,
+        logging.request_id,
+        ResponseRetryPolicy::next_target_available(false),
+        logging.response_adapter,
+        logging.route_observer,
+    )
+    .await;
+    // Once a paid exchange starts, ordinary transport/quality retries must not
+    // create a second bill. A failed attempt is terminal for this HTTP request.
+    match result {
+        RouteAttemptResult::RetryableTimeout
+        | RouteAttemptResult::RetryableUnavailable
+        | RouteAttemptResult::RetryableContextOverflow
+        | RouteAttemptResult::RetryableResponseQuality(_) => {
+            payment_error(
+                client,
+                "paid inference interrupted; settlement remains recoverable",
+            )
+            .await
+        }
+        result => result,
+    }
+}
+
+pub(super) fn is_local_origin(client: &ClientStream) -> bool {
+    client.peer_addr().is_ok_and(|addr| {
+        addr.ip().is_loopback() && !crate::network::tunnel::is_remote_bridge(addr)
+    })
+}
+
+fn trusted_payment_headers(peer: Option<std::net::SocketAddr>, raw: &[u8]) -> bool {
+    use crate::api::access::{is_trusted_local_request, request_host, request_origin};
+    match (request_origin(raw), request_host(raw)) {
+        (Ok(origin), Ok(host)) => is_trusted_local_request(peer, origin, host),
+        _ => false,
+    }
+}
+
+pub(super) async fn payment_error(client: &mut ClientStream, message: &str) -> RouteAttemptResult {
+    let body =
+        serde_json::json!({"error": {"message": message, "type": "payment_required"}}).to_string();
+    let response = format!(
+        "HTTP/1.1 402 Payment Required\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    if client.write_all(response.as_bytes()).await.is_err() {
+        return RouteAttemptResult::ClientDisconnected;
+    }
+    RouteAttemptResult::Delivered {
+        status_code: 402,
+        usage: None,
+        cache_cost: None,
+    }
+}
+
+struct CancelOnDrop(tokio::sync::watch::Sender<bool>);
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.send(true);
+    }
+}
+
+type StartedExchange = (
+    DuplexStream,
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::watch::Sender<bool>,
+);
+
+async fn start(
+    node: &Node,
+    peer: iroh::EndpointId,
+    raw: &[u8],
+    price: Pricing,
+) -> Result<StartedExchange> {
+    let request = PaidRequest::parse(raw)?;
+    let (mut send, recv) = node.open_http_tunnel(peer).await?;
+    let service = node.payment_service().await?;
+    let id = uuid::Uuid::new_v4().to_string();
+    send.write_all(wire::HTTP_UPGRADE).await?;
+    wire::write(
+        &mut send,
+        &Frame::Request {
+            id: id.clone(),
+            model: request.model.clone(),
+            pricing: price.clone(),
+            http: request.backend_http(&id)?,
+        },
+    )
+    .await?;
+    let (pipe, mut output) = tokio::io::duplex(64 * 1024);
+    let (ready, wait_ready) = tokio::sync::oneshot::channel();
+    let (cancel, cancellation) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        let result = exchange(
+            service,
+            peer,
+            id,
+            request,
+            price,
+            send,
+            recv,
+            &mut output,
+            ready,
+            cancellation,
+        )
+        .await;
+        if result.is_err() {
+            // Static logging only: invoices, prompt contents, and hashes are
+            // operator data and do not belong in ordinary runtime logs.
+            tracing::warn!("paid inference exchange interrupted; durable settlement retained");
+        }
+    });
+    Ok((pipe, wait_ready, cancel))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn exchange(
+    service: Arc<PaymentService>,
+    peer: iroh::EndpointId,
+    id: String,
+    request: PaidRequest,
+    price: Pricing,
+    mut send: impl AsyncWrite + Unpin,
+    mut recv: impl AsyncRead + Unpin,
+    output: &mut DuplexStream,
+    ready: tokio::sync::oneshot::Sender<()>,
+    mut cancellation: tokio::sync::watch::Receiver<bool>,
+) -> Result<()> {
+    let Frame::InputInvoice { mut terms, invoice } = wire::read(&mut recv).await? else {
+        bail!("expected input invoice");
+    };
+    ensure!(
+        terms.id == id && terms.model == request.model && terms.pricing == price,
+        "payment terms mismatch"
+    );
+    ensure!(
+        terms.input_tokens > 0 && terms.input_tokens <= 131_072,
+        "invalid input count"
+    );
+    request.validate_output_allowance(terms.max_output_tokens)?;
+    let input_amount = price.input_charge(terms.input_tokens)?;
+    let total = input_amount
+        .checked_add(price.output_charge(terms.max_output_tokens)?)
+        .and_then(|n| n.checked_add(2 * FEE_ALLOWANCE_MSAT))
+        .context("price overflow")?;
+    ensure!(
+        terms.max_total_msat == total && terms.expires_at_ms == invoice.expires_at_ms,
+        "payment limit mismatch"
+    );
+    invoice.validate_payment(input_amount, mesh_llm_payments::now_ms())?;
+    ensure!(
+        invoice.amount_msat == Some(input_amount),
+        "fixed-amount inference invoice required"
+    );
+    // Peer identity is from authenticated QUIC, never a peer-supplied field.
+    terms.peer = peer.to_string();
+    terms.payee = Some(invoice.payee.clone());
+    tokio::select! {
+        result = service.await_authorization(&terms) => result?,
+        _ = cancellation.changed() => {
+            let _ = service.ledger.reject(&id);
+            let _ = wire::write(&mut send, &Frame::Cancel).await;
+            bail!("application disconnected before approval");
+        }
+    }
+    service
+        .pay_charge(&Charge {
+            request_id: id.clone(),
+            segment: 0,
+            invoice,
+            amount_msat: input_amount,
+            max_total_msat: input_amount + FEE_ALLOWANCE_MSAT,
+        })
+        .await?;
+    let _ = ready.send(());
+    let mut cancelled = false;
+    let mut output_settled = false;
+    loop {
+        let reading = wire::read(&mut recv);
+        tokio::pin!(reading);
+        let frame = loop {
+            tokio::select! {
+                frame = &mut reading => break frame?,
+                _ = cancellation.changed(), if !cancelled => {
+                    cancelled = true;
+                    wire::write(&mut send, &Frame::Cancel).await?;
+                }
+            }
+        };
+        match frame {
+            Frame::Output { bytes } => {
+                ensure!(!output_settled, "output after final invoice");
+                if !cancelled && output.write_all(&bytes).await.is_err() {
+                    cancelled = true;
+                    wire::write(&mut send, &Frame::Cancel).await?;
+                }
+            }
+            Frame::OutputInvoice {
+                request_id,
+                tokens,
+                invoice,
+            } => {
+                ensure!(
+                    !output_settled && request_id == id,
+                    "unexpected output invoice"
+                );
+                settle_output(&service, &terms, tokens, invoice).await?;
+                output_settled = true;
+            }
+            Frame::Complete => {
+                service.ledger.finish(&id)?;
+                return Ok(());
+            }
+            _ => bail!("invalid payment exchange frame"),
+        }
+    }
+}
+
+pub(crate) async fn settle_output(
+    service: &PaymentService,
+    terms: &RequestTerms,
+    tokens: u64,
+    invoice: mesh_llm_payments::invoice::Invoice,
+) -> Result<()> {
+    ensure!(
+        tokens > 0 && tokens <= terms.max_output_tokens,
+        "output token allowance exceeded"
+    );
+    ensure!(
+        terms.payee.as_deref() == Some(invoice.payee.as_str()),
+        "output invoice changed receiving wallet"
+    );
+    let amount_msat = terms.pricing.output_charge(tokens)?;
+    ensure!(
+        invoice.amount_msat == Some(amount_msat),
+        "output invoice amount mismatch"
+    );
+    service
+        .pay_charge(&Charge {
+            request_id: terms.id.clone(),
+            segment: 1,
+            invoice,
+            amount_msat,
+            max_total_msat: amount_msat
+                .checked_add(FEE_ALLOWANCE_MSAT)
+                .context("fee overflow")?,
+        })
+        .await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn payments_cross_site_loopback_requests_are_denied_before_wallet_or_peer_access()
+    -> Result<()> {
+        for headers in [
+            "Host: localhost\r\nOrigin: https://attacker.example\r\n",
+            "Host: attacker.example\r\n",
+            "Host: 127.0.0.1\r\nOrigin: null\r\n",
+        ] {
+            let node = Node::new_for_tests(crate::mesh::NodeRole::Client).await?;
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+            let mut application = tokio::net::TcpStream::connect(listener.local_addr()?).await?;
+            let (socket, _) = listener.accept().await?;
+            let mut client: ClientStream = socket.into();
+            // A simple browser POST does not need application/json or a CORS preflight.
+            let raw = format!(
+                "POST /v1/completions HTTP/1.1\r\n{headers}Content-Type: text/plain\r\n\r\n{{\"model\":\"test\",\"prompt\":\"Hi\"}}"
+            );
+            let result = route(
+                &node,
+                &mut client,
+                node.endpoint.id(),
+                raw.as_bytes(),
+                Pricing {
+                    input_msat_per_million: 1,
+                    output_msat_per_million: 1,
+                    minimum_invoice_msat: 1,
+                },
+                RouteAttemptLoggingContext {
+                    request_id: Default::default(),
+                    retry_policy: ResponseRetryPolicy::next_target_available(false),
+                    response_adapter:
+                        crate::network::openai::request_normalize::ResponseAdapter::None,
+                    route_observer: crate::logging::OpenAiRouteObserver::default(),
+                },
+            )
+            .await;
+            assert!(matches!(
+                result,
+                RouteAttemptResult::Delivered {
+                    status_code: 402,
+                    ..
+                }
+            ));
+            assert!(node.payments.get().is_none());
+            drop(client);
+            let mut response = String::new();
+            tokio::io::AsyncReadExt::read_to_string(&mut application, &mut response).await?;
+            assert!(response.contains("only locally originated"));
+            node.endpoint.close().await;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn payments_native_and_trusted_local_browser_headers_are_accepted() {
+        let peer = Some(([127, 0, 0, 1], 1234).into());
+        assert!(trusted_payment_headers(
+            peer,
+            b"POST /v1/completions HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        ));
+        assert!(trusted_payment_headers(peer, b"POST /v1/completions HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://localhost:3131\r\n\r\n"));
+        assert!(!trusted_payment_headers(
+            peer,
+            b"POST /v1/completions HTTP/1.1\r\nHost: localhost\r\nOrigin: \xff\r\n\r\n"
+        ));
+    }
+}
