@@ -512,6 +512,8 @@ fn health_test_stage_status(
         flash_attn_type: skippy_protocol::FlashAttentionType::Auto,
         error: None,
         shutdown_generation: 1,
+        compute_busy_nanos: 0,
+        compute_operations: 0,
     }
 }
 

@@ -529,7 +529,10 @@ pub(super) async fn collect_split_participant_membership(
 /// only the ratio between nodes moves the cut — and runtime measurement
 /// replaces it once stages are serving.
 pub(super) fn decode_bytes_per_second_from_gbps(gbps: Option<&[f64]>) -> Option<u64> {
-    let total: f64 = gbps?.iter().filter(|value| value.is_finite() && **value > 0.0).sum();
+    let total: f64 = gbps?
+        .iter()
+        .filter(|value| value.is_finite() && **value > 0.0)
+        .sum();
     (total > 0.0).then(|| (total * 1_000_000_000.0) as u64)
 }
 
@@ -559,7 +562,9 @@ pub(super) async fn collect_split_participants(
             Some(node.first_joined_mesh_ts().await.unwrap_or(0)),
             package,
         )
-        .with_decode_speed(decode_bytes_per_second_from_gbps(local_bandwidth.as_deref())),
+        .with_decode_speed(decode_bytes_per_second_from_gbps(
+            local_bandwidth.as_deref(),
+        )),
     ];
     let mut excluded = Vec::new();
     for peer in node.peers().await {

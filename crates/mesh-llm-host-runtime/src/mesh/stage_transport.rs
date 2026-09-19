@@ -465,6 +465,9 @@ pub struct StageRuntimeStatus {
     pub flash_attn_type: skippy_protocol::FlashAttentionType,
     pub error: Option<String>,
     pub shutdown_generation: u64,
+    /// Cumulative runtime compute-busy time reported by the stage.
+    pub compute_busy_nanos: u64,
+    pub compute_operations: u64,
 }
 
 /// Classifies a stage status-refresh failure so that only a definitive
