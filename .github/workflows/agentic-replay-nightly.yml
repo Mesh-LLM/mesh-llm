@@ -202,7 +202,8 @@ jobs:
 
       - name: Replay each pinned model
         id: benchmark
-        timeout-minutes: 660
+        # GitHub limits individual steps to six hours, including self-hosted.
+        timeout-minutes: 360
         run: |
           set -euo pipefail
           # Replay shape comes from the matrix (like the repair re-run) so the
@@ -348,7 +349,8 @@ jobs:
       - name: Prepare repair PR artifact on regression (Goose)
         id: repair
         if: ${{ !cancelled() && steps.history.outcome == 'failure' && steps.history.outputs.repair_required == 'true' }}
-        timeout-minutes: 720
+        # Includes Goose and the complete verification replay.
+        timeout-minutes: 360
         env:
           REPLAY_AGENT_PROVIDER: ${{ vars.LLAMA_CANARY_GOOSE_PROVIDER || 'zai_coding_plan' }}
           REPLAY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_GOOSE_MODEL || 'glm-5.3-flash' }}

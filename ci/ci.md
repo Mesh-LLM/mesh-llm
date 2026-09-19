@@ -40,8 +40,9 @@ only after successful replay and history retrieval, complete pass/concurrency
 coverage, and a gated performance regression against matching hardware history.
 Infrastructure errors retain evidence without starting code repair. Cancellation
 also preserves available artifacts. The replay and repair steps have separate
-660/720-minute budgets within a 1,440-minute job. The agent invocation is bounded
-to one hour and logged. Goose uses the canary's provider/model settings
+360-minute budgets (GitHub's per-step maximum) within a 1,440-minute job.
+The repair budget includes both Goose and its complete verification replay.
+The agent invocation is bounded to one hour and logged. Goose uses the canary's provider/model settings
 (`LLAMA_CANARY_GOOSE_PROVIDER` / `LLAMA_CANARY_GOOSE_MODEL`, default
 `zai_coding_plan` / `glm-5.3-flash`), an authentication preflight, the developer
 builtin, and a run/attempt-specific named session. Failed or

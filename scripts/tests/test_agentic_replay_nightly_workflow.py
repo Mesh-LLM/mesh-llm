@@ -81,6 +81,19 @@ class NightlyWorkflowTests(unittest.TestCase):
         self.assertIn("repair.log", repair["run"])
         self.assertIn("vars.LLAMA_CANARY_GOOSE_PROVIDER", repair["env"]["REPLAY_AGENT_PROVIDER"])
         self.assertIn("vars.LLAMA_CANARY_GOOSE_MODEL", repair["env"]["REPLAY_AGENT_MODEL"])
+
+    def test_step_timeouts_respect_github_limit_and_leave_job_headroom(self):
+        """Reject invalid step budgets independently of the larger job limit."""
+        for job_id, job in self.workflow["jobs"].items():
+            for step in job.get("steps", []):
+                if "timeout-minutes" not in step:
+                    continue
+                with self.subTest(job=job_id, step=step.get("name", step.get("uses"))):
+                    timeout = step["timeout-minutes"]
+                    self.assertIs(type(timeout), int)
+                    self.assertGreater(timeout, 0)
+                    self.assertLessEqual(timeout, 360)
+        repair = self.step("Prepare repair PR artifact on regression (Goose)")
         replay = self.step("Replay each pinned model")
         self.assertGreater(self.job["timeout-minutes"], replay["timeout-minutes"] + repair["timeout-minutes"])
 
