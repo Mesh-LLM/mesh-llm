@@ -1356,6 +1356,7 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
             .is_some_and(|model| model.local_source_required),
         allow_uncertified_split: options.allow_uncertified_split,
         split_topology_lock: options.split_topology_lock.clone(),
+        performance_aware: options.performance_aware,
         resource_planning_profile,
         openai_guardrail_policy: openai_guardrail_policy.clone(),
         split: options.split,
