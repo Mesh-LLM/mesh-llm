@@ -13,6 +13,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 mod inbound_http;
+mod remote_origin;
+pub(crate) use remote_origin::is_remote_bridge;
 
 /// Global byte counter for tunnel traffic
 static BYTES_TRANSFERRED: AtomicU64 = AtomicU64::new(0);

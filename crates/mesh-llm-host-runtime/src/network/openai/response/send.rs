@@ -123,7 +123,6 @@ pub async fn send_400(stream: ClientStream, msg: &str) -> std::io::Result<()> {
     send_openai_error(stream, 400, msg, None).await
 }
 
-#[cfg(test)]
 pub async fn send_error(stream: ClientStream, code: u16, msg: &str) -> std::io::Result<()> {
     send_openai_error(stream, code, msg, None).await
 }

@@ -439,7 +439,7 @@ impl Node {
             artifact_transfer_supported:
                 crate::models::artifact_transfer::artifact_transfer_advertised(&owner_summary),
             advertised_model_throughput,
-            lightning_offers: Default::default(),
+            lightning_offers: self.advertised_payment_offers().await.unwrap_or_default(),
             cache_affinity: Some(cache_affinity),
             gpu_mem_bandwidth_gbps: Self::format_optional_locked_f32_list(
                 &self.gpu_mem_bandwidth_gbps,
