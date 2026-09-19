@@ -18,11 +18,10 @@ use crate::hash::file_sha256;
 use crate::package::{
     ArtifactHook, ExplicitSourceIdentity, PackageInput, resolve_package_input, run_artifact_hook,
 };
-use crate::plan::StagePlan;
 use crate::progress::{PackageProgress, format_bytes};
 use crate::source_inventory::{SourceInventory, inspect, normalized_model_metadata};
 use crate::tensor_payload::{TensorLocation, compare_tensor_payload};
-use crate::write::{ModelSource, create_parent_dir, write_json_file, write_stage_artifact};
+use crate::write::{ModelSource, create_parent_dir, write_json_file};
 
 mod layout;
 
@@ -57,11 +56,6 @@ pub(crate) fn write_package(
     );
     let mut progress = PackageProgress::new(planned.len() + projectors.len() + 2);
     let source_tensors = source_tensors_by_name(&inventory)?;
-    let common_names = planned
-        .iter()
-        .find(|artifact| artifact.kind == PlannedArtifactKind::Common)
-        .map(|artifact| artifact.tensor_names.iter().cloned().collect())
-        .unwrap_or_default();
     let mut catalog = Vec::with_capacity(source_tensors.len());
     let no_hook = ArtifactHook { command: None };
     // Payload artifacts may be uploaded and locally deleted by their hook as
@@ -73,16 +67,13 @@ pub(crate) fn write_package(
     let headers_dir = out_dir.join(".headers");
     fs::create_dir_all(&headers_dir)?;
     let mut header_stubs = Vec::with_capacity(planned.len());
-    for (stage_index, artifact_plan) in planned.iter().enumerate() {
+    for artifact_plan in &planned {
         progress.start_step(&artifact_plan.path)?;
         let (artifact, mut tensors) = emit_payload_artifact(
             &source,
             &source_tensors,
             &inventory,
             artifact_plan,
-            &common_names,
-            inventory.layer_count,
-            stage_index,
             &out_dir,
             &no_hook,
             resume_existing_artifacts,
@@ -386,9 +377,6 @@ fn emit_payload_artifact(
     source_tensors: &BTreeMap<String, TensorLocation>,
     inventory: &SourceInventory,
     planned: &PlannedArtifact,
-    common_names: &BTreeSet<String>,
-    layer_count: u32,
-    stage_index: usize,
     out_dir: &Path,
     artifact_hook: &ArtifactHook,
     resume: bool,
@@ -396,12 +384,7 @@ fn emit_payload_artifact(
     let path = out_dir.join(&planned.path);
     ensure_not_source_file(source, &path)?;
     if !path.exists() {
-        if planned.is_part() {
-            crate::part_writer::write_part(inventory, &planned.tensor_names, &path)?;
-        } else {
-            let stage = stage_plan(planned, stage_index, layer_count);
-            write_stage_artifact(source, &stage, &path)?;
-        }
+        crate::part_writer::write_part(inventory, &planned.tensor_names, &path)?;
     } else {
         ensure!(
             resume,
@@ -427,37 +410,23 @@ fn emit_payload_artifact(
             )
         })
         .collect::<BTreeMap<_, _>>();
-    let expected_physical = if planned.is_part() {
-        // Part artifacts are written by the Rust part writer and hold exactly
-        // their planned tensors; unlike native stage slices they carry no
-        // duplicated common tensors.
-        planned
-            .tensor_names
-            .iter()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>()
-    } else {
-        planned
-            .tensor_names
-            .iter()
-            .chain(common_names)
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>()
-    };
+    let expected_physical = planned
+        .tensor_names
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
     ensure!(
         emitted_by_name
             .keys()
             .map(String::as_str)
             .collect::<BTreeSet<_>>()
             == expected_physical,
-        "written artifact {:?} differs from its native role plan",
+        "written artifact {:?} differs from its exact inventory plan",
         planned.id
     );
     let layer_ordinal = match planned.kind {
         PlannedArtifactKind::Layer { ordinal } => Some(ordinal),
-        PlannedArtifactKind::Common
-        | PlannedArtifactKind::Embeddings
-        | PlannedArtifactKind::Output => None,
+        PlannedArtifactKind::Common => None,
     };
     let mut bound = Vec::with_capacity(planned.tensor_names.len());
     for name in &planned.tensor_names {
@@ -518,28 +487,6 @@ fn write_header_stub(path: &Path, header: &Path, byte_size: u64) -> Result<()> {
     .with_context(|| format!("copy header stub {}", header.display()))?;
     output.sync_all()?;
     Ok(())
-}
-
-fn stage_plan(planned: &PlannedArtifact, stage_index: usize, layer_count: u32) -> StagePlan {
-    let (layer_start, layer_end, includes_embeddings, includes_output) = match planned.kind {
-        PlannedArtifactKind::Common => (0, 0, false, false),
-        PlannedArtifactKind::Embeddings => (0, 0, true, false),
-        PlannedArtifactKind::Output => (layer_count, layer_count, false, true),
-        PlannedArtifactKind::Layer { ordinal } => (ordinal, ordinal + 1, false, false),
-    };
-    StagePlan {
-        stage_index,
-        layer_start,
-        layer_end,
-        includes_embeddings,
-        includes_output,
-        includes_per_layer_token_embd: planned
-            .tensor_names
-            .iter()
-            .any(|name| name == crate::plan::PER_LAYER_TOKEN_EMBD),
-        tensor_count: planned.tensor_names.len(),
-        tensor_bytes: 0,
-    }
 }
 
 fn artifact_record(id: &str, relative: &str, path: &Path) -> Result<Artifact> {

@@ -8,7 +8,7 @@ LLAMA_UPSTREAM_URL="${LLAMA_UPSTREAM_URL:-https://github.com/ggml-org/llama.cpp.
 LLAMA_WORKDIR="${LLAMA_WORKDIR:-$ROOT/.deps/llama.cpp}"
 PIN_FILE="${LLAMA_PIN_FILE:-$ROOT/third_party/llama.cpp/upstream.txt}"
 PATCH_DIR="${LLAMA_PATCH_DIR:-$ROOT/third_party/llama.cpp/patches}"
-PREPARE_SCHEMA=4
+PREPARE_SCHEMA=5
 
 if [[ ! -f "$PIN_FILE" ]]; then
   echo "missing llama upstream pin: $PIN_FILE" >&2
@@ -162,6 +162,44 @@ validate_patch_sequence() {
 }
 
 validate_patch_sequence
+
+MODEL_SUPPORT_PATCH_DIR="$PATCH_DIR/model_support"
+MODEL_SUPPORT_SERIES="$MODEL_SUPPORT_PATCH_DIR/series"
+if [[ -e "$MODEL_SUPPORT_PATCH_DIR" && ! -f "$MODEL_SUPPORT_SERIES" ]]; then
+  echo "model support patch directory is missing its series file: $MODEL_SUPPORT_PATCH_DIR" >&2
+  exit 1
+fi
+if [[ -f "$MODEL_SUPPORT_SERIES" ]]; then
+  model_support_expected=1
+  model_support_count=0
+  while IFS= read -r filename || [[ -n "$filename" ]]; do
+    # Git for Windows may check this text manifest out with CRLF endings.
+    filename="${filename%$'\r'}"
+    if [[ ! "$filename" =~ ^([0-9]{4})-[a-z0-9][a-z0-9.-]*\.patch$ ]]; then
+      echo "invalid model support patch filename in series: $filename" >&2
+      exit 1
+    fi
+    sequence=$((10#${BASH_REMATCH[1]}))
+    if (( sequence != model_support_expected )); then
+      printf -v expected_prefix '%04d' "$model_support_expected"
+      echo "invalid model support patch sequence: expected $expected_prefix, found ${BASH_REMATCH[1]} ($filename)" >&2
+      exit 1
+    fi
+    patch="$MODEL_SUPPORT_PATCH_DIR/$filename"
+    if [[ ! -f "$patch" ]]; then
+      echo "model support patch listed by series is missing: $patch" >&2
+      exit 1
+    fi
+    PATCHES+=("$patch")
+    model_support_expected=$((model_support_expected + 1))
+    model_support_count=$((model_support_count + 1))
+  done < "$MODEL_SUPPORT_SERIES"
+  actual_model_support_count="$(find "$MODEL_SUPPORT_PATCH_DIR" -maxdepth 1 -type f -name '*.patch' | wc -l | tr -d '[:space:]')"
+  if (( model_support_count == 0 || actual_model_support_count != model_support_count )); then
+    echo "model support patch series does not exactly cover its patch directory" >&2
+    exit 1
+  fi
+fi
 
 GENERATED_PATCH_DIR="$PATCH_DIR/generated"
 GENERATED_SERIES="$GENERATED_PATCH_DIR/series"

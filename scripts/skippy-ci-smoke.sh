@@ -295,7 +295,6 @@ config = {
     "cache_type_k": "f16",
     "cache_type_v": "f16",
     "flash_attn_type": flash_attn,
-    "filter_tensors_on_load": False,
     "load_mode": "runtime-slice",
     "bind_addr": bind_addr,
     "upstream": None if not upstream_endpoint else {

@@ -36,12 +36,9 @@ impl DraftRunner {
                 image_max_tokens: None,
                 batch_max_tokens: None,
                 glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
-                include_embeddings: true,
-                include_output: true,
                 mtp_source: MtpSource::Disabled,
                 // The draft runner uses the whole model; a full-range load
                 // needs no admitted tensor closure.
-                filter_tensors_on_load: false,
                 resident_tensor_names: Vec::new(),
                 activation_import_identities: Vec::new(),
                 activation_import_bindings: Vec::new(),

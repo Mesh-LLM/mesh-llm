@@ -31,23 +31,11 @@ pub(crate) struct PlannedArtifact {
     pub(crate) tensor_names: Vec<String>,
 }
 
-impl PlannedArtifact {
-    /// Whether this artifact is one of several byte-balanced parts of an
-    /// oversized layer, written by the Rust part writer rather than the native
-    /// whole-layer slice writer.
-    pub(crate) fn is_part(&self) -> bool {
-        self.id.contains("-part")
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PlannedArtifactKind {
-    /// Metadata/Tokenizer/Unknown-role payload tensors. Emitted only when the
-    /// set is nonempty; a plain slice carries them with real payload.
+    /// Every non-layer tensor. Physical grouping never assigns stage
+    /// ownership; exact graph closure does that at admission time.
     Common,
-    Embeddings,
-    /// FinalNorm + Output role tensors.
-    Output,
     Layer {
         ordinal: u32,
     },
@@ -67,8 +55,6 @@ pub(crate) fn plan_artifacts_with_budget(
 ) -> Result<Vec<PlannedArtifact>> {
     ensure_budget(max_artifact_bytes)?;
     let mut common: Vec<String> = Vec::new();
-    let mut embeddings: Vec<String> = Vec::new();
-    let mut output: Vec<String> = Vec::new();
     let mut layers: BTreeMap<u32, Vec<String>> = BTreeMap::new();
     for tensor in tensors {
         match tensor.role {
@@ -78,16 +64,15 @@ pub(crate) fn plan_artifacts_with_budget(
                 })?;
                 layers.entry(ordinal).or_default().push(tensor.name.clone());
             }
-            TensorRole::Embedding => embeddings.push(tensor.name.clone()),
-            TensorRole::FinalNorm | TensorRole::Output => output.push(tensor.name.clone()),
-            TensorRole::Metadata | TensorRole::Tokenizer | TensorRole::Unknown => {
-                common.push(tensor.name.clone())
-            }
+            TensorRole::Embedding
+            | TensorRole::FinalNorm
+            | TensorRole::Output
+            | TensorRole::Metadata
+            | TensorRole::Tokenizer
+            | TensorRole::Unknown => common.push(tensor.name.clone()),
         }
     }
     common.sort();
-    embeddings.sort();
-    output.sort();
 
     let mut planned = Vec::new();
     if !common.is_empty() {
@@ -96,22 +81,6 @@ pub(crate) fn plan_artifacts_with_budget(
             path: "shared/common.gguf".to_string(),
             kind: PlannedArtifactKind::Common,
             tensor_names: common,
-        });
-    }
-    if !embeddings.is_empty() {
-        planned.push(PlannedArtifact {
-            id: "embeddings".to_string(),
-            path: "shared/embeddings.gguf".to_string(),
-            kind: PlannedArtifactKind::Embeddings,
-            tensor_names: embeddings,
-        });
-    }
-    if !output.is_empty() {
-        planned.push(PlannedArtifact {
-            id: "output".to_string(),
-            path: "shared/output.gguf".to_string(),
-            kind: PlannedArtifactKind::Output,
-            tensor_names: output,
         });
     }
     for (ordinal, mut names) in layers {

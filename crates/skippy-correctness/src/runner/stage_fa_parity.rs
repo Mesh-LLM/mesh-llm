@@ -78,6 +78,8 @@ fn decode_boundary(
         args.ctx_size,
         1,
     )?;
+    let source_stage = plan.activation_import_identities.is_empty();
+    let terminal_stage = plan.activation_export_identities.is_empty();
     let mut config = RuntimeConfig {
         stage_index: 0,
         layer_start: args.layer_start,
@@ -110,10 +112,7 @@ fn decode_boundary(
         image_max_tokens: None,
         batch_max_tokens: None,
         glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
-        include_embeddings: true,
-        include_output: false,
         mtp_source: MtpSource::Disabled,
-        filter_tensors_on_load: true,
         resident_tensor_names: Vec::new(),
         activation_import_identities: Vec::new(),
         activation_import_bindings: Vec::new(),
@@ -134,8 +133,8 @@ fn decode_boundary(
         stage_id: "stage-0".to_string(),
         layer_start: args.layer_start,
         layer_end: args.layer_end,
-        include_embeddings: true,
-        include_output: false,
+        source_stage,
+        terminal_stage,
     })
     .context("select package parts")?;
     let model = StageModel::open_from_parts(&selection.absolute_paths, &config)

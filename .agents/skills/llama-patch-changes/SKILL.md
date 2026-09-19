@@ -11,7 +11,9 @@ that prepare or consume patched llama.cpp.
 
 ## Boundaries
 
-- Keep durable llama-side changes in `third_party/llama.cpp/patches/*.patch`.
+- Keep durable llama-side changes in the ordered queue under
+  `third_party/llama.cpp/patches`: top-level core patches first,
+  `model_support/series` second, and `generated/series` last.
 - Keep the upstream pin in `third_party/llama.cpp/upstream.txt`.
 - Do not add a submodule, vendor a llama checkout, or depend on the old
   Mesh-LLM llama.cpp fork.
@@ -20,7 +22,12 @@ that prepare or consume patched llama.cpp.
 - Do not add llama-stage ABI/static in-process patches unless the task
   explicitly asks for that integration pass.
 - Prefer small, reviewable llama commits with one functional boundary per
-  patch. Keep patch numbers unique and contiguous.
+  patch. Keep patch numbers unique and contiguous within each queue lane.
+- Put a new model family's implementation, conversion, templates, multimodal
+  integration, runtime adaptations, and family tests in one focused patch in
+  `model_support/`. Do not spread family-specific code through core patches.
+- Keep generated graph-semantics edits in `generated/`; do not hand-maintain
+  them in either the core or model-support lane.
 - Do not append a terminal patch whose only purpose is to split, move, or clean
   up code introduced by earlier patches. Recreate the affected patches so they
   use the intended ownership boundaries from the outset.
@@ -37,21 +44,36 @@ For actual llama-side editing, prefer a normal llama.cpp checkout or branch
 where commits can be named and inspected. Base the branch on upstream
 `ggml-org/llama.cpp` `master`, then carry the Mesh-LLM patch commits on top.
 
-For a deliberate queue rewrite, reconstruct capability-owned commits from the
-pinned upstream, verify the reconstructed head is tree-identical to the
-authoritative final checkout, then regenerate the patch queue:
+For a deliberate queue rewrite, reconstruct capability-owned core commits from
+the pinned upstream, add model-family support commits, then add the generated
+family shards. Verify the reconstructed head is tree-identical to the
+authoritative final checkout before regenerating each queue lane. Preserve the
+`model_support/series` and `generated/series` manifests explicitly rather than
+flattening their patches into the top-level queue.
 
 ```bash
 repo_root="$(pwd)"
 llama_checkout="${LLAMA_CHECKOUT:-$repo_root/.deps/llama.cpp}"
 patch_backup="$(mktemp -d /tmp/mesh-llm-patches.XXXXXX)"
-mv "$repo_root/third_party/llama.cpp/patches" "$patch_backup/patches"
-mkdir -p "$repo_root/third_party/llama.cpp/patches"
+patch_root="$repo_root/third_party/llama.cpp/patches"
+mkdir -p "$patch_backup/core"
+mv "$patch_root"/*.patch "$patch_backup/core/"
+mv "$patch_root/model_support" "$patch_backup/model_support"
+mkdir -p "$patch_root/model_support"
 git -C "$llama_checkout" format-patch \
   --start-number 1 \
-  --output-directory "$repo_root/third_party/llama.cpp/patches" \
-  "$(cat "$repo_root/third_party/llama.cpp/upstream.txt")..HEAD"
+  --output-directory "$patch_root" \
+  "$(cat "$repo_root/third_party/llama.cpp/upstream.txt")..<core-head>"
+git -C "$llama_checkout" format-patch \
+  --start-number 1 \
+  --output-directory "$patch_root/model_support" \
+  "<core-head>..<model-support-head>"
 ```
+
+Regenerate `model_support/series` from the sorted patch filenames. Leave the
+generated lane in place unless its generator inputs changed; if they did,
+regenerate it with the deterministic family-patch workflow rather than moving
+or formatting those commits by hand.
 
 Keep the temporary backup until clean patch application and the required native
 build pass. Ordinary focused changes may append a patch without rebuilding

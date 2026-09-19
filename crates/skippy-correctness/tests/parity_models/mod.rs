@@ -687,7 +687,6 @@ struct TestLayout {
 struct StagePath {
     path: PathBuf,
     load_mode: RuntimeLoadMode,
-    filter_tensors_on_load: bool,
     resident_tensor_names: Vec<String>,
 }
 
@@ -732,7 +731,6 @@ impl ResolvedCase {
                     full_model: StagePath {
                         path: path.clone(),
                         load_mode: RuntimeLoadMode::RuntimeSlice,
-                        filter_tensors_on_load: false,
                         resident_tensor_names: Vec::new(),
                     },
                     package_dir: None,
@@ -747,7 +745,6 @@ impl ResolvedCase {
                     full_model: StagePath {
                         path: package_dir.clone(),
                         load_mode: RuntimeLoadMode::LayerPackage,
-                        filter_tensors_on_load: true,
                         resident_tensor_names: Vec::new(),
                     },
                     package_dir: Some(package_dir.clone()),
@@ -1274,7 +1271,6 @@ fn stage_path(layout: &TestLayout, spec: FamilySpec, shape: StageShape) -> Resul
         return Ok(StagePath {
             path: layout.full_model.path.clone(),
             load_mode: RuntimeLoadMode::RuntimeSlice,
-            filter_tensors_on_load: true,
             resident_tensor_names: Vec::new(),
         });
     }
@@ -1307,13 +1303,12 @@ fn materialize_stage(
         stage_id: format!("stage-{layer_start}-{layer_end}"),
         layer_start,
         layer_end,
-        include_embeddings,
-        include_output,
+        source_stage: include_embeddings,
+        terminal_stage: include_output,
     })?;
     Ok(StagePath {
         path: materialized.output_path,
         load_mode: RuntimeLoadMode::LayerPackage,
-        filter_tensors_on_load: true,
         resident_tensor_names: Vec::new(),
     })
 }
@@ -1630,10 +1625,7 @@ fn open_stage_model(path: &StagePath, shape: StageShape, n_gpu_layers: i32) -> R
             image_max_tokens: None,
             batch_max_tokens: None,
             glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
-            include_embeddings: shape.include_embeddings,
-            include_output: shape.include_output,
             mtp_source: MtpSource::Disabled,
-            filter_tensors_on_load: path.filter_tensors_on_load,
             resident_tensor_names: path.resident_tensor_names.clone(),
             activation_import_identities: Vec::new(),
             activation_import_bindings: Vec::new(),

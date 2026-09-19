@@ -12,9 +12,9 @@ use crate::{
     MtmdHelperVideo, MtmdInputChunkType, MtmdInputChunks, MtmdInputText, NativeMtpDraft,
     NativeRuntimeLoadError, NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session,
     SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventReporterV1,
-    SlicePlan, StagePlan, StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1,
-    StagePlanStringRefV1, StagePlanValueDescV1, StagePlanValueKind, StagePlanner,
-    StagePlannerConfigV1, Status, TensorInfo, TokenSignal, runtime_abi_supported,
+    StagePlan, StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStringRefV1,
+    StagePlanValueDescV1, StagePlanValueKind, StagePlanner, StagePlannerConfigV1, Status,
+    TensorInfo, TokenSignal, runtime_abi_supported,
 };
 
 static SYMBOLS: OnceLock<Symbols> = OnceLock::new();
@@ -233,10 +233,6 @@ dynamic_symbols! {
     skippy_model_info_free(info: *mut ModelInfo, out_error: *mut *mut Error) -> Status;
     skippy_model_info_tensor_count(info: *mut ModelInfo, out_count: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_model_info_tensor_at(info: *mut ModelInfo, index: usize, out_tensor: *mut TensorInfo, out_error: *mut *mut Error) -> Status;
-    skippy_slice_plan_create(info: *mut ModelInfo, out_plan: *mut *mut SlicePlan, out_error: *mut *mut Error) -> Status;
-    skippy_slice_plan_free(plan: *mut SlicePlan, out_error: *mut *mut Error) -> Status;
-    skippy_slice_plan_add_layer_range(plan: *mut SlicePlan, stage_index: i32, layer_start: i32, layer_end: i32, include_embeddings: bool, include_output: bool, include_per_layer_token_embd: bool, out_error: *mut *mut Error) -> Status;
-    skippy_write_slice_gguf(info: *mut ModelInfo, plan: *const SlicePlan, stage_index: i32, output_path: *const c_char, out_error: *mut *mut Error) -> Status;
     skippy_write_gguf_metadata_from_parts(input_paths: *const *const c_char, input_count: usize, output_path: *const c_char, out_error: *mut *mut Error) -> Status;
     skippy_write_gguf_from_parts(input_paths: *const *const c_char, input_count: usize, output_path: *const c_char, out_error: *mut *mut Error) -> Status;
     skippy_write_gguf_from_parts_consuming(input_paths: *const *const c_char, input_count: usize, output_path: *const c_char, out_error: *mut *mut Error) -> Status;

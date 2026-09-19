@@ -100,12 +100,9 @@ pub struct RuntimeConfig {
     pub image_max_tokens: Option<u32>,
     pub batch_max_tokens: Option<u32>,
     pub glm_dsa_policy: GlmDsaPolicy,
-    pub include_embeddings: bool,
-    pub include_output: bool,
     pub mtp_source: MtpSource,
-    pub filter_tensors_on_load: bool,
-    /// Exact native tensor names admitted for this stage. Empty preserves the
-    /// legacy range-based loader filter.
+    /// Exact native tensor names admitted for this stage. An empty set means
+    /// an unsplit full-model load; split stages have no range-based fallback.
     pub resident_tensor_names: Vec<String>,
     /// Planner value identities imported by this stage, in native frontier order.
     pub activation_import_identities: Vec<String>,
@@ -186,6 +183,18 @@ fn slice_ptr<T>(values: &[T]) -> *const T {
 }
 
 impl RuntimeConfig {
+    pub fn has_stage_plan(&self) -> bool {
+        !self.resident_tensor_names.is_empty()
+    }
+
+    pub fn is_source_stage(&self) -> bool {
+        !self.has_stage_plan() || self.activation_import_identities.is_empty()
+    }
+
+    pub fn is_terminal_stage(&self) -> bool {
+        !self.has_stage_plan() || self.activation_export_identities.is_empty()
+    }
+
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.layer_start >= self.layer_end {
             return Err("layer_start must be less than layer_end");
@@ -212,17 +221,13 @@ impl RuntimeConfig {
         if self.n_threads_batch == Some(0) {
             return Err("n_threads_batch must be greater than zero when provided");
         }
-        if self.filter_tensors_on_load && self.resident_tensor_names.is_empty() {
-            return Err("filtered stage loading requires an explicit admitted resident tensor set");
-        }
         Ok(())
     }
 
     pub(crate) fn as_raw(&self) -> Result<RawRuntimeConfigParts> {
         self.validate().map_err(anyhow::Error::msg)?;
         let mmap = self.mmap.or_else(|| {
-            (self.filter_tensors_on_load && self.load_mode == LoadMode::RuntimeSlice)
-                .then_some(false)
+            (self.has_stage_plan() && self.load_mode == LoadMode::RuntimeSlice).then_some(false)
         });
         let n_batch = self
             .n_batch
@@ -339,7 +344,6 @@ impl RuntimeConfig {
                 disable_repack: !self.repack,
                 use_mmap_prefetch: false,
                 use_mmap_buffer: false,
-                filter_tensors_on_load: self.filter_tensors_on_load,
                 resident_tensor_names: resident_tensor_names_ptr,
                 resident_tensor_name_count: resident_tensor_name_ptrs.len(),
                 activation_import_identities: slice_ptr(&activation_import_identity_ptrs),
@@ -348,8 +352,6 @@ impl RuntimeConfig {
                 activation_export_identities: slice_ptr(&activation_export_identity_ptrs),
                 activation_export_identity_count: activation_export_identity_ptrs.len(),
                 activation_export_bindings: slice_ptr(&activation_export_binding_ptrs),
-                include_embeddings: self.include_embeddings,
-                include_output: self.include_output,
                 mtp_source: self.mtp_source.as_raw(),
                 selected_backend_device: selected_backend_device_ptr,
                 glm_dsa_policy_profile: match self.glm_dsa_policy {
@@ -406,7 +408,7 @@ impl RuntimeConfig {
             .unwrap_or_else(|| default_n_batch_for_lane_count(self.lane_count));
         let n_ubatch = self.n_ubatch.unwrap_or(LLAMA_SERVER_DEFAULT_N_UBATCH);
         format!(
-            "stage_index={} layers={}..{} ctx={} lanes={} n_batch={} n_ubatch={} n_gpu_layers={} mmap={} mlock={} repack={} backend={} cache_k={} cache_v={} flash_attn={:?} load_mode={:?} include_embeddings={} include_output={} mtp_source={:?} filter_tensors_on_load={} resident_tensor_count={} checkpoint_quantization={:?}",
+            "stage_index={} layers={}..{} ctx={} lanes={} n_batch={} n_ubatch={} n_gpu_layers={} mmap={} mlock={} repack={} backend={} cache_k={} cache_v={} flash_attn={:?} load_mode={:?} source_stage={} terminal_stage={} mtp_source={:?} resident_tensor_count={} checkpoint_quantization={:?}",
             self.stage_index,
             self.layer_start,
             self.layer_end,
@@ -425,10 +427,9 @@ impl RuntimeConfig {
             self.cache_type_v,
             self.flash_attn_type,
             self.load_mode,
-            self.include_embeddings,
-            self.include_output,
+            self.is_source_stage(),
+            self.is_terminal_stage(),
             self.mtp_source,
-            self.filter_tensors_on_load,
             self.resident_tensor_names.len(),
             self.checkpoint_quantization,
         )
@@ -484,10 +485,7 @@ impl Default for RuntimeConfig {
             image_max_tokens: None,
             batch_max_tokens: None,
             glm_dsa_policy: GlmDsaPolicy::Auto,
-            include_embeddings: true,
-            include_output: true,
             mtp_source: MtpSource::Disabled,
-            filter_tensors_on_load: false,
             resident_tensor_names: Vec::new(),
             activation_import_identities: Vec::new(),
             activation_import_bindings: Vec::new(),
@@ -587,10 +585,9 @@ mod tests {
     }
 
     #[test]
-    fn filtered_runtime_slice_disables_mmap_by_default() -> anyhow::Result<()> {
-        let filtered = RuntimeConfig {
+    fn graph_admitted_runtime_slice_disables_mmap_by_default() -> anyhow::Result<()> {
+        let admitted = RuntimeConfig {
             mmap: None,
-            filter_tensors_on_load: true,
             resident_tensor_names: vec!["output.weight".into()],
             ..RuntimeConfig::default()
         }
@@ -598,21 +595,19 @@ mod tests {
         .raw;
         let explicitly_enabled = RuntimeConfig {
             mmap: Some(true),
-            filter_tensors_on_load: true,
             resident_tensor_names: vec!["output.weight".into()],
             ..RuntimeConfig::default()
         }
         .as_raw()?
         .raw;
 
-        assert!(filtered.has_mmap_override);
-        assert!(!filtered.use_mmap);
+        assert!(admitted.has_mmap_override);
+        assert!(!admitted.use_mmap);
         assert!(explicitly_enabled.has_mmap_override);
         assert!(explicitly_enabled.use_mmap);
 
         let materialized = RuntimeConfig {
             mmap: None,
-            filter_tensors_on_load: false,
             load_mode: LoadMode::LayerPackage,
             ..RuntimeConfig::default()
         }
@@ -672,19 +667,23 @@ mod tests {
     }
 
     #[test]
-    fn runtime_config_rejects_filtered_load_without_admission() {
-        let error = RuntimeConfig {
-            filter_tensors_on_load: true,
-            resident_tensor_names: Vec::new(),
+    fn runtime_config_derives_stage_ownership_from_frontiers() {
+        let source = RuntimeConfig {
+            resident_tensor_names: vec!["blk.0.attn.weight".into()],
+            activation_export_identities: vec!["activation-0".into()],
             ..RuntimeConfig::default()
-        }
-        .as_raw()
-        .expect_err("filtered loads must carry an exact resident tensor set");
-        assert!(
-            error
-                .to_string()
-                .contains("explicit admitted resident tensor set")
-        );
+        };
+        let terminal = RuntimeConfig {
+            resident_tensor_names: vec!["output.weight".into()],
+            activation_import_identities: vec!["activation-0".into()],
+            ..RuntimeConfig::default()
+        };
+
+        assert!(source.has_stage_plan());
+        assert!(source.is_source_stage());
+        assert!(!source.is_terminal_stage());
+        assert!(!terminal.is_source_stage());
+        assert!(terminal.is_terminal_stage());
     }
 
     #[test]

@@ -529,11 +529,11 @@ mesh-llm serve --model Qwen2.5-32B --split --join <TOKEN>
 
 #### Split-package preflight diagnostics
 
-Before starting a package-backed split run, preflight the local package
-directory and then certify the immutable published ref:
+Before starting a package-backed split run, verify the local package against
+its independent source and then certify the immutable published ref:
 
 ```bash
-skippy-model-package preflight ./model-package --stages 2 --verify-sha256
+skippy-model-package verify-package-v2 ./model-package --source ./model.gguf
 mesh-llm models certify hf://namespace/repo@revision --package-only --report-out target/skippy-preflight/cert.json
 ```
 

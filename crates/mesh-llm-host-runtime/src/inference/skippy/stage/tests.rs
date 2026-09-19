@@ -297,7 +297,9 @@ fn assert_stage_config_execution_fields(config: &StageConfig) {
         config.downstream.as_ref().map(|d| d.stage_id.as_str()),
         Some("stage-1")
     );
-    assert!(config.filter_tensors_on_load);
+    assert!(config.resident_tensor_names.is_empty());
+    assert!(config.activation_import_identities.is_empty());
+    assert!(config.activation_export_identities.is_empty());
 }
 
 #[test]

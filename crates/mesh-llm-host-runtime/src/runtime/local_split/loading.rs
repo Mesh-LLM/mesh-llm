@@ -478,7 +478,6 @@ pub(super) async fn stage0_runtime_options(
     runtime_options.config.lane_count = spec.slots as u32;
     runtime_options.config.activation_codec = spec.generation.activation_codec;
     runtime_options.config.activation_codec_policy = spec.generation.activation_codec_policy;
-    runtime_options.config.filter_tensors_on_load = true;
     runtime_options.config.resident_tensor_names = skippy::admitted_resident_tensor_names(
         verified_stage0_load.as_ref().unwrap_or(&stage0_load),
         resolved_stage0_package.as_ref(),

@@ -674,7 +674,6 @@ fn write_stage_config(
         "flash_attn_type": protocol_flash_attn(args.runtime.flash_attn),
         "cache_type_k": "f16",
         "cache_type_v": "f16",
-        "filter_tensors_on_load": true,
         "resident_tensor_names": runtime_plan.resident_tensor_names,
         "activation_import_identities": runtime_plan.activation_import_identities,
         "activation_import_bindings": runtime_plan.activation_import_bindings,

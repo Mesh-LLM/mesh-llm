@@ -37,8 +37,6 @@ fn assigns_every_role_to_its_canonical_artifact() {
             .collect::<Vec<_>>(),
         [
             "shared/common.gguf",
-            "shared/embeddings.gguf",
-            "shared/output.gguf",
             "layers/layer-00000.gguf",
             "layers/layer-00001.gguf",
             "layers/layer-00011.gguf",
@@ -50,12 +48,14 @@ fn assigns_every_role_to_its_canonical_artifact() {
         .collect::<BTreeMap<_, _>>();
     assert_eq!(
         by_id["common"].tensor_names,
-        ["caption.notes", "tokenizer.ggml.tokens", "unknown.thing"]
-    );
-    assert_eq!(by_id["embeddings"].tensor_names, ["token_embd.weight"]);
-    assert_eq!(
-        by_id["output"].tensor_names,
-        ["output.weight", "output_norm.weight"]
+        [
+            "caption.notes",
+            "output.weight",
+            "output_norm.weight",
+            "token_embd.weight",
+            "tokenizer.ggml.tokens",
+            "unknown.thing",
+        ]
     );
     assert_eq!(by_id["layer-00000"].tensor_names, ["blk.0.attn_q.weight"]);
     assert_eq!(
@@ -125,7 +125,11 @@ fn oversized_layer_splits_into_byte_balanced_parts() {
             "layers/layer-00000-part01.gguf",
         ]
     );
-    assert!(planned.iter().all(PlannedArtifact::is_part));
+    assert!(
+        planned
+            .iter()
+            .all(|artifact| artifact.path.contains("-part"))
+    );
     // Two byte-balanced parts of a 40-byte layer hold 20/20 within budget.
     for part in &planned {
         let bytes: u64 = part
@@ -166,7 +170,7 @@ fn dominating_tensor_stays_whole_rather_than_exceeding_budget_in_parts() {
     // parts that still exceed the budget.
     assert_eq!(planned.len(), 1);
     assert_eq!(planned[0].path, "layers/layer-00000.gguf");
-    assert!(!planned[0].is_part());
+    assert!(!planned[0].path.contains("-part"));
     assert_eq!(planned[0].tensor_names.len(), 2);
 }
 

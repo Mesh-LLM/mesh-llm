@@ -328,7 +328,6 @@ pub struct RuntimeConfig {
     pub disable_repack: bool,
     pub use_mmap_prefetch: bool,
     pub use_mmap_buffer: bool,
-    pub filter_tensors_on_load: bool,
     pub resident_tensor_names: *const *const c_char,
     pub resident_tensor_name_count: usize,
     pub activation_import_identities: *const *const c_char,
@@ -337,8 +336,6 @@ pub struct RuntimeConfig {
     pub activation_export_identities: *const *const c_char,
     pub activation_export_identity_count: usize,
     pub activation_export_bindings: *const *const c_char,
-    pub include_embeddings: bool,
-    pub include_output: bool,
     pub mtp_source: MtpSource,
     pub selected_backend_device: *const c_char,
     pub glm_dsa_policy_profile: i32,
@@ -415,10 +412,5 @@ pub type SkippyDecodeStepSampledMtpFn = unsafe extern "C" fn(
     out_mtp_draft: *mut NativeMtpDraft,
     out_error: *mut *mut Error,
 ) -> Status;
-
-#[repr(C)]
-pub struct SlicePlan {
-    _private: [u8; 0],
-}
 
 pub type Opaque = c_void;

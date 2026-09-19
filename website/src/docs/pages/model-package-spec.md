@@ -223,7 +223,7 @@ Create and validate a package with the package tool:
 
 ```sh
 skippy-model-package write-package org/repo:distribution --out-dir model-package/
-skippy-model-package validate-package /path/to/source.gguf model-package/
+skippy-model-package verify-package-v2 model-package/ --source /path/to/source.gguf
 ```
 
 For multimodal packages, declare the projector when writing the package:
