@@ -720,6 +720,43 @@ pub(super) fn native_log_parser_mode(
     }
 }
 
+/// Lift the soft open-file limit to the hard limit. A serving node holds a
+/// socket per lane, per stage bridge relay and per client, and macOS starts
+/// processes at a soft limit as low as 256, which a busy split exhausts —
+/// after which accepts fail and stage bridges stop taking connections.
+fn raise_open_file_limit() {
+    #[cfg(unix)]
+    {
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: getrlimit/setrlimit read and write a caller-owned struct.
+        if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 {
+            return;
+        }
+        // macOS rejects RLIM_INFINITY for NOFILE; OPEN_MAX-style caps apply.
+        let target = if limit.rlim_max == libc::RLIM_INFINITY {
+            65_536
+        } else {
+            limit.rlim_max.min(1_048_576)
+        };
+        if limit.rlim_cur >= target {
+            return;
+        }
+        let previous = limit.rlim_cur;
+        limit.rlim_cur = target;
+        // SAFETY: as above.
+        if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) } == 0 {
+            tracing::info!(previous, raised_to = target, "raised open-file limit");
+        } else {
+            limit.rlim_cur = 10_240.max(previous);
+            // SAFETY: as above; fall back to a limit macOS always accepts.
+            let _ = unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) };
+        }
+    }
+}
+
 pub(super) fn spawn_node_benchmark_task(node: &mesh::Node, bin_dir: &Path) {
     let mem_arc = node.gpu_mem_bandwidth_gbps.clone();
     let compute_fp32_arc = node.gpu_compute_tflops_fp32.clone();
@@ -1043,6 +1080,7 @@ pub(super) async fn build_run_auto_node_setup(
 
     if !is_client {
         spawn_node_benchmark_task(&node, bin_dir);
+        raise_open_file_limit();
     } else {
         tracing::debug!("client node — skipping memory bandwidth benchmark");
     }

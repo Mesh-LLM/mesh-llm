@@ -1134,16 +1134,28 @@ impl Node {
             }
         };
         let node = self.clone();
-        let cleanup_node = self.clone();
         let cleanup_key = key.clone();
-        let cleanup_owner = owner.clone();
         let topology_for_task = topology_id.clone();
         let run_for_task = run_id.clone();
         let stage_for_task = stage_id.clone();
         let handle = tokio::spawn(async move {
             loop {
-                let Ok((tcp_stream, _)) = listener.accept().await else {
-                    break;
+                // An accept error (EMFILE under load, an aborted handshake)
+                // must not end the bridge: once this loop exits the local
+                // listener closes and every stage-0 lane to this peer is
+                // refused for the rest of the generation.
+                let tcp_stream = match listener.accept().await {
+                    Ok((tcp_stream, _)) => tcp_stream,
+                    Err(err) => {
+                        tracing::warn!(
+                            key = %cleanup_key.replace('\n', "/"),
+                            peer = %peer_id.fmt_short(),
+                            error = %err,
+                            "stage transport bridge accept failed; retrying"
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        continue;
+                    }
                 };
                 let node = node.clone();
                 let topology_id = topology_for_task.clone();
@@ -1168,9 +1180,6 @@ impl Node {
                     }
                 });
             }
-            cleanup_node
-                .remove_stage_transport_bridge_if_owner(&cleanup_key, &cleanup_owner)
-                .await;
         });
         if self
             .publish_stage_transport_bridge(key, owner, handle)
