@@ -26,15 +26,42 @@ fn string(bytes: &mut Vec<u8>, value: &str) {
 }
 
 pub(crate) fn fixture(path: &Path, tensors: &[FixtureTensor<'_>], split: Option<(u16, u16, u64)>) {
-    fixture_with_alignment(path, tensors, split, true);
+    write_fixture(path, 2, None, tensors, split, true);
 }
 
 pub(crate) fn fixture_without_alignment(path: &Path, tensors: &[FixtureTensor<'_>]) {
-    fixture_with_alignment(path, tensors, None, false);
+    write_fixture(path, 2, None, tensors, None, false);
 }
 
-fn fixture_with_alignment(
+pub(crate) fn fixture_with_nextn(
     path: &Path,
+    block_count: u32,
+    nextn_predict_layers: Option<u32>,
+    tensors: &[FixtureTensor<'_>],
+    split: Option<(u16, u16, u64)>,
+) {
+    write_fixture(
+        path,
+        block_count,
+        nextn_predict_layers,
+        tensors,
+        split,
+        true,
+    );
+}
+
+pub(crate) fn fixture_with_nextn_noninteger(
+    path: &Path,
+    block_count: u32,
+    tensors: &[FixtureTensor<'_>],
+    split: Option<(u16, u16, u64)>,
+) {
+    write_fixture_noninteger_nextn(path, block_count, tensors, split, true);
+}
+
+fn write_fixture_noninteger_nextn(
+    path: &Path,
+    block_count: u32,
     tensors: &[FixtureTensor<'_>],
     split: Option<(u16, u16, u64)>,
     include_alignment: bool,
@@ -42,14 +69,78 @@ fn fixture_with_alignment(
     let mut bytes = b"GGUF".to_vec();
     bytes.extend_from_slice(&3_u32.to_le_bytes());
     bytes.extend_from_slice(&(tensors.len() as u64).to_le_bytes());
-    let metadata_count = 3 + u64::from(include_alignment) + if split.is_some() { 3 } else { 0 };
+    let metadata_count = 3 + u64::from(include_alignment) + 1 + if split.is_some() { 3 } else { 0 };
     bytes.extend_from_slice(&metadata_count.to_le_bytes());
     string(&mut bytes, "general.architecture");
     bytes.extend_from_slice(&8_u32.to_le_bytes());
     string(&mut bytes, "llama");
     string(&mut bytes, "llama.block_count");
     bytes.extend_from_slice(&4_u32.to_le_bytes());
-    bytes.extend_from_slice(&2_u32.to_le_bytes());
+    bytes.extend_from_slice(&block_count.to_le_bytes());
+    string(&mut bytes, "llama.nextn_predict_layers");
+    bytes.extend_from_slice(&8_u32.to_le_bytes());
+    string(&mut bytes, "one");
+    if include_alignment {
+        string(&mut bytes, "general.alignment");
+        bytes.extend_from_slice(&4_u32.to_le_bytes());
+        bytes.extend_from_slice(&32_u32.to_le_bytes());
+    }
+    string(&mut bytes, "tokenizer.ggml.tokens");
+    bytes.extend_from_slice(&9_u32.to_le_bytes());
+    bytes.extend_from_slice(&8_u32.to_le_bytes());
+    bytes.extend_from_slice(&1_u64.to_le_bytes());
+    string(&mut bytes, "fixture-token");
+    if let Some((number, count, total)) = split {
+        for (key, value) in [("split.no", number), ("split.count", count)] {
+            string(&mut bytes, key);
+            bytes.extend_from_slice(&2_u32.to_le_bytes());
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        string(&mut bytes, "split.tensors.count");
+        bytes.extend_from_slice(&10_u32.to_le_bytes());
+        bytes.extend_from_slice(&total.to_le_bytes());
+    }
+    for t in tensors {
+        string(&mut bytes, t.name);
+        bytes.extend_from_slice(&(t.dimensions.len() as u32).to_le_bytes());
+        for dimension in &t.dimensions {
+            bytes.extend_from_slice(&dimension.to_le_bytes());
+        }
+        bytes.extend_from_slice(&t.dtype.to_le_bytes());
+        bytes.extend_from_slice(&t.offset.to_le_bytes());
+    }
+    bytes.resize(bytes.len().div_ceil(32) * 32, 0);
+    bytes.resize(bytes.len() + tensors.len() * 32, 0x3f);
+    fs::write(path, bytes).unwrap();
+}
+
+fn write_fixture(
+    path: &Path,
+    block_count: u32,
+    nextn_predict_layers: Option<u32>,
+    tensors: &[FixtureTensor<'_>],
+    split: Option<(u16, u16, u64)>,
+    include_alignment: bool,
+) {
+    let mut bytes = b"GGUF".to_vec();
+    bytes.extend_from_slice(&3_u32.to_le_bytes());
+    bytes.extend_from_slice(&(tensors.len() as u64).to_le_bytes());
+    let metadata_count = 3
+        + u64::from(include_alignment)
+        + u64::from(nextn_predict_layers.is_some())
+        + if split.is_some() { 3 } else { 0 };
+    bytes.extend_from_slice(&metadata_count.to_le_bytes());
+    string(&mut bytes, "general.architecture");
+    bytes.extend_from_slice(&8_u32.to_le_bytes());
+    string(&mut bytes, "llama");
+    string(&mut bytes, "llama.block_count");
+    bytes.extend_from_slice(&4_u32.to_le_bytes());
+    bytes.extend_from_slice(&block_count.to_le_bytes());
+    if let Some(layers) = nextn_predict_layers {
+        string(&mut bytes, "llama.nextn_predict_layers");
+        bytes.extend_from_slice(&4_u32.to_le_bytes());
+        bytes.extend_from_slice(&layers.to_le_bytes());
+    }
     if include_alignment {
         string(&mut bytes, "general.alignment");
         bytes.extend_from_slice(&4_u32.to_le_bytes());

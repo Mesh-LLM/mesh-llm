@@ -474,6 +474,18 @@ missing = [
 if missing:
     raise SystemExit(f"manifest contains {len(missing)} incomplete artifact catalog entries")
 print(f"  ✓ Manifest records {len(required)} uploaded artifacts")
+speculative = (manifest.get("generation") or {}).get("speculative_decoding")
+if speculative:
+    details = []
+    for name, strategy in (speculative.get("strategies") or {}).items():
+        kind = strategy.get("type", "unknown")
+        if kind == "native-mtp":
+            depth = strategy.get("prediction_depth")
+            indices = strategy.get("layer_indices") or []
+            details.append(f"{name}: native-mtp depth {depth} layers [{', '.join(str(i) for i in indices)}]")
+        else:
+            details.append(f"{name}: {kind}")
+    print(f"  ✓ Manifest declares speculative decoding (default {speculative.get('default')}): {', '.join(details)}")
 PYTHON
 
 # ─── Publish ──────────────────────────────────────────────────────────────
@@ -706,6 +718,20 @@ def code(value) -> str:
 def yaml_quote(value: str) -> str:
     return json.dumps(value)
 
+def speculative_summary(spec: dict) -> str:
+    default = spec.get("default")
+    details = []
+    for name, strategy in (spec.get("strategies") or {}).items():
+        kind = strategy.get("type", "unknown")
+        if kind == "native-mtp":
+            depth = strategy.get("prediction_depth")
+            indices = strategy.get("layer_indices") or []
+            details.append(f"{name}: {kind} depth {depth} layers [{', '.join(str(i) for i in indices)}]")
+        else:
+            details.append(f"{name}: {kind}")
+    summary = "; ".join(details)
+    return f"default {default}; {summary}"
+
 def card_value(info, key: str):
     card_data = getattr(info, "card_data", None)
     if card_data is None:
@@ -932,14 +958,18 @@ curl -s http://localhost:3131/v1/chat/completions \\
 |---|---|
 """
 
-for key, value in [
+variant_rows = [
     ("Format", code(manifest.get("format", "layer-package"))),
     ("Canonical source ref", code(canonical_ref)),
     ("Source revision", code(source_revision)),
     ("Source SHA-256", code(source_sha)),
     ("Skippy ABI", code(skippy_abi)),
     ("Package manifest SHA-256", code(manifest_hash)),
-]:
+]
+speculative = (manifest.get("generation") or {}).get("speculative_decoding")
+if speculative:
+    variant_rows.append(("Speculative decoding", code(speculative_summary(speculative))))
+for key, value in variant_rows:
     readme += f"| **{md_cell(key)}** | {md_cell(value)} |\n"
 
 readme += f"""
