@@ -789,6 +789,13 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
+    /// Manage the local mainnet Lightning wallet.
+    Wallet {
+        #[arg(long, default_value_t = 3131)]
+        port: u16,
+        #[command(subcommand)]
+        command: crate::wallet::WalletCommand,
+    },
     /// Serve local models and join or publish a mesh.
     Serve,
     /// Run as a client-only mesh node with no local model required.

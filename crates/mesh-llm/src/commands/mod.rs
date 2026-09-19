@@ -51,6 +51,9 @@ async fn dispatch_command(cli: &Cli, cmd: &Command) -> Result<()> {
 async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
     match cmd {
         Command::Serve | Command::Client => Ok(()),
+        Command::Wallet { port, command } => {
+            mesh_llm_commands::wallet::run(command, *port, cli.config.as_deref()).await
+        }
         Command::Models { command } => {
             dispatch_models_command(command).await?;
             Ok(())

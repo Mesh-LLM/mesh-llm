@@ -34,6 +34,7 @@ const UPDATE_CONFLICTS: &[&[&str]] = &[&["--flavor", "--detect-flavor"]];
 const SKILLS_INSTALL_CONFLICTS: &[&[&str]] = &[&["--agent", "--all"]];
 
 pub(super) const DESCRIPTORS: &[Descriptor] = &[
+    descriptor(&["wallet"], NONE, NONE, false, RawKind::None),
     descriptor_with_conflicts(
         &["mesh-llm", "setup"],
         SETUP_FLAGS,

@@ -22,3 +22,5 @@ pub use parser::{
     RuntimeSurface, SkillAgentArg, SkillCommand, TrustCommand, TrustPolicy,
     legacy_runtime_surface_warning, normalize_runtime_surface_args, validate_discovery_mode_args,
 };
+
+pub mod wallet;
