@@ -913,9 +913,10 @@ manifest mesh_version and the distinct native-SDK version contract remain
 product identities. Legacy runtime parsing is confined to the explicit cache
 importer; no alias or automatic migration is introduced.
 
-Standalone dynamic server startup now depends on skippy-runtime-install and
-skippy-native-runtime. The publish roster orders the installer before the
-server; the Linux test Docker context includes installer/native/hardware crates.
+Standalone dynamic startup in skippy-api depends on skippy-runtime-install and
+skippy-native-runtime. The publish roster orders those dependencies and the
+serving library before the API; the Linux test Docker context includes
+installer/native/hardware crates.
 Runtime selection is shared with Mesh embedded local startup; no runner or
 release publication policy changes.
 
@@ -929,9 +930,10 @@ checkpoint preparation. The host consumes it; publish/affected-crate rosters and
 Linux Docker contexts include the new owner. Mesh rendering and hooks stay in
 the host. No external CI policy changes.
 
-Standalone local-model serving now consumes `skippy-api`; publish order places
-the API before `skippy-server`. Source identity and planning are shared with
-Mesh. CI topology and runner policy are unchanged.
+The shared `skippy-api` lifecycle now consumes the embedded `skippy-server`
+service; publish order places the server before the API, then the CLI. Native
+runtime startup and model backend composition belong to the API. Source identity
+and planning are shared with Mesh. CI topology and runner policy are unchanged.
 
 Split-certification roster generation now targets `crates/skippy-api/src/split-certified.json`.
 The release-bound recipe build script and admission checks move with this neutral

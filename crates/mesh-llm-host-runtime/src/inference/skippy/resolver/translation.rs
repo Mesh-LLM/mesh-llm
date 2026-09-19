@@ -1,19 +1,12 @@
-use std::{
-    io::Read,
-    net::SocketAddr,
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
+use std::{io::Read, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
-use openai_frontend::OpenAiHookPolicy;
 use skippy_protocol::{
     LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
 };
 use skippy_runtime::MtpSource;
 use skippy_server::{
-    DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS, EmbeddedOpenAiArgs, EmbeddedOpenAiRequestDefaults,
-    EmbeddedRuntimeOptions, NativeMtpProposalConfig, SpeculativeDecodeConfig, telemetry::Telemetry,
+    EmbeddedOpenAiRequestDefaults, EmbeddedRuntimeOptions, SpeculativeDecodeConfig,
 };
 
 use super::super::{
@@ -28,15 +21,10 @@ use super::request_defaults::{
 use super::support::resolve_prefill_chunk_policy;
 use super::types::{
     BUILTIN_PREFILL_ADAPTIVE_MAX, BUILTIN_PREFILL_ADAPTIVE_START, BUILTIN_PREFILL_ADAPTIVE_STEP,
-    BUILTIN_PREFILL_ADAPTIVE_TARGET_MS, BUILTIN_PREFILL_CHUNK_SIZE, ResolvedEmbeddedOpenAiArgs,
-    ResolvedSkippyConfig, ResolvedStageKvCache,
+    BUILTIN_PREFILL_ADAPTIVE_TARGET_MS, ResolvedEmbeddedOpenAiArgs, ResolvedSkippyConfig,
+    ResolvedStageKvCache,
 };
 
-/// Default maximum number of draft tokens for native MTP sidecar probes when
-/// no explicit `draft_max_tokens` is configured. Three tokens is a reasonable
-/// default: long enough to confirm or reject the draft trajectory without
-/// over-committing speculative decode resources.
-const DEFAULT_NATIVE_MTP_MAX_TOKENS: usize = 3;
 const MAX_CHAT_TEMPLATE_BYTES: u64 = 1024 * 1024;
 
 fn read_chat_template(path: &str) -> Result<String> {
@@ -519,176 +507,5 @@ impl ResolvedSkippyConfig {
 impl ResolvedSkippyConfig {
     fn speculative_decode_config(&self) -> SpeculativeDecodeConfig {
         self.speculative.decode.clone()
-    }
-}
-
-impl ResolvedEmbeddedOpenAiArgs {
-    pub(crate) fn direct_single_stage_defaults(
-        model_id: String,
-        default_max_tokens: u32,
-        generation_concurrency: usize,
-        native_mtp_enabled: bool,
-    ) -> Self {
-        Self {
-            model_id: Some(model_id),
-            default_max_tokens,
-            request_defaults: EmbeddedOpenAiRequestDefaults::default(),
-            generation_concurrency,
-            continuous_batching: true,
-            prefill_chunk_size: BUILTIN_PREFILL_CHUNK_SIZE,
-            prefill_chunk_policy: "fixed".to_string(),
-            prefill_chunk_schedule: None,
-            prefill_adaptive_start: BUILTIN_PREFILL_ADAPTIVE_START,
-            prefill_adaptive_step: BUILTIN_PREFILL_ADAPTIVE_STEP,
-            prefill_adaptive_max: BUILTIN_PREFILL_ADAPTIVE_MAX,
-            prefill_adaptive_target_ms: BUILTIN_PREFILL_ADAPTIVE_TARGET_MS,
-            draft_model_path: None,
-            speculative_window: 0,
-            adaptive_speculative_window: false,
-            draft_n_gpu_layers: None,
-            speculative: SpeculativeDecodeConfig {
-                native_mtp: NativeMtpProposalConfig {
-                    enabled: native_mtp_enabled,
-                    max_draft_tokens: if native_mtp_enabled {
-                        DEFAULT_NATIVE_MTP_MAX_TOKENS
-                    } else {
-                        1
-                    },
-                    min_draft_tokens: 0,
-                    reject_cooldown_tokens: 0,
-                    suppress_cooldown_drafts: false,
-                    suppress_cooldown_draft_limit: 0,
-                },
-                effective_strategy: if native_mtp_enabled {
-                    "native-mtp".to_string()
-                } else {
-                    "disabled".to_string()
-                },
-                ..SpeculativeDecodeConfig::default()
-            },
-            native_mtp_enabled,
-            native_mtp_draft_model_path: None,
-            native_mtp_max_tokens: if native_mtp_enabled {
-                DEFAULT_NATIVE_MTP_MAX_TOKENS
-            } else {
-                0
-            },
-            native_mtp_min_tokens: 0,
-            activation_width: 0,
-            reply_credit_limit: None,
-            downstream_connect_timeout_secs: 30,
-        }
-    }
-
-    pub(crate) fn embedded_stage_defaults(
-        model_id: Option<String>,
-        default_max_tokens: u32,
-        generation_concurrency: usize,
-        activation_width: i32,
-        native_mtp_enabled: bool,
-    ) -> Self {
-        Self {
-            model_id,
-            default_max_tokens,
-            request_defaults: EmbeddedOpenAiRequestDefaults::default(),
-            generation_concurrency,
-            continuous_batching: true,
-            prefill_chunk_size: BUILTIN_PREFILL_CHUNK_SIZE,
-            prefill_chunk_policy: "fixed".to_string(),
-            prefill_chunk_schedule: None,
-            prefill_adaptive_start: BUILTIN_PREFILL_ADAPTIVE_START,
-            prefill_adaptive_step: BUILTIN_PREFILL_ADAPTIVE_STEP,
-            prefill_adaptive_max: BUILTIN_PREFILL_ADAPTIVE_MAX,
-            prefill_adaptive_target_ms: BUILTIN_PREFILL_ADAPTIVE_TARGET_MS,
-            draft_model_path: None,
-            speculative_window: 0,
-            adaptive_speculative_window: false,
-            draft_n_gpu_layers: None,
-            speculative: SpeculativeDecodeConfig {
-                native_mtp: NativeMtpProposalConfig {
-                    enabled: native_mtp_enabled,
-                    max_draft_tokens: if native_mtp_enabled {
-                        DEFAULT_NATIVE_MTP_MAX_TOKENS
-                    } else {
-                        1
-                    },
-                    min_draft_tokens: 0,
-                    reject_cooldown_tokens: 0,
-                    suppress_cooldown_drafts: false,
-                    suppress_cooldown_draft_limit: 0,
-                },
-                effective_strategy: if native_mtp_enabled {
-                    "native-mtp".to_string()
-                } else {
-                    "disabled".to_string()
-                },
-                ..SpeculativeDecodeConfig::default()
-            },
-            native_mtp_enabled,
-            native_mtp_draft_model_path: None,
-            native_mtp_max_tokens: if native_mtp_enabled {
-                DEFAULT_NATIVE_MTP_MAX_TOKENS
-            } else {
-                0
-            },
-            native_mtp_min_tokens: 0,
-            activation_width,
-            reply_credit_limit: None,
-            downstream_connect_timeout_secs: 30,
-        }
-    }
-
-    pub(crate) fn build(
-        self,
-        bind_addr: SocketAddr,
-        config: StageConfig,
-        runtime: Arc<Mutex<skippy_server::runtime_state::RuntimeState>>,
-        telemetry: Telemetry,
-        hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
-    ) -> EmbeddedOpenAiArgs {
-        EmbeddedOpenAiArgs {
-            bind_addr,
-            config,
-            runtime,
-            model_id: self.model_id,
-            default_max_tokens: self.default_max_tokens,
-            request_defaults: self.request_defaults,
-            generation_concurrency: self.generation_concurrency,
-            continuous_batching: self.continuous_batching,
-            adaptive_generation_min_concurrency: None,
-            generation_queue_capacity: self.generation_concurrency.saturating_mul(8).clamp(16, 256),
-            generation_admission_timeout_secs: DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS,
-            prefill_chunk_size: self.prefill_chunk_size,
-            prefill_chunk_policy: self.prefill_chunk_policy,
-            prefill_chunk_schedule: self.prefill_chunk_schedule,
-            prefill_adaptive_start: self.prefill_adaptive_start,
-            prefill_adaptive_step: self.prefill_adaptive_step,
-            prefill_adaptive_max: self.prefill_adaptive_max,
-            prefill_adaptive_target_ms: self.prefill_adaptive_target_ms,
-            draft_model_path: self.draft_model_path,
-            speculative_window: self.speculative_window,
-            adaptive_speculative_window: self.adaptive_speculative_window,
-            draft_n_gpu_layers: self.draft_n_gpu_layers,
-            speculative: self.speculative,
-            native_mtp_enabled: self.native_mtp_enabled,
-            native_mtp_draft_model_path: self.native_mtp_draft_model_path,
-            native_mtp_max_tokens: self.native_mtp_max_tokens,
-            native_mtp_min_tokens: self.native_mtp_min_tokens,
-            activation_width: self.activation_width,
-            reply_credit_limit: self.reply_credit_limit,
-            downstream_connect_timeout_secs: self.downstream_connect_timeout_secs,
-            downstream_wire_condition: skippy_server::binary_transport::WireCondition::new(
-                0.0, None,
-            )
-            .expect("static downstream wire condition should construct"),
-            prediction_returns: None,
-            telemetry,
-            hook_policy,
-            generation_receipt: None,
-            generation_lifecycle: None,
-            linear_proposal_ingress: None,
-            kv_lifecycle_observer: None,
-            openai_guardrails: None,
-        }
     }
 }

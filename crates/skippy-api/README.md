@@ -13,3 +13,15 @@ Shared Skippy model preparation. `SingleStageOptions` and a resolved `StageSourc
 `stage_load` builds admitted stage configs from neutral options, verified resident tensor names and activation frontiers. Mesh maps its control requests and peer endpoints into these types; no coordinator identity, lease or iroh type crosses this boundary. `materialization` resolves local package-v2 closures, verifies required artifacts and preserves metadata-first ordering. Network acquisition and progress reporting remain caller concerns.
 
 The opt-in `direct_graph_admission` test accepts `SKIPPY_TEST_GGUF_PATH` and exercises real native two-stage planning, certification, tensor binding and activation frontiers. Run the complete API test suite with `--include-ignored` only when a prepared static native runtime and the pinned model fixture are available. This planning gate is separate from end-to-end split serving.
+
+`serving::ModelLoadRequest` owns native model loading, graph-bound activation
+widths, prediction-return listeners, tokenizer-bound hook construction and OpenAI
+backend composition. `serving::OpenAiOptions` is shared resolved configuration;
+Mesh translates its product configuration and supplies observers/plugin hooks.
+Guardrail/compaction wrapping uses the serving library implementation, including
+an optional caller-owned telemetry sink. `ModelOpenEvents` preserves the native
+load-with-events choice independently of whether an observer is supplied.
+
+`native_runtime` selects and loads an explicitly supplied runtime bundle/cache.
+It performs no product discovery and does not download implicitly. The dependency
+direction is API → serving; the serving library does not depend on this API.

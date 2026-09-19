@@ -10,7 +10,6 @@ pub mod frontend;
 pub mod http;
 pub mod kv_integration;
 pub mod kv_proto;
-pub mod native_runtime;
 pub mod package;
 pub mod runtime_state;
 

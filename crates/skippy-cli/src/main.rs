@@ -25,7 +25,7 @@ async fn main() -> Result<()> {
             | Command::ServeOpenAi(_)
             | Command::PlanSplit(_)
     ) {
-        skippy_server::native_runtime::load_local_native_runtime(&native_options)?;
+        skippy_api::native_runtime::load_local_native_runtime(&native_options)?;
     }
     match cli.command {
         Command::Serve(args) => {

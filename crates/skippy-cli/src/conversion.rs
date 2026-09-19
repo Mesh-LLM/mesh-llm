@@ -191,7 +191,7 @@ impl From<crate::cli::OpenAiGuardrailsCliMode> for skippy_server::frontend::Open
         }
     }
 }
-impl From<crate::cli::NativeRuntimeArgs> for skippy_server::native_runtime::NativeRuntimeOptions {
+impl From<crate::cli::NativeRuntimeArgs> for skippy_api::native_runtime::NativeRuntimeOptions {
     fn from(value: crate::cli::NativeRuntimeArgs) -> Self {
         Self {
             bundle_dirs: value.bundle_dirs,

@@ -54,6 +54,25 @@ crates/mesh-llm-host-runtime/src/
 └── system/                  Hardware detection, benchmarking, self-update
 ```
 
+## Skippy lifecycle boundary
+
+`skippy-api` owns verified model preparation and model backend construction over
+`skippy-server`. The serving library has no dependency back into the lifecycle
+API. Native runtime selection/loading takes explicit bundle/cache inputs through
+`skippy-api::native_runtime`.
+
+Mesh translates its configuration in `inference/skippy/loading.rs` and supplies
+product observers, hook policy and a tokenizer-bound serving hook factory to
+`skippy-api::serving::ModelLoadRequest`. Skippy loads the native model, binds
+activation widths from the loaded graph, owns prediction-return setup, and
+constructs the OpenAI backend with the common guardrail/compaction wrapper.
+Mesh retains operational event recording and plugin loading/invocation; no Mesh
+plugin ABI or loader is imported by the Skippy API.
+
+This is an intermediate extraction: standalone local serving still has its
+existing frontend entrypoint, and the dedicated Mesh adapter/transport/membership
+crates and physical `mesh/` and `skippy/` ownership trees are not yet in place.
+
 ## Topology Roles
 
 ```rust

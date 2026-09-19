@@ -38,7 +38,7 @@ fn standalone_rejects_missing_runtime_before_reading_stage_config() {
 
 #[test]
 fn standalone_selection_uses_verified_bundle_and_rejects_abi_mismatch() {
-    use skippy_server::native_runtime::{NativeRuntimeOptions, local_native_runtime_plan};
+    use skippy_api::native_runtime::{NativeRuntimeOptions, local_native_runtime_plan};
     let temp = tempfile::tempdir().unwrap();
     let bundle = temp.path().join("runtime");
     std::fs::create_dir_all(bundle.join("lib")).unwrap();

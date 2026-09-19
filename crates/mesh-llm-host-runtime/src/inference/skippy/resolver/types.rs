@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use skippy_protocol::{FlashAttentionType, StageKvCacheMode, StageKvCachePayload};
 use skippy_runtime::package::PackageGenerationInfo;
-use skippy_server::{EmbeddedOpenAiRequestDefaults, SpeculativeDecodeConfig};
+use skippy_server::SpeculativeDecodeConfig;
 
 use crate::plugin::{MeshConfig, ReasoningBudget, ReasoningEnabled, RequestDefaultsConfig};
 
@@ -192,30 +192,4 @@ pub(crate) struct ResolvedRequestDefaultsConfig {
     pub(crate) json_schema: Option<toml::Value>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ResolvedEmbeddedOpenAiArgs {
-    pub(crate) model_id: Option<String>,
-    pub(crate) default_max_tokens: u32,
-    pub(crate) request_defaults: EmbeddedOpenAiRequestDefaults,
-    pub(crate) generation_concurrency: usize,
-    pub(crate) continuous_batching: bool,
-    pub(crate) prefill_chunk_size: usize,
-    pub(crate) prefill_chunk_policy: String,
-    pub(crate) prefill_chunk_schedule: Option<String>,
-    pub(crate) prefill_adaptive_start: usize,
-    pub(crate) prefill_adaptive_step: usize,
-    pub(crate) prefill_adaptive_max: usize,
-    pub(crate) prefill_adaptive_target_ms: f64,
-    pub(crate) draft_model_path: Option<PathBuf>,
-    pub(crate) speculative_window: usize,
-    pub(crate) adaptive_speculative_window: bool,
-    pub(crate) draft_n_gpu_layers: Option<i32>,
-    pub(crate) speculative: SpeculativeDecodeConfig,
-    pub(crate) native_mtp_enabled: bool,
-    pub(crate) native_mtp_draft_model_path: Option<PathBuf>,
-    pub(crate) native_mtp_max_tokens: usize,
-    pub(crate) native_mtp_min_tokens: usize,
-    pub(crate) activation_width: i32,
-    pub(crate) reply_credit_limit: Option<usize>,
-    pub(crate) downstream_connect_timeout_secs: u64,
-}
+pub(crate) use skippy_api::serving::OpenAiOptions as ResolvedEmbeddedOpenAiArgs;

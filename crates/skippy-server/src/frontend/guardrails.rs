@@ -11,6 +11,7 @@ use openai_frontend::GuardedOpenAiBackend;
 use openai_frontend::GuardrailMode;
 use openai_frontend::GuardrailPolicy;
 use openai_frontend::GuardrailPolicyHandle;
+use openai_frontend::GuardrailTelemetrySink;
 use openai_frontend::OpenAiBackend;
 use openai_frontend::RetryExhaustionMode;
 use openai_frontend::StreamingGuardrailMode;
@@ -105,14 +106,24 @@ impl OpenAiGuardrailsConfig {
         backend: Arc<dyn OpenAiBackend>,
         context_limit_tokens: Option<usize>,
     ) -> Arc<dyn OpenAiBackend> {
+        self.wrap_backend_with_telemetry(backend, context_limit_tokens, None)
+    }
+
+    /// Apply common compaction and guardrails with an optional caller-owned observer.
+    pub fn wrap_backend_with_telemetry(
+        &self,
+        backend: Arc<dyn OpenAiBackend>,
+        context_limit_tokens: Option<usize>,
+        telemetry: Option<Arc<dyn GuardrailTelemetrySink>>,
+    ) -> Arc<dyn OpenAiBackend> {
         let backend = self.wrap_compacting_backend(backend, context_limit_tokens);
-        if self.should_wrap_guardrail_backend() {
-            Arc::new(GuardedOpenAiBackend::with_policy_handle(
-                backend,
-                self.policy.clone(),
-            ))
-        } else {
-            backend
+        if !self.should_wrap_guardrail_backend() {
+            return backend;
+        }
+        let guarded = GuardedOpenAiBackend::with_policy_handle(backend, self.policy.clone());
+        match telemetry {
+            Some(telemetry) => Arc::new(guarded.with_telemetry(telemetry)),
+            None => Arc::new(guarded),
         }
     }
 

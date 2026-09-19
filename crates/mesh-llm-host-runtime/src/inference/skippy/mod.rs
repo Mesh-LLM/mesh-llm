@@ -7,6 +7,7 @@ pub(crate) mod diagnostics;
 mod hash_cache;
 mod hooks;
 mod kv_cache;
+mod loading;
 mod local_source;
 mod materialization;
 pub(crate) mod metal_pipeline_cache;
@@ -30,22 +31,19 @@ use std::{
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use openai_frontend::{
-    ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream, CompactingOpenAiBackend,
-    CompactionConfig, CompletionRequest, CompletionResponse, CompletionStream,
-    GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy, GuardrailPolicyHandle,
-    GuardrailTelemetrySink, ModelObject, OpenAiBackend, OpenAiHookPolicy, OpenAiRequestContext,
+    ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream, CompactionConfig,
+    CompletionRequest, CompletionResponse, CompletionStream, GuardrailMode, GuardrailPolicy,
+    GuardrailPolicyHandle, ModelObject, OpenAiBackend, OpenAiHookPolicy, OpenAiRequestContext,
     OpenAiResult,
 };
 use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig, StageDevice, StageKvCacheConfig};
 use skippy_runtime::{ModelInfo, MtpSource};
-use skippy_server::serving_hooks::{ModelServingHooks, SharedModelServingHooksFactory};
+use skippy_server::serving_hooks::SharedModelServingHooksFactory;
 use skippy_server::{
-    DEFAULT_EMBEDDED_MAX_TOKENS, DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS, EmbeddedOpenAiArgs,
-    EmbeddedRuntimeOptions, EmbeddedRuntimeStatus, EmbeddedServerHandle, EmbeddedState,
-    OpenAiGuardrailsConfig, OpenAiGuardrailsStatus, OpenAiGuardrailsTarget, SkippyRuntimeHandle,
-    binary_transport::PredictionReturnHub, binary_transport::PredictionReturnListener,
-    binary_transport::WireCondition, embedded_openai_backend, runtime_state::RuntimeState,
-    telemetry::Telemetry, telemetry::TelemetryLevel,
+    DEFAULT_EMBEDDED_MAX_TOKENS, EmbeddedRuntimeOptions, EmbeddedRuntimeStatus,
+    EmbeddedServerHandle, EmbeddedState, OpenAiGuardrailsConfig, OpenAiGuardrailsStatus,
+    OpenAiGuardrailsTarget, SkippyRuntimeHandle, binary_transport::PredictionReturnListener,
+    binary_transport::WireCondition,
 };
 
 pub use certification::{
@@ -248,44 +246,7 @@ pub(crate) struct SkippyModelLoadOptions {
     pub(crate) serving_hooks_factory: Option<SharedModelServingHooksFactory>,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct SkippyTelemetryOptions {
-    pub(crate) metrics_otlp_grpc: Option<String>,
-    pub(crate) queue_capacity: usize,
-    pub(crate) level: TelemetryLevel,
-}
-
-impl Default for SkippyTelemetryOptions {
-    fn default() -> Self {
-        Self::off()
-    }
-}
-
-impl SkippyTelemetryOptions {
-    pub(crate) fn off() -> Self {
-        Self {
-            metrics_otlp_grpc: None,
-            queue_capacity: 0,
-            level: TelemetryLevel::Off,
-        }
-    }
-
-    pub(crate) fn debug(metrics_otlp_grpc: Option<String>) -> Self {
-        Self {
-            metrics_otlp_grpc,
-            queue_capacity: 1024,
-            level: TelemetryLevel::Debug,
-        }
-    }
-
-    pub(crate) fn summary(metrics_otlp_grpc: String) -> Self {
-        Self {
-            metrics_otlp_grpc: Some(metrics_otlp_grpc),
-            queue_capacity: 1024,
-            level: TelemetryLevel::Summary,
-        }
-    }
-}
+pub(crate) use skippy_api::serving::ServingTelemetryOptions as SkippyTelemetryOptions;
 
 pub(crate) fn default_skippy_openai_guardrails() -> OpenAiGuardrailsConfig {
     skippy_openai_guardrails_for_mode(GuardrailMode::Disabled)
@@ -538,565 +499,7 @@ impl SkippyHttpHandle {
     }
 }
 
-/// Builds `EmbeddedOpenAiArgs`, filling most fields from `embedded_args` and
-/// taking only the handful that differ per load path as parameters.
-fn embedded_openai_args_from(
-    embedded_args: resolver::ResolvedEmbeddedOpenAiArgs,
-    config: StageConfig,
-    runtime: Arc<Mutex<RuntimeState>>,
-    prediction_returns: Option<Arc<PredictionReturnHub>>,
-    telemetry: Telemetry,
-    hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
-    serving_hooks: &ModelServingHooks,
-) -> Result<EmbeddedOpenAiArgs> {
-    let activation_width = if config.downstream.is_some() {
-        let descriptor = runtime
-            .lock()
-            .map_err(|_| anyhow::anyhow!("runtime lock poisoned"))?
-            .output_activation_boundary()
-            .context("stage 0 graph did not expose its output activation boundary")?;
-        descriptor.raw_f32_width("output")?
-    } else {
-        embedded_args.activation_width
-    };
-    Ok(EmbeddedOpenAiArgs {
-        bind_addr: "127.0.0.1:0"
-            .parse()
-            .expect("static bind address should parse"),
-        config,
-        runtime,
-        model_id: embedded_args.model_id,
-        default_max_tokens: embedded_args.default_max_tokens,
-        request_defaults: embedded_args.request_defaults,
-        generation_concurrency: embedded_args.generation_concurrency,
-        continuous_batching: embedded_args.continuous_batching,
-        adaptive_generation_min_concurrency: None,
-        generation_queue_capacity: embedded_args
-            .generation_concurrency
-            .saturating_mul(8)
-            .clamp(16, 256),
-        generation_admission_timeout_secs: DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS,
-        prefill_chunk_size: embedded_args.prefill_chunk_size,
-        prefill_chunk_policy: embedded_args.prefill_chunk_policy,
-        prefill_chunk_schedule: embedded_args.prefill_chunk_schedule,
-        prefill_adaptive_start: embedded_args.prefill_adaptive_start,
-        prefill_adaptive_step: embedded_args.prefill_adaptive_step,
-        prefill_adaptive_max: embedded_args.prefill_adaptive_max,
-        prefill_adaptive_target_ms: embedded_args.prefill_adaptive_target_ms,
-        draft_model_path: embedded_args.draft_model_path,
-        speculative_window: embedded_args.speculative_window,
-        adaptive_speculative_window: embedded_args.adaptive_speculative_window,
-        draft_n_gpu_layers: embedded_args.draft_n_gpu_layers,
-        speculative: embedded_args.speculative,
-        native_mtp_enabled: embedded_args.native_mtp_enabled,
-        native_mtp_draft_model_path: embedded_args.native_mtp_draft_model_path,
-        native_mtp_max_tokens: embedded_args.native_mtp_max_tokens,
-        native_mtp_min_tokens: embedded_args.native_mtp_min_tokens,
-        activation_width,
-        reply_credit_limit: embedded_args.reply_credit_limit,
-        downstream_connect_timeout_secs: embedded_args.downstream_connect_timeout_secs,
-        downstream_wire_condition: benchmark_downstream_wire_condition()?,
-        prediction_returns,
-        telemetry,
-        hook_policy,
-        generation_receipt: serving_hooks.generation_receipt(),
-        generation_lifecycle: serving_hooks.generation_lifecycle(),
-        linear_proposal_ingress: serving_hooks.linear_proposal_ingress(),
-        kv_lifecycle_observer: serving_hooks.kv_lifecycle_observer(),
-        openai_guardrails: None,
-    })
-}
-
-fn resolve_serving_hooks(
-    factory: Option<&SharedModelServingHooksFactory>,
-    runtime: &SkippyRuntimeHandle,
-) -> Result<ModelServingHooks> {
-    let runtime_event_sink: Arc<dyn skippy_server::frontend::GenerationLifecycleIngress> =
-        Arc::new(runtime_events::SkippyGenerationRuntimeEventAdapter::new());
-    let kv_observer: Arc<dyn skippy_server::kv_integration::KvLifecycleObserver> =
-        Arc::new(runtime_events::SkippyKvRuntimeEventObserver::new());
-    let hooks = match factory {
-        None => lifecycle_only_serving_hooks(runtime_event_sink),
-        Some(factory) => {
-            let tokenizer = runtime
-                .tokenizer_capability()
-                .context("loaded Skippy runtime cannot provide its tokenizer capability")?;
-            factory
-                .create(tokenizer, Some(runtime_event_sink))
-                .context("product-neutral serving hook factory rejected the loaded model")?
-        }
-    };
-    Ok(hooks.with_kv_lifecycle_observer(kv_observer))
-}
-
-fn lifecycle_only_serving_hooks(
-    runtime_event_sink: Arc<dyn skippy_server::frontend::GenerationLifecycleIngress>,
-) -> ModelServingHooks {
-    ModelServingHooks::default().with_generation_lifecycle(
-        skippy_server::frontend::GenerationLifecycleConfig::from_ingress(runtime_event_sink),
-    )
-}
-
-struct NativeSkippyStartupAudit {
-    ready: bool,
-}
-
-impl NativeSkippyStartupAudit {
-    fn new() -> Self {
-        record_native_skippy_operational_event(NativeSkippyOperationalEvent::RuntimeStartupStarted);
-        Self { ready: false }
-    }
-
-    fn mark_ready(&mut self) {
-        self.ready = true;
-        record_native_skippy_operational_event(NativeSkippyOperationalEvent::RuntimeReady);
-    }
-}
-
-impl Drop for NativeSkippyStartupAudit {
-    fn drop(&mut self) {
-        if !self.ready {
-            record_native_skippy_operational_event(
-                NativeSkippyOperationalEvent::RuntimeStartupFailed,
-            );
-        }
-    }
-}
-
 impl SkippyModelHandle {
-    pub(crate) fn output_activation_boundary(
-        &self,
-    ) -> Option<skippy_runtime::ActivationBoundaryDesc> {
-        self.runtime.output_activation_boundary()
-    }
-
-    fn resolved_mtp_source(
-        native_mtp_enabled: bool,
-        native_mtp_draft_model_path: Option<&Path>,
-    ) -> MtpSource {
-        if !native_mtp_enabled {
-            MtpSource::Disabled
-        } else if native_mtp_draft_model_path.is_some() {
-            MtpSource::External
-        } else {
-            MtpSource::Integrated
-        }
-    }
-
-    pub(crate) fn load(options: SkippyModelLoadOptions) -> Result<Self> {
-        Self::load_with_hooks(options, None, survey::SurveyTelemetry::disabled())
-    }
-
-    pub(crate) fn load_with_hooks(
-        options: SkippyModelLoadOptions,
-        hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
-        guardrail_telemetry: survey::SurveyTelemetry,
-    ) -> Result<Self> {
-        let mut lifecycle_audit = NativeSkippyStartupAudit::new();
-        let stage_config = single_stage_config(&options)?;
-        let mtp_source = Self::resolved_mtp_source(
-            options.native_mtp_enabled,
-            options
-                .embedded_openai
-                .as_ref()
-                .and_then(|args| args.native_mtp_draft_model_path.as_deref()),
-        );
-        let session_observer: Arc<dyn skippy_server::runtime_state::SessionLifecycleObserver> =
-            Arc::new(runtime_events::SkippySessionRuntimeEventObserver::new());
-        let runtime = SkippyRuntimeHandle::load(EmbeddedRuntimeOptions {
-            config: stage_config.clone(),
-            topology: None,
-            n_threads: options.n_threads,
-            n_threads_batch: options.n_threads_batch,
-            mtp_source,
-            metrics_otlp_grpc: options.telemetry.metrics_otlp_grpc.clone(),
-            telemetry_queue_capacity: options.telemetry.queue_capacity,
-            telemetry_level: options.telemetry.level,
-            operation_id: None,
-            session_lifecycle_observer: Some(session_observer),
-        })
-        .with_context(|| {
-            format!(
-                "load skippy runtime for model {} from {}",
-                options.model_id,
-                options.model_path.display()
-            )
-        })?;
-        let telemetry = Telemetry::new(
-            options.telemetry.metrics_otlp_grpc.clone(),
-            options.telemetry.queue_capacity,
-            stage_config.clone(),
-            options.telemetry.level,
-        );
-        let serving_hooks =
-            resolve_serving_hooks(options.serving_hooks_factory.as_ref(), &runtime)?;
-        let embedded_args = options.embedded_openai.clone().unwrap_or_else(|| {
-            resolver::ResolvedEmbeddedOpenAiArgs::direct_single_stage_defaults(
-                options.model_id.clone(),
-                options.default_max_tokens,
-                options.generation_concurrency,
-                options.native_mtp_enabled,
-            )
-        });
-        let openai_guardrails = options.openai_guardrails.clone();
-        let binding = embedded_openai_backend(embedded_openai_args_from(
-            embedded_args,
-            stage_config.clone(),
-            runtime.runtime(),
-            None,
-            telemetry,
-            hook_policy,
-            &serving_hooks,
-        )?)
-        .context("construct skippy OpenAI backend")?;
-        let backend = wrap_host_guardrail_backend(
-            binding.backend,
-            openai_guardrails.as_ref(),
-            Some(usize::try_from(stage_config.ctx_size).unwrap_or(usize::MAX)),
-            guardrail_telemetry.guardrail_sink(),
-        );
-        lifecycle_audit.mark_ready();
-        Ok(Self {
-            runtime,
-            backend,
-            openai_guardrails,
-            config: stage_config,
-            started_at_unix_nanos: now_unix_nanos(),
-            status: Arc::new(Mutex::new(HandleState {
-                state: SkippyModelState::Ready,
-                stopped_at_unix_nanos: None,
-                last_error: None,
-            })),
-            _prediction_return_listener: None,
-        })
-    }
-
-    pub(crate) fn load_with_hooks_and_open_events(
-        options: SkippyModelLoadOptions,
-        hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
-        model_open_event_reporter: Option<NativeModelOpenEventReporter>,
-        guardrail_telemetry: survey::SurveyTelemetry,
-    ) -> Result<Self> {
-        let mut lifecycle_audit = NativeSkippyStartupAudit::new();
-        let stage_config = single_stage_config(&options)?;
-        let mtp_source = Self::resolved_mtp_source(
-            options.native_mtp_enabled,
-            options
-                .embedded_openai
-                .as_ref()
-                .and_then(|args| args.native_mtp_draft_model_path.as_deref()),
-        );
-        // Task 9: minted at this host call site (not inside skippy-server
-        // or skippy-runtime) so the identity is host-assigned at the point
-        // the host initiates a model-open-with-events call. Full
-        // correlation with this call's `LoadOperation` child reservation
-        // (in `runtime/model_lifecycle/events.rs`) would require threading
-        // that `ChildOperationId` through `LocalRuntimeModelStartSpec` and
-        // `SkippyModelLoadOptions` -- not done this round, see
-        // decisions.md for why.
-        let operation_id = skippy_runtime::next_operation_id();
-        let session_observer: Arc<dyn skippy_server::runtime_state::SessionLifecycleObserver> =
-            Arc::new(runtime_events::SkippySessionRuntimeEventObserver::new());
-        let runtime = SkippyRuntimeHandle::load_with_open_events(
-            EmbeddedRuntimeOptions {
-                config: stage_config.clone(),
-                topology: None,
-                n_threads: options.n_threads,
-                n_threads_batch: options.n_threads_batch,
-                mtp_source,
-                metrics_otlp_grpc: options.telemetry.metrics_otlp_grpc.clone(),
-                telemetry_queue_capacity: options.telemetry.queue_capacity,
-                telemetry_level: options.telemetry.level,
-                operation_id: Some(operation_id),
-                session_lifecycle_observer: Some(session_observer),
-            },
-            model_open_event_reporter,
-        )
-        .with_context(|| {
-            format!(
-                "load skippy runtime for model {} from {}",
-                options.model_id,
-                options.model_path.display()
-            )
-        })?;
-        let telemetry = Telemetry::new(
-            options.telemetry.metrics_otlp_grpc.clone(),
-            options.telemetry.queue_capacity,
-            stage_config.clone(),
-            options.telemetry.level,
-        );
-        let serving_hooks =
-            resolve_serving_hooks(options.serving_hooks_factory.as_ref(), &runtime)?;
-        let embedded_args = options.embedded_openai.clone().unwrap_or_else(|| {
-            resolver::ResolvedEmbeddedOpenAiArgs::direct_single_stage_defaults(
-                options.model_id.clone(),
-                options.default_max_tokens,
-                options.generation_concurrency,
-                options.native_mtp_enabled,
-            )
-        });
-        let openai_guardrails = options.openai_guardrails.clone();
-        let binding = embedded_openai_backend(embedded_openai_args_from(
-            embedded_args,
-            stage_config.clone(),
-            runtime.runtime(),
-            None,
-            telemetry,
-            hook_policy,
-            &serving_hooks,
-        )?)
-        .context("construct skippy OpenAI backend")?;
-        let backend = wrap_host_guardrail_backend(
-            binding.backend,
-            openai_guardrails.as_ref(),
-            Some(usize::try_from(stage_config.ctx_size).unwrap_or(usize::MAX)),
-            guardrail_telemetry.guardrail_sink(),
-        );
-        lifecycle_audit.mark_ready();
-        Ok(Self {
-            runtime,
-            backend,
-            openai_guardrails,
-            config: stage_config,
-            started_at_unix_nanos: now_unix_nanos(),
-            status: Arc::new(Mutex::new(HandleState {
-                state: SkippyModelState::Ready,
-                stopped_at_unix_nanos: None,
-                last_error: None,
-            })),
-            _prediction_return_listener: None,
-        })
-    }
-
-    pub(crate) fn load_stage0_config(
-        config: StageConfig,
-        activation_width: i32,
-        generation_concurrency: usize,
-        default_max_tokens: u32,
-        hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
-        telemetry: SkippyTelemetryOptions,
-        guardrails: SkippyOpenAiGuardrailOptions,
-    ) -> Result<Self> {
-        let model_id = config.model_id.clone();
-        let native_mtp_enabled = config.native_mtp_enabled;
-        Self::load_stage0_config_with_openai_args(
-            config,
-            resolver::ResolvedEmbeddedOpenAiArgs::embedded_stage_defaults(
-                Some(model_id),
-                default_max_tokens,
-                generation_concurrency,
-                activation_width,
-                native_mtp_enabled,
-            ),
-            hook_policy,
-            telemetry,
-            guardrails,
-        )
-    }
-
-    pub(crate) fn load_stage0_config_with_openai_args(
-        config: StageConfig,
-        embedded_args: resolver::ResolvedEmbeddedOpenAiArgs,
-        hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
-        telemetry: SkippyTelemetryOptions,
-        guardrails: SkippyOpenAiGuardrailOptions,
-    ) -> Result<Self> {
-        let mtp_source = Self::resolved_mtp_source(
-            config.native_mtp_enabled,
-            embedded_args.native_mtp_draft_model_path.as_deref(),
-        );
-        let session_observer: Arc<dyn skippy_server::runtime_state::SessionLifecycleObserver> =
-            Arc::new(runtime_events::SkippySessionRuntimeEventObserver::new());
-        Self::load_stage0_runtime_options_with_openai_args(
-            EmbeddedRuntimeOptions {
-                config,
-                topology: None,
-                n_threads: None,
-                n_threads_batch: None,
-                mtp_source,
-                metrics_otlp_grpc: telemetry.metrics_otlp_grpc.clone(),
-                telemetry_queue_capacity: telemetry.queue_capacity,
-                telemetry_level: telemetry.level,
-                operation_id: None,
-                session_lifecycle_observer: Some(session_observer),
-            },
-            embedded_args,
-            hook_policy,
-            telemetry,
-            guardrails,
-            None,
-        )
-    }
-
-    pub(crate) fn load_stage0_runtime_options_with_openai_args(
-        mut runtime_options: EmbeddedRuntimeOptions,
-        mut embedded_args: resolver::ResolvedEmbeddedOpenAiArgs,
-        hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
-        telemetry: SkippyTelemetryOptions,
-        guardrails: SkippyOpenAiGuardrailOptions,
-        serving_hooks_factory: Option<SharedModelServingHooksFactory>,
-    ) -> Result<Self> {
-        let mut lifecycle_audit = NativeSkippyStartupAudit::new();
-        configure_materialized_stage_cache();
-        let config = &mut runtime_options.config;
-        anyhow::ensure!(
-            config.load_mode != LoadMode::LayerPackage,
-            "layer-package schema v1 is offline-only; split serving requires package-v2 graph admission"
-        );
-        if config.kv_cache.is_none() {
-            let family_policy = family_policy_for_stage_config(config);
-            config.kv_cache = family_policy.stage_kv_cache_config_for_stage(config);
-        }
-        let runtime_config = config.clone();
-        let runtime = SkippyRuntimeHandle::load(runtime_options).with_context(|| {
-            format!(
-                "load skippy stage 0 runtime for model {} from {:?}",
-                runtime_config.model_id, runtime_config.model_path
-            )
-        })?;
-        embedded_args.activation_width = if runtime_config.downstream.is_some() {
-            runtime
-                .output_activation_boundary()
-                .context("stage 0 graph did not expose its output activation boundary")?
-                .raw_f32_width("output")?
-        } else {
-            0
-        };
-        let telemetry = Telemetry::new(
-            telemetry.metrics_otlp_grpc.clone(),
-            telemetry.queue_capacity,
-            runtime_config.clone(),
-            telemetry.level,
-        );
-        let serving_hooks = resolve_serving_hooks(serving_hooks_factory.as_ref(), &runtime)?;
-        let prediction_return_listener = if runtime_config.downstream.is_some() {
-            Some(PredictionReturnListener::start(
-                runtime_config.bind_addr.parse()?,
-            )?)
-        } else {
-            None
-        };
-        let prediction_returns = prediction_return_listener
-            .as_ref()
-            .map(PredictionReturnListener::hub);
-        let binding = embedded_openai_backend(embedded_openai_args_from(
-            embedded_args,
-            runtime_config.clone(),
-            runtime.runtime(),
-            prediction_returns,
-            telemetry,
-            hook_policy,
-            &serving_hooks,
-        )?)
-        .context("construct skippy stage 0 OpenAI backend")?;
-        let backend = wrap_host_guardrail_backend(
-            binding.backend,
-            guardrails.config.as_ref(),
-            Some(usize::try_from(runtime_config.ctx_size).unwrap_or(usize::MAX)),
-            guardrails.telemetry.guardrail_sink(),
-        );
-        lifecycle_audit.mark_ready();
-        Ok(Self {
-            runtime,
-            backend,
-            openai_guardrails: guardrails.config,
-            config: runtime_config,
-            started_at_unix_nanos: now_unix_nanos(),
-            status: Arc::new(Mutex::new(HandleState {
-                state: SkippyModelState::Ready,
-                stopped_at_unix_nanos: None,
-                last_error: None,
-            })),
-            _prediction_return_listener: prediction_return_listener,
-        })
-    }
-
-    pub(crate) fn load_stage0_runtime_options_with_openai_args_and_open_events(
-        mut runtime_options: EmbeddedRuntimeOptions,
-        mut embedded_args: resolver::ResolvedEmbeddedOpenAiArgs,
-        hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
-        telemetry: SkippyTelemetryOptions,
-        model_open_event_reporter: Option<NativeModelOpenEventReporter>,
-        guardrails: SkippyOpenAiGuardrailOptions,
-        serving_hooks_factory: Option<SharedModelServingHooksFactory>,
-    ) -> Result<Self> {
-        let mut lifecycle_audit = NativeSkippyStartupAudit::new();
-        configure_materialized_stage_cache();
-        let config = &mut runtime_options.config;
-        anyhow::ensure!(
-            config.load_mode != LoadMode::LayerPackage,
-            "layer-package schema v1 is offline-only; split serving requires package-v2 graph admission"
-        );
-        if config.kv_cache.is_none() {
-            let family_policy = family_policy_for_stage_config(config);
-            config.kv_cache = family_policy.stage_kv_cache_config_for_stage(config);
-        }
-        let runtime_config = config.clone();
-        let runtime =
-            SkippyRuntimeHandle::load_with_open_events(runtime_options, model_open_event_reporter)
-                .with_context(|| {
-                    format!(
-                        "load skippy stage 0 runtime for model {} from {:?}",
-                        runtime_config.model_id, runtime_config.model_path
-                    )
-                })?;
-        embedded_args.activation_width = if runtime_config.downstream.is_some() {
-            runtime
-                .output_activation_boundary()
-                .context("stage 0 graph did not expose its output activation boundary")?
-                .raw_f32_width("output")?
-        } else {
-            0
-        };
-        let telemetry = Telemetry::new(
-            telemetry.metrics_otlp_grpc.clone(),
-            telemetry.queue_capacity,
-            runtime_config.clone(),
-            telemetry.level,
-        );
-        let serving_hooks = resolve_serving_hooks(serving_hooks_factory.as_ref(), &runtime)?;
-        let prediction_return_listener = if runtime_config.downstream.is_some() {
-            Some(PredictionReturnListener::start(
-                runtime_config.bind_addr.parse()?,
-            )?)
-        } else {
-            None
-        };
-        let prediction_returns = prediction_return_listener
-            .as_ref()
-            .map(PredictionReturnListener::hub);
-        let binding = embedded_openai_backend(embedded_openai_args_from(
-            embedded_args,
-            runtime_config.clone(),
-            runtime.runtime(),
-            prediction_returns,
-            telemetry,
-            hook_policy,
-            &serving_hooks,
-        )?)
-        .context("construct skippy stage 0 OpenAI backend")?;
-        let backend = wrap_host_guardrail_backend(
-            binding.backend,
-            guardrails.config.as_ref(),
-            Some(usize::try_from(runtime_config.ctx_size).unwrap_or(usize::MAX)),
-            guardrails.telemetry.guardrail_sink(),
-        );
-        lifecycle_audit.mark_ready();
-        Ok(Self {
-            runtime,
-            backend,
-            openai_guardrails: guardrails.config,
-            config: runtime_config,
-            started_at_unix_nanos: now_unix_nanos(),
-            status: Arc::new(Mutex::new(HandleState {
-                state: SkippyModelState::Ready,
-                stopped_at_unix_nanos: None,
-                last_error: None,
-            })),
-            _prediction_return_listener: prediction_return_listener,
-        })
-    }
-
     pub(crate) fn backend(&self) -> Arc<dyn OpenAiBackend> {
         self.backend.clone()
     }
@@ -1177,33 +580,18 @@ impl Drop for SkippyModelHandle {
     }
 }
 
+#[cfg(test)]
 fn wrap_host_guardrail_backend(
     backend: Arc<dyn OpenAiBackend>,
     openai_guardrails: Option<&OpenAiGuardrailsConfig>,
     context_limit_tokens: Option<usize>,
-    telemetry: Option<Arc<dyn GuardrailTelemetrySink>>,
+    telemetry: Option<Arc<dyn openai_frontend::GuardrailTelemetrySink>>,
 ) -> Arc<dyn OpenAiBackend> {
-    let Some(openai_guardrails) = openai_guardrails else {
-        return backend;
-    };
-    if !matches!(openai_guardrails.target, OpenAiGuardrailsTarget::Skippy) {
-        return backend;
-    }
-
-    let backend = match openai_guardrails.compaction {
-        Some(mut compaction) => {
-            if compaction.context_limit_tokens.is_none() {
-                compaction.context_limit_tokens = context_limit_tokens;
-            }
-            Arc::new(CompactingOpenAiBackend::new(backend, compaction))
+    match openai_guardrails {
+        Some(config) => {
+            config.wrap_backend_with_telemetry(backend, context_limit_tokens, telemetry)
         }
         None => backend,
-    };
-    let guarded =
-        GuardedOpenAiBackend::with_policy_handle(backend, openai_guardrails.policy.clone());
-    match telemetry {
-        Some(telemetry) => Arc::new(guarded.with_telemetry(telemetry)),
-        None => Arc::new(guarded),
     }
 }
 
@@ -1433,7 +821,10 @@ mod tests {
     fn lifecycle_only_hooks_leave_exact_receipts_unset() {
         let ingress: Arc<dyn skippy_server::frontend::GenerationLifecycleIngress> =
             Arc::new(runtime_events::SkippyGenerationRuntimeEventAdapter::new());
-        let hooks = lifecycle_only_serving_hooks(ingress);
+        let hooks = skippy_server::serving_hooks::ModelServingHooks::default()
+            .with_generation_lifecycle(
+                skippy_server::frontend::GenerationLifecycleConfig::from_ingress(ingress),
+            );
 
         assert!(hooks.generation_lifecycle().is_some());
         assert!(hooks.generation_receipt().is_none());

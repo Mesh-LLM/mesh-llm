@@ -1,7 +1,7 @@
 use crate::cli::{NativeRuntimeArgs, RuntimeCommand};
 use anyhow::{Context, Result, bail};
+use skippy_api::native_runtime::NativeRuntimeOptions;
 use skippy_runtime_install::{NativeRuntimeCache, NativeRuntimeManifest};
-use skippy_server::native_runtime::NativeRuntimeOptions;
 
 pub fn resolve_options(args: NativeRuntimeArgs) -> Result<NativeRuntimeOptions> {
     let mut options: NativeRuntimeOptions = args.into();

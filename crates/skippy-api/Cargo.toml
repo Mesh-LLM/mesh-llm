@@ -9,9 +9,13 @@ readme = "README.md"
 
 [features]
 default = []
-dynamic-native-runtime = ["skippy-runtime/dynamic-native-runtime"]
+dynamic-native-runtime = ["skippy-runtime/dynamic-native-runtime", "skippy-server/dynamic-native-runtime"]
 
 [dependencies]
+skippy-server = { path = "../skippy-server", version = "0.76.1" }
+skippy-native-runtime = { path = "../skippy-native-runtime", version = "0.76.1" }
+skippy-runtime-install = { path = "../skippy-runtime-install", version = "0.76.1" }
+openai-frontend = { path = "../openai-frontend", version = "0.76.1" }
 anyhow.workspace = true
 hex = "0.4"
 sha2.workspace = true
