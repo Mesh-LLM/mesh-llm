@@ -1,4 +1,4 @@
-From 813d2724fa20384059eace3274348566618c33c9 Mon Sep 17 00:00:00 2001
+From f36b3654ff1989c863bfc9f7916fab3446f84b34 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:50 +1000
 Subject: [PATCH 5/6] build: wire staged runtime and backend support
@@ -7,10 +7,10 @@ Subject: [PATCH 5/6] build: wire staged runtime and backend support
  CMakeLists.txt                          |  17 +
  ggml/cmake/common.cmake                 |   9 +-
  ggml/src/ggml-cuda/ggml-cuda.cu         |   4 +-
- ggml/src/ggml-metal/ggml-metal-device.m | 200 ++++++++++-
+ ggml/src/ggml-metal/ggml-metal-device.m | 195 ++++++++++-
  ggml/src/ggml-metal/ggml-metal-impl.h   |  34 +-
  src/CMakeLists.txt                      | 423 +++++++++++++++++++++++-
- 6 files changed, 661 insertions(+), 26 deletions(-)
+ 6 files changed, 656 insertions(+), 26 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index 4052fa3d6..99d46fb76 100644
@@ -90,7 +90,7 @@ index 790553888..b39f0ab2e 100644
  
      {
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
-index 5654c5004..9e2d8e560 100644
+index 5654c5004..bd928b494 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
 @@ -11,6 +11,7 @@
@@ -195,7 +195,7 @@ index 5654c5004..9e2d8e560 100644
 +}
 +
 +// Persist the archive so later processes can reuse the compiled pipelines.
-+// Called under lib->lock after each newly compiled pipeline is added.
++// Called once when the library is released, after pipeline compilation ends.
 +static void ggml_metal_pso_cache_flush(ggml_metal_library_t lib) {
 +    if (@available(macOS 11.0, iOS 14.0, *)) {
 +        if (!lib->pso_archive) {
@@ -316,11 +316,12 @@ index 5654c5004..9e2d8e560 100644
      return res;
  #endif
  }
-@@ -675,6 +802,13 @@ void ggml_metal_library_free(ggml_metal_library_t lib) {
+@@ -675,6 +802,14 @@ void ggml_metal_library_free(ggml_metal_library_t lib) {
  
      ggml_metal_pipelines_free(lib->pipelines);
  
 +    if (lib->pso_archive) {
++        ggml_metal_pso_cache_flush(lib);
 +        [lib->pso_archive release];
 +    }
 +    if (lib->pso_archive_url) {
@@ -330,7 +331,7 @@ index 5654c5004..9e2d8e560 100644
      [lib->lock release];
  
      free(lib);
-@@ -768,7 +902,32 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
+@@ -768,7 +903,32 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
          }
  
          id<MTLDevice> device = ggml_metal_device_get_obj(lib->dev);
@@ -364,20 +365,7 @@ index 5654c5004..9e2d8e560 100644
  
          [mtl_function release];
  
-@@ -802,6 +961,12 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
-         res.pipeline->obj = obj;
- 
-         ggml_metal_pipelines_add(lib->pipelines, name, res.pipeline);
-+
-+        if (@available(macOS 11.0, iOS 14.0, *)) {
-+            if (lib->pso_archive) {
-+                ggml_metal_pso_cache_flush(lib);
-+            }
-+        }
-     }
- 
-     [lib->lock unlock];
-@@ -1253,7 +1418,7 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
+@@ -1253,7 +1413,7 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
  #endif
  
                  dev->props.use_shared_buffers = dev->props.has_unified_memory;
@@ -386,7 +374,7 @@ index 5654c5004..9e2d8e560 100644
                  // In case of eGPU, shared memory may be preferable.
                  dev->props.use_shared_buffers |= [dev->mtl_device location] == MTLDeviceLocationExternal;
  #endif
-@@ -1320,12 +1485,14 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
+@@ -1320,12 +1480,14 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
                          }
                      }
  
@@ -401,7 +389,7 @@ index 5654c5004..9e2d8e560 100644
  
                      for (int i = MTLGPUFamilyMetal3_GGML + 5; i >= MTLGPUFamilyMetal3_GGML; --i) {
                          if ([dev->mtl_device supportsFamily:i]) {
-@@ -1736,6 +1903,29 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
+@@ -1736,6 +1898,29 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
              if (op->src[1]->type != op->src[2]->type) {
                  return false;
              }
@@ -936,4 +924,3 @@ index bc922b6a7..0cc6123c7 100644
 +endif()
 -- 
 2.54.0 (Apple Git-157)
-

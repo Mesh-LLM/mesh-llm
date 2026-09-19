@@ -209,6 +209,20 @@ mod tests {
             "f16-rne-v1"
         );
     }
+
+    #[test]
+    fn stage_config_rejects_obsolete_tensor_filter_flag() {
+        let mut value = serde_json::to_value(super::StageConfig::default()).unwrap();
+        value["filter_tensors_on_load"] = serde_json::Value::Bool(true);
+
+        let error = serde_json::from_value::<super::StageConfig>(value).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("filter_tensors_on_load is obsolete")
+        );
+    }
     use super::{
         STAGE_PROTOCOL_GENERATION, STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V10,
         StageFrameError, validate_stage_admission_descriptor,

@@ -36,8 +36,8 @@ pub(crate) enum Command {
         source_file: Option<String>,
         #[arg(long)]
         resume_existing_artifacts: bool,
-        /// Maximum payload bytes per artifact; oversized layers are split into
-        /// byte-balanced part artifacts. Defaults to 8 GiB.
+        /// Maximum payload bytes per artifact; oversized common and layer
+        /// groups are split into deterministic part artifacts. Defaults to 8 GiB.
         #[arg(long)]
         max_artifact_bytes: Option<u64>,
     },
