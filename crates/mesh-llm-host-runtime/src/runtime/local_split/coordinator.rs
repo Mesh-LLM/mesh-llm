@@ -843,7 +843,7 @@ fn split_candidate_stage0_is_local(
 /// Longest a planned performance cutover waits for in-flight requests.
 const PERFORMANCE_DRAIN_TIMEOUT: Duration = Duration::from_secs(180);
 /// Smallest predicted bottleneck improvement worth a cutover.
-const PERFORMANCE_MIN_PREDICTED_GAIN: f64 = 0.05;
+const PERFORMANCE_MIN_PREDICTED_GAIN: f64 = 0.10;
 
 impl SplitTopologyCoordinator {
     /// Sample stage busy time and let the performance controller decide.

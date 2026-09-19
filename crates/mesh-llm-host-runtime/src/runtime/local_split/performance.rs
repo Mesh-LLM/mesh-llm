@@ -57,8 +57,10 @@ impl Default for PerformanceControllerConfig {
         Self {
             min_window: Duration::from_secs(60),
             min_decode_tokens_per_second: 1.0,
-            imbalance_threshold: 0.15,
-            required_windows: 2,
+            // Sustained runs vary about +/-15% window to window; act only on
+            // imbalance and gains well above that.
+            imbalance_threshold: 0.20,
+            required_windows: 3,
             cooldown: Duration::from_secs(300),
             rollback_margin: 0.10,
         }
@@ -344,6 +346,8 @@ mod tests {
         PerformanceControllerConfig {
             min_window: Duration::from_secs(60),
             cooldown: Duration::from_secs(300),
+            imbalance_threshold: 0.15,
+            required_windows: 2,
             ..PerformanceControllerConfig::default()
         }
     }
