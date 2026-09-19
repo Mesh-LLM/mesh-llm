@@ -374,8 +374,9 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 - Agentic replay is a daily trusted-main benchmark, without a repository
   opt-in flag. The persistent micstudio runner must execute natively as arm64
-  before checkout. Its shared model cache stays offline; online trajectory
-  downloads use runner-local storage. Only a complete, gated performance
+  before checkout. Its shared model cache is writable and permits pinned model
+  and trajectory downloads. Repair uses Goose with the llama canary's provider
+  and model defaults. Only a complete, gated performance
   regression may start repair; infrastructure failures retain evidence without
   invoking the agent. Repair failures or an unchanged tree publish no PR.
 

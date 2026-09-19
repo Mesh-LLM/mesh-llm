@@ -30,11 +30,9 @@ jobs:
       EXPECTED_REPLAY_RUNNER_NAME: micstudio
       MATRIX_FILE: ci/agentic-replay-nightly/matrix.json
       DATASET_REPO: ${{ vars.MESH_AGENTIC_REPLAY_DATASET || 'meshllm/agentic-replay-nightly' }}
-      # Same model-access config as the llama canary: micstudio ships a
-      # pre-warmed read-only HF cache exported as HF_CACHE; the workflow
-      # normalizes it into HF_HOME/HF_HUB_CACHE for offline reads only.
-      # Online trajectory downloads use a separate runner-local cache.
-      HF_HUB_OFFLINE: "1"
+      # Reuse micstudio's shared HF cache and permit pinned cache-miss downloads.
+      # Override the runner service's historical offline default explicitly.
+      HF_HUB_OFFLINE: "0"
       HF_HUB_DISABLE_IMPLICIT_TOKEN: "1"
       GATE_ENABLED: ${{ vars.MESH_AGENTIC_REPLAY_GATE_ENABLED || '0' }}
     outputs:
@@ -73,9 +71,15 @@ jobs:
               missing=1
             fi
           done
-          if [[ "${HF_CACHE:-}" != "/Users/lab/models/huggingface" || ! -d "${HF_CACHE:-}/hub" ]]; then
-            echo "HF_CACHE must name the pre-warmed /Users/lab/models/huggingface cache with a hub directory" >&2
+          if [[ "${HF_CACHE:-}" != "/Users/lab/models/huggingface" ]]; then
+            echo "HF_CACHE must name /Users/lab/models/huggingface" >&2
             missing=1
+          else
+            mkdir -p "$HF_CACHE/hub"
+            if [[ ! -w "$HF_CACHE" || ! -w "$HF_CACHE/hub" ]]; then
+              echo "the shared Hugging Face cache must be writable for pinned downloads" >&2
+              missing=1
+            fi
           fi
           if [[ "$missing" == "1" ]]; then exit 1; fi
           export HF_HOME="$HF_CACHE"
@@ -181,8 +185,7 @@ jobs:
           PY
           IFS=$'\t' read -r dataset_repo dataset_revision dataset_file dataset_sha < "$RUNNER_TEMP/agentic-replay-dataset.tsv"
           dataset_path=$(HF_HUB_OFFLINE=0 hf download "$dataset_repo" "$dataset_file" \
-            --repo-type dataset --revision "$dataset_revision" \
-            --cache-dir "$RUNNER_TEMP/agentic-replay-dataset-cache")
+            --repo-type dataset --revision "$dataset_revision")
           python3 - "$dataset_path" "$dataset_sha" <<'PY'
           import hashlib, pathlib, sys
           path, expected = pathlib.Path(sys.argv[1]), sys.argv[2]
@@ -342,11 +345,13 @@ jobs:
             "$OUTPUT_DIR/card.md" "card.md" --repo-type dataset \
             --commit-message "card refresh $RUN_DATE"
 
-      - name: Prepare repair PR artifact on regression (opencode loop)
+      - name: Prepare repair PR artifact on regression (Goose)
         id: repair
         if: ${{ !cancelled() && steps.history.outcome == 'failure' && steps.history.outputs.repair_required == 'true' }}
         timeout-minutes: 720
         env:
+          REPLAY_AGENT_PROVIDER: ${{ vars.LLAMA_CANARY_GOOSE_PROVIDER || 'zai_coding_plan' }}
+          REPLAY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_GOOSE_MODEL || 'glm-5.3-flash' }}
           # Same location the summarize step downloaded the baseline to.
           HISTORY_LOCAL: ${{ runner.temp }}/agentic-replay-history
         run: |

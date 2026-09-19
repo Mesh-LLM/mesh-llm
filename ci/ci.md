@@ -32,15 +32,19 @@ and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 Agentic replay runs daily at `14:23 UTC` without an enable variable; it can
 queue while the llama canary occupies micstudio. Runner labels retain the
 registered `X64` label, but a pre-checkout guard requires native arm64 execution
-and working Git/xcrun. The toolchain uses the same canonical read-only HF model
-cache as the canary; online trajectory downloads use a runner-local cache.
+and working Git/xcrun. The toolchain uses the canonical shared HF cache at
+`/Users/lab/models/huggingface`, checks that it is writable, and explicitly sets
+`HF_HUB_OFFLINE=0` so missing pinned models and trajectories can be downloaded.
 Public history reads receive no HF token. The workflow grants repair eligibility
 only after successful replay and history retrieval, complete pass/concurrency
 coverage, and a gated performance regression against matching hardware history.
 Infrastructure errors retain evidence without starting code repair. Cancellation
 also preserves available artifacts. The replay and repair steps have separate
 660/720-minute budgets within a 1,440-minute job. The agent invocation is bounded
-to one hour, logged, and uses OpenCode's `--agent build` interface; failed or
+to one hour and logged. Goose uses the canary's provider/model settings
+(`LLAMA_CANARY_GOOSE_PROVIDER` / `LLAMA_CANARY_GOOSE_MODEL`, default
+`zai_coding_plan` / `glm-5.3-flash`), an authentication preflight, the developer
+builtin, and a run/attempt-specific named session. Failed or
 unchanged agent output and edits to verification/control files publish no PR.
 Only a passing repaired benchmark emits a publication artifact. The hosted
 publisher uses Conventional Commit titles. Independent verification in a fresh

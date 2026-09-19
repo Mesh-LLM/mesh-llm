@@ -54,15 +54,21 @@ class NightlyWorkflowTests(unittest.TestCase):
                 result = subprocess.run(["bash", "-c", preflight["run"]], env=env, capture_output=True, text=True)
                 self.assertEqual(result.returncode, expected, result.stderr)
 
-    def test_online_download_does_not_write_shared_model_cache(self):
+    def test_shared_cache_allows_pinned_model_and_trajectory_downloads(self):
         inputs = self.step("Verify pinned replay inputs")["run"]
-        self.assertIn('--cache-dir "$RUNNER_TEMP/agentic-replay-dataset-cache"', inputs)
-        self.assertEqual(self.job["env"]["HF_HUB_OFFLINE"], "1")
+        self.assertNotIn("--cache-dir", inputs)
+        self.assertIn('hf download "$repo" "$file" --revision "$revision"', inputs)
+        self.assertIn('--repo-type dataset --revision "$dataset_revision"', inputs)
+        self.assertEqual(self.job["env"]["HF_HUB_OFFLINE"], "0")
+        toolchain = self.step("Verify runner toolchain")["run"]
+        self.assertIn('export HF_HOME="$HF_CACHE"', toolchain)
+        self.assertIn('export HF_HUB_CACHE="$HF_CACHE/hub"', toolchain)
+        self.assertIn('! -w "$HF_CACHE/hub"', toolchain)
         self.assertEqual(self.job["env"]["HF_HUB_DISABLE_IMPLICIT_TOKEN"], "1")
         self.assertNotIn("env", self.step("Download cohort-matched history"))
 
     def test_repair_requires_explicit_regression_and_preserves_evidence(self):
-        repair = self.step("Prepare repair PR artifact on regression (opencode loop)")
+        repair = self.step("Prepare repair PR artifact on regression (Goose)")
         self.assertIn("steps.history.outcome == 'failure'", repair["if"])
         self.assertIn("steps.history.outputs.repair_required == 'true'", repair["if"])
         self.assertIn("!cancelled()", repair["if"])
@@ -73,6 +79,8 @@ class NightlyWorkflowTests(unittest.TestCase):
         self.assertIn("cancelled()", artifact["if"])
         self.assertNotIn("!cancelled()", artifact["if"])
         self.assertIn("repair.log", repair["run"])
+        self.assertIn("vars.LLAMA_CANARY_GOOSE_PROVIDER", repair["env"]["REPLAY_AGENT_PROVIDER"])
+        self.assertIn("vars.LLAMA_CANARY_GOOSE_MODEL", repair["env"]["REPLAY_AGENT_MODEL"])
         replay = self.step("Replay each pinned model")
         self.assertGreater(self.job["timeout-minutes"], replay["timeout-minutes"] + repair["timeout-minutes"])
 
