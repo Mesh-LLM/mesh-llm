@@ -1,28 +1,28 @@
-From 30f18a31d49a624c72fe3c1d6004d341de7aa143 Mon Sep 17 00:00:00 2001
+From 8c515f73be2b7ec28d3bc9137b4f81c97dec5951 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:59 +1000
-Subject: [PATCH 6/6] test: cover graph-derived stage contracts
+Subject: [PATCH] test: cover graph-derived stage contracts
 
 ---
- src/skippy/tests/graph_build_inputs.cpp       |  619 +++++++++
+ src/skippy/tests/graph_build_inputs.cpp       |  619 ++++++++
  .../tests/hardware_application_probe.cpp      |   64 +
- src/skippy/tests/noalloc_graph_planning.cpp   | 1088 ++++++++++++++++
- .../tests/renamed_multishard_planning.cpp     | 1152 +++++++++++++++++
- src/skippy/tests/runtime_events.cpp           |  489 +++++++
+ src/skippy/tests/noalloc_graph_planning.cpp   | 1088 ++++++++++++++
+ .../tests/renamed_multishard_planning.cpp     | 1331 +++++++++++++++++
+ src/skippy/tests/runtime_events.cpp           |  489 ++++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
- src/skippy/tests/stage_slice_plan.cpp         | 1146 ++++++++++++++++
+ src/skippy/tests/stage_slice_plan.cpp         | 1146 ++++++++++++++
  tests/CMakeLists.txt                          |   20 +
  tests/test-chat-auto-parser.cpp               |   47 +
  tests/test-chat.cpp                           |  170 ++-
  tests/test-deepseek4-mtp.h                    |   88 ++
- tests/test-llama-archs.cpp                    |  164 ++-
+ tests/test-llama-archs.cpp                    |  164 +-
  tests/test-skippy-kv-cells-contiguous.cpp     |   20 +
  tests/test-skippy-kv-page-export.cpp          |  283 ++++
- tests/test-skippy-model-loader-accounting.cpp |  326 +++++
- .../test-skippy-recurrent-state-roundtrip.cpp |  159 +++
+ tests/test-skippy-model-loader-accounting.cpp |  326 ++++
+ .../test-skippy-recurrent-state-roundtrip.cpp |  159 ++
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 18 files changed, 5868 insertions(+), 16 deletions(-)
+ 18 files changed, 6047 insertions(+), 16 deletions(-)
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/hardware_application_probe.cpp
  create mode 100644 src/skippy/tests/noalloc_graph_planning.cpp
@@ -1829,10 +1829,10 @@ index 000000000..11559ce5c
 +}
 diff --git a/src/skippy/tests/renamed_multishard_planning.cpp b/src/skippy/tests/renamed_multishard_planning.cpp
 new file mode 100644
-index 000000000..9b837716b
+index 000000000..2953cdeb6
 --- /dev/null
 +++ b/src/skippy/tests/renamed_multishard_planning.cpp
-@@ -0,0 +1,1152 @@
+@@ -0,0 +1,1331 @@
 +#include "ggml-backend.h"
 +#include "ggml.h"
 +#include "gguf.h"
@@ -2123,6 +2123,81 @@ index 000000000..9b837716b
 +    error = native_error == nullptr ? "metadata carrier write failed" : native_error->message;
 +    skippy_error_free(native_error);
 +    return false;
++}
++
++bool write_selected_payload(
++        const package_inventory & inventory,
++        const std::vector<std::string> & resident_names,
++        const std::string & output_path,
++        std::string & error) {
++    std::vector<gguf_context_owner> metadata;
++    std::vector<ggml_context_owner> tensors;
++    for (const auto & path : inventory.ordered_paths) {
++        ggml_context * tensors_raw = nullptr;
++        gguf_init_params init = { true, &tensors_raw };
++        metadata.emplace_back(gguf_init_from_file(path.c_str(), init), gguf_free);
++        tensors.emplace_back(tensors_raw, ggml_free);
++        if (!metadata.back() || !tensors.back()) {
++            error = "cannot inspect selected payload source";
++            return false;
++        }
++    }
++
++    std::set<std::string> requested(resident_names.begin(), resident_names.end());
++    std::vector<const skippy_package_tensor_binding_input *> selected;
++    gguf_context_owner output_metadata(gguf_init_empty(), gguf_free);
++    for (const auto & source : inventory.tensors) {
++        if (requested.erase(source.native_name) == 0) {
++            continue;
++        }
++        if (source.split_no >= tensors.size()) {
++            error = "selected payload source part is out of range";
++            return false;
++        }
++        ggml_tensor * tensor = ggml_get_tensor(tensors[source.split_no].get(), source.native_name.c_str());
++        if (tensor == nullptr) {
++            error = "selected payload source tensor is absent";
++            return false;
++        }
++        gguf_add_tensor(output_metadata.get(), tensor);
++        selected.push_back(&source);
++    }
++    if (!requested.empty() || selected.empty()) {
++        error = "selected payload resident closure is incomplete";
++        return false;
++    }
++
++    std::ofstream output(output_path, std::ios::binary | std::ios::trunc);
++    if (!output) {
++        error = "cannot create selected payload";
++        return false;
++    }
++    std::vector<uint8_t> metadata_bytes(gguf_get_meta_size(output_metadata.get()));
++    gguf_get_meta_data(output_metadata.get(), metadata_bytes.data());
++    output.write(
++            reinterpret_cast<const char *>(metadata_bytes.data()),
++            static_cast<std::streamsize>(metadata_bytes.size()));
++    std::vector<uint8_t> payload;
++    for (const auto * source : selected) {
++        std::ifstream input(inventory.ordered_paths[source->split_no], std::ios::binary);
++        if (!input || !read_exact(input, source->data_offset, source->stored_length, payload)) {
++            error = "cannot read selected payload tensor";
++            return false;
++        }
++        output.write(
++                reinterpret_cast<const char *>(payload.data()),
++                static_cast<std::streamsize>(payload.size()));
++        const size_t padding = GGML_PAD(source->stored_length, GGUF_DEFAULT_ALIGNMENT) - source->stored_length;
++        if (!write_padding(output, padding)) {
++            error = "cannot write selected payload padding";
++            return false;
++        }
++    }
++    if (!output.good()) {
++        error = "cannot finish selected payload";
++        return false;
++    }
++    return true;
 +}
 +
 +bool inspect_metadata_carrier(
@@ -2544,10 +2619,19 @@ index 000000000..9b837716b
 +    return std::string(data, length);
 +}
 +
++struct runtime_stage_plan {
++    int32_t layer_start = 0;
++    int32_t layer_end = 0;
++    std::vector<std::string> resident_names;
++    std::vector<std::string> import_identities;
++    std::vector<std::string> import_bindings;
++};
++
 +bool check_public_stage_plan_abi(
 +        const package_inventory & inventory,
 +        const std::vector<std::string> & paths,
-+        int32_t layer_count) {
++        int32_t layer_count,
++        runtime_stage_plan * runtime_stage = nullptr) {
 +    std::vector<const char *> shard_paths;
 +    for (const auto & path : paths) {
 +        shard_paths.push_back(path.c_str());
@@ -2627,9 +2711,11 @@ index 000000000..9b837716b
 +        return false;
 +    }
 +    skippy_stage_plan_desc_v1 descriptor{};
++    skippy_stage_plan_desc_v1 final_descriptor{};
 +    skippy_stage_plan_profile_desc_v1 profile{};
 +    skippy_stage_plan_value_desc_v1 resident{};
 +    if (skippy_stage_plan_describe_v1(source, &descriptor, &error) != SKIPPY_STATUS_OK ||
++            skippy_stage_plan_describe_v1(final, &final_descriptor, &error) != SKIPPY_STATUS_OK ||
 +            descriptor.abi_version != 1 || descriptor.profile_count != profiles.size() ||
 +            descriptor.resident_tensor_count == 0 || plan_string(source, descriptor.package_id) != package_id ||
 +            plan_string(source, descriptor.plan_id).compare(0, 15, "skippy-plan:v1:") != 0 ||
@@ -2669,6 +2755,39 @@ index 000000000..9b837716b
 +        }
 +        stable_frontier.emplace_back(
 +                plan_string(source, exported.identity), plan_string(source, exported.binding));
++    }
++    if (runtime_stage != nullptr) {
++        *runtime_stage = {};
++        runtime_stage->layer_start = 1;
++        runtime_stage->layer_end = layer_count;
++        for (size_t index = 0; index < final_descriptor.resident_tensor_count; ++index) {
++            skippy_stage_plan_value_desc_v1 resident_value{};
++            if (skippy_stage_plan_resident_tensor_at_v1(final, index, &resident_value, &error) !=
++                    SKIPPY_STATUS_OK) {
++                skippy_error_free(error);
++                return false;
++            }
++            const std::string tensor_id = plan_string(final, resident_value.identity);
++            const auto found = std::find_if(
++                    inventory.tensors.begin(), inventory.tensors.end(), [&](const auto & candidate) {
++                        return candidate.tensor_id == tensor_id;
++                    });
++            if (found == inventory.tensors.end()) {
++                std::fprintf(stderr, "public stage resident identity is absent from the package inventory\n");
++                return false;
++            }
++            runtime_stage->resident_names.push_back(found->native_name);
++        }
++        for (size_t index = 0; index < final_profile.activation_import_count; ++index) {
++            skippy_stage_plan_value_desc_v1 imported{};
++            if (skippy_stage_plan_value_at_v1(final, 0, SKIPPY_STAGE_PLAN_VALUE_ACTIVATION_IMPORT,
++                        index, &imported, &error) != SKIPPY_STATUS_OK) {
++                skippy_error_free(error);
++                return false;
++            }
++            runtime_stage->import_identities.push_back(plan_string(final, imported.identity));
++            runtime_stage->import_bindings.push_back(plan_string(final, imported.binding));
++        }
 +    }
 +    for (size_t index = 0; index < profiles.size(); ++index) {
 +        if (skippy_stage_plan_profile_at_v1(source, index, &profile, &error) != SKIPPY_STATUS_OK ||
@@ -2907,9 +3026,14 @@ index 000000000..9b837716b
 +    }
 +    error.clear();
 +    package_inventory carrier;
++    runtime_stage_plan terminal_stage;
 +    if (!write_metadata_carrier(inventory.ordered_paths, carrier_path, error) ||
 +            !inspect_metadata_carrier(carrier_path, inventory, inventory.ordered_paths.size(), carrier, error) ||
-+            !check_public_stage_plan_abi(carrier, carrier.ordered_paths, llama_model_n_layer(model.get()))) {
++            !check_public_stage_plan_abi(
++                carrier,
++                carrier.ordered_paths,
++                llama_model_n_layer(model.get()),
++                &terminal_stage)) {
 +        std::fprintf(stderr, "metadata carrier stage-plan ABI proof failed: %s\n", error.c_str());
 +        return 10;
 +    }
@@ -2962,6 +3086,61 @@ index 000000000..9b837716b
 +        std::fprintf(stderr, "metadata carrier runtime free failed: %s\n", runtime_error->message);
 +        skippy_error_free(runtime_error);
 +        return 12;
++    }
++
++    // The resident-only payload regression targets transformer stage loading.
++    // Recurrent frontier execution has separate no-allocation coverage and can
++    // require architecture-specific state lanes beyond this loader contract.
++    if (expect_recurrent) {
++        return 0;
++    }
++
++    const std::string selected_payload_path = std::string(output_directory) + "/terminal-stage.gguf";
++    if (!write_selected_payload(inventory, terminal_stage.resident_names, selected_payload_path, error)) {
++        std::fprintf(stderr, "terminal stage payload write failed: %s\n", error.c_str());
++        return 13;
++    }
++    std::vector<const char *> terminal_resident_ptrs;
++    for (const auto & name : terminal_stage.resident_names) {
++        terminal_resident_ptrs.push_back(name.c_str());
++    }
++    std::vector<const char *> terminal_import_identity_ptrs;
++    for (const auto & identity : terminal_stage.import_identities) {
++        terminal_import_identity_ptrs.push_back(identity.c_str());
++    }
++    std::vector<const char *> terminal_import_binding_ptrs;
++    for (const auto & binding : terminal_stage.import_bindings) {
++        terminal_import_binding_ptrs.push_back(binding.c_str());
++    }
++    const std::vector<const char *> terminal_part_ptrs = {
++        carrier_path.c_str(),
++        selected_payload_path.c_str(),
++    };
++    runtime_config.stage_index = 1;
++    runtime_config.layer_start = terminal_stage.layer_start;
++    runtime_config.layer_end = terminal_stage.layer_end;
++    runtime_config.resident_tensor_names = terminal_resident_ptrs.data();
++    runtime_config.resident_tensor_name_count = terminal_resident_ptrs.size();
++    runtime_config.activation_import_identities = terminal_import_identity_ptrs.data();
++    runtime_config.activation_import_identity_count = terminal_import_identity_ptrs.size();
++    runtime_config.activation_import_bindings = terminal_import_binding_ptrs.data();
++    carrier_model = nullptr;
++    runtime_error = nullptr;
++    const skippy_status terminal_status = skippy_model_open_from_parts(
++            terminal_part_ptrs.data(), terminal_part_ptrs.size(), &runtime_config, &carrier_model, &runtime_error);
++    if (terminal_status != SKIPPY_STATUS_OK || carrier_model == nullptr) {
++        std::fprintf(
++                stderr,
++                "terminal stage runtime load failed: %s\n",
++                runtime_error == nullptr ? "" : runtime_error->message);
++        skippy_error_free(runtime_error);
++        return 14;
++    }
++    skippy_model_free(carrier_model, &runtime_error);
++    if (runtime_error != nullptr) {
++        std::fprintf(stderr, "terminal stage runtime free failed: %s\n", runtime_error->message);
++        skippy_error_free(runtime_error);
++        return 15;
 +    }
 +    std::printf(
 +            "renamed multishard metadata planning: tensors=%zu dependencies=%zu payload_reads=%zu payload_bytes=%zu recurrent=%d\n",
