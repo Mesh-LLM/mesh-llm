@@ -17,6 +17,7 @@ use std::time::Duration;
 pub struct StageComputeMeter {
     busy_nanos: AtomicU64,
     operations: AtomicU64,
+    decode_tokens: AtomicU64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -25,6 +26,10 @@ pub struct StageComputeSnapshot {
     pub busy_nanos: u64,
     /// Runtime operations counted into `busy_nanos`.
     pub operations: u64,
+    /// Single-token decode steps run on this stage. Every generated token
+    /// takes one decode step on every stage, so on stage 0 this is the
+    /// split's decode throughput counter.
+    pub decode_tokens: u64,
 }
 
 impl StageComputeMeter {
@@ -34,10 +39,15 @@ impl StageComputeMeter {
         self.operations.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_decode_tokens(&self, tokens: u64) {
+        self.decode_tokens.fetch_add(tokens, Ordering::Relaxed);
+    }
+
     pub fn snapshot(&self) -> StageComputeSnapshot {
         StageComputeSnapshot {
             busy_nanos: self.busy_nanos.load(Ordering::Relaxed),
             operations: self.operations.load(Ordering::Relaxed),
+            decode_tokens: self.decode_tokens.load(Ordering::Relaxed),
         }
     }
 }
@@ -51,12 +61,14 @@ mod tests {
         let meter = StageComputeMeter::default();
         meter.record(Duration::from_millis(3));
         meter.record(Duration::from_millis(4));
+        meter.record_decode_tokens(5);
 
         assert_eq!(
             meter.snapshot(),
             StageComputeSnapshot {
                 busy_nanos: 7_000_000,
                 operations: 2,
+                decode_tokens: 5,
             }
         );
     }

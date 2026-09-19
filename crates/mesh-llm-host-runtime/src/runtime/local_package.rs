@@ -533,7 +533,7 @@ pub(super) fn decode_bytes_per_second_from_gbps(gbps: Option<&[f64]>) -> Option<
         .iter()
         .filter(|value| value.is_finite() && **value > 0.0)
         .sum();
-    (total > 0.0).then(|| (total * 1_000_000_000.0) as u64)
+    (total > 0.0).then_some((total * 1_000_000_000.0) as u64)
 }
 
 /// Parse the comma-joined per-GPU bandwidth a peer gossips.

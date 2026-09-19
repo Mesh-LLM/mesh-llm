@@ -953,6 +953,7 @@ impl SkippyModelHandle {
                 runtime_config.model_id, runtime_config.model_path
             )
         })?;
+        register_stage0_compute_meter(&runtime_config.run_id, &runtime);
         embedded_args.activation_width = if runtime_config.downstream.is_some() {
             runtime
                 .output_activation_boundary()
@@ -1039,6 +1040,7 @@ impl SkippyModelHandle {
                         runtime_config.model_id, runtime_config.model_path
                     )
                 })?;
+        register_stage0_compute_meter(&runtime_config.run_id, &runtime);
         embedded_args.activation_width = if runtime_config.downstream.is_some() {
             runtime
                 .output_activation_boundary()
@@ -1474,6 +1476,39 @@ fn now_unix_nanos() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos().min(i64::MAX as u128) as i64)
         .unwrap_or(0)
+}
+
+/// Stage-0 compute meters of running split generations, keyed by run id, so
+/// the split coordinator can read the local stage's busy time alongside the
+/// peer stages' reported status.
+static STAGE0_COMPUTE_METERS: std::sync::LazyLock<
+    std::sync::Mutex<
+        std::collections::HashMap<
+            String,
+            std::sync::Arc<skippy_server::compute_meter::StageComputeMeter>,
+        >,
+    >,
+> = std::sync::LazyLock::new(Default::default);
+
+fn register_stage0_compute_meter(run_id: &str, runtime: &SkippyRuntimeHandle) {
+    let Ok(state) = runtime.runtime().lock().map(|state| state.compute_meter()) else {
+        return;
+    };
+    if let Ok(mut meters) = STAGE0_COMPUTE_METERS.lock() {
+        meters.insert(run_id.to_string(), state);
+    }
+}
+
+pub(crate) fn stage0_compute_meter(
+    run_id: &str,
+) -> Option<std::sync::Arc<skippy_server::compute_meter::StageComputeMeter>> {
+    STAGE0_COMPUTE_METERS.lock().ok()?.get(run_id).cloned()
+}
+
+pub(crate) fn forget_stage0_compute_meter(run_id: &str) {
+    if let Ok(mut meters) = STAGE0_COMPUTE_METERS.lock() {
+        meters.remove(run_id);
+    }
 }
 
 #[cfg(test)]
