@@ -477,6 +477,7 @@ async fn make_test_node_with_requirements(
             let (tx, _rx) = tokio::sync::watch::channel(0u64);
             Arc::new(tx)
         },
+        payments: Arc::new(tokio::sync::OnceCell::new()),
         activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
             &mesh_llm_config::RuntimeActivityConfig::default(),
         ),

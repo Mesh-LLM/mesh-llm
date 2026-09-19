@@ -61,6 +61,15 @@ message PeerAnnouncement {
   optional InferenceAdmissionState inference_admission_state = 49;
   // Positive, short-lived cache evidence. Digests are salted and contain no tokens.
   optional CacheAffinityAdvertisement cache_affinity = 50;
+  repeated LightningOffer lightning_offers = 51;
+}
+
+// Presence means payment is required for this exact model, protocol v1.
+message LightningOffer {
+  string model = 1;
+  uint64 input_msat_per_million = 2;
+  uint64 output_msat_per_million = 3;
+  uint64 minimum_invoice_msat = 4;
 }
 
 enum InferenceAdmissionState {

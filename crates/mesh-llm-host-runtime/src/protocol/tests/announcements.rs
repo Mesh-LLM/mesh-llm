@@ -58,6 +58,7 @@ fn owner_fields_roundtrip_through_proto_announcement() {
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
         advertised_model_throughput: vec![],
+        lightning_offers: Default::default(),
         cache_affinity: None,
         latency_ms: None,
         latency_source: None,
@@ -193,6 +194,7 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
                 throughput_samples: 99,
             },
         ],
+        lightning_offers: Default::default(),
         cache_affinity: Some(
             mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement {
                 salt,
@@ -395,6 +397,7 @@ fn inference_admission_state_roundtrips_through_proto_announcement() {
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
         advertised_model_throughput: vec![],
+        lightning_offers: Default::default(),
         cache_affinity: None,
         latency_ms: None,
         latency_source: None,
@@ -650,6 +653,7 @@ fn test_proto_round_trip_with_bandwidth_and_tflops() {
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
         advertised_model_throughput: vec![],
+        lightning_offers: Default::default(),
         cache_affinity: None,
         latency_ms: None,
         latency_source: None,

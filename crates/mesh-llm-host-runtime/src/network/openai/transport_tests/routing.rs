@@ -112,6 +112,7 @@ fn test_peer_serving_model(peer_id: iroh::EndpointId, model: &str) -> mesh::Peer
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
         advertised_model_throughput: vec![],
+        lightning_offers: Default::default(),
         cache_affinity: None,
         display_rtt: None,
         selected_path: None,

@@ -132,6 +132,8 @@ pub struct PeerAnnouncement {
     /// Positive, short-lived cache evidence. Digests are salted and contain no tokens.
     #[prost(message, optional, tag = "50")]
     pub cache_affinity: ::core::option::Option<CacheAffinityAdvertisement>,
+    #[prost(message, repeated, tag = "51")]
+    pub lightning_offers: ::prost::alloc::vec::Vec<LightningOffer>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AdvertisedModelThroughput {
@@ -1502,4 +1504,16 @@ impl InferenceAdmissionState {
             _ => None,
         }
     }
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LightningOffer {
+    #[prost(string, tag = "1")]
+    pub model: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub input_msat_per_million: u64,
+    #[prost(uint64, tag = "3")]
+    pub output_msat_per_million: u64,
+    #[prost(uint64, tag = "4")]
+    pub minimum_invoice_msat: u64,
 }
