@@ -240,9 +240,10 @@ deadline handling.
 - `serve-binary` forwards eligible non-final prefill activation frames on a
   bounded background writer by default. Use `--no-async-prefill-forward` only
   when comparing against the synchronous prefill path.
-- `runtime-slice` loads a full model and filters tensors at runtime.
-- `artifact-slice` loads GGUF slice artifacts written by `skippy-model-package`
-  with `filter_tensors_on_load=true`.
+- `runtime-slice` loads the exact graph-admitted resident tensor closure from a
+  package-v2 catalog and executes the matching normalized graph slice.
+- `artifact-slice` opens an explicitly supplied GGUF artifact without applying
+  any implicit layer, embedding, or output ownership rules.
 - `layer-package` loads a local `model-package.json` directory, validates the
   manifest and selected part files, then opens those GGUF parts directly through
   the stage ABI.

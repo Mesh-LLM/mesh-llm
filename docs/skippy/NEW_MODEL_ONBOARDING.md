@@ -75,8 +75,7 @@ After a package exists, validate the package and then run the certification
 surface that matches the evidence you need:
 
 ```bash
-skippy-model-package validate-package /path/to/model.gguf /path/to/package
-skippy-model-package preflight /path/to/package --stages 2 --verify-sha256
+skippy-model-package verify-package-v2 /path/to/package --source /path/to/model.gguf
 mesh-llm models certify hf://namespace/repo@revision --package-only --report-out cert.json
 mesh-llm models certify hf://namespace/repo@revision --api-base http://127.0.0.1:9337 --json
 ```
@@ -105,7 +104,7 @@ Current certification status:
 | Gate | Command A+ candidate status |
 | --- | --- |
 | Pinned mesh-llm llama.cpp inspect/load | Not run |
-| Package write and `validate-package` | Not run |
+| Package write and `verify-package-v2` | Not run |
 | `/v1/models` runtime smoke | Not run |
 | `/v1/chat/completions` runtime smoke | Not run |
 | `/v1/responses` runtime smoke | Not run |
@@ -117,7 +116,7 @@ Treat this as a candidate, not support. Do not add Command A+ to
 `FAMILY_STATUS.md`, `reviewed-family-capabilities.json`, or the catalog until:
 
 1. The pinned mesh-llm llama.cpp tree can inspect/load the selected GGUF.
-2. Package writing and `validate-package` pass for the selected quant.
+2. Package writing and `verify-package-v2` pass for the selected quant.
 3. The package-backed runtime smoke passes through `/v1/models`,
    `/v1/chat/completions`, and `/v1/responses`.
 4. Text split evidence passes for the selected topology.

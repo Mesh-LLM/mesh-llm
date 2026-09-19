@@ -494,7 +494,6 @@ def write_stage_config(
         "n_gpu_layers": -1,
         "cache_type_k": "f16",
         "cache_type_v": "f16",
-        "filter_tensors_on_load": False,
         "native_mtp_enabled": False,
         "load_mode": "runtime-slice",
         "bind_addr": f"127.0.0.1:{port}",

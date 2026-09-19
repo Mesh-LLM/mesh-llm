@@ -25,15 +25,8 @@ pub fn validate_config(config: &StageConfig, topology: Option<&StageTopology>) -
     }
     match config.load_mode {
         LoadMode::RuntimeSlice => {}
-        LoadMode::ArtifactSlice => {
-            if !config.filter_tensors_on_load {
-                bail!("artifact-slice load mode requires filter_tensors_on_load=true")
-            }
-        }
+        LoadMode::ArtifactSlice => {}
         LoadMode::LayerPackage => {
-            if !config.filter_tensors_on_load {
-                bail!("layer-package load mode requires filter_tensors_on_load=true")
-            }
             let Some(model_path) = config.model_path.as_ref() else {
                 bail!("layer-package load mode requires model_path to point at a package directory")
             };
@@ -92,7 +85,6 @@ pub fn example_config() -> Value {
         "n_gpu_layers": 0,
         "cache_type_k": "f16",
         "cache_type_v": "f16",
-        "filter_tensors_on_load": false,
         "load_mode": "runtime-slice",
         "bind_addr": "127.0.0.1:19000",
         "upstream": null,

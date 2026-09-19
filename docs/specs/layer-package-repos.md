@@ -867,7 +867,7 @@ skippy-model-package write-package ./model.gguf \
 Before publishing, run package validation against the source model:
 
 ```bash
-skippy-model-package validate-package /path/to/source.gguf model-package/
+skippy-model-package verify-package-v2 model-package/ --source /path/to/source.gguf
 ```
 
 A published repository SHOULD include a short `README.md` with:

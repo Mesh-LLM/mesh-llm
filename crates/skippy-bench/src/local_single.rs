@@ -113,7 +113,6 @@ pub fn local_single(args: LocalSingleArgs) -> Result<()> {
         "n_gpu_layers": args.n_gpu_layers,
         "cache_type_k": args.cache_type_k,
         "cache_type_v": args.cache_type_v,
-        "filter_tensors_on_load": false,
         "load_mode": "runtime-slice",
         "bind_addr": args.stage_bind_addr,
         "upstream": null,

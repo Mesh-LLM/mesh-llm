@@ -78,7 +78,6 @@ def write_config(
         "cache_type_k": "f16",
         "cache_type_v": "f16",
         "flash_attn_type": "disabled",
-        "filter_tensors_on_load": True,
         "selected_device": {"backend_device": "CPU"},
         "native_mtp_enabled": True,
         "load_mode": "layer-package",

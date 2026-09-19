@@ -35,8 +35,8 @@ impl MaterializedCacheIdentity {
                 stage_id: request.stage_id.clone(),
                 layer_start: request.layer_start,
                 layer_end: request.layer_end,
-                include_embeddings: request.include_embeddings,
-                include_output: request.include_output,
+                source_stage: request.source_stage,
+                terminal_stage: request.terminal_stage,
             },
             manifest_sha256: manifest_sha256.to_string(),
             selected_parts: selected_parts
@@ -54,8 +54,8 @@ struct MaterializedRequestIdentity {
     stage_id: String,
     layer_start: u32,
     layer_end: u32,
-    include_embeddings: bool,
-    include_output: bool,
+    source_stage: bool,
+    terminal_stage: bool,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]

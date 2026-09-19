@@ -902,8 +902,8 @@ impl DriverTokenizer {
                 stage_id: "driver-tokenizer".to_string(),
                 layer_start: first.layer_start,
                 layer_end: first.layer_end,
-                include_embeddings: true,
-                include_output: plan.stages.len() == 1,
+                source_stage: true,
+                terminal_stage: plan.stages.len() == 1,
             })
             .context("materialize local layer-package tokenizer model")?;
             materialized_model_path = Some(package.output_path.clone());
@@ -948,10 +948,7 @@ impl DriverTokenizer {
                 image_max_tokens: None,
                 batch_max_tokens: None,
                 glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
-                include_embeddings: true,
-                include_output: plan.stages.len() == 1,
                 mtp_source: MtpSource::Disabled,
-                filter_tensors_on_load: args.stage_load_mode != "runtime-slice",
                 resident_tensor_names: Vec::new(),
                 activation_import_identities: Vec::new(),
                 activation_import_bindings: Vec::new(),
