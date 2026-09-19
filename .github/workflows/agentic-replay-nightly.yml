@@ -19,19 +19,23 @@ jobs:
     if: >-
       github.repository == 'Mesh-LLM/mesh-llm' &&
       github.ref == 'refs/heads/main' &&
-      (github.event_name == 'workflow_dispatch' ||
-       (github.event_name == 'schedule' && vars.MESH_AGENTIC_REPLAY_NIGHTLY_ENABLED == '1'))
+      (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
     runs-on: [self-hosted, X64, macOS, family-certify, agentic-replay]
-    timeout-minutes: 720
+    # Separate replay and repair budgets, plus preflight and evidence headroom.
+    timeout-minutes: 1440
+    defaults:
+      run:
+        shell: bash
     env:
       EXPECTED_REPLAY_RUNNER_NAME: micstudio
       MATRIX_FILE: ci/agentic-replay-nightly/matrix.json
       DATASET_REPO: ${{ vars.MESH_AGENTIC_REPLAY_DATASET || 'meshllm/agentic-replay-nightly' }}
       # Same model-access config as the llama canary: micstudio ships a
       # pre-warmed read-only HF cache exported as HF_CACHE; the workflow
-      # normalizes it into HF_HOME/HF_HUB_CACHE so `hf download` is only a
-      # cache-miss backfill. Dataset writes go through the runner-local hf CLI.
+      # normalizes it into HF_HOME/HF_HUB_CACHE for offline reads only.
+      # Online trajectory downloads use a separate runner-local cache.
       HF_HUB_OFFLINE: "1"
+      HF_HUB_DISABLE_IMPLICIT_TOKEN: "1"
       GATE_ENABLED: ${{ vars.MESH_AGENTIC_REPLAY_GATE_ENABLED || '0' }}
     outputs:
       repair_prepared: ${{ steps.repair.outputs.prepared }}
@@ -44,6 +48,12 @@ jobs:
             echo "agentic replay nightly requires runner '$EXPECTED_REPLAY_RUNNER_NAME'; got '$RUNNER_NAME'" >&2
             exit 1
           fi
+          if [[ "$(uname -m)" != "arm64" ]]; then
+            echo "micstudio must run the ARM64 Actions runner and bundled Node natively; repair the runner installation before checkout" >&2
+            exit 1
+          fi
+          git --version
+          xcrun --find clang
 
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -51,17 +61,20 @@ jobs:
           persist-credentials: false
 
       - name: Verify runner toolchain
+        timeout-minutes: 5
         run: |
           set -euo pipefail
           missing=0
-          for cmd in cargo just jq python3 uv git-lfs hf opencode; do
+          export PATH="/Users/lab/.local/bin:$PATH"
+          echo "/Users/lab/.local/bin" >> "$GITHUB_PATH"
+          for cmd in cargo just sccache jq python3 uv cmake ninja git-lfs hf; do
             if ! command -v "$cmd" >/dev/null 2>&1; then
               echo "missing on micstudio image: $cmd" >&2
               missing=1
             fi
           done
-          if [[ -z "${HF_CACHE:-}" ]]; then
-            echo "HF_CACHE is not exported on this runner" >&2
+          if [[ "${HF_CACHE:-}" != "/Users/lab/models/huggingface" || ! -d "${HF_CACHE:-}/hub" ]]; then
+            echo "HF_CACHE must name the pre-warmed /Users/lab/models/huggingface cache with a hub directory" >&2
             missing=1
           fi
           if [[ "$missing" == "1" ]]; then exit 1; fi
@@ -93,6 +106,7 @@ jobs:
           PY
 
       - name: Verify pinned replay inputs
+        timeout-minutes: 30
         run: |
           set -euo pipefail
           # Validate pins before any download: format errors and drift from
@@ -167,7 +181,8 @@ jobs:
           PY
           IFS=$'\t' read -r dataset_repo dataset_revision dataset_file dataset_sha < "$RUNNER_TEMP/agentic-replay-dataset.tsv"
           dataset_path=$(HF_HUB_OFFLINE=0 hf download "$dataset_repo" "$dataset_file" \
-            --repo-type dataset --revision "$dataset_revision")
+            --repo-type dataset --revision "$dataset_revision" \
+            --cache-dir "$RUNNER_TEMP/agentic-replay-dataset-cache")
           python3 - "$dataset_path" "$dataset_sha" <<'PY'
           import hashlib, pathlib, sys
           path, expected = pathlib.Path(sys.argv[1]), sys.argv[2]
@@ -183,6 +198,8 @@ jobs:
           echo "DATASET_FILE=$dataset_path" >> "$GITHUB_ENV"
 
       - name: Replay each pinned model
+        id: benchmark
+        timeout-minutes: 660
         run: |
           set -euo pipefail
           # Replay shape comes from the matrix (like the repair re-run) so the
@@ -215,12 +232,12 @@ jobs:
               FAILED=1
             fi
           done
-          exit $FAILED # failures continue to the gate step via `if: !cancelled()`
+          exit $FAILED # failed measurements retain raw evidence and do not start repair
 
       - name: Download cohort-matched history
-        if: ${{ !cancelled() }}
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        id: baseline
+        if: ${{ !cancelled() && steps.benchmark.outcome == 'success' }}
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           # The dataset repo is public, so history downloads are anonymous and
@@ -239,14 +256,15 @@ jobs:
           # Only a genuinely missing dataset is a bootstrap run; auth,
           # permission, and network failures must fail loudly.
           if HF_HUB_OFFLINE=0 python3 - "$DATASET_REPO" <<'PY' > "$RUNNER_TEMP/repo-exists.out" 2>&1; then
-          import os, sys
+          import sys
           import huggingface_hub
           repo = sys.argv[1]
           try:
-              huggingface_hub.repo_info(repo, repo_type="dataset", token=os.environ.get("HF_TOKEN"))
+              huggingface_hub.repo_info(repo, repo_type="dataset", token=False)
           except Exception as exc:
-              message = str(exc)
-              if "404" in message or "Entry Not Found" in message or "Repository Not Found" in message:
+              # Authentication errors can also say "Repository Not Found".
+              # Only an actual HTTP 404 permits bootstrap.
+              if getattr(getattr(exc, "response", None), "status_code", None) == 404:
                   sys.exit(3)
               sys.exit(1)
           PY
@@ -268,7 +286,7 @@ jobs:
 
       - name: Normalize history and gate on regression
         id: history
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.benchmark.outcome == 'success' && steps.baseline.outcome == 'success' }}
         run: |
           set -euo pipefail
           BACKEND_SHA=$(python3 - "$OUTPUT_DIR" <<'PY'
@@ -293,6 +311,7 @@ jobs:
             --source-sha "$(git rev-parse HEAD)"
             --replay "$RUNNER_TEMP/agentic-replay-params.json"
             --output "$OUTPUT_DIR/summary/history.jsonl"
+            --github-output "$GITHUB_OUTPUT"
           )
           if [[ -n "$BACKEND_SHA" ]]; then
             args+=(--backend-binary-sha256 "$BACKEND_SHA")
@@ -325,13 +344,14 @@ jobs:
 
       - name: Prepare repair PR artifact on regression (opencode loop)
         id: repair
-        if: failure()
+        if: ${{ !cancelled() && steps.history.outcome == 'failure' && steps.history.outputs.repair_required == 'true' }}
+        timeout-minutes: 720
         env:
           # Same location the summarize step downloaded the baseline to.
           HISTORY_LOCAL: ${{ runner.temp }}/agentic-replay-history
         run: |
           set -euo pipefail
-          if scripts/agentic-replay-repair.sh "$RUNNER_TEMP/agentic-replay-artifacts"; then
+          if scripts/agentic-replay-repair.sh "$RUNNER_TEMP/agentic-replay-artifacts" 2>&1 | tee "$RUNNER_TEMP/agentic-replay-artifacts/repair.log"; then
             echo "prepared=true" >> "$GITHUB_OUTPUT"
           else
             echo "prepared=false" >> "$GITHUB_OUTPUT"
@@ -339,7 +359,7 @@ jobs:
           fi
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: ${{ !cancelled() }}
+        if: ${{ success() || failure() || cancelled() }}
         with:
           name: replay-artifacts
           path: ${{ runner.temp }}/agentic-replay-artifacts/
@@ -482,6 +502,10 @@ jobs:
           git config user.email "replay-bot@meshllm.invalid"
           git -c core.hooksPath=/dev/null am --no-verify --no-gpg-sign --empty=keep "$PATCH_FILE"
           test "$(git rev-parse HEAD^)" = "${{ github.sha }}"
+          if ! git diff --quiet HEAD^ HEAD -- .github .agents scripts evals ci; then
+            echo "repair publication changes protected verification or CI files" >&2
+            exit 1
+          fi
 
       - name: Push repair branch and open PR
         env:
@@ -494,11 +518,11 @@ jobs:
           RESOLUTION="${{ steps.validate.outputs.resolution }}"
           case "$RESOLUTION" in
             fix-verified)
-              TITLE="Agentic replay nightly regression — run ${RUN_ID}-${RUN_ATTEMPT} (fix verified)"
+              TITLE="fix: agentic replay nightly regression (run ${RUN_ID}-${RUN_ATTEMPT})"
               LABELS="agentic-replay,nightly"
               ;;
             needs-attention)
-              TITLE="Agentic replay nightly regression — run ${RUN_ID}-${RUN_ATTEMPT} — NEEDS ATTENTION"
+              TITLE="fix: agentic replay nightly regression needs attention (run ${RUN_ID}-${RUN_ATTEMPT})"
               LABELS="agentic-replay,nightly,needs-attention"
               ;;
             *)

@@ -372,6 +372,13 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Operational safety
 
+- Agentic replay is a daily trusted-main benchmark, without a repository
+  opt-in flag. The persistent micstudio runner must execute natively as arm64
+  before checkout. Its shared model cache stays offline; online trajectory
+  downloads use runner-local storage. Only a complete, gated performance
+  regression may start repair; infrastructure failures retain evidence without
+  invoking the agent. Repair failures or an unchanged tree publish no PR.
+
 - Changed-pin llama canary agents use focused reproductions while repairing
   source. They return control after those checks pass instead of running an
   additional full family battery. The trusted repair wrapper still runs every

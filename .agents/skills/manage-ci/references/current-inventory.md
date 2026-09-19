@@ -27,7 +27,25 @@ Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 | `pr_cleanup.yml` | PR close, dispatch | Positively matched cleanup only |
 | `pr_auto_assign.yml` | PR lifecycle | Metadata only |
 | `cache-warm-sccache.yml` (`Cache · Trusted sccache seed`) | successful Main Quality, dispatch | Sole bounded Linux compiler-seed publisher on GitHub-hosted infrastructure |
-| `agentic-replay-nightly.yml` (`Agentic Replay Nightly (micstudio)`) | daily schedule, trusted-main dispatch | Coding-agent serving benchmark on the pinned persistent macOS `micstudio` runner. Scheduled and manual execution is restricted to trusted `main`; exact model and trajectory revisions are SHA-256 verified, the trajectory pin is cross-checked against the canonical harness, replay shape comes from the checked-in matrix, history lookup fails closed, summaries are retained on regressions, and the persistent repair loop receives no publication credential. It emits a patch, PR body and validated run/attempt status artifact; a separate canonical-main, failed-run GitHub-hosted job validates and applies that data with hooks disabled, then uses `CANARY_REPAIR_TOKEN` to publish the deterministic run/attempt repair branch and PR. |
+| `agentic-replay-nightly.yml` (`Agentic Replay Nightly (micstudio)`) | daily schedule (no opt-in), trusted-main dispatch | Coding-agent serving benchmark on the pinned persistent macOS `micstudio` runner. Scheduled and manual execution is restricted to trusted `main`; exact model and trajectory revisions are SHA-256 verified, the trajectory pin is cross-checked against the canonical harness, replay shape comes from the checked-in matrix, history lookup fails closed, summaries are retained on regressions, and the persistent repair loop receives no publication credential. It emits a patch, PR body and validated run/attempt status artifact; a separate canonical-main, failed-run GitHub-hosted job validates and applies that data with hooks disabled, then uses `CANARY_REPAIR_TOKEN` to publish the deterministic run/attempt repair branch and PR. |
+
+
+Agentic replay runs daily at `14:23 UTC` without an enable variable; it can
+queue while the llama canary occupies micstudio. Runner labels retain the
+registered `X64` label, but a pre-checkout guard requires native arm64 execution
+and working Git/xcrun. The toolchain uses the same canonical read-only HF model
+cache as the canary; online trajectory downloads use a runner-local cache.
+Public history reads receive no HF token. The workflow grants repair eligibility
+only after successful replay and history retrieval, complete pass/concurrency
+coverage, and a gated performance regression against matching hardware history.
+Infrastructure errors retain evidence without starting code repair. Cancellation
+also preserves available artifacts. The replay and repair steps have separate
+660/720-minute budgets within a 1,440-minute job. The agent invocation is bounded
+to one hour, logged, and uses OpenCode's `--agent build` interface; failed or
+unchanged agent output and edits to verification/control files publish no PR.
+Only a passing repaired benchmark emits a publication artifact. The hosted
+publisher uses Conventional Commit titles. Independent verification in a fresh
+job, as used by the llama canary, remains a follow-up for this older repair path.
 
 Other scheduled, deployment, Docker, package, canary and cache-warming
 workflows are independent of required PR readiness.

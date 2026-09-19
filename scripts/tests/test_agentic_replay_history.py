@@ -258,8 +258,60 @@ class GateTests(unittest.TestCase):
             )
             rows = output.read_text().splitlines()
 
-        self.assertEqual(result, 0)
+        self.assertEqual(result, 1)
         self.assertEqual(len(rows), 1)
+
+    def test_changed_hardware_starts_a_new_baseline(self):
+        baseline = [make_row(f"2026-09-0{d}") for d in (1, 2, 3)]
+        candidate = make_row("2026-09-09", decode=1.0)
+        candidate["hardware_fingerprint"] = {"os_version": "new"}
+        self.assertEqual(history.compare(candidate, baseline), [])
+
+    def test_matrix_requires_all_passes_and_concurrency_levels(self):
+        replay = {"passes": 2, "concurrency": [1, 4]}
+        cells = [{"_pass": p, "concurrency": c} for p in (1, 2) for c in (1, 4)]
+        self.assertIsNone(history.coverage_problem(cells, replay))
+        self.assertIsNotNone(history.coverage_problem(cells[:-1], replay))
+        self.assertIsNotNone(history.coverage_problem(cells + cells[:1], replay))
+        self.assertIsNotNone(history.coverage_problem(cells + [{"_pass": 3, "concurrency": 4}], replay))
+
+    def test_only_complete_gated_regression_requests_repair(self):
+        for gate, complete, expected in ((False, True, False), (True, False, False), (True, True, True)):
+            with self.subTest(gate=gate, complete=complete), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                model = make_row("2026-09-09")["model"]
+                replay = dict(make_row("2026-09-09")["replay"], passes=1, concurrency=[4])
+                hardware = {"machine_model": "Mac15,14"}
+                for name, data in (("matrix", {"models": [model]}), ("replay", replay), ("hardware", hardware)):
+                    (root / f"{name}.json").write_text(json.dumps(data))
+                cells = root / "runs" / model["family"] / "data/pass-1/main"
+                cells.mkdir(parents=True)
+                (cells / "c-4.json").write_text(json.dumps({
+                    "concurrency": 4, "requests": 4,
+                    "successful_requests": 4 if complete else 3,
+                    "failed_requests": 0 if complete else 1,
+                    "decode_tokens_per_second": 1.0,
+                }))
+                baseline = root / "baseline"
+                baseline.mkdir()
+                prior = []
+                for day in (1, 2, 3):
+                    row = make_row(f"2026-09-0{day}")
+                    row["replay"] = dict(replay, concurrency=4)
+                    row["hardware_fingerprint"] = hardware
+                    prior.append(row)
+                (baseline / "runs.jsonl").write_text("\n".join(map(json.dumps, prior)))
+                outputs = root / "github-output"
+                args = [
+                    "--matrix", str(root / "matrix.json"), "--replay", str(root / "replay.json"),
+                    "--hardware", str(root / "hardware.json"), "--source-sha", "a" * 40,
+                    "--replay-dir", str(root / "runs"), "--label", "main",
+                    "--baseline", str(baseline), "--output", str(root / "history.jsonl"),
+                    "--github-output", str(outputs),
+                ]
+                result = history.main(args + (["--gate"] if gate else []))
+                self.assertEqual(result, 1 if gate or not complete else 0)
+                self.assertEqual(outputs.read_text().splitlines()[-1], f"repair_required={str(expected).lower()}")
 
     def test_baseline_with_other_model_sha_does_not_count_toward_bootstrap(self):
         other = make_row("2026-09-01")

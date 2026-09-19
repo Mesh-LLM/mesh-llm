@@ -7,7 +7,7 @@ set -euo pipefail
 
 # This script runs on the persistent runner. It never receives or publishes
 # credentials; the separate hosted publication job owns that boundary.
-unset CANARY_REPAIR_TOKEN GH_TOKEN GITHUB_TOKEN
+unset CANARY_REPAIR_TOKEN GH_TOKEN GITHUB_TOKEN HF_TOKEN
 
 OUTPUT_DIR="${1:?usage: agentic-replay-repair.sh <output-dir>}"
 RUN_ID="${GITHUB_RUN_ID:-local}"
@@ -24,9 +24,10 @@ cleanup() {
 trap cleanup EXIT
 
 run_untrusted() {
-  env -u CANARY_REPAIR_TOKEN -u GH_TOKEN -u GITHUB_TOKEN "$@"
+  env -u CANARY_REPAIR_TOKEN -u GH_TOKEN -u GITHUB_TOKEN -u HF_TOKEN "$@"
 }
 
+run_untrusted opencode --version
 git config user.name "mesh-replay-bot"
 git config user.email "replay-bot@meshllm.invalid"
 git checkout -b "agentic-replay-nightly/repair-${RUN_ID}-${RUN_ATTEMPT}"
@@ -45,23 +46,26 @@ done
 # 1. opencode analyzes the regression evidence and attempts a fix. It must not
 # see GitHub credentials. The same wrapper is used for every command that can
 # execute repair-modified repository code.
-run_untrusted opencode run --mode agent \
-  "The nightly agentic replay benchmark on micstudio regressed at immutable base $BASE_SHA. Evidence: $OUTPUT_DIR/summary/history.jsonl and per-model artifacts in $OUTPUT_DIR. Analyze the regression against that exact base (git log $BASE_SHA is available) and attempt a minimal fix. Do not touch ci/agentic-replay-nightly baselines or thresholds." || true
+run_untrusted python3 scripts/run-command-with-timeout.py \
+  --seconds 3600 --label agentic-replay-agent -- opencode run --agent build \
+  "The nightly agentic replay benchmark on micstudio regressed at immutable base $BASE_SHA. Evidence: $OUTPUT_DIR/summary/history.jsonl and per-model artifacts in $OUTPUT_DIR. Analyze the regression against that exact base (git log $BASE_SHA is available) and attempt a minimal source fix. Do not edit .github, .agents, scripts, evals, or ci: the trusted harness owns verification and benchmark policy. Do not commit, change branches, push, or open PRs. Leave source changes uncommitted and return control for the full replay verification."
 
+if [[ "$(git rev-parse HEAD)" != "$BASE_SHA" ]]; then
+  echo "repair agent changed HEAD; no candidate will be published" >&2
+  exit 1
+fi
 git add -A
-git reset --soft "$BASE_SHA"
+if ! git diff --cached --quiet "$BASE_SHA" -- .github .agents scripts evals ci; then
+  echo "repair agent changed protected verification or CI files; no candidate will be published" >&2
+  exit 1
+fi
 if git diff --cached --quiet; then
-  echo "opencode produced no changes — needs-attention" >&2
-  git -c core.hooksPath=/dev/null commit --no-gpg-sign --allow-empty -m "chore: agentic replay nightly regression needs attention (run ${RUN_ID}-${RUN_ATTEMPT})
-
-Automated repair produced no changes; PR opened for human triage with the
-run evidence attached."
+  echo "opencode produced no changes; no candidate will be published" >&2
+  exit 1
 else
   git -c core.hooksPath=/dev/null commit --no-gpg-sign -m "fix: agentic replay nightly regression (run ${RUN_ID}-${RUN_ATTEMPT})
 
-Attempted automated repair by opencode from nightly run evidence.
-
-Co-authored-by: opencode <opencode@meshllm.invalid>"
+Attempted automated repair by opencode from nightly run evidence."
 
   # 2. Re-run the benchmark on the repaired tree with the nightly benchmark
   # shape, then re-normalize and gate the repaired summaries.
@@ -129,6 +133,11 @@ PY
   fi
 fi
 
+if [[ "$RESOLVED" != "1" ]]; then
+  echo "repair did not pass the complete replay gate; no candidate will be published" >&2
+  exit 1
+fi
+
 # 3. Emit a publication artifact for the trusted hosted job. The persistent
 # runner cannot receive publication credentials or publish the branch or PR.
 if [[ ! -d "$OUTPUT_DIR" || -L "$OUTPUT_DIR" ]]; then
@@ -141,13 +150,8 @@ PATCH_FILE="$PUBLICATION_DIR/repair.patch"
 BODY_FILE="$PUBLICATION_DIR/pr-body.md"
 STATUS_FILE="$PUBLICATION_DIR/status.json"
 BASE_SHA=$(git rev-parse HEAD^)
-if [[ "$RESOLVED" == "1" ]]; then
-  RESOLUTION="fix-verified"
-  BODY=$'The nightly agentic replay regressed; opencode analyzed the evidence and this fix passes the re-run benchmark.\n\nResults (HF card format) are linked in the run report artifact and the dataset shard.'
-else
-  RESOLUTION="needs-attention"
-  BODY=$'The nightly agentic replay regressed and the automated repair did not clear it. Review the evidence: history.jsonl, per-model artifacts, and the HF dataset shard for this run.'
-fi
+RESOLUTION="fix-verified"
+BODY=$'The nightly agentic replay regressed; opencode analyzed the evidence and this fix passes the re-run benchmark.\n\nResults and repair logs are retained in the replay-artifacts workflow artifact.'
 
 # A format-patch artifact is data for the hosted publisher. It is never
 # sourced, executed, or used as a workflow/action definition in this job.

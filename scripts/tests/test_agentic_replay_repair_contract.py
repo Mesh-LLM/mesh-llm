@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -19,6 +23,49 @@ class AgenticReplayRepairContractTests(unittest.TestCase):
         self.workflow = WORKFLOW.read_text(encoding="utf-8")
         self.matrix = json.loads(MATRIX.read_text(encoding="utf-8"))
 
+    def test_failed_unchanged_or_policy_modifying_agent_cannot_publish(self) -> None:
+        for mode in ("failure", "unchanged", "protected"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                repo = root / "repo"
+                repo.mkdir()
+                (repo / "scripts").mkdir()
+                (repo / "ci").mkdir()
+                (repo / "ci/policy.json").write_text("{}\n")
+                shutil.copy(REPAIR, repo / "scripts/agentic-replay-repair.sh")
+                shutil.copy(ROOT / "scripts/run-command-with-timeout.py", repo / "scripts/run-command-with-timeout.py")
+                bin_dir = root / "bin"
+                bin_dir.mkdir()
+                stub = bin_dir / "opencode"
+                stub.write_text('''#!/bin/sh
+if [ "$1" = "--version" ]; then echo test-opencode; exit 0; fi
+test "$1 $2 $3" = "run --agent build" || exit 99
+test -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}${HF_TOKEN:-}${CANARY_REPAIR_TOKEN:-}" || exit 98
+case "$TEST_AGENT_MODE" in
+  failure) exit 42 ;;
+  protected) echo '{"weaken":true}' > ci/policy.json ;;
+esac
+''')
+                stub.chmod(0o755)
+                env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", TEST_AGENT_MODE=mode,
+                           GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", GITHUB_RUN_ID="123",
+                           GITHUB_RUN_ATTEMPT="1", GH_TOKEN="test", GITHUB_TOKEN="test",
+                           HF_TOKEN="test", CANARY_REPAIR_TOKEN="test")
+                def git(*args):
+                    return subprocess.run(["git", *args], cwd=repo, env=env, check=True, capture_output=True)
+                git("init", "-b", "main")
+                git("config", "user.name", "Test Fixture")
+                git("config", "user.email", "fixture@example.invalid")
+                git("add", ".")
+                git("-c", "commit.gpgsign=false", "commit", "-m", "test: fixture")
+                output = root / "artifacts"
+                output.mkdir()
+                result = subprocess.run(["bash", "scripts/agentic-replay-repair.sh", str(output)],
+                                        cwd=repo, env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 42 if mode == "failure" else 1, result.stderr)
+                self.assertFalse((output / "repair-publication").exists())
+                self.assertEqual(git("rev-list", "--count", "HEAD").stdout.strip(), b"1")
+
     def test_persistent_repair_only_emits_publication_data(self) -> None:
         self.assertIn("unset CANARY_REPAIR_TOKEN GH_TOKEN GITHUB_TOKEN", self.repair)
         self.assertIn("run_untrusted opencode", self.repair)
@@ -35,7 +82,11 @@ class AgenticReplayRepairContractTests(unittest.TestCase):
         self.assertNotIn("git push", self.repair)
         self.assertIn("git -c core.hooksPath=/dev/null commit", self.repair)
         self.assertIn('BASE_SHA=$(git rev-parse HEAD)', self.repair)
-        self.assertIn('git add -A\ngit reset --soft "$BASE_SHA"', self.repair)
+        self.assertIn('git diff --cached --quiet "$BASE_SHA" -- .github .agents scripts evals ci', self.repair)
+        self.assertNotIn('--mode agent', self.repair)
+        self.assertIn('opencode run --agent build', self.repair)
+        self.assertIn('--seconds 3600 --label agentic-replay-agent', self.repair)
+        self.assertNotIn('--allow-empty', self.repair)
         self.assertIn("git -c core.hooksPath=/dev/null commit --no-gpg-sign", self.repair)
         self.assertIn('RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT:-1}"', self.repair)
         self.assertIn('repair-${RUN_ID}-${RUN_ATTEMPT}', self.repair)
@@ -78,6 +129,7 @@ class AgenticReplayRepairContractTests(unittest.TestCase):
         self.assertIn('"run_attempt"', publication)
         self.assertIn('echo "run_attempt=$RUN_ATTEMPT"', publication)
         self.assertIn("git -c core.hooksPath=/dev/null am --no-verify --no-gpg-sign --empty=keep", publication)
+        self.assertIn("git diff --quiet HEAD^ HEAD -- .github .agents scripts evals ci", publication)
         self.assertNotIn('"repair_commit_sha"', publication)
         self.assertIn('repair-${RUN_ID}-${RUN_ATTEMPT}', publication)
         self.assertIn('run ${RUN_ID}-${RUN_ATTEMPT}', publication)
