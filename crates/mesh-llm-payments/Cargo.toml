@@ -1,0 +1,36 @@
+[package]
+name = "mesh-llm-payments"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Lightning wallets and durable inference settlement"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[features]
+default = ["lexe"]
+lexe = ["dep:lexe", "dep:lexe-api-core", "dep:rustls"]
+
+[dependencies]
+anyhow.workspace = true
+async-trait = "0.1"
+fs2 = "0.4"
+hex = "0.4"
+lexe = { version = "=0.1.23", features = ["unstable"], optional = true }
+lexe-api-core = { version = "=0.1.23", optional = true }
+lightning-invoice = { version = "0.35.0-rc1", features = ["std"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio = { version = "1", features = ["sync", "time", "rt", "io-util"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+bitcoin = { version = "0.32", features = ["secp-recovery"] }
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
