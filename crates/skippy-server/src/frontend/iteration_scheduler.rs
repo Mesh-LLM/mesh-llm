@@ -8,7 +8,8 @@ use self::cache_runtime::{
     should_suppress_cache_runtime,
 };
 use self::direct_batch::{
-    direct_coalesce_target, effective_scheduler_lane_count, scheduler_safe_mode_from_value,
+    PIPELINE_DECODE_GROUPS_ENV, direct_coalesce_target, effective_scheduler_lane_count,
+    pipeline_decode_groups_from_value, pipeline_group_batch_size, scheduler_safe_mode_from_value,
     should_serve_direct, take_direct_iteration_batch, validate_direct_iteration,
 };
 use crate::frontend::admission::DECODE_BATCH_HEADROOM_TOKENS;
@@ -362,6 +363,9 @@ struct SchedulerWorker {
     commands: std_mpsc::Receiver<SchedulerCommand>,
     kv_capacity_tokens: usize,
     max_direct_batch_size: usize,
+    /// Decode batch cap per pipeline group; equals `max_direct_batch_size`
+    /// unless `SKIPPY_PIPELINE_DECODE_GROUPS` splits waves into groups.
+    direct_group_batch_size: usize,
     max_direct_iteration_tokens: usize,
     max_commands_per_turn: usize,
     iteration_interval: Duration,
@@ -397,6 +401,8 @@ impl IterationScheduler {
             )
         };
         let safe_mode = scheduler_safe_mode_from_value(env::var(SAFE_MODE_ENV).ok().as_deref());
+        let pipeline_decode_groups =
+            pipeline_decode_groups_from_value(env::var(PIPELINE_DECODE_GROUPS_ENV).ok().as_deref());
         let scheduler_lane_count =
             effective_scheduler_lane_count(lane_count, safe_mode, continuous_batching);
         let scheduler_config = build_scheduler_config(
@@ -464,6 +470,10 @@ impl IterationScheduler {
                     commands: receiver,
                     kv_capacity_tokens,
                     max_direct_batch_size: scheduler_lane_count.max(1),
+                    direct_group_batch_size: pipeline_group_batch_size(
+                        scheduler_lane_count.max(1),
+                        pipeline_decode_groups,
+                    ),
                     max_direct_iteration_tokens,
                     max_commands_per_turn: command_queue_capacity.min(MAX_COMMANDS_PER_TURN),
                     iteration_interval,
@@ -1108,7 +1118,7 @@ impl SchedulerWorker {
         let target = direct_coalesce_target(
             self.active_runtime_sessions,
             self.direct_iterations.len(),
-            self.max_direct_batch_size,
+            self.direct_group_batch_size,
         );
         if target <= self.direct_iterations.len() {
             return true;
@@ -1314,7 +1324,7 @@ impl SchedulerWorker {
     fn run_direct_iteration_batch(&mut self) {
         let batch = take_direct_iteration_batch(
             &mut self.direct_iterations,
-            self.max_direct_batch_size,
+            self.direct_group_batch_size,
             self.max_direct_iteration_tokens,
         );
         debug_assert!(!batch.is_empty(), "validated direct queue must yield work");
