@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
             .await
         }
         Command::ServeOpenAi(args) => {
-            skippy_server::frontend::serve_local_openai_with_shutdown(
+            skippy_api::serving::serve_local_openai_with_shutdown(
                 conversion::local_openai_options(args)?,
                 shutdown_signal()?,
             )

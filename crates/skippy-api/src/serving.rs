@@ -25,6 +25,9 @@ pub struct OpenAiOptions {
     pub request_defaults: EmbeddedOpenAiRequestDefaults,
     pub generation_concurrency: usize,
     pub continuous_batching: bool,
+    pub adaptive_generation_min_concurrency: Option<usize>,
+    pub generation_queue_capacity: usize,
+    pub generation_admission_timeout_secs: u64,
     pub prefill_chunk_size: usize,
     pub prefill_chunk_policy: String,
     pub prefill_chunk_schedule: Option<String>,
@@ -53,55 +56,13 @@ impl OpenAiOptions {
         generation_concurrency: usize,
         native_mtp_enabled: bool,
     ) -> Self {
-        Self {
-            model_id: Some(model_id),
+        Self::embedded_stage_defaults(
+            Some(model_id),
             default_max_tokens,
-            request_defaults: EmbeddedOpenAiRequestDefaults::default(),
             generation_concurrency,
-            continuous_batching: true,
-            prefill_chunk_size: BUILTIN_PREFILL_CHUNK_SIZE,
-            prefill_chunk_policy: "fixed".to_string(),
-            prefill_chunk_schedule: None,
-            prefill_adaptive_start: BUILTIN_PREFILL_ADAPTIVE_START,
-            prefill_adaptive_step: BUILTIN_PREFILL_ADAPTIVE_STEP,
-            prefill_adaptive_max: BUILTIN_PREFILL_ADAPTIVE_MAX,
-            prefill_adaptive_target_ms: BUILTIN_PREFILL_ADAPTIVE_TARGET_MS,
-            draft_model_path: None,
-            speculative_window: 0,
-            adaptive_speculative_window: false,
-            draft_n_gpu_layers: None,
-            speculative: SpeculativeDecodeConfig {
-                native_mtp: NativeMtpProposalConfig {
-                    enabled: native_mtp_enabled,
-                    max_draft_tokens: if native_mtp_enabled {
-                        DEFAULT_NATIVE_MTP_MAX_TOKENS
-                    } else {
-                        1
-                    },
-                    min_draft_tokens: 0,
-                    reject_cooldown_tokens: 0,
-                    suppress_cooldown_drafts: false,
-                    suppress_cooldown_draft_limit: 0,
-                },
-                effective_strategy: if native_mtp_enabled {
-                    "native-mtp".to_string()
-                } else {
-                    "disabled".to_string()
-                },
-                ..SpeculativeDecodeConfig::default()
-            },
+            0,
             native_mtp_enabled,
-            native_mtp_draft_model_path: None,
-            native_mtp_max_tokens: if native_mtp_enabled {
-                DEFAULT_NATIVE_MTP_MAX_TOKENS
-            } else {
-                0
-            },
-            native_mtp_min_tokens: 0,
-            activation_width: 0,
-            reply_credit_limit: None,
-            downstream_connect_timeout_secs: 30,
-        }
+        )
     }
 
     pub fn embedded_stage_defaults(
@@ -117,6 +78,11 @@ impl OpenAiOptions {
             request_defaults: EmbeddedOpenAiRequestDefaults::default(),
             generation_concurrency,
             continuous_batching: true,
+            adaptive_generation_min_concurrency: None,
+            generation_queue_capacity: skippy_server::frontend::default_generation_queue_capacity(
+                generation_concurrency,
+            ),
+            generation_admission_timeout_secs: DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS,
             prefill_chunk_size: BUILTIN_PREFILL_CHUNK_SIZE,
             prefill_chunk_policy: "fixed".to_string(),
             prefill_chunk_schedule: None,
@@ -179,9 +145,9 @@ impl OpenAiOptions {
             request_defaults: self.request_defaults,
             generation_concurrency: self.generation_concurrency,
             continuous_batching: self.continuous_batching,
-            adaptive_generation_min_concurrency: None,
-            generation_queue_capacity: self.generation_concurrency.saturating_mul(8).clamp(16, 256),
-            generation_admission_timeout_secs: DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS,
+            adaptive_generation_min_concurrency: self.adaptive_generation_min_concurrency,
+            generation_queue_capacity: self.generation_queue_capacity,
+            generation_admission_timeout_secs: self.generation_admission_timeout_secs,
             prefill_chunk_size: self.prefill_chunk_size,
             prefill_chunk_policy: self.prefill_chunk_policy,
             prefill_chunk_schedule: self.prefill_chunk_schedule,
@@ -258,3 +224,6 @@ impl ServingTelemetryOptions {
         }
     }
 }
+
+mod local;
+pub use local::{LocalOpenAiOptions, serve_local_openai_with_shutdown};

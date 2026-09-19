@@ -18,8 +18,8 @@ pub use server::{
     EmbeddedReasoningBudget, EmbeddedReasoningEnabled, EmbeddedReasoningFormat,
 };
 pub use server::{
-    LocalOpenAiOptions, embedded_openai_backend, embedded_openai_router, serve_embedded_openai,
-    serve_embedded_openai_with_shutdown, serve_local_openai, serve_local_openai_with_shutdown,
+    embedded_openai_backend, embedded_openai_router, serve_embedded_openai,
+    serve_embedded_openai_with_shutdown, serve_openai_backend_with_shutdown,
 };
 
 pub(in crate::frontend) use cache_hints::{

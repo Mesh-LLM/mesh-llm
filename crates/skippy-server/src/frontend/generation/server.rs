@@ -23,7 +23,6 @@ use crate::frontend::speculative::{SpeculativeDecodeConfig, standalone_ngram_pro
 use crate::http::bind_serve_listener;
 use crate::kv_integration::KvStageIntegration;
 use crate::runtime_state::RuntimeState;
-use crate::runtime_state::load_runtime;
 use crate::runtime_state::loaded_model_state_kind;
 use crate::telemetry::Telemetry;
 use crate::telemetry::lifecycle_attrs;
@@ -46,9 +45,7 @@ use openai_frontend::OpenAiHookPolicy;
 use openai_frontend::ReasoningEffort;
 use serde_json::Value;
 use serde_json::json;
-use skippy_config::validate_config;
 use skippy_protocol::StageConfig;
-use skippy_protocol::StageTopology;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -58,178 +55,25 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
-/// Prepared local OpenAI serving options. Model acquisition and argument parsing belong to callers.
-pub struct LocalOpenAiOptions {
-    pub config: StageConfig,
-    pub topology: Option<StageTopology>,
-    pub speculative: SpeculativeDecodeConfig,
-    pub bind_addr: SocketAddr,
-    pub model_id: Option<String>,
-    pub default_max_tokens: u32,
-    pub generation_concurrency: Option<usize>,
-    pub adaptive_generation_concurrency: bool,
-    pub adaptive_generation_min_concurrency: Option<usize>,
-    pub generation_queue_capacity: Option<usize>,
-    pub generation_admission_timeout_secs: u64,
-    pub prefill_chunk_size: usize,
-    pub prefill_chunk_policy: String,
-    pub prefill_chunk_schedule: Option<String>,
-    pub prefill_adaptive_start: usize,
-    pub prefill_adaptive_step: usize,
-    pub prefill_adaptive_max: usize,
-    pub prefill_adaptive_target_ms: f64,
-    pub metrics_otlp_grpc: Option<String>,
-    pub telemetry_queue_capacity: usize,
-    pub telemetry_level: crate::telemetry::TelemetryLevel,
-    pub openai_guardrails: crate::frontend::OpenAiGuardrailsMode,
-}
-pub async fn serve_local_openai(options: LocalOpenAiOptions) -> Result<()> {
-    serve_local_openai_with_shutdown(options, std::future::pending::<()>()).await
-}
-
-pub async fn serve_local_openai_with_shutdown(
-    args: LocalOpenAiOptions,
+/// Serve a caller-owned backend and tokenizer, awaiting all accepted HTTP work on shutdown.
+pub async fn serve_openai_backend_with_shutdown(
+    bind_addr: SocketAddr,
+    backend: Arc<dyn OpenAiBackend>,
+    tokenizer: TokenizerCapability,
+    telemetry: Telemetry,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<()> {
-    let config = args.config;
-    let topology = args.topology;
-    validate_config(&config, topology.as_ref())?;
-    if config.downstream.is_some() {
-        bail!("serve-openai local backend requires a final/single-stage config with no downstream");
-    }
-    if args.prefill_chunk_size == 0 {
-        bail!("--prefill-chunk-size must be greater than zero");
-    }
-    if args.generation_concurrency == Some(0) {
-        bail!("--generation-concurrency must be greater than zero");
-    }
-    let generation_concurrency = args
-        .generation_concurrency
-        .unwrap_or_else(|| usize::try_from(config.lane_count).unwrap_or(usize::MAX));
-    let adaptive_generation_min_concurrency = resolve_adaptive_generation_min_concurrency(
-        args.adaptive_generation_concurrency,
-        args.adaptive_generation_min_concurrency,
-        generation_concurrency,
-        "--adaptive-generation-min-concurrency",
-    )?;
-    let generation_queue_capacity = args
-        .generation_queue_capacity
-        .unwrap_or_else(|| super::default_generation_queue_capacity(generation_concurrency));
-    let generation_admission_timeout = Duration::from_secs(args.generation_admission_timeout_secs);
-    let speculative = args.speculative;
-    speculative.validate()?;
-
-    let runtime = load_runtime(&config)?.ok_or_else(|| {
-        anyhow!("serve-openai requires a stage config with model_path for tokenization and decode")
-    })?;
-    let model_id = ModelId::new(args.model_id.unwrap_or_else(|| config.model_id.clone()))
-        .map_err(|error| anyhow!("invalid OpenAI model id: {error}"))?
-        .into_string();
-    let mode = OpenAiBackendMode::LocalRuntime;
-    let mode_label = mode.label();
-    let telemetry = Telemetry::new(
-        args.metrics_otlp_grpc,
-        args.telemetry_queue_capacity,
-        config.clone(),
-        args.telemetry_level,
-    );
-    let mut server_start_attrs = lifecycle_attrs(&config);
-    insert_generation_admission_config_attrs(
-        &mut server_start_attrs,
-        generation_concurrency,
-        adaptive_generation_min_concurrency,
-        generation_queue_capacity,
-        args.generation_admission_timeout_secs,
-    );
-    telemetry.emit("stage.openai_server_start", server_start_attrs);
-    if matches!(&mode, OpenAiBackendMode::LocalRuntime) {
-        ensure_generation_concurrency_fits_lanes(
-            generation_concurrency,
-            config.lane_count,
-            "--generation-concurrency",
-        )?;
-        prewarm_generation_sessions(
-            &runtime,
-            generation_concurrency,
-            &telemetry,
-            &config,
-            "stage.openai_runtime_prewarm",
-        )
-        .context("prewarm OpenAI runtime sessions")?;
-    }
-    let kv = KvStageIntegration::from_loaded_model(
-        &config,
-        loaded_model_state_kind(Some(&runtime)),
-        None,
-    )?
-    .map(Arc::new);
-    let ctx_size = usize::try_from(config.ctx_size).unwrap_or(usize::MAX);
-    let iteration_scheduler = IterationScheduler::new(
-        runtime.clone(),
-        &config,
-        generation_concurrency,
-        true,
-        telemetry.clone(),
-    )?;
-    let tokenizer = TokenizerCapability::from_stage_zero(&config, runtime.clone())
-        .context("construct stage-0 tokenizer capability for OpenAI serving")?;
-    let backend: Arc<dyn OpenAiBackend> = Arc::new(StageOpenAiBackend {
-        runtime,
-        config,
-        telemetry: telemetry.clone(),
-        model_id: model_id.clone(),
-        default_max_tokens: args.default_max_tokens,
-        request_defaults: EmbeddedOpenAiRequestDefaults::default(),
-        ctx_size,
-        mode,
-        draft: None,
-        speculative_window: 0,
-        adaptive_speculative_window: false,
-        ngram_max: standalone_ngram_proposal_limit(&speculative),
-        speculative,
-        generation_limit: Arc::new(match adaptive_generation_min_concurrency {
-            Some(initial_limit) => {
-                GenerationConcurrencyController::adaptive(generation_concurrency, initial_limit)
-            }
-            None => GenerationConcurrencyController::fixed(generation_concurrency),
-        }),
-        generation_queue_depth: Arc::new(AtomicUsize::new(0)),
-        generation_queue_limit: generation_queue_capacity,
-        generation_admission_timeout,
-        generation_service_estimator: Arc::new(GenerationServiceEstimator::new(
-            generation_concurrency,
-        )),
-        generation_session_locks: Arc::new(Mutex::new(BTreeMap::new())),
-        generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
-        hook_policy: None,
-        generation_receipt: None,
-        generation_lifecycle: None,
-        linear_proposal_ingress: None,
-        kv,
-        iteration_scheduler,
-    });
-    let backend = OpenAiGuardrailsConfig::for_standalone_mode(args.openai_guardrails)
-        .wrap_backend_with_context_limit(backend, Some(ctx_size));
-    let app: Router = instrumented_openai_router(backend, tokenizer, telemetry.clone());
-
+    let app = instrumented_openai_router(backend, tokenizer, telemetry);
+    let listener = bind_serve_listener(bind_addr)?;
     skippy_events::diagnostics::emit(skippy_events::diagnostics::ServingDiagnostic::Status {
-        message: format!(
-            "skippy-server listening: openai={} model_id={} backend={} generation_concurrency={} generation_queue_capacity={} generation_admission_timeout_secs={}",
-            args.bind_addr,
-            model_id,
-            mode_label,
-            generation_concurrency,
-            generation_queue_capacity,
-            args.generation_admission_timeout_secs,
-        ),
+        message: format!("skippy-server listening: openai={bind_addr}"),
     })?;
-
-    let listener = bind_serve_listener(args.bind_addr)?;
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown)
         .await?;
     Ok(())
 }
+
 #[derive(Clone)]
 pub struct EmbeddedOpenAiArgs {
     pub bind_addr: SocketAddr,
@@ -453,7 +297,10 @@ fn embedded_openai_backend_with_scheduler(
     // Recurrent verify windows are supported by the native runtime's bounded
     // recurrent checkpoints and accepted-prefix replay. Keep admission aligned
     // with that recovery contract instead of rejecting these models up front.
-    if args.config.stage_index != 0 || args.config.layer_start != 0 {
+    if args.config.stage_index != 0
+        || args.config.layer_start != 0
+        || args.config.upstream.is_some()
+    {
         bail!("embedded OpenAI serving is only supported on stage 0");
     }
     attach_native_mtp_draft_model(
@@ -476,32 +323,37 @@ fn embedded_openai_backend_with_scheduler(
     )
     .map_err(|error| anyhow!("invalid OpenAI model id: {error}"))?
     .into_string();
-    let lane_pool = PersistentStageLanePool::new(
-        &args.config,
-        args.generation_concurrency,
-        args.downstream_connect_timeout_secs,
-        args.telemetry.clone(),
-    )
-    .context("create embedded OpenAI persistent downstream lanes")?;
-    let prefill_reply_credit_limit = args.reply_credit_limit.unwrap_or(3);
-    let mode = OpenAiBackendMode::EmbeddedStageZero {
-        config: args.config.clone(),
-        prefill_chunk_policy: PrefillChunkPolicy::parse(PrefillChunkPolicyArgs {
-            policy: &args.prefill_chunk_policy,
-            schedule: args.prefill_chunk_schedule.as_deref(),
-            fixed_chunk_size: args.prefill_chunk_size,
-            adaptive_start: args.prefill_adaptive_start,
-            adaptive_step: args.prefill_adaptive_step,
-            adaptive_max: args.prefill_adaptive_max,
-            adaptive_target_ms: args.prefill_adaptive_target_ms,
-            schedule_arg: "--openai-prefill-chunk-schedule",
-            policy_arg: "--openai-prefill-chunk-policy",
-        })?,
-        activation_width: args.activation_width,
-        downstream_wire_condition: args.downstream_wire_condition,
-        prefill_reply_credit_limit,
-        lane_pool,
-        prediction_returns: args.prediction_returns.clone(),
+    let prefill_chunk_policy = PrefillChunkPolicy::parse(PrefillChunkPolicyArgs {
+        policy: &args.prefill_chunk_policy,
+        schedule: args.prefill_chunk_schedule.as_deref(),
+        fixed_chunk_size: args.prefill_chunk_size,
+        adaptive_start: args.prefill_adaptive_start,
+        adaptive_step: args.prefill_adaptive_step,
+        adaptive_max: args.prefill_adaptive_max,
+        adaptive_target_ms: args.prefill_adaptive_target_ms,
+        schedule_arg: "--openai-prefill-chunk-schedule",
+        policy_arg: "--openai-prefill-chunk-policy",
+    })?;
+    let mode = if args.config.downstream.is_none() {
+        OpenAiBackendMode::LocalRuntime
+    } else {
+        let lane_pool = PersistentStageLanePool::new(
+            &args.config,
+            args.generation_concurrency,
+            args.downstream_connect_timeout_secs,
+            args.telemetry.clone(),
+        )
+        .context("create embedded OpenAI persistent downstream lanes")?;
+        let prefill_reply_credit_limit = args.reply_credit_limit.unwrap_or(3);
+        OpenAiBackendMode::EmbeddedStageZero {
+            config: args.config.clone(),
+            prefill_chunk_policy,
+            activation_width: args.activation_width,
+            downstream_wire_condition: args.downstream_wire_condition,
+            prefill_reply_credit_limit,
+            lane_pool,
+            prediction_returns: args.prediction_returns.clone(),
+        }
     };
     let mut server_start_attrs = lifecycle_attrs(&args.config);
     insert_generation_admission_config_attrs(

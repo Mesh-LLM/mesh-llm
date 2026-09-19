@@ -606,8 +606,18 @@ fn run_binary_stage(
                     if let Some(peer_addr) = peer_addr {
                         attrs.insert("llama_stage.peer_addr".to_string(), json!(peer_addr));
                     }
-                    attrs.insert("llama_stage.error".to_string(), json!(error.to_string()));
+                    let message = format!("{error:#}");
+                    attrs.insert("llama_stage.error".to_string(), json!(message));
                     tracing::warn!("{error:#}");
+                    let _ = skippy_events::diagnostics::emit(
+                        skippy_events::diagnostics::ServingDiagnostic::Warning {
+                            message,
+                            context: Some(format!(
+                                "run_id={} stage_id={} peer={peer_addr:?}",
+                                config.run_id, config.stage_id
+                            )),
+                        },
+                    );
                     telemetry.emit("stage.binary_connection_error", attrs);
                 }
                 task_control.clear();

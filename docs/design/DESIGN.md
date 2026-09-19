@@ -69,9 +69,16 @@ constructs the OpenAI backend with the common guardrail/compaction wrapper.
 Mesh retains operational event recording and plugin loading/invocation; no Mesh
 plugin ABI or loader is imported by the Skippy API.
 
-This is an intermediate extraction: standalone local serving still has its
-existing frontend entrypoint, and the dedicated Mesh adapter/transport/membership
-crates and physical `mesh/` and `skippy/` ownership trees are not yet in place.
+Standalone local HTTP serving now also loads through `ModelLoadRequest` and the
+same backend constructor. Explicit queue/adaptive/admission settings cross this
+API boundary; the serving library owns the HTTP router and awaited shutdown.
+Both products select local execution when stage zero has no downstream peer,
+including preservation of the recurrent-prefix token input. Split stage zero
+retains its downstream lane and prediction-return behavior.
+
+This remains an intermediate extraction: the dedicated Mesh
+adapter/transport/membership crates and physical `mesh/` and `skippy/` ownership
+trees are not yet in place.
 
 ## Topology Roles
 

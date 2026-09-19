@@ -43,13 +43,14 @@ pub struct LoadedModelBackend {
     pub backend: Arc<dyn OpenAiBackend>,
     pub config: StageConfig,
     pub prediction_return_listener: Option<PredictionReturnListener>,
+    telemetry: Telemetry,
 }
 
 impl ModelLoadRequest {
     pub fn load(self) -> Result<LoadedModelBackend> {
         let config = self.runtime.config.clone();
         ensure!(
-            config.stage_index == 0 && config.layer_start == 0,
+            config.stage_index == 0 && config.layer_start == 0 && config.upstream.is_none(),
             "OpenAI model loading requires stage 0"
         );
         ensure!(
@@ -96,7 +97,7 @@ impl ModelLoadRequest {
             ([127, 0, 0, 1], 0).into(),
             config.clone(),
             runtime.runtime(),
-            telemetry,
+            telemetry.clone(),
             self.hook_policy,
         );
         // The loaded graph, not a caller's width estimate, binds the stage boundary.
@@ -128,6 +129,7 @@ impl ModelLoadRequest {
             backend,
             config,
             prediction_return_listener,
+            telemetry,
         })
     }
 }
@@ -157,6 +159,29 @@ fn resolve_hooks(
         hooks = hooks.with_kv_lifecycle_observer(observer);
     }
     Ok(hooks)
+}
+
+impl LoadedModelBackend {
+    pub async fn serve_http_with_shutdown(
+        self,
+        bind_addr: std::net::SocketAddr,
+        shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+    ) -> Result<()> {
+        let tokenizer = self
+            .runtime
+            .tokenizer_capability()
+            .context("construct tokenizer capability for OpenAI serving")?;
+        let result = skippy_server::frontend::serve_openai_backend_with_shutdown(
+            bind_addr,
+            self.backend.clone(),
+            tokenizer,
+            self.telemetry.clone(),
+            shutdown,
+        )
+        .await;
+        drop(self);
+        result
+    }
 }
 
 #[cfg(test)]
@@ -206,6 +231,21 @@ mod tests {
             .load()
             .err()
             .expect("worker is not an OpenAI entrypoint");
+        assert!(error.to_string().contains("requires stage 0"));
+    }
+
+    #[test]
+    fn stage_zero_with_an_upstream_is_rejected_before_native_loading() {
+        let mut request = request();
+        request.runtime.config.upstream = Some(skippy_protocol::PeerConfig {
+            stage_id: "foreign-stage".into(),
+            stage_index: 1,
+            endpoint: "127.0.0.1:19001".into(),
+        });
+        request.open_events = ModelOpenEvents::Enabled(Some(Box::new(|_| {
+            panic!("ambiguous stage zero must not load a model");
+        })));
+        let error = request.load().err().expect("ambiguous stage zero accepted");
         assert!(error.to_string().contains("requires stage 0"));
     }
 

@@ -127,7 +127,7 @@ pub fn binary_stage_options(args: ServeBinaryArgs) -> Result<BinaryStageOptions>
 
 pub fn local_openai_options(
     args: crate::cli::ServeOpenAiArgs,
-) -> Result<skippy_server::frontend::LocalOpenAiOptions> {
+) -> Result<skippy_api::serving::LocalOpenAiOptions> {
     if args.first_stage_addr.is_some() {
         bail!(
             "--first-stage-addr is no longer supported; direct prediction return requires embedded stage-0 OpenAI serving via serve-binary --openai-bind-addr"
@@ -147,7 +147,7 @@ pub fn local_openai_options(
         .transpose()
         .context("load speculative config")?
         .unwrap_or_default();
-    Ok(skippy_server::frontend::LocalOpenAiOptions {
+    Ok(skippy_api::serving::LocalOpenAiOptions {
         config,
         topology,
         speculative,

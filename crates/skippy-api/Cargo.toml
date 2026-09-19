@@ -12,6 +12,7 @@ default = []
 dynamic-native-runtime = ["skippy-runtime/dynamic-native-runtime", "skippy-server/dynamic-native-runtime"]
 
 [dependencies]
+skippy-config = { path = "../skippy-config", version = "0.76.1" }
 skippy-server = { path = "../skippy-server", version = "0.76.1" }
 skippy-native-runtime = { path = "../skippy-native-runtime", version = "0.76.1" }
 skippy-runtime-install = { path = "../skippy-runtime-install", version = "0.76.1" }
@@ -36,7 +37,6 @@ same-file = "1.0.6"
 
 [dev-dependencies]
 tempfile = "3"
-skippy-config = { path = "../skippy-config", version = "0.76.1" }
 
 [build-dependencies]
 serde_json = "1"

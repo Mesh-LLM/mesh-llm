@@ -38,9 +38,9 @@ pub use self::generation::{
     CONTEXT_BUDGET_MAX_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS,
     DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS, EmbeddedOpenAiArgs, EmbeddedOpenAiBackend,
     EmbeddedOpenAiRequestDefaults, EmbeddedOpenAiRouter, EmbeddedReasoningBudget,
-    EmbeddedReasoningEnabled, EmbeddedReasoningFormat, LocalOpenAiOptions, embedded_openai_backend,
+    EmbeddedReasoningEnabled, EmbeddedReasoningFormat, embedded_openai_backend,
     embedded_openai_router, serve_embedded_openai, serve_embedded_openai_with_shutdown,
-    serve_local_openai, serve_local_openai_with_shutdown,
+    serve_openai_backend_with_shutdown,
 };
 pub use self::generation::{
     default_generation_queue_capacity, resolve_adaptive_generation_min_concurrency,

@@ -383,6 +383,12 @@ impl ResolvedSkippyConfig {
             },
             generation_concurrency: self.throughput.parallel,
             continuous_batching: self.throughput.continuous_batching != "false",
+            adaptive_generation_min_concurrency: None,
+            generation_queue_capacity: skippy_server::frontend::default_generation_queue_capacity(
+                self.throughput.parallel,
+            ),
+            generation_admission_timeout_secs:
+                skippy_server::DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS,
             prefill_chunk_size: self.skippy.prefill_chunk_size,
             prefill_chunk_policy: resolve_prefill_chunk_policy(&self.skippy.prefill_chunking),
             prefill_chunk_schedule: self.skippy.prefill_chunk_schedule.clone(),
