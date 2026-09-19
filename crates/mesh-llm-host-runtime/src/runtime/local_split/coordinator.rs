@@ -1010,8 +1010,24 @@ impl SplitTopologyCoordinator {
             .iter()
             .map(|stage| (stage.layer_start, stage.layer_end))
             .collect::<Vec<_>>();
+        let target = proposal
+            .boundaries
+            .iter()
+            .map(|(_, start, end)| (*start, *end))
+            .collect::<Vec<_>>();
+        let damped = super::performance::damped_boundaries(&previous, &target);
+        let next = stages
+            .iter()
+            .zip(&damped)
+            .map(|(stage, (start, end))| (stage.node_id, *start, *end))
+            .collect::<Vec<_>>();
+        tracing::info!(
+            model_ref = self.model_ref,
+            next = ?damped,
+            "performance rebalance moving part of the way toward the proposed cut"
+        );
         let moved = self
-            .cut_over_to_boundaries("performance_rebalance", proposal.boundaries)
+            .cut_over_to_boundaries("performance_rebalance", next)
             .await;
         if let Some(controller) = self.performance.as_mut() {
             if moved {

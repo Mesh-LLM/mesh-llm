@@ -236,6 +236,50 @@ impl PerformanceController {
     }
 }
 
+/// Move each internal stage boundary at most halfway toward `target`, and
+/// always at least one layer when it moves, keeping every stage non-empty.
+///
+/// The measured-rate model treats a stage's time as proportional to its
+/// weight bytes, but part of each step is fixed (output head, sampling,
+/// activation I/O). Measured from a far-off cut that error sends a single
+/// full jump past the optimum; halving the step converges without
+/// oscillating, and each step is re-measured before the next.
+pub(super) fn damped_boundaries(current: &[(u32, u32)], target: &[(u32, u32)]) -> Vec<(u32, u32)> {
+    if current.len() != target.len() || current.is_empty() {
+        return current.to_vec();
+    }
+    let layer_end = current.last().map(|(_, end)| *end).unwrap_or(0);
+    let mut ends = Vec::with_capacity(current.len());
+    for (index, ((_, now), (_, goal))) in current.iter().zip(target).enumerate() {
+        if index + 1 == current.len() {
+            ends.push(layer_end);
+            break;
+        }
+        let delta = i64::from(*goal) - i64::from(*now);
+        let step = if delta == 0 {
+            0
+        } else {
+            (delta / 2).signum() * (delta.abs() / 2).max(1)
+        };
+        let step = if delta != 0 && step == 0 {
+            delta.signum()
+        } else {
+            step
+        };
+        let lowest = ends.last().map(|end| end + 1).unwrap_or(1);
+        let highest = layer_end - (current.len() - 1 - index) as u32;
+        ends.push(((i64::from(*now) + step).clamp(i64::from(lowest), i64::from(highest))) as u32);
+    }
+    let mut start = 0;
+    ends.into_iter()
+        .map(|end| {
+            let range = (start, end);
+            start = end;
+            range
+        })
+        .collect()
+}
+
 fn same_shape(left: &PerformanceSample, right: &PerformanceSample) -> bool {
     left.stages.len() == right.stages.len()
         && left
@@ -432,6 +476,32 @@ mod tests {
                 observed: 12.0,
             }
         );
+    }
+
+    #[test]
+    fn damping_moves_halfway_and_at_least_one_layer() {
+        // 35/1 toward 12/24 moves to 24/12, then 18/18, then 15/21 ...
+        assert_eq!(
+            damped_boundaries(&[(0, 35), (35, 36)], &[(0, 12), (12, 36)]),
+            vec![(0, 24), (24, 36)]
+        );
+        // One layer away still moves one layer.
+        assert_eq!(
+            damped_boundaries(&[(0, 13), (13, 36)], &[(0, 12), (12, 36)]),
+            vec![(0, 12), (12, 36)]
+        );
+        // Already there: no change.
+        assert_eq!(
+            damped_boundaries(&[(0, 12), (12, 36)], &[(0, 12), (12, 36)]),
+            vec![(0, 12), (12, 36)]
+        );
+    }
+
+    #[test]
+    fn damping_keeps_every_stage_non_empty() {
+        let damped = damped_boundaries(&[(0, 2), (2, 3), (3, 10)], &[(0, 9), (9, 9), (9, 10)]);
+        assert!(damped.iter().all(|(start, end)| end > start), "{damped:?}");
+        assert_eq!(damped.last().unwrap().1, 10);
     }
 
     #[test]
