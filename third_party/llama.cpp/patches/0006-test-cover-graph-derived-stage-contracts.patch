@@ -1,4 +1,4 @@
-From e27a11ae3945fe144b865f9bf3cc6c89c186b25f Mon Sep 17 00:00:00 2001
+From 450ce945994ccc8f520bbb6aeaa5cba442935fd7 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:59 +1000
 Subject: [PATCH 6/6] test: cover graph-derived stage contracts
@@ -6,8 +6,8 @@ Subject: [PATCH 6/6] test: cover graph-derived stage contracts
 ---
  src/skippy/tests/graph_build_inputs.cpp       |  619 +++++++
  .../tests/hardware_application_probe.cpp      |   64 +
- src/skippy/tests/noalloc_graph_planning.cpp   | 1088 +++++++++++++
- .../tests/renamed_multishard_planning.cpp     | 1444 +++++++++++++++++
+ src/skippy/tests/noalloc_graph_planning.cpp   | 1088 ++++++++++++
+ .../tests/renamed_multishard_planning.cpp     | 1504 +++++++++++++++++
  src/skippy/tests/runtime_events.cpp           |  489 ++++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
@@ -22,7 +22,7 @@ Subject: [PATCH 6/6] test: cover graph-derived stage contracts
  tests/test-skippy-model-loader-accounting.cpp |  326 ++++
  .../test-skippy-recurrent-state-roundtrip.cpp |  159 ++
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 18 files changed, 6160 insertions(+), 16 deletions(-)
+ 18 files changed, 6220 insertions(+), 16 deletions(-)
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/hardware_application_probe.cpp
  create mode 100644 src/skippy/tests/noalloc_graph_planning.cpp
@@ -1829,10 +1829,10 @@ index 000000000..11559ce5c
 +}
 diff --git a/src/skippy/tests/renamed_multishard_planning.cpp b/src/skippy/tests/renamed_multishard_planning.cpp
 new file mode 100644
-index 000000000..010a5b165
+index 000000000..34efecd19
 --- /dev/null
 +++ b/src/skippy/tests/renamed_multishard_planning.cpp
-@@ -0,0 +1,1444 @@
+@@ -0,0 +1,1504 @@
 +#include "ggml-backend.h"
 +#include "ggml.h"
 +#include "gguf.h"
@@ -3153,11 +3153,11 @@ index 000000000..010a5b165
 +    runtime_config.activation_import_identities = terminal_import_identity_ptrs.data();
 +    runtime_config.activation_import_identity_count = terminal_import_identity_ptrs.size();
 +    runtime_config.activation_import_bindings = terminal_import_binding_ptrs.data();
-+    carrier_model = nullptr;
++    skippy_model * terminal_model = nullptr;
 +    runtime_error = nullptr;
 +    const skippy_status terminal_status = skippy_model_open_from_parts(
-+            terminal_part_ptrs.data(), terminal_part_ptrs.size(), &runtime_config, &carrier_model, &runtime_error);
-+    if (terminal_status != SKIPPY_STATUS_OK || carrier_model == nullptr) {
++            terminal_part_ptrs.data(), terminal_part_ptrs.size(), &runtime_config, &terminal_model, &runtime_error);
++    if (terminal_status != SKIPPY_STATUS_OK || terminal_model == nullptr) {
 +        std::fprintf(
 +                stderr,
 +                "terminal stage runtime load failed: %s\n",
@@ -3165,9 +3165,11 @@ index 000000000..010a5b165
 +        skippy_error_free(runtime_error);
 +        return 14;
 +    }
-+    skippy_model_free(carrier_model, &runtime_error);
-+    if (runtime_error != nullptr) {
-+        std::fprintf(stderr, "terminal stage runtime free failed: %s\n", runtime_error->message);
++    skippy_session * terminal_session = nullptr;
++    if (skippy_session_create(terminal_model, &terminal_session, &runtime_error) != SKIPPY_STATUS_OK ||
++            terminal_session == nullptr) {
++        std::fprintf(stderr, "terminal stage session create failed: %s\n",
++                runtime_error == nullptr ? "" : runtime_error->message);
 +        skippy_error_free(runtime_error);
 +        return 15;
 +    }
@@ -3243,17 +3245,75 @@ index 000000000..010a5b165
 +        std::fprintf(stderr, "source stage prefill returned an empty activation frontier\n");
 +        return 21;
 +    }
++    skippy_activation_desc terminal_output_desc{};
++    std::vector<uint8_t> terminal_output_payload(1024 * 1024);
++    size_t terminal_output_bytes = 0;
++    if (skippy_prefill_chunk_frame(
++                terminal_session, tokens, 2, &output_desc, output_payload.data(),
++                &terminal_output_desc, terminal_output_payload.data(), terminal_output_payload.size(),
++                &terminal_output_bytes, &runtime_error) != SKIPPY_STATUS_OK) {
++        std::fprintf(stderr, "terminal stage prefill failed: %s\n",
++                runtime_error == nullptr ? "" : runtime_error->message);
++        skippy_error_free(runtime_error);
++        return 22;
++    }
++
++    skippy_sampling_config sampling{};
++    sampling.version = 1;
++    sampling.flags = SKIPPY_SAMPLING_FLAG_ENABLED;
++    sampling.seed = 1;
++    sampling.repeat_penalty = 1.0f;
++    llama_token next_token = 3;
++    for (int iteration = 0; iteration < 2; ++iteration) {
++        skippy_activation_desc step_desc{};
++        size_t step_bytes = 0;
++        llama_token ignored_prediction = -1;
++        if (skippy_decode_step_frame_sampled(
++                    session, next_token, nullptr, nullptr, nullptr,
++                    &step_desc, output_payload.data(), output_payload.size(), &step_bytes,
++                    &ignored_prediction, &runtime_error) != SKIPPY_STATUS_OK) {
++            std::fprintf(stderr, "source stage sampled decode setup failed: %s\n",
++                    runtime_error == nullptr ? "" : runtime_error->message);
++            skippy_error_free(runtime_error);
++            return 23;
++        }
++        llama_token predicted_token = -1;
++        terminal_output_bytes = 0;
++        if (skippy_decode_step_frame_sampled(
++                    terminal_session, next_token, &sampling, &step_desc, output_payload.data(),
++                    &terminal_output_desc, terminal_output_payload.data(), terminal_output_payload.size(),
++                    &terminal_output_bytes, &predicted_token, &runtime_error) != SKIPPY_STATUS_OK ||
++                predicted_token < 0) {
++            std::fprintf(stderr, "terminal stage sampled decode failed: %s\n",
++                    runtime_error == nullptr ? "" : runtime_error->message);
++            skippy_error_free(runtime_error);
++            return 24;
++        }
++        next_token = predicted_token;
++    }
 +    if (skippy_session_free(session, &runtime_error) != SKIPPY_STATUS_OK || runtime_error != nullptr) {
 +        std::fprintf(stderr, "source stage session free failed: %s\n",
 +                runtime_error == nullptr ? "" : runtime_error->message);
 +        skippy_error_free(runtime_error);
-+        return 22;
++        return 25;
 +    }
 +    if (skippy_model_free(carrier_model, &runtime_error) != SKIPPY_STATUS_OK || runtime_error != nullptr) {
 +        std::fprintf(stderr, "source stage model free failed: %s\n",
 +                runtime_error == nullptr ? "" : runtime_error->message);
 +        skippy_error_free(runtime_error);
-+        return 23;
++        return 26;
++    }
++    if (skippy_session_free(terminal_session, &runtime_error) != SKIPPY_STATUS_OK || runtime_error != nullptr) {
++        std::fprintf(stderr, "terminal stage session free failed: %s\n",
++                runtime_error == nullptr ? "" : runtime_error->message);
++        skippy_error_free(runtime_error);
++        return 27;
++    }
++    if (skippy_model_free(terminal_model, &runtime_error) != SKIPPY_STATUS_OK || runtime_error != nullptr) {
++        std::fprintf(stderr, "terminal stage model free failed: %s\n",
++                runtime_error == nullptr ? "" : runtime_error->message);
++        skippy_error_free(runtime_error);
++        return 28;
 +    }
 +    std::printf(
 +            "renamed multishard metadata planning: tensors=%zu dependencies=%zu payload_reads=%zu payload_bytes=%zu recurrent=%d\n",

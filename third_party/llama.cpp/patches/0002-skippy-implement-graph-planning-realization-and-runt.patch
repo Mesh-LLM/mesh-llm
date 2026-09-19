@@ -1,4 +1,4 @@
-From f748e9fdb1db16a1ee30565073cc38b63d63c1bc Mon Sep 17 00:00:00 2001
+From 7c8a5d1e39a52caa9bac49d600a1df9dc39c1b5d Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:16 +1000
 Subject: [PATCH 2/6] skippy: implement graph planning realization and runtime
@@ -45,7 +45,7 @@ Subject: [PATCH 2/6] skippy: implement graph planning realization and runtime
  src/skippy/speculative_decoding.cpp     |  531 ++++++++++
  src/skippy/speculative_internal.h       |   32 +
  src/skippy/stage_plan.cpp               |  632 ++++++++++++
- src/skippy/stage_realization.cpp        |  225 +++++
+ src/skippy/stage_realization.cpp        |  247 +++++
  src/skippy/stage_realization.h          |   13 +
  src/skippy/stage_slice_plan.cpp         |  871 +++++++++++++++++
  src/skippy/stage_slice_plan.h           |  117 +++
@@ -54,7 +54,7 @@ Subject: [PATCH 2/6] skippy: implement graph planning realization and runtime
  src/skippy/state_effects.h              |   74 ++
  src/skippy/tokenization.cpp             |  179 ++++
  src/skippy/verification.cpp             |  265 +++++
- 50 files changed, 14692 insertions(+)
+ 50 files changed, 14714 insertions(+)
  create mode 100644 src/skippy-verify-checkpoint.h
  create mode 100644 src/skippy/abi.cpp
  create mode 100644 src/skippy/activation.cpp
@@ -11771,10 +11771,10 @@ index 000000000..7dc097dad
 +}
 diff --git a/src/skippy/stage_realization.cpp b/src/skippy/stage_realization.cpp
 new file mode 100644
-index 000000000..4cf904d29
+index 000000000..33b47ef3f
 --- /dev/null
 +++ b/src/skippy/stage_realization.cpp
-@@ -0,0 +1,225 @@
+@@ -0,0 +1,247 @@
 +#include "stage_realization.h"
 +
 +#include "stage_slice_plan.h"
@@ -11984,6 +11984,28 @@ index 000000000..4cf904d29
 +        } else {
 +            ggml_build_forward_order(graph, node);
 +        }
++    }
++
++    const auto graph_contains = [graph](const ggml_tensor * tensor) {
++        if (tensor == nullptr) return false;
++        for (int index = 0; index < ggml_graph_n_nodes(graph); ++index) {
++            if (ggml_graph_node(graph, index) == tensor) return true;
++        }
++        return false;
++    };
++    const auto add_sampling_outputs = [graph](const std::vector<ggml_tensor *> & tensors) {
++        for (ggml_tensor * tensor : tensors) {
++            if (tensor != nullptr) ggml_build_forward_expand(graph, tensor);
++        }
++    };
++    // Backend samplers are downstream consumers of the terminal logits. They
++    // are not part of the dependency slice selected for the logits themselves,
++    // but decode reads their outputs asynchronously after graph execution.
++    if (graph_contains(result.get_logits())) {
++        add_sampling_outputs(result.t_sampled);
++        add_sampling_outputs(result.t_sampled_probs);
++        add_sampling_outputs(result.t_sampled_logits);
++        add_sampling_outputs(result.t_candidates);
 +    }
 +
 +    std::vector<skippy_activation_port> exports;
