@@ -378,7 +378,11 @@ checked-in expiry are the maintainer-controlled approval boundary.
   candidate gate over the complete roster, feeds failures back to the same
   agent, and requires success before snapshotting. The separate verifier still
   repeats all gates on the exact candidate in a fresh checkout. Agent test
-  results must never replace either trusted full pass.
+  results must never replace either trusted full pass. Coding turns are admitted
+  only within a bounded repair window. Each returned candidate receives a full,
+  separately bounded verification pass; earlier repairs and failed gates must
+  not shorten that pass. Outer workflow limits must cover the repair window
+  plus one final verification pass and leave time to upload evidence.
 
 - Inspection, log reads, syntax validation, and dry-run planning are read-only.
   Dispatching, rerunning, cancelling, approving, deleting, changing variables

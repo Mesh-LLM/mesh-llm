@@ -57,13 +57,30 @@ fn classify_model_state(recurrent: bool, hybrid: bool, diffusion: bool) -> Model
     }
 }
 
+/// Architectures that build a separate indexer memory tier on top of their
+/// attention/recurrent state. Mirrors the upstream `needs_mem_idx` allowlist
+/// (llama-model.cpp); extend this alongside that expression when upstream adds
+/// indexer architectures. Indexer state is only covered by full-state
+/// snapshots, so these models must not serve lossy KV-page/recurrent snapshots.
+const INDEXER_MEMORY_ARCHITECTURES: &[&str] = &["qwen4exp"];
+
+/// Reads the model's GGUF `general.architecture` value. `None` means the
+/// native runtime does not export the metadata accessor or the key is absent;
+/// architecture-dependent capability flags must fail closed in that case.
+fn model_architecture(model: *const skippy_ffi::Opaque) -> Option<String> {
+    unsafe { skippy_ffi::llama_model_meta_val_str(model, "general.architecture") }
+}
+
 fn capability_from_state_probes(
     recurrent: Option<bool>,
     hybrid: Option<bool>,
     diffusion: Option<bool>,
+    architecture: Option<&str>,
 ) -> Option<LoadedModelCapability> {
     Some(LoadedModelCapability {
         state_kind: classify_model_state(recurrent?, hybrid?, diffusion?),
+        has_indexer_memory: architecture
+            .is_some_and(|arch| INDEXER_MEMORY_ARCHITECTURES.contains(&arch)),
     })
 }
 
@@ -72,10 +89,12 @@ fn loaded_model_capability(raw: *mut RawModel) -> Option<LoadedModelCapability> 
     if model.is_null() {
         return None;
     }
+    let architecture = model_architecture(model);
     capability_from_state_probes(
         unsafe { skippy_ffi::llama_model_is_recurrent(model) },
         unsafe { skippy_ffi::llama_model_is_hybrid(model) },
         unsafe { skippy_ffi::llama_model_is_diffusion(model) },
+        architecture.as_deref(),
     )
 }
 
@@ -1019,15 +1038,37 @@ mod output_capacity_tests {
 
     #[test]
     fn missing_native_state_probe_fails_capability_closed() {
-        assert!(capability_from_state_probes(None, Some(false), Some(false)).is_none());
-        assert!(capability_from_state_probes(Some(false), None, Some(false)).is_none());
-        assert!(capability_from_state_probes(Some(false), Some(false), None).is_none());
+        assert!(capability_from_state_probes(None, Some(false), Some(false), None).is_none());
+        assert!(capability_from_state_probes(Some(false), None, Some(false), None).is_none());
+        assert!(capability_from_state_probes(Some(false), Some(false), None, None).is_none());
         assert_eq!(
-            capability_from_state_probes(Some(true), Some(true), Some(false))
+            capability_from_state_probes(Some(true), Some(true), Some(false), Some("qwen4exp"))
                 .expect("all native probes are present")
                 .state_kind,
             ModelStateKind::Hybrid
         );
+    }
+
+    #[test]
+    fn indexer_memory_flag_follows_the_upstream_architecture_allowlist() {
+        // qwen4exp builds the QSA indexer memory (upstream needs_mem_idx).
+        let capability =
+            capability_from_state_probes(Some(true), Some(true), Some(false), Some("qwen4exp"))
+                .expect("all native probes are present");
+        assert!(capability.has_indexer_memory);
+
+        // Every other architecture stays exact-state-free...
+        for arch in ["llama4", "qwen3", "gemma3", "nemotron_h", ""] {
+            let capability =
+                capability_from_state_probes(Some(true), Some(true), Some(false), Some(arch))
+                    .expect("all native probes are present");
+            assert!(!capability.has_indexer_memory, "{arch} must not be flagged");
+        }
+
+        // ...and a runtime without the metadata probe fails closed to false.
+        let capability = capability_from_state_probes(Some(true), Some(true), Some(false), None)
+            .expect("all native probes are present");
+        assert!(!capability.has_indexer_memory);
     }
 
     #[test]

@@ -29,7 +29,7 @@ use crate::http::bind_serve_listener;
 use crate::kv_integration::KvStageIntegration;
 use crate::runtime_state::RuntimeState;
 use crate::runtime_state::load_runtime;
-use crate::runtime_state::loaded_model_state_kind;
+use crate::runtime_state::{loaded_model_has_indexer_memory, loaded_model_state_kind};
 use crate::telemetry::Telemetry;
 use crate::telemetry::lifecycle_attrs;
 use crate::telemetry::now_unix_nanos;
@@ -145,6 +145,7 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
     let kv = KvStageIntegration::from_loaded_model(
         &config,
         loaded_model_state_kind(Some(&runtime)),
+        loaded_model_has_indexer_memory(Some(&runtime)),
         None,
     )?
     .map(Arc::new);
@@ -509,6 +510,7 @@ fn embedded_openai_backend_with_scheduler(
     let kv = KvStageIntegration::from_loaded_model(
         &args.config,
         loaded_model_state_kind(Some(&args.runtime)),
+        loaded_model_has_indexer_memory(Some(&args.runtime)),
         args.kv_lifecycle_observer.clone(),
     )?
     .map(Arc::new);

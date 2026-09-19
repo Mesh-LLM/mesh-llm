@@ -92,18 +92,23 @@ each complete certification has
 a portable process-group wall-clock limit, and the workflow's outer battery
 ceiling is 12 hours. For a changed pin, one non-interactive named Goose session
 (`CANARY_AGENT_PROVIDER`/`CANARY_AGENT_MODEL`, default
-`custom_z_ai_coding_plan`/`glm-5.3-flash`, overridable through
+`zai_coding_plan`/`glm-5.3-flash`, overridable through
 `LLAMA_CANARY_GOOSE_PROVIDER`/`LLAMA_CANARY_GOOSE_MODEL`) receives the
 complete developer task:
 repair or regenerate the patch queue, address ABI fallout, and validate repairs
 with prepare, build, smoke, and focused reproductions. The agent then returns
 control instead of starting an additional full battery. The trusted wrapper
 owns the complete candidate gates, and the separate verifier repeats them;
-focused agent results replace neither full pass. The repair loop has an 11.5-hour deadline and independent verification
-has a 12-hour deadline while the complete roster runtime is measured. The agent
+focused agent results replace neither full pass. The repair loop admits coding turns for 11.5 hours, including time spent in
+earlier gates. Each returned candidate receives a fresh 12-hour gate budget,
+even when the repair window is nearly exhausted. A failed pass after that
+window ends is terminal. The repair step is bounded at 1,420 minutes and its
+job at 1,430 minutes, covering the 23.5-hour maximum plus upload headroom.
+Independent verification retains its separate 12-hour deadline. The agent
 has no GitHub credentials. Ending one coding
 response is not success: the wrapper runs the candidate gates and returns their
-logs to the same Goose session until they pass or the deadline expires. The
+logs to the same Goose session while coding admission remains open. An
+already-admitted verification pass may finish after that window closes. The
 repair and independent-verifier checkouts configure the same repository-local
 `mesh-llama-canary-bot` identity before invoking the wrapper, so candidate
 commit creation never depends on persistent-runner global Git configuration.
@@ -241,7 +246,7 @@ it after the protected-main runner-contract update is active.
 | `ci-{linux,macos,windows}-host-slice.yml` | Platform-pure neutral host producers; no empty cross-platform jobs |
 | `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers. The Linux CPU row also runs the native runtime-event gate against the runtime it just built and uploads its evidence. |
 | `ci-{linux,macos,windows}-product-slice.yml` | Platform-pure composition-only product consumers |
-| `ci-platform-checks-slice.yml` | macOS portable/unit, Windows portable, and Windows log-store privacy ACL checks |
+| `ci-platform-checks-slice.yml` | macOS portable/unit, Windows portable/unit, and Windows log-store privacy ACL checks |
 | `ci-linux-product-smoke-slice.yml`, `ci-macos-product-smoke-slice.yml` | Platform-local callers of the typed CPU/CUDA/Vulkan (`gpu-nvidia` self-hosted), conditional ROCm (`gpu-amd`), and Metal product-integration suite plus model-download. The suite stages the registry-pinned SmolLM2 Q8 and IBM Granite 4.0 H Q4 pair once, runs dense standalone/SDK/restart, then dense passive-client split routing and strict recurrent `KvRecurrent` validation. Each split phase persists strict-whitelist seed/worker node, mesh, and peer identity plus stage/model snapshots, then atomically reconciles exact two-observer, topology/run/model/package/manifest, two-stage contiguous-cut and bind-address, ready-status, and served-model agreement. A capped five-minute wall-clock deadline with parallel, bounded endpoint capture finalizes failure evidence before workflow cancellation; the status projection excludes invite tokens, nested fields, and unrelated paths. Product reconciliation independently verifies both evidence files, records their paths and SHA-256 digests in `phase-results.json`, rejects missing or modified evidence, and uploads every JSON snapshot/evidence file with logs on success or failure. Linux CUDA packages admit only the reviewed cudart, cuBLAS, cuBLASLt, and nvJitLink families for the declared CUDA major, retain NVIDIA object bytes, and include the toolkit distribution license. The Linux CUDA smoke verifies that closure with `LD_LIBRARY_PATH` unset; cudart and cuBLAS are not installed by apt, and the NVIDIA driver remains host-owned. Before inference, it records CUDA visibility variables, host driver-library resolution and NVIDIA device nodes, then runs the packaged benchmark's device-count probe without benchmark allocations, using inherited and strict packaged-library resolution. ROCm skips unless `MESH_ROCM_INFERENCE_RUNNER_ENABLED` is exactly `true`; accelerator product-integration rows remain outside the checked plan pending live qualification. |
 | `ci-linux-sdk-slice.yml`, `ci-macos-sdk-slice.yml` | Platform-local Rust/Kotlin/Swift smoke consumers; SDK producers are independent top-level calls and each smoke receives the lane-local immutable UI artifact |
 | `ci-runner-contract-slice.yml` | Provider/cache/plan trust and main runner-image checks |

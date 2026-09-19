@@ -28,7 +28,9 @@ use crate::{
     cli::ServeArgs,
     config::{load_json, validate_config},
     kv_integration::KvStageIntegration,
-    runtime_state::{RuntimeState, load_runtime, loaded_model_state_kind},
+    runtime_state::{
+        RuntimeState, load_runtime, loaded_model_has_indexer_memory, loaded_model_state_kind,
+    },
     telemetry::{Telemetry, TelemetryLevel, TelemetryStats, lifecycle_attrs, now_unix_nanos},
     tokenizer::tokenizer_identity_from_stage,
 };
@@ -249,6 +251,7 @@ pub fn stage_http_router(options: StageHttpOptions) -> Result<Router> {
     let kv = KvStageIntegration::from_loaded_model(
         &config,
         loaded_model_state_kind(runtime.as_ref()),
+        loaded_model_has_indexer_memory(runtime.as_ref()),
         None,
     )?
     .map(Arc::new);

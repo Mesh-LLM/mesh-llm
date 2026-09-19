@@ -239,7 +239,6 @@ fn send_signal_if_matches(
         return SignalOutcome::Failed;
     }
 
-    #[cfg(not(windows))]
     {
         let matches = if let Some(expected_t) = expected_start_time {
             crate::process::validate_pid_matches(pid, expected_comm, expected_t)
@@ -253,11 +252,6 @@ fn send_signal_if_matches(
             tracing::warn!("pid {pid} no longer matches {expected_comm}, skipping signal");
             return SignalOutcome::Skipped;
         }
-    }
-
-    #[cfg(windows)]
-    {
-        let _ = (expected_comm, expected_start_time);
     }
 
     #[cfg(unix)]

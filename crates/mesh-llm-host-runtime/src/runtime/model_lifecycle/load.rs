@@ -653,9 +653,13 @@ mod tests {
             ..Default::default()
         };
 
+        // A spec that is an absolute path is used as-is. Built from the temp
+        // dir so the path is absolute on every platform: a leading slash is
+        // rooted but not absolute on Windows, and the helper rejects it there.
+        let requested = std::env::temp_dir().join("requested.gguf");
         assert_eq!(
-            local_required_runtime_model_path(&config, None, "/models/requested.gguf"),
-            Some("/models/requested.gguf".into())
+            local_required_runtime_model_path(&config, None, &requested.to_string_lossy()),
+            Some(requested)
         );
     }
 

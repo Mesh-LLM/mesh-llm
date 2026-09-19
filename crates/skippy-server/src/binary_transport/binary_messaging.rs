@@ -25,7 +25,10 @@ use crate::{
     config::validate_config,
     frontend::{self, EmbeddedOpenAiArgs, iteration_scheduler::IterationScheduler},
     kv_integration::KvStageIntegration,
-    runtime_state::{RuntimeLaunchOverrides, load_runtime_with_overrides, loaded_model_state_kind},
+    runtime_state::{
+        RuntimeLaunchOverrides, load_runtime_with_overrides, loaded_model_has_indexer_memory,
+        loaded_model_state_kind,
+    },
     telemetry::{Telemetry, lifecycle_attrs},
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -350,6 +353,7 @@ fn run_binary_stage(
     let kv = KvStageIntegration::from_loaded_model(
         &config,
         loaded_model_state_kind(Some(&runtime)),
+        loaded_model_has_indexer_memory(Some(&runtime)),
         None,
     )?
     .map(Arc::new);

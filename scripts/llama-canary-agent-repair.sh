@@ -33,7 +33,7 @@ cd "$ROOT"
 
 OLD_SHA="$(tr -d '[:space:]' < third_party/llama.cpp/upstream.txt)"
 PIN_FILE="$ROOT/third_party/llama.cpp/upstream.txt"
-AGENT_PROVIDER="${CANARY_AGENT_PROVIDER:-custom_z_ai_coding_plan}"
+AGENT_PROVIDER="${CANARY_AGENT_PROVIDER:-zai_coding_plan}"
 AGENT_MODEL="${CANARY_AGENT_MODEL:-glm-5.3-flash}"
 AGENT_TIMEOUT_SECONDS="${CANARY_AGENT_TIMEOUT_SECONDS:-41400}"
 VERIFICATION_TIMEOUT_SECONDS="${CANARY_VERIFICATION_TIMEOUT_SECONDS:-43200}"
@@ -446,12 +446,15 @@ check_split_certification_roster() {
 repair_candidate_until_green() {
   local prompt
   REPAIR_DEADLINE_AT="$(( $(date +%s) + AGENT_TIMEOUT_SECONDS ))"
-  VERIFICATION_DEADLINE_AT="$REPAIR_DEADLINE_AT"
   prompt="$(agent_prompt)"
 
   while remaining_repair_seconds >/dev/null; do
     agent_session_step "$prompt" || return 1
     assert_agent_control_unchanged || return 1
+    # Coding turns may start only within the repair window. Once a turn
+    # returns, give its complete gate sequence a fresh bounded pass, even
+    # when earlier gates have consumed most of the repair window.
+    VERIFICATION_DEADLINE_AT="$(( $(date +%s) + VERIFICATION_TIMEOUT_SECONDS ))"
     if run_candidate_gates refresh; then
       assert_agent_control_unchanged || return 1
       validate_agent_manifest_changes || return 1
@@ -527,7 +530,7 @@ finalize_certified_tree() {
 if [[ "$HARNESS_MODE" == "repair" ]]; then
   write_repair_pin
   verify_repair_pin
-  echo "starting one agent developer session with a ${AGENT_TIMEOUT_SECONDS}s repair-and-test budget..."
+  echo "starting one agent developer session with a ${AGENT_TIMEOUT_SECONDS}s repair window and ${VERIFICATION_TIMEOUT_SECONDS}s per candidate verification pass..."
   if ! repair_candidate_until_green; then
     echo "agent task failed or timed out; no canary branch or pull request was published" >&2
     exit 1

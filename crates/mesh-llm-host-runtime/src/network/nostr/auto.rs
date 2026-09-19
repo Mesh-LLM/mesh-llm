@@ -442,6 +442,16 @@ mod smart_auto_tests {
         }
     }
 
+    /// The `StartNew` branch reaches `default_models_for_vram`, which
+    /// refreshes the remote catalog from Hugging Face whenever the on-disk
+    /// copy is absent or a day old: 115 downloads inside a unit test, and a
+    /// hang wherever the network is slow. An empty catalog keeps the decision
+    /// under test and the network out of it. The override is process-global,
+    /// so every test taking it is `#[serial]`.
+    fn empty_catalog() -> crate::models::remote_catalog::CatalogEntriesOverrideGuard {
+        crate::models::remote_catalog::set_catalog_entries_for_test(Vec::new())
+    }
+
     fn make_mesh(
         name: Option<&str>,
         mesh_id: &str,
@@ -506,7 +516,9 @@ mod smart_auto_tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn smart_auto_excludes_other_named_meshes() {
+        let _catalog = empty_catalog();
         // Without --mesh-name, --auto must only consider the community mesh
         // (unnamed or name == "mesh-llm"). Other named meshes — even though
         // they are publicly discoverable on Nostr — should never appear as
@@ -577,7 +589,9 @@ mod smart_auto_tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn smart_auto_filters_full_mesh() {
+        let _catalog = empty_catalog();
         let meshes = vec![make_mesh(
             None,
             "full",
@@ -634,7 +648,9 @@ mod smart_auto_tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn smart_auto_empty_starts_new() {
+        let _catalog = empty_catalog();
         match smart_auto(&[], 24.0, None) {
             AutoDecision::StartNew { models } => {
                 assert!(!models.is_empty());
