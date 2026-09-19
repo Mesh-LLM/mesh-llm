@@ -1,4 +1,4 @@
-From e43928bd920cb910b354ad131ddd4fa79ce3c7ab Mon Sep 17 00:00:00 2001
+From 8c450bac57ce8872908a524ada9c6afd2d5b54ff Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:28 +1000
 Subject: [PATCH 3/6] llama: integrate explicit stage planning and loading
@@ -18,7 +18,8 @@ Subject: [PATCH 3/6] llama: integrate explicit stage planning and loading
  src/llama-kv-cache.cpp         | 1104 ++++++++++++++++++++++++++++++--
  src/llama-kv-cache.h           |   65 +-
  src/llama-kv-cells.h           |   66 +-
- src/llama-memory-recurrent.cpp |   31 +-
+ src/llama-memory-recurrent.cpp |   69 +-
+ src/llama-memory-recurrent.h   |    9 +
  src/llama-mmap.cpp             |   46 +-
  src/llama-mmap.h               |   10 +
  src/llama-model-loader.cpp     |  270 ++++++--
@@ -27,7 +28,7 @@ Subject: [PATCH 3/6] llama: integrate explicit stage planning and loading
  src/llama-model.h              |   17 +-
  src/llama-quant.cpp            |   12 +-
  src/llama.cpp                  |   91 ++-
- 23 files changed, 3225 insertions(+), 350 deletions(-)
+ 24 files changed, 3268 insertions(+), 354 deletions(-)
 
 diff --git a/include/llama.h b/include/llama.h
 index 3ab935939..9c9aa4a05 100644
@@ -4568,7 +4569,7 @@ index 5d567a6ed..f734b6668 100644
  
      // remove cell i
 diff --git a/src/llama-memory-recurrent.cpp b/src/llama-memory-recurrent.cpp
-index 57919accf..73225ac98 100644
+index 57919accf..9b6b6db63 100644
 --- a/src/llama-memory-recurrent.cpp
 +++ b/src/llama-memory-recurrent.cpp
 @@ -26,7 +26,8 @@ llama_memory_recurrent::llama_memory_recurrent(
@@ -4581,7 +4582,57 @@ index 57919accf..73225ac98 100644
  
      head = 0;
      size = mem_size;
-@@ -116,7 +117,17 @@ llama_memory_recurrent::llama_memory_recurrent(
+@@ -73,10 +74,41 @@ llama_memory_recurrent::llama_memory_recurrent(
+     r_l.resize(n_layer);
+     s_l.resize(n_layer);
+     p_l.resize(n_layer);
++    graph_r_l.resize(n_layer);
++    graph_s_l.resize(n_layer);
++    graph_p_l.resize(n_layer);
++
++    const uint32_t n_rows = mem_size * (1 + n_rs_seq);
++
++    auto graph_ctx_get = [&]() -> ggml_context * {
++        if (!graph_ctx) {
++            ggml_init_params params = {
++                /*.mem_size   =*/ size_t((hparams.ple_conv_state() > 0 ? 3u : 2u)*n_layer*ggml_tensor_overhead()),
++                /*.mem_buffer =*/ NULL,
++                /*.no_alloc   =*/ true,
++            };
++            graph_ctx.reset(ggml_init(params));
++            if (!graph_ctx) {
++                throw std::runtime_error("failed to create graph-only context for rs cache");
++            }
++        }
++        return graph_ctx.get();
++    };
+ 
+     for (int i = 0; i < n_layer; i++) {
+         if (filter && !filter(i)) {
+             LLAMA_LOG_DEBUG("%s: layer %3d: skipped\n", __func__, i);
++
++            ggml_context * ctx = graph_ctx_get();
++            graph_r_l[i] = ggml_new_tensor_2d(ctx, type_r, hparams.n_embd_r(), n_rows);
++            graph_s_l[i] = ggml_new_tensor_2d(ctx, type_s, hparams.n_embd_s(), n_rows);
++            ggml_format_name(graph_r_l[i], "cache_r_l%d", i);
++            ggml_format_name(graph_s_l[i], "cache_s_l%d", i);
++
++            if (hparams.ple_conv_state() > 0 && hparams.is_ple(i)) {
++                graph_p_l[i] = ggml_new_tensor_2d(ctx, type_r, hparams.ple_conv_state(), n_rows);
++                ggml_format_name(graph_p_l[i], "cache_ple_r_l%d", i);
++            }
+             continue;
+         }
+ 
+@@ -98,7 +130,6 @@ llama_memory_recurrent::llama_memory_recurrent(
+             throw std::runtime_error("failed to create ggml context for rs cache");
+         }
+ 
+-        const uint32_t n_rows = mem_size * (1 + n_rs_seq);
+         ggml_tensor * r = ggml_new_tensor_2d(ctx, type_r, hparams.n_embd_r(), n_rows);
+         ggml_tensor * s = ggml_new_tensor_2d(ctx, type_s, hparams.n_embd_s(), n_rows);
+         ggml_format_name(r, "cache_r_l%d", i);
+@@ -116,7 +147,17 @@ llama_memory_recurrent::llama_memory_recurrent(
  
      // allocate tensors and initialize the buffers to avoid NaNs in the padding
      for (auto & [buft, ctx] : ctx_map) {
@@ -4600,7 +4651,7 @@ index 57919accf..73225ac98 100644
          if (!buf) {
              throw std::runtime_error("failed to allocate buffer for rs cache");
          }
-@@ -419,8 +430,14 @@ void llama_memory_recurrent::set_rs_idx(llama_seq_id seq_id, uint32_t idx) {
+@@ -419,8 +460,14 @@ void llama_memory_recurrent::set_rs_idx(llama_seq_id seq_id, uint32_t idx) {
  
  std::map<ggml_backend_buffer_type_t, size_t> llama_memory_recurrent::memory_breakdown() const {
      std::map<ggml_backend_buffer_type_t, size_t> ret;
@@ -4617,7 +4668,7 @@ index 57919accf..73225ac98 100644
      }
      return ret;
  }
-@@ -896,7 +913,7 @@ void llama_memory_recurrent::state_write_meta(llama_io_write_i & io, const std::
+@@ -896,7 +943,7 @@ void llama_memory_recurrent::state_write_meta(llama_io_write_i & io, const std::
  
  void llama_memory_recurrent::state_write_data(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges) const {
      const uint32_t s_trans = 0;
@@ -4626,7 +4677,7 @@ index 57919accf..73225ac98 100644
  
      io.write(&s_trans, sizeof(s_trans));
      io.write(&n_layer, sizeof(n_layer));
-@@ -1091,8 +1108,8 @@ bool llama_memory_recurrent::state_read_data(llama_io_read_i & io, uint32_t cell
+@@ -1091,8 +1138,8 @@ bool llama_memory_recurrent::state_read_data(llama_io_read_i & io, uint32_t cell
      io.read(&s_trans, sizeof(s_trans));
      io.read(&n_layer, sizeof(n_layer));
  
@@ -4637,6 +4688,52 @@ index 57919accf..73225ac98 100644
          return false;
      }
      if (cell_count > size) {
+@@ -1292,15 +1339,15 @@ uint32_t llama_memory_recurrent_context::get_size() const {
+ }
+ 
+ ggml_tensor * llama_memory_recurrent_context::get_r_l(int32_t il) const {
+-    return mem->r_l[il];
++    return mem->r_l[il] != nullptr ? mem->r_l[il] : mem->graph_r_l[il];
+ }
+ 
+ ggml_tensor * llama_memory_recurrent_context::get_s_l(int32_t il) const {
+-    return mem->s_l[il];
++    return mem->s_l[il] != nullptr ? mem->s_l[il] : mem->graph_s_l[il];
+ }
+ 
+ ggml_tensor * llama_memory_recurrent_context::get_p_l(int32_t il) const {
+-    return mem->p_l[il];
++    return mem->p_l[il] != nullptr ? mem->p_l[il] : mem->graph_p_l[il];
+ }
+ 
+ int32_t llama_memory_recurrent_context::s_copy(int i) const {
+diff --git a/src/llama-memory-recurrent.h b/src/llama-memory-recurrent.h
+index 4abb3f5cf..99fcb9fed 100644
+--- a/src/llama-memory-recurrent.h
++++ b/src/llama-memory-recurrent.h
+@@ -114,6 +114,13 @@ public:
+     // a second conv history that must stay replicated across devices, so it cannot share the r row
+     std::vector<ggml_tensor *> p_l;
+ 
++    // Graph-only metadata for layers whose recurrent state is not resident in
++    // this staged context. These tensors have no backing buffer and exist only
++    // so the canonical whole-model graph can be built before stage slicing.
++    std::vector<ggml_tensor *> graph_r_l;
++    std::vector<ggml_tensor *> graph_s_l;
++    std::vector<ggml_tensor *> graph_p_l;
++
+ private:
+     //const llama_model & model;
+     const llama_hparams & hparams;
+@@ -123,6 +130,8 @@ private:
+     // ggml contexts for the KV cache along with the allocated backend buffers:
+     std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
+ 
++    ggml_context_ptr graph_ctx;
++
+     size_t total_size() const;
+ 
+     size_t size_r_bytes() const;
 diff --git a/src/llama-mmap.cpp b/src/llama-mmap.cpp
 index 715a6e354..1f6b2c5a8 100644
 --- a/src/llama-mmap.cpp

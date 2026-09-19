@@ -1,4 +1,4 @@
-From 450ce945994ccc8f520bbb6aeaa5cba442935fd7 Mon Sep 17 00:00:00 2001
+From bf554ef28d5c501c9f5c178c51cc51dfd9a4a6c7 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:59 +1000
 Subject: [PATCH 6/6] test: cover graph-derived stage contracts
@@ -7,7 +7,7 @@ Subject: [PATCH 6/6] test: cover graph-derived stage contracts
  src/skippy/tests/graph_build_inputs.cpp       |  619 +++++++
  .../tests/hardware_application_probe.cpp      |   64 +
  src/skippy/tests/noalloc_graph_planning.cpp   | 1088 ++++++++++++
- .../tests/renamed_multishard_planning.cpp     | 1504 +++++++++++++++++
+ .../tests/renamed_multishard_planning.cpp     | 1512 +++++++++++++++++
  src/skippy/tests/runtime_events.cpp           |  489 ++++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
@@ -18,11 +18,11 @@ Subject: [PATCH 6/6] test: cover graph-derived stage contracts
  tests/test-deepseek4-mtp.h                    |   88 +
  tests/test-llama-archs.cpp                    |  164 +-
  tests/test-skippy-kv-cells-contiguous.cpp     |   20 +
- tests/test-skippy-kv-page-export.cpp          |  283 ++++
+ tests/test-skippy-kv-page-export.cpp          |  283 +++
  tests/test-skippy-model-loader-accounting.cpp |  326 ++++
  .../test-skippy-recurrent-state-roundtrip.cpp |  159 ++
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 18 files changed, 6220 insertions(+), 16 deletions(-)
+ 18 files changed, 6228 insertions(+), 16 deletions(-)
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/hardware_application_probe.cpp
  create mode 100644 src/skippy/tests/noalloc_graph_planning.cpp
@@ -1829,10 +1829,10 @@ index 000000000..11559ce5c
 +}
 diff --git a/src/skippy/tests/renamed_multishard_planning.cpp b/src/skippy/tests/renamed_multishard_planning.cpp
 new file mode 100644
-index 000000000..34efecd19
+index 000000000..a4a7117f6
 --- /dev/null
 +++ b/src/skippy/tests/renamed_multishard_planning.cpp
-@@ -0,0 +1,1504 @@
+@@ -0,0 +1,1512 @@
 +#include "ggml-backend.h"
 +#include "ggml.h"
 +#include "gguf.h"
@@ -3116,14 +3116,6 @@ index 000000000..34efecd19
 +        return 12;
 +    }
 +
-+    // The resident-only payload regression targets transformer stage loading
-+    // and execution.
-+    // Recurrent frontier execution has separate no-allocation coverage and can
-+    // require architecture-specific state lanes beyond this loader contract.
-+    if (expect_recurrent) {
-+        return 0;
-+    }
-+
 +    const std::string selected_payload_path = std::string(output_directory) + "/terminal-stage.gguf";
 +    if (!write_selected_payload(inventory, terminal_stage.resident_names, selected_payload_path, error)) {
 +        std::fprintf(stderr, "terminal stage payload write failed: %s\n", error.c_str());
@@ -3153,6 +3145,10 @@ index 000000000..34efecd19
 +    runtime_config.activation_import_identities = terminal_import_identity_ptrs.data();
 +    runtime_config.activation_import_identity_count = terminal_import_identity_ptrs.size();
 +    runtime_config.activation_import_bindings = terminal_import_binding_ptrs.data();
++    if (expect_recurrent) {
++        runtime_config.n_batch = 512;
++        runtime_config.n_ubatch = 128;
++    }
 +    skippy_model * terminal_model = nullptr;
 +    runtime_error = nullptr;
 +    const skippy_status terminal_status = skippy_model_open_from_parts(
@@ -3164,6 +3160,18 @@ index 000000000..34efecd19
 +                runtime_error == nullptr ? "" : runtime_error->message);
 +        skippy_error_free(runtime_error);
 +        return 14;
++    }
++    // Recurrent frontier execution has separate no-allocation coverage and can
++    // require architecture-specific state lanes beyond this loader contract.
++    // The production-sized terminal load still has to complete promptly.
++    if (expect_recurrent) {
++        skippy_model_free(terminal_model, &runtime_error);
++        if (runtime_error != nullptr) {
++            std::fprintf(stderr, "recurrent terminal stage runtime free failed: %s\n", runtime_error->message);
++            skippy_error_free(runtime_error);
++            return 15;
++        }
++        return 0;
 +    }
 +    skippy_session * terminal_session = nullptr;
 +    if (skippy_session_create(terminal_model, &terminal_session, &runtime_error) != SKIPPY_STATUS_OK ||
