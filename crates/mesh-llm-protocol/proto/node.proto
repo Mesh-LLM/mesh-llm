@@ -261,6 +261,16 @@ message ServedModelMetadata {
   optional uint32 kv_head_count = 10;
   optional uint32 expert_count = 11;
   optional uint32 active_expert_count = 12;
+  optional ModelWorkloadClass workload_class = 13;
+}
+
+enum ModelWorkloadClass {
+  MODEL_WORKLOAD_CLASS_UNSPECIFIED = 0;
+  MODEL_WORKLOAD_CLASS_CAUSAL_GENERATION = 1;
+  MODEL_WORKLOAD_CLASS_EMBEDDING = 2;
+  MODEL_WORKLOAD_CLASS_RERANK = 3;
+  MODEL_WORKLOAD_CLASS_ENCODER_DECODER = 4;
+  MODEL_WORKLOAD_CLASS_SPEECH_SYNTHESIS = 5;
 }
 
 message ServedModelIdentity {

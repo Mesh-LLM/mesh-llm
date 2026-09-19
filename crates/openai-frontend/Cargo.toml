@@ -9,7 +9,8 @@ homepage = "https://github.com/Mesh-LLM/mesh-llm"
 
 [dependencies]
 async-trait = "0.1"
-axum = "0.8"
+axum = { version = "0.8", features = ["multipart"] }
+base64 = "0.22"
 futures-core = "0.3"
 futures-util = "0.3"
 mesh-llm-guardrails = { path = "../mesh-llm-guardrails", version = "0.76.1"  }

@@ -1455,7 +1455,7 @@ impl Node {
         })
     }
 
-    #[cfg(test)]
+    /// Snapshot only this node's models for endpoint-local workload admission.
     pub async fn served_model_descriptors(&self) -> Vec<ServedModelDescriptor> {
         self.served_model_descriptors.lock().await.clone()
     }

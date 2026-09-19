@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
-from pathlib import Path
 import struct
 import subprocess
 import tempfile
 import unittest
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PLANNER = ROOT / "scripts" / "plan-family-battery.py"
@@ -78,7 +78,8 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         for index, (relative, block_count) in enumerate(
             zip(files, block_counts, strict=True)
         ):
-            blob_id = f"{index + 1:064x}"
+            # Target and projector fixtures may share a repository and snapshot.
+            blob_id = hashlib.sha256(f"{index}:{relative}".encode()).hexdigest()
             blob = repo_root / "blobs" / blob_id
             blob.parent.mkdir(parents=True, exist_ok=True)
             shard_width = embedding_length if block_count is not None else None
@@ -110,13 +111,30 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         )
 
     def test_checked_in_policy_resolves_all_certified_models(self) -> None:
+        """Preserve all primary split targets and six explicitly classed workload-oracle rows."""
         result = self._run()
         self.assertEqual(0, result.returncode, result.stderr)
         plan = json.loads(result.stdout)
-        self.assertEqual(83, plan["selected_family_count"])
+        self.assertEqual(89, plan["selected_family_count"])
         self.assertEqual(
             ["single-step", "chain", "state-handoff"],
             plan["required_certification_lanes"],
+        )
+        self.assertEqual(
+            {
+                "causal_generation",
+                "embedding",
+                "rerank",
+                "encoder_decoder",
+                "ocr",
+                "speech_synthesis",
+                "speech_recognition",
+            },
+            {model["class"] for model in plan["selected_models"]},
+        )
+        self.assertEqual(
+            ["embedding-smoke", "embedding-oracle"],
+            plan["model_class_lanes"]["embedding"],
         )
         glm47 = next(
             model
@@ -141,6 +159,27 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         qwen4exp = by_family["qwen4exp"]
         self.assertEqual(10240, qwen4exp["execution"]["activation_width"])
         self.assertEqual(3, len(qwen4exp["artifact"]["files"]))
+        expected_workloads = {
+            "nomic-bert-embedding": ("embedding", "embedding-smoke"),
+            "jina-bert-v2-rerank": ("rerank", "rerank-smoke"),
+            "t5-encoder-decoder": (
+                "encoder_decoder",
+                "encoder-decoder-smoke",
+            ),
+            "paddleocr": ("ocr", "ocr-smoke"),
+            "qwen3tts": ("speech_synthesis", "speech-synthesis-smoke"),
+            "ultravox": ("speech_recognition", "speech-recognition-smoke"),
+        }
+        for family, (model_class, lane) in expected_workloads.items():
+            with self.subTest(family=family):
+                model = by_family[family]
+                self.assertEqual(model_class, model["class"])
+                self.assertEqual([lane, lane.replace("-smoke", "-oracle")], model["certification_lanes"])
+                self.assertEqual("workload-oracle", model["profile"])
+                self.assertEqual("certified", model["certification_status"])
+                self.assertEqual("local-monolithic", model["oracle"])
+                self.assertEqual("disabled", model["execution"]["speculative_policy"])
+                self.assertEqual(0, model["execution"]["mtp_layers"])
         for auxiliary in ("deepseek4", "gemma4-assistant", "muse-glimmer", "glm-dsa"):
             self.assertNotIn(auxiliary, by_family)
 
@@ -150,6 +189,7 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         self.assertIn("unrecognized arguments: --cadence", result.stderr)
 
     def test_mmproj_artifacts_resolve_and_cover_the_vision_families(self) -> None:
+        """Require immutable projector sidecars for the complete causal and non-chat media roster."""
         result = self._run()
         self.assertEqual(0, result.returncode, result.stderr)
         plan = json.loads(result.stdout)
@@ -166,6 +206,9 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
                 "qwen2-vl",
                 "qwen3-vl",
                 "qwen3vlmoe",
+                "paddleocr",
+                "qwen3tts",
+                "ultravox",
             },
             set(with_mmproj),
         )
@@ -176,9 +219,7 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
                 self.assertEqual(
                     set(mmproj["file_integrity"]), set(mmproj["files"])
                 )
-                self.assertRegex(
-                    mmproj["files"][0], r"^mmproj"
-                )
+                self.assertIn("mmproj", mmproj["files"][0].lower())
 
     def test_certified_model_requires_an_explicit_activation_width(self) -> None:
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -214,6 +255,82 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("must require exactly the three core lanes", result.stderr)
 
+    def test_workload_smoke_profile_cannot_claim_an_oracle(self) -> None:
+        """Prevent smoke profiles from claiming independent-oracle evidence."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        manifest["policy"]["profiles"]["workload-smoke"]["oracle"] = "local-monolithic"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "manifest.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            result = self._run(path)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("workload-smoke must remain provisional and oracle-free", result.stderr)
+
+    def test_workload_oracle_profile_cannot_drop_the_oracle_lane(self) -> None:
+        """Require the oracle lane for profiles claiming oracle validation."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        manifest["policy"]["profiles"]["workload-oracle"]["required_lanes"] = ["class-specific-smoke"]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "manifest.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            result = self._run(path)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("workload-oracle requires certified local-monolithic", result.stderr)
+
+    def test_certified_workload_requires_fixture_and_comparison_evidence(self) -> None:
+        """Require fixtures and comparison evidence before workload certification."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        model = next(row for row in manifest["models"] if row["profile"] == "workload-oracle")
+        del model["evidence"]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "manifest.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            result = self._run(path)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("evidence must be an object", result.stderr)
+
+    def test_supplied_plan_rejects_tampered_selected_model_rows(self) -> None:
+        """Reject changes to canonical model selection or shard metadata in supplied plans."""
+        generated = self._run(MANIFEST, "--shard-count", "2")
+        self.assertEqual(0, generated.returncode, generated.stderr)
+        plan = json.loads(generated.stdout)
+        family = plan["selected_models"].pop()["family"]
+        plan["selected_family_count"] -= 1
+        for shard in plan["shards"]:
+            if family in shard["families"]:
+                shard["families"].remove(family)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "tampered-plan.json"
+            path.write_text(json.dumps(plan), encoding="utf-8")
+            result = self._run(MANIFEST, "--verify-plan", str(path))
+        self.assertEqual(2, result.returncode)
+        self.assertIn("differs from the canonical manifest and selection", result.stderr)
+
+    def test_supplied_plan_rejects_inflated_oracle_status(self) -> None:
+        """Reject plans promoting uncertified manifest entries to oracle-certified status."""
+        generated = self._run(MANIFEST, "--families", "nomic-bert-embedding")
+        self.assertEqual(0, generated.returncode, generated.stderr)
+        plan = json.loads(generated.stdout)
+        plan["selected_models"][0]["oracle"] = "none"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "tampered-plan.json"
+            path.write_text(json.dumps(plan), encoding="utf-8")
+            result = self._run(MANIFEST, "--verify-plan", str(path))
+        self.assertEqual(2, result.returncode)
+        self.assertIn("differs from the canonical manifest and selection", result.stderr)
+
+    def test_non_chat_model_cannot_claim_the_certified_full_profile(self) -> None:
+        """Prevent non-chat workloads from inheriting causal-only certification."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        model = next(row for row in manifest["models"] if row["class"] == "embedding")
+        model["profile"] = "full"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "manifest.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            result = self._run(path)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("requires a class-specific workload profile", result.stderr)
+
     def test_duplicate_family_is_rejected(self) -> None:
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         manifest["models"].append(copy.deepcopy(manifest["models"][0]))
@@ -223,6 +340,98 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
             result = self._run(path)
         self.assertEqual(2, result.returncode)
         self.assertIn("duplicate family", result.stderr)
+
+    def test_model_class_is_required_and_selects_class_specific_lanes(self) -> None:
+        """Require an explicit supported model class and its corresponding validation lanes."""
+        source = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        model = copy.deepcopy(source["models"][0])
+        source["models"] = [model]
+        del model["class"]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "manifest.json"
+            path.write_text(json.dumps(source), encoding="utf-8")
+            missing = self._run(path)
+            model["class"] = "embedding"
+            model["profile"] = "workload-smoke"
+            model["execution"]["speculative_policy"] = "disabled"
+            path.write_text(json.dumps(source), encoding="utf-8")
+            embedding = self._run(path)
+
+        self.assertEqual(2, missing.returncode)
+        self.assertIn("models[0].class must be", missing.stderr)
+        self.assertEqual(0, embedding.returncode, embedding.stderr)
+        selected = json.loads(embedding.stdout)["selected_models"][0]
+        self.assertEqual("embedding", selected["class"])
+        self.assertEqual(["embedding-smoke"], selected["certification_lanes"])
+
+    def test_projector_classes_require_an_explicit_projector_artifact(self) -> None:
+        """Require a pinned projector for model classes that consume media."""
+        source = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        model = copy.deepcopy(source["models"][0])
+        source["models"] = [model]
+        model["class"] = "speech_recognition"
+        model["profile"] = "workload-smoke"
+        model["execution"]["speculative_policy"] = "disabled"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "manifest.json"
+            path.write_text(json.dumps(source), encoding="utf-8")
+            result = self._run(path)
+
+        self.assertEqual(2, result.returncode)
+        self.assertIn("requires an mmproj_artifact", result.stderr)
+
+    def test_non_causal_classes_reject_split_and_speculative_policy(self) -> None:
+        """Reject split and speculative policies unsupported by non-causal workloads."""
+        source = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        model = copy.deepcopy(source["models"][0])
+        source["models"] = [model]
+        model["class"] = "embedding"
+        model["profile"] = "workload-smoke"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "manifest.json"
+            path.write_text(json.dumps(source), encoding="utf-8")
+            speculative = self._run(path)
+            model["execution"]["speculative_policy"] = "disabled"
+            model["execution"]["mtp_layers"] = 1
+            path.write_text(json.dumps(source), encoding="utf-8")
+            split = self._run(path)
+
+        self.assertEqual(2, speculative.returncode)
+        self.assertIn("must disable speculative decoding", speculative.stderr)
+        self.assertEqual(2, split.returncode)
+        self.assertIn("must not request split or MTP certification", split.stderr)
+
+    def test_inspect_gguf_reports_canonical_dimensions_without_a_manifest(self) -> None:
+        """Read canonical GGUF dimensions independently of family-manifest metadata."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "fixture.gguf"
+            self._write_gguf(path, 7, 1536)
+            result = subprocess.run(
+                [str(PLANNER), "--inspect-gguf", str(path)],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(
+            {"activation_width": 1536, "layer_count": 7},
+            json.loads(result.stdout),
+        )
+
+    def test_unknown_model_class_is_rejected(self) -> None:
+        """Reject unknown model classes instead of selecting a causal fallback."""
+        source = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        source["models"] = [copy.deepcopy(source["models"][0])]
+        source["models"][0]["class"] = "guessed-from-name"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "manifest.json"
+            path.write_text(json.dumps(source), encoding="utf-8")
+            result = self._run(path)
+
+        self.assertEqual(2, result.returncode)
+        self.assertIn("class must be one of", result.stderr)
 
     def test_cache_gate_requires_every_exact_revision_file(self) -> None:
         source = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -319,6 +528,55 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("is certified for architecture qwen3", result.stderr)
         self.assertIn("declares different", result.stderr)
+
+    def test_non_chat_cache_gate_checks_architecture_without_changing_workload_lanes(self) -> None:
+        """Validate each non-chat target's architecture independently of its workload class."""
+        source = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        for row in source["models"]:
+            if row["class"] == "causal_generation":
+                continue
+            with (
+                self.subTest(family=row["family"]),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                root = Path(temp_dir)
+                model = copy.deepcopy(row)
+                manifest = root / "manifest.json"
+                policy = {**source, "models": [model]}
+                self._materialize_cached_artifact(
+                    root,
+                    model["artifact"],
+                    [model["execution"]["trunk_layers"]],
+                    embedding_length=model["execution"]["activation_width"],
+                    architecture=model["architecture"],
+                )
+                if "mmproj_artifact" in model:
+                    self._materialize_cached_artifact(
+                        root, model["mmproj_artifact"], [None]
+                    )
+                manifest.write_text(json.dumps(policy), encoding="utf-8")
+                accepted = self._run(
+                    manifest, "--check-cache", "--cache-root", str(root / "cache")
+                )
+                self.assertEqual(0, accepted.returncode, accepted.stderr)
+                selected = json.loads(accepted.stdout)["selected_models"][0]
+                self.assertEqual(row["architecture"], selected["architecture"])
+                self.assertEqual(row["class"], selected["class"])
+                self.assertEqual(2, len(selected["certification_lanes"]))
+                self.assertTrue(
+                    all(
+                        "-smoke" in lane or "-oracle" in lane
+                        for lane in selected["certification_lanes"]
+                    )
+                )
+                model["architecture"] = "different"
+                manifest.write_text(json.dumps(policy), encoding="utf-8")
+                rejected = self._run(
+                    manifest, "--check-cache", "--cache-root", str(root / "cache")
+                )
+                self.assertEqual(2, rejected.returncode)
+                self.assertIn("is certified for architecture different", rejected.stderr)
+                self.assertIn(f"declares {row['architecture']}", rejected.stderr)
 
     def test_cache_gate_derives_qwen4exp_hyper_connected_activation_width(self) -> None:
         source = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -525,6 +783,7 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         self.assertIn("has no GGUF shard", result.stderr)
 
     def test_shards_are_deterministic_and_preserve_every_family_once(self) -> None:
+        """Sharding must be reproducible and neither duplicate nor omit a selected family."""
         first = self._run(MANIFEST, "--shard-count", "4")
         second = self._run(MANIFEST, "--shard-count", "4")
         self.assertEqual(0, first.returncode, first.stderr)
@@ -533,8 +792,8 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         families = [
             family for shard in plan["shards"] for family in shard["families"]
         ]
-        self.assertEqual(83, len(families))
-        self.assertEqual(83, len(set(families)))
+        self.assertEqual(89, len(families))
+        self.assertEqual(89, len(set(families)))
         self.assertEqual(4, len(plan["github_matrix"]["include"]))
 
 

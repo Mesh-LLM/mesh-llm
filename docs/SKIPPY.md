@@ -754,14 +754,21 @@ router it provides. Mesh's public ingress should be able to:
 - stream responses through the shared adapters without buffering the full
   response body.
 
-Embeddings can be deferred for now. The replacement plan does not need
-`/v1/embeddings` parity before removing `llama-server`.
+The shared frontend and local full-model runtime now cover embedding, rerank,
+encoder-decoder, OCR, speech-synthesis, and speech-recognition workloads. These
+paths are intentionally separate from staged causal generation: unsupported
+stage shapes return structured errors instead of inheriting a generation lane.
+See [NON_CHAT_MODELS.md](NON_CHAT_MODELS.md) for the current endpoint and
+certification matrix.
 
 Current branch status:
 
 - `openai-frontend` owns `/v1/chat/completions`, `/v1/completions`, and
   `/v1/responses` request/response shapes, streaming SSE adapters, OpenAI error
   bodies, tool-call fields, structured-output fields, and logprob fields;
+- `openai-frontend` also owns `/v1/embeddings`, `/v1/rerank`, and `/v1/audio/*`
+  request/response shapes, including bounded multipart uploads and binary audio
+  responses;
 - frontend fixture coverage accepts and translates tool, structured-output,
   logprob, streaming, and responses requests without mesh carrying a second
   public OpenAI model;
