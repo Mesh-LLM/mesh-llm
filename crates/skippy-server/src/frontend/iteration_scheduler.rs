@@ -354,6 +354,7 @@ struct RequestState {
 
 struct SchedulerWorker {
     runtime: Arc<Mutex<RuntimeState>>,
+    compute_meter: Arc<crate::compute_meter::StageComputeMeter>,
     scheduler: Scheduler,
     requests: BTreeMap<String, RequestState>,
     direct_iterations: VecDeque<DirectIteration>,
@@ -385,13 +386,14 @@ impl IterationScheduler {
         continuous_batching: bool,
         telemetry: Telemetry,
     ) -> OpenAiResult<Self> {
-        let (lane_count, kv_pool_tokens) = {
+        let (lane_count, kv_pool_tokens, compute_meter) = {
             let runtime = runtime
                 .lock()
                 .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
             (
                 runtime.lane_count() as usize,
                 runtime.kv_pool_tokens() as usize,
+                runtime.compute_meter(),
             )
         };
         let safe_mode = scheduler_safe_mode_from_value(env::var(SAFE_MODE_ENV).ok().as_deref());
@@ -468,6 +470,7 @@ impl IterationScheduler {
                     active_runtime_sessions: 0,
                     direct_wave_full: false,
                     telemetry: Some(telemetry),
+                    compute_meter,
                     last_served_direct: false,
                     last_served_cache_runtime: false,
                     last_emitted_lifecycle_counters: (0, 0, 0, 0),
@@ -1036,6 +1039,7 @@ impl SchedulerWorker {
         let label = operation.label;
         let cache_operation = operation.control.clone();
         (operation.run)(&self.runtime);
+        self.record_compute(started.elapsed());
         if let Ok(runtime) = self.runtime.lock() {
             self.active_runtime_sessions = runtime.active_session_count();
             if self.active_runtime_sessions < self.max_direct_batch_size {
@@ -1387,8 +1391,10 @@ impl SchedulerWorker {
         let result = runtime
             .iteration_batch_sampled(&requests)
             .map_err(openai_backend_error);
-        let runtime_lock_hold_ms = hold_started.elapsed().as_secs_f64() * 1_000.0;
+        let hold = hold_started.elapsed();
+        let runtime_lock_hold_ms = hold.as_secs_f64() * 1_000.0;
         drop(runtime);
+        self.record_compute(hold);
         if let Some(telemetry) = self.telemetry.as_ref() {
             telemetry.emit_debug(
                 "stage.scheduler_feature_iteration",
@@ -1704,6 +1710,10 @@ impl SchedulerWorker {
         Ok((configured, failures))
     }
 
+    fn record_compute(&self, elapsed: Duration) {
+        self.compute_meter.record(elapsed);
+    }
+
     fn execute_plan(
         &self,
         plan: &skippy_scheduler::IterationPlan,
@@ -1712,6 +1722,7 @@ impl SchedulerWorker {
             .runtime
             .lock()
             .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
+        let hold_started = Instant::now();
         let requests = plan
             .work
             .iter()
@@ -1733,8 +1744,10 @@ impl SchedulerWorker {
                 },
             })
             .collect::<Vec<_>>();
-        runtime
-            .iteration_batch_sampled(&requests)
+        let result = runtime.iteration_batch_sampled(&requests);
+        drop(runtime);
+        self.record_compute(hold_started.elapsed());
+        result
             .map(|outputs| {
                 outputs
                     .samples

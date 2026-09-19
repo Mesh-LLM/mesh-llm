@@ -33,6 +33,7 @@ pub struct RuntimeLaunchOverrides {
 
 pub struct RuntimeState {
     pub model: StageModel,
+    compute_meter: Arc<crate::compute_meter::StageComputeMeter>,
     layer_start: u32,
     layer_end: u32,
     lane_count: u32,
@@ -181,6 +182,7 @@ impl RuntimeState {
             session_token_counts: BTreeMap::new(),
             session_resident_prefixes: BTreeMap::new(),
             session_lifecycle_observer: None,
+            compute_meter: Arc::default(),
             modelless_for_test: true,
         }
     }
@@ -210,6 +212,17 @@ impl RuntimeState {
 
     pub fn lane_count(&self) -> u32 {
         self.lane_count
+    }
+
+    /// Compute-busy accounting for this stage runtime.
+    pub fn compute_meter(&self) -> Arc<crate::compute_meter::StageComputeMeter> {
+        self.compute_meter.clone()
+    }
+
+    /// Share an externally owned meter, so the embedding host can read it.
+    /// Must be set before the iteration scheduler starts.
+    pub fn set_compute_meter(&mut self, meter: Arc<crate::compute_meter::StageComputeMeter>) {
+        self.compute_meter = meter;
     }
 
     pub(crate) fn active_session_count(&self) -> usize {
@@ -317,6 +330,7 @@ pub fn load_runtime_with_overrides(
         session_token_counts: BTreeMap::new(),
         session_resident_prefixes: BTreeMap::new(),
         session_lifecycle_observer,
+        compute_meter: Arc::default(),
         #[cfg(test)]
         modelless_for_test: false,
     }))))
@@ -374,6 +388,7 @@ pub fn load_runtime_with_overrides_and_open_events(
         session_token_counts: BTreeMap::new(),
         session_resident_prefixes: BTreeMap::new(),
         session_lifecycle_observer,
+        compute_meter: Arc::default(),
         #[cfg(test)]
         modelless_for_test: false,
     }))))

@@ -32,6 +32,9 @@ pub struct BinaryStageOptions {
     /// the stage-control load request.
     pub continuous_batching: bool,
     pub openai: Option<EmbeddedOpenAiStageOptions>,
+    /// Receives this stage's runtime compute time, for performance-aware
+    /// split placement. `None` skips the accounting.
+    pub compute_meter: Option<std::sync::Arc<crate::compute_meter::StageComputeMeter>>,
 }
 
 #[derive(Clone)]
@@ -153,6 +156,7 @@ impl BinaryStageOptions {
             downstream_connect_timeout_secs: args.downstream_connect_timeout_secs,
             native_mtp_enabled,
             continuous_batching: true,
+            compute_meter: None,
             openai,
         })
     }

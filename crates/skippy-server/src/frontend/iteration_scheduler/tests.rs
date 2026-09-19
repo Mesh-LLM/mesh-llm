@@ -24,6 +24,7 @@ fn expired_direct_iteration_behind_blocked_worker_never_reaches_native_runtime()
     let (commands, receiver) = std_mpsc::sync_channel(8);
     let worker = thread::spawn(move || {
         SchedulerWorker {
+            compute_meter: std::sync::Arc::default(),
             runtime,
             scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8)),
             requests: BTreeMap::new(),
@@ -194,6 +195,7 @@ fn server_scheduler_worker_batches_and_completes_default_generations() {
     let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(2)));
     let (_commands, receiver) = std_mpsc::channel();
     let mut worker = SchedulerWorker {
+        compute_meter: std::sync::Arc::default(),
         runtime,
         scheduler: Scheduler::new(build_scheduler_config(2, 64, 0, Some(8), Some(8), 8)),
         requests: BTreeMap::new(),
@@ -340,6 +342,7 @@ fn token_control_is_applied_without_blocking_the_scheduler_iteration() {
     let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
     let (_commands, receiver) = std_mpsc::channel();
     let mut worker = SchedulerWorker {
+        compute_meter: std::sync::Arc::default(),
         runtime,
         scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8)),
         requests: BTreeMap::new(),
@@ -397,6 +400,7 @@ fn resumed_request_cancellation_leaves_runtime_for_caller_cleanup() {
         .track_session_tokens_for_test("resumed", 1);
     let (_commands, receiver) = std_mpsc::channel();
     let mut worker = SchedulerWorker {
+        compute_meter: std::sync::Arc::default(),
         runtime: Arc::clone(&runtime),
         scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8)),
         requests: BTreeMap::new(),
@@ -452,6 +456,7 @@ fn feature_runtime_operations_execute_on_the_scheduler_worker() {
     let (commands, receiver) = std_mpsc::sync_channel(8);
     let worker = thread::spawn(move || {
         SchedulerWorker {
+            compute_meter: std::sync::Arc::default(),
             runtime,
             scheduler: Scheduler::new(build_scheduler_config(3, 64, 0, Some(8), Some(8), 8)),
             requests: BTreeMap::new(),
@@ -496,6 +501,7 @@ fn detached_runtime_operation_returns_before_work_completes() {
     let (commands, receiver) = std_mpsc::sync_channel(8);
     let worker = thread::spawn(move || {
         SchedulerWorker {
+            compute_meter: std::sync::Arc::default(),
             runtime,
             scheduler: Scheduler::new(build_scheduler_config(3, 64, 0, Some(8), Some(8), 8)),
             requests: BTreeMap::new(),
@@ -637,6 +643,7 @@ fn full_direct_wave_suppresses_cache_runtime_while_direct_queue_is_temporarily_e
     let (_commands, receiver) = std_mpsc::channel();
     let (selected, selected_rx) = std_mpsc::channel();
     let mut worker = SchedulerWorker {
+        compute_meter: std::sync::Arc::default(),
         runtime,
         scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8)),
         requests: BTreeMap::new(),
@@ -682,6 +689,7 @@ fn resident_kv_does_not_engage_direct_wave_gate() {
     let (_commands, receiver) = std_mpsc::channel();
     let (selected, selected_rx) = std_mpsc::channel();
     let mut worker = SchedulerWorker {
+        compute_meter: std::sync::Arc::default(),
         runtime,
         scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8)),
         requests: BTreeMap::new(),
@@ -774,6 +782,7 @@ fn worker_panic_is_contained_and_fails_active_requests() {
     let (commands, receiver) = std_mpsc::sync_channel(8);
     let worker = thread::spawn(move || {
         SchedulerWorker {
+            compute_meter: std::sync::Arc::default(),
             runtime,
             scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8)),
             requests: BTreeMap::new(),

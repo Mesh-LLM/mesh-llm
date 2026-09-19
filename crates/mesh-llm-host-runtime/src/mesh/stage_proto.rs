@@ -85,6 +85,8 @@ pub(super) fn stage_runtime_status_from_snapshot(
         flash_attn_type: status.flash_attn_type,
         error: status.error,
         shutdown_generation: status.shutdown_generation,
+        compute_busy_nanos: status.compute_busy_nanos,
+        compute_operations: status.compute_operations,
     }
 }
 
@@ -133,6 +135,8 @@ pub(crate) fn stage_snapshot_from_runtime_status(
         coordinator_term: 0,
         coordinator_id: None,
         lease_until_unix_ms: 0,
+        compute_busy_nanos: 0,
+        compute_operations: 0,
     }
 }
 
@@ -766,6 +770,8 @@ pub(super) fn stage_control_unavailable_response(
                 coordinator_term: stop.coordinator_term,
                 coordinator_id: None,
                 lease_until_unix_ms: 0,
+                compute_busy_nanos: 0,
+                compute_operations: 0,
             }
         }
         crate::inference::skippy::StageControlRequest::Status(_) => {
@@ -845,6 +851,8 @@ pub(crate) fn stage_status_from_load(
         coordinator_term: load.coordinator_term,
         coordinator_id: load.coordinator_id,
         lease_until_unix_ms: load.lease_until_unix_ms,
+        compute_busy_nanos: 0,
+        compute_operations: 0,
     }
 }
 
@@ -1130,6 +1138,8 @@ pub(super) fn stage_status_to_proto(
         activation_codec_policy: stage_activation_codec_policy_to_proto(
             status.activation_codec_policy,
         ) as i32,
+        compute_busy_nanos: status.compute_busy_nanos,
+        compute_operations: status.compute_operations,
     }
 }
 
@@ -1207,6 +1217,8 @@ pub(super) fn stage_status_from_proto(
             .transpose()
             .context("invalid stage status coordinator_id")?,
         lease_until_unix_ms: status.lease_until_unix_ms,
+        compute_busy_nanos: status.compute_busy_nanos,
+        compute_operations: status.compute_operations,
     })
 }
 

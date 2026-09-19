@@ -157,17 +157,23 @@ pub fn plan_topology_with_stage0(
 ///
 /// Returns `None` when a node lacks a speed, no feasible cut exists, or the
 /// balanced cut is the current one.
-pub fn rebalance_topology(input: &TopologyPlanningInput, current: &TopologyPlan) -> Option<TopologyPlan> {
+pub fn rebalance_topology(
+    input: &TopologyPlanningInput,
+    current: &TopologyPlan,
+) -> Option<TopologyPlan> {
     let nodes = usable_nodes(&input.nodes);
     let layer_weights = layer_weight_bytes(input);
     let layer_required = layer_required_bytes(
         &layer_weights,
         &recurrent_bytes_by_layer(input),
-        input.kv_bytes_per_token.div_ceil(u64::from(input.layer_count)),
+        input
+            .kv_bytes_per_token
+            .div_ceil(u64::from(input.layer_count)),
         current.context_length,
         current.parallel_lanes,
     )?;
-    let stages = performance::balance_stages(&current.stages, &nodes, &layer_weights, &layer_required)?;
+    let stages =
+        performance::balance_stages(&current.stages, &nodes, &layer_weights, &layer_required)?;
     if stages
         .iter()
         .zip(&current.stages)
@@ -958,7 +964,11 @@ mod tests {
     }
 
     fn layers_on(plan: &TopologyPlan, node_id: &str) -> u32 {
-        let stage = plan.stages.iter().find(|stage| stage.node_id == node_id).unwrap();
+        let stage = plan
+            .stages
+            .iter()
+            .find(|stage| stage.node_id == node_id)
+            .unwrap();
         stage.layer_end - stage.layer_start
     }
 
@@ -972,7 +982,10 @@ mod tests {
         assert_eq!(layers_on(&balanced, "m4"), 23);
         let memory_bottleneck = memory_only.throughput.unwrap().bottleneck_decode_nanos;
         let balanced_bottleneck = balanced.throughput.unwrap().bottleneck_decode_nanos;
-        assert!(balanced_bottleneck * 10 < memory_bottleneck * 7, "{balanced_bottleneck} vs {memory_bottleneck}");
+        assert!(
+            balanced_bottleneck * 10 < memory_bottleneck * 7,
+            "{balanced_bottleneck} vs {memory_bottleneck}"
+        );
     }
 
     #[test]

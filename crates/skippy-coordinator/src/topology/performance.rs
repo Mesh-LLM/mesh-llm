@@ -232,7 +232,10 @@ mod tests {
         // 36 equal layers; M1-class ~68 GB/s vs M4-class ~120 GB/s.
         let weights = vec![130_000_000u64; 36];
         let required = weights.clone();
-        let nodes = [node("m1", 12 * GB, Some(68 * GB)), node("m4", 12 * GB, Some(120 * GB))];
+        let nodes = [
+            node("m1", 12 * GB, Some(68 * GB)),
+            node("m4", 12 * GB, Some(120 * GB)),
+        ];
         let stages = [stage(0, "m1", 0, 18), stage(1, "m4", 18, 36)];
 
         let balanced = balance_stages(&stages, &nodes, &weights, &required).unwrap();
@@ -248,7 +251,10 @@ mod tests {
     #[test]
     fn equal_nodes_split_evenly() {
         let weights = vec![100u64; 10];
-        let nodes = [node("a", 10_000, Some(1_000)), node("b", 10_000, Some(1_000))];
+        let nodes = [
+            node("a", 10_000, Some(1_000)),
+            node("b", 10_000, Some(1_000)),
+        ];
         let stages = [stage(0, "a", 0, 9), stage(1, "b", 9, 10)];
 
         let balanced = balance_stages(&stages, &nodes, &weights, &weights).unwrap();
@@ -260,7 +266,10 @@ mod tests {
     fn memory_cap_binds_before_speed() {
         // The fast node would take 8 of 10 layers but only fits 6.
         let weights = vec![100u64; 10];
-        let nodes = [node("slow", 10_000, Some(250)), node("fast", 600, Some(1_000))];
+        let nodes = [
+            node("slow", 10_000, Some(250)),
+            node("fast", 600, Some(1_000)),
+        ];
         let stages = [stage(0, "slow", 0, 5), stage(1, "fast", 5, 10)];
 
         let balanced = balance_stages(&stages, &nodes, &weights, &weights).unwrap();
@@ -273,12 +282,18 @@ mod tests {
         // The last layer carries the output head; bytes, not layer count, set cost.
         let mut weights = vec![100u64; 8];
         weights[7] = 800;
-        let nodes = [node("a", 10_000, Some(1_000)), node("b", 10_000, Some(1_000))];
+        let nodes = [
+            node("a", 10_000, Some(1_000)),
+            node("b", 10_000, Some(1_000)),
+        ];
         let stages = [stage(0, "a", 0, 4), stage(1, "b", 4, 8)];
 
         let balanced = balance_stages(&stages, &nodes, &weights, &weights).unwrap();
 
-        assert_eq!(balanced[0].layer_end, 7, "stage 1 keeps only the heavy output layer");
+        assert_eq!(
+            balanced[0].layer_end, 7,
+            "stage 1 keeps only the heavy output layer"
+        );
     }
 
     #[test]
@@ -308,23 +323,40 @@ mod tests {
             node("b", 10_000, Some(1)),
             node("c", 10_000, Some(10_000)),
         ];
-        let stages = [stage(0, "a", 0, 2), stage(1, "b", 2, 4), stage(2, "c", 4, 5)];
+        let stages = [
+            stage(0, "a", 0, 2),
+            stage(1, "b", 2, 4),
+            stage(2, "c", 4, 5),
+        ];
 
         let balanced = balance_stages(&stages, &nodes, &weights, &weights).unwrap();
 
         assert_eq!(balanced[1].layer_end - balanced[1].layer_start, 1);
-        assert!(balanced.iter().all(|stage| stage.layer_end > stage.layer_start));
+        assert!(
+            balanced
+                .iter()
+                .all(|stage| stage.layer_end > stage.layer_start)
+        );
     }
 
     #[test]
     fn idle_share_reports_the_waiting_stage() {
         let weights = vec![130_000_000u64; 36];
-        let nodes = [node("m1", 12 * GB, Some(68 * GB)), node("m4", 12 * GB, Some(120 * GB))];
+        let nodes = [
+            node("m1", 12 * GB, Some(68 * GB)),
+            node("m4", 12 * GB, Some(120 * GB)),
+        ];
         let stages = [stage(0, "m1", 0, 18), stage(1, "m4", 18, 36)];
 
-        let idle = estimate_throughput(&stages, &nodes, &weights).unwrap().idle_basis_points();
+        let idle = estimate_throughput(&stages, &nodes, &weights)
+            .unwrap()
+            .idle_basis_points();
 
         assert_eq!(idle[0], 0, "the M1 stage is the bottleneck");
-        assert!((4_000..=4_500).contains(&idle[1]), "M4 idles ~43%: {}", idle[1]);
+        assert!(
+            (4_000..=4_500).contains(&idle[1]),
+            "M4 idles ~43%: {}",
+            idle[1]
+        );
     }
 }
