@@ -1,28 +1,28 @@
-From 8c515f73be2b7ec28d3bc9137b4f81c97dec5951 Mon Sep 17 00:00:00 2001
+From e27a11ae3945fe144b865f9bf3cc6c89c186b25f Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:59 +1000
-Subject: [PATCH] test: cover graph-derived stage contracts
+Subject: [PATCH 6/6] test: cover graph-derived stage contracts
 
 ---
- src/skippy/tests/graph_build_inputs.cpp       |  619 ++++++++
+ src/skippy/tests/graph_build_inputs.cpp       |  619 +++++++
  .../tests/hardware_application_probe.cpp      |   64 +
- src/skippy/tests/noalloc_graph_planning.cpp   | 1088 ++++++++++++++
- .../tests/renamed_multishard_planning.cpp     | 1331 +++++++++++++++++
+ src/skippy/tests/noalloc_graph_planning.cpp   | 1088 +++++++++++++
+ .../tests/renamed_multishard_planning.cpp     | 1444 +++++++++++++++++
  src/skippy/tests/runtime_events.cpp           |  489 ++++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
- src/skippy/tests/stage_slice_plan.cpp         | 1146 ++++++++++++++
+ src/skippy/tests/stage_slice_plan.cpp         | 1146 +++++++++++++
  tests/CMakeLists.txt                          |   20 +
  tests/test-chat-auto-parser.cpp               |   47 +
- tests/test-chat.cpp                           |  170 ++-
- tests/test-deepseek4-mtp.h                    |   88 ++
+ tests/test-chat.cpp                           |  170 +-
+ tests/test-deepseek4-mtp.h                    |   88 +
  tests/test-llama-archs.cpp                    |  164 +-
  tests/test-skippy-kv-cells-contiguous.cpp     |   20 +
  tests/test-skippy-kv-page-export.cpp          |  283 ++++
  tests/test-skippy-model-loader-accounting.cpp |  326 ++++
  .../test-skippy-recurrent-state-roundtrip.cpp |  159 ++
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 18 files changed, 6047 insertions(+), 16 deletions(-)
+ 18 files changed, 6160 insertions(+), 16 deletions(-)
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/hardware_application_probe.cpp
  create mode 100644 src/skippy/tests/noalloc_graph_planning.cpp
@@ -1829,10 +1829,10 @@ index 000000000..11559ce5c
 +}
 diff --git a/src/skippy/tests/renamed_multishard_planning.cpp b/src/skippy/tests/renamed_multishard_planning.cpp
 new file mode 100644
-index 000000000..2953cdeb6
+index 000000000..010a5b165
 --- /dev/null
 +++ b/src/skippy/tests/renamed_multishard_planning.cpp
-@@ -0,0 +1,1331 @@
+@@ -0,0 +1,1444 @@
 +#include "ggml-backend.h"
 +#include "ggml.h"
 +#include "gguf.h"
@@ -1845,6 +1845,8 @@ index 000000000..2953cdeb6
 +#include "llama.h"
 +#include "skippy/model_package.h"
 +#include "skippy/package_tensor_binding.h"
++#include "skippy/activation.h"
++#include "skippy/execution.h"
 +#include "skippy/runtime.h"
 +#include "skippy/stage_plan.h"
 +#include "skippy/stage_slice_plan.h"
@@ -2625,6 +2627,9 @@ index 000000000..2953cdeb6
 +    std::vector<std::string> resident_names;
 +    std::vector<std::string> import_identities;
 +    std::vector<std::string> import_bindings;
++    std::vector<std::string> source_resident_names;
++    std::vector<std::string> export_identities;
++    std::vector<std::string> export_bindings;
 +};
 +
 +bool check_public_stage_plan_abi(
@@ -2760,6 +2765,24 @@ index 000000000..2953cdeb6
 +        *runtime_stage = {};
 +        runtime_stage->layer_start = 1;
 +        runtime_stage->layer_end = layer_count;
++        for (size_t index = 0; index < descriptor.resident_tensor_count; ++index) {
++            skippy_stage_plan_value_desc_v1 resident_value{};
++            if (skippy_stage_plan_resident_tensor_at_v1(source, index, &resident_value, &error) !=
++                    SKIPPY_STATUS_OK) {
++                skippy_error_free(error);
++                return false;
++            }
++            const std::string tensor_id = plan_string(source, resident_value.identity);
++            const auto found = std::find_if(
++                    inventory.tensors.begin(), inventory.tensors.end(), [&](const auto & candidate) {
++                        return candidate.tensor_id == tensor_id;
++                    });
++            if (found == inventory.tensors.end()) {
++                std::fprintf(stderr, "public source-stage resident identity is absent from the package inventory\n");
++                return false;
++            }
++            runtime_stage->source_resident_names.push_back(found->native_name);
++        }
 +        for (size_t index = 0; index < final_descriptor.resident_tensor_count; ++index) {
 +            skippy_stage_plan_value_desc_v1 resident_value{};
 +            if (skippy_stage_plan_resident_tensor_at_v1(final, index, &resident_value, &error) !=
@@ -2780,13 +2803,18 @@ index 000000000..2953cdeb6
 +        }
 +        for (size_t index = 0; index < final_profile.activation_import_count; ++index) {
 +            skippy_stage_plan_value_desc_v1 imported{};
++            skippy_stage_plan_value_desc_v1 exported{};
 +            if (skippy_stage_plan_value_at_v1(final, 0, SKIPPY_STAGE_PLAN_VALUE_ACTIVATION_IMPORT,
-+                        index, &imported, &error) != SKIPPY_STATUS_OK) {
++                        index, &imported, &error) != SKIPPY_STATUS_OK ||
++                    skippy_stage_plan_value_at_v1(source, 0, SKIPPY_STAGE_PLAN_VALUE_ACTIVATION_EXPORT,
++                        index, &exported, &error) != SKIPPY_STATUS_OK) {
 +                skippy_error_free(error);
 +                return false;
 +            }
 +            runtime_stage->import_identities.push_back(plan_string(final, imported.identity));
 +            runtime_stage->import_bindings.push_back(plan_string(final, imported.binding));
++            runtime_stage->export_identities.push_back(plan_string(source, exported.identity));
++            runtime_stage->export_bindings.push_back(plan_string(source, exported.binding));
 +        }
 +    }
 +    for (size_t index = 0; index < profiles.size(); ++index) {
@@ -3088,7 +3116,8 @@ index 000000000..2953cdeb6
 +        return 12;
 +    }
 +
-+    // The resident-only payload regression targets transformer stage loading.
++    // The resident-only payload regression targets transformer stage loading
++    // and execution.
 +    // Recurrent frontier execution has separate no-allocation coverage and can
 +    // require architecture-specific state lanes beyond this loader contract.
 +    if (expect_recurrent) {
@@ -3141,6 +3170,90 @@ index 000000000..2953cdeb6
 +        std::fprintf(stderr, "terminal stage runtime free failed: %s\n", runtime_error->message);
 +        skippy_error_free(runtime_error);
 +        return 15;
++    }
++
++    const std::string source_payload_path = std::string(output_directory) + "/source-stage.gguf";
++    if (!write_selected_payload(inventory, terminal_stage.source_resident_names, source_payload_path, error)) {
++        std::fprintf(stderr, "source stage payload write failed: %s\n", error.c_str());
++        return 16;
++    }
++    std::vector<const char *> source_resident_ptrs;
++    for (const auto & name : terminal_stage.source_resident_names) {
++        source_resident_ptrs.push_back(name.c_str());
++    }
++    std::vector<const char *> source_export_identity_ptrs;
++    for (const auto & identity : terminal_stage.export_identities) {
++        source_export_identity_ptrs.push_back(identity.c_str());
++    }
++    std::vector<const char *> source_export_binding_ptrs;
++    for (const auto & binding : terminal_stage.export_bindings) {
++        source_export_binding_ptrs.push_back(binding.c_str());
++    }
++    const std::vector<const char *> source_part_ptrs = {
++        carrier_path.c_str(),
++        source_payload_path.c_str(),
++    };
++    runtime_config.stage_index = 0;
++    runtime_config.layer_start = 0;
++    runtime_config.layer_end = 1;
++    runtime_config.resident_tensor_names = source_resident_ptrs.data();
++    runtime_config.resident_tensor_name_count = source_resident_ptrs.size();
++    runtime_config.activation_import_identities = nullptr;
++    runtime_config.activation_import_identity_count = 0;
++    runtime_config.activation_import_bindings = nullptr;
++    runtime_config.activation_export_identities = source_export_identity_ptrs.data();
++    runtime_config.activation_export_identity_count = source_export_identity_ptrs.size();
++    runtime_config.activation_export_bindings = source_export_binding_ptrs.data();
++    carrier_model = nullptr;
++    runtime_error = nullptr;
++    const skippy_status source_status = skippy_model_open_from_parts(
++            source_part_ptrs.data(), source_part_ptrs.size(), &runtime_config, &carrier_model, &runtime_error);
++    if (source_status != SKIPPY_STATUS_OK || carrier_model == nullptr) {
++        std::fprintf(stderr, "source stage runtime load failed: %s\n",
++                runtime_error == nullptr ? "" : runtime_error->message);
++        skippy_error_free(runtime_error);
++        return 17;
++    }
++    skippy_session * session = nullptr;
++    if (skippy_session_create(carrier_model, &session, &runtime_error) != SKIPPY_STATUS_OK || session == nullptr) {
++        std::fprintf(stderr, "source stage session create failed: %s\n",
++                runtime_error == nullptr ? "" : runtime_error->message);
++        skippy_error_free(runtime_error);
++        return 18;
++    }
++    const llama_token tokens[] = {1, 2};
++    std::vector<uint8_t> output_payload(1024 * 1024);
++    skippy_activation_desc output_desc{};
++    size_t output_bytes = 0;
++    try {
++        const skippy_status prefill_status = skippy_prefill_chunk_frame(
++                session, tokens, 2, nullptr, nullptr, &output_desc, output_payload.data(),
++                output_payload.size(), &output_bytes, &runtime_error);
++        if (prefill_status != SKIPPY_STATUS_OK) {
++            std::fprintf(stderr, "source stage prefill failed: %s\n",
++                    runtime_error == nullptr ? "" : runtime_error->message);
++            skippy_error_free(runtime_error);
++            return 19;
++        }
++    } catch (const std::exception & exception) {
++        std::fprintf(stderr, "source stage prefill threw: %s\n", exception.what());
++        return 20;
++    }
++    if (output_desc.part_count == 0 || output_bytes == 0 || output_desc.payload_bytes != output_bytes) {
++        std::fprintf(stderr, "source stage prefill returned an empty activation frontier\n");
++        return 21;
++    }
++    if (skippy_session_free(session, &runtime_error) != SKIPPY_STATUS_OK || runtime_error != nullptr) {
++        std::fprintf(stderr, "source stage session free failed: %s\n",
++                runtime_error == nullptr ? "" : runtime_error->message);
++        skippy_error_free(runtime_error);
++        return 22;
++    }
++    if (skippy_model_free(carrier_model, &runtime_error) != SKIPPY_STATUS_OK || runtime_error != nullptr) {
++        std::fprintf(stderr, "source stage model free failed: %s\n",
++                runtime_error == nullptr ? "" : runtime_error->message);
++        skippy_error_free(runtime_error);
++        return 23;
 +    }
 +    std::printf(
 +            "renamed multishard metadata planning: tensors=%zu dependencies=%zu payload_reads=%zu payload_bytes=%zu recurrent=%d\n",

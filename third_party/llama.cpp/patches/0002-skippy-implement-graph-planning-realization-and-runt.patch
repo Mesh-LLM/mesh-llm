@@ -1,4 +1,4 @@
-From 068eac165a1b8c81d77158eb3f7d4bda58e51a38 Mon Sep 17 00:00:00 2001
+From f748e9fdb1db16a1ee30565073cc38b63d63c1bc Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:16 +1000
 Subject: [PATCH 2/6] skippy: implement graph planning realization and runtime
@@ -6,7 +6,7 @@ Subject: [PATCH 2/6] skippy: implement graph planning realization and runtime
 ---
  src/skippy-verify-checkpoint.h          |   24 +
  src/skippy/abi.cpp                      |   57 ++
- src/skippy/activation.cpp               |  990 +++++++++++++++++++
+ src/skippy/activation.cpp               |  995 +++++++++++++++++++
  src/skippy/activation_internal.h        |   86 ++
  src/skippy/activation_layout.cpp        |  171 ++++
  src/skippy/block_boundaries.cpp         |   64 ++
@@ -31,14 +31,14 @@ Subject: [PATCH 2/6] skippy: implement graph planning realization and runtime
  src/skippy/model_lifecycle.cpp          |  155 +++
  src/skippy/model_load_config.cpp        |  186 ++++
  src/skippy/model_load_config_internal.h |   25 +
- src/skippy/model_loading.cpp            | 1171 +++++++++++++++++++++++
+ src/skippy/model_loading.cpp            | 1174 +++++++++++++++++++++++
  src/skippy/model_loading_internal.h     |   38 +
  src/skippy/model_package.cpp            |  782 +++++++++++++++
  src/skippy/model_source.cpp             |  457 +++++++++
  src/skippy/package_tensor_binding.cpp   |  120 +++
  src/skippy/package_tensor_binding.h     |   27 +
  src/skippy/runtime_support.h            |   50 +
- src/skippy/runtime_types.h              |  171 ++++
+ src/skippy/runtime_types.h              |  173 ++++
  src/skippy/sampling.cpp                 |  961 +++++++++++++++++++
  src/skippy/sampling_internal.h          |   49 +
  src/skippy/session.cpp                  |  483 ++++++++++
@@ -54,7 +54,7 @@ Subject: [PATCH 2/6] skippy: implement graph planning realization and runtime
  src/skippy/state_effects.h              |   74 ++
  src/skippy/tokenization.cpp             |  179 ++++
  src/skippy/verification.cpp             |  265 +++++
- 50 files changed, 14682 insertions(+)
+ 50 files changed, 14692 insertions(+)
  create mode 100644 src/skippy-verify-checkpoint.h
  create mode 100644 src/skippy/abi.cpp
  create mode 100644 src/skippy/activation.cpp
@@ -201,10 +201,10 @@ index 000000000..cfc6a2e66
 +}
 diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
 new file mode 100644
-index 000000000..20574fc90
+index 000000000..7b61f5575
 --- /dev/null
 +++ b/src/skippy/activation.cpp
-@@ -0,0 +1,990 @@
+@@ -0,0 +1,995 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/graph_build_inputs.h"
@@ -659,9 +659,14 @@ index 000000000..20574fc90
 +        return usable_status;
 +    }
 +    skippy_graph_build_inputs inputs = graph_build_inputs != nullptr ? *graph_build_inputs : skippy_graph_build_inputs{};
-+    inputs.selection = skippy_graph_build_inputs_from_config(
-+            &session->stage_model->config,
-+            glm_dsa_phase_hint).selection;
++    const skippy_graph_build_inputs configured_inputs = skippy_graph_build_inputs_from_config(
++            &session->stage_model->config, glm_dsa_phase_hint);
++    inputs.selection = configured_inputs.selection;
++    inputs.activation_import_identities = configured_inputs.activation_import_identities;
++    inputs.activation_import_bindings = configured_inputs.activation_import_bindings;
++    inputs.activation_export_identities = configured_inputs.activation_export_identities;
++    inputs.activation_export_bindings = configured_inputs.activation_export_bindings;
++    inputs.resident_tensor_names = configured_inputs.resident_tensor_names;
 +    const char * phase_log = getenv("SKIPPY_GLM_DSA_LOG_DIRECT_SPARSE_DECISIONS");
 +    if (phase_log != nullptr && atoi(phase_log) != 0) {
 +        LLAMA_LOG_INFO(
@@ -6173,10 +6178,10 @@ index 000000000..0f7c83139
 +        llama_context_params & params);
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
 new file mode 100644
-index 000000000..7c1d1bfa8
+index 000000000..20b7abad7
 --- /dev/null
 +++ b/src/skippy/model_loading.cpp
-@@ -0,0 +1,1171 @@
+@@ -0,0 +1,1174 @@
 +#include "skippy.h"
 +#include "skippy/errors.h"
 +#include "skippy/environment.h"
@@ -6859,10 +6864,13 @@ index 000000000..7c1d1bfa8
 +                stage_model->activation_export_identities, stage_model->activation_export_identity_ptrs);
 +        copy_frontier(config->activation_export_bindings, config->activation_export_identity_count,
 +                stage_model->activation_export_bindings, stage_model->activation_export_binding_ptrs);
++        copy_frontier(config->resident_tensor_names, config->resident_tensor_name_count,
++                stage_model->resident_tensor_names, stage_model->resident_tensor_name_ptrs);
 +        stage_model->config.activation_import_identities = stage_model->activation_import_identity_ptrs.data();
 +        stage_model->config.activation_import_bindings = stage_model->activation_import_binding_ptrs.data();
 +        stage_model->config.activation_export_identities = stage_model->activation_export_identity_ptrs.data();
 +        stage_model->config.activation_export_bindings = stage_model->activation_export_binding_ptrs.data();
++        stage_model->config.resident_tensor_names = stage_model->resident_tensor_name_ptrs.data();
 +    }
 +    stage_model->lane_count = lane_count;
 +
@@ -8860,10 +8868,10 @@ index 000000000..55499ea20
 +        skippy_error ** out_error);
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
 new file mode 100644
-index 000000000..96b82a1d7
+index 000000000..f0c55102a
 --- /dev/null
 +++ b/src/skippy/runtime_types.h
-@@ -0,0 +1,171 @@
+@@ -0,0 +1,173 @@
 +#pragma once
 +
 +#include "skippy.h"
@@ -8964,6 +8972,8 @@ index 000000000..96b82a1d7
 +    std::vector<const char *> activation_export_identity_ptrs;
 +    std::vector<std::string> activation_export_bindings;
 +    std::vector<const char *> activation_export_binding_ptrs;
++    std::vector<std::string> resident_tensor_names;
++    std::vector<const char *> resident_tensor_name_ptrs;
 +    skippy_glm_dsa_op_timing glm_dsa_timing = {};
 +    bool executable = true;
 +    bool has_input_activation_boundary = false;
