@@ -55,6 +55,8 @@ members = [
     "crates/skippy-scheduler",
     "crates/skippy-server",
     "crates/skippy-cli",
+    "crates/skippy-commands",
+    "crates/skippy-config",
     "crates/skippy-api",
     "crates/metrics-server",
     "crates/skippy-model-package",

@@ -423,8 +423,10 @@ publish_crates=(
     skippy-scheduler
     openai-frontend
     skippy-runtime-install
+    skippy-config
     skippy-server
     skippy-api
+    skippy-commands
     skippy-cli
     mesh-native-serving-plugin-host
     mesh-llm-plugin-manager

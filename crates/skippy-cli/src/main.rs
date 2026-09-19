@@ -1,10 +1,7 @@
 mod cli;
-mod console;
 mod conversion;
 mod local_model;
-mod models;
 mod runtime;
-mod split;
 
 #[cfg(unix)]
 use anyhow::Context;
@@ -14,7 +11,7 @@ use cli::{Cli, Command};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    console::install();
+    skippy_commands::console::install();
     let cli = Cli::parse();
     let native_options = runtime::resolve_options(cli.native_runtime)?;
     #[cfg(feature = "dynamic-native-runtime")]
@@ -49,10 +46,20 @@ async fn main() -> Result<()> {
             )
             .await
         }
-        Command::Models { cache_dir, command } => models::run(cache_dir, command).await,
-        Command::PlanSplit(args) => split::run(args),
-        Command::Runtime { command } => runtime::run(command, &native_options).await,
-        Command::ExampleConfig => console::write_json(&skippy_server::config::example_config()),
+        Command::Models { cache_dir, command } => {
+            skippy_commands::models::run(cache_dir, command.into()).await
+        }
+        Command::PlanSplit(args) => skippy_commands::split::run(args.into()),
+        Command::Runtime { command } => {
+            skippy_commands::runtime::run(
+                command.into(),
+                &runtime::command_options(&native_options),
+            )
+            .await
+        }
+        Command::ExampleConfig => {
+            skippy_commands::console::write_json(&skippy_config::example_config())
+        }
     }
 }
 

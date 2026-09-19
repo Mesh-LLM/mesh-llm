@@ -176,6 +176,8 @@
         "crates/skippy-runtime/**",
         "crates/skippy-server/**",
         "crates/skippy-cli/**",
+        "crates/skippy-commands/**",
+        "crates/skippy-config/**",
         "crates/skippy-topology/**"
       ]
     },
@@ -302,6 +304,8 @@
         "skippy-runtime",
         "skippy-server",
         "skippy-cli",
+        "skippy-commands",
+        "skippy-config",
         "skippy-topology"
       ]
     },

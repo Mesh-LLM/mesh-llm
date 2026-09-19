@@ -17,25 +17,18 @@ dynamic-native-runtime = ["skippy-server/dynamic-native-runtime", "skippy-api/dy
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-dirs = "6"
-skippy-runtime-install = { path = "../skippy-runtime-install", version = "0.76.1" }
 skippy-api = { path = "../skippy-api", version = "0.76.1" }
-skippy-server = { path = "../skippy-server", version = "0.76.1" }
-skippy-protocol = { path = "../skippy-protocol", version = "0.76.1" }
-skippy-topology = { path = "../skippy-topology", version = "0.76.1" }
-sha2.workspace = true
-hex = "0.4"
+skippy-commands = { path = "../skippy-commands", version = "0.76.1" }
+skippy-config = { path = "../skippy-config", version = "0.76.1" }
 skippy-events = { path = "../skippy-events", version = "0.76.1" }
+skippy-protocol = { path = "../skippy-protocol", version = "0.76.1" }
+skippy-server = { path = "../skippy-server", version = "0.76.1" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 uuid = { version = "1", features = ["v4"] }
-
-model-hf = { path = "../model-hf", version = "0.76.1" }
-model-artifact = { path = "../model-artifact", version = "0.76.1" }
-hf-hub = { package = "skippy-hf-hub", path = "../skippy-hf-hub", version = "0.76.1", default-features = false }
 
 [dev-dependencies]
 skippy-native-runtime = { path = "../skippy-native-runtime", version = "0.76.1" }
 skippy-runtime = { path = "../skippy-runtime", version = "0.76.1" }
+skippy-runtime-install = { path = "../skippy-runtime-install", version = "0.76.1" }
+serde_json.workspace = true
 tempfile = "3"

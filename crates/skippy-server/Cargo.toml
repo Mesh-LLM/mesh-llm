@@ -17,6 +17,7 @@ dynamic-native-runtime = ["skippy-runtime/dynamic-native-runtime"]
 test-support = []
 
 [dependencies]
+skippy-config = { path = "../skippy-config", version = "0.76.1" }
 ahash.workspace = true
 anyhow.workspace = true
 async-trait = "0.1"

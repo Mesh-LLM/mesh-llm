@@ -1,6 +1,5 @@
 use crate::binary_transport::PredictionReturnHub;
 use crate::binary_transport::WireCondition;
-use crate::config::validate_config;
 use crate::frontend::GenerationLifecycleConfig;
 use crate::frontend::GenerationReceiptConfig;
 use crate::frontend::LinearProposalIngressConfig;
@@ -47,6 +46,7 @@ use openai_frontend::OpenAiHookPolicy;
 use openai_frontend::ReasoningEffort;
 use serde_json::Value;
 use serde_json::json;
+use skippy_config::validate_config;
 use skippy_protocol::StageConfig;
 use skippy_protocol::StageTopology;
 use std::collections::BTreeMap;

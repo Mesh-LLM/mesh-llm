@@ -2,8 +2,8 @@
 use crate::cli::ServeOpenAiArgs;
 use anyhow::{Context, Result};
 use skippy_api::{SingleStageOptions, hash_cache::SidecarDigestCache};
+use skippy_config::load_json;
 use skippy_protocol::StageConfig;
-use skippy_server::config::load_json;
 
 pub(crate) fn prepare_openai_stage(args: &ServeOpenAiArgs) -> Result<StageConfig> {
     match (&args.config, &args.model_path) {

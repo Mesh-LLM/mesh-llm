@@ -164,8 +164,7 @@ mod tests {
     use super::*;
 
     fn request() -> ModelLoadRequest {
-        let config: StageConfig =
-            serde_json::from_value(skippy_server::config::example_config()).unwrap();
+        let config: StageConfig = serde_json::from_value(skippy_config::example_config()).unwrap();
         ModelLoadRequest {
             openai: OpenAiOptions::direct_single_stage_defaults(
                 config.model_id.clone(),

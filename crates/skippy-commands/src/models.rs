@@ -1,19 +1,25 @@
-use crate::cli::ModelCommand;
 use anyhow::{Context, Result, ensure};
 use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
 
-fn cache_root(explicit: Option<PathBuf>) -> Result<PathBuf> {
-    explicit
-        .or_else(|| {
-            std::env::var_os("SKIPPY_MODEL_CACHE_DIR")
-                .filter(|v| !v.is_empty())
-                .map(PathBuf::from)
-        })
-        .or_else(|| dirs::cache_dir().map(|p| p.join("skippy/models")))
-        .context("cannot determine model cache directory; supply models --cache-dir")
+/// Parsed `skippy models` action, decoupled from clap.
+#[derive(Debug, Clone)]
+pub enum ModelAction {
+    /// Resolve a Hub revision and download its selected model files.
+    Pull {
+        /// Hub reference: org/repo@revision:filename-or-quantization.
+        model_ref: String,
+        /// Expected SHA-256 of the primary model file; checked on cache hits too.
+        sha256: Option<String>,
+        /// Expected byte count of the primary model file.
+        size_bytes: Option<u64>,
+    },
+    /// Remove all cached revisions of one local model repository; never deletes from the Hub.
+    Remove { repo: String, dry_run: bool },
+    /// List local model repositories and snapshots without contacting the Hub.
+    List,
 }
 
 fn validate_digest(digest: Option<&str>) -> Result<()> {
@@ -56,10 +62,10 @@ fn verify_file(
     )
 }
 
-pub async fn run(explicit_cache: Option<PathBuf>, command: ModelCommand) -> Result<()> {
-    let cache = cache_root(explicit_cache)?;
+pub async fn run(explicit_cache: Option<PathBuf>, command: ModelAction) -> Result<()> {
+    let cache = skippy_config::paths::model_cache_dir(explicit_cache)?;
     match command {
-        ModelCommand::Pull {
+        ModelAction::Pull {
             model_ref,
             sha256,
             size_bytes,
@@ -103,10 +109,10 @@ pub async fn run(explicit_cache: Option<PathBuf>, command: ModelCommand) -> Resu
                 "cache_dir": cache, "artifact": artifact, "primary_path": primary_path, "files": files
             }))
         }
-        ModelCommand::Remove { repo, dry_run } => crate::console::write_json(
+        ModelAction::Remove { repo, dry_run } => crate::console::write_json(
             &model_hf::local_cache::remove_repository(&cache, &repo, dry_run)?,
         ),
-        ModelCommand::List => {
+        ModelAction::List => {
             // This operation scans only the explicit local root; it issues no Hub request.
             let _ = model_hf::configure_hf_tls_provider();
             let client = hf_hub::HFClient::builder().cache_dir(&cache).build()?;
@@ -158,14 +164,6 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("64 hexadecimal")
-        );
-    }
-
-    #[test]
-    fn explicit_cache_wins() {
-        assert_eq!(
-            cache_root(Some(PathBuf::from("chosen"))).unwrap(),
-            PathBuf::from("chosen")
         );
     }
 }

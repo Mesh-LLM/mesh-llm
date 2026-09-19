@@ -16,6 +16,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use skippy_config::validate_config;
 use skippy_metrics::attr;
 use skippy_protocol::{
     AckMessage, MessageBase, SCHEMA_VERSION, StageConfig, StageMessage, StageTopology,
@@ -24,7 +25,6 @@ use skippy_protocol::{
 use tokio::net::TcpListener;
 
 use crate::{
-    config::validate_config,
     kv_integration::KvStageIntegration,
     runtime_state::{RuntimeState, load_runtime, loaded_model_state_kind},
     telemetry::{Telemetry, TelemetryLevel, TelemetryStats, lifecycle_attrs, now_unix_nanos},

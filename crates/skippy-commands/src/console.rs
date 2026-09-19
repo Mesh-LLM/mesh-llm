@@ -1,4 +1,4 @@
-//! Standalone command output. This module is compiled only into the binary.
+//! Standalone command output formatting.
 use skippy_events::diagnostics::{DiagnosticSink, ServingDiagnostic, set_diagnostic_sink};
 use std::{
     io::{self, Write},

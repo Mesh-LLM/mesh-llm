@@ -4,13 +4,11 @@
 //! or other host runtimes.
 
 pub mod binary_transport;
-pub mod config;
 pub mod embedded;
 pub mod frontend;
 pub mod http;
 pub mod kv_integration;
 pub mod kv_proto;
-pub mod package;
 pub mod runtime_state;
 
 #[cfg(test)]

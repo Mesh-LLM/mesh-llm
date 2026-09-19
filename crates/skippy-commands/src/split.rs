@@ -1,4 +1,5 @@
-use crate::cli::PlanSplitArgs;
+use std::{net::SocketAddr, path::PathBuf};
+
 use anyhow::{Context, Result, ensure};
 use sha2::{Digest, Sha256};
 use skippy_api::{source, split_certification, stage_admission, stage_load};
@@ -8,7 +9,21 @@ use skippy_topology::{
     plan_balanced_accepted_contiguous,
 };
 
-fn validate(args: &PlanSplitArgs) -> Result<()> {
+/// Parsed `plan-split` inputs, decoupled from clap.
+#[derive(Debug, Clone)]
+pub struct PlanSplitCommand {
+    pub model_path: PathBuf,
+    pub model_id: Option<String>,
+    /// Ordered worker listen endpoints, one per stage. Use routable addresses across machines.
+    pub workers: Vec<SocketAddr>,
+    pub ctx_size: u32,
+    pub lanes: u32,
+    pub n_gpu_layers: i32,
+    /// New directory for stage configs and their admission descriptors; never overwritten.
+    pub output_dir: PathBuf,
+}
+
+fn validate(args: &PlanSplitCommand) -> Result<()> {
     ensure!(
         args.workers.len() >= 2,
         "a split needs at least two --worker endpoints"
@@ -38,7 +53,7 @@ fn validate(args: &PlanSplitArgs) -> Result<()> {
     Ok(())
 }
 
-pub fn run(args: PlanSplitArgs) -> Result<()> {
+pub fn run(args: PlanSplitCommand) -> Result<()> {
     validate(&args)?;
     let path = if args.model_path.is_absolute() {
         args.model_path.clone()
@@ -289,7 +304,7 @@ mod tests {
     #[test]
     fn checkpoint_directory_fails_before_native_planning_or_publication() {
         let root = tempfile::tempdir().unwrap();
-        let args = PlanSplitArgs {
+        let args = PlanSplitCommand {
             model_path: root.path().to_owned(),
             model_id: None,
             workers: vec![
@@ -313,7 +328,7 @@ mod tests {
     #[test]
     fn invalid_workers_fail_before_reading_model_or_writing_output() {
         let root = tempfile::tempdir().unwrap();
-        let args = PlanSplitArgs {
+        let args = PlanSplitCommand {
             model_path: root.path().join("missing.gguf"),
             model_id: None,
             workers: vec!["127.0.0.1:9100".parse().unwrap(); 2],

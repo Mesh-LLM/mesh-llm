@@ -7,13 +7,13 @@ use std::{
 use anyhow::{Context, Result};
 use axum::Router;
 use openai_frontend::{OpenAiBackend, OpenAiFrontendConfig, OpenAiLifecycleObserver};
+use skippy_config::validate_config;
 use skippy_protocol::{StageConfig, StageTopology};
 use skippy_runtime::{ActivationBoundaryDesc, MtpSource};
 use tokio::{sync::oneshot, task::JoinHandle};
 
 use crate::{
     binary_transport::BinaryStageOptions,
-    config::validate_config,
     frontend::{EmbeddedOpenAiArgs, serve_embedded_openai_with_shutdown},
     http::{StageHttpOptions, serve_stage_http_with_shutdown},
     runtime_state::{

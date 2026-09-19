@@ -394,6 +394,57 @@ pub struct PlanSplitArgs {
     pub output_dir: PathBuf,
 }
 
+impl From<ModelCommand> for skippy_commands::models::ModelAction {
+    fn from(command: ModelCommand) -> Self {
+        match command {
+            ModelCommand::Pull {
+                model_ref,
+                sha256,
+                size_bytes,
+            } => Self::Pull {
+                model_ref,
+                sha256,
+                size_bytes,
+            },
+            ModelCommand::Remove { repo, dry_run } => Self::Remove { repo, dry_run },
+            ModelCommand::List => Self::List,
+        }
+    }
+}
+
+impl From<RuntimeCommand> for skippy_commands::runtime::RuntimeAction {
+    fn from(command: RuntimeCommand) -> Self {
+        match command {
+            RuntimeCommand::List => Self::List,
+            RuntimeCommand::Install {
+                manifest,
+                manifest_url,
+            } => Self::Install {
+                manifest,
+                manifest_url,
+            },
+            RuntimeCommand::Import { source, dry_run } => Self::Import { source, dry_run },
+            RuntimeCommand::ImportLegacy { source, dry_run } => {
+                Self::ImportLegacy { source, dry_run }
+            }
+        }
+    }
+}
+
+impl From<PlanSplitArgs> for skippy_commands::split::PlanSplitCommand {
+    fn from(args: PlanSplitArgs) -> Self {
+        Self {
+            model_path: args.model_path,
+            model_id: args.model_id,
+            workers: args.workers,
+            ctx_size: args.ctx_size,
+            lanes: args.lanes,
+            n_gpu_layers: args.n_gpu_layers,
+            output_dir: args.output_dir,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

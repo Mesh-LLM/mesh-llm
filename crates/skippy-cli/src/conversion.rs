@@ -1,9 +1,9 @@
 use crate::cli::{ServeArgs, ServeBinaryArgs};
 use anyhow::{Context, Result, bail};
+use skippy_config::load_json;
 use skippy_protocol::{StageConfig, StageTopology};
 use skippy_server::{
     binary_transport::{BinaryStageOptions, EmbeddedOpenAiStageOptions, WireCondition},
-    config::load_json,
     frontend::SpeculativeDecodeConfig,
     http::StageHttpOptions,
 };

@@ -4,8 +4,6 @@ use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use skippy_protocol::{LoadMode, StageConfig, StageTopology};
 
-use crate::package::is_hf_package_ref;
-
 pub fn validate_config(config: &StageConfig, topology: Option<&StageTopology>) -> Result<()> {
     if config.layer_start >= config.layer_end {
         bail!("layer_start must be less than layer_end");
@@ -37,7 +35,7 @@ pub fn validate_config(config: &StageConfig, topology: Option<&StageTopology>) -
             let Some(model_path) = config.model_path.as_ref() else {
                 bail!("layer-package load mode requires model_path to point at a package directory")
             };
-            if !is_hf_package_ref(model_path) && !std::path::Path::new(model_path).is_dir() {
+            if !model_path.starts_with("hf://") && !std::path::Path::new(model_path).is_dir() {
                 bail!("layer-package model_path must be a package directory")
             }
         }

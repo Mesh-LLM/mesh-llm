@@ -21,7 +21,6 @@ use super::{
     preconnect::DownstreamPreconnector,
 };
 use crate::{
-    config::validate_config,
     frontend::{self, EmbeddedOpenAiArgs, iteration_scheduler::IterationScheduler},
     kv_integration::KvStageIntegration,
     runtime_state::{RuntimeLaunchOverrides, load_runtime_with_overrides, loaded_model_state_kind},
@@ -29,6 +28,7 @@ use crate::{
 };
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::json;
+use skippy_config::validate_config;
 use skippy_protocol::binary::{WireMessageKind, read_stage_message_for_codec_policy, send_ready};
 use skippy_runtime::ActivationBoundaryDesc;
 

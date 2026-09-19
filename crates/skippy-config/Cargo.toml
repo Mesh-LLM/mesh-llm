@@ -1,0 +1,18 @@
+[package]
+name = "skippy-config"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Standalone Skippy settings and path policy for model, runtime and worker configuration"
+readme = "README.md"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+
+[dependencies]
+anyhow.workspace = true
+dirs = "6"
+serde.workspace = true
+serde_json.workspace = true
+skippy-protocol = { path = "../skippy-protocol", version = "0.76.1" }
+
+[dev-dependencies]
+tempfile = "3"
