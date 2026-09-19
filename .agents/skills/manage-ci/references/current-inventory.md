@@ -92,7 +92,7 @@ each complete certification has
 a portable process-group wall-clock limit, and the workflow's outer battery
 ceiling is 12 hours. For a changed pin, one non-interactive named Goose session
 (`CANARY_AGENT_PROVIDER`/`CANARY_AGENT_MODEL`, default
-`custom_z_ai_coding_plan`/`glm-5.3-flash`, overridable through
+`zai_coding_plan`/`glm-5.3-flash`, overridable through
 `LLAMA_CANARY_GOOSE_PROVIDER`/`LLAMA_CANARY_GOOSE_MODEL`) receives the
 complete developer task:
 repair or regenerate the patch queue, address ABI fallout, and validate repairs

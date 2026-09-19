@@ -312,7 +312,7 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("timeout-minutes: 1430", latest)
         self.assertIn("continue-on-error: true", changed)
         self.assertIn("LLAMA_CANARY_GOOSE_PROVIDER", changed)
-        self.assertIn("custom_z_ai_coding_plan", changed)
+        self.assertIn("zai_coding_plan", changed)
         self.assertIn("LLAMA_CANARY_GOOSE_MODEL", changed)
         self.assertIn("glm-5.3-flash", changed)
         self.assertIn('CANARY_AGENT_TIMEOUT_SECONDS: "41400"', changed)

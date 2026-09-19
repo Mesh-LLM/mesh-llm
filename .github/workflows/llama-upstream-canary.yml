@@ -198,7 +198,7 @@ jobs:
         timeout-minutes: 1420
         continue-on-error: true
         env:
-          CANARY_AGENT_PROVIDER: ${{ vars.LLAMA_CANARY_GOOSE_PROVIDER || 'custom_z_ai_coding_plan' }}
+          CANARY_AGENT_PROVIDER: ${{ vars.LLAMA_CANARY_GOOSE_PROVIDER || 'zai_coding_plan' }}
           CANARY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_GOOSE_MODEL || 'glm-5.3-flash' }}
           # Admit coding turns for 11.5h; each returned candidate gets a full
           # 12h gate pass. Independent verification follows in its own job.

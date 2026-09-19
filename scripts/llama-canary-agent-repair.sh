@@ -33,7 +33,7 @@ cd "$ROOT"
 
 OLD_SHA="$(tr -d '[:space:]' < third_party/llama.cpp/upstream.txt)"
 PIN_FILE="$ROOT/third_party/llama.cpp/upstream.txt"
-AGENT_PROVIDER="${CANARY_AGENT_PROVIDER:-custom_z_ai_coding_plan}"
+AGENT_PROVIDER="${CANARY_AGENT_PROVIDER:-zai_coding_plan}"
 AGENT_MODEL="${CANARY_AGENT_MODEL:-glm-5.3-flash}"
 AGENT_TIMEOUT_SECONDS="${CANARY_AGENT_TIMEOUT_SECONDS:-41400}"
 VERIFICATION_TIMEOUT_SECONDS="${CANARY_VERIFICATION_TIMEOUT_SECONDS:-43200}"
