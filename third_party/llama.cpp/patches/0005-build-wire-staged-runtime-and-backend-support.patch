@@ -1,16 +1,16 @@
-From f36b3654ff1989c863bfc9f7916fab3446f84b34 Mon Sep 17 00:00:00 2001
+From 511f81ca79b09042e2eca9e133dd45ea3eae0374 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:50 +1000
-Subject: [PATCH 5/6] build: wire staged runtime and backend support
+Subject: [PATCH] build: wire staged runtime and backend support
 
 ---
  CMakeLists.txt                          |  17 +
  ggml/cmake/common.cmake                 |   9 +-
- ggml/src/ggml-cuda/ggml-cuda.cu         |   4 +-
+ ggml/src/ggml-cuda/ggml-cuda.cu         |   7 +-
  ggml/src/ggml-metal/ggml-metal-device.m | 195 ++++++++++-
  ggml/src/ggml-metal/ggml-metal-impl.h   |  34 +-
  src/CMakeLists.txt                      | 423 +++++++++++++++++++++++-
- 6 files changed, 656 insertions(+), 26 deletions(-)
+ 6 files changed, 659 insertions(+), 26 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index 4052fa3d6..99d46fb76 100644
@@ -75,16 +75,19 @@ index 25eff7a5e..29e71898b 100644
          foreach (TYPE_K IN LISTS FA_TYPES)
              if ("${TYPE_K}-${TYPE_V}" IN_LIST FA_COMBINATIONS)
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 790553888..b39f0ab2e 100644
+index 790553888..ed6ed7213 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -5649,7 +5649,9 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
+@@ -5649,7 +5649,12 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
      #endif
  
      #ifdef GGML_CUDA_FA_QUANTS
 -        features.push_back({ "FA_QUANTS", GGML_CUDA_FA_QUANTS });
-+        static std::string fa_quants = STRINGIFY(GGML_CUDA_FA_QUANTS);
-+        std::replace(fa_quants.begin(), fa_quants.end(), ':', ',');
++        static const std::string fa_quants = [] {
++            std::string value = STRINGIFY(GGML_CUDA_FA_QUANTS);
++            std::replace(value.begin(), value.end(), ':', ',');
++            return value;
++        }();
 +        features.push_back({ "FA_QUANTS", fa_quants.c_str() });
      #endif
  
@@ -924,3 +927,4 @@ index bc922b6a7..0cc6123c7 100644
 +endif()
 -- 
 2.54.0 (Apple Git-157)
+
