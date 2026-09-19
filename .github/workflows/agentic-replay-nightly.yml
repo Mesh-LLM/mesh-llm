@@ -90,8 +90,18 @@ jobs:
             echo "HF_HOME=$HF_HOME"
             echo "HF_HUB_CACHE=$HF_HUB_CACHE"
             echo "HISTORY_LOCAL=$HISTORY_LOCAL"
+            echo "SCCACHE_SERVER_UDS=$RUNNER_TEMP/agentic-replay-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sock"
             echo "OUTPUT_DIR=$OUTPUT_DIR"
           } >> "$GITHUB_ENV"
+
+      - name: Prepare pinned replay Python environment
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          uv sync --locked --project ci/agentic-replay-nightly
+          REPLAY_PYTHON_BIN="$GITHUB_WORKSPACE/ci/agentic-replay-nightly/.venv/bin"
+          "$REPLAY_PYTHON_BIN/python3" -c 'import duckdb; print("DuckDB", duckdb.__version__)'
+          echo "$REPLAY_PYTHON_BIN" >> "$GITHUB_PATH"
 
       - name: Record hardware fingerprint
         run: |
@@ -150,14 +160,11 @@ jobs:
             --json-output "$RUNNER_TEMP/agentic-replay-params.json" \
             --github-env "$GITHUB_ENV"
           while IFS=$'\t' read -r family repo revision file expected_sha; do
-            # Use the API return value; CLI stdout may contain styled status text.
-            python3 - "$repo" "$revision" "$file" "$expected_sha" "$family" <<'PY'
+            # Request path-only stdout from the installed CLI, not system Python.
+            model_path=$(hf download "$repo" "$file" --revision "$revision" --format quiet)
+            python3 - "$model_path" "$expected_sha" "$family" <<'PY'
           import hashlib, pathlib, sys
-          from huggingface_hub import hf_hub_download
-          repo, revision, filename, expected, family = sys.argv[1:]
-          path = pathlib.Path(hf_hub_download(
-              repo_id=repo, filename=filename, revision=revision, token=False,
-          ))
+          path, expected, family = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
           digest = hashlib.sha256()
           with path.open("rb") as model_file:
               for chunk in iter(lambda: model_file.read(8 * 1024 * 1024), b""):
@@ -188,14 +195,11 @@ jobs:
           print("\t".join((dataset["repo"], dataset["revision"], dataset["filename"], dataset["sha256"])))
           PY
           IFS=$'\t' read -r dataset_repo dataset_revision dataset_file dataset_sha < "$RUNNER_TEMP/agentic-replay-dataset.tsv"
-          python3 - "$dataset_repo" "$dataset_revision" "$dataset_file" "$dataset_sha" "$GITHUB_ENV" <<'PY'
+          dataset_path=$(HF_HUB_OFFLINE=0 hf download "$dataset_repo" "$dataset_file" \
+            --repo-type dataset --revision "$dataset_revision" --format quiet)
+          python3 - "$dataset_path" "$dataset_sha" <<'PY'
           import hashlib, pathlib, sys
-          from huggingface_hub import hf_hub_download
-          repo, revision, filename, expected, github_env = sys.argv[1:]
-          path = pathlib.Path(hf_hub_download(
-              repo_id=repo, filename=filename, revision=revision,
-              repo_type="dataset", token=False,
-          ))
+          path, expected = pathlib.Path(sys.argv[1]), sys.argv[2]
           digest = hashlib.sha256()
           with path.open("rb") as dataset_file:
               for chunk in iter(lambda: dataset_file.read(8 * 1024 * 1024), b""):
@@ -204,9 +208,8 @@ jobs:
           if actual != expected:
               raise SystemExit(f"dataset SHA-256 mismatch: expected={expected} actual={actual}")
           print(f"verified trajectory dataset: {actual}")
-          with pathlib.Path(github_env).open("a", encoding="utf-8") as env:
-              env.write(f"DATASET_FILE={path}\n")
           PY
+          echo "DATASET_FILE=$dataset_path" >> "$GITHUB_ENV"
 
       - name: Replay each pinned model
         id: benchmark
@@ -214,6 +217,8 @@ jobs:
         timeout-minutes: 360
         run: |
           set -euo pipefail
+          # Start this run's sccache daemon with enough descriptors for Rust builds.
+          ulimit -n 65536
           # Replay shape comes from the matrix (like the repair re-run) so the
           # recorded history rows, the gate's baseline matching, and the
           # repair re-run share one source of truth.
@@ -269,14 +274,17 @@ jobs:
           # permission, and network failures must fail loudly.
           if HF_HUB_OFFLINE=0 python3 - "$DATASET_REPO" <<'PY' > "$RUNNER_TEMP/repo-exists.out" 2>&1; then
           import sys
-          import huggingface_hub
+          from urllib.error import HTTPError
+          from urllib.parse import quote
+          from urllib.request import urlopen
           repo = sys.argv[1]
           try:
-              huggingface_hub.repo_info(repo, repo_type="dataset", token=False)
+              with urlopen("https://huggingface.co/api/datasets/" + quote(repo, safe="/"), timeout=30):
+                  pass
           except Exception as exc:
               # Authentication errors can also say "Repository Not Found".
               # Only an actual HTTP 404 permits bootstrap.
-              if getattr(getattr(exc, "response", None), "status_code", None) == 404:
+              if isinstance(exc, HTTPError) and exc.code == 404:
                   sys.exit(3)
               sys.exit(1)
           PY
@@ -366,6 +374,7 @@ jobs:
           HISTORY_LOCAL: ${{ runner.temp }}/agentic-replay-history
         run: |
           set -euo pipefail
+          ulimit -n 65536
           if scripts/agentic-replay-repair.sh "$RUNNER_TEMP/agentic-replay-artifacts" 2>&1 | tee "$RUNNER_TEMP/agentic-replay-artifacts/repair.log"; then
             echo "prepared=true" >> "$GITHUB_OUTPUT"
           else
