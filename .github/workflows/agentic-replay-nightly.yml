@@ -150,10 +150,14 @@ jobs:
             --json-output "$RUNNER_TEMP/agentic-replay-params.json" \
             --github-env "$GITHUB_ENV"
           while IFS=$'\t' read -r family repo revision file expected_sha; do
-            model_path=$(hf download "$repo" "$file" --revision "$revision")
-            python3 - "$model_path" "$expected_sha" "$family" <<'PY'
+            # Use the API return value; CLI stdout may contain styled status text.
+            python3 - "$repo" "$revision" "$file" "$expected_sha" "$family" <<'PY'
           import hashlib, pathlib, sys
-          path, expected, family = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+          from huggingface_hub import hf_hub_download
+          repo, revision, filename, expected, family = sys.argv[1:]
+          path = pathlib.Path(hf_hub_download(
+              repo_id=repo, filename=filename, revision=revision, token=False,
+          ))
           digest = hashlib.sha256()
           with path.open("rb") as model_file:
               for chunk in iter(lambda: model_file.read(8 * 1024 * 1024), b""):
@@ -184,11 +188,14 @@ jobs:
           print("\t".join((dataset["repo"], dataset["revision"], dataset["filename"], dataset["sha256"])))
           PY
           IFS=$'\t' read -r dataset_repo dataset_revision dataset_file dataset_sha < "$RUNNER_TEMP/agentic-replay-dataset.tsv"
-          dataset_path=$(HF_HUB_OFFLINE=0 hf download "$dataset_repo" "$dataset_file" \
-            --repo-type dataset --revision "$dataset_revision")
-          python3 - "$dataset_path" "$dataset_sha" <<'PY'
+          python3 - "$dataset_repo" "$dataset_revision" "$dataset_file" "$dataset_sha" "$GITHUB_ENV" <<'PY'
           import hashlib, pathlib, sys
-          path, expected = pathlib.Path(sys.argv[1]), sys.argv[2]
+          from huggingface_hub import hf_hub_download
+          repo, revision, filename, expected, github_env = sys.argv[1:]
+          path = pathlib.Path(hf_hub_download(
+              repo_id=repo, filename=filename, revision=revision,
+              repo_type="dataset", token=False,
+          ))
           digest = hashlib.sha256()
           with path.open("rb") as dataset_file:
               for chunk in iter(lambda: dataset_file.read(8 * 1024 * 1024), b""):
@@ -197,8 +204,9 @@ jobs:
           if actual != expected:
               raise SystemExit(f"dataset SHA-256 mismatch: expected={expected} actual={actual}")
           print(f"verified trajectory dataset: {actual}")
+          with pathlib.Path(github_env).open("a", encoding="utf-8") as env:
+              env.write(f"DATASET_FILE={path}\n")
           PY
-          echo "DATASET_FILE=$dataset_path" >> "$GITHUB_ENV"
 
       - name: Replay each pinned model
         id: benchmark

@@ -36,6 +36,9 @@ registered `X64` label, but a pre-checkout guard requires native arm64 execution
 and working Git/xcrun. The toolchain uses the canonical shared HF cache at
 `/Users/lab/models/huggingface`, checks that it is writable, and explicitly sets
 `HF_HUB_OFFLINE=0` so missing pinned models and trajectories can be downloaded.
+Pinned input verification uses the `hf_hub_download` API return value directly,
+so CLI presentation output cannot become a filesystem path. Model and trajectory
+downloads are anonymous and retain revision and SHA-256 checks.
 Public history reads receive no HF token. The workflow grants repair eligibility
 only after successful replay and history retrieval, complete pass/concurrency
 coverage, and a gated performance regression against matching hardware history.
