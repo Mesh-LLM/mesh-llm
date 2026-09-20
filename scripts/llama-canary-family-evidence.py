@@ -258,23 +258,41 @@ def validate_results(path: Path, family: str, model: dict) -> None:
 def aggregate(args) -> None:
     identity, plan = verify_package(args.package, args.identity)
     models = validate_plan(plan)
-    receipts = list(args.evidence.glob("*/receipt.json"))
+    receipts = sorted(args.evidence.glob("*/receipt.json"))
     seen = set()
+    errors = []
+    passed = []
     for path in receipts:
-        item = read(path)
-        family = item["family"]
-        if family not in models or family in seen:
-            raise ValueError("duplicate or unplanned family receipt")
-        seen.add(family)
-        if (item["identity_sha256"] != args.identity or item["candidate"] != identity["candidate"]
-                or item["pass_id"] != identity["pass_id"] or item["outcome"] != "success"):
-            raise ValueError(f"{family}: failed or mismatched worker receipt")
-        results = path.parent / "results.jsonl"
-        if sha(results) != item["results_sha256"]:
-            raise ValueError("worker results digest mismatch")
-        validate_results(results, family, models[family])
+        family = path.parent.name
+        try:
+            item = read(path)
+            family = item["family"]
+            if family not in models or family in seen:
+                raise ValueError("duplicate or unplanned family receipt")
+            seen.add(family)
+            if (item["identity_sha256"] != args.identity or item["candidate"] != identity["candidate"]
+                    or item["pass_id"] != identity["pass_id"] or item["outcome"] != "success"):
+                raise ValueError("failed or mismatched worker receipt "
+                                 f"(runner={item.get('runner', 'unknown')}, outcome={item.get('outcome', 'unknown')})")
+            results = path.parent / "results.jsonl"
+            if sha(results) != item["results_sha256"]:
+                raise ValueError("worker results digest mismatch")
+            validate_results(results, family, models[family])
+            passed.append(family)
+        except (ValueError, OSError, KeyError, TypeError) as error:
+            errors.append(f"{family}: {error}")
     if seen != set(models):
-        raise ValueError(f"missing family receipts: {sorted(set(models) - seen)}")
+        errors.append(f"missing family receipts: {sorted(set(models) - seen)}")
+    report = (f"Canary {identity['pass_id']}: {len(passed)}/{len(models)} family receipts passed "
+              f"for {identity['candidate']}\n")
+    if errors:
+        report += "\n" + "\n".join(f"- {error}" for error in errors) + "\n"
+    print(report)
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
+            stream.write(report + "\n")
+    if errors:
+        raise ValueError("family aggregation failed:\n" + "\n".join(errors))
     output(green="true", candidate=identity["candidate"], branch=identity["branch"])
     print(f"All {len(seen)} families passed for {identity['candidate']} ({identity['pass_id']})")
 

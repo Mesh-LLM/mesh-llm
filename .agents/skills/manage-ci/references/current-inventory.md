@@ -109,6 +109,10 @@ status, matching candidate/plan/build digests, successful core lanes, and any
 required multimodal result. The battery itself reconciles the production
 planner's selected cuts, immutable revisions, tensor bytes, and native MTP
 requirements. Missing, cancelled, duplicate, or stale evidence cannot certify.
+Aggregation reports every failed receipt, including its runner and outcome, in
+the job log and Actions summary before rejecting the pass. Worker/aggregate
+failures remain recoverable by later bounded repair passes; only complete
+independent success permits publication.
 Full worker/build logs remain for 14 days; executable handoffs remain for seven
 days so a single-machine queue can complete later passes.
 

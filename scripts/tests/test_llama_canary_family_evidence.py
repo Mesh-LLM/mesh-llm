@@ -75,6 +75,20 @@ class FamilyEvidenceTests(unittest.TestCase):
     def test_complete_distributed_pass(self):
         self.aggregate()
 
+    def test_reports_all_failed_workers_without_emitting_green(self):
+        for family in ('dense', 'hybrid'):
+            self.make_receipt(family, 'failure')
+        summary = self.root / 'summary.md'
+        output = self.root / 'outputs'
+        with patch.dict(os.environ, GITHUB_STEP_SUMMARY=str(summary), GITHUB_OUTPUT=str(output)):
+            with self.assertRaises(ValueError) as caught:
+                self.aggregate()
+        for family in ('dense', 'hybrid'):
+            self.assertIn(f'{family}: failed or mismatched', str(caught.exception))
+            self.assertIn(f'{family}: failed or mismatched', summary.read_text())
+        self.assertIn('0/2 family receipts passed', summary.read_text())
+        self.assertFalse(output.exists())
+
     def test_missing_worker_cannot_pass(self):
         (self.evidence / 'hybrid/receipt.json').unlink()
         with self.assertRaisesRegex(ValueError, 'missing family'):
