@@ -80,12 +80,8 @@ Attempted automated repair by Goose from nightly run evidence."
   # 2. Re-run the benchmark on the repaired tree with the nightly benchmark
   # shape, then re-normalize and gate the repaired summaries.
   REPLAY_PARAMS_FILE=$(mktemp "${TMPDIR:-/tmp}/agentic-replay-params.XXXXXX")
-  REPLAY_CONFIG="$(run_untrusted python3 scripts/agentic-replay-params.py \
-    --matrix "$MATRIX_FILE" --json-output "$REPLAY_PARAMS_FILE" --print-shell)"
-  IFS=$'\t' read -r REPLAY_MODE TRAJECTORIES_PER_FRAMEWORK PASSES WARMUP_TURNS MAX_OUTPUT_TOKENS LEVELS <<< "$REPLAY_CONFIG"
-  IFS=',' read -r -a CONCURRENCY_LEVELS <<< "$LEVELS"
-  LEVEL_ARGS=()
-  for level in "${CONCURRENCY_LEVELS[@]}"; do LEVEL_ARGS+=(--concurrency "$level"); done
+  run_untrusted python3 scripts/agentic-replay-params.py \
+    --matrix "$MATRIX_FILE" --json-output "$REPLAY_PARAMS_FILE"
   REPLAY_DATASET_FILE="${DATASET_FILE:-${MESH_AGENTIC_REPLAY_DATASET_FILE:-}}"
   RERUN_FAILED=0
   if [[ -z "$REPLAY_DATASET_FILE" ]]; then
@@ -100,27 +96,9 @@ print(" ".join(model["family"] for model in json.loads(pathlib.Path(sys.argv[1])
 PY
   ); do
     if [[ "$RERUN_FAILED" == "1" && -z "$REPLAY_DATASET_FILE" ]]; then break; fi
-    model_uri=$(run_untrusted python3 - "$MATRIX_FILE" "$family" <<'PY'
-import json
-import pathlib
-import sys
-
-family = sys.argv[2]
-model = next(model for model in json.loads(pathlib.Path(sys.argv[1]).read_text())["models"] if model["family"] == family)
-print(f'{model["repo"]}@{model["revision"]}/{model["file"]}')
-PY
-    )
-    run_untrusted python3 evals/agentic-replay.py run \
-      --ref fixed=HEAD \
-      --ref "base=$BASE_SHA" \
-      --model "$model_uri" \
-      --backend metal \
-      --replay-mode "$REPLAY_MODE" \
-      --trajectories-per-framework "$TRAJECTORIES_PER_FRAMEWORK" \
-      "${LEVEL_ARGS[@]}" \
-      --passes "$PASSES" \
-      --warmup-turns "$WARMUP_TURNS" \
-      --max-output-tokens "$MAX_OUTPUT_TOKENS" \
+    run_untrusted python3 scripts/agentic-replay-params.py \
+      --matrix "$MATRIX_FILE" --run-family "$family" \
+      --ref fixed=HEAD --ref "base=$BASE_SHA" \
       --dataset-file "$REPLAY_DATASET_FILE" \
       --output "$OUTPUT_DIR/repair/$family" || RERUN_FAILED=1
   done

@@ -190,14 +190,28 @@ class NightlyWorkflowTests(unittest.TestCase):
 
     def test_replay_environment_is_locked_and_prepared_before_inputs(self):
         prepare = self.step("Prepare pinned replay Python environment")
-        self.assertLess(self.steps.index(prepare), self.steps.index(self.step("Verify pinned replay inputs")))
-        self.assertIn("uv sync --locked --project ci/agentic-replay-nightly", prepare["run"])
+        self.assertLess(
+            self.steps.index(prepare),
+            self.steps.index(self.step("Verify pinned replay inputs")),
+        )
+        self.assertIn(
+            "uv sync --locked --project ci/agentic-replay-nightly", prepare["run"]
+        )
         self.assertIn("import duckdb", prepare["run"])
         self.assertIn('"$GITHUB_PATH"', prepare["run"])
         self.assertTrue((ROOT / "ci/agentic-replay-nightly/uv.lock").is_file())
-        self.assertIn("SCCACHE_SERVER_UDS=$RUNNER_TEMP/agentic-replay-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sock", self.step("Verify runner toolchain")["run"])
-        self.assertIn("ulimit -n 65536", self.step("Replay each pinned model")["run"])
-        self.assertIn("ulimit -n 65536", self.step("Prepare repair PR artifact on regression (Goose)")["run"])
+        self.assertIn(
+            "SCCACHE_SERVER_UDS=$RUNNER_TEMP/agentic-replay-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sock",
+            self.step("Verify runner toolchain")["run"],
+        )
+        self.assertIn(
+            "ulimit -n 65536",
+            self.step("Replay granite-3.1-2b complete sessions")["run"],
+        )
+        self.assertIn(
+            "ulimit -n 65536",
+            self.step("Prepare repair PR artifact on regression (Goose)")["run"],
+        )
 
     def test_repair_requires_explicit_regression_and_preserves_evidence(self):
         repair = self.step("Prepare repair PR artifact on regression (Goose)")
@@ -226,8 +240,11 @@ class NightlyWorkflowTests(unittest.TestCase):
                     self.assertGreater(timeout, 0)
                     self.assertLessEqual(timeout, 360)
         repair = self.step("Prepare repair PR artifact on regression (Goose)")
-        replay = self.step("Replay each pinned model")
-        self.assertGreater(self.job["timeout-minutes"], replay["timeout-minutes"] + repair["timeout-minutes"])
+        replay = self.step("Replay granite-3.1-2b complete sessions")
+        self.assertGreater(
+            self.job["timeout-minutes"],
+            3 * replay["timeout-minutes"] + repair["timeout-minutes"],
+        )
 
 
 if __name__ == "__main__":

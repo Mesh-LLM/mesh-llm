@@ -1,8 +1,7 @@
 name: Agentic Replay Nightly (micstudio)
 
 on:
-  schedule:
-    - cron: "23 14 * * *" # after the Linux competitive run settles
+  # Schedule resumes after reviewed long-context/runtime calibration.
   workflow_dispatch:
 
 # Scheduled runs execute the default-branch definition only; manual dispatch is
@@ -22,7 +21,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
     runs-on: [self-hosted, X64, macOS, family-certify, agentic-replay]
     # Separate replay and repair budgets, plus preflight and evidence headroom.
-    timeout-minutes: 1440
+    timeout-minutes: 1800
     defaults:
       run:
         shell: bash
@@ -120,6 +119,7 @@ jobs:
           PY
 
       - name: Verify pinned replay inputs
+        id: inputs
         timeout-minutes: 30
         run: |
           set -euo pipefail
@@ -211,45 +211,49 @@ jobs:
           PY
           echo "DATASET_FILE=$dataset_path" >> "$GITHUB_ENV"
 
-      - name: Replay each pinned model
-        id: benchmark
-        # GitHub limits individual steps to six hours, including self-hosted.
+      - name: Replay granite-3.1-2b complete sessions
+        id: model_0
+        if: ${{ !cancelled() && steps.inputs.outcome == 'success' }}
         timeout-minutes: 360
         run: |
           set -euo pipefail
-          # Start this run's sccache daemon with enough descriptors for Rust builds.
           ulimit -n 65536
-          # Replay shape comes from the matrix (like the repair re-run) so the
-          # recorded history rows, the gate's baseline matching, and the
-          # repair re-run share one source of truth.
-          LEVELS="${AGENTIC_REPLAY_CONCURRENCY:?validated replay concurrency is unavailable}"
-          IFS=',' read -r -a CONCURRENCY_LEVELS <<< "$LEVELS"
-          LEVEL_ARGS=()
-          for level in "${CONCURRENCY_LEVELS[@]}"; do LEVEL_ARGS+=(--concurrency "$level"); done
-          TPFS="${AGENTIC_REPLAY_TRAJECTORIES_PER_FRAMEWORK:?validated trajectories_per_framework is unavailable}"
-          PASSES="${AGENTIC_REPLAY_PASSES:?validated passes is unavailable}"
-          WARMUP="${AGENTIC_REPLAY_WARMUP_TURNS:?validated warmup_turns is unavailable}"
-          REPLAY_MODE="${AGENTIC_REPLAY_MODE:?validated replay mode is unavailable}"
-          MAX_OUTPUT="${AGENTIC_REPLAY_MAX_OUTPUT_TOKENS:?validated max_output_tokens is unavailable}"
-          FAILED=0
-          for family in $(python3 -c "import json;print(' '.join(m['family'] for m in json.load(open('$MATRIX_FILE'))['models']))"); do
-            model_uri=$(python3 -c "import json;m=[m for m in json.load(open('$MATRIX_FILE'))['models'] if m['family']=='$family'][0];print(m['repo']+'@'+m['revision']+'/'+m['file'])")
-            if ! python3 evals/agentic-replay.py run \
-                --ref main=HEAD \
-                --model "$model_uri" \
-                --backend metal \
-                --replay-mode "$REPLAY_MODE" \
-                --trajectories-per-framework "$TPFS" \
-                "${LEVEL_ARGS[@]}" \
-                --passes "$PASSES" \
-                --warmup-turns "$WARMUP" \
-                --max-output-tokens "$MAX_OUTPUT" \
-                --dataset-file "$DATASET_FILE" \
-                --output "$OUTPUT_DIR/$family"; then
-              FAILED=1
-            fi
-          done
-          exit $FAILED # failed measurements retain raw evidence and do not start repair
+          python3 scripts/agentic-replay-params.py --matrix "$MATRIX_FILE" \
+            --run-family granite-3.1-2b --ref main=HEAD \
+            --dataset-file "$DATASET_FILE" --output "$OUTPUT_DIR/granite-3.1-2b"
+
+      - name: Replay granite-3.1-3b-a800m complete sessions
+        id: model_1
+        if: ${{ !cancelled() && steps.inputs.outcome == 'success' }}
+        timeout-minutes: 360
+        run: |
+          set -euo pipefail
+          ulimit -n 65536
+          python3 scripts/agentic-replay-params.py --matrix "$MATRIX_FILE" \
+            --run-family granite-3.1-3b-a800m --ref main=HEAD \
+            --dataset-file "$DATASET_FILE" --output "$OUTPUT_DIR/granite-3.1-3b-a800m"
+
+      - name: Replay qwen3.5-4b complete sessions
+        id: model_2
+        if: ${{ !cancelled() && steps.inputs.outcome == 'success' }}
+        timeout-minutes: 360
+        run: |
+          set -euo pipefail
+          ulimit -n 65536
+          python3 scripts/agentic-replay-params.py --matrix "$MATRIX_FILE" \
+            --run-family qwen3.5-4b --ref main=HEAD \
+            --dataset-file "$DATASET_FILE" --output "$OUTPUT_DIR/qwen3.5-4b"
+
+      - name: Require every model replay
+        id: benchmark
+        if: ${{ !cancelled() }}
+        env:
+          DENSE_RESULT: ${{ steps.model_0.outcome }}
+          MOE_RESULT: ${{ steps.model_1.outcome }}
+          RECURRENT_RESULT: ${{ steps.model_2.outcome }}
+        run: |
+          set -euo pipefail
+          [[ "$DENSE_RESULT" == success && "$MOE_RESULT" == success && "$RECURRENT_RESULT" == success ]]
 
       - name: Download cohort-matched history
         id: baseline
