@@ -1462,6 +1462,8 @@ impl Node {
     /// on that: gossip strips `weights_digest` before it crosses the wire
     /// (see `protocol/convert.rs`), so a peer descriptor would silently read
     /// back `None` even when this host's own load-time digest is known.
+    /// Endpoint-local workload admission also snapshots only this node's
+    /// models, never a peer's copy.
     pub async fn served_model_descriptors(&self) -> Vec<ServedModelDescriptor> {
         self.served_model_descriptors.lock().await.clone()
     }

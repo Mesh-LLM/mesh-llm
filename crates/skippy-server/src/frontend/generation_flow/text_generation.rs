@@ -6,7 +6,7 @@ use crate::frontend::generation::{
 use crate::frontend::util::{generation_stop_values, openai_backend_error};
 use openai_frontend::{ChatCompletionRequest, OpenAiError, OpenAiResult};
 use serde_json::json;
-use skippy_runtime::SamplingConfig;
+use skippy_runtime::{ModelWorkload, SamplingConfig};
 
 pub(super) fn resident_capacity_target_tokens(prompt_token_count: usize) -> u64 {
     u64::try_from(prompt_token_count).unwrap_or(u64::MAX)
@@ -91,6 +91,33 @@ impl StageOpenAiBackend {
             Some(prepared) => prepared,
             None => self.prepare_text_prompt(&prompt, max_tokens, &ids)?,
         };
+        let workload = self
+            .runtime
+            .lock()
+            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?
+            .workload_info()
+            .map_err(openai_backend_error)?
+            .kind;
+        if workload == ModelWorkload::EncoderDecoder {
+            let mut collector =
+                TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk)?
+                    .with_ignore_eos(sampling.ignore_eos);
+            let cache_stats = self.generate_encoder_decoder_tokens(
+                &prompt_token_ids,
+                max_tokens,
+                &sampling,
+                hook_request.as_ref(),
+                cancellation,
+                &ids,
+                |token| collector.push_token(token),
+            )?;
+            return collector.finish(prompt_token_ids.len(), cache_stats);
+        }
+        if workload != ModelWorkload::CausalGeneration {
+            return Err(OpenAiError::unsupported(format!(
+                "model workload is {workload:?}; chat and completion endpoints require a generative model"
+            )));
+        }
         // This is an optional cache candidate. The already-rendered prompt is
         // valid even when its second, assistant-marker-free rendering cannot
         // be tokenized, so bypass the candidate rather than failing the chat

@@ -324,10 +324,11 @@ seed/step trace in its uploaded log. Repository variables
 set `MESH_NIGHTLY_KV_COVERAGE_ENABLED=0` to disable the scheduled run. Manual
 dispatch still executes trusted `main` on GitHub-hosted infrastructure.
 
-The unchanged-pin daily llama canary uses the `nightly` cadence in
-`ci/llama-canary/family-certified.json`: Qwen3 dense, Falcon-H1 hybrid,
-Qwen3Next composite, and Mamba recurrent. Llama bumps and explicit forced
-certification retain the full 33-family battery.
+The daily llama canary, pin advances, and explicit forced certification all
+use the complete `ci/llama-canary/family-certified.json` roster: 83 causal
+split targets plus six non-chat workloads. Trigger labels do not filter model
+coverage. Causal rows use product-approved topology cuts; non-chat rows require
+class-specific smoke and independent CPU oracle evidence, never split proof.
 
 ### 0g. Logging workflow certification
 

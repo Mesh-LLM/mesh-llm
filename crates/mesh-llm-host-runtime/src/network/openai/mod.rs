@@ -17,3 +17,4 @@ mod routing_rank;
 pub(crate) mod runtime_events;
 mod tool_call_ids;
 pub(crate) mod transport;
+mod workload_routing;

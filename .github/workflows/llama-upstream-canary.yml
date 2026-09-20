@@ -18,7 +18,7 @@ on:
 # It must never execute a caller-selected ref on the persistent
 # `family-certify` self-hosted runner. The job token is read-only. Changed pins
 # are repaired by one agent, independently verified by the harness, and then
-# published from a fresh GitHub-hosted job; unchanged nightly sentinels remain
+# published from a fresh GitHub-hosted job; unchanged full-roster checks remain
 # read-only.
 permissions:
   contents: read
@@ -339,6 +339,14 @@ jobs:
           WORK_DIR: ${{ runner.temp }}/skippy-ci-smoke
         run: scripts/skippy-ci-smoke.sh
 
+      - name: Build pinned CPU workload oracles and candidate
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' && steps.family_patch.outcome == 'success'
+        run: |
+          set -euo pipefail
+          workload_root="${LLAMA_STAGE_BUILD_DIR:?}-workloads"
+          arch -arm64 just skippy-workload-oracles-build "$workload_root"
+          bash scripts/skippy-workload-oracles-build.sh --print-env "$workload_root" >> "$GITHUB_ENV"
+
       - name: Supported-families certification battery (parity gate)
         id: battery
         if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' && steps.family_patch.outcome == 'success'
@@ -366,6 +374,7 @@ jobs:
           name: llama-family-battery-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             target/family-battery/${{ github.run_id }}-${{ github.run_attempt }}/
+            ${{ env.LLAMA_STAGE_BUILD_DIR }}-workloads/producer.json
             target/skippy-stage-rewriter-check/
           if-no-files-found: warn
           retention-days: 14
@@ -411,9 +420,9 @@ jobs:
           && steps.family_patch.outcome == 'success'
         run: |
           {
-            echo "## llama.cpp nightly family sentinels"
+            echo "## llama.cpp nightly full family certification"
             echo
-            echo "The pinned upstream passed the dense, hybrid/composite, and recurrent sentinel battery."
+            echo "The pinned upstream passed the full causal split and non-chat workload battery."
             echo
             echo "Certified families: ${{ steps.family_plan.outputs.family_count }}"
             cat /tmp/llama-upstream-pr.md
