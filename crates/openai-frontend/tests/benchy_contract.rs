@@ -462,6 +462,7 @@ async fn flat_tools_remain_invalid_on_chat_and_malformed_responses_are_rejected(
             json!([{"type":"function","name":"lookup"}]),
         ),
         ("/v1/responses", json!([{"type":"function","name":""}])),
+        ("/v1/responses", json!([{"type":"function","name":"   "}])),
         (
             "/v1/responses",
             json!([{"type":"function","name":"lookup","parameters":false}]),
@@ -471,4 +472,62 @@ async fn flat_tools_remain_invalid_on_chat_and_malformed_responses_are_rejected(
         let response = request("POST", path, json!({"model":BENCHY_MODEL_ID,"input":"hi","messages":[{"role":"user","content":"hi"}],"tools":tools})).await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
+}
+
+#[tokio::test]
+async fn responses_flat_function_names_are_trimmed_before_the_backend() {
+    let backend = Arc::new(GuardedBenchyBackend::default());
+    let response = request_with_app(
+        openai_frontend::router_for(backend.clone()), "POST", "/v1/responses",
+        json!({"model":BENCHY_MODEL_ID,"input":"weather",
+            "tools":[{"type":"function","name":"  lookup  ","description":"weather","parameters":{"type":"object","properties":{}}}],
+            "tool_choice":{"type":"function","name":" lookup "}}), None,
+    ).await;
+    let status = response.status();
+    let text = response_text(response).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let requests = backend.seen_chat_requests.lock().unwrap();
+    let request = &requests[0];
+    assert_eq!(
+        request.tools.as_ref().unwrap()[0]["function"]["name"],
+        "lookup"
+    );
+    assert_eq!(
+        request.tool_choice.as_ref().unwrap(),
+        &json!({"type":"function","function":{"name":"lookup"}})
+    );
+}
+
+#[tokio::test]
+async fn responses_missing_function_names_error_per_parameter() {
+    let response = request(
+        "POST",
+        "/v1/responses",
+        json!({"model":BENCHY_MODEL_ID,"input":"hi",
+        "tools":[{"type":"function","name":""}]}),
+    )
+    .await;
+    let status = response.status();
+    let text = response_text(response).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert!(
+        text.contains("function name must be a non-empty string"),
+        "{text}"
+    );
+
+    let response = request(
+        "POST",
+        "/v1/responses",
+        json!({"model":BENCHY_MODEL_ID,"input":"hi",
+        "tools":[{"type":"function","name":"lookup"}],
+        "tool_choice":{"type":"function"}}),
+    )
+    .await;
+    let status = response.status();
+    let text = response_text(response).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert!(
+        text.contains("tool_choice must reference a function by name"),
+        "{text}"
+    );
 }

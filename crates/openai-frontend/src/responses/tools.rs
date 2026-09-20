@@ -39,19 +39,28 @@ fn normalize_function(value: &mut Value, param: &str) -> Result<bool, OpenAiErro
         }
         return Ok(false);
     }
-    if !object
-        .get("name")
-        .and_then(Value::as_str)
-        .is_some_and(|name| !name.trim().is_empty())
-    {
-        return Err(
-            OpenAiError::invalid_request("function name must be a non-empty string")
-                .with_param(param),
-        );
-    }
+    // Validate the trimmed name and store it trimmed, so whitespace padding
+    // cannot pass validation and leak into the shared Chat request.
+    let name = match object.get("name").and_then(Value::as_str).map(str::trim) {
+        Some(name) if !name.is_empty() => name.to_owned(),
+        _ => {
+            return Err(
+                OpenAiError::invalid_request(missing_function_name(param)).with_param(param)
+            );
+        }
+    };
     let mut function = std::mem::take(object);
     function.remove("type");
+    function.insert("name".into(), Value::String(name));
     object.insert("type".into(), Value::String("function".into()));
     object.insert("function".into(), Value::Object(function));
     Ok(true)
+}
+
+fn missing_function_name(param: &str) -> &'static str {
+    if param == "tool_choice" {
+        "tool_choice must reference a function by name"
+    } else {
+        "function name must be a non-empty string"
+    }
 }
