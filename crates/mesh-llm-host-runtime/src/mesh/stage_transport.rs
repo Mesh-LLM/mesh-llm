@@ -1139,13 +1139,20 @@ impl Node {
         let run_for_task = run_id.clone();
         let stage_for_task = stage_id.clone();
         let handle = tokio::spawn(async move {
+            // Back off exponentially on accept errors (capped at 1s) so a
+            // permanently failing accept cannot warn every 100ms forever;
+            // each successful accept restores the fast retry.
+            let mut accept_backoff = std::time::Duration::from_millis(100);
             loop {
                 // An accept error (EMFILE under load, an aborted handshake)
                 // must not end the bridge: once this loop exits the local
                 // listener closes and every stage-0 lane to this peer is
                 // refused for the rest of the generation.
                 let tcp_stream = match listener.accept().await {
-                    Ok((tcp_stream, _)) => tcp_stream,
+                    Ok((tcp_stream, _)) => {
+                        accept_backoff = std::time::Duration::from_millis(100);
+                        tcp_stream
+                    }
                     Err(err) => {
                         tracing::warn!(
                             key = %cleanup_key.replace('\n', "/"),
@@ -1153,7 +1160,9 @@ impl Node {
                             error = %err,
                             "stage transport bridge accept failed; retrying"
                         );
-                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        tokio::time::sleep(accept_backoff).await;
+                        accept_backoff =
+                            (accept_backoff * 2).min(std::time::Duration::from_secs(1));
                         continue;
                     }
                 };
