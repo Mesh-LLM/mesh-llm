@@ -100,10 +100,6 @@ class ModelArtifactRegistryTests(unittest.TestCase):
             {"smollm2-q8-inference", "family-granite-hybrid"},
         )
         self.assertEqual(
-            manifest["default_artifact_id"],
-            "smollm2-q8-inference",
-        )
-        self.assertEqual(
             artifacts["smollm2-q8-inference"]["model_ref"],
             "unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0",
         )
@@ -116,6 +112,17 @@ class ModelArtifactRegistryTests(unittest.TestCase):
             self.assertEqual(
                 artifact["sha256"], artifact["file_integrity"][artifact["file"]]["blob_id"]
             )
+
+    def test_paired_smoke_manifests_default_to_the_dense_fixture(self) -> None:
+        for name in ("product-smoke", "scripted-binary-smoke"):
+            with self.subTest(manifest=name):
+                manifest = json.loads(
+                    (MANIFESTS / f"{name}.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(
+                    manifest["default_artifact_id"],
+                    "smollm2-q8-inference",
+                )
 
     def test_family_manifest_is_generated_from_registry(self) -> None:
         registry = json.loads(REGISTRY.read_text(encoding="utf-8"))

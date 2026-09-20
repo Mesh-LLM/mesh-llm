@@ -41,6 +41,7 @@ SUITE_OUTPUTS = {
 }
 SUITE_DEFAULT_ARTIFACTS = {
     "product-smoke": "smollm2-q8-inference",
+    "scripted-binary-smoke": "smollm2-q8-inference",
 }
 FAMILY_MANIFEST = ROOT / "ci" / "llama-canary" / "family-certified.json"
 

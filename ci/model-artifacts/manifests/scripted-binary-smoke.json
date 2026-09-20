@@ -85,5 +85,6 @@
       "url": "https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf",
       "notes": "Shared product, scripted-binary, and SDK inference fixture."
     }
-  ]
+  ],
+  "default_artifact_id": "smollm2-q8-inference"
 }
