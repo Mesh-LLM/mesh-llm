@@ -29,12 +29,15 @@ impl VettingRecord {
 #[serde(deny_unknown_fields)]
 pub struct VettingPolicy {
     pub required: bool,
+    #[serde(default)]
+    pub serve_probes: bool,
     pub ttl_ms: u64,
 }
 impl Default for VettingPolicy {
     fn default() -> Self {
         Self {
             required: false,
+            serve_probes: false,
             ttl_ms: DEFAULT_TTL_MS,
         }
     }
@@ -59,6 +62,11 @@ impl Ledger {
             .vetting_records()?
             .iter()
             .any(|record| record.provider_id == provider_id && record.is_fresh(now_ms, ttl_ms)))
+    }
+
+    /// Explicit operator reset; never changes payment records or obligations.
+    pub fn reset_provider_vetting(&self) -> Result<()> {
+        self.set_setting("provider_vetting", "[]")
     }
 
     fn vetting_records(&self) -> Result<Vec<VettingRecord>> {

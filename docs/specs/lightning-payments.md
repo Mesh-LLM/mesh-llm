@@ -488,15 +488,17 @@ A trusted-local profile can require a recent inference sanity check before its
 selected remote provider receives the user's request:
 
 ```json
-{"command":"vetting_policy","value":{"required":true,"ttl_ms":86400000}}
+{"command":"vetting_policy","value":{"required":true,"serve_probes":false,"ttl_ms":86400000}}
 ```
 
 Compatibility default is `required: false`: old peers remain usable, but are not
 recorded as verified. Required mode rejects unsupported, busy, timed-out or wrong
 answers as unverified/unavailable; it does not accuse a peer of fraud. The
 separate `/mesh/vetting/v1` tunnel upgrade leaves payment-v1 frames unchanged.
-Protocol version is checked within the challenge; advertisement negotiation and
-bounded alternative-provider retry remain follow-up work.
+The provider first returns a versioned supported/unsupported capability response
+before accepting a challenge. Providers opt in independently with `serve_probes:
+true` (default false). This is selected-peer negotiation, not a gossip-driven
+probe. Bounded alternative-provider retry remains follow-up work.
 
 On a cache miss the client sends a randomized, fixed arithmetic challenge, never
 a user-authored free prompt. The provider uses an already-local backend with a
@@ -506,11 +508,15 @@ nonce, version and integer answer, and persists the authenticated endpoint ID,
 tested model, challenge version and observation time. Cache is bounded to 1024
 records; TTL is configurable up to seven days, with 24 hours as the default.
 Clock rollback makes a record stale. Concurrent misses serialize and recheck.
+Failures have a 30-second bounded in-memory cooldown; per-peer provider probes
+are limited to one per minute alongside the global limits. Operators can reset
+all local observations with `{"command":"reset_vetting"}`.
 The cache does not authorize spending or attest a provider's entire catalogue.
 The simple challenge can be scripted or forwarded: this is service sanity, not
 cryptographic proof of inference.
 
-Initial tests cover cache persistence, expiry/rollback, frame bounds and the
-no-network/no-wallet cache-hit path. A real probe-through-tunnel/backend test,
-failure cooldown/per-peer limits, manual cache reset and live latency evidence
-are still required before calling this feature complete.
+Tests cover cache persistence, expiry/rollback, frame bounds, cache hits, and a
+real two-node gossip/QUIC/tunnel exchange through a simulated local HTTP backend.
+No real model or mainnet wallet is used by that test. Live model validation and
+latency evidence, negative probe cohorts and bounded reselection remain required
+before calling the complete feature ready.
