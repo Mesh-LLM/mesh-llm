@@ -378,7 +378,10 @@ one line to that env file:
 
 ```sh
 install -m 600 /dev/null ~/.mesh-llm/invite.token
-printf '%s\n' '<complete-invite-token>' > ~/.mesh-llm/invite.token
+read -r -s -p 'Invite token: ' invite_token
+printf '\n' >&2
+printf '%s\n' "$invite_token" > ~/.mesh-llm/invite.token
+unset invite_token
 printf 'MESH_LLM_JOIN_FILE=%s\n' "$HOME/.mesh-llm/invite.token" >> ~/.config/mesh-llm/service.env
 systemctl --user restart mesh-llm.service
 # macOS: launchctl kickstart -k gui/$(id -u)/com.mesh-llm.mesh-llm
