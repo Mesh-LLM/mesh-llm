@@ -114,6 +114,7 @@ pub fn local_single(args: LocalSingleArgs) -> Result<()> {
         "cache_type_k": args.cache_type_k,
         "cache_type_v": args.cache_type_v,
         "load_mode": "runtime-slice",
+        "execution_contract": "",
         "bind_addr": args.stage_bind_addr,
         "upstream": null,
         "downstream": null

@@ -36,6 +36,9 @@ registered `X64` label, but a pre-checkout guard requires native arm64 execution
 and working Git/xcrun. The toolchain uses the canonical shared HF cache at
 `/Users/lab/models/huggingface`, checks that it is writable, and explicitly sets
 `HF_HUB_OFFLINE=0` so missing pinned models and trajectories can be downloaded.
+Pinned input verification uses the `hf_hub_download` API return value directly,
+so CLI presentation output cannot become a filesystem path. Model and trajectory
+downloads are anonymous and retain revision and SHA-256 checks.
 Public history reads receive no HF token. The workflow grants repair eligibility
 only after successful replay and history retrieval, complete pass/concurrency
 coverage, and a gated performance regression against matching hardware history.
@@ -892,3 +895,22 @@ The gate resolves bundle, model and evidence paths against the caller's working
 directory before invoking Cargo. Cargo starts the integration test in its crate
 directory; absolute paths keep its evidence writer and the wrapper's execution
 check on the same file.
+
+
+## macOS deployment target
+
+`scripts/lib/macos-deployment-target.txt` records the shared default (13.3),
+matching the pinned llama.cpp
+[Apple release](https://github.com/ggml-org/llama.cpp/blob/661643e43079a4ee6faab4c1895291767b67ea8d/.github/workflows/release.yml#L73)
+and [XCFramework](https://github.com/ggml-org/llama.cpp/blob/661643e43079a4ee6faab4c1895291767b67ea8d/build-xcframework.sh#L8)
+baseline. Just exports it unless the caller sets `MACOSX_DEPLOYMENT_TARGET`.
+Direct host/native builds and the canary harness load the same default; both
+canary jobs export it for every subsequent Cargo/CMake step and include it in
+compiler-cache identity. Native CMake receives the resolved target explicitly,
+so its build stamp changes and old target objects are rebuilt. This changes
+future builds, not running jobs or shared model caches.
+
+Explicit SDK/platform overrides remain supported. The full Swift SDK passes
+its selected macOS target to both Cargo and CMake while retaining its separate
+iOS targets. Setting a deployment target is not proof of oldest-OS runtime
+compatibility; validate on the minimum OS before making that claim.

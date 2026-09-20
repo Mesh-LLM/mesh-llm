@@ -122,6 +122,7 @@ config = {
     "ctx_size": int(ctx_size),
     "n_gpu_layers": 0,
     "load_mode": "runtime-slice",
+    "execution_contract": "",
     "bind_addr": "127.0.0.1:19000",
     "upstream": None,
     "downstream": None,

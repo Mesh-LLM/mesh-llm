@@ -1,8 +1,12 @@
 """Admission, runner preflight, and failure-path contracts for nightly replay."""
 
+import hashlib
+import json
 import os
+import shutil
 import subprocess
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -57,8 +61,8 @@ class NightlyWorkflowTests(unittest.TestCase):
     def test_shared_cache_allows_pinned_model_and_trajectory_downloads(self):
         inputs = self.step("Verify pinned replay inputs")["run"]
         self.assertNotIn("--cache-dir", inputs)
-        self.assertIn('hf download "$repo" "$file" --revision "$revision"', inputs)
-        self.assertIn('--repo-type dataset --revision "$dataset_revision"', inputs)
+        self.assertNotIn("hf download", inputs)
+        self.assertIn('repo_type="dataset", token=False', inputs)
         self.assertEqual(self.job["env"]["HF_HUB_OFFLINE"], "0")
         toolchain = self.step("Verify runner toolchain")["run"]
         self.assertIn('export HF_HOME="$HF_CACHE"', toolchain)
@@ -66,6 +70,84 @@ class NightlyWorkflowTests(unittest.TestCase):
         self.assertIn('! -w "$HF_CACHE/hub"', toolchain)
         self.assertEqual(self.job["env"]["HF_HUB_DISABLE_IMPLICIT_TOKEN"], "1")
         self.assertNotIn("env", self.step("Download cohort-matched history"))
+
+    def test_input_verification_uses_api_paths_and_fails_closed(self):
+        # Execute the actual workflow step with small pinned files. The fake
+        # CLI reproduces the runner's decorated stdout, while the API returns
+        # a real path and may emit unrelated status text of its own.
+        cases = ("success", "model-corrupt", "dataset-corrupt", "model-download", "dataset-download")
+        for failure in cases:
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "evals").mkdir()
+                (root / "scripts").mkdir()
+                shutil.copy(ROOT / "scripts/agentic-replay-params.py", root / "scripts")
+                cache = root / "shared cache"
+                cache.mkdir()
+                matrix = json.loads((ROOT / "ci/agentic-replay-nightly/matrix.json").read_text())
+                for model in matrix["models"]:
+                    data = model["family"].encode()
+                    (cache / model["file"]).write_bytes(data)
+                    model["sha256"] = hashlib.sha256(data).hexdigest()
+                replay = matrix["replay"]
+                data = b"trajectory fixture"
+                dataset = cache / replay["dataset_file"]
+                dataset.write_bytes(data)
+                replay["dataset_sha256"] = hashlib.sha256(data).hexdigest()
+                (root / "matrix.json").write_text(json.dumps(matrix))
+                canonical = {
+                    "repo": replay["dataset"], "revision": replay["dataset_revision"],
+                    "filename": replay["dataset_file"], "sha256": replay["dataset_sha256"],
+                }
+                (root / "evals/skippy-competitive-benchmark.json").write_text(
+                    json.dumps({"thoughtworks": {"dataset": canonical}})
+                )
+                (root / "huggingface_hub.py").write_text(textwrap.dedent(r'''
+                    import json, os
+                    from pathlib import Path
+
+                    def hf_hub_download(*, repo_id, filename, revision, token, repo_type="model"):
+                        assert token is False
+                        assert os.environ["HF_HUB_OFFLINE"] == "0"
+                        matrix = json.loads(Path("matrix.json").read_text())
+                        expected = matrix["models"] if repo_type == "model" else [{
+                            "repo": matrix["replay"]["dataset"],
+                            "file": matrix["replay"]["dataset_file"],
+                            "revision": matrix["replay"]["dataset_revision"],
+                        }]
+                        assert any((row["repo"], row["file"], row["revision"]) ==
+                                   (repo_id, filename, revision) for row in expected)
+                        if os.environ["FAILURE"] == repo_type + "-download":
+                            raise RuntimeError("fixture download failure")
+                        path = Path(os.environ["HF_HUB_CACHE"]) / filename
+                        print("\x1b[32m✓ Downloaded\x1b[0m\n  path: " + str(path))
+                        return str(path)
+                '''))
+                hf = root / "hf"
+                hf.write_text("#!/bin/sh\nprintf '\\033[32m✓ Downloaded\\033[0m\\n  path: /not/a/path\\n'\n")
+                hf.chmod(0o755)
+                if failure == "model-corrupt":
+                    (cache / matrix["models"][0]["file"]).write_bytes(b"bad model")
+                elif failure == "dataset-corrupt":
+                    dataset.write_bytes(b"bad dataset")
+                env_file = root / "github-env"
+                env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}",
+                           PYTHONPATH=str(root), MATRIX_FILE=str(root / "matrix.json"),
+                           RUNNER_TEMP=str(root), GITHUB_ENV=str(env_file),
+                           HF_HUB_CACHE=str(cache), HF_HUB_OFFLINE="0", FAILURE=failure)
+                result = subprocess.run(
+                    ["bash", "-c", self.step("Verify pinned replay inputs")["run"]],
+                    cwd=root, env=env, capture_output=True, text=True,
+                )
+                if failure == "success":
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn(f"DATASET_FILE={dataset}\n", env_file.read_text())
+                    self.assertEqual(result.stdout.count("verified "), len(matrix["models"]) + 1)
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertNotIn("DATASET_FILE=", env_file.read_text())
+                    expected = "SHA-256 mismatch" if failure.endswith("corrupt") else "fixture download failure"
+                    self.assertIn(expected, result.stderr)
 
     def test_repair_requires_explicit_regression_and_preserves_evidence(self):
         repair = self.step("Prepare repair PR artifact on regression (Goose)")

@@ -40,6 +40,7 @@ impl DraftRunner {
                 // The draft runner uses the whole model; a full-range load
                 // needs no admitted tensor closure.
                 resident_tensor_names: Vec::new(),
+                execution_contract: String::new(),
                 activation_import_identities: Vec::new(),
                 activation_import_bindings: Vec::new(),
                 activation_export_identities: Vec::new(),

@@ -104,6 +104,8 @@ pub struct RuntimeConfig {
     /// Exact native tensor names admitted for this stage. An empty set means
     /// an unsplit full-model load; split stages have no range-based fallback.
     pub resident_tensor_names: Vec<String>,
+    /// Opaque planner-produced contract for decoder and auxiliary dependencies.
+    pub execution_contract: String,
     /// Planner value identities imported by this stage, in native frontier order.
     pub activation_import_identities: Vec<String>,
     /// Stable live-graph tensor bindings paired with imported planner identities.
@@ -309,6 +311,7 @@ impl RuntimeConfig {
             .iter()
             .map(|binding| binding.as_ptr())
             .collect::<Vec<_>>();
+        let execution_contract = CString::new(self.execution_contract.as_str())?;
         Ok(RawRuntimeConfigParts {
             raw: RawRuntimeConfig {
                 stage_index: i32::try_from(self.stage_index).context("stage_index exceeds i32")?,
@@ -346,6 +349,7 @@ impl RuntimeConfig {
                 use_mmap_buffer: false,
                 resident_tensor_names: resident_tensor_names_ptr,
                 resident_tensor_name_count: resident_tensor_name_ptrs.len(),
+                execution_contract: execution_contract.as_ptr(),
                 activation_import_identities: slice_ptr(&activation_import_identity_ptrs),
                 activation_import_identity_count: activation_import_identity_ptrs.len(),
                 activation_import_bindings: slice_ptr(&activation_import_binding_ptrs),
@@ -390,6 +394,7 @@ impl RuntimeConfig {
             },
             _selected_backend_device: selected_backend_device,
             _resident_tensor_names: resident_tensor_names,
+            _execution_contract: execution_contract,
             _resident_tensor_name_ptrs: resident_tensor_name_ptrs,
             _activation_import_identities: activation_import_identities,
             _activation_import_identity_ptrs: activation_import_identity_ptrs,
@@ -446,6 +451,7 @@ pub(crate) struct RawRuntimeConfigParts {
     pub(crate) raw: RawRuntimeConfig,
     _selected_backend_device: Option<CString>,
     _resident_tensor_names: Vec<CString>,
+    _execution_contract: CString,
     _resident_tensor_name_ptrs: Vec<*const std::ffi::c_char>,
     _activation_import_identities: Vec<CString>,
     _activation_import_identity_ptrs: Vec<*const std::ffi::c_char>,
@@ -487,6 +493,7 @@ impl Default for RuntimeConfig {
             glm_dsa_policy: GlmDsaPolicy::Auto,
             mtp_source: MtpSource::Disabled,
             resident_tensor_names: Vec::new(),
+            execution_contract: String::new(),
             activation_import_identities: Vec::new(),
             activation_import_bindings: Vec::new(),
             activation_export_identities: Vec::new(),
@@ -622,10 +629,15 @@ mod tests {
     fn runtime_config_raw_preserves_exact_resident_tensor_names() -> anyhow::Result<()> {
         let parts = RuntimeConfig {
             resident_tensor_names: vec!["blk.0.attn.weight".into(), "output.weight".into()],
+            execution_contract: "planner-owned-contract".into(),
             ..RuntimeConfig::default()
         }
         .as_raw()?;
 
+        assert_eq!(
+            unsafe { CStr::from_ptr(parts.raw.execution_contract) }.to_str()?,
+            "planner-owned-contract"
+        );
         assert_eq!(parts.raw.resident_tensor_name_count, 2);
         assert!(!parts.raw.resident_tensor_names.is_null());
         let names = unsafe {
@@ -675,6 +687,7 @@ mod tests {
         };
         let terminal = RuntimeConfig {
             resident_tensor_names: vec!["output.weight".into()],
+            execution_contract: String::new(),
             activation_import_identities: vec!["activation-0".into()],
             ..RuntimeConfig::default()
         };

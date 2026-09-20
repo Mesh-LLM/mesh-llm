@@ -330,6 +330,7 @@ pub struct RuntimeConfig {
     pub use_mmap_buffer: bool,
     pub resident_tensor_names: *const *const c_char,
     pub resident_tensor_name_count: usize,
+    pub execution_contract: *const c_char,
     pub activation_import_identities: *const *const c_char,
     pub activation_import_identity_count: usize,
     pub activation_import_bindings: *const *const c_char,

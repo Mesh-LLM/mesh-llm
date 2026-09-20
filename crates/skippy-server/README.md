@@ -127,11 +127,11 @@ deadline handling.
 ## Notes
 
 - `serve-binary` is the tuned binary stage-to-stage path.
-- `serve-binary` participates in the breaking generation-10 stage protocol.
-  Stage compatibility requires the complete `stage-generation-10` control,
+- `serve-binary` participates in the breaking generation-11 stage protocol.
+  Stage compatibility requires the complete `stage-generation-11` control,
   status-list, strict-content-identity, stage-admission, and stale-window-discard
   bundle. Older peers, including generation 7 peers, are rejected during split
-  planning rather than being mixed into a generation-10 topology. A manually
+  planning rather than being mixed into a generation-11 topology. A manually
   wired `serve-binary --downstream` chain has no generation handshake, so every
   stage in that chain must be upgraded together.
 - `serve-binary` accepts upstream protocol connections concurrently. Model

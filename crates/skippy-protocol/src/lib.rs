@@ -40,7 +40,7 @@ pub use validation::{
     STAGE_STREAM_CONTROL, STAGE_STREAM_TRANSPORT, STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER,
     STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1, STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
     STAGE_SUBPROTOCOL_FEATURE_STAGE_GENERATION,
-    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V10, STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
+    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V11, STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
     STAGE_SUBPROTOCOL_MAJOR, STAGE_SUBPROTOCOL_NAME, StageFrameError,
     validate_stage_admission_descriptor, validate_stage_artifact_transfer_request,
     validate_stage_artifact_transfer_response, validate_stage_control_request,
@@ -66,6 +66,7 @@ mod tests {
             version: super::STAGE_ADMISSION_DESCRIPTOR_VERSION,
             package_id: format!("sha256:{}", "c7".repeat(32)),
             plan_id: format!("skippy-plan:v1:{}", "d8".repeat(32)),
+            execution_contract: String::new(),
             layer_start,
             layer_end,
             resident_tensor_ids: vec!["tensor-a".to_string(), "tensor-b".to_string()],
@@ -164,15 +165,16 @@ mod tests {
 
     #[test]
     fn stage_config_policy_defaults_do_not_depend_on_sibling_fields() {
-        // A legacy config that sets F16 without naming a policy must keep the
-        // fixed F16 behavior after serde round-trip.
-        let legacy = format!(
+        // A config that sets F16 without naming a policy keeps fixed F16
+        // behavior independently of its execution contract.
+        let encoded = format!(
             "{}",
             serde_json::json!({
                 "run_id": "run",
                 "topology_id": "topology",
                 "model_id": "model",
                 "activation_codec": "f16-rne-v1",
+                "execution_contract": "",
                 "stage_id": "stage-0",
                 "stage_index": 0,
                 "layer_start": 0,
@@ -193,7 +195,7 @@ mod tests {
                 "cache_type_v": "f16",
             })
         );
-        let config: super::StageConfig = serde_json::from_str(&legacy).unwrap();
+        let config: super::StageConfig = serde_json::from_str(&encoded).unwrap();
         assert_eq!(
             config.activation_codec,
             super::StageActivationCodec::F16RneV1
@@ -224,7 +226,7 @@ mod tests {
         );
     }
     use super::{
-        STAGE_PROTOCOL_GENERATION, STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V10,
+        STAGE_PROTOCOL_GENERATION, STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V11,
         StageFrameError, validate_stage_admission_descriptor,
         validate_stage_artifact_transfer_request, validate_stage_artifact_transfer_response,
         validate_stage_control_request, validate_stage_control_response,
@@ -234,7 +236,7 @@ mod tests {
     #[test]
     fn stage_protocol_generation_feature_names_current_generation() {
         assert_eq!(
-            STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V10,
+            STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V11,
             format!("stage-generation-{STAGE_PROTOCOL_GENERATION}")
         );
     }

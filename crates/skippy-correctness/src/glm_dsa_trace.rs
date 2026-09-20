@@ -675,6 +675,7 @@ fn write_stage_config(
         "cache_type_k": "f16",
         "cache_type_v": "f16",
         "resident_tensor_names": runtime_plan.resident_tensor_names,
+        "execution_contract": runtime_plan.execution_contract,
         "activation_import_identities": runtime_plan.activation_import_identities,
         "activation_import_bindings": runtime_plan.activation_import_bindings,
         "activation_export_identities": runtime_plan.activation_export_identities,

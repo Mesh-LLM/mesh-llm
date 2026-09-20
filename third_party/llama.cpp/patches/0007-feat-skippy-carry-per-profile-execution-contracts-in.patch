@@ -1,0 +1,54 @@
+From 86017004bab2242614ef7fb13601e7866163ed7e Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Sun, 20 Sep 2026 10:04:24 +1000
+Subject: [PATCH] feat(skippy): carry per-profile execution contracts in the
+ ABI
+
+---
+ include/skippy/common.h     | 2 +-
+ include/skippy/runtime.h    | 2 ++
+ include/skippy/stage_plan.h | 2 ++
+ 3 files changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index 5ac737396..0265816cc 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -46,7 +46,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 59
++#define SKIPPY_ABI_VERSION_PATCH 60
+ 
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
+index 97989af15..b0881ead6 100644
+--- a/include/skippy/runtime.h
++++ b/include/skippy/runtime.h
+@@ -67,6 +67,8 @@ struct skippy_runtime_config {
+     // an unsplit full-model load; there is no range-based loader fallback.
+     const char * const * resident_tensor_names;
+     size_t resident_tensor_name_count;
++    /** @brief Planner-produced execution dependency contract for shared residency. */
++    const char * execution_contract;
+     const char * const * activation_import_identities;
+     size_t activation_import_identity_count;
+     const char * const * activation_import_bindings;
+diff --git a/include/skippy/stage_plan.h b/include/skippy/stage_plan.h
+index 17dbba5ef..962674190 100644
+--- a/include/skippy/stage_plan.h
++++ b/include/skippy/stage_plan.h
+@@ -114,6 +114,8 @@ struct skippy_stage_plan_desc_v1 {
+     uint32_t reserved;
+     uint64_t profile_count;
+     uint64_t resident_tensor_count;
++    /** @brief Opaque native execution dependency contract; carry unchanged to runtime config. */
++    struct skippy_stage_plan_string_ref_v1 execution_contract;
+ };
+ 
+ /** @brief Pointer-free guard and identity summary for one graph profile. */
+-- 
+2.54.0 (Apple Git-157)
+

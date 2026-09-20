@@ -413,13 +413,13 @@ negative fixtures fail before topology publication.
 
 - Do not block the internal graph design on a wire change.
 - At the atomic v2-only cutover, advance the stage control protocol to
-  generation 10 and require a versioned stage-plan admission descriptor carrying
+  generation 11 and require a versioned stage-plan admission descriptor carrying
   `package_id`, the content-derived native `plan_id`, the exact stage range, strictly
   sorted resident tensor ids, typed sidecars, and all guarded profile/slice
   identities. Generation-7 nodes may remain visible to mesh discovery but
-  cannot join, coordinate, source artifacts for, or receive a generation-10
+  cannot join, coordinate, source artifacts for, or receive a generation-11
   topology. There is no downgrade or v1/direct-GGUF fallback.
-- Carry graph-described activation frontiers in the generation-10 multipart
+- Carry graph-described activation frontiers in the generation-11 multipart
   frame. Each part includes:
   - repeated plane descriptors with stable semantic ids;
   - dtype, layout, dimensions/strides, byte offset, and byte length;
@@ -433,7 +433,7 @@ negative fixtures fail before topology publication.
   coordinated v2-only cutoff. Package v1 compatibility is intentionally not
   retained.
 **Exit gate:** graph-described multipart activation framing runs behind
-generation-10 control admission; every participant echoes and verifies the same
+generation-11 control admission; every participant echoes and verifies the same
 package/plan/stage descriptor, typed frontier obligations in the frozen support
 matrix are validated before execution, and unsupported boundaries reject before
 topology publication.
@@ -761,6 +761,10 @@ The completed cutover satisfies the accepted criteria:
 
 - Graph-derived planning is the only production filtering path, and unsupported
   boundaries reject before topology publication.
+- Each admitted stage carries the planner-produced decoder/MTP execution
+  dependency contract through generation-11 control admission; runtime
+  realization validates the selected dependency set and the resident union
+  independently.
 - Package planning, native loading, and model builders no longer own the
   retired family-specific core stage-filter path.
 - The durable patch queue applies core, `model_support/`, then generated
@@ -851,3 +855,29 @@ The completed cutover satisfies the accepted criteria:
 - `third_party/llama.cpp/patches/0002-skippy-implement-graph-planning-realization-and-runt.patch`
 - [PR #1662: recurrent KV restoration and split-cache integration](https://github.com/Mesh-LLM/mesh-llm/pull/1662)
 - [PR #1665: consolidated dense/recurrent split smoke](https://github.com/Mesh-LLM/mesh-llm/pull/1665)
+
+## Shared decoder and MTP residency
+
+The native stage descriptor carries an opaque execution dependency contract
+alongside its resident union. Admission reproduces and compares that contract;
+the host carries it unchanged into the runtime configuration. The contract
+keeps decoder dependencies separate from each auxiliary MTP depth. Runtime
+realization requires exact equality with the selected dependency set and
+independently requires residency to equal the union. A graph cannot borrow
+another profile's exclusive weights merely because they are loaded.
+
+Prefill, decode, and batch traces must agree on parameter requirements within
+each execution kind/depth; otherwise planning rejects the configuration. Their
+existing graph identities, guards, and activation boundaries remain separate.
+This dependency contract does not replace those semantic identities or certify
+untraced model behavior. MTP graphs are validated as auxiliary graphs rather
+than sliced using decoder block frontiers.
+
+The native ABI advances from 0.1.59 to 0.1.60. Stage-control admission carries
+a required opaque contract field. Every staged native caller must provide the
+planner-produced contract; missing contracts are rejected, including
+single-profile stages. Mixed native ABI versions must not be combined. Cache
+identity and graph reuse also include the contract.
+
+The required execution contract advances the stage protocol to generation 11;
+mixed-generation peers fail closed through the existing capability gate.

@@ -405,6 +405,7 @@ pub(super) fn write_stage_configs(
             "cache_type_k": args.cache_type_k,
             "cache_type_v": args.cache_type_v,
             "load_mode": config_load_mode,
+            "execution_contract": "",
             "bind_addr": stage.bind_addr,
             "upstream": upstream,
             "downstream": downstream,

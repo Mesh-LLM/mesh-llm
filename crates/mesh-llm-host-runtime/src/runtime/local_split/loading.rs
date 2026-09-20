@@ -504,6 +504,7 @@ pub(super) fn apply_admitted_activation_frontier(
     load: &skippy::StageLoadRequest,
 ) -> Result<()> {
     let frontier_profile = skippy::admitted_activation_frontier(load)?;
+    config.execution_contract = load.admission.execution_contract.clone();
     config.activation_import_identities = frontier_profile.activation_imports.clone();
     config.activation_import_bindings = frontier_profile.activation_import_bindings.clone();
     config.activation_export_identities = frontier_profile.activation_exports.clone();
@@ -1359,7 +1360,7 @@ mod activation_boundary_tests {
     #[test]
     fn missing_graph_boundary_is_not_reconstructed_from_manifest_width() {
         let error = required_boundary(None, "stage-1", "input")
-            .expect_err("generation 10 requires graph-observed boundary descriptors");
+            .expect_err("generation 11 requires graph-observed boundary descriptors");
         assert!(
             error
                 .to_string()

@@ -926,6 +926,7 @@ mod tests {
             version: skippy_protocol::STAGE_ADMISSION_DESCRIPTOR_VERSION,
             package_id,
             plan_id: format!("skippy-plan:v1:{}", "bb".repeat(32)),
+            execution_contract: String::new(),
             layer_start: 1,
             layer_end: 2,
             resident_tensor_ids: vec!["tensor-resident".to_string()],

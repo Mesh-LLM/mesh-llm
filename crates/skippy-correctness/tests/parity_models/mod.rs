@@ -1627,6 +1627,7 @@ fn open_stage_model(path: &StagePath, shape: StageShape, n_gpu_layers: i32) -> R
             glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
             mtp_source: MtpSource::Disabled,
             resident_tensor_names: path.resident_tensor_names.clone(),
+            execution_contract: String::new(),
             activation_import_identities: Vec::new(),
             activation_import_bindings: Vec::new(),
             activation_export_identities: Vec::new(),
