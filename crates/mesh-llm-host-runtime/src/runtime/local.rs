@@ -1115,7 +1115,6 @@ async fn start_local_package_v2_model(
     }
     runtime_options.config.ctx_size = context_length;
     runtime_options.config.lane_count = plan.slots as u32;
-    runtime_options.config.filter_tensors_on_load = false;
     if spec.device_override.is_none()
         && let Some(gpu) = spec.pinned_gpu
     {

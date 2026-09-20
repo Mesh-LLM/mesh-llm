@@ -2,10 +2,8 @@ use std::ffi::CStr;
 use std::path::Path;
 use std::ptr;
 
-use anyhow::{Context, Result, anyhow};
-use skippy_ffi::{
-    ModelInfo as RawModelInfo, SlicePlan as RawSlicePlan, TensorInfo as RawTensorInfo, TensorRole,
-};
+use anyhow::{Result, anyhow};
+use skippy_ffi::{ModelInfo as RawModelInfo, TensorInfo as RawTensorInfo, TensorRole};
 
 use crate::TensorInfo;
 use crate::error::ensure_ok;
@@ -13,10 +11,6 @@ use crate::path_cstring::path_to_cstring;
 
 pub struct ModelInfo {
     raw: *mut RawModelInfo,
-}
-
-pub struct SlicePlan {
-    raw: *mut RawSlicePlan,
 }
 
 impl ModelInfo {
@@ -80,40 +74,6 @@ impl ModelInfo {
         let count = self.tensor_count()?;
         (0..count).map(|index| self.tensor_at(index)).collect()
     }
-
-    pub fn create_slice_plan(&self) -> Result<SlicePlan> {
-        let mut raw = ptr::null_mut();
-        let mut error = ptr::null_mut();
-        let status =
-            unsafe { skippy_ffi::skippy_slice_plan_create(self.raw, &mut raw, &mut error) };
-        ensure_ok(status, error)?;
-        if raw.is_null() {
-            return Err(anyhow!("skippy_slice_plan_create returned a null handle"));
-        }
-        Ok(SlicePlan { raw })
-    }
-
-    pub fn write_slice_gguf(
-        &self,
-        plan: &SlicePlan,
-        stage_index: u32,
-        output_path: impl AsRef<Path>,
-    ) -> Result<()> {
-        let stage_index = i32::try_from(stage_index).context("stage_index exceeds i32")?;
-        let output_path = output_path.as_ref();
-        let output_path = path_to_cstring(output_path, "output path")?;
-        let mut error = ptr::null_mut();
-        let status = unsafe {
-            skippy_ffi::skippy_write_slice_gguf(
-                self.raw,
-                plan.raw,
-                stage_index,
-                output_path.as_ptr(),
-                &mut error,
-            )
-        };
-        ensure_ok(status, error)
-    }
 }
 
 impl Drop for ModelInfo {
@@ -121,43 +81,6 @@ impl Drop for ModelInfo {
         if !self.raw.is_null() {
             unsafe {
                 let _ = skippy_ffi::skippy_model_info_free(self.raw, ptr::null_mut());
-            }
-        }
-    }
-}
-
-impl SlicePlan {
-    pub fn add_layer_range(
-        &mut self,
-        stage_index: u32,
-        layer_start: u32,
-        layer_end: u32,
-        include_embeddings: bool,
-        include_output: bool,
-        include_per_layer_token_embd: bool,
-    ) -> Result<()> {
-        let mut error = ptr::null_mut();
-        let status = unsafe {
-            skippy_ffi::skippy_slice_plan_add_layer_range(
-                self.raw,
-                i32::try_from(stage_index).context("stage_index exceeds i32")?,
-                i32::try_from(layer_start).context("layer_start exceeds i32")?,
-                i32::try_from(layer_end).context("layer_end exceeds i32")?,
-                include_embeddings,
-                include_output,
-                include_per_layer_token_embd,
-                &mut error,
-            )
-        };
-        ensure_ok(status, error)
-    }
-}
-
-impl Drop for SlicePlan {
-    fn drop(&mut self) {
-        if !self.raw.is_null() {
-            unsafe {
-                let _ = skippy_ffi::skippy_slice_plan_free(self.raw, ptr::null_mut());
             }
         }
     }

@@ -202,7 +202,138 @@ fn parse_lstart_naive(s: &str) -> Option<chrono::NaiveDateTime> {
     Some(NaiveDateTime::new(date, time))
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(windows)]
+mod platform {
+    //! Process facts through the Win32 process API. Every query opens the
+    //! process with the least right that answers it,
+    //! `PROCESS_QUERY_LIMITED_INFORMATION`, which the same user holds without
+    //! any privilege.
+    //!
+    //! Same contract as the Unix modules: a PID that names no process is
+    //! `Ok(None)`, and so is one we are not allowed to query, as a `/proc`
+    //! read denied on Linux; any other failure is an error, which
+    //! `process_liveness` reports as `Unknown` rather than `Dead`.
+
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, FILETIME, GetLastError, HANDLE,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+        QueryFullProcessImageNameW,
+    };
+
+    /// Owned process handle, closed on drop.
+    struct Process(HANDLE);
+
+    impl Drop for Process {
+        fn drop(&mut self) {
+            // SAFETY: the handle came from a successful `OpenProcess` and is
+            // closed exactly once, here.
+            unsafe { CloseHandle(self.0) };
+        }
+    }
+
+    /// Open `pid` for querying: `Ok(None)` when no such process exists or it
+    /// cannot be queried, `Err` for anything else.
+    fn open(pid: u32) -> anyhow::Result<Option<Process>> {
+        // SAFETY: a plain Win32 call taking values; the null return is
+        // checked before the handle is used.
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if !handle.is_null() {
+            return Ok(Some(Process(handle)));
+        }
+        // SAFETY: reads the calling thread's last error and takes nothing.
+        match unsafe { GetLastError() } {
+            ERROR_INVALID_PARAMETER => Ok(None),
+            ERROR_ACCESS_DENIED => {
+                tracing::debug!(pid, "access denied opening process for query");
+                Ok(None)
+            }
+            code => Err(anyhow::anyhow!(
+                "OpenProcess({pid}) failed with Win32 error {code}"
+            )),
+        }
+    }
+
+    /// Full image path of the process, as the kernel reports it.
+    fn image_path(process: &Process) -> anyhow::Result<String> {
+        let mut buffer = vec![0u16; 32 * 1024];
+        let mut length = buffer.len() as u32;
+        // SAFETY: the buffer outlives the call and `length` carries its
+        // capacity in UTF-16 units; the API writes at most that many and
+        // stores the written length back.
+        let ok = unsafe {
+            QueryFullProcessImageNameW(
+                process.0,
+                PROCESS_NAME_WIN32,
+                buffer.as_mut_ptr(),
+                &mut length,
+            )
+        };
+        if ok == 0 {
+            // SAFETY: as above.
+            let code = unsafe { GetLastError() };
+            anyhow::bail!("QueryFullProcessImageNameW failed with Win32 error {code}");
+        }
+        Ok(String::from_utf16_lossy(&buffer[..length as usize]))
+    }
+
+    /// The image file name without its extension, which is the shape
+    /// `binary_process_name` derives from a configured binary on Windows.
+    fn image_stem(process: &Process) -> anyhow::Result<Option<String>> {
+        let path = image_path(process)?;
+        Ok(std::path::Path::new(&path)
+            .file_stem()
+            .map(|name| name.to_string_lossy().into_owned()))
+    }
+
+    pub fn process_comm(pid: u32) -> anyhow::Result<Option<String>> {
+        match open(pid)? {
+            Some(process) => image_stem(&process),
+            None => Ok(None),
+        }
+    }
+
+    pub fn process_executable_name(pid: u32) -> anyhow::Result<Option<String>> {
+        process_comm(pid)
+    }
+
+    pub fn process_started_at_unix(pid: u32) -> anyhow::Result<Option<i64>> {
+        let Some(process) = open(pid)? else {
+            return Ok(None);
+        };
+        let zero = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let (mut creation, mut exit, mut kernel, mut user) = (zero, zero, zero, zero);
+        // SAFETY: four valid out-pointers to stack values that outlive the call.
+        let ok =
+            unsafe { GetProcessTimes(process.0, &mut creation, &mut exit, &mut kernel, &mut user) };
+        if ok == 0 {
+            // SAFETY: as above.
+            let code = unsafe { GetLastError() };
+            anyhow::bail!("GetProcessTimes({pid}) failed with Win32 error {code}");
+        }
+        Ok(Some(super::filetime_to_unix(
+            creation.dwHighDateTime,
+            creation.dwLowDateTime,
+        )))
+    }
+}
+
+/// Convert a Win32 `FILETIME`, 100-nanosecond ticks since 1601-01-01 UTC, to
+/// Unix seconds. Kept outside the Windows module so the arithmetic runs on
+/// every CI runner, the way `parse_lstart_naive` does for macOS.
+#[cfg(any(test, windows))]
+fn filetime_to_unix(high: u32, low: u32) -> i64 {
+    const TICKS_PER_SECOND: i64 = 10_000_000;
+    const SECONDS_FROM_1601_TO_1970: i64 = 11_644_473_600;
+    let ticks = ((high as i64) << 32) | (low as i64);
+    ticks / TICKS_PER_SECOND - SECONDS_FROM_1601_TO_1970
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 mod platform {
     pub fn process_comm(_pid: u32) -> anyhow::Result<Option<String>> {
         Ok(None)
@@ -246,15 +377,37 @@ pub fn process_name_matches(pid: u32, expected_comm: &str) -> bool {
     process_executable_name(pid)
         .ok()
         .flatten()
-        .is_some_and(|name| name == expected_comm)
+        .is_some_and(|name| names_match(&name, expected_comm))
         || process_comm(pid)
             .ok()
             .flatten()
-            .is_some_and(|name| name == expected_comm)
+            .is_some_and(|name| names_match(&name, expected_comm))
+}
+
+/// Compares a live process name with the expected one.
+///
+/// The two sides reach the name through different APIs. The expected name is
+/// the file stem of what `owner.json` recorded from `std::env::current_exe`,
+/// which on Windows reports the path as it was handed to `CreateProcess`, so
+/// as the caller spelled it. The live name comes from
+/// `QueryFullProcessImageNameW`, which reports the canonical path on disk.
+/// Windows opens files without regard to case, so launching through a
+/// differently cased path is ordinary and makes the two disagree: measured
+/// here, one side answered `PYTHON` while the other answered `python` for the
+/// same process. Folding ASCII case covers that, the executable stems compared
+/// here being ASCII, and every other platform keeps the exact comparison its
+/// filesystem calls for.
+#[cfg(windows)]
+fn names_match(live: &str, expected: &str) -> bool {
+    live.eq_ignore_ascii_case(expected)
+}
+
+#[cfg(not(windows))]
+fn names_match(live: &str, expected: &str) -> bool {
+    live == expected
 }
 
 /// Returns true iff the live process matches the expected name and start time.
-#[cfg(not(windows))]
 pub fn validate_pid_matches(pid: u32, expected_comm: &str, expected_started_at_unix: i64) -> bool {
     match process_started_at_unix(pid) {
         Ok(Some(t)) => {
@@ -317,5 +470,71 @@ mod tests {
     #[test]
     fn rejects_unknown_month_name() {
         assert!(parse_lstart_naive("Wed Foo 9 18:43:39 2026").is_none());
+    }
+
+    #[test]
+    fn filetime_ticks_at_the_unix_epoch_convert_to_zero() {
+        // 1970-01-01T00:00:00Z is 116_444_736_000_000_000 ticks after
+        // 1601-01-01, which is 0x019DB1DE_D53E8000 split into its two halves.
+        assert_eq!(super::filetime_to_unix(0x019D_B1DE, 0xD53E_8000), 0);
+        // One second later, ten million ticks further.
+        assert_eq!(
+            super::filetime_to_unix(0x019D_B1DE, 0xD53E_8000 + 10_000_000),
+            1
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_reports_the_current_process() {
+        let pid = std::process::id();
+        let comm = super::process_comm(pid)
+            .unwrap()
+            .expect("the current process must be visible to itself");
+        assert!(!comm.is_empty());
+        assert!(
+            !comm.to_ascii_lowercase().ends_with(".exe"),
+            "comm is the image stem, got {comm}"
+        );
+        let started = super::process_started_at_unix(pid)
+            .unwrap()
+            .expect("the current process has a start time");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert!(
+            (0..3600).contains(&(now - started)),
+            "started at {started}, now {now}"
+        );
+        assert_eq!(super::process_liveness(pid), super::Liveness::Alive);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_reports_a_missing_pid_as_dead() {
+        // PID 0 names the System Idle Process, and `OpenProcess` documents
+        // that it fails there with `ERROR_INVALID_PARAMETER`, which this
+        // module reads as "no such process". An arbitrary large value would
+        // not do as well: the kernel allocates process ids through the handle
+        // manager, which ignores their low two bits, so a value like 999_999
+        // reaches 999_996 and would open it on a machine that happened to run
+        // it.
+        assert_eq!(super::process_comm(0).unwrap(), None);
+        assert_eq!(super::process_liveness(0), super::Liveness::Dead);
+    }
+
+    #[test]
+    fn a_name_that_differs_only_in_case_matches_where_the_filesystem_does() {
+        assert!(super::names_match("mesh-llm", "mesh-llm"));
+        assert!(!super::names_match("mesh-llm", "other"));
+        // `current_exe` spells the binary the way it was launched, so a
+        // Windows caller reaching it through an upper-cased path records a
+        // name the canonical one does not equal.
+        assert_eq!(
+            super::names_match("mesh-llm", "MESH-LLM"),
+            cfg!(windows),
+            "case folding must follow the platform's filesystem"
+        );
     }
 }

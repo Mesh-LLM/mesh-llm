@@ -832,7 +832,7 @@ mod proactive_eviction_tests {
         };
         let observer = Arc::new(RecordingObserver::default());
         let integration =
-            KvStageIntegration::from_loaded_model(&config, Some(ModelStateKind::Dense), None)
+            KvStageIntegration::from_loaded_model(&config, Some(ModelStateKind::Dense), None, None)
                 .unwrap()
                 .expect("resident cache should be enabled")
                 .with_kv_lifecycle_observer(observer.clone());

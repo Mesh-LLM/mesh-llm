@@ -45,7 +45,7 @@ chain alone makes the hot path six hops, or about 60 ms before compute.
 Generation 7 introduced direct prediction return, and generation 9 added
 canonical stage-admission descriptors. Generation 10 is the current
 compatibility-breaking cutover: a peer is stage compatible only when it
-advertises both `skippy-stage/2` and the complete `stage-generation-10` bundle.
+advertises both `skippy-stage/2` and the complete `stage-generation-11` bundle.
 Every load carries a canonical admission descriptor. The ready response echoes
 that descriptor exactly before topology publication.
 Prediction-bearing messages return directly from the final/readout stage to the
@@ -86,7 +86,7 @@ compute. That removes two serialized reply hops from every generated token.
 ## Stale Verify-Window Discard
 
 Generation 10 adds the `DiscardStaleWindows` control frame (wire kind 23),
-which makes this generation compatibility-breaking: a pre-generation-10
+which makes this generation compatibility-breaking: a pre-generation-11
 peer rejects the kind outright and drops the request connection.
 
 Run-ahead admission dispatches verify windows before their predecessors are

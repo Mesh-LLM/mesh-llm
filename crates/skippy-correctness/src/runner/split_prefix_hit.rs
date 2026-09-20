@@ -149,7 +149,6 @@ fn run_split_prefix_hit_case(
         "cache_type_k": "f16",
         "cache_type_v": "f16",
         "flash_attn_type": protocol_flash_attn(args.runtime.flash_attn),
-        "filter_tensors_on_load": true,
         "load_mode": protocol_load_mode(args.runtime.stage_load_mode),
     });
     let stage0_config = merge_stage_config(
@@ -160,6 +159,7 @@ fn run_split_prefix_hit_case(
             "layer_start": 0,
             "layer_end": args.split_layer,
             "resident_tensor_names": runtime_plans[0].resident_tensor_names,
+            "execution_contract": runtime_plans[0].execution_contract,
             "activation_import_identities": runtime_plans[0].activation_import_identities,
             "activation_import_bindings": runtime_plans[0].activation_import_bindings,
             "activation_export_identities": runtime_plans[0].activation_export_identities,
@@ -181,6 +181,7 @@ fn run_split_prefix_hit_case(
             "layer_start": args.split_layer,
             "layer_end": args.runtime.layer_end,
             "resident_tensor_names": runtime_plans[1].resident_tensor_names,
+            "execution_contract": runtime_plans[1].execution_contract,
             "activation_import_identities": runtime_plans[1].activation_import_identities,
             "activation_import_bindings": runtime_plans[1].activation_import_bindings,
             "activation_export_identities": runtime_plans[1].activation_export_identities,

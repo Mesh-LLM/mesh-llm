@@ -27,6 +27,12 @@ pub enum ModelStateKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedModelCapability {
     pub state_kind: ModelStateKind,
+    /// Upstream gates a separate indexer memory tier behind an architecture
+    /// allowlist (`needs_mem_idx`, llama-model.cpp). Indexer state is only
+    /// serialized by full-state snapshots, never by KV-page or recurrent
+    /// snapshots, so cache payload selection must treat these models as
+    /// exact-state-only. See skippy-server `effective_cache_payload`.
+    pub has_indexer_memory: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

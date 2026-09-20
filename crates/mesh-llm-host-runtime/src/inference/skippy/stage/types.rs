@@ -125,6 +125,7 @@ pub(crate) fn test_stage_admission(
         version: skippy_protocol::STAGE_ADMISSION_DESCRIPTOR_VERSION,
         package_id: format!("sha256:{}", "a5".repeat(32)),
         plan_id: format!("skippy-plan:v1:{}", "b6".repeat(32)),
+        execution_contract: String::new(),
         layer_start,
         layer_end,
         resident_tensor_ids: vec!["tensor-0".to_string()],

@@ -466,7 +466,7 @@ class DepotCanaryWorkflowTests(unittest.TestCase):
                     self.assertIn("depot_selected:", block)
                     self.assertIn("startsWith(", block)
                     self.assertIn("needs.runner_policy.outputs.", block)
-        self.assertEqual(audit_calls, 25)
+        self.assertEqual(audit_calls, 26)
 
     def test_endpoint_and_docker_auth_probes_fail_closed(self) -> None:
         action = (

@@ -89,6 +89,61 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
         self.assertEqual(124, result.returncode)
         self.assertIn("agent developer task timed out after 1s", result.stderr)
 
+    def test_each_returned_candidate_gets_a_full_verification_window(self) -> None:
+        # Exercise the actual shell loop with a deterministic clock. The first
+        # failed pass consumes most of the repair window; the second must still
+        # get all 200 seconds and may finish after coding admission closes.
+        for second_pass_succeeds in (True, False):
+            with self.subTest(second_pass_succeeds=second_pass_succeeds):
+                result = self.run_repair_clock_fixture(second_pass_succeeds)
+                self.assertEqual(0 if second_pass_succeeds else 124, result.returncode,
+                                 result.stdout + result.stderr)
+                self.assertEqual(2, result.stdout.count("agent turn"))
+                self.assertEqual(2, result.stdout.count("gate budget=200"))
+                self.assertNotIn("gate budget=10", result.stdout)
+
+    def run_repair_clock_fixture(self, second_pass_succeeds: bool) -> subprocess.CompletedProcess[str]:
+        remaining = self.wrapper.split("remaining_verification_seconds() {", 1)[1]
+        remaining = "remaining_verification_seconds() {" + remaining.split("run_verification_logged() {", 1)[0]
+        loop = self.wrapper.split("repair_candidate_until_green() {", 1)[1]
+        loop = "repair_candidate_until_green() {" + loop.split("write_upstream_summary() {", 1)[0]
+        fixture = r"""
+set -euo pipefail
+now=1000
+AGENT_TIMEOUT_SECONDS=100
+VERIFICATION_TIMEOUT_SECONDS=200
+turns=0
+date() { echo "$now"; }
+agent_prompt() { echo initial; }
+agent_feedback_prompt() { echo feedback; }
+assert_agent_control_unchanged() { :; }
+validate_agent_manifest_changes() { :; }
+agent_session_step() {
+  turns=$((turns + 1))
+  echo "agent turn $turns"
+  now=$((now + 10))
+}
+run_candidate_gates() {
+  local budget
+  budget="$(remaining_verification_seconds)" || return 124
+  echo "gate budget=$budget"
+  if (( turns == 1 )); then
+    now=$((now + 80))
+    return 1
+  fi
+  if (( budget < 150 )); then
+    now=$((now + budget))
+    return 124
+  fi
+  now=$((now + 150))
+  return SECOND_STATUS
+}
+""".replace("SECOND_STATUS", "0" if second_pass_succeeds else "1")
+        return subprocess.run(
+            ["bash", "-c", fixture + remaining + loop + "\nrepair_candidate_until_green\n"],
+            text=True, capture_output=True, check=False, timeout=10,
+        )
+
     def test_prepare_owns_pin_and_exact_prepared_upstream(self) -> None:
         prepare = self.wrapper[
             self.wrapper.index("run_prepare() {") : self.wrapper.index("run_full_build() {")

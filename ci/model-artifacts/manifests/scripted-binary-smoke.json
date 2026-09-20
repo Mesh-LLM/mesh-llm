@@ -2,8 +2,48 @@
   "schema_version": 1,
   "manifest_kind": "test-model-artifacts",
   "suite": "scripted-binary-smoke",
-  "registry_sha256": "a55ed4b1ef10e9ed5906d55483e003ac941c280f3889ef14a89814410ea6a921",
+  "registry_sha256": "f1e3ced515076c6848dbbcde2b76cf2c1dc6b7ca3d526ee9cfcd12dd370c69f5",
   "artifacts": [
+    {
+      "id": "family-granite-hybrid",
+      "family": "granite-hybrid",
+      "capability_tags": [
+        "gguf",
+        "hybrid"
+      ],
+      "suites": [
+        "llama-family-certification",
+        "product-smoke",
+        "scripted-binary-smoke"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full",
+        "pull-request",
+        "main",
+        "release"
+      ],
+      "repo": "ibm-granite/granite-4.0-h-350m-GGUF",
+      "revision": "a864f823cce6e6048b5752e2816fe7a23987d790",
+      "selector": "Q4_K_M",
+      "files": [
+        "granite-4.0-h-350m-Q4_K_M.gguf"
+      ],
+      "file_integrity": {
+        "granite-4.0-h-350m-Q4_K_M.gguf": {
+          "size_bytes": 222662560,
+          "blob_id": "0a8d6a7373602fadfba274a640ba784b86cc6847f1c67f1b0a90fa2ec266b7fb"
+        }
+      },
+      "model_ref": "ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M",
+      "urls": [
+        "https://huggingface.co/ibm-granite/granite-4.0-h-350m-GGUF/resolve/a864f823cce6e6048b5752e2816fe7a23987d790/granite-4.0-h-350m-Q4_K_M.gguf"
+      ],
+      "file": "granite-4.0-h-350m-Q4_K_M.gguf",
+      "size_bytes": 222662560,
+      "sha256": "0a8d6a7373602fadfba274a640ba784b86cc6847f1c67f1b0a90fa2ec266b7fb",
+      "url": "https://huggingface.co/ibm-granite/granite-4.0-h-350m-GGUF/resolve/a864f823cce6e6048b5752e2816fe7a23987d790/granite-4.0-h-350m-Q4_K_M.gguf"
+    },
     {
       "id": "smollm2-q8-inference",
       "family": "smollm2",
@@ -15,7 +55,6 @@
       ],
       "suites": [
         "product-smoke",
-        "product-integration-smoke",
         "scripted-binary-smoke",
         "sdk-smoke"
       ],
@@ -46,5 +85,6 @@
       "url": "https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf",
       "notes": "Shared product, scripted-binary, and SDK inference fixture."
     }
-  ]
+  ],
+  "default_artifact_id": "smollm2-q8-inference"
 }

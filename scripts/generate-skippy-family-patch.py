@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the deterministic llama.cpp model-family stage-control patch."""
+"""Generate deterministic llama.cpp model-family graph-semantics patches."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ separately and remain outside the primary decoder stage interval.
 ---
 """
 
-GENERATOR_VERSION = "0.4.1"
+GENERATOR_VERSION = "0.5.0"
 DIFF_HEADER = re.compile(r"^diff --git a/(src/models/[^ ]+) b/[^\n]+$", re.MULTILINE)
 
 
@@ -101,8 +101,8 @@ def validate_report(report_path: Path, *, idempotence: bool) -> dict:
         if inherited:
             raise RuntimeError(
                 "first rewriter pass received pre-transformed model builders; "
-                "generation must start after core patches and before every "
-                "generated family patch: "
+                "generation must start after core and model-support patches "
+                "and before every generated family patch: "
                 + ", ".join(inherited[:10])
             )
         refused = [
@@ -208,7 +208,7 @@ def write_family_shards(
             label = "--".join(families) if families else "unmapped"
             filename = f"{index:04d}-family-{label}.patch"
             shard_diff = "".join(sections[source] for source in sorted(sections))
-            content = patch_text(f"skippy: generate {label} stage controls", shard_diff)
+            content = patch_text(f"skippy: annotate {label} graph semantics", shard_diff)
             write_utf8(temp / filename, content)
             shards.append({
                 "file": filename,
