@@ -1,5 +1,7 @@
 [build]
 rustc-wrapper = "sccache"
+# sccache cannot cache Rust incremental compilations; disable them for all profiles.
+incremental = false
 
 [target.aarch64-apple-darwin]
 linker = "scripts/cargo-linker"
