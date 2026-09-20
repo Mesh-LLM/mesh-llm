@@ -26,6 +26,13 @@ def _load(path: Path, artifact_id: str | None, cadence: str) -> dict[str, Any]:
     artifacts = raw.get("artifacts")
     if not isinstance(artifacts, list) or not artifacts:
         raise ManifestError("manifest must contain artifacts")
+    default_artifact_id = raw.get("default_artifact_id")
+    if default_artifact_id is not None and (
+        not isinstance(default_artifact_id, str) or not default_artifact_id
+    ):
+        raise ManifestError("default_artifact_id must be a non-empty string")
+    if artifact_id is None and default_artifact_id is not None:
+        artifact_id = default_artifact_id
     matches = [row for row in artifacts if isinstance(row, dict) and row.get("id") == artifact_id]
     if artifact_id is None:
         if len(artifacts) != 1 or not isinstance(artifacts[0], dict):

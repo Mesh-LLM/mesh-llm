@@ -47,21 +47,22 @@ class MacosDeploymentTargetTests(unittest.TestCase):
             self.assertEqual(result.stdout.strip(), override or DEFAULT)
 
     def test_both_canary_jobs_export_target_before_compilation(self):
-        workflow = yaml.safe_load((ROOT / ".github/workflows/llama-upstream-canary.yml").read_text())
-        count = 0
-        for job in workflow["jobs"].values():
-            if "family-certify" not in job.get("runs-on", []):
-                continue
-            count += 1
-            steps = job["steps"]
-            setup = next(i for i, step in enumerate(steps)
-                         if "source scripts/lib/macos-deployment-target.sh" in step.get("run", ""))
-            self.assertIn('echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET" >> "$GITHUB_ENV"',
-                          steps[setup]["run"])
-            cache = next(i for i, step in enumerate(steps) if step.get("name") == "Isolate compiler cache identity")
-            self.assertLess(setup, cache)
-            self.assertIn('macos-deployment-target=%s', steps[cache]["run"])
-        self.assertEqual(count, 2)
+        workflow = yaml.safe_load((ROOT / ".github/workflows/llama-canary-family-pass.yml").read_text())
+        steps = yaml.safe_load((ROOT / ".github/actions/setup-canary-runner/action.yml").read_text())["runs"]["steps"]
+        setup = next(i for i, step in enumerate(steps)
+                     if "source scripts/lib/macos-deployment-target.sh" in step.get("run", ""))
+        self.assertIn('echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET" >> "$GITHUB_ENV"',
+                      steps[setup]["run"])
+        cache = next(i for i, step in enumerate(steps) if step.get("name") == "Isolate compiler cache identity")
+        self.assertLess(setup, cache)
+        self.assertIn('macos-deployment-target=%s', steps[cache]["run"])
+        build = workflow['jobs']['build']['steps']
+        setup_call = next(i for i, step in enumerate(build) if step.get('uses') == './.github/actions/setup-canary-runner')
+        compile_call = next(i for i, step in enumerate(build) if step.get('id') == 'build')
+        self.assertLess(setup_call, compile_call)
+        # Family consumers run producer bytes; no compiler or deployment-target inference.
+        self.assertNotIn('cargo ', '\n'.join(step.get('run', '') for step in workflow['jobs']['family']['steps']))
+
 
 
 if __name__ == "__main__":

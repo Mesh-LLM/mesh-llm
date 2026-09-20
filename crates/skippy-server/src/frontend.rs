@@ -13,6 +13,10 @@ mod guardrails;
 pub(crate) mod iteration_scheduler;
 mod linear_proposal;
 mod local_generation;
+// Test-only visibility chain for the exact-state capture counters (see
+// local_generation::capture_trace).
+#[cfg(test)]
+pub(crate) use local_generation::capture_trace;
 mod native_mtp;
 mod prefill;
 mod prefix_cache;

@@ -68,6 +68,11 @@ REPORT_PATH="${SYSTEMONE_SMOKE_REPORT:-$REPORT_DIR/system-one.json}"
 
 SERVER_PID=""
 REPORT_REASONS=""
+# Full-model read cache state, filled in by read_part when the read backend is
+# declared qualified: the resolved artifact path and whether the offline cache
+# was actually checked (false on the intentionally unqualified Metal path).
+READ_RESOLVED_ARTIFACT_PATH=""
+READ_ARTIFACT_CACHE_CHECKED="false"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -383,10 +388,15 @@ read_part() {
   summary="$(artifact_summary "$READ_ARTIFACT_ID")" || return 2
   cached="$(cached_artifact_path "$(jq -r '.repo' <<<"$summary")" \
     "$(jq -r '.revision' <<<"$summary")" "$(jq -r '.file' <<<"$summary")")"
-  if [[ -z "${SYSTEMONE_SMOKE_READ_MODEL_PATH:-}" && -z "$cached" ]]; then
-    echo "system-one: full-model read NOT CERTIFIED: pinned $(jq -r '.repo' <<<"$summary")/$(jq -r '.file' <<<"$summary") is not in the offline model cache" >&2
+  READ_RESOLVED_ARTIFACT_PATH="${SYSTEMONE_SMOKE_READ_MODEL_PATH:-$cached}"
+  READ_ARTIFACT_CACHE_CHECKED="true"
+  if [[ -z "$READ_RESOLVED_ARTIFACT_PATH" ]]; then
+    # A declared-qualified backend must never satisfy this lane without
+    # running the full-model read: a missing pinned artifact is a hard
+    # failure, distinct from the intentionally unqualified path (exit 3).
+    echo "system-one: full-model read FAILED: build backend '${BUILD_BACKEND:-<unset>}' is declared qualified (${CERTIFIED_BACKENDS}), but pinned $(jq -r '.repo' <<<"$summary")/$(jq -r '.file' <<<"$summary") is not in the offline model cache" >&2
     echo "pre-warm it with: scripts/skippy-system-one-smoke.sh --prewarm" >&2
-    return 3
+    return 4
   fi
   run_cases_against_stage "full-model read" "$READ_ARTIFACT_ID" \
     "${SYSTEMONE_SMOKE_READ_MODEL_PATH:-}" full-read "$READ_N_BATCH" \
@@ -442,6 +452,10 @@ main() {
   case "$rc" in
     0) read_status="pass" ;;
     3) read_status="unqualified" ;;
+    4)
+      read_status="fail"
+      record_reason "declared-qualified backend ${BUILD_BACKEND:-<unset>} is missing the pinned full-model read artifact"
+      ;;
     2) read_status="error" ;;
     *) read_status="fail" ;;
   esac
@@ -475,6 +489,8 @@ main() {
   SYSTEMONE_SMOKE_REASONS="$REPORT_REASONS" \
   SYSTEMONE_SMOKE_REPORT_PATH="$REPORT_PATH" \
   SYSTEMONE_SMOKE_READ_ARTIFACT="$READ_ARTIFACT_ID" \
+  SYSTEMONE_SMOKE_RESOLVED_ARTIFACT_PATH="$READ_RESOLVED_ARTIFACT_PATH" \
+  SYSTEMONE_SMOKE_ARTIFACT_CACHE_CHECKED="$READ_ARTIFACT_CACHE_CHECKED" \
   SYSTEMONE_SMOKE_REQUIRE_QUALIFIED_FLAG="$REQUIRE_QUALIFIED" \
   SYSTEMONE_SMOKE_SKIP_CONTRACT_FLAG="$SKIP_CONTRACT" \
   SYSTEMONE_SMOKE_CTX_SIZE_VALUE="$CTX_SIZE" \
@@ -491,6 +507,9 @@ report = {
         "status": os.environ["SYSTEMONE_SMOKE_READ_STATUS"],
         "artifact": os.environ["SYSTEMONE_SMOKE_READ_ARTIFACT"],
         "backend": os.environ["SYSTEMONE_SMOKE_BUILD_BACKEND"] or None,
+        "artifact_path": os.environ["SYSTEMONE_SMOKE_RESOLVED_ARTIFACT_PATH"] or None,
+        "artifact_cache_checked": os.environ["SYSTEMONE_SMOKE_ARTIFACT_CACHE_CHECKED"]
+        in ("1", "true"),
         "certified_backends": [
             item
             for item in os.environ["SYSTEMONE_SMOKE_CERTIFIED_BACKENDS"].split(",")

@@ -1,4 +1,5 @@
 0001-models-add-inkling-family-support.patch
-0002-llama-port-diffusion-gemma-support.patch
-0003-skippy-add-diffusion-gemma-system-one-reads.patch
-0004-skippy-query-diffusion-canvas-length.patch
+0002-fix-kimi-k3-name-residual-checkpoint-activation-port.patch
+0003-llama-port-diffusion-gemma-support.patch
+0004-skippy-add-diffusion-gemma-system-one-reads.patch
+0005-skippy-query-diffusion-canvas-length.patch

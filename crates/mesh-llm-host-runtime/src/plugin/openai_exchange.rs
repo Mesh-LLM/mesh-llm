@@ -120,6 +120,11 @@ pub struct ServingProvenance {
     /// `ServedModelIdentity.revision`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_revision: Option<String>,
+    /// From `ServedModelIdentity.weights_digest` — see that field's doc
+    /// comment for what it is a digest over. Omitted exactly when the
+    /// descriptor carries no digest; never a fabricated or zeroed value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weights_digest: Option<String>,
     /// GPU display name from this host's startup hardware survey
     /// (`Node.gpu_name`). Omitted on CPU-only hosts or where no accelerator
     /// was enumerated.
@@ -892,6 +897,7 @@ mod tests {
             model_identity_hash: Some("abc123".to_string()),
             model_canonical_ref: None,
             model_revision: None,
+            weights_digest: None,
             gpu: None,
             vram_bytes: None,
             is_soc: Some(true),
@@ -908,8 +914,50 @@ mod tests {
         // Unknown facts are ABSENT (omitted), not fabricated as null/empty.
         assert!(prov.get("model_canonical_ref").is_none());
         assert!(prov.get("model_revision").is_none());
+        assert!(prov.get("weights_digest").is_none());
         assert!(prov.get("gpu").is_none());
         assert!(prov.get("vram_bytes").is_none());
+    }
+
+    /// A terminal envelope whose serving provenance resolved a real load-time
+    /// weights digest carries it on the wire — the field this consumer exists
+    /// to thread onto the exchange (see `mesh::weights_digest_for_file`'s
+    /// module doc for what the digest is over).
+    #[test]
+    fn terminal_carries_weights_digest_when_present() {
+        let envelope = OpenAiExchangeEnvelope::terminal(
+            "exch-1",
+            OpenAiExchangeDispatchPath::RawProxy,
+            "hermes-2-pro-mistral-7b",
+            Some(200),
+            None,
+            None,
+        )
+        .with_serving_provenance(ServingProvenance {
+            served_by_node_id: "node-abc".to_string(),
+            hostname: None,
+            quantization: None,
+            architecture: None,
+            context_length: None,
+            parameter_size: None,
+            layer_count: None,
+            model_identity_hash: None,
+            model_canonical_ref: None,
+            model_revision: None,
+            weights_digest: Some(
+                "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                    .to_string(),
+            ),
+            gpu: None,
+            vram_bytes: None,
+            is_soc: None,
+        });
+
+        let value = serde_json::to_value(&envelope).expect("serialize");
+        assert_eq!(
+            value["serving_provenance"]["weights_digest"],
+            "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
     }
 
     /// An effective-request envelope carries NO serving provenance (the field

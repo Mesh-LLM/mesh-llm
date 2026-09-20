@@ -477,22 +477,21 @@ mesh-llm serve \
   response from the layer-package model.
 
 > **CI coverage:** `two_node_split_smoke` runs
-> `scripts/ci-two-node-split-smoke.sh` against the Linux inference binary in two
-> model lanes: dense SmolLM2-135M and recurrent Qwen3.5-0.8B. Each lane starts
-> two serving nodes (the recurrent lane fixes a 4096-token context), waits for
-> a topology with stages on two distinct nodes, checks `/v1/models`, then sends
-> three progressively longer `/v1/chat/completions` prompts with one shared
-> prefix through stage 0. The smoke requires the reported cached-token count to
-> increase after each request so either model-state path cannot silently fall
-> back to cold prefill for prefix matches. A follow-up request that restores
-> nothing is the one outcome a loaded runner can produce without a regression,
-> because the host answers before the stage lane releases; the smoke retries the
-> whole sequence from a fresh cold prefix up to
-> `MESH_TWO_NODE_SPLIT_PREFIX_ATTEMPTS` times (3 by default) for that case only.
-> Reuse that is present but not growing fails immediately.
+> `scripts/ci-two-node-split-smoke.sh` against the Linux composed product in two
+> registry-pinned model legs: dense SmolLM2-135M Q8 and recurrent IBM Granite
+> 4.0 H 350M Q4. Each leg starts two serving nodes (the recurrent leg fixes a
+> 4096-token context), waits for matching two-observer topology evidence, checks
+> `/v1/models`, and sends three progressively longer shared-prefix prompts twice
+> through stage 0. Dense repeats must restore a near-full prefix; Granite repeats
+> must report exact `kv-recurrent` checkpoint restoration. The workflow uploads
+> strict identity/stage/model snapshots, reconciled split evidence, and logs on
+> success or failure.
 >
 > Other nearby CI coverage:
 >
+> - `.github/workflows/smoke.yml` — restores the same dense/recurrent pair once
+>   and runs both through standalone inference, OpenAI client compatibility,
+>   and constrained-stack restart on CPU, CUDA, and Metal product rows.
 > - `scripts/ci-two-node-client-serving-smoke.sh` — two nodes, but only tests
 >   `client` -> `serve` routing. The model is held entirely on one node.
 > - `scripts/skippy-ci-smoke.sh` — exercises 3-stage layer splits via

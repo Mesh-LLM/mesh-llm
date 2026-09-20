@@ -1,4 +1,5 @@
 use super::*;
+use crate::frontend::local_generation::CaptureTaskOutstandingGuard;
 
 fn direct_iteration(session_id: &str, token_count: usize) -> DirectIteration {
     let (reply, _result) = std_mpsc::sync_channel(1);
@@ -836,4 +837,109 @@ fn worker_panic_is_contained_and_fails_active_requests() {
     };
     assert!(error.to_string().contains("worker panicked"));
     worker.join().unwrap();
+}
+
+/// Exercises the REAL test-only CaptureTaskOutstandingGuard through the real
+/// channel/command types: the unit is accounted at guard construction —
+/// before submission — and released exactly once by its Drop, whether the
+/// detached operation runs, is rejected on a full queue, or sits queued and
+/// is dropped unexecuted at shutdown.
+#[test]
+fn detached_capture_unit_releases_on_completion_rejection_and_shutdown_drop() {
+    let counter = Arc::new(AtomicUsize::new(0));
+
+    // Rejection on a full queue: try_send returns the command inside the
+    // error, and dropping that error drops the owned operation and its guard.
+    let (commands, _receiver) = std_mpsc::sync_channel(1);
+    commands
+        .send(SchedulerCommand::ExecuteRuntime(capture_operation(
+            &counter,
+            "capture-unit-queued",
+        )))
+        .unwrap();
+    let rejected = commands.try_send(SchedulerCommand::ExecuteRuntime(capture_operation(
+        &counter,
+        "capture-unit-rejected",
+    )));
+    match rejected {
+        Err(std_mpsc::TrySendError::Full(command)) => drop(command),
+        Err(std_mpsc::TrySendError::Disconnected(_)) => {
+            panic!("scheduler queue disconnected unexpectedly")
+        }
+        Ok(()) => panic!("second command was unexpectedly accepted on a full queue"),
+    }
+    assert_eq!(
+        counter.load(Ordering::Acquire),
+        1,
+        "only the queued operation holds a unit; the rejected one was released by its drop"
+    );
+
+    // Shutdown with the queued operation never executed: dropping the queue
+    // (as fail_queued/queue teardown does) drops the operation and its guard.
+    drop(commands);
+    drop(_receiver);
+    assert_eq!(
+        counter.load(Ordering::Acquire),
+        0,
+        "drop-before-run releases the unit exactly once"
+    );
+
+    // Run path: executing the operation releases the unit at completion.
+    let counter = Arc::new(AtomicUsize::new(0));
+    let (commands, receiver) = std_mpsc::sync_channel(1);
+    let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
+    let worker = thread::spawn(move || {
+        SchedulerWorker {
+            runtime,
+            scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8)),
+            requests: BTreeMap::new(),
+            direct_iterations: VecDeque::new(),
+            cache_runtime_queue: CacheRuntimeQueue::new(CACHE_AGING_COST_PER_TURN, true),
+            commands: receiver,
+            kv_capacity_tokens: 64,
+            max_direct_batch_size: 1,
+            max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
+            max_commands_per_turn: 8,
+            iteration_interval: Duration::ZERO,
+            active_runtime_sessions: 0,
+            direct_wave_full: false,
+            telemetry: None,
+            last_served_direct: false,
+            last_served_cache_runtime: false,
+            last_emitted_lifecycle_counters: (0, 0, 0, 0),
+        }
+        .run();
+    });
+    let (ran, ran_rx) = std_mpsc::sync_channel(0);
+    let run_counter = counter.clone();
+    let run_guard = CaptureTaskOutstandingGuard::new(run_counter);
+    commands
+        .send(SchedulerCommand::ExecuteRuntime(RuntimeOperation {
+            label: "capture-unit-run",
+            control: None,
+            run: Box::new(move |_| {
+                let _guard = run_guard;
+                ran.send(()).unwrap();
+            }),
+        }))
+        .unwrap();
+    ran_rx.recv().unwrap();
+    commands.send(SchedulerCommand::Shutdown).unwrap();
+    worker.join().unwrap();
+    assert_eq!(
+        counter.load(Ordering::Acquire),
+        0,
+        "run path releases the unit at completion"
+    );
+}
+
+fn capture_operation(counter: &Arc<AtomicUsize>, label: &'static str) -> RuntimeOperation {
+    let guard = CaptureTaskOutstandingGuard::new(counter.clone());
+    RuntimeOperation {
+        label,
+        control: None,
+        run: Box::new(move |_| {
+            let _guard = guard;
+        }),
+    }
 }

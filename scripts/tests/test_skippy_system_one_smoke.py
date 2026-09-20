@@ -33,6 +33,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 DRIVER = ROOT / "scripts" / "skippy-system-one-cases.py"
 SMOKE = ROOT / "scripts" / "skippy-system-one-smoke.sh"
+FAMILY_PASS = ROOT / ".github" / "workflows" / "llama-canary-family-pass.yml"
 WORKFLOW = ROOT / ".github" / "workflows" / "llama-upstream-canary.yml"
 WRAPPER = ROOT / "scripts" / "llama-canary-agent-repair.sh"
 REGISTRY = ROOT / "ci" / "model-artifacts" / "registry.json"
@@ -446,6 +447,10 @@ class SystemOneSmokeGateTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual("unqualified", report["status"])
         self.assertEqual("unqualified", report["full_model_read"]["status"])
+        # The cache is not consulted on an unqualified backend, and the report
+        # says so instead of letting the summary guess.
+        self.assertFalse(report["full_model_read"]["artifact_cache_checked"])
+        self.assertIsNone(report["full_model_read"]["artifact_path"])
         self.assertIn("NOT CERTIFIED", result.stdout)
         # The lane must never pass quietly.
         self.assertIn("::warning title=System One smoke::", result.stdout)
@@ -459,16 +464,24 @@ class SystemOneSmokeGateTests(unittest.TestCase):
         self.assertEqual(1, result.returncode)
         self.assertEqual("fail", report["status"])
 
-    def test_a_declared_backend_without_the_pinned_artifact_still_reports(self) -> None:
-        # Declared qualified, artifact absent from the offline cache: an honest
-        # NOT CERTIFIED, not a failure and not a skip.
+    def test_a_qualified_backend_with_a_missing_artifact_fails(self) -> None:
+        # Declared qualified, artifact absent from the offline cache: this is
+        # the ndizazzo canary-gating hole. The run must go red rather than
+        # passing (or reporting "unqualified") without executing any
+        # full-model read.
         result, report = self._run_smoke(
             SYSTEMONE_SMOKE_SKIP_CONTRACT="1",
             SYSTEMONE_SMOKE_BUILD_BACKEND="cuda",
             HF_CACHE="/nonexistent-hf-cache",
         )
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual("unqualified", report["status"])
+        self.assertEqual(1, result.returncode)
+        self.assertEqual("fail", report["status"])
+        self.assertEqual("fail", report["full_model_read"]["status"])
+        # The cache was genuinely checked and the resolved path is reported.
+        self.assertTrue(report["full_model_read"]["artifact_cache_checked"])
+        self.assertIsNone(report["full_model_read"]["artifact_path"])
+        self.assertIn("declared qualified", result.stderr)
+        self.assertIn("--prewarm", result.stderr)
 
     def test_missing_native_build_fails_the_contract_part(self) -> None:
         # The contract part cannot run: that is an unusable environment, which
@@ -496,34 +509,21 @@ class SystemOneSmokeGateTests(unittest.TestCase):
 
 class SystemOneCanaryWiringTests(unittest.TestCase):
     def test_unchanged_pin_workflow_runs_and_gates_the_smoke(self) -> None:
-        workflow = WORKFLOW.read_text(encoding="utf-8")
-        smoke_step = workflow[
-            workflow.index("      - name: System One (OpenJEV) smoke\n") :
-        ]
-        smoke_step = smoke_step[: smoke_step.index("\n      - name: ", 10)]
-        self.assertIn("id: system_one", smoke_step)
-        self.assertIn("scripts/skippy-system-one-smoke.sh", smoke_step)
-        self.assertIn("continue-on-error: true", smoke_step)
-        self.assertIn("steps.sha.outputs.certify == 'true'", smoke_step)
-        self.assertIn(
-            "SYSTEMONE_SMOKE_REQUIRE_QUALIFIED: ${{ vars.LLAMA_CANARY_SYSTEMONE_REQUIRE_QUALIFIED }}",
-            smoke_step,
-        )
-        self.assertIn(
-            "SYSTEMONE_SMOKE_CADENCE: ${{ steps.sha.outputs.cadence }}", smoke_step
-        )
-        # The forced and nightly success reports only claim certification when
-        # the System One lane is green.
-        for cadence in ("manual-full", "nightly"):
-            report = workflow[workflow.index(f"cadence == '{cadence}'") :]
-            report = report[: report.index("\n      - name: ", 10)]
-            self.assertIn("steps.system_one.outcome == 'success'", report, cadence)
-        # And a red lane blocks the unchanged-pin run.
-        failure_gate = workflow[workflow.index("      - name: Fail unsuccessful unchanged-pin certification\n") :]
-        self.assertIn("steps.system_one.outcome == 'failure'", failure_gate)
-        # The evidence and the loud summary always run.
-        self.assertIn("      - name: Report System One smoke result\n", workflow)
-        self.assertIn("      - name: Upload System One smoke evidence\n", workflow)
+        # Main's canary is a distributed pass: the smoke executes inside the
+        # producer's candidate gates (covered by the wrapper test below), and
+        # the reusable family-pass workflow carries the loud summary and the
+        # evidence upload for both repair and verification passes.
+        family_pass = FAMILY_PASS.read_text(encoding="utf-8")
+        self.assertIn("      - name: Report System One smoke result\n", family_pass)
+        self.assertIn("      - name: Upload System One smoke evidence\n", family_pass)
+        self.assertIn("llama-canary-system-one-", family_pass)
+        # The summary must render the checked cache state, not guess it.
+        self.assertIn("artifact_cache_checked", family_pass)
+        # Both passes of the canary invoke the same reusable workflow, so the
+        # summary/evidence wiring covers the unchanged-pin run and the
+        # changed-pin repair + verification passes.
+        top = WORKFLOW.read_text(encoding="utf-8")
+        self.assertGreaterEqual(top.count("llama-canary-family-pass.yml"), 2)
 
     def test_changed_pin_repair_and_verification_both_run_the_smoke(self) -> None:
         wrapper = WRAPPER.read_text(encoding="utf-8")
@@ -537,6 +537,11 @@ class SystemOneCanaryWiringTests(unittest.TestCase):
         self.assertIn("run_candidate_gates() {", wrapper)
         self.assertIn("run_full_build || return 1", wrapper)
         self.assertIn("if ! run_candidate_gates; then", wrapper)
+        # The verifier work dir must be re-derived under the verification root
+        # so the smoke evidence lands inside the copied verification tree.
+        materialize = wrapper[wrapper.index("materialize_verification_tree() {") :]
+        materialize = materialize[: materialize.index("\nrun_prepare() {")]
+        self.assertIn('SYSTEMONE_SMOKE_DIR="$ROOT/target/skippy-system-one-smoke"', materialize)
 
     def test_the_smoke_never_claims_family_certification(self) -> None:
         families = json.loads(FAMILY_MANIFEST.read_text(encoding="utf-8"))

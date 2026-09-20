@@ -387,6 +387,7 @@ pub fn identity_from_package_v2(package_dir: &Path) -> Result<SkippyPackageIdent
             .context("package-v2 manifest byte count exceeds u64")?,
         sha256: manifest_sha256.clone(),
     });
+    warn_if_mtp_without_generation(&manifest);
     let generation = manifest.generation.as_ref().map(package_v2_generation_info);
 
     Ok(SkippyPackageIdentity {
@@ -496,6 +497,40 @@ fn package_v2_layer_weight_bytes(manifest: &PackageManifestV2) -> Result<Vec<u64
         return Ok(Vec::new());
     }
     Ok(layer_bytes)
+}
+
+fn manifest_ships_mtp_without_generation(manifest: &PackageManifestV2) -> bool {
+    let ships_mtp = manifest
+        .tensor_catalog
+        .entries
+        .iter()
+        .any(|tensor| tensor.name.contains(".nextn."));
+    let declares_speculative_decoding = manifest
+        .generation
+        .as_ref()
+        .and_then(|generation| generation.speculative_decoding.as_ref())
+        .is_some();
+
+    ships_mtp && !declares_speculative_decoding
+}
+
+/// Warn when a package carries MTP (`nextn`) tensors but declares no speculative
+/// decoding, so native MTP stays disabled for it until it is republished with a
+/// writer that emits the `generation` block.
+///
+/// Both the local-package and canonical-layer-package identity paths call this,
+/// so the two cannot drift apart.
+fn warn_if_mtp_without_generation(manifest: &PackageManifestV2) {
+    if !manifest_ships_mtp_without_generation(manifest) {
+        return;
+    }
+    tracing::warn!(
+        model_id = %manifest.model_id,
+        package_id = %manifest.package_id,
+        "package contains MTP (nextn) tensors but generation.speculative_decoding is missing; \
+         native MTP will not be enabled for this package; republish with a fixed \
+         skippy-model-package writer to enable it"
+    );
 }
 
 fn package_v2_generation_info(
@@ -1575,6 +1610,7 @@ fn identity_from_package_v2_metadata(
         .context("package-v2 tensor count exceeds u64")?;
     let manifest_sha256 = hex_lower(&Sha256::digest(&manifest_bytes));
     let canonical_package_ref = canonical_layer_package_ref(package_ref, local_ref);
+    warn_if_mtp_without_generation(&manifest);
     Ok(SkippyPackageIdentity {
         package_ref: canonical_package_ref,
         manifest_sha256,
@@ -1828,6 +1864,106 @@ mod tests {
             package_v2_layer_weight_bytes(&manifest).unwrap(),
             vec![10, 20]
         );
+    }
+
+    fn manifest_with_mtp_tensor(
+        tensor_name: &str,
+        generation: Option<skippy_package_format::Generation>,
+    ) -> PackageManifestV2 {
+        PackageManifestV2 {
+            schema_version: skippy_package_format::PACKAGE_SCHEMA_VERSION,
+            package_id: "fixture-package".to_string(),
+            model_id: "fixture/model".to_string(),
+            source_model: SourceModel {
+                sha256: String::new(),
+                metadata_artifact_id: "source".to_string(),
+                repo: None,
+                revision: None,
+                primary_file: None,
+                canonical_ref: None,
+                distribution_id: None,
+                files: Vec::new(),
+            },
+            format: "gguf".to_string(),
+            layer_count: 1,
+            model_metadata: Default::default(),
+            artifact_catalog: ArtifactCatalog {
+                entries: Vec::new(),
+            },
+            tensor_catalog: TensorCatalog {
+                entries: vec![Tensor {
+                    id: "tensor-0".to_string(),
+                    name: tensor_name.to_string(),
+                    ggml_type: 0,
+                    dimensions: vec![1],
+                    layer_ordinal: Some(0),
+                    storage: TensorStorage::Owned {
+                        artifact_id: "source".to_string(),
+                        data_offset: 0,
+                        stored_length: 10,
+                        alignment: 1,
+                        integrity: TensorIntegrity::ArtifactSha256,
+                    },
+                }],
+            },
+            sidecars: Vec::new(),
+            generation,
+            native_abi_version: String::new(),
+            generator_version: String::new(),
+            created_at_unix_secs: 0,
+        }
+    }
+
+    #[test]
+    fn package_v2_warns_when_mtp_tensors_ship_without_generation() {
+        let manifest = manifest_with_mtp_tensor("blk.40.nextn.eh_proj.weight", None);
+
+        assert!(manifest_ships_mtp_without_generation(&manifest));
+    }
+
+    #[test]
+    fn package_v2_warns_when_generation_lacks_speculative_decoding() {
+        let manifest = manifest_with_mtp_tensor(
+            "blk.40.nextn.eh_proj.weight",
+            Some(skippy_package_format::Generation {
+                speculative_decoding: None,
+            }),
+        );
+
+        assert!(manifest_ships_mtp_without_generation(&manifest));
+    }
+
+    #[test]
+    fn package_v2_stays_silent_when_mtp_generation_is_declared() {
+        let manifest = manifest_with_mtp_tensor(
+            "blk.40.nextn.eh_proj.weight",
+            Some(skippy_package_format::Generation {
+                speculative_decoding: Some(skippy_package_format::SpeculativeDecoding {
+                    default: "mtp".to_string(),
+                    proposers: Default::default(),
+                    strategies: std::collections::BTreeMap::from([(
+                        "mtp".to_string(),
+                        skippy_package_format::StrategySpec {
+                            kind: StrategyKind::NativeMtp {
+                                proposer: None,
+                                prediction_depth: Some(1),
+                                layer_indices: vec![1],
+                                window_policy: None,
+                            },
+                        },
+                    )]),
+                }),
+            }),
+        );
+
+        assert!(!manifest_ships_mtp_without_generation(&manifest));
+    }
+
+    #[test]
+    fn package_v2_stays_silent_for_non_mtp_tensors_without_generation() {
+        let manifest = manifest_with_mtp_tensor("blk.40.attn_q.weight", None);
+
+        assert!(!manifest_ships_mtp_without_generation(&manifest));
     }
 
     #[test]
