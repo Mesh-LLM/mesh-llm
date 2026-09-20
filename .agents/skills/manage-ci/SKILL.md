@@ -332,6 +332,12 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Product and artifact contract
 
+- macOS builds default to the pinned llama.cpp release baseline recorded in
+  `scripts/lib/macos-deployment-target.txt` (currently 13.3). Just, direct
+  host/native build entry points, and both canary jobs must use the same
+  resolved Rust/CMake deployment target. Preserve explicit SDK/cross-platform
+  overrides; include the native target in build/cache identity.
+
 - Model every executable product as a backend-neutral host, one separately
   packaged native runtime per OS/architecture/backend, and a composition-only
   product. A backend matrix belongs to runtime/product rows, never host rows.
@@ -372,6 +378,30 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Operational safety
 
+- Agentic replay executes complete recorded sessions only on trusted main.
+  Long-context qualification is currently manual-only; restore the daily
+  schedule only after reviewed calibration of all model/concurrency cells.
+  Require at least 128K model/runtime context, complete turn evidence, and
+  actual recurrent restores for the recurrent lane. Never substitute shorter
+  sessions or checkpoint sampling to make a failing cohort pass. The persistent micstudio runner must execute natively as arm64
+  before checkout. Its shared model cache is writable and permits pinned model
+  and trajectory downloads. Repair uses Goose with the llama canary's provider
+  and model defaults. Only a complete, gated performance
+  regression may start repair; infrastructure failures retain evidence without
+  invoking the agent. Repair failures or an unchanged tree publish no PR.
+
+- Changed-pin llama canary agents use focused reproductions while repairing
+  source. They return control after those checks pass instead of running an
+  additional full family battery. The trusted repair wrapper still runs every
+  candidate gate over the complete roster, feeds failures back to the same
+  agent, and requires success before snapshotting. The separate verifier still
+  repeats all gates on the exact candidate in a fresh checkout. Agent test
+  results must never replace either trusted full pass. Coding turns are admitted
+  only within a bounded repair window. Each returned candidate receives a full,
+  separately bounded verification pass; earlier repairs and failed gates must
+  not shorten that pass. Outer workflow limits must cover the repair window
+  plus one final verification pass and leave time to upload evidence.
+
 - Inspection, log reads, syntax validation, and dry-run planning are read-only.
   Dispatching, rerunning, cancelling, approving, deleting, changing variables
   or secrets, editing runner groups, changing Depot settings, publishing,
@@ -384,6 +414,25 @@ checked-in expiry are the maintainer-controlled approval boundary.
   deterministic failure.
 - Validate with the narrowest safe workflow. A run is not successful until all
   required jobs reach a terminal successful conclusion; state expected skips.
+
+## Llama canary family fan-out
+
+The trusted-main canary releases its build runner before scheduling one job
+per certified family. Every worker consumes the exact source, plan, manifest,
+and executable handoff from its producer; family workers never rebuild.
+The immutable model cache remains offline and read-only. One workflow-level
+non-cancelling concurrency group prevents overlapping canary runs, while
+family jobs have no shared concurrency group and use at most eight runners.
+
+Changed pins have at most three distributed repair attempts. Within each
+attempt, prepare/build failures return to the same bounded Goose session.
+Family or independent-verification failures feed the preserved candidate and
+all available worker/build evidence into a new session in the next attempt.
+Every edit invalidates all family results. A complete green repair pass must
+be followed by a fresh independent build and complete per-family pass on the
+same commit. A hosted aggregate rejects missing, duplicate, failed, cancelled,
+or mismatched results. Only the final hosted publisher receives the repair
+credential, and exhausted attempts publish no branch or PR.
 
 ## Validation contract
 

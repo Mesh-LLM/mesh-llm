@@ -26,8 +26,9 @@ pub use super::request_parse::{
 };
 pub(crate) use super::response::{
     PipelineCapsuleNonce, PipelineProxyResult, append_safe_header, pipeline_proxy_local,
-    send_400_observed, send_503_observed, send_error_observed, send_json_ok_with_headers,
-    send_json_with_status_and_headers_observed, send_models_list_with_descriptors,
+    send_400_observed, send_409_observed, send_503_observed, send_error_observed,
+    send_json_ok_with_headers, send_json_with_status_and_headers_observed,
+    send_models_list_with_descriptors,
 };
 pub(crate) use super::routing_rank::{
     capabilities_for_model, descriptor_metadata_for_model, request_budget_tokens_from_parts,
@@ -430,15 +431,18 @@ async fn route_mesh_moa_or_passthrough(
     let moa_model_name = request.model_name.clone();
     let moa_required_tokens = request_context_budget(request);
     let adapter = request.response_adapter;
+    let mesh_routing_requested =
+        crate::network::openai::ingress::mesh_routing_headers_requested(request);
     let result = match crate::network::openai::moa_gateway::try_handle_moa(
         node,
         tcp_stream,
         request,
         moa_model_name.as_deref(),
-        super::moa_gateway::MoaRoutingContext {
+        crate::network::openai::moa_gateway::MoaRoutingContext {
             targets: None, // passive path has no local targets table
             required_tokens: moa_required_tokens,
             affinity,
+            mesh_routing_requested,
         },
         route_observer,
     )
@@ -728,6 +732,10 @@ async fn route_mesh_request_attempts(
                 retry_policy: ResponseRetryPolicy::next_target_available(idx + 1 < total_targets),
                 response_adapter: request.response_adapter,
                 route_observer,
+                // This is the separate "mesh" auto-plan fan-out across many
+                // candidate hosts, not the `x-mesh-target` forced single-peer
+                // path -- there is no one chosen target to echo here.
+                served_by: None,
             },
         )
         .await;
@@ -1515,6 +1523,7 @@ pub async fn route_to_target(
             retry_policy,
             response_adapter,
             route_observer,
+            served_by: None,
         },
     )
     .await;
@@ -1606,6 +1615,7 @@ pub async fn route_http_endpoint_request(
             retry_policy: ResponseRetryPolicy::next_target_available(false),
             response_adapter: request.response_adapter,
             route_observer,
+            served_by: None,
         },
     )
     .await;

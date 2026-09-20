@@ -1122,6 +1122,8 @@ pub(super) async fn spawn_run_auto_post_join_tasks(options: &RuntimeOptions, nod
                     tracing::debug!("Rejoin failed: {e}");
                 }
             }
+            rejoin_node.redial_join_targets().await;
+            rejoin_node.refresh_adopted_mesh_membership().await;
         }
     });
 
@@ -1284,7 +1286,7 @@ pub(super) fn run_auto_model_identity(
         .map(|startup_model| startup_model.declared_ref.clone())
         .unwrap_or_else(|| models::model_ref_for_path(model));
     let model_source = primary_startup_model
-        .map(|startup_model| startup_model.declared_ref.clone())
+        .map(|startup_model| startup_model.model_source.clone())
         .unwrap_or_else(|| model_name.clone());
     (model_name, model_source)
 }

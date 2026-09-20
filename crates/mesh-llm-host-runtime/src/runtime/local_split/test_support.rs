@@ -62,6 +62,7 @@ pub(super) fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadReques
         model_path: Some("/models/qwen.gguf".to_string()),
         source_model_bytes: Some(4_900_000_000),
         source_model_sha256: None,
+        split_certification: None,
         local_source_required: false,
         projector_path: None,
         projector_use_gpu: None,
@@ -334,6 +335,7 @@ pub(super) fn runtime_status_for_stage(
         manifest_sha256: Some("direct-gguf:1:model.gguf".to_string()),
         source_model_path: Some("/model.gguf".to_string()),
         source_model_sha256: None,
+        split_certification: Some("certified".to_string()),
         source_model_bytes: Some(1),
         materialized_path: None,
         materialized_pinned: false,
@@ -489,6 +491,7 @@ stop = ["END"]
         projector_path: Some("/models/fallback-mmproj.gguf".to_string()),
         ctx_size: 8192,
         compact_meta: &compact_meta,
+        split_certification: skippy::SplitCertificationAdmission::Certified,
         capacity_budget_bytes: Some(6_000_000_000),
         pinned_gpu: None,
         device_override: None,
@@ -627,6 +630,7 @@ async fn split_stage_load_guards_metadata_kv_default_with_planned_metadata() {
         projector_path: None,
         ctx_size: 4096,
         compact_meta: &incompatible_meta,
+        split_certification: skippy::SplitCertificationAdmission::Certified,
         capacity_budget_bytes: None,
         pinned_gpu: None,
         device_override: None,
@@ -690,7 +694,7 @@ async fn runtime_resolver_uses_config_identity_and_honors_device_override() {
 model = "other/model-ref"
 
 [models.hardware]
-model_path = "{model_path}"
+model_path = {model_path}
 device = "CUDA1"
 
 [models.throughput]
@@ -701,7 +705,7 @@ threads_batch = 13
 model = "configured/model-ref"
 
 [models.hardware]
-model_path = "{model_path}"
+model_path = {model_path}
 
 [models.throughput]
 threads = 9
@@ -710,7 +714,7 @@ threads_batch = 5
 [models.request_defaults]
 max_tokens = 222
 "#,
-        model_path = model_path.display()
+        model_path = toml::Value::String(model_path.to_string_lossy().into_owned())
     ))
     .expect("test mesh config should parse");
     let model_bytes = fs::metadata(&model_path).unwrap().len();
@@ -881,14 +885,22 @@ pub(super) fn test_stage_status_from_load(
     load: &skippy::StageLoadRequest,
     state: skippy::StageRuntimeState,
 ) -> skippy::StageStatusSnapshot {
+    let mut parts =
+        [skippy_runtime::ActivationPartDesc::default(); skippy_runtime::ACTIVATION_MAX_PARTS];
+    parts[0] = skippy_runtime::ActivationPartDesc {
+        identity: [1; 32],
+        ggml_type: skippy_runtime::GGML_TYPE_F32,
+        rank: 2,
+        token_axis: 1,
+        dimensions: [4096, -1, 0, 0],
+        byte_strides: [4, 4096 * 4, 0, 0],
+        ..skippy_runtime::ActivationPartDesc::default()
+    };
     let boundary = Some(skippy_runtime::ActivationBoundaryDesc {
-        version: 1,
-        ggml_type: 0,
-        layout: 1,
-        elements_per_token: 4096,
-        bytes_per_token: 4096 * std::mem::size_of::<f32>() as u64,
-        required_frame_flags: 0,
-        required_sidebands: 0,
+        version: skippy_runtime::ACTIVATION_BOUNDARY_DESC_VERSION,
+        part_count: 1,
+        frontier_identity: [9; 32],
+        parts,
     });
     skippy::StageStatusSnapshot {
         topology_id: load.topology_id.clone(),
@@ -899,6 +911,7 @@ pub(super) fn test_stage_status_from_load(
         manifest_sha256: Some(load.manifest_sha256.clone()),
         source_model_path: load.model_path.clone(),
         source_model_sha256: None,
+        split_certification: load.split_certification.clone(),
         source_model_bytes: load.source_model_bytes,
         materialized_path: None,
         materialized_pinned: false,
@@ -950,6 +963,7 @@ pub(super) fn test_stage_status_from_stop(
         manifest_sha256: None,
         source_model_path: None,
         source_model_sha256: None,
+        split_certification: None,
         source_model_bytes: None,
         materialized_path: None,
         materialized_pinned: false,

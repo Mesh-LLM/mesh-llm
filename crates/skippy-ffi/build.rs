@@ -21,6 +21,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=VULKAN_SDK");
 
     if std::env::var_os("CARGO_FEATURE_DYNAMIC_RUNTIME").is_some() {
+        emit_native_link_fingerprint("dynamic");
         return;
     }
 
@@ -58,6 +59,7 @@ fn main() {
         println!("cargo:rustc-link-lib=dylib=mtmd");
         println!("cargo:rustc-link-lib=dylib=llama-common");
         println!("cargo:rustc-link-lib=dylib=llama");
+        emit_native_link_fingerprint("dynamic");
         if target.contains("linux") && backend == "cuda" {
             // Driverless builders use the toolkit's link-time driver stub.
             // Resolve the same library CMake selected without embedding its
@@ -69,6 +71,7 @@ fn main() {
         return;
     }
     ensure_static_native_ready(&workspace_root, &build_dir, &target, &backend);
+    emit_static_native_link_fingerprint(&build_dir);
 
     let search_dirs = [
         build_dir.join("tools/mtmd"),
@@ -255,6 +258,32 @@ fn main() {
             link_windows_vulkan_libs();
         }
     }
+}
+
+fn emit_static_native_link_fingerprint(build_dir: &std::path::Path) {
+    let build_stamp = build_dir.join(".mesh-llm-build-stamp");
+    println!("cargo:rerun-if-changed={}", build_stamp.display());
+    let fingerprint = std::fs::read_to_string(&build_stamp).unwrap_or_else(|_| {
+        let metadata = ["src/libllama.a", "src/llama.lib"]
+            .iter()
+            .find_map(|archive| build_dir.join(archive).metadata().ok());
+        format!(
+            "unstamped:{}:{}",
+            metadata.as_ref().map_or(0, std::fs::Metadata::len),
+            metadata
+                .and_then(|value| value.modified().ok())
+                .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |value| value.as_nanos())
+        )
+    });
+    emit_native_link_fingerprint(&fingerprint);
+}
+
+fn emit_native_link_fingerprint(value: &str) {
+    let hash = value.bytes().fold(0xcbf29ce484222325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+    });
+    println!("cargo:rustc-env=SKIPPY_NATIVE_LINK_FINGERPRINT={hash:016x}");
 }
 
 fn default_build_dir(workspace_root: &std::path::Path, backend: &str) -> std::path::PathBuf {

@@ -707,6 +707,29 @@ class CiArtifactActionTests(unittest.TestCase):
             action,
         )
 
+    def test_exact_cache_publication_retries_after_service_cooldown(self) -> None:
+        action = self.read_action("save-and-verify-actions-cache")
+        cache_save = (
+            "uses: actions/cache/save@"
+            "caa296126883cff596d87d8935842f9db880ef25 # v5.1.0"
+        )
+
+        self.assertEqual(action.count(cache_save), 2)
+        self.assertIn("id: initial-publication", action)
+        self.assertIn("for (let attempt = 1; attempt <= 13; attempt++)", action)
+        self.assertIn("return 'published';", action)
+        self.assertIn("return 'missing';", action)
+        self.assertIn(
+            "if: steps.initial-publication.outputs.result != 'published'",
+            action,
+        )
+        self.assertIn(
+            "The initial ${label} cache save was not published; retrying once.",
+            action,
+        )
+        self.assertIn("for (let attempt = 1; attempt <= 12; attempt++)", action)
+        self.assertIn("!existingIds.has(String(candidate.id))", action)
+
     def test_windows_native_cache_inputs_fail_closed_and_callers_opt_in(
         self,
     ) -> None:
@@ -1078,7 +1101,7 @@ class CiArtifactActionTests(unittest.TestCase):
             with self.subTest(workflow=workflow):
                 source = (workflow_dir / workflow).read_text(encoding="utf-8")
                 self.assertIn(
-                    "hashFiles('Cargo.lock', '.github/cache-version.txt', 'Justfile', 'just/**')",
+                    "hashFiles('Cargo.lock', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', 'Justfile', 'just/**')",
                     source,
                 )
 
@@ -1293,12 +1316,12 @@ class CiArtifactActionTests(unittest.TestCase):
         )
         self.assertIn(
             "mesh-llm-cuda-runner-sha256-"
-            "8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d",
+            "f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7",
             producer,
         )
         epoch = (
             "mesh-llm-cuda-runner-sha256-"
-            "8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d"
+            "f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7"
         )
         for consumer in (native_sdk_producer,):
             self.assertIn(epoch, consumer)
@@ -2207,6 +2230,7 @@ class CiArtifactActionTests(unittest.TestCase):
             "model_url: ${{ inputs.model_url }}",
             "model_file: ${{ inputs.model_file }}",
             "model_manifest: ${{ inputs.model_manifest }}",
+            "model_artifact_id: ${{ inputs.model_artifact_id }}",
             "model_cadence: ${{ inputs.model_cadence }}",
             "model_cache_scope: ${{ inputs.model_cache_scope }}",
             "save_model_cache: ${{ inputs.save_model_cache }}",
@@ -2219,6 +2243,7 @@ class CiArtifactActionTests(unittest.TestCase):
             "value: ${{ steps.resolve-model.outputs.model_file }}",
             "value: ${{ steps.resolve-model.outputs.model_sha256 }}",
             "value: ${{ steps.resolve-model.outputs.model_size_bytes }}",
+            "value: ${{ steps.resolve-model.outputs.model_path }}",
         ):
             self.assertIn(exported, action)
 
@@ -2902,7 +2927,7 @@ class CiArtifactActionTests(unittest.TestCase):
         }
         expected_jobs = {
             "ci-quality-slice.yml": {
-                "commit_convention", "runner_policy", "quality_contracts", "rust_fmt", "rust_clippy",
+                "commit_convention", "runner_policy", "quality_contracts", "rust_fmt", "cargo_machete", "rust_clippy",
                 "cli_docs_sync", "authority_sentinel",
             },
             "ci-web-slice.yml": {"runner_policy", "ui_quality", "ui_e2e", "website"},

@@ -427,6 +427,7 @@ mod tests {
                     os: "linux".to_string(),
                     arch: "x86_64".to_string(),
                     target: None,
+                    min_glibc: None,
                 },
                 backend: NativeRuntimeBackend::cpu(),
                 rank: 0,

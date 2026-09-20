@@ -1,10 +1,13 @@
 use super::*;
 use skippy_model::gguf_catalog::read_gguf_catalog;
-use skippy_package_format::TensorStorage;
 use skippy_package_format::stage_admission::StageAdmissionDescriptor;
+use skippy_package_format::{StrategyKind, TensorStorage, WindowPolicy};
 use std::collections::BTreeMap;
 
-use crate::test_gguf::{FixtureTensor, explicit, fixture, fixture_without_alignment, tensor};
+use crate::test_gguf::{
+    FixtureTensor, explicit, fixture, fixture_with_nextn, fixture_with_nextn_noninteger,
+    fixture_without_alignment, tensor,
+};
 
 fn tensor_info(name: &str) -> TensorInfo {
     TensorInfo {
@@ -37,6 +40,7 @@ fn write(source: &Path, out: &Path, resume: bool) -> Result<()> {
         ArtifactHook { command: None },
         explicit(source),
         resume,
+        None,
     )
 }
 
@@ -374,6 +378,7 @@ fn refuses_transform_hooks_and_existing_completion_marker() {
         },
         explicit(&source),
         false,
+        None,
     );
     assert!(
         result
@@ -405,6 +410,7 @@ fn verified_resume_and_projector_sidecar_round_trip() {
         ArtifactHook { command: None },
         explicit(&source),
         true,
+        None,
     )
     .unwrap();
     let manifest = read_manifest(&out);
@@ -447,6 +453,7 @@ fn upload_hook_can_delete_verified_copies_without_losing_inventory() {
         ArtifactHook { command: None },
         explicit(&source),
         false,
+        None,
     )
     .unwrap();
     let manifest: PackageManifest =
@@ -461,4 +468,382 @@ fn upload_hook_can_delete_verified_copies_without_losing_inventory() {
             .all(|artifact| !out.join(&artifact.path).exists())
     );
     assert!(source.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn successful_artifact_hook_may_leave_verified_copies_for_rechecking() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.gguf");
+    fixture(&source, &[tensor("first", 0), tensor("second", 32)], None);
+    let out = temp.path().join("package");
+    write_package(
+        source.display().to_string(),
+        out.clone(),
+        Vec::new(),
+        ArtifactHook {
+            command: Some("/usr/bin/true".into()),
+        },
+        ArtifactHook { command: None },
+        explicit(&source),
+        false,
+        None,
+    )
+    .unwrap();
+    let manifest = read_manifest(&out);
+    manifest.validate().unwrap();
+    assert!(
+        manifest
+            .artifact_catalog
+            .entries
+            .iter()
+            .all(|artifact| out.join(&artifact.path).is_file())
+    );
+}
+
+#[test]
+fn hook_verification_treats_deleted_artifact_as_unchanged() {
+    use skippy_package_format::Artifact;
+
+    fn artifact_for(path: &std::path::Path) -> Artifact {
+        Artifact {
+            id: "artifact".to_string(),
+            path: path.display().to_string(),
+            byte_size: std::fs::metadata(path).unwrap().len(),
+            sha256: crate::hash::file_sha256(path).unwrap(),
+        }
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let present = temp.path().join("present.gguf");
+    let mutated = temp.path().join("mutated.gguf");
+    let gone = temp.path().join("gone.gguf");
+    fs::write(&present, b"payload").unwrap();
+    fs::write(&mutated, b"payload").unwrap();
+    fs::write(&gone, b"payload").unwrap();
+
+    let hook = ArtifactHook {
+        command: Some(temp.path().join("upload.sh")),
+    };
+
+    // Unchanged on disk -> unchanged.
+    let record = artifact_for(&present);
+    super::verify_hook_result(&record, &present, &hook).unwrap();
+
+    // Mutated after the hook -> rejected (content differs from the record).
+    fs::write(&mutated, b"tampered").unwrap();
+    let record = artifact_for(&gone);
+    let mut tampered_record = record.clone();
+    tampered_record.path = mutated.display().to_string();
+    assert!(super::verify_hook_result(&tampered_record, &mutated, &hook).is_err());
+
+    // Deleted by the hook (a FUSE attr cache can still report it present via
+    // path.exists()) -> opening it fails ENOENT, which must read as unchanged.
+    fs::remove_file(&gone).unwrap();
+    super::verify_hook_result(&record, &gone, &hook).unwrap();
+}
+
+#[test]
+fn oversized_layer_splits_into_verified_part_artifacts_end_to_end() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("model.gguf");
+    fixture(
+        &source,
+        &[
+            tensor("blk.0.attn_q.weight", 0),
+            tensor("blk.0.attn_k.weight", 32),
+            tensor("blk.0.attn_v.weight", 64),
+            tensor("unknown-global", 96),
+        ],
+        None,
+    );
+    let out = temp.path().join("package");
+    // 16-byte fixture tensors: a 17-byte budget forces the 48-byte layer to
+    // split into ceil(48/17)=3 single-tensor parts, each under budget.
+    write_package(
+        source.display().to_string(),
+        out.clone(),
+        Vec::new(),
+        ArtifactHook { command: None },
+        ArtifactHook { command: None },
+        explicit(&source),
+        false,
+        Some(17),
+    )
+    .unwrap();
+    let manifest = read_manifest(&out);
+    manifest.validate().unwrap();
+    let paths: Vec<&str> = manifest
+        .artifact_catalog
+        .entries
+        .iter()
+        .map(|artifact| artifact.path.as_str())
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "shared/metadata.gguf",
+            "shared/common.gguf",
+            "layers/layer-00000-part00.gguf",
+            "layers/layer-00000-part01.gguf",
+            "layers/layer-00000-part02.gguf",
+        ]
+    );
+    // Split-layer tensors keep their layer ordinal and resolve through the
+    // carrier to their physical part artifacts.
+    for tensor in &manifest.tensor_catalog.entries {
+        if tensor.layer_ordinal.is_some() {
+            assert_eq!(tensor.layer_ordinal, Some(0));
+            let TensorStorage::Owned { artifact_id, .. } = &tensor.storage else {
+                panic!("part tensors own storage");
+            };
+            assert!(artifact_id.starts_with("layer-00000-part"));
+        }
+    }
+    // The independent verifier accepts part artifacts and their paths.
+    crate::verify_v2::verify_package(&out, &source, None, &[]).unwrap();
+}
+
+#[test]
+fn writer_emits_mtp_generation_for_native_mtp_sources() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("model.gguf");
+    fixture_with_nextn(
+        &source,
+        2,
+        Some(1),
+        &[tensor("blk.0.embed", 0), tensor("blk.1.nextn.embed", 32)],
+        None,
+    );
+    let out = temp.path().join("package");
+    write(&source, &out, false).unwrap();
+    let manifest = read_manifest(&out);
+    manifest.validate().unwrap();
+    assert_eq!(manifest.package_id, manifest.computed_package_id().unwrap());
+    let generation = manifest.generation.as_ref().unwrap();
+    let speculative = generation.speculative_decoding.as_ref().unwrap();
+    assert_eq!(speculative.default, "mtp");
+    assert!(speculative.proposers.is_empty());
+    assert_eq!(speculative.strategies.len(), 1);
+    let strategy = &speculative.strategies["mtp"];
+    let StrategyKind::NativeMtp {
+        proposer,
+        prediction_depth,
+        layer_indices,
+        window_policy,
+    } = &strategy.kind
+    else {
+        panic!("the mtp strategy must be native MTP");
+    };
+    assert!(proposer.is_none());
+    assert_eq!(*prediction_depth, Some(1));
+    assert_eq!(layer_indices.as_slice(), [1]);
+    let window = window_policy.as_ref().unwrap();
+    let WindowPolicy {
+        default,
+        initial_window,
+        min_window,
+        max_window,
+        pipeline_depth,
+    } = window;
+    assert_eq!(default, "fixed");
+    assert_eq!(*initial_window, 1);
+    assert_eq!(*min_window, 1);
+    assert_eq!(*max_window, 1);
+    assert!(pipeline_depth.is_none());
+}
+
+#[test]
+fn non_mtp_source_emits_no_generation() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("model.gguf");
+    fixture(
+        &source,
+        &[tensor("blk.0.embed", 0), tensor("blk.1.embed", 32)],
+        None,
+    );
+    let out = temp.path().join("package");
+    write(&source, &out, false).unwrap();
+    let manifest = read_manifest(&out);
+    manifest.validate().unwrap();
+    assert!(manifest.generation.is_none());
+}
+
+#[test]
+fn zero_nextn_without_tensors_emits_no_generation() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("model.gguf");
+    fixture_with_nextn(
+        &source,
+        2,
+        Some(0),
+        &[tensor("blk.0.embed", 0), tensor("blk.1.embed", 32)],
+        None,
+    );
+    let out = temp.path().join("package");
+    write(&source, &out, false).unwrap();
+    let manifest = read_manifest(&out);
+    manifest.validate().unwrap();
+    assert!(manifest.generation.is_none());
+}
+
+#[test]
+fn declared_depth_2_fails_closed() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("model.gguf");
+    fixture_with_nextn(
+        &source,
+        2,
+        Some(2),
+        &[tensor("blk.0.embed", 0), tensor("blk.1.nextn.embed", 32)],
+        None,
+    );
+    let out = temp.path().join("package");
+    assert!(
+        write(&source, &out, false)
+            .unwrap_err()
+            .to_string()
+            .contains("source declares 2-step native MTP prediction")
+    );
+    assert!(!out.join("model-package.json").exists());
+}
+
+#[test]
+fn declared_depth_1_with_wrong_layer_fails_closed() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("model.gguf");
+    fixture_with_nextn(
+        &source,
+        2,
+        Some(1),
+        &[tensor("blk.0.embed", 0), tensor("blk.0.nextn.embed", 32)],
+        None,
+    );
+    let out = temp.path().join("package");
+    assert!(
+        write(&source, &out, false)
+            .unwrap_err()
+            .to_string()
+            .contains("native MTP evidence is inconsistent")
+    );
+    assert!(!out.join("model-package.json").exists());
+}
+
+#[test]
+fn nextn_tensors_without_key_fails_closed() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("model.gguf");
+    fixture_with_nextn(
+        &source,
+        2,
+        None,
+        &[tensor("blk.0.embed", 0), tensor("blk.1.nextn.embed", 32)],
+        None,
+    );
+    let out = temp.path().join("package");
+    assert!(
+        write(&source, &out, false)
+            .unwrap_err()
+            .to_string()
+            .contains("native MTP evidence is inconsistent")
+    );
+    assert!(!out.join("model-package.json").exists());
+}
+
+#[test]
+fn key_present_without_nextn_tensors_fails_closed() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("model.gguf");
+    fixture_with_nextn(
+        &source,
+        2,
+        Some(1),
+        &[tensor("blk.0.embed", 0), tensor("blk.1.embed", 32)],
+        None,
+    );
+    let out = temp.path().join("package");
+    assert!(
+        write(&source, &out, false)
+            .unwrap_err()
+            .to_string()
+            .contains("native MTP evidence is inconsistent")
+    );
+    assert!(!out.join("model-package.json").exists());
+}
+
+#[test]
+fn non_integer_nextn_key_fails_closed() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("model.gguf");
+    fixture_with_nextn_noninteger(
+        &source,
+        2,
+        &[tensor("blk.0.embed", 0), tensor("blk.1.nextn.embed", 32)],
+        None,
+    );
+    let out = temp.path().join("package");
+    assert!(
+        write(&source, &out, false)
+            .unwrap_err()
+            .to_string()
+            .contains("is present in the source metadata but is not an integer")
+    );
+    assert!(!out.join("model-package.json").exists());
+}
+
+#[test]
+fn unparseable_nextn_tensor_name_fails_closed() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("model.gguf");
+    fixture_with_nextn(
+        &source,
+        2,
+        Some(1),
+        &[tensor("blk.0.embed", 0), tensor("foo.nextn.embed", 32)],
+        None,
+    );
+    let out = temp.path().join("package");
+    assert!(
+        write(&source, &out, false)
+            .unwrap_err()
+            .to_string()
+            .contains("native MTP tensor names without a parseable")
+    );
+    assert!(!out.join("model-package.json").exists());
+}
+
+#[test]
+fn mtp_source_package_id_differs_from_non_mtp() {
+    let temp = tempfile::tempdir().unwrap();
+    let mtp_source = temp.path().join("mtp.gguf");
+    fixture_with_nextn(
+        &mtp_source,
+        2,
+        Some(1),
+        &[tensor("blk.0.embed", 0), tensor("blk.1.nextn.embed", 32)],
+        None,
+    );
+    let plain_source = temp.path().join("plain.gguf");
+    fixture(
+        &plain_source,
+        &[tensor("blk.0.embed", 0), tensor("blk.1.embed", 32)],
+        None,
+    );
+    let mtp_out = temp.path().join("mtp-package");
+    write(&mtp_source, &mtp_out, false).unwrap();
+    let plain_out = temp.path().join("plain-package");
+    write(&plain_source, &plain_out, false).unwrap();
+    let mtp = read_manifest(&mtp_out);
+    let plain = read_manifest(&plain_out);
+    mtp.validate().unwrap();
+    plain.validate().unwrap();
+    assert!(mtp.generation.is_some());
+    assert!(plain.generation.is_none());
+    assert_ne!(mtp.package_id, plain.package_id);
+    let mut without_generation = mtp.clone();
+    without_generation.generation = None;
+    assert_ne!(
+        mtp.package_id,
+        without_generation.computed_package_id().unwrap()
+    );
 }

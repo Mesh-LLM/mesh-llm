@@ -47,7 +47,7 @@ skippy-quantize backends
 ✅ llama-api quantization: available
 ℹ️  llama-api runtime: available
 ⚠️  skippy-abi runtime not loaded
-ℹ️  skippy-abi: model_introspection=false gguf_slice_write=false feature_mask=unknown
+ℹ️  skippy-abi: model_introspection=false feature_mask=unknown
 ```
 
 Preflight shows the job shape, backend readiness, and source/target shard

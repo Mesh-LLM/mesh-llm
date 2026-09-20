@@ -39,6 +39,8 @@ struct llm_graph_input_stage_tokens {
 struct graph_result {
   ggml_tensor *t_embd;
   template <typename T> void add_input(std::unique_ptr<T>) {}
+  void add_skippy_activation_import(ggml_tensor *, int) {}
+  void add_skippy_activation_export(ggml_tensor *, int) {}
 };
 
 struct model_per_layer_sideband {
@@ -54,6 +56,7 @@ struct model_per_layer_sideband {
     ggml_tensor *ggml_get_rows(void *, ggml_tensor *, ggml_tensor *);
     ggml_tensor *ggml_reshape_3d(void *, ggml_tensor *, long, long, long);
     ggml_tensor *ggml_new_tensor_1d(void *, ggml_type, long);
+    ggml_tensor *ggml_new_tensor_3d(void *, ggml_type, long, long, long);
     void ggml_set_input(ggml_tensor *);
     void begin_block(ggml_tensor *, int);
     void end_block(ggml_tensor *, int);
@@ -75,8 +78,11 @@ model_per_layer_sideband::graph::graph(const model_type &model) {
   ggml_tensor *inpL = build_inp_embd(model.tok_embd);
   inpL = ggml_scale(ctx0, inpL, sqrtf((float)n_embd));
 
-  ggml_tensor *inp_per_layer = build_inp_per_layer();
-  inp_per_layer = project_per_layer_inputs(inpL, inp_per_layer);
+  ggml_tensor *inp_per_layer = nullptr;
+  if (model.per_layer_tok_embd) {
+    inp_per_layer = build_inp_per_layer();
+    inp_per_layer = project_per_layer_inputs(inpL, inp_per_layer);
+  }
 
   for (int il = 0; il < n_layer; ++il) {
     inpL = block(inpL, il);

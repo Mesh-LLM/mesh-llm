@@ -35,12 +35,12 @@ pub use messages::{
     StateImportMessage, StopMessage, TokenReplyMessage,
 };
 pub use validation::{
-    MAX_STAGE_FRAME_BYTES, MAX_VERIFY_WINDOW_PIPELINE_DEPTH, SCHEMA_VERSION, STAGE_ALPN_V2,
-    STAGE_PROTOCOL_GENERATION, STAGE_STREAM_ARTIFACT_TRANSFER, STAGE_STREAM_CONTROL,
-    STAGE_STREAM_TRANSPORT, STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER,
+    MAX_STAGE_FRAME_BYTES, MAX_VERIFY_WINDOW_PIPELINE_DEPTH, MAX_VERIFY_WINDOW_RUNAHEAD_TOKENS,
+    SCHEMA_VERSION, STAGE_ALPN_V2, STAGE_PROTOCOL_GENERATION, STAGE_STREAM_ARTIFACT_TRANSFER,
+    STAGE_STREAM_CONTROL, STAGE_STREAM_TRANSPORT, STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER,
     STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1, STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
     STAGE_SUBPROTOCOL_FEATURE_STAGE_GENERATION,
-    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V9, STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
+    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V11, STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
     STAGE_SUBPROTOCOL_MAJOR, STAGE_SUBPROTOCOL_NAME, StageFrameError,
     validate_stage_admission_descriptor, validate_stage_artifact_transfer_request,
     validate_stage_artifact_transfer_response, validate_stage_control_request,
@@ -66,6 +66,7 @@ mod tests {
             version: super::STAGE_ADMISSION_DESCRIPTOR_VERSION,
             package_id: format!("sha256:{}", "c7".repeat(32)),
             plan_id: format!("skippy-plan:v1:{}", "d8".repeat(32)),
+            execution_contract: String::new(),
             layer_start,
             layer_end,
             resident_tensor_ids: vec!["tensor-a".to_string(), "tensor-b".to_string()],
@@ -82,6 +83,10 @@ mod tests {
                 source_snapshot_identity: "snapshot-a".to_string(),
                 graph_configuration_id: "graph-config-a".to_string(),
                 backend_id: "cpu".to_string(),
+                activation_imports: Vec::new(),
+                activation_exports: Vec::new(),
+                activation_import_bindings: Vec::new(),
+                activation_export_bindings: Vec::new(),
             }],
         }
     }
@@ -160,15 +165,16 @@ mod tests {
 
     #[test]
     fn stage_config_policy_defaults_do_not_depend_on_sibling_fields() {
-        // A legacy config that sets F16 without naming a policy must keep the
-        // fixed F16 behavior after serde round-trip.
-        let legacy = format!(
+        // A config that sets F16 without naming a policy keeps fixed F16
+        // behavior independently of its execution contract.
+        let encoded = format!(
             "{}",
             serde_json::json!({
                 "run_id": "run",
                 "topology_id": "topology",
                 "model_id": "model",
                 "activation_codec": "f16-rne-v1",
+                "execution_contract": "",
                 "stage_id": "stage-0",
                 "stage_index": 0,
                 "layer_start": 0,
@@ -189,7 +195,7 @@ mod tests {
                 "cache_type_v": "f16",
             })
         );
-        let config: super::StageConfig = serde_json::from_str(&legacy).unwrap();
+        let config: super::StageConfig = serde_json::from_str(&encoded).unwrap();
         assert_eq!(
             config.activation_codec,
             super::StageActivationCodec::F16RneV1
@@ -205,8 +211,22 @@ mod tests {
             "f16-rne-v1"
         );
     }
+
+    #[test]
+    fn stage_config_rejects_obsolete_tensor_filter_flag() {
+        let mut value = serde_json::to_value(super::StageConfig::default()).unwrap();
+        value["filter_tensors_on_load"] = serde_json::Value::Bool(true);
+
+        let error = serde_json::from_value::<super::StageConfig>(value).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("filter_tensors_on_load is obsolete")
+        );
+    }
     use super::{
-        STAGE_PROTOCOL_GENERATION, STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V9,
+        STAGE_PROTOCOL_GENERATION, STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V11,
         StageFrameError, validate_stage_admission_descriptor,
         validate_stage_artifact_transfer_request, validate_stage_artifact_transfer_response,
         validate_stage_control_request, validate_stage_control_response,
@@ -216,7 +236,7 @@ mod tests {
     #[test]
     fn stage_protocol_generation_feature_names_current_generation() {
         assert_eq!(
-            STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V9,
+            STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V11,
             format!("stage-generation-{STAGE_PROTOCOL_GENERATION}")
         );
     }
@@ -248,6 +268,17 @@ mod tests {
 
         let mut invalid = descriptor.clone();
         invalid.profiles[0].graph_identity.clear();
+        assert!(validate_stage_admission_descriptor(&invalid).is_err());
+
+        let mut invalid = descriptor.clone();
+        invalid.profiles[0].activation_imports = vec!["frontier-a".to_string()];
+        assert!(validate_stage_admission_descriptor(&invalid).is_err());
+
+        let mut invalid = descriptor.clone();
+        invalid.profiles[0].activation_exports =
+            vec!["frontier-a".to_string(), "frontier-b".to_string()];
+        invalid.profiles[0].activation_export_bindings =
+            vec!["live-output".to_string(), "live-output".to_string()];
         assert!(validate_stage_admission_descriptor(&invalid).is_err());
 
         let mut invalid = descriptor;
@@ -483,14 +514,20 @@ mod tests {
             Err(StageFrameError::MissingStageControlCommand)
         ));
 
+        let previous_generation = STAGE_PROTOCOL_GENERATION - 1;
         let wrong_gen = StageControlRequest {
-            r#gen: STAGE_PROTOCOL_GENERATION - 1,
+            r#gen: previous_generation,
             ..frame
         };
-        assert!(matches!(
+        // Compared against the computed previous generation rather than a
+        // literal, so the assertion keeps testing rejection of the previous
+        // generation across bumps instead of failing on the number.
+        assert_eq!(
             validate_stage_control_request(&wrong_gen),
-            Err(StageFrameError::BadGeneration { got }) if got == STAGE_PROTOCOL_GENERATION - 1
-        ));
+            Err(StageFrameError::BadGeneration {
+                got: previous_generation,
+            })
+        );
     }
 
     #[test]

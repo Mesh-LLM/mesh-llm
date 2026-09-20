@@ -17,10 +17,11 @@ the first stage.
 The full request/reply path is tip-to-tip: token IDs enter at the driver-facing
 tip, and activations flow through the stage chain. Generation 7 introduced
 direct prediction return from the final/readout tip to the driver-facing stage.
-Generation 9 retains that path and requires mandatory canonical stage-admission
-descriptors with exact participant echo before topology publication. Middle-out
-is the prefill optimization inside that path, where internal boundary
-activations are handed downstream while local compute advances.
+Generation 10 retains that path and requires mandatory canonical stage-admission
+descriptors with exact participant echo before topology publication, and adds
+stale verify-window discard for run-ahead execution. Middle-out is the prefill
+optimization inside that path, where internal boundary activations are handed
+downstream while local compute advances.
 
 ```mermaid
 flowchart LR
@@ -126,11 +127,13 @@ deadline handling.
 ## Notes
 
 - `serve-binary` is the tuned binary stage-to-stage path.
-- `serve-binary` participates in the breaking generation-9 stage protocol.
-  Stage compatibility requires the complete `stage-generation-9` control,
-  status-list, strict-content-identity, and stage-admission bundle. Older peers,
-  including generation 7 peers, are rejected during split planning rather than
-  being mixed into a generation-9 topology.
+- `serve-binary` participates in the breaking generation-11 stage protocol.
+  Stage compatibility requires the complete `stage-generation-11` control,
+  status-list, strict-content-identity, stage-admission, and stale-window-discard
+  bundle. Older peers, including generation 7 peers, are rejected during split
+  planning rather than being mixed into a generation-11 topology. A manually
+  wired `serve-binary --downstream` chain has no generation handshake, so every
+  stage in that chain must be upgraded together.
 - `serve-binary` accepts upstream protocol connections concurrently. Model
   execution remains serialized by the per-process runtime lock, but readiness,
   abandoned, or broken connections do not monopolize the listener and block the
@@ -146,7 +149,7 @@ deadline handling.
   `/v1/completions` using the shared `openai-frontend` crate for a local
   final/single-stage config with no downstream peer. Split serving uses
   embedded stage-0 OpenAI serving from `serve-binary --openai-bind-addr` because
-  generation-7 prediction returns flow directly from the final stage to stage 0.
+  prediction returns flow directly from the final stage to stage 0.
   The older standalone `serve-openai --first-stage-addr` adapter is no longer
   supported. `--model-id` is the exact served model id to advertise
   and accept, for example `org/repo:Q4_K_M`; it is not parsed as stage topology.
@@ -237,9 +240,10 @@ deadline handling.
 - `serve-binary` forwards eligible non-final prefill activation frames on a
   bounded background writer by default. Use `--no-async-prefill-forward` only
   when comparing against the synchronous prefill path.
-- `runtime-slice` loads a full model and filters tensors at runtime.
-- `artifact-slice` loads GGUF slice artifacts written by `skippy-model-package`
-  with `filter_tensors_on_load=true`.
+- `runtime-slice` loads the exact graph-admitted resident tensor closure from a
+  package-v2 catalog and executes the matching normalized graph slice.
+- `artifact-slice` opens an explicitly supplied GGUF artifact without applying
+  any implicit layer, embedding, or output ownership rules.
 - `layer-package` loads a local `model-package.json` directory, validates the
   manifest and selected part files, then opens those GGUF parts directly through
   the stage ABI.

@@ -228,48 +228,18 @@ EOF
     crate_to_dir["$crate_name"]="$dir"
   done < <(echo "$metadata_no_deps" | jq -r '.packages[] | "\(.name)|\(.manifest_path)"')
 
-  # Step 2: Build reverse-dep graph: for each crate, list which crates depend on it
+  # Step 2: Build the reverse-dependency graph from the same no-deps metadata.
+  # Package dependency declarations are sufficient for conservative CI
+  # selection and avoid cargo invoking rustc merely to resolve target details.
   local -A reverse_deps=()
-  local metadata_json
-  metadata_json=$(cargo metadata --format-version=1 2>/dev/null) || fail_open
-
-  # Build name→id mapping
-  local -A name_to_id=()
-  while IFS='|' read -r name id; do
-    [[ -z "$name" ]] && continue
-    name_to_id["$name"]="$id"
-  done < <(echo "$metadata_json" | jq -r '.packages[] | "\(.name)|\(.id)"')
-
-  # Build reverse deps: for each node, add it as a reverse dep of its dependencies
-  while IFS='|' read -r node_id dep_id; do
-    [[ -z "$node_id" ]] && continue
-    # Find crate name for dep_id
-    local dep_name=""
-    for name in "${!name_to_id[@]}"; do
-      if [[ "${name_to_id[$name]}" == "$dep_id" ]]; then
-        dep_name="$name"
-        break
-      fi
-    done
-    [[ -z "$dep_name" ]] && continue
-
-    # Find crate name for node_id
-    local node_name=""
-    for name in "${!name_to_id[@]}"; do
-      if [[ "${name_to_id[$name]}" == "$node_id" ]]; then
-        node_name="$name"
-        break
-      fi
-    done
-    [[ -z "$node_name" ]] && continue
-
-    # Add node_name as reverse dep of dep_name
+  while IFS='|' read -r node_name dep_name; do
+    [[ -z "$node_name" || -z "$dep_name" || -z "${crate_to_dir[$dep_name]:-}" ]] && continue
     if [[ -z "${reverse_deps[$dep_name]:-}" ]]; then
       reverse_deps["$dep_name"]="$node_name"
     else
       reverse_deps["$dep_name"]="${reverse_deps[$dep_name]} $node_name"
     fi
-  done < <(echo "$metadata_json" | jq -r '.resolve.nodes[] | "\(.id)|\(.dependencies[]?)"')
+  done < <(echo "$metadata_no_deps" | jq -r '.packages[] | .name as $node | .dependencies[]? | "\($node)|\(.name)"')
 
   # Step 3: Match changed files to owning crates
   local -a test_crates=()

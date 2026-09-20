@@ -81,7 +81,7 @@ function ModelRow({
 
   return (
     <button
-      aria-label={`View ${model.name} model from ${provider.label}${active ? ' (selected)' : ''}`}
+      aria-label={`View ${model.displayName || model.name} model from ${provider.label}${active ? ' (selected)' : ''}`}
       data-active={active ? 'true' : undefined}
       className={cn(
         'ui-row-action grid w-full gap-x-3 border-b border-border-soft px-4 py-3 text-left',
@@ -95,8 +95,10 @@ function ModelRow({
         <ProviderIcon className="size-4" aria-hidden="true" strokeWidth={1.8} />
       </AccentIconFrame>
       <div className="min-w-0">
-        <div className="truncate font-mono text-[length:var(--density-type-control-lg)] font-medium">{model.name}</div>
-        {model.fullId && (
+        <div className="truncate font-mono text-[length:var(--density-type-control-lg)] font-medium">
+          {model.displayName || model.name}
+        </div>
+        {!model.displayName && model.fullId && model.fullId !== model.name && (
           <div className="mt-0.5 truncate font-mono text-[length:var(--density-type-label)] text-fg-faint">
             {model.fullId}
           </div>

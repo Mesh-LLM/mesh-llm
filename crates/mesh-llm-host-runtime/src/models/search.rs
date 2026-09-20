@@ -12,6 +12,7 @@ use hf_hub::repository::ModelInfo;
 use regex_lite::Regex;
 use serde_json::{Value, json};
 use std::collections::HashSet;
+use std::io::Write;
 use std::sync::LazyLock;
 use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
@@ -179,6 +180,7 @@ pub async fn search_huggingface<F>(
 where
     F: FnMut(SearchProgress),
 {
+    let mut console = mesh_llm_events::console_err();
     const SEARCH_CONCURRENCY: usize = 10;
 
     let repo_limit = match sort {
@@ -250,7 +252,7 @@ where
             }
             Ok(None) => {}
             Err(err) => {
-                eprintln!("⚠️  Failed to inspect Hugging Face repo: {err:#}");
+                writeln!(console, "⚠️  Failed to inspect Hugging Face repo: {err:#}")?;
             }
         }
         if let Some((next_index, repo)) = pending.next() {

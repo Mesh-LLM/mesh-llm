@@ -6,23 +6,31 @@ use crate::runtime_native::{
 };
 use crate::terminal::{style_muted, style_ok, style_warn};
 use mesh_llm_runtime_install::NativeRuntimeInstallStatus;
+use std::io::Write;
 
 pub(crate) fn print_runtime_install_result(outcome: &SetupNativeRuntimeOutcome) {
+    let mut err = mesh_llm_events::console_err();
     match &outcome.status {
         SetupNativeRuntimeStatus::Skipped => {}
         SetupNativeRuntimeStatus::Installed(installed) => match installed.status {
-            NativeRuntimeInstallStatus::Installed => eprintln!(
-                "{} Installed native runtime {} for mesh version {}",
-                style_ok("✓"),
-                installed.runtime.native_runtime_id,
-                installed.runtime.mesh_version
-            ),
-            NativeRuntimeInstallStatus::AlreadyInstalled => eprintln!(
-                "{} Native runtime {} is already installed for mesh version {}",
-                style_ok("✓"),
-                installed.runtime.native_runtime_id,
-                installed.runtime.mesh_version
-            ),
+            NativeRuntimeInstallStatus::Installed => {
+                let _ = writeln!(
+                    err,
+                    "{} Installed native runtime {} for mesh version {}",
+                    style_ok("✓"),
+                    installed.runtime.native_runtime_id,
+                    installed.runtime.mesh_version
+                );
+            }
+            NativeRuntimeInstallStatus::AlreadyInstalled => {
+                let _ = writeln!(
+                    err,
+                    "{} Native runtime {} is already installed for mesh version {}",
+                    style_ok("✓"),
+                    installed.runtime.native_runtime_id,
+                    installed.runtime.mesh_version
+                );
+            }
         },
     }
 }
@@ -32,30 +40,33 @@ pub(crate) fn print_service_install_result(
     verbose: bool,
 ) {
     if verbose {
+        let mut err = mesh_llm_events::console_err();
         for line in &report.messages {
-            eprintln!("{line}");
+            let _ = writeln!(err, "{line}");
         }
     }
 }
 
 pub(crate) fn print_setup_summary(plan: &SetupPlan, actions: &CliSetupActions<'_>, verbose: bool) {
-    eprintln!();
+    let mut err = mesh_llm_events::console_err();
+    let _ = writeln!(err);
     if verbose {
-        eprintln!("Setup summary");
-        eprintln!("- Runtime: {}", runtime_summary(plan, actions));
-        eprintln!("- Service: {}", service_summary(plan, actions));
-        eprintln!(
+        let _ = writeln!(err, "Setup summary");
+        let _ = writeln!(err, "- Runtime: {}", runtime_summary(plan, actions));
+        let _ = writeln!(err, "- Service: {}", service_summary(plan, actions));
+        let _ = writeln!(
+            err,
             "- GitHub star: {}",
             super::github::github_summary(plan, &actions.github_outcome)
         );
         return;
     }
 
-    eprintln!("{} Mesh setup complete", style_ok("✓"));
-    eprintln!("  Runtime  {}", runtime_brief(plan, actions));
-    eprintln!("  Service  {}", service_brief(plan, actions));
+    let _ = writeln!(err, "{} Mesh setup complete", style_ok("✓"));
+    let _ = writeln!(err, "  Runtime  {}", runtime_brief(plan, actions));
+    let _ = writeln!(err, "  Service  {}", service_brief(plan, actions));
     if let Some(github) = github_brief(actions) {
-        eprintln!("  GitHub star  {github}");
+        let _ = writeln!(err, "  GitHub star  {github}");
     }
 }
 

@@ -19,6 +19,17 @@ def write_failing_nvcc(path: Path) -> None:
 
 
 class PackageNativeRuntimeTests(unittest.TestCase):
+    def test_linux_glibc_manifest_probe_pins_readelf_locale(self) -> None:
+        script = SCRIPT.read_text(encoding="utf-8")
+        start = script.index("def packaged_glibc_requirement(paths):")
+        end = script.index("files = {", start)
+        probe = script[start:end]
+
+        self.assertIn('readelf_env["LC_ALL"] = "C"', probe)
+        self.assertIn("env=readelf_env", probe)
+        self.assertIn('version == "GLIBC_ABI_DT_RELR"', probe)
+        self.assertIn("return (2, 36)", probe)
+
     def test_linux_cuda_benchmark_links_shared_cudart(self) -> None:
         script = SCRIPT.read_text(encoding="utf-8")
         start = script.index("build_gpu_benchmark_tool() {")
@@ -219,26 +230,14 @@ class PackageNativeRuntimeTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_macos_model_package_tool_uses_only_a_probed_linker(self) -> None:
-        """Installed is not enough: lld must also link against the active
-        SDK, and a protected reusable workflow may not have installed it at
-        all. Both cases take an explicitly empty encoded flag set."""
+    def test_model_package_tool_keeps_repository_cargo_defaults(self) -> None:
         script = SCRIPT.read_text(encoding="utf-8")
-        self.assertIn('source "$SCRIPT_DIR/lib/lld.sh"', script)
         start = script.index("build_model_package_tool() {")
         end = script.index("collect_runtime_libraries() {", start)
         function = script[start:end]
-        self.assertNotIn('command -v ld64.lld', function)
-        self.assertIn('macos_lld="$(resolve_usable_lld)"', function)
-        self.assertIn(
-            'CARGO_ENCODED_RUSTFLAGS=-Clink-arg=-fuse-ld=$macos_lld',
-            function,
-        )
-        self.assertIn('cargo_env+=("CARGO_ENCODED_RUSTFLAGS=")', function)
-        self.assertNotIn(
-            "LLVM ld64.lld is required to build the macOS model package tool",
-            function,
-        )
+        self.assertNotIn("CARGO_ENCODED_RUSTFLAGS", function)
+        self.assertNotIn("RUSTFLAGS", function)
+        self.assertIn("cargo build --release --locked", function)
 
     def test_windows_package_skips_dynamic_model_package_tool(self) -> None:
         script = SCRIPT.read_text(encoding="utf-8")

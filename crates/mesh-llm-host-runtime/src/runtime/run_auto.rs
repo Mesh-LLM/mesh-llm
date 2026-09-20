@@ -332,10 +332,8 @@ pub(super) async fn run_runtime_cli(
     // or --auto (where --mesh-name is just a filter for which mesh to join).
     emit_private_mesh_name_warning(&options);
 
-    // --- Public-to-private identity transition ---
-    // If the previous run was public (--auto or --publish) but this run is
-    // private, clear the stored identity so the private mesh gets a fresh key
-    // that isn't associated with the old public listing.
+    // Crossing the public/private boundary rotates node and mesh identity in
+    // either direction; same-mode restarts preserve them.
     handle_public_identity_transition(&options)?;
 
     let mut auto_join_candidates: Vec<(String, Option<String>)> = Vec::new();
@@ -1142,6 +1140,7 @@ pub(super) async fn advertise_run_auto_models(
     node.set_serving_models(all_declared.clone()).await;
     node.set_hosted_models(Vec::new()).await;
     node.set_models(all_declared).await;
+    super::model_presentation::advertise_startup_sources(node, startup_models).await;
     node.regossip().await;
 }
 

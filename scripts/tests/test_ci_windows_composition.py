@@ -21,6 +21,18 @@ class CiWindowsCompositionTests(unittest.TestCase):
             ACTIONS / "compute-changes" / "derive-outputs.sh"
         ).read_text(encoding="utf-8")
 
+    def test_windows_cache_warmup_supports_focused_cpu_dispatch(self) -> None:
+        workflow = (
+            ROOT / ".github" / "workflows" / "windows-warm-caches.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("workload:", workflow)
+        self.assertIn("inputs.workload == 'cpu'", workflow)
+        self.assertIn(
+            "github.event_name != 'workflow_dispatch' || inputs.workload == 'all'",
+            workflow,
+        )
+
     def test_host_action_uses_canonical_dynamic_host_builder(self) -> None:
         action = self.read_action("prepare-host-input")
 

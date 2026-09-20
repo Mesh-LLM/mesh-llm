@@ -20,36 +20,49 @@ SPEC.loader.exec_module(GENERATOR)
 
 
 class SplitCertificationRosterTests(unittest.TestCase):
-    def test_single_file_identity_is_exact_blob_digest(self) -> None:
-        digest = "a" * 64
-        self.assertEqual(
-            digest,
-            GENERATOR.aggregate_source_sha256(
-                ["model.gguf"],
-                {"model.gguf": {"size_bytes": 42, "blob_id": digest}},
-            ),
-        )
+    def test_patch_identity_covers_all_three_queue_lanes_in_order(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            patch_root = Path(directory)
+            model_support = patch_root / "model_support"
+            generated = patch_root / "generated"
+            model_support.mkdir()
+            generated.mkdir()
+            (patch_root / "0001-core.patch").write_bytes(b"core")
+            (model_support / "0001-model.patch").write_bytes(b"model")
+            (model_support / "series").write_text(
+                "0001-model.patch\n", encoding="utf-8"
+            )
+            (generated / "0001-family-test.patch").write_bytes(b"generated")
+            (generated / "series").write_text(
+                "0001-family-test.patch\n", encoding="utf-8"
+            )
+            original_patch_dir = GENERATOR.PATCH_DIR
+            try:
+                GENERATOR.PATCH_DIR = patch_root
+                self.assertEqual(
+                    [
+                        "0001-core.patch",
+                        "model_support/0001-model.patch",
+                        "generated/0001-family-test.patch",
+                    ],
+                    [
+                        path.relative_to(patch_root).as_posix()
+                        for path in GENERATOR.ordered_patch_queue()
+                    ],
+                )
+                initial = GENERATOR.patch_queue_sha256()
+                (model_support / "0001-model.patch").write_bytes(b"model changed")
+                self.assertNotEqual(initial, GENERATOR.patch_queue_sha256())
+            finally:
+                GENERATOR.PATCH_DIR = original_patch_dir
 
-    def test_multi_file_identity_is_ordered_and_path_independent(self) -> None:
-        integrity = {
-            "one.gguf": {"size_bytes": 10, "blob_id": "a" * 64},
-            "two.gguf": {"size_bytes": 20, "blob_id": "b" * 64},
-        }
-        first = GENERATOR.aggregate_source_sha256(
-            ["one.gguf", "two.gguf"], integrity
-        )
-        relocated = GENERATOR.aggregate_source_sha256(
-            ["nested/one.gguf", "nested/two.gguf"],
-            {
-                "nested/one.gguf": integrity["one.gguf"],
-                "nested/two.gguf": integrity["two.gguf"],
-            },
-        )
-        reversed_digest = GENERATOR.aggregate_source_sha256(
-            ["two.gguf", "one.gguf"], integrity
-        )
-        self.assertEqual(first, relocated)
-        self.assertNotEqual(first, reversed_digest)
+    def test_roster_contains_unique_tested_architectures(self) -> None:
+        manifest = json.loads(GENERATOR.DEFAULT_MANIFEST.read_text(encoding="utf-8"))
+        roster = GENERATOR.build_roster(manifest)
+        self.assertEqual(2, roster["schema_version"])
+        self.assertEqual(sorted(set(roster["architectures"])), roster["architectures"])
+        self.assertIn("inkling", roster["architectures"])
+        self.assertNotIn("models", roster)
 
     def test_checked_in_roster_is_deterministic_and_current(self) -> None:
         result = subprocess.run(

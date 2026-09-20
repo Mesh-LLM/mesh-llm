@@ -19,6 +19,4 @@ dynamic-native-runtime = ["mesh-llm-host-runtime/dynamic-native-runtime"]
 workspace = true
 
 [dependencies]
-anyhow.workspace = true
 mesh-llm-host-runtime = { path = "../mesh-llm-host-runtime", version = "0.76.1", default-features = false }
-serde_json.workspace = true

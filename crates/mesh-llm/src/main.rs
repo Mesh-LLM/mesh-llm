@@ -1,5 +1,7 @@
 #![recursion_limit = "256"]
 
+use std::io::Write;
+
 /// Default MeshLLM application and Tokio worker thread stack size: 8 MB.
 ///
 /// The standard Tokio default is 2 MB, which is too small for several spawned
@@ -68,18 +70,20 @@ fn run_on_application_thread<T: Send + 'static>(
 }
 
 fn prepare_model_download_directories() {
+    let mut err = mesh_llm_events::console_err();
     let prepared =
         match mesh_llm_host_runtime::command_support::models::prepare_download_directories() {
             Ok(prepared) => prepared,
             Err(error) => {
-                eprintln!(
+                let _ = writeln!(
+                    err,
                     "⚠ Unable to prepare model download directories: {error:#}. Model downloads may fail; set MESH_LLM_DATA_DIR to a writable directory."
                 );
                 return;
             }
         };
     for fallback in &prepared.fallbacks {
-        eprintln!("⚠ {fallback}");
+        let _ = writeln!(err, "⚠ {fallback}");
     }
     // SAFETY: This runs before the Tokio runtime is constructed, while the
     // process is still single-threaded.

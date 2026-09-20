@@ -1,4 +1,4 @@
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::result::Result as StdResult;
 
@@ -341,47 +341,59 @@ pub(crate) fn run_init(
         None,
     ));
 
-    eprintln!();
-    eprintln!("Owner keystore created.");
-    eprintln!("Owner ID:        {owner_id}");
-    eprintln!("Signing key:     {sign_pk}");
-    eprintln!("Encryption key:  {enc_pk}");
-    eprintln!("Path:            {}", path.display());
-    eprintln!("Encrypted:       {}", if encrypted { "yes" } else { "no" });
+    let mut err = mesh_llm_events::console_err();
+    writeln!(err)?;
+    writeln!(err, "Owner keystore created.")?;
+    writeln!(err, "Owner ID:        {owner_id}")?;
+    writeln!(err, "Signing key:     {sign_pk}")?;
+    writeln!(err, "Encryption key:  {enc_pk}")?;
+    writeln!(err, "Path:            {}", path.display())?;
+    writeln!(
+        err,
+        "Encrypted:       {}",
+        if encrypted { "yes" } else { "no" }
+    )?;
     match &source {
         PassphraseSource::Keychain { account } => {
-            eprintln!(
+            writeln!(
+                err,
                 "Unlock:          OS keychain (service={KEYCHAIN_SERVICE}, account={account})"
-            );
+            )?;
         }
         PassphraseSource::Prompt => {
-            eprintln!("Unlock:          passphrase prompt");
+            writeln!(err, "Unlock:          passphrase prompt")?;
         }
         PassphraseSource::None => {}
     }
-    eprintln!();
-    eprintln!("Next steps:");
+    writeln!(err)?;
+    writeln!(err, "Next steps:")?;
     match &source {
         PassphraseSource::Keychain { account } => {
-            eprintln!(
+            writeln!(
+                err,
                 "- This keystore is unlock-bound to this machine's keychain. To share the same \
                  owner identity on another node, retrieve the passphrase from your OS keychain \
                  (service={KEYCHAIN_SERVICE}, account={account}) and enter it there, or re-run \
                  `auth init` with a manual passphrase so the same passphrase can be used everywhere."
-            );
+            )?;
         }
         PassphraseSource::Prompt | PassphraseSource::None => {
-            eprintln!(
+            writeln!(
+                err,
                 "- Copy this keystore to other trusted nodes that should share the same owner identity."
-            );
+            )?;
         }
     }
-    eprintln!("- Start mesh-llm and it will automatically attest nodes from this keystore.");
+    writeln!(
+        err,
+        "- Start mesh-llm and it will automatically attest nodes from this keystore."
+    )?;
     if custom_owner_key {
-        eprintln!(
+        writeln!(
+            err,
             "- Pass --owner-key {} when starting mesh-llm.",
             path.display()
-        );
+        )?;
     }
 
     Ok(())
@@ -399,72 +411,92 @@ pub(crate) fn run_status(
     let node_ownership_path = resolve_node_ownership_path(node_ownership)?;
     let trust_store_path = resolve_trust_store_path(trust_store)?;
 
+    let mut err = mesh_llm_events::console_err();
+
     if !keystore_exists(&owner_key_path) {
-        eprintln!("No owner keystore found at {}", owner_key_path.display());
-        eprintln!("Run `mesh-llm auth init` to create one.");
+        writeln!(
+            err,
+            "No owner keystore found at {}",
+            owner_key_path.display()
+        )?;
+        writeln!(err, "Run `mesh-llm auth init` to create one.")?;
     } else {
         let info = keystore_metadata(&owner_key_path)?;
-        eprintln!("Owner keystore:  {}", owner_key_path.display());
-        eprintln!("Status:          present");
-        eprintln!(
+        writeln!(err, "Owner keystore:  {}", owner_key_path.display())?;
+        writeln!(err, "Status:          present")?;
+        writeln!(
+            err,
             "Encrypted:       {}",
             if info.encrypted { "yes" } else { "no" }
-        );
-        eprintln!("Owner ID:        {}", info.owner_id);
+        )?;
+        writeln!(err, "Owner ID:        {}", info.owner_id)?;
         if let Some(ref spk) = info.signing_public_key {
-            eprintln!("Signing key:     {spk}");
+            writeln!(err, "Signing key:     {spk}")?;
         }
         if let Some(ref epk) = info.encryption_public_key {
-            eprintln!("Encryption key:  {epk}");
+            writeln!(err, "Encryption key:  {epk}")?;
         }
-        eprintln!("Created:         {}", info.created_at);
+        writeln!(err, "Created:         {}", info.created_at)?;
         if info.encrypted {
             match load_owner_keypair_from_keychain(&owner_key_path) {
                 Ok(_) => {
-                    eprintln!("Keystore:        valid (unlocked from OS keychain)");
+                    writeln!(err, "Keystore:        valid (unlocked from OS keychain)")?;
                 }
                 Err(OwnerKeychainLoadError::Crypto(e)) => {
-                    eprintln!(
+                    writeln!(
+                        err,
                         "{}",
                         encrypted_keystore_keychain_status(OwnerKeychainLoadError::Crypto(e))
-                    );
+                    )?;
                 }
-                Err(e) => eprintln!("{}", encrypted_keystore_keychain_status(e)),
+                Err(e) => writeln!(err, "{}", encrypted_keystore_keychain_status(e))?,
             }
         } else {
             match load_keystore(&owner_key_path, None) {
                 Ok(_) => {
-                    eprintln!("Keystore:        valid (keys loaded successfully)");
+                    writeln!(err, "Keystore:        valid (keys loaded successfully)")?;
                 }
                 Err(e) => {
-                    eprintln!("Keystore:        ERROR loading keys: {e}");
+                    writeln!(err, "Keystore:        ERROR loading keys: {e}")?;
                 }
             }
         }
     }
 
-    eprintln!();
+    writeln!(err)?;
 
     let node_secret_key = if node_key_path.exists() {
         let node_secret_key = load_node_key_from_path(&node_key_path)?;
         let node_id = EndpointId::from(node_secret_key.public());
-        eprintln!("Node key:        {}", node_key_path.display());
-        eprintln!("Node ID:         {}", hex::encode(node_id.as_bytes()));
+        writeln!(err, "Node key:        {}", node_key_path.display())?;
+        writeln!(err, "Node ID:         {}", hex::encode(node_id.as_bytes()))?;
         Some(node_secret_key)
     } else {
-        eprintln!("Node key:        missing ({})", node_key_path.display());
+        writeln!(
+            err,
+            "Node key:        missing ({})",
+            node_key_path.display()
+        )?;
         None
     };
 
     let trust_store = load_effective_trust_store(&trust_store_path)?;
-    eprintln!("Trust store:     {}", trust_store_path.display());
-    eprintln!("Trust policy:    {:?}", trust_store.policy);
-    eprintln!("Trusted owners:  {}", trust_store.trusted_owners.len());
-    eprintln!("Revoked owners:  {}", trust_store.revoked_owners.len());
-    eprintln!("Revoked certs:   {}", trust_store.revoked_node_certs.len());
-    eprintln!("Revoked node IDs:{}", trust_store.revoked_node_ids.len());
+    writeln!(err, "Trust store:     {}", trust_store_path.display())?;
+    writeln!(err, "Trust policy:    {:?}", trust_store.policy)?;
+    writeln!(err, "Trusted owners:  {}", trust_store.trusted_owners.len())?;
+    writeln!(err, "Revoked owners:  {}", trust_store.revoked_owners.len())?;
+    writeln!(
+        err,
+        "Revoked certs:   {}",
+        trust_store.revoked_node_certs.len()
+    )?;
+    writeln!(
+        err,
+        "Revoked node IDs:{}",
+        trust_store.revoked_node_ids.len()
+    )?;
 
-    eprintln!();
+    writeln!(err)?;
 
     if node_ownership_path.exists() {
         let ownership = load_node_ownership(&node_ownership_path)?;
@@ -488,33 +520,40 @@ pub(crate) fn run_status(
             trust_store.policy,
             now_unix_ms(),
         );
-        eprintln!("Node cert:       {}", node_ownership_path.display());
-        eprintln!("Cert ID:         {}", ownership.claim.cert_id);
-        eprintln!("Claim node ID:   {}", ownership.claim.node_endpoint_id);
-        eprintln!(
+        writeln!(err, "Node cert:       {}", node_ownership_path.display())?;
+        writeln!(err, "Cert ID:         {}", ownership.claim.cert_id)?;
+        writeln!(err, "Claim node ID:   {}", ownership.claim.node_endpoint_id)?;
+        writeln!(
+            err,
             "Owner ID:        {}",
             summary
                 .owner_id
                 .as_deref()
                 .unwrap_or(ownership.claim.owner_id.as_str())
-        );
-        eprintln!("Status:          {:?}", summary.status);
-        eprintln!(
+        )?;
+        writeln!(err, "Status:          {:?}", summary.status)?;
+        writeln!(
+            err,
             "Verified:        {}",
             if summary.verified { "yes" } else { "no" }
-        );
-        eprintln!("Expires at:      {}", ownership.claim.expires_at_unix_ms);
+        )?;
+        writeln!(
+            err,
+            "Expires at:      {}",
+            ownership.claim.expires_at_unix_ms
+        )?;
         if let Some(node_label) = summary.node_label.as_deref() {
-            eprintln!("Node label:      {node_label}");
+            writeln!(err, "Node label:      {node_label}")?;
         }
         if let Some(hostname_hint) = summary.hostname_hint.as_deref() {
-            eprintln!("Hostname hint:   {hostname_hint}");
+            writeln!(err, "Hostname hint:   {hostname_hint}")?;
         }
     } else {
-        eprintln!(
+        writeln!(
+            err,
             "Node cert:       missing ({})",
             node_ownership_path.display()
-        );
+        )?;
     }
 
     Ok(())
@@ -550,14 +589,20 @@ pub(crate) fn run_sign_node(
         None,
     ));
 
-    eprintln!(
+    let mut err = mesh_llm_events::console_err();
+    writeln!(
+        err,
         "Signed node certificate written to {}",
         output_path.display()
-    );
-    eprintln!("Owner ID:        {}", ownership.claim.owner_id);
-    eprintln!("Node ID:         {}", ownership.claim.node_endpoint_id);
-    eprintln!("Cert ID:         {}", ownership.claim.cert_id);
-    eprintln!("Expires at:      {}", ownership.claim.expires_at_unix_ms);
+    )?;
+    writeln!(err, "Owner ID:        {}", ownership.claim.owner_id)?;
+    writeln!(err, "Node ID:         {}", ownership.claim.node_endpoint_id)?;
+    writeln!(err, "Cert ID:         {}", ownership.claim.cert_id)?;
+    writeln!(
+        err,
+        "Expires at:      {}",
+        ownership.claim.expires_at_unix_ms
+    )?;
 
     Ok(())
 }
@@ -604,17 +649,23 @@ pub(crate) fn run_verify_node(
         now_unix_ms(),
     );
 
-    eprintln!("Certificate:     {}", certificate_path.display());
-    eprintln!("Owner ID:        {}", ownership.claim.owner_id);
-    eprintln!("Node ID:         {}", ownership.claim.node_endpoint_id);
-    eprintln!("Cert ID:         {}", ownership.claim.cert_id);
-    eprintln!("Trust policy:    {:?}", policy);
-    eprintln!("Status:          {:?}", summary.status);
-    eprintln!(
+    let mut err = mesh_llm_events::console_err();
+    writeln!(err, "Certificate:     {}", certificate_path.display())?;
+    writeln!(err, "Owner ID:        {}", ownership.claim.owner_id)?;
+    writeln!(err, "Node ID:         {}", ownership.claim.node_endpoint_id)?;
+    writeln!(err, "Cert ID:         {}", ownership.claim.cert_id)?;
+    writeln!(err, "Trust policy:    {:?}", policy)?;
+    writeln!(err, "Status:          {:?}", summary.status)?;
+    writeln!(
+        err,
         "Verified:        {}",
         if summary.verified { "yes" } else { "no" }
-    );
-    eprintln!("Expires at:      {}", ownership.claim.expires_at_unix_ms);
+    )?;
+    writeln!(
+        err,
+        "Expires at:      {}",
+        ownership.claim.expires_at_unix_ms
+    )?;
 
     Ok(())
 }
@@ -672,19 +723,25 @@ pub(crate) const RUN_ROTATE_NODE: RunRotateNodeFn =
         let new_key = SecretKey::generate();
         save_node_key_to_path(&node_key_path, &new_key)?;
 
-        eprintln!("Node key rotated at {}", node_key_path.display());
+        let mut err = mesh_llm_events::console_err();
+        writeln!(err, "Node key rotated at {}", node_key_path.display())?;
         if let Some(previous_node_id) = previous_node_id {
-            eprintln!("Previous node ID:{previous_node_id}");
+            writeln!(err, "Previous node ID:{previous_node_id}")?;
         }
         let new_node_id = hex::encode(EndpointId::from(new_key.public()).as_bytes());
-        eprintln!("New node ID:     {new_node_id}");
+        writeln!(err, "New node ID:     {new_node_id}")?;
 
         let owner_key_path = resolve_owner_key_path(owner_key)?;
         if !owner_key_path.exists() {
-            eprintln!("No owner keystore found at {}", owner_key_path.display());
-            eprintln!(
+            writeln!(
+                err,
+                "No owner keystore found at {}",
+                owner_key_path.display()
+            )?;
+            writeln!(
+                err,
                 "Run `mesh-llm auth init` or `mesh-llm auth sign-node` later to attest this node."
-            );
+            )?;
             return Ok(());
         }
 
@@ -706,8 +763,8 @@ pub(crate) const RUN_ROTATE_NODE: RunRotateNodeFn =
             None,
         ));
 
-        eprintln!("New node certificate: {}", certificate_path.display());
-        eprintln!("New cert ID:      {}", ownership.claim.cert_id);
+        writeln!(err, "New node certificate: {}", certificate_path.display())?;
+        writeln!(err, "New cert ID:      {}", ownership.claim.cert_id)?;
 
         Ok(())
     };
@@ -733,7 +790,12 @@ pub(crate) fn run_revoke_owner(
         None,
     ));
 
-    eprintln!("Revoked owner {owner_id} in {}", trust_store_path.display());
+    let mut err = mesh_llm_events::console_err();
+    writeln!(
+        err,
+        "Revoked owner {owner_id} in {}",
+        trust_store_path.display()
+    )?;
     Ok(())
 }
 
@@ -769,6 +831,7 @@ pub(crate) fn run_revoke_node(
     // only after every requested revocation is durable.
     save_trust_store(&trust_store_path, &trust_store)?;
 
+    let mut err = mesh_llm_events::console_err();
     if let Some(cert_id) = cert_id.as_ref() {
         let _ = emit_audit(audit_events::admin_action(
             Some("system".to_string()),
@@ -777,7 +840,7 @@ pub(crate) fn run_revoke_node(
             true,
             None,
         ));
-        eprintln!("Revoked cert ID {cert_id}");
+        writeln!(err, "Revoked cert ID {cert_id}")?;
     }
     if let Some(normalized) = normalized_node_id.as_ref() {
         let _ = emit_audit(audit_events::admin_action(
@@ -787,9 +850,9 @@ pub(crate) fn run_revoke_node(
             true,
             None,
         ));
-        eprintln!("Revoked node ID {normalized}");
+        writeln!(err, "Revoked node ID {normalized}")?;
     }
-    eprintln!("Updated trust store {}", trust_store_path.display());
+    writeln!(err, "Updated trust store {}", trust_store_path.display())?;
     Ok(())
 }
 
@@ -836,10 +899,15 @@ pub(crate) fn run_rotate_owner(
         None,
     ));
 
-    eprintln!("Rotated owner keystore at {}", owner_key_path.display());
-    eprintln!("New owner ID:    {}", new_keypair.owner_id());
+    let mut err = mesh_llm_events::console_err();
+    writeln!(
+        err,
+        "Rotated owner keystore at {}",
+        owner_key_path.display()
+    )?;
+    writeln!(err, "New owner ID:    {}", new_keypair.owner_id())?;
     if let Some(backup_path) = backup_path {
-        eprintln!("Backup:          {}", backup_path.display());
+        writeln!(err, "Backup:          {}", backup_path.display())?;
     }
 
     Ok(())
@@ -856,7 +924,12 @@ pub(crate) fn run_trust_command(command: &TrustCommand) -> Result<()> {
             let mut store = load_effective_trust_store(&trust_store_path)?;
             store.add_trusted_owner(owner_id.clone(), label.clone());
             save_trust_store(&trust_store_path, &store)?;
-            eprintln!("Trusted owner {owner_id} in {}", trust_store_path.display());
+            let mut err = mesh_llm_events::console_err();
+            writeln!(
+                err,
+                "Trusted owner {owner_id} in {}",
+                trust_store_path.display()
+            )?;
         }
         TrustCommand::Remove {
             owner_id,
@@ -864,66 +937,69 @@ pub(crate) fn run_trust_command(command: &TrustCommand) -> Result<()> {
         } => {
             let trust_store_path = resolve_trust_store_path(trust_store.clone())?;
             let mut store = load_effective_trust_store(&trust_store_path)?;
+            let mut err = mesh_llm_events::console_err();
             if store.remove_trusted_owner(owner_id) {
                 save_trust_store(&trust_store_path, &store)?;
-                eprintln!(
+                writeln!(
+                    err,
                     "Removed trusted owner {owner_id} from {}",
                     trust_store_path.display()
-                );
+                )?;
             } else {
-                eprintln!("Trusted owner {owner_id} was not present.");
+                writeln!(err, "Trusted owner {owner_id} was not present.")?;
             }
         }
         TrustCommand::List { trust_store } => {
             let trust_store_path = resolve_trust_store_path(trust_store.clone())?;
             let store = load_effective_trust_store(&trust_store_path)?;
-            eprintln!("Trust store:     {}", trust_store_path.display());
-            eprintln!("Policy:          {:?}", store.policy);
-            eprintln!();
-            eprintln!("Trusted owners:");
+            let mut err = mesh_llm_events::console_err();
+            writeln!(err, "Trust store:     {}", trust_store_path.display())?;
+            writeln!(err, "Policy:          {:?}", store.policy)?;
+            writeln!(err)?;
+            writeln!(err, "Trusted owners:")?;
             if store.trusted_owners.is_empty() {
-                eprintln!("- none");
+                writeln!(err, "- none")?;
             } else {
                 for owner in &store.trusted_owners {
                     match owner.label.as_deref() {
-                        Some(label) => eprintln!("- {} ({label})", owner.owner_id),
-                        None => eprintln!("- {}", owner.owner_id),
+                        Some(label) => writeln!(err, "- {} ({label})", owner.owner_id)?,
+                        None => writeln!(err, "- {}", owner.owner_id)?,
                     }
                 }
             }
-            eprintln!();
-            eprintln!("Revoked owners:");
+            writeln!(err)?;
+            writeln!(err, "Revoked owners:")?;
             if store.revoked_owners.is_empty() {
-                eprintln!("- none");
+                writeln!(err, "- none")?;
             } else {
                 for owner in &store.revoked_owners {
                     match owner.reason.as_deref() {
-                        Some(reason) => eprintln!("- {} ({reason})", owner.owner_id),
-                        None => eprintln!("- {}", owner.owner_id),
+                        Some(reason) => writeln!(err, "- {} ({reason})", owner.owner_id)?,
+                        None => writeln!(err, "- {}", owner.owner_id)?,
                     }
                 }
             }
-            eprintln!();
-            eprintln!("Revoked node certs:");
+            writeln!(err)?;
+            writeln!(err, "Revoked node certs:")?;
             if store.revoked_node_certs.is_empty() {
-                eprintln!("- none");
+                writeln!(err, "- none")?;
             } else {
                 for cert in &store.revoked_node_certs {
                     match cert.reason.as_deref() {
-                        Some(reason) => eprintln!("- {} ({reason})", cert.cert_id),
-                        None => eprintln!("- {}", cert.cert_id),
+                        Some(reason) => writeln!(err, "- {} ({reason})", cert.cert_id)?,
+                        None => writeln!(err, "- {}", cert.cert_id)?,
                     }
                 }
             }
-            eprintln!();
-            eprintln!("Revoked node IDs:");
+            writeln!(err)?;
+            writeln!(err, "Revoked node IDs:")?;
             if store.revoked_node_ids.is_empty() {
-                eprintln!("- none");
+                writeln!(err, "- none")?;
             } else {
                 for node in &store.revoked_node_ids {
                     match node.reason.as_deref() {
-                        Some(reason) => eprintln!("- {} ({reason})", node.node_endpoint_id),
-                        None => eprintln!("- {}", node.node_endpoint_id),
+                        Some(reason) => writeln!(err, "- {} ({reason})", node.node_endpoint_id)?,
+                        None => writeln!(err, "- {}", node.node_endpoint_id)?,
                     }
                 }
             }

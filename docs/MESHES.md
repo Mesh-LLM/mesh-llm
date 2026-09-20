@@ -326,3 +326,14 @@ Advertisement behavior is configured via `[runtime.activity].advertisement`:
 **Privacy**: only the coarse admission state is advertised. No raw activity
 data, input events, app/window names, usernames, idle durations, timestamps, or
 detector errors are ever encoded in gossip.
+
+### Public/private identity transitions
+
+Switching between private mode and Nostr public discovery (`--auto`,
+`--publish`, or `--discover`) starts a fresh node and mesh identity in either
+direction. The active node key, Nostr key, mesh ID, last-mesh hint, signed
+genesis policy, and adopted membership are cleared. Other node-key namespaces,
+owner-account credentials, and trust-store settings are preserved. Restarts
+within the same mode retain identity; an expired invite cannot restore private
+membership after crossing this boundary. A supplied fresh invite can still join
+its intended mesh normally.

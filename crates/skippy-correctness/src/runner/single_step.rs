@@ -19,6 +19,7 @@ use super::{
         NativeMtpRequirement, emit_report, ensure_native_mtp_artifact_if_required,
         native_mtp_requirement, native_mtp_satisfies_requirement, native_mtp_sideband_report,
         native_mtp_verification_report, native_mtp_verification_satisfies_requirement,
+        normalize_runtime_layer_end,
     },
     stage_execution::{
         BinaryDecodeMessageArgs, BinarySplitConfig, BinarySplitResult, CorrectnessTopologyStage,
@@ -26,11 +27,13 @@ use super::{
         configure_child_logs, correctness_topology, elapsed_us, ensure_matches, ensure_reply_kind,
         protocol_flash_attn, protocol_load_mode, runtime_flash_attn, runtime_load_mode,
         runtime_model_identity, send_generation_config, split_report, stage_model_resolution,
-        stage_resident_tensor_names, stage_server_model_path, status,
+        stage_runtime_plans, stage_server_model_path, status,
     },
 };
 
 pub fn single_step(args: SingleStepArgs) -> Result<()> {
+    let mut args = args;
+    normalize_runtime_layer_end(&mut args.runtime)?;
     let native_mtp = native_mtp_requirement(args.native_mtp);
     ensure_native_mtp_artifact_if_required(&args.runtime, native_mtp)?;
     let model_identity = runtime_model_identity(&args.runtime)?;
@@ -136,11 +139,13 @@ pub(in crate::runner) fn run_full_model_decode(args: &RuntimeArgs) -> Result<Ful
         image_max_tokens: None,
         batch_max_tokens: None,
         glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
-        include_embeddings: true,
-        include_output: true,
         mtp_source: MtpSource::Disabled,
-        filter_tensors_on_load: false,
         resident_tensor_names: Vec::new(),
+        execution_contract: String::new(),
+        activation_import_identities: Vec::new(),
+        activation_import_bindings: Vec::new(),
+        activation_export_identities: Vec::new(),
+        activation_export_bindings: Vec::new(),
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
@@ -209,7 +214,7 @@ pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<Bin
         &args.model_identity,
         stage1_spec,
     )?;
-    let resident_tensor_names = stage_resident_tensor_names(
+    let runtime_plans = stage_runtime_plans(
         args.stage_load_mode,
         &args.model,
         &[&stage0_resolution.path, &stage1_resolution.path],
@@ -246,11 +251,13 @@ pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<Bin
         image_max_tokens: None,
         batch_max_tokens: None,
         glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
-        include_embeddings: true,
-        include_output: false,
         mtp_source: MtpSource::Disabled,
-        filter_tensors_on_load: true,
-        resident_tensor_names: resident_tensor_names[0].clone(),
+        resident_tensor_names: runtime_plans[0].resident_tensor_names.clone(),
+        execution_contract: runtime_plans[0].execution_contract.clone(),
+        activation_import_identities: runtime_plans[0].activation_import_identities.clone(),
+        activation_import_bindings: runtime_plans[0].activation_import_bindings.clone(),
+        activation_export_identities: runtime_plans[0].activation_export_identities.clone(),
+        activation_export_bindings: runtime_plans[0].activation_export_bindings.clone(),
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
@@ -301,8 +308,12 @@ pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<Bin
         "n_ubatch": args.n_ubatch,
         "n_gpu_layers": args.n_gpu_layers,
         "flash_attn_type": protocol_flash_attn(args.flash_attn),
-        "filter_tensors_on_load": true,
-        "resident_tensor_names": resident_tensor_names[1],
+        "resident_tensor_names": runtime_plans[1].resident_tensor_names,
+        "execution_contract": runtime_plans[1].execution_contract,
+        "activation_import_identities": runtime_plans[1].activation_import_identities,
+        "activation_import_bindings": runtime_plans[1].activation_import_bindings,
+        "activation_export_identities": runtime_plans[1].activation_export_identities,
+        "activation_export_bindings": runtime_plans[1].activation_export_bindings,
         "load_mode": protocol_load_mode(args.stage_load_mode),
         "bind_addr": args.stage1_bind_addr,
         "upstream": {
@@ -371,7 +382,6 @@ pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<Bin
         decode_step: 0,
         source_stage_index: 0,
         boundary: &boundary,
-        activation_width,
         request_id,
         session_id,
     })?;
@@ -391,7 +401,6 @@ pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<Bin
             decode_step: 1,
             source_stage_index: 0,
             boundary: &second_boundary,
-            activation_width,
             request_id,
             session_id,
         })?;

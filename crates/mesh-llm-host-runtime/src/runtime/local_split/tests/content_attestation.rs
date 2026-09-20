@@ -76,14 +76,14 @@ fn strict_multimodal_config(model_path: &Path, projector_path: &Path) -> plugin:
 model = "strict-multimodal"
 
 [models.hardware]
-model_path = "{model_path}"
-mmproj = "{projector_path}"
+model_path = {model_path}
+mmproj = {projector_path}
 
 [models.skippy]
 source_policy = "local-required"
 "#,
-        model_path = model_path.display(),
-        projector_path = projector_path.display(),
+        model_path = toml::Value::String(model_path.to_string_lossy().into_owned()),
+        projector_path = toml::Value::String(projector_path.to_string_lossy().into_owned()),
     ))
     .expect("strict multimodal config")
 }
@@ -145,6 +145,7 @@ async fn strict_multimodal_stage_loads() -> StrictMultimodalStageLoads {
         projector_path: Some(projector_path.to_string_lossy().into_owned()),
         ctx_size: 4096,
         compact_meta: &compact_meta,
+        split_certification: skippy::SplitCertificationAdmission::Certified,
         capacity_budget_bytes: None,
         pinned_gpu: None,
         device_override: None,

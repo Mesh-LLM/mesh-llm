@@ -9,11 +9,33 @@ This file covers local build and development workflows for this repository.
 - `just`
 - `cmake`
 - Rust toolchain (`cargo`)
+- `sccache` (required by the repository Cargo configuration)
 - Node.js 24 + pnpm 10 or newer (for UI development). The UI lockfile keeps
   `overrides` in `pnpm-workspace.yaml`, which pnpm 9 does not read, so pnpm 9
   cannot install it. `corepack pnpm@10` is enough if your host pnpm is older.
 
-**macOS**: Apple Silicon. Metal is used automatically.
+Install the pinned compiler cache and the platform linkers with:
+
+```bash
+just bootstrap-build-tools
+```
+
+The bootstrap installs sccache 0.16.0. On Linux it also installs mold and lld
+with the detected system package manager; on macOS it installs lld with
+Homebrew. On Windows it installs the Rust LLVM tools with rustup. Set
+`MESH_LLM_SCCACHE_VERSION` only when deliberately testing a newer cache binary.
+
+**macOS**: Apple Silicon. Metal is used automatically. Install the accelerated
+linker with `brew install lld`; the repository probes `ld64.lld` against the
+active SDK and uses Apple ld when that installed version is incompatible.
+
+**Linux**: install `mold` and `lld`. Cargo uses mold by default and retains lld
+as the diagnosed compatibility fallback. On Ubuntu/Debian:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y mold lld
+```
 
 **Linux NVIDIA**: x86_64 with an NVIDIA GPU. Requires the CUDA toolkit (`nvcc` in your `PATH`). On Arch Linux, CUDA is typically at `/opt/cuda`; on Ubuntu/Debian it's at `/usr/local/cuda`. Auto-detection finds the right SM architecture for your GPU.
 
@@ -22,7 +44,9 @@ This file covers local build and development workflows for this repository.
 **Linux Vulkan**: Vulkan is supported when the Vulkan development files and `glslc` are installed. On Ubuntu/Debian, install `libvulkan-dev glslc`. On Arch Linux, install `vulkan-headers shaderc`.
 
 **Windows**: native runtime builds support `cuda`, `hip`/`rocm`, `vulkan`, or
-`cpu`. Metal is not supported on Windows.
+`cpu`. Metal is not supported on Windows. Install the Rust lld tools with
+`rustup component add llvm-tools-preview`, or install LLVM with `winget install
+LLVM.LLVM`.
 
 ## Build from source
 
@@ -161,6 +185,28 @@ process as a best-effort safeguard. Cargo configurations that separate
 not report, lock, or clean a second artifact tree.
 
 On native Windows, `just check-release` runs the host-safe Rust/doc invariant subset and skips the Bash-only `install.sh` / `package-release.sh` parity checks. Run it on macOS or Linux when you need full shell parity coverage.
+
+### Line endings on native Windows
+
+`.gitattributes` checks every text file out with LF on every platform. A
+checkout created before that landed, with `core.autocrlf=true`, keeps its CRLF
+working copy until the files are re-extracted, and five host-runtime tests
+still fail locally on content they read verbatim: both `config_schema`
+snapshots, the `plugin::config` fixture, `inference::skippy::topology`, which
+greps its own source, and `inference::skippy::split_certification`, whose
+`build.rs` patch-queue digest is hashed from the bytes of the llama.cpp
+patches and gates production split certification rather than tests alone.
+
+Renormalise once, after committing or stashing anything in progress, since the
+second command discards uncommitted work:
+
+```powershell
+git rm --cached -r .
+git reset --hard HEAD
+```
+
+`git ls-files --eol` should then report `i/lf w/lf` for every text file. A
+fresh clone needs none of this.
 
 ### Testing crates on native Windows
 

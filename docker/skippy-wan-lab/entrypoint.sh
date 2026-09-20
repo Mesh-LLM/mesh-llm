@@ -539,7 +539,6 @@ config = {
     "cache_type_k": os.environ.get("CACHE_TYPE_K", "f16"),
     "cache_type_v": os.environ.get("CACHE_TYPE_V", "f16"),
     "flash_attn_type": os.environ.get("FLASH_ATTN_TYPE", "disabled"),
-    "filter_tensors_on_load": True,
     "selected_device": None,
     "kv_cache": None,
     "load_mode": os.environ.get("LOAD_MODE", "runtime-slice"),

@@ -77,6 +77,7 @@ fn load_request() -> StageLoadRequest {
         model_path: Some("/models/model.gguf".to_string()),
         source_model_bytes: Some(64 * 1024 * 1024 * 1024),
         source_model_sha256: None,
+        split_certification: None,
         local_source_required: false,
         projector_path: Some("/models/mmproj.gguf".to_string()),
         projector_use_gpu: None,
@@ -296,7 +297,9 @@ fn assert_stage_config_execution_fields(config: &StageConfig) {
         config.downstream.as_ref().map(|d| d.stage_id.as_str()),
         Some("stage-1")
     );
-    assert!(config.filter_tensors_on_load);
+    assert!(config.resident_tensor_names.is_empty());
+    assert!(config.activation_import_identities.is_empty());
+    assert!(config.activation_export_identities.is_empty());
 }
 
 #[test]

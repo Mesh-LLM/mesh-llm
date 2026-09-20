@@ -320,7 +320,7 @@ where
 
 enum SchedulerCommand {
     Submit(ScheduledRequest),
-    ExecuteIteration(DirectIteration),
+    ExecuteIteration(Box<DirectIteration>),
     ExecuteRuntime(RuntimeOperation),
     ExecuteCacheAwareRuntime(
         RuntimeOperation,
@@ -704,20 +704,22 @@ impl IterationScheduler {
             self.shared.max_direct_iteration_tokens,
         )?;
         ensure_direct_iteration_active(deadline, cancellation)?;
-        self.enqueue_command(SchedulerCommand::ExecuteIteration(DirectIteration {
-            session_id: session_id.to_string(),
-            target_token_count,
-            token_ids: token_ids.to_vec(),
-            positions: positions.to_vec(),
-            sampling: sampling.cloned(),
-            input,
-            sample_last,
-            phase,
-            deadline,
-            cancellation: cancellation.cloned(),
-            enqueued_at: Instant::now(),
-            reply: channel.reply.clone(),
-        }))?;
+        self.enqueue_command(SchedulerCommand::ExecuteIteration(Box::new(
+            DirectIteration {
+                session_id: session_id.to_string(),
+                target_token_count,
+                token_ids: token_ids.to_vec(),
+                positions: positions.to_vec(),
+                sampling: sampling.cloned(),
+                input,
+                sample_last,
+                phase,
+                deadline,
+                cancellation: cancellation.cloned(),
+                enqueued_at: Instant::now(),
+                reply: channel.reply.clone(),
+            },
+        )))?;
         let result = channel.result.recv().map_err(|error| {
             OpenAiError::backend(format!("iteration scheduler stopped: {error}"))
         })?;
@@ -928,7 +930,7 @@ impl SchedulerWorker {
         match command {
             SchedulerCommand::Submit(request) => self.submit(request),
             SchedulerCommand::ExecuteIteration(request) => {
-                self.direct_iterations.push_back(request);
+                self.direct_iterations.push_back(*request);
             }
             SchedulerCommand::ExecuteRuntime(operation) => {
                 self.run_runtime_operation(operation, None);

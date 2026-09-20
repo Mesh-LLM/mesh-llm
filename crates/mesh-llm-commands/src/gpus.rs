@@ -7,7 +7,7 @@ use mesh_llm_system::{
     vram::VramCapacity,
 };
 use serde_json::{Value, json};
-use std::path::Path;
+use std::{io::Write, path::Path};
 
 pub mod tune;
 
@@ -32,7 +32,8 @@ pub fn dispatch_gpu_command(
 
 fn run_gpu_backend_benchmark(backend: GpuBenchmarkBackend) -> Result<()> {
     let outputs = benchmark::run_backend_by_name(map_gpu_backend(backend))?;
-    println!("{}", serde_json::to_string(&outputs)?);
+    let mut out = mesh_llm_events::machine_out();
+    writeln!(out, "{}", serde_json::to_string(&outputs)?)?;
     Ok(())
 }
 
@@ -54,7 +55,8 @@ pub fn run_gpus(json_output: bool, config_path: Option<&Path>) -> Result<()> {
         return print_json(gpus_json(&hw, &margin));
     }
 
-    println!("{}", format_gpus(&hw, &margin));
+    let mut out = mesh_llm_events::console_out();
+    writeln!(out, "{}", format_gpus(&hw, &margin))?;
 
     Ok(())
 }
@@ -92,11 +94,15 @@ fn advertised_memory(hw: &HardwareSurvey, margin: &SafetyMargin) -> AdvertisedMe
 
 fn run_gpu_benchmark(json_output: bool) -> Result<()> {
     let hw = hardware::survey();
+    let mut out = mesh_llm_events::console_out();
     if hw.gpus.is_empty() {
         if json_output {
             return print_json(gpu_benchmark_empty_json());
         }
-        println!("⚠️ No GPUs detected on this node. Nothing to benchmark.");
+        writeln!(
+            out,
+            "⚠️ No GPUs detected on this node. Nothing to benchmark."
+        )?;
         return Ok(());
     }
 
@@ -113,13 +119,18 @@ fn run_gpu_benchmark(json_output: bool) -> Result<()> {
         return print_json(gpu_benchmark_json(&hw, &saved));
     }
 
-    println!("✅ Refreshed GPU benchmark fingerprint.");
-    println!(
+    writeln!(out, "✅ Refreshed GPU benchmark fingerprint.")?;
+    writeln!(
+        out,
         "  GPUs benchmarked: {}",
         saved.result.mem_bandwidth_gbps.len()
-    );
-    println!("  Total bandwidth: {}", format_bandwidth(total_bandwidth));
-    println!("  Cache path: {}", saved.path.display());
+    )?;
+    writeln!(
+        out,
+        "  Total bandwidth: {}",
+        format_bandwidth(total_bandwidth)
+    )?;
+    writeln!(out, "  Cache path: {}", saved.path.display())?;
 
     Ok(())
 }
@@ -245,7 +256,8 @@ fn gpu_benchmark_json(hw: &HardwareSurvey, saved: &SavedBenchmark) -> Value {
 }
 
 fn print_json(value: Value) -> Result<()> {
-    println!("{}", serde_json::to_string_pretty(&value)?);
+    let mut out = mesh_llm_events::machine_out();
+    writeln!(out, "{}", serde_json::to_string_pretty(&value)?)?;
     Ok(())
 }
 

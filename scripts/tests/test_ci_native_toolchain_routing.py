@@ -345,7 +345,7 @@ class CiNativeToolchainRoutingTests(unittest.TestCase):
             with self.subTest(workflow=workflow):
                 source = (workflow_dir / workflow).read_text(encoding="utf-8")
                 self.assertIn(
-                    "hashFiles('Cargo.lock', '.github/cache-version.txt', 'Justfile', 'just/**')",
+                    "hashFiles('Cargo.lock', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', 'Justfile', 'just/**')",
                     source,
                 )
 

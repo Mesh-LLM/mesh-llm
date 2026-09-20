@@ -1,10 +1,11 @@
 # ── Full Validation Gate ───────────────────────────────────────
 
-# Populate the trusted Linux compiler-object seed with the dominant host graph
-# and the isolated test graph used by the high-fanout CLI test batch.
+# Populate the trusted Linux compiler-object seed with the dominant Clippy,
+# release-host, and isolated test graphs used by high-fanout CI jobs.
 [linux]
 ci-sccache-seed-build:
     cargo clippy --locked -p mesh-llm --all-targets -- -D warnings
+    cargo build --release --locked -p mesh-llm --bin mesh-llm --no-default-features --features web-ui,dynamic-native-runtime
     cargo test --locked -p mesh-llm-cli --no-run
 
 # Validate CI definitions, planner fixtures, and repository consistency.
@@ -25,9 +26,9 @@ ci-crate-lists:
 publish-crates:
     just with-lld cargo run -p xtask -- repo-consistency publish-crates
 
-# Ratchet on println!/eprintln!/print!/eprint! in Rust files under crates/
-# (including crate test targets; build.rs is skipped): every occurrence must be
-# explicitly listed in tools/xtask/data/console_print_allowlist.json.
+# Gate on println!/eprintln!/print!/eprint! and direct io::stdout()/io::stderr()
+# handles in Rust files under crates/ (excluding tests, non-product crates, helper
+# bins and build.rs). There is no allowlist: route output through mesh-llm-events.
 no-console-print:
     cargo run -p xtask -- repo-consistency no-console-print
 
@@ -109,8 +110,11 @@ test-all:
         --exclude mesh-llm-nodejs \
         --exclude skippy-ffi \
         --exclude skippy-quantize \
+        --exclude skippy-model-package \
         --exclude skippy-runtime \
         --exclude skippy-server
+    echo "--- Static Skippy model-package tests ---"
+    just with-lld cargo test --package skippy-model-package --no-default-features
     echo "--- Static Skippy runtime tests ---"
     just with-lld cargo test --package skippy-runtime --no-default-features --lib
     echo "--- Static Skippy server tests ---"

@@ -1,0 +1,11 @@
+name: Use runner Hugging Face cache
+description: Load the runner login shell configuration and validate its existing offline cache.
+runs:
+  using: composite
+  steps:
+    - name: Read configured model cache
+      # The runner service does not load the owner's interactive shell configuration.
+      shell: /bin/zsh -il {0}
+      run: |
+        set -eu
+        python3 scripts/configure-canary-cache.py

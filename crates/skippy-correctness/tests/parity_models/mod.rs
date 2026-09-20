@@ -158,11 +158,6 @@ pub(crate) fn graph_boundary_contract_matches_stage_roles(spec: FamilySpec) -> R
         ("final stage input", final_input),
     ] {
         boundary.raw_f32_width(edge)?;
-        if boundary.bytes_per_token
-            != boundary.elements_per_token * std::mem::size_of::<f32>() as u64
-        {
-            bail!("{edge} did not report its exact native F32 bytes per token");
-        }
     }
     if first_output != middle_input {
         bail!(
@@ -173,34 +168,6 @@ pub(crate) fn graph_boundary_contract_matches_stage_roles(spec: FamilySpec) -> R
         bail!(
             "middle-to-final graph boundary contracts do not match: producer {middle_output:?}, consumer {final_input:?}"
         );
-    }
-
-    let (expected_required_frame_flags, expected_required_sidebands) = match spec.family {
-        "gemma3n" => (
-            skippy_runtime::ACTIVATION_FLAG_GEMMA3N_ALTUP,
-            skippy_runtime::ACTIVATION_SIDEBAND_TOKEN_IDS,
-        ),
-        "qwen4exp" => (0, skippy_runtime::ACTIVATION_SIDEBAND_TOKEN_IDS),
-        _ => (0, 0),
-    };
-    for (edge, boundary) in [
-        ("first stage output", first_output),
-        ("middle stage input", middle_input),
-        ("middle stage output", middle_output),
-        ("final stage input", final_input),
-    ] {
-        if boundary.required_frame_flags != expected_required_frame_flags {
-            bail!(
-                "{edge} required frame flags {:#x}, expected {expected_required_frame_flags:#x}",
-                boundary.required_frame_flags
-            );
-        }
-        if boundary.required_sidebands != expected_required_sidebands {
-            bail!(
-                "{edge} required sidebands {:#x}, expected {expected_required_sidebands:#x}",
-                boundary.required_sidebands
-            );
-        }
     }
 
     let tokens = first.tokenize(case_prompt(case.row), true)?;
@@ -253,12 +220,22 @@ fn assert_frame_matches_graph_boundary(
             frame.payload.len()
         );
     }
-    if frame.desc.flags != boundary.required_frame_flags {
-        bail!(
-            "{edge} frame flags {:#x} do not match boundary flags {:#x}",
-            frame.desc.flags,
-            boundary.required_frame_flags
-        );
+    if frame.desc.frontier_identity != boundary.frontier_identity {
+        bail!("{edge} frame frontier identity does not match its graph boundary");
+    }
+    let boundary_parts = boundary.parts()?;
+    let frame_parts = frame.desc.parts()?;
+    if frame_parts.len() != boundary_parts.len() {
+        bail!("{edge} frame part count does not match its graph boundary");
+    }
+    for (actual, expected) in frame_parts.iter().zip(boundary_parts) {
+        if actual.identity != expected.identity
+            || actual.ggml_type != expected.ggml_type
+            || actual.rank != expected.rank
+            || actual.token_axis != expected.token_axis
+        {
+            bail!("{edge} frame part structure does not match its graph boundary");
+        }
     }
     Ok(())
 }
@@ -710,7 +687,6 @@ struct TestLayout {
 struct StagePath {
     path: PathBuf,
     load_mode: RuntimeLoadMode,
-    filter_tensors_on_load: bool,
     resident_tensor_names: Vec<String>,
 }
 
@@ -755,7 +731,6 @@ impl ResolvedCase {
                     full_model: StagePath {
                         path: path.clone(),
                         load_mode: RuntimeLoadMode::RuntimeSlice,
-                        filter_tensors_on_load: false,
                         resident_tensor_names: Vec::new(),
                     },
                     package_dir: None,
@@ -770,7 +745,6 @@ impl ResolvedCase {
                     full_model: StagePath {
                         path: package_dir.clone(),
                         load_mode: RuntimeLoadMode::LayerPackage,
-                        filter_tensors_on_load: true,
                         resident_tensor_names: Vec::new(),
                     },
                     package_dir: Some(package_dir.clone()),
@@ -1297,7 +1271,6 @@ fn stage_path(layout: &TestLayout, spec: FamilySpec, shape: StageShape) -> Resul
         return Ok(StagePath {
             path: layout.full_model.path.clone(),
             load_mode: RuntimeLoadMode::RuntimeSlice,
-            filter_tensors_on_load: true,
             resident_tensor_names: Vec::new(),
         });
     }
@@ -1330,13 +1303,12 @@ fn materialize_stage(
         stage_id: format!("stage-{layer_start}-{layer_end}"),
         layer_start,
         layer_end,
-        include_embeddings,
-        include_output,
+        source_stage: include_embeddings,
+        terminal_stage: include_output,
     })?;
     Ok(StagePath {
         path: materialized.output_path,
         load_mode: RuntimeLoadMode::LayerPackage,
-        filter_tensors_on_load: true,
         resident_tensor_names: Vec::new(),
     })
 }
@@ -1518,10 +1490,7 @@ fn verify_suffix_prefill_after_restore(
 }
 
 fn activation_frames_match(source: &ActivationFrame, restored: &ActivationFrame) -> bool {
-    if source.desc.token_count != restored.desc.token_count
-        || source.desc.flags != restored.desc.flags
-        || source.payload.len() != restored.payload.len()
-    {
+    if source.desc != restored.desc || source.payload.len() != restored.payload.len() {
         return false;
     }
     if source.payload == restored.payload {
@@ -1656,11 +1625,13 @@ fn open_stage_model(path: &StagePath, shape: StageShape, n_gpu_layers: i32) -> R
             image_max_tokens: None,
             batch_max_tokens: None,
             glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
-            include_embeddings: shape.include_embeddings,
-            include_output: shape.include_output,
             mtp_source: MtpSource::Disabled,
-            filter_tensors_on_load: path.filter_tensors_on_load,
             resident_tensor_names: path.resident_tensor_names.clone(),
+            execution_contract: String::new(),
+            activation_import_identities: Vec::new(),
+            activation_import_bindings: Vec::new(),
+            activation_export_identities: Vec::new(),
+            activation_export_bindings: Vec::new(),
             checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
             checkpoint_imatrix: None,
             checkpoint_imatrix_sha256: None,

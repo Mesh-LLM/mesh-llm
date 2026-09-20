@@ -11,6 +11,23 @@ use skippy_protocol::binary::WireReplyKind;
 use skippy_protocol::binary::recv_reply;
 use std::net::TcpStream;
 
+pub(super) fn prefill_chunk_end(
+    pos_start: usize,
+    chunk_size: usize,
+    prefill_token_count: usize,
+    exact_checkpoint_boundary: Option<usize>,
+) -> usize {
+    let mut end = pos_start
+        .saturating_add(chunk_size)
+        .min(prefill_token_count);
+    if let Some(boundary) = exact_checkpoint_boundary
+        && pos_start < boundary
+    {
+        end = end.min(boundary);
+    }
+    end
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct PrefillChunkSchedule {
     pub(super) sizes: Vec<usize>,
@@ -365,4 +382,22 @@ pub(super) fn drain_embedded_prefill_replies(
         drained.absorb(current);
     }
     Ok(drained)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prefill_chunk_end;
+
+    #[test]
+    fn exact_checkpoint_splits_prefill_at_the_native_state_boundary() {
+        assert_eq!(prefill_chunk_end(0, 1024, 1400, Some(768)), 768);
+        assert_eq!(prefill_chunk_end(768, 1024, 1400, Some(768)), 1400);
+    }
+
+    #[test]
+    fn exact_checkpoint_preserves_earlier_adaptive_chunks() {
+        assert_eq!(prefill_chunk_end(0, 256, 1400, Some(768)), 256);
+        assert_eq!(prefill_chunk_end(256, 256, 1400, Some(768)), 512);
+        assert_eq!(prefill_chunk_end(512, 512, 1400, Some(768)), 768);
+    }
 }

@@ -30,11 +30,15 @@ Own the repair end to end:
    requires it. Bump the prepare schema and ABI version together where the
    repository skills require that. A model row may change only when runtime
    evidence shows that its immutable manifest data is stale.
-5. Run the canonical path repeatedly until it is green: prepare, the complete
-   patched llama.cpp build with upstream tests, the generated-family check, all
-   five Rust package builds, Skippy smoke tests, parity validation, the
-   complete family plan and full family battery. Inspect failures and continue repairing rather than stopping after
-   the first partial pass.
+5. Run prepare, the complete patched llama.cpp build with upstream tests, the
+   generated-family check, affected Rust package checks, and focused smoke or
+   real-model reproductions for your repairs. Inspect failures and fix them.
+   Once those checks pass, return control to the trusted harness. Do not run
+   an additional full family battery inside the coding session: the wrapper
+   runs every canonical gate, including the complete roster, after you return.
+   If it finds a failure, use the supplied logs to reproduce and fix that
+   failure, then return for the next trusted pass. Report the exact checks you
+   ran and remaining uncertainties; a focused pass is not certification.
 
 The models are already available in the runner's `HF_CACHE`. Stay offline and
 do not add Actions caching or download logic. Full family certification must
@@ -65,13 +69,18 @@ wrapper checks these limits before it accepts the tree, and the full battery
 independently verifies every corrected tensor-byte value against the pinned
 local artifact.
 
-Returning from the coding session is not a success signal. The trusted harness
-runs the complete gate sequence on the working tree. If a gate is red, it
-returns the current logs to this same session and you continue the task within
-the shared repair-and-test deadline. Only a green repair pass may create the
-local candidate commit. A separate job then independently reruns the same
-sequence on that exact tree before a later success-gated step owns GitHub
-publication.
+Returning from the coding session is not certification. The trusted harness
+runs prepare, manifest-policy, build and smoke gates; local failures return to
+the same named session within the coding admission window. Once those gates
+pass, the job exports an uncertified immutable candidate and releases its
+runner. Separate jobs certify every family using the exact producer binaries.
+
+A failed family pass or independent verification supplies its candidate and
+all available failure logs to a new session in the next attempt. Read those
+logs before continuing. There are at most three distributed repair attempts;
+every edit requires a new complete build and family pass. Both the first full
+family pass and the fresh independent build/family pass must be green on the
+same commit before the hosted publisher can create a branch or PR.
 
 ## New upstream model families
 

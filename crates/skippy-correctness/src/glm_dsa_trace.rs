@@ -11,15 +11,16 @@ use std::{
         mpsc,
     },
     thread::{self, JoinHandle},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use skippy_protocol::binary::{
-    StageReplyStats, WireMessageKind, read_stage_message, recv_ready, send_ready,
-    send_reply_ack_with_stats, send_reply_predicted_with_stats,
+    StageReplyStats, StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
+    read_stage_message, recv_ready, recv_reply, send_ready, send_reply_ack_with_stats,
+    send_reply_predicted_with_stats, write_stage_message,
 };
 
 use crate::{
@@ -31,6 +32,7 @@ use crate::{
         GlmDsaTimingReport, GlmDsaTopKComparisonReport, GlmDsaTraceKeyReport,
         GlmDsaTraceParityMismatchReport, GlmDsaTraceParityReport, GlmDsaTraceVariantReport,
     },
+    runner::stage_runtime_plan_for_range,
     support::ChildGuard,
 };
 
@@ -105,6 +107,11 @@ impl Read for StopAwareReader<'_> {
 struct TraceVariantRun {
     report: GlmDsaTraceVariantReport,
     fake_messages: Vec<FakeDownstreamMessage>,
+}
+
+struct TraceDriverOutput {
+    exit_code: Option<i32>,
+    success: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -211,8 +218,8 @@ fn parity_gate_matched(trace_matched: bool, semantic_matched: bool) -> bool {
 }
 
 fn ensure_supported_args(args: &GlmDsaStage0TraceArgs) -> Result<()> {
-    if args.runtime.stage_load_mode != StageLoadMode::LayerPackage {
-        bail!("glm-dsa-stage0-trace currently requires --stage-load-mode layer-package");
+    if args.runtime.stage_load_mode == StageLoadMode::ArtifactSlice {
+        bail!("glm-dsa-stage0-trace does not support --stage-load-mode artifact-slice");
     }
     if args.stage_layer_end == 0 {
         bail!("--stage-layer-end must be greater than zero");
@@ -263,8 +270,8 @@ fn run_variant(
         variant: variant.name,
         direct_sparse_attn: variant.direct_sparse_attn,
         fused_sparse_mask: variant.fused_sparse_mask,
-        prompt_exit_code: prompt_output.status.code(),
-        prompt_success: prompt_output.status.success(),
+        prompt_exit_code: prompt_output.exit_code,
+        prompt_success: prompt_output.success,
         stage_log: stage_log_path.to_string_lossy().into_owned(),
         prompt_log: prompt_log_path.to_string_lossy().into_owned(),
         fake_downstream_message_count: fake_downstream.message_count,
@@ -642,6 +649,15 @@ fn write_stage_config(
         .model_id
         .clone()
         .unwrap_or_else(|| "local/glm-dsa-stage0-trace".to_string());
+    let runtime_plan = stage_runtime_plan_for_range(
+        args.runtime.stage_load_mode,
+        &args.runtime.model,
+        &model_path,
+        (0, args.stage_layer_end),
+        args.runtime.layer_end,
+        args.runtime.ctx_size,
+        1,
+    )?;
     let config = json!({
         "run_id": run_id,
         "topology_id": format!("glm-dsa-stage0-trace-{variant}"),
@@ -658,9 +674,14 @@ fn write_stage_config(
         "flash_attn_type": protocol_flash_attn(args.runtime.flash_attn),
         "cache_type_k": "f16",
         "cache_type_v": "f16",
-        "filter_tensors_on_load": true,
+        "resident_tensor_names": runtime_plan.resident_tensor_names,
+        "execution_contract": runtime_plan.execution_contract,
+        "activation_import_identities": runtime_plan.activation_import_identities,
+        "activation_import_bindings": runtime_plan.activation_import_bindings,
+        "activation_export_identities": runtime_plan.activation_export_identities,
+        "activation_export_bindings": runtime_plan.activation_export_bindings,
         "use_mmap": true,
-        "load_mode": "layer-package",
+        "load_mode": stage_load_mode_name(args.runtime.stage_load_mode),
         "bind_addr": args.stage0_bind_addr,
         "upstream": null,
         "downstream": {
@@ -689,8 +710,11 @@ fn start_stage0(
             "serve-binary",
             "--config",
             path_str(config_path)?,
+            // The deterministic driver sends one prefill followed by Stop, so
+            // require the downstream ACK immediately instead of leaving a
+            // deferred prefill reply that Stop must reject.
             "--max-inflight",
-            &args.server.max_inflight.to_string(),
+            "1",
         ])
         .env("SKIPPY_GLM_DSA_OP_TIMING", "1")
         .env("SKIPPY_GLM_DSA_TENSOR_TRACE", "1")
@@ -721,57 +745,64 @@ fn start_stage0(
     ChildGuard::spawn(command)
 }
 
-fn run_prompt(
-    args: &GlmDsaStage0TraceArgs,
-    prompt_log_path: &Path,
-) -> Result<std::process::Output> {
-    let model_path = stage_model_path(args)?;
-    let mut child = Command::new(&args.prompt_bin)
-        .args([
-            "binary",
-            "--model-path",
-            path_str(&model_path)?,
-            "--tokenizer-load-mode",
-            "layer-package",
-            "--tokenizer-layer-start",
-            "0",
-            "--tokenizer-layer-end",
-            "1",
-            "--first-stage-addr",
-            &args.stage0_bind_addr.to_string(),
-            "--ctx-size",
-            &args.runtime.ctx_size.to_string(),
-            "--n-gpu-layers",
-            "0",
-            "--activation-width",
-            &args.activation_width.to_string(),
-            "--prefill-chunk-size",
-            &args.prefill_chunk_size.to_string(),
-            "--max-new-tokens",
-            &args.max_new_tokens.to_string(),
-            "--decode-timeout-secs",
-            &args.server.startup_timeout_secs.to_string(),
-            "--trace-token-ids",
-            "--no-think",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("spawn {}", args.prompt_bin.display()))?;
-    {
-        let stdin = child.stdin.as_mut().context("open skippy-prompt stdin")?;
-        let prompt = args.runtime.prompt.replace(['\r', '\n'], " ");
-        writeln!(stdin, "{prompt}")?;
-        writeln!(stdin, ":quit")?;
+fn run_prompt(args: &GlmDsaStage0TraceArgs, prompt_log_path: &Path) -> Result<TraceDriverOutput> {
+    let mut stream = try_connect_ready(args.stage0_bind_addr).context("connect stage0 driver")?;
+    let timeout = Duration::from_secs(args.server.startup_timeout_secs.max(1));
+    stream.set_read_timeout(Some(timeout)).ok();
+    stream.set_write_timeout(Some(timeout)).ok();
+
+    // This command certifies the stage-0 activation boundary. A non-final
+    // prefill exercises the complete 0..stage_layer_end graph and receives an
+    // ACK through the ordinary stage chain, without requiring a downstream
+    // sampler or the production direct-prediction-return listener.
+    let tokens = vec![1, 2, 3, 4, 5, 6];
+    let mut state = StageStateHeader::new(WireMessageKind::PrefillEmbd);
+    state.seq_id = 0;
+    state.prompt_token_count =
+        i32::try_from(tokens.len()).context("trace token count exceeds i32")?;
+    state.source_stage_index = -1;
+    let message = StageWireMessage {
+        kind: WireMessageKind::PrefillEmbd,
+        pos_start: 0,
+        token_count: i32::try_from(tokens.len()).context("trace token count exceeds i32")?,
+        state,
+        request_id: 1,
+        session_id: 1,
+        sampling: None,
+        chat_sampling_metadata: None,
+        tokens,
+        positions: Vec::new(),
+        activation: Vec::new(),
+        raw_bytes: Vec::new(),
+    };
+    let started = Instant::now();
+    write_stage_message(&mut stream, &message).context("send stage0 trace prefill")?;
+    stream.flush().context("flush stage0 trace prefill")?;
+    let reply = recv_reply(&mut stream).context("receive stage0 trace prefill ACK")?;
+    if reply.kind != WireReplyKind::Ack {
+        bail!("stage0 trace prefill expected ACK, got {:?}", reply.kind);
     }
-    let output = child.wait_with_output().context("wait for skippy-prompt")?;
-    let mut log = Vec::new();
-    log.extend_from_slice(&output.stdout);
-    log.extend_from_slice(&output.stderr);
-    fs::write(prompt_log_path, log)
-        .with_context(|| format!("write prompt log {}", prompt_log_path.display()))?;
-    Ok(output)
+    write_stage_message(&mut stream, &StageWireMessage::stop_with_identity(1, 1))
+        .context("send stage0 trace stop")?;
+    stream.flush().context("flush stage0 trace stop")?;
+    let stop_reply = recv_reply(&mut stream).context("receive stage0 trace stop ACK")?;
+    if stop_reply.kind != WireReplyKind::Ack {
+        bail!("stage0 trace stop expected ACK, got {:?}", stop_reply.kind);
+    }
+    let elapsed = started.elapsed();
+    let prefill_tok_s = 6.0 / elapsed.as_secs_f64().max(f64::MIN_POSITIVE);
+    fs::write(
+        prompt_log_path,
+        format!(
+            "deterministic stage-boundary driver: tokens=6 elapsed_ms={:.3} prefill_tok_s={prefill_tok_s:.3}\n",
+            elapsed.as_secs_f64() * 1000.0,
+        ),
+    )
+    .with_context(|| format!("write driver log {}", prompt_log_path.display()))?;
+    Ok(TraceDriverOutput {
+        exit_code: Some(0),
+        success: true,
+    })
 }
 
 fn wait_for_stage_ready_or_exit(
@@ -863,7 +894,23 @@ impl FakeDownstreamGuard {
                                     return Err(anyhow!(error).context("read stage message"));
                                 }
                             };
-                            let activation_f32_payload = message.activation_f32_payload().ok();
+                            let activation_frame = message.activation_frame().ok().flatten();
+                            let part_payload = |ggml_type| {
+                                let frame = activation_frame.as_ref()?;
+                                let part = frame
+                                    .desc
+                                    .parts
+                                    .iter()
+                                    .find(|part| part.ggml_type == ggml_type)?;
+                                let start = usize::try_from(part.payload_offset).ok()?;
+                                let bytes = usize::try_from(part.payload_bytes).ok()?;
+                                frame
+                                    .payload
+                                    .get(start..start.checked_add(bytes)?)
+                                    .map(<[u8]>::to_vec)
+                            };
+                            let activation_f32_payload = part_payload(0);
+                            let top_k_payload = part_payload(26).unwrap_or_default();
                             let summary = FakeDownstreamMessage {
                                 kind: message.kind,
                                 pos_start: message.pos_start,
@@ -874,9 +921,9 @@ impl FakeDownstreamGuard {
                                     .as_ref()
                                     .and_then(|payload| activation_f32_stats(payload)),
                                 activation_f32_payload,
-                                top_k_count: message.raw_bytes.len() / std::mem::size_of::<i32>(),
-                                top_k_sha256: sha256_hex(&message.raw_bytes),
-                                top_k_values: decode_i32_values(&message.raw_bytes),
+                                top_k_count: top_k_payload.len() / std::mem::size_of::<i32>(),
+                                top_k_sha256: sha256_hex(&top_k_payload),
+                                top_k_values: decode_i32_values(&top_k_payload),
                             };
                             thread_messages
                                 .lock()
@@ -1419,6 +1466,14 @@ fn stage_model_path(args: &GlmDsaStage0TraceArgs) -> Result<PathBuf> {
         .stage_model
         .clone()
         .unwrap_or_else(|| args.runtime.model.clone()))
+}
+
+fn stage_load_mode_name(value: StageLoadMode) -> &'static str {
+    match value {
+        StageLoadMode::RuntimeSlice => "runtime-slice",
+        StageLoadMode::ArtifactSlice => "artifact-slice",
+        StageLoadMode::LayerPackage => "layer-package",
+    }
 }
 
 fn protocol_flash_attn(value: FlashAttentionArg) -> &'static str {

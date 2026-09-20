@@ -141,8 +141,7 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
     let input = input_activation_frame(config, topology, &mut message)?;
     let decode_message = restore_prefill_decode_as_decode_message(&message, current_token);
     let compute_started = Instant::now();
-    let output_capacity =
-        stage_output_activation_capacity(config, decode_message.token_count, activation_width)?;
+    let has_downstream = config.downstream.is_some();
     let scheduler_session_id = session_id.to_string();
     let scheduler_message = message.clone();
     let scheduler_decode_message = decode_message.clone();
@@ -150,6 +149,12 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
     let sample = route == RestorePrefillDecodeRoute::DirectHit;
     let outcome = iteration_scheduler
         .execute_runtime_timed("binary-restore-prefill-decode", move |runtime| {
+            let output_capacity = stage_output_activation_capacity(
+                has_downstream,
+                scheduler_decode_message.token_count,
+                runtime.output_activation_boundary(),
+            )
+            .map_err(|error| openai_frontend::OpenAiError::backend(format!("{error:#}")))?;
             if let Some(metadata) = scheduler_message.chat_sampling_metadata.as_deref() {
                 let sampling = runtime_sampling_config(scheduler_message.sampling.as_ref());
                 runtime

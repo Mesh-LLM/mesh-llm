@@ -1,3 +1,2 @@
-import defaultPrompt from './default-system-prompt.md?raw'
-
-export const DEFAULT_SYSTEM_PROMPT = defaultPrompt.trim()
+// The console adds no instructions unless the user supplies a custom prompt.
+export const DEFAULT_SYSTEM_PROMPT = ''

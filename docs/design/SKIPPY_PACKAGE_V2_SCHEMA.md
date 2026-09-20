@@ -125,6 +125,64 @@ Multiple projectors therefore require stable distinct names; the package writer
 uses each projector's deterministic artifact id as its name. Generation remains
 a typed manifest field rather than a generic sidecar.
 
+## Generation
+
+`generation` is an optional typed manifest field, not a sidecar. It sits at the
+manifest root, participates in the canonical package identity, and is rejected
+if it appears in the sidecar list. When the source has no native
+speculative-decoding support the field is omitted entirely (it is not
+serialized as `null`), so a non-MTP package carries no `generation` key.
+
+The authoritative type is `Generation` in `crates/skippy-package-format`. In the
+v0.76.1 schema it is `deny_unknown_fields` with a single sub-field,
+`speculative_decoding`. `policy` and `thresholds` are not part of the v0.76.1
+wire and are rejected at parse time; they belong to the
+model-generation-defaults change (PR #1878) and the writer must not emit them
+in this release.
+
+`speculative_decoding` is a `SpeculativeDecoding` value:
+
+- `default`: the strategy name used when a caller does not name one;
+- `proposers`: an optional map of standalone proposers (omitted when empty);
+- `strategies`: a map of named strategies. Each entry is an internally-tagged
+  enum (`#[serde(tag = "type")]`, kebab-case variants) that carries a `"type"`
+  discriminator plus the kind-specific fields inlined beside it.
+
+The writer emits a single `native-mtp` strategy, and only when the source GGUF
+declares 1-step native MTP support (`{arch}.nextn_predict_layers == 1` and the
+`blk.<layer>.nextn.*` tensor names agree). The MTP layer index and window policy
+are derived from the source metadata; the exact emitted shape is:
+
+```json
+{
+  "generation": {
+    "speculative_decoding": {
+      "default": "mtp",
+      "strategies": {
+        "mtp": {
+          "type": "native-mtp",
+          "prediction_depth": 1,
+          "layer_indices": [0],
+          "window_policy": {
+            "default": "fixed",
+            "initial_window": 1,
+            "min_window": 1,
+            "max_window": 1
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+`layer_indices` is the single MTP/nextn layer (`layer_count - 1`); `proposers`,
+the strategy `proposer`, and `window_policy.pipeline_depth` are omitted when
+empty or absent. Unknown `"type"` values and unknown fields inside a strategy,
+proposer, or `window_policy` are rejected (`deny_unknown_fields`), as are the
+`policy` and `thresholds` keys. Because `generation` is hashed into the package
+identity, adding or changing it changes the `package_id`.
+
 ## Loading Rule
 
 The runtime validates the JSON root, fetches and verifies its declared metadata

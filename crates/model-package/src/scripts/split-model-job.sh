@@ -10,6 +10,7 @@ set -euo pipefail
 #   SOURCE_PIPELINE_TAG — source model pipeline tag for the published model card
 #   MESH_LLM_REF — git ref to build from (default: main)
 #   CATALOG_CREATE_PR — "true" to open a PR for catalog updates (non-org members)
+#   REPUBLISH — "true" to stage a replacement and atomically promote it to main
 #   PACKAGE_EXPERIMENTAL — "true" to label the public package as not runtime-certified
 #   HF_TOKEN — injected as a secret by HF Jobs
 #
@@ -19,6 +20,7 @@ set -euo pipefail
 MESH_LLM_REF="${MESH_LLM_REF:-main}"
 SOURCE_REVISION="${SOURCE_REVISION:-main}"
 SOURCE_QUANT="${SOURCE_QUANT:-}"
+REPUBLISH="${REPUBLISH:-false}"
 : "${SOURCE_REPO:?SOURCE_REPO is required}"
 if [ -z "$SOURCE_QUANT" ] && [[ "${MODEL_ID:-}" == *:* ]]; then
     SOURCE_QUANT="${MODEL_ID##*:}"
@@ -41,8 +43,10 @@ echo ""
 
 # Keep executable toolchains/build products on local ephemeral storage:
 # HF bucket mounts can be unsuitable for dynamic loader/toolchain execution.
-# Package artifacts are also written locally, uploaded one at a time, and
-# removed immediately so the job never accumulates a full 400GB+ package.
+# Package artifacts are also written to the local work dir: the per-artifact
+# upload+delete interleave keeps peak usage at one artifact plus its shard
+# scratch, which fits the 50G ephemeral cap — and the upload hook re-reading
+# artifacts through the writable /bucket FUSE mount surfaces I/O errors.
 JOB_WORK_ROOT="${JOB_WORK_ROOT:-/bucket/job-work}"
 SAFE_TARGET_REPO="$(printf '%s' "$TARGET_REPO" | tr -c '[:alnum:]._-' '_')"
 LOCAL_WORK_DIR="${LOCAL_WORK_DIR:-/tmp/meshllm-layer-job-${SAFE_TARGET_REPO}-$$}"
@@ -55,13 +59,26 @@ fi
 PACKAGE_DIR="${PACKAGE_DIR:-${LOCAL_WORK_DIR}/package}"
 HF_HOME="${HF_HOME:-${JOB_WORK_DIR}/hf-home}"
 HF_HUB_CACHE="${HF_HUB_CACHE:-${HF_HOME}/hub}"
-HF_XET_CACHE="${HF_XET_CACHE:-${HF_HOME}/xet}"
+# The Xet chunk cache must live on the container's local SSD: on network
+# filesystems it performs poorly and surfaces I/O errors (the July convert
+# wrapper learned this; the same os error 5 killed three split jobs through
+# the /bucket FUSE mount on 2026-09-10).
+HF_XET_CACHE="${HF_XET_CACHE:-${LOCAL_WORK_DIR}/xet-cache}"
+# Route uploads through the classic HTTP path instead of Xet-CAS: HF Jobs
+# containers hit sustained I/O errors (os error 5) on the Xet channel that
+# do not reproduce outside the cluster, and per-layer GGUF artifacts do not
+# benefit from chunk deduplication anyway. Set HF_HUB_DISABLE_XET=0 to
+# restore the Xet uploader.
+HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"
+PACKAGE_DIR_ALLOW_BUCKET="${PACKAGE_DIR_ALLOW_BUCKET:-}"
 JOB_TMP_DIR="${JOB_TMP_DIR:-${LOCAL_WORK_DIR}/tmp}"
 BUILD_DIR="${BUILD_DIR:-${LOCAL_WORK_DIR}/build}"
 TOOL_DIR="${TOOL_DIR:-${LOCAL_WORK_DIR}/tools}"
 VENV_DIR="${VENV_DIR:-${LOCAL_WORK_DIR}/venv}"
 ARTIFACT_UPLOAD_SCRIPT="${ARTIFACT_UPLOAD_SCRIPT:-${LOCAL_WORK_DIR}/upload-package-artifact.py}"
+SPECULATIVE_SUMMARY_HELPER="${SPECULATIVE_SUMMARY_HELPER:-${LOCAL_WORK_DIR}/speculative-summary.py}"
 ARTIFACT_UPLOAD_HOOK="${ARTIFACT_UPLOAD_HOOK:-${LOCAL_WORK_DIR}/upload-package-artifact.sh}"
+SNAPSHOT_PROMOTER="${SNAPSHOT_PROMOTER:-${TOOL_DIR}/promote_layer_package_snapshot.py}"
 CARGO_HOME="${CARGO_HOME:-${LOCAL_WORK_DIR}/cargo-home}"
 RUSTUP_HOME="${RUSTUP_HOME:-${LOCAL_WORK_DIR}/rustup-home}"
 CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${LOCAL_WORK_DIR}/cargo-target}"
@@ -71,7 +88,7 @@ BUILD_TMP_DIR="${BUILD_TMP_DIR:-${LOCAL_WORK_DIR}/tmp}"
 TMPDIR="$BUILD_TMP_DIR"
 TEMP="$BUILD_TMP_DIR"
 TMP="$BUILD_TMP_DIR"
-export JOB_WORK_DIR PACKAGE_DIR HF_HOME HF_HUB_CACHE HF_XET_CACHE VENV_DIR ARTIFACT_UPLOAD_SCRIPT
+export JOB_WORK_DIR PACKAGE_DIR HF_HOME HF_HUB_CACHE HF_XET_CACHE HF_HUB_DISABLE_XET VENV_DIR ARTIFACT_UPLOAD_SCRIPT SPECULATIVE_SUMMARY_HELPER
 export TMPDIR TEMP TMP CARGO_HOME RUSTUP_HOME CARGO_TARGET_DIR XDG_CACHE_HOME PIP_CACHE_DIR
 
 cleanup_job_work_dir() {
@@ -174,17 +191,34 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y > /dev/n
 # shellcheck source=/dev/null
 source "${CARGO_HOME}/env"
 
+# Fetch a raw commit SHA with retries: GitHub's ref advertisement for
+# allow-any-SHA fetches ("upload-pack: not our ref") lags behind the push for
+# freshly-pushed commits, which killed two jobs 90 seconds in. Poll until the
+# commit is servable, up to 10 minutes.
+fetch_ref_with_retry() {
+    local ref="$1" attempt
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+        if git fetch --depth 1 origin "$ref"; then
+            return 0
+        fi
+        echo "  fetch of ${ref} failed (attempt ${attempt}/10); retrying in 60s..." >&2
+        sleep 60
+    done
+    echo "ERROR: could not fetch ${ref} from origin after 10 attempts" >&2
+    return 1
+}
+
 echo "=== [3/9] Cloning mesh-llm and building skippy-model-package ==="
 git clone --filter=blob:none https://github.com/Mesh-LLM/mesh-llm.git "$BUILD_DIR"
 cd "$BUILD_DIR"
 if git ls-remote --exit-code --heads origin "$MESH_LLM_REF" >/dev/null 2>&1 || \
    git ls-remote --exit-code --tags origin "$MESH_LLM_REF" >/dev/null 2>&1; then
-    git fetch --depth 1 origin "$MESH_LLM_REF"
+    fetch_ref_with_retry "$MESH_LLM_REF"
     git checkout --detach FETCH_HEAD
 elif git cat-file -e "$MESH_LLM_REF^{commit}" 2>/dev/null; then
     git checkout --detach "$MESH_LLM_REF"
 else
-    git fetch --depth 1 origin "$MESH_LLM_REF"
+    fetch_ref_with_retry "$MESH_LLM_REF"
     git checkout --detach FETCH_HEAD
 fi
 
@@ -213,6 +247,7 @@ if [ ! -f "$SLICER" ]; then
     exit 1
 fi
 cp "$SLICER" "${TOOL_DIR}/skippy-model-package"
+cp scripts/promote_layer_package_snapshot.py "$SNAPSHOT_PROMOTER"
 SLICER="${TOOL_DIR}/skippy-model-package"
 chmod +x "$SLICER"
 cd /
@@ -235,6 +270,20 @@ import os
 api = HfApi(token=os.environ["HF_TOKEN"])
 api.create_repo(os.environ["TARGET_REPO"], exist_ok=True)
 PYTHON
+TARGET_UPLOAD_REVISION="main"
+TARGET_MAIN_PARENT=""
+if [ "$REPUBLISH" = "true" ]; then
+    mapfile -t SNAPSHOT_STATE < <(
+        "$VENV_DIR/bin/python3" "$SNAPSHOT_PROMOTER" prepare \
+            --repo "$TARGET_REPO" \
+            --source-revision "$SOURCE_REVISION" \
+            --token "$(date -u +%Y%m%d%H%M%S)-$$"
+    )
+    TARGET_UPLOAD_REVISION="${SNAPSHOT_STATE[0]:?missing staging revision}"
+    TARGET_MAIN_PARENT="${SNAPSHOT_STATE[1]:?missing target main parent}"
+    echo "  Staging replacement on ${TARGET_UPLOAD_REVISION} from ${TARGET_MAIN_PARENT}"
+fi
+export TARGET_UPLOAD_REVISION TARGET_MAIN_PARENT
 cat > "$ARTIFACT_UPLOAD_SCRIPT" <<'PYTHON'
 from huggingface_hub import HfApi
 from pathlib import Path
@@ -244,7 +293,8 @@ import time
 path = Path(os.environ["SKIPPY_PACKAGE_ARTIFACT_PATH"])
 relative = os.environ["SKIPPY_PACKAGE_ARTIFACT_RELATIVE_PATH"]
 target_repo = os.environ["TARGET_REPO"]
-max_attempts = int(os.environ.get("ARTIFACT_UPLOAD_ATTEMPTS", "4"))
+target_revision = os.environ["TARGET_UPLOAD_REVISION"]
+max_attempts = int(os.environ.get("ARTIFACT_UPLOAD_ATTEMPTS", "8"))
 
 api = HfApi(token=os.environ["HF_TOKEN"])
 last_error = None
@@ -255,6 +305,7 @@ for attempt in range(1, max_attempts + 1):
             path_or_fileobj=str(path),
             path_in_repo=relative,
             repo_type="model",
+            revision=target_revision,
             commit_message=f"Add package artifact {relative}",
         )
         last_error = None
@@ -263,7 +314,7 @@ for attempt in range(1, max_attempts + 1):
         last_error = err
         if attempt == max_attempts:
             break
-        delay = min(60, 5 * attempt)
+        delay = min(300, 10 * 2 ** (attempt - 1))
         print(
             f"  Upload failed for {relative} on attempt {attempt}/{max_attempts}: {err}. "
             f"Retrying in {delay}s...",
@@ -344,16 +395,34 @@ echo "  Hugging Face cache: $HF_HUB_CACHE"
 echo "  Package workspace: $PACKAGE_DIR"
 echo "  Temporary workspace: $TMPDIR"
 log_storage_snapshot "before write-package"
-ROOT_FS="$(df -P / | awk 'NR==2 {print $1}')"
-PACKAGE_FS="$(df -P "$PACKAGE_DIR" | awk 'NR==2 {print $1}')"
-if [ -n "$ROOT_FS" ] && [ "$ROOT_FS" = "$PACKAGE_FS" ]; then
-    echo "WARNING: package workspace is on the container root filesystem; very large splits may hit the HF Jobs 50G ephemeral storage limit." >&2
+# The package workspace must live on the container's local SSD. Two reasons:
+# (1) HF Jobs evicts the pod once container-local ephemeral storage exceeds
+#     50G, and writes through the /bucket FUSE mount count against that same
+#     budget ~1:1, so staging on /bucket never avoided the wall — only the
+#     per-artifact upload+delete interleave does; (2) the artifact upload hook
+#     re-reads each artifact through the writable FUSE mount, which surfaces
+#     I/O errors (os error 5) mid-upload. Re-create the directory here: empty
+#     directories on the bucket FUSE mount are not backed by an object and can
+#     disappear between the initial mkdir and this point.
+mkdir -p "$PACKAGE_DIR"
+if [ -n "$PACKAGE_DIR_ALLOW_BUCKET" ]; then
+    echo "  NOTE: PACKAGE_DIR placement override active; /bucket EIO risk accepted." >&2
+else
+    ROOT_FS="$(df -P / | awk 'NR==2 {print $1}')"
+    PACKAGE_FS="$(df -P "$PACKAGE_DIR" | awk 'NR==2 {print $1}')"
+    if [ -n "$ROOT_FS" ] && [ "$ROOT_FS" != "$PACKAGE_FS" ]; then
+        echo "ERROR: package workspace $PACKAGE_DIR is not on the container root filesystem. The /bucket FUSE mount counts writes against the same 50G ephemeral cap AND surfaces upload I/O errors; refusing to continue (unset PACKAGE_DIR_ALLOW_BUCKET to require local staging)." >&2
+        exit 1
+    fi
 fi
 if [ -n "${ESTIMATED_BUCKET_BYTES:-}" ]; then
-    PACKAGE_AVAILABLE_BYTES="$(df -Pk "$PACKAGE_DIR" | awk 'NR==2 {printf "%.0f", $4 * 1024}')"
+    # This estimate covers the HF-cache fallback (full source under
+    # HF_HUB_CACHE, which lives on /bucket). The local package workspace only
+    # needs one artifact plus its shard scratch at a time.
+    PACKAGE_AVAILABLE_BYTES="$(df -Pk /bucket | awk 'NR==2 {printf "%.0f", $4 * 1024}')"
     if [ -n "$PACKAGE_AVAILABLE_BYTES" ] && [ "$PACKAGE_AVAILABLE_BYTES" -gt 0 ] && \
         [ "$PACKAGE_AVAILABLE_BYTES" -lt "$ESTIMATED_BUCKET_BYTES" ]; then
-        echo "WARNING: package workspace has $(format_bytes "$PACKAGE_AVAILABLE_BYTES") available, below estimated need $(format_bytes "$ESTIMATED_BUCKET_BYTES")." >&2
+        echo "WARNING: /bucket has $(format_bytes "$PACKAGE_AVAILABLE_BYTES") available for the source-cache fallback, below estimated need $(format_bytes "$ESTIMATED_BUCKET_BYTES")." >&2
     fi
 fi
 echo "  Starting write-package at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -384,6 +453,27 @@ TOTAL_SIZE_LABEL="$(format_bytes "$TOTAL_SIZE")"
 echo "  ✓ Split into $LAYER_COUNT layers; artifacts uploaded incrementally (${TOTAL_SIZE_LABEL} total)"
 
 # ─── Verify manifest ──────────────────────────────────────────────────────
+# Render the speculative-decoding declaration in one place. The verification
+# log line below and the published model card describe the same strategy
+# fields, so both load this helper rather than formatting them separately.
+cat > "$SPECULATIVE_SUMMARY_HELPER" <<'PYTHON'
+def speculative_strategy_details(spec):
+    details = []
+    for name, strategy in (spec.get("strategies") or {}).items():
+        kind = strategy.get("type", "unknown")
+        if kind == "native-mtp":
+            depth = strategy.get("prediction_depth")
+            indices = strategy.get("layer_indices") or []
+            details.append(f"{name}: {kind} depth {depth} layers [{', '.join(str(i) for i in indices)}]")
+        else:
+            details.append(f"{name}: {kind}")
+    return details
+
+
+def speculative_summary(spec):
+    return f"default {spec.get('default')}; {'; '.join(speculative_strategy_details(spec))}"
+PYTHON
+
 echo ""
 echo "=== [5/9] Verifying package manifest ==="
 "$VENV_DIR/bin/python3" << 'PYTHON'
@@ -406,6 +496,10 @@ missing = [
 if missing:
     raise SystemExit(f"manifest contains {len(missing)} incomplete artifact catalog entries")
 print(f"  ✓ Manifest records {len(required)} uploaded artifacts")
+speculative = (manifest.get("generation") or {}).get("speculative_decoding")
+if speculative:
+    exec(Path(os.environ["SPECULATIVE_SUMMARY_HELPER"]).read_text())
+    print(f"  ✓ Manifest declares speculative decoding ({speculative_summary(speculative)})")
 PYTHON
 
 # ─── Publish ──────────────────────────────────────────────────────────────
@@ -418,6 +512,7 @@ from pathlib import Path
 
 api = HfApi(token=os.environ['HF_TOKEN'])
 target_repo = os.environ['TARGET_REPO']
+target_revision = os.environ['TARGET_UPLOAD_REVISION']
 source_repo = os.environ['SOURCE_REPO']
 model_id = os.environ.get('MODEL_ID', '')
 manifest_path = Path(os.environ['PACKAGE_DIR']) / 'model-package.json'
@@ -427,16 +522,26 @@ api.upload_file(
     path_or_fileobj=str(manifest_path),
     path_in_repo='model-package.json',
     repo_type='model',
+    revision=target_revision,
     commit_message=f'Add layer package manifest from {source_repo} ({model_id})',
 )
 
-# Print summary
 manifest = json.load(open(manifest_path))
-print(f'  ✓ Published: https://huggingface.co/{target_repo}')
+action = 'Staged replacement' if target_revision != 'main' else 'Published'
+print(f'  ✓ {action}: https://huggingface.co/{target_repo}/tree/{target_revision}')
 print(f'    Model:  {manifest["model_id"]}')
 print(f'    Layers: {manifest["layer_count"]}')
 print(f'    Schema: {manifest["schema_version"]}')
 PYTHON
+
+if [ "$REPUBLISH" = "true" ]; then
+    "$VENV_DIR/bin/python3" "$SNAPSHOT_PROMOTER" promote \
+        --repo "$TARGET_REPO" \
+        --manifest "$PACKAGE_DIR/model-package.json" \
+        --staging-revision "$TARGET_UPLOAD_REVISION" \
+        --parent-commit "$TARGET_MAIN_PARENT"
+    echo "  ✓ Atomically promoted replacement snapshot to main"
+fi
 
 # ─── Update catalog ───────────────────────────────────────────────────────
 echo ""
@@ -568,6 +673,8 @@ from pathlib import Path
 import hashlib
 import json
 import os
+
+exec(Path(os.environ["SPECULATIVE_SUMMARY_HELPER"]).read_text())
 
 package_dir = Path(os.environ["PACKAGE_DIR"])
 manifest_path = package_dir / "model-package.json"
@@ -853,14 +960,18 @@ curl -s http://localhost:3131/v1/chat/completions \\
 |---|---|
 """
 
-for key, value in [
+variant_rows = [
     ("Format", code(manifest.get("format", "layer-package"))),
     ("Canonical source ref", code(canonical_ref)),
     ("Source revision", code(source_revision)),
     ("Source SHA-256", code(source_sha)),
     ("Skippy ABI", code(skippy_abi)),
     ("Package manifest SHA-256", code(manifest_hash)),
-]:
+]
+speculative = (manifest.get("generation") or {}).get("speculative_decoding")
+if speculative:
+    variant_rows.append(("Speculative decoding", code(speculative_summary(speculative))))
+for key, value in variant_rows:
     readme += f"| **{md_cell(key)}** | {md_cell(value)} |\n"
 
 readme += f"""

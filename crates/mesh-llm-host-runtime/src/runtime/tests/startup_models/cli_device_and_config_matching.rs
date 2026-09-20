@@ -79,6 +79,7 @@ fn cli_model_exact_config_ref_resolves_pinned_backend_and_keeps_cli_overrides() 
     assert_eq!(specs[0].parallel, None);
 
     let mut plans = vec![StartupModelPlan {
+        model_source: String::new(),
         declared_ref: "Qwen3-8B-Q4_K_M".into(),
         resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
         preindexed_split_package: None,

@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow};
 use skippy_coordinator::{ClaimDecision, ClaimFence, LoadClaimRef};
-use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig, StageConfig};
+use skippy_protocol::{FlashAttentionType, PeerConfig, StageConfig};
 use skippy_server::{EmbeddedServerHandle, binary_transport::BinaryStageOptions};
 use tokio::{
     sync::{mpsc, oneshot},
@@ -656,6 +656,7 @@ fn stage_config(
         );
     }
     let resident_tensor_names = admitted_resident_tensor_names(load, package)?;
+    let frontier_profile = admitted_activation_frontier(load)?;
     let mut config = StageConfig {
         run_id: load.run_id.clone(),
         topology_id: load.topology_id.clone(),
@@ -722,11 +723,12 @@ fn stage_config(
         kv_unified: load.runtime_settings.kv_unified,
         swa_full: load.runtime_settings.swa_full,
         cache_idle_slots: load.runtime_settings.cache_idle_slots,
-        filter_tensors_on_load: matches!(
-            load.load_mode,
-            LoadMode::RuntimeSlice | LoadMode::LayerPackage
-        ),
         resident_tensor_names,
+        execution_contract: load.admission.execution_contract.clone(),
+        activation_import_identities: frontier_profile.activation_imports.clone(),
+        activation_import_bindings: frontier_profile.activation_import_bindings.clone(),
+        activation_export_identities: frontier_profile.activation_exports.clone(),
+        activation_export_bindings: frontier_profile.activation_export_bindings.clone(),
         checkpoint_quantization: None,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
@@ -746,6 +748,26 @@ fn stage_config(
         },
     );
     Ok(config)
+}
+
+pub(crate) fn admitted_activation_frontier(
+    load: &StageLoadRequest,
+) -> Result<&skippy_protocol::StageAdmissionProfile> {
+    let frontier = load
+        .admission
+        .profiles
+        .first()
+        .context("stage admission descriptor has no execution profiles")?;
+    anyhow::ensure!(
+        load.admission.profiles.iter().all(|profile| {
+            profile.activation_imports == frontier.activation_imports
+                && profile.activation_exports == frontier.activation_exports
+                && profile.activation_import_bindings == frontier.activation_import_bindings
+                && profile.activation_export_bindings == frontier.activation_export_bindings
+        }),
+        "stage admission execution profiles disagree on activation frontier identities"
+    );
+    Ok(frontier)
 }
 
 pub(crate) fn admitted_resident_tensor_names(
@@ -862,6 +884,7 @@ fn status_from_running(stage: &RunningStage) -> StageStatusSnapshot {
             .as_ref()
             .map(|package| package.source_model_sha256.clone())
             .or_else(|| stage.load.source_model_sha256.clone()),
+        split_certification: stage.load.split_certification.clone(),
         source_model_bytes: stage
             .package
             .as_ref()
@@ -907,6 +930,7 @@ fn stopped_status(stop: &StageStopRequest) -> StageStatusSnapshot {
         manifest_sha256: None,
         source_model_path: None,
         source_model_sha256: None,
+        split_certification: None,
         source_model_bytes: None,
         materialized_path: None,
         materialized_pinned: false,
@@ -950,6 +974,7 @@ fn failed_status_from_load(load: &StageLoadRequest, error: String) -> StageStatu
             .then(|| load.model_path.clone())
             .flatten(),
         source_model_sha256: load.source_model_sha256.clone(),
+        split_certification: load.split_certification.clone(),
         source_model_bytes: load.source_model_bytes,
         materialized_path: None,
         materialized_pinned: false,

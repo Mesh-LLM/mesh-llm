@@ -6,9 +6,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/cuda-toolkit.sh"
-# shellcheck source=scripts/lib/lld.sh
-source "$SCRIPT_DIR/lib/lld.sh"
-
 BUILD=0
 OUT_DIR="$REPO_ROOT/dist/native-runtimes"
 BACKEND="${LLAMA_STAGE_BACKEND:-${SKIPPY_LLAMA_BACKEND:-cpu}}"
@@ -338,7 +335,7 @@ build_model_package_tool() {
         return 0
     fi
 
-    local tool_rel tool_path source_path configured cargo_target_dir macos_lld
+    local tool_rel tool_path source_path configured cargo_target_dir
     local -a cargo_env=(
         "LLAMA_STAGE_LINK_MODE=dynamic"
         "LLAMA_STAGE_LIB_DIR=$stage_dir/lib"
@@ -357,20 +354,6 @@ build_model_package_tool() {
         fi
         source_path="$configured"
     else
-        if [[ "$runtime_os" == "macos" ]]; then
-            # Use lld only when it is installed AND links against the active
-            # SDK. A protected reusable workflow may not include the
-            # repository setup action at all, and on a developer machine lld
-            # can fall behind the SDK; both take the platform linker. The
-            # explicitly empty encoded flag set still overrides any RUSTFLAGS
-            # a caller exported. See scripts/lib/lld.sh.
-            macos_lld="$(resolve_usable_lld)"
-            if [[ -n "$macos_lld" ]]; then
-                cargo_env+=("CARGO_ENCODED_RUSTFLAGS=-Clink-arg=-fuse-ld=$macos_lld")
-            else
-                cargo_env+=("CARGO_ENCODED_RUSTFLAGS=")
-            fi
-        fi
         env "${cargo_env[@]}" \
             cargo build --release --locked --target "$TARGET_TRIPLE" \
                 -p skippy-model-package
@@ -800,6 +783,8 @@ manifest_args+=(-- "${linux_relocatable_library_paths[@]}")
 import json
 import hashlib
 import os
+import re
+import subprocess
 import sys
 
 manifest_path = sys.argv[1]
@@ -838,6 +823,38 @@ def file_sha256(path):
             digest.update(chunk)
     return digest.hexdigest()
 
+def packaged_glibc_requirement(paths):
+    if "$runtime_os" != "linux":
+        return None
+    requirements = []
+    readelf_env = os.environ.copy()
+    readelf_env["LC_ALL"] = "C"
+    for relative_path in paths:
+        path = os.path.join(os.path.dirname(manifest_path), relative_path)
+        with open(path, "rb") as handle:
+            if handle.read(4) != b"\x7fELF":
+                continue
+        output = subprocess.run(
+            ["readelf", "-V", path], check=True, capture_output=True, text=True,
+            env=readelf_env,
+        ).stdout
+        _, heading, needs = output.partition("Version needs section")
+        if heading:
+            def glibc_requirement(version):
+                if version == "GLIBC_ABI_DT_RELR":
+                    return (2, 36)
+                major, minor = version.removeprefix("GLIBC_").split(".")
+                return (int(major), int(minor))
+
+            requirements.extend(
+                glibc_requirement(version)
+                for version in re.findall(r"GLIBC_(?:\d+\.\d+|ABI_DT_RELR)", needs)
+            )
+    if not requirements:
+        return None
+    major, minor = max(requirements)
+    return f"{major}.{minor}"
+
 files = {
     path: file_sha256(os.path.join(os.path.dirname(manifest_path), path))
     for path in [*library_paths, *license_paths]
@@ -846,6 +863,7 @@ tools = {
     path: file_sha256(os.path.join(os.path.dirname(manifest_path), path))
     for path in tool_paths
 }
+min_glibc = packaged_glibc_requirement([*library_paths, *tool_paths])
 backend_manifest = {"kind": kind}
 if kind == "cuda":
     backend_manifest["cuda"] = {
@@ -877,6 +895,7 @@ manifest = {
             "os": "$runtime_os",
             "arch": "$runtime_arch",
             "target": "$TARGET_TRIPLE",
+            "min_glibc": min_glibc,
         },
         "backend": backend_manifest,
         "rank": int(os.environ.get("MESH_LLM_NATIVE_RUNTIME_RANK") or 0),

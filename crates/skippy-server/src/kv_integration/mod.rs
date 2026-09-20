@@ -25,6 +25,7 @@ mod activation;
 mod cache_affinity;
 mod config;
 mod exact_state;
+pub(crate) use exact_state::CaptureAdmission;
 mod identity;
 pub mod lifecycle;
 mod model_capability;
@@ -167,6 +168,28 @@ pub struct KvStageIntegration {
     pub(crate) exact_state_records_queued: Arc<AtomicU64>,
     pub(crate) exact_state_records_dropped: Arc<AtomicU64>,
     pub(crate) exact_state_records_pending: Arc<AtomicUsize>,
+    /// Production admission accounting for the recorder pipeline: credits
+    /// held by captures that are exporting, queued in the channel, or held by
+    /// the worker. See `ExactStateAdmissionCredit`.
+    pub(crate) admission_outstanding: Arc<AtomicUsize>,
+    pub(crate) admission_best_effort_outstanding: Arc<AtomicUsize>,
+    /// Test-only outstanding-capture tracking: incremented when a capture task
+    /// is scheduled onto the iteration scheduler, released when that task
+    /// reaches ANY terminal outcome (recorded, skipped, error, panic) via a
+    /// drop guard inside the task. Lets tests establish a completion boundary
+    /// for detached captures before draining the recorder.
+    #[cfg(test)]
+    pub(crate) exact_state_captures_outstanding: Arc<AtomicUsize>,
+    /// Test-only: records received off the channel by the recorder worker
+    /// (pre-storage), for the worker-receipt barrier in tests.
+    #[cfg(test)]
+    pub(crate) exact_state_worker_received: Arc<AtomicUsize>,
+    /// Test-only recorder pause: when set, the recorder worker waits AFTER
+    /// receiving a record and BEFORE storing it, holding no locks. Lets tests
+    /// hold a record (and its credit) worker-side deterministically without
+    /// radix contention.
+    #[cfg(test)]
+    pub(crate) exact_state_worker_pause: Arc<AtomicBool>,
     pub(crate) exact_state_record_worker_healthy: Arc<AtomicBool>,
     pub(crate) exact_state_record_worker_panics: Arc<AtomicU64>,
     pub(crate) cache_healthy: Arc<AtomicBool>,
@@ -192,6 +215,11 @@ pub(crate) struct PendingExactStateRecord {
     pub(crate) extra: ExactStateExtra,
     pub(crate) namespace: String,
     pub(crate) token_ids: Vec<i32>,
+    /// Owns the admission slot for this payload; released when the record is
+    /// dropped after the worker stores (or fails) it. Never read directly:
+    /// the Drop impl of the credit performs the release.
+    #[allow(dead_code)]
+    pub(crate) admission_credit: crate::kv_integration::exact_state::ExactStateAdmissionCredit,
 }
 
 #[derive(Debug, Clone)]
@@ -304,10 +332,6 @@ pub(crate) enum ExactStateRecordAdmission {
     Queued,
     DroppedFull,
     WorkerStopped,
-}
-
-fn has_exact_state_record_capacity(pending_count: &AtomicUsize) -> bool {
-    pending_count.load(std::sync::atomic::Ordering::Acquire) < EXACT_STATE_RECORD_CAPACITY
 }
 
 fn finish_exact_state_record(
@@ -526,10 +550,159 @@ impl KvStageIntegration {
             .remove(page_id);
     }
 
-    pub(crate) fn has_exact_state_record_capacity(&self) -> bool {
-        self.exact_state_record_worker_healthy
+    /// Test-only completion boundary for detached exact-state capture tasks:
+    /// waits until every capture scheduled so far has reached a TERMINAL
+    /// outcome. Terminal means finished, not successful: a skipped capture
+    /// releases its outstanding unit without touching the recorder's
+    /// dropped/panics counters, so this boundary deliberately does not turn
+    /// skips into errors. Combined with
+    /// [`Self::wait_for_exact_state_recording`] it gives tests an exact
+    /// ordering — all capture tasks for a request are finished before the
+    /// recorder is drained, so no still-detached capture can be missed —
+    /// while the unchanged cache-hit assertion remains the proof that the
+    /// needed record was actually captured and stored.
+    #[cfg(test)]
+    pub(crate) fn wait_for_exact_state_captures_idle(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Result<(), String> {
+        let deadline = std::time::Instant::now() + timeout;
+        while self
+            .exact_state_captures_outstanding
             .load(std::sync::atomic::Ordering::Acquire)
-            && has_exact_state_record_capacity(&self.exact_state_records_pending)
+            != 0
+        {
+            if std::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "exact-state capture tasks still outstanding after {timeout:?}: \
+                     outstanding={}",
+                    self.exact_state_captures_outstanding
+                        .load(std::sync::atomic::Ordering::Acquire)
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        Ok(())
+    }
+
+    /// Test-only: number of records the recorder worker has RECEIVED off the
+    /// channel (before storing). Lets the saturation test prove worker
+    /// receipt, which pending/queued counters alone do not distinguish.
+    #[cfg(test)]
+    pub(crate) fn wait_for_exact_state_worker_received(
+        &self,
+        minimum: usize,
+        timeout: std::time::Duration,
+    ) -> Result<(), String> {
+        let deadline = std::time::Instant::now() + timeout;
+        while self
+            .exact_state_worker_received
+            .load(std::sync::atomic::Ordering::Acquire)
+            < minimum
+        {
+            if std::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "recorder worker never received {minimum} record(s) within {timeout:?}; received={}",
+                    self.exact_state_worker_received
+                        .load(std::sync::atomic::Ordering::Acquire)
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        Ok(())
+    }
+
+    /// Test-only wait for the recorder worker to drain everything enqueued and
+    /// finish in a completed state. Call only after
+    /// [`Self::wait_for_exact_state_captures_idle`]; fails with the recorder
+    /// counters so a drop and a worker panic are distinguishable instead of
+    /// surfacing as a downstream cache miss.
+    #[cfg(test)]
+    pub(crate) fn wait_for_exact_state_recording(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Result<(), String> {
+        let state = || {
+            format!(
+                "pending={} queued={} dropped={} worker_panics={} healthy={}",
+                self.exact_state_records_pending
+                    .load(std::sync::atomic::Ordering::Acquire),
+                self.exact_state_records_queued
+                    .load(std::sync::atomic::Ordering::Acquire),
+                self.exact_state_records_dropped
+                    .load(std::sync::atomic::Ordering::Acquire),
+                self.exact_state_record_worker_panics
+                    .load(std::sync::atomic::Ordering::Acquire),
+                self.exact_state_record_worker_healthy
+                    .load(std::sync::atomic::Ordering::Acquire),
+            )
+        };
+        let deadline = std::time::Instant::now() + timeout;
+        // The recorder worker must drain everything enqueued.
+        while self
+            .exact_state_records_pending
+            .load(std::sync::atomic::Ordering::Acquire)
+            != 0
+        {
+            if std::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "exact-state recording did not drain within {timeout:?}; {}",
+                    state()
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        // Drained records must have completed, not failed.
+        let dropped = self
+            .exact_state_records_dropped
+            .load(std::sync::atomic::Ordering::Acquire);
+        let panics = self
+            .exact_state_record_worker_panics
+            .load(std::sync::atomic::Ordering::Acquire);
+        if dropped != 0 || panics != 0 {
+            return Err(format!(
+                "exact-state recording finished in a failure state: dropped={dropped}, worker_panics={panics}"
+            ));
+        }
+        Ok(())
+    }
+
+    /// Test-only: whether the EXACT identity is RETAINED in the radix right
+    /// now. Read-only peek — no LRU or refcount side effects. `peek_recurrent`
+    /// is a LONGEST-PREFIX lookup, so a retained shorter entry would make a
+    /// longer identity look retained; requiring `matched_tokens` to equal the
+    /// queried length and the stored path to equal the queried tokens closes
+    /// that false-certification. Storage-time logs name candidate keys; this
+    /// checks actual retention after the recorder drains.
+    #[cfg(test)]
+    pub(crate) fn retained_exact_identity(&self, namespace: &str, token_ids: &[i32]) -> bool {
+        match self
+            .radix
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .peek_recurrent(namespace, token_ids)
+        {
+            Some(matched) => {
+                matched.matched_tokens == token_ids.len() && matched.stored_tokens == token_ids
+            }
+            None => false,
+        }
+    }
+
+    /// Test-only: how many tokens of `query_tokens` a retained exact entry
+    /// under `namespace` would serve (read-only peek), i.e. the restore
+    /// eligibility of the stored state against a later prompt.
+    #[cfg(test)]
+    pub(crate) fn eligible_exact_match_tokens(
+        &self,
+        namespace: &str,
+        query_tokens: &[i32],
+    ) -> Option<usize> {
+        self.radix
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .peek_recurrent(namespace, query_tokens)
+            .map(|matched| matched.matched_tokens)
     }
 
     pub(crate) fn enqueue_exact_state_record(
@@ -957,10 +1130,27 @@ mod exact_state_record_queue_tests {
     };
 
     use super::{
-        BTreeSet, EXACT_STATE_RECORD_CAPACITY, ExactStateExtra, ExactStateRecordAdmission,
-        ExactStateWorkerHandles, KvLifecycleEvent, KvLifecycleObserver, PendingExactStateRecord,
-        enqueue_exact_state_record, has_exact_state_record_capacity, run_exact_state_record_job,
+        BTreeSet, ExactStateExtra, ExactStateRecordAdmission, ExactStateWorkerHandles,
+        KvLifecycleEvent, KvLifecycleObserver, PendingExactStateRecord, enqueue_exact_state_record,
+        run_exact_state_record_job,
     };
+    use crate::kv_integration::exact_state::{CaptureAdmission, ExactStateAdmissionCredit};
+
+    /// A fresh, observable budget: the SAME counters back every credit a test
+    /// creates, so release paths are asserted on real accounting, not on
+    /// throwaway stubs.
+    fn budget() -> (Arc<AtomicUsize>, Arc<AtomicUsize>) {
+        (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)))
+    }
+
+    fn credit(
+        total: &Arc<AtomicUsize>,
+        best_effort: &Arc<AtomicUsize>,
+        class: CaptureAdmission,
+    ) -> ExactStateAdmissionCredit {
+        ExactStateAdmissionCredit::acquire(total, best_effort, class)
+            .expect("a fresh budget must admit")
+    }
 
     struct RecordingObserver(Arc<Mutex<Vec<KvLifecycleEvent>>>);
 
@@ -970,29 +1160,32 @@ mod exact_state_record_queue_tests {
         }
     }
 
-    fn pending(page_id: &str) -> PendingExactStateRecord {
+    fn pending(
+        page_id: &str,
+        admission_credit: ExactStateAdmissionCredit,
+    ) -> PendingExactStateRecord {
         PendingExactStateRecord {
             page_id: page_id.to_string(),
             payload: ExactStatePayload::full_state(vec![1]),
             extra: ExactStateExtra::default(),
             namespace: "test".to_string(),
             token_ids: vec![1],
+            admission_credit,
         }
     }
 
     #[test]
-    fn pending_capacity_signal_rejects_work_before_export() {
-        let pending_count = AtomicUsize::new(0);
-        assert!(has_exact_state_record_capacity(&pending_count));
-
-        pending_count.store(EXACT_STATE_RECORD_CAPACITY, Ordering::Release);
-        assert!(!has_exact_state_record_capacity(&pending_count));
-    }
-
-    #[test]
     fn full_queue_drops_optional_record_and_releases_inflight_page() {
-        let (sender, _receiver) = sync_channel(1);
-        sender.send(pending("queued")).unwrap();
+        let (total, best_effort) = budget();
+        let (sender, receiver) = sync_channel(1);
+        // One BestEffort record occupies the channel buffer; its credit stays
+        // observable in `total`.
+        sender
+            .send(pending(
+                "queued",
+                credit(&total, &best_effort, CaptureAdmission::BestEffort),
+            ))
+            .unwrap();
         let inflight = Mutex::new(BTreeSet::from(["dropped".to_string()]));
         let queued = AtomicU64::new(0);
         let dropped = AtomicU64::new(0);
@@ -1007,7 +1200,10 @@ mod exact_state_record_queue_tests {
                 &dropped,
                 &pending_count,
                 &worker_healthy,
-                pending("dropped"),
+                pending(
+                    "dropped",
+                    credit(&total, &best_effort, CaptureAdmission::Continuation)
+                ),
             ),
             ExactStateRecordAdmission::DroppedFull
         );
@@ -1015,10 +1211,32 @@ mod exact_state_record_queue_tests {
         assert_eq!(queued.load(Ordering::Relaxed), 0);
         assert_eq!(dropped.load(Ordering::Relaxed), 1);
         assert_eq!(pending_count.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            total.load(Ordering::Acquire),
+            1,
+            "the Full rejection must release the dropped record's credit; the buffered one stays"
+        );
+        assert_eq!(
+            best_effort.load(Ordering::Acquire),
+            1,
+            "the buffered BestEffort credit is still outstanding"
+        );
+
+        // Receiver drop: discarding the channel drops the buffered record and
+        // releases its credit too.
+        drop(sender);
+        drop(receiver);
+        assert_eq!(
+            total.load(Ordering::Acquire),
+            0,
+            "receiver drop released the buffered credit"
+        );
+        assert_eq!(best_effort.load(Ordering::Acquire), 0);
     }
 
     #[test]
     fn disconnected_worker_releases_inflight_page() {
+        let (total, best_effort) = budget();
         let (sender, receiver) = sync_channel(1);
         drop(receiver);
         let inflight = Mutex::new(BTreeSet::from(["orphaned".to_string()]));
@@ -1035,17 +1253,27 @@ mod exact_state_record_queue_tests {
                 &dropped,
                 &pending_count,
                 &worker_healthy,
-                pending("orphaned"),
+                pending(
+                    "orphaned",
+                    credit(&total, &best_effort, CaptureAdmission::Continuation)
+                ),
             ),
             ExactStateRecordAdmission::WorkerStopped
         );
         assert!(!inflight.lock().unwrap().contains("orphaned"));
         assert_eq!(dropped.load(Ordering::Relaxed), 1);
         assert_eq!(pending_count.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            total.load(Ordering::Acquire),
+            0,
+            "the disconnected channel must release the orphaned credit"
+        );
+        assert_eq!(best_effort.load(Ordering::Acquire), 0);
     }
 
     #[test]
     fn worker_keeps_page_inflight_until_record_finishes() {
+        let (total, best_effort) = budget();
         let (sender, receiver) = sync_channel(1);
         let inflight = Arc::new(Mutex::new(BTreeSet::from(["page".to_string()])));
         let worker_inflight = inflight.clone();
@@ -1063,17 +1291,26 @@ mod exact_state_record_queue_tests {
                 &dropped,
                 &pending_count,
                 &worker_healthy,
-                pending("page"),
+                pending(
+                    "page",
+                    credit(&total, &best_effort, CaptureAdmission::Continuation)
+                ),
             ),
             ExactStateRecordAdmission::Queued
         );
         assert!(inflight.lock().unwrap().contains("page"));
+        assert_eq!(
+            total.load(Ordering::Acquire),
+            1,
+            "the credit is outstanding while the record sits in the channel"
+        );
 
         let worker = std::thread::spawn(move || {
             let pending = receiver.recv().unwrap();
             assert!(worker_inflight.lock().unwrap().contains(&pending.page_id));
             worker_inflight.lock().unwrap().remove(&pending.page_id);
             worker_pending_count.fetch_sub(1, Ordering::Relaxed);
+            // `pending` (and its credit) drops when this closure returns.
         });
         worker.join().unwrap();
 
@@ -1081,6 +1318,11 @@ mod exact_state_record_queue_tests {
         assert_eq!(queued.load(Ordering::Relaxed), 1);
         assert_eq!(dropped.load(Ordering::Relaxed), 0);
         assert_eq!(pending_count.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            total.load(Ordering::Acquire),
+            0,
+            "the credit released when the record dropped after processing"
+        );
     }
 
     #[test]
@@ -1092,6 +1334,7 @@ mod exact_state_record_queue_tests {
         let worker_panics = AtomicU64::new(0);
         let events: Arc<Mutex<Vec<KvLifecycleEvent>>> = Arc::default();
         let observer: Arc<dyn KvLifecycleObserver> = Arc::new(RecordingObserver(events.clone()));
+        let (total, best_effort) = budget();
 
         run_exact_state_record_job(
             ExactStateWorkerHandles {
@@ -1102,7 +1345,10 @@ mod exact_state_record_queue_tests {
                 worker_panics: &worker_panics,
             },
             Some(&observer),
-            pending("written"),
+            pending(
+                "written",
+                credit(&total, &best_effort, CaptureAdmission::Continuation),
+            ),
             |_| Ok(()),
         );
 
@@ -1111,6 +1357,11 @@ mod exact_state_record_queue_tests {
             vec![KvLifecycleEvent::ExactStateRecordCompleted]
         );
         assert_eq!(dropped.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            total.load(Ordering::Acquire),
+            0,
+            "successful completion released the real credit"
+        );
     }
 
     #[test]
@@ -1122,6 +1373,7 @@ mod exact_state_record_queue_tests {
         let worker_panics = AtomicU64::new(0);
         let events: Arc<Mutex<Vec<KvLifecycleEvent>>> = Arc::default();
         let observer: Arc<dyn KvLifecycleObserver> = Arc::new(RecordingObserver(events.clone()));
+        let (total, best_effort) = budget();
 
         run_exact_state_record_job(
             ExactStateWorkerHandles {
@@ -1132,7 +1384,10 @@ mod exact_state_record_queue_tests {
                 worker_panics: &worker_panics,
             },
             Some(&observer),
-            pending("broken"),
+            pending(
+                "broken",
+                credit(&total, &best_effort, CaptureAdmission::Continuation),
+            ),
             |_| anyhow::bail!("simulated write failure"),
         );
 
@@ -1141,6 +1396,12 @@ mod exact_state_record_queue_tests {
             vec![KvLifecycleEvent::ExactStateRecordFailed]
         );
         assert_eq!(dropped.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            total.load(Ordering::Acquire),
+            0,
+            "the worker error path released the real credit"
+        );
+        assert_eq!(best_effort.load(Ordering::Acquire), 0);
     }
 
     #[test]
@@ -1152,6 +1413,7 @@ mod exact_state_record_queue_tests {
         let pending_count = AtomicUsize::new(1);
         let worker_healthy = AtomicBool::new(true);
         let worker_panics = AtomicU64::new(0);
+        let (total, best_effort) = budget();
 
         run_exact_state_record_job(
             ExactStateWorkerHandles {
@@ -1162,7 +1424,10 @@ mod exact_state_record_queue_tests {
                 worker_panics: &worker_panics,
             },
             None,
-            pending("panicked"),
+            pending(
+                "panicked",
+                credit(&total, &best_effort, CaptureAdmission::Continuation),
+            ),
             |_| panic!("injected exact-record worker failure"),
         );
 
@@ -1171,6 +1436,12 @@ mod exact_state_record_queue_tests {
         assert_eq!(dropped.load(Ordering::Relaxed), 1);
         assert_eq!(pending_count.load(Ordering::Acquire), 0);
         assert!(inflight.lock().unwrap().is_empty());
+        assert_eq!(
+            total.load(Ordering::Acquire),
+            0,
+            "the unwind dropped the record and released its real credit"
+        );
+        assert_eq!(best_effort.load(Ordering::Acquire), 0);
 
         inflight.lock().unwrap().insert("later".to_string());
         assert_eq!(
@@ -1181,13 +1452,21 @@ mod exact_state_record_queue_tests {
                 &dropped,
                 &pending_count,
                 &worker_healthy,
-                pending("later"),
+                pending(
+                    "later",
+                    credit(&total, &best_effort, CaptureAdmission::Continuation)
+                ),
             ),
             ExactStateRecordAdmission::WorkerStopped
         );
         assert!(inflight.lock().unwrap().is_empty());
         assert_eq!(dropped.load(Ordering::Relaxed), 2);
         assert_eq!(pending_count.load(Ordering::Acquire), 0);
+        assert_eq!(
+            total.load(Ordering::Acquire),
+            0,
+            "the WorkerStopped follow-up also released its real credit"
+        );
     }
 }
 

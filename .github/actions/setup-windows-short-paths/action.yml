@@ -1,0 +1,21 @@
+name: Configure short Windows build paths
+description: Keep compiler cache and temporary files below Windows toolchain path limits.
+
+runs:
+  using: composite
+  steps:
+    - name: Create short compiler paths
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        $paths = @{
+          SCCACHE_DIR = "C:\s"
+          TEMP = "C:\t"
+          TMP = "C:\t"
+        }
+        New-Item -ItemType Directory -Force -Path $paths.SCCACHE_DIR, $paths.TEMP | Out-Null
+        foreach ($entry in $paths.GetEnumerator()) {
+          "$($entry.Key)=$($entry.Value)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        }
+        Write-Host "Windows compiler cache: $($paths.SCCACHE_DIR)"
+        Write-Host "Windows temporary root: $($paths.TEMP)"

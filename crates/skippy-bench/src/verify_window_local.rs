@@ -9,6 +9,7 @@ use serde::Serialize;
 use skippy_runtime::{
     FlashAttentionType, GenerationSignalWindow, MtpSource, RuntimeConfig, RuntimeLoadMode,
     SamplingConfig, StageModel, StageSession, TokenSignal, parse_cache_type,
+    plan_gguf_stage_runtime_plans,
 };
 
 use crate::cli::{FlashAttentionArg, MAX_VERIFY_WINDOW_WIDTH, VerifyWindowLocalArgs};
@@ -236,11 +237,13 @@ fn full_runtime_config(args: &VerifyWindowLocalArgs) -> Result<RuntimeConfig> {
         image_max_tokens: None,
         batch_max_tokens: None,
         glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
-        include_embeddings: true,
-        include_output: true,
         mtp_source: MtpSource::Disabled,
-        filter_tensors_on_load: false,
         resident_tensor_names: Vec::new(),
+        execution_contract: String::new(),
+        activation_import_identities: Vec::new(),
+        activation_import_bindings: Vec::new(),
+        activation_export_identities: Vec::new(),
+        activation_export_bindings: Vec::new(),
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
@@ -865,7 +868,15 @@ fn split_runtime_configs(
 ) -> Result<(RuntimeConfig, RuntimeConfig)> {
     let cache_type_k = parse_cache_type(&args.cache_type_k)?;
     let cache_type_v = parse_cache_type(&args.cache_type_v)?;
-    let stage0 = RuntimeConfig {
+    let mut plans = plan_gguf_stage_runtime_plans(
+        &args.model_path,
+        &[(0, split_layer), (split_layer, args.layer_end)],
+        args.ctx_size,
+        1,
+    )?;
+    let stage1_plan = plans.pop().context("missing stage 1 runtime plan")?;
+    let stage0_plan = plans.pop().context("missing stage 0 runtime plan")?;
+    let mut stage0 = RuntimeConfig {
         stage_index: 0,
         layer_start: 0,
         layer_end: split_layer,
@@ -897,11 +908,13 @@ fn split_runtime_configs(
         image_max_tokens: None,
         batch_max_tokens: None,
         glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
-        include_embeddings: true,
-        include_output: false,
         mtp_source: MtpSource::Disabled,
-        filter_tensors_on_load: true,
         resident_tensor_names: Vec::new(),
+        execution_contract: String::new(),
+        activation_import_identities: Vec::new(),
+        activation_import_bindings: Vec::new(),
+        activation_export_identities: Vec::new(),
+        activation_export_bindings: Vec::new(),
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
@@ -909,7 +922,7 @@ fn split_runtime_configs(
         kv_unified: None,
         swa_full: None,
     };
-    let stage1 = RuntimeConfig {
+    let mut stage1 = RuntimeConfig {
         stage_index: 1,
         layer_start: split_layer,
         layer_end: args.layer_end,
@@ -941,11 +954,13 @@ fn split_runtime_configs(
         image_max_tokens: None,
         batch_max_tokens: None,
         glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
-        include_embeddings: false,
-        include_output: true,
         mtp_source: MtpSource::Disabled,
-        filter_tensors_on_load: true,
         resident_tensor_names: Vec::new(),
+        execution_contract: String::new(),
+        activation_import_identities: Vec::new(),
+        activation_import_bindings: Vec::new(),
+        activation_export_identities: Vec::new(),
+        activation_export_bindings: Vec::new(),
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
@@ -953,6 +968,8 @@ fn split_runtime_configs(
         kv_unified: None,
         swa_full: None,
     };
+    stage0_plan.apply_to(&mut stage0);
+    stage1_plan.apply_to(&mut stage1);
     Ok((stage0, stage1))
 }
 

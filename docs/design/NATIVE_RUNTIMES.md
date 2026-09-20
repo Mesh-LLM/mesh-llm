@@ -50,6 +50,8 @@ A native runtime is identified by:
 - MeshLLM version, for example `0.76.1`
 - Skippy ABI, for example `0.1.25`
 - target operating system and architecture
+- observed Linux glibc minimum, as `platform.min_glibc` when the artifact
+  packages ELF libraries or tools that require glibc
 - backend kind, for example `cpu`, `metal`, `cuda`, `rocm`, or `vulkan`
 - backend requirements, for example CUDA toolkit major, CUDA SM architecture,
   ROCm GPU target, driver/runtime minimums, and priority
@@ -70,6 +72,21 @@ The artifact manifest should include at least:
 The resolver must reject an artifact whose `skippy_abi` does not exactly match
 the running loader ABI.
 
+`platform.min_glibc` is the highest `GLIBC_<major>.<minor>` requirement observed
+from the version-needs sections of the packaged Linux ELF libraries and tools.
+It is artifact metadata, not a declared CI floor. The field is optional and
+serde-defaulted so manifests published before this compatibility check remain
+parseable for legacy catalog resolution. Automatic startup does not load a
+locally installed Linux cache or bundle entry without this field, because
+missing metadata is not evidence that the entry is compatible with the host.
+
+The current Linux support baseline is Ubuntu 24.04 or newer, equivalent to
+glibc 2.39 or newer. `scripts/linux-glibc-floor.txt` is the checked-in
+compatibility ceiling for shipped Linux ELF files: the host and runtime
+artifact verifiers reject a release that needs a newer glibc. A runtime's
+observed `platform.min_glibc` may be lower than 2.39 when its packaged files
+do not use newer symbols.
+
 ## Resolver
 
 Runtime selection belongs in shared code that both SDK loaders and the
@@ -78,8 +95,8 @@ platforms, GPU families, and runtime flavors are expected to arrive over time.
 
 The resolver flow is:
 
-1. Detect the local OS, architecture, available GPU devices, drivers, and
-   supported backend lanes.
+1. Detect the local OS, architecture, available GPU devices, drivers, supported
+   backend lanes, and Linux glibc version when available.
 2. Load the release manifest for the running MeshLLM version.
 3. Filter artifacts to those compatible with the host.
 4. Rank compatible artifacts by backend lane and hardware fit.
@@ -95,6 +112,14 @@ The ranking policy is shared policy, not SDK-specific glue. For example, a
 Linux NVIDIA host with CUDA 13 and `sm_120` support may rank
 `cuda13-sm120` above generic `cuda13`, and accelerated runtimes above `cpu`,
 when all compatibility checks pass.
+
+When both `platform.min_glibc` and the Linux host glibc version are known, the
+resolver rejects an artifact requiring a newer glibc version before it is
+downloaded or loaded. The rejection reports both versions and directs the user
+to a compatible runtime or a glibc upgrade. Missing artifact metadata remains
+accepted for legacy catalog resolution, while the automatic startup cache and
+bundle paths reject it and fall through to installation. Unknown host glibc and
+non-Linux hosts preserve the legacy compatibility behavior.
 
 ### Installed bundle discovery
 

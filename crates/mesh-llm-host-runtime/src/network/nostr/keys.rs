@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use nostr_sdk::prelude::*;
+use std::io::Write;
 
 // ---------------------------------------------------------------------------
 // Keys — stored in ~/.mesh-llm/nostr.nsec for the default node key, or in the
@@ -80,24 +81,28 @@ fn ensure_private_nostr_key_file(_path: &std::path::Path) -> Result<()> {
 /// Delete the Nostr key and node identity key.  After rotation the
 /// node gets a fresh identity on next start.
 pub fn rotate_keys() -> Result<()> {
+    let mut err = mesh_llm_events::console_err();
     let nostr_path = nostr_key_path()?;
     if nostr_path.exists() {
         std::fs::remove_file(&nostr_path)?;
-        eprintln!("🔑 Deleted {}", nostr_path.display());
+        writeln!(err, "🔑 Deleted {}", nostr_path.display())?;
     } else {
-        eprintln!("No Nostr key to rotate (none exists yet).");
+        writeln!(err, "No Nostr key to rotate (none exists yet).")?;
     }
 
     let node_key_path = crate::mesh::default_node_key_path()?;
     if node_key_path.exists() {
         std::fs::remove_file(&node_key_path)?;
-        eprintln!("🔑 Deleted {}", node_key_path.display());
+        writeln!(err, "🔑 Deleted {}", node_key_path.display())?;
     } else {
-        eprintln!("No node key to rotate (none exists yet).");
+        writeln!(err, "No node key to rotate (none exists yet).")?;
     }
 
-    eprintln!();
-    eprintln!("✅ Keys rotated. New identities will be generated on next start.");
+    writeln!(err)?;
+    writeln!(
+        err,
+        "✅ Keys rotated. New identities will be generated on next start."
+    )?;
     Ok(())
 }
 

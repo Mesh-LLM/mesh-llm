@@ -10,7 +10,9 @@ use skippy_protocol::binary::{
     StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind, recv_reply,
     write_stage_message,
 };
-use skippy_runtime::{MtpSource, RuntimeConfig, RuntimeLoadMode, StageModel};
+use skippy_runtime::{
+    MtpSource, RuntimeConfig, RuntimeLoadMode, StageModel, plan_gguf_stage_runtime_plans,
+};
 use skippy_topology::{
     BoundaryDecision, NodeSpec, PlannerPolicy, TopologyPlanRequest, dense_attention_layers,
     infer_family_capability, plan_contiguous_with_splits,
@@ -238,11 +240,13 @@ fn run_full_model_decode(
         image_max_tokens: None,
         batch_max_tokens: None,
         glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
-        include_embeddings: true,
-        include_output: true,
         mtp_source: MtpSource::Disabled,
-        filter_tensors_on_load: false,
         resident_tensor_names: Vec::new(),
+        execution_contract: String::new(),
+        activation_import_identities: Vec::new(),
+        activation_import_bindings: Vec::new(),
+        activation_export_identities: Vec::new(),
+        activation_export_bindings: Vec::new(),
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
@@ -288,8 +292,20 @@ fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {
     }
     ensure_release_skippy_server_bin(&args.stage_server_bin)?;
     validate_local_topology_plan(&args.model_path, args.layer_end, &[args.split_layer], 2)?;
+    let mut runtime_plans = plan_gguf_stage_runtime_plans(
+        &args.model_path,
+        &[(0, args.split_layer), (args.split_layer, args.layer_end)],
+        args.ctx_size,
+        1,
+    )?;
+    let stage1_plan = runtime_plans
+        .pop()
+        .context("missing stage 1 runtime plan")?;
+    let stage0_plan = runtime_plans
+        .pop()
+        .context("missing stage 0 runtime plan")?;
     let model_identity = model_identity_for_path(&args.model_id, Some(&args.model_path))?;
-    let stage0_config = RuntimeConfig {
+    let mut stage0_config = RuntimeConfig {
         stage_index: 0,
         layer_start: 0,
         layer_end: args.split_layer,
@@ -321,11 +337,13 @@ fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {
         image_max_tokens: None,
         batch_max_tokens: None,
         glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
-        include_embeddings: true,
-        include_output: false,
         mtp_source: MtpSource::Disabled,
-        filter_tensors_on_load: true,
         resident_tensor_names: Vec::new(),
+        execution_contract: String::new(),
+        activation_import_identities: Vec::new(),
+        activation_import_bindings: Vec::new(),
+        activation_export_identities: Vec::new(),
+        activation_export_bindings: Vec::new(),
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
@@ -333,6 +351,7 @@ fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {
         kv_unified: None,
         swa_full: None,
     };
+    stage0_plan.apply_to(&mut stage0_config);
     let stage0 =
         StageModel::open(&args.model_path, &stage0_config).context("failed to open stage 0")?;
     let tokens = stage0
@@ -364,7 +383,12 @@ fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {
         "layer_end": args.layer_end,
         "ctx_size": args.ctx_size,
         "n_gpu_layers": args.n_gpu_layers,
-        "filter_tensors_on_load": true,
+        "resident_tensor_names": stage1_plan.resident_tensor_names,
+        "execution_contract": stage1_plan.execution_contract,
+        "activation_import_identities": stage1_plan.activation_import_identities,
+        "activation_import_bindings": stage1_plan.activation_import_bindings,
+        "activation_export_identities": stage1_plan.activation_export_identities,
+        "activation_export_bindings": stage1_plan.activation_export_bindings,
         "load_mode": "runtime-slice",
         "bind_addr": args.stage1_bind_addr,
         "upstream": {
@@ -431,16 +455,8 @@ fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {
     state.decode_step = 0;
     state.current_token = token_id;
     state.source_stage_index = 0;
-    state.flags |=
-        skippy_protocol::binary::activation_state_flags_from_frame_flags(boundary.desc.flags);
-    let activation = skippy_protocol::binary::encode_activation_payload_with_state_flags(
-        state.activation_codec,
-        1,
-        activation_width,
-        &boundary.payload,
-        state.flags,
-    )
-    .context("failed to encode boundary activation for wire")?;
+    let activation = crate::support::encode_runtime_activation(state.activation_codec, &boundary)
+        .context("failed to encode boundary activation for wire")?;
     let message = StageWireMessage {
         kind: WireMessageKind::DecodeEmbd,
         pos_start: 0,
@@ -488,8 +504,27 @@ fn run_binary_chain(args: LocalSplitChainBinaryArgs) -> Result<BinaryChainResult
         &[args.split_layer_1, args.split_layer_2],
         3,
     )?;
+    let mut runtime_plans = plan_gguf_stage_runtime_plans(
+        &args.model_path,
+        &[
+            (0, args.split_layer_1),
+            (args.split_layer_1, args.split_layer_2),
+            (args.split_layer_2, args.layer_end),
+        ],
+        args.ctx_size,
+        1,
+    )?;
+    let stage2_plan = runtime_plans
+        .pop()
+        .context("missing stage 2 runtime plan")?;
+    let stage1_plan = runtime_plans
+        .pop()
+        .context("missing stage 1 runtime plan")?;
+    let stage0_plan = runtime_plans
+        .pop()
+        .context("missing stage 0 runtime plan")?;
     let model_identity = model_identity_for_path(&args.model_id, Some(&args.model_path))?;
-    let stage0_config = RuntimeConfig {
+    let mut stage0_config = RuntimeConfig {
         stage_index: 0,
         layer_start: 0,
         layer_end: args.split_layer_1,
@@ -521,11 +556,13 @@ fn run_binary_chain(args: LocalSplitChainBinaryArgs) -> Result<BinaryChainResult
         image_max_tokens: None,
         batch_max_tokens: None,
         glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
-        include_embeddings: true,
-        include_output: false,
         mtp_source: MtpSource::Disabled,
-        filter_tensors_on_load: true,
         resident_tensor_names: Vec::new(),
+        execution_contract: String::new(),
+        activation_import_identities: Vec::new(),
+        activation_import_bindings: Vec::new(),
+        activation_export_identities: Vec::new(),
+        activation_export_bindings: Vec::new(),
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
@@ -533,6 +570,7 @@ fn run_binary_chain(args: LocalSplitChainBinaryArgs) -> Result<BinaryChainResult
         kv_unified: None,
         swa_full: None,
     };
+    stage0_plan.apply_to(&mut stage0_config);
     let stage0 =
         StageModel::open(&args.model_path, &stage0_config).context("failed to open stage 0")?;
     let tokens = stage0
@@ -565,7 +603,12 @@ fn run_binary_chain(args: LocalSplitChainBinaryArgs) -> Result<BinaryChainResult
         "layer_end": args.layer_end,
         "ctx_size": args.ctx_size,
         "n_gpu_layers": args.n_gpu_layers,
-        "filter_tensors_on_load": true,
+        "resident_tensor_names": stage2_plan.resident_tensor_names,
+        "execution_contract": stage2_plan.execution_contract,
+        "activation_import_identities": stage2_plan.activation_import_identities,
+        "activation_import_bindings": stage2_plan.activation_import_bindings,
+        "activation_export_identities": stage2_plan.activation_export_identities,
+        "activation_export_bindings": stage2_plan.activation_export_bindings,
         "load_mode": "runtime-slice",
         "bind_addr": args.stage2_bind_addr,
         "upstream": {
@@ -586,7 +629,12 @@ fn run_binary_chain(args: LocalSplitChainBinaryArgs) -> Result<BinaryChainResult
         "layer_end": args.split_layer_2,
         "ctx_size": args.ctx_size,
         "n_gpu_layers": args.n_gpu_layers,
-        "filter_tensors_on_load": true,
+        "resident_tensor_names": stage1_plan.resident_tensor_names,
+        "execution_contract": stage1_plan.execution_contract,
+        "activation_import_identities": stage1_plan.activation_import_identities,
+        "activation_import_bindings": stage1_plan.activation_import_bindings,
+        "activation_export_identities": stage1_plan.activation_export_identities,
+        "activation_export_bindings": stage1_plan.activation_export_bindings,
         "load_mode": "runtime-slice",
         "bind_addr": args.stage1_bind_addr,
         "upstream": {
@@ -681,16 +729,8 @@ fn run_binary_chain(args: LocalSplitChainBinaryArgs) -> Result<BinaryChainResult
     state.decode_step = 0;
     state.current_token = token_id;
     state.source_stage_index = 0;
-    state.flags |=
-        skippy_protocol::binary::activation_state_flags_from_frame_flags(boundary.desc.flags);
-    let activation = skippy_protocol::binary::encode_activation_payload_with_state_flags(
-        state.activation_codec,
-        1,
-        activation_width,
-        &boundary.payload,
-        state.flags,
-    )
-    .context("failed to encode boundary activation for wire")?;
+    let activation = crate::support::encode_runtime_activation(state.activation_codec, &boundary)
+        .context("failed to encode boundary activation for wire")?;
     let message = StageWireMessage {
         kind: WireMessageKind::DecodeEmbd,
         pos_start: 0,
@@ -836,7 +876,20 @@ pub fn local_split_inprocess(args: LocalSplitInprocessArgs) -> Result<()> {
         bail!("split_layer must be greater than zero and less than layer_end");
     }
 
-    let stage0_config = RuntimeConfig {
+    let mut runtime_plans = plan_gguf_stage_runtime_plans(
+        &args.model_path,
+        &[(0, args.split_layer), (args.split_layer, args.layer_end)],
+        args.ctx_size,
+        1,
+    )?;
+    let stage1_plan = runtime_plans
+        .pop()
+        .context("missing stage 1 runtime plan")?;
+    let stage0_plan = runtime_plans
+        .pop()
+        .context("missing stage 0 runtime plan")?;
+
+    let mut stage0_config = RuntimeConfig {
         stage_index: 0,
         layer_start: 0,
         layer_end: args.split_layer,
@@ -868,11 +921,13 @@ pub fn local_split_inprocess(args: LocalSplitInprocessArgs) -> Result<()> {
         image_max_tokens: None,
         batch_max_tokens: None,
         glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
-        include_embeddings: true,
-        include_output: false,
         mtp_source: MtpSource::Disabled,
-        filter_tensors_on_load: true,
         resident_tensor_names: Vec::new(),
+        execution_contract: String::new(),
+        activation_import_identities: Vec::new(),
+        activation_import_bindings: Vec::new(),
+        activation_export_identities: Vec::new(),
+        activation_export_bindings: Vec::new(),
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
@@ -880,7 +935,7 @@ pub fn local_split_inprocess(args: LocalSplitInprocessArgs) -> Result<()> {
         kv_unified: None,
         swa_full: None,
     };
-    let stage1_config = RuntimeConfig {
+    let mut stage1_config = RuntimeConfig {
         stage_index: 1,
         layer_start: args.split_layer,
         layer_end: args.layer_end,
@@ -912,11 +967,13 @@ pub fn local_split_inprocess(args: LocalSplitInprocessArgs) -> Result<()> {
         image_max_tokens: None,
         batch_max_tokens: None,
         glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
-        include_embeddings: false,
-        include_output: true,
         mtp_source: MtpSource::Disabled,
-        filter_tensors_on_load: true,
         resident_tensor_names: Vec::new(),
+        execution_contract: String::new(),
+        activation_import_identities: Vec::new(),
+        activation_import_bindings: Vec::new(),
+        activation_export_identities: Vec::new(),
+        activation_export_bindings: Vec::new(),
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
         checkpoint_imatrix: None,
         checkpoint_imatrix_sha256: None,
@@ -924,6 +981,8 @@ pub fn local_split_inprocess(args: LocalSplitInprocessArgs) -> Result<()> {
         kv_unified: None,
         swa_full: None,
     };
+    stage0_plan.apply_to(&mut stage0_config);
+    stage1_plan.apply_to(&mut stage1_config);
 
     let stage0 =
         StageModel::open(&args.model_path, &stage0_config).context("failed to open stage 0")?;

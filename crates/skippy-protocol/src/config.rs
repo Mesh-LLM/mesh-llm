@@ -1,6 +1,6 @@
 //! Stage configuration, topology, and activation contracts.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct StageIdentity {
     pub run_id: String,
@@ -225,7 +225,7 @@ pub struct StageConfig {
     #[serde(default)]
     pub generation_signal_window: Option<u32>,
     /// Floating-point activation encoding for every downstream edge produced
-    /// by this stage. Generation 9 peers echo and bind this policy before the
+    /// by this stage. Generation 10 peers echo and bind this policy before the
     /// binary data plane starts.
     #[serde(default)]
     pub activation_codec: StageActivationCodec,
@@ -280,12 +280,28 @@ pub struct StageConfig {
     pub swa_full: Option<bool>,
     #[serde(default)]
     pub cache_idle_slots: Option<u32>,
-    #[serde(default)]
-    pub filter_tensors_on_load: bool,
     /// Exact native tensor names resolved locally from admitted package-v2
-    /// tensor IDs. Empty preserves the legacy range-based loader filter.
-    #[serde(default)]
+    /// tensor IDs. Empty is valid only for an unsplit full-model load.
+    #[serde(
+        default,
+        alias = "filter_tensors_on_load",
+        deserialize_with = "deserialize_resident_tensor_names"
+    )]
     pub resident_tensor_names: Vec<String>,
+    /// Opaque native dependency contract, reproduced and checked during admission.
+    pub execution_contract: String,
+    /// Planner value identities imported by this stage, in native frontier order.
+    #[serde(default)]
+    pub activation_import_identities: Vec<String>,
+    /// Stable live-graph bindings paired with imported planner identities.
+    #[serde(default)]
+    pub activation_import_bindings: Vec<String>,
+    /// Planner value identities exported by this stage, in native frontier order.
+    #[serde(default)]
+    pub activation_export_identities: Vec<String>,
+    /// Stable live-graph bindings paired with exported planner identities.
+    #[serde(default)]
+    pub activation_export_bindings: Vec<String>,
     #[serde(default)]
     pub selected_device: Option<StageDevice>,
     #[serde(default)]
@@ -298,6 +314,28 @@ pub struct StageConfig {
     pub upstream: Option<PeerConfig>,
     #[serde(default)]
     pub downstream: Option<PeerConfig>,
+}
+
+fn deserialize_resident_tensor_names<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum ResidentTensorNames {
+        Names(Vec<String>),
+        Obsolete(bool),
+    }
+
+    match ResidentTensorNames::deserialize(deserializer)? {
+        ResidentTensorNames::Names(names) => Ok(names),
+        ResidentTensorNames::Obsolete(obsolete) => {
+            let _ = obsolete;
+            Err(de::Error::custom(
+                "filter_tensors_on_load is obsolete; provide resident_tensor_names from package-v2 stage admission",
+            ))
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

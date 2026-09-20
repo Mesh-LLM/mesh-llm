@@ -108,6 +108,7 @@ mod stage_proto;
 mod stage_transport;
 mod stage_transport_bridge;
 mod stun;
+mod weights_digest;
 
 use connection_reservation::*;
 use connections::*;
@@ -163,7 +164,7 @@ pub use node::{
 pub(crate) use node::{PeerDownReport, peer_down_endpoint_id};
 pub(crate) use peer_state::{
     ControlListenerLifecycle, DEAD_PEER_TTL, MeshState, PEER_DOWN_REPORTER_COOLDOWN_SECS,
-    PEER_STALE_SECS, resolve_peer_leaving,
+    PEER_STALE_SECS, public_model_id_from_identity, resolve_peer_leaving,
 };
 #[expect(
     unused_imports,
@@ -186,6 +187,7 @@ pub use stage_transport::{
     StageAssignment, StageEndpoint, StageRuntimeStatus, StageTopologyInstance, TunnelChannels,
 };
 pub(crate) use stage_transport_bridge::{StageTransportBridge, StageTransportBridgeLabel};
+pub(crate) use weights_digest::{file_fingerprint, weights_digest_for_file};
 
 #[cfg(test)]
 use announcements::{apply_transitive_ann, peer_meaningfully_changed};

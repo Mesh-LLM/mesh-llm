@@ -57,6 +57,7 @@ pub(super) fn resolve_local_required_startup_model(
         })
         .transpose()?;
     Ok(StartupModelPlan {
+        model_source: crate::runtime::model_presentation::launch_source(&spec.model_ref),
         declared_ref,
         config_model_id: spec.config_model_id.clone(),
         resolved_path,

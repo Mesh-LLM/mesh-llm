@@ -1,3 +1,4 @@
+pub(super) use super::model_names::public_model_id;
 use crate::mesh;
 use crate::plugin;
 use anyhow::{Context, Result, anyhow, bail};
@@ -18,6 +19,12 @@ pub(crate) const MAX_HEADER_BYTES: usize = 64 * 1024;
 /// lifecycle parent, so ordinary API clients cannot opt into target-owner
 /// suppression by sending it themselves.
 pub(crate) const RAW_LIFECYCLE_OWNER_HEADER: &str = "x-mesh-llm-raw-lifecycle";
+/// Force remote-mesh dispatch to exactly one peer (fail closed if it doesn't
+/// serve the requested model). See `ingress.rs`'s remote-mesh routing.
+pub(crate) const MESH_TARGET_HEADER: &str = "x-mesh-target";
+/// Remove one or more peers from the remote-mesh candidate set before
+/// selection. Comma-separated within one header value.
+pub(crate) const MESH_EXCLUDE_HEADER: &str = "x-mesh-exclude";
 pub(super) const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 const MAX_OBJECT_UPLOAD_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_CHUNKED_WIRE_BYTES: usize = MAX_BODY_BYTES * 6 + 64 * 1024;
@@ -161,6 +168,23 @@ impl BufferedHttpRequest {
     /// nonce every downstream reader expects, rather than dropping it.
     pub fn capsule_nonce_headers(&self) -> (Option<String>, Option<String>) {
         capsule_nonce_headers_from_raw(&self.raw)
+    }
+
+    /// Raw (unparsed) values of the `x-mesh-target` / `x-mesh-exclude` mesh
+    /// routing headers, read back off the already-buffered raw request.
+    ///
+    /// Every occurrence of each header name is returned verbatim, including
+    /// duplicates — the router (not this parser) decides whether more than
+    /// one `x-mesh-target` value is an error. These headers are opaque to
+    /// this layer: no endpoint-id parsing happens here. A header value with
+    /// non-UTF-8 bytes is rejected outright rather than silently dropped, so
+    /// an attacker can't smuggle a routing decision past invalid bytes.
+    pub fn mesh_routing_header_values(&self) -> Result<(Vec<String>, Vec<String>), String> {
+        let target = header_values_from_raw(&self.raw, MESH_TARGET_HEADER)
+            .map_err(|()| format!("{MESH_TARGET_HEADER} header contains invalid UTF-8"))?;
+        let exclude = header_values_from_raw(&self.raw, MESH_EXCLUDE_HEADER)
+            .map_err(|()| format!("{MESH_EXCLUDE_HEADER} header contains invalid UTF-8"))?;
+        Ok((target, exclude))
     }
 
     /// The only semantic request media kind trusted by artifact capture.
@@ -855,6 +879,35 @@ fn capsule_nonce_headers_from_raw(raw: &[u8]) -> (Option<String>, Option<String>
     (find(nonce_header), find(origin_header))
 }
 
+/// Every value of a given header name, read back off an already-rebuilt raw
+/// HTTP request. Only the request-header block is scanned. Order matches the
+/// wire order; duplicates are returned as separate entries. `Err(())` means
+/// at least one occurrence of `name` had non-UTF-8 bytes -- the caller must
+/// reject the request rather than silently drop that occurrence.
+fn header_values_from_raw(raw: &[u8], name: &str) -> Result<Vec<String>, ()> {
+    let header_end = raw
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .unwrap_or(raw.len());
+    let mut headers_buf = [httparse::EMPTY_HEADER; MAX_HEADERS];
+    let mut req = httparse::Request::new(&mut headers_buf);
+    if req
+        .parse(&raw[..header_end.saturating_add(4).min(raw.len())])
+        .is_err()
+    {
+        return Ok(Vec::new());
+    }
+    req.headers
+        .iter()
+        .filter(|header| header.name.eq_ignore_ascii_case(name))
+        .map(|header| {
+            std::str::from_utf8(header.value)
+                .map(|value| value.trim().to_string())
+                .map_err(|_| ())
+        })
+        .collect()
+}
+
 fn client_nonce_from_headers(headers: &[httparse::Header<'_>]) -> (String, Option<&'static str>) {
     let nonce_header = openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str();
     let inbound = headers
@@ -1120,105 +1173,6 @@ fn internal_model_for_public_id(
         }
         None
     })
-}
-
-pub(super) fn public_model_id(
-    model_name: &str,
-    descriptor: Option<&mesh::ServedModelDescriptor>,
-    profile: &str,
-) -> String {
-    // A descriptor with an `artifact` field has enough information to
-    // produce a public ID that round-trips to the same model. Without
-    // it, the HuggingFace path collapses to just the repo name and
-    // silently drops the quant-tag suffix the resolver needs (PR #566
-    // review feedback — "some IDs in /v1/models dropped quant
-    // suffixes"). Only use the descriptor-derived id when it can be
-    // lossless; otherwise prefer the on-disk file (authoritative for
-    // local models), and finally the internal model_name (which
-    // always carries the quant suffix our resolver knows how to
-    // route).
-    let base_id = if let Some(descriptor) = descriptor
-        && descriptor_can_produce_lossless_id(&descriptor.identity)
-        && let Some(id) = public_model_id_from_identity(&descriptor.identity)
-    {
-        id
-    } else if let Some(id) = public_model_id_from_local_path(model_name) {
-        id
-    } else {
-        model_name.to_string()
-    };
-
-    // Append profile suffix for non-default profiles
-    if profile.is_empty() {
-        base_id
-    } else {
-        format!("{}#{}", base_id, profile)
-    }
-}
-
-/// A descriptor identity carries enough information for
-/// `public_model_id_from_identity` to produce an ID that round-trips
-/// to the same model. For HuggingFace that means the `artifact` field
-/// (the GGUF file name) is present so the quant selector can be
-/// derived. Catalog identities always carry a `canonical_ref` with the
-/// selector baked in.
-fn descriptor_can_produce_lossless_id(identity: &mesh::ServedModelIdentity) -> bool {
-    match identity.source_kind {
-        mesh::ModelSourceKind::HuggingFace => identity.artifact.is_some(),
-        mesh::ModelSourceKind::Catalog => identity.canonical_ref.is_some(),
-        mesh::ModelSourceKind::LocalGguf
-        | mesh::ModelSourceKind::DirectUrl
-        | mesh::ModelSourceKind::Unknown => false,
-    }
-}
-
-fn public_model_id_from_identity(identity: &mesh::ServedModelIdentity) -> Option<String> {
-    match identity.source_kind {
-        mesh::ModelSourceKind::HuggingFace => identity
-            .repository
-            .as_deref()
-            .and_then(|repo| public_huggingface_model_ref(repo, identity.artifact.as_deref()))
-            .or_else(|| {
-                identity
-                    .canonical_ref
-                    .as_deref()
-                    .and_then(|model_ref| model_ref::ModelRef::parse(model_ref).ok())
-                    .map(|model_ref| model_ref.display_id())
-            }),
-        mesh::ModelSourceKind::Catalog => identity
-            .canonical_ref
-            .as_deref()
-            .and_then(|model_ref| model_ref::ModelRef::parse(model_ref).ok())
-            .map(|model_ref| model_ref.display_id()),
-        mesh::ModelSourceKind::LocalGguf
-        | mesh::ModelSourceKind::DirectUrl
-        | mesh::ModelSourceKind::Unknown => None,
-    }
-}
-
-fn public_model_id_from_local_path(model_name: &str) -> Option<String> {
-    let path = crate::models::find_model_path(model_name);
-    if !path.is_file() {
-        return None;
-    }
-    if path.extension().and_then(|extension| extension.to_str()) != Some("gguf") {
-        return None;
-    }
-    Some(crate::models::model_ref_for_path(&path))
-}
-
-fn public_huggingface_model_ref(repo: &str, artifact: Option<&str>) -> Option<String> {
-    // `artifact` can be either a GGUF filename (e.g. `Falcon-Q4_K_M.gguf`)
-    // or an already-extracted quant selector (e.g. `Q4_K_M` or
-    // `qwen2.5-3b-instruct-q4_k_m`, when the descriptor was built from
-    // a parsed `ModelRef::selector`). Handle both — if the artifact
-    // looks like a quant selector use it directly; otherwise try to
-    // pull a selector out of the filename.
-    let selector = artifact.and_then(|a| {
-        model_ref::quant_selector_from_gguf_file(a)
-            .or_else(|| (!a.is_empty() && !a.ends_with(".gguf")).then(|| a.to_string()))
-    });
-    Some(model_ref::format_model_ref(repo, None, selector.as_deref()))
 }
 
 #[cfg(test)]

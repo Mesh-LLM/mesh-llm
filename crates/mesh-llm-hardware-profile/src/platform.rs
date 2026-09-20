@@ -3,6 +3,50 @@
 use mesh_llm_native_runtime::NativeRuntimeBackendKind;
 use std::collections::BTreeSet;
 use std::process::Command;
+
+pub(crate) fn detect_glibc_version() -> Option<String> {
+    let override_value = std::env::var("MESH_LLM_GLIBC_VERSION").ok();
+    let detected_value = cfg!(target_os = "linux")
+        .then(|| command_output("getconf", &["GNU_LIBC_VERSION"]))
+        .flatten();
+    detect_glibc_version_from(
+        cfg!(target_os = "linux"),
+        override_value.as_deref(),
+        detected_value.as_deref(),
+    )
+}
+
+pub(crate) fn detect_glibc_version_from(
+    is_linux: bool,
+    override_value: Option<&str>,
+    detected_value: Option<&str>,
+) -> Option<String> {
+    is_linux
+        .then(|| {
+            override_value
+                .and_then(parse_glibc_version)
+                .or_else(|| detected_value.and_then(parse_glibc_version))
+        })
+        .flatten()
+}
+
+pub(crate) fn parse_glibc_version(value: &str) -> Option<String> {
+    let value = value.trim().strip_prefix("glibc ").unwrap_or(value.trim());
+    let (major, minor) = value.split_once('.')?;
+    if major.is_empty()
+        || minor.is_empty()
+        || minor.contains('.')
+        || !major.bytes().all(|byte| byte.is_ascii_digit())
+        || !minor.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(format!(
+        "{}.{}",
+        major.parse::<u32>().ok()?,
+        minor.parse::<u32>().ok()?
+    ))
+}
 pub(crate) fn gpu_labels() -> Vec<String> {
     let mut labels = Vec::new();
     append_command_lines(&mut labels, "vulkaninfo", &["--summary"]);
