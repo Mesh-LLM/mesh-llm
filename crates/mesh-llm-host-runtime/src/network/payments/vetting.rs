@@ -56,7 +56,9 @@ fn check_retry_cooldown(peer: iroh::EndpointId) -> Result<()> {
     Ok(())
 }
 
-// Only an attempt that actually reached the provider may start a cooldown.
+// Only an attempted remote probe may start a cooldown. This covers the whole attempt
+// from opening the tunnel onward, so it includes failures where the provider was never
+// reached; what it excludes is a purely local refusal (cooldown gate or queue wait).
 fn record_probe_failure(peer: iroh::EndpointId) {
     if let Ok(mut failures) = FAILED_PROBES.lock() {
         failures.retain(|_, time| time.elapsed() < PEER_PROBE_RESERVATION);
