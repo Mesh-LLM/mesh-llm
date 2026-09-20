@@ -58,7 +58,11 @@ original terms. Older payment implementations still apply their own limits.
 invoice creation, bounded payment, lookup by payment hash, and asynchronous
 `wait_for_payment(payment_hash)` completion. Lexe types stay
 inside its private adapter. The default feature selects Lexe 0.1.23 on mainnet.
-NWC, BOLT12, and provider selection are deferred.
+NWC, BOLT12, and operator-facing provider selection are deferred. Embedders can
+inject a `WalletFactory` through `PaymentService::with_factory`; discovery is
+side-effect-free and opening remains lazy/single-flight. The default factory
+keeps the existing Lexe directory and wallet identity. Routing and settlement
+no longer inspect Lexe seed paths themselves.
 
 The payment service awaits provider completion for incoming and pending outgoing
 payments. A second method awaits the earliest receiver-side evidence that an

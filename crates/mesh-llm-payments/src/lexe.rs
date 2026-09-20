@@ -21,6 +21,10 @@ use lexe_api_core::types::payments::{PaymentId, PaymentKind};
 use crate::invoice::Invoice;
 use crate::wallet::{Balance, PayError, PaymentStatus, Transaction, WalletProvider};
 
+pub(crate) fn is_provisioned(directory: &Path) -> bool {
+    directory.join("lexe/seedphrase.txt").exists()
+}
+
 pub(crate) struct LexeProvider {
     wallet: LexeWallet,
     // Lexe's local cache is not a multiprocess ledger. CLI clients should use

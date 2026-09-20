@@ -5,6 +5,7 @@ pub mod control;
 pub mod invoice;
 pub mod ledger;
 pub mod pricing;
+pub mod provisioning;
 pub mod service;
 pub mod wallet;
 pub mod wire;

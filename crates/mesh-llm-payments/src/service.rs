@@ -37,6 +37,7 @@ pub struct PaymentService {
     pub ledger: Ledger,
     directory: PathBuf,
     wallet: OnceCell<Arc<dyn WalletProvider>>,
+    factory: Arc<dyn crate::provisioning::WalletFactory>,
     payment_lock: Mutex<()>,
     receivable_lock: Mutex<()>,
     _process_lock: std::fs::File,
@@ -44,6 +45,16 @@ pub struct PaymentService {
 
 impl PaymentService {
     pub fn open(directory: &Path) -> Result<Self> {
+        Self::with_factory(
+            directory,
+            Arc::new(crate::provisioning::DefaultWalletFactory),
+        )
+    }
+
+    pub fn with_factory(
+        directory: &Path,
+        factory: Arc<dyn crate::provisioning::WalletFactory>,
+    ) -> Result<Self> {
         let ledger = Ledger::open(directory)?;
         let process_lock = std::fs::OpenOptions::new()
             .create(true)
@@ -59,6 +70,7 @@ impl PaymentService {
             ledger,
             directory: directory.to_owned(),
             wallet: OnceCell::new(),
+            factory,
             payment_lock: Mutex::new(()),
             receivable_lock: Mutex::new(()),
             _process_lock: process_lock,
@@ -72,22 +84,12 @@ impl PaymentService {
     }
 
     pub fn has_wallet(&self) -> bool {
-        self.wallet.get().is_some() || self.directory.join("lexe/seedphrase.txt").exists()
+        self.wallet.get().is_some() || self.factory.is_provisioned(&self.directory)
     }
 
     pub async fn wallet(&self) -> Result<&Arc<dyn WalletProvider>> {
         self.wallet
-            .get_or_try_init(|| async {
-                #[cfg(feature = "lexe")]
-                {
-                    crate::open_wallet(&self.directory.join("lexe")).await
-                }
-                #[cfg(not(feature = "lexe"))]
-                {
-                    let _ = &self.directory;
-                    bail!("no wallet provider configured")
-                }
-            })
+            .get_or_try_init(|| self.factory.open(&self.directory))
             .await
     }
 

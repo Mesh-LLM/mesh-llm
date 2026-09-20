@@ -112,7 +112,7 @@ async fn legacy_bridge_requires_payment_ingress(node: &Node) -> Result<bool> {
     // A loopback TCP bridge loses remote provenance. A wallet-enabled node
     // must use direct QUIC ingress, where spending authority remains remote.
     let directory = node.config_state.lock().await.payment_directory();
-    if directory.join("lexe/seedphrase.txt").exists() {
+    if mesh_llm_payments::provisioning::has_persisted_wallet(&directory) {
         return Ok(true);
     }
     Ok(node
