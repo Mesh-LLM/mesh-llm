@@ -953,7 +953,6 @@ impl SkippyModelHandle {
                 runtime_config.model_id, runtime_config.model_path
             )
         })?;
-        register_stage0_compute_meter(&runtime_config.run_id, &runtime);
         embedded_args.activation_width = if runtime_config.downstream.is_some() {
             runtime
                 .output_activation_boundary()
@@ -995,6 +994,9 @@ impl SkippyModelHandle {
             Some(usize::try_from(runtime_config.ctx_size).unwrap_or(usize::MAX)),
             guardrails.telemetry.guardrail_sink(),
         );
+        // Registered last so a failed load cannot leave a stale meter behind
+        // for a run id that never serves.
+        register_stage0_compute_meter(&runtime_config.run_id, &runtime);
         lifecycle_audit.mark_ready();
         Ok(Self {
             runtime,
@@ -1040,7 +1042,6 @@ impl SkippyModelHandle {
                         runtime_config.model_id, runtime_config.model_path
                     )
                 })?;
-        register_stage0_compute_meter(&runtime_config.run_id, &runtime);
         embedded_args.activation_width = if runtime_config.downstream.is_some() {
             runtime
                 .output_activation_boundary()
@@ -1082,6 +1083,9 @@ impl SkippyModelHandle {
             Some(usize::try_from(runtime_config.ctx_size).unwrap_or(usize::MAX)),
             guardrails.telemetry.guardrail_sink(),
         );
+        // Registered last so a failed load cannot leave a stale meter behind
+        // for a run id that never serves.
+        register_stage0_compute_meter(&runtime_config.run_id, &runtime);
         lifecycle_audit.mark_ready();
         Ok(Self {
             runtime,
