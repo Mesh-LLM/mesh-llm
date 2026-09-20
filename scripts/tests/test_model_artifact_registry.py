@@ -100,6 +100,10 @@ class ModelArtifactRegistryTests(unittest.TestCase):
             {"smollm2-q8-inference", "family-granite-hybrid"},
         )
         self.assertEqual(
+            manifest["default_artifact_id"],
+            "smollm2-q8-inference",
+        )
+        self.assertEqual(
             artifacts["smollm2-q8-inference"]["model_ref"],
             "unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0",
         )
@@ -225,6 +229,46 @@ class ModelArtifactRegistryTests(unittest.TestCase):
             )
             self.assertEqual(result.stderr, "")
             self.assertIn("dense_file=SmolLM2-135M-Instruct-Q8_0.gguf", output.read_text())
+
+    def test_resolver_uses_declared_default_for_multi_artifact_manifest(self) -> None:
+        result = subprocess.run(
+            [
+                "python3", str(RESOLVER), str(MANIFESTS / "product-smoke.json"),
+                "--cadence", "pull-request",
+                "--require-single-file",
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        summary = json.loads(result.stdout)
+        self.assertEqual(summary["artifact_id"], "smollm2-q8-inference")
+
+    def test_resolver_rejects_ambiguous_manifest_without_default(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "manifest_kind": "test-model-artifacts",
+                        "artifacts": [{"id": "one"}, {"id": "two"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    "python3", str(RESOLVER), str(manifest),
+                    "--cadence", "manual",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("pass --artifact-id", result.stderr)
 
     def test_smoke_identity_overrides_require_nonempty_values(self) -> None:
         skippy = (ROOT / "scripts" / "skippy-ci-smoke.sh").read_text(

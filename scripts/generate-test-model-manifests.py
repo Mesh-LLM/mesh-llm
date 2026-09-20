@@ -39,6 +39,9 @@ SUITE_OUTPUTS = {
     "competitive-benchmark": MANIFEST_DIR / "competitive-benchmark.json",
     "radix-cache": MANIFEST_DIR / "radix-cache.json",
 }
+SUITE_DEFAULT_ARTIFACTS = {
+    "product-smoke": "smollm2-q8-inference",
+}
 FAMILY_MANIFEST = ROOT / "ci" / "llama-canary" / "family-certified.json"
 
 
@@ -348,15 +351,22 @@ def _expected_outputs(registry: dict[str, Any], registry_path: Path) -> dict[Pat
         rows = [_suite_row(row) for row in registry["artifacts"] if suite in row["suites"]]
         if not rows:
             raise RegistryError(f"suite {suite} has no registered artifacts")
-        outputs[destination] = _dump(
-            {
-                "schema_version": 1,
-                "manifest_kind": "test-model-artifacts",
-                "suite": suite,
-                "registry_sha256": hashlib.sha256(registry_path.read_bytes()).hexdigest(),
-                "artifacts": rows,
-            }
-        )
+        manifest = {
+            "schema_version": 1,
+            "manifest_kind": "test-model-artifacts",
+            "suite": suite,
+            "registry_sha256": hashlib.sha256(registry_path.read_bytes()).hexdigest(),
+            "artifacts": rows,
+        }
+        default_artifact_id = SUITE_DEFAULT_ARTIFACTS.get(suite)
+        if default_artifact_id is not None:
+            if default_artifact_id not in {row["id"] for row in rows}:
+                raise RegistryError(
+                    f"suite {suite} default artifact is not registered: "
+                    f"{default_artifact_id}"
+                )
+            manifest["default_artifact_id"] = default_artifact_id
+        outputs[destination] = _dump(manifest)
     return outputs
 
 
