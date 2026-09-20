@@ -1,0 +1,97 @@
+name: Set up canary certification runner
+description: Verify preinstalled arm64 Metal tooling and read-only model cache; never install tools.
+runs:
+  using: composite
+  steps:
+  - name: Configure canary Git identity
+    run: |
+      git config --local user.name "mesh-llama-canary-bot"
+      git config --local user.email "llama-canary-bot@meshllm.invalid"
+    shell: bash
+  - name: Verify runner toolchain
+    run: |
+      set -euo pipefail
+      source scripts/lib/macos-deployment-target.sh
+      echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET" >> "$GITHUB_ENV"
+      missing=0
+      goose_dir="/Users/lab/.local/bin"
+      export PATH="$goose_dir:$PATH"
+      echo "$goose_dir" >> "$GITHUB_PATH"
+      for cmd in cargo just sccache jq python3 uv cmake ninja hf git-lfs lipo brew xcrun goose; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+          echo "missing on family-certify image: $cmd" >&2
+          missing=1
+        fi
+      done
+      if command -v goose >/dev/null 2>&1; then
+        goose_status=0
+        goose_version="$(goose --version 2>&1)" || goose_status=$?
+        if (( goose_status != 0 )); then
+          echo "goose failed its executable preflight with status $goose_status; repair the family-certify runner installation" >&2
+          missing=1
+        elif [[ -z "$goose_version" ]]; then
+          echo "goose returned no version; repair the family-certify runner installation" >&2
+          missing=1
+        else
+          echo "goose version: $goose_version"
+        fi
+      fi
+      expected_hf_cache="/Users/lab/models/huggingface"
+      if [[ "${HF_CACHE:-}" != "$expected_hf_cache" ]]; then
+        echo "HF_CACHE must be $expected_hf_cache on this runner; got: ${HF_CACHE:-<unset>}" >&2
+        missing=1
+      fi
+      if [[ ! -d "$expected_hf_cache/hub" ]]; then
+        echo "pre-warmed Hugging Face hub cache is missing: $expected_hf_cache/hub" >&2
+        missing=1
+      fi
+      if [[ "${HF_HUB_OFFLINE:-}" != "1" ]]; then
+        echo "HF_HUB_OFFLINE must be 1 on the read-only family-certify runner" >&2
+        missing=1
+      fi
+      {
+        echo "HF_HOME=$expected_hf_cache"
+        echo "HF_HUB_CACHE=$expected_hf_cache/hub"
+        echo "HF_HUB_OFFLINE=1"
+      } >> "$GITHUB_ENV"
+      # Match scripts/check-skippy-generated-family-patch.sh: prefer the
+      # pinned llvm@22, but accept any Homebrew LLVM that provides Clang
+      # LibTooling (bin/clang + ClangConfig.cmake) so a runner image whose
+      # pinned keg was rotated out does not fail the whole canary.
+      llvm_prefix="$(brew --prefix llvm@22 2>/dev/null || true)"
+      llvm_ok() {
+        [[ -n "$1" && -x "$1/bin/clang" && -f "$1/lib/cmake/clang/ClangConfig.cmake" ]]
+      }
+      if ! llvm_ok "$llvm_prefix"; then
+        echo "pinned llvm@22 missing or incomplete on the family-certify image; falling back to $(brew --prefix llvm 2>/dev/null || echo 'brew llvm')" >&2
+        llvm_prefix="$(brew --prefix llvm 2>/dev/null || true)"
+      fi
+      if ! llvm_ok "$llvm_prefix"; then
+        echo "no Homebrew LLVM with Clang LibTooling is installed on the family-certify image" >&2
+        missing=1
+      else
+        echo "SKIPPY_REWRITER_LLVM_PREFIX=$llvm_prefix" >> "$GITHUB_ENV"
+      fi
+      git lfs install --force
+      if (( missing == 1 )); then
+        echo "bake the missing tools into the family-certify runner image; this job installs nothing" >&2
+        exit 1
+      fi
+    shell: bash
+  - name: Isolate compiler cache identity
+    run: |
+      set -euo pipefail
+      mkdir -p "$SCCACHE_DIR"
+      cache_buster="$({
+        printf '%s\n' 'platform=macos' 'architecture=arm64' 'backend=metal' 'profile=release' 'cmake-osx-architectures=arm64'
+        printf 'macos-deployment-target=%s\n' "$MACOSX_DEPLOYMENT_TARGET"
+        rustc -vV
+        cc --version
+        xcrun --show-sdk-path
+        xcrun --show-sdk-build-version
+        git ls-files -s -- .cargo/config.toml scripts/build-llama.sh scripts/package-native-runtime.sh third_party/llama.cpp/upstream.txt third_party/llama.cpp/patches
+      } | shasum -a 256 | awk '{print $1}')"
+      echo "SCCACHE_C_CUSTOM_CACHE_BUSTER=$cache_buster" >> "$GITHUB_ENV"
+      sccache --start-server >/dev/null 2>&1 || true
+      sccache --zero-stats
+    shell: bash

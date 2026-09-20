@@ -61,39 +61,49 @@ Only a passing repaired benchmark emits a publication artifact. The hosted
 publisher uses Conventional Commit titles. Independent verification in a fresh
 job, as used by the llama canary, remains a follow-up for this older repair path.
 
-The changed-pin canary wrapper owns the target-pin transition: it writes the
-sole upstream selector, `third_party/llama.cpp/upstream.txt`, before the agent
-starts. The agent cannot change that selector or the harness control files.
-The wrapper retains one named Goose session, runs the ordered candidate gates
-after each response, and returns the exact failure logs to that session while
-the repair admission window remains. Every returned candidate gets a fresh
-12-hour gate budget; a failing pass after admission closes is terminal. A narrow trusted policy permits only scanned
-tensor-byte corrections in the fixed certification roster and additive,
-classification-only rows for newly observed llama.cpp model sources; each new
-row is limited to `llama_model`, `family`, `status`, and optional `notes` or
-`unsupported_reason` metadata, with no artifact selectors, revisions, integrity
-records, execution settings, or model pins. After the
-repair gates pass, the job snapshots the candidate as an unreachable commit and
-uploads a thin bundle. A separate self-hosted verification job and
-checkout materialize that commit in a fresh detached worktree, prepare through
-the checked-in `pinned` selector, verify the prepared-upstream stamp, and execute
-the complete manifest-policy, build, and certification sequence with new
-native-build and family-evidence directories. The verifier resolves and exports its own Homebrew
-LLVM prefix before the generated-family rewriter check because job environment
-files are not shared with the repair job. Only that passing commit is exported
-as the certified bundle. A later job on a fresh GitHub-hosted runner validates
-it, uses an environment-sourced askpass helper so the repair PAT never appears
-in the push URL or process arguments, pushes without force, and opens a ready
-PR as its final external mutation. If either the agent or trusted verification
-fails, the distinct `llama-canary-changed-pin-*` evidence artifact is retained.
-Evidence uploads explicitly admit success, failure, or cancellation so an
-operator cancellation still preserves the available repair and verification
-logs without making publication or status-reporting steps resist cancellation.
+`llama-upstream-canary.yml` runs daily or on trusted-main dispatch. It freezes
+one main source SHA and the upstream target before any hardware work. Unchanged
+scheduled/forced runs build once and certify the complete roster. Changed pins
+use up to three repair attempts, each followed (only when all families pass) by
+an independent build and complete verification pass on the exact same commit.
 
-Scheduled, changed-pin, and forced certification runs all consume the same
-complete supported-family roster. Cadence labels describe why the workflow
-ran; they do not filter model coverage. The
-competitive benchmark can optionally download exact-cohort history from
+`llama-canary-family-pass.yml` owns the reusable build → family matrix → hosted
+aggregate. The producer performs prepare, manifest-policy, full native and Rust
+builds, generated-family validation, smoke, and split-roster checks. It validates
+the immutable HF cache before compilation and exports a candidate Git bundle,
+one-family-per-shard plan, four arm64 certification binaries, and a prebuilt
+multimodal library-test executable. Static Metal resources are embedded; an
+unpackaged non-system dylib makes the handoff fail. SHA-256 digests bind all
+handoff bytes to the candidate, main base, run/attempt, and pass identity.
+
+Each named family job runs `--skip-build --shard-index` on the matching
+`family-certify` pool, with max-parallel 8 and fail-fast disabled. No build
+runner is held while workers queue: one machine can execute all jobs serially,
+and more machines can run them concurrently. Each machine must have the same
+arm64/Metal toolchain/runtime compatibility and read-only
+`HF_CACHE=/Users/lab/models/huggingface`, with `HF_HUB_OFFLINE=1`. One service
+per physical certification machine avoids competing model loads and ports.
+There is no Actions model cache and no worker-side compilation or download.
+
+The aggregate requires every planned family exactly once, successful worker
+status, matching candidate/plan/build digests, successful core lanes, and any
+required multimodal result. The battery itself reconciles the production
+planner's selected cuts, immutable revisions, tensor bytes, and native MTP
+requirements. Missing, cancelled, duplicate, or stale evidence cannot certify.
+Full worker/build logs remain for 14 days; executable handoffs remain for seven
+days so a single-machine queue can complete later passes.
+
+Within a build job, Goose resumes the same session for prepare/build failures
+under the existing 11.5-hour coding-admission and 12-hour per-gate budgets. A
+failed distributed pass supplies its candidate plus family/build logs to a new
+session in the next bounded attempt. Candidates are local, uncertified commits
+until both full family passes are green. The separate GitHub-hosted publisher
+alone receives `CANARY_REPAIR_TOKEN`; it publishes no failed/incomplete state.
+No Actions-write credential or dispatch controller is needed. Feature-ref
+manual dispatch is rejected before persistent-runner work. The workflow-level
+non-cancelling concurrency group serializes canary runs, not individual families.
+
+The competitive benchmark can optionally download exact-cohort history from
 `MESH_PERFORMANCE_HISTORY_DATASET`, validate the checked-in schema, report
 regression candidates, and append one immutable run shard using
 `MESH_PERFORMANCE_HISTORY_HF_TOKEN`. Performance thresholds are report-only

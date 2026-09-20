@@ -72,118 +72,47 @@ both evidence sets, and fails after both have had a chance to run.
 for a much larger deterministic radix/blob ownership corpus. It uses the
 pinned `public cpu` image, has no secrets, records exact seed/step budgets and
 source SHA, and uploads the reproducible failure log.
-`llama-upstream-canary.yml` runs only on its daily schedule or an explicit
-manual dispatch; it is not ordinary push or PR CI. One fixed non-cancelling
-concurrency group queues each run behind active work on the persistent runner.
-It executes trusted
-default-branch content only on the persistent self-hosted `family-certify`
-runner group (tools come from the runner image; no GitHub Actions model
-caching). The runner preflight prepends `/Users/lab/.local/bin` and executes
-`goose --version`, so a missing, damaged, or non-executable agent binary fails
-before the changed-pin harness starts. Before native compilation,
-`scripts/plan-family-battery.py` validates the versioned JSON family policy,
-the mandatory three-lane contract for every certified profile, and every exact
-artifact revision/file in the immutable local cache. It reads only GGUF
-metadata headers, requires each artifact to have at least one metadata-bearing
-shard, and requires every shard that carries `*.block_count` and
-`*.embedding_length` to equal the planned runtime range and activation width
-before compilation; Qwen4 experimental artifacts derive their wider boundary
-from `hyper_connection.count * embedding_length`. It emits
-deterministic bounded GitHub matrix shards; the current one-runner topology consumes one
-selected-family shard while retaining the plan as evidence. Every scheduled,
-changed-pin, or forced certification consumes the same complete family roster. The workflow requires `HF_CACHE` to be exactly
-`/Users/lab/models/huggingface`, requires its `hub` directory, and exports
-`HF_HOME` and `HF_HUB_CACHE` from that canonical root for every later step.
-The runner's `.env` exports `HF_CACHE` pointing at that pre-warmed cache on the lab NFS models
-volume and `HF_HUB_OFFLINE=1` (NFS offers no `flock`, so `hf` on the runner is
-read-only; the cache is populated by a two-stage prewarm that downloads on
-local disk and moves each repo to NFS). On Apple Silicon, the wrapper and
-generated-family rewriter re-exec as native arm64 before creating build state;
-the rewriter discards a CMake cache for any other architecture. Correctness
-lanes derive filtered-load resident tensor names from the native stage graph
-planner, including GGUFs with non-finite metadata values. The workflow builds its five
-certification binaries before the manifest lanes; the family battery builds
-them once itself unless `--skip-build` is selected, in which case it verifies
-that every binary already exists. Before any certification starts, every GGUF is resolved
-directly by the immutable snapshot SHA checked into
-`ci/llama-canary/family-certified.json`. The runtime preflight records the
-revisions, verifies all shard/tensor scans and declared runtime/MTP layer
-counts/model bytes, then uses the production topology capability rules to
-classify every interior boundary and select accepted balanced two-stage and
-three-stage cuts. Each model runs one consolidated live certification and
-shares one unloaded monolithic token oracle between its single-step and chain
-lanes. Preflight also checks disk headroom and certification ports. Native MTP/NextN heads remain part of the
-single target model; the battery never reopens that model as a separate draft.
-Those rows require native draft sidebands in staged single-step and chain
-correctness, where each proposed token is verified against the target. The
-general `llama-spec-bench` target/draft benchmark remains available for explicit
-two-model experiments outside the family battery. Per-lane
-outcomes, immutable model manifests, summaries, model scans, preflight
-evidence, and logs are uploaded for 14 days even when the battery fails. Stage
-readiness uses a declared per-model override or a model-size-derived deadline,
-each complete certification has
-a portable process-group wall-clock limit, and the workflow's outer battery
-ceiling is 12 hours. For a changed pin, one non-interactive named Goose session
-(`CANARY_AGENT_PROVIDER`/`CANARY_AGENT_MODEL`, default
-`zai_coding_plan`/`glm-5.3-flash`, overridable through
-`LLAMA_CANARY_GOOSE_PROVIDER`/`LLAMA_CANARY_GOOSE_MODEL`) receives the
-complete developer task:
-repair or regenerate the patch queue, address ABI fallout, and validate repairs
-with prepare, build, smoke, and focused reproductions. The agent then returns
-control instead of starting an additional full battery. The trusted wrapper
-owns the complete candidate gates, and the separate verifier repeats them;
-focused agent results replace neither full pass. The repair loop admits coding turns for 11.5 hours, including time spent in
-earlier gates. Each returned candidate receives a fresh 12-hour gate budget,
-even when the repair window is nearly exhausted. A failed pass after that
-window ends is terminal. The repair step is bounded at 1,420 minutes and its
-job at 1,430 minutes, covering the 23.5-hour maximum plus upload headroom.
-Independent verification retains its separate 12-hour deadline. The agent
-has no GitHub credentials. Ending one coding
-response is not success: the wrapper runs the candidate gates and returns their
-logs to the same Goose session while coding admission remains open. An
-already-admitted verification pass may finish after that window closes. The
-repair and independent-verifier checkouts configure the same repository-local
-`mesh-llama-canary-bot` identity before invoking the wrapper, so candidate
-commit creation never depends on persistent-runner global Git configuration.
-agent may leave only uncommitted candidate changes and cannot alter `.github/`,
-`.agents/`, `scripts/`, `ci/ci.md`, or its runbook. Existing certification and
-parity rows remain immutable. The only manifest edits admitted by the trusted
-policy are scanned `resources.estimated_model_bytes` corrections and appended
-classification-only rows for source files absent from the parity manifest;
-new rows contain only `llama_model`, `family`, `status`, and optional `notes` or
-`unsupported_reason` classification metadata and cannot add artifact selectors,
-source revisions, integrity records, execution settings, model pins, or other
-artifact authority. Those controls form the fixed verification boundary.
+`llama-upstream-canary.yml` runs daily or on trusted-main dispatch. It freezes
+one main source SHA and the upstream target before any hardware work. Unchanged
+scheduled/forced runs build once and certify the complete roster. Changed pins
+use up to three repair attempts, each followed (only when all families pass) by
+an independent build and complete verification pass on the exact same commit.
 
-The repair job snapshots the agent result as an unreachable commit and uploads
-a thin candidate bundle. A separate self-hosted verification job and checkout
-download that bundle, materialize its commit in a fresh detached worktree, and
-run one ordered `prepare -> manifest-policy -> build -> certify` pass with a 12-hour budget while the complete roster runtime is measured. The
-verification job independently resolves the installed Homebrew LLVM prefix and
-exports `SKIPPY_REWRITER_LLVM_PREFIX` before invoking the generated-family
-rewriter check because `GITHUB_ENV` state does not cross job boundaries. The
-wrapper owns the exact upstream selector, validates the prepared-upstream stamp,
-runs the patched llama.cpp/native-test and Rust build gates, and completes the
-full supported-family certification using new native-build and family-evidence
-directories. Before each changed-pin candidate gate, the trusted wrapper regenerates the exact-artifact split certification roster for the candidate recipe. Only a complete battery pass is snapshotted; the independent verifier and unchanged-pin canary reject a roster that is stale for the llama pin, Skippy ABI, or ordered patch queue. Only the passing bundle is uploaded as a one-day certified
-artifact. A separate success-gated job on a fresh
-GitHub-hosted runner receives the `CANARY_REPAIR_TOKEN`, validates the bundle,
-pushes the unique
-`llama-canary/repair-<run>-<attempt>-<upstream>` branch through a run-scoped
-askpass helper, and opens a normal PR bound to that exact commit. That publisher
-is outside the cancellable self-hosted runner concurrency group, and PR
-creation is its final external mutation. Any agent or verification failure
-publishes no branch or PR. Repair, verification, and unchanged-pin family
-evidence uploads explicitly admit success, failure, or cancellation so
-available logs survive operator cancellation while publication and reporting
-steps remain cancellation-sensitive. A green
-publication leaves the canary green; changed pins are never pushed directly to
-`main`. Changed-pin evidence uses its own `llama-canary-changed-pin-*` artifact
-namespace. A GitHub-hosted metadata-only job with Actions-read and Issues-write
-permissions opens or updates one alert after two consecutive non-successful
-scheduled runs, and closes that alert after a successful scheduled recovery.
-Unchanged scheduled and forced certifications stay read-only and never invoke
-the repair agent.
+`llama-canary-family-pass.yml` owns the reusable build → family matrix → hosted
+aggregate. The producer performs prepare, manifest-policy, full native and Rust
+builds, generated-family validation, smoke, and split-roster checks. It validates
+the immutable HF cache before compilation and exports a candidate Git bundle,
+one-family-per-shard plan, four arm64 certification binaries, and a prebuilt
+multimodal library-test executable. Static Metal resources are embedded; an
+unpackaged non-system dylib makes the handoff fail. SHA-256 digests bind all
+handoff bytes to the candidate, main base, run/attempt, and pass identity.
+
+Each named family job runs `--skip-build --shard-index` on the matching
+`family-certify` pool, with max-parallel 8 and fail-fast disabled. No build
+runner is held while workers queue: one machine can execute all jobs serially,
+and more machines can run them concurrently. Each machine must have the same
+arm64/Metal toolchain/runtime compatibility and read-only
+`HF_CACHE=/Users/lab/models/huggingface`, with `HF_HUB_OFFLINE=1`. One service
+per physical certification machine avoids competing model loads and ports.
+There is no Actions model cache and no worker-side compilation or download.
+
+The aggregate requires every planned family exactly once, successful worker
+status, matching candidate/plan/build digests, successful core lanes, and any
+required multimodal result. The battery itself reconciles the production
+planner's selected cuts, immutable revisions, tensor bytes, and native MTP
+requirements. Missing, cancelled, duplicate, or stale evidence cannot certify.
+Full worker/build logs remain for 14 days; executable handoffs remain for seven
+days so a single-machine queue can complete later passes.
+
+Within a build job, Goose resumes the same session for prepare/build failures
+under the existing 11.5-hour coding-admission and 12-hour per-gate budgets. A
+failed distributed pass supplies its candidate plus family/build logs to a new
+session in the next bounded attempt. Candidates are local, uncertified commits
+until both full family passes are green. The separate GitHub-hosted publisher
+alone receives `CANARY_REPAIR_TOKEN`; it publishes no failed/incomplete state.
+No Actions-write credential or dispatch controller is needed. Feature-ref
+manual dispatch is rejected before persistent-runner work. The workflow-level
+non-cancelling concurrency group serializes canary runs, not individual families.
 
 For a non-canary manual dispatch, `release.yml` runs the checked-in
 `scripts/release-version.sh`, creates one linear release-source commit when the

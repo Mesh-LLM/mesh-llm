@@ -10,9 +10,18 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "llama-upstream-canary.yml"
+PASS_WORKFLOW = ROOT / ".github/workflows/llama-canary-family-pass.yml"
+SETUP_ACTION = ROOT / ".github/actions/setup-canary-runner/action.yml"
+
+def setup_step(name):
+    action = yaml.safe_load(SETUP_ACTION.read_text())
+    return next(step["run"] for step in action["runs"]["steps"] if step.get("name") == name)
+
+
 PARITY = ROOT / "scripts" / "skippy-llama-parity.py"
 UPDATE_PIN = ROOT / "scripts" / "update-llama-pin.sh"
 BATTERY = ROOT / "scripts" / "skippy-family-battery.sh"
@@ -86,7 +95,7 @@ class ParityCliInvocationTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn(
-            "skippy-llama-parity.py --llama-src .deps/llama.cpp validate", workflow
+            "skippy-llama-parity.py --llama-src .deps/llama.cpp validate", wrapper
         )
         self.assertNotIn("next-boundary-target", workflow)
         self.assertIn(
@@ -105,109 +114,49 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertNotIn("\n  push:", workflow)
 
     def test_new_canary_queues_behind_active_runner_work(self) -> None:
-        workflow = WORKFLOW.read_text(encoding="utf-8")
-        self.assertEqual(2, workflow.count("group: llama-upstream-canary-runner"))
-        self.assertEqual(2, workflow.count("cancel-in-progress: false"))
+        workflow = WORKFLOW.read_text()
+        self.assertEqual(1, workflow.count("group: llama-upstream-canary"))
+        self.assertEqual(1, workflow.count("cancel-in-progress: false"))
+        self.assertNotIn("concurrency:", PASS_WORKFLOW.read_text())
+        # One workflow queues runs; family jobs never share a serialization group.
         self.assertNotIn("cancel-in-progress: true", workflow)
-        publisher = workflow[workflow.index("  publish-certified-canary:") : workflow.index("  alert-consecutive-failures:")]
-        self.assertNotIn("concurrency:", publisher)
 
     def test_workflow_builds_binaries_before_skipping_per_lane_builds(self) -> None:
-        workflow = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("force_certify:", workflow)
-        self.assertIn("FORCE_CERTIFY:", workflow)
-        self.assertIn(
-            "LLAMA_BUILD_DIR: ${{ github.workspace }}/.deps/llama-canary-${{ github.run_id }}-${{ github.run_attempt }}",
-            workflow,
-        )
-        self.assertIn(
-            "LLAMA_STAGE_BUILD_DIR: ${{ github.workspace }}/.deps/llama-canary-${{ github.run_id }}-${{ github.run_attempt }}",
-            workflow,
-        )
-        self.assertIn("LLAMA_STAGE_BACKEND: metal", workflow)
-        self.assertNotIn("mozilla-actions/sccache-action", workflow)
-        self.assertNotIn("SCCACHE_GHA_ENABLED", workflow)
-        self.assertIn("SCCACHE_C_CUSTOM_CACHE_BUSTER", workflow)
-        self.assertIn('MESH_LLM_REQUIRE_SCCACHE: "1"', workflow)
-        self.assertIn("SCCACHE_DIR: /Users/lab/Library/Caches/mesh-llm/sccache/llama-canary-arm64", workflow)
-        self.assertNotIn('RUSTC_WRAPPER: ""', workflow)
-        self.assertNotIn('LLAMA_STAGE_USE_SCCACHE: "0"', workflow)
-        self.assertIn("Show compiler cache stats", workflow)
-
-        native_build = _step_block(workflow, "Build patched llama.cpp ABI")
-        self.assertIn(
-            "arch -arm64 bash scripts/build-llama.sh -DCMAKE_OSX_ARCHITECTURES=arm64",
-            native_build,
-        )
-
-        family_plan = _step_block(workflow, "Plan and verify family certification cache")
-        self.assertIn("python3 scripts/plan-family-battery.py", family_plan)
-        self.assertNotIn("--cadence", family_plan)
-        self.assertIn("--check-cache", family_plan)
-        self.assertIn('--cache-root "$HF_CACHE"', family_plan)
-        self.assertIn('--github-output "$GITHUB_OUTPUT"', family_plan)
-        self.assertNotIn("--families", family_plan)
-        self.assertLess(workflow.index(family_plan), workflow.index(native_build))
-
-        build = _step_block(workflow, "Build stage runtime crates")
-        self.assertIn("cargo build", build)
-        self.assertIn("steps.sha.outputs.certify == 'true'", build)
-        self.assertNotIn("-p skippy-ffi", build)
-        for package in (
-            "skippy-correctness",
-            "skippy-server",
-            "skippy-model-package",
-        ):
-            self.assertIn(f"-p {package}", build)
-
-        architecture = _step_block(workflow, "Verify native archive architecture")
-        self.assertIn('lipo -archs "$archive"', architecture)
-        self.assertIn('[[ "$arches" != "arm64" ]]', architecture)
-
-        battery = _step_block(
-            workflow, "Supported-families certification battery (parity gate)"
-        )
-        self.assertIn("scripts/skippy-family-battery.sh --skip-build --plan", battery)
-        self.assertIn("steps.sha.outputs.certify == 'true'", battery)
-        self.assertIn("FAMILY_BATTERY_RUN_ID:", battery)
-        self.assertIn("timeout-minutes: 720", battery)
-
-        upload = _step_block(workflow, "Upload supported-families battery evidence")
-        self.assertIn("success() || failure() || cancelled()", upload)
-        self.assertNotIn("always()", upload)
-        self.assertIn("actions/upload-artifact@", upload)
-        self.assertIn("target/family-battery/", upload)
-        self.assertIn("retention-days: 14", upload)
-
-        resolve = _step_block(workflow, "Resolve requested llama.cpp upstream")
-        self.assertIn('new_sha="$(git ls-remote', resolve)
-        self.assertIn('"$FORCE_CERTIFY" == "true"', resolve)
-        self.assertIn('echo "certify=true"', resolve)
-        self.assertIn('echo "cadence=manual-full"', resolve)
-        self.assertIn('echo "cadence=llama-bump"', resolve)
-        self.assertIn('"$GITHUB_EVENT_NAME" == "schedule"', resolve)
-        self.assertIn('echo "cadence=nightly"', resolve)
-
-        forced_report = _step_block(workflow, "Report forced certification result")
-        self.assertIn("steps.sha.outputs.cadence == 'manual-full'", forced_report)
-
-        nightly_report = _step_block(workflow, "Report nightly family result")
-        self.assertIn("steps.sha.outputs.cadence == 'nightly'", nightly_report)
-        self.assertIn("steps.family_plan.outputs.family_count", nightly_report)
+        workflow = yaml.safe_load(PASS_WORKFLOW.read_text())
+        build, family = workflow['jobs']['build'], workflow['jobs']['family']
+        self.assertEqual(family['needs'], 'build')
+        self.assertFalse(family['strategy']['fail-fast'])
+        self.assertEqual(family['strategy']['max-parallel'], 8)
+        self.assertIn('fromJSON(needs.build.outputs.matrix)', family['strategy']['matrix'])
+        commands = '\n'.join(step.get('run', '') for step in family['steps'])
+        self.assertIn('--skip-build --plan', commands)
+        self.assertIn('--shard-index', commands)
+        self.assertNotIn('cargo ', commands)
+        wrapper = (ROOT / 'scripts/llama-canary-agent-repair.sh').read_text()
+        self.assertIn('arch -arm64 bash scripts/build-llama.sh -DCMAKE_OSX_ARCHITECTURES=arm64', wrapper)
+        self.assertIn('cargo build -p skippy-runtime -p skippy-server', wrapper)
+        self.assertIn('lipo -archs', wrapper)
+        self.assertEqual(build['env']['LLAMA_STAGE_BACKEND'], 'metal')
+        self.assertIn('inputs.pass_id', build['env']['LLAMA_STAGE_BUILD_DIR'])
+        self.assertIn('SCCACHE_C_CUSTOM_CACHE_BUSTER', setup_step('Isolate compiler cache identity'))
+        self.assertNotIn('SCCACHE_GHA_ENABLED', PASS_WORKFLOW.read_text())
+        self.assertIn('force_certify:', WORKFLOW.read_text())
 
     def test_persistent_runner_executes_only_trusted_main_with_read_access(self) -> None:
-        workflow = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("runs-on: [self-hosted, family-certify]", workflow)
-        self.assertIn("permissions:\n      contents: read", workflow)
-        self.assertIn("ref: main", workflow)
-        self.assertIn("fetch-depth: 1", workflow)
-        self.assertNotIn("queue_ref", workflow)
-        self.assertNotIn("github.token", workflow)
-        self.assertNotIn("contents: write", workflow)
+        workflow = WORKFLOW.read_text()
+        worker = PASS_WORKFLOW.read_text()
+        self.assertIn("github.ref == 'refs/heads/main'", workflow)
+        self.assertIn("github.ref == 'refs/heads/main'", worker)
+        self.assertIn('ref: ${{ github.sha }}', workflow)
+        self.assertIn('ref: ${{ inputs.source }}', worker)
+        self.assertIn('contents: read', worker)
+        self.assertNotIn('contents: write', workflow + worker)
+        self.assertNotIn('secrets.', worker)
+        self.assertNotIn('github.token', worker)
 
     def test_persistent_runner_requires_exact_read_only_hf_cache(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        preflight = _step_block(workflow, "Verify runner toolchain")
+        preflight = setup_step("Verify runner toolchain")
         self.assertIn('expected_hf_cache="/Users/lab/models/huggingface"', preflight)
         self.assertIn('"${HF_CACHE:-}" != "$expected_hf_cache"', preflight)
         self.assertIn('[[ ! -d "$expected_hf_cache/hub" ]]', preflight)
@@ -217,7 +166,7 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
 
     def test_persistent_runner_executes_goose_preflight(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        preflight = _step_block(workflow, "Verify runner toolchain")
+        preflight = setup_step("Verify runner toolchain")
         self.assertIn('goose_dir="/Users/lab/.local/bin"', preflight)
         self.assertIn('echo "$goose_dir" >> "$GITHUB_PATH"', preflight)
         self.assertIn("xcrun goose; do", preflight)
@@ -235,18 +184,14 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn('-DCMAKE_OSX_ARCHITECTURES="$NATIVE_ARCH"', checker)
 
     def test_changed_pin_never_pushes_directly_to_main(self) -> None:
-        workflow = WORKFLOW.read_text(encoding="utf-8")
-        changed = _step_block(workflow, "Changed-pin agent developer task")
-        publisher = workflow[workflow.index("  publish-certified-canary:") : workflow.index("  alert-consecutive-failures:")]
-        self.assertIn("steps.sha.outputs.changed == 'true'", changed)
-        self.assertIn("scripts/llama-canary-agent-repair.sh", changed)
-        self.assertNotIn("CANARY_REPAIR_TOKEN:", changed)
-        self.assertIn("UPSTREAM_SHA_INPUT:", changed)
-        self.assertIn("runs-on: ubuntu-24.04", publisher)
-        self.assertIn("CANARY_REPAIR_TOKEN:", publisher)
-        self.assertIn("scripts/llama-canary-publish.sh", publisher)
-        self.assertNotIn("update-pin:", workflow)
-        self.assertNotIn("HEAD:refs/heads/main", workflow)
+        workflow = WORKFLOW.read_text()
+        worker = PASS_WORKFLOW.read_text()
+        publisher = workflow[workflow.index('  publish-certified-canary:'):workflow.index('  alert-consecutive-failures:')]
+        self.assertNotIn('CANARY_REPAIR_TOKEN', worker)
+        self.assertIn('runs-on: ubuntu-24.04', publisher)
+        self.assertIn('CANARY_REPAIR_TOKEN:', publisher)
+        self.assertIn('scripts/llama-canary-publish.sh', publisher)
+        self.assertNotIn('HEAD:refs/heads/main', workflow + worker)
 
     def test_update_pin_script_writes_pin_and_rejects_invalid_sha(self) -> None:
         updater = UPDATE_PIN.read_text(encoding="utf-8")
@@ -302,107 +247,43 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
             self.assertEqual(prepared_target + "\n", pin.read_text(encoding="utf-8"))
 
     def test_changed_pin_uses_one_agent_then_success_gated_publication(self) -> None:
-        workflow = WORKFLOW.read_text(encoding="utf-8")
-        self.assertNotIn("Detect existing changed-pin canary PR", workflow)
-        changed = _step_block(workflow, "Changed-pin agent developer task")
-        self.assertIn("steps.sha.outputs.changed == 'true'", changed)
-        self.assertIn("timeout-minutes: 1420", changed)
-        self.assertIn('CANARY_VERIFICATION_TIMEOUT_SECONDS: "43200"', changed)
-        latest = workflow.split("  verify-changed-canary:", 1)[0]
-        self.assertIn("timeout-minutes: 1430", latest)
-        self.assertIn("continue-on-error: true", changed)
-        self.assertIn("LLAMA_CANARY_GOOSE_PROVIDER", changed)
-        self.assertIn("zai_coding_plan", changed)
-        self.assertIn("LLAMA_CANARY_GOOSE_MODEL", changed)
-        self.assertIn("glm-5.3-flash", changed)
-        self.assertIn('CANARY_AGENT_TIMEOUT_SECONDS: "41400"', changed)
-        self.assertIn("CANARY_HARNESS_MODE: repair", changed)
-        self.assertNotIn("CANARY_REPAIR_TOKEN:", changed)
-        self.assertIn("UPSTREAM_SHA_INPUT:", changed)
-        self.assertIn("scripts/llama-canary-agent-repair.sh", changed)
-
-        handoff = _step_block(workflow, "Upload changed-pin agent candidate")
-        self.assertIn("!cancelled()", handoff)
-        self.assertNotIn("always()", handoff)
-        self.assertIn("steps.changed_canary.outcome == 'success'", handoff)
-        self.assertIn("steps.changed_canary.outputs.candidate_bundle", handoff)
-        self.assertNotIn("CANARY_REPAIR_TOKEN", handoff)
-
-        verifier = workflow[workflow.index("  verify-changed-canary:") : workflow.index("  publish-certified-canary:")]
-        self.assertIn("needs: latest-upstream", verifier)
-        self.assertIn("runs-on: [self-hosted, family-certify]", verifier)
-        self.assertIn("CANARY_HARNESS_MODE: verify", verifier)
-        self.assertIn('CANARY_VERIFICATION_TIMEOUT_SECONDS: "43200"', verifier)
-        self.assertIn("actions/download-artifact@", verifier)
-        self.assertIn("Upload independently certified candidate", verifier)
-        self.assertIn("Configure verifier LLVM", verifier)
-        self.assertNotIn("CANARY_REPAIR_TOKEN", verifier)
-
-        verifier_llvm = _step_block(workflow, "Configure verifier LLVM")
-        self.assertIn("brew --prefix llvm@22", verifier_llvm)
-        self.assertIn("brew --prefix llvm", verifier_llvm)
-        self.assertIn("ClangConfig.cmake", verifier_llvm)
-        self.assertIn(
-            'echo "SKIPPY_REWRITER_LLVM_PREFIX=$llvm_prefix" >> "$GITHUB_ENV"',
-            verifier_llvm,
-        )
-
-        publisher = workflow[workflow.index("  publish-certified-canary:") : workflow.index("  alert-consecutive-failures:")]
-        self.assertIn("needs: verify-changed-canary", publisher)
-        self.assertIn("runs-on: ubuntu-24.04", publisher)
-        self.assertIn("actions/download-artifact@", publisher)
-        self.assertIn("CANARY_BUNDLE:", publisher)
-        self.assertIn("CANARY_REPAIR_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}", publisher)
-        self.assertIn("scripts/llama-canary-publish.sh", publisher)
-
-        report = _step_block(workflow, "Report changed-pin result")
-        self.assertIn("CANDIDATE_UPLOAD_OUTCOME", report)
-        self.assertIn("No canary branch or pull request was published", report)
-        self.assertIn('echo "ready=true"', report)
-        self.assertIn('if [[ "$CHANGED_CANARY_OUTCOME" != "success" || "$CANDIDATE_UPLOAD_OUTCOME" != "success" ]]', report)
-
-        upload = _step_block(workflow, "Upload changed-pin canary evidence")
-        self.assertIn("success() || failure() || cancelled()", upload)
-        self.assertNotIn("always()", upload)
-        self.assertIn("llama-canary-state-${{ github.run_id }}-${{ github.run_attempt }}", upload)
-        self.assertIn("llama-canary-changed-pin-${{ github.run_id }}-${{ github.run_attempt }}", upload)
-        self.assertNotIn("name: llama-family-battery-", upload)
-        self.assertIn("retention-days: 14", upload)
+        workflow = yaml.safe_load(WORKFLOW.read_text())
+        jobs = workflow['jobs']
+        for attempt in range(1, 4):
+            repair, verify = jobs[f'repair-{attempt}'], jobs[f'verify-{attempt}']
+            self.assertEqual(repair['uses'], './.github/workflows/llama-canary-family-pass.yml')
+            self.assertEqual(verify['uses'], repair['uses'])
+            self.assertEqual(verify['with']['mode'], 'verify-build')
+            self.assertIn(f"needs.repair-{attempt}.outputs.green == 'true'", verify['if'])
+            if attempt > 1:
+                self.assertIn(f"needs.verify-{attempt - 1}.outputs.green != 'true'", repair['if'])
+                self.assertIn('feedback_pattern', repair['with'])
+        self.assertIn("needs.result.outputs.publish == 'true'", jobs['publish-certified-canary']['if'])
+        worker = PASS_WORKFLOW.read_text()
+        self.assertIn("CANARY_AGENT_TIMEOUT_SECONDS: '41400'", worker)
+        self.assertIn("CANARY_VERIFICATION_TIMEOUT_SECONDS: '43200'", worker)
+        self.assertIn('timeout-minutes: 1430', worker)
+        self.assertIn('retention-days: 14', worker)
+        self.assertIn('LLAMA_CANARY_GOOSE_PROVIDER', worker)
+        self.assertIn('glm-5.3-flash', worker)
+        self.assertNotIn('CANARY_REPAIR_TOKEN', worker)
 
     def test_changed_pin_jobs_configure_local_git_identity_before_harness(self) -> None:
-        workflow = WORKFLOW.read_text(encoding="utf-8")
-        jobs = (
-            workflow[
-                workflow.index("  latest-upstream:") : workflow.index(
-                    "  verify-changed-canary:"
-                )
-            ],
-            workflow[
-                workflow.index("  verify-changed-canary:") : workflow.index(
-                    "  publish-certified-canary:"
-                )
-            ],
-        )
-        for job in jobs:
-            identity = _step_block(job, "Configure canary Git identity")
-            self.assertIn(
-                'git config --local user.name "mesh-llama-canary-bot"', identity
-            )
-            self.assertIn(
-                'git config --local user.email "llama-canary-bot@meshllm.invalid"',
-                identity,
-            )
-            self.assertLess(
-                job.index("Configure canary Git identity"),
-                job.index("scripts/llama-canary-agent-repair.sh"),
-            )
+        identity = setup_step('Configure canary Git identity')
+        self.assertIn('git config --local user.name "mesh-llama-canary-bot"', identity)
+        self.assertIn('git config --local user.email "llama-canary-bot@meshllm.invalid"', identity)
+        worker = PASS_WORKFLOW.read_text()
+        self.assertLess(worker.index('uses: ./.github/actions/setup-canary-runner'), worker.index('id: build'))
+        preflight = setup_step('Verify runner toolchain')
+        self.assertIn('brew --prefix llvm@22', preflight)
+        self.assertIn('ClangConfig.cmake', preflight)
 
     def test_two_scheduled_failures_raise_one_reconciled_issue(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         alert = workflow[workflow.index("  alert-consecutive-failures:") :]
         self.assertIn("!cancelled() && github.event_name == 'schedule'", alert)
         self.assertNotIn("always()", alert)
-        self.assertIn("needs: [latest-upstream, verify-changed-canary, publish-certified-canary]", alert)
+        self.assertIn("needs: [resolve, result, publish-certified-canary]", alert)
         self.assertIn("runs-on: ubuntu-24.04", alert)
         self.assertIn("actions: read", alert)
         self.assertIn("issues: write", alert)
@@ -431,9 +312,8 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         wrapper = (ROOT / "scripts" / "llama-canary-agent-repair.sh").read_text(
             encoding="utf-8"
         )
-        self.assertIn("Verify split certification roster", workflow)
-        self.assertIn("generate-split-certified.py --check", workflow)
-        self.assertIn("steps.split_roster.outcome == 'success'", workflow)
+        self.assertIn("generate-split-certified.py --check", wrapper)
+        self.assertIn("check_split_certification_roster\n", wrapper)
         gates = wrapper[
             wrapper.index("run_candidate_gates()") : wrapper.index(
                 "write_split_certification_roster()"

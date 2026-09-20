@@ -1,0 +1,213 @@
+name: llama canary family pass
+on:
+  workflow_call:
+    inputs:
+      source:
+        type: string
+        required: true
+      upstream:
+        type: string
+        required: true
+      pass_id:
+        type: string
+        required: true
+      mode:
+        type: string
+        required: true
+      previous_package:
+        type: string
+        default: ''
+      previous_identity:
+        type: string
+        default: ''
+      previous_head:
+        type: string
+        default: ''
+      feedback_build_pattern:
+        type: string
+        default: ''
+      feedback_pattern:
+        type: string
+        default: ''
+    outputs:
+      green:
+        value: ${{ jobs.aggregate.outputs.green }}
+      package:
+        value: ${{ jobs.build.outputs.package }}
+      identity:
+        value: ${{ jobs.build.outputs.identity }}
+      head:
+        value: ${{ jobs.build.outputs.head }}
+      branch:
+        value: ${{ jobs.build.outputs.branch }}
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  build:
+    # These persistent machines only execute the protected main workflow.
+    if: github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, family-certify]
+    timeout-minutes: 1430
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+      identity: ${{ steps.build.outputs.identity_sha256 }}
+      head: ${{ steps.build.outputs.candidate }}
+      branch: ${{ steps.build.outputs.branch }}
+      package: llama-family-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
+    env:
+      MESH_LLM_REQUIRE_SCCACHE: '1'
+      SCCACHE_DIR: /Users/lab/Library/Caches/mesh-llm/sccache/llama-canary-arm64
+      LLAMA_STAGE_BACKEND: metal
+      LLAMA_STAGE_BUILD_DIR: ${{ github.workspace }}/.deps/llama-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
+      LLAMA_BUILD_DIR: ${{ github.workspace }}/.deps/llama-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-canary-runner
+      - name: Download previous candidate
+        if: inputs.previous_package != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.previous_package }}
+          path: ${{ runner.temp }}/canary-previous-${{ inputs.pass_id }}
+      - name: Download prior family failure evidence
+        if: inputs.feedback_pattern != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: ${{ inputs.feedback_pattern }}
+          path: ${{ runner.temp }}/canary-feedback-${{ inputs.pass_id }}
+      - name: Download prior build failure evidence
+        if: inputs.feedback_build_pattern != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: ${{ inputs.feedback_build_pattern }}
+          path: ${{ runner.temp }}/canary-feedback-${{ inputs.pass_id }}
+      - name: Build exact candidate for distributed certification
+        id: build
+        env:
+          CANARY_HARNESS_MODE: ${{ inputs.mode }}
+          CANARY_PASS_ID: ${{ inputs.pass_id }}
+          UPSTREAM_SHA_INPUT: ${{ inputs.upstream }}
+          CANARY_PREVIOUS_PACKAGE: ${{ inputs.previous_package != '' && format('{0}/canary-previous-{1}', runner.temp, inputs.pass_id) || '' }}
+          CANARY_PREVIOUS_IDENTITY: ${{ inputs.previous_identity }}
+          CANARY_CANDIDATE_SHA: ${{ inputs.previous_head }}
+          CANARY_FEEDBACK_DIR: ${{ inputs.feedback_pattern != '' && format('{0}/canary-feedback-{1}', runner.temp, inputs.pass_id) || '' }}
+          CANARY_EXPORT_DIR: ${{ runner.temp }}/canary-export-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
+          CANARY_AGENT_PROVIDER: ${{ vars.LLAMA_CANARY_GOOSE_PROVIDER || 'zai_coding_plan' }}
+          CANARY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_GOOSE_MODEL || 'glm-5.3-flash' }}
+          CANARY_AGENT_TIMEOUT_SECONDS: '41400'
+          CANARY_VERIFICATION_TIMEOUT_SECONDS: '43200'
+        run: |
+          set -euo pipefail
+          python3 scripts/llama-canary-family-evidence.py build
+      - name: Upload exact candidate and executable handoff
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: llama-family-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
+          path: ${{ runner.temp }}/canary-export-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload build and repair evidence
+        if: ${{ success() || failure() || cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: llama-build-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
+          path: .deps/llama-canary-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}/
+          if-no-files-found: warn
+          retention-days: 14
+  family:
+    name: ${{ inputs.pass_id }} / ${{ matrix.families }}
+    needs: build
+    runs-on: [self-hosted, family-certify]
+    timeout-minutes: 780
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix: ${{ fromJSON(needs.build.outputs.matrix) }}
+    env:
+      HF_CACHE: /Users/lab/models/huggingface
+      HF_HOME: /Users/lab/models/huggingface
+      HF_HUB_CACHE: /Users/lab/models/huggingface/hub
+      HF_HUB_OFFLINE: '1'
+      LLAMA_STAGE_BACKEND: metal
+      FAMILY_BATTERY_RUN_ID: ${{ inputs.pass_id }}-${{ matrix.shard_index }}
+      FAMILY_BATTERY_ARTIFACT_ROOT: ${{ github.workspace }}/target/canary-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+      FAMILY_BATTERY_MM_TEST_BIN: ${{ github.workspace }}/target/debug/skippy-mm-test
+      PACKAGE: ${{ github.workspace }}/.deps/canary-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ matrix.shard_index }}
+      IDENTITY: ${{ needs.build.outputs.identity }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.build.outputs.package }}
+          path: ${{ env.PACKAGE }}
+      - name: Verify immutable handoff and restore producer executables
+        run: |
+          set -euo pipefail
+          python3 scripts/llama-canary-family-evidence.py restore --root "$PWD" --package "$PACKAGE" --identity "$IDENTITY"
+      - name: Certify one family
+        id: certify
+        continue-on-error: true
+        timeout-minutes: 720
+        env:
+          SHARD_INDEX: ${{ matrix.shard_index }}
+        run: |
+          set -euo pipefail
+          arch -arm64 scripts/skippy-family-battery.sh --skip-build --plan "$PACKAGE/plan.json" --shard-index "$SHARD_INDEX"
+      - name: Bind worker result to candidate and plan
+        if: ${{ !cancelled() }}
+        env:
+          FAMILY: ${{ matrix.families }}
+          OUTCOME: ${{ steps.certify.outcome }}
+        run: |
+          set -euo pipefail
+          python3 scripts/llama-canary-family-evidence.py receipt --package "$PACKAGE" --identity "$IDENTITY" \
+            --family "$FAMILY" --outcome "$OUTCOME" --evidence "$FAMILY_BATTERY_ARTIFACT_ROOT/$FAMILY_BATTERY_RUN_ID"
+      - name: Upload family evidence
+        if: ${{ success() || failure() || cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: llama-family-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ matrix.shard_index }}
+          path: ${{ env.FAMILY_BATTERY_ARTIFACT_ROOT }}/${{ env.FAMILY_BATTERY_RUN_ID }}/
+          if-no-files-found: error
+          retention-days: 14
+  aggregate:
+    needs: [build, family]
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    runs-on: ubuntu-24.04
+    outputs:
+      green: ${{ steps.aggregate.outputs.green }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.build.outputs.package }}
+          path: ${{ runner.temp }}/aggregate-input
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: llama-family-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-*
+          path: ${{ runner.temp }}/aggregate-evidence
+      - name: Require every planned family and lane
+        id: aggregate
+        continue-on-error: true
+        env:
+          IDENTITY: ${{ needs.build.outputs.identity }}
+          FAMILY_RESULT: ${{ needs.family.result }}
+        run: |
+          set -euo pipefail
+          test "$FAMILY_RESULT" = success
+          python3 scripts/llama-canary-family-evidence.py aggregate --package "$RUNNER_TEMP/aggregate-input" \
+            --identity "$IDENTITY" --evidence "$RUNNER_TEMP/aggregate-evidence"

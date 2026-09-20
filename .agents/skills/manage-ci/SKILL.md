@@ -415,6 +415,25 @@ checked-in expiry are the maintainer-controlled approval boundary.
 - Validate with the narrowest safe workflow. A run is not successful until all
   required jobs reach a terminal successful conclusion; state expected skips.
 
+## Llama canary family fan-out
+
+The trusted-main canary releases its build runner before scheduling one job
+per certified family. Every worker consumes the exact source, plan, manifest,
+and executable handoff from its producer; family workers never rebuild.
+The immutable model cache remains offline and read-only. One workflow-level
+non-cancelling concurrency group prevents overlapping canary runs, while
+family jobs have no shared concurrency group and use at most eight runners.
+
+Changed pins have at most three distributed repair attempts. Within each
+attempt, prepare/build failures return to the same bounded Goose session.
+Family or independent-verification failures feed the preserved candidate and
+all available worker/build evidence into a new session in the next attempt.
+Every edit invalidates all family results. A complete green repair pass must
+be followed by a fresh independent build and complete per-family pass on the
+same commit. A hosted aggregate rejects missing, duplicate, failed, cancelled,
+or mismatched results. Only the final hosted publisher receives the repair
+credential, and exhausted attempts publish no branch or PR.
+
 ## Validation contract
 
 For every workflow or local-action edit:
