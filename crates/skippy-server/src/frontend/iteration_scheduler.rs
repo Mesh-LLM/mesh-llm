@@ -164,7 +164,7 @@ fn ensure_direct_iteration_active(
     Ok(())
 }
 
-type RuntimeOperationFn = Box<dyn FnOnce(&Arc<Mutex<RuntimeState>>) + Send>;
+type RuntimeOperationFn = Box<dyn FnOnce(&Arc<Mutex<RuntimeState>>) -> Duration + Send>;
 type RuntimeSetupOutcome = (Vec<String>, Vec<(String, OpenAiError)>);
 
 struct RuntimeOperation {
@@ -254,20 +254,30 @@ where
         run: Box::new(move |runtime: &Arc<Mutex<RuntimeState>>| {
             let queue_wait_ms = enqueued_at.elapsed().as_secs_f64() * 1_000.0;
             let lock_started = Instant::now();
+            // The compute meter covers lock-held work only: from guard
+            // acquisition to the end of the runtime operation, so
+            // scheduler-thread lock contention does not count as model time.
+            let mut metered = Duration::ZERO;
             let outcome = runtime
                 .lock()
                 .map_err(|_| OpenAiError::backend("runtime lock poisoned"))
                 .and_then(|mut runtime| {
                     let runtime_lock_wait_ms = lock_started.elapsed().as_secs_f64() * 1_000.0;
                     let hold_started = Instant::now();
-                    operation(&mut runtime).map(|value| SchedulerRuntimeOutcome {
-                        value,
-                        queue_wait_ms,
-                        runtime_lock_wait_ms,
-                        runtime_lock_hold_ms: hold_started.elapsed().as_secs_f64() * 1_000.0,
-                    })
+                    let result = operation(&mut runtime).map(|value| {
+                        let runtime_lock_hold_ms = hold_started.elapsed().as_secs_f64() * 1_000.0;
+                        SchedulerRuntimeOutcome {
+                            value,
+                            queue_wait_ms,
+                            runtime_lock_wait_ms,
+                            runtime_lock_hold_ms,
+                        }
+                    });
+                    metered = hold_started.elapsed();
+                    result
                 });
             let _ = reply.send(outcome);
+            metered
         }),
     };
     (operation, result)
@@ -297,6 +307,8 @@ where
         run: Box::new(move |runtime: &Arc<Mutex<RuntimeState>>| {
             let queue_wait_ms = enqueued_at.elapsed().as_secs_f64() * 1_000.0;
             let lock_started = Instant::now();
+            // Compute meter: lock-held work only, as in `runtime_operation`.
+            let mut metered = Duration::ZERO;
             let outcome = worker_control.ensure_active().and_then(|()| {
                 runtime
                     .lock()
@@ -306,14 +318,20 @@ where
                 worker_control.ensure_active()?;
                 let runtime_lock_wait_ms = lock_started.elapsed().as_secs_f64() * 1_000.0;
                 let hold_started = Instant::now();
-                operation(&mut runtime, &worker_control).map(|value| SchedulerRuntimeOutcome {
-                    value,
-                    queue_wait_ms,
-                    runtime_lock_wait_ms,
-                    runtime_lock_hold_ms: hold_started.elapsed().as_secs_f64() * 1_000.0,
-                })
+                let result = operation(&mut runtime, &worker_control).map(|value| {
+                    let runtime_lock_hold_ms = hold_started.elapsed().as_secs_f64() * 1_000.0;
+                    SchedulerRuntimeOutcome {
+                        value,
+                        queue_wait_ms,
+                        runtime_lock_wait_ms,
+                        runtime_lock_hold_ms,
+                    }
+                });
+                metered = hold_started.elapsed();
+                result
             });
             let _ = reply.send(outcome);
+            metered
         }),
     };
     (runtime_operation, result, control)
@@ -1048,8 +1066,10 @@ impl SchedulerWorker {
         let started = Instant::now();
         let label = operation.label;
         let cache_operation = operation.control.clone();
-        (operation.run)(&self.runtime);
-        self.record_compute(started.elapsed());
+        // Only lock-held runtime work counts as compute time; scheduler-side
+        // waits, including lock contention, are excluded from the meter.
+        let compute = (operation.run)(&self.runtime);
+        self.record_compute(compute);
         if let Ok(runtime) = self.runtime.lock() {
             self.active_runtime_sessions = runtime.active_session_count();
             if self.active_runtime_sessions < self.max_direct_batch_size {
