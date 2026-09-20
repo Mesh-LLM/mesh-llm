@@ -286,6 +286,47 @@ class AgenticReplayTest(unittest.TestCase):
 
         self.assertEqual(result["finish_reason"], "length")
 
+    def test_stream_request_latches_valid_usage_across_later_invalid_events(self) -> None:
+        class CompleteResponse:
+            status = 200
+
+            def __iter__(self):
+                return iter(
+                    [
+                        b'data: {"choices":[{"delta":{"content":"done"}}],"usage":{"completion_tokens":8,"prompt_tokens":10,"prompt_tokens_details":{"cached_tokens":0}}}\n',
+                        b'data: {"choices":[],"usage":{"completion_tokens":false,"prompt_tokens":false,"prompt_tokens_details":{"cached_tokens":false}}}\n',
+                        b"data: [DONE]\n",
+                    ]
+                )
+
+        class CompleteConnection:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def request(self, *_args, **_kwargs):
+                pass
+
+            def getresponse(self):
+                return CompleteResponse()
+
+            def close(self):
+                pass
+
+        with mock.patch.object(BENCH.http.client, "HTTPConnection", CompleteConnection):
+            result = BENCH.stream_request(
+                "request-1",
+                [{"role": "user", "content": "task"}],
+                [],
+                {"session_id": "session-1"},
+                "model",
+                8,
+                10,
+            )
+
+        self.assertNotIn("error", result)
+        self.assertEqual(result["prompt_tokens"], 10)
+        self.assertEqual(result["cached_tokens"], 0)
+
     def test_output_hash_ignores_tool_call_chunking_and_generated_ids(self) -> None:
         chunked = {}
         BENCH.merge_tool_call_delta(

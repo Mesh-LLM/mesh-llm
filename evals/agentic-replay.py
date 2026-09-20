@@ -837,7 +837,7 @@ def stream_request(
                 }
             usage = event.get("usage")
             if isinstance(usage, dict):
-                saw_prompt_usage = (
+                saw_prompt_usage = saw_prompt_usage or (
                     type(usage.get("prompt_tokens")) is int
                     and usage["prompt_tokens"] > 0
                 )
@@ -847,7 +847,7 @@ def stream_request(
                 prompt_tokens = int(usage.get("prompt_tokens") or prompt_tokens)
                 details = usage.get("prompt_tokens_details")
                 if isinstance(details, dict):
-                    saw_cache_usage = (
+                    saw_cache_usage = saw_cache_usage or (
                         type(details.get("cached_tokens")) is int
                         and details["cached_tokens"] >= 0
                     )
