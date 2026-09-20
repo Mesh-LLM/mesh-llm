@@ -60,6 +60,7 @@ pub(super) fn stage_runtime_status_from_snapshot(
         manifest_sha256: status.manifest_sha256,
         source_model_path: status.source_model_path,
         source_model_sha256: status.source_model_sha256,
+        split_certification: status.split_certification,
         source_model_bytes: status.source_model_bytes,
         materialized_path: status.materialized_path,
         materialized_pinned: status.materialized_pinned,
@@ -105,6 +106,7 @@ pub(crate) fn stage_snapshot_from_runtime_status(
         manifest_sha256: status.manifest_sha256.clone(),
         source_model_path: status.source_model_path.clone(),
         source_model_sha256: status.source_model_sha256.clone(),
+        split_certification: status.split_certification.clone(),
         source_model_bytes: status.source_model_bytes,
         materialized_path: status.materialized_path.clone(),
         materialized_pinned: status.materialized_pinned,
@@ -248,6 +250,7 @@ pub(super) fn stage_load_to_proto(
         model_path: load.model_path,
         source_model_bytes: load.source_model_bytes,
         source_model_sha256: load.source_model_sha256,
+        split_certification: load.split_certification,
         source_resolution_policy: source_resolution_policy_to_proto(load.local_source_required)
             as i32,
         projector_path,
@@ -485,6 +488,7 @@ pub(super) fn stage_load_from_proto(
         model_path: load.model_path,
         source_model_bytes: load.source_model_bytes,
         source_model_sha256: load.source_model_sha256,
+        split_certification: load.split_certification,
         local_source_required,
         projector_path,
         projector_use_gpu: load.projector_use_gpu,
@@ -632,7 +636,7 @@ pub(super) fn stage_load_mode_from_proto(value: i32) -> anyhow::Result<skippy_pr
             Ok(skippy_protocol::LoadMode::ArtifactSlice)
         }
         Ok(skippy_stage_proto::StageLoadMode::Unspecified) | Err(_) => {
-            anyhow::bail!("unsupported generation-10 stage load mode {value}")
+            anyhow::bail!("unsupported generation-11 stage load mode {value}")
         }
     }
 }
@@ -672,7 +676,7 @@ fn stage_activation_codec_from_proto(
         Ok(skippy_stage_proto::StageActivationCodec::S8RowF32RneV1) => {
             Ok(skippy_protocol::StageActivationCodec::S8RowF32RneV1)
         }
-        _ => anyhow::bail!("unsupported generation-10 activation codec {value}"),
+        _ => anyhow::bail!("unsupported generation-11 activation codec {value}"),
     }
 }
 
@@ -694,7 +698,7 @@ fn stage_activation_codec_policy_from_proto(
 ) -> anyhow::Result<skippy_protocol::StageActivationCodecPolicy> {
     match skippy_stage_proto::StageActivationCodecPolicy::try_from(value) {
         Ok(skippy_stage_proto::StageActivationCodecPolicy::Unspecified) => {
-            anyhow::bail!("generation-10 activation codec policy must be explicit")
+            anyhow::bail!("generation-11 activation codec policy must be explicit")
         }
         Ok(skippy_stage_proto::StageActivationCodecPolicy::FixedV1) => {
             Ok(skippy_protocol::StageActivationCodecPolicy::Fixed)
@@ -702,7 +706,7 @@ fn stage_activation_codec_policy_from_proto(
         Ok(skippy_stage_proto::StageActivationCodecPolicy::AutoLosslessV1) => {
             Ok(skippy_protocol::StageActivationCodecPolicy::AutoLosslessV1)
         }
-        _ => anyhow::bail!("unsupported generation-10 activation codec policy {value}"),
+        _ => anyhow::bail!("unsupported generation-11 activation codec policy {value}"),
     }
 }
 
@@ -735,6 +739,7 @@ pub(super) fn stage_control_unavailable_response(
                 manifest_sha256: None,
                 source_model_path: None,
                 source_model_sha256: None,
+                split_certification: None,
                 source_model_bytes: None,
                 materialized_path: None,
                 materialized_pinned: false,
@@ -811,6 +816,7 @@ pub(crate) fn stage_status_from_load(
             .then(|| load.model_path.clone())
             .flatten(),
         source_model_sha256: load.source_model_sha256.clone(),
+        split_certification: load.split_certification.clone(),
         source_model_bytes: load.source_model_bytes,
         materialized_path: None,
         materialized_pinned: false,
@@ -1007,7 +1013,7 @@ fn source_resolution_policy_from_proto(value: i32) -> anyhow::Result<bool> {
         Ok(skippy_stage_proto::SourceResolutionPolicy::Fallback) => Ok(false),
         Ok(skippy_stage_proto::SourceResolutionPolicy::LocalRequired) => Ok(true),
         Ok(skippy_stage_proto::SourceResolutionPolicy::Unspecified) | Err(_) => {
-            anyhow::bail!("unsupported generation-10 stage source resolution policy {value}")
+            anyhow::bail!("unsupported generation-11 stage source resolution policy {value}")
         }
     }
 }
@@ -1110,6 +1116,7 @@ pub(super) fn stage_status_to_proto(
         manifest_sha256: status.manifest_sha256,
         source_model_path: status.source_model_path,
         source_model_sha256: status.source_model_sha256,
+        split_certification: status.split_certification,
         source_model_bytes: status.source_model_bytes,
         materialized_path: status.materialized_path,
         materialized_pinned: Some(status.materialized_pinned),
@@ -1185,6 +1192,7 @@ pub(super) fn stage_status_from_proto(
         manifest_sha256: status.manifest_sha256,
         source_model_path: status.source_model_path,
         source_model_sha256: status.source_model_sha256,
+        split_certification: status.split_certification,
         source_model_bytes: status.source_model_bytes,
         materialized_path: status.materialized_path,
         materialized_pinned: status.materialized_pinned.unwrap_or(false),

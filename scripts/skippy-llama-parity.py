@@ -886,22 +886,16 @@ def validate_runtime_slice_admission(llama_root: Path | None = None) -> int:
             "layer_end exceeds model layer count",
         ),
         (
-            "embedding ownership",
-            r"if\s*\(\s*config->include_embeddings\s*&&\s*"
-            r"config->layer_start\s*!=\s*0\s*&&\s*!config->include_output\s*\)",
-            "only the first runtime slice may include token embeddings",
+            "source-stage frontier",
+            r"if\s*\(\s*skippy_runtime_is_source_stage\s*\(\s*config\s*\)\s*"
+            r"!=\s*\(\s*config->layer_start\s*==\s*0\s*\)\s*\)",
+            "admitted activation imports disagree with the source-stage range",
         ),
         (
-            "first-slice embeddings",
-            r"if\s*\(\s*config->layer_start\s*==\s*0\s*&&\s*"
-            r"!config->include_embeddings\s*\)",
-            "the first runtime slice must include token embeddings",
-        ),
-        (
-            "output ownership",
-            r"if\s*\(\s*config->include_output\s*&&\s*"
-            r"config->layer_end\s*!=\s*n_layer\s*\)",
-            "only the final runtime slice may include output tensors",
+            "terminal-stage frontier",
+            r"if\s*\(\s*skippy_runtime_is_terminal_stage\s*\(\s*config\s*\)\s*"
+            r"!=\s*\(\s*config->layer_end\s*==\s*n_layer\s*\)\s*\)",
+            "admitted activation exports disagree with the terminal-stage range",
         ),
     )
     missing_checks = []

@@ -487,6 +487,7 @@ fn health_test_stage_status(
         manifest_sha256: None,
         source_model_path: None,
         source_model_sha256: None,
+        split_certification: None,
         source_model_bytes: None,
         materialized_path: None,
         materialized_pinned: false,

@@ -25,6 +25,12 @@ files with `--verify-root`. Single-file consumers additionally pass
 `--require-single-file` so multipart artifacts fail closed. CI caches use the
 artifact digest in their exact key; a cache hit is still verified before use.
 
+Multi-artifact manifests may declare `default_artifact_id` for callers that
+intentionally consume the suite's canonical fixture without selecting an
+artifact explicitly. Explicit `--artifact-id` selection always takes
+precedence; a multi-artifact manifest without a declared default remains an
+error.
+
 Different repositories, revisions, files, or quantizations remain separate
 named artifacts even when they cover the same model family. This preserves
 intentional coverage differences while preventing each workflow or script from

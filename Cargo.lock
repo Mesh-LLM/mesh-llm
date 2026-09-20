@@ -4171,6 +4171,7 @@ dependencies = [
  "sha2 0.11.0",
  "skippy-runtime",
  "tracing",
+ "windows-sys 0.61.2",
  "zip",
 ]
 
@@ -7305,7 +7306,6 @@ dependencies = [
  "skippy-ffi",
  "skippy-model",
  "skippy-package-format",
- "skippy-protocol",
  "skippy-runtime",
  "tempfile",
  "tokio",

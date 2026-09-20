@@ -54,7 +54,9 @@ fn models_list_json(
             if capabilities.reasoning_label().is_some() {
                 caps.push("reasoning");
             }
-            let display_name = if public_id == *m {
+            let display_name = if public_id == *m
+                && descriptor.is_none_or(|descriptor| descriptor.identity.model_name == public_id)
+            {
                 crate::models::installed_model_display_name(base_model)
             } else {
                 public_id.clone()
@@ -274,6 +276,85 @@ mod tests {
         }
     }
     #[test]
+    fn local_and_remote_listing_preserve_the_same_name_and_resolve_at_the_host() {
+        let internal = "local-gguf/sha256-test";
+        for revision in [Some("main"), Some("pinned-revision"), None] {
+            let mut descriptor = hf_descriptor(internal);
+            descriptor.identity.revision = revision.map(str::to_owned);
+            let public = mesh::public_model_id_from_identity(&descriptor.identity).unwrap();
+            assert_eq!(public_model_id(internal, Some(&descriptor), ""), public);
+            assert_listing_round_trip(descriptor, &public);
+        }
+        let catalog = catalog_model_ref_descriptor(internal);
+        let public = mesh::public_model_id_from_identity(&catalog.identity).unwrap();
+        assert_listing_round_trip(catalog, &public);
+        assert_listing_round_trip(
+            mesh::ServedModelDescriptor {
+                identity: mesh::ServedModelIdentity {
+                    model_name: internal.into(),
+                    source_kind: mesh::ModelSourceKind::LocalGguf,
+                    local_file_name: Some("Example-Q4_K_M.gguf".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            internal,
+        );
+    }
+
+    fn assert_listing_round_trip(descriptor: mesh::ServedModelDescriptor, public: &str) {
+        use crate::network::openai::request_normalize::ResponseAdapter;
+        use crate::network::openai::request_parse::{
+            BufferedHttpRequest, rewrite_public_model_alias,
+        };
+        use mesh_llm_events::logging::identifiers::RequestId;
+        let internal = descriptor.identity.model_name.clone();
+        let descriptors = vec![descriptor];
+        let local = models_list_json(std::slice::from_ref(&internal), &descriptors, &[]);
+        let remote = models_list_json(&[public.into()], &descriptors, &[]);
+        assert_eq!(local["data"][0]["id"], public);
+
+        assert_eq!(remote["data"][0]["id"], local["data"][0]["id"]);
+        assert_eq!(
+            remote["data"][0]["display_name"],
+            local["data"][0]["display_name"]
+        );
+
+        let body = serde_json::json!({"model": remote["data"][0]["id"], "messages": []});
+        let bytes = serde_json::to_vec(&body).unwrap();
+        let mut raw = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nContent-Length: {}\r\n\r\n",
+            bytes.len()
+        )
+        .into_bytes();
+        raw.extend_from_slice(&bytes);
+        let mut request = BufferedHttpRequest {
+            raw,
+            method: "POST".into(),
+            path: "/v1/chat/completions".into(),
+            client_path: "/v1/chat/completions".into(),
+            request_id: RequestId::default(),
+            body_json: Some(body),
+            body_json_attempted: true,
+            body_len_bytes: bytes.len(),
+            body_bytes: Some(bytes),
+            completion_tokens: None,
+            model_name: Some(public.into()),
+            stream: None,
+            request_object_request_ids: Vec::new(),
+            response_adapter: ResponseAdapter::None,
+            correlation_id: None,
+        };
+        // The requesting node forwards the advertised ID; the serving node
+        // must translate it back to its content-addressed runtime key.
+        rewrite_public_model_alias(&mut request, &[public.into()], &descriptors);
+        assert_eq!(request.model_name.as_deref(), Some(public));
+        rewrite_public_model_alias(&mut request, std::slice::from_ref(&internal), &descriptors);
+        assert_eq!(request.model_name.as_deref(), Some(internal.as_str()));
+        assert_eq!(request.body_json.unwrap()["model"], internal);
+    }
+
+    #[test]
     fn models_list_uses_public_huggingface_model_ref_ids() {
         let models = vec!["Falcon-H1-1.5B-Instruct-Q4_K_M".to_string()];
         let descriptors = vec![hf_descriptor(&models[0])];
@@ -282,11 +363,11 @@ mod tests {
 
         assert_eq!(
             body["data"][0]["id"],
-            "tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M"
+            "tiiuae/Falcon-H1-1.5B-Instruct-GGUF@0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a:Q4_K_M"
         );
         assert_eq!(
             body["data"][0]["display_name"],
-            "tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M"
+            "tiiuae/Falcon-H1-1.5B-Instruct-GGUF@0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a:Q4_K_M"
         );
         assert_eq!(body["data"][0]["owned_by"], "mesh-llm");
     }

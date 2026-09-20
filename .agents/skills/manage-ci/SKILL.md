@@ -332,6 +332,12 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Product and artifact contract
 
+- macOS builds default to the pinned llama.cpp release baseline recorded in
+  `scripts/lib/macos-deployment-target.txt` (currently 13.3). Just, direct
+  host/native build entry points, and both canary jobs must use the same
+  resolved Rust/CMake deployment target. Preserve explicit SDK/cross-platform
+  overrides; include the native target in build/cache identity.
+
 - Model every executable product as a backend-neutral host, one separately
   packaged native runtime per OS/architecture/backend, and a composition-only
   product. A backend matrix belongs to runtime/product rows, never host rows.
@@ -371,6 +377,26 @@ checked-in expiry are the maintainer-controlled approval boundary.
   device runner.
 
 ## Operational safety
+
+- Agentic replay is a daily trusted-main benchmark, without a repository
+  opt-in flag. The persistent micstudio runner must execute natively as arm64
+  before checkout. Its shared model cache is writable and permits pinned model
+  and trajectory downloads. Repair uses Goose with the llama canary's provider
+  and model defaults. Only a complete, gated performance
+  regression may start repair; infrastructure failures retain evidence without
+  invoking the agent. Repair failures or an unchanged tree publish no PR.
+
+- Changed-pin llama canary agents use focused reproductions while repairing
+  source. They return control after those checks pass instead of running an
+  additional full family battery. The trusted repair wrapper still runs every
+  candidate gate over the complete roster, feeds failures back to the same
+  agent, and requires success before snapshotting. The separate verifier still
+  repeats all gates on the exact candidate in a fresh checkout. Agent test
+  results must never replace either trusted full pass. Coding turns are admitted
+  only within a bounded repair window. Each returned candidate receives a full,
+  separately bounded verification pass; earlier repairs and failed gates must
+  not shorten that pass. Outer workflow limits must cover the repair window
+  plus one final verification pass and leave time to upload evidence.
 
 - Inspection, log reads, syntax validation, and dry-run planning are read-only.
   Dispatching, rerunning, cancelling, approving, deleting, changing variables

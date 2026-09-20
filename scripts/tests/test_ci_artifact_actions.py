@@ -2230,6 +2230,7 @@ class CiArtifactActionTests(unittest.TestCase):
             "model_url: ${{ inputs.model_url }}",
             "model_file: ${{ inputs.model_file }}",
             "model_manifest: ${{ inputs.model_manifest }}",
+            "model_artifact_id: ${{ inputs.model_artifact_id }}",
             "model_cadence: ${{ inputs.model_cadence }}",
             "model_cache_scope: ${{ inputs.model_cache_scope }}",
             "save_model_cache: ${{ inputs.save_model_cache }}",
@@ -2242,6 +2243,7 @@ class CiArtifactActionTests(unittest.TestCase):
             "value: ${{ steps.resolve-model.outputs.model_file }}",
             "value: ${{ steps.resolve-model.outputs.model_sha256 }}",
             "value: ${{ steps.resolve-model.outputs.model_size_bytes }}",
+            "value: ${{ steps.resolve-model.outputs.model_path }}",
         ):
             self.assertIn(exported, action)
 
@@ -2925,7 +2927,7 @@ class CiArtifactActionTests(unittest.TestCase):
         }
         expected_jobs = {
             "ci-quality-slice.yml": {
-                "commit_convention", "runner_policy", "quality_contracts", "rust_fmt", "rust_clippy",
+                "commit_convention", "runner_policy", "quality_contracts", "rust_fmt", "cargo_machete", "rust_clippy",
                 "cli_docs_sync", "authority_sentinel",
             },
             "ci-web-slice.yml": {"runner_policy", "ui_quality", "ui_e2e", "website"},

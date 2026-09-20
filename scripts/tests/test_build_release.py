@@ -80,6 +80,8 @@ class BuildReleaseScriptTests(unittest.TestCase):
         lib_dir = scripts_dir / "lib"
         lib_dir.mkdir(exist_ok=True)
         shutil.copy(LLD_LIB, lib_dir / "lld.sh")
+        for name in ("macos-deployment-target.sh", "macos-deployment-target.txt"):
+            shutil.copy(ROOT / "scripts/lib" / name, lib_dir / name)
         self.write_executable(
             bin_dir / "cc",
             """

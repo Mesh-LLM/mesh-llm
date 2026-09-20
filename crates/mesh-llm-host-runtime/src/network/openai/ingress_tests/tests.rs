@@ -928,6 +928,107 @@ fn disconnect_is_dropped_and_cannot_audit_model_access_as_success() {
     ));
 }
 
+/// The host-served path's usage extraction turns a `RespondedWithUsage` outcome
+/// into the real `ExchangeUsage` the terminal envelope carries, and yields
+/// `None` for every non-usage-bearing outcome so no all-zero record is ever
+/// fabricated.
+#[test]
+fn exchange_usage_from_outcome_extracts_real_counts_and_omits_otherwise() {
+    use mesh_llm_events::logging::events::TokenUsage;
+
+    let with_usage = proxy::RouteDispatchOutcome::RespondedWithUsage {
+        status_code: 200,
+        usage: TokenUsage {
+            prompt_tokens: Some(42),
+            cached_prompt_tokens: None,
+            completion_tokens: Some(6),
+            total_tokens: Some(48),
+        },
+    };
+    let usage = exchange_usage_from_outcome(&with_usage).expect("real usage present");
+    assert_eq!(usage.prompt_tokens, 42);
+    assert_eq!(usage.cached_prompt_tokens, None);
+    assert_eq!(usage.completion_tokens, 6);
+    assert_eq!(usage.total_tokens, 48);
+
+    // A backend total that disagrees with prompt+completion (e.g. reasoning
+    // tokens folded into `total`) must ride through as reported — never
+    // silently replaced by a derived sum.
+    let disagreeing_total = proxy::RouteDispatchOutcome::RespondedWithUsage {
+        status_code: 200,
+        usage: TokenUsage {
+            prompt_tokens: Some(10),
+            cached_prompt_tokens: None,
+            completion_tokens: Some(5),
+            total_tokens: Some(23),
+        },
+    };
+    assert_eq!(
+        exchange_usage_from_outcome(&disagreeing_total)
+            .expect("real total present")
+            .total_tokens,
+        23
+    );
+
+    // The backend omitted `total_tokens` — never derive it (prompt+completion
+    // is not necessarily the real total), so this yields None entirely.
+    let missing_total = proxy::RouteDispatchOutcome::RespondedWithUsage {
+        status_code: 200,
+        usage: TokenUsage {
+            prompt_tokens: Some(10),
+            cached_prompt_tokens: None,
+            completion_tokens: Some(5),
+            total_tokens: None,
+        },
+    };
+    assert!(exchange_usage_from_outcome(&missing_total).is_none());
+
+    // A backend reporting prompt but not completion (or vice versa) must
+    // never surface a fabricated zero for the missing count.
+    let missing_completion = proxy::RouteDispatchOutcome::RespondedWithUsage {
+        status_code: 200,
+        usage: TokenUsage {
+            prompt_tokens: Some(42),
+            cached_prompt_tokens: None,
+            completion_tokens: None,
+            total_tokens: Some(42),
+        },
+    };
+    assert!(exchange_usage_from_outcome(&missing_completion).is_none());
+
+    // The real cached-token count rides through when the backend reports it.
+    let with_cache = proxy::RouteDispatchOutcome::RespondedWithUsage {
+        status_code: 200,
+        usage: TokenUsage {
+            prompt_tokens: Some(42),
+            cached_prompt_tokens: Some(30),
+            completion_tokens: Some(6),
+            total_tokens: Some(48),
+        },
+    };
+    assert_eq!(
+        exchange_usage_from_outcome(&with_cache)
+            .expect("real usage present")
+            .cached_prompt_tokens,
+        Some(30)
+    );
+
+    // A status-only response, an error, and a wholly-empty usage object all
+    // yield None — never a fabricated all-zero record.
+    assert!(exchange_usage_from_outcome(&proxy::RouteDispatchOutcome::Responded(200)).is_none());
+    assert!(exchange_usage_from_outcome(&proxy::RouteDispatchOutcome::Failed("x")).is_none());
+    let empty = proxy::RouteDispatchOutcome::RespondedWithUsage {
+        status_code: 200,
+        usage: TokenUsage {
+            prompt_tokens: None,
+            cached_prompt_tokens: None,
+            completion_tokens: None,
+            total_tokens: None,
+        },
+    };
+    assert!(exchange_usage_from_outcome(&empty).is_none());
+}
+
 // --- #1668 round-2: call-site test for route_missing_local_model ---
 
 /// Seed a `mesh::Node` with one admitted `Host` peer serving `model` at a

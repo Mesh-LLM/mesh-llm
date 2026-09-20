@@ -2,11 +2,11 @@ use anyhow::{Context, Result, anyhow, bail};
 pub use mesh_llm_gpu_bench::BenchmarkOutput;
 use mesh_llm_native_runtime::{
     GPU_BENCHMARK_TOOL_PATH, InstalledNativeRuntime, NativeRuntimeBackendKind, RuntimeSelection,
-    select_native_runtime_from_artifacts,
+    has_startup_compatibility_metadata, select_native_runtime_from_artifacts,
 };
 use mesh_llm_runtime_install::{
     CURRENT_MESH_VERSION, current_skippy_abi_version, default_native_runtime_cache,
-    discover_local_native_runtimes, host_runtime_profile,
+    discover_local_native_runtimes_with_filter, host_runtime_profile,
 };
 use serde::{Deserialize, Serialize};
 #[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
@@ -127,7 +127,10 @@ fn resolve_runtime_benchmark_tool(
     }
 
     let cache = default_native_runtime_cache()?;
-    let installed = discover_local_native_runtimes(&[], &cache)?;
+    let profile = host_runtime_profile();
+    let installed = discover_local_native_runtimes_with_filter(&[], &cache, |runtime| {
+        has_startup_compatibility_metadata(&runtime.manifest.runtime, &profile)
+    })?;
     let installed_for_version = installed
         .iter()
         .filter(|runtime| runtime.mesh_version == CURRENT_MESH_VERSION)
@@ -141,7 +144,7 @@ fn resolve_runtime_benchmark_tool(
     let selection = runtime_selection_for_benchmark(backend)?;
     let selected = select_native_runtime_from_artifacts(
         &artifacts,
-        &host_runtime_profile(),
+        &profile,
         CURRENT_MESH_VERSION,
         Some(&current_skippy_abi_version()),
         &selection,

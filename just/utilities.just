@@ -77,7 +77,9 @@ test port="9337":
 
 # Show the local llama.cpp ABI patch queue
 diff:
-    ls -1 third_party/llama.cpp/patches
+    @find third_party/llama.cpp/patches -maxdepth 1 -type f -name '*.patch' -print | sort
+    @sed 's#^#third_party/llama.cpp/patches/model_support/#' third_party/llama.cpp/patches/model_support/series
+    @sed 's#^#third_party/llama.cpp/patches/generated/#' third_party/llama.cpp/patches/generated/series
 
 # Build the client-only Docker image
 [unix]

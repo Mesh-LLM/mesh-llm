@@ -17,6 +17,8 @@ Verifies MeshLLM native runtime artifacts:
   - artifact directory name matches runtime.id
   - all runtime.libraries exist
   - library_sha256 matches the primary library
+  - Linux platform.min_glibc is a valid major.minor floor and matches the
+    packaged ELF requirement exactly when present
   - Linux ELF libraries and tools stay within the declared glibc floor
   - Linux shared-library RUNPATH/RPATH is relocatable and resolves packaged deps
   - Linux CUDA ELF dependencies are closed, same-architecture, and non-stub
@@ -198,6 +200,18 @@ if (runtime_os, runtime_arch) != target_contract:
         f"{runtime_os}/{runtime_arch} != "
         f"{target_contract[0]}/{target_contract[1]}"
     )
+min_glibc = platform.get("min_glibc")
+if min_glibc is not None:
+    if not isinstance(min_glibc, str) or not re.fullmatch(r"\d+\.\d+", min_glibc):
+        raise SystemExit(
+            "runtime platform min_glibc must be a major.minor version "
+            f"like '2.35', got {min_glibc!r}"
+        )
+    if runtime_os != "linux":
+        raise SystemExit(
+            "runtime platform min_glibc is only supported on linux, "
+            f"got os {runtime_os!r}"
+        )
 backend = runtime["backend"]
 if not isinstance(backend, dict):
     raise SystemExit("runtime backend must be an object")
@@ -420,6 +434,67 @@ PY
     )
 }
 
+# platform.min_glibc, when present, must describe the actual packaged ELF
+# requirement, not a hand-maintained floor. A declared value lower than the
+# binaries hides an unsupported-host failure until dlopen; a higher value
+# rejects hosts that would work. A missing field makes no claim for legacy
+# catalog entries, but automatic startup rejects locally installed Linux
+# entries without it. A present value is checked and must match exactly.
+verify_linux_min_glibc_consistency() {
+    local artifact_dir="$1" manifest="$2"
+    "$(python_bin)" - "$artifact_dir" "$manifest" <<'PY'
+import json
+import os
+import re
+import subprocess
+import sys
+
+artifact_dir, manifest_path = sys.argv[1:3]
+with open(manifest_path, encoding="utf-8") as fh:
+    manifest = json.load(fh)
+runtime = manifest["runtime"]
+platform = runtime["platform"]
+if platform.get("os") != "linux":
+    raise SystemExit(0)
+declared = platform.get("min_glibc")
+requirements = []
+readelf_env = os.environ.copy()
+readelf_env["LC_ALL"] = "C"
+for rel_path in [*runtime["libraries"], *(runtime.get("tools") or {})]:
+    path = os.path.join(artifact_dir, rel_path)
+    try:
+        with open(path, "rb") as handle:
+            if handle.read(4) != b"\x7fELF":
+                continue
+    except OSError:
+        continue
+    output = subprocess.run(
+        ["readelf", "-V", path], check=True, capture_output=True, text=True,
+        env=readelf_env,
+    ).stdout
+    _, heading, needs = output.partition("Version needs section")
+    if heading:
+        def glibc_requirement(version):
+            if version == "GLIBC_ABI_DT_RELR":
+                return (2, 36)
+            major, minor = version.removeprefix("GLIBC_").split(".")
+            return (int(major), int(minor))
+
+        requirements.extend(
+            glibc_requirement(version)
+            for version in re.findall(r"GLIBC_(?:\d+\.\d+|ABI_DT_RELR)", needs)
+        )
+actual = f"{max(requirements)[0]}.{max(requirements)[1]}" if requirements else None
+if declared is None:
+    raise SystemExit(0)
+if declared != actual:
+    raise SystemExit(
+        f"runtime platform min_glibc {declared!r} does not match packaged "
+        f"ELF requirement {actual!r}; refusing to publish a misleading floor"
+    )
+PY
+}
+
 verify_linux_runtime_paths() {
     local artifact_dir="$1"
     local manifest="$2"
@@ -439,6 +514,7 @@ PY
         exit 1
     fi
     verify_linux_glibc_floor "$artifact_dir" "$manifest"
+    verify_linux_min_glibc_consistency "$artifact_dir" "$manifest"
     local runtime_arch runtime_backend primary_name actual_order expected_order
     read -r runtime_arch runtime_backend primary_name < <("$(python_bin)" - "$manifest" <<'PY'
 import json
@@ -497,6 +573,8 @@ relocatable_libraries = set((manifest.get("build") or {}).get("relocatable_libra
 library_names = {os.path.basename(path) for path in libraries}
 artifact_root = os.path.realpath(artifact_dir)
 dynamic_re = re.compile(r"\((NEEDED|RPATH|RUNPATH)\).*\[(.*)\]")
+readelf_env = os.environ.copy()
+readelf_env["LC_ALL"] = "C"
 suspicious_tokens = (
     "/home/runner/work",
     ".deps/llama-build",
@@ -505,7 +583,9 @@ suspicious_tokens = (
 
 
 def dynamic_entries(path: str) -> tuple[list[str], list[str]]:
-    output = subprocess.check_output(["readelf", "-d", path], text=True)
+    output = subprocess.check_output(
+        ["readelf", "-d", path], env=readelf_env, text=True
+    )
     needed: list[str] = []
     search_paths: list[str] = []
     for line in output.splitlines():

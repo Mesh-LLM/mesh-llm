@@ -97,6 +97,9 @@ pub struct Node {
     /// This is the single source of truth for "what does the mesh want?"
     pub(crate) model_demand: Arc<std::sync::Mutex<HashMap<String, ModelDemand>>>,
     pub(crate) requirement_mesh_state: Arc<Mutex<Option<RequirementAwareMeshState>>>,
+    /// Tests opt into membership persistence with an explicit temporary file.
+    #[cfg(test)]
+    pub(crate) adopted_membership_file: Option<std::path::PathBuf>,
     pub(crate) mesh_id: Arc<Mutex<Option<String>>>,
     pub(crate) mesh_policy_hash: Arc<Mutex<Option<String>>>,
     pub(crate) signed_genesis_policy: Arc<Mutex<Option<crate::SignedMeshGenesisPolicy>>>,
@@ -834,6 +837,8 @@ impl Node {
             explicit_model_interests: Arc::new(Mutex::new(Vec::new())),
             model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
             requirement_mesh_state: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            adopted_membership_file: None,
             mesh_id: Arc::new(Mutex::new(None)),
             mesh_policy_hash: Arc::new(Mutex::new(None)),
             signed_genesis_policy: Arc::new(Mutex::new(None)),
@@ -1017,6 +1022,8 @@ impl Node {
             explicit_model_interests: Arc::new(Mutex::new(Vec::new())),
             model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
             requirement_mesh_state: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            adopted_membership_file: None,
             mesh_id: Arc::new(Mutex::new(None)),
             mesh_policy_hash: Arc::new(Mutex::new(None)),
             signed_genesis_policy: Arc::new(Mutex::new(None)),
@@ -1448,7 +1455,13 @@ impl Node {
         })
     }
 
-    #[cfg(test)]
+    /// Locally served descriptors only -- unlike [`Self::all_served_model_descriptors`],
+    /// never includes a peer's gossiped copy, so a caller matching on
+    /// `model_name` cannot be handed a peer's descriptor for a same-named
+    /// model. `network/openai/ingress.rs`'s serving-provenance lookup relies
+    /// on that: gossip strips `weights_digest` before it crosses the wire
+    /// (see `protocol/convert.rs`), so a peer descriptor would silently read
+    /// back `None` even when this host's own load-time digest is known.
     pub async fn served_model_descriptors(&self) -> Vec<ServedModelDescriptor> {
         self.served_model_descriptors.lock().await.clone()
     }

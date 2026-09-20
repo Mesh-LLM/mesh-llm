@@ -5,6 +5,7 @@ pub(crate) mod client_stream;
 mod forwarded_request;
 pub(crate) mod ingress;
 pub(crate) mod moa_gateway;
+mod model_names;
 mod parse_failure;
 mod request_normalize;
 pub(crate) mod request_parse;

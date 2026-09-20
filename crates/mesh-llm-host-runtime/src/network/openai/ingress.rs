@@ -9,7 +9,8 @@ use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::transport as proxy;
 use crate::network::router;
 use crate::plugin::openai_exchange::{
-    ClientNonceSource, OpenAiExchangeChannel, OpenAiExchangeDispatchPath, OpenAiExchangeEnvelope,
+    ClientNonceSource, ExchangeUsage, OpenAiExchangeChannel, OpenAiExchangeDispatchPath,
+    OpenAiExchangeEnvelope, ServingProvenance, request_body_digest,
 };
 use mesh_llm_events::audit::{audit_events, emit_audit};
 use mesh_llm_events::{OutputEvent, emit_event};
@@ -25,6 +26,194 @@ fn plugin_route_status(outcome: &proxy::RouteDispatchOutcome) -> Option<u16> {
         proxy::RouteDispatchOutcome::FailedWithStatus { status_code, .. } => Some(status_code),
         proxy::RouteDispatchOutcome::Failed(_) | proxy::RouteDispatchOutcome::Dropped(_) => None,
     }
+}
+
+/// Gather the maximum inference provenance the host *actually knows* for the
+/// exchange just served — what ran, at what fidelity, on whose hardware — from
+/// state the local node already holds: the served-model descriptor (quant,
+/// architecture, context length, identity hash, revision) and this host's
+/// startup hardware survey (gpu, vram, soc, hostname). Every field is a real
+/// value or omitted; nothing is invented. Returned as a plain data struct so
+/// the wire event stays independent of the node internals.
+async fn serving_provenance_for_model(node: &mesh::Node, model_name: &str) -> ServingProvenance {
+    // The served-model descriptor for exactly this model, if the node has one.
+    // We match on the served identity's `model_name`; a miss (peer-served or
+    // not-yet-described) leaves every model field `None` rather than guessing.
+    let descriptor = node
+        .served_model_descriptors()
+        .await
+        .into_iter()
+        .find(|d| d.identity.model_name == model_name);
+
+    let (identity, metadata) = match descriptor {
+        Some(d) => (Some(d.identity), d.metadata),
+        None => (None, None),
+    };
+
+    ServingProvenance {
+        served_by_node_id: node.id().to_string(),
+        hostname: node.hostname.clone(),
+        quantization: metadata.as_ref().and_then(|m| m.quant.clone()),
+        architecture: metadata.as_ref().and_then(|m| m.architecture.clone()),
+        context_length: metadata.as_ref().and_then(|m| m.native_context_length),
+        parameter_size: metadata.as_ref().and_then(|m| m.parameter_size.clone()),
+        layer_count: metadata.as_ref().and_then(|m| m.layer_count),
+        model_identity_hash: identity.as_ref().and_then(|i| i.identity_hash.clone()),
+        model_canonical_ref: identity.as_ref().and_then(|i| i.canonical_ref.clone()),
+        model_revision: identity.as_ref().and_then(|i| i.revision.clone()),
+        gpu: node.gpu_name.clone(),
+        // `advertised_memory.total_bytes` is 0 when no accelerator memory was
+        // enumerated; surface it only when it is a real, non-zero figure.
+        vram_bytes: (node.advertised_memory.total_bytes != 0)
+            .then_some(node.advertised_memory.total_bytes),
+        is_soc: node.is_soc,
+    }
+}
+
+/// Extract the served backend's real token usage from a dispatch outcome, when
+/// it carried one. Only `RespondedWithUsage` — the outcome the host-served
+/// `route_model_request` returns after reading the backend's `usage` object —
+/// yields counts; every other outcome (plugin stub, status-only, error, drop)
+/// yields `None`, so the terminal envelope omits `usage` rather than reporting
+/// fabricated zeros.
+fn exchange_usage_from_outcome(outcome: &proxy::RouteDispatchOutcome) -> Option<ExchangeUsage> {
+    let proxy::RouteDispatchOutcome::RespondedWithUsage { usage, .. } = outcome else {
+        return None;
+    };
+    // All three or none: a backend that reports two counts but not the
+    // third has told us something is missing, and this mirrors the
+    // invariant `mesh_llm_events::logging::events::TokenUsage::from_counts`
+    // already documents elsewhere -- "missing, overflowing, or internally
+    // inconsistent usage must not be estimated." Never a derived total (a
+    // backend's real total can legitimately disagree with
+    // prompt+completion, e.g. reasoning tokens folded into `total`), and
+    // never a zero standing in for an absent count. `cached_prompt_tokens`
+    // rides along when the backend reported it -- for billing
+    // reconciliation, dropping it is usually the difference between a right
+    // and a wrong number.
+    let (Some(prompt_tokens), Some(completion_tokens), Some(total_tokens)) = (
+        usage.prompt_tokens,
+        usage.completion_tokens,
+        usage.total_tokens,
+    ) else {
+        return None;
+    };
+    Some(ExchangeUsage {
+        prompt_tokens,
+        cached_prompt_tokens: usage.cached_prompt_tokens,
+        completion_tokens,
+        total_tokens,
+    })
+}
+
+/// Whether a dispatch outcome actually means inference ran and a response
+/// body was returned to the client — the only case `ServingProvenance`'s
+/// contract ("what ran, at what fidelity, on whose hardware") can honestly
+/// describe. A 503/`Failed`/`Dropped` outcome served nothing, so attaching
+/// provenance there would be exactly the fabrication the envelope promises
+/// never to do.
+fn outcome_was_served(outcome: &proxy::RouteDispatchOutcome) -> bool {
+    matches!(
+        outcome,
+        proxy::RouteDispatchOutcome::Responded(200..=299)
+            | proxy::RouteDispatchOutcome::RespondedWithUsage {
+                status_code: 200..=299,
+                ..
+            }
+    )
+}
+
+/// Publish the raw-proxy path's terminal event for a served exchange, enriched
+/// with the serving provenance the host resolved from the node (what ran / at
+/// what fidelity / on whose hardware), the real token usage the dispatch
+/// outcome carried, and the canonical digest of the real request body. Only
+/// real values ride along; anything the node doesn't know for this model, or
+/// the dispatch didn't carry, stays omitted (never fabricated). No
+/// `X-Capsule-Id` marker exists on this path (it never runs through
+/// `openai-frontend`'s `OpenAiHookPolicy`, the only place a marker is minted),
+/// so nonce/nonce_source are `None`.
+///
+/// `served_locally` distinguishes the host-served path (this node's own
+/// weights, via `route_model_request`) from the plugin-served path (a plugin
+/// endpoint that may proxy anywhere, including a third-party service). The
+/// whole `serving_provenance` block — not just the hardware fields — is
+/// attached only when `served_locally` is true: a plugin endpoint can return
+/// 200 for an exchange this node's GPU/VRAM/hostname never touched, and the
+/// model-name-keyed descriptor lookup itself is a second, independent source
+/// of staleness (the descriptor list and the routing target table update on
+/// separate schedules, so a teardown window can hand a plugin-served exchange
+/// this node's own served-model quant/architecture/identity_hash). Omitting
+/// the whole block on the plugin path closes both windows at once rather than
+/// leaving the model-identity half open.
+async fn publish_raw_proxy_terminal(
+    node: &mesh::Node,
+    channel: &dyn OpenAiExchangeChannel,
+    exchange_id: &str,
+    model_name: &str,
+    final_outcome: &proxy::RouteDispatchOutcome,
+    served_locally: bool,
+    request_digest: Option<&str>,
+) {
+    let mut envelope = OpenAiExchangeEnvelope::terminal(
+        exchange_id.to_string(),
+        OpenAiExchangeDispatchPath::RawProxy,
+        model_name,
+        plugin_route_status(final_outcome),
+        None,
+        None,
+    );
+    // Nothing was served on a 503 / `Failed` / `Dropped` outcome, so there is
+    // no hardware or model identity to report — and no reason to pay the
+    // `served_model_descriptors()` lock for a lookup whose result would be
+    // thrown away. On the plugin-served path, skip it regardless of outcome:
+    // see the `served_locally` doc above.
+    if served_locally && outcome_was_served(final_outcome) {
+        let provenance = serving_provenance_for_model(node, model_name).await;
+        envelope = envelope.with_serving_provenance(provenance);
+    }
+    // The host-served (real-weights) branch reaches this via
+    // `route_model_request`, whose outcome carries the served backend's own
+    // `usage` object. Attach it so a downstream plugin can seal the REAL token
+    // counts of the exchange, not a zeroed stub. A plugin-served exchange has
+    // no such usage on the outcome, so this stays absent for it — never zeroed.
+    if let Some(usage) = exchange_usage_from_outcome(final_outcome) {
+        envelope = envelope.with_usage(usage);
+    }
+    // The canonical digest of the REAL request body the host dispatched, so a
+    // downstream capsule can bind its `agent_input_digest` to the real bytes.
+    // Computed by the caller (which holds the parsed request); absent only when
+    // the host held no JSON body to digest — never fabricated.
+    if let Some(digest) = request_digest {
+        envelope = envelope.with_request_digest(digest.to_string());
+    }
+    channel.publish(&envelope).await;
+}
+
+/// Path 2's own "effective request" moment: the plugin/endpoint is resolved
+/// and dispatch is about to happen. There is no typed `ChatCompletionRequest`
+/// on this path (see the #1331 design note), so the envelope carries only
+/// the model — the same narrow route fact path 1's `ChatExchangeRoute`
+/// carries. Mints the exchange id here, at admission, so it can pair this
+/// effective event with its terminal event even when concurrent raw-proxy
+/// requests share the same model. Returns `None` — no id minted, no publish
+/// — when nobody declares `openai.exchange.v1`: nothing downstream would
+/// ever see it.
+async fn mint_and_publish_effective_raw_proxy(
+    plugin_manager: &crate::plugin::PluginManager,
+    model_name: &str,
+) -> Option<String> {
+    if !plugin_manager.has_subscriber().await {
+        return None;
+    }
+    let exchange_id = uuid::Uuid::new_v4().to_string();
+    plugin_manager
+        .publish(&OpenAiExchangeEnvelope::effective(
+            exchange_id.clone(),
+            OpenAiExchangeDispatchPath::RawProxy,
+            model_name,
+        ))
+        .await;
+    Some(exchange_id)
 }
 
 /// Map a `RemoteMesh` forwarded nonce's origin marker (see
@@ -714,22 +903,8 @@ async fn try_route_plugin_model(
         .await
     {
         Ok(Some(endpoint)) => {
-            // Path 2's own "effective request" moment: the plugin/endpoint
-            // is resolved and dispatch is about to happen. There is no typed
-            // `ChatCompletionRequest` on this path (see the #1331 design
-            // note), so the envelope carries only the model — the same
-            // narrow route fact path 1's `ChatExchangeRoute` carries. Mint
-            // the exchange id here, at admission, so it can pair this
-            // effective event with its terminal event below even when
-            // concurrent raw-proxy requests share the same model.
-            let exchange_id = uuid::Uuid::new_v4().to_string();
-            plugin_manager
-                .publish(&OpenAiExchangeEnvelope::effective(
-                    exchange_id.clone(),
-                    OpenAiExchangeDispatchPath::RawProxy,
-                    model_name,
-                ))
-                .await;
+            let exchange_id =
+                mint_and_publish_effective_raw_proxy(plugin_manager, model_name).await;
             let outcome = proxy::route_http_endpoint_request(
                 ctx.node,
                 Some(model_name),
@@ -758,20 +933,28 @@ async fn try_route_plugin_model(
             } else {
                 outcome
             };
-            plugin_manager
-                .publish(&OpenAiExchangeEnvelope::terminal(
-                    exchange_id,
-                    OpenAiExchangeDispatchPath::RawProxy,
-                    model_name,
-                    plugin_route_status(&final_outcome),
-                    // No X-Capsule-Id marker on this path: it never runs
-                    // through `openai-frontend`'s `OpenAiHookPolicy`, the
-                    // only place a marker is minted (see the design note).
-                    None,
-                    // No marker means no nonce, so no nonce_source either.
-                    None,
-                ))
-                .await;
+            let Some(exchange_id) = exchange_id else {
+                return final_outcome;
+            };
+            // Bind the real request body digest when the parsed body is already
+            // available (this path holds `request` by shared ref, so it does not
+            // force parsing); `None` otherwise, never fabricated. The
+            // plugin-served completion itself is a stub (zero usage), but the
+            // request digest is still the real request that was asked.
+            let request_digest = request
+                .body_json
+                .as_ref()
+                .and_then(|body| request_body_digest(body, request.body_bytes.as_deref()));
+            publish_raw_proxy_terminal(
+                ctx.node,
+                plugin_manager,
+                &exchange_id,
+                model_name,
+                &final_outcome,
+                false, // plugin-served: never this node's own hardware/weights
+                request_digest.as_deref(),
+            )
+            .await;
             final_outcome
         }
         Ok(None) => {
@@ -843,7 +1026,55 @@ async fn route_request(
         }
 
         // Local candidates available — route normally.
-        proxy::route_model_request(
+        //
+        // Host-served (real-weights) exchange. This branch, unlike the
+        // plugin-served `try_route_plugin_model` path, previously published NO
+        // `openai.exchange.v1` terminal event — so a downstream capsule-emit
+        // plugin never saw the exchange that carried the host's REAL served-model
+        // descriptor (architecture / context / layers / params / identity) AND
+        // the backend's REAL token usage. Publish the same effective→terminal
+        // pair the plugin path does, resolving provenance by the actually-served
+        // model and attaching the real usage the dispatch outcome carries and the
+        // canonical digest of the real request body, so one sealed capsule can
+        // hold real model identity + real usage + real hardware + what was asked
+        // together. Tokenize requests are not chat exchanges, so they are not
+        // announced. `plugin_manager` is `None` when no plugin is loaded, and
+        // even with one loaded nothing may declare `openai.exchange.v1` — in
+        // either case there is no subscriber, so skip minting an exchange id
+        // and, below, the body digest and served-model provenance lookup
+        // that only exist to build an event nobody would receive.
+        let has_subscriber = match ctx.plugin_manager {
+            Some(plugin_manager) => plugin_manager.has_subscriber().await,
+            None => false,
+        };
+        let announce = (!request.is_tokenize_request() && has_subscriber)
+            .then_some(ctx.plugin_manager)
+            .flatten()
+            .map(|plugin_manager| (plugin_manager, uuid::Uuid::new_v4().to_string()));
+        // Digest the REAL request body up front, while the parsed body is still
+        // in hand and before `route_model_request` streams it to the backend —
+        // this is the one binding a downstream capsule needs to tie its
+        // `agent_input_digest` to what was actually asked. `ensure_body_json`
+        // is idempotent; `None` when the request carried no JSON body (e.g. a
+        // non-chat proxy passthrough), in which case no digest is forwarded
+        // rather than a fabricated one.
+        let request_digest = announce.as_ref().and_then(|_| {
+            request.ensure_body_json();
+            request
+                .body_json
+                .as_ref()
+                .and_then(|body| request_body_digest(body, request.body_bytes.as_deref()))
+        });
+        if let Some((plugin_manager, exchange_id)) = announce.as_ref() {
+            plugin_manager
+                .publish(&OpenAiExchangeEnvelope::effective(
+                    exchange_id.clone(),
+                    OpenAiExchangeDispatchPath::RawProxy,
+                    model_name,
+                ))
+                .await;
+        }
+        let outcome = proxy::route_model_request(
             ctx.node.clone(),
             tcp_stream,
             ctx.targets,
@@ -855,7 +1086,20 @@ async fn route_request(
                 route_observer,
             },
         )
-        .await
+        .await;
+        if let Some((plugin_manager, exchange_id)) = announce.as_ref() {
+            publish_raw_proxy_terminal(
+                ctx.node,
+                *plugin_manager,
+                exchange_id,
+                model_name,
+                &outcome,
+                true, // host-served: this node's own weights and hardware survey
+                request_digest.as_deref(),
+            )
+            .await;
+        }
+        outcome
     } else {
         // No model specified — generic fallback routing to first available target.
 

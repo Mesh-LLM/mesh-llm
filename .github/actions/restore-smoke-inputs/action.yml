@@ -24,7 +24,15 @@ inputs:
     required: false
     default: ''
   model_manifest:
-    description: Generated test-model manifest containing one immutable model artifact.
+    description: Generated test-model manifest containing immutable model artifacts.
+    required: false
+    default: ''
+  model_artifact_id:
+    description: Artifact id to select when the manifest contains more than one model.
+    required: false
+    default: ''
+  expected_backend:
+    description: Expected backend declared by the composed product manifest.
     required: false
     default: ''
   model_cadence:
@@ -57,6 +65,9 @@ outputs:
   model_size_bytes:
     description: Expected model size, when supplied by the manifest.
     value: ${{ steps.resolve-model.outputs.model_size_bytes }}
+  model_path:
+    description: Absolute path to the restored model.
+    value: ${{ steps.resolve-model.outputs.model_path }}
 
 runs:
   using: composite
@@ -93,13 +104,14 @@ runs:
           python3 - \
             "$product_manifest" \
             "$extract_root" \
-            "${{ inputs.binary_name }}" <<'PY'
+            "${{ inputs.binary_name }}" \
+            "${{ inputs.expected_backend }}" <<'PY'
         import json
         from pathlib import Path, PurePosixPath
         import re
         import sys
 
-        manifest_path, product_root_raw, binary_name = sys.argv[1:4]
+        manifest_path, product_root_raw, binary_name, expected_backend = sys.argv[1:5]
         product_root = Path(product_root_raw).resolve(strict=True)
         windows_drive = re.compile(r"^[A-Za-z]:")
 
@@ -161,6 +173,11 @@ runs:
             "vulkan",
         }:
             raise SystemExit(f"unsupported product backend: {backend!r}")
+        if expected_backend and backend != expected_backend:
+            raise SystemExit(
+                "composed product backend mismatch: "
+                f"expected {expected_backend!r}, got {backend!r}"
+            )
 
         host = manifest.get("host")
         runtime = manifest.get("runtime")
@@ -281,6 +298,7 @@ runs:
         model_url: ${{ inputs.model_url }}
         model_file: ${{ inputs.model_file }}
         model_manifest: ${{ inputs.model_manifest }}
+        model_artifact_id: ${{ inputs.model_artifact_id }}
         model_cadence: ${{ inputs.model_cadence }}
         model_cache_scope: ${{ inputs.model_cache_scope }}
         cache_key_prefix: ${{ inputs.cache_key_prefix }}

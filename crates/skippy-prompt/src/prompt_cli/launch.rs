@@ -298,8 +298,8 @@ fn prompt_repl_launch(args: PromptArgs) -> Result<()> {
             stage_id: "tokenizer".to_string(),
             layer_start: 0,
             layer_end: 1,
-            include_embeddings: true,
-            include_output: true,
+            source_stage: true,
+            terminal_stage: true,
         })
         .context("materialize tokenizer from layer package")?;
         Some(tokenizer_gguf)

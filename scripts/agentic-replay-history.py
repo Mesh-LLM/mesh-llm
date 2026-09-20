@@ -65,10 +65,23 @@ def load_cells(replay_root: Path, family: str, label: str) -> list[dict[str, Any
         if not isinstance(value, dict):
             raise ValueError(f"expected a JSON object: {path}")
         value["_mtime"] = dt.datetime.fromtimestamp(path.stat().st_mtime, dt.UTC)
+        value["_pass"] = int(path.parent.parent.name.removeprefix("pass-"))
         cells.append(value)
     if not cells:
         raise FileNotFoundError(f"no replay cells matched {replay_root / pattern}")
     return cells
+
+
+def coverage_problem(cells: list[dict[str, Any]], replay: dict[str, Any]) -> str | None:
+    """Require every planned pass/concurrency cell exactly once."""
+    levels = replay["concurrency"]
+    if isinstance(levels, int):
+        levels = [levels]
+    expected = {(p, c) for p in range(1, replay["passes"] + 1) for c in levels}
+    observed = [(cell["_pass"], int(cell["concurrency"])) for cell in cells]
+    if set(observed) != expected or len(observed) != len(expected):
+        return f"incomplete matrix: expected {sorted(expected)}, observed {sorted(observed)}"
+    return None
 
 
 def build_rows(
@@ -225,6 +238,7 @@ def compare(row: dict[str, Any], prior: list[dict[str, Any]]) -> list[str]:
         if r.get("complete")
         # Cohort contract: a model artifact digest change starts a new cohort.
         and r.get("model", {}).get("sha256") == row["model"].get("sha256")
+        and r.get("hardware_fingerprint") == row.get("hardware_fingerprint")
     ]
     if len(prior) < BASELINE_MIN_RUNS:
         return []  # bootstrap: informational only
@@ -278,7 +292,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--baseline", type=Path, default=None, help="HF dataset runs/ checkout")
     parser.add_argument("--output", type=Path, required=True, help="history JSONL to write")
     parser.add_argument("--gate", action="store_true", help="fail on regression after bootstrap")
+    parser.add_argument("--github-output", type=Path, help="emit repair eligibility for the workflow")
     args = parser.parse_args(argv)
+    # An exception, malformed input, or incomplete run must never request repair.
+    if args.github_output:
+        with args.github_output.open("a", encoding="utf-8") as handle:
+            handle.write("repair_required=false\n")
 
     matrix = json.loads(args.matrix.read_text(encoding="utf-8"))
     hardware = json.loads(args.hardware.read_text(encoding="utf-8"))
@@ -286,13 +305,18 @@ def main(argv: list[str] | None = None) -> int:
     validate_replay_pin(replay)
 
     rows: list[dict[str, Any]] = []
+    coverage_problems: list[str] = []
     for model in matrix["models"]:
         validate_model_pin(model)
         try:
             cells = load_cells(args.replay_dir, model["family"], args.label)
         except FileNotFoundError as error:
             print(f"warning: {error}; preserving other family results", file=sys.stderr)
+            coverage_problems.append(str(error))
             continue
+        coverage = coverage_problem(cells, replay)
+        if coverage:
+            coverage_problems.append(f"{model['family']}: {coverage}")
         rows.extend(
             build_rows(
                 cells,
@@ -309,7 +333,7 @@ def main(argv: list[str] | None = None) -> int:
         for row in rows:
             handle.write(json.dumps(row, sort_keys=True) + "\n")
 
-    integrity_problems = [
+    integrity_problems = coverage_problems + [
         problem for row in rows if (problem := incomplete_problem(row)) is not None
     ]
     if not rows:
@@ -329,6 +353,9 @@ def main(argv: list[str] | None = None) -> int:
             ]
             regression_problems.extend(compare(row, prior))
     problems = [*integrity_problems, *regression_problems]
+    if args.github_output and args.gate and regression_problems and not integrity_problems:
+        with args.github_output.open("a", encoding="utf-8") as handle:
+            handle.write("repair_required=true\n")
     if problems:
         print("regressions detected:", file=sys.stderr)
         for problem in problems:

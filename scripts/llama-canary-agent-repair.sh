@@ -19,6 +19,9 @@ fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TRUSTED_ROOT="$ROOT"
+
+# shellcheck disable=SC1091
+source "$ROOT/scripts/lib/macos-deployment-target.sh"
 HARNESS_MODE="${CANARY_HARNESS_MODE:-repair}"
 UPSTREAM_SHA="${1:-${UPSTREAM_SHA_INPUT:-latest}}"
 if [[ "$UPSTREAM_SHA" == "latest" || -z "$UPSTREAM_SHA" ]]; then
@@ -33,7 +36,7 @@ cd "$ROOT"
 
 OLD_SHA="$(tr -d '[:space:]' < third_party/llama.cpp/upstream.txt)"
 PIN_FILE="$ROOT/third_party/llama.cpp/upstream.txt"
-AGENT_PROVIDER="${CANARY_AGENT_PROVIDER:-custom_z_ai_coding_plan}"
+AGENT_PROVIDER="${CANARY_AGENT_PROVIDER:-zai_coding_plan}"
 AGENT_MODEL="${CANARY_AGENT_MODEL:-glm-5.3-flash}"
 AGENT_TIMEOUT_SECONDS="${CANARY_AGENT_TIMEOUT_SECONDS:-41400}"
 VERIFICATION_TIMEOUT_SECONDS="${CANARY_VERIFICATION_TIMEOUT_SECONDS:-43200}"
@@ -168,7 +171,7 @@ verify_repair_pin() {
 agent_prompt() {
   printf 'Complete the llama.cpp upstream update to %s as one developer task in this checkout.
 
-The trusted harness has already written third_party/llama.cpp/upstream.txt to the exact target and recorded it in .deps/llama-canary-target-sha. Read ci/llama-canary/agent-repair-prompt.md and every repository skill it names, then own the work end to end: reproduce the queue failure, deliberately rebase or regenerate the owned patches, fix any generated-family rewriter or Rust ABI fallout, and run the canonical prepare, build, smoke, and full supported-family certification commands. Inspect each failure and keep iterating until every required command passes.
+The trusted harness has already written third_party/llama.cpp/upstream.txt to the exact target and recorded it in .deps/llama-canary-target-sha. Read ci/llama-canary/agent-repair-prompt.md and every repository skill it names, then own the work end to end: reproduce the queue failure, deliberately rebase or regenerate the owned patches, fix any generated-family rewriter or Rust ABI fallout, and run the prepare, build, smoke, and focused reproductions needed to validate your repairs. Once those checks pass, return control to the trusted harness for the full supported-family battery. Do not start an additional full battery in the coding session; the wrapper and separate verifier each run all required gates.
 
 Do not weaken, skip, or narrow a gate. Do not edit the workflow, this wrapper, its publisher, the agent runbook, or their contract tests. Do not create or switch branches, commit, push, open a pull request, or use GitHub credentials. Leave the completed changes in this working tree. The harness will independently rerun the entire verification sequence and only a green exact tree can be published.' \
     "$UPSTREAM_SHA"
@@ -263,7 +266,7 @@ validate_agent_manifest_changes() {
 }
 
 agent_feedback_prompt() {
-  printf 'The trusted harness tested the current working tree and it is still red. Continue the same developer task in this session. Read the current failure logs at:\n\n- %s\n- %s\n- %s\n- %s\n\nFix the actual source or narrowly permitted manifest data, then rerun the affected command and keep going until the complete canonical path is green. Do not report completion while any required gate is red. The same control-file, Git, credential, and publication restrictions still apply.' \
+  printf 'The trusted harness tested the current working tree and it is still red. Continue the same developer task in this session. Read the current failure logs at:\n\n- %s\n- %s\n- %s\n- %s\n\nFix the actual source or narrowly permitted manifest data, then rerun the affected checks. Once the known failures are fixed and their reproductions pass, return control for the trusted full gates; do not repeat the full family battery inside the coding session. Report the exact checks run and any unresolved failures, without claiming certification. The same control-file, Git, credential, and publication restrictions still apply.' \
     "$PREPARE_LOG" "$MANIFEST_POLICY_LOG" "$BUILD_LOG" "$CERTIFY_LOG"
 }
 
@@ -446,12 +449,15 @@ check_split_certification_roster() {
 repair_candidate_until_green() {
   local prompt
   REPAIR_DEADLINE_AT="$(( $(date +%s) + AGENT_TIMEOUT_SECONDS ))"
-  VERIFICATION_DEADLINE_AT="$REPAIR_DEADLINE_AT"
   prompt="$(agent_prompt)"
 
   while remaining_repair_seconds >/dev/null; do
     agent_session_step "$prompt" || return 1
     assert_agent_control_unchanged || return 1
+    # Coding turns may start only within the repair window. Once a turn
+    # returns, give its complete gate sequence a fresh bounded pass, even
+    # when earlier gates have consumed most of the repair window.
+    VERIFICATION_DEADLINE_AT="$(( $(date +%s) + VERIFICATION_TIMEOUT_SECONDS ))"
     if run_candidate_gates refresh; then
       assert_agent_control_unchanged || return 1
       validate_agent_manifest_changes || return 1
@@ -527,7 +533,7 @@ finalize_certified_tree() {
 if [[ "$HARNESS_MODE" == "repair" ]]; then
   write_repair_pin
   verify_repair_pin
-  echo "starting one agent developer session with a ${AGENT_TIMEOUT_SECONDS}s repair-and-test budget..."
+  echo "starting one agent developer session with a ${AGENT_TIMEOUT_SECONDS}s repair window and ${VERIFICATION_TIMEOUT_SECONDS}s per candidate verification pass..."
   if ! repair_candidate_until_green; then
     echo "agent task failed or timed out; no canary branch or pull request was published" >&2
     exit 1

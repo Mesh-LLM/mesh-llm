@@ -1,3 +1,7 @@
+#[path = "requirements/adopted_membership.rs"]
+mod adopted_membership;
+pub(crate) use adopted_membership::*;
+
 use super::*;
 
 pub(crate) fn assert_mesh_requirements_outbound_admits_compliant_peer_after_requirements_pass() {

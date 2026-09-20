@@ -242,20 +242,15 @@ subcommands are:
 
 ```bash
 skippy-model-package inspect <model.gguf>
-skippy-model-package plan <model.gguf> --stages 4
-skippy-model-package write <model.gguf> --layers 0..12 --out ./stage-0.gguf
-skippy-model-package write-stages <model.gguf> --stages 4 --out-dir ./stages
 skippy-model-package write-package <model.gguf> --out-dir ./package
-skippy-model-package validate <model.gguf> ./stages/stage-*.gguf
-skippy-model-package validate-package <model.gguf> ./package
-skippy-model-package preflight ./package --stages 4 --verify-sha256
+skippy-model-package verify-package-v2 ./package --source <model.gguf>
+skippy-model-package validate-glm-dsa-contract ./package
 ```
 
 Validate before publishing:
 
 ```bash
-skippy-model-package validate-package <model.gguf> ./package
-skippy-model-package preflight ./package --stages 4 --verify-sha256
+skippy-model-package verify-package-v2 ./package --source <model.gguf>
 ```
 
 ## Queue a Hugging Face package job

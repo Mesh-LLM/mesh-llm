@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(not(test))]
+use crate::mesh::identity_persistence::adopted_mesh_membership_path;
 use crate::mesh::identity_persistence::mesh_genesis_policy_path;
 use crate::mesh::node::RequirementAwareMeshState;
 
@@ -27,6 +29,87 @@ fn install_requirement_mesh_state_transition(
     let was_empty = current.is_none();
     *current = Some(requested);
     Ok(was_empty)
+}
+
+const MAX_ADOPTED_PEER_ADDRS: usize = 16;
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AdoptedMeshMembership {
+    mesh_id: String,
+    policy_hash: String,
+    signed_policy: crate::SignedMeshGenesisPolicy,
+    #[serde(default)]
+    peer_addrs: Vec<EndpointAddr>,
+}
+
+impl AdoptedMeshMembership {
+    fn verify(&self) -> std::result::Result<(), MeshRequirementRejectReason> {
+        self.signed_policy.verify()?;
+        if self.signed_policy.policy.policy_derived_mesh_id()? != self.mesh_id
+            || self.signed_policy.policy.canonical_hash_hex()? != self.policy_hash
+        {
+            return Err(MeshRequirementRejectReason::MeshPolicyMismatch);
+        }
+        Ok(())
+    }
+
+    fn matches_token(&self, token: &crate::SignedBootstrapToken) -> bool {
+        self.mesh_id == token.mesh_id
+            && self.policy_hash == token.policy_hash
+            && self.signed_policy.policy == token.genesis_policy
+            && self.signed_policy.origin_sign_public_key == token.origin_sign_public_key
+    }
+}
+
+fn load_adopted_mesh_membership(path: &std::path::Path) -> Result<Option<AdoptedMeshMembership>> {
+    let serialized = match std::fs::read(path) {
+        Ok(serialized) => serialized,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+    };
+    let membership = serde_json::from_slice::<AdoptedMeshMembership>(&serialized)
+        .with_context(|| format!("parse {}", path.display()))?;
+    membership
+        .verify()
+        .map_err(|reason| anyhow::anyhow!("verify adopted mesh membership: {reason:?}"))?;
+    Ok(Some(membership))
+}
+
+fn preferred_adopted_peer_addrs(mut peer_addrs: Vec<EndpointAddr>) -> Vec<EndpointAddr> {
+    // Callers put current addresses first; keep their priority and freshest value.
+    let mut seen = std::collections::HashSet::new();
+    peer_addrs.retain(|addr| seen.insert(addr.id));
+    peer_addrs.truncate(MAX_ADOPTED_PEER_ADDRS);
+    peer_addrs
+}
+
+pub(crate) fn persist_adopted_mesh_membership(
+    path: &std::path::Path,
+    state: &RequirementAwareMeshState,
+    peer_addrs: Vec<EndpointAddr>,
+) -> Result<()> {
+    let Some(signed_policy) = state.signed_policy.clone() else {
+        return Ok(());
+    };
+    let peer_addrs = preferred_adopted_peer_addrs(peer_addrs);
+    let membership = AdoptedMeshMembership {
+        mesh_id: state.mesh_id.clone(),
+        policy_hash: state.policy_hash.clone(),
+        signed_policy,
+        peer_addrs,
+    };
+    membership
+        .verify()
+        .map_err(|reason| anyhow::anyhow!("verify adopted mesh membership: {reason:?}"))?;
+    let bytes = serde_json::to_vec_pretty(&membership).context("serialize adopted membership")?;
+    if std::fs::read(path).is_ok_and(|existing| existing == bytes) {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    crate::crypto::write_keystore_bytes_atomically(path, &bytes)?;
+    Ok(())
 }
 
 fn enrich_requirement_mesh_state(
@@ -109,6 +192,114 @@ pub(crate) fn preflight_pushed_config_for_current_node_with_gpus(
 }
 
 impl Node {
+    fn membership_file(&self) -> Result<Option<std::path::PathBuf>> {
+        #[cfg(test)]
+        {
+            Ok(self.adopted_membership_file.clone())
+        }
+        #[cfg(not(test))]
+        {
+            adopted_mesh_membership_path().map(Some)
+        }
+    }
+
+    fn load_membership(&self) -> Result<Option<AdoptedMeshMembership>> {
+        match self.membership_file()? {
+            Some(path) => load_adopted_mesh_membership(&path),
+            None => Ok(None),
+        }
+    }
+
+    fn persist_membership(
+        &self,
+        state: &RequirementAwareMeshState,
+        peers: Vec<EndpointAddr>,
+    ) -> Result<()> {
+        if let Some(path) = self.membership_file()? {
+            persist_adopted_mesh_membership(&path, state, peers)?;
+        }
+        Ok(())
+    }
+    pub(crate) async fn restore_adopted_mesh_membership(&self, join_tokens: &[String]) -> bool {
+        let membership = match self.load_membership() {
+            Ok(Some(membership)) => membership,
+            Ok(None) => return false,
+            Err(error) => {
+                tracing::warn!(error = %error, "ignoring invalid adopted mesh membership");
+                return false;
+            }
+        };
+        if !join_tokens.iter().any(|encoded| {
+            matches!(
+                parse_invite_token(encoded),
+                Ok(InviteTokenMaterial::Signed(token)) if token.verify_at(token.expires_at_unix_ms.unwrap_or_else(current_time_unix_ms)).is_ok()
+                    && membership.matches_token(&token)
+            )
+        }) {
+            return false;
+        }
+        let AdoptedMeshMembership {
+            mesh_id,
+            policy_hash,
+            signed_policy,
+            peer_addrs,
+        } = membership;
+        let policy = signed_policy.policy.clone();
+        if let Err(error) = self
+            .install_requirement_aware_mesh_state(
+                mesh_id,
+                policy_hash,
+                policy,
+                Some(signed_policy),
+                None,
+            )
+            .await
+        {
+            tracing::warn!(error = %error, "failed to restore adopted mesh membership");
+            return false;
+        }
+        for addr in peer_addrs {
+            self.remember_join_target(addr).await;
+        }
+        true
+    }
+
+    pub(crate) async fn refresh_adopted_mesh_membership(&self) {
+        let Some(state) = self.requirement_mesh_state.lock().await.clone() else {
+            return;
+        };
+        if self
+            .requirement_origin_owner(&state.policy, state.signed_policy.as_ref())
+            .is_some()
+        {
+            return;
+        }
+        let mut peer_addrs: Vec<_> = self
+            .peers()
+            .await
+            .into_iter()
+            .map(|peer| peer.addr)
+            .collect();
+        if let Ok(Some(existing)) = self.load_membership()
+            && existing.mesh_id == state.mesh_id
+            && existing.policy_hash == state.policy_hash
+        {
+            peer_addrs.extend(existing.peer_addrs);
+        }
+        if let Err(error) = self.persist_membership(&state, peer_addrs) {
+            tracing::warn!(error = %error, "failed to refresh adopted mesh membership");
+        }
+    }
+
+    pub(crate) async fn redial_join_targets(&self) {
+        let targets = self.join_targets.lock().await.clone();
+        for target in targets {
+            if let Err(error) = self.dial_peer_addr(target).await {
+                tracing::debug!(error = %error, "persisted mesh peer redial failed");
+            }
+        }
+    }
+
     pub(crate) fn load_or_create_signed_genesis_policy(
         &self,
     ) -> Result<crate::SignedMeshGenesisPolicy> {
@@ -341,7 +532,23 @@ impl Node {
         &self,
         token: &crate::SignedBootstrapToken,
     ) -> std::result::Result<Vec<EndpointAddr>, MeshRequirementRejectReason> {
-        token.verify()?;
+        match token.verify() {
+            Ok(()) => {}
+            Err(MeshRequirementRejectReason::BootstrapTokenExpired) => {
+                token.verify_at(token.expires_at_unix_ms.unwrap_or_default())?;
+                let membership = self.load_membership()
+                    .inspect_err(|error| {
+                        tracing::warn!(error = %error, "ignoring invalid adopted mesh membership")
+                    })
+                    .ok()
+                    .flatten()
+                    .ok_or(MeshRequirementRejectReason::BootstrapTokenExpired)?;
+                if !membership.matches_token(token) {
+                    return Err(MeshRequirementRejectReason::MeshPolicyMismatch);
+                }
+            }
+            Err(reason) => return Err(reason),
+        }
         if !self.local_mesh_requirements.is_unrestricted() {
             if let Some(active_policy) = self.active_mesh_policy_state().await {
                 if token.policy_hash.as_str() != active_policy.policy_hash
@@ -458,7 +665,26 @@ impl Node {
             active_policy.as_ref().map(|state| &state.policy),
             &input,
         ) {
-            MeshRequirementDecision::Accepted => Ok(()),
+            MeshRequirementDecision::Accepted => {
+                let state = self.requirement_mesh_state.lock().await.clone();
+                if let Some(state) = state.as_ref()
+                    && self
+                        .requirement_origin_owner(&state.policy, state.signed_policy.as_ref())
+                        .is_none()
+                {
+                    let mut peer_addrs: Vec<_> = self
+                        .peers()
+                        .await
+                        .into_iter()
+                        .map(|peer| peer.addr)
+                        .collect();
+                    peer_addrs.insert(0, ann.addr.clone());
+                    if let Err(error) = self.persist_membership(state, peer_addrs) {
+                        tracing::warn!(error = %error, "failed to persist adopted mesh membership");
+                    }
+                }
+                Ok(())
+            }
             MeshRequirementDecision::Rejected(reason) => Err(reason),
         }
     }
@@ -536,6 +762,28 @@ mod tests {
             signed_policy: None,
             bootstrap_token: None,
         }
+    }
+
+    #[test]
+    fn current_peer_precedes_history_and_keeps_latest_address() {
+        let mut addresses: Vec<_> = (0..=MAX_ADOPTED_PEER_ADDRS)
+            .map(|_| EndpointAddr::new(SecretKey::generate().public()))
+            .collect();
+        addresses.sort_by_key(|addr| addr.id);
+        let stale = addresses.pop().unwrap();
+        let mut current = stale.clone();
+        current
+            .addrs
+            .insert(TransportAddr::Ip("127.0.0.1:12345".parse().unwrap()));
+        let mut input = vec![current.clone(), stale];
+        input.extend(addresses);
+        let selected = preferred_adopted_peer_addrs(input);
+        assert_eq!(selected.len(), MAX_ADOPTED_PEER_ADDRS);
+        assert_eq!(selected[0], current);
+        assert_eq!(
+            selected.iter().filter(|addr| addr.id == current.id).count(),
+            1
+        );
     }
 
     #[test]

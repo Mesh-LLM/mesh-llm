@@ -510,7 +510,7 @@ def _select_rows(
         for domain in domains:
             smoke_ids.extend(slices.get("smoke_domain_rows", {}).get(domain, []))
         if "product-smoke" in selected and not smoke_ids:
-            smoke_ids.append("product-integration-cpu")
+            smoke_ids.append("core")
 
     def unique_rows(mapping: dict[str, dict[str, Any]], ids: Iterable[str], field: str) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
@@ -601,6 +601,10 @@ def _signal_value(
             path.startswith("website/src/docs/pages/")
             or path.startswith("website/src/_includes/")
             for path in changed_files
+        )
+    if name == "plugin_exemplars_changed":
+        return any(
+            path.startswith("docs/plugins/exemplars/") for path in changed_files
         )
     if name == "cli_surface_changed":
         return "cli" in domains
@@ -778,6 +782,7 @@ def _validate_plan(plan: dict[str, Any], slices: dict[str, Any], packages: list[
         "ui_changed",
         "website_changed",
         "website_docs_changed",
+        "plugin_exemplars_changed",
         "cli_surface_changed",
         "docs_only",
         "backend_changed",
@@ -859,6 +864,7 @@ def build_plan(
         "ui_changed",
         "website_changed",
         "website_docs_changed",
+        "plugin_exemplars_changed",
         "cli_surface_changed",
         "docs_only",
         "backend_changed",

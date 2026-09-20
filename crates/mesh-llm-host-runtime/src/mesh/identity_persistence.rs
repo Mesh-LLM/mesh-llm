@@ -52,6 +52,11 @@ pub(crate) fn mesh_genesis_policy_path() -> Result<std::path::PathBuf> {
     Ok(identity_state_dir()?.join("mesh-genesis-policy.json"))
 }
 
+#[cfg(not(test))]
+pub(crate) fn adopted_mesh_membership_path() -> Result<std::path::PathBuf> {
+    Ok(identity_state_dir()?.join("mesh-adopted-membership.json"))
+}
+
 /// Save the mesh ID of the last mesh we successfully joined.
 pub fn save_last_mesh_id(mesh_id: &str) -> Result<()> {
     let path = identity_state_dir()?.join("last-mesh");
@@ -171,8 +176,8 @@ pub(crate) fn clear_public_identity_file(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// Record that this node was started in public mode (--auto / --publish / --mesh-name).
-/// Called at startup so we can detect a public→private transition next time.
+/// Enter public mode, rotating a previously private node/mesh identity first.
+/// Repeated public starts preserve identity. Owner credentials are not rotated.
 pub fn mark_was_public() -> Result<()> {
     let home = identity_home_dir();
     let key_path = default_node_key_path()?;
@@ -181,6 +186,14 @@ pub fn mark_was_public() -> Result<()> {
 
 fn mark_was_public_at(home: &std::path::Path, active_key_path: &std::path::Path) -> Result<()> {
     let path = was_public_path_for(home, active_key_path);
+    if !path
+        .try_exists()
+        .with_context(|| format!("inspect {}", path.display()))?
+    {
+        // An unmarked identity is private (including identities from older versions).
+        // Rotate before marking, so a failed cleanup is retried on the next start.
+        clear_public_identity_at(home, active_key_path)?;
+    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
@@ -200,8 +213,8 @@ fn was_previously_public_at(home: &std::path::Path, active_key_path: &std::path:
 
 /// Clear identity files (key, nostr.nsec, mesh-id, last-mesh, and the marker for
 /// the active key) so the next start gets a completely fresh identity. Called
-/// when transitioning from public → private to avoid reusing a publicly-known
-/// identity in a private mesh.
+/// when crossing the public/private boundary in either direction. Owner
+/// credentials and trust-store settings are deliberately preserved.
 pub fn clear_public_identity() -> Result<()> {
     let home = identity_home_dir();
     let key_path = default_node_key_path()?;
@@ -220,7 +233,13 @@ fn clear_public_identity_at(
     if active_key_path == home.join(".mesh-llm").join("key") {
         clear_public_identity_file(&state_dir.join("key"))?;
     }
-    for name in &["nostr.nsec", "mesh-id", "last-mesh"] {
+    for name in &[
+        "nostr.nsec",
+        "mesh-id",
+        "last-mesh",
+        "mesh-adopted-membership.json",
+        "mesh-genesis-policy.json",
+    ] {
         clear_public_identity_file(&state_dir.join(name))?;
     }
     let marker = state_dir.join("was-public");
@@ -306,6 +325,71 @@ mod clear_identity_tests {
     }
 
     #[test]
+    fn public_transition_forgets_only_active_membership() {
+        let root = tempfile::tempdir().expect("identity root");
+        let home = root.path();
+        let first = home.join("first.key");
+        let second = home.join("second.key");
+        for key in [&first, &second] {
+            let dir = identity_state_dir_for(home, key);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("mesh-adopted-membership.json"), b"private").unwrap();
+        }
+        mark_was_public_at(home, &first).unwrap();
+        assert!(
+            !identity_state_dir_for(home, &first)
+                .join("mesh-adopted-membership.json")
+                .exists()
+        );
+        assert!(
+            identity_state_dir_for(home, &second)
+                .join("mesh-adopted-membership.json")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn both_mode_transitions_rotate_but_public_restarts_preserve_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path();
+        let key = home.join(".mesh-llm/key");
+        let dir = identity_state_dir_for(home, &key);
+        std::fs::create_dir_all(&dir).unwrap();
+        let node_files = [
+            "key",
+            "nostr.nsec",
+            "mesh-id",
+            "last-mesh",
+            "mesh-genesis-policy.json",
+            "mesh-adopted-membership.json",
+        ];
+        std::fs::write(dir.join("owner-keystore.json"), b"owner").unwrap();
+        for name in node_files {
+            std::fs::write(dir.join(name), b"private").unwrap();
+        }
+        mark_was_public_at(home, &key).unwrap();
+        for name in node_files {
+            assert!(!dir.join(name).exists(), "private {name} survived");
+        }
+        for name in node_files {
+            std::fs::write(dir.join(name), b"public").unwrap();
+        }
+        mark_was_public_at(home, &key).unwrap();
+        for name in node_files {
+            assert_eq!(std::fs::read(dir.join(name)).unwrap(), b"public");
+        }
+        clear_public_identity_at(home, &key).unwrap();
+        for name in node_files {
+            assert!(!dir.join(name).exists(), "public {name} survived");
+        }
+        assert!(!was_previously_public_at(home, &key));
+        assert_eq!(
+            std::fs::read(dir.join("owner-keystore.json")).unwrap(),
+            b"owner"
+        );
+    }
+
+    #[test]
     fn custom_rotation_preserves_default_and_clears_owned_state() {
         let root = tempfile::tempdir().expect("temp identity root");
         let home = root.path().join("home");
@@ -361,6 +445,8 @@ mod clear_identity_tests {
         // clearing the first process must preserve it.
         mark_was_public_at(&home, &second_key).expect("mark second key public");
         assert!(was_previously_public_at(&home, &second_key));
+        // Public startup generates the replacement key after the transition.
+        std::fs::write(&second_key, b"second public key").expect("new second key");
 
         clear_public_identity_at(&home, &first_key).expect("clear first identity");
         assert!(!first_key.exists());
