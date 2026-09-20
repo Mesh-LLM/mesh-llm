@@ -150,8 +150,13 @@ impl AutoBalanceController {
         };
         if !same_shape(last, &sample) {
             // The topology changed underneath us (a move, a replan, a
-            // restart): start a fresh window on the new shape.
+            // restart): start a fresh window on the new shape. A pending
+            // trial was measured on the old shape, so its next window would
+            // judge the old move against the new generation and could issue
+            // an unrelated rollback. Cancel it and re-learn the new shape.
             self.last = Some(sample);
+            self.trial = None;
+            self.imbalanced_windows = 0;
             return AutoBalanceDecision::Hold {
                 why: "topology changed; new window",
             };
@@ -523,6 +528,32 @@ mod tests {
             )),
             AutoBalanceDecision::Hold {
                 why: "window not yet full"
+            }
+        );
+    }
+
+    #[test]
+    fn a_topology_change_mid_trial_cancels_the_trial() {
+        let t0 = Instant::now();
+        let at = |s| t0 + Duration::from_secs(s);
+        let mut controller = AutoBalanceController::new(config());
+        controller.note_moved(21.0, vec![(0, 18), (18, 36)]);
+        // First post-move sample starts the trial window on the new shape.
+        controller.observe(sample(at(0), 30, 0, (0.0, 0.0), 0.0));
+        // An unrelated replan changes the topology while the trial is open.
+        assert_eq!(
+            controller.observe(sample(at(60), 24, 60, (0.90, 0.30), 4.0)),
+            AutoBalanceDecision::Hold {
+                why: "topology changed; new window"
+            }
+        );
+        // The next window is judged on the new generation, not against the
+        // cancelled trial: a poor measurement must not roll back to the old
+        // boundaries of a move that no longer exists.
+        assert_eq!(
+            controller.observe(sample(at(120), 24, 120, (0.90, 0.30), 5.0)),
+            AutoBalanceDecision::Hold {
+                why: "imbalance not yet sustained"
             }
         );
     }
