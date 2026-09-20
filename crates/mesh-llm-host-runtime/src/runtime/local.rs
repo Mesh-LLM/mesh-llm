@@ -242,7 +242,7 @@ pub(super) struct LocalRuntimeModelStartSpec<'a> {
     pub(super) local_source_required: bool,
     pub(super) allow_uncertified_split: bool,
     pub(super) split_topology_lock: Option<&'a Path>,
-    pub(super) performance_aware: bool,
+    pub(super) auto_balance: bool,
     pub(super) planning_profile: RuntimeResourcePlanningProfile,
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     pub(super) skippy_telemetry: skippy::SkippyTelemetryOptions,
@@ -1526,7 +1526,7 @@ mod tests {
             local_source_required: false,
             allow_uncertified_split: false,
             split_topology_lock: None,
-            performance_aware: false,
+            auto_balance: false,
             planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
             openai_guardrail_policy: openai_guardrail_policy_handle(
                 openai_frontend::GuardrailMode::Disabled,

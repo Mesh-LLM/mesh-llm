@@ -1,4 +1,4 @@
-//! Closed-loop layer rebalancing for `--performance-aware` splits.
+//! Closed-loop layer rebalancing for `--auto-balance` splits.
 //!
 //! Every token passes through every stage, so over a window each stage does
 //! the same logical work and the stage with the most compute-busy time paces
@@ -15,7 +15,7 @@
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct PerformanceControllerConfig {
+pub(super) struct AutoBalanceControllerConfig {
     /// Shortest window a decision is made on.
     pub(super) min_window: Duration,
     /// Decode throughput below which the split is treated as idle.
@@ -32,9 +32,9 @@ pub(super) struct PerformanceControllerConfig {
     pub(super) rollback_margin: f64,
 }
 
-impl PerformanceControllerConfig {
+impl AutoBalanceControllerConfig {
     /// Defaults, with the window and cooldown overridable for experiments via
-    /// `MESH_LLM_PERFORMANCE_WINDOW_SECS` and `MESH_LLM_PERFORMANCE_COOLDOWN_SECS`.
+    /// `MESH_LLM_AUTO_BALANCE_WINDOW_SECS` and `MESH_LLM_AUTO_BALANCE_COOLDOWN_SECS`.
     pub(super) fn from_env() -> Self {
         let secs = |name: &str| {
             std::env::var(name)
@@ -45,14 +45,14 @@ impl PerformanceControllerConfig {
         };
         let defaults = Self::default();
         Self {
-            min_window: secs("MESH_LLM_PERFORMANCE_WINDOW_SECS").unwrap_or(defaults.min_window),
-            cooldown: secs("MESH_LLM_PERFORMANCE_COOLDOWN_SECS").unwrap_or(defaults.cooldown),
+            min_window: secs("MESH_LLM_AUTO_BALANCE_WINDOW_SECS").unwrap_or(defaults.min_window),
+            cooldown: secs("MESH_LLM_AUTO_BALANCE_COOLDOWN_SECS").unwrap_or(defaults.cooldown),
             ..defaults
         }
     }
 }
 
-impl Default for PerformanceControllerConfig {
+impl Default for AutoBalanceControllerConfig {
     fn default() -> Self {
         Self {
             min_window: Duration::from_secs(60),
@@ -80,7 +80,7 @@ pub(super) struct StageBusy {
 
 /// One observation of the running split, stage order preserved.
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct PerformanceSample {
+pub(super) struct AutoBalanceSample {
     pub(super) at: Instant,
     pub(super) stages: Vec<StageBusy>,
     /// Cumulative decode tokens produced by the split.
@@ -99,7 +99,7 @@ pub(super) struct WindowMeasurement {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) enum PerformanceDecision {
+pub(super) enum AutoBalanceDecision {
     /// Keep sampling; `why` is for logs.
     Hold { why: &'static str },
     /// Re-plan layer boundaries with these measured per-stage rates.
@@ -121,16 +121,16 @@ struct Trial {
 }
 
 #[derive(Debug)]
-pub(super) struct PerformanceController {
-    config: PerformanceControllerConfig,
-    last: Option<PerformanceSample>,
+pub(super) struct AutoBalanceController {
+    config: AutoBalanceControllerConfig,
+    last: Option<AutoBalanceSample>,
     imbalanced_windows: u32,
     cooldown_until: Option<Instant>,
     trial: Option<Trial>,
 }
 
-impl PerformanceController {
-    pub(super) fn new(config: PerformanceControllerConfig) -> Self {
+impl AutoBalanceController {
+    pub(super) fn new(config: AutoBalanceControllerConfig) -> Self {
         Self {
             config,
             last: None,
@@ -141,10 +141,10 @@ impl PerformanceController {
     }
 
     /// Feed the latest cumulative counters and get a decision.
-    pub(super) fn observe(&mut self, sample: PerformanceSample) -> PerformanceDecision {
+    pub(super) fn observe(&mut self, sample: AutoBalanceSample) -> AutoBalanceDecision {
         let Some(last) = self.last.as_ref() else {
             self.last = Some(sample);
-            return PerformanceDecision::Hold {
+            return AutoBalanceDecision::Hold {
                 why: "first sample",
             };
         };
@@ -152,13 +152,13 @@ impl PerformanceController {
             // The topology changed underneath us (a move, a replan, a
             // restart): start a fresh window on the new shape.
             self.last = Some(sample);
-            return PerformanceDecision::Hold {
+            return AutoBalanceDecision::Hold {
                 why: "topology changed; new window",
             };
         }
         let elapsed = sample.at.saturating_duration_since(last.at);
         if elapsed < self.config.min_window {
-            return PerformanceDecision::Hold {
+            return AutoBalanceDecision::Hold {
                 why: "window not yet full",
             };
         }
@@ -167,7 +167,7 @@ impl PerformanceController {
 
         if measurement.decode_tokens_per_second < self.config.min_decode_tokens_per_second {
             self.imbalanced_windows = 0;
-            return PerformanceDecision::Hold { why: "idle" };
+            return AutoBalanceDecision::Hold { why: "idle" };
         }
 
         if let Some(trial) = self.trial.take() {
@@ -176,13 +176,13 @@ impl PerformanceController {
             let observed = measurement.decode_tokens_per_second;
             let floor = trial.baseline_tokens_per_second * (1.0 - self.config.rollback_margin);
             return if observed < floor {
-                PerformanceDecision::Rollback {
+                AutoBalanceDecision::Rollback {
                     boundaries: trial.previous_boundaries,
                     baseline: trial.baseline_tokens_per_second,
                     observed,
                 }
             } else {
-                PerformanceDecision::Accept {
+                AutoBalanceDecision::Accept {
                     baseline: trial.baseline_tokens_per_second,
                     observed,
                 }
@@ -190,29 +190,29 @@ impl PerformanceController {
         }
 
         if self.cooldown_until.is_some_and(|until| sample.at < until) {
-            return PerformanceDecision::Hold {
+            return AutoBalanceDecision::Hold {
                 why: "cooling down after a move",
             };
         }
         if measurement.bytes_per_second.contains(&0) {
             self.imbalanced_windows = 0;
-            return PerformanceDecision::Hold {
+            return AutoBalanceDecision::Hold {
                 why: "a stage reported no busy time",
             };
         }
         let (min, max) = utilization_range(&measurement.utilization);
         if max - min < self.config.imbalance_threshold {
             self.imbalanced_windows = 0;
-            return PerformanceDecision::Hold { why: "balanced" };
+            return AutoBalanceDecision::Hold { why: "balanced" };
         }
         self.imbalanced_windows += 1;
         if self.imbalanced_windows < self.config.required_windows {
-            return PerformanceDecision::Hold {
+            return AutoBalanceDecision::Hold {
                 why: "imbalance not yet sustained",
             };
         }
         self.imbalanced_windows = 0;
-        PerformanceDecision::Rebalance { measurement }
+        AutoBalanceDecision::Rebalance { measurement }
     }
 
     /// The coordinator applied a move proposed by `Rebalance`. The next full
@@ -282,7 +282,7 @@ pub(super) fn damped_boundaries(current: &[(u32, u32)], target: &[(u32, u32)]) -
         .collect()
 }
 
-fn same_shape(left: &PerformanceSample, right: &PerformanceSample) -> bool {
+fn same_shape(left: &AutoBalanceSample, right: &AutoBalanceSample) -> bool {
     left.stages.len() == right.stages.len()
         && left
             .stages
@@ -298,8 +298,8 @@ fn same_shape(left: &PerformanceSample, right: &PerformanceSample) -> bool {
 }
 
 fn measure(
-    last: &PerformanceSample,
-    now: &PerformanceSample,
+    last: &AutoBalanceSample,
+    now: &AutoBalanceSample,
     elapsed: Duration,
 ) -> WindowMeasurement {
     let seconds = elapsed.as_secs_f64().max(f64::MIN_POSITIVE);
@@ -342,13 +342,13 @@ mod tests {
 
     const LAYER_BYTES: u64 = 130_000_000;
 
-    fn config() -> PerformanceControllerConfig {
-        PerformanceControllerConfig {
+    fn config() -> AutoBalanceControllerConfig {
+        AutoBalanceControllerConfig {
             min_window: Duration::from_secs(60),
             cooldown: Duration::from_secs(300),
             imbalance_threshold: 0.15,
             required_windows: 2,
-            ..PerformanceControllerConfig::default()
+            ..AutoBalanceControllerConfig::default()
         }
     }
 
@@ -359,9 +359,9 @@ mod tests {
         seconds_elapsed: u64,
         busy_share: (f64, f64),
         tokens_per_second: f64,
-    ) -> PerformanceSample {
+    ) -> AutoBalanceSample {
         let nanos = |share: f64| (share * seconds_elapsed as f64 * 1e9) as u64;
-        PerformanceSample {
+        AutoBalanceSample {
             at,
             stages: vec![
                 StageBusy {
@@ -385,19 +385,19 @@ mod tests {
     fn sustained_imbalance_proposes_a_rebalance_with_measured_rates() {
         // The 18/18 profile: stage 0 (M1) 93% busy, stage 1 (M4) 51% busy.
         let t0 = Instant::now();
-        let mut controller = PerformanceController::new(config());
+        let mut controller = AutoBalanceController::new(config());
         let at = |s| t0 + Duration::from_secs(s);
         assert!(matches!(
             controller.observe(sample(at(0), 18, 0, (0.93, 0.51), 21.0)),
-            PerformanceDecision::Hold { .. }
+            AutoBalanceDecision::Hold { .. }
         ));
         assert!(matches!(
             controller.observe(sample(at(60), 18, 60, (0.93, 0.51), 21.0)),
-            PerformanceDecision::Hold {
+            AutoBalanceDecision::Hold {
                 why: "imbalance not yet sustained"
             }
         ));
-        let PerformanceDecision::Rebalance { measurement } =
+        let AutoBalanceDecision::Rebalance { measurement } =
             controller.observe(sample(at(120), 18, 120, (0.93, 0.51), 21.0))
         else {
             panic!("expected a rebalance after two imbalanced windows");
@@ -411,7 +411,7 @@ mod tests {
     #[test]
     fn balanced_or_idle_splits_hold() {
         let t0 = Instant::now();
-        let mut controller = PerformanceController::new(config());
+        let mut controller = AutoBalanceController::new(config());
         controller.observe(sample(t0, 12, 0, (0.0, 0.0), 0.0));
         assert_eq!(
             controller.observe(sample(
@@ -421,7 +421,7 @@ mod tests {
                 (0.90, 0.85),
                 30.0
             )),
-            PerformanceDecision::Hold { why: "balanced" }
+            AutoBalanceDecision::Hold { why: "balanced" }
         );
         assert_eq!(
             controller.observe(sample(
@@ -431,12 +431,12 @@ mod tests {
                 (0.90, 0.85),
                 15.0 * 0.0
             )),
-            PerformanceDecision::Hold {
+            AutoBalanceDecision::Hold {
                 why: "topology changed; new window"
             },
             "counters going backwards restart the window"
         );
-        let mut idle = PerformanceController::new(config());
+        let mut idle = AutoBalanceController::new(config());
         idle.observe(sample(t0, 12, 0, (0.0, 0.0), 0.0));
         assert_eq!(
             idle.observe(sample(
@@ -446,7 +446,7 @@ mod tests {
                 (0.01, 0.30),
                 0.2
             )),
-            PerformanceDecision::Hold { why: "idle" }
+            AutoBalanceDecision::Hold { why: "idle" }
         );
     }
 
@@ -455,26 +455,26 @@ mod tests {
         let t0 = Instant::now();
         let at = |s| t0 + Duration::from_secs(s);
 
-        let mut good = PerformanceController::new(config());
+        let mut good = AutoBalanceController::new(config());
         good.note_moved(21.0, vec![(0, 18), (18, 36)]);
         good.observe(sample(at(0), 12, 0, (0.0, 0.0), 0.0));
         assert!(matches!(
             good.observe(sample(at(60), 12, 60, (0.88, 0.86), 31.0)),
-            PerformanceDecision::Accept { .. }
+            AutoBalanceDecision::Accept { .. }
         ));
         assert_eq!(
             good.observe(sample(at(120), 12, 120, (0.95, 0.60), 31.0)),
-            PerformanceDecision::Hold {
+            AutoBalanceDecision::Hold {
                 why: "cooling down after a move"
             }
         );
 
-        let mut bad = PerformanceController::new(config());
+        let mut bad = AutoBalanceController::new(config());
         bad.note_moved(21.0, vec![(0, 18), (18, 36)]);
         bad.observe(sample(at(0), 30, 0, (0.0, 0.0), 0.0));
         assert_eq!(
             bad.observe(sample(at(60), 30, 60, (0.99, 0.10), 12.0)),
-            PerformanceDecision::Rollback {
+            AutoBalanceDecision::Rollback {
                 boundaries: vec![(0, 18), (18, 36)],
                 baseline: 21.0,
                 observed: 12.0,
@@ -511,7 +511,7 @@ mod tests {
     #[test]
     fn a_short_window_waits() {
         let t0 = Instant::now();
-        let mut controller = PerformanceController::new(config());
+        let mut controller = AutoBalanceController::new(config());
         controller.observe(sample(t0, 18, 0, (0.0, 0.0), 0.0));
         assert_eq!(
             controller.observe(sample(
@@ -521,7 +521,7 @@ mod tests {
                 (0.93, 0.51),
                 21.0
             )),
-            PerformanceDecision::Hold {
+            AutoBalanceDecision::Hold {
                 why: "window not yet full"
             }
         );

@@ -53,7 +53,7 @@ pub struct TopologyPlanningInput {
     /// speed instead of packing the largest node first. Needs
     /// `decode_bytes_per_second` on every placed node; otherwise the
     /// memory-only placement stands.
-    pub performance_aware: bool,
+    pub auto_balance: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -202,7 +202,7 @@ pub fn estimate_plan_throughput(
 }
 
 fn finish_plan(input: &TopologyPlanningInput, plan: TopologyPlan) -> TopologyPlan {
-    let plan = if input.performance_aware {
+    let plan = if input.auto_balance {
         rebalance_topology(input, &plan).unwrap_or(plan)
     } else {
         plan
@@ -771,7 +771,7 @@ mod tests {
             context_length_override: None,
             parallel_lanes_override: None,
             target_decode_tpot_ms: None,
-            performance_aware: false,
+            auto_balance: false,
         }
     }
 
@@ -789,7 +789,7 @@ mod tests {
             context_length_override: None,
             parallel_lanes_override: None,
             target_decode_tpot_ms: None,
-            performance_aware: false,
+            auto_balance: false,
         }
     }
 
@@ -835,7 +835,7 @@ mod tests {
             context_length_override: Some(65_536),
             parallel_lanes_override: Some(LANES),
             target_decode_tpot_ms: None,
-            performance_aware: false,
+            auto_balance: false,
         };
         let layer_weights = layer_weight_bytes(&request);
         let kv_per_layer = request.kv_bytes_per_token.div_ceil(u64::from(LAYERS));
@@ -947,7 +947,7 @@ mod tests {
         }
     }
 
-    fn mini_pair_input(performance_aware: bool) -> TopologyPlanningInput {
+    fn mini_pair_input(auto_balance: bool) -> TopologyPlanningInput {
         // Two 16 GiB-class minis, M1 (~68 GB/s) and M4 (~120 GB/s), serving a
         // 36-layer model that fits either one. The M1 advertises more memory,
         // so memory-only placement makes it stage 0 and hands it the most layers.
@@ -959,7 +959,7 @@ mod tests {
         request.context_length_override = Some(12_288);
         request.parallel_lanes_override = Some(4);
         request.minimum_nodes = 2;
-        request.performance_aware = performance_aware;
+        request.auto_balance = auto_balance;
         request
     }
 
@@ -973,7 +973,7 @@ mod tests {
     }
 
     #[test]
-    fn performance_aware_moves_layers_to_the_faster_node() {
+    fn auto_balance_moves_layers_to_the_faster_node() {
         let memory_only = plan_topology(&mini_pair_input(false)).unwrap();
         let balanced = plan_topology(&mini_pair_input(true)).unwrap();
 
@@ -989,7 +989,7 @@ mod tests {
     }
 
     #[test]
-    fn performance_aware_keeps_the_required_stage0() {
+    fn auto_balance_keeps_the_required_stage0() {
         let plan = plan_topology_with_stage0(&mini_pair_input(true), "m1").unwrap();
 
         assert_eq!(plan.stages[0].node_id, "m1");
@@ -1022,12 +1022,12 @@ mod tests {
     }
 
     #[test]
-    fn plans_without_speeds_are_unchanged_by_performance_awareness() {
+    fn plans_without_speeds_are_unchanged_by_auto_balanceness() {
         let mut aware = input(vec![node("small", 16), node("large", 48)]);
         aware.minimum_nodes = 2;
-        aware.performance_aware = true;
+        aware.auto_balance = true;
         let mut plain = aware.clone();
-        plain.performance_aware = false;
+        plain.auto_balance = false;
 
         let aware_plan = plan_topology(&aware).unwrap();
 

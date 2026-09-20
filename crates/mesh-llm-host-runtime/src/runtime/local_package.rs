@@ -284,7 +284,7 @@ pub(super) struct SplitParticipant {
     pub(super) artifact_transfer_supported: bool,
     availability_score: u32,
     /// Weight bytes per second this node streams during decode, from its GPU
-    /// memory-bandwidth benchmark. Used by `--performance-aware` placement.
+    /// memory-bandwidth benchmark. Used by `--auto-balance` placement.
     pub(super) decode_bytes_per_second: Option<u64>,
 }
 

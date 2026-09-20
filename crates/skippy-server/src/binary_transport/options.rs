@@ -32,7 +32,7 @@ pub struct BinaryStageOptions {
     /// the stage-control load request.
     pub continuous_batching: bool,
     pub openai: Option<EmbeddedOpenAiStageOptions>,
-    /// Receives this stage's runtime compute time, for performance-aware
+    /// Receives this stage's runtime compute time, for auto-balance
     /// split placement. `None` skips the accounting.
     pub compute_meter: Option<std::sync::Arc<crate::compute_meter::StageComputeMeter>>,
 }

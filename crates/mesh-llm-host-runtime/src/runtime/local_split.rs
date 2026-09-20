@@ -1,7 +1,7 @@
 mod attestation;
 mod coordinator;
 mod loading;
-mod performance;
+mod auto_balance;
 mod recovery;
 #[cfg(test)]
 mod test_support;
@@ -325,7 +325,7 @@ pub(super) async fn start_runtime_split_model(
                 .recurrent_bytes_per_configured_lane_by_layer(),
             ctx_size_override: spec.ctx_size_override,
             parallel_override: spec.parallel_override,
-            performance_aware: spec.performance_aware,
+            auto_balance: spec.auto_balance,
         },
         cache_type_k_override: spec.cache_type_k_override.map(str::to_string),
         cache_type_v_override: spec.cache_type_v_override.map(str::to_string),
@@ -342,9 +342,9 @@ pub(super) async fn start_runtime_split_model(
         event_tx: coordinator_tx,
         stage_loss_first_seen: None,
         previously_unavailable_stage_nodes: Vec::new(),
-        performance: (spec.performance_aware && !topology_locked).then(|| {
-            performance::PerformanceController::new(
-                performance::PerformanceControllerConfig::from_env(),
+        auto_balance: (spec.auto_balance && !topology_locked).then(|| {
+            auto_balance::AutoBalanceController::new(
+                auto_balance::AutoBalanceControllerConfig::from_env(),
             )
         }),
         topology_locked,
@@ -414,7 +414,7 @@ async fn prepare_split_runtime_start(
             .recurrent_bytes_per_configured_lane_by_layer(),
         ctx_size_override: spec.ctx_size_override,
         parallel_override: spec.parallel_override,
-        performance_aware: spec.performance_aware,
+        auto_balance: spec.auto_balance,
     };
     let configured_locked_stages = load_configured_split_assignments(
         spec.mesh_config,
