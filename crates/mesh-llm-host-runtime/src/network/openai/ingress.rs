@@ -686,6 +686,7 @@ async fn try_pipeline_proxy(
     request: &mut proxy::BufferedHttpRequest,
     targets: &election::ModelTargets,
     strong_name: &str,
+    route_observer: OpenAiRouteObserver<'_>,
 ) -> Option<proxy::RouteDispatchOutcome> {
     let (planner_name, planner_port, strong_port) = pipeline_local_ports(targets, strong_name)?;
 
@@ -716,6 +717,12 @@ async fn try_pipeline_proxy(
         strong_port,
         node,
         &capsule_nonce,
+        super::response::RouteAttemptLoggingContext {
+            request_id: request.request_id,
+            response_adapter: request.response_adapter,
+            retry_policy: super::response::ResponseRetryPolicy::next_target_available(false),
+            route_observer,
+        },
     )
     .await;
     match result {
@@ -1309,7 +1316,14 @@ fn pipeline_route_model<'a>(
         .as_ref()
         .map(pipeline::should_pipeline)
         .unwrap_or(false)
-        && request.response_adapter == proxy::ResponseAdapter::None;
+        && matches!(
+            request.response_adapter,
+            proxy::ResponseAdapter::None
+                | proxy::ResponseAdapter::OpenAiChatCompletionsJson
+                | proxy::ResponseAdapter::OpenAiChatCompletionsStream
+                | proxy::ResponseAdapter::AnthropicMessagesJson
+                | proxy::ResponseAdapter::AnthropicMessagesStream
+        );
     use_pipeline.then_some(routing_model).flatten()
 }
 
@@ -1319,9 +1333,18 @@ async fn try_pipeline_route(
     ctx: &IngressRouteContext<'_>,
     decision: &AutoRouteDecision,
     routing_model: Option<&str>,
+    route_observer: OpenAiRouteObserver<'_>,
 ) -> Option<proxy::RouteDispatchOutcome> {
     let strong_name = pipeline_route_model(request, decision, routing_model)?;
-    try_pipeline_proxy(ctx.node, tcp_stream, request, ctx.targets, strong_name).await
+    try_pipeline_proxy(
+        ctx.node,
+        tcp_stream,
+        request,
+        ctx.targets,
+        strong_name,
+        route_observer,
+    )
+    .await
 }
 
 enum MoaInterceptResult {
@@ -1538,6 +1561,7 @@ async fn handle_buffered_api_request(
         &ctx.route,
         &decision,
         routing_model.as_deref(),
+        lifecycle.route_observer(),
     )
     .await
     {

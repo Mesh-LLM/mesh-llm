@@ -144,6 +144,11 @@ impl OpenAiError {
         self.status
     }
 
+    /// The human-readable error message carried by this error.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
     pub fn with_code(mut self, code: impl Into<String>) -> Self {
         self.code = Some(code.into());
         self

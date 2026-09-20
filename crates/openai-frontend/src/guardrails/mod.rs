@@ -307,6 +307,10 @@ fn telemetry_attempt_bucket(attempts: u8) -> GuardrailTelemetryAttemptBucket {
 
 #[async_trait]
 impl OpenAiBackend for GuardedOpenAiBackend {
+    async fn count_chat_tokens(&self, request: ChatCompletionRequest) -> OpenAiResult<u32> {
+        self.backend.count_chat_tokens(request).await
+    }
+
     async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
         self.backend.models().await
     }

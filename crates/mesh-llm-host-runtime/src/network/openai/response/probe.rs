@@ -12,6 +12,7 @@ pub(in crate::network::openai::response) struct ParsedResponseHeaders {
     pub(in crate::network::openai::response) status_code: u16,
     pub(in crate::network::openai::response) content_length: Option<usize>,
     pub(in crate::network::openai::response) content_type: Option<String>,
+    pub(super) chunked: bool,
     /// The capsule client nonce and, if the inner frontend minted it itself,
     /// the origin marker — both echoed on the inner frontend's response, but
     /// otherwise lost because the public-proxy response adapters below
@@ -92,6 +93,7 @@ pub(in crate::network::openai::response) fn try_parse_response_headers(
         Ok(httparse::Status::Complete(header_end)) => {
             let mut content_length = None;
             let mut content_type = None;
+            let mut chunked = false;
             let mut client_nonce = None;
             let mut nonce_origin = None;
             let nonce_header = openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str();
@@ -105,6 +107,10 @@ pub(in crate::network::openai::response) fn try_parse_response_headers(
                         Some(value.trim().parse::<usize>().with_context(|| {
                             format!("invalid response Content-Length: {value}")
                         })?);
+                } else if header.name.eq_ignore_ascii_case("transfer-encoding") {
+                    chunked = std::str::from_utf8(header.value)?
+                        .split(',')
+                        .any(|part| part.trim().eq_ignore_ascii_case("chunked"));
                 } else if header.name.eq_ignore_ascii_case("content-type") {
                     content_type = Some(
                         std::str::from_utf8(header.value)
@@ -127,6 +133,7 @@ pub(in crate::network::openai::response) fn try_parse_response_headers(
                 status_code: response.code.unwrap_or(0),
                 content_length,
                 content_type,
+                chunked,
                 client_nonce,
                 nonce_origin,
             }))

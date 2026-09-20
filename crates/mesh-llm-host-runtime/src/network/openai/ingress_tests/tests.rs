@@ -298,7 +298,7 @@ async fn moa_single_worker_stays_in_gateway() {
 fn moa_degraded_model_is_consumed_by_pipeline_dispatch() {
     use crate::network::router::{Category, Classification, Complexity};
 
-    let request = proxy::BufferedHttpRequest {
+    let mut request = proxy::BufferedHttpRequest {
         raw: Vec::new(),
         method: "POST".to_owned(),
         path: "/v1/chat/completions".to_owned(),
@@ -326,11 +326,20 @@ fn moa_degraded_model_is_consumed_by_pipeline_dispatch() {
         required_tokens: None,
     };
 
-    assert_eq!(
-        pipeline_route_model(&request, &decision, request.model_name.as_deref(),),
-        Some("local/only-model:Q4_K_M"),
-        "pipeline dispatch must consume the post-degradation model, not stale 'mesh'"
-    );
+    for adapter in [
+        proxy::ResponseAdapter::None,
+        proxy::ResponseAdapter::OpenAiChatCompletionsJson,
+        proxy::ResponseAdapter::OpenAiChatCompletionsStream,
+        proxy::ResponseAdapter::AnthropicMessagesJson,
+        proxy::ResponseAdapter::AnthropicMessagesStream,
+    ] {
+        request.response_adapter = adapter;
+        assert_eq!(
+            pipeline_route_model(&request, &decision, request.model_name.as_deref()),
+            Some("local/only-model:Q4_K_M"),
+            "pipeline must preserve the selected model for {adapter:?}"
+        );
+    }
 }
 
 // --- Routing behavior tests for model-independent daemon support ---

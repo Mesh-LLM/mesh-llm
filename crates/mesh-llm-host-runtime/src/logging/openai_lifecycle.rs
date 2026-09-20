@@ -795,6 +795,9 @@ const fn operation_label(operation: OpenAiBackendOperation) -> &'static str {
         OpenAiBackendOperation::CompletionStream => "completion_stream",
         OpenAiBackendOperation::Responses => "responses",
         OpenAiBackendOperation::ResponsesStream => "responses_stream",
+        OpenAiBackendOperation::Messages => "messages",
+        OpenAiBackendOperation::MessagesStream => "messages_stream",
+        OpenAiBackendOperation::MessagesCountTokens => "messages_count_tokens",
     }
 }
 
