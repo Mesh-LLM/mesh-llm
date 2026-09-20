@@ -904,11 +904,21 @@ impl SplitTopologyCoordinator {
             .zip(boundaries)
             .map(|(stage, (start, end))| (stage.node_id, start, end))
             .collect::<Vec<_>>();
-        let _ = self
+        if self
             .cut_over_to_boundaries("auto_balance_rollback", restore)
-            .await;
-        if let Some(controller) = self.auto_balance.as_mut() {
-            controller.note_rolled_back(Instant::now());
+            .await
+        {
+            if let Some(controller) = self.auto_balance.as_mut() {
+                controller.note_rolled_back(Instant::now());
+            }
+        } else {
+            // The degraded candidate is still active. Keep the trial open so
+            // the next sample can retry the rollback instead of cooling down
+            // around a move that never completed.
+            tracing::warn!(
+                model_ref = self.model_ref,
+                "auto-balance rollback cutover failed; keeping the trial open for the next sample"
+            );
         }
     }
 
