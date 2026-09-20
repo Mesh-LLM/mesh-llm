@@ -76,6 +76,7 @@ BUILD_DIR="${BUILD_DIR:-${LOCAL_WORK_DIR}/build}"
 TOOL_DIR="${TOOL_DIR:-${LOCAL_WORK_DIR}/tools}"
 VENV_DIR="${VENV_DIR:-${LOCAL_WORK_DIR}/venv}"
 ARTIFACT_UPLOAD_SCRIPT="${ARTIFACT_UPLOAD_SCRIPT:-${LOCAL_WORK_DIR}/upload-package-artifact.py}"
+SPECULATIVE_SUMMARY_HELPER="${SPECULATIVE_SUMMARY_HELPER:-${LOCAL_WORK_DIR}/speculative-summary.py}"
 ARTIFACT_UPLOAD_HOOK="${ARTIFACT_UPLOAD_HOOK:-${LOCAL_WORK_DIR}/upload-package-artifact.sh}"
 SNAPSHOT_PROMOTER="${SNAPSHOT_PROMOTER:-${TOOL_DIR}/promote_layer_package_snapshot.py}"
 CARGO_HOME="${CARGO_HOME:-${LOCAL_WORK_DIR}/cargo-home}"
@@ -87,7 +88,7 @@ BUILD_TMP_DIR="${BUILD_TMP_DIR:-${LOCAL_WORK_DIR}/tmp}"
 TMPDIR="$BUILD_TMP_DIR"
 TEMP="$BUILD_TMP_DIR"
 TMP="$BUILD_TMP_DIR"
-export JOB_WORK_DIR PACKAGE_DIR HF_HOME HF_HUB_CACHE HF_XET_CACHE HF_HUB_DISABLE_XET VENV_DIR ARTIFACT_UPLOAD_SCRIPT
+export JOB_WORK_DIR PACKAGE_DIR HF_HOME HF_HUB_CACHE HF_XET_CACHE HF_HUB_DISABLE_XET VENV_DIR ARTIFACT_UPLOAD_SCRIPT SPECULATIVE_SUMMARY_HELPER
 export TMPDIR TEMP TMP CARGO_HOME RUSTUP_HOME CARGO_TARGET_DIR XDG_CACHE_HOME PIP_CACHE_DIR
 
 cleanup_job_work_dir() {
@@ -452,6 +453,27 @@ TOTAL_SIZE_LABEL="$(format_bytes "$TOTAL_SIZE")"
 echo "  ✓ Split into $LAYER_COUNT layers; artifacts uploaded incrementally (${TOTAL_SIZE_LABEL} total)"
 
 # ─── Verify manifest ──────────────────────────────────────────────────────
+# Render the speculative-decoding declaration in one place. The verification
+# log line below and the published model card describe the same strategy
+# fields, so both load this helper rather than formatting them separately.
+cat > "$SPECULATIVE_SUMMARY_HELPER" <<'PYTHON'
+def speculative_strategy_details(spec):
+    details = []
+    for name, strategy in (spec.get("strategies") or {}).items():
+        kind = strategy.get("type", "unknown")
+        if kind == "native-mtp":
+            depth = strategy.get("prediction_depth")
+            indices = strategy.get("layer_indices") or []
+            details.append(f"{name}: {kind} depth {depth} layers [{', '.join(str(i) for i in indices)}]")
+        else:
+            details.append(f"{name}: {kind}")
+    return details
+
+
+def speculative_summary(spec):
+    return f"default {spec.get('default')}; {'; '.join(speculative_strategy_details(spec))}"
+PYTHON
+
 echo ""
 echo "=== [5/9] Verifying package manifest ==="
 "$VENV_DIR/bin/python3" << 'PYTHON'
@@ -476,16 +498,8 @@ if missing:
 print(f"  ✓ Manifest records {len(required)} uploaded artifacts")
 speculative = (manifest.get("generation") or {}).get("speculative_decoding")
 if speculative:
-    details = []
-    for name, strategy in (speculative.get("strategies") or {}).items():
-        kind = strategy.get("type", "unknown")
-        if kind == "native-mtp":
-            depth = strategy.get("prediction_depth")
-            indices = strategy.get("layer_indices") or []
-            details.append(f"{name}: native-mtp depth {depth} layers [{', '.join(str(i) for i in indices)}]")
-        else:
-            details.append(f"{name}: {kind}")
-    print(f"  ✓ Manifest declares speculative decoding (default {speculative.get('default')}): {', '.join(details)}")
+    exec(Path(os.environ["SPECULATIVE_SUMMARY_HELPER"]).read_text())
+    print(f"  ✓ Manifest declares speculative decoding ({speculative_summary(speculative)})")
 PYTHON
 
 # ─── Publish ──────────────────────────────────────────────────────────────
@@ -660,6 +674,8 @@ import hashlib
 import json
 import os
 
+exec(Path(os.environ["SPECULATIVE_SUMMARY_HELPER"]).read_text())
+
 package_dir = Path(os.environ["PACKAGE_DIR"])
 manifest_path = package_dir / "model-package.json"
 manifest = json.loads(manifest_path.read_text())
@@ -717,20 +733,6 @@ def code(value) -> str:
 
 def yaml_quote(value: str) -> str:
     return json.dumps(value)
-
-def speculative_summary(spec: dict) -> str:
-    default = spec.get("default")
-    details = []
-    for name, strategy in (spec.get("strategies") or {}).items():
-        kind = strategy.get("type", "unknown")
-        if kind == "native-mtp":
-            depth = strategy.get("prediction_depth")
-            indices = strategy.get("layer_indices") or []
-            details.append(f"{name}: {kind} depth {depth} layers [{', '.join(str(i) for i in indices)}]")
-        else:
-            details.append(f"{name}: {kind}")
-    summary = "; ".join(details)
-    return f"default {default}; {summary}"
 
 def card_value(info, key: str):
     card_data = getattr(info, "card_data", None)

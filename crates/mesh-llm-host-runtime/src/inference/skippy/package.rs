@@ -387,15 +387,7 @@ pub fn identity_from_package_v2(package_dir: &Path) -> Result<SkippyPackageIdent
             .context("package-v2 manifest byte count exceeds u64")?,
         sha256: manifest_sha256.clone(),
     });
-    if manifest_ships_mtp_without_generation(&manifest) {
-        tracing::warn!(
-            model_id = %manifest.model_id,
-            package_id = %manifest.package_id,
-            "package contains MTP (nextn) tensors but generation.speculative_decoding is missing; \
-             native MTP will not be enabled for this package; republish with a fixed \
-             skippy-model-package writer to enable it"
-        );
-    }
+    warn_if_mtp_without_generation(&manifest);
     let generation = manifest.generation.as_ref().map(package_v2_generation_info);
 
     Ok(SkippyPackageIdentity {
@@ -520,6 +512,25 @@ fn manifest_ships_mtp_without_generation(manifest: &PackageManifestV2) -> bool {
         .is_some();
 
     ships_mtp && !declares_speculative_decoding
+}
+
+/// Warn when a package carries MTP (`nextn`) tensors but declares no speculative
+/// decoding, so native MTP stays disabled for it until it is republished with a
+/// writer that emits the `generation` block.
+///
+/// Both the local-package and canonical-layer-package identity paths call this,
+/// so the two cannot drift apart.
+fn warn_if_mtp_without_generation(manifest: &PackageManifestV2) {
+    if !manifest_ships_mtp_without_generation(manifest) {
+        return;
+    }
+    tracing::warn!(
+        model_id = %manifest.model_id,
+        package_id = %manifest.package_id,
+        "package contains MTP (nextn) tensors but generation.speculative_decoding is missing; \
+         native MTP will not be enabled for this package; republish with a fixed \
+         skippy-model-package writer to enable it"
+    );
 }
 
 fn package_v2_generation_info(
@@ -1599,15 +1610,7 @@ fn identity_from_package_v2_metadata(
         .context("package-v2 tensor count exceeds u64")?;
     let manifest_sha256 = hex_lower(&Sha256::digest(&manifest_bytes));
     let canonical_package_ref = canonical_layer_package_ref(package_ref, local_ref);
-    if manifest_ships_mtp_without_generation(&manifest) {
-        tracing::warn!(
-            model_id = %manifest.model_id,
-            package_id = %manifest.package_id,
-            "package contains MTP (nextn) tensors but generation.speculative_decoding is missing; \
-             native MTP will not be enabled for this package; republish with a fixed \
-             skippy-model-package writer to enable it"
-        );
-    }
+    warn_if_mtp_without_generation(&manifest);
     Ok(SkippyPackageIdentity {
         package_ref: canonical_package_ref,
         manifest_sha256,
