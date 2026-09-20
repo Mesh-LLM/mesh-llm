@@ -7,12 +7,17 @@ use anyhow::{Context, Result, ensure};
 use mesh_llm_payments::vetting::{CHALLENGE_VERSION, VettingRecord};
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+// tokio's clock, so paused-clock tests drive these windows deterministically.
+use tokio::time::Instant;
 
 pub(crate) const UPGRADE: &[u8] =
     b"POST /mesh/vetting/v1 HTTP/1.1\r\nHost: mesh\r\nContent-Length: 0\r\n\r\n";
 const DEADLINE: Duration = Duration::from_secs(10);
+// One provider reservation window, shared by both sides so a client that waits out
+// its own cooldown is actually eligible at the provider rather than refused again.
+const PEER_PROBE_RESERVATION: Duration = Duration::from_secs(60);
 const MAX_FRAME: usize = 4096;
 // Process-wide limits also bound callers rotating their endpoint identities.
 static PROVIDER_SLOT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
@@ -28,7 +33,7 @@ fn reserve_peer_probe(peer: iroh::EndpointId) -> Result<()> {
     let mut peers = PEER_PROBES
         .lock()
         .map_err(|_| anyhow::anyhow!("probe limiter unavailable"))?;
-    peers.retain(|_, time| time.elapsed() < Duration::from_secs(60));
+    peers.retain(|_, time| time.elapsed() < PEER_PROBE_RESERVATION);
     ensure!(
         !peers.contains_key(&peer) && peers.len() < 1024,
         "peer probe rate limited"
@@ -37,16 +42,28 @@ fn reserve_peer_probe(peer: iroh::EndpointId) -> Result<()> {
     Ok(())
 }
 
+// Read-only: rejecting an attempt locally must never postpone eligibility, or steady
+// traffic during the cooldown would keep pushing the retry out indefinitely.
 fn check_retry_cooldown(peer: iroh::EndpointId) -> Result<()> {
     let mut failures = FAILED_PROBES
         .lock()
         .map_err(|_| anyhow::anyhow!("probe cooldown unavailable"))?;
-    failures.retain(|_, time| time.elapsed() < Duration::from_secs(30));
+    failures.retain(|_, time| time.elapsed() < PEER_PROBE_RESERVATION);
     ensure!(
         !failures.contains_key(&peer),
         "provider probe retry cooldown"
     );
     Ok(())
+}
+
+// Only an attempt that actually reached the provider may start a cooldown.
+fn record_probe_failure(peer: iroh::EndpointId) {
+    if let Ok(mut failures) = FAILED_PROBES.lock() {
+        failures.retain(|_, time| time.elapsed() < PEER_PROBE_RESERVATION);
+        if failures.len() < 1024 {
+            failures.insert(peer, Instant::now());
+        }
+    }
 }
 
 // Serialize cache misses and recheck under the lock: concurrent requests for the
@@ -107,15 +124,20 @@ pub(crate) async fn verify(node: &Node, peer: iroh::EndpointId, model: &str) -> 
     {
         return Ok(());
     }
+    // Queueing behind another caller and the local cooldown gate are bounded outside the
+    // probe deadline: neither is evidence about the provider, so neither may be recorded
+    // as a probe failure below.
+    let _single_flight = tokio::time::timeout(DEADLINE, CLIENT_PROBES.lock())
+        .await
+        .context("provider sanity check queue wait exceeded")?;
+    if service
+        .ledger
+        .provider_vetted(&id, mesh_llm_payments::now_ms(), policy.ttl_ms)?
+    {
+        return Ok(());
+    }
+    check_retry_cooldown(peer)?;
     let result = tokio::time::timeout(DEADLINE, async {
-        let _single_flight = CLIENT_PROBES.lock().await;
-        if service
-            .ledger
-            .provider_vetted(&id, mesh_llm_payments::now_ms(), policy.ttl_ms)?
-        {
-            return Ok(());
-        }
-        check_retry_cooldown(peer)?;
         let random = uuid::Uuid::new_v4();
         let challenge = Challenge {
             version: CHALLENGE_VERSION,
@@ -144,13 +166,8 @@ pub(crate) async fn verify(node: &Node, peer: iroh::EndpointId, model: &str) -> 
     .await
     .context("provider sanity check deadline exceeded")
     .and_then(|result| result);
-    if result.is_err()
-        && let Ok(mut failures) = FAILED_PROBES.lock()
-    {
-        failures.retain(|_, time| time.elapsed() < Duration::from_secs(30));
-        if failures.len() < 1024 {
-            failures.insert(peer, Instant::now());
-        }
+    if result.is_err() {
+        record_probe_failure(peer);
     }
     result
 }
@@ -271,6 +288,10 @@ mod tests {
         })?;
         // No server accepts a stream: a fresh cached call must finish.
         verify(&client, provider.id(), "test").await?;
+        assert!(
+            FAILED_PROBES.lock().unwrap().get(&provider.id()).is_none(),
+            "a successful probe must leave no cooldown"
+        );
         assert!(!service.has_wallet());
         assert!(service.ledger.requests()?.is_empty());
         client.endpoint.close().await;
@@ -396,7 +417,119 @@ mod tests {
         .await
     }
 
+    // The limiter maps are process-wide, so every test that drives them is serialized;
+    // a paused clock in one test would otherwise expire another test's entries.
+    fn forget_peer(peer: iroh::EndpointId) {
+        FAILED_PROBES.lock().unwrap().remove(&peer);
+        PEER_PROBES.lock().unwrap().remove(&peer);
+    }
+
+    // A client with required vetting and no reachable provider.
+    async fn vetting_client(
+        directory: &std::path::Path,
+    ) -> Result<(
+        Node,
+        std::sync::Arc<mesh_llm_payments::service::PaymentService>,
+    )> {
+        let client = Node::new_for_tests(crate::mesh::NodeRole::Client).await?;
+        let service =
+            std::sync::Arc::new(mesh_llm_payments::service::PaymentService::open(directory)?);
+        service
+            .ledger
+            .set_vetting_policy(&mesh_llm_payments::vetting::VettingPolicy {
+                required: true,
+                serve_probes: false,
+                ttl_ms: 60_000,
+            })?;
+        client
+            .payments
+            .set(service.clone())
+            .map_err(|_| anyhow::anyhow!("already initialized"))?;
+        Ok((client, service))
+    }
+
+    // Steady traffic kept the old cooldown sliding: each locally refused call went
+    // through the failure handler and rewrote the timestamp, so a busy client never
+    // became eligible again. Every call below is refused before any I/O, so the paused
+    // clock only moves where the test advances it.
+    #[tokio::test(start_paused = true)]
+    #[serial_test::serial(vetting_limiter)]
+    async fn continuous_traffic_during_cooldown_does_not_postpone_retry() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let (client, _service) = vetting_client(directory.path()).await?;
+        let peer = iroh::SecretKey::generate().public();
+        record_probe_failure(peer);
+        for _ in 0..(PEER_PROBE_RESERVATION.as_secs() - 1) {
+            tokio::time::advance(Duration::from_secs(1)).await;
+            let error = verify(&client, peer, "test")
+                .await
+                .expect_err("cooldown must hold for the full window");
+            assert!(
+                error.to_string().contains("retry cooldown"),
+                "unexpected refusal: {error}"
+            );
+        }
+        tokio::time::advance(Duration::from_secs(2)).await;
+        check_retry_cooldown(peer)
+            .expect("eligible one window after the failure, despite continuous traffic");
+        forget_peer(peer);
+        client.endpoint.close().await;
+        Ok(())
+    }
+
+    // A client that waits out its own cooldown must be eligible at the provider too.
+    #[tokio::test(start_paused = true)]
+    #[serial_test::serial(vetting_limiter)]
+    async fn retry_eligibility_matches_the_provider_reservation() -> Result<()> {
+        let peer = iroh::SecretKey::generate().public();
+        reserve_peer_probe(peer)?;
+        record_probe_failure(peer);
+        tokio::time::advance(PEER_PROBE_RESERVATION - Duration::from_secs(1)).await;
+        assert!(check_retry_cooldown(peer).is_err());
+        assert!(reserve_peer_probe(peer).is_err(), "provider still reserved");
+        tokio::time::advance(Duration::from_secs(2)).await;
+        check_retry_cooldown(peer)?;
+        reserve_peer_probe(peer)?;
+        forget_peer(peer);
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    #[serial_test::serial(vetting_limiter)]
+    async fn a_new_probe_failure_starts_a_new_cooldown() -> Result<()> {
+        let peer = iroh::SecretKey::generate().public();
+        record_probe_failure(peer);
+        tokio::time::advance(PEER_PROBE_RESERVATION + Duration::from_secs(1)).await;
+        check_retry_cooldown(peer)?;
+        record_probe_failure(peer);
+        assert!(check_retry_cooldown(peer).is_err());
+        tokio::time::advance(PEER_PROBE_RESERVATION - Duration::from_secs(1)).await;
+        assert!(check_retry_cooldown(peer).is_err());
+        tokio::time::advance(Duration::from_secs(2)).await;
+        check_retry_cooldown(peer)?;
+        forget_peer(peer);
+        Ok(())
+    }
+
+    // Waiting behind another caller is not evidence about the provider.
+    #[tokio::test(start_paused = true)]
+    #[serial_test::serial(vetting_limiter)]
+    async fn queue_wait_timeout_does_not_arm_a_cooldown() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let (client, _service) = vetting_client(directory.path()).await?;
+        let provider = iroh::SecretKey::generate().public();
+        let held = CLIENT_PROBES.lock().await;
+        // No peer connection is ever attempted: the caller only ever waits for the lock.
+        assert!(verify(&client, provider, "test").await.is_err());
+        drop(held);
+        check_retry_cooldown(provider).expect("a queue wait must not arm the cooldown");
+        forget_peer(provider);
+        client.endpoint.close().await;
+        Ok(())
+    }
+
     #[test]
+    #[serial_test::serial(vetting_limiter)]
     fn peer_limits_and_failure_cooldown_are_bounded_and_isolated() -> Result<()> {
         let first = iroh::SecretKey::generate().public();
         let other = iroh::SecretKey::generate().public();

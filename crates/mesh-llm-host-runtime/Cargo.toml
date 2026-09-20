@@ -120,6 +120,8 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+# start_paused test clocks for the probe cooldown regression tests.
+tokio = { version = "1", features = ["full", "test-util"] }
 bitcoin = { version = "0.32", features = ["secp-recovery"] }
 lightning-invoice = { version = "0.35.0-rc1", features = ["std"] }
 serial_test = "4"
