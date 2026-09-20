@@ -14,15 +14,9 @@ SCRIPT = ROOT / "scripts" / "agentic-replay-params.py"
 
 class AgenticReplayParamsTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.replay = {
-            "mode": "checkpoint",
-            "trajectories_per_framework": 8,
-            "passes": 2,
-            "warmup_turns": 4,
-            "max_output_tokens": 2048,
-            "concurrency": [1, 2, 4, 8],
-            "dataset": "meshllm/example",
-        }
+        self.replay = json.loads(
+            (ROOT / "ci/agentic-replay-nightly/matrix.json").read_text()
+        )["replay"]
 
     def run_script(
         self, replay: dict[str, object], *args: str
@@ -43,7 +37,20 @@ class AgenticReplayParamsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             result.stdout.strip().split("\t"),
-            ["checkpoints", "8", "2", "4", "2048", "1,2,4,8"],
+            [
+                "all",
+                "16",
+                "2",
+                "131072",
+                "32768",
+                "32768",
+                "131072",
+                "5",
+                "2",
+                "4",
+                "2048",
+                "1,2,4,8",
+            ],
         )
 
     def test_writes_history_json_and_github_environment(self) -> None:
@@ -76,18 +83,31 @@ class AgenticReplayParamsTests(unittest.TestCase):
             self.assertEqual(json.loads(json_path.read_text()), self.replay)
             self.assertEqual(
                 env_path.read_text(encoding="utf-8").splitlines(),
-                [
-                    "AGENTIC_REPLAY_MODE=checkpoints",
-                    "AGENTIC_REPLAY_TRAJECTORIES_PER_FRAMEWORK=8",
-                    "AGENTIC_REPLAY_PASSES=2",
-                    "AGENTIC_REPLAY_WARMUP_TURNS=4",
-                    "AGENTIC_REPLAY_MAX_OUTPUT_TOKENS=2048",
-                    "AGENTIC_REPLAY_CONCURRENCY=1,2,4,8",
-                ],
+                ["AGENTIC_REPLAY_MODE=all"]
+                + [
+                    f"AGENTIC_REPLAY_{key.upper()}={self.replay[key]}"
+                    for key in (
+                        "sessions_per_concurrency",
+                        "minimum_worker_waves",
+                        "minimum_context_tokens",
+                        "minimum_session_prompt_tokens",
+                        "min_isl",
+                        "max_isl",
+                        "min_turns",
+                        "passes",
+                        "warmup_turns",
+                        "max_output_tokens",
+                    )
+                ]
+                + ["AGENTIC_REPLAY_CONCURRENCY=1,2,4,8"],
             )
 
     def test_rejects_invalid_replay_shapes(self) -> None:
         invalid_cases = {
+            "checkpoint mode": {**self.replay, "mode": "checkpoint"},
+            "final mode": {**self.replay, "mode": "final"},
+            "insufficient waves": {**self.replay, "sessions_per_concurrency": 8},
+            "short context": {**self.replay, "minimum_context_tokens": 32768},
             "unknown mode": {**self.replay, "mode": "sometimes"},
             "boolean positive field": {**self.replay, "passes": True},
             "duplicate concurrency": {**self.replay, "concurrency": [1, 1]},

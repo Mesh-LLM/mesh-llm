@@ -372,8 +372,12 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Operational safety
 
-- Agentic replay is a daily trusted-main benchmark, without a repository
-  opt-in flag. The persistent micstudio runner must execute natively as arm64
+- Agentic replay executes complete recorded sessions only on trusted main.
+  Long-context qualification is currently manual-only; restore the daily
+  schedule only after reviewed calibration of all model/concurrency cells.
+  Require at least 128K model/runtime context, complete turn evidence, and
+  actual recurrent restores for the recurrent lane. Never substitute shorter
+  sessions or checkpoint sampling to make a failing cohort pass. The persistent micstudio runner must execute natively as arm64
   before checkout. Its shared model cache is writable and permits pinned model
   and trajectory downloads. Repair uses Goose with the llama canary's provider
   and model defaults. Only a complete, gated performance

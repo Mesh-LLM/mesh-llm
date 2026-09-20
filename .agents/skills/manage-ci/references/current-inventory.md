@@ -27,11 +27,12 @@ Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 | `pr_cleanup.yml` | PR close, dispatch | Positively matched cleanup only |
 | `pr_auto_assign.yml` | PR lifecycle | Metadata only |
 | `cache-warm-sccache.yml` (`Cache · Trusted sccache seed`) | successful Main Quality, dispatch | Sole bounded Linux compiler-seed publisher on GitHub-hosted infrastructure |
-| `agentic-replay-nightly.yml` (`Agentic Replay Nightly (micstudio)`) | daily schedule (no opt-in), trusted-main dispatch | Coding-agent serving benchmark on the pinned persistent macOS `micstudio` runner. Scheduled and manual execution is restricted to trusted `main`; exact model and trajectory revisions are SHA-256 verified, the trajectory pin is cross-checked against the canonical harness, replay shape comes from the checked-in matrix, history lookup fails closed, summaries are retained on regressions, and the persistent repair loop receives no publication credential. It emits a patch, PR body and validated run/attempt status artifact; a separate canonical-main, failed-run GitHub-hosted job validates and applies that data with hooks disabled, then uses `CANARY_REPAIR_TOKEN` to publish the deterministic run/attempt repair branch and PR. |
+| `agentic-replay-nightly.yml` (`Agentic Replay Nightly (micstudio)`) | trusted-main dispatch; schedule paused for qualification | Coding-agent serving benchmark on the pinned persistent macOS `micstudio` runner. Scheduled and manual execution is restricted to trusted `main`; exact model and trajectory revisions are SHA-256 verified, the trajectory pin is cross-checked against the canonical harness, replay shape comes from the checked-in matrix, history lookup fails closed, summaries are retained on regressions, and the persistent repair loop receives no publication credential. It emits a patch, PR body and validated run/attempt status artifact; a separate canonical-main, failed-run GitHub-hosted job validates and applies that data with hooks disabled, then uses `CANARY_REPAIR_TOKEN` to publish the deterministic run/attempt repair branch and PR. |
 
 
-Agentic replay runs daily at `14:23 UTC` without an enable variable; it can
-queue while the llama canary occupies micstudio. Runner labels retain the
+Agentic replay is manual-only while the full-session, long-context workload is
+qualified. Restore the former `14:23 UTC` schedule only after reviewed live
+calibration. It can queue while the llama canary occupies micstudio. Runner labels retain the
 registered `X64` label, but a pre-checkout guard requires native arm64 execution
 and working Git/xcrun. The toolchain uses the canonical shared HF cache at
 `/Users/lab/models/huggingface`, checks that it is writable, and explicitly sets
@@ -47,8 +48,10 @@ Public history reads receive no HF token. The workflow grants repair eligibility
 only after successful replay and history retrieval, complete pass/concurrency
 coverage, and a gated performance regression against matching hardware history.
 Infrastructure errors retain evidence without starting code repair. Cancellation
-also preserves available artifacts. The replay and repair steps have separate
-360-minute budgets (GitHub's per-step maximum) within a 1,440-minute job.
+also preserves available artifacts. The three models run in separate serial steps, each with a 360-minute ceiling,
+within a 1,800-minute job. Repair retains its separate 360-minute ceiling.
+These ceilings are not measured runtime estimates; calibration must establish
+that original and repair verification workloads fit before scheduling.
 The repair budget includes both Goose and its complete verification replay.
 The agent invocation is bounded to one hour and logged. Goose uses the canary's provider/model settings
 (`LLAMA_CANARY_GOOSE_PROVIDER` / `LLAMA_CANARY_GOOSE_MODEL`, default
@@ -900,3 +903,6 @@ The gate resolves bundle, model and evidence paths against the caller's working
 directory before invoking Cargo. Cargo starts the integration test in its crate
 directory; absolute paths keep its evidence writer and the wrapper's execution
 check on the same file.
+
+
+Full-session replay contract: [configuration and qualification](../../../../ci/agentic-replay-nightly/README.md).
