@@ -43,6 +43,7 @@ pub(crate) fn run_validate_safetensors_load(args: ValidateSafetensorsLoadArgs) -
     let runtime_config = RuntimeConfig {
         layer_end: if full_model { layer_count } else { 1 },
         resident_tensor_names: Vec::new(),
+        execution_contract: String::new(),
         activation_import_identities: Vec::new(),
         activation_import_bindings: Vec::new(),
         activation_export_identities: Vec::new(),

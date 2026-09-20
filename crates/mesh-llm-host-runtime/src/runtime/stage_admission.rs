@@ -21,13 +21,14 @@ use skippy_package_format::{PackageManifest, Sidecar};
 /// The planned admission expectations for one stage.
 ///
 /// This is carried by the planner on `RuntimeSliceStagePlan` from planning
-/// time and mirrored into the generation-10 control protocol descriptor.
+/// time and mirrored into the generation-11 control protocol descriptor.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlannedStageAdmission {
     /// Content-derived package identity (`sha256:...`).
     pub package_id: String,
     /// Deterministic native semantic plan identity (`skippy-plan:v1:...`).
     pub plan_id: String,
+    pub execution_contract: String,
     pub layer_start: u32,
     pub layer_end: u32,
     /// Exact sorted, unique resident tensor IDs.
@@ -59,6 +60,7 @@ pub struct PlannedStageProfile {
 pub struct RealizedStagePlan {
     pub package_id: String,
     pub plan_id: String,
+    pub execution_contract: String,
     pub layer_start: u32,
     pub layer_end: u32,
     /// Exact sorted, unique resident tensor IDs realized by the native side.
@@ -115,6 +117,7 @@ fn planned_admission_from_discovery(
     PlannedStageAdmission {
         package_id: manifest.package_id.clone(),
         plan_id: discovered.plan_id.clone(),
+        execution_contract: discovered.execution_contract.clone(),
         layer_start: range.0,
         layer_end: range.1,
         resident_tensor_ids: discovered.resident_tensor_ids.clone(),
@@ -145,6 +148,7 @@ impl From<&PlannedStageAdmission> for skippy_protocol::StageAdmissionDescriptor 
             version: skippy_protocol::STAGE_ADMISSION_DESCRIPTOR_VERSION,
             package_id: planned.package_id.clone(),
             plan_id: planned.plan_id.clone(),
+            execution_contract: planned.execution_contract.clone(),
             layer_start: planned.layer_start,
             layer_end: planned.layer_end,
             resident_tensor_ids: planned.resident_tensor_ids.clone(),
@@ -212,6 +216,7 @@ impl Drop for NativePlanner {
 pub struct AdmittedStage {
     pub package_id: String,
     pub plan_id: String,
+    pub execution_contract: String,
     pub layer_start: u32,
     pub layer_end: u32,
     pub resident_tensor_ids: Vec<String>,
@@ -245,6 +250,7 @@ pub enum StagePlanAdmissionError {
         planned: String,
         realized: String,
     },
+    ExecutionContractMismatch,
     PlanIdMismatch {
         planned: String,
         realized: String,
@@ -312,6 +318,10 @@ impl fmt::Display for StagePlanAdmissionError {
             Self::PackageIdMismatch { planned, realized } => write!(
                 formatter,
                 "realized stage package id {realized:?} does not match planned {planned:?}"
+            ),
+            Self::ExecutionContractMismatch => write!(
+                formatter,
+                "realized execution dependency contract does not match admission"
             ),
             Self::PlanIdMismatch { planned, realized } => write!(
                 formatter,
@@ -480,7 +490,7 @@ fn realize_native_stage_chain_from_manifest(
 }
 
 /// Realize, package-resolve, and admit every stage before a topology can be
-/// published. Returned descriptors are canonical generation-10 wire values.
+/// published. Returned descriptors are canonical generation-11 wire values.
 pub fn realize_stage_admissions(
     package_dir: &Path,
     ranges: &[(u32, u32)],
@@ -1015,6 +1025,7 @@ fn describe_native_plan(
     Ok(RealizedStagePlan {
         package_id,
         plan_id,
+        execution_contract: read_plan_string(raw, descriptor.execution_contract)?,
         layer_start: u32::try_from(descriptor.layer_start)
             .expect("validated nonnegative native layer start"),
         layer_end: u32::try_from(descriptor.layer_end)
@@ -1487,6 +1498,9 @@ pub fn admit_stage_plan(
             realized: realized.package_id.clone(),
         });
     }
+    if planned.execution_contract != realized.execution_contract {
+        return Err(StagePlanAdmissionError::ExecutionContractMismatch);
+    }
     if planned.plan_id != realized.plan_id {
         return Err(StagePlanAdmissionError::PlanIdMismatch {
             planned: planned.plan_id.clone(),
@@ -1537,6 +1551,7 @@ pub fn admit_stage_plan(
     Ok(AdmittedStage {
         package_id: realized.package_id.clone(),
         plan_id: realized.plan_id.clone(),
+        execution_contract: realized.execution_contract.clone(),
         layer_start: realized.layer_start,
         layer_end: realized.layer_end,
         resident_tensor_ids: realized.resident_tensor_ids.clone(),

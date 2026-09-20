@@ -115,6 +115,7 @@ pub struct StagePlanDescV1 {
     pub reserved: u32,
     pub profile_count: u64,
     pub resident_tensor_count: u64,
+    pub execution_contract: StagePlanStringRefV1,
 }
 
 #[repr(C)]

@@ -186,6 +186,7 @@ def stage_config(
         "cache_type_k": "f16",
         "cache_type_v": "f16",
         "load_mode": "runtime-slice",
+        "execution_contract": "",
         "bind_addr": f"127.0.0.1:{port}",
         "upstream": upstream,
         "downstream": downstream,

@@ -288,6 +288,8 @@ pub struct StageConfig {
         deserialize_with = "deserialize_resident_tensor_names"
     )]
     pub resident_tensor_names: Vec<String>,
+    /// Opaque native dependency contract, reproduced and checked during admission.
+    pub execution_contract: String,
     /// Planner value identities imported by this stage, in native frontier order.
     #[serde(default)]
     pub activation_import_identities: Vec<String>,

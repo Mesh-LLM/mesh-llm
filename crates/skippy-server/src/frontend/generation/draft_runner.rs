@@ -197,6 +197,7 @@ pub(in crate::frontend) fn draft_runtime_config(
         glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
         mtp_source,
         resident_tensor_names: Vec::new(),
+        execution_contract: String::new(),
         activation_import_identities: Vec::new(),
         activation_import_bindings: Vec::new(),
         activation_export_identities: Vec::new(),
