@@ -1286,6 +1286,11 @@ pub(super) async fn stop_split_generation(
             &stage0.stage_id,
         )
         .await;
+        // Drop this node's compute-meter entry for the run: teardown paths
+        // (withdraw, replan replace, failed load, local fallback, model
+        // stop) all come through here, so the registry cannot outlive the
+        // generation it describes.
+        skippy::forget_stage0_compute_meter(&generation.run_id);
     }
     for stage in generation.stages.iter().skip(1) {
         let stop = skippy::StageStopRequest {
