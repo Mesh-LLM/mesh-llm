@@ -960,10 +960,10 @@ untraced model behavior. MTP graphs are validated as auxiliary graphs rather
 than sliced using decoder block frontiers.
 
 The native ABI advances from 0.1.59 to 0.1.60. Stage-control admission carries
-a required opaque contract field. Direct native callers without a contract
-retain strict single-profile equality and cannot admit shared residency. Mixed
-native ABI versions must not be combined. Cache identity and graph reuse also
-include the contract.
+a required opaque contract field. Every staged native caller must provide the
+planner-produced contract; missing contracts are rejected, including
+single-profile stages. Mixed native ABI versions must not be combined. Cache
+identity and graph reuse also include the contract.
 
 The required execution contract advances the stage protocol to generation 11;
 mixed-generation peers fail closed through the existing capability gate.
