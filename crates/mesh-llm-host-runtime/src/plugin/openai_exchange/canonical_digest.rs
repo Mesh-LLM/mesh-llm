@@ -189,11 +189,27 @@ fn stringify_floats(value: &serde_json::Value) -> serde_json::Value {
 /// formatting: the shortest decimal digit sequence that round-trips to `f`,
 /// rendered in fixed-point form when the decimal exponent is in `[-4, 16)`
 /// and in exponent form (`d[.ddd]e+NN`/`e-NN`, sign always present, at least
-/// two exponent digits) otherwise. Rust's own `Display` for `f64` already
-/// computes the shortest round-trip digit sequence but — unlike Python —
-/// never switches to exponent form, so this reuses `Display`'s fixed-point
-/// string purely as a source of those digits and re-derives the placement.
+/// two exponent digits) otherwise.
+///
+/// The **digits** come from `ryu`, not from Rust's own `Display`. Both
+/// compute a shortest round-tripping sequence, but they need not agree on the
+/// last digit when two candidates tie: `Display` renders the double nearest
+/// `1057279450645605.2` as `1057279450645605.3`, while Python's `repr` — and
+/// `ryu` — keep the even last digit, `1057279450645605.2`. These bytes feed a
+/// cross-language digest, so the digit source has to be the one Python's
+/// `dtoa` agrees with; only the *placement* is re-derived here, because
+/// Rust's `Display` never switches to exponent form while `ryu` switches at
+/// different exponents than Python does (`1e-5`: `ryu` prints `0.00001`,
+/// Python `1e-05`).
+///
+/// A JSON document cannot carry a non-finite number (`serde_json` rejects
+/// `NaN`/`Infinity` literals), so [`stringify_floats`] never reaches this
+/// with one; such a value keeps Rust's own rendering rather than being given
+/// an invented digit sequence.
 fn float_repr(f: f64) -> String {
+    if !f.is_finite() {
+        return format!("{f}");
+    }
     if f == 0.0 {
         return if f.is_sign_negative() {
             "-0.0".to_string()
@@ -202,41 +218,20 @@ fn float_repr(f: f64) -> String {
         };
     }
     let sign = if f.is_sign_negative() { "-" } else { "" };
-    let fixed = format!("{}", f.abs());
-    let (int_part, frac_part) = match fixed.split_once('.') {
-        Some((i, f)) => (i, f),
-        None => (fixed.as_str(), ""),
+    let shortest = {
+        let mut buffer = ryu::Buffer::new();
+        buffer.format(f.abs()).to_string()
     };
-    // The decimal exponent of the most significant digit, and the
-    // significant digits themselves (no leading zeros).
-    let (digits, exponent): (String, i32) = if int_part != "0" {
-        // A double this large (>= 10^16, once `exponent` disqualifies fixed
-        // form below) has no fractional precision left — it is exactly an
-        // integer — so `int_part` alone carries every real digit. Whatever
-        // follows the last nonzero digit is a positional placeholder, not a
-        // significant digit, and must be trimmed for the mantissa (`2e17`,
-        // not `2.00000000000000000e+17`).
-        let exponent = int_part.len() as i32 - 1;
-        let trimmed = int_part.trim_end_matches('0');
-        let trimmed = if trimmed.is_empty() { "0" } else { trimmed };
-        (trimmed.to_string(), exponent)
-    } else {
-        let leading_zeros = frac_part.chars().take_while(|c| *c == '0').count();
-        (
-            frac_part[leading_zeros..].to_string(),
-            -(leading_zeros as i32) - 1,
-        )
-    };
+    let (digits, exponent) = significant_digits(&shortest);
     if (-4..16).contains(&exponent) {
-        // Fixed notation: the source string already places the digits
-        // correctly; just guarantee the trailing `.0` Python always shows for
-        // a whole number.
-        let s = if fixed.contains('.') {
-            fixed
+        // Fixed notation: Python's `repr` places the point itself once the
+        // decimal exponent lands in `[-4, 16)`.
+        let body = if exponent >= 0 {
+            fixed_from_digits(&digits, exponent.unsigned_abs() as usize)
         } else {
-            format!("{fixed}.0")
+            format!("0.{}{}", "0".repeat((-exponent - 1) as usize), digits)
         };
-        format!("{sign}{s}")
+        format!("{sign}{body}")
     } else {
         let mantissa = if digits.len() == 1 {
             digits
@@ -245,6 +240,46 @@ fn float_repr(f: f64) -> String {
         };
         let exp_sign = if exponent < 0 { '-' } else { '+' };
         format!("{sign}{mantissa}e{exp_sign}{:02}", exponent.abs())
+    }
+}
+
+/// Split a shortest-round-trip decimal — in either fixed or exponent form, as
+/// `ryu` emits both — into its significant digits, with no leading or
+/// trailing zeros, and the decimal exponent of the first significant digit.
+///
+/// `1057279450645605.2` -> (`"10572794506456052"`, 15);
+/// `0.00001` -> (`"1"`, -5); `1e16` -> (`"1"`, 16); `123456789.0` ->
+/// (`"123456789"`, 8).
+fn significant_digits(shortest: &str) -> (String, i32) {
+    let (mantissa, exponent) = match shortest.split_once(['e', 'E']) {
+        Some((mantissa, exponent)) => (mantissa, exponent.parse::<i32>().unwrap_or(0)),
+        None => (shortest, 0),
+    };
+    let (int_part, frac_part) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let combined = format!("{int_part}{frac_part}");
+    let leading_zeros = combined.chars().take_while(|c| *c == '0').count();
+    let significant = combined[leading_zeros..].trim_end_matches('0');
+    let significant = if significant.is_empty() {
+        "0"
+    } else {
+        significant
+    };
+    (
+        significant.to_string(),
+        int_part.len() as i32 - 1 + exponent - leading_zeros as i32,
+    )
+}
+
+/// Render `digits` (no leading or trailing zeros) with the decimal point
+/// after the digit at position `exponent`, padding with zeros on either side
+/// as Python's fixed notation does. Callers only reach this when
+/// `exponent >= 0`.
+fn fixed_from_digits(digits: &str, exponent: usize) -> String {
+    let int_len = exponent + 1;
+    if digits.len() > int_len {
+        format!("{}.{}", &digits[..int_len], &digits[int_len..])
+    } else {
+        format!("{digits}{}.0", "0".repeat(int_len - digits.len()))
     }
 }
 
@@ -397,6 +432,51 @@ mod tests {
         assert_eq!(float_repr(0.0), "0.0");
         assert_eq!(float_repr(0.7), "0.7");
         assert_eq!(float_repr(1.0), "1.0");
+    }
+
+    /// The tie class ndizazzo's reproducer comes from (PR #1946 review): a
+    /// double whose shortest round-trip decimal is 17 significant digits and
+    /// whose last digit is a tie between two candidates. Rust's `Display`
+    /// breaks the tie away from zero (`…605.3`); Python's `repr` — and `ryu`,
+    /// which is now the digit source — keep the even digit (`…605.2`).
+    /// Sampling 20k random finite doubles found 6 members of this class, all
+    /// of them this shape; each one is pinned here.
+    #[test]
+    fn float_repr_keeps_pythons_even_digit_on_a_tie() {
+        assert_eq!(float_repr(1057279450645605.2), "1057279450645605.2");
+        assert_eq!(float_repr(-1773462770291661.2), "-1773462770291661.2");
+        assert_eq!(float_repr(-1744291649208894.2), "-1744291649208894.2");
+        assert_eq!(float_repr(-939516722504932.2), "-939516722504932.2");
+        assert_eq!(float_repr(1417228018360600.2), "1417228018360600.2");
+        assert_eq!(float_repr(-1325006684080122.2), "-1325006684080122.2");
+    }
+
+    /// The reproducer itself, end to end: the digest of `{"v":
+    /// 1057279450645605.2}` is `HEX(SHA-256(JCS({"v": "1057279450645605.2"})))`,
+    /// the value the Python reference produces because `repr` renders the
+    /// double's last digit as `2`. Rust's `Display`-sourced digits rendered
+    /// `…605.3`, digesting to a different value.
+    #[test]
+    fn request_body_digest_matches_python_reference_on_a_tie_digit() {
+        assert_eq!(
+            digest(&serde_json::json!({"v": 1057279450645605.2})).as_deref(),
+            Some("e9fa72c32950dc63c269da7ecdf055bb74a051dda8102aa6c2c00897f16c839f")
+        );
+        assert_eq!(
+            digest(&serde_json::json!({"v": -1325006684080122.2})).as_deref(),
+            Some("0bbedca1a650354674897391be9ad8d75515d96b5f4e2299d392191978bae4c3")
+        );
+    }
+
+    /// A JSON document cannot carry a non-finite number, so this branch is
+    /// unreachable from `stringify_floats`; it exists so a future caller
+    /// passing one gets Rust's own rendering instead of a fabricated digit
+    /// sequence.
+    #[test]
+    fn float_repr_keeps_rusts_rendering_for_non_finite_values() {
+        assert_eq!(float_repr(f64::INFINITY), "inf");
+        assert_eq!(float_repr(f64::NEG_INFINITY), "-inf");
+        assert_eq!(float_repr(f64::NAN), "NaN");
     }
 
     /// Each vector cross-checked against a live run of the Python reference,
