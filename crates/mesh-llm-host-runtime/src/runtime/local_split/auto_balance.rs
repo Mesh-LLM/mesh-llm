@@ -118,7 +118,18 @@ pub(super) enum AutoBalanceDecision {
 struct Trial {
     baseline_tokens_per_second: f64,
     previous_boundaries: Vec<(u32, u32)>,
+    /// Windows skipped because the load was too low to judge the move.
+    deferred_windows: u32,
 }
+
+/// A trial window must reach this fraction of the baseline decode rate to be
+/// judged; below it the window is mostly idle and the verdict would measure
+/// the idle share, not the move.
+const TRIAL_JUDGE_LOAD_FRACTION: f64 = 0.5;
+
+/// Judge the trial anyway after this many partial-load windows, so a move
+/// cannot sit unjudged forever under a permanently reduced load.
+const TRIAL_MAX_DEFERRED_WINDOWS: u32 = 3;
 
 #[derive(Debug)]
 pub(super) struct AutoBalanceController {
@@ -176,9 +187,23 @@ impl AutoBalanceController {
         }
 
         if let Some(trial) = self.trial.take() {
+            let observed = measurement.decode_tokens_per_second;
+            let judge_floor = trial.baseline_tokens_per_second * TRIAL_JUDGE_LOAD_FRACTION;
+            if observed < judge_floor && trial.deferred_windows < TRIAL_MAX_DEFERRED_WINDOWS {
+                // A partially loaded window measures the idle share, not the
+                // move: a 21 tok/s baseline judged over 30s idle + 30s busy
+                // reads ~10.5 and would roll back a move whose steady state
+                // is better. Defer to the next full window.
+                self.trial = Some(Trial {
+                    deferred_windows: trial.deferred_windows + 1,
+                    ..trial
+                });
+                return AutoBalanceDecision::Hold {
+                    why: "trial window partially loaded; deferring judgment",
+                };
+            }
             self.cooldown_until = Some(sample.at + self.config.cooldown);
             self.imbalanced_windows = 0;
-            let observed = measurement.decode_tokens_per_second;
             let floor = trial.baseline_tokens_per_second * (1.0 - self.config.rollback_margin);
             return if observed < floor {
                 AutoBalanceDecision::Rollback {
@@ -226,6 +251,7 @@ impl AutoBalanceController {
         self.trial = Some(Trial {
             baseline_tokens_per_second: baseline,
             previous_boundaries: previous,
+            deferred_windows: 0,
         });
         self.last = None;
     }
@@ -530,6 +556,28 @@ mod tests {
                 why: "window not yet full"
             }
         );
+    }
+
+    #[test]
+    fn a_partially_loaded_trial_window_defers_judgment() {
+        let t0 = Instant::now();
+        let at = |s| t0 + Duration::from_secs(s);
+        let mut controller = AutoBalanceController::new(config());
+        controller.note_moved(21.0, vec![(0, 18), (18, 36)]);
+        controller.observe(sample(at(0), 12, 0, (0.0, 0.0), 0.0));
+        // Half the window idle: the 21 tok/s baseline judged over 30s idle
+        // plus 30s busy reads ~9 tok/s and must not roll back the move.
+        assert_eq!(
+            controller.observe(sample(at(60), 12, 60, (0.90, 0.30), 9.0)),
+            AutoBalanceDecision::Hold {
+                why: "trial window partially loaded; deferring judgment"
+            }
+        );
+        // The next window at full load judges the move on its merits.
+        assert!(matches!(
+            controller.observe(sample(at(120), 12, 120, (0.90, 0.30), 31.0)),
+            AutoBalanceDecision::Accept { .. }
+        ));
     }
 
     #[test]
