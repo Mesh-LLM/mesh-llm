@@ -426,6 +426,22 @@ impl OpenAiBackend for FakeBackend {
         Ok(vec![ModelObject::new("org/repo:Q4_K_M")])
     }
 
+    async fn system_one(&self, request: SystemOneRequest) -> OpenAiResult<SystemOneResponse> {
+        Ok(SystemOneResponse {
+            model: request.model,
+            answers: [(
+                "safe".to_string(),
+                crate::SystemOneAnswer::Noul { noul: 0.875 },
+            )]
+            .into_iter()
+            .collect(),
+            usage: crate::SystemOneUsage {
+                input_tokens: 12,
+                output_tokens: 0,
+            },
+        })
+    }
+
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
@@ -565,6 +581,31 @@ impl OpenAiBackend for FakeBackend {
             )),
         ])))
     }
+}
+
+#[tokio::test]
+async fn system_one_route_preserves_jev_response_shape() {
+    let response = post_json(
+        "/v1/systemone",
+        json!({
+            "state": "release candidate",
+            "model": "openjev-latest",
+            "questions": {
+                "safe": {
+                    "type": "noul",
+                    "instructions": "Is this safe?"
+                }
+            }
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_body_json(response).await;
+    assert_eq!(body["model"], "openjev-latest");
+    assert_eq!(body["answers"]["safe"]["type"], "noul");
+    assert_eq!(body["answers"]["safe"]["noul"], 0.875);
+    assert_eq!(body["usage"]["input_tokens"], 12);
+    assert_eq!(body["usage"]["output_tokens"], 0);
 }
 
 struct SlowBackend;

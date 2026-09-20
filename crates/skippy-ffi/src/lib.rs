@@ -5,7 +5,7 @@ mod dynamic_library;
 // without compiling the crate to determine native-runtime compatibility.
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 60;
+pub const ABI_VERSION_PATCH: u32 = 61;
 
 // Propagate static native archive changes through Cargo dependency metadata so
 // final binaries are relinked after CMake rebuilds llama.cpp.
@@ -36,14 +36,15 @@ pub use abi::{
     FEATURE_DIAGNOSTIC_EVENTS, FEATURE_ITERATION_BATCH, FEATURE_KV_EVENTS,
     FEATURE_MODEL_LOAD_EVENTS_V2, FEATURE_MODEL_SOURCE, FEATURE_MTP_MULTIMODAL,
     FEATURE_NATIVE_MTP_N1, FEATURE_NGRAM_CACHE_DRAFT, FEATURE_RUNTIME_EVENT_REPORTER,
-    FEATURE_RUNTIME_EVENTS, FEATURE_STAGE_PLAN, FEATURE_UNLOAD_EVENTS, IterationRequest,
-    LlamaLogCallback, LoadMode, MODEL_TENSOR_SOURCE_V1_ABI_VERSION, Model, ModelImatrixEntryV1,
-    ModelInfo, ModelReadTensorF32Callback, ModelTensorSourceV1, MtmdProgressCallback, MtpSource,
-    NgramCache, Opaque, RuntimeConfig, Session, SkippyDecodeStepSampledMtpFn,
-    SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventCallback, SkippyRuntimeEventCategory,
-    SkippyRuntimeEventEmitterKind, SkippyRuntimeEventFailureCode, SkippyRuntimeEventKind,
-    SkippyRuntimeEventProgressUnit, SkippyRuntimeEventReporterV1, SkippyRuntimeEventV1, Status,
-    TRISTATE_AUTO, TRISTATE_FALSE, TRISTATE_TRUE, TensorRole, runtime_abi_supported,
+    FEATURE_RUNTIME_EVENTS, FEATURE_STAGE_PLAN, FEATURE_SYSTEM_ONE, FEATURE_UNLOAD_EVENTS,
+    IterationRequest, LlamaLogCallback, LoadMode, MODEL_TENSOR_SOURCE_V1_ABI_VERSION, Model,
+    ModelImatrixEntryV1, ModelInfo, ModelReadTensorF32Callback, ModelTensorSourceV1,
+    MtmdProgressCallback, MtpSource, NgramCache, Opaque, RuntimeConfig, Session,
+    SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventCallback,
+    SkippyRuntimeEventCategory, SkippyRuntimeEventEmitterKind, SkippyRuntimeEventFailureCode,
+    SkippyRuntimeEventKind, SkippyRuntimeEventProgressUnit, SkippyRuntimeEventReporterV1,
+    SkippyRuntimeEventV1, Status, SystemOneSlot, TRISTATE_AUTO, TRISTATE_FALSE, TRISTATE_TRUE,
+    TensorRole, runtime_abi_supported,
 };
 pub use activation::{
     ACTIVATION_BOUNDARY_DESC_VERSION, ACTIVATION_FRAME_VERSION, ACTIVATION_IDENTITY_BYTES,
@@ -132,9 +133,10 @@ pub use dynamic::{
     skippy_stage_plan_state_at_v1, skippy_stage_plan_string_v1,
     skippy_stage_plan_validate_chain_v1, skippy_stage_plan_value_at_v1,
     skippy_stage_planner_create_v1, skippy_stage_planner_free, skippy_stage_planner_realize_v1,
-    skippy_token_is_eog, skippy_tokenize, skippy_trim_session, skippy_verify_tokens,
-    skippy_verify_tokens_frame_sampled, skippy_write_gguf_from_parts,
-    skippy_write_gguf_from_parts_consuming, skippy_write_gguf_metadata_from_parts,
+    skippy_system_one_canvas_length, skippy_system_one_read, skippy_token_is_eog, skippy_tokenize,
+    skippy_trim_session, skippy_verify_tokens, skippy_verify_tokens_frame_sampled,
+    skippy_write_gguf_from_parts, skippy_write_gguf_from_parts_consuming,
+    skippy_write_gguf_metadata_from_parts,
 };
 
 #[cfg(feature = "dynamic-runtime")]
@@ -181,7 +183,8 @@ pub use static_bindings::{
     skippy_stage_plan_state_at_v1, skippy_stage_plan_string_v1,
     skippy_stage_plan_validate_chain_v1, skippy_stage_plan_value_at_v1,
     skippy_stage_planner_create_v1, skippy_stage_planner_free, skippy_stage_planner_realize_v1,
-    skippy_token_is_eog, skippy_tokenize, skippy_trim_session, skippy_verify_tokens,
-    skippy_verify_tokens_frame_sampled, skippy_write_gguf_from_parts,
-    skippy_write_gguf_from_parts_consuming, skippy_write_gguf_metadata_from_parts,
+    skippy_system_one_canvas_length, skippy_system_one_read, skippy_token_is_eog, skippy_tokenize,
+    skippy_trim_session, skippy_verify_tokens, skippy_verify_tokens_frame_sampled,
+    skippy_write_gguf_from_parts, skippy_write_gguf_from_parts_consuming,
+    skippy_write_gguf_metadata_from_parts,
 };

@@ -16,6 +16,7 @@ use crate::{
     errors::OpenAiError,
     lifecycle::RequestId,
     models::ModelObject,
+    system_one::{SystemOneRequest, SystemOneResponse},
 };
 
 pub type ChatCompletionStream =
@@ -182,6 +183,12 @@ pub trait OpenAiBackend: Send + Sync + 'static {
     ) -> OpenAiResult<CompletionStream> {
         Err(OpenAiError::unsupported(
             "/v1/completions streaming is not supported by this backend",
+        ))
+    }
+
+    async fn system_one(&self, _request: SystemOneRequest) -> OpenAiResult<SystemOneResponse> {
+        Err(OpenAiError::unsupported(
+            "/v1/systemone is not supported by this backend",
         ))
     }
 }

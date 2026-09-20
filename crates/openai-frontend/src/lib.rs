@@ -13,6 +13,7 @@ pub mod responses;
 pub mod router;
 pub mod sse;
 mod stream_lifecycle;
+pub mod system_one;
 
 pub use backend::{
     CancellationToken, ChatCompletionStream, CompletionStream, OpenAiBackend, OpenAiRequestContext,
@@ -72,4 +73,8 @@ pub use responses::{
 };
 pub use router::{
     OpenAiFrontendConfig, router, router_for, router_for_with_config, router_with_config,
+};
+pub use system_one::{
+    SystemOneAnswer, SystemOneNoulCriteria, SystemOneQuestion, SystemOneRequest, SystemOneResponse,
+    SystemOneUsage,
 };

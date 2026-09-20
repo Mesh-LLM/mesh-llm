@@ -789,6 +789,7 @@ const fn operation_label(operation: OpenAiBackendOperation) -> &'static str {
         OpenAiBackendOperation::CompletionStream => "completion_stream",
         OpenAiBackendOperation::Responses => "responses",
         OpenAiBackendOperation::ResponsesStream => "responses_stream",
+        OpenAiBackendOperation::SystemOne => "system_one",
     }
 }
 
@@ -1394,6 +1395,10 @@ mod tests {
             })
             .expect("event should serialize"),
             r#"{"type":"route_selected","provider":"openai_frontend","engine":"responses"}"#
+        );
+        assert_eq!(
+            operation_label(OpenAiBackendOperation::SystemOne),
+            "system_one"
         );
     }
 

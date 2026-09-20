@@ -13,6 +13,7 @@ use crate::{
     },
     completions::{CompletionRequest, CompletionResponse},
     models::ModelObject,
+    system_one::{SystemOneRequest, SystemOneResponse},
 };
 
 pub const MESH_HOOKS_FIELD: &str = "mesh_hooks";
@@ -444,6 +445,10 @@ impl HookedOpenAiBackend {
 impl OpenAiBackend for HookedOpenAiBackend {
     async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
         self.backend.models().await
+    }
+
+    async fn system_one(&self, request: SystemOneRequest) -> OpenAiResult<SystemOneResponse> {
+        self.backend.system_one(request).await
     }
 
     async fn chat_completion(

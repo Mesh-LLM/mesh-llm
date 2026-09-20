@@ -13,6 +13,7 @@ use crate::{
     completions::{CompletionRequest, CompletionResponse},
     errors::OpenAiError,
     models::ModelObject,
+    system_one::{SystemOneRequest, SystemOneResponse},
 };
 
 pub struct CompactingOpenAiBackend {
@@ -58,6 +59,10 @@ impl CompactingOpenAiBackend {
 impl OpenAiBackend for CompactingOpenAiBackend {
     async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
         self.backend.models().await
+    }
+
+    async fn system_one(&self, request: SystemOneRequest) -> OpenAiResult<SystemOneResponse> {
+        self.backend.system_one(request).await
     }
 
     async fn chat_completion(
