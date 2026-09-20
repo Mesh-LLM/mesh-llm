@@ -56,6 +56,7 @@ fn expired_direct_iteration_behind_blocked_worker_never_reaches_native_runtime()
             run: Box::new(move |_| {
                 worker_blocked.send(()).unwrap();
                 release_worker_rx.recv().unwrap();
+                Duration::ZERO
             }),
         }))
         .unwrap();
@@ -676,6 +677,7 @@ fn full_direct_wave_suppresses_cache_runtime_while_direct_queue_is_temporarily_e
             control: None,
             run: Box::new(move |_| {
                 selected.send(()).unwrap();
+                Duration::ZERO
             }),
         },
         skippy_scheduler::CacheAffinity::default(),
@@ -723,6 +725,7 @@ fn resident_kv_does_not_engage_direct_wave_gate() {
             control: None,
             run: Box::new(move |_| {
                 selected.send(()).unwrap();
+                Duration::ZERO
             }),
         },
         skippy_scheduler::CacheAffinity::default(),
@@ -822,6 +825,7 @@ fn worker_panic_is_contained_and_fails_active_requests() {
             run: Box::new(move |_| {
                 worker_blocked.send(()).unwrap();
                 release_worker_rx.recv().unwrap();
+                Duration::ZERO
             }),
         }))
         .unwrap();
@@ -845,7 +849,7 @@ fn worker_panic_is_contained_and_fails_active_requests() {
         .send(SchedulerCommand::ExecuteRuntime(RuntimeOperation {
             label: "panic-test",
             control: None,
-            run: Box::new(|_| panic!("injected scheduler worker panic")),
+            run: Box::new(|_| -> Duration { panic!("injected scheduler worker panic") }),
         }))
         .unwrap();
     release_worker.send(()).unwrap();
@@ -909,6 +913,7 @@ fn detached_capture_unit_releases_on_completion_rejection_and_shutdown_drop() {
     let worker = thread::spawn(move || {
         SchedulerWorker {
             runtime,
+            compute_meter: std::sync::Arc::default(),
             scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8)),
             requests: BTreeMap::new(),
             direct_iterations: VecDeque::new(),
@@ -916,6 +921,7 @@ fn detached_capture_unit_releases_on_completion_rejection_and_shutdown_drop() {
             commands: receiver,
             kv_capacity_tokens: 64,
             max_direct_batch_size: 1,
+            direct_group_batch_size: 1,
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
@@ -938,6 +944,7 @@ fn detached_capture_unit_releases_on_completion_rejection_and_shutdown_drop() {
             run: Box::new(move |_| {
                 let _guard = run_guard;
                 ran.send(()).unwrap();
+                Duration::ZERO
             }),
         }))
         .unwrap();
@@ -958,6 +965,7 @@ fn capture_operation(counter: &Arc<AtomicUsize>, label: &'static str) -> Runtime
         control: None,
         run: Box::new(move |_| {
             let _guard = guard;
+            Duration::ZERO
         }),
     }
 }
