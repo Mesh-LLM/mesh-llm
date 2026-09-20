@@ -4,8 +4,8 @@ use super::common::{
     sse_data_frame_is_openai_error,
 };
 use super::probe::{
-    ResponseProbe, append_capsule_nonce_headers, response_is_event_stream,
-    try_parse_response_headers,
+    ResponseProbe, append_capsule_nonce_headers, append_mesh_served_by_header,
+    response_is_event_stream, try_parse_response_headers,
 };
 use super::relay::{relay_error_response, relay_success_response};
 use super::stream_translation::write_captured_sse_event;
@@ -23,6 +23,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     reader: &mut R,
     probe: ResponseProbe,
     retry_policy: ResponseRetryPolicy,
+    served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> Result<RouteAttemptResult> {
     relay_chat_protocol_stream(
@@ -30,6 +31,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
         reader,
         probe,
         retry_policy,
+        served_by,
         route_observer,
         false,
     )
@@ -43,6 +45,7 @@ pub(in crate::network::openai::response) async fn relay_translated_messages_stre
     reader: &mut R,
     probe: ResponseProbe,
     retry_policy: ResponseRetryPolicy,
+    served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> Result<RouteAttemptResult> {
     relay_chat_protocol_stream(
@@ -50,6 +53,7 @@ pub(in crate::network::openai::response) async fn relay_translated_messages_stre
         reader,
         probe,
         retry_policy,
+        served_by,
         route_observer,
         true,
     )
@@ -85,6 +89,7 @@ pub(in crate::network::openai::response) async fn relay_chat_protocol_stream<
     reader: &mut R,
     probe: ResponseProbe,
     retry_policy: ResponseRetryPolicy,
+    served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
     anthropic: bool,
 ) -> Result<RouteAttemptResult> {
@@ -100,11 +105,12 @@ pub(in crate::network::openai::response) async fn relay_chat_protocol_stream<
                 reader,
                 probe,
                 retry_policy,
+                served_by,
                 route_observer,
             )
             .await;
         }
-        return relay_error_response(tcp_stream, reader, probe, route_observer).await;
+        return relay_error_response(tcp_stream, reader, probe, served_by, route_observer).await;
     }
 
     let parsed = try_parse_response_headers(&probe.buffered)?
@@ -116,6 +122,7 @@ pub(in crate::network::openai::response) async fn relay_chat_protocol_stream<
             probe,
             parsed,
             retry_policy,
+            served_by,
             route_observer,
             anthropic,
         )
@@ -141,6 +148,7 @@ pub(in crate::network::openai::response) async fn relay_chat_protocol_stream<
         parsed.client_nonce.as_deref(),
         parsed.nonce_origin.as_deref(),
     );
+    append_mesh_served_by_header(&mut header, served_by);
     header.push_str("Connection: close\r\n\r\n");
     tcp_stream.write_all(header.as_bytes()).await?;
     let mut response_capture = route_observer.begin_stream_response_capture();
@@ -293,6 +301,7 @@ async fn relay_non_streaming_reply<R: AsyncRead + Unpin>(
     probe: ResponseProbe,
     parsed: super::probe::ParsedResponseHeaders,
     retry_policy: ResponseRetryPolicy,
+    served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
     anthropic: bool,
 ) -> Result<RouteAttemptResult> {
@@ -302,6 +311,7 @@ async fn relay_non_streaming_reply<R: AsyncRead + Unpin>(
             reader,
             probe,
             retry_policy,
+            served_by,
             route_observer,
         )
         .await
@@ -312,6 +322,7 @@ async fn relay_non_streaming_reply<R: AsyncRead + Unpin>(
             probe,
             parsed,
             retry_policy,
+            served_by,
             route_observer,
         )
         .await

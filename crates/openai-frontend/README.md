@@ -59,6 +59,7 @@ For the concrete benchy command and contract, see
 | Agent session header | Supported | Set `MESH_AGENT_SESSION_HEADER` to accept a trusted upstream header as the stable agent-session identity. |
 | Vision input | Supported | Preserved through chat/Responses content parts and executed by projector-backed runtimes. |
 | Non-chat staging | Fail closed | Embedding, rerank, encoder-decoder, and speech-synthesis models currently require an unsplit full-model runtime. |
+| Mesh routing headers | Supported (remote-mesh routing only) | Implemented by the host runtime's public `:9337` proxy, not this crate, but documented here as part of the same header contract. `x-mesh-target: <EndpointId>` forces dispatch to exactly that peer if it currently advertises the requested model; otherwise the request fails closed with a `409` naming the mismatch — it is never silently rerouted to another peer or served locally. `x-mesh-exclude: <EndpointId>[,...]` removes one or more peers from the candidate set before selection (comma-separated within one header, or repeated). The routing node echoes the resolved peer back as `x-mesh-served-by: <EndpointId>` on the response when `x-mesh-target` resolves to a remote peer or a locally-served (non-plugin) model; plugin-served self-targets do not yet echo this header. Both request headers are no-ops when absent, and an unparseable value is a `400`, never a silently ignored one. |
 
 ## Shape
 

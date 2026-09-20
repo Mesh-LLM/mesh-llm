@@ -40,6 +40,7 @@ pub(super) async fn relay_planned_request(
         logging.request_id,
         logging.retry_policy,
         logging.response_adapter,
+        logging.served_by,
         logging.route_observer,
     )
     .await
