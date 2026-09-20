@@ -55,7 +55,7 @@ pub(super) struct SplitTopologyPlanInput {
     pub(super) target_decode_tpot_ms: Option<u32>,
     pub(super) minimum_nodes: usize,
     pub(super) nodes: Vec<SplitTopologyPlanNode>,
-    pub(super) performance_aware: bool,
+    pub(super) auto_balance: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -95,8 +95,8 @@ pub(super) struct SplitTopologyResourceInputs {
     pub(super) recurrent_bytes_per_sequence_by_layer: Vec<u64>,
     pub(super) ctx_size_override: Option<u32>,
     pub(super) parallel_override: Option<usize>,
-    /// Balance layer boundaries by node decode speed (`--performance-aware`).
-    pub(super) performance_aware: bool,
+    /// Balance layer boundaries by node decode speed (`--auto-balance`).
+    pub(super) auto_balance: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -159,7 +159,7 @@ fn topology_planning_input(input: SplitTopologyPlanInput) -> TopologyPlanningInp
         context_length_override: input.context_length_override,
         parallel_lanes_override: input.parallel_lanes_override,
         target_decode_tpot_ms: input.target_decode_tpot_ms,
-        performance_aware: input.performance_aware,
+        auto_balance: input.auto_balance,
     }
 }
 
@@ -222,7 +222,7 @@ pub(super) fn plan_runtime_slice_topology_with_resources_and_stage0(
     );
 
     let participant_by_id = participant_index_by_id(participants);
-    let plan_performance_aware = resources.performance_aware;
+    let plan_auto_balance = resources.auto_balance;
     let plan_input = runtime_slice_plan_input(package, participants, resources.clone());
     let plan = plan_runtime_slice_topology_result(
         SplitPlanAttempt {
@@ -248,7 +248,7 @@ pub(super) fn plan_runtime_slice_topology_with_resources_and_stage0(
         estimated_decode_network_ms_per_token = plan.estimated_decode_network_ms_per_token,
         decode_tpot_target_met = plan.decode_tpot_target_met,
         stages = ?split_stage_plan_labels(&stages),
-        performance_aware = plan_performance_aware,
+        auto_balance = plan_auto_balance,
         stage_decode_ms = ?plan.throughput.as_ref().map(stage_decode_ms_labels),
         stage_idle_pct = ?plan.throughput.as_ref().map(stage_idle_pct_labels),
         "planned resource-aware split runtime topology"
@@ -484,10 +484,10 @@ fn runtime_slice_plan_input(
                 decode_bytes_per_second: participant.decode_bytes_per_second,
             })
             .collect(),
-        // `MESH_LLM_PERFORMANCE_INITIAL_CUT=memory` starts from the memory-only
+        // `MESH_LLM_AUTO_BALANCE_INITIAL_CUT=memory` starts from the memory-only
         // cut so runtime rebalancing can be exercised from a poor placement.
-        performance_aware: resources.performance_aware
-            && std::env::var("MESH_LLM_PERFORMANCE_INITIAL_CUT").as_deref() != Ok("memory"),
+        auto_balance: resources.auto_balance
+            && std::env::var("MESH_LLM_AUTO_BALANCE_INITIAL_CUT").as_deref() != Ok("memory"),
     }
 }
 
@@ -913,7 +913,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: None,
                 parallel_override: None,
-                performance_aware: false,
+                auto_balance: false,
             },
         )
         .expect("resource-aware topology");
@@ -944,7 +944,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: Some(1),
                 parallel_override: Some(1),
-                performance_aware: false,
+                auto_balance: false,
             },
         )
         .expect("resource-aware topology with exact layer weights");
@@ -980,7 +980,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: Some(1),
                 parallel_override: Some(1),
-                performance_aware: false,
+                auto_balance: false,
             },
         )
         .expect("MI300X and smaller accelerator should form a valid topology");
@@ -1024,7 +1024,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: None,
                 parallel_override: None,
-                performance_aware: false,
+                auto_balance: false,
             },
         )
         .expect("latency-aware runtime topology");
@@ -1078,7 +1078,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: None,
                 parallel_override: None,
-                performance_aware: false,
+                auto_balance: false,
             },
         );
 

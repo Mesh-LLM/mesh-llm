@@ -4,7 +4,7 @@
 //! the same window each stage does the same logical work and the stage with
 //! the most busy time is the one pacing the pipeline. A stage's effective
 //! decode rate is the weight bytes it holds divided by its busy time; the
-//! ratio between stages is what performance-aware placement balances.
+//! ratio between stages is what auto-balance placement balances.
 //!
 //! The iteration scheduler runs all native compute on one worker thread, so
 //! summing the durations it records here gives busy time without double

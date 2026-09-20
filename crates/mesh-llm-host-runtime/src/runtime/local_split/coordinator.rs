@@ -147,9 +147,9 @@ pub(super) struct SplitTopologyCoordinator {
     pub(super) topology_locked: bool,
     pub(super) local_source_required: bool,
     pub(super) health_interval: Duration,
-    /// `--performance-aware` closed-loop rebalancing; `None` when off or the
+    /// `--auto-balance` closed-loop rebalancing; `None` when off or the
     /// topology is locked.
-    pub(super) performance: Option<super::performance::PerformanceController>,
+    pub(super) auto_balance: Option<super::auto_balance::AutoBalanceController>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -189,7 +189,7 @@ impl SplitTopologyCoordinator {
                     if !self.evaluate_replan("periodic_check").await {
                         break;
                     }
-                    self.evaluate_performance().await;
+                    self.evaluate_auto_balance().await;
                 }
             }
         }
@@ -841,55 +841,55 @@ fn split_candidate_stage0_is_local(
 }
 
 /// Longest a planned performance cutover waits for in-flight requests.
-const PERFORMANCE_DRAIN_TIMEOUT: Duration = Duration::from_secs(180);
+const AUTO_BALANCE_DRAIN_TIMEOUT: Duration = Duration::from_secs(180);
 /// Smallest predicted bottleneck improvement worth a cutover.
-const PERFORMANCE_MIN_PREDICTED_GAIN: f64 = 0.10;
+const AUTO_BALANCE_MIN_PREDICTED_GAIN: f64 = 0.10;
 
 impl SplitTopologyCoordinator {
     /// Sample stage busy time and let the performance controller decide.
-    async fn evaluate_performance(&mut self) {
-        if self.performance.is_none() {
+    async fn evaluate_auto_balance(&mut self) {
+        if self.auto_balance.is_none() {
             return;
         }
-        let Some(sample) = self.performance_sample().await else {
+        let Some(sample) = self.auto_balance_sample().await else {
             return;
         };
-        let decision = match self.performance.as_mut() {
+        let decision = match self.auto_balance.as_mut() {
             Some(controller) => controller.observe(sample),
             None => return,
         };
         match decision {
-            super::performance::PerformanceDecision::Hold { why } => {
+            super::auto_balance::AutoBalanceDecision::Hold { why } => {
                 tracing::debug!(
                     model_ref = self.model_ref,
                     why,
-                    "performance rebalance holding"
+                    "auto-balance holding"
                 );
             }
-            super::performance::PerformanceDecision::Accept { baseline, observed } => {
+            super::auto_balance::AutoBalanceDecision::Accept { baseline, observed } => {
                 tracing::info!(
                     model_ref = self.model_ref,
                     baseline_tokens_per_second = baseline,
                     observed_tokens_per_second = observed,
                     stages = ?split_stage_plan_labels(&self.active.stages),
-                    "performance rebalance kept"
+                    "auto-balance kept"
                 );
             }
-            super::performance::PerformanceDecision::Rebalance { measurement } => {
-                self.try_performance_rebalance(measurement).await;
+            super::auto_balance::AutoBalanceDecision::Rebalance { measurement } => {
+                self.try_auto_rebalance(measurement).await;
             }
-            super::performance::PerformanceDecision::Rollback {
+            super::auto_balance::AutoBalanceDecision::Rollback {
                 boundaries,
                 baseline,
                 observed,
             } => {
-                self.apply_performance_rollback(boundaries, baseline, observed)
+                self.apply_auto_balance_rollback(boundaries, baseline, observed)
                     .await;
             }
         }
     }
 
-    async fn apply_performance_rollback(
+    async fn apply_auto_balance_rollback(
         &mut self,
         boundaries: Vec<(u32, u32)>,
         baseline: f64,
@@ -899,7 +899,7 @@ impl SplitTopologyCoordinator {
             model_ref = self.model_ref,
             baseline_tokens_per_second = baseline,
             observed_tokens_per_second = observed,
-            "performance rebalance lowered throughput; restoring previous layer boundaries"
+            "auto-balance lowered throughput; restoring previous layer boundaries"
         );
         let mut stages = self.active.stages.clone();
         stages.sort_by_key(|stage| stage.stage_index);
@@ -909,15 +909,15 @@ impl SplitTopologyCoordinator {
             .map(|(stage, (start, end))| (stage.node_id, start, end))
             .collect::<Vec<_>>();
         let _ = self
-            .cut_over_to_boundaries("performance_rollback", restore)
+            .cut_over_to_boundaries("auto_balance_rollback", restore)
             .await;
-        if let Some(controller) = self.performance.as_mut() {
+        if let Some(controller) = self.auto_balance.as_mut() {
             controller.note_rolled_back(Instant::now());
         }
     }
 
     /// Cumulative busy time per active stage plus stage-0 decode tokens.
-    async fn performance_sample(&self) -> Option<super::performance::PerformanceSample> {
+    async fn auto_balance_sample(&self) -> Option<super::auto_balance::AutoBalanceSample> {
         let stage0 = skippy::stage0_compute_meter(&self.active.run_id)?.snapshot();
         let statuses = self.node.stage_runtime_statuses().await;
         let mut stages = self.active.stages.clone();
@@ -934,26 +934,29 @@ impl SplitTopologyCoordinator {
                     })?
                     .compute_busy_nanos
             };
-            busy.push(super::performance::StageBusy {
+            busy.push(super::auto_balance::StageBusy {
                 layer_start: stage.layer_start,
                 layer_end: stage.layer_end,
                 weight_bytes: stage.parameter_bytes,
                 busy_nanos,
             });
         }
-        Some(super::performance::PerformanceSample {
+        Some(super::auto_balance::AutoBalanceSample {
             at: Instant::now(),
             stages: busy,
             decode_tokens: stage0.decode_tokens,
         })
     }
 
-    async fn try_performance_rebalance(
-        &mut self,
-        measurement: super::performance::WindowMeasurement,
-    ) {
-        let mut stages = self.active.stages.clone();
-        stages.sort_by_key(|stage| stage.stage_index);
+    /// The planner's answer for this window, or `None` when nothing is worth a
+    /// cutover: either the solver found no better cut, or the predicted gain is
+    /// under [`AUTO_BALANCE_MIN_PREDICTED_GAIN`]. Logging lives here so both
+    /// reasons are visible in the log without the caller re-deriving them.
+    fn propose_rebalance(
+        &self,
+        measurement: &super::auto_balance::WindowMeasurement,
+        stages: &[RuntimeSliceStagePlan],
+    ) -> Option<crate::runtime::split_planning::MeasuredRebalance> {
         let rates = stages
             .iter()
             .zip(&measurement.bytes_per_second)
@@ -968,7 +971,7 @@ impl SplitTopologyCoordinator {
             &self.package,
             &self.active.participants,
             resources,
-            &stages,
+            stages,
             self.ctx_size,
             self.slots,
             &rates,
@@ -977,12 +980,9 @@ impl SplitTopologyCoordinator {
             tracing::info!(
                 model_ref = self.model_ref,
                 utilization = ?measurement.utilization,
-                "performance rebalance found no better cut"
+                "auto-balance found no better cut"
             );
-            if let Some(controller) = self.performance.as_mut() {
-                controller.note_not_moved(Instant::now());
-            }
-            return;
+            return None;
         };
         let gain = proposal.bottleneck_before_nanos as f64
             / proposal.bottleneck_after_nanos.max(1) as f64
@@ -991,21 +991,30 @@ impl SplitTopologyCoordinator {
             model_ref = self.model_ref,
             decode_tokens_per_second = measurement.decode_tokens_per_second,
             utilization = ?measurement.utilization,
-            current = ?split_stage_plan_labels(&stages),
+            current = ?split_stage_plan_labels(stages),
             proposed = ?proposal
                 .boundaries
                 .iter()
                 .map(|(_, start, end)| format!("{start}..{end}"))
                 .collect::<Vec<_>>(),
             predicted_gain_pct = gain * 100.0,
-            "performance rebalance proposed from measured stage busy time"
+            "auto-balance proposed from measured stage busy time"
         );
-        if gain < PERFORMANCE_MIN_PREDICTED_GAIN {
-            if let Some(controller) = self.performance.as_mut() {
+        (gain >= AUTO_BALANCE_MIN_PREDICTED_GAIN).then_some(proposal)
+    }
+
+    async fn try_auto_rebalance(
+        &mut self,
+        measurement: super::auto_balance::WindowMeasurement,
+    ) {
+        let mut stages = self.active.stages.clone();
+        stages.sort_by_key(|stage| stage.stage_index);
+        let Some(proposal) = self.propose_rebalance(&measurement, &stages) else {
+            if let Some(controller) = self.auto_balance.as_mut() {
                 controller.note_not_moved(Instant::now());
             }
             return;
-        }
+        };
         let previous = stages
             .iter()
             .map(|stage| (stage.layer_start, stage.layer_end))
@@ -1015,7 +1024,7 @@ impl SplitTopologyCoordinator {
             .iter()
             .map(|(_, start, end)| (*start, *end))
             .collect::<Vec<_>>();
-        let damped = super::performance::damped_boundaries(&previous, &target);
+        let damped = super::auto_balance::damped_boundaries(&previous, &target);
         let next = stages
             .iter()
             .zip(&damped)
@@ -1024,12 +1033,12 @@ impl SplitTopologyCoordinator {
         tracing::info!(
             model_ref = self.model_ref,
             next = ?damped,
-            "performance rebalance moving part of the way toward the proposed cut"
+            "auto-balance moving part of the way toward the proposed cut"
         );
         let moved = self
-            .cut_over_to_boundaries("performance_rebalance", next)
+            .cut_over_to_boundaries("auto_balance_rebalance", next)
             .await;
-        if let Some(controller) = self.performance.as_mut() {
+        if let Some(controller) = self.auto_balance.as_mut() {
             if moved {
                 controller.note_moved(measurement.decode_tokens_per_second, previous);
             } else {
@@ -1048,7 +1057,7 @@ impl SplitTopologyCoordinator {
         let candidate = match self.plan_boundary_candidate(&boundaries) {
             Ok(candidate) => candidate,
             Err(error) => {
-                tracing::warn!(model_ref = self.model_ref, reason, %error, "performance cutover plan failed");
+                tracing::warn!(model_ref = self.model_ref, reason, %error, "auto-balance cutover plan failed");
                 return false;
             }
         };
@@ -1066,7 +1075,7 @@ impl SplitTopologyCoordinator {
                     model_ref = self.model_ref,
                     reason,
                     %error,
-                    "performance cutover load failed; resuming the current generation"
+                    "auto-balance cutover load failed; resuming the current generation"
                 );
                 crate::runtime::startup_handles::rearm_lifecycle_for_cutover(&lifecycle).await;
                 let _ = lifecycle.lock().await.transition_to(
@@ -1089,7 +1098,7 @@ impl SplitTopologyCoordinator {
         let (ack, ack_rx) = tokio::sync::oneshot::channel();
         let event = SplitCoordinatorEvent::Drain(super::SplitCoordinatorDrainEvent {
             reason,
-            deadline: Instant::now() + PERFORMANCE_DRAIN_TIMEOUT,
+            deadline: Instant::now() + AUTO_BALANCE_DRAIN_TIMEOUT,
             ack,
         });
         self.event_tx.send(event).await.ok()?;

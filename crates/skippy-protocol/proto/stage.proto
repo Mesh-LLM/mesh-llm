@@ -243,7 +243,7 @@ message StageStatus {
   }
   optional string split_certification = 36;
   // Cumulative runtime compute-busy time on this stage and the operations it
-  // covers, for performance-aware split placement. Zero when not reported.
+  // covers, for auto-balance split placement. Zero when not reported.
   uint64 compute_busy_nanos = 37;
   uint64 compute_operations = 38;
 }
