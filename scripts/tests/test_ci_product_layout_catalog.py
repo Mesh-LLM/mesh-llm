@@ -43,11 +43,15 @@ class ProductLayoutCatalogTests(unittest.TestCase):
         ):
             for prefix in ("crates/", "mesh/crates/"):
                 with self.subTest(crate=name, prefix=prefix):
-                    domains = PLANNER._matched_domains(
-                        self.ownership, [f"{prefix}{name}/src/lib.rs"], [name]
+                    path_domains = PLANNER._matched_domains(
+                        self.ownership, [f"{prefix}{name}/src/lib.rs"], []
                     )
-                    self.assertIn("rust", domains)
-                    self.assertIn("runtime-product", domains)
+                    crate_domains = PLANNER._matched_domains(
+                        self.ownership, [], [name]
+                    )
+                    for domains in (path_domains, crate_domains):
+                        self.assertIn("rust", domains)
+                        self.assertIn("runtime-product", domains)
 
     def test_relocation_preserves_complete_runtime_plan_selection(self) -> None:
         old = fixture("runtime.json")
