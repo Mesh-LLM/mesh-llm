@@ -680,8 +680,8 @@ pub struct Cli {
     pub split_topology_lock: Option<PathBuf>,
 
     /// Place split layers by node speed and rebalance them while serving, so a
-    /// slower node does not hold back faster ones.
-    #[arg(long)]
+    /// slower node does not hold back faster ones. Split-only: requires --split.
+    #[arg(long, requires = "split")]
     pub auto_balance: bool,
 
     /// Override context size (tokens). Default: auto-scaled to available VRAM.

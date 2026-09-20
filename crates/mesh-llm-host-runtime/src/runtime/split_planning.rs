@@ -237,27 +237,82 @@ pub(super) fn plan_runtime_slice_topology_with_resources_and_stage0(
         required_stage0,
     )?;
 
+    let plan_labels = PlannedSliceTopologyLabels {
+        context_length: plan.context_length,
+        slots: plan.parallel_lanes,
+        estimated_decode_network_ms_per_token: plan.estimated_decode_network_ms_per_token,
+        decode_tpot_target_met: plan.decode_tpot_target_met,
+        auto_balance_applied: plan.throughput.is_some(),
+        stage_decode_ms: plan.throughput.as_ref().map(stage_decode_ms_labels),
+        stage_idle_pct: plan.throughput.as_ref().map(stage_idle_pct_labels),
+    };
     let mut stages = map_runtime_slice_stages(plan.stages, &participant_by_id)?;
     stages.sort_by_key(|stage| stage.stage_index);
     validate_split_capacity(model_ref, package, participants, &stages, excluded)?;
-    tracing::info!(
+    log_planned_slice_topology(
         topology_id,
         model_ref,
-        context_length = plan.context_length,
-        slots = plan.parallel_lanes,
-        estimated_decode_network_ms_per_token = plan.estimated_decode_network_ms_per_token,
-        decode_tpot_target_met = plan.decode_tpot_target_met,
-        stages = ?split_stage_plan_labels(&stages),
-        auto_balance = plan_auto_balance,
-        stage_decode_ms = ?plan.throughput.as_ref().map(stage_decode_ms_labels),
-        stage_idle_pct = ?plan.throughput.as_ref().map(stage_idle_pct_labels),
-        "planned resource-aware split runtime topology"
+        plan_auto_balance,
+        plan_labels,
+        &stages,
     );
     Ok(PlannedRuntimeSliceTopology {
         stages,
         context_length: plan.context_length,
         slots: plan.parallel_lanes,
     })
+}
+
+/// Summary of a finished plan, captured before its stages are mapped so the
+/// placement summary can be logged after capacity validation.
+struct PlannedSliceTopologyLabels {
+    context_length: u32,
+    slots: usize,
+    estimated_decode_network_ms_per_token: Option<u32>,
+    decode_tpot_target_met: Option<bool>,
+    auto_balance_applied: bool,
+    stage_decode_ms: Option<Vec<String>>,
+    stage_idle_pct: Option<Vec<String>>,
+}
+
+/// Log the planned placement, calling out an auto-balance request that fell
+/// back to the memory-only cut because a placed peer has no measured speed.
+fn log_planned_slice_topology(
+    topology_id: &str,
+    model_ref: &str,
+    plan_auto_balance: bool,
+    labels: PlannedSliceTopologyLabels,
+    stages: &[RuntimeSliceStagePlan],
+) {
+    let PlannedSliceTopologyLabels {
+        context_length,
+        slots,
+        estimated_decode_network_ms_per_token,
+        decode_tpot_target_met,
+        auto_balance_applied,
+        stage_decode_ms,
+        stage_idle_pct,
+    } = labels;
+    if plan_auto_balance && !auto_balance_applied {
+        tracing::warn!(
+            model_ref,
+            "auto-balance requested but at least one placed peer has no measured decode speed; keeping the memory-only placement"
+        );
+    }
+    tracing::info!(
+        topology_id,
+        model_ref,
+        context_length,
+        slots,
+        estimated_decode_network_ms_per_token,
+        decode_tpot_target_met,
+        stages = ?split_stage_plan_labels(stages),
+        auto_balance_requested = plan_auto_balance,
+        auto_balance_applied,
+        stage_decode_ms = ?stage_decode_ms,
+        stage_idle_pct = ?stage_idle_pct,
+        "planned resource-aware split runtime topology"
+    );
 }
 
 pub(super) fn plan_locked_runtime_slice_topology_with_resources(
