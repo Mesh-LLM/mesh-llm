@@ -113,6 +113,29 @@ Join from an API-only client:
 mesh-llm client --join <token>
 ```
 
+### Join without putting the token in argv
+
+The invite token can also come from a file or from the environment, which is
+what a background service needs:
+
+```bash
+mesh-llm serve --join-file /home/you/.mesh-llm/invite.token
+```
+
+| Source | Flag / variable | Re-read after startup |
+|---|---|---|
+| argv | `--join <TOKEN>` | no |
+| file | `--join-file <PATH>`, `MESH_LLM_JOIN_FILE` | yes — on every rejoin attempt |
+| environment | `MESH_LLM_JOIN` | no |
+
+A file-backed token is re-read on every rejoin, so rotating an invite token is
+just replacing the file's contents. `mesh-llm setup --service` installs a unit
+that runs a bare `serve` and loads `~/.config/mesh-llm/service.env`, so
+`MESH_LLM_JOIN_FILE=/path/to/invite.token` in that file is enough to run a
+private-mesh node as a service with no unit edits. Keeping the token out of argv
+and out of the unit file also keeps it out of `ps`, `pgrep -a`, and
+`systemctl list-units` output.
+
 ### Multi-interface Linux and Docker hosts
 
 On Linux hosts with several kernel-visible interfaces, especially

@@ -458,6 +458,13 @@ pub struct Cli {
     #[arg(long, short)]
     pub join: Vec<String>,
 
+    /// Read an invite token from a file (can repeat).
+    ///
+    /// The file is re-read on every rejoin attempt, so a rotated token is
+    /// picked up without restarting a service.
+    #[arg(long, value_name = "PATH")]
+    pub join_file: Vec<PathBuf>,
+
     /// Discover a mesh and join it.
     #[arg(long, default_missing_value = "", num_args = 0..=1)]
     pub discover: Option<String>,

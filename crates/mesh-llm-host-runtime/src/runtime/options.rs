@@ -32,6 +32,11 @@ pub struct RuntimeOptions {
     pub mesh_guardrails: MeshGuardrailMode,
     pub help_text: Option<String>,
     pub join: Vec<String>,
+    /// Invite-token files from `--join-file` / `MESH_LLM_JOIN_FILE`.
+    ///
+    /// Re-read on every rejoin attempt so a rotated token is picked up without
+    /// restarting a service.
+    pub join_files: Vec<PathBuf>,
     pub discover: Option<String>,
     pub auto: bool,
     pub mesh_discovery_mode: MeshDiscoveryMode,
@@ -112,6 +117,7 @@ impl Default for RuntimeOptions {
             mesh_guardrails: MeshGuardrailMode::Disabled,
             help_text: None,
             join: Vec::new(),
+            join_files: Vec::new(),
             discover: None,
             auto: false,
             mesh_discovery_mode: MeshDiscoveryMode::Nostr,

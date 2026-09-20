@@ -1,4 +1,5 @@
 use super::daemon_startup::{check_mode_conflicts, resolve_effective_mode};
+use super::join_sources;
 use super::plugin_host_role;
 use super::startup_identity::{emit_private_mesh_name_warning, handle_public_identity_transition};
 use super::status::mesh_guardrail_mode_to_openai;
@@ -202,6 +203,7 @@ pub(super) fn options_from_embedded_options(embedded: EmbeddedRuntimeOptions) ->
         client: matches!(embedded.mode, EmbeddedRuntimeMode::Client),
         model: embedded.models.into_iter().map(PathBuf::from).collect(),
         join: embedded.join,
+        join_files: Vec::new(),
         auto: embedded.auto,
         port: embedded.api_port,
         console: embedded.console_port,
@@ -307,6 +309,7 @@ pub(super) async fn run_runtime_cli(
         options.checkpoint_imatrix.as_deref(),
     )?;
     apply_runtime_config_options(&mut options, &config);
+    join_sources::apply_join_token_sources(&mut options)?;
 
     initialize_audit_logging_for_options(&options)?;
 

@@ -432,6 +432,7 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         mesh_guardrails: map_mesh_guardrail_mode(cli.mesh_guardrails),
         help_text: runtime_help_text(),
         join: cli.join,
+        join_files: cli.join_file,
         discover: cli.discover,
         auto: cli.auto,
         mesh_discovery_mode: map_mesh_discovery_mode(cli.mesh_discovery_mode),

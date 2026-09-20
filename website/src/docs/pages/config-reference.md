@@ -31,6 +31,8 @@ built-in runtime default.
 |---|---|
 | `MESH_LLM_CONFIG` | Full path to the config file, instead of `~/.mesh-llm/config.toml` |
 | `MESH_LLM_LIFECYCLE_LOG_PARSER` | Overrides `runtime.lifecycle_log_parser`; accepts `auto`, `enabled`, or `disabled` |
+| `MESH_LLM_JOIN` | Invite token for a private mesh; equivalent to one `--join` |
+| `MESH_LLM_JOIN_FILE` | Path to a file holding the invite token; equivalent to `--join-file`, and re-read on every rejoin attempt |
 
 ## Managing config via CLI
 
