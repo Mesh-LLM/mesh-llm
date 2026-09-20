@@ -20,7 +20,7 @@
 
 ## Diagnosis
 
-<!-- opencode's analysis of the offending change -->
+<!-- Goose's analysis of the offending change -->
 
 {{DIAGNOSIS}}
 
@@ -53,7 +53,7 @@
 | Nightly run | `{{RUN_ID}}` |
 | History shard | `data/runs/{{RUN_DATE}}/{{RUN_ID}}.jsonl` in {{DATASET_REPO}} |
 | Raw evidence | GitHub Actions artifact `replay-artifacts` (30-day retention) |
-| Repair agent | opencode (agent mode), session log in run artifact |
+| Repair agent | Goose, output in the run artifact's repair.log |
 
 ## Reviewer checklist
 

@@ -2,11 +2,11 @@ use super::{
     DEFAULT_MESH_MCP_URL, OPENCODE_DEFAULT_CONTEXT_LIMIT, OPENCODE_INSTALL_HINT,
     OPENCODE_OUTPUT_LIMIT, build_mesh_provider_spec_for_test, build_opencode_launch_spec,
     build_opencode_launch_spec_with_limits, build_pi_provider_config,
-    build_pi_provider_config_with_limits, cleanup_mesh_child, configure_opencode_launch_command,
-    merge_context_lengths, merge_goose_mcp_config, mesh_mcp_claude_config_json,
-    normalize_opencode_host, opencode_missing_binary_guidance, pi_missing_binary_guidance,
-    resolve_opencode_config_path_from_home, write_opencode_config_for_test,
-    write_pi_config_for_test, write_pi_config_to_path,
+    build_pi_provider_config_with_limits, cleanup_mesh_child, configure_claude_launch_command,
+    configure_opencode_launch_command, merge_context_lengths, merge_goose_mcp_config,
+    mesh_mcp_claude_config_json, normalize_opencode_host, opencode_missing_binary_guidance,
+    pi_missing_binary_guidance, resolve_opencode_config_path_from_home,
+    write_opencode_config_for_test, write_pi_config_for_test, write_pi_config_to_path,
 };
 
 const LOCAL_OPENCODE_HOST: &str = "127.0.0.1:9337";
@@ -172,6 +172,40 @@ fn opencode_launch_command_uses_persisted_config_instead_of_env_blob() {
     assert!(
         !envs.contains_key("OPENCODE_CONFIG_CONTENT"),
         "interactive launch should use the persisted opencode config"
+    );
+}
+
+#[test]
+fn claude_launch_command_sets_expected_args() {
+    let mut command = std::process::Command::new("claude");
+
+    configure_claude_launch_command(
+        &mut command,
+        [
+            "--model",
+            "GLM-4.7-Flash-Q4_K_M",
+            "--settings",
+            "{}",
+            "--mcp-config",
+            "{}",
+        ],
+    );
+
+    let args = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        args,
+        vec![
+            "--model",
+            "GLM-4.7-Flash-Q4_K_M",
+            "--settings",
+            "{}",
+            "--mcp-config",
+            "{}"
+        ]
     );
 }
 

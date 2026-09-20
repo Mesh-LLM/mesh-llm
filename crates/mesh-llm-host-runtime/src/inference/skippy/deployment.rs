@@ -168,7 +168,6 @@ pub(crate) fn stage0_config(
         kv_unified: context.runtime_settings.kv_unified,
         swa_full: context.runtime_settings.swa_full,
         cache_idle_slots: context.runtime_settings.cache_idle_slots,
-        filter_tensors_on_load: true,
         resident_tensor_names: Vec::new(),
         activation_import_identities: frontier_profile.activation_imports.clone(),
         activation_import_bindings: frontier_profile.activation_import_bindings.clone(),

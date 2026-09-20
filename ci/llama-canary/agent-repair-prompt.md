@@ -72,7 +72,10 @@ local artifact.
 Returning from the coding session is not a success signal. The trusted harness
 runs the complete gate sequence on the working tree. If a gate is red, it
 returns the current logs to this same session and you continue the task within
-the shared repair-and-test deadline. Only a green repair pass may create the
+the repair admission window. Each returned candidate gets a fresh bounded
+verification pass; previous repair and test time does not shorten it. After the
+admission window expires, a failing pass ends the task without another coding
+turn. Only a green repair pass may create the
 local candidate commit. A separate job then independently reruns the same
 sequence on that exact tree before a later success-gated step owns GitHub
 publication.

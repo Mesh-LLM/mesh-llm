@@ -1,10 +1,10 @@
 # Generic Skippy Graph-Derived Stage Splitting Plan
 
-Status: proposed for sign-off.
+Status: core Graph Filter V2 cutover implemented; full product acceptance pending.
 
-## Decision Request
+## Implemented Decision
 
-Approve replacing Skippy's three independent descriptions of a stage with one
+Skippy's three independent descriptions of a stage are replaced with one
 graph-derived stage plan:
 
 1. Build the normal unsplit `ggml_cgraph` in metadata-only mode.
@@ -19,8 +19,8 @@ filtering diagnostics may participate in stage selection.
 
 ## Problem Statement
 
-Today the same `[layer_start, layer_end)` request is interpreted independently
-by three systems:
+Before this cutover, the same `[layer_start, layer_end)` request was interpreted
+independently by three systems:
 
 - package planning chooses artifacts using layer, role, endpoint, and name
   heuristics;
@@ -441,7 +441,9 @@ no release in which v1 and v2 serving paths coexist.
    cutover. Fold transitional corrections into their capability-owning patches,
    remove obsolete filter and diagnostic patches, preserve unique contiguous
    numbering, and prove a fresh replay. Do not append a terminal cleanup patch
-   that leaves the obsolete implementation in earlier queue history.
+   that leaves the obsolete implementation in earlier queue history. Apply the
+   recreated queue as top-level core patches, `model_support/` family patches,
+   then generated graph-semantics patches.
 
 Rollback is an explicit deployment rollback to the previous binary and v1
 package corpus. It is not a runtime toggle, mixed-fleet compatibility promise,
@@ -907,7 +909,8 @@ Approval is requested for these decisions:
       cross-family every-cut gate passes.
 - [ ] The final llama.cpp patch queue is recreated from the pinned upstream,
       contains no obsolete stage-filter implementation, and passes a fresh
-      full replay and validation run.
+      full replay and validation run. Its application order is core,
+      `model_support/`, then generated graph-semantics patches.
 - [ ] Acceptance reconciles an independently frozen support matrix so the new
       planner cannot pass by rejecting previously supported models or cuts.
 - [ ] The existing llama canary and registry remain the sole orchestration and
@@ -923,17 +926,18 @@ Approval is requested for these decisions:
 - [ ] The work is split across lanes A–E with one integration owner and three
       shared contracts.
 
-No implementation starts under this plan until these decisions are approved.
+The core implementation decision is approved. Unchecked items above remain
+release-acceptance obligations rather than alternate runtime paths.
 
 ## Evidence Base
 
-- `crates/skippy-model-package/src/plan.rs`
+- `crates/skippy-model-package/src/package_v2.rs`
 - `crates/skippy-model-package/src/package.rs`
 - `crates/skippy-model-package/src/write.rs`
 - `crates/skippy-runtime/src/package.rs`
 - `crates/skippy-runtime/src/types.rs`
 - `crates/skippy-protocol/proto/stage.proto`
 - `crates/skippy-protocol/src/binary/types.rs`
-- `third_party/llama.cpp/patches/0001-Add-staged-model-graph-and-family-support.patch`
+- `third_party/llama.cpp/patches/0002-skippy-implement-graph-planning-realization-and-runt.patch`
 - [PR #1662: recurrent KV restoration and split-cache integration](https://github.com/Mesh-LLM/mesh-llm/pull/1662)
 - [PR #1665: consolidated dense/recurrent split smoke](https://github.com/Mesh-LLM/mesh-llm/pull/1665)

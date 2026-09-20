@@ -49,6 +49,13 @@ fn configure_opencode_launch_command(command: &mut Command, spec: &OpenCodeLaunc
     // initializing its TTY write streams.
 }
 
+fn configure_claude_launch_command(command: &mut Command, args: [&str; 6]) {
+    command.args(args);
+    // Claude Code's native build runs on Bun, which expects the original
+    // terminal file descriptors. Reopening /dev/tty here can make Bun fail
+    // while initializing its kqueue-registered stdin (EINVAL on macOS).
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct OpenCodeLaunchSpec {
     provider_id: &'static str,
@@ -684,15 +691,17 @@ pub async fn run_claude(model: Option<String>, port: u16) -> Result<()> {
     writeln!(err, "🚀 Launching Claude Code with {chosen} → {base_url}\n")?;
     let _ = err.flush();
     let mut command = Command::new("claude");
-    command.args([
-        "--model",
-        &chosen,
-        "--settings",
-        &settings_json,
-        "--mcp-config",
-        &mcp_config_json,
-    ]);
-    configure_interactive_stdio(&mut command);
+    configure_claude_launch_command(
+        &mut command,
+        [
+            "--model",
+            &chosen,
+            "--settings",
+            &settings_json,
+            "--mcp-config",
+            &mcp_config_json,
+        ],
+    );
     let status = command.status();
     match status {
         Ok(s) if s.success() => {}

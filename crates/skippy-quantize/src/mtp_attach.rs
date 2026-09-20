@@ -196,10 +196,7 @@ fn runtime_config(
         image_max_tokens: None,
         batch_max_tokens: None,
         glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
-        include_embeddings: true,
-        include_output: true,
         mtp_source,
-        filter_tensors_on_load: false,
         resident_tensor_names: Vec::new(),
         activation_import_identities: Vec::new(),
         activation_import_bindings: Vec::new(),
@@ -238,7 +235,7 @@ mod tests {
             config.projector_path.as_deref(),
             Some("/models/mmproj.gguf")
         );
-        assert!(config.include_embeddings);
-        assert!(config.include_output);
+        assert!(config.is_source_stage());
+        assert!(config.is_terminal_stage());
     }
 }

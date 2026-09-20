@@ -313,7 +313,6 @@ def write_config(
         "ctx_size": ctx_size,
         "lane_count": lanes,
         "n_gpu_layers": n_gpu_layers,
-        "filter_tensors_on_load": False,
         "load_mode": "runtime-slice",
         "bind_addr": "127.0.0.1:0",
         "upstream": None,

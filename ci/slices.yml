@@ -188,7 +188,7 @@
   },
   "platform_domain_rows": {
   "platform-macos": ["macos-portable", "macos-unit"],
-    "platform-windows": ["windows-portable"],
+    "platform-windows": ["windows-portable", "windows-unit"],
     "platform-windows-storage": ["windows-log-store"]
   },
   "sdk_domain_rows": {
@@ -211,6 +211,7 @@
   {"id": "macos-portable", "platform": "macos", "architecture": "arm64", "runner_role": "macos-build", "kind": "portable"},
   {"id": "macos-unit", "platform": "macos", "architecture": "arm64", "runner_role": "macos-build", "kind": "unit"},
     {"id": "windows-portable", "platform": "windows", "architecture": "amd64", "runner_role": "windows-build", "kind": "portable"},
+    {"id": "windows-unit", "platform": "windows", "architecture": "amd64", "runner_role": "windows-build", "kind": "unit"},
     {"id": "windows-log-store", "platform": "windows", "architecture": "amd64", "runner_role": "windows-build", "kind": "log-store"}
   ],
   "sdk_rows": [

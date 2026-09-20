@@ -415,7 +415,6 @@ fn stage_config_json(args: &NativeMtpOpenAiAbArgs, stage: OpenAiStageConfig<'_>)
         "cache_type_k": "f16",
         "cache_type_v": "f16",
         "flash_attn_type": protocol_flash_attn(args.runtime.flash_attn),
-        "filter_tensors_on_load": true,
         "resident_tensor_names": stage.runtime_plan.resident_tensor_names,
         "activation_import_identities": stage.runtime_plan.activation_import_identities,
         "activation_import_bindings": stage.runtime_plan.activation_import_bindings,

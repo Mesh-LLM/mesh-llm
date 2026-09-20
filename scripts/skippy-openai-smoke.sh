@@ -121,7 +121,6 @@ config = {
     "layer_end": int(layer_end),
     "ctx_size": int(ctx_size),
     "n_gpu_layers": 0,
-    "filter_tensors_on_load": False,
     "load_mode": "runtime-slice",
     "bind_addr": "127.0.0.1:19000",
     "upstream": None,

@@ -89,6 +89,17 @@ pub(super) async fn write_moa_response(
             ),
         }
     } else if is_failure {
+        // Failure keeps the connection-level 502 in every adapter mode,
+        // but a Responses-API client must still receive a Responses-shaped
+        // body — the non-streaming success path translates via the
+        // response adapter, and the error path was sending the raw
+        // chat.completion object, so clients parsing /v1/responses saw a
+        // different schema on failure than on success.
+        let body = if response_adapter == proxy::ResponseAdapter::OpenAiResponsesJson {
+            &chat_completion_to_responses_json(body)
+        } else {
+            body
+        };
         (
             "JSON-502",
             proxy::send_json_with_status_and_headers_observed(
@@ -783,6 +794,18 @@ mod tests {
     }
 
     #[test]
+    fn chat_completion_to_responses_json_passes_through_on_malformed() {
+        // Defensive: if the translator can't make sense of the body
+        // we return the chat body unchanged rather than blowing up.
+        let bogus = serde_json::json!({ "not": "a chat completion" });
+        let out = chat_completion_to_responses_json(&bogus);
+        // The translator may either succeed (producing an empty
+        // response) or fall back to the input; both behaviours are
+        // acceptable, what matters is no panic and a JSON value.
+        assert!(out.is_object());
+    }
+
+    #[test]
     fn chat_completion_to_responses_json_returns_response_object() {
         // Non-streaming /v1/responses with model=mesh: the body that
         // reaches the client must be Responses-shape, not chat-shape.
@@ -803,15 +826,62 @@ mod tests {
     }
 
     #[test]
-    fn chat_completion_to_responses_json_passes_through_on_malformed() {
-        // Defensive: if the translator can't make sense of the body
-        // we return the chat body unchanged rather than blowing up.
-        let bogus = serde_json::json!({ "not": "a chat completion" });
-        let out = chat_completion_to_responses_json(&bogus);
-        // The translator may either succeed (producing an empty
-        // response) or fall back to the input; both behaviours are
-        // acceptable, what matters is no panic and a JSON value.
-        assert!(out.is_object());
+    fn failure_body_translated_for_responses_json_adapter() {
+        // Regression for #1905: a non-streaming /v1/responses request
+        // answered by the MoA gateway with a failure used to receive the
+        // raw chat.completion body at HTTP 502. The failure status is
+        // intended; the body must still be Responses-shape. The translator
+        // carries the chat finish_reason through, so the error stays
+        // observable as finish_reason "error".
+        let failure = serde_json::json!({
+            "object": "chat.completion",
+            "error": { "code": "all_reducers_failed", "message": "boom" },
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": "" },
+                "finish_reason": "error"
+            }],
+            "usage": { "prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1 }
+        });
+        assert!(is_moa_failure_body(&failure));
+
+        let translated = chat_completion_to_responses_json(&failure);
+        assert_eq!(
+            translated.get("object").and_then(|v| v.as_str()),
+            Some("response"),
+            "502 body for a /v1/responses caller must claim object=response"
+        );
+        assert_eq!(
+            translated.get("finish_reason").and_then(|v| v.as_str()),
+            Some("error"),
+            "translated body must keep the failure finish_reason"
+        );
+        assert_ne!(
+            translated.get("choices"),
+            Some(&failure["choices"]),
+            "translated body must not keep the chat.completion choices array verbatim"
+        );
+    }
+
+    #[test]
+    fn failure_body_untouched_for_chat_adapter() {
+        // Chat Completions callers keep the chat-shaped failure body.
+        let failure = serde_json::json!({
+            "object": "chat.completion",
+            "error": { "code": "all_reducers_failed" },
+            "choices": [{ "finish_reason": "error" }]
+        });
+        let body = &failure;
+        let adapter = proxy::ResponseAdapter::OpenAiChatCompletionsJson;
+        let sent = if adapter == proxy::ResponseAdapter::OpenAiResponsesJson {
+            chat_completion_to_responses_json(body)
+        } else {
+            body.clone()
+        };
+        assert_eq!(
+            sent.get("object").and_then(|v| v.as_str()),
+            Some("chat.completion")
+        );
     }
 
     /// Run `send_moa_as_responses_sse` against a real TCP loopback
