@@ -428,6 +428,9 @@ pub async fn handle_mesh_request(
     release_request_objects(&node, &request.request_object_request_ids).await;
 }
 
+// `RouteDispatchOutcome` is deliberately `Copy`; its usage-plus-output-digests variant
+// (three optional 32-byte digests inline) exceeds clippy's 128-byte `Err` threshold.
+#[allow(clippy::result_large_err)]
 async fn route_mesh_moa_or_passthrough(
     node: &mesh::Node,
     tcp_stream: ClientStream,

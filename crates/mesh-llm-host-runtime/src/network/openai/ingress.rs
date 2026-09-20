@@ -332,6 +332,9 @@ fn response_outcome(status_code: u16, result: std::io::Result<()>) -> proxy::Rou
 }
 
 /// Check activity policy admission and reject with 503 if paused.
+// `RouteDispatchOutcome` is deliberately `Copy`; its usage-plus-output-digests variant
+// (three optional 32-byte digests inline) exceeds clippy's 128-byte `Err` threshold.
+#[allow(clippy::result_large_err)]
 async fn check_activity_admission(
     tcp_stream: ClientStream,
     guard: &crate::runtime::ActivityPolicyGuard,
@@ -1663,6 +1666,9 @@ fn mesh_routing_unsupported_dispatch_kind(
 /// still runs unconditionally here, ahead of MoA -- only the *unsupported
 /// dispatch kind* rejection (409) excludes `model: "mesh"`; see
 /// `mesh_routing_unsupported_dispatch_kind`.
+// `RouteDispatchOutcome` is deliberately `Copy`; its usage-plus-output-digests variant
+// (three optional 32-byte digests inline) exceeds clippy's 128-byte `Err` threshold.
+#[allow(clippy::result_large_err)]
 async fn enforce_mesh_routing_headers_before_dispatch(
     tcp_stream: ClientStream,
     request: &proxy::BufferedHttpRequest,
@@ -1701,6 +1707,9 @@ async fn enforce_mesh_routing_headers_before_dispatch(
 /// Apply activity-policy admission to an inference request that has already
 /// passed the control-plane gate. Returns the stream to continue dispatch, or
 /// an outcome (already written to the stream) when admission is denied.
+// `RouteDispatchOutcome` is deliberately `Copy`; its usage-plus-output-digests variant
+// (three optional 32-byte digests inline) exceeds clippy's 128-byte `Err` threshold.
+#[allow(clippy::result_large_err)]
 async fn admit_buffered_api_request(
     tcp_stream: ClientStream,
     ctx: &ProxyConnectionContext<'_>,
