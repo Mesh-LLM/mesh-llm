@@ -27,7 +27,6 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
             "hf-download-smoke.yml",
             "smoke.yml",
             "scripted-binary-smoke.yml",
-            "product-integration-smoke.yml",
             "sdk-smoke.yml",
         ):
             with self.subTest(workflow=name):
@@ -339,7 +338,6 @@ class ReusableWorkflowRunnerTrustTests(unittest.TestCase):
             "hf-download-smoke.yml",
             "smoke.yml",
             "scripted-binary-smoke.yml",
-            "product-integration-smoke.yml",
             "sdk-smoke.yml",
         ):
             with self.subTest(workflow=name):

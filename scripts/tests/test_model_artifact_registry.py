@@ -51,7 +51,6 @@ class ModelArtifactRegistryTests(unittest.TestCase):
     def test_suite_manifests_allow_every_executable_cadence(self) -> None:
         required = {
             "product-smoke": {"pull-request", "main", "release"},
-            "product-integration-smoke": {"pull-request", "main", "release"},
             "scripted-binary-smoke": {"pull-request", "main", "release"},
             "sdk-smoke": {"pull-request", "main", "release"},
             "hf-download-smoke": {"pull-request", "main", "manual"},
@@ -88,9 +87,9 @@ class ModelArtifactRegistryTests(unittest.TestCase):
                     cwd=ROOT, check=True, capture_output=True, text=True,
                 )
 
-    def test_product_integration_manifest_is_the_pinned_dense_recurrent_pair(self) -> None:
+    def test_product_smoke_manifest_is_the_pinned_dense_recurrent_pair(self) -> None:
         manifest = json.loads(
-            (MANIFESTS / "product-integration-smoke.json").read_text(
+            (MANIFESTS / "product-smoke.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -186,7 +185,6 @@ class ModelArtifactRegistryTests(unittest.TestCase):
         # that is where the invocation -- and the cadence -- must be.
         consumers = (
             ".github/actions/restore-test-model/action.yml",
-            ".github/actions/restore-product-integration-inputs/action.yml",
             ".github/workflows/ci-rust-tests-slice.yml",
             "scripts/ci-hf-download-smoke.sh",
             "scripts/materialize-competitive-inputs.sh",
@@ -208,7 +206,7 @@ class ModelArtifactRegistryTests(unittest.TestCase):
         self.assertIn('"manual" not in artifact.get("cadences", [])', parity)
 
     def test_resolver_prefixes_github_outputs_for_multi_fixture_consumers(self) -> None:
-        manifest = MANIFESTS / "product-integration-smoke.json"
+        manifest = MANIFESTS / "product-smoke.json"
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "github-output"
             result = subprocess.run(
@@ -348,6 +346,8 @@ class ModelArtifactRegistryTests(unittest.TestCase):
                 "python3",
                 str(RESOLVER),
                 str(manifest),
+                "--artifact-id",
+                "smollm2-q8-inference",
                 "--cadence",
                 "manual",
             ],
