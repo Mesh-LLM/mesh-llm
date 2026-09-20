@@ -317,8 +317,8 @@ pub(in crate::runner) fn stage_model_resolution(
                 stage_id: spec.stage_id.to_string(),
                 layer_start: spec.layer_start,
                 layer_end: spec.layer_end,
-                include_embeddings: spec.include_embeddings,
-                include_output: spec.include_output,
+                source_stage: spec.include_embeddings,
+                terminal_stage: spec.include_output,
             })?;
             let path = materialized.output_path.clone();
             (path, Some(package_stage_report(package_ref, materialized)))
@@ -379,7 +379,7 @@ pub(in crate::runner) fn stage_server_model_path(
 pub(in crate::runner) fn tokenizer_model_for_state_handoff(
     args: &BinaryStateHandoffConfig,
 ) -> Result<(PathBuf, RuntimeConfig)> {
-    let (path, layer_end, load_mode, filter_tensors_on_load) = match args.stage_load_mode {
+    let (path, layer_end, load_mode, requires_stage_plan) = match args.stage_load_mode {
         StageLoadMode::LayerPackage => {
             let package_ref = layer_package_ref(&args.model, args.stage_model.as_ref());
             let package_ref_string = package_ref.to_string_lossy().into_owned();
@@ -390,8 +390,8 @@ pub(in crate::runner) fn tokenizer_model_for_state_handoff(
                 stage_id: "tokenizer".to_string(),
                 layer_start: 0,
                 layer_end: 1,
-                include_embeddings: true,
-                include_output: false,
+                source_stage: true,
+                terminal_stage: false,
             })?;
             (
                 materialized.output_path,
@@ -411,7 +411,7 @@ pub(in crate::runner) fn tokenizer_model_for_state_handoff(
             false,
         ),
     };
-    let runtime_plan = if filter_tensors_on_load {
+    let runtime_plan = if requires_stage_plan {
         let mut names = ModelInfo::open(&path)
             .context("open state handoff tokenizer tensor inventory")?
             .tensors()
@@ -471,10 +471,7 @@ pub(in crate::runner) fn tokenizer_model_for_state_handoff(
             image_max_tokens: None,
             batch_max_tokens: None,
             glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
-            include_embeddings: true,
-            include_output: false,
             mtp_source: MtpSource::Disabled,
-            filter_tensors_on_load,
             resident_tensor_names: runtime_plan
                 .as_ref()
                 .map_or_else(Vec::new, |plan| plan.resident_tensor_names.clone()),

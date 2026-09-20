@@ -781,7 +781,6 @@ def write_skippy_benchmark_config(
         "ctx_size": ctx_size,
         "lane_count": lane_count,
         "n_gpu_layers": case.n_gpu_layers,
-        "filter_tensors_on_load": False,
         "load_mode": "runtime-slice",
         "bind_addr": "127.0.0.1:0",
         "upstream": None,

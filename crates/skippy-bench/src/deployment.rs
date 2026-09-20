@@ -404,7 +404,6 @@ pub(super) fn write_stage_configs(
             "n_gpu_layers": args.n_gpu_layers,
             "cache_type_k": args.cache_type_k,
             "cache_type_v": args.cache_type_v,
-            "filter_tensors_on_load": config_load_mode != "runtime-slice",
             "load_mode": config_load_mode,
             "bind_addr": stage.bind_addr,
             "upstream": upstream,

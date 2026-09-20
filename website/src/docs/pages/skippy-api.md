@@ -9,7 +9,7 @@ description: Generated reference for the capability-oriented Skippy C ABI.
 
 This reference is generated from the patched llama.cpp public headers. It documents the native C ABI used by Skippy's Rust FFI layer and staged runtime. The ABI is experimental and versioned for lockstep native/Rust builds.
 
-Current generated surface: **15 headers** and **100 exported functions**.
+Current generated surface: **15 headers** and **96 exported functions**.
 
 ## Quick navigation
 
@@ -74,16 +74,12 @@ Current generated surface: **15 headers** and **100 exported functions**.
       </div>
     </section>
     <section class="skippy-api-index__group">
-      <a class="skippy-api-index__group-title" href="#skippy-header-model-package-h"><code>model_package.h</code><span>11 functions</span></a>
+      <a class="skippy-api-index__group-title" href="#skippy-header-model-package-h"><code>model_package.h</code><span>7 functions</span></a>
       <div class="skippy-api-index__functions">
         <a href="#skippy-fn-skippy-model-info-open"><code>skippy_model_info_open</code></a>
         <a href="#skippy-fn-skippy-model-info-free"><code>skippy_model_info_free</code></a>
         <a href="#skippy-fn-skippy-model-info-tensor-count"><code>skippy_model_info_tensor_count</code></a>
         <a href="#skippy-fn-skippy-model-info-tensor-at"><code>skippy_model_info_tensor_at</code></a>
-        <a href="#skippy-fn-skippy-slice-plan-create"><code>skippy_slice_plan_create</code></a>
-        <a href="#skippy-fn-skippy-slice-plan-free"><code>skippy_slice_plan_free</code></a>
-        <a href="#skippy-fn-skippy-slice-plan-add-layer-range"><code>skippy_slice_plan_add_layer_range</code></a>
-        <a href="#skippy-fn-skippy-write-slice-gguf"><code>skippy_write_slice_gguf</code></a>
         <a href="#skippy-fn-skippy-write-gguf-metadata-from-parts"><code>skippy_write_gguf_metadata_from_parts</code></a>
         <a href="#skippy-fn-skippy-write-gguf-from-parts"><code>skippy_write_gguf_from_parts</code></a>
         <a href="#skippy-fn-skippy-write-gguf-from-parts-consuming"><code>skippy_write_gguf_from_parts_consuming</code></a>
@@ -208,7 +204,7 @@ Capability consumers can include a narrower header:
 | `include/skippy/devices.h` | Enumerates backend devices available to the staged runtime. |
 | `include/skippy/events.h` | Versioned callbacks for model-open and runtime lifecycle progress. Event reporters are optional and operation-scoped. A reporter must remain valid until the corresponding model-open call returns. |
 | `include/skippy/execution.h` | Prefill, decode, verification, activation-frame, and batched execution. |
-| `include/skippy/model_package.h` | Inspects GGUF tensors and writes layer-range or multi-part packages. |
+| `include/skippy/model_package.h` | Inspects GGUF tensors and writes metadata and multi-part packages. |
 | `include/skippy/model_source.h` | Callback-backed model construction and load-time quantization. |
 | `include/skippy/runtime.h` | Model loading, session lifecycle, and llama.cpp context access. |
 | `include/skippy/sampling.h` | Sampling parameters shared by single-token and batched decode calls. |
@@ -731,60 +727,6 @@ LLAMA_API enum skippy_status skippy_model_info_tensor_at(
          struct skippy_model_info * info,
         size_t index,
         struct skippy_tensor_info * out_tensor,
-        struct skippy_error ** out_error);
-```
-
-<a id="skippy-fn-skippy-slice-plan-create"></a>
-#### `skippy_slice_plan_create`
-
-Creates an empty layer-range package-writing plan.
-
-```cpp
-LLAMA_API enum skippy_status skippy_slice_plan_create(
-         struct skippy_model_info * info,
-        struct skippy_slice_plan ** out_plan,
-        struct skippy_error ** out_error);
-```
-
-<a id="skippy-fn-skippy-slice-plan-free"></a>
-#### `skippy_slice_plan_free`
-
-Releases a package-writing plan.
-
-```cpp
-LLAMA_API enum skippy_status skippy_slice_plan_free(
-         struct skippy_slice_plan * plan,
-        struct skippy_error ** out_error);
-```
-
-<a id="skippy-fn-skippy-slice-plan-add-layer-range"></a>
-#### `skippy_slice_plan_add_layer_range`
-
-Adds a stage layer range and its shared-tensor ownership to a plan.
-
-```cpp
-LLAMA_API enum skippy_status skippy_slice_plan_add_layer_range(
-         struct skippy_slice_plan * plan,
-        int32_t stage_index,
-        int32_t layer_start,
-        int32_t layer_end,
-        bool include_embeddings,
-        bool include_output,
-        bool include_per_layer_token_embd,
-        struct skippy_error ** out_error);
-```
-
-<a id="skippy-fn-skippy-write-slice-gguf"></a>
-#### `skippy_write_slice_gguf`
-
-Writes one planned stage slice as a GGUF file.
-
-```cpp
-LLAMA_API enum skippy_status skippy_write_slice_gguf(
-         struct skippy_model_info * info,
-        const struct skippy_slice_plan * plan,
-        int32_t stage_index,
-        const char * output_path,
         struct skippy_error ** out_error);
 ```
 
@@ -1688,17 +1630,17 @@ SKIPPY_COMMON_API enum skippy_status skippy_parse_chat_response_json(
 The headers also define the following enums, structs, opaque handles, and ABI constants:
 
 - `activation.h`: `skippy_activation_part_desc`, `skippy_activation_boundary_desc`, `skippy_activation_desc`, `SKIPPY_ACTIVATION_FRAME_VERSION = 2`, `SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION = 2`, `SKIPPY_ACTIVATION_IDENTITY_BYTES = 32`, `SKIPPY_ACTIVATION_MAX_DIMS = 4`, `SKIPPY_ACTIVATION_MAX_PARTS = 16`, `SKIPPY_ACTIVATION_PART_OPTIONAL = (UINT32_C(1) << 0)`
-- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 57`, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER = ((uint64_t)1 << 31)`, `SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 = ((uint64_t)1 << 32)`, `SKIPPY_FEATURE_KV_EVENTS = ((uint64_t)1 << 33)`, `SKIPPY_FEATURE_DEVICE_EVENTS = ((uint64_t)1 << 34)`, `SKIPPY_FEATURE_DIAGNOSTIC_EVENTS = ((uint64_t)1 << 35)`, `SKIPPY_FEATURE_UNLOAD_EVENTS = ((uint64_t)1 << 36)`
+- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 59`, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER = ((uint64_t)1 << 31)`, `SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 = ((uint64_t)1 << 32)`, `SKIPPY_FEATURE_KV_EVENTS = ((uint64_t)1 << 33)`, `SKIPPY_FEATURE_DEVICE_EVENTS = ((uint64_t)1 << 34)`, `SKIPPY_FEATURE_DIAGNOSTIC_EVENTS = ((uint64_t)1 << 35)`, `SKIPPY_FEATURE_UNLOAD_EVENTS = ((uint64_t)1 << 36)`
 - `devices.h`: `skippy_backend_device_type`, `skippy_backend_device_cap`, `skippy_backend_device`
 - `events.h`: `skippy_runtime_event_v1`, `skippy_runtime_event_reporter_v1`, `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION = 1`
 - `execution.h`: `skippy_iteration_request`
-- `model_package.h`: `skippy_tensor_role`, `skippy_model_info`, `skippy_slice_plan`, `skippy_tensor_info`
+- `model_package.h`: `skippy_tensor_role`, `skippy_model_info`, `skippy_tensor_info`
 - `model_source.h`: `skippy_model`, `skippy_runtime_config`, `skippy_model_imatrix_entry_v1`, `skippy_model_tensor_source_v1`, `SKIPPY_MODEL_TENSOR_SOURCE_V1_ABI_VERSION = 1`
 - `runtime.h`: `skippy_load_mode`, `skippy_mtp_source`, `skippy_model`, `skippy_session`, `skippy_activation_boundary_desc`, `skippy_runtime_config`, `SKIPPY_GLM_DSA_POLICY_PROFILE_NONE = 0`, `SKIPPY_GLM_DSA_POLICY_PROFILE_V1 = 1`, `SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_ATTN = (UINT32_C(1) << 0)`, `SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_PREFILL = (UINT32_C(1) << 1)`, `SKIPPY_GLM_DSA_POLICY_DISABLE_COMPACT_FLASH_ATTN = (UINT32_C(1) << 2)`, `SKIPPY_GLM_DSA_POLICY_UNPROVEN_LARGE_DIRECT_SPARSE_PREFILL = (UINT32_C(1) << 3)`, `SKIPPY_TRISTATE_AUTO = (-1)`, `SKIPPY_TRISTATE_FALSE = (0)`, `SKIPPY_TRISTATE_TRUE = (1)`
 - `sampling.h`: `skippy_sampler_type`, `skippy_sampling_config`, `SKIPPY_MAX_LOGIT_BIAS = 256`, `SKIPPY_MAX_SAMPLERS = 16`, `SKIPPY_MAX_DRY_SEQUENCE_BREAKERS = 8`, `SKIPPY_MAX_DRY_SEQUENCE_BREAKER_BYTES = 16`, `SKIPPY_SAMPLING_FLAG_ENABLED = (1u << 0)`, `SKIPPY_SAMPLING_FLAG_IGNORE_EOS = (1u << 1)`
 - `signals.h`: `skippy_token_signal`, `skippy_generation_signal_window`
 - `speculative_decoding.h`: `skippy_ngram_cache`, `skippy_native_mtp_draft`, `SKIPPY_NATIVE_MTP_MAX_DRAFT_TOKENS = 8`
-- `stage_plan.h`: `skippy_stage_planner`, `skippy_stage_plan`, `skippy_stage_plan_string_ref_v1`, `skippy_stage_planner_tensor_v1`, `skippy_stage_planner_profile_v1`, `skippy_stage_planner_config_v1`, `skippy_stage_plan_value_kind`, `skippy_stage_plan_state_kind`, `skippy_stage_plan_state_access`, `skippy_stage_plan_desc_v1`, `skippy_stage_plan_profile_desc_v1`, `skippy_stage_plan_value_desc_v1`, `skippy_stage_plan_state_desc_v1`, `SKIPPY_STAGE_PLANNER_CONFIG_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLANNER_TENSOR_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLANNER_PROFILE_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_PROFILE_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_VALUE_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_STATE_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_MAX_DIMS = 4`
+- `stage_plan.h`: `skippy_stage_planner`, `skippy_stage_plan`, `skippy_stage_plan_string_ref_v1`, `skippy_stage_planner_tensor_v1`, `skippy_stage_planner_profile_v1`, `skippy_stage_planner_config_v1`, `skippy_stage_plan_value_kind`, `skippy_stage_plan_state_kind`, `skippy_stage_plan_state_access`, `skippy_stage_plan_state_residency`, `skippy_stage_plan_desc_v1`, `skippy_stage_plan_profile_desc_v1`, `skippy_stage_plan_value_desc_v1`, `skippy_stage_plan_state_desc_v1`, `SKIPPY_STAGE_PLANNER_CONFIG_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLANNER_TENSOR_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLANNER_PROFILE_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_PROFILE_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_VALUE_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_STATE_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_MAX_DIMS = 4`
 - `state.h`: `skippy_kv_page_flag`, `skippy_kv_page_codec`, `skippy_kv_page_component_role`, `skippy_kv_page_component_desc`, `skippy_kv_page_desc`
 
 Source directory: `include/skippy/`. Regenerate this page after changing any public header or exported function.

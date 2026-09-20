@@ -149,7 +149,6 @@ fn run_split_prefix_hit_case(
         "cache_type_k": "f16",
         "cache_type_v": "f16",
         "flash_attn_type": protocol_flash_attn(args.runtime.flash_attn),
-        "filter_tensors_on_load": true,
         "load_mode": protocol_load_mode(args.runtime.stage_load_mode),
     });
     let stage0_config = merge_stage_config(

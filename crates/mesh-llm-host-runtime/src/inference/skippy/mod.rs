@@ -1328,7 +1328,6 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
         kv_unified: options.kv_unified,
         swa_full: options.swa_full,
         cache_idle_slots: options.cache_idle_slots,
-        filter_tensors_on_load: false,
         resident_tensor_names: Vec::new(),
         activation_import_identities: Vec::new(),
         activation_import_bindings: Vec::new(),

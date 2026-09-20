@@ -31,7 +31,8 @@ jobs:
       # discarding hours of agent and native-build work on the persistent runner.
       cancel-in-progress: false
     runs-on: [self-hosted, family-certify]
-    timeout-minutes: 780
+    # 11.5h repair admission + final 12h gate pass + setup/upload margin.
+    timeout-minutes: 1430
     outputs:
       changed: ${{ steps.sha.outputs.changed }}
       candidate_ready: ${{ steps.changed_result.outputs.ready }}
@@ -72,6 +73,8 @@ jobs:
       - name: Verify runner toolchain
         run: |
           set -euo pipefail
+          source scripts/lib/macos-deployment-target.sh
+          echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET" >> "$GITHUB_ENV"
           missing=0
           goose_dir="/Users/lab/.local/bin"
           export PATH="$goose_dir:$PATH"
@@ -143,6 +146,7 @@ jobs:
           mkdir -p "$SCCACHE_DIR"
           cache_buster="$({
             printf '%s\n' 'platform=macos' 'architecture=arm64' 'backend=metal' 'profile=release' 'cmake-osx-architectures=arm64'
+            printf 'macos-deployment-target=%s\n' "$MACOSX_DEPLOYMENT_TARGET"
             rustc -vV
             cc --version
             xcrun --show-sdk-path
@@ -194,14 +198,15 @@ jobs:
       - name: Changed-pin agent developer task
         id: changed_canary
         if: steps.sha.outputs.changed == 'true'
-        timeout-minutes: 720
+        timeout-minutes: 1420
         continue-on-error: true
         env:
-          CANARY_AGENT_PROVIDER: ${{ vars.LLAMA_CANARY_GOOSE_PROVIDER || 'custom_z_ai_coding_plan' }}
+          CANARY_AGENT_PROVIDER: ${{ vars.LLAMA_CANARY_GOOSE_PROVIDER || 'zai_coding_plan' }}
           CANARY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_GOOSE_MODEL || 'glm-5.3-flash' }}
-          # One agent receives the complete developer task. Verification runs
-          # later in a separate job after this process context has ended.
+          # Admit coding turns for 11.5h; each returned candidate gets a full
+          # 12h gate pass. Independent verification follows in its own job.
           CANARY_AGENT_TIMEOUT_SECONDS: "41400"
+          CANARY_VERIFICATION_TIMEOUT_SECONDS: "43200"
           CANARY_HARNESS_MODE: repair
           FAMILY_BATTERY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           UPSTREAM_SHA_INPUT: ${{ steps.sha.outputs.new_sha }}
@@ -470,6 +475,8 @@ jobs:
       - name: Configure verifier LLVM
         run: |
           set -euo pipefail
+          source scripts/lib/macos-deployment-target.sh
+          echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET" >> "$GITHUB_ENV"
           llvm_prefix="$(brew --prefix llvm@22 2>/dev/null || true)"
           llvm_ok() {
             [[ -n "$1" && -x "$1/bin/clang" && -f "$1/lib/cmake/clang/ClangConfig.cmake" ]]
@@ -490,6 +497,7 @@ jobs:
           mkdir -p "$SCCACHE_DIR"
           cache_buster="$({
             printf '%s\n' 'platform=macos' 'architecture=arm64' 'backend=metal' 'profile=release' 'cmake-osx-architectures=arm64'
+            printf 'macos-deployment-target=%s\n' "$MACOSX_DEPLOYMENT_TARGET"
             rustc -vV
             cc --version
             xcrun --show-sdk-path

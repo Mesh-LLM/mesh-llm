@@ -31,23 +31,11 @@ pub(crate) struct PlannedArtifact {
     pub(crate) tensor_names: Vec<String>,
 }
 
-impl PlannedArtifact {
-    /// Whether this artifact is one of several byte-balanced parts of an
-    /// oversized layer, written by the Rust part writer rather than the native
-    /// whole-layer slice writer.
-    pub(crate) fn is_part(&self) -> bool {
-        self.id.contains("-part")
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PlannedArtifactKind {
-    /// Metadata/Tokenizer/Unknown-role payload tensors. Emitted only when the
-    /// set is nonempty; a plain slice carries them with real payload.
+    /// Every non-layer tensor. Physical grouping never assigns stage
+    /// ownership; exact graph closure does that at admission time.
     Common,
-    Embeddings,
-    /// FinalNorm + Output role tensors.
-    Output,
     Layer {
         ordinal: u32,
     },
@@ -67,8 +55,6 @@ pub(crate) fn plan_artifacts_with_budget(
 ) -> Result<Vec<PlannedArtifact>> {
     ensure_budget(max_artifact_bytes)?;
     let mut common: Vec<String> = Vec::new();
-    let mut embeddings: Vec<String> = Vec::new();
-    let mut output: Vec<String> = Vec::new();
     let mut layers: BTreeMap<u32, Vec<String>> = BTreeMap::new();
     for tensor in tensors {
         match tensor.role {
@@ -78,45 +64,41 @@ pub(crate) fn plan_artifacts_with_budget(
                 })?;
                 layers.entry(ordinal).or_default().push(tensor.name.clone());
             }
-            TensorRole::Embedding => embeddings.push(tensor.name.clone()),
-            TensorRole::FinalNorm | TensorRole::Output => output.push(tensor.name.clone()),
-            TensorRole::Metadata | TensorRole::Tokenizer | TensorRole::Unknown => {
-                common.push(tensor.name.clone())
-            }
+            TensorRole::Embedding
+            | TensorRole::FinalNorm
+            | TensorRole::Output
+            | TensorRole::Metadata
+            | TensorRole::Tokenizer
+            | TensorRole::Unknown => common.push(tensor.name.clone()),
         }
     }
     common.sort();
-    embeddings.sort();
-    output.sort();
 
     let mut planned = Vec::new();
     if !common.is_empty() {
-        planned.push(PlannedArtifact {
-            id: "common".to_string(),
-            path: "shared/common.gguf".to_string(),
-            kind: PlannedArtifactKind::Common,
-            tensor_names: common,
-        });
-    }
-    if !embeddings.is_empty() {
-        planned.push(PlannedArtifact {
-            id: "embeddings".to_string(),
-            path: "shared/embeddings.gguf".to_string(),
-            kind: PlannedArtifactKind::Embeddings,
-            tensor_names: embeddings,
-        });
-    }
-    if !output.is_empty() {
-        planned.push(PlannedArtifact {
-            id: "output".to_string(),
-            path: "shared/output.gguf".to_string(),
-            kind: PlannedArtifactKind::Output,
-            tensor_names: output,
-        });
+        let split = split_oversized_group(&common, tensors, max_artifact_bytes, "common")?;
+        if split.len() == 1 {
+            planned.push(PlannedArtifact {
+                id: "common".to_string(),
+                path: "shared/common.gguf".to_string(),
+                kind: PlannedArtifactKind::Common,
+                tensor_names: common,
+            });
+        } else {
+            for (index, part) in split.into_iter().enumerate() {
+                planned.push(PlannedArtifact {
+                    id: format!("common-part{index:02}"),
+                    path: format!("shared/common-part{index:02}.gguf"),
+                    kind: PlannedArtifactKind::Common,
+                    tensor_names: part,
+                });
+            }
+        }
     }
     for (ordinal, mut names) in layers {
         names.sort();
-        let split = split_oversized_group(&names, tensors, max_artifact_bytes, ordinal)?;
+        let group = format!("layer {ordinal}");
+        let split = split_oversized_group(&names, tensors, max_artifact_bytes, &group)?;
         if split.len() == 1 {
             planned.push(PlannedArtifact {
                 id: format!("layer-{ordinal:05}"),
@@ -138,16 +120,15 @@ pub(crate) fn plan_artifacts_with_budget(
     Ok(planned)
 }
 
-/// Split a sorted tensor-name group into byte-balanced part groups when its
-/// payload exceeds `max_artifact_bytes`. A single tensor larger than the budget
-/// stays whole: it is already the smallest indivisible unit, and failing the
-/// package on it would publish nothing at all. Parts are nonempty and every
-/// input name is assigned exactly once.
+/// Split a sorted tensor-name group into deterministic budget-bounded parts.
+/// A single tensor larger than the budget stays whole because it is already
+/// the smallest indivisible unit. Parts are nonempty and every input name is
+/// assigned exactly once.
 fn split_oversized_group(
     names: &[String],
     tensors: &[TensorInfo],
     max_artifact_bytes: u64,
-    ordinal: u32,
+    group: &str,
 ) -> Result<Vec<Vec<String>>> {
     let bytes_of = |name: &str| -> u64 {
         tensors
@@ -160,53 +141,26 @@ fn split_oversized_group(
     if total <= max_artifact_bytes {
         return Ok(vec![names.to_vec()]);
     }
-    anyhow::ensure!(
-        !names.is_empty(),
-        "layer {ordinal} has no tensors to subdivide"
-    );
-    // A dominating tensor is the smallest indivisible unit: keep it whole
-    // instead of emitting parts that still exceed the budget.
-    if names.len() == 1 || bytes_of(&names[0]) > max_artifact_bytes {
-        return Ok(vec![names.to_vec()]);
-    }
-    let split_count = usize::try_from(total.div_ceil(max_artifact_bytes))
-        .unwrap_or(usize::MAX)
-        .clamp(2, names.len());
-    // Byte-balanced boundaries mirroring the safetensors GGUF splitter
-    // (`byte_balanced_split_boundaries`): close part k once accumulated bytes
-    // reach k/split_count of the layer total, keeping enough tensors back to
-    // keep every remaining part nonempty.
-    let mut boundaries = vec![0_usize];
-    let mut accumulated: u128 = 0;
-    for (index, name) in names.iter().enumerate() {
-        accumulated += u128::from(bytes_of(name));
-        let remaining_tensors = names.len() - (index + 1);
-        let remaining_splits = split_count - (boundaries.len() - 1);
-        if boundaries.len() < split_count && remaining_tensors >= remaining_splits {
-            let target = u128::from(total) * boundaries.len() as u128 / split_count as u128;
-            if accumulated >= target {
-                boundaries.push(index + 1);
-            }
+    anyhow::ensure!(!names.is_empty(), "{group} has no tensors to subdivide");
+    let mut parts = Vec::new();
+    let mut current = Vec::new();
+    let mut current_bytes = 0_u64;
+    for name in names {
+        let tensor_bytes = bytes_of(name);
+        if !current.is_empty() && current_bytes.saturating_add(tensor_bytes) > max_artifact_bytes {
+            parts.push(std::mem::take(&mut current));
+            current_bytes = 0;
         }
+        current.push(name.clone());
+        current_bytes = current_bytes.saturating_add(tensor_bytes);
     }
-    while boundaries.len() < split_count {
-        let next = boundaries.last().copied().unwrap_or(0) + 1;
-        boundaries.push(next);
-    }
-    boundaries.push(names.len());
-    let mut parts = Vec::with_capacity(split_count);
-    for window in boundaries.windows(2) {
-        let part = &names[window[0]..window[1]];
-        anyhow::ensure!(
-            !part.is_empty(),
-            "layer {ordinal} byte-balanced split produced an empty part"
-        );
-        parts.push(part.to_vec());
+    if !current.is_empty() {
+        parts.push(current);
     }
     let assigned: usize = parts.iter().map(Vec::len).sum();
     anyhow::ensure!(
         assigned == names.len(),
-        "layer {ordinal} byte-balanced split dropped tensors"
+        "{group} budget split dropped tensors"
     );
     Ok(parts)
 }

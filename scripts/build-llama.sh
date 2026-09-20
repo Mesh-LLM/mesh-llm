@@ -6,6 +6,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
 source "$ROOT/scripts/lib/cuda-toolkit.sh"
 
+# shellcheck disable=SC1091
+source "$ROOT/scripts/lib/macos-deployment-target.sh"
+
 LLAMA_WORKDIR="${LLAMA_WORKDIR:-$ROOT/.deps/llama.cpp}"
 LLAMA_BUILD_ROOT="${MESH_LLM_LLAMA_BUILD_ROOT:-$ROOT/.deps/llama-build}"
 LLAMA_BACKEND="${LLAMA_STAGE_BACKEND:-${SKIPPY_LLAMA_BACKEND:-${LLAMA_BACKEND:-cpu}}}"
@@ -220,6 +223,13 @@ CMAKE_ARGS=(
   # platforms.
   -DMTMD_VIDEO=OFF
 )
+
+# Set the native target explicitly: an existing CMake cache does not adopt
+# a changed environment default. Arguments enter the build stamp below.
+# SDK callers append their own target/sysroot arguments after these defaults.
+if [[ "$(uname -s)" == Darwin ]]; then
+  CMAKE_ARGS+=("-DCMAKE_OSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET")
+fi
 
 # Static ABI inputs cross job and runner boundaries. Normalize compiler-
 # embedded source/build paths so the archived link closure does not retain a
