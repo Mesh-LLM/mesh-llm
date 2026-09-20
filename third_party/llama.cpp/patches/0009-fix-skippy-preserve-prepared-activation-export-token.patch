@@ -1,0 +1,156 @@
+From cd4fa91f620afce651feb65e120d56faed638778 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Mon, 21 Sep 2026 05:39:11 +1000
+Subject: [PATCH] fix(skippy): preserve prepared activation export token axes
+
+---
+ src/llama-context.cpp                   | 11 +++++++++++
+ src/llama-graph.h                       |  4 +++-
+ src/skippy/stage_realization.cpp        | 12 +++++++++++-
+ src/skippy/stage_realization.h          |  7 +++++++
+ src/skippy/tests/graph_build_inputs.cpp | 23 +++++++++++++++++++++++
+ 5 files changed, 55 insertions(+), 2 deletions(-)
+
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index b518a7330..4843b073f 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -2744,6 +2744,16 @@ llm_graph_params llama_context::graph_params(
+             const llama_memory_context_i * mctx,
+                           llm_graph_type   gtype,
+             const skippy_graph_build_inputs & graph_build_inputs) const {
++    std::vector<int32_t> export_token_axes;
++    // Reservation observes the frontier with multiple tokens. Reuse those
++    // axes during decode, where singleton checkpoint/token dimensions can be
++    // indistinguishable by shape alone (for example Kimi-K3 residual banks).
++    if (activation_frontier_observed && activation_frontier_stable &&
++            graph_build_inputs.activation_export_bindings == this->graph_build_inputs.activation_export_bindings) {
++        for (const auto & part : activation_frontier) {
++            export_token_axes.push_back(part.token_axis);
++        }
++    }
+     return {
+         /*.arch        =*/ model.arch,
+         /*.hparams     =*/ model.hparams,
+@@ -2758,6 +2768,7 @@ llm_graph_params llama_context::graph_params(
+         /*.cross       =*/ &cross,
+         /*.samplers    =*/ sampling.samplers,
+         /*.build_inputs=*/ graph_build_inputs,
++        /*.activation_export_token_axes=*/ std::move(export_token_axes),
+         /*.n_outputs   =*/ n_outputs,
+         /*.cb          =*/ graph_get_cb(),
+         /*.res         =*/ res,
+diff --git a/src/llama-graph.h b/src/llama-graph.h
+index ba320bff1..732af4c7b 100644
+--- a/src/llama-graph.h
++++ b/src/llama-graph.h
+@@ -970,6 +970,7 @@ struct llm_graph_params {
+     std::map<llama_seq_id, llama_sampler *> samplers;
+ 
+     skippy_graph_build_inputs build_inputs;
++    std::vector<int32_t> activation_export_token_axes;
+ 
+     static bool samplers_equal(
+           const std::map<llama_seq_id, llama_sampler *> & lhs,
+@@ -1030,7 +1031,8 @@ struct llm_graph_params {
+             return false;
+         }
+ 
+-        if (!build_inputs.topology_equal(other.build_inputs)) {
++        if (!build_inputs.topology_equal(other.build_inputs) ||
++                activation_export_token_axes != other.activation_export_token_axes) {
+             return false;
+         }
+ 
+diff --git a/src/skippy/stage_realization.cpp b/src/skippy/stage_realization.cpp
+index abb17284e..a0938dcb8 100644
+--- a/src/skippy/stage_realization.cpp
++++ b/src/skippy/stage_realization.cpp
+@@ -115,6 +115,14 @@ void describe_frontier(
+ 
+ }
+ 
++int32_t skippy_activation_token_axis(const ggml_tensor * tensor, uint32_t n_tokens, int32_t prepared_axis) {
++    if (prepared_axis < 0) return infer_token_axis(tensor, n_tokens);
++    if (prepared_axis >= GGML_MAX_DIMS || tensor->ne[prepared_axis] != static_cast<int64_t>(n_tokens)) {
++        throw std::runtime_error("live stage frontier does not match its prepared token axis");
++    }
++    return prepared_axis;
++}
++
+ void skippy_realize_stage_graph(
+         const llama_model & model,
+         const llm_graph_params & params,
+@@ -243,7 +251,9 @@ void skippy_realize_stage_graph(
+             tensor = replacement->second;
+         }
+         ggml_set_output(tensor);
+-        exports.push_back({tensor, infer_token_axis(tensor, params.ubatch.n_tokens), false,
++        const int32_t axis = index < params.activation_export_token_axes.size()
++                ? params.activation_export_token_axes[index] : -1;
++        exports.push_back({tensor, skippy_activation_token_axis(tensor, params.ubatch.n_tokens, axis), false,
+                 params.build_inputs.activation_export_bindings[index]});
+     }
+     result.replace_with_stage_graph(graph, std::move(imports), std::move(exports));
+diff --git a/src/skippy/stage_realization.h b/src/skippy/stage_realization.h
+index a51962749..277a61a09 100644
+--- a/src/skippy/stage_realization.h
++++ b/src/skippy/stage_realization.h
+@@ -1,5 +1,12 @@
+ #pragma once
+ 
++#include <cstdint>
++
++struct ggml_tensor;
++
++// Preserve the admitted token axis when runtime dimensions are ambiguous.
++int32_t skippy_activation_token_axis(const ggml_tensor * tensor, uint32_t n_tokens, int32_t prepared_axis);
++
+ struct llama_model;
+ struct llm_graph_params;
+ class llm_graph_result;
+diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
+index 7c146f14a..fe8a9c4f9 100644
+--- a/src/skippy/tests/graph_build_inputs.cpp
++++ b/src/skippy/tests/graph_build_inputs.cpp
+@@ -6,6 +6,7 @@
+ #include "llama-model.h"
+ #include "llama.h"
+ #include "skippy/stage_slice_plan.h"
++#include "skippy/stage_realization.h"
+ 
+ #include <atomic>
+ #include <cstdint>
+@@ -95,7 +96,29 @@ static int check_sequential_and_nested_lifetimes() {
+     return 0;
+ }
+ 
++static int check_prepared_export_token_axis() {
++    ggml_tensor tensor = {};
++    tensor.ne[0] = 16;
++    tensor.ne[1] = 1; // residual checkpoint count
++    tensor.ne[2] = 8; // token count
++    tensor.ne[3] = 1;
++    const int32_t prepared = skippy_activation_token_axis(&tensor, 8, -1);
++    if (prepared != 2) return 101;
++    tensor.ne[2] = 1;
++    if (skippy_activation_token_axis(&tensor, 1, prepared) != 2) return 102;
++    tensor.ne[1] = 2;
++    tensor.ne[2] = 2;
++    if (skippy_activation_token_axis(&tensor, 2, prepared) != 2) return 103;
++    tensor.ne[2] = 3;
++    try {
++        skippy_activation_token_axis(&tensor, 2, prepared);
++        return 104;
++    } catch (const std::runtime_error &) {}
++    return 0;
++}
++
+ static int check_topology_reuse_guards() {
++    if (const int result = check_prepared_export_token_axis()) return result;
+     auto base = make_inputs(31);
+     skippy_activation_frontier_part_input frontier;
+     frontier.values = reinterpret_cast<const void *>(static_cast<uintptr_t>(34));
+-- 
+2.54.0 (Apple Git-157)
+
