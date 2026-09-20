@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -81,10 +82,15 @@ class FamilyEvidenceTests(unittest.TestCase):
 
     def test_duplicate_worker_cannot_pass(self):
         duplicate = self.evidence / 'duplicate'
-        duplicate.mkdir()
-        E.write(duplicate / 'receipt.json', E.read(self.evidence / 'dense/receipt.json'))
-        with self.assertRaisesRegex(ValueError, 'duplicate'):
-            self.aggregate()
+        shutil.copytree(self.evidence / 'dense', duplicate)
+        receipts = sorted(self.evidence.glob('*/receipt.json'))
+        # Filesystem traversal order differs across CI and developer machines.
+        # Both workers must have complete evidence so only duplication fails.
+        for order in (receipts, list(reversed(receipts))):
+            with self.subTest(first=order[0].parent.name):
+                with patch.object(Path, 'glob', return_value=iter(order)):
+                    with self.assertRaisesRegex(ValueError, 'duplicate'):
+                        self.aggregate()
 
     def test_failed_timed_out_or_cancelled_family_cannot_pass(self):
         for outcome in ('failure', 'cancelled', 'skipped'):
