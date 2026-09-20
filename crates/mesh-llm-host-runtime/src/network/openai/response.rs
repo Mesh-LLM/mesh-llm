@@ -4,6 +4,7 @@ mod common;
 mod dispatch;
 mod external_endpoint;
 mod json_adaptation;
+mod model_prices;
 mod models;
 mod pipeline;
 mod probe;

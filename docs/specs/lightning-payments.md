@@ -470,3 +470,14 @@ numbered charge segments; token ranges and the cryptographic construction remain
 TODO. Preimage-based access does not prove valid inference or honest prefill.
 
 Proof of prefill remains an open [TODO](../../crates/mesh-llm/TODO.md).
+
+## Advertised price visibility
+
+`GET /v1/models` includes an additive `payment` object for concrete model IDs:
+`free_available`, `paid_available`, `binding_quote: false`, and `offers` keyed by
+`provider_id`. Each offer includes `paid`, nullable `pricing` (input/output
+msat-per-million rates and minimum invoice msat), and peer last-seen age. The
+age describes peer contact, not a guaranteed quote timestamp. Mixed free/paid
+providers remain separate offers. Local advertised seller prices describe remote
+service; ordinary local inference does not pay itself. Unknown external-plugin
+pricing is not inferred from these offers. Invoice terms remain authoritative.

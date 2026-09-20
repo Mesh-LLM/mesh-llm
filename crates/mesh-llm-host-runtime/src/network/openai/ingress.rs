@@ -215,8 +215,14 @@ async fn handle_models_list_request(
     let runtimes = node.all_model_runtime_descriptors().await;
     response_outcome(
         200,
-        proxy::send_models_list_with_descriptors(tcp_stream, &models, &descriptors, &runtimes)
-            .await,
+        proxy::send_models_list_with_descriptors(
+            tcp_stream,
+            &models,
+            &descriptors,
+            &runtimes,
+            Some(node),
+        )
+        .await,
     )
 }
 

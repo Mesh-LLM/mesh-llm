@@ -9,8 +9,13 @@ pub async fn send_models_list_with_descriptors(
     models: &[String],
     descriptors: &[mesh::ServedModelDescriptor],
     runtimes: &[mesh::ModelRuntimeDescriptor],
+    node: Option<&mesh::Node>,
 ) -> std::io::Result<()> {
-    let body = models_list_json(models, descriptors, runtimes).to_string();
+    let mut body = models_list_json(models, descriptors, runtimes);
+    if let Some(node) = node {
+        super::model_prices::attach_prices(&mut body, models, descriptors, node).await;
+    }
+    let body = body.to_string();
     let resp = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\n\r\n{}",
         body.len(),
@@ -477,6 +482,7 @@ mod tests {
             std::slice::from_ref(&alias),
             &[local_gguf_descriptor(&alias)],
             &[],
+            None,
         )
         .await
         .expect("models response succeeds");

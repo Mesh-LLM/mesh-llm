@@ -282,7 +282,14 @@ async fn handle_mesh_control_request(
         let runtimes = node.all_model_runtime_descriptors().await;
         let outcome = response_outcome(
             200,
-            send_models_list_with_descriptors(tcp_stream, &served, &descriptors, &runtimes).await,
+            send_models_list_with_descriptors(
+                tcp_stream,
+                &served,
+                &descriptors,
+                &runtimes,
+                Some(node),
+            )
+            .await,
         );
         lifecycle.terminal(outcome.terminal_outcome());
         return None;
