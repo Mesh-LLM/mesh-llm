@@ -11,6 +11,7 @@ const UNKNOWN_CONTEXT_LIMIT: u32 = 8192;
 pub(super) struct ModelInventory {
     pub names: Vec<String>,
     pub context_lengths: HashMap<String, Option<u32>>,
+    pub(super) fallbacks: Vec<(String, u32)>,
 }
 
 impl ModelInventory {
@@ -45,14 +46,22 @@ impl ModelInventory {
                 } else {
                     UNKNOWN_CONTEXT_LIMIT
                 };
-                let _ = writeln!(
-                    mesh_llm_events::console_err(),
-                    "⚠️  {id} has no served context metadata; using a {fallback}-token launcher fallback."
-                );
+                inventory.fallbacks.push((id.clone(), fallback));
                 *limit = Some(fallback);
             }
         }
         inventory
+    }
+
+    /// Report served-inventory fallbacks to the operator. Parsing stays pure;
+    /// callers call this once after they settle on an inventory.
+    pub fn report_fallbacks(&self) {
+        for (id, fallback) in &self.fallbacks {
+            let _ = writeln!(
+                mesh_llm_events::console_err(),
+                "⚠️  {id} has no served context metadata; using a {fallback}-token launcher fallback."
+            );
+        }
     }
 
     pub fn context_limit(&self, id: &str) -> u32 {
@@ -71,7 +80,16 @@ impl ModelInventory {
     }
 }
 
-pub(super) fn apply_claude_limits(settings: &mut Value, context: u32) {
+/// Claude Code (v2.1.193+) honors CLAUDE_CODE_MAX_CONTEXT_TOKENS only for model
+/// IDs it does not recognize as first-party. A mesh-served `claude-*` ID keeps
+/// Claude's built-in window, so the served limit is a silent no-op there and
+/// auto-compact would fire on the built-in window; DISABLE_COMPACT opts out for
+/// that case. For unrecognized IDs the served limit applies directly and
+/// compaction stays enabled.
+pub(super) fn apply_claude_limits(settings: &mut Value, model_id: &str, context: u32) {
+    if model_id.starts_with("claude-") {
+        settings["env"]["DISABLE_COMPACT"] = json!("1");
+    }
     settings["env"]["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = json!(context.to_string());
     settings["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] =
         json!((context / 4).clamp(1, 4096).to_string());

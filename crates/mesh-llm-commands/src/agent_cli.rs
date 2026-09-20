@@ -455,6 +455,7 @@ async fn check_mesh(
              Ensure at least one serving peer is available on the mesh."
         );
     }
+    models.report_fallbacks();
 
     let chosen = choose_requested_or_agent_model(&models.names, model, &mut child)?;
     writeln!(err, "   Models: {}", models.names.join(", "))?;
@@ -522,6 +523,7 @@ async fn fetch_mesh_models(
              Ensure at least one serving peer is available on the mesh."
         );
     }
+    models.report_fallbacks();
 
     let chosen = if let Some(model) = requested_model {
         if !models.names.iter().any(|name| name == model) {
@@ -664,7 +666,7 @@ pub async fn run_claude(model: Option<String>, port: u16) -> Result<()> {
         "terminalProgressBarEnabled": false
     });
     let context = models.context_limit(&chosen);
-    model_inventory::apply_claude_limits(&mut settings, context);
+    model_inventory::apply_claude_limits(&mut settings, &chosen, context);
     if context < 20_000 {
         let mut err = mesh_llm_events::console_err();
         writeln!(

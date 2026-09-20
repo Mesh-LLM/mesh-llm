@@ -959,8 +959,18 @@ fn served_inventory_limits_feed_every_launcher_without_native_headroom() {
     let mut settings = serde_json::json!({"env":{}});
     super::model_inventory::apply_claude_limits(
         &mut settings,
+        "org/Ornith:Q4_K_M",
         inventory.context_limit("org/Ornith:Q4_K_M"),
     );
+    assert_eq!(settings["env"]["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "16384");
+    assert_eq!(settings["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"], "4096");
+    // Unrecognized IDs apply the served limit directly; compaction stays on.
+    assert!(settings["env"].get("DISABLE_COMPACT").is_none());
+    let mut settings = serde_json::json!({"env":{}});
+    super::model_inventory::apply_claude_limits(&mut settings, "claude-sonnet-4-6", 16384);
+    // claude-* IDs ignore CLAUDE_CODE_MAX_CONTEXT_TOKENS in Claude Code
+    // (v2.1.193+), so auto-compact must be disabled for the served window.
+    assert_eq!(settings["env"]["DISABLE_COMPACT"], "1");
     assert_eq!(settings["env"]["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "16384");
     assert_eq!(settings["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"], "4096");
 }
@@ -978,7 +988,7 @@ fn inventory_invalid_or_missing_windows_use_explicit_bounded_fallback() {
         assert_eq!(inventory.context_limit(name), 8192);
     }
     let mut settings = serde_json::json!({"env":{}});
-    super::model_inventory::apply_claude_limits(&mut settings, 2048);
+    super::model_inventory::apply_claude_limits(&mut settings, "org/custom-llm", 2048);
     assert_eq!(settings["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"], "512");
 }
 
