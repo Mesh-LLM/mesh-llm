@@ -426,6 +426,10 @@ class PlanCiTests(unittest.TestCase):
 
                 plan = PLANNER.build_plan(payload, root=ROOT)
 
+                self.assertIn(
+                    "core",
+                    {row["id"] for row in plan["matrices"]["smoke"]},
+                )
                 tested = {
                     crate
                     for batch in plan["matrices"]["rust_tests"]

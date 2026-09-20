@@ -3,10 +3,10 @@ use super::{
     OPENCODE_OUTPUT_LIMIT, build_mesh_provider_spec_for_test, build_opencode_launch_spec,
     build_opencode_launch_spec_with_limits, build_pi_provider_config,
     build_pi_provider_config_with_limits, cleanup_mesh_child, configure_claude_launch_command,
-    configure_opencode_launch_command, merge_context_lengths, merge_goose_mcp_config,
-    mesh_mcp_claude_config_json, normalize_opencode_host, opencode_missing_binary_guidance,
-    pi_missing_binary_guidance, resolve_opencode_config_path_from_home,
-    write_opencode_config_for_test, write_pi_config_for_test, write_pi_config_to_path,
+    configure_opencode_launch_command, merge_goose_mcp_config, mesh_mcp_claude_config_json,
+    normalize_opencode_host, opencode_missing_binary_guidance, pi_missing_binary_guidance,
+    resolve_opencode_config_path_from_home, write_opencode_config_for_test,
+    write_pi_config_for_test, write_pi_config_to_path,
 };
 
 const LOCAL_OPENCODE_HOST: &str = "127.0.0.1:9337";
@@ -817,10 +817,6 @@ fn opencode_host_normalization_defaults_bare_host_ports_and_management_lookup() 
         target.api_models_url,
         "http://mesh.example.com:9337/v1/models"
     );
-    assert_eq!(
-        target.management_models_url,
-        "http://mesh.example.com:3131/api/models"
-    );
     assert_eq!(target.mcp_url, "http://mesh.example.com:3131/mcp");
     assert!(!target.auto_start_local_mesh);
 }
@@ -831,10 +827,6 @@ fn opencode_host_normalization_treats_bare_port_as_loopback_api_port() {
 
     assert_eq!(target.api_base_url, "http://127.0.0.1:9443/v1");
     assert_eq!(target.api_models_url, "http://127.0.0.1:9443/v1/models");
-    assert_eq!(
-        target.management_models_url,
-        "http://127.0.0.1:3131/api/models"
-    );
     assert_eq!(target.mcp_url, "http://127.0.0.1:3131/mcp");
     assert!(target.auto_start_local_mesh);
     assert_eq!(target.local_port, Some(9443));
@@ -847,18 +839,10 @@ fn opencode_host_normalization_defaults_scheme_loopback_to_mesh_ports() {
 
     assert_eq!(localhost.api_base_url, "http://localhost:9337/v1");
     assert_eq!(localhost.api_models_url, "http://localhost:9337/v1/models");
-    assert_eq!(
-        localhost.management_models_url,
-        "http://localhost:3131/api/models"
-    );
     assert!(localhost.auto_start_local_mesh);
     assert_eq!(localhost.local_port, Some(9337));
 
     assert_eq!(loopback.api_base_url, "http://127.0.0.1:9337/v1");
-    assert_eq!(
-        loopback.management_models_url,
-        "http://127.0.0.1:3131/api/models"
-    );
     assert!(loopback.auto_start_local_mesh);
     assert_eq!(loopback.local_port, Some(9337));
 }
@@ -869,18 +853,10 @@ fn opencode_host_normalization_uses_management_port_for_explicit_loopback_api_ur
     let loopback = normalize_opencode_host("http://127.0.0.1:9443").expect("valid loopback URL");
 
     assert_eq!(localhost.api_base_url, "http://localhost:9337/v1");
-    assert_eq!(
-        localhost.management_models_url,
-        "http://localhost:3131/api/models"
-    );
     assert!(localhost.auto_start_local_mesh);
     assert_eq!(localhost.local_port, Some(9337));
 
     assert_eq!(loopback.api_base_url, "http://127.0.0.1:9443/v1");
-    assert_eq!(
-        loopback.management_models_url,
-        "http://127.0.0.1:3131/api/models"
-    );
     assert!(loopback.auto_start_local_mesh);
     assert_eq!(loopback.local_port, Some(9443));
 }
@@ -898,119 +874,8 @@ fn opencode_host_normalization_does_not_auto_start_https_loopback() {
     let target = normalize_opencode_host("https://localhost:9337").expect("valid HTTPS URL");
 
     assert_eq!(target.api_base_url, "https://localhost:9337/v1");
-    assert_eq!(
-        target.management_models_url,
-        "https://localhost:9337/api/models"
-    );
     assert!(!target.auto_start_local_mesh);
     assert_eq!(target.local_port, Some(9337));
-}
-
-#[test]
-fn merge_context_lengths_uses_runtime_process_when_api_models_missing() {
-    let models = serde_json::json!({
-        "mesh_models": [
-            { "name": "ModelA", "context_length": null },
-            { "name": "ModelB", "context_length": 8192 },
-        ]
-    });
-    let processes = serde_json::json!({
-        "processes": [
-            { "name": "ModelA", "context_length": 16384 },
-            { "name": "ModelB", "context_length": null },
-            { "name": "ModelC", "context_length": 32768 },
-        ]
-    });
-
-    let result = merge_context_lengths(&models, &processes);
-
-    assert_eq!(result.get("ModelA"), Some(&Some(16384)));
-    assert_eq!(result.get("ModelB"), Some(&Some(8192)));
-    assert_eq!(result.get("ModelC"), Some(&Some(32768)));
-}
-
-#[test]
-fn merge_context_lengths_api_models_only() {
-    let models = serde_json::json!({
-        "mesh_models": [
-            { "name": "ModelA", "context_length": 4096 },
-            { "name": "ModelB", "context_length": 8192 },
-        ]
-    });
-    let processes = serde_json::json!({ "processes": [] });
-
-    let result = merge_context_lengths(&models, &processes);
-
-    assert_eq!(result.get("ModelA"), Some(&Some(4096)));
-    assert_eq!(result.get("ModelB"), Some(&Some(8192)));
-    assert_eq!(result.get("ModelC"), None);
-}
-
-#[test]
-fn merge_context_lengths_runtime_process_only() {
-    let models = serde_json::json!({ "mesh_models": [] });
-    let processes = serde_json::json!({
-        "processes": [
-            { "name": "ModelX", "context_length": 65536 },
-        ]
-    });
-
-    let result = merge_context_lengths(&models, &processes);
-
-    assert_eq!(result.get("ModelX"), Some(&Some(65536)));
-}
-
-#[test]
-fn merge_context_lengths_runtime_process_trumps_api_models() {
-    let models = serde_json::json!({
-        "mesh_models": [
-            { "name": "Qwen3-8B", "context_length": 32768 },
-        ]
-    });
-    let processes = serde_json::json!({
-        "processes": [
-            { "name": "Qwen3-8B", "context_length": 16384 },
-        ]
-    });
-
-    let result = merge_context_lengths(&models, &processes);
-
-    assert_eq!(result.get("Qwen3-8B"), Some(&Some(16384)));
-}
-
-#[test]
-fn merge_context_lengths_falls_back_to_metadata_when_runtime_null() {
-    let models = serde_json::json!({
-        "mesh_models": [
-            { "name": "ModelA", "context_length": 4096 },
-        ]
-    });
-    let processes = serde_json::json!({
-        "processes": [
-            { "name": "ModelA", "context_length": null },
-        ]
-    });
-
-    let result = merge_context_lengths(&models, &processes);
-
-    assert_eq!(result.get("ModelA"), Some(&Some(4096)));
-}
-
-#[test]
-fn context_length_lookup_is_best_effort_and_returns_empty_map_on_failure() {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_millis(50))
-        .build()
-        .expect("client should build");
-
-    let context_lengths = tokio::runtime::Runtime::new()
-        .expect("test runtime")
-        .block_on(super::fetch_model_context_lengths(
-            &client,
-            "http://127.0.0.1:9/api/models",
-        ));
-
-    assert!(context_lengths.is_empty());
 }
 
 #[test]
@@ -1019,10 +884,6 @@ fn opencode_host_normalization_preserves_full_url_origin() {
         normalize_opencode_host("https://mesh.example.com:9443/custom/path").expect("valid URL");
 
     assert_eq!(target.api_base_url, "https://mesh.example.com:9443/v1");
-    assert_eq!(
-        target.management_models_url,
-        "https://mesh.example.com:9443/api/models"
-    );
     assert!(!target.auto_start_local_mesh);
 }
 
@@ -1095,4 +956,110 @@ fn cleanup_mesh_child_stops_spawned_process() {
         .try_wait()
         .expect("wait should succeed");
     assert!(status.is_some(), "child should be exited after cleanup");
+}
+
+#[test]
+fn served_inventory_limits_feed_every_launcher_without_native_headroom() {
+    let inventory = super::ModelInventory::from_response(&serde_json::json!({"data":[
+        {"id":"org/Ornith:Q4_K_M","metadata":{"context_length":16384,"native_context_length":262144,"max_context_length":65536}},
+        {"id":"peer/Qwen:Q8","metadata":{"context_length":4096}},
+        {"id":"mesh"}
+    ]}));
+    assert_eq!(inventory.context_limit("org/Ornith:Q4_K_M"), 16384);
+    assert_eq!(inventory.context_limit("peer/Qwen:Q8"), 4096);
+    assert_eq!(inventory.context_limit("mesh"), 4096);
+    let pi = super::build_pi_provider_config_with_limits(
+        &inventory.names,
+        "http://localhost/v1",
+        &inventory.context_lengths,
+    );
+    assert_eq!(pi["models"][0]["contextWindow"], 16384);
+    assert_eq!(pi["models"][1]["contextWindow"], 4096);
+    assert_eq!(pi["models"][2]["contextWindow"], 4096);
+    let opencode = super::build_opencode_launch_spec_with_limits(
+        &inventory.names,
+        &inventory.names[0],
+        "http://localhost/v1",
+        "http://localhost/mcp",
+        &inventory.context_lengths,
+    );
+    let config: serde_json::Value = serde_json::from_str(&opencode.config_content).unwrap();
+    assert_eq!(
+        config["provider"]["mesh"]["models"]["org/Ornith:Q4_K_M"]["limit"]["context"],
+        16384
+    );
+    assert_eq!(inventory.goose_models()[0]["context_limit"], 16384);
+    assert_eq!(inventory.goose_models()[2]["context_limit"], 4096);
+    let mut settings = serde_json::json!({"env":{}});
+    super::model_inventory::apply_claude_limits(
+        &mut settings,
+        "org/Ornith:Q4_K_M",
+        inventory.context_limit("org/Ornith:Q4_K_M"),
+    );
+    assert_eq!(settings["env"]["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "16384");
+    assert_eq!(settings["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"], "4096");
+    // Unrecognized IDs apply the served limit directly; compaction stays on.
+    assert!(settings["env"].get("DISABLE_COMPACT").is_none());
+    let mut settings = serde_json::json!({"env":{}});
+    super::model_inventory::apply_claude_limits(&mut settings, "claude-sonnet-4-6", 16384);
+    // claude-* IDs ignore CLAUDE_CODE_MAX_CONTEXT_TOKENS in Claude Code
+    // (v2.1.193+), so auto-compact must be disabled for the served window.
+    assert_eq!(settings["env"]["DISABLE_COMPACT"], "1");
+    assert_eq!(settings["env"]["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "16384");
+    assert_eq!(settings["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"], "4096");
+}
+
+#[test]
+fn inventory_invalid_or_missing_windows_use_explicit_bounded_fallback() {
+    let inventory = super::ModelInventory::from_response(&serde_json::json!({"data":[
+        {"id":"zero","metadata":{"context_length":0}},
+        {"id":"overflow","metadata":{"context_length":4294967296_u64}},
+        {"id":"negative","metadata":{"context_length":-1}},
+        {"id":"native-only","metadata":{"native_context_length":262144}},
+        {"id":"mesh"}
+    ]}));
+    for name in &inventory.names {
+        assert_eq!(inventory.context_limit(name), 8192);
+    }
+    let mut settings = serde_json::json!({"env":{}});
+    super::model_inventory::apply_claude_limits(&mut settings, "org/custom-llm", 2048);
+    assert_eq!(settings["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"], "512");
+}
+
+#[tokio::test]
+async fn remote_inventory_fetch_preserves_context_with_served_id() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        assert!(line.starts_with("GET /v1/models "));
+        loop {
+            line.clear();
+            assert!(reader.read_line(&mut line).await.unwrap() > 0);
+            if line == "\r\n" {
+                break;
+            }
+        }
+        let mut stream = reader.into_inner();
+        let body = r#"{"data":[{"id":"org/remote:Q4","metadata":{"context_length":16384,"native_context_length":262144}}]}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(response.as_bytes()).await.unwrap();
+    });
+    let (inventory, chosen) = super::fetch_mesh_models(
+        &reqwest::Client::new(),
+        &format!("http://{address}/v1/models"),
+        &None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(chosen, "org/remote:Q4");
+    assert_eq!(inventory.context_limit(&chosen), 16384);
+    server.await.unwrap();
 }

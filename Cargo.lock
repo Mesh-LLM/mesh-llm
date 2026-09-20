@@ -7306,7 +7306,6 @@ dependencies = [
  "skippy-ffi",
  "skippy-model",
  "skippy-package-format",
- "skippy-protocol",
  "skippy-runtime",
  "tempfile",
  "tokio",

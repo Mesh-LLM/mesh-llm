@@ -110,8 +110,11 @@ test-all:
         --exclude mesh-llm-nodejs \
         --exclude skippy-ffi \
         --exclude skippy-quantize \
+        --exclude skippy-model-package \
         --exclude skippy-runtime \
         --exclude skippy-server
+    echo "--- Static Skippy model-package tests ---"
+    just with-lld cargo test --package skippy-model-package --no-default-features
     echo "--- Static Skippy runtime tests ---"
     just with-lld cargo test --package skippy-runtime --no-default-features --lib
     echo "--- Static Skippy server tests ---"

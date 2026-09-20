@@ -165,6 +165,101 @@ class PrepareLlamaTests(unittest.TestCase):
                 result.stderr,
             )
 
+    def test_applies_core_model_support_and_generated_patches_in_order(self) -> None:
+        """Family support is applied after core and before generated graph shards."""
+        with tempfile.TemporaryDirectory(prefix="mesh-llm-prepare-order-") as temp_dir:
+            root = Path(temp_dir)
+            upstream = root / "upstream"
+            author = root / "author"
+            workdir = root / "workdir"
+            patch_dir = root / "patches"
+            model_support_dir = patch_dir / "model_support"
+            generated_dir = patch_dir / "generated"
+            pin_file = root / "upstream.txt"
+
+            self.run_git(root, "init", "--initial-branch=master", str(upstream))
+            self.run_git(upstream, "config", "user.name", "Test Author")
+            self.run_git(upstream, "config", "user.email", "test@example.com")
+            (upstream / "sample.txt").write_text("base\n", encoding="utf-8")
+            self.run_git(upstream, "add", "sample.txt")
+            self.run_git(upstream, "commit", "-m", "base")
+            pin_file.write_text(
+                f"{self.run_git(upstream, 'rev-parse', 'HEAD', capture_output=True).stdout.strip()}\n",
+                encoding="utf-8",
+            )
+
+            self.run_git(root, "clone", str(upstream), str(author))
+            self.run_git(author, "config", "user.name", "Test Author")
+            self.run_git(author, "config", "user.email", "test@example.com")
+            commits: list[str] = []
+            for content, subject in (
+                ("core\n", "core change"),
+                ("model support\n", "model support change"),
+                ("generated\n", "generated graph change"),
+            ):
+                (author / "sample.txt").write_text(content, encoding="utf-8")
+                self.run_git(author, "commit", "-am", subject)
+                commits.append(
+                    self.run_git(
+                        author, "rev-parse", "HEAD", capture_output=True
+                    ).stdout.strip()
+                )
+
+            patch_dir.mkdir()
+            model_support_dir.mkdir()
+            generated_dir.mkdir()
+            patch_specs = (
+                (patch_dir / "0001-core-change.patch", commits[0]),
+                (
+                    model_support_dir / "0001-models-add-test-family.patch",
+                    commits[1],
+                ),
+                (generated_dir / "0001-family-test.patch", commits[2]),
+            )
+            for destination, commit in patch_specs:
+                patch = self.run_git(
+                    author,
+                    "format-patch",
+                    "-1",
+                    "--stdout",
+                    commit,
+                    capture_output=True,
+                ).stdout
+                destination.write_text(patch, encoding="utf-8")
+            (model_support_dir / "series").write_text(
+                "0001-models-add-test-family.patch\n", encoding="utf-8"
+            )
+            (generated_dir / "series").write_text(
+                "0001-family-test.patch\n", encoding="utf-8"
+            )
+
+            env = os.environ | {
+                "LLAMA_UPSTREAM_URL": str(upstream),
+                "LLAMA_WORKDIR": str(workdir),
+                "LLAMA_PIN_FILE": str(pin_file),
+                "LLAMA_PATCH_DIR": str(patch_dir),
+                "LLAMA_GIT_MAX_ATTEMPTS": "1",
+            }
+            subprocess.run(
+                [str(PREPARE_LLAMA), "pinned"], cwd=ROOT, check=True, env=env
+            )
+
+            self.assertEqual(
+                (workdir / "sample.txt").read_text(encoding="utf-8"), "generated\n"
+            )
+            subjects = self.run_git(
+                workdir,
+                "log",
+                "--reverse",
+                "--format=%s",
+                "--max-count=3",
+                capture_output=True,
+            ).stdout.splitlines()
+            self.assertEqual(
+                subjects,
+                ["core change", "model support change", "generated graph change"],
+            )
+
     def test_generated_series_accepts_windows_crlf_checkout(self) -> None:
         """Generated shard names remain valid when Git checks series out as CRLF."""
         with tempfile.TemporaryDirectory(prefix="mesh-llm-prepare-crlf-") as temp_dir:
@@ -296,7 +391,7 @@ class PrepareLlamaTests(unittest.TestCase):
                     (workdir / ".mesh-llm-prepare-schema")
                     .read_text(encoding="utf-8")
                     .strip(),
-                    "4",
+                    "5",
                 )
                 self.assertFalse(hook_marker.exists())
 

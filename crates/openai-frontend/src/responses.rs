@@ -1,3 +1,5 @@
+mod tools;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -320,7 +322,7 @@ fn translate_responses_input_to_messages(input: &Value) -> Result<Vec<Value>, Op
 }
 
 fn translate_openai_responses_input(object: &mut Map<String, Value>) -> Result<bool, OpenAiError> {
-    let mut changed = false;
+    let mut changed = tools::normalize(object)?;
     let mut messages = Vec::new();
     let mut state_cache_key = None;
 

@@ -47,7 +47,8 @@ if [[ -n "$(git -C "$SOURCE_ROOT" status --porcelain --untracked-files=no)" ]]; 
 fi
 
 # Normal preparation applies the checked-in generated family shards after the
-# core Skippy queue. Generation must never consume those model edits as input:
+# core and model-support queues. Generation must never consume those generated
+# model edits as input:
 # otherwise every builder is classified as already_transformed and inherited
 # mistakes become self-validating. Rewind exactly the generated tail while the
 # checker runs, then restore the prepared checkout for subsequent CI steps.
@@ -57,7 +58,7 @@ if [[ ! "$GENERATED_PATCH_COUNT" =~ ^[1-9][0-9]*$ ]]; then
   echo "generated family patch series must contain at least one patch" >&2
   exit 1
 fi
-CORE_SOURCE_HEAD="$(git -C "$SOURCE_ROOT" rev-parse "$ORIGINAL_SOURCE_HEAD~$GENERATED_PATCH_COUNT")"
+PRE_GENERATED_SOURCE_HEAD="$(git -C "$SOURCE_ROOT" rev-parse "$ORIGINAL_SOURCE_HEAD~$GENERATED_PATCH_COUNT")"
 
 cleanup() {
   git -C "$SOURCE_ROOT" reset --hard >/dev/null
@@ -65,11 +66,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
-git -C "$SOURCE_ROOT" checkout --force --detach "$CORE_SOURCE_HEAD" >/dev/null
-if marker_matches="$(rg -n '\bstage_filter\b|\bbegin_block[[:space:]]*\(|\bend_block[[:space:]]*\(' "$SOURCE_ROOT/src/models" || true)" &&
+git -C "$SOURCE_ROOT" checkout --force --detach "$PRE_GENERATED_SOURCE_HEAD" >/dev/null
+if marker_matches="$(rg -n '\bbegin_block[[:space:]]*\(|\bend_block[[:space:]]*\(' "$SOURCE_ROOT/src/models" || true)" &&
    [[ -n "$marker_matches" ]]; then
-  echo "core-only generator input already contains model-stage transformations:" >&2
+  echo "pre-generated queue already contains model-stage transformations:" >&2
   printf '%s\n' "$marker_matches" >&2
+  exit 1
+fi
+if legacy_filter_matches="$(rg -n '\bstage_filter\b' "$SOURCE_ROOT/src/models" || true)" &&
+   [[ -n "$legacy_filter_matches" ]]; then
+  echo "model-local stage filtering is forbidden under Graph Filter V2:" >&2
+  printf '%s\n' "$legacy_filter_matches" >&2
   exit 1
 fi
 
@@ -110,7 +117,7 @@ python3 "$ROOT/scripts/generate-skippy-family-patch.py" \
   --build-dir "$LLAMA_BUILD_DIR" \
   --rewriter "$TOOL_BUILD/skippy-stage-rewriter" \
   --report "$FIRST_REPORT" \
-  --diff-base "$CORE_SOURCE_HEAD" \
+  --diff-base "$PRE_GENERATED_SOURCE_HEAD" \
   --output "$GENERATED_PATCH" \
   --shard-output-dir "$GENERATED_PATCH_DIR" \
   --family-source-map "$FAMILY_SOURCE_MAP" \
@@ -121,6 +128,20 @@ python3 "$ROOT/scripts/verify-skippy-family-generator-coverage.py" \
   --manifest "$FAMILY_MANIFEST" \
   --family-map "$FAMILY_SOURCE_MAP" \
   --report "$FIRST_REPORT"
+
+if legacy_generated_matches="$(rg -n '\bstage_filter\b|build_inputs\.filter|g_skippy_graph_filter' \
+    "$SOURCE_ROOT/src/models" "$GENERATED_PATCH" "$GENERATED_PATCH_DIR" || true)" &&
+   [[ -n "$legacy_generated_matches" ]]; then
+  echo "generated Graph Filter V2 builders contain legacy stage-selection control flow:" >&2
+  printf '%s\n' "$legacy_generated_matches" >&2
+  exit 1
+fi
+
+if ! rg -q '\bbegin_block[[:space:]]*\(' "$SOURCE_ROOT/src/models" ||
+   ! rg -q '\bend_block[[:space:]]*\(' "$SOURCE_ROOT/src/models"; then
+  echo "generated Graph Filter V2 tree is missing block-boundary annotations" >&2
+  exit 1
+fi
 
 TRANSFORMED_TREE_TARGETS=(
   llama
@@ -134,6 +155,11 @@ TRANSFORMED_TREE_TARGETS=(
   skippy-stage-plan-header-cpp
   skippy-stage-slice-plan
 )
+# Other native validation lanes reuse this build directory and may configure
+# private stage probes off. Reassert the checker contract after generation so
+# a stale probe binary cannot let the preflight pass while CMake omits the
+# transformed-tree targets below.
+cmake -S "$SOURCE_ROOT" -B "$LLAMA_BUILD_DIR" -DLLAMA_STAGE_BUILD_TESTS=ON
 if cmake --build "$LLAMA_BUILD_DIR" --target "${TRANSFORMED_TREE_TARGETS[@]}" 2>&1 \
   | tee "$ARTIFACT_ROOT/transformed-tree-compile.log"; then
   compile_result=pass

@@ -702,8 +702,8 @@ fn verify_resolved_hf_package_files(
             stage_id: format!("layers-{layer_start}-{layer_end}"),
             layer_start,
             layer_end,
-            include_embeddings,
-            include_output,
+            source_stage: include_embeddings,
+            terminal_stage: include_output,
         };
         package::verify_layer_package_integrity(&request, &options)
     }

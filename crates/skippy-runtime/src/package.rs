@@ -22,8 +22,8 @@ pub struct PackageStageRequest {
     pub stage_id: String,
     pub layer_start: u32,
     pub layer_end: u32,
-    pub include_embeddings: bool,
-    pub include_output: bool,
+    pub source_stage: bool,
+    pub terminal_stage: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -439,7 +439,7 @@ pub fn select_layer_package_parts_with_integrity(
         &manifest.shared.metadata,
         &package_dir,
     )?;
-    if request.include_embeddings {
+    if request.source_stage {
         push_part(
             &mut parts,
             "embeddings",
@@ -460,7 +460,7 @@ pub fn select_layer_package_parts_with_integrity(
             &package_dir,
         )?;
     }
-    if request.include_output {
+    if request.terminal_stage {
         push_part(
             &mut parts,
             "output",
@@ -1152,8 +1152,8 @@ fn materialized_path(
     hasher.update(request.layer_start.to_le_bytes());
     hasher.update(request.layer_end.to_le_bytes());
     hasher.update([
-        u8::from(request.include_embeddings),
-        u8::from(request.include_output),
+        u8::from(request.source_stage),
+        u8::from(request.terminal_stage),
     ]);
     hasher.update(manifest_sha256.as_bytes());
     for part in parts {
@@ -1343,8 +1343,8 @@ mod tests {
             stage_id: "stage-0".to_string(),
             layer_start: 0,
             layer_end: 1,
-            include_embeddings: true,
-            include_output: true,
+            source_stage: true,
+            terminal_stage: true,
         }
     }
 

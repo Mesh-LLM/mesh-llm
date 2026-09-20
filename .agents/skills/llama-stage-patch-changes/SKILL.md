@@ -12,14 +12,19 @@ Use this skill when changing the Skippy staged-runtime ABI carried in
 
 ## Boundaries
 
-- Keep durable llama.cpp-side changes in `third_party/llama.cpp/patches/*.patch`.
+- Keep durable llama.cpp-side changes in the ordered queue under
+  `third_party/llama.cpp/patches`: top-level core patches first,
+  `model_support/series` second, and `generated/series` last.
 - Keep the upstream pin in `third_party/llama.cpp/upstream.txt`.
 - Do not edit `.deps/llama.cpp` as the final artifact; regenerate the
   patch queue from commits.
 - Keep mesh orchestration, protocol compatibility, lifecycle, model management,
   and API status behavior in Rust.
 - Keep one functional boundary per patch. Patch numbers must be unique and
-  contiguous.
+  contiguous within each queue lane.
+- Put family-specific model support in a focused `model_support/` patch. Keep
+  reusable staged-runtime machinery in the core lane and generated graph
+  annotations in the generated lane.
 - Keep public ABI declarations separate from independently reviewable model
   lifecycle, loading, and package implementation changes.
 - The Skippy native ABI is an internal lockstep boundary, not a stable
@@ -111,10 +116,12 @@ scripts/prepare-llama.sh pinned
 
 For llama-side editing, work in `.deps/llama.cpp` or another llama.cpp
 checkout where commits can be named and inspected. Base the branch on the
-pinned upstream, then carry the stage ABI patch commits on top.
+pinned upstream, then carry core stage ABI commits, model-support commits, and
+generated family commits in that order.
 
-For an ordinary capability change, emit one focused mail-format patch after
-the current queue. Do not rewrite unrelated entries:
+For an ordinary core capability change, emit one focused mail-format patch
+after the current top-level core lane. Do not rewrite unrelated entries or put
+the patch after `model_support/` or generated shards:
 
 ```bash
 repo_root="$(pwd)"

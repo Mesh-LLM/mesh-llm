@@ -51,7 +51,6 @@ class ModelArtifactRegistryTests(unittest.TestCase):
     def test_suite_manifests_allow_every_executable_cadence(self) -> None:
         required = {
             "product-smoke": {"pull-request", "main", "release"},
-            "product-integration-smoke": {"pull-request", "main", "release"},
             "scripted-binary-smoke": {"pull-request", "main", "release"},
             "sdk-smoke": {"pull-request", "main", "release"},
             "hf-download-smoke": {"pull-request", "main", "manual"},
@@ -88,9 +87,9 @@ class ModelArtifactRegistryTests(unittest.TestCase):
                     cwd=ROOT, check=True, capture_output=True, text=True,
                 )
 
-    def test_product_integration_manifest_is_the_pinned_dense_recurrent_pair(self) -> None:
+    def test_product_smoke_manifest_is_the_pinned_dense_recurrent_pair(self) -> None:
         manifest = json.loads(
-            (MANIFESTS / "product-integration-smoke.json").read_text(
+            (MANIFESTS / "product-smoke.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -113,6 +112,17 @@ class ModelArtifactRegistryTests(unittest.TestCase):
             self.assertEqual(
                 artifact["sha256"], artifact["file_integrity"][artifact["file"]]["blob_id"]
             )
+
+    def test_paired_smoke_manifests_default_to_the_dense_fixture(self) -> None:
+        for name in ("product-smoke", "scripted-binary-smoke"):
+            with self.subTest(manifest=name):
+                manifest = json.loads(
+                    (MANIFESTS / f"{name}.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(
+                    manifest["default_artifact_id"],
+                    "smollm2-q8-inference",
+                )
 
     def test_family_manifest_is_generated_from_registry(self) -> None:
         registry = json.loads(REGISTRY.read_text(encoding="utf-8"))
@@ -186,7 +196,6 @@ class ModelArtifactRegistryTests(unittest.TestCase):
         # that is where the invocation -- and the cadence -- must be.
         consumers = (
             ".github/actions/restore-test-model/action.yml",
-            ".github/actions/restore-product-integration-inputs/action.yml",
             ".github/workflows/ci-rust-tests-slice.yml",
             "scripts/ci-hf-download-smoke.sh",
             "scripts/materialize-competitive-inputs.sh",
@@ -208,7 +217,7 @@ class ModelArtifactRegistryTests(unittest.TestCase):
         self.assertIn('"manual" not in artifact.get("cadences", [])', parity)
 
     def test_resolver_prefixes_github_outputs_for_multi_fixture_consumers(self) -> None:
-        manifest = MANIFESTS / "product-integration-smoke.json"
+        manifest = MANIFESTS / "product-smoke.json"
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "github-output"
             result = subprocess.run(
@@ -227,6 +236,46 @@ class ModelArtifactRegistryTests(unittest.TestCase):
             )
             self.assertEqual(result.stderr, "")
             self.assertIn("dense_file=SmolLM2-135M-Instruct-Q8_0.gguf", output.read_text())
+
+    def test_resolver_uses_declared_default_for_multi_artifact_manifest(self) -> None:
+        result = subprocess.run(
+            [
+                "python3", str(RESOLVER), str(MANIFESTS / "product-smoke.json"),
+                "--cadence", "pull-request",
+                "--require-single-file",
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        summary = json.loads(result.stdout)
+        self.assertEqual(summary["artifact_id"], "smollm2-q8-inference")
+
+    def test_resolver_rejects_ambiguous_manifest_without_default(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "manifest_kind": "test-model-artifacts",
+                        "artifacts": [{"id": "one"}, {"id": "two"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    "python3", str(RESOLVER), str(manifest),
+                    "--cadence", "manual",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("pass --artifact-id", result.stderr)
 
     def test_smoke_identity_overrides_require_nonempty_values(self) -> None:
         skippy = (ROOT / "scripts" / "skippy-ci-smoke.sh").read_text(
@@ -348,6 +397,8 @@ class ModelArtifactRegistryTests(unittest.TestCase):
                 "python3",
                 str(RESOLVER),
                 str(manifest),
+                "--artifact-id",
+                "smollm2-q8-inference",
                 "--cadence",
                 "manual",
             ],

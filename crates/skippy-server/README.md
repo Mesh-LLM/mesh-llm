@@ -127,11 +127,11 @@ deadline handling.
 ## Notes
 
 - `serve-binary` is the tuned binary stage-to-stage path.
-- `serve-binary` participates in the breaking generation-10 stage protocol.
-  Stage compatibility requires the complete `stage-generation-10` control,
+- `serve-binary` participates in the breaking generation-11 stage protocol.
+  Stage compatibility requires the complete `stage-generation-11` control,
   status-list, strict-content-identity, stage-admission, and stale-window-discard
   bundle. Older peers, including generation 7 peers, are rejected during split
-  planning rather than being mixed into a generation-10 topology. A manually
+  planning rather than being mixed into a generation-11 topology. A manually
   wired `serve-binary --downstream` chain has no generation handshake, so every
   stage in that chain must be upgraded together.
 - `serve-binary` accepts upstream protocol connections concurrently. Model
@@ -240,9 +240,10 @@ deadline handling.
 - `serve-binary` forwards eligible non-final prefill activation frames on a
   bounded background writer by default. Use `--no-async-prefill-forward` only
   when comparing against the synchronous prefill path.
-- `runtime-slice` loads a full model and filters tensors at runtime.
-- `artifact-slice` loads GGUF slice artifacts written by `skippy-model-package`
-  with `filter_tensors_on_load=true`.
+- `runtime-slice` loads the exact graph-admitted resident tensor closure from a
+  package-v2 catalog and executes the matching normalized graph slice.
+- `artifact-slice` opens an explicitly supplied GGUF artifact without applying
+  any implicit layer, embedding, or output ownership rules.
 - `layer-package` loads a local `model-package.json` directory, validates the
   manifest and selected part files, then opens those GGUF parts directly through
   the stage ABI.

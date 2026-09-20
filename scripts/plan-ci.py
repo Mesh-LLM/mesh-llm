@@ -510,7 +510,7 @@ def _select_rows(
         for domain in domains:
             smoke_ids.extend(slices.get("smoke_domain_rows", {}).get(domain, []))
         if "product-smoke" in selected and not smoke_ids:
-            smoke_ids.append("product-integration-cpu")
+            smoke_ids.append("core")
 
     def unique_rows(mapping: dict[str, dict[str, Any]], ids: Iterable[str], field: str) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []

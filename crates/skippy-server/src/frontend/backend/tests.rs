@@ -33,6 +33,7 @@ fn test_telemetry() -> crate::telemetry::Telemetry {
         "layer_start": 0,
         "layer_end": 4,
         "load_mode": "runtime-slice",
+        "execution_contract": "",
         "bind_addr": "127.0.0.1:0",
     }))
     .expect("minimal stage config for telemetry");
@@ -1205,6 +1206,7 @@ fn hooks_test_backend(hook_policy: Option<Arc<dyn OpenAiHookPolicy>>) -> StageOp
         "layer_start": 0,
         "layer_end": 1,
         "load_mode": "runtime-slice",
+        "execution_contract": "",
         "bind_addr": "127.0.0.1:0",
     }))
     .expect("minimal stage config for hook lifecycle tests");

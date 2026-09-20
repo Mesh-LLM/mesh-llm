@@ -37,8 +37,6 @@ fn assigns_every_role_to_its_canonical_artifact() {
             .collect::<Vec<_>>(),
         [
             "shared/common.gguf",
-            "shared/embeddings.gguf",
-            "shared/output.gguf",
             "layers/layer-00000.gguf",
             "layers/layer-00001.gguf",
             "layers/layer-00011.gguf",
@@ -50,12 +48,14 @@ fn assigns_every_role_to_its_canonical_artifact() {
         .collect::<BTreeMap<_, _>>();
     assert_eq!(
         by_id["common"].tensor_names,
-        ["caption.notes", "tokenizer.ggml.tokens", "unknown.thing"]
-    );
-    assert_eq!(by_id["embeddings"].tensor_names, ["token_embd.weight"]);
-    assert_eq!(
-        by_id["output"].tensor_names,
-        ["output.weight", "output_norm.weight"]
+        [
+            "caption.notes",
+            "output.weight",
+            "output_norm.weight",
+            "token_embd.weight",
+            "tokenizer.ggml.tokens",
+            "unknown.thing",
+        ]
     );
     assert_eq!(by_id["layer-00000"].tensor_names, ["blk.0.attn_q.weight"]);
     assert_eq!(
@@ -105,7 +105,7 @@ fn every_tensor_is_bound_exactly_once() {
 }
 
 #[test]
-fn oversized_layer_splits_into_byte_balanced_parts() {
+fn oversized_layer_splits_into_budget_bounded_parts() {
     let tensors = [
         info("blk.0.attn_q.weight", TensorRole::Layer, 0),
         info("blk.0.attn_k.weight", TensorRole::Layer, 0),
@@ -125,8 +125,12 @@ fn oversized_layer_splits_into_byte_balanced_parts() {
             "layers/layer-00000-part01.gguf",
         ]
     );
-    assert!(planned.iter().all(PlannedArtifact::is_part));
-    // Two byte-balanced parts of a 40-byte layer hold 20/20 within budget.
+    assert!(
+        planned
+            .iter()
+            .all(|artifact| artifact.path.contains("-part"))
+    );
+    // Two deterministic parts of a 40-byte layer hold 20/20 within budget.
     for part in &planned {
         let bytes: u64 = part
             .tensor_names
@@ -152,7 +156,50 @@ fn oversized_layer_splits_into_byte_balanced_parts() {
 }
 
 #[test]
-fn dominating_tensor_stays_whole_rather_than_exceeding_budget_in_parts() {
+fn oversized_common_group_splits_into_deterministic_parts() {
+    let tensors = [
+        info("token_embd.weight", TensorRole::Embedding, -1),
+        info("output_norm.weight", TensorRole::FinalNorm, -1),
+        info("output.weight", TensorRole::Output, -1),
+        info("tokenizer.ggml.tokens", TensorRole::Tokenizer, -1),
+    ]
+    .map(|mut tensor| {
+        tensor.byte_size = 10;
+        tensor
+    });
+    let planned = plan_artifacts_with_budget(&tensors, 21).unwrap();
+    assert_eq!(
+        planned
+            .iter()
+            .map(|artifact| artifact.path.as_str())
+            .collect::<Vec<_>>(),
+        ["shared/common-part00.gguf", "shared/common-part01.gguf",]
+    );
+    assert_eq!(
+        planned
+            .iter()
+            .map(|artifact| artifact.id.as_str())
+            .collect::<Vec<_>>(),
+        ["common-part00", "common-part01"]
+    );
+    assert!(planned.iter().all(|artifact| {
+        artifact
+            .tensor_names
+            .iter()
+            .map(|name| {
+                tensors
+                    .iter()
+                    .find(|tensor| tensor.name == *name)
+                    .unwrap()
+                    .byte_size
+            })
+            .sum::<u64>()
+            <= 21
+    }));
+}
+
+#[test]
+fn indivisible_oversized_tensors_get_separate_parts() {
     let tensors = [
         info("blk.0.attn_q.weight", TensorRole::Layer, 0),
         info("blk.0.ffn_down.weight", TensorRole::Layer, 0),
@@ -162,12 +209,14 @@ fn dominating_tensor_stays_whole_rather_than_exceeding_budget_in_parts() {
         tensor
     });
     let planned = plan_artifacts_with_budget(&tensors, 21).unwrap();
-    // The oversized tensor is indivisible: keep it whole instead of emitting
-    // parts that still exceed the budget.
-    assert_eq!(planned.len(), 1);
-    assert_eq!(planned[0].path, "layers/layer-00000.gguf");
-    assert!(!planned[0].is_part());
-    assert_eq!(planned[0].tensor_names.len(), 2);
+    assert_eq!(planned.len(), 2);
+    assert_eq!(planned[0].path, "layers/layer-00000-part00.gguf");
+    assert_eq!(planned[1].path, "layers/layer-00000-part01.gguf");
+    assert!(
+        planned
+            .iter()
+            .all(|artifact| artifact.tensor_names.len() == 1)
+    );
 }
 
 #[test]
