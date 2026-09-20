@@ -394,6 +394,7 @@ async fn host_dispatch_rejects_local_legacy_target_without_capable_replicas() {
             RouteModelRequestContext {
                 required_tokens: None,
                 affinity: &affinity,
+                served_by_header: None,
                 route_observer: OpenAiRouteObserver::default(),
             },
         ),

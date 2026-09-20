@@ -120,7 +120,6 @@ pub(in crate::network::openai::response) async fn relay_chat_protocol_stream<
             tcp_stream,
             reader,
             probe,
-            parsed,
             retry_policy,
             served_by,
             route_observer,
@@ -299,7 +298,6 @@ async fn relay_non_streaming_reply<R: AsyncRead + Unpin>(
     tcp_stream: &mut ClientStream,
     reader: &mut R,
     probe: ResponseProbe,
-    parsed: super::probe::ParsedResponseHeaders,
     retry_policy: ResponseRetryPolicy,
     served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
@@ -316,6 +314,8 @@ async fn relay_non_streaming_reply<R: AsyncRead + Unpin>(
         )
         .await
     } else {
+        let parsed = try_parse_response_headers(&probe.buffered)?
+            .ok_or_else(|| anyhow!("incomplete HTTP response"))?;
         relay_success_response(
             tcp_stream,
             reader,
@@ -326,5 +326,133 @@ async fn relay_non_streaming_reply<R: AsyncRead + Unpin>(
             route_observer,
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpListener;
+
+    async fn relay_anthropic_upstream(
+        upstream_response: &[u8],
+        served_by: Option<&str>,
+    ) -> (Vec<u8>, tokio::task::JoinHandle<RouteAttemptResult>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let served_by = served_by.map(str::to_string);
+        let upstream_response = upstream_response.to_vec();
+        let sse_marker = b"text/event-stream";
+        let is_event_stream_response = upstream_response
+            .windows(sse_marker.len())
+            .any(|window| window == sse_marker);
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_task = tokio::spawn(async move {
+            let (client_socket, _) = listener.accept().await.unwrap();
+            let mut client_socket: ClientStream = client_socket.into();
+            let header_end = upstream_response
+                .windows(4)
+                .position(|bytes| bytes == b"\r\n\r\n")
+                .expect("response headers")
+                + 4;
+            let probe = ResponseProbe {
+                buffered: upstream_response,
+                header_end,
+                status_code: 200,
+                retryable_context_overflow: false,
+            };
+            relay_translated_messages_stream(
+                &mut client_socket,
+                &mut upstream_reader,
+                probe,
+                ResponseRetryPolicy::next_target_available(false),
+                served_by.as_deref(),
+                OpenAiRouteObserver::default(),
+            )
+            .await
+            .expect("relay")
+        });
+
+        if is_event_stream_response {
+            upstream_writer
+                .write_all(
+                    b"data: {\"id\":\"chatcmpl-a\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"qwen\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\n",
+                )
+                .await
+                .unwrap();
+            upstream_writer
+                .write_all(b"data: [DONE]\n\n")
+                .await
+                .unwrap();
+        }
+        upstream_writer.shutdown().await.unwrap();
+
+        let mut client = ClientStream::connect(addr).await.unwrap();
+        let mut output = Vec::new();
+        client.read_to_end(&mut output).await.unwrap();
+        (output, server_task)
+    }
+
+    #[tokio::test]
+    async fn anthropic_stream_echoes_served_by_header_only_when_set() {
+        let sse_headers =
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
+
+        let (with_target_output, with_target_task) =
+            relay_anthropic_upstream(sse_headers, Some("peer-endpoint-hex")).await;
+        let body = String::from_utf8_lossy(&with_target_output);
+        assert!(
+            body.contains("x-mesh-served-by: peer-endpoint-hex\r\n"),
+            "anthropic SSE must echo the resolved peer:\n{body}"
+        );
+        assert!(
+            body.contains("message_start"),
+            "missing message_start:\n{body}"
+        );
+        assert!(
+            body.contains("message_stop"),
+            "missing message_stop:\n{body}"
+        );
+        with_target_task.await.expect("relay");
+
+        let (without_target_output, without_target_task) =
+            relay_anthropic_upstream(sse_headers, None).await;
+        assert!(
+            !String::from_utf8_lossy(&without_target_output).contains("x-mesh-served-by"),
+            "absent x-mesh-target must not add x-mesh-served-by"
+        );
+        without_target_task.await.expect("relay");
+    }
+
+    #[tokio::test]
+    async fn anthropic_non_streaming_reply_echoes_served_by_header_only_when_set() {
+        let completion = r#"{"id":"chatcmpl-b","object":"chat.completion","created":1,"model":"qwen","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+        let upstream = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{completion}",
+            completion.len()
+        );
+
+        let (with_target_output, with_target_task) =
+            relay_anthropic_upstream(upstream.as_bytes(), Some("peer-endpoint-hex")).await;
+        let body = String::from_utf8_lossy(&with_target_output);
+        assert!(
+            body.contains("x-mesh-served-by: peer-endpoint-hex\r\n"),
+            "anthropic JSON translation must echo the resolved peer:\n{body}"
+        );
+        assert!(
+            body.contains("\"type\":\"message\""),
+            "expected an Anthropic message envelope:\n{body}"
+        );
+        with_target_task.await.expect("relay");
+
+        let (without_target_output, without_target_task) =
+            relay_anthropic_upstream(upstream.as_bytes(), None).await;
+        assert!(
+            !String::from_utf8_lossy(&without_target_output).contains("x-mesh-served-by"),
+            "absent x-mesh-target must not add x-mesh-served-by"
+        );
+        without_target_task.await.expect("relay");
     }
 }
