@@ -81,6 +81,55 @@ fn offer(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn listing_aggregates_mixed_offers_without_changing_other_fields() -> anyhow::Result<()> {
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Client).await?;
+        let free = mesh::Node::new_for_tests(mesh::NodeRole::Host { http_port: 0 }).await?;
+        let paid = mesh::Node::new_for_tests(mesh::NodeRole::Host { http_port: 0 }).await?;
+        for (provider, charged) in [(&free, false), (&paid, true)] {
+            provider.set_models(vec!["test".into()]).await;
+            provider.set_hosted_models(vec!["test".into()]).await;
+            provider.set_serving_models(vec!["test".into()]).await;
+            let mut announcement = provider
+                .build_local_announcement(provider.snapshot_local_announcement_data().await);
+            if charged {
+                announcement.lightning_offers.insert(
+                    "test".into(),
+                    mesh_llm_payments::pricing::Pricing {
+                        input_msat_per_million: 10,
+                        output_msat_per_million: 20,
+                        minimum_invoice_msat: 1000,
+                    },
+                );
+            }
+            node.add_peer_after_direct_requirements_validated(
+                provider.id(),
+                provider.endpoint.addr(),
+                &announcement,
+                Some(1),
+            )
+            .await;
+        }
+        let mut body = json!({"data":[{"id":"test","sentinel":7},{"id":"unrelated"}]});
+        attach_prices(&mut body, &["test".into()], &[], &node).await;
+        assert_eq!(body["data"][0]["sentinel"], 7);
+        assert_eq!(body["data"][0]["payment"]["free_available"], true);
+        assert_eq!(body["data"][0]["payment"]["paid_available"], true);
+        assert_eq!(
+            body["data"][0]["payment"]["offers"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(body["data"][1].get("payment").is_none());
+        assert!(node.payments.get().is_none());
+        node.endpoint.close().await;
+        free.endpoint.close().await;
+        paid.endpoint.close().await;
+        Ok(())
+    }
+
     #[test]
     fn same_model_can_describe_free_and_paid_providers() {
         let price = mesh_llm_payments::pricing::Pricing {
