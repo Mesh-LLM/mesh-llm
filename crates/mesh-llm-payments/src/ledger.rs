@@ -1,5 +1,6 @@
 //! SQLite owns approvals and reservations across processes and restarts.
 
+mod migrations;
 pub mod receivables;
 
 #[cfg(test)]
@@ -87,9 +88,9 @@ impl Ledger {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))?;
         }
-        let connection = Connection::open(directory.join("payments.sqlite3"))?;
+        let mut connection = Connection::open(directory.join("payments.sqlite3"))?;
         connection.busy_timeout(std::time::Duration::from_secs(10))?;
-        connection.execute_batch(include_str!("ledger/schema.sql"))?;
+        migrations::initialize(&mut connection)?;
         Ok(Self {
             connection: Mutex::new(connection),
         })
