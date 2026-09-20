@@ -420,13 +420,13 @@ runtime producers are not duplicated.
 - `ci-platform-checks-slice.yml` — macOS portable/unit, Windows portable/unit,
   and focused Windows log-store privacy ACL checks.
 - `ci-linux-product-smoke-slice.yml` and
-  `ci-macos-product-smoke-slice.yml` — platform-local callers of the typed
-  product-integration suite and the model-download consumer. The suite stages
-  its registry-derived pair exactly once: dense SmolLM2-135M Q8 and recurrent
-  IBM Granite 4.0 H 350M Q4. Its ordered phases cover dense standalone,
-  OpenAI/SDK, constrained-Tokio restart, and a dense seed/worker/passive-client
-  topology followed by a separately evidenced strict Granite `KvRecurrent`
-  phase. Each split phase persists strict-whitelist seed and worker status
+  `ci-macos-product-smoke-slice.yml` — platform-local callers of the core,
+  scripted, and model-download smokes. The core smoke restores the
+  registry-derived dense SmolLM2-135M Q8 and recurrent IBM Granite 4.0 H 350M
+  Q4 pair once, then runs both through standalone inference, OpenAI client
+  compatibility, and constrained-Tokio restart. The two-node split smoke uses
+  the same pair for dense KV and strict Granite `KvRecurrent` coverage. It
+  persists strict-whitelist seed and worker status
   snapshots containing only node, mesh, and peer identity, plus runtime-stage
   and OpenAI model-list snapshots. The network-free reconciler fails closed
   unless both distinct observers report the same mesh, non-empty
@@ -438,18 +438,12 @@ runtime producers are not duplicated.
   process-exit diagnostics retain the final snapshots, failed reconciliation,
   and both server log tails. The status projection never persists invite
   tokens, nested fields, or unrelated path fields.
-  The product suite independently replays reconciliation from the persisted
-  snapshots, records each split evidence path and SHA-256 in
-  `phase-results.json`, and rejects missing, modified, or self-inconsistent
-  evidence. All JSON snapshots and reconciled evidence upload with the phase
-  logs on success or failure. The existing Qwen3.5 recurrent job remains
-  required until Granite passes that live contract. The typed runner supports
-  CPU, CUDA, Metal, Vulkan, and ROCm,
-  but only CPU is selected during the first qualification stage; the existing
-  CUDA inference and Metal model-load signals remain required until their typed
-  product rows pass live qualification in that order. CUDA and Metal request
-  their explicit accelerator device and reject unsupported typed selections.
-  CUDA inference uses the
+  The scripted workflow uploads the snapshots, reconciled evidence, and logs on
+  success or failure. There is no separate product-integration lane or Qwen3.5
+  migration gate: the existing CPU, CUDA, and Metal core rows own the paired
+  model contract, while the CPU two-node row owns dense and recurrent cache
+  semantics. CUDA and Metal request their explicit accelerator devices. CUDA
+  inference uses the
   approved `gpu-nvidia` ephemeral self-hosted scale set, including for
   same-repository PRs. That hardware-qualified exception executes only through
   protected default-branch reusable workflows, receives no repository secrets or
@@ -466,13 +460,10 @@ runtime producers are not duplicated.
   inference, it records CUDA visibility variables, host driver-library
   resolution and NVIDIA device nodes, then runs the packaged benchmark's
   device-count probe without benchmark allocations, using inherited and
-  strict packaged-library resolution. Vulkan uses
-  the same approved `gpu-nvidia` host
-  with the explicit `Vulkan0` device. ROCm uses `ROCm0` and its reusable job is
-  skipped unless `MESH_ROCM_INFERENCE_RUNNER_ENABLED` is exactly `true`; the
-  corresponding repository-scoped `gpu-amd` runner could not be verified from
-  the current GitHub token. Accelerator product-integration rows remain absent
-  from the checked plan until their live qualification is accepted.
+  strict packaged-library resolution. The composed-product restore also
+  requires the manifest backend to match the smoke row, and all product smokes
+  force native-runtime discovery through the runtime bundled beside the host
+  rather than a published manifest.
 - `ci-linux-sdk-slice.yml` and `ci-macos-sdk-slice.yml` — platform-local
   Rust, Kotlin and Swift consumers. Each smoke downloads the matching
   platform lane's immutable UI artifact before packaging SDK resources;

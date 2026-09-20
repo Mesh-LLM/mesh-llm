@@ -66,6 +66,11 @@ jobs:
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
+      # Qualify the runtime packaged by this workflow. A published manifest for
+      # the same version must not mask a broken bundle beside the host binary.
+      MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL: http://127.0.0.1:9/native-runtimes.json
+      MESH_CI_DEVICE: ${{ inputs.runner == 'gpu-nvidia' && 'CUDA0' || 'CPU' }}
+      MESH_COMPAT_DEVICE: ${{ inputs.runner == 'gpu-nvidia' && 'CUDA0' || 'CPU' }}
       # /github/home is a host-side mount owned by the host runner uid; the
       # public image's container runs as root (Dockerfile's public stage
       # never drops back from `USER root`), and pip refuses a cache dir
@@ -154,42 +159,88 @@ jobs:
           HUGGING_FACE_HUB_TOKEN: ""
         run: npm install --global openai@7.5.0
 
-      - name: Install CUDA smoke runtime libraries
+      - name: Record CUDA device provenance
         if: inputs.runner == 'gpu-nvidia'
         run: |
-          sudo apt-get install -y --no-install-recommends \
-            cuda-cudart-12-9 \
-            libcublas-12-9
           nvidia-smi --query-gpu=name,compute_cap,driver_version \
             --format=csv,noheader
 
       - uses: ./.github/actions/restore-smoke-inputs
-        id: model_inputs
+        id: dense_model
         with:
           artifact_name: ${{ inputs.artifact_name }}
           artifact_path: ${{ inputs.artifact_path }}
           staged_binary_path: ${{ inputs.mesh_binary_target }}
           model_manifest: ci/model-artifacts/manifests/product-smoke.json
+          model_artifact_id: smollm2-q8-inference
+          expected_backend: ${{ inputs.runner == 'gpu-nvidia' && 'cuda' || 'cpu' }}
           model_cadence: ${{ inputs.release_tag != '' && 'release' || (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' || github.event.inputs.original_event_name == 'pull_request' || github.event.inputs.original_event_name == 'pull_request_target') && 'pull-request' || 'main' }}
           model_cache_scope: inference-smoke-model
           cache_key_prefix: ${{ inputs.cache_key_prefix }}
           save_model_cache: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
 
-      - name: Smoke test real skippy inference
+      - name: Restore recurrent smoke model
+        id: recurrent_model
+        uses: ./.github/actions/restore-test-model
+        with:
+          model_manifest: ci/model-artifacts/manifests/product-smoke.json
+          model_artifact_id: family-granite-hybrid
+          model_cadence: ${{ inputs.release_tag != '' && 'release' || (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' || github.event.inputs.original_event_name == 'pull_request' || github.event.inputs.original_event_name == 'pull_request_target') && 'pull-request' || 'main' }}
+          model_cache_scope: inference-smoke-recurrent-model
+          cache_key_prefix: ${{ inputs.cache_key_prefix }}
+          save_model_cache: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
+
+      - name: Verify packaged CUDA runtime without inherited toolkit paths
+        if: inputs.runner == 'gpu-nvidia'
+        run: |
+          set -euo pipefail
+          runtime_dir="$(find "${{ inputs.artifact_path }}/native-runtimes" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+          test -n "$runtime_dir"
+          env -u LD_LIBRARY_PATH scripts/verify-native-runtime-package.sh "$runtime_dir"
+          benchmark="$runtime_dir/tools/mesh-llm-gpu-benchmark"
+          test -x "$benchmark"
+          "$benchmark" --probe
+          env -u LD_LIBRARY_PATH "$benchmark" --probe
+
+      - name: Dense standalone inference smoke
         run: |
           scripts/ci-smoke-test.sh \
             "${{ inputs.mesh_binary_target }}" \
             "${{ inputs.artifact_path }}" \
-            "$HOME/.models/${{ steps.model_inputs.outputs.model_file }}"
+            "${{ steps.dense_model.outputs.model_path }}"
 
-      - name: OpenAI client compatibility smoke
+      - name: Recurrent standalone inference smoke
+        env:
+          MESH_CI_API_PORT: "9357"
+          MESH_CI_CONSOLE_PORT: "3151"
+          MESH_CI_HEADLESS_API_PORT: "9358"
+          MESH_CI_HEADLESS_CONSOLE_PORT: "3152"
+          MESH_CI_LOG: /tmp/mesh-llm-ci-recurrent.log
+        run: |
+          scripts/ci-smoke-test.sh \
+            "${{ inputs.mesh_binary_target }}" \
+            "${{ inputs.artifact_path }}" \
+            "${{ steps.recurrent_model.outputs.model_path }}"
+
+      - name: Dense OpenAI client compatibility smoke
         run: |
           scripts/ci-compat-smoke.sh \
             "${{ inputs.mesh_binary_target }}" \
             "${{ inputs.artifact_path }}" \
-            "$HOME/.models/${{ steps.model_inputs.outputs.model_file }}"
+            "${{ steps.dense_model.outputs.model_path }}"
 
-      - name: Constrained-stack smoke (detect oversized spawned futures)
+      - name: Recurrent OpenAI client compatibility smoke
+        env:
+          MESH_COMPAT_API_PORT: "9359"
+          MESH_COMPAT_CONSOLE_PORT: "3153"
+          MESH_COMPAT_LOG: /tmp/mesh-llm-compat-recurrent.log
+        run: |
+          scripts/ci-compat-smoke.sh \
+            "${{ inputs.mesh_binary_target }}" \
+            "${{ inputs.artifact_path }}" \
+            "${{ steps.recurrent_model.outputs.model_path }}"
+
+      - name: Dense constrained-stack smoke
         # Canary that detects pathologically oversized spawned futures by
         # running the smoke under a reduced tokio worker stack. The default
         # at runtime is 8 MiB (see crates/mesh-llm/src/main.rs); the canary
@@ -205,7 +256,21 @@ jobs:
           scripts/ci-smoke-test.sh \
             "${{ inputs.mesh_binary_target }}" \
             "${{ inputs.artifact_path }}" \
-            "$HOME/.models/${{ steps.model_inputs.outputs.model_file }}"
+            "${{ steps.dense_model.outputs.model_path }}"
+
+      - name: Recurrent constrained-stack smoke
+        env:
+          MESH_TOKIO_STACK_SIZE: "2097152"
+          MESH_CI_API_PORT: "9360"
+          MESH_CI_CONSOLE_PORT: "3154"
+          MESH_CI_HEADLESS_API_PORT: "9361"
+          MESH_CI_HEADLESS_CONSOLE_PORT: "3155"
+          MESH_CI_LOG: /tmp/mesh-llm-ci-constrained-recurrent.log
+        run: |
+          scripts/ci-smoke-test.sh \
+            "${{ inputs.mesh_binary_target }}" \
+            "${{ inputs.artifact_path }}" \
+            "${{ steps.recurrent_model.outputs.model_path }}"
 
   smoke_tests_macos:
     name: Skippy Inference Smoke Tests (macOS Metal)
@@ -216,6 +281,9 @@ jobs:
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
+      MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL: http://127.0.0.1:9/native-runtimes.json
+      MESH_CI_DEVICE: MTL0
+      MESH_COMPAT_DEVICE: MTL0
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -262,32 +330,69 @@ jobs:
         run: npm install --global openai@7.5.0
 
       - uses: ./.github/actions/restore-smoke-inputs
-        id: model_inputs
+        id: dense_model
         with:
           artifact_name: ${{ inputs.artifact_name }}
           artifact_path: ${{ inputs.artifact_path }}
           staged_binary_path: ${{ inputs.mesh_binary_target }}
           model_manifest: ci/model-artifacts/manifests/product-smoke.json
+          model_artifact_id: smollm2-q8-inference
+          expected_backend: metal
           model_cadence: ${{ inputs.release_tag != '' && 'release' || (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' || github.event.inputs.original_event_name == 'pull_request' || github.event.inputs.original_event_name == 'pull_request_target') && 'pull-request' || 'main' }}
           model_cache_scope: inference-smoke-model
           cache_key_prefix: ${{ inputs.cache_key_prefix }}
           save_model_cache: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
 
-      - name: Smoke test real skippy inference
+      - name: Restore recurrent smoke model
+        id: recurrent_model
+        uses: ./.github/actions/restore-test-model
+        with:
+          model_manifest: ci/model-artifacts/manifests/product-smoke.json
+          model_artifact_id: family-granite-hybrid
+          model_cadence: ${{ inputs.release_tag != '' && 'release' || (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' || github.event.inputs.original_event_name == 'pull_request' || github.event.inputs.original_event_name == 'pull_request_target') && 'pull-request' || 'main' }}
+          model_cache_scope: inference-smoke-recurrent-model
+          cache_key_prefix: ${{ inputs.cache_key_prefix }}
+          save_model_cache: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
+
+      - name: Dense standalone inference smoke
         run: |
           scripts/ci-smoke-test.sh \
             "${{ inputs.mesh_binary_target }}" \
             "${{ inputs.artifact_path }}" \
-            "$HOME/.models/${{ steps.model_inputs.outputs.model_file }}"
+            "${{ steps.dense_model.outputs.model_path }}"
 
-      - name: OpenAI client compatibility smoke
+      - name: Recurrent standalone inference smoke
+        env:
+          MESH_CI_API_PORT: "9357"
+          MESH_CI_CONSOLE_PORT: "3151"
+          MESH_CI_HEADLESS_API_PORT: "9358"
+          MESH_CI_HEADLESS_CONSOLE_PORT: "3152"
+          MESH_CI_LOG: /tmp/mesh-llm-ci-recurrent.log
+        run: |
+          scripts/ci-smoke-test.sh \
+            "${{ inputs.mesh_binary_target }}" \
+            "${{ inputs.artifact_path }}" \
+            "${{ steps.recurrent_model.outputs.model_path }}"
+
+      - name: Dense OpenAI client compatibility smoke
         run: |
           scripts/ci-compat-smoke.sh \
             "${{ inputs.mesh_binary_target }}" \
             "${{ inputs.artifact_path }}" \
-            "$HOME/.models/${{ steps.model_inputs.outputs.model_file }}"
+            "${{ steps.dense_model.outputs.model_path }}"
 
-      - name: Constrained-stack smoke (detect oversized spawned futures)
+      - name: Recurrent OpenAI client compatibility smoke
+        env:
+          MESH_COMPAT_API_PORT: "9359"
+          MESH_COMPAT_CONSOLE_PORT: "3153"
+          MESH_COMPAT_LOG: /tmp/mesh-llm-compat-recurrent.log
+        run: |
+          scripts/ci-compat-smoke.sh \
+            "${{ inputs.mesh_binary_target }}" \
+            "${{ inputs.artifact_path }}" \
+            "${{ steps.recurrent_model.outputs.model_path }}"
+
+      - name: Dense constrained-stack smoke
         # Canary that detects pathologically oversized spawned futures by
         # running the smoke under a reduced tokio worker stack. The default
         # at runtime is 8 MiB (see crates/mesh-llm/src/main.rs); the canary
@@ -303,4 +408,18 @@ jobs:
           scripts/ci-smoke-test.sh \
             "${{ inputs.mesh_binary_target }}" \
             "${{ inputs.artifact_path }}" \
-            "$HOME/.models/${{ steps.model_inputs.outputs.model_file }}"
+            "${{ steps.dense_model.outputs.model_path }}"
+
+      - name: Recurrent constrained-stack smoke
+        env:
+          MESH_TOKIO_STACK_SIZE: "2097152"
+          MESH_CI_API_PORT: "9360"
+          MESH_CI_CONSOLE_PORT: "3154"
+          MESH_CI_HEADLESS_API_PORT: "9361"
+          MESH_CI_HEADLESS_CONSOLE_PORT: "3155"
+          MESH_CI_LOG: /tmp/mesh-llm-ci-constrained-recurrent.log
+        run: |
+          scripts/ci-smoke-test.sh \
+            "${{ inputs.mesh_binary_target }}" \
+            "${{ inputs.artifact_path }}" \
+            "${{ steps.recurrent_model.outputs.model_path }}"
