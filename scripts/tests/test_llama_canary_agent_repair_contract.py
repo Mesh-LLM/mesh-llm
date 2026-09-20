@@ -32,7 +32,7 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
         ]
         self.assertIn("while remaining_repair_seconds", repair)
         self.assertLess(repair.index("agent_session_step"), repair.index("run_candidate_gates"))
-        self.assertIn('AGENT_SESSION_NAME="llama-canary-repair-${RUN_KEY}"', self.wrapper)
+        self.assertIn('AGENT_SESSION_NAME="llama-canary-repair-${RUN_KEY}-${PASS_ID}"', self.wrapper)
         self.assertIn('goose_args+=(--resume)', self.wrapper)
         self.assertIn('--name "$AGENT_SESSION_NAME"', self.wrapper)
         self.assertLess(gates.index("run_prepare"), gates.index("validate_agent_manifest_changes"))
@@ -279,7 +279,8 @@ run_candidate_gates() {
 
         main = self.wrapper[self.wrapper.index("write_repair_pin\n") :]
         self.assertLess(main.index("snapshot_candidate_tree"), main.index("materialize_verification_tree"))
-        self.assertLess(main.index("materialize_verification_tree"), main.index("run_candidate_gates"))
+        verify_main = main[main.index("materialize_verification_tree"): ]
+        self.assertLess(verify_main.index("materialize_verification_tree"), verify_main.index("run_candidate_gates"))
         self.assertLess(main.index("run_candidate_gates"), main.index("finalize_certified_tree"))
 
     def test_verify_mode_restores_tree_identity_from_candidate_commit(self) -> None:
@@ -368,7 +369,7 @@ run_candidate_gates() {
                 self.assertEqual(0, result.returncode, result.stderr)
 
     def test_persistent_runner_scratch_is_scoped_and_pruned(self) -> None:
-        self.assertIn('STATE_DIR="$ROOT/.deps/llama-canary-state-${RUN_KEY}"', self.wrapper)
+        self.assertIn('STATE_DIR="$ROOT/.deps/llama-canary-state-${RUN_KEY}-${PASS_ID}"', self.wrapper)
         self.assertIn('TARGET_SHA_FILE="$ROOT/.deps/llama-canary-target-sha"', self.wrapper)
         self.assertIn('git -C "$ROOT/.deps/llama.cpp" worktree prune', self.wrapper)
         self.assertIn("rm -rf /tmp/llama-old-pin /tmp/llama-repair /tmp/llama-repair-*", self.wrapper)

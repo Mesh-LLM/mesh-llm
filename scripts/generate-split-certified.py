@@ -37,13 +37,44 @@ def _frame(hasher: Any, value: bytes) -> None:
     hasher.update(value)
 
 
+def _series_patches(directory: Path) -> list[Path]:
+    # Keep this series validation and ordering contract in lockstep with
+    # crates/mesh-llm-host-runtime/build.rs::series_patches. Together they
+    # define the v2 patch_queue_sha256 embedded in the generated roster.
+    if not directory.exists():
+        return []
+    series = directory / "series"
+    if not series.is_file():
+        raise RosterError(f"patch directory is missing its series file: {directory}")
+    names = [line.rstrip("\r") for line in series.read_text(encoding="utf-8").splitlines()]
+    if not names or any(not name for name in names):
+        raise RosterError(f"patch series is empty or contains blank entries: {series}")
+    if len(set(names)) != len(names) or any(Path(name).name != name for name in names):
+        raise RosterError(f"patch series contains duplicate or unsafe entries: {series}")
+    patches = [directory / name for name in names]
+    if any(not path.is_file() for path in patches):
+        raise RosterError(f"patch series lists a missing patch: {series}")
+    actual = {path.name for path in directory.glob("*.patch")}
+    if actual != set(names):
+        raise RosterError(f"patch series does not exactly cover its directory: {series}")
+    return patches
+
+
+def ordered_patch_queue() -> list[Path]:
+    return [
+        *sorted(PATCH_DIR.glob("*.patch")),
+        *_series_patches(PATCH_DIR / "model_support"),
+        *_series_patches(PATCH_DIR / "generated"),
+    ]
+
+
 def patch_queue_sha256() -> str:
     hasher = hashlib.sha256()
-    hasher.update(b"mesh-llm-skippy-patch-queue-v1\0")
-    patches = sorted(PATCH_DIR.glob("*.patch"))
+    hasher.update(b"mesh-llm-skippy-patch-queue-v2\0")
+    patches = ordered_patch_queue()
     hasher.update(struct.pack("<Q", len(patches)))
     for path in patches:
-        _frame(hasher, path.name.encode())
+        _frame(hasher, path.relative_to(PATCH_DIR).as_posix().encode())
         _frame(hasher, path.read_bytes())
     return hasher.hexdigest()
 

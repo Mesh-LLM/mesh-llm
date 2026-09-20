@@ -1,0 +1,930 @@
+From 511f81ca79b09042e2eca9e133dd45ea3eae0374 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Sat, 19 Sep 2026 15:17:50 +1000
+Subject: [PATCH] build: wire staged runtime and backend support
+
+---
+ CMakeLists.txt                          |  17 +
+ ggml/cmake/common.cmake                 |   9 +-
+ ggml/src/ggml-cuda/ggml-cuda.cu         |   7 +-
+ ggml/src/ggml-metal/ggml-metal-device.m | 195 ++++++++++-
+ ggml/src/ggml-metal/ggml-metal-impl.h   |  34 +-
+ src/CMakeLists.txt                      | 423 +++++++++++++++++++++++-
+ 6 files changed, 659 insertions(+), 26 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 4052fa3d6..99d46fb76 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -2,6 +2,18 @@ cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit
+ project("llama.cpp" C CXX)
+ include(CheckIncludeFileCXX)
+ 
++# Upstream added target_precompile_headers for several targets. The Skippy
++# stage rewriter (Clang LibTooling) consumes the compilation database with its
++# own clang, which cannot read a PCH produced by the configured compiler, and
++# unity-built model sources inherit those -include-pch flags when the database
++# is matched. Keep every target PCH-free so the database stays rewriter-ready.
++set(CMAKE_DISABLE_PRECOMPILE_HEADERS ON)
++
++option(LLAMA_STAGE_BUILD_TESTS "Build private Skippy native application probes" OFF)
++if (LLAMA_STAGE_BUILD_TESTS)
++    enable_testing()
++endif()
++
+ ### llama.cpp version
+ set(LLAMA_VERSION_MAJOR 0)
+ set(LLAMA_VERSION_MINOR 4)
+@@ -281,6 +293,7 @@ set(LLAMA_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location o
+ 
+ set(LLAMA_PUBLIC_HEADERS
+     ${CMAKE_CURRENT_SOURCE_DIR}/include/llama.h
++    ${CMAKE_CURRENT_SOURCE_DIR}/include/skippy.h
+     ${CMAKE_CURRENT_SOURCE_DIR}/include/llama-cpp.h)
+ 
+ set_target_properties(llama
+@@ -288,6 +301,10 @@ set_target_properties(llama
+         PUBLIC_HEADER "${LLAMA_PUBLIC_HEADERS}")
+ 
+ install(TARGETS llama LIBRARY PUBLIC_HEADER)
++install(
++    DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/skippy
++    DESTINATION ${LLAMA_INCLUDE_INSTALL_DIR}
++    FILES_MATCHING PATTERN "*.h")
+ 
+ if (LLAMA_BUILD_COMMON)
+     install(TARGETS llama-common LIBRARY)
+diff --git a/ggml/cmake/common.cmake b/ggml/cmake/common.cmake
+index 25eff7a5e..29e71898b 100644
+--- a/ggml/cmake/common.cmake
++++ b/ggml/cmake/common.cmake
+@@ -92,8 +92,13 @@ function(ggml_cuda_fattn_vec_instances DIR OUT_SRCS)
+     endif()
+     list(REMOVE_DUPLICATES FA_COMBINATIONS)
+ 
+-    string(REPLACE ";" "," FA_QUANTS_DEFINE "${FA_QUANTS}")
+-    add_compile_definitions(GGML_CUDA_FA_QUANTS="${FA_QUANTS_DEFINE}")
++    # Encode list separators as colons for the compiler command line. nvcc
++    # treats commas inside -D values as option separators, while quoted
++    # definitions are re-emitted with escaped quotes that Windows sccache
++    # cannot parse.
++    string(REPLACE ";" ":" FA_QUANTS_DEFINE "${FA_QUANTS}")
++    string(REPLACE "," ":" FA_QUANTS_DEFINE "${FA_QUANTS_DEFINE}")
++    add_compile_definitions(GGML_CUDA_FA_QUANTS=${FA_QUANTS_DEFINE})
+     foreach (TYPE_V IN LISTS FA_TYPES)
+         foreach (TYPE_K IN LISTS FA_TYPES)
+             if ("${TYPE_K}-${TYPE_V}" IN_LIST FA_COMBINATIONS)
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index 790553888..ed6ed7213 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -5649,7 +5649,12 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
+     #endif
+ 
+     #ifdef GGML_CUDA_FA_QUANTS
+-        features.push_back({ "FA_QUANTS", GGML_CUDA_FA_QUANTS });
++        static const std::string fa_quants = [] {
++            std::string value = STRINGIFY(GGML_CUDA_FA_QUANTS);
++            std::replace(value.begin(), value.end(), ':', ',');
++            return value;
++        }();
++        features.push_back({ "FA_QUANTS", fa_quants.c_str() });
+     #endif
+ 
+     {
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
+index 5654c5004..bd928b494 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.m
++++ b/ggml/src/ggml-metal/ggml-metal-device.m
+@@ -11,6 +11,7 @@
+ #include <Metal/Metal.h>
+ 
+ #include <stdatomic.h>
++#include <limits.h>
+ 
+ #ifndef TARGET_OS_VISION
+ #define TARGET_OS_VISION 0
+@@ -164,6 +165,11 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
+     ggml_metal_device_t dev;
+     ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
+ 
++    // Optional on-disk cache of compiled pipeline states (MTLBinaryArchive),
++    // enabled via GGML_METAL_PIPELINE_CACHE_DIR. nil when disabled.
++    id<MTLBinaryArchive> pso_archive;
++    NSURL * pso_archive_url;
++
+     NSLock * lock;
+ };
+ 
+@@ -193,6 +199,98 @@ static void ggml_metal_compile_options_set_lang(MTLCompileOptions * options, boo
+     options.languageVersion = (MTLLanguageVersion) MTLLanguageVersion4_0_GGML;
+ }
+ 
++// FNV-1a 64-bit, used to fingerprint the inputs that determine pipeline
++// specialization so a stale on-disk archive is never consulted.
++static uint64_t ggml_metal_fnv1a64(uint64_t h, const void * data, size_t len) {
++    const unsigned char * p = (const unsigned char *) data;
++    for (size_t i = 0; i < len; ++i) {
++        h ^= p[i];
++        h *= 0x100000001b3ULL;
++    }
++    return h;
++}
++
++// Attach an on-disk MTLBinaryArchive to the library so pipeline compilation
++// can load previously compiled pipeline states and append new ones. The file
++// name embeds a fingerprint (device + ggml version + preprocessor macros +
++// kernel source hash) so a changed environment resolves to a different file
++// instead of a stale archive. Any failure leaves the cache disabled; pipeline
++// compilation then proceeds exactly as without this feature.
++static void ggml_metal_pso_cache_setup(ggml_metal_library_t lib, id<MTLDevice> device, NSDictionary * prep, uint64_t source_hash) {
++    if (@available(macOS 11.0, iOS 14.0, *)) {
++        const char * dir = getenv("GGML_METAL_PIPELINE_CACHE_DIR");
++        if (!dir || !dir[0]) {
++            return;
++        }
++
++        const struct ggml_metal_device_props * props = ggml_metal_device_get_props(lib->dev);
++
++        uint64_t h = 0xcbf29ce484222325ULL;
++        h = ggml_metal_fnv1a64(h, props->desc, strlen(props->desc));
++        h = ggml_metal_fnv1a64(h, ggml_version(), strlen(ggml_version()));
++        for (NSString * key in [prep.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
++            NSString * val = prep[key];
++            h = ggml_metal_fnv1a64(h, key.UTF8String, key.length);
++            h = ggml_metal_fnv1a64(h, val.UTF8String, val.length);
++        }
++        h ^= source_hash;
++        h *= 0x100000001b3ULL;
++
++        char path[PATH_MAX];
++        snprintf(path, sizeof(path), "%s/pipelines-%016llx.metallibar", dir, (unsigned long long) h);
++
++        NSString * path_ns = [NSString stringWithUTF8String:path];
++        NSURL * url = [NSURL fileURLWithPath:path_ns];
++
++        NSError * error = nil;
++        if (![[NSFileManager defaultManager] createDirectoryAtPath:[NSString stringWithUTF8String:dir]
++                                      withIntermediateDirectories:YES
++                                                       attributes:nil
++                                                            error:&error]) {
++            GGML_LOG_WARN("%s: cannot create pipeline cache dir '%s'\n", __func__, dir);
++            return;
++        }
++
++        MTLBinaryArchiveDescriptor * desc = [MTLBinaryArchiveDescriptor new];
++        desc.url = url;
++
++        id<MTLBinaryArchive> archive = [device newBinaryArchiveWithDescriptor:desc error:&error];
++        if (!archive) {
++            // no usable archive at this path (missing or incompatible): start a fresh one
++            GGML_LOG_INFO("%s: no usable pipeline cache at '%s', starting fresh\n", __func__, path);
++            desc.url = nil;
++            archive = [device newBinaryArchiveWithDescriptor:desc error:&error];
++        }
++
++        [desc release];
++
++        if (!archive) {
++            GGML_LOG_WARN("%s: failed to create binary archive: %s\n", __func__, [[error description] UTF8String]);
++            return;
++        }
++
++        lib->pso_archive     = archive;
++        lib->pso_archive_url = [url retain];
++
++        GGML_LOG_INFO("%s: Metal pipeline cache: %s\n", __func__, path);
++    }
++}
++
++// Persist the archive so later processes can reuse the compiled pipelines.
++// Called once when the library is released, after pipeline compilation ends.
++static void ggml_metal_pso_cache_flush(ggml_metal_library_t lib) {
++    if (@available(macOS 11.0, iOS 14.0, *)) {
++        if (!lib->pso_archive) {
++            return;
++        }
++
++        NSError * error = nil;
++        if (![lib->pso_archive serializeToURL:lib->pso_archive_url error:&error]) {
++            GGML_LOG_WARN("%s: failed to serialize pipeline cache: %s\n", __func__, [[error description] UTF8String]);
++        }
++    }
++}
++
+ // Parse a `#include "name"` line. Returns the quoted name in *include_name on
+ // success. Whitespace-tolerant; ignores `#include <...>` (system headers).
+ static bool ggml_metal_library_parse_quoted_include(NSString * line, NSString ** include_name) {
+@@ -303,12 +401,14 @@ static bool ggml_metal_library_compile_all(
+         id<MTLDevice> device,
+         NSDictionary * prep,
+         NSString * (^source_for_kind)(int kind, NSError ** err),
+-        const char * origin) {
++        const char * origin,
++        uint64_t * source_hash_out) {
+     const int64_t t_start = ggml_time_us();
+ 
+     int64_t  * t_per_lib   = calloc(GGML_METAL_LIB_COUNT, sizeof(int64_t));
+     NSError ** err_per_lib = calloc(GGML_METAL_LIB_COUNT, sizeof(NSError *));
+     __block atomic_bool any_failure = false;
++    uint64_t * source_hash_per_lib = calloc(GGML_METAL_LIB_COUNT, sizeof(uint64_t));
+ 
+     dispatch_group_t group = dispatch_group_create();
+     dispatch_queue_t queue = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
+@@ -327,6 +427,11 @@ static bool ggml_metal_library_compile_all(
+                 return;
+             }
+ 
++            // Hash each source independently; fold by kind only after all
++            // concurrent compilation blocks have completed.
++            const char * bytes = src.UTF8String;
++            source_hash_per_lib[kind] = ggml_metal_fnv1a64(0xcbf29ce484222325ULL, bytes, strlen(bytes));
++
+             id<MTLLibrary> lib = nil;
+ 
+             @autoreleasepool {
+@@ -361,6 +466,18 @@ static bool ggml_metal_library_compile_all(
+ 
+     const bool ok = !atomic_load(&any_failure);
+ 
++    uint64_t source_hash = 0xcbf29ce484222325ULL;
++    for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
++        source_hash = ggml_metal_fnv1a64(source_hash, &kind, sizeof(kind));
++        source_hash = ggml_metal_fnv1a64(source_hash, &source_hash_per_lib[kind],
++                                         sizeof(source_hash_per_lib[kind]));
++    }
++
++    if (source_hash_out) {
++        *source_hash_out = source_hash;
++    }
++    free(source_hash_per_lib);
++
+     if (ok) {
+         const int64_t t_total = ggml_time_us() - t_start;
+         int64_t t_max = 0;
+@@ -468,19 +585,23 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+ #undef X
+     };
+ 
++    uint64_t source_hash = 0;
++
+     const bool ok = ggml_metal_library_compile_all(res, device, prep,
+         ^NSString * (int kind, NSError ** err) {
+             (void) err;
+             return [[NSString alloc] initWithBytes:lib_start[kind]
+                                             length:(lib_end[kind] - lib_start[kind])
+                                           encoding:NSUTF8StringEncoding];
+-        }, "embedded data");
++        }, "embedded data", &source_hash);
+ 
+     if (!ok) {
+         ggml_metal_library_free(res);
+         return NULL;
+     }
+ 
++    ggml_metal_pso_cache_setup(res, device, prep, source_hash);
++
+     return res;
+ #else
+ #ifdef SWIFT_PACKAGE
+@@ -532,6 +653,9 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+         }
+ 
+         GGML_LOG_INFO("%s: loaded in %.3f sec\n", __func__, (ggml_time_us() - t_start) / 1e6);
++
++        ggml_metal_pso_cache_setup(res, device, prep, 0);
++
+         return res;
+     }
+ 
+@@ -566,10 +690,11 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+         path_per_kind[kind] = [path_source retain];
+     }
+ 
++    uint64_t source_hash = 0;
+     const bool ok = ggml_metal_library_compile_all(res, device, prep,
+         ^NSString * (int kind, NSError ** err) {
+             return ggml_metal_library_flatten_source(path_per_kind[kind], err);
+-        }, "source");
++        }, "source", &source_hash);
+ 
+     for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
+         [path_per_kind[kind] release];
+@@ -581,6 +706,8 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+         return NULL;
+     }
+ 
++    ggml_metal_pso_cache_setup(res, device, prep, source_hash);
++
+     return res;
+ #endif
+ }
+@@ -675,6 +802,14 @@ void ggml_metal_library_free(ggml_metal_library_t lib) {
+ 
+     ggml_metal_pipelines_free(lib->pipelines);
+ 
++    if (lib->pso_archive) {
++        ggml_metal_pso_cache_flush(lib);
++        [lib->pso_archive release];
++    }
++    if (lib->pso_archive_url) {
++        [lib->pso_archive_url release];
++    }
++
+     [lib->lock release];
+ 
+     free(lib);
+@@ -768,7 +903,32 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
+         }
+ 
+         id<MTLDevice> device = ggml_metal_device_get_obj(lib->dev);
+-        id<MTLComputePipelineState> obj = [device newComputePipelineStateWithFunction:mtl_function error:&error];
++        id<MTLComputePipelineState> obj = nil;
++
++        if (@available(macOS 11.0, iOS 14.0, *)) {
++            if (lib->pso_archive) {
++                // descriptor-based creation consults the archive before compiling
++                NSError * add_error = nil;
++                MTLComputePipelineDescriptor * pdesc = [MTLComputePipelineDescriptor new];
++                pdesc.computeFunction = mtl_function;
++                pdesc.binaryArchives  = @[lib->pso_archive];
++
++                obj = [device newComputePipelineStateWithDescriptor:pdesc
++                                                             options:MTLPipelineOptionNone
++                                                          reflection:nil
++                                                               error:&error];
++
++                if (obj && ![lib->pso_archive addComputePipelineFunctionsWithDescriptor:pdesc error:&add_error]) {
++                    GGML_LOG_WARN("%s: failed to add pipeline to archive: %s\n", __func__, [[add_error description] UTF8String]);
++                }
++
++                [pdesc release];
++            } else {
++                obj = [device newComputePipelineStateWithFunction:mtl_function error:&error];
++            }
++        } else {
++            obj = [device newComputePipelineStateWithFunction:mtl_function error:&error];
++        }
+ 
+         [mtl_function release];
+ 
+@@ -1253,7 +1413,7 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
+ #endif
+ 
+                 dev->props.use_shared_buffers = dev->props.has_unified_memory;
+-#if TARGET_OS_OSX
++#if TARGET_OS_OSX && !defined(__aarch64__)
+                 // In case of eGPU, shared memory may be preferable.
+                 dev->props.use_shared_buffers |= [dev->mtl_device location] == MTLDeviceLocationExternal;
+ #endif
+@@ -1320,12 +1480,14 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
+                         }
+                     }
+ 
++#if !defined(__aarch64__)
+                     for (int i = MTLGPUFamilyCommon1 + 5; i >= MTLGPUFamilyCommon1; --i) {
+                         if ([dev->mtl_device supportsFamily:i]) {
+                             GGML_LOG_INFO("%s: GPU family: MTLGPUFamilyCommon%d (%d)\n", __func__, i - (int) MTLGPUFamilyCommon1 + 1, i);
+                             break;
+                         }
+                     }
++#endif
+ 
+                     for (int i = MTLGPUFamilyMetal3_GGML + 5; i >= MTLGPUFamilyMetal3_GGML; --i) {
+                         if ([dev->mtl_device supportsFamily:i]) {
+@@ -1736,6 +1898,29 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
+             if (op->src[1]->type != op->src[2]->type) {
+                 return false;
+             }
++            {
++                // only the instantiated (dk, dv) kernel families can run on Metal
++                const int64_t dk = op->src[1]->ne[0];
++                const int64_t dv = op->src[2]->ne[0];
++                const bool dk_dv_ok = (dk == 32  && dv == 32)  ||
++                                      (dk == 40  && dv == 40)  ||
++                                      (dk == 48  && dv == 48)  ||
++                                      (dk == 64  && dv == 64)  ||
++                                      (dk == 72  && dv == 72)  ||
++                                      (dk == 80  && dv == 80)  ||
++                                      (dk == 96  && dv == 96)  ||
++                                      (dk == 112 && dv == 112) ||
++                                      (dk == 128 && dv == 128) ||
++                                      (dk == 192 && dv == 128) ||
++                                      (dk == 192 && dv == 192) ||
++                                      (dk == 256 && dv == 256) ||
++                                      (dk == 320 && dv == 256) ||
++                                      (dk == 512 && dv == 512) ||
++                                      (dk == 576 && dv == 512);
++                if (!dk_dv_ok) {
++                    return false;
++                }
++            }
+             switch (op->src[1]->type) {
+                 case GGML_TYPE_F32:
+                 case GGML_TYPE_F16:
+diff --git a/ggml/src/ggml-metal/ggml-metal-impl.h b/ggml/src/ggml-metal/ggml-metal-impl.h
+index 7ad21341e..629724219 100644
+--- a/ggml/src/ggml-metal/ggml-metal-impl.h
++++ b/ggml/src/ggml-metal/ggml-metal-impl.h
+@@ -1015,6 +1015,23 @@ typedef struct {
+     uint64_t nb3;
+ } ggml_metal_kargs_solve_tri;
+ 
++typedef struct {
++    int32_t  n_kv;
++    int32_t  n_batch;
++    int32_t  mask_ne3;
++    uint64_t nb1;
++    uint64_t nb3;
++    uint64_t nbq1;
++    uint64_t nbq2;
++    uint64_t nbq3;
++    uint64_t nbk2;
++    uint64_t nbk3;
++    uint64_t nbw1;
++    uint64_t nbw3;
++    uint64_t nbm1;
++    uint64_t nbm3;
++} ggml_metal_kargs_lightning_indexer;
++
+ typedef struct {
+     int32_t  ne00t;
+     int32_t  ne00;
+@@ -1235,23 +1252,6 @@ typedef struct {
+     int64_t val;
+ } ggml_metal_kargs_memset;
+ 
+-typedef struct {
+-    int32_t  n_kv;
+-    int32_t  n_batch;
+-    int32_t  mask_ne3;
+-    uint64_t nb1;
+-    uint64_t nb3;
+-    uint64_t nbq1;
+-    uint64_t nbq2;
+-    uint64_t nbq3;
+-    uint64_t nbk2;
+-    uint64_t nbk3;
+-    uint64_t nbw1;
+-    uint64_t nbw3;
+-    uint64_t nbm1;
+-    uint64_t nbm3;
+-} ggml_metal_kargs_lightning_indexer;
+-
+ typedef struct {
+     int32_t  n_tokens;
+     int32_t  n_iter;
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index bc922b6a7..0cc6123c7 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -46,6 +46,34 @@ set(LLAMA_CORE_SOURCES
+ add_library(llama
+             ../include/llama.h
+             ${LLAMA_CORE_SOURCES}
++            skippy/activation.cpp
++            skippy/activation_layout.cpp
++            skippy/execution-batch.cpp
++            skippy/execution-single.cpp
++            skippy/model_load_config.cpp
++            skippy/model_lifecycle.cpp
++            skippy/model_loading.cpp
++            skippy/model_source.cpp
++            skippy/session.cpp
++            skippy/verification.cpp
++            skippy/abi.cpp
++            skippy/block_boundaries.cpp
++            skippy/devices.cpp
++            skippy/glm_dsa.cpp
++            skippy/graph_dependencies.cpp
++            skippy/graph_identity.cpp
++            skippy/executable_graph.cpp
++            skippy/model_package.cpp
++            skippy/package_tensor_binding.cpp
++            skippy/sampling.cpp
++            skippy/stage_slice_plan.cpp
++            skippy/stage_plan.cpp
++            skippy/stage_realization.cpp
++            skippy/state.cpp
++            skippy/state_effects.cpp
++            skippy/speculative_decoding.cpp
++            skippy/tokenization.cpp
++            skippy/events.cpp
+             unicode.h
+             ${LLAMA_MODELS_SOURCES}
+             )
+@@ -62,17 +90,410 @@ set_target_properties(llama PROPERTIES
+ set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h
+     PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+ 
++# Keep model sources out of the unity build as well. The Skippy stage
++# rewriter (Clang LibTooling) needs a per-source compilation database entry
++# for every model builder, and unity composites collapse those entries.
++set_source_files_properties(${LLAMA_MODELS_SOURCES}
++    PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
++
+ configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)
+ 
+ target_include_directories(llama PRIVATE . ${CMAKE_CURRENT_BINARY_DIR})
+ target_include_directories(llama PUBLIC ../include)
+ target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
+-target_precompile_headers (llama PRIVATE models/models.h)
++# Upstream added a models.h PCH for the llama target. The Skippy stage
++# rewriter (Clang LibTooling) consumes this target's compilation database
++# entries with its own clang, which cannot read a PCH produced by the
++# configured compiler, so the llama target must stay PCH-free.
++# target_precompile_headers (llama PRIVATE models/models.h)
+ 
+ target_link_libraries(llama PUBLIC ggml)
+ 
++if (LLAMA_STAGE_BUILD_TESTS)
++    target_compile_definitions(llama PRIVATE LLAMA_STAGE_BUILD_TESTS)
++
++    add_executable(skippy-hardware-application-probe
++        skippy/tests/hardware_application_probe.cpp)
++    target_include_directories(skippy-hardware-application-probe PRIVATE .)
++    target_compile_features(skippy-hardware-application-probe PRIVATE cxx_std_17)
++    target_link_libraries(skippy-hardware-application-probe PRIVATE llama)
++    add_test(
++        NAME skippy_hardware_application_probe
++        COMMAND skippy-hardware-application-probe)
++
++    target_compile_definitions(llama PRIVATE SKIPPY_RUNTIME_EVENTS_TEST_HOOKS)
++
++    add_executable(skippy-runtime-events-test
++        skippy/tests/runtime_events.cpp)
++    target_include_directories(skippy-runtime-events-test PRIVATE .)
++    target_compile_features(skippy-runtime-events-test PRIVATE cxx_std_17)
++    target_compile_definitions(skippy-runtime-events-test PRIVATE SKIPPY_RUNTIME_EVENTS_TEST_HOOKS)
++    target_link_libraries(skippy-runtime-events-test PRIVATE llama)
++    foreach(SKIPPY_EVENT_TEST_CASE
++            register_and_dispatch
++            malformed_reporter_rejected
++            replacement_waits_for_previous_callback
++            clear_is_quiescent
++            callback_lifecycle_is_nonblocking
++            struct_size_extension
++            concurrent_dispatch
++            model_load_events_v2_dispatch
++            kv_events_dispatch
++            device_events_dispatch
++            diagnostic_events_dispatch
++            unload_events_dispatch
++            families_independent)
++        add_test(
++            NAME skippy_runtime_event_${SKIPPY_EVENT_TEST_CASE}
++            COMMAND skippy-runtime-events-test ${SKIPPY_EVENT_TEST_CASE})
++    endforeach()
++
++    set(SKIPPY_MODEL_FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/skippy/test-models")
++    file(MAKE_DIRECTORY "${SKIPPY_MODEL_FIXTURE_DIR}")
++
++    add_executable(skippy-model-fixture-generator
++        ../tests/test-llama-archs.cpp)
++    target_compile_features(skippy-model-fixture-generator PRIVATE cxx_std_17)
++    target_include_directories(skippy-model-fixture-generator PRIVATE .)
++    target_link_libraries(skippy-model-fixture-generator PRIVATE llama-common)
++    set(MTP_WIDTH_FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/mtp-width-models")
++    file(MAKE_DIRECTORY "${MTP_WIDTH_FIXTURE_DIR}")
++    add_test(NAME skippy_generate_mtp_width COMMAND skippy-model-fixture-generator
++        --arch deepseek4 --seed 42 --deepseek4-mtp --out "${MTP_WIDTH_FIXTURE_DIR}")
++    set_tests_properties(skippy_generate_mtp_width PROPERTIES FIXTURES_SETUP mtp-width-model)
++    add_test(NAME skippy_mtp_width COMMAND skippy-model-fixture-generator
++        --test-mtp-model "${MTP_WIDTH_FIXTURE_DIR}/deepseek4-mtp-moe.gguf")
++    set_tests_properties(skippy_mtp_width PROPERTIES FIXTURES_REQUIRED mtp-width-model)
++
++
++    add_executable(skippy-model-loader-accounting
++        ../tests/test-skippy-model-loader-accounting.cpp)
++    target_include_directories(skippy-model-loader-accounting PRIVATE .)
++    target_compile_features(skippy-model-loader-accounting PRIVATE cxx_std_17)
++    target_link_libraries(skippy-model-loader-accounting PRIVATE llama-common)
++
++    add_test(
++        NAME skippy_runtime_event_native_model_load_production
++        COMMAND skippy-runtime-events-test native_model_load_production
++            "${SKIPPY_MODEL_FIXTURE_DIR}/gemma-dense.gguf")
++    set_tests_properties(skippy_runtime_event_native_model_load_production PROPERTIES
++        FIXTURES_REQUIRED skippy-model-loader-fixtures)
++
++    add_executable(skippy-noalloc-graph-planning
++        skippy/tests/noalloc_graph_planning.cpp)
++    target_include_directories(skippy-noalloc-graph-planning PRIVATE .)
++    target_compile_features(skippy-noalloc-graph-planning PRIVATE cxx_std_17)
++    target_link_libraries(skippy-noalloc-graph-planning PRIVATE llama)
++
++    add_executable(skippy-renamed-multishard-planning
++        skippy/tests/renamed_multishard_planning.cpp)
++    target_include_directories(skippy-renamed-multishard-planning PRIVATE .)
++    target_compile_definitions(skippy-renamed-multishard-planning PRIVATE LLAMA_STAGE_BUILD_TESTS)
++    target_compile_features(skippy-renamed-multishard-planning PRIVATE cxx_std_17)
++    target_link_libraries(skippy-renamed-multishard-planning PRIVATE llama)
++    add_dependencies(skippy-noalloc-graph-planning skippy-renamed-multishard-planning)
++
++    add_executable(skippy-stage-plan-header-c
++        skippy/tests/stage_plan_header.c)
++    target_compile_features(skippy-stage-plan-header-c PRIVATE c_std_11)
++    target_include_directories(skippy-stage-plan-header-c PRIVATE ../include ../ggml/include)
++
++    add_executable(skippy-stage-plan-header-cpp
++        skippy/tests/stage_plan_header.cpp)
++    target_compile_features(skippy-stage-plan-header-cpp PRIVATE cxx_std_17)
++    target_include_directories(skippy-stage-plan-header-cpp PRIVATE ../include ../ggml/include)
++
++    add_test(NAME skippy_stage_plan_header_c COMMAND skippy-stage-plan-header-c)
++    add_test(NAME skippy_stage_plan_header_cpp COMMAND skippy-stage-plan-header-cpp)
++
++    add_executable(skippy-stage-slice-plan
++        skippy/tests/stage_slice_plan.cpp)
++    target_include_directories(skippy-stage-slice-plan PRIVATE .)
++    target_compile_features(skippy-stage-slice-plan PRIVATE cxx_std_17)
++    target_link_libraries(skippy-stage-slice-plan PRIVATE llama)
++    add_dependencies(skippy-stage-slice-plan skippy-stage-plan-header-c skippy-stage-plan-header-cpp)
++
++    add_test(
++        NAME skippy_stage_slice_plan
++        COMMAND skippy-stage-slice-plan)
++
++    add_executable(skippy-graph-build-inputs
++        skippy/tests/graph_build_inputs.cpp)
++    target_include_directories(skippy-graph-build-inputs PRIVATE .)
++    target_compile_features(skippy-graph-build-inputs PRIVATE cxx_std_17)
++    target_link_libraries(skippy-graph-build-inputs PRIVATE llama)
++    add_dependencies(skippy-stage-slice-plan skippy-graph-build-inputs)
++    add_test(NAME skippy_decode_input_width COMMAND skippy-graph-build-inputs --input-width)
++
++    add_test(
++        NAME skippy_graph_build_inputs
++        COMMAND skippy-graph-build-inputs
++            "${SKIPPY_MODEL_FIXTURE_DIR}/gemma-dense.gguf"
++            "${SKIPPY_MODEL_FIXTURE_DIR}/dream-dense.gguf")
++    set_tests_properties(skippy_graph_build_inputs PROPERTIES
++        FIXTURES_REQUIRED "skippy-model-loader-fixtures;skippy-graph-build-input-fixtures")
++
++    add_test(
++        NAME skippy_generate_graph_build_input_fixture
++        COMMAND skippy-model-fixture-generator
++            --arch dream
++            --seed 1
++            --out "${SKIPPY_MODEL_FIXTURE_DIR}")
++    set_tests_properties(skippy_generate_graph_build_input_fixture PROPERTIES
++        FIXTURES_SETUP skippy-graph-build-input-fixtures)
++
++    add_test(
++        NAME skippy_generate_gemma_fixture
++        COMMAND skippy-model-fixture-generator
++            --arch gemma
++            --seed 1
++            --out "${SKIPPY_MODEL_FIXTURE_DIR}")
++    set_tests_properties(skippy_generate_gemma_fixture PROPERTIES
++        FIXTURES_SETUP skippy-model-loader-fixtures)
++
++    add_test(
++        NAME skippy_generate_qwen3_fixture
++        COMMAND skippy-model-fixture-generator
++            --arch qwen3
++            --seed 1
++            --out "${SKIPPY_MODEL_FIXTURE_DIR}")
++    set_tests_properties(skippy_generate_qwen3_fixture PROPERTIES
++        FIXTURES_SETUP skippy-noalloc-qwen3-fixture)
++
++    add_test(
++        NAME skippy_generate_qwen2moe_fixture
++        COMMAND skippy-model-fixture-generator
++            --arch qwen2moe
++            --seed 1
++            --out "${SKIPPY_MODEL_FIXTURE_DIR}")
++    set_tests_properties(skippy_generate_qwen2moe_fixture PROPERTIES
++        FIXTURES_SETUP skippy-model-loader-fixtures)
++
++    add_test(
++        NAME skippy_generate_granite_hybrid_fixture
++        COMMAND skippy-model-fixture-generator
++            --arch granitehybrid
++            --seed 1
++            --out "${SKIPPY_MODEL_FIXTURE_DIR}")
++    set_tests_properties(skippy_generate_granite_hybrid_fixture PROPERTIES
++        FIXTURES_SETUP skippy-noalloc-granite-hybrid-fixture)
++
++    add_test(
++        NAME skippy_generate_qwen35_fixture
++        COMMAND skippy-model-fixture-generator
++            --arch qwen35
++            --seed 1
++            --out "${SKIPPY_MODEL_FIXTURE_DIR}")
++    set_tests_properties(skippy_generate_qwen35_fixture PROPERTIES
++        FIXTURES_SETUP skippy-noalloc-qwen35-fixture)
++
++    add_test(
++        NAME skippy_renamed_multishard_planning_qwen35
++        COMMAND skippy-renamed-multishard-planning
++            "${SKIPPY_MODEL_FIXTURE_DIR}/qwen35-dense.gguf"
++            "${SKIPPY_MODEL_FIXTURE_DIR}/renamed-qwen35"
++            1)
++    set_tests_properties(skippy_renamed_multishard_planning_qwen35 PROPERTIES
++        FIXTURES_REQUIRED skippy-noalloc-qwen35-fixture)
++
++    add_test(
++        NAME skippy_model_loader_accounting_dense
++        COMMAND skippy-model-loader-accounting
++            "${SKIPPY_MODEL_FIXTURE_DIR}/gemma-dense.gguf")
++    set_tests_properties(skippy_model_loader_accounting_dense PROPERTIES
++        FIXTURES_REQUIRED skippy-model-loader-fixtures)
++
++    add_test(
++        NAME skippy_model_loader_accounting_moe
++        COMMAND skippy-model-loader-accounting
++            "${SKIPPY_MODEL_FIXTURE_DIR}/qwen2moe-moe.gguf")
++    set_tests_properties(skippy_model_loader_accounting_moe PROPERTIES
++        FIXTURES_REQUIRED skippy-model-loader-fixtures)
++
++    add_test(
++        NAME skippy_noalloc_graph_planning_dense
++        COMMAND skippy-noalloc-graph-planning
++            "${SKIPPY_MODEL_FIXTURE_DIR}/gemma-dense.gguf"
++            0
++            "kv,kv")
++    set_tests_properties(skippy_noalloc_graph_planning_dense PROPERTIES
++        FIXTURES_REQUIRED skippy-model-loader-fixtures)
++
++    add_test(
++        NAME skippy_noalloc_graph_planning_qwen3
++        COMMAND skippy-noalloc-graph-planning
++            "${SKIPPY_MODEL_FIXTURE_DIR}/qwen3-dense.gguf"
++            0
++            "kv,kv"
++            0
++            "token-kv")
++    set_tests_properties(skippy_noalloc_graph_planning_qwen3 PROPERTIES
++        FIXTURES_REQUIRED skippy-noalloc-qwen3-fixture)
++
++    add_test(
++        NAME skippy_generate_gemma2_fixture
++        COMMAND skippy-model-fixture-generator
++            --arch gemma2
++            --seed 1
++            --out "${SKIPPY_MODEL_FIXTURE_DIR}")
++    set_tests_properties(skippy_generate_gemma2_fixture PROPERTIES
++        FIXTURES_SETUP skippy-noalloc-gemma2-fixture)
++
++    add_test(
++        NAME skippy_noalloc_graph_planning_iswa
++        COMMAND skippy-noalloc-graph-planning
++            "${SKIPPY_MODEL_FIXTURE_DIR}/gemma2-dense.gguf"
++            0
++            "kv,kv")
++    set_tests_properties(skippy_noalloc_graph_planning_iswa PROPERTIES
++        FIXTURES_REQUIRED skippy-noalloc-gemma2-fixture)
++
++    add_test(
++        NAME skippy_generate_minimax_m3_fixture
++        COMMAND skippy-model-fixture-generator
++            --arch minimax-m3
++            --seed 1
++            --out "${SKIPPY_MODEL_FIXTURE_DIR}")
++    set_tests_properties(skippy_generate_minimax_m3_fixture PROPERTIES
++        FIXTURES_SETUP skippy-noalloc-minimax-m3-fixture)
++
++    add_test(
++        NAME skippy_noalloc_graph_planning_msa
++        COMMAND skippy-noalloc-graph-planning
++            "${SKIPPY_MODEL_FIXTURE_DIR}/minimax-m3-moe.gguf"
++            0
++            "kv,kv")
++    set_tests_properties(skippy_noalloc_graph_planning_msa PROPERTIES
++        FIXTURES_REQUIRED skippy-noalloc-minimax-m3-fixture)
++
++    add_test(
++        NAME skippy_generate_kimi_linear_fixture
++        COMMAND skippy-model-fixture-generator
++            --arch kimi-linear
++            --seed 1
++            --out "${SKIPPY_MODEL_FIXTURE_DIR}")
++    set_tests_properties(skippy_generate_kimi_linear_fixture PROPERTIES
++        FIXTURES_SETUP skippy-noalloc-kimi-linear-fixture)
++
++    add_test(
++        NAME skippy_noalloc_graph_planning_kimi_linear
++        COMMAND skippy-noalloc-graph-planning
++            "${SKIPPY_MODEL_FIXTURE_DIR}/kimi-linear-moe.gguf"
++            1
++            "k,kda")
++    set_tests_properties(skippy_noalloc_graph_planning_kimi_linear PROPERTIES
++        FIXTURES_REQUIRED skippy-noalloc-kimi-linear-fixture)
++
++    add_test(
++        NAME skippy_generate_deepseek4_fixture
++        COMMAND skippy-model-fixture-generator
++            --arch deepseek4
++            --seed 1
++            --out "${SKIPPY_MODEL_FIXTURE_DIR}")
++    set_tests_properties(skippy_generate_deepseek4_fixture PROPERTIES
++        FIXTURES_SETUP skippy-noalloc-deepseek4-fixture)
++
++    add_test(
++        NAME skippy_noalloc_graph_planning_deepseek4_hyperconnection
++        COMMAND skippy-noalloc-graph-planning
++            "${SKIPPY_MODEL_FIXTURE_DIR}/deepseek4-moe.gguf"
++            0
++            "none,none,none,none"
++            0
++            "unchecked"
++            2048)
++    set_tests_properties(skippy_noalloc_graph_planning_deepseek4_hyperconnection PROPERTIES
++        FIXTURES_REQUIRED skippy-noalloc-deepseek4-fixture)
++
++    add_test(
++        NAME skippy_noalloc_graph_planning_granite_hybrid
++        COMMAND skippy-noalloc-graph-planning
++            "${SKIPPY_MODEL_FIXTURE_DIR}/granitehybrid-dense.gguf"
++            1
++            "kv,recurrent")
++    set_tests_properties(skippy_noalloc_graph_planning_granite_hybrid PROPERTIES
++        FIXTURES_REQUIRED skippy-noalloc-granite-hybrid-fixture)
++
++    add_test(
++        NAME skippy_renamed_multishard_planning_dense
++        COMMAND skippy-renamed-multishard-planning
++            "${SKIPPY_MODEL_FIXTURE_DIR}/gemma-dense.gguf"
++            "${SKIPPY_MODEL_FIXTURE_DIR}/renamed-gemma"
++            0)
++    set_tests_properties(skippy_renamed_multishard_planning_dense PROPERTIES
++        FIXTURES_REQUIRED skippy-model-loader-fixtures)
++
++    add_test(
++        NAME skippy_renamed_multishard_planning_granite_hybrid
++        COMMAND skippy-renamed-multishard-planning
++            "${SKIPPY_MODEL_FIXTURE_DIR}/granitehybrid-dense.gguf"
++            "${SKIPPY_MODEL_FIXTURE_DIR}/renamed-granite-hybrid"
++            1)
++    set_tests_properties(skippy_renamed_multishard_planning_granite_hybrid PROPERTIES
++        FIXTURES_REQUIRED skippy-noalloc-granite-hybrid-fixture)
++
++    add_test(
++        NAME skippy_generate_nemotron_h_fixture
++        COMMAND skippy-model-fixture-generator
++            --arch nemotron_h
++            --seed 1
++            --out "${SKIPPY_MODEL_FIXTURE_DIR}")
++    set_tests_properties(skippy_generate_nemotron_h_fixture PROPERTIES
++        FIXTURES_SETUP skippy-noalloc-nemotron-h-fixture)
++
++    add_test(
++        NAME skippy_noalloc_graph_planning_recurrent_rollback
++        COMMAND skippy-noalloc-graph-planning
++            "${SKIPPY_MODEL_FIXTURE_DIR}/nemotron_h-dense.gguf"
++            1
++            "kv,recurrent,none"
++            2)
++    set_tests_properties(skippy_noalloc_graph_planning_recurrent_rollback PROPERTIES
++        FIXTURES_REQUIRED skippy-noalloc-nemotron-h-fixture)
++
++    add_test(
++        NAME skippy_generate_mamba2_fixture
++        COMMAND skippy-model-fixture-generator
++            --arch mamba2
++            --seed 1
++            --out "${SKIPPY_MODEL_FIXTURE_DIR}")
++    set_tests_properties(skippy_generate_mamba2_fixture PROPERTIES
++        FIXTURES_SETUP skippy-noalloc-mamba2-fixture)
++
++    add_test(
++        NAME skippy_noalloc_graph_planning_recurrent_source
++        COMMAND skippy-noalloc-graph-planning
++            "${SKIPPY_MODEL_FIXTURE_DIR}/mamba2-dense.gguf"
++            1
++            "recurrent,recurrent")
++    set_tests_properties(skippy_noalloc_graph_planning_recurrent_source PROPERTIES
++        FIXTURES_REQUIRED skippy-noalloc-mamba2-fixture)
++
++    add_test(
++        NAME skippy_generate_mamba_fixture
++        COMMAND skippy-model-fixture-generator
++            --arch mamba
++            --seed 1
++            --out "${SKIPPY_MODEL_FIXTURE_DIR}")
++    set_tests_properties(skippy_generate_mamba_fixture PROPERTIES
++        FIXTURES_SETUP skippy-noalloc-mamba-fixture)
++
++    add_test(
++        NAME skippy_noalloc_graph_planning_mamba_state_ownership
++        COMMAND skippy-noalloc-graph-planning
++            "${SKIPPY_MODEL_FIXTURE_DIR}/mamba-dense.gguf"
++            1
++            "recurrent,recurrent")
++    set_tests_properties(skippy_noalloc_graph_planning_mamba_state_ownership PROPERTIES
++        FIXTURES_REQUIRED skippy-noalloc-mamba-fixture)
++endif()
++
+ if (BUILD_SHARED_LIBS)
+     set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)
+     target_compile_definitions(llama PRIVATE LLAMA_BUILD)
+     target_compile_definitions(llama PUBLIC  LLAMA_SHARED)
+ endif()
++if (APPLE)
++    find_library(SKIPPY_ACCELERATE_FRAMEWORK Accelerate REQUIRED)
++    target_link_libraries(llama PRIVATE ${SKIPPY_ACCELERATE_FRAMEWORK})
++endif()
+-- 
+2.54.0 (Apple Git-157)
+

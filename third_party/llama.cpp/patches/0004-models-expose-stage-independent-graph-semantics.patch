@@ -1,0 +1,2208 @@
+From 2c0eff7fd5bdfe49cf72267bf42cb542ffb82982 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Sat, 19 Sep 2026 15:17:37 +1000
+Subject: [PATCH 4/6] models: expose stage-independent graph semantics
+
+---
+ common/CMakeLists.txt                 |   2 +
+ common/chat-auto-parser-generator.cpp |  51 +++-
+ common/chat-diff-analyzer.cpp         |  10 +-
+ common/chat-peg-parser.cpp            |  15 +-
+ common/chat-peg-parser.h              |   2 +-
+ common/chat.cpp                       | 126 ++++++++-
+ common/chat.h                         |   5 +-
+ common/ngram-cache.cpp                | 153 ++++++++++-
+ common/stage-chat.cpp                 | 362 ++++++++++++++++++++++++++
+ conversion/base.py                    |  17 ++
+ src/models/bailingmoe3.cpp            |   4 +-
+ src/models/bitnet.cpp                 |   4 +-
+ src/models/chameleon.cpp              |  25 +-
+ src/models/deepseek32.cpp             |  16 +-
+ src/models/deepseek4.cpp              |   9 +-
+ src/models/delta-net-base.cpp         |  23 +-
+ src/models/gemma4.cpp                 |   3 +-
+ src/models/glm-dsa.cpp                |  60 ++++-
+ src/models/granite-swa.cpp            |  36 ++-
+ src/models/granite-switch.cpp         |  53 ++--
+ src/models/kimi-k3.cpp                |   4 +-
+ src/models/kimi-linear.cpp            |   4 +-
+ src/models/lfm2.cpp                   |   8 +-
+ src/models/mamba-base.cpp             |  48 ++--
+ src/models/mimo2.cpp                  |  15 +-
+ src/models/minimax-01.cpp             |  13 +-
+ src/models/minimax-m3.cpp             |  45 +++-
+ src/models/nemotron-h-moe.cpp         |  31 ++-
+ src/models/nemotron-h.cpp             |  13 +-
+ src/models/qwen2moe.cpp               |   5 +-
+ src/models/qwen35.cpp                 |   2 +-
+ src/models/qwen35moe.cpp              |   2 +-
+ src/models/qwen3next.cpp              |   2 +-
+ src/models/qwen3vl.cpp                |   3 +-
+ src/models/qwen4exp.cpp               |  15 +-
+ src/models/rwkv6-base.cpp             |   9 +-
+ src/models/rwkv6.cpp                  |   2 +-
+ src/models/rwkv7-base.cpp             |   9 +-
+ tools/mtmd/mtmd-audio.cpp             |   2 +
+ 39 files changed, 1044 insertions(+), 164 deletions(-)
+ create mode 100644 common/stage-chat.cpp
+
+diff --git a/common/CMakeLists.txt b/common/CMakeLists.txt
+index 38dab96ab..ae1bc1a0f 100644
+--- a/common/CMakeLists.txt
++++ b/common/CMakeLists.txt
+@@ -105,6 +105,7 @@ add_library(${TARGET}
+     reasoning-budget.h
+     sampling.cpp
+     sampling.h
++    stage-chat.cpp
+     speculative.cpp
+     speculative.h
+     subproc.cpp
+@@ -145,6 +146,7 @@ endif()
+ 
+ if (BUILD_SHARED_LIBS)
+     set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
++    target_compile_definitions(${TARGET} PRIVATE SKIPPY_COMMON_BUILD)
+ 
+     # TODO: make fine-grained exports in the future
+     set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+diff --git a/common/chat-auto-parser-generator.cpp b/common/chat-auto-parser-generator.cpp
+index b78789d8c..0fca78375 100644
+--- a/common/chat-auto-parser-generator.cpp
++++ b/common/chat-auto-parser-generator.cpp
+@@ -13,6 +13,18 @@
+ 
+ using json = common_json;
+ 
++static bool is_ascii_space(char c) {
++    return c == ' ' || c == '\n' || c == '\r' || c == '\t' || c == '\f' || c == '\v';
++}
++
++static std::string lazy_trigger_marker(const std::string & marker) {
++    std::string trimmed = marker;
++    while (!trimmed.empty() && is_ascii_space(trimmed.back())) {
++        trimmed.pop_back();
++    }
++    return trimmed.empty() ? marker : trimmed;
++}
++
+ namespace autoparser {
+ 
+ parser_build_context::parser_build_context(common_chat_peg_builder & p, const generation_params & inputs) :
+@@ -84,7 +96,7 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &
+         // Set grammar triggers based on tool section markers (fall back to per-call markers)
+         if (data.grammar_lazy) {
+             data.grammar_triggers = {
+-                { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, trigger_marker }
++                { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, lazy_trigger_marker(trigger_marker) }
+             };
+             if (autoparser.tools.format.openai_wrapper_trigger) {
+                 // model emits the OpenAI function wrapper, trigger on it
+@@ -368,7 +380,9 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
+         const auto & func = tool.at("function");
+         std::string  name = func.at("name");
+ 
+-        // Build parser for each argument, separating required and optional
++        // Object member order is semantically irrelevant. Split the declared
++        // arguments into required and optional sets so the grammar can enforce
++        // presence structurally instead of validating after the fact.
+         std::vector<common_peg_parser> required_parsers;
+         std::vector<common_peg_parser> optional_parsers;
+         foreach_parameter(func, [&](const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
+@@ -391,22 +405,33 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
+             }
+         });
+ 
+-        // Build required arg sequence in definition order
+-        common_peg_parser args_seq = p.eps();
+-        for (size_t i = 0; i < required_parsers.size(); i++) {
+-            if (i > 0) {
+-                args_seq = args_seq + p.space();
+-            }
+-            args_seq = args_seq + required_parsers[i];
+-        }
+-
+-        // Build optional args with flexible ordering
++        // Optional arguments may appear in any order, any number of times, and
++        // interleaved anywhere among the required arguments.
++        common_peg_parser optional_run = p.eps();
+         if (!optional_parsers.empty()) {
+             common_peg_parser any_opt = p.choice();
+             for (const auto & opt : optional_parsers) {
+                 any_opt |= opt;
+             }
+-            args_seq = args_seq + p.repeat(p.space() + any_opt, 0, -1);
++            optional_run = p.rule("tool-" + name + "-optional", p.zero_or_more(any_opt + p.space()));
++        }
++
++        // Required arguments must each appear exactly once, in any order.
++        // permute() generates every ordering while structurally requiring all of
++        // them, so the grammar sampler prevents both omission and duplication --
++        // matching the generic JSON tool path (common/chat.cpp). Optional
++        // arguments are allowed before each required argument (and after the
++        // last) so required and optional fields may be freely interleaved.
++        common_peg_parser args_seq = p.eps();
++        if (!required_parsers.empty()) {
++            std::vector<common_peg_parser> required_slots;
++            required_slots.reserve(required_parsers.size());
++            for (const auto & req : required_parsers) {
++                required_slots.push_back(optional_run + req + p.space());
++            }
++            args_seq = args_seq + p.permute("tool-" + name + "-required", required_slots) + optional_run;
++        } else {
++            args_seq = args_seq + optional_run;
+         }
+ 
+         if (!arguments.start.empty()) {
+diff --git a/common/chat-diff-analyzer.cpp b/common/chat-diff-analyzer.cpp
+index a7e370578..39ffa20f1 100644
+--- a/common/chat-diff-analyzer.cpp
++++ b/common/chat-diff-analyzer.cpp
+@@ -484,7 +484,8 @@ void analyze_reasoning::compare_reasoning_presence() {
+     json assistant_with_reasoning = json{
+         { "role",              "assistant"                },
+         { "content",           ASSISTANT_MSG              },
+-        { "reasoning_content", THINKING_CONTENT           }
++        { "reasoning_content", THINKING_CONTENT           },
++        { "thinking",          THINKING_CONTENT           }
+     };
+ 
+     template_params params;
+@@ -617,13 +618,15 @@ void analyze_reasoning::compare_reasoning_scope() {
+     json assistant_reasoning_content = json{
+         { "role",              "assistant"      },
+         { "content",           ASSISTANT_MSG    },
+-        { "reasoning_content", THINKING_CONTENT }
++        { "reasoning_content", THINKING_CONTENT },
++        { "thinking",          THINKING_CONTENT }
+     };
+ 
+     json assistant_reasoning_tools = json{
+         { "role",              "assistant"                                                                  },
+         { "content",           nullptr                                                                      },
+         { "reasoning_content", THINKING_CONTENT                                                             },
++        { "thinking",          THINKING_CONTENT                                                             },
+         { "tool_calls",
+          json::array({ build_tool_call(FUN_FIRST, json{ { ARG_FIRST, "VVVV" }, { ARG_SECOND, "XXXX" } }) }) }
+     };
+@@ -692,7 +695,8 @@ analyze_content::analyze_content(const common_chat_template & tmpl, const analyz
+     json assistant_with_reasoning = json{
+         { "role",              "assistant"      },
+         { "content",           ""               },
+-        { "reasoning_content", THINKING_CONTENT }
++        { "reasoning_content", THINKING_CONTENT },
++        { "thinking",          THINKING_CONTENT }
+     };
+ 
+     template_params params_content_only;
+diff --git a/common/chat-peg-parser.cpp b/common/chat-peg-parser.cpp
+index ffa43a318..b052dceac 100644
+--- a/common/chat-peg-parser.cpp
++++ b/common/chat-peg-parser.cpp
+@@ -386,11 +386,12 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
+     }
+ 
+     if (is_arg_name && current_tool) {
++        const std::string arg_name(trim(node.text));
+         std::string arg_entry;
+         if (arg_count > 0) {
+             arg_entry = ",";
+         }
+-        arg_entry += ordered_json(trim(node.text)).dump() + ":";
++        arg_entry += ordered_json(arg_name).dump() + ":";
+         ++arg_count;
+ 
+         auto & target = args_target();
+@@ -667,10 +668,10 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
+         // Arguments — either wrapped in args_key or parsed directly
+         common_peg_parser args_parser = eps();
+         if (args_key.empty()) {
+-            args_parser = tool_args(schema(json(), "tool-" + name + "-schema", params));
++            args_parser = tool_args(schema(json_object(), "tool-" + name + "-schema", params));
+         } else {
+             args_parser = literal("\"" + effective_args_key + "\"") + space() + literal(":") + space() +
+-                          tool_args(schema(json(), "tool-" + name + "-schema", params));
++                          tool_args(schema(json_object(), "tool-" + name + "-schema", params));
+         }
+         inner_fields.push_back(args_parser);
+ 
+@@ -731,7 +732,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
+         auto nested_name = literal("\"" + nested_name_field + "\"") + space() + literal(":") + space() +
+                           atomic(literal("\"") + tool_name(literal(name)) + literal("\""));
+         auto nested_args = literal("\"" + nested_args_field + "\"") + space() + literal(":") + space() +
+-                          tool_args(schema(json(), "tool-" + name + "-schema", params));
++                          tool_args(schema(json_object(), "tool-" + name + "-schema", params));
+ 
+         auto nested_object = literal("{") + space() +
+                             nested_name + space() + literal(",") + space() +
+@@ -787,7 +788,9 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
+ 
+     auto tool_choices    = choice();
+     auto name_key_parser = literal("\"" + effective_name_key + "\"");
+-    auto args_key_parser = literal("\"" + effective_args_key + "\"");
++    auto args_key_parser = effective_args_key == "arguments"
++                               ? choice({ literal("\"arguments\""), literal("\"args\"") })
++                               : literal("\"" + effective_args_key + "\"");
+ 
+     for (const auto & tool_def : tools) {
+         if (!tool_def.contains("function")) {
+@@ -800,7 +803,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
+         auto tool_name_ = name_key_parser + space() + literal(":") + space() +
+                          atomic(literal("\"") + tool_name(literal(name)) + literal("\""));
+         auto tool_args_ = args_key_parser + space() + literal(":") + space() +
+-                         tool_args(schema(json(), "tool-" + name + "-schema", params));
++                         tool_args(schema(json_object(), "tool-" + name + "-schema", params));
+ 
+         // Build ID parsers if keys are provided
+         common_peg_parser id_parser = eps();
+diff --git a/common/chat-peg-parser.h b/common/chat-peg-parser.h
+index 114fa049f..7723d4e35 100644
+--- a/common/chat-peg-parser.h
++++ b/common/chat-peg-parser.h
+@@ -5,6 +5,7 @@
+ 
+ #include <map>
+ #include <optional>
++#include <set>
+ #include <vector>
+ 
+ class common_chat_peg_mapper {
+@@ -106,7 +107,6 @@ class common_chat_peg_builder : public common_peg_parser_builder {
+     common_peg_parser tool_arg_string_value(const common_peg_parser & p) { return tag(TOOL_ARG_STRING_VALUE, p); }
+     common_peg_parser tool_arg_json_value(const common_peg_parser & p) { return tag(TOOL_ARG_VALUE, p); }
+ 
+-
+     // Matches every parser exactly once, in any order.
+     common_peg_parser permute(const std::string & rule_prefix, const std::vector<common_peg_parser> & parsers);
+ 
+diff --git a/common/chat.cpp b/common/chat.cpp
+index 3a204e12d..508f64658 100644
+--- a/common/chat.cpp
++++ b/common/chat.cpp
+@@ -227,6 +227,11 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
+                 });
+             }
+         }
++    } else if (!content_present) {
++        // Preserve an omitted OpenAI-compatible content field. Some templates
++        // distinguish this from explicit null and an empty string.
++    } else if (content_is_null) {
++        jmsg["content"] = nullptr;
+     } else {
+         jmsg["content"] = "";
+     }
+@@ -391,6 +396,7 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
+ 
+             auto has_content    = message.contains("content");
+             auto has_tool_calls = message.contains("tool_calls");
++            msg.content_present = has_content;
+             if (has_content) {
+                 const auto & content = message.at("content");
+                 if (content.is_string()) {
+@@ -409,7 +415,9 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
+                         msg_part.text = part.at("text");
+                         msg.content_parts.push_back(msg_part);
+                     }
+-                } else if (!content.is_null()) {
++                } else if (content.is_null()) {
++                    msg.content_is_null = true;
++                } else {
+                     throw std::invalid_argument("Invalid 'content' type: expected string or array, got " +
+                                                 content.dump() +
+                                                 " (ref: https://github.com/ggml-org/llama.cpp/issues/8367)");
+@@ -445,11 +453,6 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
+                     msg.tool_calls.push_back(tc);
+                 }
+             }
+-            if (!has_content && !has_tool_calls) {
+-                throw std::invalid_argument(
+-                    "Expected 'content' or 'tool_calls' (ref: https://github.com/ggml-org/llama.cpp/issues/8367 & "
+-                    "https://github.com/ggml-org/llama.cpp/issues/12279)");
+-            }
+             if (message.contains("reasoning_content")) {
+                 msg.reasoning_content = message.at("reasoning_content");
+             }
+@@ -720,6 +723,113 @@ std::string common_chat_format_example(const struct common_chat_templates *
+     "  {{- '<|im_start|>assistant\n' -}}\n"                                               \
+     "{%- endif -%}"
+ 
++// Fallback copied from the official zai-org/GLM-4.7-Flash chat_template.jinja.
++// In particular, the generation-prompt branch that emits a leading </think>
++// when enable_thinking=false is upstream GLM template behavior, not skippy policy.
++static const char * GLM_4_7_FALLBACK_TEMPLATE_SRC = R"jinja([gMASK]<sop>
++{%- if tools -%}
++<|system|>
++# Tools
++
++You may call one or more functions to assist with the user query.
++
++You are provided with function signatures within <tools></tools> XML tags:
++<tools>
++{% for tool in tools %}
++{{ tool | tojson(ensure_ascii=False) }}
++{% endfor %}
++</tools>
++
++For each function call, output the function name and arguments within the following XML format:
++<tool_call>{function-name}<arg_key>{arg-key-1}</arg_key><arg_value>{arg-value-1}</arg_value><arg_key>{arg-key-2}</arg_key><arg_value>{arg-value-2}</arg_value>...</tool_call>{%- endif -%}
++{%- macro visible_text(content) -%}
++    {%- if content is string -%}
++        {{- content }}
++    {%- elif content is iterable and content is not mapping -%}
++        {%- for item in content -%}
++            {%- if item is mapping and item.type == 'text' -%}
++                {{- item.text }}
++            {%- elif item is string -%}
++                {{- item }}
++            {%- endif -%}
++        {%- endfor -%}
++    {%- else -%}
++        {{- content }}
++    {%- endif -%}
++{%- endmacro -%}
++{%- set ns = namespace(last_user_index=-1) %}
++{%- for m in messages %}
++    {%- if m.role == 'user' %}
++        {% set ns.last_user_index = loop.index0 -%}
++    {%- endif %}
++{%- endfor %}
++{% for m in messages %}
++{%- if m.role == 'user' -%}<|user|>{{ visible_text(m.content) }}
++{%- elif m.role == 'assistant' -%}
++<|assistant|>
++{%- set reasoning_content = '' %}
++{%- set content = visible_text(m.content) %}
++{%- if m.reasoning_content is string %}
++    {%- set reasoning_content = m.reasoning_content %}
++{%- else %}
++    {%- if '</think>' in content %}
++        {%- set reasoning_content = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
++        {%- set content = content.split('</think>')[-1].lstrip('\n') %}
++    {%- endif %}
++{%- endif %}
++{%- if ((clear_thinking is defined and not clear_thinking) or loop.index0 > ns.last_user_index) and reasoning_content -%}
++{{ '<think>' + reasoning_content.strip() +  '</think>'}}
++{%- else -%}
++{{ '</think>' }}
++{%- endif -%}
++{%- if content.strip() -%}
++{{ content.strip() }}
++{%- endif -%}
++{% if m.tool_calls %}
++{% for tc in m.tool_calls %}
++{%- if tc.function %}
++    {%- set tc = tc.function %}
++{%- endif %}
++{{- '<tool_call>' + tc.name -}}
++{% set _args = tc.arguments %}{% for k, v in _args.items() %}<arg_key>{{ k }}</arg_key><arg_value>{{ v | tojson(ensure_ascii=False) if v is not string else v }}</arg_value>{% endfor %}</tool_call>{% endfor %}
++{% endif %}
++{%- elif m.role == 'tool' -%}
++{%- if m.content is string -%}
++{%- if loop.first or (messages[loop.index0 - 1].role != "tool") %}
++    {{- '<|observation|>' }}
++{%- endif %}
++{{- '<tool_response>' }}
++{{- m.content }}
++{{- '</tool_response>' }}
++{%- else -%}
++<|observation|>{% for tr in m.content %}
++<tool_response>{{ tr.output if tr.output is defined else tr }}</tool_response>{% endfor -%}
++{% endif -%}
++{%- elif m.role == 'system' -%}
++<|system|>{{ visible_text(m.content) }}
++{%- endif -%}
++{%- endfor -%}
++{%- if add_generation_prompt -%}
++    <|assistant|>{{- '</think>' if (enable_thinking is defined and not enable_thinking) else '<think>' -}}
++{%- endif -%})jinja";
++
++static std::string common_chat_vocab_piece(const struct llama_vocab * vocab, llama_token token) {
++    return token == LLAMA_TOKEN_NULL ? std::string() : common_token_to_piece(vocab, token, true);
++}
++
++static bool common_chat_model_has_glm4_vocab(const struct llama_model * model) {
++    if (model == nullptr) {
++        return false;
++    }
++    const auto * vocab = llama_model_get_vocab(model);
++    if (vocab == nullptr) {
++        return false;
++    }
++    return common_chat_vocab_piece(vocab, llama_vocab_bos(vocab)) == "[gMASK]" &&
++           common_chat_vocab_piece(vocab, llama_vocab_eos(vocab)) == "<|endoftext|>" &&
++           common_chat_vocab_piece(vocab, llama_vocab_eot(vocab)) == "<|user|>";
++}
++
+ void common_chat_templates_free(struct common_chat_templates * tmpls) {
+     delete tmpls;
+ }
+@@ -777,6 +887,10 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model *
+     } else {
+         default_template_src = chat_template_override;
+     }
++    if (default_template_src.empty() && template_tool_use_src.empty() && common_chat_model_has_glm4_vocab(model)) {
++        LOG_DBG("%s: using built-in GLM 4.7 fallback chat template\n", __func__);
++        default_template_src = GLM_4_7_FALLBACK_TEMPLATE_SRC;
++    }
+     if (default_template_src.empty() || default_template_src == "chatml") {
+         if (!template_tool_use_src.empty()) {
+             default_template_src = template_tool_use_src;
+diff --git a/common/chat.h b/common/chat.h
+index 0e1423a5a..71c803597 100644
+--- a/common/chat.h
++++ b/common/chat.h
+@@ -85,6 +85,8 @@ struct common_chat_msg {
+     std::string                               reasoning_content;
+     std::string                               tool_name;
+     std::string                               tool_call_id;
++    bool                                      content_present = true;
++    bool                                      content_is_null = false;
+ 
+     common_json to_json_oaicompat(bool concat_typed_text = false) const;
+ 
+@@ -121,7 +123,8 @@ struct common_chat_msg {
+     bool operator==(const common_chat_msg & other) const {
+         return role == other.role && content == other.content && content_parts == other.content_parts &&
+                tool_calls == other.tool_calls && reasoning_content == other.reasoning_content &&
+-               tool_name == other.tool_name && tool_call_id == other.tool_call_id;
++               tool_name == other.tool_name && tool_call_id == other.tool_call_id &&
++               content_present == other.content_present && content_is_null == other.content_is_null;
+     }
+ 
+     bool operator!=(const common_chat_msg & other) const { return !(*this == other); }
+diff --git a/common/ngram-cache.cpp b/common/ngram-cache.cpp
+index dce54b364..bc3ab811b 100644
+--- a/common/ngram-cache.cpp
++++ b/common/ngram-cache.cpp
+@@ -1,14 +1,156 @@
+ #include "ngram-cache.h"
+ #include "common.h"
+ #include "log.h"
++#include "../include/skippy.h"
+ 
+ #include <cinttypes>
+ #include <cstdint>
+ #include <cstdio>
+ #include <fstream>
++#include <limits>
+ #include <thread>
+ #include <algorithm>
+ 
++struct skippy_ngram_cache {
++    uint16_t ngram_min;
++    uint16_t ngram_max;
++    std::vector<llama_token> history;
++    common_ngram_cache context;
++    common_ngram_cache dynamic;
++    common_ngram_cache static_cache;
++};
++
++static bool skippy_ngram_cache_valid_config(uint16_t ngram_min, uint16_t ngram_max) {
++    return ngram_min >= LLAMA_NGRAM_MIN && ngram_min <= ngram_max && ngram_max <= LLAMA_NGRAM_MAX;
++}
++
++static void skippy_ngram_cache_clear_request_state(skippy_ngram_cache * cache) {
++    cache->history.clear();
++    cache->context.clear();
++    cache->dynamic.clear();
++    cache->static_cache.clear();
++}
++
++static enum skippy_status skippy_ngram_cache_update(
++        skippy_ngram_cache * cache,
++        const llama_token * token_ids,
++        size_t token_count,
++        bool reset) {
++    if (cache == nullptr || (token_count > 0 && token_ids == nullptr)) {
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (token_count == 0) {
++        if (reset) {
++            skippy_ngram_cache_clear_request_state(cache);
++        }
++        return SKIPPY_STATUS_OK;
++    }
++    if (token_count > static_cast<size_t>(std::numeric_limits<int>::max()) ||
++            cache->history.size() > static_cast<size_t>(std::numeric_limits<int>::max()) - token_count) {
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (reset) {
++        skippy_ngram_cache_clear_request_state(cache);
++        cache->history.assign(token_ids, token_ids + token_count);
++        common_ngram_cache_update(
++                cache->context,
++                cache->ngram_min,
++                cache->ngram_max,
++                cache->history,
++                static_cast<int>(token_count),
++                false);
++        return SKIPPY_STATUS_OK;
++    }
++    cache->history.insert(cache->history.end(), token_ids, token_ids + token_count);
++    common_ngram_cache_update(
++            cache->context,
++            cache->ngram_min,
++            cache->ngram_max,
++            cache->history,
++            static_cast<int>(token_count),
++            false);
++    return SKIPPY_STATUS_OK;
++}
++
++extern "C" SKIPPY_COMMON_API enum skippy_status skippy_ngram_cache_create(
++        uint16_t ngram_min,
++        uint16_t ngram_max,
++        struct skippy_ngram_cache ** out_cache,
++        struct skippy_error ** /* out_error */) {
++    if (out_cache == nullptr || !skippy_ngram_cache_valid_config(ngram_min, ngram_max)) {
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    *out_cache = new skippy_ngram_cache{ ngram_min, ngram_max, {}, {}, {}, {} };
++    return SKIPPY_STATUS_OK;
++}
++
++extern "C" SKIPPY_COMMON_API void skippy_ngram_cache_free(struct skippy_ngram_cache * cache) {
++    delete cache;
++}
++
++extern "C" SKIPPY_COMMON_API enum skippy_status skippy_ngram_cache_reset(
++        struct skippy_ngram_cache * cache,
++        const llama_token * token_ids,
++        size_t token_count,
++        struct skippy_error ** /* out_error */) {
++    return skippy_ngram_cache_update(cache, token_ids, token_count, true);
++}
++
++extern "C" SKIPPY_COMMON_API enum skippy_status skippy_ngram_cache_append(
++        struct skippy_ngram_cache * cache,
++        const llama_token * token_ids,
++        size_t token_count,
++        struct skippy_error ** /* out_error */) {
++    return skippy_ngram_cache_update(cache, token_ids, token_count, false);
++}
++
++extern "C" SKIPPY_COMMON_API enum skippy_status skippy_ngram_cache_draft(
++        struct skippy_ngram_cache * cache,
++        const llama_token * continuation_prefix,
++        size_t continuation_prefix_count,
++        uint16_t max_draft_tokens,
++        llama_token * output_tokens,
++        size_t output_token_capacity,
++        size_t * out_token_count,
++        struct skippy_error ** /* out_error */) {
++    if (out_token_count == nullptr || cache == nullptr ||
++            (continuation_prefix_count > 0 && continuation_prefix == nullptr)) {
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    *out_token_count = 0;
++    if (max_draft_tokens == 0 || cache->history.empty()) {
++        return SKIPPY_STATUS_OK;
++    }
++
++    std::vector<llama_token> input = cache->history;
++    std::vector<llama_token> draft;
++    if (continuation_prefix_count == 0) {
++        draft.push_back(input.back());
++    } else {
++        input.insert(input.end(), continuation_prefix, continuation_prefix + continuation_prefix_count);
++        draft.push_back(continuation_prefix[continuation_prefix_count - 1]);
++    }
++    common_ngram_cache_draft(
++            input,
++            draft,
++            max_draft_tokens,
++            cache->ngram_min,
++            cache->ngram_max,
++            cache->context,
++            cache->dynamic,
++            cache->static_cache);
++    const size_t drafted_count = draft.size() - 1;
++    *out_token_count = drafted_count;
++    if (drafted_count == 0) {
++        return SKIPPY_STATUS_OK;
++    }
++    if (output_tokens == nullptr || output_token_capacity < drafted_count) {
++        return SKIPPY_STATUS_BUFFER_TOO_SMALL;
++    }
++    std::copy(draft.begin() + 1, draft.end(), output_tokens);
++    return SKIPPY_STATUS_OK;
++}
++
+ void common_ngram_cache_update(common_ngram_cache & ngram_cache, int ngram_min, int ngram_max,
+                               std::vector<llama_token> & inp, int nnew, bool print_progress) {
+     const int64_t t_start_ms = ggml_time_ms();
+@@ -97,12 +239,13 @@ static llama_token try_draft(common_ngram_cache & nc_static, const common_ngram
+ // Try to draft a token from primary cache (context/dynamic), validate with static cache:
+ static llama_token try_draft(
+     common_ngram_cache & nc_primary, const std::vector<common_ngram> & ngrams_primary, common_ngram_cache_part & part_static,
+-    const int * min_sample_size, const int * min_percent) {
++    const int * min_sample_size, const int * min_percent, int ngram_min) {
+ 
+     llama_token drafted_token = LLAMA_TOKEN_NULL;
+ 
+     for (int i = ngrams_primary.size()-1; i >= 0 && drafted_token == LLAMA_TOKEN_NULL; --i) {
+         const common_ngram ngram_primary = ngrams_primary[i];
++        const int threshold_index = ngram_min + i - 1;
+ 
+         common_ngram_cache::iterator part_primary_it = nc_primary.find(ngram_primary);
+         if (part_primary_it == nc_primary.end()) {
+@@ -131,10 +274,10 @@ static llama_token try_draft(
+             sum_count_primary += count_primary;
+         }
+ 
+-        if (sum_count_primary < min_sample_size[i]) {
++        if (sum_count_primary < min_sample_size[threshold_index]) {
+             continue;
+         }
+-        if (100*max_count_primary < min_percent[i]*sum_count_primary) {
++        if (100*max_count_primary < min_percent[threshold_index]*sum_count_primary) {
+             continue;;
+         }
+         drafted_token = max_token;
+@@ -179,10 +322,10 @@ void common_ngram_cache_draft(
+             ngrams_cd.push_back(ngram_cd);
+         }
+         if (drafted_token == LLAMA_TOKEN_NULL) {
+-            drafted_token = try_draft(nc_context, ngrams_cd, part_static, draft_min_sample_size_lax, draft_min_percent_lax);
++            drafted_token = try_draft(nc_context, ngrams_cd, part_static, draft_min_sample_size_lax, draft_min_percent_lax, ngram_min);
+         }
+         if (drafted_token == LLAMA_TOKEN_NULL) {
+-            drafted_token = try_draft(nc_dynamic, ngrams_cd, part_static, draft_min_sample_size_strict, draft_min_percent_strict);
++            drafted_token = try_draft(nc_dynamic, ngrams_cd, part_static, draft_min_sample_size_strict, draft_min_percent_strict, ngram_min);
+         }
+         if (drafted_token == LLAMA_TOKEN_NULL) {
+             drafted_token = try_draft(nc_static, ngram_static);
+diff --git a/common/stage-chat.cpp b/common/stage-chat.cpp
+new file mode 100644
+index 000000000..180c0a884
+--- /dev/null
++++ b/common/stage-chat.cpp
+@@ -0,0 +1,362 @@
++#include "chat.h"
++#include "skippy.h"
++
++#include "json.h"
++
++#include <cstdlib>
++#include <cstring>
++#include <exception>
++#include <limits>
++#include <string>
++#include <vector>
++
++using json = common_json;
++
++using skippy_chat_templates_create_fn = void * (*)(const llama_model * model);
++using skippy_chat_templates_free_fn = void (*)(void * templates);
++
++extern "C" LLAMA_API void * skippy_model_chat_templates_get_or_init(
++        struct skippy_model * model,
++        skippy_chat_templates_create_fn create,
++        skippy_chat_templates_free_fn free_templates);
++extern "C" LLAMA_API void skippy_model_chat_templates_lock(struct skippy_model * model);
++extern "C" LLAMA_API void skippy_model_chat_templates_unlock(struct skippy_model * model);
++
++class skippy_chat_templates_lock_guard {
++public:
++    explicit skippy_chat_templates_lock_guard(skippy_model * model) : model(model) {
++        skippy_model_chat_templates_lock(model);
++    }
++
++    ~skippy_chat_templates_lock_guard() {
++        skippy_model_chat_templates_unlock(model);
++    }
++
++private:
++    skippy_model * model;
++};
++
++static void * skippy_common_chat_templates_create(const llama_model * model) {
++    return common_chat_templates_init(model, "").release();
++}
++
++static void skippy_common_chat_templates_free(void * templates) {
++    common_chat_templates_free(static_cast<common_chat_templates *>(templates));
++}
++
++static skippy_error * skippy_common_make_error(enum skippy_status status, const char * message) {
++    skippy_error * error = new skippy_error{};
++    error->status = status;
++
++    if (message == nullptr) {
++        error->message = nullptr;
++        return error;
++    }
++
++    const size_t len = std::strlen(message);
++    char * owned = static_cast<char *>(std::malloc(len + 1));
++    if (owned == nullptr) {
++        error->status = SKIPPY_STATUS_ERROR;
++        error->message = nullptr;
++        return error;
++    }
++
++    std::memcpy(owned, message, len + 1);
++    error->message = owned;
++    return error;
++}
++
++static void skippy_common_set_error(
++        skippy_error ** out_error,
++        enum skippy_status status,
++        const char * message) {
++    if (out_error != nullptr) {
++        *out_error = skippy_common_make_error(status, message);
++    }
++}
++
++static enum skippy_status skippy_common_success(skippy_error ** out_error) {
++    if (out_error != nullptr) {
++        *out_error = nullptr;
++    }
++    return SKIPPY_STATUS_OK;
++}
++
++static bool skippy_common_buffer_too_small(
++        const std::string & value,
++        char * output,
++        size_t output_capacity,
++        size_t * out_bytes) {
++    if (out_bytes != nullptr) {
++        *out_bytes = value.size();
++    }
++    return output == nullptr || output_capacity < value.size();
++}
++
++static void skippy_common_copy_output(const std::string & value, char * output) {
++    if (!value.empty()) {
++        std::memcpy(output, value.data(), value.size());
++    }
++}
++
++static json skippy_common_parse_json_or_null(const char * value) {
++    if (value == nullptr || value[0] == '\0') {
++        return json();
++    }
++    return json::parse(value);
++}
++
++static std::string skippy_common_tool_choice_string(const char * tool_choice_json) {
++    json value = skippy_common_parse_json_or_null(tool_choice_json);
++    if (value.is_null()) {
++        return "auto";
++    }
++    if (value.is_string()) {
++        return value.get<std::string>();
++    }
++    if (value.is_object()) {
++        const std::string type = value.value("type", std::string("auto"));
++        if (type == "function" || type == "tool") {
++            return "required";
++        }
++        if (type == "any") {
++            return "required";
++        }
++        if (type == "auto" || type == "none" || type == "required") {
++            return type;
++        }
++    }
++    throw std::invalid_argument("Invalid tool_choice: " + value.dump());
++}
++
++static json skippy_common_grammar_triggers_to_json(const std::vector<common_grammar_trigger> & triggers) {
++    json out = json::array();
++    for (const auto & trigger : triggers) {
++        json item = {
++            {"type", static_cast<int>(trigger.type)},
++            {"value", trigger.value},
++        };
++        if (trigger.type == COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN) {
++            item["token"] = static_cast<int>(trigger.token);
++        }
++        out.push_back(std::move(item));
++    }
++    return out;
++}
++
++static json skippy_common_chat_metadata_json(
++        const common_chat_params & params,
++        common_reasoning_format reasoning_format,
++        bool parse_tool_calls,
++        bool skip_chat_parsing) {
++    return {
++        {"chat_format", static_cast<int>(params.format)},
++        {"reasoning_format", common_reasoning_format_name(reasoning_format)},
++        {"generation_prompt", params.generation_prompt},
++        {"parse_tool_calls", parse_tool_calls},
++        {"chat_parser", params.parser},
++        {"grammar", params.grammar},
++        {"grammar_lazy", params.grammar_lazy},
++        {"grammar_triggers", skippy_common_grammar_triggers_to_json(params.grammar_triggers)},
++        {"preserved_tokens", params.preserved_tokens},
++        {"additional_stops", params.additional_stops},
++        {"skip_chat_parsing", skip_chat_parsing},
++    };
++}
++
++extern "C" SKIPPY_COMMON_API enum skippy_status skippy_apply_chat_template_json(
++        struct skippy_model * model,
++        const char * messages_json,
++        const char * tools_json,
++        const char * tool_choice_json,
++        bool add_assistant,
++        bool override_enable_thinking,
++        bool enable_thinking,
++        bool parallel_tool_calls,
++        const char * reasoning_format_name,
++        const char * chat_template_kwargs_json,
++        const char * chat_template,
++        bool use_jinja,
++        const char * grammar,
++        const char * json_schema,
++        bool skip_chat_parsing,
++        char * output_text,
++        size_t output_text_capacity,
++        size_t * out_text_bytes,
++        char * output_metadata_json,
++        size_t output_metadata_json_capacity,
++        size_t * out_metadata_json_bytes,
++        struct skippy_error ** out_error) {
++    if (messages_json == nullptr) {
++        skippy_common_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "messages_json is required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (out_text_bytes == nullptr || out_metadata_json_bytes == nullptr) {
++        skippy_common_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "output byte counters are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (output_text_capacity > static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
++        output_metadata_json_capacity > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
++        skippy_common_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "chat template output capacity exceeds int32_t range");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    const llama_model * native_model = skippy_model_native_model(model);
++    if (native_model == nullptr) {
++        skippy_common_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model is required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++
++    std::string prompt;
++    std::string metadata;
++    try {
++        json messages = json::parse(messages_json);
++        json tools = skippy_common_parse_json_or_null(tools_json);
++
++        common_chat_templates_inputs inputs;
++        inputs.messages              = common_chat_msgs_parse_oaicompat(messages);
++        inputs.tools                 = common_chat_tools_parse_oaicompat(tools);
++        inputs.tool_choice           = common_chat_tool_choice_parse_oaicompat(skippy_common_tool_choice_string(tool_choice_json));
++        inputs.add_generation_prompt = add_assistant;
++        inputs.use_jinja             = use_jinja;
++        inputs.parallel_tool_calls   = parallel_tool_calls;
++        if (override_enable_thinking) {
++            const char * value = enable_thinking ? "true" : "false";
++            inputs.enable_thinking = enable_thinking;
++            inputs.chat_template_kwargs["enable_thinking"] = value;
++            inputs.chat_template_kwargs["enableThinking"] = value;
++            inputs.chat_template_kwargs["enable_reasoning"] = value;
++            inputs.chat_template_kwargs["use_reasoning"] = value;
++            inputs.chat_template_kwargs["reasoning_enabled"] = value;
++            inputs.chat_template_kwargs["use_thinking"] = value;
++            inputs.chat_template_kwargs["thinking_enabled"] = value;
++            inputs.chat_template_kwargs["enable_think"] = value;
++            inputs.chat_template_kwargs["think_enabled"] = value;
++            if (!enable_thinking) {
++                inputs.chat_template_kwargs["reasoning_effort"] = "0";
++            }
++        }
++        if (reasoning_format_name != nullptr && reasoning_format_name[0] != '\0') {
++            inputs.reasoning_format = common_reasoning_format_from_name(reasoning_format_name);
++        }
++        if (json_schema != nullptr && json_schema[0] != '\0') {
++            inputs.json_schema = json_schema;
++        }
++        json chat_template_kwargs = skippy_common_parse_json_or_null(chat_template_kwargs_json);
++        if (!chat_template_kwargs.is_null()) {
++            if (!chat_template_kwargs.is_object()) {
++                throw std::runtime_error("chat_template_kwargs must be a JSON object");
++            }
++            for (const auto & [key, value] : chat_template_kwargs.items()) {
++                inputs.chat_template_kwargs[key] = value.dump();
++            }
++        }
++        if (override_enable_thinking && !enable_thinking) {
++            inputs.chat_template_kwargs["reasoning_effort"] = "0";
++        }
++
++        common_chat_templates_ptr custom_tmpls;
++        common_chat_templates * tmpls = nullptr;
++        if (chat_template != nullptr && chat_template[0] != '\0') {
++            custom_tmpls = common_chat_templates_init(native_model, chat_template);
++            tmpls = custom_tmpls.get();
++        } else {
++            tmpls = static_cast<common_chat_templates *>(
++                    skippy_model_chat_templates_get_or_init(
++                        model,
++                        skippy_common_chat_templates_create,
++                        skippy_common_chat_templates_free));
++        }
++        if (tmpls == nullptr) {
++            throw std::runtime_error("failed to initialize model chat templates");
++        }
++        skippy_chat_templates_lock_guard templates_lock(model);
++        common_chat_params params = common_chat_templates_apply(tmpls, inputs);
++        if (grammar != nullptr && grammar[0] != '\0') {
++            params.grammar = grammar;
++            params.grammar_lazy = false;
++            params.grammar_triggers.clear();
++        }
++        prompt = params.prompt;
++
++        const bool parse_tool_calls = !inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
++        metadata = skippy_common_chat_metadata_json(
++                params,
++                inputs.reasoning_format,
++                parse_tool_calls,
++                skip_chat_parsing).dump();
++    } catch (const std::exception & e) {
++        skippy_common_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED,
++            ("failed to apply chat template: " + std::string(e.what())).c_str());
++        return SKIPPY_STATUS_UNSUPPORTED;
++    } catch (...) {
++        skippy_common_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "failed to apply chat template");
++        return SKIPPY_STATUS_UNSUPPORTED;
++    }
++
++    const bool prompt_too_small = skippy_common_buffer_too_small(prompt, output_text, output_text_capacity, out_text_bytes);
++    const bool metadata_too_small = skippy_common_buffer_too_small(metadata, output_metadata_json, output_metadata_json_capacity, out_metadata_json_bytes);
++    if (prompt_too_small || metadata_too_small) {
++        skippy_common_set_error(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "chat template output buffer is too small");
++        return SKIPPY_STATUS_BUFFER_TOO_SMALL;
++    }
++
++    skippy_common_copy_output(prompt, output_text);
++    skippy_common_copy_output(metadata, output_metadata_json);
++    return skippy_common_success(out_error);
++}
++
++extern "C" SKIPPY_COMMON_API enum skippy_status skippy_parse_chat_response_json(
++        const char * generated_text,
++        const char * metadata_json,
++        bool is_partial,
++        char * output_message_json,
++        size_t output_message_json_capacity,
++        size_t * out_message_json_bytes,
++        struct skippy_error ** out_error) {
++    if (generated_text == nullptr || metadata_json == nullptr) {
++        skippy_common_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "generated_text and metadata_json are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (out_message_json_bytes == nullptr) {
++        skippy_common_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "out_message_json_bytes is required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (output_message_json_capacity > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
++        skippy_common_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "parse output capacity exceeds int32_t range");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++
++    std::string output;
++    try {
++        json metadata = json::parse(metadata_json);
++        common_chat_parser_params params;
++        params.format = static_cast<common_chat_format>(metadata.value("chat_format", 0));
++        const std::string reasoning_format = metadata.value("reasoning_format", std::string());
++        if (!reasoning_format.empty()) {
++            params.reasoning_format = common_reasoning_format_from_name(reasoning_format);
++        }
++        params.generation_prompt = metadata.value("generation_prompt", std::string());
++        params.parse_tool_calls = metadata.value("parse_tool_calls", true);
++        const std::string parser = metadata.value("chat_parser", std::string());
++        if (!parser.empty()) {
++            params.parser.load(parser);
++        }
++
++        common_chat_msg msg = common_chat_parse(generated_text, is_partial, params);
++        output = common_chat_msgs_to_json_oaicompat({ msg }).at(0).dump();
++    } catch (const std::exception & e) {
++        skippy_common_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED,
++            ("failed to parse chat response: " + std::string(e.what())).c_str());
++        return SKIPPY_STATUS_UNSUPPORTED;
++    } catch (...) {
++        skippy_common_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "failed to parse chat response");
++        return SKIPPY_STATUS_UNSUPPORTED;
++    }
++
++    if (skippy_common_buffer_too_small(output, output_message_json, output_message_json_capacity, out_message_json_bytes)) {
++        skippy_common_set_error(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "parse output buffer is too small");
++        return SKIPPY_STATUS_BUFFER_TOO_SMALL;
++    }
++    skippy_common_copy_output(output, output_message_json);
++    return skippy_common_success(out_error);
++}
+diff --git a/conversion/base.py b/conversion/base.py
+index d2d80be36..7a3373c0e 100644
+--- a/conversion/base.py
++++ b/conversion/base.py
+@@ -284,8 +284,17 @@ class ModelBase:
+                             data_gen = lambda data=data_torch: LazyTorchTensor.from_eager(data)  # noqa: E731
+                         else:
+                             data_gen = lambda data=data_torch: data  # noqa: E731
++                    # the index maps each tensor to one shard; a duplicate would silently overwrite it
++                    if weight_map and name in weight_map and weight_map[name] != part_name:
++                        raise ValueError(
++                            f"tensor '{name}' found in '{part_name}' but the index assigns "
++                            f"it to '{weight_map[name]}'; refusing to load a wrong-shard copy")
+                     if titem := self.filter_tensors((name, data_gen)):
+                         tname, tgen = titem
++                        if tname in tensors:
++                            raise ValueError(
++                                f"duplicate tensor '{tname}' found in multiple model parts; "
++                                f"refusing to silently overwrite")
+                         tensors[tname] = tgen
+ 
+         # verify tensor name presence and identify potentially missing files
+@@ -1160,6 +1169,14 @@ class ModelBase:
+ 
+     def write(self):
+         self.prepare_tensors()
++        # zero tensors means the shards were never discovered, yet a metadata-only GGUF logs success
++        n_written = sum(len(shard) for shard in self.gguf_writer.tensors)
++        if n_written == 0:
++            raise ValueError(
++                "no tensors were written: the model shards could not be found. "
++                "Check that the safetensors filenames are discoverable (they must "
++                "start with 'model') or that model.safetensors exists."
++            )
+         self.prepare_metadata(vocab_only=False)
+         self.gguf_writer.write_header_to_file(path=self.fname_out)
+         self.gguf_writer.write_kv_data_to_file()
+diff --git a/src/models/bailingmoe3.cpp b/src/models/bailingmoe3.cpp
+index e208c7d5a..d375502dd 100644
+--- a/src/models/bailingmoe3.cpp
++++ b/src/models/bailingmoe3.cpp
+@@ -257,7 +257,7 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
+             const auto cache_head = mctx_cur->get_head();
+             const auto mem_size = mctx_cur->get_size();
+             ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
+-            ggml_tensor * conv_state_all = build_rs(inp_rs, conv_states_all, hparams.n_embd_r(), n_seqs);
++            ggml_tensor * conv_state_all = build_rs(inp_rs, conv_states_all, hparams.n_embd_r(), n_seqs, skippy_state_kind::recurrent_conv, il);
+ 
+             ggml_tensor * q = bailingmoe3_causal_conv1d(
+                     gf, ctx0, conv_states_all, conv_state_all, 0, cur, layer.wq, layer.ssm_q_conv,
+@@ -284,7 +284,7 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
+             k = build_gdn_l2_norm(ctx0, k, hparams.f_norm_rms_eps);
+ 
+             ggml_tensor * states_all = mctx_cur->get_s_l(il);
+-            ggml_tensor * state = build_rs(inp_rs, states_all, hparams.n_embd_s(), n_seqs);
++            ggml_tensor * state = build_rs(inp_rs, states_all, hparams.n_embd_s(), n_seqs, skippy_state_kind::recurrent_ssm, il);
+             state = ggml_reshape_4d(ctx0, state, head_dim, head_dim, n_head, n_seqs);
+ 
+             ggml_tensor * out = ggml_cont(ctx0, build_recurrent_attn(
+diff --git a/src/models/bitnet.cpp b/src/models/bitnet.cpp
+index c83302745..fcb4910e3 100644
+--- a/src/models/bitnet.cpp
++++ b/src/models/bitnet.cpp
+@@ -16,6 +16,7 @@ void llama_model_bitnet::load_arch_tensors(llama_model_loader &) {
+ 
+     // output
+     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
++    output      = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,  "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+ 
+     for (int i = 0; i < n_layer; ++i) {
+         auto & layer = layers[i];
+@@ -160,8 +161,7 @@ llama_model_bitnet::graph::graph(const llama_model & model, const llm_graph_para
+     res->t_embd = cur;
+ 
+     // lm_head
+-    // FIXME: do not use model.tok_embd directly, duplicate as model.output
+-    cur = build_lora_mm(model.tok_embd, cur);
++    cur = build_lora_mm(model.output, cur);
+ 
+     cb(cur, "result_output", -1);
+     res->t_logits = cur;
+diff --git a/src/models/chameleon.cpp b/src/models/chameleon.cpp
+index 4f45acecf..4679e294c 100644
+--- a/src/models/chameleon.cpp
++++ b/src/models/chameleon.cpp
+@@ -185,17 +185,20 @@ llama_model_chameleon::graph::graph(const llama_model & model, const llm_graph_p
+     cb(cur, "result_output_with_img_logits", -1);
+ 
+     // TODO: this suppresses the output of image tokens, which is required to enable text-only outputs.
+-    // Needs to be removed once image outputs are supported.
+-    int img_token_end_idx = 8196;
+-    int img_token_start_idx = 4;
+-    int num_img_tokens = img_token_end_idx - img_token_start_idx;
+-    // creates 1d tensor of size num_img_tokens and values -FLT_MAX,
+-    // which ensures that text token values are always at least larger than image token values
+-    ggml_tensor * img_logits = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, num_img_tokens);
+-    img_logits = ggml_clamp(ctx0, img_logits, -FLT_MAX, -FLT_MAX);
+-    cb(img_logits, "img_logits", -1);
+-
+-    cur = ggml_set_1d(ctx0, cur, img_logits, ggml_element_size(cur) * img_token_start_idx);
++    // Needs to be removed once image outputs are supported. State-only calls can request zero
++    // output rows, in which case there is no logits tensor range to mask.
++    if (cur->ne[1] > 0) {
++        int img_token_end_idx = 8196;
++        int img_token_start_idx = 4;
++        int num_img_tokens = img_token_end_idx - img_token_start_idx;
++        // creates 1d tensor of size num_img_tokens and values -FLT_MAX,
++        // which ensures that text token values are always at least larger than image token values
++        ggml_tensor * img_logits = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, num_img_tokens);
++        img_logits = ggml_clamp(ctx0, img_logits, -FLT_MAX, -FLT_MAX);
++        cb(img_logits, "img_logits", -1);
++
++        cur = ggml_set_1d(ctx0, cur, img_logits, ggml_element_size(cur) * img_token_start_idx);
++    }
+ 
+     cb(cur, "result_output", -1);
+     res->t_logits = cur;
+diff --git a/src/models/deepseek32.cpp b/src/models/deepseek32.cpp
+index 60cc17c49..bfeefa9e6 100644
+--- a/src/models/deepseek32.cpp
++++ b/src/models/deepseek32.cpp
+@@ -206,6 +206,8 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
+ 
+     ggml_tensor * inp_out_ids = build_inp_out_ids();
+ 
++    ggml_tensor * shared_top_k = nullptr;
++
+     for (int il = 0; il < n_layer; ++il) {
+         ggml_tensor * inpSA = inpL;
+ 
+@@ -223,8 +225,15 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
+ 
+             ggml_tensor * top_k = nullptr;
+ 
++            const bool has_indexer =
++                model.layers[il].indexer_attn_q_b &&
++                model.layers[il].indexer_attn_k &&
++                model.layers[il].indexer_k_norm &&
++                model.layers[il].indexer_k_norm_b &&
++                model.layers[il].indexer_proj;
++
+             // lightning indexer
+-            {
++            if (has_indexer) {
+                 ggml_tensor * indexer_q = ggml_mul_mat(ctx0, model.layers[il].indexer_attn_q_b, qr);
+                 cb(indexer_q, "indexer_q", il);
+ 
+@@ -320,6 +329,11 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
+                 uint32_t n_top_k = indexer_score->ne[0] < n_indexer_top_k ? indexer_score->ne[0] : n_indexer_top_k;
+                 top_k = ggml_cont(ctx0, ggml_top_k(ctx0, indexer_score, n_top_k));
+                 cb(top_k, "top_k", il);
++                shared_top_k = top_k;
++            } else {
++                GGML_ASSERT(shared_top_k != nullptr && "DSA IndexShare layer requires a previous top-k");
++                top_k = shared_top_k;
++                cb(top_k, "top_k_shared", il);
+             }
+ 
+             ggml_tensor * q = ggml_mul_mat(ctx0, model.layers[il].wq_b, qr);
+diff --git a/src/models/deepseek4.cpp b/src/models/deepseek4.cpp
+index 6bf9d3444..35e229566 100644
+--- a/src/models/deepseek4.cpp
++++ b/src/models/deepseek4.cpp
+@@ -20,7 +20,8 @@ void llama_model_deepseek4::load_arch_hparams(llama_model_loader & ml) {
+     if (hparams.n_layer_nextn > 0) {
+         const uint32_t n_layer_main = hparams.n_layer_all - hparams.n_layer_nextn;
+         const std::string mtp_probe = "blk." + std::to_string(n_layer_main) + ".nextn.eh_proj.weight";
+-        if (ml.get_weight(mtp_probe.c_str()) == nullptr) {
++        if (ml.get_weight(mtp_probe.c_str()) == nullptr &&
++                !(ml.files.empty() && gguf_find_tensor(ml.metadata, mtp_probe.c_str()) >= 0)) {
+             hparams.n_layer_nextn = 0;
+         }
+     }
+@@ -1477,11 +1478,13 @@ llama_model_deepseek4::graph_mtp::graph_mtp(const llama_model & model, const llm
+     cb(inpL, "mtp_l_out", il);
+ 
+     ggml_tensor * flat = ggml_reshape_2d(ctx0, inpL, n_embd*hc, n_tokens);
+-    ggml_tensor * h_nextn = ggml_get_rows(ctx0, flat, inp_out_ids);
++    ggml_tensor * flat_out = ggml_get_rows(ctx0, flat, inp_out_ids);
++    ggml_tensor * h_nextn = cparams.embeddings_nextn_masked ? flat_out : flat;
+     cb(h_nextn, "h_nextn", -1);
+     res->t_h_nextn = h_nextn;
++    ggml_build_forward_expand(gf, h_nextn);
+ 
+-    inpL = ggml_reshape_3d(ctx0, h_nextn, n_embd, hc, n_outputs);
++    inpL = ggml_reshape_3d(ctx0, flat_out, n_embd, hc, n_outputs);
+ 
+     cur = build_hc_head(inpL, model.hc_head_fn, model.hc_head_scale, model.hc_head_base);
+     cb(cur, "mtp_hc_head", -1);
+diff --git a/src/models/delta-net-base.cpp b/src/models/delta-net-base.cpp
+index ad6612647..342a5d795 100644
+--- a/src/models/delta-net-base.cpp
++++ b/src/models/delta-net-base.cpp
+@@ -460,7 +460,7 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
+ 
+     const int64_t n_seqs = ubatch.n_seqs;
+ 
+-    ggml_tensor * conv_states = build_rs(inp, conv_states_all, hparams.n_embd_r(), n_seqs);
++    ggml_tensor * conv_states = build_rs(inp, conv_states_all, hparams.n_embd_r(), n_seqs, skippy_state_kind::recurrent_conv, il);
+     cb(conv_states, "conv_states", il);
+ 
+     conv_states = ggml_reshape_3d(ctx0, conv_states, conv_kernel_size - 1, conv_channels, n_seqs);
+@@ -493,7 +493,9 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
+                     (s_slot * mem_size + kv_head) * row_size);
+         cb(conv_state_update, "conv_state_update", il);
+ 
+-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, conv_state_last, conv_state_update));
++        ggml_tensor * conv_write = ggml_cpy(ctx0, conv_state_last, conv_state_update);
++        ggml_build_forward_expand(gf, conv_write);
++        state_write(skippy_state_kind::recurrent_conv, conv_states_all, conv_write, il);
+     } else {
+         // [TAG_RECURRENT_ROLLBACK_SPLITS]
+         // this logic assumes that the last (n_rs_seq + 1) tokens of a sequence in a batch are inside
+@@ -517,7 +519,9 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
+                         conv_states_all->nb[1],
+                         (s_slot * mem_size + kv_head) * row_size);
+ 
+-            ggml_build_forward_expand(gf, ggml_cpy(ctx0, conv_state_last, conv_state_update));
++            ggml_tensor * conv_write = ggml_cpy(ctx0, conv_state_last, conv_state_update);
++            ggml_build_forward_expand(gf, conv_write);
++            state_write(skippy_state_kind::recurrent_conv, conv_states_all, conv_write, il);
+         }
+     }
+ 
+@@ -552,10 +556,11 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
+         cb(output, "attn_output", il);
+         cb(new_state, "new_state", il);
+ 
+-        ggml_build_forward_expand(gf,
+-                ggml_cpy(ctx0, new_state,
+-                    ggml_view_2d(ctx0, ssm_states_all, hparams.n_embd_s(), n_seqs, ssm_states_all->nb[1],
+-                        kv_head * hparams.n_embd_s() * ggml_element_size(ssm_states_all))));
++        ggml_tensor * ssm_write = ggml_cpy(ctx0, new_state,
++            ggml_view_2d(ctx0, ssm_states_all, hparams.n_embd_s(), n_seqs, ssm_states_all->nb[1],
++                kv_head * hparams.n_embd_s() * ggml_element_size(ssm_states_all)));
++        ggml_build_forward_expand(gf, ssm_write);
++        state_write(skippy_state_kind::recurrent_ssm, ssm_states_all, ssm_write, il);
+ 
+         return output;
+     }
+@@ -600,7 +605,9 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
+         (size_t) mem_size * row_size,
+         (size_t) kv_head * row_size);
+ 
+-    ggml_build_forward_expand(gf, ggml_cpy(ctx0, src, dst));
++    ggml_tensor * ssm_write = ggml_cpy(ctx0, src, dst);
++    ggml_build_forward_expand(gf, ssm_write);
++    state_write(skippy_state_kind::recurrent_ssm, ssm_states_all, ssm_write, il);
+ 
+     return output;
+ }
+diff --git a/src/models/gemma4.cpp b/src/models/gemma4.cpp
+index 39e899aa6..8e52c3502 100644
+--- a/src/models/gemma4.cpp
++++ b/src/models/gemma4.cpp
+@@ -107,8 +107,9 @@ void llama_model_gemma4::load_arch_tensors(llama_model_loader &) {
+         layer.ffn_post_norm = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM, "weight", i), {n_embd}, 0);
+ 
+         // MoE router
++        const std::string ffn_gate_inp_name = tn(LLM_TENSOR_FFN_GATE_INP, "weight", i).str();
+         layer.ffn_gate_inp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, TENSOR_NOT_REQUIRED);
+-        bool has_expert = layer.ffn_gate_inp != nullptr;
++        bool has_expert = layer.ffn_gate_inp != nullptr || ml->get_tensor_meta(ffn_gate_inp_name.c_str()) != nullptr;
+ 
+         // norm
+         if (has_expert) {
+diff --git a/src/models/glm-dsa.cpp b/src/models/glm-dsa.cpp
+index 44d883274..12cfc27d1 100644
+--- a/src/models/glm-dsa.cpp
++++ b/src/models/glm-dsa.cpp
+@@ -56,14 +56,67 @@ void llama_model_glm_dsa::load_arch_hparams(llama_model_loader & ml) {
+         hparams.expert_gating_func =  LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID;
+     }
+ 
+-    // BC for GLM 5, 5.1 (full indexers) without indexer_types metadata
++    ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K_FREQUENCY,   hparams.indexer_top_k_freq, false);
++    ml.get_key(LLM_KV_ATTENTION_INDEXER_SKIP_TOP_K_OFFSET, hparams.indexer_skip_top_k_offset, false);
++
++    // BC for GLM 5 and 5.1 (full indexers) and the first GLM 5.2
++    // conversions, which omitted explicit IndexShare metadata.
+     const bool is_pre_5_2 = hparams.n_ctx_train < 1048576;
+     if (is_pre_5_2) {
+         std::fill(hparams.is_indexer_full_impl.begin(), hparams.is_indexer_full_impl.end(), 1);
+     } else {
+         hparams.is_indexer_full_impl = GLM_5_2_DEFAULT_INDEXER_TYPES;
+     }
+-    ml.get_key_or_arr(LLM_KV_ATTENTION_INDEXER_TYPES, hparams.is_indexer_full_impl, hparams.n_layer(), false);
++
++    if (hparams.indexer_top_k_freq > 0) {
++        for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
++            const uint32_t offset = hparams.indexer_skip_top_k_offset;
++            hparams.is_indexer_full_impl[il] =
++                il < offset || (il >= offset && ((il - offset + 1) % hparams.indexer_top_k_freq) == 0);
++        }
++    }
++
++    bool has_explicit_indexer_types = false;
++    try {
++        std::vector<std::string> indexer_types;
++        if (ml.get_arr(LLM_KV_ATTENTION_INDEXER_TYPES, indexer_types, false)) {
++            if (indexer_types.size() != hparams.n_layer()) {
++                throw std::runtime_error(
++                    "glm-dsa.attention.indexer.types length must match the decoder layer count");
++            }
++            for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
++                const std::string & role = indexer_types[il];
++                if (role == "full") {
++                    hparams.is_indexer_full_impl[il] = 1;
++                } else if (role == "shared") {
++                    hparams.is_indexer_full_impl[il] = 0;
++                } else {
++                    throw std::runtime_error(
++                        "glm-dsa.attention.indexer.types values must be full or shared");
++                }
++            }
++            has_explicit_indexer_types = true;
++        }
++    } catch (const std::runtime_error & error) {
++        if (std::string(error.what()).find("wrong array element type") == std::string::npos) {
++            throw;
++        }
++        // Older GGUF writers represented the same roles as 0/1 integers.
++        has_explicit_indexer_types = ml.get_key_or_arr(
++            LLM_KV_ATTENTION_INDEXER_TYPES,
++            hparams.is_indexer_full_impl,
++            hparams.n_layer(),
++            false);
++    }
++
++    hparams.indexer_types_present = has_explicit_indexer_types;
++    for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
++        if (hparams.is_indexer_full_impl[il] > 1) {
++            throw std::runtime_error(
++                "glm-dsa.attention.indexer.types numeric values must be 0 or 1");
++        }
++        hparams.indexer_types[il] = static_cast<int32_t>(hparams.is_indexer_full_impl[il]);
++    }
+ 
+     switch (hparams.n_layer()) {
+         case 78: type = LLM_TYPE_744B_A40B; break;
+@@ -212,6 +265,9 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
+ 
+     // the indexer head layout is [rope | nope]
+     GGML_ASSERT(hparams.n_rot() <= n_embd_indexer_head);
++    const int64_t n_embd_indexer_head_rope = hparams.n_rot();
++    const int64_t n_embd_indexer_head_nope = n_embd_indexer_head - n_embd_indexer_head_rope;
++    GGML_ASSERT(n_embd_indexer_head_nope >= 1);
+ 
+     const uint32_t kv_lora_rank = hparams.n_lora_kv;
+ 
+diff --git a/src/models/granite-swa.cpp b/src/models/granite-swa.cpp
+index 08d9e8a54..91f273da7 100644
+--- a/src/models/granite-swa.cpp
++++ b/src/models/granite-swa.cpp
+@@ -53,7 +53,7 @@ void llama_model_granite_swa::load_arch_hparams(llama_model_loader & ml) {
+     ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, /* required */ false);
+ }
+ 
+-void llama_model_granite_swa::load_arch_tensors(llama_model_loader &) {
++void llama_model_granite_swa::load_arch_tensors(llama_model_loader & ml) {
+     LLAMA_LOAD_LOCALS;
+ 
+     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+@@ -107,8 +107,17 @@ void llama_model_granite_swa::load_arch_tensors(llama_model_loader &) {
+ 
+             // For Granite MoE Shared - gate+up kept fused in ffn_up_shexp (see LLM_FFN_SWIGLU below)
+             if (hparams.n_ff_shexp > 0) {
+-                layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, 2*hparams.n_ff_shexp}, 0);
+-                layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {hparams.n_ff_shexp, n_embd}, 0);
++                const ggml_tensor * shexp_meta =
++                    ml.get_tensor_meta(tn(LLM_TENSOR_FFN_UP_SHEXP, "weight", i).str().c_str());
++                if (shexp_meta != nullptr && shexp_meta->ne[1] == 2*hparams.n_ff_shexp) {
++                    layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, 2*hparams.n_ff_shexp}, 0);
++                    layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {hparams.n_ff_shexp, n_embd}, 0);
++                } else {
++                    // some conversions keep separate gate and up projections
++                    layer.ffn_gate_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, hparams.n_ff_shexp}, 0);
++                    layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, hparams.n_ff_shexp}, 0);
++                    layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {hparams.n_ff_shexp, n_embd}, 0);
++                }
+             }
+         }
+     }
+@@ -288,14 +297,21 @@ ggml_tensor * llama_model_granite_swa::graph::build_layer_ffn(
+                 nullptr, model.layers[il].ffn_gate_up_exps);
+         cb(moe_out, "ffn_moe_out", il);
+ 
+-        // For Granite MoE Shared - gate+up kept fused in ffn_up_shexp
++        // For Granite MoE Shared - gate+up kept fused in ffn_up_shexp (see LLM_FFN_SWIGLU below)
+         if (hparams.n_ff_shexp > 0) {
+-            ggml_tensor * ffn_shexp = build_ffn(cur,
+-                model.layers[il].ffn_up_shexp,   NULL, NULL,
+-                NULL,                            NULL, NULL,
+-                model.layers[il].ffn_down_shexp, NULL, NULL,
+-                NULL,
+-                LLM_FFN_SWIGLU, LLM_FFN_SEQ, il);
++            ggml_tensor * ffn_shexp = model.layers[il].ffn_gate_shexp != nullptr
++                ? build_ffn(cur,
++                    model.layers[il].ffn_up_shexp,   NULL, NULL,
++                    model.layers[il].ffn_gate_shexp, NULL, NULL,
++                    model.layers[il].ffn_down_shexp, NULL, NULL,
++                    NULL,
++                    LLM_FFN_SILU, LLM_FFN_PAR, il)
++                : build_ffn(cur,
++                    model.layers[il].ffn_up_shexp,   NULL, NULL,
++                    NULL,                            NULL, NULL,
++                    model.layers[il].ffn_down_shexp, NULL, NULL,
++                    NULL,
++                    LLM_FFN_SWIGLU, LLM_FFN_SEQ, il);
+             cb(ffn_shexp, "ffn_shexp", il);
+ 
+             cur = ggml_add(ctx0, moe_out, ffn_shexp);
+diff --git a/src/models/granite-switch.cpp b/src/models/granite-switch.cpp
+index 7c9a901c8..ed3a6c674 100644
+--- a/src/models/granite-switch.cpp
++++ b/src/models/granite-switch.cpp
+@@ -22,8 +22,14 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
+ 
+     ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, /* required */ false);
+ 
+-    ml.get_key(LLM_KV_ADAPTER_COUNT,     n_adapters);
+-    ml.get_key(LLM_KV_ADAPTER_LORA_RANK, max_lora_rank);
++    // Early granite-switch conversions name the adapter metadata without the
++    // "adapters." grouping; accept both spellings.
++    if (!ml.get_key(LLM_KV_ADAPTER_COUNT, n_adapters, /* required */ false)) {
++        ml.get_key("graniteswitch.num_adapters", n_adapters);
++    }
++    if (!ml.get_key(LLM_KV_ADAPTER_LORA_RANK, max_lora_rank, /* required */ false)) {
++        ml.get_key("graniteswitch.max_lora_rank", max_lora_rank);
++    }
+     ml.get_key(LLM_KV_ADAPTER_ROUTER_GAIN, router_gain, /* required */ false);
+ 
+     // bound counts that size tensors
+@@ -36,8 +42,12 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
+ 
+     std::vector<llama_token> token_ids;
+     std::vector<llama_token> substitute_ids;
+-    ml.get_arr(LLM_KV_ADAPTER_TOKEN_IDS_ACTIVATE,   token_ids);
+-    ml.get_arr(LLM_KV_ADAPTER_TOKEN_IDS_SUBSTITUTE, substitute_ids);
++    if (!ml.get_arr(LLM_KV_ADAPTER_TOKEN_IDS_ACTIVATE,   token_ids, /* required */ false)) {
++        ml.get_arr("graniteswitch.adapter_token_ids", token_ids);
++    }
++    if (!ml.get_arr(LLM_KV_ADAPTER_TOKEN_IDS_SUBSTITUTE, substitute_ids, /* required */ false)) {
++        ml.get_arr("graniteswitch.adapter_substitute_token_ids", substitute_ids);
++    }
+ 
+     if (token_ids.size() != n_adapters || substitute_ids.size() != n_adapters) {
+         throw std::runtime_error(format(
+@@ -112,12 +122,12 @@ void llama_model_granite_switch::load_arch_tensors(llama_model_loader &) {
+ 
+         auto & sl = layer.switch_lora;
+ 
+-        sl.a_q = create_tensor(tn(LLM_TENSOR_ATTN_Q, "lora_a", i), {n_embd,  n_rank, n_slots}, 0);
+-        sl.b_q = create_tensor(tn(LLM_TENSOR_ATTN_Q, "lora_b", i), {n_rank, n_embd_q, n_slots}, 0);
+-        sl.a_k = create_tensor(tn(LLM_TENSOR_ATTN_K, "lora_a", i), {n_embd,  n_rank, n_slots}, 0);
+-        sl.b_k = create_tensor(tn(LLM_TENSOR_ATTN_K, "lora_b", i), {n_rank, n_embd_kv, n_slots}, 0);
+-        sl.a_v = create_tensor(tn(LLM_TENSOR_ATTN_V, "lora_a", i), {n_embd,  n_rank, n_slots}, 0);
+-        sl.b_v = create_tensor(tn(LLM_TENSOR_ATTN_V, "lora_b", i), {n_rank, n_embd_kv, n_slots}, 0);
++        sl.a_q = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "lora_a_q", i), {n_embd,  n_rank, n_slots}, 0);
++        sl.b_q = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "lora_b_q", i), {n_rank, n_embd_q, n_slots}, 0);
++        sl.a_k = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "lora_a_k", i), {n_embd,  n_rank, n_slots}, 0);
++        sl.b_k = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "lora_b_k", i), {n_rank, n_embd_kv, n_slots}, 0);
++        sl.a_v = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "lora_a_v", i), {n_embd,  n_rank, n_slots}, 0);
++        sl.b_v = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "lora_b_v", i), {n_rank, n_embd_kv, n_slots}, 0);
+ 
+         sl.a_o = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "lora_a", i), {n_embd_q, n_rank, n_slots}, 0);
+         sl.b_o = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "lora_b", i), {n_rank,   n_embd, n_slots}, 0);
+@@ -178,10 +188,18 @@ void llm_graph_input_switch::set_input(const llama_ubatch * ubatch) {
+             : (int32_t) tok;
+     }
+ 
+-    ggml_backend_tensor_set(sub_tokens,  sub.data(),  0, n_tokens*ggml_element_size(sub_tokens));
+-    ggml_backend_tensor_set(router_ksig, ksig.data(), 0, n_tokens*ggml_element_size(router_ksig));
+-    ggml_backend_tensor_set(router_vval, vval.data(), 0, n_tokens*ggml_element_size(router_vval));
+-    ggml_backend_tensor_set(router_q,    q.data(),    0, n_tokens*ggml_element_size(router_q));
++    if (sub_tokens != nullptr && sub_tokens->buffer != nullptr) {
++        ggml_backend_tensor_set(sub_tokens, sub.data(), 0, n_tokens*ggml_element_size(sub_tokens));
++    }
++    if (router_ksig != nullptr && router_ksig->buffer != nullptr) {
++        ggml_backend_tensor_set(router_ksig, ksig.data(), 0, n_tokens*ggml_element_size(router_ksig));
++    }
++    if (router_vval != nullptr && router_vval->buffer != nullptr) {
++        ggml_backend_tensor_set(router_vval, vval.data(), 0, n_tokens*ggml_element_size(router_vval));
++    }
++    if (router_q != nullptr && router_q->buffer != nullptr) {
++        ggml_backend_tensor_set(router_q, q.data(), 0, n_tokens*ggml_element_size(router_q));
++    }
+ }
+ 
+ std::unique_ptr<llm_graph_context> llama_model_granite_switch::build_arch_graph(const llm_graph_params & params) const {
+@@ -225,7 +243,8 @@ llama_model_granite_switch::graph::graph(
+ 
+     const auto & smodel = static_cast<const llama_model_granite_switch &>(model);
+ 
+-    // TODO: support raw embedding input (multimodal / pre-embedded tokens) when needed
++    // The canonical graph is always built from the ordinary token batch. The
++    // stage realizer preserves these router tensors as explicit request inputs.
+     GGML_ASSERT(ubatch.token && "granite-switch requires token input");
+ 
+     const int64_t n_embd_head = hparams.n_embd_head_v();
+@@ -245,6 +264,10 @@ llama_model_granite_switch::graph::graph(
+     ggml_tensor * router_ksig = inp_switch->router_ksig;
+     ggml_tensor * router_vval = inp_switch->router_vval;
+     ggml_tensor * router_q    = inp_switch->router_q;
++    request_input(sub_tokens,  "granite_switch.substituted_tokens");
++    request_input(router_ksig, "granite_switch.router_key_signal");
++    request_input(router_vval, "granite_switch.router_value");
++    request_input(router_q,    "granite_switch.router_query");
+     res->add_input(std::move(inp_switch));
+ 
+     // embed the substituted ids directly; build_inp_embd would embed the raw tokens
+diff --git a/src/models/kimi-k3.cpp b/src/models/kimi-k3.cpp
+index 112b09849..17ff450ee 100644
+--- a/src/models/kimi-k3.cpp
++++ b/src/models/kimi-k3.cpp
+@@ -405,7 +405,7 @@ ggml_tensor * llama_model_kimi_k3::graph::build_kda_layer(
+     const auto   kv_head  = mctx_cur->get_head();
+ 
+     ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
+-    ggml_tensor * conv_state_all  = build_rs(inp_rs, conv_states_all, hparams.n_embd_r(), n_seqs);
++    ggml_tensor * conv_state_all  = build_rs(inp_rs, conv_states_all, hparams.n_embd_r(), n_seqs, skippy_state_kind::recurrent_conv, il);
+ 
+     const int64_t mem_size = mctx_cur->get_size();
+     const int64_t K_rs     = (int64_t) cparams.n_rs_seq + 1;
+@@ -449,7 +449,7 @@ ggml_tensor * llama_model_kimi_k3::graph::build_kda_layer(
+     ggml_tensor * cur_3d = ggml_reshape_3d(ctx0, cur, cur->ne[0], n_seq_tokens, n_seqs);
+ 
+     ggml_tensor * ssm_states_all = mctx_cur->get_s_l(il);
+-    ggml_tensor * state = build_rs(inp_rs, ssm_states_all, hparams.n_embd_s(), n_seqs);
++    ggml_tensor * state = build_rs(inp_rs, ssm_states_all, hparams.n_embd_s(), n_seqs, skippy_state_kind::recurrent_ssm, il);
+     state = ggml_reshape_4d(ctx0, state, head_dim, head_dim, n_head_kda, n_seqs);
+ 
+     const float eps_norm = hparams.f_norm_rms_eps;
+diff --git a/src/models/kimi-linear.cpp b/src/models/kimi-linear.cpp
+index b9cf28d85..b8c455360 100644
+--- a/src/models/kimi-linear.cpp
++++ b/src/models/kimi-linear.cpp
+@@ -294,7 +294,7 @@ llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph
+             // Get conv states from r_l tensor (Q, K, V each have separate state)
+             ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
+             cb(conv_states_all, "conv_states_all", il);
+-            ggml_tensor * conv_state_all = build_rs(inp_rs, conv_states_all, hparams.n_embd_r(), n_seqs);
++            ggml_tensor * conv_state_all = build_rs(inp_rs, conv_states_all, hparams.n_embd_r(), n_seqs, skippy_state_kind::recurrent_conv, il);
+             ggml_tensor * q_in = cur, * k_in = cur, * v_in = cur;
+             ggml_tensor * q_w = layer.wq, * k_w = layer.wk, * v_w = layer.wv;
+             if (layer.wqkv) {
+@@ -339,7 +339,7 @@ llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph
+ 
+             // Get SSM state and compute KDA recurrence using ggml_kda_scan
+             ggml_tensor * ssm_states_all = mctx_cur->get_s_l(il);
+-            ggml_tensor * state = build_rs(inp_rs, ssm_states_all, hparams.n_embd_s(), n_seqs);
++            ggml_tensor * state = build_rs(inp_rs, ssm_states_all, hparams.n_embd_s(), n_seqs, skippy_state_kind::recurrent_ssm, il);
+             state = ggml_reshape_4d(ctx0, state, head_dim, head_dim, n_head, n_seqs);
+ 
+ 
+diff --git a/src/models/lfm2.cpp b/src/models/lfm2.cpp
+index 07b71ccd3..9a7eadd24 100644
+--- a/src/models/lfm2.cpp
++++ b/src/models/lfm2.cpp
+@@ -190,7 +190,7 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+ 
+         // read conv state
+         auto * conv_state = mctx_cur->get_r_l(il);
+-        auto * conv_rs    = build_rs(inp_recr, conv_state, hparams.n_embd_r(), n_seqs);
++        auto * conv_rs    = build_rs(inp_recr, conv_state, hparams.n_embd_r(), n_seqs, skippy_state_kind::recurrent_conv, il);
+         auto * conv       = ggml_reshape_3d(ctx0, conv_rs, d_conv, hparams.n_embd, n_seqs);
+ 
+         // causal prepends the state, non-causal pads symmetrically for a centered window
+@@ -213,10 +213,12 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+         for (int64_t slot = 0; slot < n_written; ++slot) {
+             auto * conv_snap = ggml_view_3d(ctx0, bx, d_conv, bx->ne[1], bx->ne[2], bx->nb[1], bx->nb[2],
+                                             (bx->ne[0] - d_conv - slot) * ggml_element_size(bx));
+-            ggml_build_forward_expand(gf, ggml_cpy(ctx0, conv_snap,
++            ggml_tensor * conv_write = ggml_cpy(ctx0, conv_snap,
+                                                    ggml_view_2d(ctx0, conv_state, (int64_t) d_conv * n_embd, n_seqs,
+                                                                 conv_state->nb[1],
+-                                                                ((size_t) slot * mem_size + kv_head) * row_size)));
++                                                                ((size_t) slot * mem_size + kv_head) * row_size));
++            ggml_build_forward_expand(gf, conv_write);
++            state_write(skippy_state_kind::recurrent_conv, conv_state, conv_write, il);
+         }
+ 
+         auto * conv_kernel = model.layers[il].shortconv.conv;
+diff --git a/src/models/mamba-base.cpp b/src/models/mamba-base.cpp
+index 03ee3805b..44dfda9d1 100644
+--- a/src/models/mamba-base.cpp
++++ b/src/models/mamba-base.cpp
+@@ -37,7 +37,8 @@ ggml_tensor * llm_build_mamba_base::build_mamba_layer(llm_graph_input_rs * inp,
+     ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
+     ggml_tensor * ssm_states_all  = mctx_cur->get_s_l(il);
+ 
+-    ggml_tensor * conv = build_rs(inp, conv_states_all, hparams.n_embd_r(), n_seqs);
++    ggml_tensor * conv = build_rs(
++        inp, conv_states_all, hparams.n_embd_r(), n_seqs, skippy_state_kind::recurrent_conv, il);
+     conv               = ggml_reshape_3d(ctx0, conv, d_conv - 1, d_inner, n_seqs);
+ 
+     // {n_embd, n_tokens} => {n_embd, n_seq_tokens, n_seqs}
+@@ -60,10 +61,12 @@ ggml_tensor * llm_build_mamba_base::build_mamba_layer(llm_graph_input_rs * inp,
+         ggml_tensor * last_conv = ggml_view_3d(ctx0, conv_x, d_conv - 1, d_inner, n_seqs, conv_x->nb[1], conv_x->nb[2],
+                                                n_seq_tokens * (conv_x->nb[0]));
+ 
+-        ggml_build_forward_expand(
+-            gf, ggml_cpy(ctx0, last_conv,
+-                         ggml_view_1d(ctx0, conv_states_all, (d_conv - 1) * (d_inner) * (n_seqs),
+-                                      kv_head * (d_conv - 1) * (d_inner) *ggml_element_size(conv_states_all))));
++        ggml_tensor * conv_write = ggml_cpy(
++            ctx0, last_conv,
++            ggml_view_1d(ctx0, conv_states_all, (d_conv - 1) * (d_inner) * (n_seqs),
++                         kv_head * (d_conv - 1) * (d_inner) * ggml_element_size(conv_states_all)));
++        ggml_build_forward_expand(gf, conv_write);
++        state_write(skippy_state_kind::recurrent_conv, conv_states_all, conv_write, il);
+ 
+         // 1D convolution
+         // The equivalent is to make a self-overlapping view of conv_x
+@@ -123,13 +126,16 @@ ggml_tensor * llm_build_mamba_base::build_mamba_layer(llm_graph_input_rs * inp,
+             return ggml_ssm_scan(ctx, ssm, x, dt, A, B, C, ids, /*K=*/1);
+         };
+ 
+-        ggml_tensor * y_ssm = build_rs(inp, ssm_states_all, hparams.n_embd_s(), ubatch.n_seqs, get_ssm_rows);
++        ggml_tensor * y_ssm = build_rs(
++            inp, ssm_states_all, hparams.n_embd_s(), ubatch.n_seqs, skippy_state_kind::recurrent_ssm, il, get_ssm_rows);
+ 
+         // store last states
+-        ggml_build_forward_expand(
+-            gf, ggml_cpy(ctx0, ggml_view_1d(ctx0, y_ssm, d_state * d_inner * n_seqs, x->nb[3] * x->ne[3]),
+-                         ggml_view_1d(ctx0, ssm_states_all, d_state * d_inner * n_seqs,
+-                                      kv_head * d_state * d_inner * ggml_element_size(ssm_states_all))));
++        ggml_tensor * ssm_write = ggml_cpy(
++            ctx0, ggml_view_1d(ctx0, y_ssm, d_state * d_inner * n_seqs, x->nb[3] * x->ne[3]),
++            ggml_view_1d(ctx0, ssm_states_all, d_state * d_inner * n_seqs,
++                         kv_head * d_state * d_inner * ggml_element_size(ssm_states_all)));
++        ggml_build_forward_expand(gf, ssm_write);
++        state_write(skippy_state_kind::recurrent_ssm, ssm_states_all, ssm_write, il);
+ 
+         ggml_tensor * y = ggml_view_3d(ctx0, y_ssm, d_inner, n_seq_tokens, n_seqs, x->nb[2], x->nb[3], 0);
+ 
+@@ -179,7 +185,7 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
+     ggml_tensor * ssm_states_all  = mctx_cur->get_s_l(il);
+     const int64_t state_slots     = ssm_states_all->ne[1];
+ 
+-    ggml_tensor * conv = build_rs(inp, conv_states_all, hparams.n_embd_r(), n_seqs);
++    ggml_tensor * conv = build_rs(inp, conv_states_all, hparams.n_embd_r(), n_seqs, skippy_state_kind::recurrent_conv, il);
+     conv               = ggml_reshape_3d(ctx0, conv, d_conv - 1, d_inner + 2 * n_group * d_state, n_seqs);
+ 
+     // d_in_proj = 2 * self.d_inner + 2 * self.ngroups * self.d_state + self.nheads
+@@ -212,10 +218,12 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
+             ggml_tensor * last_conv = ggml_view_3d(ctx0, conv_x, d_conv - 1, d_inner + 2 * n_group * d_state, n_seqs,
+                                                    conv_x->nb[1], conv_x->nb[2], (n_seq_tokens - slot) * conv_x->nb[0]);
+ 
+-            ggml_build_forward_expand(gf, ggml_cpy(ctx0, last_conv,
+-                                                   ggml_view_2d(ctx0, conv_states_all, row_count, n_seqs,
+-                                                                conv_states_all->nb[1],
+-                                                                ((size_t) slot * mem_size + kv_head) * row_size)));
++            ggml_tensor * conv_write = ggml_cpy(ctx0, last_conv,
++                                                ggml_view_2d(ctx0, conv_states_all, row_count, n_seqs,
++                                                             conv_states_all->nb[1],
++                                                             ((size_t) slot * mem_size + kv_head) * row_size));
++            ggml_build_forward_expand(gf, conv_write);
++            state_write(skippy_state_kind::recurrent_conv, conv_states_all, conv_write, il);
+         }
+ 
+         // 1D convolution
+@@ -262,19 +270,21 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
+             return ggml_ssm_scan(ctx, ssm, x, dt, A, B, C, ids, K);
+         };
+ 
+-        ggml_tensor * y_ssm = build_rs(inp, ssm_states_all, hparams.n_embd_s(), ubatch.n_seqs, get_ssm_rows);
++        ggml_tensor * y_ssm = build_rs(inp, ssm_states_all, hparams.n_embd_s(), ubatch.n_seqs, skippy_state_kind::recurrent_ssm, il, get_ssm_rows);
++
+         const int64_t D            = d_state * d_inner;
+         const int64_t n_written    = std::min<int64_t>(n_seq_tokens, K);
+         const size_t  row_size     = ggml_row_size(ssm_states_all->type, D);
+         const size_t  y_row_size   = ggml_row_size(y_ssm->type, D);
+         const size_t  state_offset = ggml_nelements(x) * ggml_element_size(x);
+ 
+-        ggml_build_forward_expand(
+-            gf, ggml_cpy(ctx0,
++        ggml_tensor * ssm_write = ggml_cpy(ctx0,
+                          ggml_view_3d(ctx0, y_ssm, D, n_seqs, n_written,
+                                       y_row_size, y_row_size * n_seqs, state_offset),
+                          ggml_view_3d(ctx0, ssm_states_all, D, n_seqs, n_written,
+-                                      ssm_states_all->nb[1], (size_t) mem_size * row_size, kv_head * row_size)));
++                                      ssm_states_all->nb[1], (size_t) mem_size * row_size, kv_head * row_size));
++        ggml_build_forward_expand(gf, ssm_write);
++        state_write(skippy_state_kind::recurrent_ssm, ssm_states_all, ssm_write, il);
+ 
+         ggml_tensor * y = ggml_view_4d(ctx0, y_ssm, head_dim, n_head, n_seq_tokens, n_seqs, x->nb[1], n_head * x->nb[1],
+                                        n_seq_tokens * n_head * x->nb[1], 0);
+diff --git a/src/models/mimo2.cpp b/src/models/mimo2.cpp
+index 8772319f4..1b0ca2d84 100644
+--- a/src/models/mimo2.cpp
++++ b/src/models/mimo2.cpp
+@@ -9,7 +9,9 @@ void llama_model_mimo2::load_arch_hparams(llama_model_loader & ml) {
+     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,   hparams.n_swa);
+     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,         hparams.rope_freq_base_train_swa, false);
+ 
+-    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer());
++    // Some conversions append the SWA pattern for the MTP blocks as well; the
++    // trunk uses the leading n_layer() entries.
++    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer_all);
+ 
+     float value_scale = 0.0f;
+     if (ml.get_key(LLM_KV_ATTENTION_VALUE_SCALE, value_scale, false) && value_scale != 1.0f) {
+@@ -373,10 +375,17 @@ llama_model_mimo2::graph_mtp::graph_mtp(const llama_model & model, const llm_gra
+     cur = ggml_add(ctx0, cur, ffn_inp);
+     cb(cur, "mtp_post_ffn", il);
+ 
++    if (!cparams.embeddings_nextn_masked) {
++        cb(cur, "h_nextn", -1);
++        res->t_h_nextn = cur;
++    }
++
+     cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+ 
+-    cb(cur, "h_nextn", -1);
+-    res->t_h_nextn = cur;
++    if (cparams.embeddings_nextn_masked) {
++        cb(cur, "h_nextn", -1);
++        res->t_h_nextn = cur;
++    }
+ 
+     ggml_tensor * head_norm_w = layer.nextn.shared_head_norm
+             ? layer.nextn.shared_head_norm
+diff --git a/src/models/minimax-01.cpp b/src/models/minimax-01.cpp
+index 9fa2e8fc0..3067029ed 100644
+--- a/src/models/minimax-01.cpp
++++ b/src/models/minimax-01.cpp
+@@ -282,7 +282,7 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
+ 
+             // TODO unneeded - any way to make conv states optional in recurrent memory?
+             ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
+-            ggml_tensor * conv_state_all  = build_rs(inp_rs, conv_states_all, hparams.n_embd_r(), n_seqs);
++            ggml_tensor * conv_state_all  = build_rs(inp_rs, conv_states_all, hparams.n_embd_r(), n_seqs, skippy_state_kind::recurrent_conv, il);
+             ggml_build_forward_expand(gf, conv_state_all);
+ 
+             float slope_scale = 1.0 - 1.0 * il / (n_layer - 1) + 1e-5;
+@@ -309,7 +309,7 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
+ 
+             // get previous KV
+             ggml_tensor * la_states_all = mctx_cur->get_s_l(il);
+-            ggml_tensor * state = build_rs(inp_rs, la_states_all, hparams.n_embd_s(), n_seqs);
++            ggml_tensor * state = build_rs(inp_rs, la_states_all, hparams.n_embd_s(), n_seqs, skippy_state_kind::recurrent_ssm, il);
+ 
+             ggml_tensor * kv_old = ggml_reshape_4d(ctx0, state, n_embd_head, n_embd_head, n_head, n_seqs);
+             cb(kv_old, "kv_old", il);
+@@ -388,10 +388,11 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
+             }
+ 
+             // store new KV
+-            ggml_build_forward_expand(gf,
+-                                     ggml_cpy(ctx0, kv_new,
+-                                              ggml_view_1d(ctx0, la_states_all, hparams.n_embd_s() * n_seqs,
+-                                                           kv_head * hparams.n_embd_s() * ggml_element_size(la_states_all))));
++            ggml_tensor * la_state_write = ggml_cpy(ctx0, kv_new,
++                                     ggml_view_1d(ctx0, la_states_all, hparams.n_embd_s() * n_seqs,
++                                                  kv_head * hparams.n_embd_s() * ggml_element_size(la_states_all)));
++            ggml_build_forward_expand(gf, la_state_write);
++            state_write(skippy_state_kind::recurrent_ssm, la_states_all, la_state_write, il);
+ 
+             qkv = ggml_cont(ctx0, ggml_permute(ctx0, qkv, 0, 2, 1, 3));
+             cb(qkv, "qkv_permuted", il);
+diff --git a/src/models/minimax-m3.cpp b/src/models/minimax-m3.cpp
+index f3b64b210..5e8758132 100644
+--- a/src/models/minimax-m3.cpp
++++ b/src/models/minimax-m3.cpp
+@@ -18,14 +18,27 @@ void llama_model_minimax_m3::load_arch_hparams(llama_model_loader & ml) {
+     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale, false);
+     ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm, false);
+     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func);
+-    ml.get_key(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,    hparams.indexer_n_head);
+-    ml.get_key(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,    hparams.indexer_head_size);
+-    ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K,         hparams.indexer_top_k);
+-    ml.get_key(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,    hparams.indexer_block_size);
+-    ml.get_key(LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS,  hparams.indexer_local_blocks);
++    // The pinned M3 conversion carries no indexer metadata or weights; MSA
++    // then stays disabled and attention runs dense (same fallback as no-FA).
++    ml.get_key(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,    hparams.indexer_n_head,    false);
++    ml.get_key(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,    hparams.indexer_head_size, false);
++    ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K,         hparams.indexer_top_k,     false);
++    ml.get_key(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,    hparams.indexer_block_size, false);
++    ml.get_key(LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS,  hparams.indexer_local_blocks, false);
+     msa_p = { (int) hparams.indexer_block_size, (int) hparams.indexer_top_k, (int) hparams.indexer_local_blocks };
+ 
+-    GGML_ASSERT(hparams.indexer_block_size > 0); // avoid div by zero
++    const bool indexer_present = hparams.indexer_n_head > 0 && hparams.indexer_head_size > 0 &&
++        hparams.indexer_top_k > 0 && hparams.indexer_block_size > 0 && hparams.indexer_local_blocks > 0;
++    if (!indexer_present) {
++        hparams.indexer_n_head = 0;
++        hparams.indexer_head_size = 0;
++        hparams.indexer_top_k = 0;
++        hparams.indexer_block_size = 0;
++        hparams.indexer_local_blocks = 0;
++        msa_p = {0, 0, 0};
++    } else {
++        GGML_ASSERT(hparams.indexer_block_size > 0); // avoid div by zero
++    }
+ 
+     switch (hparams.n_layer()) {
+         case 60: type = LLM_TYPE_428B_A23B; break;
+@@ -76,10 +89,10 @@ void llama_model_minimax_m3::load_arch_tensors(llama_model_loader &) {
+             layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_exp * n_expert_shared}, 0);
+ 
+             // indexer
+-            layer.index_q_proj = create_tensor(tn(LLM_TENSOR_INDEXER_Q_PROJ, "weight", i), {n_embd, hparams.indexer_n_head * hparams.indexer_head_size}, 0);
+-            layer.index_k_proj = create_tensor(tn(LLM_TENSOR_INDEXER_K_PROJ, "weight", i), {n_embd, hparams.indexer_head_size}, 0);
+-            layer.index_q_norm = create_tensor(tn(LLM_TENSOR_INDEXER_Q_NORM, "weight", i), {hparams.indexer_head_size}, 0);
+-            layer.index_k_norm = create_tensor(tn(LLM_TENSOR_INDEXER_K_NORM, "weight", i), {hparams.indexer_head_size}, 0);
++            layer.index_q_proj = create_tensor(tn(LLM_TENSOR_INDEXER_Q_PROJ, "weight", i), {n_embd, hparams.indexer_n_head * hparams.indexer_head_size}, TENSOR_NOT_REQUIRED);
++            layer.index_k_proj = create_tensor(tn(LLM_TENSOR_INDEXER_K_PROJ, "weight", i), {n_embd, hparams.indexer_head_size}, TENSOR_NOT_REQUIRED);
++            layer.index_q_norm = create_tensor(tn(LLM_TENSOR_INDEXER_Q_NORM, "weight", i), {hparams.indexer_head_size}, TENSOR_NOT_REQUIRED);
++            layer.index_k_norm = create_tensor(tn(LLM_TENSOR_INDEXER_K_NORM, "weight", i), {hparams.indexer_head_size}, TENSOR_NOT_REQUIRED);
+         }
+     }
+ }
+@@ -225,9 +238,10 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
+     // caches either a single sequence, or multiple sequences with kv_unified == false (each
+     // stream then has its own slot space). A unified cache with multiple sequences
+     // interleaves slots and would silently break block anchoring so it falls back to dense.
+-    const bool fa_on       = cparams.flash_attn;
+-    const bool streams_ok  = cparams.n_seq_max == 1 || !cparams.kv_unified;
+-    const bool msa_enabled = fa_on && streams_ok;
++    const bool fa_on        = cparams.flash_attn;
++    const bool streams_ok   = cparams.n_seq_max == 1 || !cparams.kv_unified;
++    const bool indexer_ok   = hparams.indexer_n_head > 0 && hparams.indexer_head_size > 0;
++    const bool msa_enabled  = fa_on && streams_ok && indexer_ok;
+ 
+     auto * inp_attn = build_attn_inp_kv_msa(msa_enabled);
+ 
+@@ -273,19 +287,24 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
+ 
+         inp->bias = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, nblk, n_tokens);  // stream-grouped tokens
+         ggml_set_input(inp->bias);
++        request_input(inp->bias, "attention.msa.local_bias");
+ 
+         inp->pos_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_ps, n_tokens);
+         ggml_set_input(inp->pos_mask);
++        request_input(inp->pos_mask, "attention.msa.position_mask");
+ 
+         inp->pos_slot_i = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_ps, ns);
+         ggml_set_input(inp->pos_slot_i);
++        request_input(inp->pos_slot_i, "attention.msa.position_to_cell_indices");
+ 
+         if (msa_decode) {
+             inp->pos_slot_f = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_ps, ns);
+             ggml_set_input(inp->pos_slot_f);
++            request_input(inp->pos_slot_f, "attention.msa.position_to_cell_values");
+         } else {
+             inp->cell_blk = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_kv, ns);
+             ggml_set_input(inp->cell_blk);
++            request_input(inp->cell_blk, "attention.msa.cell_blocks");
+ 
+             msa_mf = ggml_cast(ctx0, msa_kqm, GGML_TYPE_F32);
+         }
+diff --git a/src/models/nemotron-h-moe.cpp b/src/models/nemotron-h-moe.cpp
+index 4d03f49e0..bd8408d5a 100644
+--- a/src/models/nemotron-h-moe.cpp
++++ b/src/models/nemotron-h-moe.cpp
+@@ -22,8 +22,13 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
+     GGML_ASSERT(layer.ffn_gate_inp);
+ 
+     // token embedding weights
+-    ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
+-    GGML_ASSERT(tok_embd_w != nullptr && "NEMOTRON_H_MOE MTP requires token embeddings");
++    // A standalone NextN-only draft omits token_embd/output and shares the
++    // trunk tensors through ctx_other.
++    const llama_model * trunk = cparams.ctx_other != nullptr ? llama_get_model(cparams.ctx_other) : nullptr;
++    ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens
++                          : (model.tok_embd          ? model.tok_embd
++                          : (trunk                   ? trunk->tok_embd : nullptr));
++    GGML_ASSERT(tok_embd_w != nullptr && "NEMOTRON_H_MOE MTP requires token embeddings (own or shared trunk)");
+ 
+     auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd);
+ 
+@@ -100,8 +105,13 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
+         ggml_tensor * router_logits = build_lora_mm(layer.ffn_gate_inp, cur);
+         cb(router_logits, "mtp_ffn_moe_logits", il);
+ 
++        ggml_tensor * inp_latent = cur;
++        if (layer.ffn_latent_down) {
++            inp_latent = ggml_mul_mat(ctx0, layer.ffn_latent_down, cur);
++        }
++
+         ggml_tensor * moe_out =
+-            build_moe_ffn(cur,
++            build_moe_ffn(inp_latent,
+                 layer.ffn_gate_inp,
+                 layer.ffn_up_exps,
+                 nullptr, // no gate
+@@ -118,6 +128,11 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
+                 layer.ffn_down_exps_s);
+         cb(moe_out, "mtp_ffn_moe_out", il);
+ 
++        if (layer.ffn_latent_up) {
++            moe_out = ggml_mul_mat(ctx0, layer.ffn_latent_up, moe_out);
++            cb(moe_out, "mtp_ffn_moe_latent_up", il);
++        }
++
+         ggml_tensor * ffn_shexp = build_ffn(cur,
+                 layer.ffn_up_shexp,   NULL, layer.ffn_up_shexp_s,
+                 NULL,                 NULL, NULL,
+@@ -145,9 +160,13 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
+     }
+ 
+     // LM head
+-    ggml_tensor * head_w = layer.nextn.shared_head_head ? layer.nextn.shared_head_head : model.output;
+-    ggml_tensor * head_s = layer.nextn.shared_head_head ? layer.nextn.shared_head_head_s : model.output_s;
+-    GGML_ASSERT(head_w != nullptr && "NEMOTRON_H_MOE MTP requires an output projection");
++    ggml_tensor * head_w = layer.nextn.shared_head_head ? layer.nextn.shared_head_head
++                        : (model.output                ? model.output
++                        : (trunk                       ? trunk->output : nullptr));
++    ggml_tensor * head_s = layer.nextn.shared_head_head ? layer.nextn.shared_head_head_s
++                        : (model.output_s              ? model.output_s
++                        : (trunk                       ? trunk->output_s : nullptr));
++    GGML_ASSERT(head_w != nullptr && "NEMOTRON_H_MOE MTP requires an output projection (own or shared trunk)");
+     cur = build_lora_mm(head_w, cur, head_s);
+     cb(cur, "result_output", -1);
+ 
+diff --git a/src/models/nemotron-h.cpp b/src/models/nemotron-h.cpp
+index ff8784d18..51a0855f5 100644
+--- a/src/models/nemotron-h.cpp
++++ b/src/models/nemotron-h.cpp
+@@ -62,14 +62,16 @@ void llama_model_nemotron_h::load_arch_tensors(llama_model_loader & ml) {
+     const int64_t moe_n_embd = hparams.moe_latent_size > 0 ? hparams.moe_latent_size : n_embd;
+ 
+     // embeddings
+-    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
++    // A NextN-only MTP draft shares the trunk embedding and output projection
++    // (borrowed via ctx_other at graph build time), so both stay optional.
++    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, trunk_flags);
+ 
+     // output
+     {
+-        output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
++        output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, trunk_flags);
+         output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+         // if output is NULL, init from the input tok embed, duplicated to allow offloading
+-        if (output == NULL) {
++        if (output == NULL && !mtp_only) {
+             output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+         }
+     }
+@@ -170,6 +172,11 @@ void llama_model_nemotron_h::load_arch_tensors(llama_model_loader & ml) {
+         layer.attn_post_norm  = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM,  "weight", i), {n_embd}, mtp_flags);
+         layer.ffn_gate_inp    = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,    "weight", i), {n_embd, n_expert}, mtp_flags);
+         layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias",   i), {n_expert}, mtp_flags);
++        // Latent (LoRA-compressed) expert projections, as supported for trunk
++        // MoE layers; optional so drafts whose experts run at full width load
++        // unchanged.
++        layer.ffn_latent_down = create_tensor(tn(LLM_TENSOR_FFN_LATENT_DOWN, "weight", i), {n_embd, moe_n_embd}, mtp_flags | TENSOR_NOT_REQUIRED);
++        layer.ffn_latent_up   = create_tensor(tn(LLM_TENSOR_FFN_LATENT_UP,   "weight", i), {moe_n_embd, n_embd}, mtp_flags | TENSOR_NOT_REQUIRED);
+         layer.ffn_down_exps   = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS,   "weight", i), {n_ff_exp,   moe_n_embd, n_expert}, mtp_flags);
+         layer.ffn_up_exps     = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,     "weight", i), {moe_n_embd, n_ff_exp,   n_expert}, mtp_flags);
+         layer.ffn_down_shexp  = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP,  "weight", i), {n_ff_shexp, n_embd}, mtp_flags);
+diff --git a/src/models/qwen2moe.cpp b/src/models/qwen2moe.cpp
+index 8bcb1017b..9e2cedf64 100644
+--- a/src/models/qwen2moe.cpp
++++ b/src/models/qwen2moe.cpp
+@@ -20,7 +20,10 @@ void llama_model_qwen2moe::load_arch_tensors(llama_model_loader &) {
+ 
+     // output
+     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+-    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
++    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
++    if (output == NULL) {
++        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
++    }
+ 
+     for (int i = 0; i < n_layer; ++i) {
+         auto & layer = layers[i];
+diff --git a/src/models/qwen35.cpp b/src/models/qwen35.cpp
+index a1e263500..583fcea71 100644
+--- a/src/models/qwen35.cpp
++++ b/src/models/qwen35.cpp
+@@ -384,7 +384,7 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
+ 
+     ggml_tensor * conv_input = build_conv_state(inp, conv_states_all, qkv_mixed, conv_kernel_size, conv_channels, il);
+ 
+-    ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs);
++    ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs, skippy_state_kind::recurrent_ssm, il);
+     state = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim, num_v_heads, n_seqs);
+     cb(state, "state_predelta", il);
+ 
+diff --git a/src/models/qwen35moe.cpp b/src/models/qwen35moe.cpp
+index bdf772625..7b637b455 100644
+--- a/src/models/qwen35moe.cpp
++++ b/src/models/qwen35moe.cpp
+@@ -408,7 +408,7 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn_linear(
+ 
+     ggml_tensor * conv_input = build_conv_state(inp, conv_states_all, qkv_mixed, conv_kernel_size, conv_channels, il);
+ 
+-    ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs);
++    ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs, skippy_state_kind::recurrent_ssm, il);
+     state = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim, num_v_heads, n_seqs);
+     cb(state, "state_predelta", il);
+ 
+diff --git a/src/models/qwen3next.cpp b/src/models/qwen3next.cpp
+index b63fc9c6a..1bdfc3e3f 100644
+--- a/src/models/qwen3next.cpp
++++ b/src/models/qwen3next.cpp
+@@ -464,7 +464,7 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
+ 
+     ggml_tensor * conv_input = build_conv_state(inp, conv_states_all, qkv_mixed, conv_kernel_size, conv_channels, il);
+ 
+-    ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs);
++    ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs, skippy_state_kind::recurrent_ssm, il);
+     state = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim, num_v_heads, n_seqs);
+     cb(state, "state_predelta", il);
+ 
+diff --git a/src/models/qwen3vl.cpp b/src/models/qwen3vl.cpp
+index 30c08ed35..8e938a69a 100644
+--- a/src/models/qwen3vl.cpp
++++ b/src/models/qwen3vl.cpp
+@@ -172,7 +172,8 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
+     // lm_head
+     cur = build_lora_mm(model.output, cur, model.output_s);
+ 
+-    int64_t n_vocab_in  = model.tok_embd->ne[1];
++    int64_t n_vocab_in  = model.tok_embd ? model.tok_embd->ne[1]
++                                         : (int64_t) model.vocab.n_tokens();
+     int64_t n_vocab_out = model.output->ne[1];
+     if (n_vocab_in > n_vocab_out) {
+         // case: Qwen3TTS model with codec_head as output
+diff --git a/src/models/qwen4exp.cpp b/src/models/qwen4exp.cpp
+index 8ace95f73..7ee067a06 100644
+--- a/src/models/qwen4exp.cpp
++++ b/src/models/qwen4exp.cpp
+@@ -573,6 +573,12 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
+         ggml_set_input(qsa->blk_pos);
+         ggml_set_input(qsa->bias);
+ 
++        request_input(qsa->k_idxs,    "qwen4exp.qsa.key_indices");
++        request_input(qsa->cell_blk,  "qwen4exp.qsa.cell_blocks");
++        request_input(qsa->blk_cells, "qwen4exp.qsa.block_cells");
++        request_input(qsa->blk_pos,   "qwen4exp.qsa.block_positions");
++        request_input(qsa->bias,      "qwen4exp.qsa.bias");
++
+         inp = qsa.get();
+         res->add_input(std::move(qsa));
+         qsa_inps.emplace((uint32_t) r, inp);
+@@ -899,7 +905,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn_linear(
+     ggml_tensor * conv_input = build_conv_state_at(inp, conv_states_all, qkv_mixed,
+             conv_kernel_size - 1, conv_channels, il);
+ 
+-    ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs);
++    ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs, skippy_state_kind::recurrent_ssm, il);
+     state = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim, num_v_heads, n_seqs);
+     cb(state, "state_predelta", il);
+ 
+@@ -1133,7 +1139,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_conv_state_at(
+ 
+     auto it = rs_rows.find(conv_states_all);
+     if (it == rs_rows.end()) {
+-        it = rs_rows.emplace(conv_states_all, build_rs(inp, conv_states_all, row_total, n_seqs)).first;
++        it = rs_rows.emplace(conv_states_all, build_rs(inp, conv_states_all, row_total, n_seqs, skippy_state_kind::recurrent_conv, il)).first;
+     }
+     ggml_tensor * rows = it->second;
+ 
+@@ -1162,7 +1168,9 @@ ggml_tensor * llama_model_qwen4exp::graph::build_conv_state_at(
+                 conv_states_all->nb[1],
+                 (slot * mem_size + kv_head) * row_size);
+ 
+-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, ggml_cont(ctx0, tail), dst));
++        ggml_tensor * conv_write = ggml_cpy(ctx0, ggml_cont(ctx0, tail), dst);
++        ggml_build_forward_expand(gf, conv_write);
++        state_write(skippy_state_kind::recurrent_conv, conv_states_all, conv_write, il);
+     }
+ 
+     return conv_input;
+@@ -1178,6 +1186,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_inp_ple(
+ 
+     ple_inp->rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_heads * n_tokens);
+     ggml_set_input(ple_inp->rows);
++    request_input(ple_inp->rows, "qwen4exp.ple.rows");
+     ggml_tensor * rows = ple_inp->rows;
+     res->add_input(std::move(ple_inp));
+ 
+diff --git a/src/models/rwkv6-base.cpp b/src/models/rwkv6-base.cpp
+index 83aeab728..27d30b669 100644
+--- a/src/models/rwkv6-base.cpp
++++ b/src/models/rwkv6-base.cpp
+@@ -130,7 +130,7 @@ ggml_tensor * llm_build_rwkv6_base::build_rwkv6_time_mix(llm_graph_input_rs * in
+         // k = k * (1 - w)
+         k = ggml_sub(ctx0, k, ggml_mul(ctx0, k, w));
+     }
+-    ggml_tensor * wkv_state = build_rs(inp, mctx_cur->get_s_l(il), hparams.n_embd_s(), n_seqs);
++    ggml_tensor * wkv_state = build_rs(inp, mctx_cur->get_s_l(il), hparams.n_embd_s(), n_seqs, skippy_state_kind::recurrent_ssm, il);
+ 
+     ggml_tensor * wkv_output;
+     if (is_qrwkv) {
+@@ -141,10 +141,11 @@ ggml_tensor * llm_build_rwkv6_base::build_rwkv6_time_mix(llm_graph_input_rs * in
+     cur       = ggml_view_1d(ctx0, wkv_output, n_embd * n_tokens, 0);
+     wkv_state = ggml_view_1d(ctx0, wkv_output, n_embd * head_size * n_seqs, n_embd * n_tokens * sizeof(float));
+ 
+-    ggml_build_forward_expand(
+-        gf, ggml_cpy(ctx0, wkv_state,
++    ggml_tensor * wkv_state_write = ggml_cpy(ctx0, wkv_state,
+                      ggml_view_1d(ctx0, mctx_cur->get_s_l(il), hparams.n_embd_s() * n_seqs,
+-                                  hparams.n_embd_s() * kv_head * ggml_element_size(mctx_cur->get_s_l(il)))));
++                                  hparams.n_embd_s() * kv_head * ggml_element_size(mctx_cur->get_s_l(il))));
++    ggml_build_forward_expand(gf, wkv_state_write);
++    state_write(skippy_state_kind::recurrent_ssm, mctx_cur->get_s_l(il), wkv_state_write, il);
+ 
+     if (!is_qrwkv) {
+         // group norm with head_count groups
+diff --git a/src/models/rwkv6.cpp b/src/models/rwkv6.cpp
+index 0b5013dc7..ef58f3e47 100644
+--- a/src/models/rwkv6.cpp
++++ b/src/models/rwkv6.cpp
+@@ -62,7 +62,7 @@ void llama_model_rwkv6::load_arch_tensors(llama_model_loader &) {
+         layer.time_mix_lerp_r = create_tensor(tn(LLM_TENSOR_TIME_MIX_LERP_R, "weight", i), {n_embd, 1, 1}, TENSOR_NOT_REQUIRED);
+         layer.time_mix_lerp_g = create_tensor(tn(LLM_TENSOR_TIME_MIX_LERP_G, "weight", i), {n_embd, 1, 1}, TENSOR_NOT_REQUIRED);
+         layer.time_mix_lerp_fused = create_tensor(tn(LLM_TENSOR_TIME_MIX_LERP_FUSED, "weight", i), {n_embd, 1, 1, 5}, TENSOR_NOT_REQUIRED);
+-        GGML_ASSERT(!(layer.time_mix_lerp_fused == NULL && layer.time_mix_lerp_w == NULL));
++        GGML_ASSERT(layer.time_mix_lerp_x == NULL || !(layer.time_mix_lerp_fused == NULL && layer.time_mix_lerp_w == NULL));
+ 
+         layer.time_mix_first = create_tensor(tn(LLM_TENSOR_TIME_MIX_FIRST, "weight", i), {head_size, n_embd / head_size}, 0);
+         layer.time_mix_decay = create_tensor(tn(LLM_TENSOR_TIME_MIX_DECAY, "weight", i), {n_embd}, 0);
+diff --git a/src/models/rwkv7-base.cpp b/src/models/rwkv7-base.cpp
+index 7fcab7774..d42c07ab7 100644
+--- a/src/models/rwkv7-base.cpp
++++ b/src/models/rwkv7-base.cpp
+@@ -102,16 +102,17 @@ ggml_tensor * llm_build_rwkv7_base::build_rwkv7_time_mix(llm_graph_input_rs * in
+     v = ggml_reshape_3d(ctx0, v, head_size, head_count, n_tokens);
+     a = ggml_reshape_3d(ctx0, a, head_size, head_count, n_tokens);
+ 
+-    ggml_tensor * wkv_state = build_rs(inp, mctx_cur->get_s_l(il), hparams.n_embd_s(), n_seqs);
++    ggml_tensor * wkv_state = build_rs(inp, mctx_cur->get_s_l(il), hparams.n_embd_s(), n_seqs, skippy_state_kind::recurrent_ssm, il);
+ 
+     ggml_tensor * wkv_output = ggml_rwkv_wkv7(ctx0, r, w, k, v, ggml_neg(ctx0, kk), ggml_mul(ctx0, kk, a), wkv_state);
+     cur                      = ggml_view_1d(ctx0, wkv_output, n_embd * n_tokens, 0);
+     wkv_state = ggml_view_1d(ctx0, wkv_output, n_embd * head_size * n_seqs, n_embd * n_tokens * sizeof(float));
+ 
+-    ggml_build_forward_expand(
+-        gf, ggml_cpy(ctx0, wkv_state,
++    ggml_tensor * wkv_state_write = ggml_cpy(ctx0, wkv_state,
+                      ggml_view_1d(ctx0, mctx_cur->get_s_l(il), hparams.n_embd_s() * n_seqs,
+-                                  hparams.n_embd_s() * kv_head * ggml_element_size(mctx_cur->get_s_l(il)))));
++                                  hparams.n_embd_s() * kv_head * ggml_element_size(mctx_cur->get_s_l(il))));
++    ggml_build_forward_expand(gf, wkv_state_write);
++    state_write(skippy_state_kind::recurrent_ssm, mctx_cur->get_s_l(il), wkv_state_write, il);
+ 
+     if (layer.time_mix_ln && layer.time_mix_ln_b) {
+         // group norm with head_count groups
+diff --git a/tools/mtmd/mtmd-audio.cpp b/tools/mtmd/mtmd-audio.cpp
+index c25bf4ec8..6f017519f 100644
+--- a/tools/mtmd/mtmd-audio.cpp
++++ b/tools/mtmd/mtmd-audio.cpp
+@@ -283,6 +283,7 @@ struct filter_params {
+     bool    norm_per_feature = false;
+     bool    use_magnitude   = false;  // |X| instead of |X|^2
+     float   mel_floor       = 5.960464477539063e-08f;
++    float   power_floor     = 0.0f;   // clamp |X|^2 to this before sqrt (0 = disabled)
+ };
+ 
+ static void log_mel_spectrogram_worker_thread(int                        ith,
+@@ -327,6 +328,7 @@ static void log_mel_spectrogram_worker_thread(int                        ith,
+         // Calculate modulus^2 (power) or modulus (magnitude)
+         for (int j = 0; j < n_fft_bins; j++) {
+             float power = (fft_out[2 * j + 0] * fft_out[2 * j + 0] + fft_out[2 * j + 1] * fft_out[2 * j + 1]);
++            power = std::max(power, params.power_floor);
+             fft_out[j] = params.use_magnitude ? sqrtf(power) : power;
+         }
+ 
+-- 
+2.54.0 (Apple Git-157)
+

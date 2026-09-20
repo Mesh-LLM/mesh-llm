@@ -588,7 +588,12 @@ pub(in crate::binary_transport) fn maybe_record_binary_prefill(
                 continue;
             }
             if token_count_usize == token_ids.len() {
-                match kv.record_exact_state(runtime, session_id, &identity) {
+                match kv.record_exact_state(
+                    runtime,
+                    session_id,
+                    &identity,
+                    crate::kv_integration::CaptureAdmission::BestEffort,
+                ) {
                     Ok(Some(record)) => {
                         result.recorded_pages = result.recorded_pages.saturating_add(1);
                         result.recorded_tokens = result
@@ -824,7 +829,12 @@ pub(in crate::binary_transport) fn maybe_record_binary_full_prefill(
             .unwrap_or(usize::MAX)
             .min(token_ids.len());
         if token_count_usize == token_ids.len() {
-            match kv.record_exact_state(runtime, session_id, &identity) {
+            match kv.record_exact_state(
+                runtime,
+                session_id,
+                &identity,
+                crate::kv_integration::CaptureAdmission::BestEffort,
+            ) {
                 Ok(Some(record)) => {
                     result.recorded_pages = result.recorded_pages.saturating_add(1);
                     result.recorded_tokens = result

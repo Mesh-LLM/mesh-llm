@@ -95,6 +95,13 @@ pub enum StagePlanStateAccess {
     Write = 1,
 }
 
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StagePlanStateResidency {
+    LayerLocal = 0,
+    PerStage = 1,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StagePlanDescV1 {
@@ -108,6 +115,7 @@ pub struct StagePlanDescV1 {
     pub reserved: u32,
     pub profile_count: u64,
     pub resident_tensor_count: u64,
+    pub execution_contract: StagePlanStringRefV1,
 }
 
 #[repr(C)]
@@ -150,6 +158,6 @@ pub struct StagePlanStateDescV1 {
     pub kind: i32,
     pub access: i32,
     pub layer: i32,
-    pub reserved: i32,
+    pub residency: i32,
     pub write_ordinal: i64,
 }

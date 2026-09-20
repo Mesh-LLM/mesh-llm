@@ -60,7 +60,7 @@ class RunnerImageIdentityTests(unittest.TestCase):
         paths = list((self.root / ".github/workflows").glob("*.yml")) + [self.root / "ci/slices.yml", self.root / "ci/ownership.yml"]
         before = {path: path.read_bytes() for path in paths}
         self.assertEqual(IDENTITY.check(self.catalog, self.root), {
-            "images": 9, "roles": 35, "workflow_bindings": 36,
+            "images": 9, "roles": 35, "workflow_bindings": 35,
             "runtime_rows": 4, "seed_consumers": 6,
         })
         self.assertEqual(before, {path: path.read_bytes() for path in paths})
@@ -167,7 +167,7 @@ class RunnerImageIdentityTests(unittest.TestCase):
             for binding in role["bindings"]:
                 if binding["workflow"] == original:
                     binding["workflow"] = renamed
-        self.assertEqual(IDENTITY.check(self.catalog, self.root)["workflow_bindings"], 36)
+        self.assertEqual(IDENTITY.check(self.catalog, self.root)["workflow_bindings"], 35)
         self.replace(".github/workflows/" + renamed, self.image("public-web"), self.image("public-cpu"))
         self.assert_drift("image reference drift")
 
@@ -275,8 +275,10 @@ class RunnerImageIdentityTests(unittest.TestCase):
                 with self.assertRaisesRegex(IDENTITY.IdentityError, message):
                     IDENTITY.validate(catalog, self.root)
 
-    def test_product_smoke_role_keeps_multiple_bindings(self) -> None:
-        self.assertEqual(len(self.catalog["consumer_roles"]["product-smoke"]["bindings"]), 2)
+    def test_product_smoke_role_tracks_the_core_smoke(self) -> None:
+        bindings = self.catalog["consumer_roles"]["product-smoke"]["bindings"]
+        self.assertEqual(len(bindings), 1)
+        self.assertEqual(bindings[0]["workflow"], "smoke.yml")
         IDENTITY.validate(self.catalog, self.root)
 
     def test_diagnose_cli_rejects_missing_or_ambiguous_planner_row(self) -> None:

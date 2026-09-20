@@ -163,6 +163,14 @@ libraries. The only durable llama.cpp patch queue is
   numbers. A source-layout change must be folded into the patches that own the
   affected capabilities; do not append a terminal "split", "move", or
   "cleanup" patch that reorganizes code introduced by earlier patches.
+- Apply the queue in three lanes: numbered core patches directly under
+  `patches/`, numbered family-enablement patches listed by
+  `patches/model_support/series`, then generated graph-semantics shards listed
+  by `patches/generated/series`. Numbering is contiguous within each lane.
+- New model-family implementations and their family-specific conversion,
+  template, multimodal, runtime, and tests belong in one focused
+  `model_support/` patch. Keep reusable Skippy machinery in the core lane and
+  mechanically generated graph annotations in the generated lane.
 - Ordinary capability changes may append one focused patch. When deliberately
   changing queue boundaries, recreate the affected series from the pinned
   upstream and prove that the rebuilt series produces the intended final tree.
