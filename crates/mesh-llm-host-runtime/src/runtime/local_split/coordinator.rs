@@ -842,6 +842,10 @@ fn split_candidate_stage0_is_local(
 
 /// Longest a planned performance cutover waits for in-flight requests.
 const AUTO_BALANCE_DRAIN_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// Lifecycle record the runtime loop hands back once a generation drained.
+type DrainAckLifecycle =
+    std::sync::Arc<tokio::sync::Mutex<crate::runtime::instance_lifecycle::InstanceLifecycleRecord>>;
 /// Smallest predicted bottleneck improvement worth a cutover.
 const AUTO_BALANCE_MIN_PREDICTED_GAIN: f64 = 0.10;
 
@@ -1089,15 +1093,28 @@ impl SplitTopologyCoordinator {
         }
     }
 
-    /// Stop new admissions and wait (bounded) for in-flight requests.
-    async fn drain_serving_generation(
+    /// Bounded wait for the runtime loop's drain acknowledgement. `None` when
+    /// the acknowledgement does not arrive within the cutover deadline.
+    async fn await_drain_ack(
         &self,
         reason: &'static str,
-    ) -> Option<
-        std::sync::Arc<
-            tokio::sync::Mutex<crate::runtime::instance_lifecycle::InstanceLifecycleRecord>,
-        >,
-    > {
+        ack_rx: tokio::sync::oneshot::Receiver<Option<DrainAckLifecycle>>,
+    ) -> Option<DrainAckLifecycle> {
+        match tokio::time::timeout(AUTO_BALANCE_DRAIN_TIMEOUT, ack_rx).await {
+            Ok(Ok(Some(lifecycle))) => Some(lifecycle),
+            _ => {
+                tracing::warn!(
+                    model_ref = self.model_ref,
+                    reason,
+                    "runtime loop did not acknowledge the drain within the cutover deadline"
+                );
+                None
+            }
+        }
+    }
+
+    /// Stop new admissions and wait (bounded) for in-flight requests.
+    async fn drain_serving_generation(&self, reason: &'static str) -> Option<DrainAckLifecycle> {
         let (ack, ack_rx) = tokio::sync::oneshot::channel();
         let event = SplitCoordinatorEvent::Drain(super::SplitCoordinatorDrainEvent {
             reason,
@@ -1105,7 +1122,7 @@ impl SplitTopologyCoordinator {
             ack,
         });
         self.event_tx.send(event).await.ok()?;
-        let lifecycle = ack_rx.await.ok()??;
+        let lifecycle = self.await_drain_ack(reason, ack_rx).await?;
         let started = Instant::now();
         let result = crate::runtime::instance_lifecycle::DrainCoordinator::default()
             .wait_for_unload_ready(&lifecycle)
