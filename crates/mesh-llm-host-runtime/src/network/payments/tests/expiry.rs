@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn payments_expired_input_releases_backend_without_decode_or_output_debt() -> Result<()> {
+async fn payments_expired_input_discards_buffered_output_without_output_debt() -> Result<()> {
     tokio::time::timeout(Duration::from_secs(15), expired_exchange()).await?
 }
 
@@ -22,8 +22,10 @@ async fn expired_backend(listener: tokio::net::TcpListener) -> Result<()> {
         .unwrap()
         .unwrap();
     tokio::task::spawn_blocking(move || {
-        assert!(gate.after_prefill(40, 8).is_err());
-        assert_eq!(gate.committed_tokens(), 0);
+        gate.after_prefill(40, 8).unwrap();
+        gate.before_token().unwrap();
+        gate.committed_token().unwrap();
+        assert_eq!(gate.committed_tokens(), 1);
     })
     .await?;
     stream
@@ -69,8 +71,9 @@ async fn expired_exchange() -> Result<()> {
     let serving = tokio::spawn(async move {
         let conn = serving_node.endpoint.accept().await.unwrap().await?;
         let (send, recv) = conn.accept_bi().await?;
-        super::super::server::serve(serving_node, conn.remote_id(), recv, send, targets).await?;
-        Ok::<_, anyhow::Error>(conn)
+        let result =
+            super::super::server::serve(serving_node, conn.remote_id(), recv, send, targets).await;
+        Ok::<_, anyhow::Error>((conn, result))
     });
     let conn = caller
         .endpoint
@@ -92,14 +95,13 @@ async fn expired_exchange() -> Result<()> {
     let Frame::InputInvoice { invoice, .. } = wire::read(&mut recv).await? else {
         anyhow::bail!("expected invoice")
     };
-    loop {
-        match wire::read(&mut recv).await? {
-            Frame::Output { .. } => {}
-            Frame::Complete => break,
-            _ => anyhow::bail!("unexpected output invoice after unpaid prefill"),
-        }
+    match wire::read(&mut recv).await? {
+        Frame::Error { .. } => {}
+        Frame::Output { .. } => anyhow::bail!("unpaid buffered output was released"),
+        _ => anyhow::bail!("unexpected frame after unpaid prefill"),
     }
-    let _serving_connection = serving.await??;
+    let (_serving_connection, result) = serving.await??;
+    assert!(result.is_err());
     backend.await??;
     assert!(mesh_llm_payments::now_ms() >= invoice.expires_at_ms);
     let (_, _, tokens, finished) = service.ledger.serving_account(&id)?;

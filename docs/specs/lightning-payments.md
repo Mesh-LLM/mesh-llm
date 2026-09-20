@@ -15,9 +15,14 @@ validation results and remaining gaps are recorded below.
    allowance, and total cap.
 3. The payer validates the invoice and obtains per-request manual approval or
    reserves against its automatic spending budget.
-4. The payer pays. The provider independently observes incoming settlement before
-   allowing decode to start.
-5. Output streams through the ordinary OpenAI response path.
+4. After successful prefill, decode runs concurrently with invoice creation and
+   payment observation. The provider buffers backend HTTP output in a bounded
+   256 KiB queue, applying backpressure when full. No response headers or body
+   are released until its own wallet observes payment arrival (`claiming` or
+   terminal fallback). Failed or expired authorization discards buffered output.
+5. Authorized output streams through the ordinary OpenAI response path. The
+   payer reads concurrently with its terminal payment reconciliation; neither
+   ledger records settlement until terminal success is observed.
 6. The provider invoices actual output transmitted, and the payer settles under
    the original authorization. No second manual approval is needed.
 
@@ -56,8 +61,12 @@ inside its private adapter. The default feature selects Lexe 0.1.23 on mainnet.
 NWC, BOLT12, and provider selection are deferred.
 
 The payment service awaits provider completion for incoming and pending outgoing
-payments. Event-capable adapters can use native subscriptions; Lexe implements
-this method with one-second polling internally. The method returns an
+payments. A second method awaits the earliest receiver-side evidence that an
+incoming payment has arrived, used only to open the output-delivery gate; it defaults to
+the completion wait, so an adapter without such a signal is simply slower, never
+wrong. Event-capable adapters can use native subscriptions; Lexe implements both
+by polling on a bounded lookup-start cadence, and reports the arrival signal from
+its detailed per-payment status. The method returns an
 authoritative succeeded/failed transaction and must handle settlement before or
 during subscription, support multiple waiters, and tolerate cancellation of an
 observer without cancelling or resubmitting the payment. Subscribe before reading
@@ -151,8 +160,10 @@ Partial frames or a crash between transmission and accounting can conservatively
 undercharge. Non-streaming responses become billable when their complete JSON
 usage is transmitted.
 
-Unpaid prefill waits until the invoice's actual expiry (Lexe's default: 24 hours), or
-cancellation. Settlement continues independently of the application's HTTP
+Unpaid output delivery waits until the invoice's actual expiry (Lexe's default:
+24 hours), or cancellation. Decode can run ahead within the backend and transport
+buffers; the 256 KiB queue bounds this adapter's buffered bytes, not all native
+compute or socket buffering. Settlement continues independently of the application's HTTP
 connection. The provider stops further generation when it receives cancellation.
 Late input payment after state release is recorded but does not regenerate output
 or trigger an automatic refund.

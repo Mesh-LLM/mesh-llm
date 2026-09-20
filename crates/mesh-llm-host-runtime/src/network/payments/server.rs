@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
@@ -11,7 +12,10 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
-use super::{gate::InvoiceGate, request::PaidRequest};
+use super::{
+    gate::{GateEvent, InvoiceGate},
+    request::PaidRequest,
+};
 use crate::{
     inference::election::{InferenceTarget, ModelTargets},
     mesh::Node,
@@ -93,9 +97,11 @@ async fn serve_inner(
         max_tokens: request.max_tokens,
         events,
         runtime: tokio::runtime::Handle::current(),
-        authorized: AtomicBool::new(false),
-        cancelled: AtomicBool::new(false),
+        authorized: Arc::new(AtomicBool::new(false)),
+        cancelled: Arc::new(AtomicBool::new(false)),
+        started: AtomicBool::new(false),
         output_tokens: AtomicU64::new(0),
+        input_settlement: Arc::new(tokio::sync::Mutex::new(None)),
     });
     let _serving_guard = ServingGuard { gate: gate.clone() };
     let backend_id = uuid::Uuid::new_v4();
@@ -106,13 +112,12 @@ async fn serve_inner(
     backend
         .write_all(&request.backend_http(&backend_id.to_string())?)
         .await?;
-    let invoice = tokio::time::timeout(Duration::from_secs(300), receiver.recv())
-        .await?
-        .context("generation did not reach payment gate")?;
-    wire::write(writer, &invoice).await?;
-    let transport_alive = stream_output(reader, writer, &mut backend, &gate).await?;
+    let transport_alive = stream_output(reader, writer, &mut backend, &gate, &mut receiver).await?;
     drop(backend);
     service.ledger.finish_serving(&id)?;
+    // Delivery opened on receiver-side HTLC arrival; the input payment must
+    // still be recorded as settled before this request is complete.
+    gate.await_input_settlement().await?;
     if gate.authorized.load(Ordering::Acquire)
         && let Some(receipt) = service.output_receivable(&id).await?
     {
@@ -143,36 +148,108 @@ async fn stream_output(
     writer: &mut (impl AsyncWrite + Unpin),
     backend: &mut TcpStream,
     gate: &InvoiceGate,
+    events: &mut mpsc::UnboundedReceiver<GateEvent>,
 ) -> Result<bool> {
-    // The backend is suspended until the authoritative receiving wallet sees
-    // settlement. Headers may arrive early; the payer holds them until paid.
+    // Decode runs as soon as prefill completes. Drain the backend into a
+    // bounded buffer, but do not release even HTTP headers until the provider's
+    // receiving wallet sees `claiming` or a terminal fallback. Reaching the
+    // cap applies TCP backpressure to decode rather than growing without bound.
     let mut buffer = vec![0; 16 * 1024];
-    let mut transport_alive = true;
+    let mut pending: VecDeque<Vec<u8>> = VecDeque::new();
+    let mut pending_bytes = 0_usize;
+    let mut gate_open = false;
+    let mut invoice_sent = false;
+    let mut backend_eof = false;
     let mut delivery = super::delivery::DeliveryUsage::default();
+    let invoice_timeout = tokio::time::sleep(Duration::from_secs(300));
+    tokio::pin!(invoice_timeout);
     // Keep partial cancellation-frame bytes across backend output reads.
     let incoming = wire::read(reader);
     tokio::pin!(incoming);
     loop {
+        if gate_open {
+            while let Some(bytes) = pending.pop_front() {
+                pending_bytes -= bytes.len();
+                if !deliver_output(writer, gate, &mut delivery, bytes).await? {
+                    return Ok(false);
+                }
+            }
+            if backend_eof {
+                break;
+            }
+        }
+        let read_capacity = if gate_open {
+            buffer.len()
+        } else {
+            buffer
+                .len()
+                .min(MAX_BUFFERED_OUTPUT_BYTES.saturating_sub(pending_bytes))
+        };
         tokio::select! {
+            _ = &mut invoice_timeout, if !invoice_sent => {
+                bail!("generation did not reach payment gate");
+            }
+            event = events.recv(), if !gate_open => {
+                match event.context("payment gate closed")? {
+                    GateEvent::InputInvoice(invoice) => {
+                        ensure!(!invoice_sent, "duplicate input invoice");
+                        if wire::write(writer, invoice.as_ref()).await.is_err() {
+                            gate.cancelled.store(true, Ordering::Release);
+                            return Ok(false);
+                        }
+                        invoice_sent = true;
+                    }
+                    GateEvent::Opened => {
+                        ensure!(invoice_sent, "payment gate opened before invoice");
+                        gate_open = true;
+                    }
+                    GateEvent::Failed => bail!("input payment was not authorized"),
+                }
+            }
             incoming = &mut incoming => {
                 let _ = incoming;
                 gate.cancelled.store(true, Ordering::Release);
                 break;
             }
-            read = backend.read(&mut buffer) => {
+            read = backend.read(&mut buffer[..read_capacity]), if !backend_eof && read_capacity > 0 => {
                 let count = read?;
-                if count == 0 { break; }
-                if wire::write(writer, &Frame::Output { bytes: buffer[..count].to_vec() }).await.is_err() {
-                    transport_alive = false;
-                    gate.cancelled.store(true, Ordering::Release);
-                    break;
+                if count == 0 {
+                    backend_eof = true;
+                } else if gate_open {
+                    if !deliver_output(writer, gate, &mut delivery, buffer[..count].to_vec()).await? {
+                        return Ok(false);
+                    }
+                } else {
+                    pending_bytes += count;
+                    pending.push_back(buffer[..count].to_vec());
                 }
-                let delivered_tokens = delivery.observe(&buffer[..count])?;
-                gate.service.ledger.record_delivered_tokens(&gate.request_id, delivered_tokens)?;
             }
         }
     }
-    Ok(transport_alive)
+    Ok(true)
+}
+
+const MAX_BUFFERED_OUTPUT_BYTES: usize = 256 * 1024;
+
+async fn deliver_output(
+    writer: &mut (impl AsyncWrite + Unpin),
+    gate: &InvoiceGate,
+    delivery: &mut super::delivery::DeliveryUsage,
+    bytes: Vec<u8>,
+) -> Result<bool> {
+    let frame = Frame::Output { bytes };
+    if wire::write(writer, &frame).await.is_err() {
+        gate.cancelled.store(true, Ordering::Release);
+        return Ok(false);
+    }
+    let Frame::Output { bytes } = frame else {
+        unreachable!("output frame changed before delivery accounting");
+    };
+    let delivered_tokens = delivery.observe(&bytes)?;
+    gate.service
+        .ledger
+        .record_delivered_tokens(&gate.request_id, delivered_tokens)?;
+    Ok(true)
 }
 
 async fn refresh_receivables(service: &PaymentService, peer: &str) -> Result<()> {

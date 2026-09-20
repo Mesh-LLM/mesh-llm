@@ -11,7 +11,7 @@ use crate::{
     invoice::Invoice,
     ledger::{ApprovalMode, Charge, Ledger, Policy, RequestTerms},
     pricing::Pricing,
-    service::PaymentService,
+    service::{Arrival, PaymentService},
     wallet::{Balance, PayError, PaymentStatus, Transaction, WalletProvider},
 };
 
@@ -77,6 +77,7 @@ struct MockWallet {
     updates: tokio::sync::Notify,
     lookups: AtomicUsize,
     waits: AtomicUsize,
+    arrival_waits: AtomicUsize,
     settle_during_lookup: AtomicBool,
     reject_submission: AtomicBool,
     terminal_failure: AtomicBool,
@@ -137,6 +138,20 @@ impl WalletProvider for MockWallet {
             changed.await;
         }
     }
+    async fn wait_for_arrival(&self, hash: &str) -> Result<Transaction> {
+        self.arrival_waits.fetch_add(1, Ordering::SeqCst);
+        loop {
+            let changed = self.updates.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if let Some(payment) = self.lookup(hash).await?
+                && (payment.status != PaymentStatus::Pending || payment.is_claiming())
+            {
+                return Ok(payment);
+            }
+            changed.await;
+        }
+    }
     async fn pay(&self, invoice: &Invoice, amount: u64, cap: u64) -> Result<Transaction, PayError> {
         assert!(amount + 10 <= cap);
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -159,6 +174,7 @@ impl WalletProvider for MockWallet {
             } else {
                 PaymentStatus::Succeeded
             },
+            status_msg: None,
             created_at_ms: crate::now_ms(),
             settled_at_ms: (!pending).then(crate::now_ms),
         };

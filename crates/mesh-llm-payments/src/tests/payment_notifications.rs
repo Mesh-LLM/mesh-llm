@@ -11,6 +11,7 @@ fn publish(wallet: &MockWallet, invoice: &Invoice, inbound: bool, status: Paymen
             amount_msat: invoice.amount_msat.unwrap(),
             fee_msat: if inbound { 0 } else { 10 },
             status,
+            status_msg: None,
             created_at_ms: crate::now_ms(),
             settled_at_ms: (status != PaymentStatus::Pending).then(crate::now_ms),
         },
@@ -224,5 +225,84 @@ async fn notification_error_keeps_reservation_until_authoritative_recovery() -> 
     service.reconcile_pending().await?;
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
     assert_eq!(service.ledger.requests()?[0].spent_msat, 110);
+    Ok(())
+}
+
+fn publish_claiming(wallet: &MockWallet, invoice: &Invoice) {
+    wallet.payments.lock().unwrap().insert(
+        invoice.payment_hash.clone(),
+        Transaction {
+            id: invoice.payment_hash.clone(),
+            payment_hash: Some(invoice.payment_hash.clone()),
+            inbound: true,
+            amount_msat: invoice.amount_msat.unwrap(),
+            fee_msat: 0,
+            status: PaymentStatus::Pending,
+            status_msg: Some("claiming".into()),
+            created_at_ms: crate::now_ms(),
+            settled_at_ms: None,
+        },
+    );
+    wallet.updates.notify_waiters();
+}
+
+#[tokio::test(start_paused = true)]
+async fn arrival_returns_on_claiming_while_receipt_still_requires_completion() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let wallet = Arc::new(MockWallet::default());
+    let service = Arc::new(PaymentService::with_provider(dir.path(), wallet.clone())?);
+    let invoice = invoice(1, 100);
+    publish_claiming(&wallet, &invoice);
+
+    // The gate opens on the transient claiming state, and says so.
+    assert_eq!(service.wait_arrival(&invoice).await?, Arrival::Claiming);
+
+    // Settlement does not: it stays blocked until the payment completes.
+    let settling = tokio::spawn({
+        let (service, invoice) = (service.clone(), invoice.clone());
+        async move { service.wait_received(&invoice).await }
+    });
+    wait_until_subscribed(&wallet, 1).await;
+    tokio::time::advance(Duration::from_secs(20)).await;
+    assert!(!settling.is_finished());
+
+    publish(&wallet, &invoice, true, PaymentStatus::Succeeded);
+    settling.await??;
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn arrival_without_a_claiming_state_falls_back_to_completion() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let wallet = Arc::new(MockWallet::default());
+    let service = Arc::new(PaymentService::with_provider(dir.path(), wallet.clone())?);
+    let invoice = invoice(1, 100);
+    publish(&wallet, &invoice, true, PaymentStatus::Pending);
+    let waiting = tokio::spawn({
+        let (service, invoice) = (service.clone(), invoice.clone());
+        async move { service.wait_arrival(&invoice).await }
+    });
+    for _ in 0..100 {
+        if wallet.arrival_waits.load(Ordering::SeqCst) == 1 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(wallet.arrival_waits.load(Ordering::SeqCst), 1);
+    tokio::time::advance(Duration::from_secs(20)).await;
+    assert!(!waiting.is_finished());
+    publish(&wallet, &invoice, true, PaymentStatus::Succeeded);
+    assert_eq!(waiting.await??, Arrival::Terminal);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_failed_incoming_payment_never_opens_the_gate() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let wallet = Arc::new(MockWallet::default());
+    let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
+    let invoice = invoice(1, 100);
+    publish(&wallet, &invoice, true, PaymentStatus::Failed);
+    assert!(service.wait_arrival(&invoice).await.is_err());
     Ok(())
 }

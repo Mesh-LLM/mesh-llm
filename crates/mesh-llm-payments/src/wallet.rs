@@ -51,8 +51,24 @@ pub struct Transaction {
     pub amount_msat: u64,
     pub fee_msat: u64,
     pub status: PaymentStatus,
+    /// Provider-specific detailed status, preserved verbatim. The coarse
+    /// `status` collapses distinct provider states (Lexe maps both
+    /// `InvoiceGenerated` and `Claiming` to `Pending`), so this field is the
+    /// only way to observe receiver-side HTLC arrival.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_msg: Option<String>,
     pub created_at_ms: u64,
     pub settled_at_ms: Option<u64>,
+}
+
+impl Transaction {
+    /// Receiver-side evidence that the HTLC arrived and the node is claiming
+    /// it. Advisory only: it is a transient state and may be missed entirely.
+    pub fn is_claiming(&self) -> bool {
+        self.inbound
+            && self.status == PaymentStatus::Pending
+            && self.status_msg.as_deref() == Some("claiming")
+    }
 }
 
 #[async_trait]
@@ -90,4 +106,16 @@ pub trait WalletProvider: Send + Sync {
     /// Invoice expiry alone must not terminate an outgoing in-flight payment;
     /// callers own any deadline for waiting on an unpaid incoming invoice.
     async fn wait_for_payment(&self, payment_hash: &str) -> Result<Transaction>;
+
+    /// Wait for the earliest receiver-side evidence that this incoming payment
+    /// has arrived: either a transient claiming state or a terminal status.
+    ///
+    /// This is a latency optimization for opening a work gate, never a
+    /// settlement record. Callers must still await `wait_for_payment` before
+    /// recording the payment as received. The claiming state is transient and
+    /// may be missed; the default implementation simply waits for a terminal
+    /// status, which is always a correct (if slower) answer.
+    async fn wait_for_arrival(&self, payment_hash: &str) -> Result<Transaction> {
+        self.wait_for_payment(payment_hash).await
+    }
 }

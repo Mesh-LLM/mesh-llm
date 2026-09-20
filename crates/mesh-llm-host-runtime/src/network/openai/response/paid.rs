@@ -210,15 +210,20 @@ pub(crate) async fn exchange(
             bail!("application disconnected before approval");
         }
     }
-    service
-        .pay_charge(&Charge {
-            request_id: id.clone(),
-            segment: 0,
-            invoice,
-            amount_msat: input_amount,
-            max_total_msat: input_amount + FEE_ALLOWANCE_MSAT,
-        })
-        .await?;
+    // Start durable submission and terminal reconciliation, then read the
+    // provider stream concurrently. The provider releases output only after
+    // its own receiving wallet sees the payment arrive, so the payer's later
+    // terminal observation must not become a second delivery gate.
+    let payment_service = service.clone();
+    let charge = Charge {
+        request_id: id.clone(),
+        segment: 0,
+        invoice,
+        amount_msat: input_amount,
+        max_total_msat: input_amount + FEE_ALLOWANCE_MSAT,
+    };
+    let mut input_payment = tokio::spawn(async move { payment_service.pay_charge(&charge).await });
+    let mut input_settled = false;
     let _ = ready.send(());
     let mut cancelled = false;
     let mut output_settled = false;
@@ -227,6 +232,10 @@ pub(crate) async fn exchange(
         tokio::pin!(reading);
         let frame = loop {
             tokio::select! {
+                result = &mut input_payment, if !input_settled => {
+                    result.context("input payment task failed")??;
+                    input_settled = true;
+                }
                 frame = &mut reading => break frame?,
                 _ = cancellation.changed(), if !cancelled => {
                     cancelled = true;
@@ -255,6 +264,9 @@ pub(crate) async fn exchange(
                 output_settled = true;
             }
             Frame::Complete => {
+                if !input_settled {
+                    input_payment.await.context("input payment task failed")??;
+                }
                 service.ledger.finish(&id)?;
                 return Ok(());
             }

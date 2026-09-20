@@ -9,6 +9,29 @@ use crate::invoice::Invoice;
 use crate::ledger::{ApprovalMode, Charge, Ledger, RequestTerms};
 use crate::wallet::{PayError, PaymentStatus, Transaction, WalletProvider};
 
+/// Which receiver-side evidence ended an arrival wait.
+///
+/// Diagnostic only: both variants mean the same thing for authorization, and
+/// neither is a settlement record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Arrival {
+    /// A transient claiming state was observed before the payment settled.
+    Claiming,
+    /// The claiming state was missed or never published, and the wait ended on
+    /// a terminal status.
+    Terminal,
+}
+
+impl Arrival {
+    /// A static label safe to attach to a log event.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Claiming => "claiming",
+            Self::Terminal => "terminal",
+        }
+    }
+}
+
 /// Owns wallet I/O and durable authorization for a single data directory.
 pub struct PaymentService {
     pub ledger: Ledger,
@@ -233,7 +256,37 @@ impl PaymentService {
         Ok(Some(receipt))
     }
 
+    /// Wait for the earliest receiver-side evidence that this incoming payment
+    /// has arrived, which is the safe point to start work that has not yet been
+    /// delivered. It is **not** a settlement record: the caller must still
+    /// `wait_received` before treating the payment as received.
+    ///
+    /// The returned [`Arrival`] records which evidence opened the gate, so a
+    /// caller can tell an early claiming observation from the terminal
+    /// fallback. It is diagnostic only and must not change settlement.
+    pub async fn wait_arrival(&self, invoice: &Invoice) -> Result<Arrival> {
+        let payment = self.await_incoming(invoice, true).await?;
+        ensure!(
+            payment.status == PaymentStatus::Succeeded || payment.is_claiming(),
+            "incoming payment did not succeed"
+        );
+        Ok(if payment.is_claiming() {
+            Arrival::Claiming
+        } else {
+            Arrival::Terminal
+        })
+    }
+
     pub async fn wait_received(&self, invoice: &Invoice) -> Result<()> {
+        let payment = self.await_incoming(invoice, false).await?;
+        ensure!(
+            payment.status == PaymentStatus::Succeeded,
+            "incoming payment did not succeed"
+        );
+        Ok(())
+    }
+
+    async fn await_incoming(&self, invoice: &Invoice, claiming: bool) -> Result<Transaction> {
         let wallet = self.wallet().await?;
         let remaining = invoice.expires_at_ms.saturating_sub(crate::now_ms());
         let payment = if remaining == 0 {
@@ -248,19 +301,23 @@ impl PaymentService {
             );
             payment
         } else {
-            tokio::time::timeout(
-                Duration::from_millis(remaining),
-                wallet.wait_for_payment(&invoice.payment_hash),
-            )
-            .await
-            .context("payment invoice expired")??
+            let waiting = async {
+                if claiming {
+                    wallet.wait_for_arrival(&invoice.payment_hash).await
+                } else {
+                    wallet.wait_for_payment(&invoice.payment_hash).await
+                }
+            };
+            tokio::time::timeout(Duration::from_millis(remaining), waiting)
+                .await
+                .context("payment invoice expired")??
         };
         validate_payment_update(&payment, &invoice.payment_hash, true)?;
         ensure!(
-            payment.status == PaymentStatus::Succeeded,
+            payment.status != PaymentStatus::Failed,
             "incoming payment did not succeed"
         );
-        Ok(())
+        Ok(payment)
     }
 }
 

@@ -85,6 +85,7 @@ impl LexeProvider {
                 lexe::types::payment::PaymentStatus::Completed => PaymentStatus::Succeeded,
                 lexe::types::payment::PaymentStatus::Failed => PaymentStatus::Failed,
             },
+            status_msg: Some(payment.status_msg),
             created_at_ms: payment.created_at.to_millis(),
             settled_at_ms: payment.finalized_at.map(|time| time.to_millis()),
         }
@@ -160,6 +161,21 @@ impl WalletProvider for LexeProvider {
         amount_msat: u64,
         max_total_msat: u64,
     ) -> Result<Transaction, PayError> {
+        // Phase timing for the payer-side critical path. Static field names
+        // and durations only; invoices and hashes are operator data.
+        let started = std::time::Instant::now();
+        let mut mark = started;
+        let lap = |phase: &'static str, mark: &mut std::time::Instant| {
+            let now = std::time::Instant::now();
+            tracing::debug!(
+                target: "mesh_llm::payments::timing",
+                phase,
+                ms = now.duration_since(*mark).as_millis() as u64,
+                total_ms = now.duration_since(started).as_millis() as u64,
+                "payer phase"
+            );
+            *mark = now;
+        };
         invoice
             .validate_payment(amount_msat, crate::now_ms())
             .map_err(PayError::NotSubmitted)?;
@@ -175,6 +191,7 @@ impl WalletProvider for LexeProvider {
             }
             return Ok(existing);
         }
+        lap("duplicate_lookup", &mut mark);
         let parsed: lexe::types::bitcoin::Invoice = invoice
             .bolt11
             .parse()
@@ -195,6 +212,7 @@ impl WalletProvider for LexeProvider {
             .map_err(|_| {
                 PayError::NotSubmitted(anyhow::anyhow!("Lexe payment preflight failed"))
             })?;
+        lap("preflight", &mut mark);
         let debit = route
             .amount
             .msat()
@@ -221,10 +239,13 @@ impl WalletProvider for LexeProvider {
             .map_err(|_| {
                 anyhow::anyhow!("Lexe payment outcome uncertain; reconcile by payment hash")
             })?;
-        Ok(self
+        lap("submit", &mut mark);
+        let submitted = self
             .lookup(&invoice.payment_hash)
             .await?
-            .context("payment submitted; status not yet available")?)
+            .context("payment submitted; status not yet available")?;
+        lap("submitted_lookup", &mut mark);
+        Ok(submitted)
     }
 
     async fn lookup(&self, payment_hash: &str) -> Result<Option<Transaction>> {
@@ -244,18 +265,56 @@ impl WalletProvider for LexeProvider {
     }
 
     async fn wait_for_payment(&self, payment_hash: &str) -> Result<Transaction> {
-        // Lexe currently exposes payment lookup rather than push notifications.
-        // Keep that transport detail behind the provider interface.
+        self.poll_until(payment_hash, |payment| {
+            payment.status != PaymentStatus::Pending
+        })
+        .await
+    }
+
+    async fn wait_for_arrival(&self, payment_hash: &str) -> Result<Transaction> {
+        self.poll_until(payment_hash, |payment| {
+            payment.status != PaymentStatus::Pending || payment.is_claiming()
+        })
+        .await
+    }
+}
+
+impl LexeProvider {
+    /// Lexe exposes payment lookup rather than push notifications. Keep that
+    /// transport detail behind the provider interface.
+    ///
+    /// This is a lookup-start cadence, not an inter-poll sleep. A warm lookup
+    /// round trip is itself 171-255 ms on the reference pair, so sleeping a
+    /// further fixed interval would nearly double the effective period and can
+    /// miss the receiver's few-hundred-millisecond claiming state. Ticks that
+    /// a slow lookup has already consumed are skipped rather than queued.
+    async fn poll_until(
+        &self,
+        payment_hash: &str,
+        settled: impl Fn(&Transaction) -> bool,
+    ) -> Result<Transaction> {
+        let mut cadence = tokio::time::interval(POLL_INTERVAL);
+        cadence.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
-            if let Some(payment) = self.lookup(payment_hash).await?
-                && payment.status != PaymentStatus::Pending
+            cadence.tick().await;
+            let started = std::time::Instant::now();
+            let payment = self.lookup(payment_hash).await?;
+            tracing::debug!(
+                target: "mesh_llm::payments::timing",
+                phase = "lookup",
+                ms = started.elapsed().as_millis() as u64,
+                "wallet lookup"
+            );
+            if let Some(payment) = payment
+                && settled(&payment)
             {
                 return Ok(payment);
             }
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
     }
 }
+
+const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
 
 #[cfg(test)]
 mod tests {

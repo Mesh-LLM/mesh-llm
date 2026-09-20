@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -33,6 +33,10 @@ struct Network {
     payments: AtomicUsize,
     invoice_expiry_seconds: AtomicUsize,
     updates: tokio::sync::Notify,
+    hold_payments: AtomicBool,
+    payment_release: tokio::sync::Notify,
+    decoded_before_payment: AtomicBool,
+    backend_output_before_payment: AtomicBool,
 }
 
 struct TestWallet {
@@ -78,6 +82,7 @@ impl WalletProvider for TestWallet {
                     amount_msat: amount.unwrap_or(1),
                     fee_msat: 10,
                     status: PaymentStatus::Pending,
+                    status_msg: None,
                     created_at_ms: mesh_llm_payments::now_ms(),
                     settled_at_ms: None,
                 },
@@ -104,6 +109,14 @@ impl WalletProvider for TestWallet {
     async fn pay(&self, invoice: &Invoice, amount: u64, cap: u64) -> Result<Transaction, PayError> {
         invoice.validate_payment(amount, mesh_llm_payments::now_ms())?;
         assert!(amount + 10 <= cap);
+        while self.network.hold_payments.load(Ordering::SeqCst) {
+            let released = self.network.payment_release.notified();
+            tokio::pin!(released);
+            if !self.network.hold_payments.load(Ordering::SeqCst) {
+                break;
+            }
+            released.await;
+        }
         {
             let mut entries = self.network.entries.lock().unwrap();
             let (owner, payment) = entries.get_mut(&invoice.payment_hash).unwrap();
@@ -154,12 +167,17 @@ async fn simulated_backend(
         .unwrap()
         .unwrap();
     let output_tokens = if output_allowance > 4096 { 5000 } else { 3 };
+    let generation_payments = payments.clone();
     let generate = tokio::task::spawn_blocking(move || -> Result<()> {
-        // No decode may happen until the seller's authoritative wallet records payment.
-        assert_eq!(payments.payments.load(Ordering::SeqCst), 0);
+        // Payment starts after prefill, while decode is allowed to continue.
+        assert_eq!(generation_payments.payments.load(Ordering::SeqCst), 0);
         gate.after_prefill(40, output_allowance)
             .map_err(|_| anyhow::anyhow!("gate failed"))?;
-        assert_eq!(payments.payments.load(Ordering::SeqCst), 1);
+        if generation_payments.payments.load(Ordering::SeqCst) == 0 {
+            generation_payments
+                .decoded_before_payment
+                .store(true, Ordering::SeqCst);
+        }
         for _ in 0..output_tokens {
             gate.before_token()
                 .map_err(|_| anyhow::anyhow!("cancelled"))?;
@@ -183,6 +201,11 @@ async fn simulated_backend(
     stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).as_bytes()).await?;
     stream.write_all(&body).await?;
     stream.shutdown().await?;
+    if payments.payments.load(Ordering::SeqCst) == 0 {
+        payments
+            .backend_output_before_payment
+            .store(true, Ordering::SeqCst);
+    }
     Ok(())
 }
 
@@ -190,7 +213,17 @@ async fn simulated_backend(
 async fn payments_two_quic_nodes_gate_decode_and_settle_actual_output() -> Result<()> {
     tokio::time::timeout(
         Duration::from_secs(20),
-        paid_exchange(false, false, Some(8), 8),
+        paid_exchange(false, false, false, Some(8), 8),
+    )
+    .await??;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn payments_decode_runs_while_input_payment_is_pending_but_delivery_waits() -> Result<()> {
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        paid_exchange(false, false, true, Some(8), 8),
     )
     .await??;
     Ok(())
@@ -200,7 +233,7 @@ async fn payments_two_quic_nodes_gate_decode_and_settle_actual_output() -> Resul
 async fn payments_manual_approval_gates_both_invoices() -> Result<()> {
     tokio::time::timeout(
         Duration::from_secs(20),
-        paid_exchange(true, false, Some(8), 8),
+        paid_exchange(true, false, false, Some(8), 8),
     )
     .await??;
     Ok(())
@@ -210,7 +243,7 @@ async fn payments_manual_approval_gates_both_invoices() -> Result<()> {
 async fn payments_cancellation_settles_transmitted_output() -> Result<()> {
     tokio::time::timeout(
         Duration::from_secs(20),
-        paid_exchange(false, true, Some(8), 8),
+        paid_exchange(false, true, false, Some(8), 8),
     )
     .await??;
     Ok(())
@@ -220,7 +253,7 @@ async fn payments_cancellation_settles_transmitted_output() -> Result<()> {
 async fn payments_omitted_limit_uses_backend_context_and_settles_long_output() -> Result<()> {
     tokio::time::timeout(
         Duration::from_secs(20),
-        paid_exchange(false, false, None, 6000),
+        paid_exchange(false, false, false, None, 6000),
     )
     .await??;
     Ok(())
@@ -230,7 +263,7 @@ async fn payments_omitted_limit_uses_backend_context_and_settles_long_output() -
 async fn payments_explicit_large_limit_can_be_clamped_to_context() -> Result<()> {
     tokio::time::timeout(
         Duration::from_secs(20),
-        paid_exchange(true, false, Some(65_536), 6000),
+        paid_exchange(true, false, false, Some(65_536), 6000),
     )
     .await??;
     Ok(())
@@ -239,12 +272,16 @@ async fn payments_explicit_large_limit_can_be_clamped_to_context() -> Result<()>
 async fn paid_exchange(
     manual: bool,
     cancel_after_output: bool,
+    hold_input_payment: bool,
     requested: Option<u32>,
     output_allowance: u32,
 ) -> Result<()> {
     let provider_dir = tempfile::tempdir()?;
     let payer_dir = tempfile::tempdir()?;
     let network = Arc::new(Network::default());
+    network
+        .hold_payments
+        .store(hold_input_payment, Ordering::SeqCst);
     let provider_service = Arc::new(PaymentService::with_provider(
         provider_dir.path(),
         Arc::new(TestWallet {
@@ -307,13 +344,7 @@ async fn paid_exchange(
         .await?;
     let (mut send, recv) = connection.open_bi().await?;
     let id = uuid::Uuid::new_v4().to_string();
-    let mut body = serde_json::json!({"model": "test", "prompt": "Hi"});
-    if let Some(limit) = requested {
-        body["max_tokens"] = limit.into();
-    }
-    let request = super::request::PaidRequest::parse(
-        format!("POST /v1/completions HTTP/1.1\r\n\r\n{body}").as_bytes(),
-    )?;
+    let request = paid_request(requested)?;
     wire::write(
         &mut send,
         &Frame::Request {
@@ -346,6 +377,7 @@ async fn paid_exchange(
     if manual {
         approve_pending_request(&payer_service, &network).await?;
     }
+    release_held_payment_after_backend_output(hold_input_payment, &network, &mut receiver).await?;
     let response = receive_and_cancel(&mut receiver, cancel_after_output, cancel).await?;
     exchange.await??;
     assert!(response.contains("test output"));
@@ -360,6 +392,49 @@ async fn paid_exchange(
     );
     payer.endpoint.close().await;
     provider.endpoint.close().await;
+    Ok(())
+}
+
+fn paid_request(max_tokens: Option<u32>) -> Result<super::request::PaidRequest> {
+    let mut body = serde_json::json!({"model": "test", "prompt": "Hi"});
+    if let Some(limit) = max_tokens {
+        body["max_tokens"] = limit.into();
+    }
+    super::request::PaidRequest::parse(
+        format!("POST /v1/completions HTTP/1.1\r\n\r\n{body}").as_bytes(),
+    )
+}
+
+async fn wait_for_backend_output_before_payment(network: &Network) -> Result<()> {
+    while !network.backend_output_before_payment.load(Ordering::SeqCst) {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        network.decoded_before_payment.load(Ordering::SeqCst),
+        "decode did not start while payment was pending"
+    );
+    assert_eq!(network.payments.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+async fn release_held_payment_after_backend_output(
+    held: bool,
+    network: &Network,
+    receiver: &mut tokio::io::DuplexStream,
+) -> Result<()> {
+    if !held {
+        return Ok(());
+    }
+    wait_for_backend_output_before_payment(network).await?;
+    let mut byte = [0; 1];
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), receiver.read(&mut byte))
+            .await
+            .is_err(),
+        "provider released output before receiving payment"
+    );
+    network.hold_payments.store(false, Ordering::SeqCst);
+    network.payment_release.notify_waiters();
     Ok(())
 }
 
