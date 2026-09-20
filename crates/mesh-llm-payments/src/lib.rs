@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 pub mod control;
+pub mod intent;
 pub mod invoice;
 pub mod ledger;
 pub mod pricing;

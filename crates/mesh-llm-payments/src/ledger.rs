@@ -111,7 +111,7 @@ impl Ledger {
         self.set_setting("policy", &serde_json::to_string(policy)?)
     }
 
-    fn get_setting(&self, key: &str) -> Result<Option<String>> {
+    pub(crate) fn get_setting(&self, key: &str) -> Result<Option<String>> {
         Ok(self
             .lock()?
             .query_row("SELECT value FROM settings WHERE key=?", [key], |r| {
@@ -120,7 +120,7 @@ impl Ledger {
             .optional()?)
     }
 
-    fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+    pub(crate) fn set_setting(&self, key: &str, value: &str) -> Result<()> {
         self.lock()?.execute("INSERT INTO settings VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![key, value])?;
         Ok(())
     }

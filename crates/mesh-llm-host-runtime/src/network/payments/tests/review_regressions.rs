@@ -46,6 +46,7 @@ async fn fragmented_exchange() -> Result<()> {
             network: network.clone(),
         }),
     )?);
+    allow_paid(&service)?;
     service.ledger.set_policy(&Policy {
         mode: ApprovalMode::Automatic,
         daily_budget_msat: Some(10_000),

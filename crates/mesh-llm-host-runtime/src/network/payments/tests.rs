@@ -297,6 +297,7 @@ async fn paid_exchange(
             network: network.clone(),
         }),
     )?);
+    allow_paid(&payer_service)?;
     payer_service.ledger.set_policy(&Policy {
         mode: if manual {
             ApprovalMode::Manual
@@ -490,4 +491,14 @@ fn assert_settlement(
             .all(|r| r.paid)
     );
     Ok(())
+}
+
+fn allow_paid(service: &PaymentService) -> Result<()> {
+    service
+        .ledger
+        .set_payment_intent(&mesh_llm_payments::intent::PaymentIntent::AllowPaid {
+            max_input_msat_per_million: 1_000_000,
+            max_output_msat_per_million: 1_000_000,
+            max_total_msat: 100_000,
+        })
 }

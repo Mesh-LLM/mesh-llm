@@ -21,6 +21,7 @@ async fn remote_request(legacy: bool) -> Result<()> {
             network: network.clone(),
         }),
     )?);
+    allow_paid(&service)?;
     service.ledger.set_policy(&Policy {
         mode: ApprovalMode::Automatic,
         daily_budget_msat: Some(100_000),

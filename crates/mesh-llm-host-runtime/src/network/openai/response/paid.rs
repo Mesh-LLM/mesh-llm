@@ -122,6 +122,10 @@ async fn start(
     let request = PaidRequest::parse(raw)?;
     let (mut send, recv) = node.open_http_tunnel(peer).await?;
     let service = node.payment_service().await?;
+    ensure!(
+        service.ledger.payment_intent()?.permits(&price, 0),
+        "paid inference is excluded by client payment intent"
+    );
     let id = uuid::Uuid::new_v4().to_string();
     send.write_all(wire::HTTP_UPGRADE).await?;
     wire::write(
@@ -194,6 +198,10 @@ pub(crate) async fn exchange(
         terms.max_total_msat == total && terms.expires_at_ms == invoice.expires_at_ms,
         "payment limit mismatch"
     );
+    ensure!(
+        service.ledger.payment_intent()?.permits(&price, total),
+        "paid inference is excluded by client payment intent"
+    );
     invoice.validate_payment(input_amount, mesh_llm_payments::now_ms())?;
     ensure!(
         invoice.amount_msat == Some(input_amount),
@@ -209,6 +217,11 @@ pub(crate) async fn exchange(
             let _ = wire::write(&mut send, &Frame::Cancel).await;
             bail!("application disconnected before approval");
         }
+    }
+    if !service.ledger.payment_intent()?.permits(&price, total) {
+        service.ledger.fail_authorization_if_idle(&id)?;
+        let _ = wire::write(&mut send, &Frame::Cancel).await;
+        bail!("client payment intent changed before submission");
     }
     // Start durable submission and terminal reconciliation, then read the
     // provider stream concurrently. The provider releases output only after

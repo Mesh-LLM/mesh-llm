@@ -38,6 +38,9 @@ pub enum ControlCommand {
     Policy {
         value: Option<Policy>,
     },
+    PaymentIntent {
+        value: Option<crate::intent::PaymentIntent>,
+    },
     Pricing,
     SetPricing {
         model: String,
@@ -96,6 +99,12 @@ impl PaymentService {
                     self.ledger.set_policy(&value)?;
                 }
                 Ok(serde_json::to_value(self.ledger.policy()?)?)
+            }
+            ControlCommand::PaymentIntent { value } => {
+                if let Some(value) = value {
+                    self.ledger.set_payment_intent(&value)?;
+                }
+                Ok(serde_json::to_value(self.ledger.payment_intent()?)?)
             }
             ControlCommand::Pricing => Ok(serde_json::to_value(self.ledger.pricing()?)?),
             ControlCommand::SetPricing { model, value } => {

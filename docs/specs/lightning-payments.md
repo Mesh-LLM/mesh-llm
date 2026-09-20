@@ -184,6 +184,23 @@ reservations carry across midnight. Approval atomically checks both unreserved
 wallet balance and remaining budget so concurrent requests cannot reserve the
 same funds.
 
+Client intent defaults to `free_only`, independently of wallet funding or automatic
+approval. Configure deliberate paid use through the trusted-local wallet API:
+
+```json
+{"command":"payment_intent","value":{"mode":"allow_paid","max_input_msat_per_million":1000000,"max_output_msat_per_million":1000000,"max_total_msat":10000}}
+```
+
+Read it with `{"command":"payment_intent"}`; reset with
+`{"command":"payment_intent","value":{"mode":"free_only"}}`. This profile-level
+setting works for ordinary OpenAI clients without custom request fields. Paid
+intent retains free providers as candidates. Rate caps and total debit (including
+both fee allowances and invoice rounding) are enforced during ranking and against
+exact input-invoice terms before approval, then rechecked after approval. Existing
+remote-ingress restrictions remain authoritative. Once submission starts,
+changing intent does not cancel existing settlement obligations. Per-request
+intent overrides and a dedicated CLI command are not implemented yet.
+
 Routing prefers local inference, eligible paid peers, then free peers. Paid peers
 are ranked by estimated input plus maximum output cost for the exact model.
 Existing capability, health and context checks still apply. Equal-price choices
