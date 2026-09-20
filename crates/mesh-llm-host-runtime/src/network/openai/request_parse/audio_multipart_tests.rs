@@ -120,12 +120,18 @@ async fn oversized_multipart_model_is_rejected_before_audio_routing() {
                 "POST {path} HTTP/1.1\r\nContent-Type: multipart/form-data; boundary=mesh\r\nContent-Length: {}\r\n\r\n{body}",
                 body.len()
             );
-            let (mut client, mut server) = tokio::io::duplex(request.len() + 1);
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                read_http_request_with_plugin_manager_with_context(&mut stream.into(), None)
+                    .await
+                    .unwrap_err()
+            });
+            let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
             client.write_all(request.as_bytes()).await.unwrap();
             client.shutdown().await.unwrap();
-            let error = read_http_request_with_plugin_manager_with_context(&mut server, None)
-                .await
-                .unwrap_err();
+            let error = server.await.unwrap();
             assert_eq!(error.context().unwrap().client_path, path);
             assert!(error.to_string().contains("256-byte limit"));
         }
@@ -155,12 +161,18 @@ async fn duplicate_multipart_model_is_rejected_before_audio_routing() {
             "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\r\n{body}",
             body.len()
         );
-        let (mut client, mut server) = tokio::io::duplex(request.len() + 1);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            read_http_request_with_plugin_manager_with_context(&mut stream.into(), None)
+                .await
+                .unwrap_err()
+        });
+        let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
         client.write_all(request.as_bytes()).await.unwrap();
         client.shutdown().await.unwrap();
-        let error = read_http_request_with_plugin_manager_with_context(&mut server, None)
-            .await
-            .unwrap_err();
+        let error = server.await.unwrap();
         assert_eq!(error.context().unwrap().client_path, path);
         assert!(
             error

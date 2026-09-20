@@ -26,6 +26,8 @@ pub(super) fn request_workload_class(path: &str) -> Option<ModelWorkloadClass> {
         "/v1/chat/completions"
         | "/v1/completions"
         | "/v1/responses"
+        | "/v1/messages"
+        | "/v1/messages/count_tokens"
         | "/v1/audio/transcriptions"
         | "/v1/audio/translations" => Some(ModelWorkloadClass::CausalGeneration),
         "/v1/embeddings" => Some(ModelWorkloadClass::Embedding),
@@ -40,7 +42,7 @@ pub(super) fn request_workload_class(path: &str) -> Option<ModelWorkloadClass> {
 pub(super) fn supports_generation_affinity(path: &str) -> bool {
     matches!(
         path.split('?').next().unwrap_or(path),
-        "/v1/chat/completions" | "/v1/completions" | "/v1/responses"
+        "/v1/chat/completions" | "/v1/completions" | "/v1/responses" | "/v1/messages"
     )
 }
 

@@ -38,6 +38,28 @@ fn unknown_workloads_never_inherit_legacy_admission() {
     assert_eq!(absent.workload_class, None);
 }
 
+#[test]
+/// Anthropic Messages normalizes to a chat completion, so it must be admitted
+/// as causal generation and share generation affinity with the chat route.
+fn anthropic_messages_shares_chat_workload_and_affinity() {
+    assert_eq!(
+        request_workload_class("/v1/messages"),
+        Some(ModelWorkloadClass::CausalGeneration)
+    );
+    assert_eq!(
+        request_workload_class("/v1/messages/count_tokens"),
+        Some(ModelWorkloadClass::CausalGeneration)
+    );
+    // Query strings must not change classification.
+    assert_eq!(
+        request_workload_class("/v1/messages?foo=bar"),
+        Some(ModelWorkloadClass::CausalGeneration)
+    );
+    assert!(supports_generation_affinity("/v1/messages"));
+    // Count requests are stateless and must not pin generation affinity.
+    assert!(!supports_generation_affinity("/v1/messages/count_tokens"));
+}
+
 /// Construct a local artifact identity without implying workload capability.
 fn local_gguf_descriptor(model_name: &str) -> ServedModelDescriptor {
     ServedModelDescriptor {
