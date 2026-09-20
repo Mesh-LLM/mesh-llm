@@ -9,10 +9,10 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{oneshot, watch};
 
-async fn start_http_tunnel_test_node() -> (mesh::Node, mesh::TunnelChannels) {
+async fn start_http_tunnel_test_node() -> (mesh::Node, mesh::TunnelChannels, tempfile::TempDir) {
     let relay_urls = Vec::new();
     let relay_auths = HashMap::new();
-    mesh::Node::start(
+    let (node, channels) = mesh::Node::start(
         mesh::NodeRole::Client,
         mesh::RelayConfig {
             urls: &relay_urls,
@@ -30,7 +30,14 @@ async fn start_http_tunnel_test_node() -> (mesh::Node, mesh::TunnelChannels) {
         crate::MeshRequirements::unrestricted(),
     )
     .await
-    .expect("start HTTP tunnel test node")
+    .expect("start HTTP tunnel test node");
+    // These are free-routing fixtures, not the operator's configured wallet.
+    // Keep the directory alive for every clone used by tunnel tasks.
+    let directory = tempfile::tempdir().expect("isolated payment config");
+    *node.config_state.lock().await =
+        crate::runtime::config_state::ConfigState::load(&directory.path().join("config.toml"))
+            .expect("isolated config state");
+    (node, channels, directory)
 }
 
 async fn spawn_tunnel_capture() -> (u16, oneshot::Receiver<Vec<u8>>, tokio::task::JoinHandle<()>) {
@@ -82,8 +89,9 @@ async fn send_tunneled_request(
 
 #[tokio::test]
 async fn paused_inbound_quic_http_rejects_before_reading_or_routing_request() {
-    let (sender, sender_channels) = start_http_tunnel_test_node().await;
-    let (mut receiver, receiver_channels) = start_http_tunnel_test_node().await;
+    let (sender, sender_channels, _sender_directory) = start_http_tunnel_test_node().await;
+    let (mut receiver, receiver_channels, _receiver_directory) =
+        start_http_tunnel_test_node().await;
     receiver.activity_policy_guard = crate::runtime::activity_policy::ActivityPolicyGuard::new(
         &mesh_llm_config::RuntimeActivityConfig {
             enabled: true,
@@ -152,8 +160,8 @@ async fn paused_inbound_quic_http_rejects_before_reading_or_routing_request() {
 
 #[tokio::test]
 async fn inbound_quic_http_dispatches_without_local_api_listener() {
-    let (sender, sender_channels) = start_http_tunnel_test_node().await;
-    let (receiver, receiver_channels) = start_http_tunnel_test_node().await;
+    let (sender, sender_channels, _sender_directory) = start_http_tunnel_test_node().await;
+    let (receiver, receiver_channels, _receiver_directory) = start_http_tunnel_test_node().await;
     let (upstream_port, upstream_rx, upstream_handle) = spawn_tunnel_capture().await;
     let mut targets = election::ModelTargets::default();
     targets.targets.insert(
@@ -195,8 +203,8 @@ async fn inbound_quic_http_dispatches_without_local_api_listener() {
 }
 
 async fn assert_passive_legacy_lifecycle_path_is_rejected(path: &str) {
-    let (sender, sender_channels) = start_http_tunnel_test_node().await;
-    let (receiver, receiver_channels) = start_http_tunnel_test_node().await;
+    let (sender, sender_channels, _sender_directory) = start_http_tunnel_test_node().await;
+    let (receiver, receiver_channels, _receiver_directory) = start_http_tunnel_test_node().await;
     let (upstream_port, upstream_rx, upstream_handle) = spawn_tunnel_capture().await;
     let api_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
