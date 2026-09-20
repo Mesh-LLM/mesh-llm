@@ -339,6 +339,63 @@ jobs:
           WORK_DIR: ${{ runner.temp }}/skippy-ci-smoke
         run: scripts/skippy-ci-smoke.sh
 
+      - name: System One (OpenJEV) smoke
+        id: system_one
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' && steps.family_patch.outcome == 'success'
+        # Continue so the evidence upload and the explicit unchanged-pin failure
+        # summary still run after a red lane. The full-model read is admitted
+        # only by an explicitly declared qualified backend; on the Metal
+        # family-certify runner it reports NOT CERTIFIED instead of passing
+        # quietly, and only a red contract part or a red declared-qualified read
+        # fails the run.
+        continue-on-error: true
+        timeout-minutes: 120
+        env:
+          WORK_DIR: ${{ github.workspace }}/target/skippy-system-one-smoke
+          SYSTEMONE_SMOKE_CADENCE: ${{ steps.sha.outputs.cadence }}
+          SYSTEMONE_SMOKE_BUILD_BACKEND: ${{ vars.LLAMA_CANARY_SYSTEMONE_BACKEND }}
+          SYSTEMONE_SMOKE_CERTIFIED_BACKENDS: ${{ vars.LLAMA_CANARY_SYSTEMONE_CERTIFIED_BACKENDS }}
+          SYSTEMONE_SMOKE_REQUIRE_QUALIFIED: ${{ vars.LLAMA_CANARY_SYSTEMONE_REQUIRE_QUALIFIED }}
+        run: scripts/skippy-system-one-smoke.sh
+
+      - name: Report System One smoke result
+        if: ${{ !cancelled() && steps.system_one.outcome != 'skipped' }}
+        env:
+          SYSTEM_ONE_OUTCOME: ${{ steps.system_one.outcome }}
+          WORK_DIR: ${{ github.workspace }}/target/skippy-system-one-smoke
+        run: |
+          set -euo pipefail
+          report="$WORK_DIR/reports/system-one.json"
+          {
+            echo "## System One (OpenJEV) smoke"
+            echo
+            if [[ ! -f "$report" ]]; then
+              echo "No System One smoke report was produced (step outcome: ${SYSTEM_ONE_OUTCOME})."
+            elif [[ "$(jq -r '.status' "$report")" == "unqualified" ]]; then
+              echo "**Full-model System One read: NOT CERTIFIED on this runner.**"
+              echo
+              echo "The contract part $(jq -r '.contract.status' "$report"). The complete-model read is admitted only on a declared qualified backend; this runner reports backend \`$(jq -r '.full_model_read.backend // "<unset>"' "$report")\` against \`$(jq -r '.full_model_read.certified_backends | join(",")' "$report")\`, with the pinned artifact $(if [[ "$(jq -r '.full_model_read.artifact_path // ""' "$report")" == "" ]]; then echo "not present in the offline cache"; else echo "present in the offline cache"; fi)."
+              echo
+              echo "Pre-warm instructions: \`scripts/skippy-system-one-smoke.sh --prewarm\`."
+            else
+              echo "Contract part: $(jq -r '.contract.status' "$report"). Full-model read: $(jq -r '.full_model_read.status' "$report"). Backend: \`$(jq -r '.full_model_read.backend // "<unset>"' "$report")\`."
+            fi
+            if [[ "$(jq -r '.reasons | length' "$report" 2>/dev/null || echo 0)" != "0" ]]; then
+              echo
+              jq -r '.reasons[] | "- \(.)"' "$report"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload System One smoke evidence
+        if: ${{ steps.system_one.outcome != 'skipped' && (success() || failure() || cancelled()) }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: llama-canary-system-one-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            target/skippy-system-one-smoke/
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Supported-families certification battery (parity gate)
         id: battery
         if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' && steps.family_patch.outcome == 'success'
@@ -390,6 +447,7 @@ jobs:
           && steps.split_roster.outcome == 'success'
           && steps.parity_validate.outcome == 'success'
           && steps.family_patch.outcome == 'success'
+          && steps.system_one.outcome == 'success'
         run: |
           {
             echo "## llama.cpp upstream canary (forced certification)"
@@ -409,6 +467,7 @@ jobs:
           && steps.split_roster.outcome == 'success'
           && steps.parity_validate.outcome == 'success'
           && steps.family_patch.outcome == 'success'
+          && steps.system_one.outcome == 'success'
         run: |
           {
             echo "## llama.cpp nightly family sentinels"
@@ -426,7 +485,8 @@ jobs:
           && (steps.battery.outcome == 'failure'
               || steps.split_roster.outcome == 'failure'
               || steps.parity_validate.outcome == 'failure'
-              || steps.family_patch.outcome == 'failure')
+              || steps.family_patch.outcome == 'failure'
+              || steps.system_one.outcome == 'failure')
         run: |
           {
             echo "## llama.cpp unchanged-pin certification failed"

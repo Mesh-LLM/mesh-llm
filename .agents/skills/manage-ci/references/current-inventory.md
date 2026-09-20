@@ -97,7 +97,21 @@ lanes derive filtered-load resident tensor names from the native stage graph
 planner, including GGUFs with non-finite metadata values. The workflow builds its five
 certification binaries before the manifest lanes; the family battery builds
 them once itself unless `--skip-build` is selected, in which case it verifies
-that every binary already exists. Before any certification starts, every GGUF is resolved
+that every binary already exists. Every certification also runs the System One
+(OpenJEV) smoke, `scripts/skippy-system-one-smoke.sh`, which drives
+`POST /v1/systemone` through the pinned `family-qwen3-dense` fixture for the
+backend-independent contract and fail-closed rejections, and through the pinned
+`unsloth/diffusiongemma-26B-A4B-it-GGUF` Q4_K_M artifact for one complete
+single-lane read with repeat/interleaved determinism. Both artifacts come from
+`ci/model-artifacts/manifests/skippy-system-one-smoke.json`, whose cadence
+authorization and pinned revision/size/SHA-256 are enforced before load; a
+mismatch is a hard failure, never a skip. The complete-model read is admitted
+only on a declared qualified backend (default `cuda`), so it reports
+NOT CERTIFIED on the Metal runner through a job annotation, a report row, and
+the job summary rather than passing quietly, and a red contract part or a red
+declared-qualified read fails the unchanged-pin run, the changed-pin repair
+gates, and the independent verification pass. It adds no family roster row and
+claims no split or profile support. Before any certification starts, every GGUF is resolved
 directly by the immutable snapshot SHA checked into
 `ci/llama-canary/family-certified.json`. The runtime preflight records the
 revisions, verifies all shard/tensor scans and declared runtime/MTP layer

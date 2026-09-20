@@ -36,6 +36,7 @@ SUITE_OUTPUTS = {
     "skippy-correctness": MANIFEST_DIR / "skippy-correctness.json",
     "safetensors-runtime-smoke": MANIFEST_DIR / "safetensors-runtime-smoke.json",
     "skippy-ci-smoke": MANIFEST_DIR / "skippy-ci-smoke.json",
+    "skippy-system-one-smoke": MANIFEST_DIR / "skippy-system-one-smoke.json",
     "skippy-parity": MANIFEST_DIR / "skippy-parity.json",
     "competitive-benchmark": MANIFEST_DIR / "competitive-benchmark.json",
     "radix-cache": MANIFEST_DIR / "radix-cache.json",

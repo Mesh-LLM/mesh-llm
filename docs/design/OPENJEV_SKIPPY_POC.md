@@ -130,6 +130,74 @@ backend forwards System One reads to the inner backend unscreened. This is
 intentional for the PoC: `state` is consumed as structured read input, and the
 endpoint never generates free-form text.
 
+## Canary coverage
+
+`scripts/skippy-system-one-smoke.sh` is the llama.cpp upstream canary's System
+One lane. It runs in two independent parts, because they have different
+preconditions.
+
+**Contract part (always runs).** It starts `serve-openai` on the pinned
+`family-qwen3-dense` fixture and drives `POST /v1/systemone` through the
+fail-closed boundaries the frontend decides, which need no diffusion model and
+therefore no particular accelerator:
+
+- an unloaded model, empty questions, and choice/score criteria outside their
+  documented bounds (`2..=26` and `2..=10`) are typed `invalid_request` errors;
+- `images`, more than one `steps` or `samples`, `think`, and `sequential` reads
+  are typed unsupported-feature errors rather than silently changing meaning;
+- a non-`POST` method gets the method-not-allowed fallback;
+- a well-formed read against a non-DiffusionGemma model is refused by the
+  native runtime instead of being answered.
+
+**Full-model read part (backend qualified only).** It loads
+`unsloth/diffusiongemma-26B-A4B-it-GGUF` at `Q4_K_M` on exactly one runtime
+lane and asserts `noul`, `choice`, `score`, and mixed-question answers: finite
+probabilities inside `[0, 1]`, label distributions that sum to one, an answer
+inside the declared label set, a reported score that is the expectation of its
+own distribution, positive input tokens with no generated output tokens, and
+the documented alias, whose requested model string the response echoes. It
+then repeats a read, interleaves a different read, and
+repeats the first again: the two identical reads must agree, and the two
+different reads must differ. A leaked diffusion canvas or a cached answer
+breaks one of those two.
+
+Both artifacts are resolved through the shared test-model manifest contract
+(`ci/model-artifacts/manifests/skippy-system-one-smoke.json`), which enforces
+the authorized cadence and verifies the pinned revision, byte size, and
+SHA-256 before load. A mismatch fails; it is never a skip.
+
+The part that matters is admission. CUDA is the only backend this proof of
+concept certifies, and the canary's `family-certify` runner builds Metal, so
+the read part is admitted by declaration rather than by assuming whatever
+accelerator is present:
+
+```bash
+# Run the contract part only, wherever a patched native build exists.
+scripts/skippy-system-one-smoke.sh
+
+# Admit the full-model read on a qualified backend with the pin warmed.
+LLAMA_STAGE_BACKEND=cuda SYSTEMONE_SMOKE_BUILD_BACKEND=cuda \
+  scripts/skippy-system-one-smoke.sh
+
+# Pre-warm plan for the pinned artifact (the runner cache is offline and
+# operator-owned, so no CI step downloads it).
+scripts/skippy-system-one-smoke.sh --prewarm
+```
+
+When the read part is not admitted, the smoke records `unqualified`, emits a
+`NOT CERTIFIED` job annotation, and exits zero — a visible gap, never a quiet
+pass. `SYSTEMONE_SMOKE_REQUIRE_QUALIFIED=1` (or the
+`LLAMA_CANARY_SYSTEMONE_REQUIRE_QUALIFIED` repository variable) turns that into
+a hard failure once a qualified backend joins the pool.
+
+The smoke is wired into the unchanged-pin certification, the changed-pin repair
+gates, and the independent candidate verification, and a red contract part or a
+red declared-qualified read blocks publication. It deliberately adds no
+`ci/llama-canary/family-certified.json` row and no
+`ci/llama-canary/generated-family-map.json` entry: it proves the read this
+branch introduces without claiming that the diffusion canvas is
+stage-distributed or that a family profile is certified.
+
 ## Split-serving boundary
 
 The existing
