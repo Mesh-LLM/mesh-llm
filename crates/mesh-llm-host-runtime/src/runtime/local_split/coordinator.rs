@@ -860,11 +860,7 @@ impl SplitTopologyCoordinator {
         };
         match decision {
             super::auto_balance::AutoBalanceDecision::Hold { why } => {
-                tracing::debug!(
-                    model_ref = self.model_ref,
-                    why,
-                    "auto-balance holding"
-                );
+                tracing::debug!(model_ref = self.model_ref, why, "auto-balance holding");
             }
             super::auto_balance::AutoBalanceDecision::Accept { baseline, observed } => {
                 tracing::info!(
@@ -1003,10 +999,7 @@ impl SplitTopologyCoordinator {
         (gain >= AUTO_BALANCE_MIN_PREDICTED_GAIN).then_some(proposal)
     }
 
-    async fn try_auto_rebalance(
-        &mut self,
-        measurement: super::auto_balance::WindowMeasurement,
-    ) {
+    async fn try_auto_rebalance(&mut self, measurement: super::auto_balance::WindowMeasurement) {
         let mut stages = self.active.stages.clone();
         stages.sort_by_key(|stage| stage.stage_index);
         let Some(proposal) = self.propose_rebalance(&measurement, &stages) else {

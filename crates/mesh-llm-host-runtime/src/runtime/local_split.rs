@@ -1,7 +1,7 @@
 mod attestation;
+mod auto_balance;
 mod coordinator;
 mod loading;
-mod auto_balance;
 mod recovery;
 #[cfg(test)]
 mod test_support;
