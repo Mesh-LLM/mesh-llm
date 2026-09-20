@@ -154,20 +154,21 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertNotIn('secrets.', worker)
         self.assertNotIn('github.token', worker)
 
-    def test_persistent_runner_requires_exact_read_only_hf_cache(self) -> None:
-        workflow = WORKFLOW.read_text(encoding="utf-8")
-        preflight = setup_step("Verify runner toolchain")
-        self.assertIn('expected_hf_cache="/Users/lab/models/huggingface"', preflight)
-        self.assertIn('"${HF_CACHE:-}" != "$expected_hf_cache"', preflight)
-        self.assertIn('[[ ! -d "$expected_hf_cache/hub" ]]', preflight)
-        self.assertIn('"${HF_HUB_OFFLINE:-}" != "1"', preflight)
-        self.assertIn('echo "HF_HOME=$expected_hf_cache"', preflight)
-        self.assertIn('echo "HF_HUB_CACHE=$expected_hf_cache/hub"', preflight)
+    def test_build_and_workers_load_runner_cache_configuration(self) -> None:
+        setup = yaml.safe_load(SETUP_ACTION.read_text())
+        worker = yaml.safe_load(PASS_WORKFLOW.read_text())["jobs"]["family"]
+        cache_action = "./.github/actions/use-canary-cache"
+        self.assertEqual(setup["runs"]["steps"][0]["uses"], cache_action)
+        self.assertEqual(worker["steps"][1]["uses"], cache_action)
+        self.assertFalse(any(key.startswith("HF_") for key in worker["env"]))
+        self.assertNotIn("/Users/lab", SETUP_ACTION.read_text() + PASS_WORKFLOW.read_text())
+        cache = yaml.safe_load((ROOT / cache_action / "action.yml").read_text())
+        self.assertEqual(cache["runs"]["steps"][0]["shell"], "/bin/zsh -il {0}")
 
     def test_persistent_runner_executes_goose_preflight(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         preflight = setup_step("Verify runner toolchain")
-        self.assertIn('goose_dir="/Users/lab/.local/bin"', preflight)
+        self.assertIn('goose_dir="$HOME/.local/bin"', preflight)
         self.assertIn('echo "$goose_dir" >> "$GITHUB_PATH"', preflight)
         self.assertIn("xcrun goose; do", preflight)
         self.assertIn('goose_version="$(goose --version 2>&1)"', preflight)

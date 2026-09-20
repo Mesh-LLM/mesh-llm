@@ -3,6 +3,7 @@ description: Verify preinstalled arm64 Metal tooling and read-only model cache; 
 runs:
   using: composite
   steps:
+  - uses: ./.github/actions/use-canary-cache
   - name: Configure canary Git identity
     run: |
       git config --local user.name "mesh-llama-canary-bot"
@@ -14,7 +15,7 @@ runs:
       source scripts/lib/macos-deployment-target.sh
       echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET" >> "$GITHUB_ENV"
       missing=0
-      goose_dir="/Users/lab/.local/bin"
+      goose_dir="$HOME/.local/bin"
       export PATH="$goose_dir:$PATH"
       echo "$goose_dir" >> "$GITHUB_PATH"
       for cmd in cargo just sccache jq python3 uv cmake ninja hf git-lfs lipo brew xcrun goose; do
@@ -36,24 +37,6 @@ runs:
           echo "goose version: $goose_version"
         fi
       fi
-      expected_hf_cache="/Users/lab/models/huggingface"
-      if [[ "${HF_CACHE:-}" != "$expected_hf_cache" ]]; then
-        echo "HF_CACHE must be $expected_hf_cache on this runner; got: ${HF_CACHE:-<unset>}" >&2
-        missing=1
-      fi
-      if [[ ! -d "$expected_hf_cache/hub" ]]; then
-        echo "pre-warmed Hugging Face hub cache is missing: $expected_hf_cache/hub" >&2
-        missing=1
-      fi
-      if [[ "${HF_HUB_OFFLINE:-}" != "1" ]]; then
-        echo "HF_HUB_OFFLINE must be 1 on the read-only family-certify runner" >&2
-        missing=1
-      fi
-      {
-        echo "HF_HOME=$expected_hf_cache"
-        echo "HF_HUB_CACHE=$expected_hf_cache/hub"
-        echo "HF_HUB_OFFLINE=1"
-      } >> "$GITHUB_ENV"
       # Match scripts/check-skippy-generated-family-patch.sh: prefer the
       # pinned llvm@22, but accept any Homebrew LLVM that provides Clang
       # LibTooling (bin/clang + ClangConfig.cmake) so a runner image whose
@@ -81,6 +64,9 @@ runs:
   - name: Isolate compiler cache identity
     run: |
       set -euo pipefail
+      SCCACHE_DIR="${SCCACHE_DIR:-$HOME/Library/Caches/mesh-llm/sccache/llama-canary-arm64}"
+      export SCCACHE_DIR
+      echo "SCCACHE_DIR=$SCCACHE_DIR" >> "$GITHUB_ENV"
       mkdir -p "$SCCACHE_DIR"
       cache_buster="$({
         printf '%s\n' 'platform=macos' 'architecture=arm64' 'backend=metal' 'profile=release' 'cmake-osx-architectures=arm64'

@@ -59,7 +59,6 @@ jobs:
       package: llama-family-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
     env:
       MESH_LLM_REQUIRE_SCCACHE: '1'
-      SCCACHE_DIR: /Users/lab/Library/Caches/mesh-llm/sccache/llama-canary-arm64
       LLAMA_STAGE_BACKEND: metal
       LLAMA_STAGE_BUILD_DIR: ${{ github.workspace }}/.deps/llama-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
       LLAMA_BUILD_DIR: ${{ github.workspace }}/.deps/llama-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
@@ -131,10 +130,6 @@ jobs:
       max-parallel: 8
       matrix: ${{ fromJSON(needs.build.outputs.matrix) }}
     env:
-      HF_CACHE: /Users/lab/models/huggingface
-      HF_HOME: /Users/lab/models/huggingface
-      HF_HUB_CACHE: /Users/lab/models/huggingface/hub
-      HF_HUB_OFFLINE: '1'
       LLAMA_STAGE_BACKEND: metal
       FAMILY_BATTERY_RUN_ID: ${{ inputs.pass_id }}-${{ matrix.shard_index }}
       FAMILY_BATTERY_ARTIFACT_ROOT: ${{ github.workspace }}/target/canary-evidence-${{ github.run_id }}-${{ github.run_attempt }}
@@ -147,6 +142,7 @@ jobs:
           ref: ${{ inputs.source }}
           fetch-depth: 0
           persist-credentials: false
+      - uses: ./.github/actions/use-canary-cache
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ needs.build.outputs.package }}
