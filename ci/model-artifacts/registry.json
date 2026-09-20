@@ -13,7 +13,6 @@
   "suites": [
     "llama-family-certification",
     "product-smoke",
-    "product-integration-smoke",
     "scripted-binary-smoke",
     "sdk-smoke",
     "hf-download-smoke",
@@ -946,7 +945,8 @@
       "family": "granite-hybrid",
       "suites": [
         "llama-family-certification",
-        "product-integration-smoke"
+        "product-smoke",
+        "scripted-binary-smoke"
       ],
       "cadences": [
         "llama-bump",
@@ -3870,7 +3870,6 @@
       "family": "smollm2",
       "suites": [
         "product-smoke",
-        "product-integration-smoke",
         "scripted-binary-smoke",
         "sdk-smoke"
       ],

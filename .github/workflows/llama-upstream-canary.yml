@@ -73,6 +73,8 @@ jobs:
       - name: Verify runner toolchain
         run: |
           set -euo pipefail
+          source scripts/lib/macos-deployment-target.sh
+          echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET" >> "$GITHUB_ENV"
           missing=0
           goose_dir="/Users/lab/.local/bin"
           export PATH="$goose_dir:$PATH"
@@ -144,6 +146,7 @@ jobs:
           mkdir -p "$SCCACHE_DIR"
           cache_buster="$({
             printf '%s\n' 'platform=macos' 'architecture=arm64' 'backend=metal' 'profile=release' 'cmake-osx-architectures=arm64'
+            printf 'macos-deployment-target=%s\n' "$MACOSX_DEPLOYMENT_TARGET"
             rustc -vV
             cc --version
             xcrun --show-sdk-path
@@ -472,6 +475,8 @@ jobs:
       - name: Configure verifier LLVM
         run: |
           set -euo pipefail
+          source scripts/lib/macos-deployment-target.sh
+          echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET" >> "$GITHUB_ENV"
           llvm_prefix="$(brew --prefix llvm@22 2>/dev/null || true)"
           llvm_ok() {
             [[ -n "$1" && -x "$1/bin/clang" && -f "$1/lib/cmake/clang/ClangConfig.cmake" ]]
@@ -492,6 +497,7 @@ jobs:
           mkdir -p "$SCCACHE_DIR"
           cache_buster="$({
             printf '%s\n' 'platform=macos' 'architecture=arm64' 'backend=metal' 'profile=release' 'cmake-osx-architectures=arm64'
+            printf 'macos-deployment-target=%s\n' "$MACOSX_DEPLOYMENT_TARGET"
             rustc -vV
             cc --version
             xcrun --show-sdk-path

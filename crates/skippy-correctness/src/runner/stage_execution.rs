@@ -475,6 +475,9 @@ pub(in crate::runner) fn tokenizer_model_for_state_handoff(
             resident_tensor_names: runtime_plan
                 .as_ref()
                 .map_or_else(Vec::new, |plan| plan.resident_tensor_names.clone()),
+            execution_contract: runtime_plan
+                .as_ref()
+                .map_or_else(String::new, |plan| plan.execution_contract.clone()),
             activation_import_identities: runtime_plan
                 .as_ref()
                 .map_or_else(Vec::new, |plan| plan.activation_import_identities.clone()),

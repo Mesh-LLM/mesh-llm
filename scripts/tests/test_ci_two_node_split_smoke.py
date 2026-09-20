@@ -190,9 +190,9 @@ class TwoNodeSplitSmokeTests(unittest.TestCase):
         self.assertNotIn('seq 1 "$MAX_WAIT"', script)
         self.assertIn('deadline=$((started_at + READINESS_TIMEOUT_SECONDS))', script)
         workflow = (
-            ROOT / ".github/workflows/product-integration-smoke.yml"
+            ROOT / ".github/workflows/scripted-binary-smoke.yml"
         ).read_text()
-        self.assertIn("if: success() || failure()", workflow)
+        self.assertIn("success() || failure()", workflow)
 
     def test_raw_gguf_is_prepared_as_verified_package_v2(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -269,7 +269,7 @@ fi
             "smoke_script: MESH_TWO_NODE_SPLIT_ALLOW_UNCERTIFIED=1 "
             "scripts/ci-two-node-split-smoke.sh"
         )
-        self.assertEqual(caller.count(override_command), 2)
+        self.assertEqual(caller.count(override_command), 1)
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

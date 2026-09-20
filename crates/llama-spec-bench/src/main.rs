@@ -252,6 +252,7 @@ fn open_full_model(path: &Path, ctx_size: u32, n_gpu_layers: i32) -> Result<Stag
 
             mtp_source: MtpSource::Disabled,
             resident_tensor_names: Vec::new(),
+            execution_contract: String::new(),
             activation_import_identities: Vec::new(),
             activation_import_bindings: Vec::new(),
             activation_export_identities: Vec::new(),

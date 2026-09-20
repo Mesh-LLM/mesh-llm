@@ -227,6 +227,7 @@ fn multimodal_stage_config(
     };
     if let Some(plan) = runtime_plan {
         config.resident_tensor_names = plan.resident_tensor_names;
+        config.execution_contract = plan.execution_contract;
         config.activation_import_identities = plan.activation_import_identities;
         config.activation_import_bindings = plan.activation_import_bindings;
         config.activation_export_identities = plan.activation_export_identities;

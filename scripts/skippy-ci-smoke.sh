@@ -296,6 +296,7 @@ config = {
     "cache_type_v": "f16",
     "flash_attn_type": flash_attn,
     "load_mode": "runtime-slice",
+    "execution_contract": "",
     "bind_addr": bind_addr,
     "upstream": None if not upstream_endpoint else {
         "stage_id": "stage-0",

@@ -314,6 +314,7 @@ def write_config(
         "lane_count": lanes,
         "n_gpu_layers": n_gpu_layers,
         "load_mode": "runtime-slice",
+        "execution_contract": "",
         "bind_addr": "127.0.0.1:0",
         "upstream": None,
         "downstream": None,

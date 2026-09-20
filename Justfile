@@ -11,6 +11,11 @@ hf_home := env("HF_HOME", xdg_cache_dir / "huggingface")
 models_dir := env("HF_HUB_CACHE", hf_home / "hub")
 model := models_dir / "GLM-4.7-Flash-Q4_K_M.gguf"
 
+# Match pinned llama.cpp Apple release builds. The variable is macOS-specific;
+# native non-Apple toolchains ignore it, and SDK recipes scope their own targets.
+macos_deployment_target := env("MACOSX_DEPLOYMENT_TARGET", "")
+export MACOSX_DEPLOYMENT_TARGET := if macos_deployment_target == "" { trim(read(justfile_directory() / "scripts/lib/macos-deployment-target.txt")) } else { macos_deployment_target }
+
 # Build for the current platform.
 default: build
 

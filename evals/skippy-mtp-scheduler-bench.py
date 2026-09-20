@@ -81,6 +81,7 @@ def write_config(
         "selected_device": {"backend_device": "CPU"},
         "native_mtp_enabled": True,
         "load_mode": "layer-package",
+        "execution_contract": "",
         "bind_addr": f"127.0.0.1:{port}",
         "upstream": {
             "stage_id": "stage-prev",

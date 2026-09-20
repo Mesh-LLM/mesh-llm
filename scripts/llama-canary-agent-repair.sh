@@ -19,6 +19,9 @@ fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TRUSTED_ROOT="$ROOT"
+
+# shellcheck disable=SC1091
+source "$ROOT/scripts/lib/macos-deployment-target.sh"
 HARNESS_MODE="${CANARY_HARNESS_MODE:-repair}"
 UPSTREAM_SHA="${1:-${UPSTREAM_SHA_INPUT:-latest}}"
 if [[ "$UPSTREAM_SHA" == "latest" || -z "$UPSTREAM_SHA" ]]; then

@@ -468,6 +468,7 @@ fn runtime_config_from_stage_config(
         },
         mtp_source: overrides.mtp_source,
         resident_tensor_names: config.resident_tensor_names.clone(),
+        execution_contract: config.execution_contract.clone(),
         activation_import_identities: config.activation_import_identities.clone(),
         activation_import_bindings: config.activation_import_bindings.clone(),
         activation_export_identities: config.activation_export_identities.clone(),
@@ -1192,6 +1193,7 @@ mod tests {
             "cache_type_v": "f16",
             "native_mtp_enabled": true,
             "load_mode": "runtime-slice",
+            "execution_contract": "",
             "bind_addr": "127.0.0.1:0"
         }))
         .expect("stage config should deserialize");

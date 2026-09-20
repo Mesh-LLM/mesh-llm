@@ -724,6 +724,7 @@ fn stage_config(
         swa_full: load.runtime_settings.swa_full,
         cache_idle_slots: load.runtime_settings.cache_idle_slots,
         resident_tensor_names,
+        execution_contract: load.admission.execution_contract.clone(),
         activation_import_identities: frontier_profile.activation_imports.clone(),
         activation_import_bindings: frontier_profile.activation_import_bindings.clone(),
         activation_export_identities: frontier_profile.activation_exports.clone(),

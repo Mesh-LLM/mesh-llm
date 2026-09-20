@@ -297,6 +297,7 @@ message StageAdmissionDescriptor {
   repeated string resident_tensor_ids = 6;
   repeated StageAdmissionSidecar sidecars = 7;
   repeated StageAdmissionProfile profiles = 8;
+  string execution_contract = 9;
 }
 
 message StageAdmissionSidecar {

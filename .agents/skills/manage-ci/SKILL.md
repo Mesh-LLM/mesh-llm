@@ -332,6 +332,12 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Product and artifact contract
 
+- macOS builds default to the pinned llama.cpp release baseline recorded in
+  `scripts/lib/macos-deployment-target.txt` (currently 13.3). Just, direct
+  host/native build entry points, and both canary jobs must use the same
+  resolved Rust/CMake deployment target. Preserve explicit SDK/cross-platform
+  overrides; include the native target in build/cache identity.
+
 - Model every executable product as a backend-neutral host, one separately
   packaged native runtime per OS/architecture/backend, and a composition-only
   product. A backend matrix belongs to runtime/product rows, never host rows.
