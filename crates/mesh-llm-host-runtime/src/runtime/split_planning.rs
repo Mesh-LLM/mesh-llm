@@ -31,6 +31,24 @@ use super::split_topology_lock::LockedSplitStageAssignment;
 // with `--max-vram`.
 const RUNTIME_NODE_HEADROOM_NUMERATOR: u64 = 1;
 const RUNTIME_NODE_HEADROOM_DENOMINATOR: u64 = 10;
+
+// Context-independent floor on that reserve.
+//
+// The KV-scaled term grows with `n_ctx`, but the compute graph is sized by
+// lanes and batch: a four-lane stage allocated five buffers of 229.61 MiB each
+// — 1.12 GiB — whether it held 12 layers or 18. A stage holding many layers at
+// a modest context is therefore priced almost entirely on weights and KV, and
+// the proportional share alone does not cover what the graph will take.
+//
+// Measured on a 16 GB host: planning admitted a 35-of-36-layer stage at 8.7 GB
+// against a 12 GB budget; the process reached 12.0 GB resident, the machine
+// fell to 10% free, the node stopped heartbeating and the split lost the stage.
+//
+// 1 GiB is a floor calibrated at one working point, not a model of the buffers,
+// so it is deliberately flat: extrapolating the per-lane figure to large lane
+// counts would reserve several GiB on exactly the nodes whose context-scaled
+// share is already generous.
+const RUNTIME_NODE_HEADROOM_FLOOR_BYTES: u64 = 1024 * 1024 * 1024;
 const DEFAULT_TARGET_DECODE_TPOT_MS: u32 = 33;
 
 // KV compute reserve, mirroring `skippy_coordinator::topology`'s
@@ -164,9 +182,14 @@ fn topology_planning_input(input: SplitTopologyPlanInput) -> TopologyPlanningInp
 }
 
 pub(super) fn default_runtime_headroom_bytes(vram_bytes: u64) -> u64 {
-    vram_bytes
+    let proportional = vram_bytes
         .saturating_mul(RUNTIME_NODE_HEADROOM_NUMERATOR)
-        .div_ceil(RUNTIME_NODE_HEADROOM_DENOMINATOR)
+        .div_ceil(RUNTIME_NODE_HEADROOM_DENOMINATOR);
+    // Never reserve more than the node has: a tiny node keeps the proportional
+    // share rather than being planned out of existence by the floor.
+    proportional
+        .max(RUNTIME_NODE_HEADROOM_FLOOR_BYTES.min(vram_bytes / 2))
+        .min(vram_bytes)
 }
 
 pub(super) fn split_participants_for_stages(
@@ -248,6 +271,7 @@ pub(super) fn plan_runtime_slice_topology_with_resources_and_stage0(
     };
     let mut stages = map_runtime_slice_stages(plan.stages, &participant_by_id)?;
     stages.sort_by_key(|stage| stage.stage_index);
+    apply_initial_cut_override(&mut stages, package.layer_count);
     validate_split_capacity(model_ref, package, participants, &stages, excluded)?;
     log_planned_slice_topology(
         topology_id,
@@ -539,11 +563,73 @@ fn runtime_slice_plan_input(
                 decode_bytes_per_second: participant.decode_bytes_per_second,
             })
             .collect(),
-        // `MESH_LLM_AUTO_BALANCE_INITIAL_CUT=memory` starts from the memory-only
-        // cut so runtime rebalancing can be exercised from a poor placement.
-        auto_balance: resources.auto_balance
-            && std::env::var("MESH_LLM_AUTO_BALANCE_INITIAL_CUT").as_deref() != Ok("memory"),
+        auto_balance: resources.auto_balance && initial_cut_override().is_none(),
     }
+}
+
+/// Starting boundaries for an auto-balance acceptance test, read from
+/// `MESH_LLM_AUTO_BALANCE_INITIAL_CUT` as the layer index ending each stage but
+/// the last (`12` for a two-stage 12/24 cut, `12,24` for three stages).
+///
+/// The controller can only be exercised from a placement worth correcting, and
+/// the planner's own paths do not produce one: speed-balanced placement starts
+/// at the answer, and the memory-first cut it replaced starts somewhere fatal —
+/// it filled the first node to its budget, chose 35 of 36 layers, and the node
+/// died before the first window closed. An explicit cut lets a test start from
+/// a placement that is deliberately wrong but survivable.
+///
+/// Nothing here trusts the value: the plan it produces goes through
+/// `validate_split_capacity` like any other, so a cut that does not fit is
+/// rejected rather than loaded.
+fn initial_cut_override() -> Option<Vec<u32>> {
+    parse_initial_cut(&std::env::var("MESH_LLM_AUTO_BALANCE_INITIAL_CUT").ok()?)
+}
+
+/// Layer indices ending each stage but the last. Every stage must hold at least
+/// one layer, so the boundaries strictly increase and none may be zero.
+fn parse_initial_cut(raw: &str) -> Option<Vec<u32>> {
+    let boundaries = raw
+        .split(',')
+        .map(|part| part.trim().parse::<u32>().ok())
+        .collect::<Option<Vec<_>>>()?;
+    (!boundaries.is_empty()
+        && boundaries[0] > 0
+        && boundaries.windows(2).all(|pair| pair[0] < pair[1]))
+    .then_some(boundaries)
+}
+
+/// Repoint an already-planned topology at [`initial_cut_override`]'s
+/// boundaries. Left alone when the override is absent.
+fn apply_initial_cut_override(stages: &mut [RuntimeSliceStagePlan], layer_count: u32) {
+    if let Some(boundaries) = initial_cut_override() {
+        apply_boundaries(stages, &boundaries, layer_count);
+    }
+}
+
+/// Move the cut to `boundaries`, keeping each stage's node and order. Ignored
+/// when the boundaries do not describe this topology, so a stale value in the
+/// environment cannot silently produce a different split than it names.
+fn apply_boundaries(stages: &mut [RuntimeSliceStagePlan], boundaries: &[u32], layer_count: u32) {
+    if boundaries.len() + 1 != stages.len() || boundaries[boundaries.len() - 1] >= layer_count {
+        tracing::warn!(
+            ?boundaries,
+            stages = stages.len(),
+            layer_count,
+            "ignoring MESH_LLM_AUTO_BALANCE_INITIAL_CUT: it does not describe this topology"
+        );
+        return;
+    }
+    let mut start = 0u32;
+    for (index, stage) in stages.iter_mut().enumerate() {
+        let end = boundaries.get(index).copied().unwrap_or(layer_count);
+        stage.layer_start = start;
+        stage.layer_end = end;
+        start = end;
+    }
+    tracing::warn!(
+        ?boundaries,
+        "starting from MESH_LLM_AUTO_BALANCE_INITIAL_CUT instead of planned placement"
+    );
 }
 
 fn package_layer_weight_bytes(package: &skippy::SkippyPackageIdentity) -> Vec<u64> {
@@ -853,6 +939,88 @@ mod tests {
     use super::*;
     use iroh::SecretKey;
     use std::path::PathBuf;
+
+    fn stage(index: u32, seed: u8, layer_start: u32, layer_end: u32) -> RuntimeSliceStagePlan {
+        RuntimeSliceStagePlan {
+            stage_id: format!("stage-{index}"),
+            stage_index: index,
+            node_id: make_id(seed),
+            layer_start,
+            layer_end,
+            parameter_bytes: 0,
+        }
+    }
+
+    #[test]
+    fn node_headroom_covers_the_compute_graph_floor() {
+        // 12 GB budget: the proportional 10% alone left a stage priced 3.3 GB
+        // under what it went on to use.
+        for vram_gb in [4u64, 8, 12, 16] {
+            let vram = vram_gb * 1024 * 1024 * 1024;
+            let headroom = default_runtime_headroom_bytes(vram);
+            assert!(
+                headroom >= RUNTIME_NODE_HEADROOM_FLOOR_BYTES,
+                "{vram_gb} GB node reserved {headroom} B, under the compute-graph floor"
+            );
+            assert!(
+                headroom >= vram / 10,
+                "{vram_gb} GB node lost the 10% share"
+            );
+            assert!(headroom < vram, "{vram_gb} GB node reserved everything");
+        }
+    }
+
+    #[test]
+    fn large_nodes_keep_the_proportional_share() {
+        let eighty_gb = 80 * 1024 * 1024 * 1024;
+        assert_eq!(default_runtime_headroom_bytes(eighty_gb), eighty_gb / 10);
+    }
+
+    #[test]
+    fn small_nodes_are_not_reserved_out_of_existence() {
+        let one_gb = 1024 * 1024 * 1024;
+        assert_eq!(default_runtime_headroom_bytes(one_gb), one_gb / 2);
+        assert_eq!(default_runtime_headroom_bytes(0), 0);
+    }
+
+    #[test]
+    fn initial_cut_override_rewrites_boundaries_in_order() {
+        let mut stages = vec![stage(0, 1, 0, 18), stage(1, 2, 18, 36)];
+        apply_boundaries(&mut stages, &[12], 36);
+        assert_eq!(
+            stages
+                .iter()
+                .map(|s| (s.layer_start, s.layer_end))
+                .collect::<Vec<_>>(),
+            vec![(0, 12), (12, 36)]
+        );
+        // Nodes and order are untouched: only the cut moves.
+        assert_eq!(stages[0].node_id, make_id(1));
+        assert_eq!(stages[1].node_id, make_id(2));
+    }
+
+    #[test]
+    fn initial_cut_override_ignores_a_cut_for_a_different_topology() {
+        let original = vec![stage(0, 1, 0, 18), stage(1, 2, 18, 36)];
+        for boundaries in [vec![12, 24], vec![36], vec![40]] {
+            let mut stages = original.clone();
+            apply_boundaries(&mut stages, &boundaries, 36);
+            assert_eq!(
+                stages, original,
+                "boundaries {boundaries:?} should be ignored"
+            );
+        }
+    }
+
+    #[test]
+    fn initial_cut_override_parses_only_sane_values() {
+        assert_eq!(parse_initial_cut("12"), Some(vec![12]));
+        assert_eq!(parse_initial_cut(" 12 , 24 "), Some(vec![12, 24]));
+        assert_eq!(parse_initial_cut("0"), None, "a stage cannot be empty");
+        assert_eq!(parse_initial_cut("24,12"), None, "must increase");
+        assert_eq!(parse_initial_cut("memory"), None);
+        assert_eq!(parse_initial_cut(""), None);
+    }
 
     fn make_id(seed: u8) -> iroh::EndpointId {
         let mut bytes = [0u8; 32];
