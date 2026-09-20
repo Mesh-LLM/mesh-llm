@@ -397,6 +397,23 @@ mod tests {
     }
 
     #[test]
+    fn peer_limits_and_failure_cooldown_are_bounded_and_isolated() -> Result<()> {
+        let first = iroh::SecretKey::generate().public();
+        let other = iroh::SecretKey::generate().public();
+        reserve_peer_probe(first)?;
+        assert!(reserve_peer_probe(first).is_err());
+        reserve_peer_probe(other)?;
+        check_retry_cooldown(first)?;
+        FAILED_PROBES.lock().unwrap().insert(first, Instant::now());
+        assert!(check_retry_cooldown(first).is_err());
+        check_retry_cooldown(other)?;
+        FAILED_PROBES.lock().unwrap().remove(&first);
+        PEER_PROBES.lock().unwrap().remove(&first);
+        PEER_PROBES.lock().unwrap().remove(&other);
+        Ok(())
+    }
+
+    #[test]
     fn wrong_answer_replay_and_version_are_rejected() {
         let challenge = Challenge {
             version: CHALLENGE_VERSION,

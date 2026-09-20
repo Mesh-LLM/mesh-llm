@@ -498,7 +498,9 @@ separate `/mesh/vetting/v1` tunnel upgrade leaves payment-v1 frames unchanged.
 The provider first returns a versioned supported/unsupported capability response
 before accepting a challenge. Providers opt in independently with `serve_probes:
 true` (default false). This is selected-peer negotiation, not a gossip-driven
-probe. Bounded alternative-provider retry remains follow-up work.
+probe. Probe failure returns pre-dispatch unavailability to the existing finite
+candidate traversal, allowing a different eligible provider without a payment
+retry. Dedicated multi-candidate failure tests remain follow-up work.
 
 On a cache miss the client sends a randomized, fixed arithmetic challenge, never
 a user-authored free prompt. The provider uses an already-local backend with a
@@ -518,5 +520,5 @@ cryptographic proof of inference.
 Tests cover cache persistence, expiry/rollback, frame bounds, cache hits, and a
 real two-node gossip/QUIC/tunnel exchange through a simulated local HTTP backend.
 No real model or mainnet wallet is used by that test. Live model validation and
-latency evidence, negative probe cohorts and bounded reselection remain required
+latency evidence and multi-candidate negative probe cohorts remain required
 before calling the complete feature ready.

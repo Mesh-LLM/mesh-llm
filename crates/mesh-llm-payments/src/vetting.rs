@@ -145,6 +145,8 @@ mod tests {
             crate::intent::PaymentIntent::FreeOnly
         ));
         assert!(ledger.requests()?.is_empty());
+        ledger.reset_provider_vetting()?;
+        assert!(!ledger.provider_vetted(&provider, 1000, 100)?);
         Ok(())
     }
 }
