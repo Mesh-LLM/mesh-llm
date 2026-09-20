@@ -78,6 +78,18 @@ struct Capability {
     supported: bool,
 }
 
+fn validate_answer(challenge: &Challenge, answer: &Answer) -> Result<()> {
+    ensure!(
+        answer.version == CHALLENGE_VERSION && answer.nonce == challenge.nonce,
+        "probe identity mismatch"
+    );
+    ensure!(
+        answer.text.trim() == (u16::from(challenge.left) + u16::from(challenge.right)).to_string(),
+        "provider failed inference sanity check"
+    );
+    Ok(())
+}
+
 pub(crate) fn is_upgrade(prefix: &[u8]) -> bool {
     prefix.starts_with(b"POST /mesh/vetting/v1 HTTP/1.1\r\n")
 }
@@ -121,15 +133,7 @@ pub(crate) async fn verify(node: &Node, peer: iroh::EndpointId, model: &str) -> 
         );
         write_json(&mut send, &challenge).await?;
         let answer: Answer = read_json(&mut recv).await?;
-        ensure!(
-            answer.version == CHALLENGE_VERSION && answer.nonce == challenge.nonce,
-            "probe identity mismatch"
-        );
-        ensure!(
-            answer.text.trim()
-                == (u16::from(challenge.left) + u16::from(challenge.right)).to_string(),
-            "provider failed inference sanity check"
-        );
+        validate_answer(&challenge, &answer)?;
         service.ledger.record_provider_vetted(VettingRecord {
             provider_id: id,
             model: model.into(),
@@ -390,6 +394,59 @@ mod tests {
             crate::MeshRequirements::unrestricted(),
         )
         .await
+    }
+
+    #[test]
+    fn wrong_answer_replay_and_version_are_rejected() {
+        let challenge = Challenge {
+            version: CHALLENGE_VERSION,
+            model: "m".into(),
+            nonce: uuid::Uuid::new_v4().to_string(),
+            left: 3,
+            right: 8,
+        };
+        let mut answer = Answer {
+            version: CHALLENGE_VERSION,
+            nonce: challenge.nonce.clone(),
+            text: "11".into(),
+        };
+        assert!(validate_answer(&challenge, &answer).is_ok());
+        answer.text = "12".into();
+        assert!(validate_answer(&challenge, &answer).is_err());
+        answer.text = "11".into();
+        answer.nonce = uuid::Uuid::new_v4().to_string();
+        assert!(validate_answer(&challenge, &answer).is_err());
+        answer.nonce = challenge.nonce.clone();
+        answer.version += 1;
+        assert!(validate_answer(&challenge, &answer).is_err());
+    }
+
+    #[tokio::test]
+    async fn provider_opt_out_negotiates_without_backend_or_wallet() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let node = Node::new_for_tests(crate::mesh::NodeRole::Client).await?;
+        let service = std::sync::Arc::new(mesh_llm_payments::service::PaymentService::open(
+            directory.path(),
+        )?);
+        node.payments
+            .set(service.clone())
+            .map_err(|_| anyhow::anyhow!("already set"))?;
+        let (mut caller, server) = tokio::io::duplex(4096);
+        let (read, write) = tokio::io::split(server);
+        let result = serve(
+            iroh::SecretKey::generate().public(),
+            &node,
+            read,
+            write,
+            ModelTargets::default(),
+        )
+        .await;
+        assert!(result.is_err());
+        let capability: Capability = read_json(&mut caller).await?;
+        assert!(!capability.supported);
+        assert!(!service.has_wallet());
+        node.endpoint.close().await;
+        Ok(())
     }
 
     #[tokio::test]

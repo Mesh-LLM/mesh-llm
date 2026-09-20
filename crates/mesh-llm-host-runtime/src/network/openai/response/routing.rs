@@ -323,10 +323,9 @@ async fn vet_selected_provider(
             .await
             .is_err()
         {
-            return Some(
-                super::paid::payment_error(tcp_stream, "provider is unverified or unavailable")
-                    .await,
-            );
+            // No user bytes or payments were sent. Existing finite candidate
+            // traversal can try another provider without duplicating a charge.
+            return Some(RouteAttemptResult::RetryableUnavailable);
         }
     }
     None
