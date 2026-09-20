@@ -6,6 +6,7 @@ pub(crate) struct PaidRequest {
     pub max_tokens: Option<u32>,
     pub path: String,
     pub body: Value,
+    pub intent: Option<mesh_llm_payments::intent::PaymentIntent>,
 }
 
 impl PaidRequest {
@@ -26,6 +27,14 @@ impl PaidRequest {
             "paid endpoint unsupported"
         );
         let mut body: Value = serde_json::from_slice(&raw[offset..])?;
+        let intent = body
+            .as_object_mut()
+            .and_then(|body| body.remove("mesh_payment"))
+            .map(serde_json::from_value::<mesh_llm_payments::intent::PaymentIntent>)
+            .transpose()?;
+        if let Some(intent) = &intent {
+            intent.validate()?;
+        }
         let model = body
             .get("model")
             .and_then(Value::as_str)
@@ -61,6 +70,7 @@ impl PaidRequest {
             max_tokens,
             path: path.into(),
             body,
+            intent,
         })
     }
 
@@ -80,9 +90,54 @@ impl PaidRequest {
     }
 }
 
+/// Remove trusted-local policy metadata without altering any other request field.
+pub(crate) fn strip_intent(raw: &[u8]) -> Result<Vec<u8>> {
+    let mut headers = [httparse::EMPTY_HEADER; 64];
+    let mut request = httparse::Request::new(&mut headers);
+    let httparse::Status::Complete(offset) = request.parse(raw)? else {
+        anyhow::bail!("incomplete request");
+    };
+    let Ok(mut body) = serde_json::from_slice::<Value>(&raw[offset..]) else {
+        return Ok(raw.to_vec());
+    };
+    let Some(value) = body
+        .as_object_mut()
+        .and_then(|body| body.remove("mesh_payment"))
+    else {
+        return Ok(raw.to_vec());
+    };
+    let intent: mesh_llm_payments::intent::PaymentIntent = serde_json::from_value(value)?;
+    intent.validate()?;
+    let bytes = serde_json::to_vec(&body)?;
+    let headers = std::str::from_utf8(&raw[..offset - 4])?;
+    let mut rebuilt = String::new();
+    for line in headers.split("\r\n") {
+        if !line.to_ascii_lowercase().starts_with("content-length:") {
+            rebuilt.push_str(line);
+            rebuilt.push_str("\r\n");
+        }
+    }
+    rebuilt.push_str(&format!("Content-Length: {}\r\n\r\n", bytes.len()));
+    let mut result = rebuilt.into_bytes();
+    result.extend(bytes);
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn request_intent_is_validated_and_not_forwarded() {
+        let raw = b"POST /v1/completions HTTP/1.1\r\nx-request-id: kept\r\n\r\n{\"model\":\"m\",\"mesh_payment\":{\"mode\":\"free_only\"}}";
+        let request = PaidRequest::parse(raw).unwrap();
+        assert!(request.intent.is_some());
+        assert!(request.body.get("mesh_payment").is_none());
+        let stripped = String::from_utf8(strip_intent(raw).unwrap()).unwrap();
+        assert!(!stripped.contains("mesh_payment"));
+        assert!(stripped.contains("x-request-id: kept"));
+        assert!(PaidRequest::parse(b"POST /v1/completions HTTP/1.1\r\n\r\n{\"model\":\"m\",\"mesh_payment\":{\"mode\":\"bad\"}}").is_err());
+    }
 
     #[test]
     fn payments_allow_large_explicit_limits_and_context_clamping() {

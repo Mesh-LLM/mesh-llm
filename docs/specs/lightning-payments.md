@@ -198,8 +198,11 @@ intent retains free providers as candidates. Rate caps and total debit (includin
 both fee allowances and invoice rounding) are enforced during ranking and against
 exact input-invoice terms before approval, then rechecked after approval. Existing
 remote-ingress restrictions remain authoritative. Once submission starts,
-changing intent does not cancel existing settlement obligations. Per-request
-intent overrides and a dedicated CLI command are not implemented yet.
+changing intent does not cancel existing settlement obligations. Requests may include `mesh_payment` with the same tagged intent shape to
+**tighten** their local profile (for example `{"mode":"free_only"}`). Paid caps
+are intersected with the profile caps; a request cannot expand a free-only
+profile into paid authority. The field is stripped before ordinary backend or
+remote forwarding. A dedicated CLI command is not implemented yet.
 
 Routing prefers local inference, eligible paid peers, then free peers. Paid peers
 are ranked by estimated input plus maximum output cost for the exact model.
@@ -522,3 +525,7 @@ real two-node gossip/QUIC/tunnel exchange through a simulated local HTTP backend
 No real model or mainnet wallet is used by that test. Live model validation and
 latency evidence and multi-candidate negative probe cohorts remain required
 before calling the complete feature ready.
+
+Per-peer probe limits do not eliminate Sybil availability attacks: rotating
+endpoint identities can saturate the global allowance. Compute is bounded;
+honest required-mode requests may still fail closed during saturation.

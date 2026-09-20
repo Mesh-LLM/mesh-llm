@@ -123,7 +123,7 @@ async fn start(
     let (mut send, recv) = node.open_http_tunnel(peer).await?;
     let service = node.payment_service().await?;
     ensure!(
-        service.ledger.payment_intent()?.permits(&price, 0),
+        effective_intent(&service, &request)?.permits(&price, 0),
         "paid inference is excluded by client payment intent"
     );
     let id = uuid::Uuid::new_v4().to_string();
@@ -199,7 +199,7 @@ pub(crate) async fn exchange(
         "payment limit mismatch"
     );
     ensure!(
-        service.ledger.payment_intent()?.permits(&price, total),
+        effective_intent(&service, &request)?.permits(&price, total),
         "paid inference is excluded by client payment intent"
     );
     invoice.validate_payment(input_amount, mesh_llm_payments::now_ms())?;
@@ -218,7 +218,7 @@ pub(crate) async fn exchange(
             bail!("application disconnected before approval");
         }
     }
-    if !service.ledger.payment_intent()?.permits(&price, total) {
+    if !effective_intent(&service, &request)?.permits(&price, total) {
         service.ledger.fail_authorization_if_idle(&id)?;
         let _ = wire::write(&mut send, &Frame::Cancel).await;
         bail!("client payment intent changed before submission");
@@ -319,6 +319,17 @@ pub(crate) async fn settle_output(
         })
         .await?;
     Ok(())
+}
+
+pub(super) fn effective_intent(
+    service: &PaymentService,
+    request: &PaidRequest,
+) -> Result<mesh_llm_payments::intent::PaymentIntent> {
+    let profile = service.ledger.payment_intent()?;
+    Ok(request
+        .intent
+        .as_ref()
+        .map_or_else(|| profile.clone(), |request| profile.restrict(request)))
 }
 
 #[cfg(test)]

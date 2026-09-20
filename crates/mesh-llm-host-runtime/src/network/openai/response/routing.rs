@@ -225,6 +225,13 @@ pub(in crate::network::openai) async fn route_remote_attempt(
     {
         return super::paid::route(node, tcp_stream, host_id, prefetched, price, logging).await;
     }
+    let sanitized = match crate::network::payments::request::strip_intent(prefetched) {
+        Ok(raw) => raw,
+        Err(_) => {
+            return super::paid::payment_error(tcp_stream, "invalid request payment intent").await;
+        }
+    };
+    let prefetched = sanitized.as_slice();
     let (mut quic_send, mut quic_recv) = match node.open_http_tunnel(host_id).await {
         Ok(tunnel) => tunnel,
         Err(err) => {
@@ -287,7 +294,9 @@ async fn forward_buffered_request<W: AsyncWrite + Unpin>(
     upstream: &mut W,
     prefetched: &[u8],
 ) -> std::io::Result<()> {
-    upstream.write_all(prefetched).await
+    let sanitized = crate::network::payments::request::strip_intent(prefetched)
+        .map_err(std::io::Error::other)?;
+    upstream.write_all(&sanitized).await
 }
 
 async fn vet_selected_provider(
@@ -303,9 +312,7 @@ async fn vet_selected_provider(
         // this boundary without the usual ranker. Never probe excluded sellers.
         if let Some(price) = node.peer_payment_offer(host_id, &request.model).await {
             let allowed = match node.payment_service().await {
-                Ok(service) => service
-                    .ledger
-                    .payment_intent()
+                Ok(service) => super::paid::effective_intent(&service, &request)
                     .is_ok_and(|intent| intent.permits(&price, 0)),
                 Err(_) => false,
             };

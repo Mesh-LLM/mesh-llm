@@ -103,6 +103,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         (request.body_len_bytes as u64).div_ceil(4),
         u64::from(request.completion_tokens.unwrap_or(256)),
         &mut ranked,
+        request.body_json.as_ref(),
     )
     .await;
     let ordered_candidates = affinity.route_eligible_candidates(model, &ranked.ordered);

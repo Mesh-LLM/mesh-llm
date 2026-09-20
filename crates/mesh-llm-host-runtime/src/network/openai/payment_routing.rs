@@ -9,6 +9,7 @@ pub(super) async fn rank(
     input_estimate: u64,
     max_output: u64,
     candidates: &mut RankedCandidates<InferenceTarget>,
+    request_body: Option<&serde_json::Value>,
 ) -> bool {
     let mut prices = std::collections::HashMap::new();
     for target in &candidates.ordered {
@@ -27,6 +28,16 @@ pub(super) async fn rank(
         .as_ref()
         .and_then(|service| service.ledger.payment_intent().ok())
         .unwrap_or_default();
+    let intent = match request_body.and_then(|body| body.get("mesh_payment")) {
+        Some(value) => {
+            match serde_json::from_value::<mesh_llm_payments::intent::PaymentIntent>(value.clone())
+            {
+                Ok(request) if request.validate().is_ok() => intent.restrict(&request),
+                _ => mesh_llm_payments::intent::PaymentIntent::FreeOnly,
+            }
+        }
+        None => intent,
+    };
     let available = match service {
         Some(service)
             if !matches!(intent, mesh_llm_payments::intent::PaymentIntent::FreeOnly)
@@ -117,7 +128,7 @@ mod tests {
             ],
             equivalent_prefix: 2,
         };
-        assert!(rank(&node, "test", 1, 1, &mut candidates).await);
+        assert!(rank(&node, "test", 1, 1, &mut candidates, None).await);
         assert_eq!(candidates.ordered, vec![InferenceTarget::Remote(free)]);
         assert!(!service.has_wallet());
         assert!(service.ledger.requests()?.is_empty());

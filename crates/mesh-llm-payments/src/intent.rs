@@ -35,6 +35,29 @@ impl PaymentIntent {
         Ok(())
     }
 
+    /// A request may tighten a paid profile, never expand its authority.
+    pub fn restrict(&self, request: &Self) -> Self {
+        match (self, request) {
+            (
+                Self::AllowPaid {
+                    max_input_msat_per_million: a,
+                    max_output_msat_per_million: b,
+                    max_total_msat: c,
+                },
+                Self::AllowPaid {
+                    max_input_msat_per_million: x,
+                    max_output_msat_per_million: y,
+                    max_total_msat: z,
+                },
+            ) => Self::AllowPaid {
+                max_input_msat_per_million: (*a).min(*x),
+                max_output_msat_per_million: (*b).min(*y),
+                max_total_msat: (*c).min(*z),
+            },
+            _ => Self::FreeOnly,
+        }
+    }
+
     pub fn permits(&self, price: &Pricing, total_including_fees: u64) -> bool {
         if self.validate().is_err() || price.validate().is_err() {
             return false;
@@ -71,6 +94,33 @@ impl Ledger {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn requests_cannot_expand_profile_authority() {
+        let profile = PaymentIntent::AllowPaid {
+            max_input_msat_per_million: 10,
+            max_output_msat_per_million: 20,
+            max_total_msat: 4000,
+        };
+        let broad = PaymentIntent::AllowPaid {
+            max_input_msat_per_million: 100,
+            max_output_msat_per_million: 200,
+            max_total_msat: 8000,
+        };
+        let price = Pricing {
+            input_msat_per_million: 10,
+            output_msat_per_million: 20,
+            minimum_invoice_msat: 1,
+        };
+        assert!(profile.restrict(&broad).permits(&price, 4000));
+        assert!(!profile.restrict(&broad).permits(&price, 4001));
+        assert!(!PaymentIntent::FreeOnly.restrict(&broad).permits(&price, 1));
+        assert!(
+            !profile
+                .restrict(&PaymentIntent::FreeOnly)
+                .permits(&price, 1)
+        );
+    }
+
     #[test]
     fn intent_defaults_free_and_caps_rates_and_fees_across_restart() -> Result<()> {
         let directory = tempfile::tempdir()?;
