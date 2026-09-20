@@ -36,7 +36,7 @@ index 4faf057ba..6046c77ec 100644
   * @brief Scores structured labels with one DiffusionGemma read.
   *
 diff --git a/src/skippy/system_one.cpp b/src/skippy/system_one.cpp
-index b6dd66238..5ca4635e6 100644
+index d60467a46..5a81888fe 100644
 --- a/src/skippy/system_one.cpp
 +++ b/src/skippy/system_one.cpp
 @@ -43,6 +43,27 @@ private:

@@ -57,11 +57,6 @@ impl StageOpenAiBackend {
         let system_text = system_text(&questions, format);
         let state_text = value_text(&request.state);
         let seed: [u8; 32] = Sha256::digest(request_seed).into();
-        let response_model = if request.model == self.model_id {
-            self.model_id.clone()
-        } else {
-            "openjev-0.1".to_string()
-        };
 
         let read_questions = questions.clone();
         let outcome =
@@ -110,7 +105,7 @@ impl StageOpenAiBackend {
 
         let input_tokens = u32::try_from(outcome.0).unwrap_or(u32::MAX);
         Ok(SystemOneResponse {
-            model: response_model,
+            model: request.model,
             answers: answers(&questions, &outcome.1)?,
             usage: SystemOneUsage {
                 input_tokens,

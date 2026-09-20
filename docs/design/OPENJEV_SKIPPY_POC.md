@@ -110,6 +110,10 @@ The response shape is `{model, answers, usage}`. This proof supports text-only
 rejects images, thinking, multiple samples/steps, and sequential reads rather
 than silently changing their meaning.
 
+`usage.input_tokens` counts the tokenized prompt only. The fixed canvas tokens
+the read computes over are not reported, and `output_tokens` stays `0` because
+the endpoint generates no text.
+
 ## What the branch implements
 
 1. It ports the draft llama.cpp DiffusionGemma architecture support onto the
@@ -120,6 +124,11 @@ than silently changing their meaning.
    a per-slot softmax restricted to the caller's declared labels.
 4. The HTTP frontend formats Jev question types and maps those probabilities to
    Jev-compatible answers. No answer text is generated or parsed.
+
+Guardrail screening applies to the chat and completion paths; the guarded OpenAI
+backend forwards System One reads to the inner backend unscreened. This is
+intentional for the PoC: `state` is consumed as structured read input, and the
+endpoint never generates free-form text.
 
 ## Split-serving boundary
 

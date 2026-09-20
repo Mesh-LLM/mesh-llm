@@ -14,8 +14,8 @@ Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
  include/skippy/system_one.h |  60 +++++++++++
  src/CMakeLists.txt          |   1 +
  src/skippy/abi.cpp          |   3 +-
- src/skippy/system_one.cpp   | 223 ++++++++++++++++++++++++++++++++++++
- 6 files changed, 289 insertions(+), 2 deletions(-)
+ src/skippy/system_one.cpp   | 232 ++++++++++++++++++++++++++++++++++++
+ 6 files changed, 298 insertions(+), 2 deletions(-)
  create mode 100644 include/skippy/system_one.h
  create mode 100644 src/skippy/system_one.cpp
 
@@ -145,10 +145,10 @@ index cfc6a2e66..acf0b086e 100644
  void skippy_error_free(struct skippy_error * error) {
 diff --git a/src/skippy/system_one.cpp b/src/skippy/system_one.cpp
 new file mode 100644
-index 000000000..b6dd66238
+index 000000000..d60467a46
 --- /dev/null
 +++ b/src/skippy/system_one.cpp
-@@ -0,0 +1,223 @@
+@@ -0,0 +1,232 @@
 +#include "skippy/system_one.h"
 +
 +#include "skippy/errors.h"
@@ -190,6 +190,18 @@ index 000000000..b6dd66238
 +private:
 +    skippy_model * model;
 +    int32_t lane;
++};
++
++class system_one_batch_guard {
++public:
++    explicit system_one_batch_guard(llama_batch value) : batch(value) {}
++
++    ~system_one_batch_guard() { llama_batch_free(batch); }
++
++    system_one_batch_guard(const system_one_batch_guard &) = delete;
++    system_one_batch_guard & operator=(const system_one_batch_guard &) = delete;
++
++    llama_batch batch;
 +};
 +
 +} // namespace
@@ -293,7 +305,9 @@ index 000000000..b6dd66238
 +        const int32_t canvas_count = static_cast<int32_t>(canvas_token_count);
 +        const int32_t ubatch_size = std::max<int32_t>(1, static_cast<int32_t>(llama_n_ubatch(model->ctx)));
 +        const int32_t batch_capacity = std::max(ubatch_size, canvas_count);
-+        llama_batch batch = llama_batch_init(batch_capacity, 0, 1);
++        system_one_batch_guard batch_guard(
++                llama_batch_init(batch_capacity, 0, 1));
++        llama_batch & batch = batch_guard.batch;
 +        const skippy_graph_build_inputs graph_inputs = skippy_graph_build_inputs_from_config(&model->config);
 +
 +        for (int32_t offset = 0; offset < prompt_count; offset += ubatch_size) {
@@ -308,7 +322,6 @@ index 000000000..b6dd66238
 +                batch.logits[index] = index == chunk_count - 1 ? 1 : 0;
 +            }
 +            if (model->ctx->decode(batch, graph_inputs) != 0) {
-+                llama_batch_free(batch);
 +                return system_one_fail(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
 +                        "DiffusionGemma prompt prefill failed");
 +            }
@@ -324,7 +337,6 @@ index 000000000..b6dd66238
 +            batch.logits[index] = seen_canvas_positions[index] != 0 ? 1 : 0;
 +        }
 +        if (model->ctx->decode(batch, graph_inputs) != 0) {
-+            llama_batch_free(batch);
 +            return system_one_fail(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
 +                    "DiffusionGemma canvas read failed");
 +        }
@@ -336,7 +348,6 @@ index 000000000..b6dd66238
 +            const skippy_system_one_slot & slot = slots[slot_index];
 +            const float * logits = llama_get_logits_ith(model->ctx, static_cast<int32_t>(slot.canvas_position));
 +            if (logits == nullptr) {
-+                llama_batch_free(batch);
 +                return system_one_fail(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
 +                        "DiffusionGemma did not return logits for a requested canvas slot");
 +            }
@@ -354,7 +365,6 @@ index 000000000..b6dd66238
 +                denominator += value;
 +            }
 +            if (!(denominator > 0.0f) || !std::isfinite(denominator)) {
-+                llama_batch_free(batch);
 +                return system_one_fail(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
 +                        "DiffusionGemma returned a non-finite label distribution");
 +            }
@@ -363,7 +373,6 @@ index 000000000..b6dd66238
 +            }
 +        }
 +
-+        llama_batch_free(batch);
 +        return skippy_success(out_error);
 +    } catch (const std::exception & exception) {
 +        return system_one_fail(out_error, SKIPPY_STATUS_RUNTIME_ERROR, exception.what());
