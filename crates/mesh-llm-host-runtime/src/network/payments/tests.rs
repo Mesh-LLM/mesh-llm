@@ -22,6 +22,7 @@ use crate::{
     mesh::{Node, NodeRole},
 };
 
+mod admission;
 mod expiry;
 mod forwarding;
 mod review_regressions;

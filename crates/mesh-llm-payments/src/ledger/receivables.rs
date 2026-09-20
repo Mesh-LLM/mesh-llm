@@ -46,6 +46,16 @@ impl Ledger {
         Ok(())
     }
 
+    /// Whether admission must wait for recorded debt. This is advisory; the
+    /// transactional check in `begin_serving` remains the authority.
+    pub fn has_outstanding_payment(&self, peer: &str) -> Result<bool> {
+        Ok(self.lock()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM receivables WHERE peer=?1 AND state='unpaid') OR EXISTS(SELECT 1 FROM serving_requests r JOIN serving_accounting a ON a.id=r.id WHERE r.peer=?1 AND a.finished=1 AND a.tokens>0 AND NOT EXISTS(SELECT 1 FROM receivables WHERE request_id=r.id AND segment=1))",
+            [peer],
+            |row| row.get(0),
+        )?)
+    }
+
     /// Freeze the backend's resolved context allowance before creating the
     /// input invoice. It may be smaller than the caller's explicit ceiling.
     pub fn resolve_serving_output_allowance(&self, id: &str, tokens: u64) -> Result<()> {

@@ -117,8 +117,11 @@ remains unresolved rather than trusting an unrelated peer's completion claim.
 Providers reject a peer with unpaid recorded invoices or finished, delivered
 output debt awaiting invoice creation. Background recovery creates missing
 output invoices in bounded batches after a crash or temporary wallet failure.
-Admission refreshes only the requesting peer's unpaid invoices. This can reject concurrent
-requests from the same peer while its first invoice is pending. Peer identities
+Admission waits up to 30 seconds for the requesting peer's recorded debt to
+settle, refreshing only that peer's unpaid invoices. No backend starts during
+this wait. The transactional admission check still rejects outstanding debt
+after the deadline; claiming alone does not clear it. This covers the window
+where the previous HTTP response finished but its trailing invoice is settling. Peer identities
 can be replaced, so this blacklist is only a PoC deterrent. Rejecting an input
 invoice leaves that peer blocked too; the PoC has no operator unblock command or
 automatic removal of expired unpaid receivables.

@@ -79,7 +79,7 @@ async fn serve_inner(
         })
         .context("paid model must be served locally")?;
     let peer = peer.to_string();
-    refresh_receivables(&service, &peer).await?;
+    await_prior_settlement(&service, &peer, Duration::from_secs(30)).await?;
     service.ledger.begin_serving(
         &id,
         &peer,
@@ -250,6 +250,29 @@ async fn deliver_output(
         .ledger
         .record_delivered_tokens(&gate.request_id, delivered_tokens)?;
     Ok(true)
+}
+
+// A completed HTTP body can precede its trailing output payment. Wait before
+// starting another backend, without forgiving debt or granting additional credit.
+pub(super) async fn await_prior_settlement(
+    service: &PaymentService,
+    peer: &str,
+    deadline: Duration,
+) -> Result<()> {
+    tokio::time::timeout(deadline, async {
+        loop {
+            if !service.ledger.has_outstanding_payment(peer)? {
+                return Ok(());
+            }
+            refresh_receivables(service, peer).await?;
+            if !service.ledger.has_outstanding_payment(peer)? {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .context("prior payment settlement deadline exceeded")?
 }
 
 async fn refresh_receivables(service: &PaymentService, peer: &str) -> Result<()> {
