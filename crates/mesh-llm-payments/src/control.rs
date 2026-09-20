@@ -41,6 +41,9 @@ pub enum ControlCommand {
     PaymentIntent {
         value: Option<crate::intent::PaymentIntent>,
     },
+    VettingPolicy {
+        value: Option<crate::vetting::VettingPolicy>,
+    },
     Pricing,
     SetPricing {
         model: String,
@@ -105,6 +108,12 @@ impl PaymentService {
                     self.ledger.set_payment_intent(&value)?;
                 }
                 Ok(serde_json::to_value(self.ledger.payment_intent()?)?)
+            }
+            ControlCommand::VettingPolicy { value } => {
+                if let Some(value) = value {
+                    self.ledger.set_vetting_policy(&value)?;
+                }
+                Ok(serde_json::to_value(self.ledger.vetting_policy()?)?)
             }
             ControlCommand::Pricing => Ok(serde_json::to_value(self.ledger.pricing()?)?),
             ControlCommand::SetPricing { model, value } => {

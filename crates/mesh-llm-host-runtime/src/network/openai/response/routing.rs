@@ -217,6 +217,9 @@ pub(in crate::network::openai) async fn route_remote_attempt(
         response_adapter,
         route_observer,
     } = logging;
+    if let Some(result) = vet_selected_provider(node, tcp_stream, host_id, prefetched).await {
+        return result;
+    }
     if let Ok(request) = crate::network::payments::request::PaidRequest::parse(prefetched)
         && let Some(price) = node.peer_payment_offer(host_id, &request.model).await
     {
@@ -285,6 +288,48 @@ async fn forward_buffered_request<W: AsyncWrite + Unpin>(
     prefetched: &[u8],
 ) -> std::io::Result<()> {
     upstream.write_all(prefetched).await
+}
+
+async fn vet_selected_provider(
+    node: &mesh::Node,
+    tcp_stream: &mut ClientStream,
+    host_id: iroh::EndpointId,
+    prefetched: &[u8],
+) -> Option<RouteAttemptResult> {
+    if super::paid::is_local_origin(tcp_stream)
+        && let Ok(request) = crate::network::payments::request::PaidRequest::parse(prefetched)
+    {
+        // Recheck economics before an unpaid probe, including paths that reach
+        // this boundary without the usual ranker. Never probe excluded sellers.
+        if let Some(price) = node.peer_payment_offer(host_id, &request.model).await {
+            let allowed = match node.payment_service().await {
+                Ok(service) => service
+                    .ledger
+                    .payment_intent()
+                    .is_ok_and(|intent| intent.permits(&price, 0)),
+                Err(_) => false,
+            };
+            if !allowed {
+                return Some(
+                    super::paid::payment_error(
+                        tcp_stream,
+                        "paid provider excluded by client intent",
+                    )
+                    .await,
+                );
+            }
+        }
+        if crate::network::payments::vetting::verify(node, host_id, &request.model)
+            .await
+            .is_err()
+        {
+            return Some(
+                super::paid::payment_error(tcp_stream, "provider is unverified or unavailable")
+                    .await,
+            );
+        }
+    }
+    None
 }
 
 #[cfg(test)]

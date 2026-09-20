@@ -8,6 +8,7 @@ pub mod ledger;
 pub mod pricing;
 pub mod provisioning;
 pub mod service;
+pub mod vetting;
 pub mod wallet;
 pub mod wire;
 
