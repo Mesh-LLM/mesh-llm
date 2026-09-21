@@ -103,9 +103,19 @@ pub struct IterationBatchRequest<'a> {
 }
 
 impl StageSession {
+    /// Execute one scheduler iteration for every request as a single native
+    /// batch. The native batched path accepts planned frontier parts only;
+    /// frames that carry optional parts are executed one at a time here, by
+    /// decision, so the native layer never has to signal a fallback.
     pub fn iteration_batch_sampled(
         requests: &mut [IterationBatchRequest<'_>],
     ) -> Result<IterationBatchOutput> {
+        if requests
+            .iter()
+            .any(|request| frame_has_optional_parts(request.input))
+        {
+            return Self::iteration_batch_sampled_one_at_a_time(requests);
+        }
         Self::iteration_batch_sampled_raw(requests, &vec![0; requests.len()])
     }
 
@@ -187,10 +197,6 @@ impl StageSession {
             free_error(error);
             return Self::iteration_batch_sampled_raw(requests, &output_bytes);
         }
-        if status == Status::Unsupported {
-            free_error(error);
-            return Self::iteration_batch_sampled_serial(requests);
-        }
         ensure_ok(status, error)?;
         let samples = collect_iteration_samples(
             requests.len(),
@@ -235,7 +241,7 @@ impl StageSession {
         })
     }
 
-    fn iteration_batch_sampled_serial(
+    fn iteration_batch_sampled_one_at_a_time(
         requests: &mut [IterationBatchRequest<'_>],
     ) -> Result<IterationBatchOutput> {
         let mut request_outputs = Vec::with_capacity(requests.len());
@@ -660,9 +666,18 @@ impl StageSession {
         ))
     }
 
+    /// Decode one token for every request as a single native batch. Frames
+    /// carrying optional parts are executed one at a time by decision (see
+    /// `iteration_batch_sampled`).
     pub fn decode_step_frame_batch_sampled(
         requests: &mut [DecodeFrameBatchRequest<'_>],
     ) -> Result<Vec<DecodeFrameBatchOutput>> {
+        if requests
+            .iter()
+            .any(|request| frame_has_optional_parts(request.input))
+        {
+            return Self::decode_step_frame_batch_sampled_one_at_a_time(requests);
+        }
         Self::decode_step_frame_batch_sampled_raw(requests, &vec![0; requests.len()])
     }
 
@@ -742,10 +757,6 @@ impl StageSession {
                 return Self::decode_step_frame_batch_sampled_raw(requests, &output_bytes);
             }
         }
-        if status == Status::Unsupported {
-            free_error(error);
-            return Self::decode_step_frame_batch_sampled_serial(requests);
-        }
         ensure_ok(status, error)?;
         // The native call has already advanced every session, so compute all
         // new counts before storing any: a mid-loop overflow error must not
@@ -781,7 +792,7 @@ impl StageSession {
             .collect())
     }
 
-    fn decode_step_frame_batch_sampled_serial(
+    fn decode_step_frame_batch_sampled_one_at_a_time(
         requests: &mut [DecodeFrameBatchRequest<'_>],
     ) -> Result<Vec<DecodeFrameBatchOutput>> {
         requests
@@ -1044,6 +1055,18 @@ fn validate_serial_decode_request(request: &IterationBatchRequest<'_>) -> Result
         );
     }
     Ok(())
+}
+
+/// Whether a frame carries parts beyond the planned frontier (optional ports),
+/// which the native batched path does not concatenate.
+fn frame_has_optional_parts(frame: Option<&ActivationFrame>) -> bool {
+    frame.is_some_and(|frame| {
+        frame
+            .desc
+            .parts()
+            .map(|parts| parts.iter().any(|part| part.is_optional()))
+            .unwrap_or(true)
+    })
 }
 
 #[cfg(test)]
