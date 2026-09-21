@@ -153,11 +153,18 @@ pub(in crate::network::openai::response) async fn relay_error_response<R: AsyncR
         .and_then(|headers| headers.content_type);
     route_observer.capture_response_body(http_body(&outgoing), media_kind.as_deref());
     let _ = tcp_stream.shutdown().await;
+    // An error body is still a response body: a JSON one (typically
+    // `{"error": {...}}`) digests to the same construction a success body
+    // does, and the plugin observing this exchange should see it. A non-JSON
+    // error page yields an all-`None` bundle, adding nothing.
+    let output_digests = crate::plugin::openai_exchange::ExchangeOutputDigests::from_response_body(
+        http_body(&outgoing),
+    );
     Ok(RouteAttemptResult::Delivered {
         status_code,
         usage: None,
         cache_cost: None,
-        output_digests: Default::default(),
+        output_digests,
     })
 }
 
@@ -532,6 +539,103 @@ mod tests {
             without_target_response, expected,
             "absent x-mesh-target must relay today's response byte-for-byte"
         );
+    }
+
+    /// A JSON error body is a response body: the plugin observing this
+    /// exchange must see its response digest, not an all-`None` bundle. A
+    /// non-JSON error page still yields `None` — nothing is fabricated.
+    #[tokio::test]
+    async fn relay_error_response_digests_a_json_body() {
+        let json_body =
+            br#"{"error":{"message":"context length exceeded","type":"invalid_request_error","code":null}}"#;
+        let probe_for = |header: &str| ResponseProbe {
+            buffered: header.as_bytes().to_vec(),
+            header_end: header.len(),
+            status_code: 400,
+            retryable_context_overflow: false,
+        };
+        let header = format!(
+            "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            json_body.len()
+        );
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (client, _) = listener.accept().await.unwrap();
+            let mut client: ClientStream = client.into();
+            relay_error_response(
+                &mut client,
+                &mut upstream_reader,
+                probe_for(&header),
+                None,
+                OpenAiRouteObserver::default(),
+            )
+            .await
+            .unwrap()
+        });
+        upstream_writer.write_all(json_body).await.unwrap();
+        drop(upstream_writer);
+        let mut socket = ClientStream::connect(address).await.unwrap();
+        let mut relayed = Vec::new();
+        socket.read_to_end(&mut relayed).await.unwrap();
+        let result = task.await.unwrap();
+
+        let RouteAttemptResult::Delivered { output_digests, .. } = result else {
+            panic!("an error response is still a delivered attempt");
+        };
+        // HEX(SHA-256(JCS(body))). The upstream body already has the OpenAI
+        // error shape, so it is relayed unsorted and JCS reorders the *inner*
+        // object's keys (message/type/code -> code/message/type) before
+        // hashing.
+        assert_eq!(
+            output_digests.response.map(hex::encode).as_deref(),
+            Some("381ae8bb04478842ee1ab2a5f549e211575f66780fd48ee60be2ddba09d8fab1")
+        );
+        // The model called no tools and emitted no reasoning here.
+        assert!(output_digests.tool_calls.is_none());
+        assert!(output_digests.reasoning.is_none());
+
+        // A non-JSON (HTML) upstream error page is remapped into an
+        // OpenAI-shaped error body before it is relayed, so the digest is over
+        // that remapped body — whatever the client actually received — and the
+        // model-side digests stay absent.
+        let html_body = b"<html><body>Bad Gateway</body></html>";
+        let html_header = format!(
+            "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n",
+            html_body.len()
+        );
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (client, _) = listener.accept().await.unwrap();
+            let mut client: ClientStream = client.into();
+            relay_error_response(
+                &mut client,
+                &mut upstream_reader,
+                probe_for(&html_header),
+                None,
+                OpenAiRouteObserver::default(),
+            )
+            .await
+            .unwrap()
+        });
+        upstream_writer.write_all(html_body).await.unwrap();
+        drop(upstream_writer);
+        let mut socket = ClientStream::connect(address).await.unwrap();
+        let mut relayed = Vec::new();
+        socket.read_to_end(&mut relayed).await.unwrap();
+        let result = task.await.unwrap();
+        let RouteAttemptResult::Delivered { output_digests, .. } = result else {
+            panic!("an error response is still a delivered attempt");
+        };
+        assert!(
+            output_digests.response.is_some(),
+            "the remapped error body is JSON, so it digests"
+        );
+        assert!(output_digests.tool_calls.is_none());
+        assert!(output_digests.reasoning.is_none());
     }
 
     #[tokio::test]

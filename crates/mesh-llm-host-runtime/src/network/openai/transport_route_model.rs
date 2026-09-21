@@ -414,14 +414,7 @@ fn handle_delivered_route_model_attempt(
         route_ms = context.state.route_started.elapsed().as_millis(),
         "openai route_model_request delivered"
     );
-    RouteModelDisposition::Return(usage.map_or(
-        RouteDispatchOutcome::Responded(status_code),
-        |usage| RouteDispatchOutcome::RespondedWithUsage {
-            status_code,
-            usage,
-            output_digests,
-        },
-    ))
+    RouteModelDisposition::Return(delivered_outcome(status_code, usage, output_digests))
 }
 
 fn update_local_cache_evidence(

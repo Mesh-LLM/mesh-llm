@@ -23,6 +23,7 @@ fn plugin_route_status(outcome: &proxy::RouteDispatchOutcome) -> Option<u16> {
     match *outcome {
         proxy::RouteDispatchOutcome::Responded(status) => Some(status),
         proxy::RouteDispatchOutcome::RespondedWithUsage { status_code, .. } => Some(status_code),
+        proxy::RouteDispatchOutcome::RespondedWithDigests { status_code, .. } => Some(status_code),
         proxy::RouteDispatchOutcome::FailedWithStatus { status_code, .. } => Some(status_code),
         proxy::RouteDispatchOutcome::Failed(_) | proxy::RouteDispatchOutcome::Dropped(_) => None,
     }
@@ -117,6 +118,10 @@ fn outcome_was_served(outcome: &proxy::RouteDispatchOutcome) -> bool {
     matches!(
         outcome,
         proxy::RouteDispatchOutcome::Responded(200..=299)
+            | proxy::RouteDispatchOutcome::RespondedWithDigests {
+                status_code: 200..=299,
+                ..
+            }
             | proxy::RouteDispatchOutcome::RespondedWithUsage {
                 status_code: 200..=299,
                 ..
@@ -213,7 +218,10 @@ fn exchange_output_digests_from_outcome(
     outcome: &proxy::RouteDispatchOutcome,
 ) -> crate::plugin::openai_exchange::ExchangeOutputDigests {
     match outcome {
-        proxy::RouteDispatchOutcome::RespondedWithUsage { output_digests, .. } => *output_digests,
+        proxy::RouteDispatchOutcome::RespondedWithUsage { output_digests, .. }
+        | proxy::RouteDispatchOutcome::RespondedWithDigests { output_digests, .. } => {
+            *output_digests
+        }
         _ => Default::default(),
     }
 }
@@ -313,6 +321,10 @@ fn model_access_succeeded(outcome: proxy::RouteDispatchOutcome) -> bool {
     matches!(
         outcome,
         proxy::RouteDispatchOutcome::Responded(200..=299)
+            | proxy::RouteDispatchOutcome::RespondedWithDigests {
+                status_code: 200..=299,
+                ..
+            }
             | proxy::RouteDispatchOutcome::RespondedWithUsage {
                 status_code: 200..=299,
                 ..

@@ -74,12 +74,44 @@ pub(crate) enum RouteDispatchOutcome {
         /// digests rather than fabricating any.
         output_digests: crate::plugin::openai_exchange::ExchangeOutputDigests,
     },
+    /// A response body was written whose digests the host captured, but the
+    /// backend reported no `usage` for it. Digests do not depend on `usage`:
+    /// a JSON error body, or a served body from any backend that omits the
+    /// OpenAI `usage` object, still digests — and would otherwise be silently
+    /// dropped at the `usage.map_or` boundary that builds these outcomes.
+    RespondedWithDigests {
+        status_code: u16,
+        output_digests: crate::plugin::openai_exchange::ExchangeOutputDigests,
+    },
     Failed(&'static str),
     FailedWithStatus {
         status_code: u16,
         reason: &'static str,
     },
     Dropped(&'static str),
+}
+
+/// The dispatch outcome for a [`RouteAttemptResult::Delivered`] attempt: the
+/// backend's `usage` when it reported any, and the captured response digests
+/// whenever the body was digestsable — the two are independent, so a delivered
+/// body that carried no `usage` still reports its digests.
+pub(super) fn delivered_outcome(
+    status_code: u16,
+    usage: Option<TokenUsage>,
+    output_digests: crate::plugin::openai_exchange::ExchangeOutputDigests,
+) -> RouteDispatchOutcome {
+    match usage {
+        Some(usage) => RouteDispatchOutcome::RespondedWithUsage {
+            status_code,
+            usage,
+            output_digests,
+        },
+        None if output_digests.has_any() => RouteDispatchOutcome::RespondedWithDigests {
+            status_code,
+            output_digests,
+        },
+        None => RouteDispatchOutcome::Responded(status_code),
+    }
 }
 
 pub(super) fn record_moa_stream_lifecycle(
@@ -100,10 +132,15 @@ pub(super) fn record_moa_stream_lifecycle(
             usage,
             ..
         } => observer.stream_completed(Some(usage)),
-        RouteDispatchOutcome::Responded(200..=299) => observer.stream_completed(None),
+        RouteDispatchOutcome::Responded(200..=299)
+        | RouteDispatchOutcome::RespondedWithDigests {
+            status_code: 200..=299,
+            ..
+        } => observer.stream_completed(None),
         RouteDispatchOutcome::Failed(_)
         | RouteDispatchOutcome::FailedWithStatus { .. }
         | RouteDispatchOutcome::Responded(_)
+        | RouteDispatchOutcome::RespondedWithDigests { .. }
         | RouteDispatchOutcome::RespondedWithUsage { .. }
         | RouteDispatchOutcome::Dropped(_) => observer.stream_error("moa_stream_failed"),
     }
@@ -111,7 +148,12 @@ pub(super) fn record_moa_stream_lifecycle(
 
 impl RouteDispatchOutcome {
     pub(crate) const fn response_written(self) -> bool {
-        matches!(self, Self::Responded(_) | Self::RespondedWithUsage { .. })
+        matches!(
+            self,
+            Self::Responded(_)
+                | Self::RespondedWithUsage { .. }
+                | Self::RespondedWithDigests { .. }
+        )
     }
 
     pub(crate) fn terminal_outcome(self) -> crate::logging::TerminalOutcome {
@@ -144,6 +186,11 @@ impl RouteDispatchOutcome {
                 error: format!("http_status_{status}"),
                 status_code: status,
             },
+            // Same classification as `Responded`: this variant exists only to
+            // carry digests, which the terminal outcome does not report.
+            Self::RespondedWithDigests { status_code, .. } => {
+                Self::Responded(status_code).terminal_outcome()
+            }
             Self::Failed(reason) => crate::logging::TerminalOutcome::Failed(reason.into()),
             Self::FailedWithStatus {
                 status_code,
@@ -1580,13 +1627,7 @@ pub async fn route_to_target(
                 );
             }
             node.record_routed_request(model, 1, outcome);
-            usage.map_or(RouteDispatchOutcome::Responded(status_code), |usage| {
-                RouteDispatchOutcome::RespondedWithUsage {
-                    status_code,
-                    usage,
-                    output_digests,
-                }
-            })
+            delivered_outcome(status_code, usage, output_digests)
         }
         RouteAttemptResult::RetryableTimeout
         | RouteAttemptResult::RetryableContextOverflow
@@ -1689,13 +1730,7 @@ pub async fn route_http_endpoint_request(
                 );
             }
             node.record_routed_request(model, 1, outcome);
-            usage.map_or(RouteDispatchOutcome::Responded(status_code), |usage| {
-                RouteDispatchOutcome::RespondedWithUsage {
-                    status_code,
-                    usage,
-                    output_digests,
-                }
-            })
+            delivered_outcome(status_code, usage, output_digests)
         }
         RouteAttemptResult::RetryableTimeout
         | RouteAttemptResult::RetryableContextOverflow
