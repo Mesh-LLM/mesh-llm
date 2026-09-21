@@ -35,30 +35,36 @@ pub(in crate::network::openai) async fn route_local_attempt(
         served_by,
         peer_capsule_id,
     } = logging;
-    if !super::paid::is_local_origin(tcp_stream) {
-        let model = super::super::request_parse::parse_json_body_from_http_request(prefetched)
-            .and_then(|body| {
-                body.get("model")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned)
-            });
-        match node.advertised_payment_offers().await {
-            Ok(prices)
-                if model
-                    .as_ref()
-                    .is_some_and(|model| prices.contains_key(model)) =>
-            {
-                return super::paid::payment_error(
-                    tcp_stream,
-                    "this provider requires the Lightning payment protocol",
-                )
-                .await;
-            }
-            Err(_) => {
-                return super::paid::payment_error(tcp_stream, "seller payment state unavailable")
+    #[cfg(feature = "payments")]
+    {
+        if !super::paid::is_local_origin(tcp_stream) {
+            let model = super::super::request_parse::parse_json_body_from_http_request(prefetched)
+                .and_then(|body| {
+                    body.get("model")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                });
+            match node.advertised_payment_offers().await {
+                Ok(prices)
+                    if model
+                        .as_ref()
+                        .is_some_and(|model| prices.contains_key(model)) =>
+                {
+                    return super::paid::payment_error(
+                        tcp_stream,
+                        "this provider requires the Lightning payment protocol",
+                    )
                     .await;
+                }
+                Err(_) => {
+                    return super::paid::payment_error(
+                        tcp_stream,
+                        "seller payment state unavailable",
+                    )
+                    .await;
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
     let Ok((_instance_request, mut upstream)) = acquire_local_attempt_upstream(node, port).await
@@ -238,17 +244,23 @@ pub(in crate::network::openai) async fn route_remote_attempt(
         served_by,
         peer_capsule_id,
     } = logging;
-    if let Ok(request) = crate::network::payments::request::PaidRequest::parse(prefetched)
-        && let Some(price) = node.peer_payment_offer(host_id, &request.model).await
+    #[cfg(feature = "payments")]
     {
-        return super::paid::route(node, tcp_stream, host_id, prefetched, price, logging).await;
+        if let Ok(request) = crate::network::payments::request::PaidRequest::parse(prefetched)
+            && let Some(price) = node.peer_payment_offer(host_id, &request.model).await
+        {
+            return super::paid::route(node, tcp_stream, host_id, prefetched, price, logging).await;
+        }
     }
+    #[cfg(feature = "payments")]
     let sanitized = match crate::network::payments::request::strip_intent(prefetched) {
         Ok(raw) => raw,
         Err(_) => {
             return super::paid::payment_error(tcp_stream, "invalid request payment intent").await;
         }
     };
+    #[cfg(not(feature = "payments"))]
+    let sanitized = prefetched.to_vec();
     let prefetched = sanitized.as_slice();
     let (mut quic_send, mut quic_recv) = match node.open_http_tunnel(host_id).await {
         Ok(tunnel) => tunnel,
@@ -314,8 +326,11 @@ async fn forward_buffered_request<W: AsyncWrite + Unpin>(
     upstream: &mut W,
     prefetched: &[u8],
 ) -> std::io::Result<()> {
+    #[cfg(feature = "payments")]
     let sanitized = crate::network::payments::request::strip_intent(prefetched)
         .map_err(std::io::Error::other)?;
+    #[cfg(not(feature = "payments"))]
+    let sanitized = prefetched.to_vec();
     upstream.write_all(&sanitized).await
 }
 

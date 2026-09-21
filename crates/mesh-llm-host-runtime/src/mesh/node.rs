@@ -173,6 +173,7 @@ pub struct Node {
     pub(crate) config_state: Arc<tokio::sync::Mutex<crate::runtime::config_state::ConfigState>>,
     pub(crate) config_revision_tx: Arc<tokio::sync::watch::Sender<u64>>,
     /// Shared activity policy guard for ingress admission checks.
+    #[cfg(feature = "payments")]
     pub(crate) payments:
         Arc<tokio::sync::OnceCell<Arc<mesh_llm_payments::service::PaymentService>>>,
     pub(crate) activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard,
@@ -885,6 +886,7 @@ impl Node {
                 let (tx, _rx) = tokio::sync::watch::channel(config_revision_init);
                 Arc::new(tx)
             },
+            #[cfg(feature = "payments")]
             payments: Arc::new(tokio::sync::OnceCell::new()),
             activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
                 &activity_policy_config,
@@ -1063,6 +1065,7 @@ impl Node {
                 let (tx, _rx) = tokio::sync::watch::channel(0);
                 Arc::new(tx)
             },
+            #[cfg(feature = "payments")]
             payments: Arc::new(tokio::sync::OnceCell::new()),
             activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
                 &mesh_llm_config::RuntimeActivityConfig::default(),

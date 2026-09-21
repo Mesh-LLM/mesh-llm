@@ -27,6 +27,7 @@ impl Drop for RemoteBridge {
     }
 }
 
+#[cfg(feature = "payments")]
 pub(crate) fn is_remote_bridge(address: SocketAddr) -> bool {
     // Poisoned provenance fails closed for wallet spending.
     connections()
@@ -34,7 +35,7 @@ pub(crate) fn is_remote_bridge(address: SocketAddr) -> bool {
         .map_or(true, |connections| connections.contains(&address))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "payments"))]
 mod tests {
     use super::*;
     #[tokio::test]

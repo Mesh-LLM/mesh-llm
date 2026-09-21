@@ -14,6 +14,9 @@ categories = ["api-bindings", "network-programming"]
 default = []
 web-ui = ["mesh-llm-host-runtime/web-ui"]
 dynamic-native-runtime = ["mesh-llm-host-runtime/dynamic-native-runtime"]
+# Lightning wallet + paid inference. Off unless a serving consumer opts in;
+# pulls the lexe/lightning-invoice/bitcoin stack back into host-runtime.
+payments = ["mesh-llm-host-runtime/payments"]
 
 [lints]
 workspace = true

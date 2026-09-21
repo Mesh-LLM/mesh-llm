@@ -41,6 +41,7 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
     |stream, state, method, path, path_only, body, req, raw_request| {
         Box::pin(async move {
             match (method, path_only) {
+                #[cfg(feature = "payments")]
                 ("POST", "/api/wallet") => {
                     wallet::handle(stream, state, body).await?;
                     Ok(true)

@@ -3,6 +3,7 @@ use crate::{inference::election::InferenceTarget, mesh::Node};
 
 /// Apply economics after capability/context/health eligibility. Stable sorting
 /// preserves observed performance ordering for equal-price offers.
+#[cfg(feature = "payments")]
 pub(super) async fn rank(
     node: &Node,
     model: &str,
@@ -94,6 +95,20 @@ pub(super) async fn rank(
     Ok(true)
 }
 
+/// Wallets compiled out: no payment tiers exist, so candidate ordering is left
+/// exactly as capability/context/health eligibility produced it.
+#[cfg(not(feature = "payments"))]
+pub(super) async fn rank(
+    _node: &Node,
+    _model: &str,
+    _input_estimate: u64,
+    _max_output: u64,
+    _candidates: &mut RankedCandidates<InferenceTarget>,
+    _request_body: Option<&serde_json::Value>,
+) -> Result<bool, &'static str> {
+    Ok(false)
+}
+
 pub(super) fn cache_candidates<'a>(
     payment_ranked: bool,
     ranked: &'a RankedCandidates<InferenceTarget>,
@@ -119,7 +134,7 @@ pub(super) fn prefer_price_tier(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "payments"))]
 mod tests {
     use super::*;
     use mesh_llm_payments::{intent::PaymentIntent, pricing::Pricing, service::PaymentService};

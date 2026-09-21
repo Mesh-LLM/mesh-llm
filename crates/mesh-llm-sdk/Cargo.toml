@@ -25,6 +25,10 @@ serving = [
     "dep:serde",
     "dep:serde_json",
 ]
+# Opt-in Lightning wallet + paid inference on top of the serving path. Off by
+# default: an embedding consumer (e.g. Buzz) that enables `serving` alone stays
+# wallet-free and does not compile the lexe/lightning-invoice/bitcoin stack.
+payments = ["serving", "mesh-llm-embedded-runtime/payments"]
 
 [lints]
 workspace = true

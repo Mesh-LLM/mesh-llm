@@ -10,7 +10,9 @@ mod parse_failure;
 mod request_normalize;
 pub(crate) mod request_parse;
 mod response;
-pub(crate) use response::{send_503, send_error};
+pub(crate) use response::send_503;
+#[cfg(feature = "payments")]
+pub(crate) use response::send_error;
 pub(crate) mod response_adapter;
 mod response_quality;
 mod routing_rank;
@@ -18,9 +20,9 @@ pub(crate) mod runtime_events;
 mod tool_call_ids;
 pub(crate) mod transport;
 
-#[cfg(feature = "payments")]
 mod payment_routing;
 
+#[cfg(feature = "payments")]
 pub(crate) use response::payment_recovery;
 
 #[cfg(test)]

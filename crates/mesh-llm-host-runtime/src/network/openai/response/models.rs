@@ -11,10 +11,17 @@ pub async fn send_models_list_with_descriptors(
     runtimes: &[mesh::ModelRuntimeDescriptor],
     node: Option<&mesh::Node>,
 ) -> std::io::Result<()> {
-    let mut body = models_list_json(models, descriptors, runtimes);
-    if let Some(node) = node {
-        super::model_prices::attach_prices(&mut body, models, descriptors, node).await;
-    }
+    let body = models_list_json(models, descriptors, runtimes);
+    #[cfg(feature = "payments")]
+    let body = {
+        let mut body = body;
+        if let Some(node) = node {
+            super::model_prices::attach_prices(&mut body, models, descriptors, node).await;
+        }
+        body
+    };
+    #[cfg(not(feature = "payments"))]
+    let _ = node;
     let body = body.to_string();
     let resp = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\n\r\n{}",
