@@ -800,10 +800,8 @@ async fn route_missing_local_model(
             // already does for its own dispatch below, with `RemoteMesh` in
             // place of `RawProxy`, so a plugin on the ROUTING node can observe
             // this exchange too (previously it observed nothing at all for a
-            // routed exchange). No marker exists on this path yet -- a peer's
-            // `X-Capsule-Id` response header is not read back here -- so
-            // capsule_id stays absent, same as the plugin-served terminal
-            // event just below.
+            // routed exchange). The peer's `X-Capsule-Id` response header IS
+            // read back here -- see `PeerCapsuleIdSink` below.
             let exchange_id = uuid::Uuid::new_v4().to_string();
             // The client-contributed capsule nonce, already stabilized (and,
             // if the client sent none, minted) by `finalize_forwarded_request`
@@ -840,6 +838,13 @@ async fn route_missing_local_model(
             // `x-mesh-target` -- absent headers must produce today's
             // response byte-for-byte, with no `x-mesh-served-by` added.
             let served_by_hex = target.map(|id| hex::encode(id.as_bytes()));
+            // Where `route_model_request` records the peer's `X-Capsule-Id`
+            // response header, when it reads one back. See
+            // `PeerCapsuleIdSink` -- this is the peer's own UNVERIFIED
+            // assertion of its capsule, never elevated to verified here
+            // (that happens in whatever later pulls the capsule via a later
+            // out-of-band fetch and checks its digest).
+            let peer_capsule_id_sink = proxy::PeerCapsuleIdSink::new();
             let outcome = proxy::route_model_request(
                 ctx.node.clone(),
                 tcp_stream,
@@ -851,6 +856,7 @@ async fn route_missing_local_model(
                     affinity: ctx.affinity,
                     route_observer,
                     served_by_header: served_by_hex.as_deref(),
+                    peer_capsule_id: Some(&peer_capsule_id_sink),
                 },
             )
             .await;
@@ -861,6 +867,7 @@ async fn route_missing_local_model(
                     plugin_route_status(&outcome),
                     forwarded_nonce,
                     nonce_source,
+                    peer_capsule_id_sink.take(),
                 ))
                 .await;
             }
@@ -1408,6 +1415,10 @@ async fn route_request(
                 affinity: ctx.affinity,
                 route_observer,
                 served_by_header: served_by_hex.as_deref(),
+                // Not the `RemoteMesh` dispatch path -- this node is serving
+                // (or election-selecting among candidates that may include
+                // itself) the exchange, not merely routing to a peer.
+                peer_capsule_id: None,
             },
         )
         .await;
