@@ -2,6 +2,7 @@ pub(super) fn is_static_summary_token(token: &str) -> bool {
     matches!(
         token,
         "mesh-llm"
+            | "wallet"
             | "load"
             | "unload"
             | "status"
