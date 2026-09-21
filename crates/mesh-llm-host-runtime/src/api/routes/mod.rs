@@ -17,6 +17,7 @@ pub(crate) mod runtime_control_state;
 mod runtime_control_state_sources;
 pub(crate) mod runtime_events;
 mod search;
+#[cfg(feature = "payments")]
 mod wallet;
 
 use super::MeshApi;

@@ -9,7 +9,14 @@ homepage = "https://github.com/Mesh-LLM/mesh-llm"
 readme = "README.md"
 
 [features]
-default = ["web-ui", "dynamic-native-runtime"]
+default = ["web-ui", "dynamic-native-runtime", "payments"]
+# Lightning wallet + paid-inference settlement. On by default so the shipped
+# binary and host-runtime's own tests keep wallets. Consumers that reach
+# host-runtime with `default-features = false` (e.g. via the SDK serving path)
+# stay wallet-free and drop the lexe/rusqlite/lightning-invoice/bitcoin stack
+# unless they opt back in with this feature. Propagates to the optional
+# `mesh-llm-payments` dependency.
+payments = ["dep:mesh-llm-payments"]
 # Embed the React web console into the binary. Default on; turn off for
 # lib-style / headless consumers that don't need the console assets.
 # Propagates to `mesh-llm-ui/embed-assets`.
@@ -28,7 +35,7 @@ serde_json = "1"
 sha2 = "0.11"
 
 [dependencies]
-mesh-llm-payments = { path = "../mesh-llm-payments", version = "0.76.1" }
+mesh-llm-payments = { path = "../mesh-llm-payments", version = "0.76.1", optional = true }
 bytes = "1"
 mesh-llm-build-info.workspace = true
 mesh-mixture-of-agents = { path = "../mesh-mixture-of-agents", version = "0.76.1"  }

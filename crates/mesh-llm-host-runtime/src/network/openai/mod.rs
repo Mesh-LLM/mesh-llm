@@ -18,6 +18,7 @@ pub(crate) mod runtime_events;
 mod tool_call_ids;
 pub(crate) mod transport;
 
+#[cfg(feature = "payments")]
 mod payment_routing;
 
 pub(crate) use response::payment_recovery;
