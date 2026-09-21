@@ -435,20 +435,11 @@ impl IterationScheduler {
         let max_consecutive_prefill_iterations =
             scheduler_config.max_consecutive_prefill_iterations;
         let mixed_prefill_decode = scheduler_config.mixed_prefill_decode;
-        // Activation exports are read from a single native microbatch, so a
-        // batched iteration must never exceed n_ubatch on an exporting stage.
-        // Capping here keeps that a scheduler guarantee rather than a native
-        // error.
-        let microbatch_tokens = usize::try_from(
-            config
-                .n_ubatch
-                .unwrap_or(skippy_runtime::LLAMA_SERVER_DEFAULT_N_UBATCH),
-        )
-        .unwrap_or(usize::MAX)
-        .max(1);
-        let max_direct_iteration_tokens = scheduler_config
-            .max_tokens_per_iteration
-            .min(microbatch_tokens);
+        let max_direct_iteration_tokens = direct_iteration_token_budget(
+            config.emits_activation_frame(),
+            scheduler_config.max_tokens_per_iteration,
+            config.n_ubatch,
+        );
         let cache_runtime_queue = CacheRuntimeQueue::new(
             scheduler_config.cache_aging_cost_per_iteration,
             scheduler_config.group_waiting_prefixes,
@@ -1873,6 +1864,28 @@ impl SchedulerWorker {
             }
         }
     }
+}
+
+/// Batched tokens one scheduler iteration may carry.
+///
+/// An exporting stage reads its activation exports from a single native
+/// microbatch, so a batched iteration must never exceed `n_ubatch` there; that
+/// is a scheduler guarantee rather than a native error. Stages that export
+/// nothing keep the full budget, including whole-prompt prefill up to
+/// `n_batch`.
+fn direct_iteration_token_budget(
+    exports_activation_frame: bool,
+    max_tokens_per_iteration: usize,
+    n_ubatch: Option<u32>,
+) -> usize {
+    if !exports_activation_frame {
+        return max_tokens_per_iteration;
+    }
+    let microbatch_tokens =
+        usize::try_from(n_ubatch.unwrap_or(skippy_runtime::LLAMA_SERVER_DEFAULT_N_UBATCH))
+            .unwrap_or(usize::MAX)
+            .max(1);
+    max_tokens_per_iteration.min(microbatch_tokens)
 }
 
 fn build_scheduler_config(

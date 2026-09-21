@@ -19,6 +19,32 @@ fn direct_iteration(session_id: &str, token_count: usize) -> DirectIteration {
     }
 }
 
+/// An exporting stage must fit one native microbatch, while a stage that
+/// exports nothing (terminal or unsplit) keeps its whole-iteration budget.
+#[test]
+fn activation_export_stages_cap_iteration_tokens_at_the_native_microbatch() {
+    assert_eq!(
+        direct_iteration_token_budget(true, 2048, None),
+        usize::try_from(skippy_runtime::LLAMA_SERVER_DEFAULT_N_UBATCH).unwrap(),
+        "an exporting stage without an explicit n_ubatch caps at the default microbatch"
+    );
+    assert_eq!(
+        direct_iteration_token_budget(true, 2048, Some(512)),
+        512,
+        "an exporting stage caps at its configured microbatch"
+    );
+    assert_eq!(
+        direct_iteration_token_budget(true, 128, Some(512)),
+        128,
+        "the microbatch cap never raises the stage budget"
+    );
+    assert_eq!(
+        direct_iteration_token_budget(false, 2048, Some(512)),
+        2048,
+        "a stage that exports nothing keeps the full iteration budget"
+    );
+}
+
 #[test]
 fn expired_direct_iteration_behind_blocked_worker_never_reaches_native_runtime() {
     let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));

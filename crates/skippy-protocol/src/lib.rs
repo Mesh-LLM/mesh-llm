@@ -128,6 +128,51 @@ mod tests {
     }
 
     #[test]
+    fn stage_config_reports_when_it_emits_an_activation_frame() {
+        let encoded = format!(
+            "{}",
+            serde_json::json!({
+                "run_id": "run",
+                "topology_id": "topology",
+                "model_id": "model",
+                "activation_codec": "f16-rne-v1",
+                "execution_contract": "",
+                "stage_id": "stage-0",
+                "stage_index": 0,
+                "layer_start": 0,
+                "layer_end": 1,
+                "ctx_size": 512,
+                "lane_count": 2,
+                "n_gpu_layers": 0,
+                "mlock": false,
+                "check_tensors": false,
+                "direct_io": false,
+                "repack": false,
+                "load_mode": "runtime-slice",
+                "bind_addr": "127.0.0.1:0",
+                "split_mode": "none",
+                "flash_attn_type": "auto",
+                "glm_dsa_policy": "auto",
+                "cache_type_k": "f16",
+                "cache_type_v": "f16",
+            })
+        );
+        let mut config: super::StageConfig = serde_json::from_str(&encoded).unwrap();
+
+        assert!(
+            !config.emits_activation_frame(),
+            "an unsplit full-model load carries no resident tensor plan"
+        );
+        config.resident_tensor_names = vec!["blk.0.attn_norm.weight".to_string()];
+        assert!(
+            !config.emits_activation_frame(),
+            "a terminal stage has no export frontier"
+        );
+        config.activation_export_identities = vec!["stage-0.out".to_string()];
+        assert!(config.emits_activation_frame());
+    }
+
+    #[test]
     fn activation_codec_policy_permits_is_fail_closed() {
         use super::StageActivationCodec as C;
         use super::StageActivationCodecPolicy as P;
