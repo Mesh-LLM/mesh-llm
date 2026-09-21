@@ -56,6 +56,41 @@ class SplitCertificationRosterTests(unittest.TestCase):
             finally:
                 GENERATOR.PATCH_DIR = original_patch_dir
 
+    def test_non_chat_workload_evidence_never_grants_split_admission(self) -> None:
+        """Only architectures backed by causal split evidence enter the roster."""
+        manifest = json.loads(GENERATOR.DEFAULT_MANIFEST.read_text())
+        roster = GENERATOR.build_roster(manifest)
+        causal = [model for model in manifest["models"]
+                  if model["class"] == "causal_generation"]
+        self.assertEqual(83, len(causal))
+        self.assertEqual(
+            {model["architecture"] for model in causal}, set(roster["architectures"])
+        )
+        for model in manifest["models"]:
+            if model["class"] != "causal_generation":
+                model["architecture"] = f"non-chat-{model['class']}"
+        self.assertEqual(roster, GENERATOR.build_roster(manifest))
+
+    def test_workload_evidence_cannot_supply_the_only_split_architecture(self) -> None:
+        """A shared architecture label does not promote non-chat evidence to split evidence."""
+        manifest = json.loads(GENERATOR.DEFAULT_MANIFEST.read_text())
+        manifest["models"] = [model for model in manifest["models"]
+                              if model["class"] == "speech_recognition"]
+        self.assertEqual("llama", manifest["models"][0]["architecture"])
+        with self.assertRaisesRegex(GENERATOR.RosterError, "no split-certified architectures"):
+            GENERATOR.build_roster(manifest)
+
+    def test_invalid_workload_class_or_profile_cannot_grant_split_admission(self) -> None:
+        """Fail closed on absent classes or non-chat rows mislabeled as split-certified."""
+        for fields in ({"class": None}, {"class": "future"},
+                       {"class": "embedding", "profile": "full"},
+                       {"class": "causal_generation", "profile": "workload-oracle"}):
+            with self.subTest(fields=fields):
+                manifest = json.loads(GENERATOR.DEFAULT_MANIFEST.read_text())
+                manifest["models"][0].update(fields)
+                with self.assertRaises(GENERATOR.RosterError):
+                    GENERATOR.build_roster(manifest)
+
     def test_roster_contains_unique_tested_architectures(self) -> None:
         manifest = json.loads(GENERATOR.DEFAULT_MANIFEST.read_text(encoding="utf-8"))
         roster = GENERATOR.build_roster(manifest)

@@ -396,6 +396,10 @@ run_full_build() {
     || return 1
   run_verification_logged "Skippy smoke tests" "$BUILD_LOG" \
     scripts/skippy-ci-smoke.sh || return 1
+  # Run-scoped CPU workload oracle closure for the non-chat certification
+  # lanes; packed into the executable handoff for family workers.
+  run_verification_logged "pinned CPU workload oracles and candidate" "$BUILD_LOG" \
+    just skippy-workload-oracles-build "${LLAMA_STAGE_BUILD_DIR:?}-workloads" || return 1
   if [[ "$HARNESS_MODE" == *-build ]]; then
     # The nested shell expands its positional argument, not this shell.
     # shellcheck disable=SC2016
@@ -407,6 +411,16 @@ run_full_build() {
 
 # Local CLI compatibility path. CI uses *-build modes and separate family jobs.
 run_certification() {
+  local setting workload_settings
+  local workload_env=()
+  workload_settings="$(bash scripts/skippy-workload-oracles-build.sh --print-env "${LLAMA_STAGE_BUILD_DIR:?}-workloads")" || return 1
+  if [[ -z "$workload_settings" ]]; then
+    echo "workload producer returned no certification environment" >&2
+    return 1
+  fi
+  while IFS= read -r setting; do
+    workload_env+=("$setting")
+  done <<< "$workload_settings"
   : > "$CERTIFY_LOG"
   echo "trusted candidate gate: certify" | tee -a "$CERTIFY_LOG"
   run_verification_logged "parity manifest validation" "$CERTIFY_LOG" \
@@ -422,6 +436,7 @@ run_certification() {
     || return 1
   run_verification_logged "full supported-family certification" "$CERTIFY_LOG" env \
     FAMILY_BATTERY_RUN_ID="$FAMILY_BATTERY_RUN_ID" \
+    "${workload_env[@]}" \
     scripts/skippy-family-battery.sh --skip-build --plan "$PLAN_PATH"
 }
 
@@ -558,7 +573,8 @@ export_family_inputs() {
   python3 "$TRUSTED_ROOT/scripts/llama-canary-family-evidence.py" pack \
     --root "$ROOT" --output "$destination" --candidate "$CERTIFIED_SHA" \
     --base "$CANDIDATE_BASE_HEAD" --branch "$BRANCH" --pass-id "$PASS_ID" \
-    --test-build "$STATE_DIR/mm-build.jsonl" --bundle "$BUNDLE" --summary "$UPSTREAM_SUMMARY"
+    --test-build "$STATE_DIR/mm-build.jsonl" --bundle "$BUNDLE" --summary "$UPSTREAM_SUMMARY" \
+    --workload-oracles "${LLAMA_STAGE_BUILD_DIR:?}-workloads"
 }
 
 if [[ "$HARNESS_MODE" == repair* ]]; then

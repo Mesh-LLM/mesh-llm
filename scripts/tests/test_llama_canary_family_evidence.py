@@ -35,7 +35,8 @@ class FamilyEvidenceTests(unittest.TestCase):
         self.addCleanup(self.env.stop)
         self.plan = {
             'required_certification_lanes': sorted(E.CORE),
-            'selected_models': [{'family': f, 'mmproj_artifact': None} for f in ('dense', 'hybrid')],
+            'selected_models': [{'family': f, 'mmproj_artifact': None, 'class': 'causal_generation',
+                                 'certification_lanes': sorted(E.CORE)} for f in ('dense', 'hybrid')],
             'shards': [{'shard_index': i, 'families': [f]} for i, f in enumerate(('dense', 'hybrid'))],
             'github_matrix': {'include': [{'shard_index': i, 'families': f} for i, f in enumerate(('dense', 'hybrid'))]},
         }
@@ -46,11 +47,13 @@ class FamilyEvidenceTests(unittest.TestCase):
                 content = b'#!/bin/sh\nexit 0\n'
                 info.size = len(content)
                 archive.addfile(info, io.BytesIO(content))
-        self.identity = {'schema': 1, 'candidate': 'a'*40, 'base': 'a'*40,
+        self.build_closure()
+        self.identity = {'schema': 2, 'candidate': 'a'*40, 'base': 'a'*40,
                          'branch': 'llama-canary/repair-123-2-aaaaaaaaaa', 'pass_id': 'repair-1',
                          'platform': 'macos-arm64-metal', 'run_id': '123', 'run_attempt': '2',
                          'plan_sha256': E.sha(self.package / 'plan.json'),
                          'binaries_sha256': E.sha(self.package / 'binaries.tar'),
+                         'workload_oracles_sha256': E.sha(self.package / E.WORKLOAD_ORACLES_TAR),
                          'bundle_sha256': None, 'manifest_sha256': 'b'*64}
         self.save_identity()
         for family in ('dense', 'hybrid'):
@@ -64,6 +67,32 @@ class FamilyEvidenceTests(unittest.TestCase):
     def save_identity(self):
         E.write(self.package / 'identity.json', self.identity)
         self.digest = E.sha(self.package / 'identity.json')
+
+    def build_closure(self):
+        """Create a synthetic workload oracle closure and its handoff tar."""
+        directory = self.root / 'closure-src'
+        directory.mkdir(exist_ok=True)
+        files = {
+            'candidate': 'cargo/debug/skippy-server',
+            'test_binary': 'cargo/debug/deps/smoke-test',
+            'model_package': 'cargo/debug/skippy-model-package',
+            'correctness': 'cargo/debug/skippy-correctness',
+            'topology_plan': 'cargo/debug/skippy-topology-plan',
+            'native_stamp': 'native/.mesh-llm-build-stamp',
+            'oracle_server': 'native/bin/llama-server',
+            'oracle_completion': 'native/bin/llama-completion',
+            'oracle_tts': 'native/bin/llama-tts',
+        }
+        manifest = {'schema_version': 1, 'source': {'head': 'x'*40, 'worktree_sha256': 'y'*64},
+                    'files': {name: {'path': relative, 'sha256': 'z'*64} for name, relative in files.items()}}
+        (directory / 'producer.json').write_text(json.dumps(manifest, sort_keys=True) + '\n')
+        for relative in files.values():
+            target = directory / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b'closure:' + relative.encode())
+        with tarfile.open(self.package / E.WORKLOAD_ORACLES_TAR, 'w') as archive:
+            for relative in sorted({'producer.json', *files.values()}):
+                archive.add(directory / relative, arcname=relative)
 
     def make_receipt(self, family, outcome='success'):
         E.receipt(SimpleNamespace(package=self.package, identity=self.digest, evidence=self.evidence / family,
@@ -155,9 +184,65 @@ class FamilyEvidenceTests(unittest.TestCase):
             self.aggregate()
 
     def test_missing_multimodal_smoke_is_rejected(self):
-        model = {'mmproj_artifact': {'files': ['projector.gguf']}}
+        model = {'mmproj_artifact': {'files': ['projector.gguf']}, 'class': 'causal_generation',
+                 'certification_lanes': sorted(E.CORE)}
         with self.assertRaisesRegex(ValueError, 'multimodal'):
             E.validate_results(self.evidence / 'dense/results.jsonl', 'dense', model)
+
+    def test_workload_family_requires_its_class_lanes(self):
+        """Non-chat evidence must contain exactly its own smoke and oracle lanes."""
+        model = {'family': 'dense', 'class': 'embedding', 'mmproj_artifact': None,
+                 'certification_lanes': ['embedding-smoke', 'embedding-oracle']}
+        row = {'family': 'dense', 'exit_code': 0, 'workload_class': 'embedding',
+               'outcomes': [{'name': lane, 'status': 'pass', 'exit_code': 0}
+                            for lane in ('embedding-smoke', 'embedding-oracle')]}
+        path = self.evidence / 'dense/results.jsonl'
+        path.write_text(json.dumps(row) + '\n')
+        E.validate_results(path, 'dense', model)
+        row['outcomes'] = row['outcomes'][:1]
+        path.write_text(json.dumps(row) + '\n')
+        with self.assertRaisesRegex(ValueError, 'required lane embedding-oracle'):
+            E.validate_results(path, 'dense', model)
+
+    def test_workload_class_mismatch_is_rejected(self):
+        """A family result cannot substitute another class for the immutable plan."""
+        model = {'family': 'dense', 'class': 'embedding', 'mmproj_artifact': None,
+                 'certification_lanes': ['embedding-smoke', 'embedding-oracle']}
+        row = {'family': 'dense', 'exit_code': 0, 'workload_class': 'rerank',
+               'outcomes': [{'name': lane, 'status': 'pass', 'exit_code': 0}
+                            for lane in ('embedding-smoke', 'embedding-oracle')]}
+        path = self.evidence / 'dense/results.jsonl'
+        path.write_text(json.dumps(row) + '\n')
+        with self.assertRaisesRegex(ValueError, 'class mismatch'):
+            E.validate_results(path, 'dense', model)
+
+    def test_tampered_workload_closure_is_rejected(self):
+        """Reject a changed producer closure before allowing any worker execution."""
+        (self.package / E.WORKLOAD_ORACLES_TAR).write_bytes(b'wrong')
+        with self.assertRaisesRegex(ValueError, 'digest mismatch'):
+            E.verify_package(self.package, self.digest)
+
+    def test_restore_materializes_relocatable_workload_closure(self):
+        """Restored workers consume verified producer bytes without rebuilding them."""
+        checkout = self.root / 'closure-checkout'
+        checkout.mkdir()
+        subprocess.run(['git', 'init', '-q', str(checkout)], check=True)
+        manifest = checkout / 'ci/llama-canary/family-certified.json'
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text('{}\n')
+        subprocess.run(['git', '-C', str(checkout), 'add', '.'], check=True)
+        subprocess.run(['git', '-C', str(checkout), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                        '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture'], check=True)
+        self.identity['base'] = self.identity['candidate'] = E.git(checkout, 'rev-parse', 'HEAD')
+        self.identity['manifest_sha256'] = E.sha(manifest)
+        self.save_identity()
+        E.restore(SimpleNamespace(package=self.package, identity=self.digest, root=checkout))
+        closure = checkout / E.WORKLOAD_CLOSURE_ROOT
+        stamp = closure / 'native/.mesh-llm-build-stamp'
+        candidate = closure / 'cargo/debug/skippy-server'
+        self.assertEqual(candidate.read_bytes(), b'closure:cargo/debug/skippy-server')
+        self.assertLess(stamp.stat().st_mtime_ns, candidate.stat().st_mtime_ns,
+                        'restored stamp must predate restored executables')
 
     def test_foreign_run_and_attempt_are_rejected(self):
         for key in ('run_id', 'run_attempt'):

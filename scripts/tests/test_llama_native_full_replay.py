@@ -18,17 +18,21 @@ PRIVATE_TARGETS = {
     "skippy-hardware-application-probe",
     "skippy-model-fixture-generator",
     "skippy-model-loader-accounting",
+    "skippy-runtime-events-test",
     "skippy-noalloc-graph-planning",
     "skippy-renamed-multishard-planning",
     "skippy-stage-slice-plan",
 }
 LEGACY_TARGETS = {
-    "test-skippy-activation-layout",
     "test-skippy-kv-cells-contiguous",
     "test-skippy-kv-page-export",
     "test-skippy-model-loader-accounting",
     "test-skippy-recurrent-state-roundtrip",
     "test-skippy-verify-checkpoint-retirement",
+}
+NON_CHAT_TARGETS = {
+    "test-skippy-rerank-template",
+    "test-skippy-sampling-suppress",
 }
 
 
@@ -150,17 +154,21 @@ class LlamaNativeFullReplayTests(unittest.TestCase):
             return [json.loads(line) for line in trace.read_text().splitlines()]
 
     def test_default_build_keeps_standard_and_private_tests_disabled(self) -> None:
+        """Normal product builds must not silently enable the expensive native certification suite."""
         trace = self.run_build(full_replay=False)
         configure = next(call for call in trace if call["args"][0] != "--build")
         build = next(call for call in trace if call["args"][0] == "--build")
 
         self.assertIn("-DLLAMA_BUILD_TESTS=OFF", configure["args"])
         self.assertIn("-DLLAMA_STAGE_BUILD_TESTS=OFF", configure["args"])
+        self.assertIn("-DGGML_METAL=OFF", configure["args"])
         self.assertTrue(PRIVATE_TARGETS.isdisjoint(build["args"]))
         self.assertTrue(LEGACY_TARGETS.isdisjoint(build["args"]))
+        self.assertTrue(NON_CHAT_TARGETS.isdisjoint(build["args"]))
         self.assertFalse(any(call["tool"] == "ctest" for call in trace))
 
     def test_full_replay_builds_and_runs_only_skippy_gates(self) -> None:
+        """Explicit full replay must build and execute every retained Skippy gate without upstream tests."""
         trace = self.run_build(full_replay=True)
         configure = next(call for call in trace if call["args"][0] != "--build")
         build = next(call for call in trace if call["args"][0] == "--build")
@@ -172,6 +180,8 @@ class LlamaNativeFullReplayTests(unittest.TestCase):
         self.assertIn("-DLLAMA_BUILD_SERVER=OFF", configure["args"])
         self.assertTrue(PRIVATE_TARGETS.issubset(build["args"]))
         self.assertTrue(LEGACY_TARGETS.issubset(build["args"]))
+        self.assertTrue(NON_CHAT_TARGETS.issubset(build["args"]))
+        self.assertNotIn("test-skippy-activation-layout", build["args"])
         self.assertNotIn("test-llama-archs", build["args"])
         self.assertEqual(
             [fixture[:4] for fixture in fixtures],

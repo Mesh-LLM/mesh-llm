@@ -121,6 +121,7 @@ async fn phantom_model_is_not_auto_route_eligible() {
         &targets,
         "phantom/model:Q4_K_M",
         None,
+        "/v1/chat/completions",
         &affinity,
     )
     .await;
@@ -149,6 +150,7 @@ async fn freshly_served_local_model_is_auto_route_eligible() {
         &targets,
         "local/fresh-model:Q4_K_M",
         None,
+        "/v1/chat/completions",
         &affinity,
     )
     .await;

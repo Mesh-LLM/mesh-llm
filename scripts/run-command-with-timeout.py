@@ -8,6 +8,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 
 
 def parse_args() -> argparse.Namespace:
@@ -40,40 +41,59 @@ def terminate_group(process: subprocess.Popen[bytes]) -> None:
 
 
 def main() -> int:
+    """Supervise one process group, preserving completed status and bounded cancellation."""
     args = parse_args()
-    # The wrapper is commonly invoked from manifest-reading shell loops. A
-    # child must never inherit and consume the loop's stdin, because doing so
-    # can silently drop later planned rows. Commands in this harness are fully
-    # argument-driven, so EOF is the only valid stdin contract.
-    process = subprocess.Popen(
-        args.command,
-        stdin=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    received_signal: int | None = None
 
-    def terminate_on_signal(signum: int, _frame: object) -> None:
-        # Prevent a second cancellation signal from interrupting cleanup and
-        # leaving descendants behind on the persistent runner.
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        print(
-            f"{args.label} received signal {signum}; terminating process group",
-            file=sys.stderr,
-        )
-        terminate_group(process)
-        raise SystemExit(128 + signum)
+    def request_termination(signum: int, _frame: object) -> None:
+        """Record the first signal without reentering process construction or wait locks."""
+        # A handler can interrupt Popen construction or wait's internal lock.
+        # Only record intent here; never wait, print, or clean up reentrantly.
+        nonlocal received_signal
+        if received_signal is None:
+            received_signal = signum
 
-    signal.signal(signal.SIGINT, terminate_on_signal)
-    signal.signal(signal.SIGTERM, terminate_on_signal)
+    previous_handlers = {
+        signum: signal.signal(signum, request_termination)
+        for signum in (signal.SIGINT, signal.SIGTERM)
+    }
     try:
-        return process.wait(timeout=args.seconds)
-    except subprocess.TimeoutExpired:
+        # Commands are argument-driven: inheriting a manifest loop's stdin
+        # could silently consume later planned rows, so children receive EOF.
+        process = subprocess.Popen(
+            args.command,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        deadline = time.monotonic() + args.seconds
+        while received_signal is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                returncode = process.poll()
+                if returncode is not None:
+                    return returncode
+                print(
+                    f"{args.label} timed out after {args.seconds}s; terminating process group",
+                    file=sys.stderr,
+                )
+                terminate_group(process)
+                return 124
+            try:
+                returncode = process.wait(timeout=min(0.1, remaining))
+            except subprocess.TimeoutExpired:
+                continue
+            if received_signal is None:
+                return returncode
+
         print(
-            f"{args.label} timed out after {args.seconds}s; terminating process group",
+            f"{args.label} received signal {received_signal}; terminating process group",
             file=sys.stderr,
         )
         terminate_group(process)
-        return 124
+        return 128 + received_signal
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
 
 
 if __name__ == "__main__":

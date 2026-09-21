@@ -161,6 +161,7 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
         .context("construct stage-0 tokenizer capability for OpenAI serving")?;
     let backend: Arc<dyn OpenAiBackend> = Arc::new(StageOpenAiBackend {
         runtime,
+        workload: Default::default(),
         config,
         telemetry: telemetry.clone(),
         model_id: model_id.clone(),
@@ -527,6 +528,7 @@ fn embedded_openai_backend_with_scheduler(
     };
     let backend: Arc<dyn OpenAiBackend> = Arc::new(StageOpenAiBackend {
         runtime: args.runtime,
+        workload: Default::default(),
         config: args.config.clone(),
         telemetry: args.telemetry.clone(),
         model_id: model_id.clone(),

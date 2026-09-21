@@ -24,6 +24,15 @@ class SkippyLlamaParityTests(unittest.TestCase):
     def setUp(self) -> None:
         self.parity = load_module()
 
+    def test_inventory_checks_admission_in_the_explicit_checkout(self) -> None:
+        """An explicit native source must not silently validate an ambient checkout."""
+        selected = Path("isolated-native-source")
+        with patch.object(self.parity, "validate_runtime_slice_admission", return_value=1) as admission:
+            with patch.object(self.parity, "boundary_registered_models", return_value=set()):
+                failures = self.parity.validate_inventory([], selected)
+        admission.assert_called_once_with(selected)
+        self.assertEqual(failures, 1)
+
     def test_resolves_first_gguf_shard_for_split_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             previous_cache = os.environ.get("HF_HUB_CACHE")

@@ -415,6 +415,7 @@ mod tests {
                 .unwrap();
         let backend = StageOpenAiBackend {
             runtime: runtime.clone(),
+            workload: Default::default(),
             config: stage_config.clone(),
             telemetry,
             model_id: "linear-proposal-test".to_string(),

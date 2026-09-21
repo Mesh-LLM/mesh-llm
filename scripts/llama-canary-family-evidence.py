@@ -12,9 +12,22 @@ import re
 import shutil
 import subprocess
 import tarfile
+import time
 
 BINS = ("skippy-correctness", "skippy-server", "skippy-model-package", "skippy-topology-plan")
 CORE = {"single-step", "chain", "state-handoff"}
+# The workload oracle closure ships in the handoff so family workers consume
+# the CPU candidate and native oracle executables without compiling. Paths are
+# the producer manifest's canonical relatives; workers export them as
+# SKIPPY_WORKLOAD_* below this restore root (see llama-canary-family-pass.yml).
+WORKLOAD_CLOSURE_ROOT = ".deps/canary-workload-oracles"
+WORKLOAD_ORACLES_TAR = "workload-oracles.tar"
+WORKLOAD_ORACLE_CANONICAL = (
+    "native/bin/llama-server",
+    "native/bin/llama-completion",
+    "native/bin/llama-tts",
+    "cargo/debug/skippy-server",
+)
 
 
 def sha(path: Path) -> str:
@@ -115,10 +128,40 @@ def publication(args) -> None:
         "Update the llama.cpp pin and its patch queue to the independently certified candidate.\n\n"
         f"Candidate: `{identity['candidate']}`. Both complete per-family passes succeeded on this exact tree. "
         "Each pass independently rebuilt the native/Rust binaries and ran the complete roster, including "
-        "single-step, chain, state-handoff, native draft requirements and applicable multimodal smokes.\n\n"
+        "single-step, chain, state-handoff, native draft requirements, applicable multimodal smokes, and "
+        "class-specific workload smoke/oracle lanes for the non-chat families.\n\n"
         f"Evidence: {url} ({identity['pass_id']}; {len(plan['selected_models'])} families).\n\n"
         + (args.package / "upstream-summary.md").read_text()
     )
+
+
+def workload_closure_members(closure: Path) -> list[str]:
+    """Validate a workload oracle closure and return its exact archive members.
+
+    The member set is the producer manifest plus exactly the files it binds.
+    Canonical oracle/candidate executables must be present at their documented
+    relatives so worker environments can point SKIPPY_WORKLOAD_* at them.
+    """
+    manifest = closure / "producer.json"
+    if not manifest.is_file():
+        raise ValueError("workload oracle closure has no producer.json manifest")
+    payload = read(manifest)
+    if payload.get("schema_version") != 1 or not isinstance(payload.get("files"), dict):
+        raise ValueError("unknown workload producer manifest schema")
+    referenced = [record.get("path") for record in payload["files"].values()]
+    for relative in (*WORKLOAD_ORACLE_CANONICAL, *(path for path in referenced if path)):
+        if not isinstance(relative, str) or ".." in relative.split("/") or re.fullmatch(
+            r"[a-zA-Z0-9][a-zA-Z0-9._/-]*", relative
+        ) is None:
+            raise ValueError(f"unsafe workload closure path: {relative!r}")
+        if not (closure / relative).is_file():
+            raise ValueError(f"workload closure file missing: {relative}")
+    if len(set(referenced)) != len(referenced):
+        raise ValueError("duplicate workload closure manifest entries")
+    unbound = [relative for relative in WORKLOAD_ORACLE_CANONICAL if relative not in referenced]
+    if unbound:
+        raise ValueError(f"workload closure manifest does not bind canonical executables: {unbound}")
+    return ["producer.json", *sorted(set(referenced))]
 
 
 def pack(args) -> None:
@@ -149,14 +192,22 @@ def pack(args) -> None:
         for path in sorted(payload.iterdir()):
             archive.add(path, arcname=path.name, recursive=False)
     shutil.rmtree(payload)
+    closure_root = args.workload_oracles.resolve()
+    closure_members = workload_closure_members(closure_root)
+    for relative in WORKLOAD_ORACLE_CANONICAL:
+        check_binary(closure_root / relative)
+    with tarfile.open(dest / WORKLOAD_ORACLES_TAR, "w") as archive:
+        for relative in closure_members:
+            archive.add(closure_root / relative, arcname=relative, recursive=False)
     shutil.copyfile(args.summary, dest / "upstream-summary.md")
     if args.bundle.is_file():
         shutil.copyfile(args.bundle, dest / "candidate.bundle")
-    identity = {"schema": 1, "candidate": args.candidate, "base": args.base,
+    identity = {"schema": 2, "candidate": args.candidate, "base": args.base,
                 "branch": args.branch, "pass_id": args.pass_id,
                 "run_id": os.environ["GITHUB_RUN_ID"], "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
                 "platform": "macos-arm64-metal", "summary_sha256": sha(dest / "upstream-summary.md"), "plan_sha256": sha(dest / "plan.json"),
                 "manifest_sha256": plan["manifest_sha256"], "binaries_sha256": sha(dest / "binaries.tar"),
+                "workload_oracles_sha256": sha(dest / WORKLOAD_ORACLES_TAR),
                 "bundle_sha256": sha(dest / "candidate.bundle") if (dest / "candidate.bundle").exists() else None}
     write(dest / "identity.json", identity)
     output(matrix=json.dumps(plan["github_matrix"], separators=(",", ":")),
@@ -167,7 +218,7 @@ def verify_package(directory: Path, expected: str) -> tuple[dict, dict]:
     if sha(directory / "identity.json") != expected:
         raise ValueError("build identity digest mismatch")
     identity, plan = read(directory / "identity.json"), read(directory / "plan.json")
-    if identity["schema"] != 1 or identity["platform"] != "macos-arm64-metal":
+    if identity["schema"] != 2 or identity["platform"] != "macos-arm64-metal":
         raise ValueError("unknown build identity")
     for key in ("candidate", "base"):
         if not re.fullmatch(r"[0-9a-f]{40}", identity[key]):
@@ -175,7 +226,8 @@ def verify_package(directory: Path, expected: str) -> tuple[dict, dict]:
     for env, key in (("GITHUB_RUN_ID", "run_id"), ("GITHUB_RUN_ATTEMPT", "run_attempt")):
         if identity[key] != os.environ[env]:
             raise ValueError("foreign workflow run or attempt")
-    for name, key in (("plan.json", "plan_sha256"), ("binaries.tar", "binaries_sha256")):
+    for name, key in (("plan.json", "plan_sha256"), ("binaries.tar", "binaries_sha256"),
+                      (WORKLOAD_ORACLES_TAR, "workload_oracles_sha256")):
         if sha(directory / name) != identity[key]:
             raise ValueError(f"{name} digest mismatch")
     if identity.get("summary_sha256") and sha(directory / "upstream-summary.md") != identity["summary_sha256"]:
@@ -220,6 +272,36 @@ def restore(args) -> None:
             with archive.extractfile(member) as source, target.open("wb") as sink:
                 shutil.copyfileobj(source, sink)
             target.chmod(0o755)
+    closure_root = root / WORKLOAD_CLOSURE_ROOT
+    if closure_root.exists():
+        shutil.rmtree(closure_root)
+    closure_root.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(args.package / WORKLOAD_ORACLES_TAR) as archive:
+        members = archive.getmembers()
+        if len({m.name for m in members}) != len(members) or any(not m.isfile() for m in members):
+            raise ValueError("unsafe workload closure archive")
+        producer_stream = archive.extractfile("producer.json")
+        if producer_stream is None:
+            raise ValueError("workload closure archive has no producer manifest")
+        payload = json.loads(producer_stream.read())
+        referenced = sorted({record["path"] for record in payload["files"].values()})
+        if sorted(m.name for m in members) != sorted({"producer.json", *referenced}):
+            raise ValueError("workload closure archive does not match its producer manifest")
+        for member in members:
+            target = closure_root / member.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with archive.extractfile(member) as source, target.open("wb") as sink:
+                shutil.copyfileobj(source, sink)
+            target.chmod(0o755)
+    # check_candidate requires every executable to postdate the stamped native
+    # ABI. Extraction mtimes are host-dependent, so pin the stamp into the past
+    # and every other member to the same extraction instant.
+    restored = [path for path in closure_root.rglob("*") if path.is_file()]
+    stamp_relative = payload["files"]["native_stamp"]["path"]
+    moment = time.time()
+    for path in restored:
+        os.utime(path, (moment, moment))
+    os.utime(closure_root / stamp_relative, (moment - 120.0, moment - 120.0))
     output(candidate=identity["candidate"])
 
 
@@ -240,18 +322,32 @@ def validate_results(path: Path, family: str, model: dict) -> None:
     rows = [json.loads(line) for line in path.read_text().splitlines() if line]
     if not rows or any(row.get("family") != family or row.get("exit_code") != 0 for row in rows):
         raise ValueError(f"{family}: missing, foreign, or failed results")
-    core_rows = [row for row in rows if row.get("split_layer") is not None]
-    # The battery runs one consolidated certification per family and itself
-    # reconciles product-selected cuts and native draft requirements.
-    if len(core_rows) != 1:
-        raise ValueError(f"{family}: expected one consolidated certification")
-    outcomes = core_rows[0]["outcomes"]
-    for lane in CORE:
+    if model["class"] == "causal_generation":
+        core_rows = [row for row in rows if row.get("split_layer") is not None]
+        # The battery runs one consolidated certification per family and itself
+        # reconciles product-selected cuts and native draft requirements.
+        if len(core_rows) != 1:
+            raise ValueError(f"{family}: expected one consolidated certification")
+        outcomes = core_rows[0]["outcomes"]
+    else:
+        workload_rows = [row for row in rows if row.get("workload_class") is not None]
+        if len(workload_rows) != 1:
+            raise ValueError(f"{family}: expected one workload certification")
+        if workload_rows[0].get("workload_class") != model["class"]:
+            raise ValueError(f"{family}: workload class mismatch")
+        outcomes = workload_rows[0]["outcomes"]
+    # Required lanes come from the plan's per-model certification contract, so
+    # causal rows demand their split-parity lanes and non-chat rows demand
+    # their class-specific smoke and (for workload-oracle profiles) oracle
+    # lanes. A missing or failed required lane can never certify.
+    for lane in model["certification_lanes"]:
         matches = [item for item in outcomes if item.get("name") == lane]
         if len(matches) != 1 or matches[0].get("status") != "pass" or matches[0].get("exit_code") != 0:
             raise ValueError(f"{family}: required lane {lane} incomplete")
     mm = [row for row in rows if row.get("mmproj_smoke")]
-    if len(mm) != int(bool(model.get("mmproj_artifact"))):
+    # Projector smokes are consolidated into the workload lane for non-chat
+    # classes; only causal families emit separate mmproj smoke rows.
+    if model["class"] == "causal_generation" and len(mm) != int(bool(model.get("mmproj_artifact"))):
         raise ValueError(f"{family}: multimodal evidence incomplete")
 
 
@@ -301,7 +397,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     subs = parser.add_subparsers(dest="command", required=True)
     p = subs.add_parser("pack")
-    for name in ("root", "output", "test-build", "bundle", "summary"):
+    for name in ("root", "output", "test-build", "bundle", "summary", "workload-oracles"):
         p.add_argument("--" + name, type=Path, required=True)
     for name in ("candidate", "base", "branch", "pass-id"):
         p.add_argument("--" + name, required=True)
