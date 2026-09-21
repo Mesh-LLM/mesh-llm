@@ -1050,6 +1050,8 @@ contract, telemetry, and benchmark requirements.
 
 For package-authoring rules, see
 [Layer Package Repositories](specs/layer-package-repos.md#generation-defaults).
+For the wire shape of the `generation.speculative_decoding` manifest field, see
+[Skippy Model Package v2 Schema](design/SKIPPY_PACKAGE_V2_SCHEMA.md#generation).
 For strategy diagrams, CLI overrides, and the VerifyWindow telemetry used to
 evaluate a configuration, see
 [Pipelined VerifyWindow Decode](skippy/PIPELINED_VERIFY_WINDOW.md).

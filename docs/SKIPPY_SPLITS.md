@@ -25,15 +25,17 @@ package identity and compact GGUF metadata resolution and before coordinator
 election, topology planning, stage materialization, or native model loading.
 Automatic splitting because a model does not fit locally uses the same gate.
 
-The llama canary regenerates the roster after its complete staged correctness
-battery passes. Each roster is bound to the llama.cpp upstream pin, the Skippy
-ABI, and the ordered patch queue. A different quantization or immutable repack
-of a certified architecture is admitted; an architecture that has not passed
-the battery is rejected. Artifact digests remain the peer-to-peer identity and
-integrity boundary, independent of architecture admission. Cached Hugging Face
-GGUFs use a versioned canonical identity containing the repository, immutable
-commit, and ordered Hub filenames, sizes, and blob SHA-256 values, so startup
-does not reread the weight payload merely to establish mesh identity.
+The llama canary regenerates the roster while preparing a changed-pin
+candidate. Each roster is bound to the llama.cpp upstream pin, the Skippy ABI,
+and the ordered patch queue, and the candidate cannot be published until the
+distributed full-registry gate reconciles a passing result for every planned
+model. A different quantization or immutable repack of a certified architecture
+is admitted; an architecture that has not passed the battery is rejected.
+Artifact digests remain the peer-to-peer identity and integrity boundary,
+independent of architecture admission. Cached Hugging Face GGUFs use a
+versioned canonical identity containing the repository, immutable commit, and
+ordered Hub filenames, sizes, and blob SHA-256 values, so startup does not
+reread the weight payload merely to establish mesh identity.
 
 An operator can explicitly run an uncertified architecture for development:
 
@@ -246,9 +248,10 @@ replace the stages or collapse the model to a local fallback. If a locked stage
 is lost, the topology becomes unavailable and is withdrawn after the normal
 stage-loss grace period.
 
-Use `skippy-model-package preflight <package-dir> --verify-sha256` to obtain the
-manifest digest for a local package. Confirm the realized assignments through
-`GET /api/runtime/stages`.
+Use `skippy-model-package verify-package-v2 <package-dir> --source
+<source.gguf>` to verify a local package against its independent source. Read
+the package identity from its verified report and confirm the realized
+assignments through `GET /api/runtime/stages`.
 
 ## Use a local GGUF
 
@@ -343,10 +346,11 @@ Use package-only certification as the rollout preflight for published package
 refs. It should fail before a split model becomes routable when package
 resolution, manifest shape, artifact size/SHA, missing stage files,
 tokenizer/projector sidecars, or local materialization are not clean enough for
-serving. For a local package directory, run the package-local preflight first:
+serving. For a local package directory, verify it against the independent
+source first:
 
 ```bash
-skippy-model-package preflight ./model-package --stages 2 --verify-sha256
+skippy-model-package verify-package-v2 ./model-package --source ./model.gguf
 ```
 
 Runtime verification additionally checks a running OpenAI-compatible endpoint:

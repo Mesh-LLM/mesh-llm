@@ -213,6 +213,40 @@ class AgenticReplayTest(unittest.TestCase):
             result["error"], "stream ended without terminal [DONE] marker"
         )
 
+    def test_context_probe_accepts_hidden_first_token_but_measurement_does_not(self):
+        class Response:
+            status = 200
+
+            def __iter__(self):
+                return iter(
+                    [
+                        b'data: {"choices":[{"delta":{},"finish_reason":"length"}],"usage":{"completion_tokens":1,"prompt_tokens":40000,"prompt_tokens_details":{"cached_tokens":0}}}\n',
+                        b"data: [DONE]\n",
+                    ]
+                )
+
+        class Connection:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def request(self, *args, **kwargs):
+                pass
+
+            def getresponse(self):
+                return Response()
+
+            def close(self):
+                pass
+
+        with mock.patch.object(BENCH.http.client, "HTTPConnection", Connection):
+            probe = BENCH.stream_request(
+                "s:0", [], [], {"qualification_probe": True}, "m", 1, 10
+            )
+            measured = BENCH.stream_request("s:0", [], [], {}, "m", 1, 10)
+        self.assertEqual(probe["prompt_tokens"], 40000)
+        self.assertNotIn("error", probe)
+        self.assertIn("without generated content", measured["error"])
+
     def test_stream_request_records_terminal_finish_reason(self) -> None:
         class CompleteResponse:
             status = 200
@@ -221,7 +255,7 @@ class AgenticReplayTest(unittest.TestCase):
                 return iter(
                     [
                         b'data: {"choices":[{"delta":{"content":"done"}}]}\n',
-                        b'data: {"choices":[{"delta":{},"finish_reason":"length"}],"usage":{"completion_tokens":8,"prompt_tokens":10}}\n',
+                        b'data: {"choices":[{"delta":{},"finish_reason":"length"}],"usage":{"completion_tokens":8,"prompt_tokens":10,"prompt_tokens_details":{"cached_tokens":0}}}\n',
                         b"data: [DONE]\n",
                     ]
                 )
@@ -251,6 +285,47 @@ class AgenticReplayTest(unittest.TestCase):
             )
 
         self.assertEqual(result["finish_reason"], "length")
+
+    def test_stream_request_latches_valid_usage_across_later_invalid_events(self) -> None:
+        class CompleteResponse:
+            status = 200
+
+            def __iter__(self):
+                return iter(
+                    [
+                        b'data: {"choices":[{"delta":{"content":"done"}}],"usage":{"completion_tokens":8,"prompt_tokens":10,"prompt_tokens_details":{"cached_tokens":0}}}\n',
+                        b'data: {"choices":[],"usage":{"completion_tokens":false,"prompt_tokens":false,"prompt_tokens_details":{"cached_tokens":false}}}\n',
+                        b"data: [DONE]\n",
+                    ]
+                )
+
+        class CompleteConnection:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def request(self, *_args, **_kwargs):
+                pass
+
+            def getresponse(self):
+                return CompleteResponse()
+
+            def close(self):
+                pass
+
+        with mock.patch.object(BENCH.http.client, "HTTPConnection", CompleteConnection):
+            result = BENCH.stream_request(
+                "request-1",
+                [{"role": "user", "content": "task"}],
+                [],
+                {"session_id": "session-1"},
+                "model",
+                8,
+                10,
+            )
+
+        self.assertNotIn("error", result)
+        self.assertEqual(result["prompt_tokens"], 10)
+        self.assertEqual(result["cached_tokens"], 0)
 
     def test_output_hash_ignores_tool_call_chunking_and_generated_ids(self) -> None:
         chunked = {}
@@ -284,72 +359,6 @@ class AgenticReplayTest(unittest.TestCase):
         self.assertEqual(
             BENCH.response_content_sha256([], [], chunked),
             BENCH.response_content_sha256([], [], unchunked),
-        )
-
-    def test_checkpoint_replay_reconstructs_full_recorded_prefix(self) -> None:
-        trajectory = {
-            "session_id": "session-1",
-            "source_dataset": "source",
-            "agent_framework": "framework",
-            "recorded_model": "recorded-model",
-            "messages": [
-                {"role": "user", "content": "task"},
-                {"role": "assistant", "content": "recorded first"},
-                {"role": "tool", "content": "observation", "tool_call_id": "1"},
-                {"role": "assistant", "content": "recorded second"},
-            ],
-        }
-        calls = []
-        original = BENCH.stream_request
-
-        def fake_stream(*args, **kwargs):
-            calls.append((args[0], list(args[1]), args[2], dict(args[3])))
-            return {"request_id": args[0]}
-
-        BENCH.stream_request = fake_stream
-        try:
-            BENCH.replay_trajectory(
-                trajectory,
-                "model",
-                2048,
-                10,
-                measured_assistant_turns={1},
-                checkpoint_stage="final",
-            )
-        finally:
-            BENCH.stream_request = original
-
-        self.assertEqual([call[0] for call in calls], ["session-1:1"])
-        self.assertEqual(
-            [message["content"] for message in calls[0][1]],
-            ["task", "recorded first", "observation"],
-        )
-        self.assertEqual(calls[0][3]["checkpoint_stage"], "final")
-
-    def test_checkpoint_schedule_balances_four_stages_per_framework(self) -> None:
-        trajectories = []
-        for index in range(4):
-            messages = []
-            for turn in range(8):
-                messages.extend(
-                    [
-                        {"role": "user", "content": f"u{turn}"},
-                        {"role": "assistant", "content": f"a{turn}"},
-                    ]
-                )
-            trajectories.append(
-                {
-                    "session_id": f"session-{index}",
-                    "agent_framework": "framework",
-                    "messages": messages,
-                }
-            )
-
-        schedule = BENCH.checkpoint_schedule(trajectories)
-
-        self.assertEqual(
-            list(schedule.values()),
-            [(1, "early"), (3, "middle"), (5, "late"), (7, "final")],
         )
 
     def test_trajectory_tools_are_stable_and_schema_shaped(self) -> None:
@@ -466,51 +475,6 @@ class AgenticReplayTest(unittest.TestCase):
 
         self.assertGreater(BENCH.recorded_output_budget(recorded, 2048), 8)
 
-    def test_final_replay_measures_only_the_last_assistant_prefix(self) -> None:
-        trajectory = {
-            "session_id": "session-1",
-            "source_dataset": "buzz-capture",
-            "agent_framework": "buzz",
-            "recorded_model": "model",
-            "messages": [
-                {"role": "user", "content": "task"},
-                {"role": "assistant", "content": "first"},
-                {"role": "tool", "content": "observation", "tool_call_id": "1"},
-                {"role": "assistant", "content": "second"},
-            ],
-        }
-        calls = []
-        original = BENCH.stream_request
-        BENCH.stream_request = lambda *args, **kwargs: calls.append(args) or {
-            "request_id": args[0],
-            "session_id": args[3]["session_id"],
-            "started": 0.0,
-            "first_token_at": 1.0,
-            "completed": 2.0,
-            "ttft_seconds": 1.0,
-            "elapsed_seconds": 2.0,
-            "generation_seconds": 1.0,
-            "completion_tokens": 1,
-            "prompt_tokens": 100,
-            "cached_tokens": 0,
-            "content_sha256": "a" * 64,
-        }
-        try:
-            BENCH.run_trajectory_cell(
-                trajectories=[trajectory],
-                model_id="model",
-                concurrency=1,
-                max_output_tokens=8,
-                timeout=10,
-                raw_path=Path(tempfile.gettempdir()) / "agentic-final-test.jsonl",
-                replay_mode="final",
-            )
-        finally:
-            BENCH.stream_request = original
-
-        self.assertEqual([call[0] for call in calls], ["session-1:1"])
-        self.assertEqual(calls[0][3]["checkpoint_stage"], "final")
-
     def test_server_command_keeps_mesh_planning_at_defaults(self) -> None:
         command = BENCH.server_command(Path("/product/mesh-llm"), "model-uri")
 
@@ -565,6 +529,24 @@ class AgenticReplayTest(unittest.TestCase):
             )
             self.assertFalse((root / "artifact/identity.key").exists())
 
+    def test_removed_sampling_modes_are_rejected(self):
+        for mode in ("checkpoints", "final"):
+            with self.subTest(mode=mode), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    BENCH.parse_args(
+                        [
+                            "plan",
+                            "--ref",
+                            "main=HEAD",
+                            "--model",
+                            "m",
+                            "--sessions-per-concurrency",
+                            "16",
+                            "--replay-mode",
+                            mode,
+                        ]
+                    )
+
     def test_default_cli_workload_has_external_concurrency_only(self) -> None:
         args = BENCH.parse_args(
             [
@@ -583,7 +565,7 @@ class AgenticReplayTest(unittest.TestCase):
         self.assertEqual(args.concurrency, [1, 2, 4])
         self.assertEqual(args.minimum_worker_waves, 2)
         self.assertEqual(args.passes, 1)
-        self.assertEqual(args.replay_mode, "checkpoints")
+        self.assertEqual(args.replay_mode, "all")
         self.assertEqual(args.trajectories_per_framework, 4)
         self.assertEqual(args.framework, ["swe-agent", "mini-swe-agent", "openhands"])
         self.assertEqual(args.max_output_tokens, 2048)
@@ -670,7 +652,10 @@ class AgenticReplayTest(unittest.TestCase):
                 "source_dataset": "source",
                 "agent_framework": "framework",
                 "recorded_model": None,
-                "messages": [{"role": "user", "content": "task"}],
+                "messages": [
+                    {"role": "user", "content": "task"},
+                    {"role": "assistant", "content": "answer"},
+                ],
             }
             manifest.write_text(
                 json.dumps({"cohorts": {"warmup": [trajectory]}}),
@@ -701,15 +686,16 @@ class AgenticReplayTest(unittest.TestCase):
                 json.dumps(
                     {
                         "metadata": {"name": "real harness capture", "revision": "r1"},
-                        "cohorts": {"warmup": [trajectory], "1": [trajectory]},
+                        "cohorts": {
+                            "warmup": [{**trajectory, "session_id": "warmup-1"}],
+                            "1": [trajectory],
+                        },
                     }
                 ),
                 encoding="utf-8",
             )
 
-            imported = BENCH.import_trajectory_manifest(
-                source, output, ["warmup", "1"]
-            )
+            imported = BENCH.import_trajectory_manifest(source, output, ["warmup", "1"])
 
             self.assertEqual(imported["kind"], "captured")
             self.assertEqual(imported["dataset"]["revision"], "r1")
@@ -1171,7 +1157,7 @@ class AgenticReplayTest(unittest.TestCase):
                 "model": "model",
                 "concurrency": [1],
                 "warmup_turns": 14,
-                "replay_mode": "checkpoints",
+                "replay_mode": "all",
             },
             "inputs": {
                 "dataset": {"revision": "c" * 40},
@@ -1204,7 +1190,7 @@ class AgenticReplayTest(unittest.TestCase):
                             "mini-swe-agent": 30,
                             "openhands": 50,
                         },
-                    }
+                    },
                 },
             },
             "builds": [
@@ -1254,10 +1240,7 @@ class AgenticReplayTest(unittest.TestCase):
             )
             self.assertIn("Decode tok/s", report.read_text(encoding="utf-8"))
             self.assertIn("Slot use", report.read_text(encoding="utf-8"))
-            self.assertIn(
-                "other cohort sizes use rank/count labels",
-                report.read_text(encoding="utf-8"),
-            )
+            self.assertIn("Every selected session", report.read_text(encoding="utf-8"))
 
     def test_plan_records_exact_default_server_command(self) -> None:
         args = SimpleNamespace(
@@ -1274,7 +1257,7 @@ class AgenticReplayTest(unittest.TestCase):
             concurrency=[1, 2, 4],
             max_output_tokens=2048,
             warmup_turns=14,
-            replay_mode="checkpoints",
+            replay_mode="all",
         )
 
         plan = BENCH.benchmark_plan(args, self.specs())
@@ -1296,8 +1279,28 @@ class AgenticReplayTest(unittest.TestCase):
         )
         self.assertEqual(plan["selection"]["measured_unique_trajectory_count"], 36)
         self.assertEqual(plan["selection"]["warmup_unique_trajectory_count"], 12)
-        self.assertEqual(plan["workload"]["measured_requests_per_arm_pass"], 36)
-        self.assertEqual(plan["workload"]["measured_requests_total"], 144)
+        self.assertIsNone(plan["workload"]["measured_requests_per_arm_pass"])
+        self.assertIsNone(plan["workload"]["measured_requests_total"])
+
+    def test_plan_counts_total_sessions_without_framework_multiplier(self):
+        args = BENCH.parse_args(
+            [
+                "plan",
+                "--ref",
+                "candidate=HEAD",
+                "--model",
+                "m",
+                "--sessions-per-concurrency",
+                "16",
+                "--concurrency",
+                "1",
+                "--concurrency",
+                "8",
+            ]
+        )
+        plan = BENCH.benchmark_plan(args, self.specs())
+        self.assertEqual(plan["selection"]["measured_unique_trajectory_count"], 32)
+        self.assertEqual(plan["selection"]["warmup_unique_trajectory_count"], 16)
 
     def test_plan_appends_external_arms_to_the_same_abba_order(self) -> None:
         args = SimpleNamespace(
@@ -1314,7 +1317,7 @@ class AgenticReplayTest(unittest.TestCase):
             concurrency=[1, 2, 4],
             max_output_tokens=2048,
             warmup_turns=4,
-            replay_mode="checkpoints",
+            replay_mode="all",
         )
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "engines.json"
@@ -1345,7 +1348,7 @@ class AgenticReplayTest(unittest.TestCase):
             [item["label"] for item in plan["order"]],
             ["rc8", "main", "vllm", "vllm", "main", "rc8"],
         )
-        self.assertEqual(plan["workload"]["measured_requests_total"], 216)
+        self.assertIsNone(plan["workload"]["measured_requests_total"])
         self.assertIn("--max-num-seqs", plan["external_server_commands"][0])
 
     def test_plan_order_uses_verified_engine_identity_when_supplied(self) -> None:
@@ -1363,7 +1366,7 @@ class AgenticReplayTest(unittest.TestCase):
             concurrency=[1, 2, 4],
             max_output_tokens=2048,
             warmup_turns=4,
-            replay_mode="checkpoints",
+            replay_mode="all",
         )
         external_builds = [
             {

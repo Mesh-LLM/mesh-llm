@@ -971,7 +971,6 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
         kv_unified: None,
         swa_full: None,
         cache_idle_slots: None,
-        filter_tensors_on_load: false,
         resident_tensor_names: Vec::new(),
         selected_device: None,
         kv_cache: Some(StageKvCacheConfig {

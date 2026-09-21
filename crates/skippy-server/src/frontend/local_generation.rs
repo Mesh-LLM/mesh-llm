@@ -7,6 +7,13 @@ mod resident_prefill;
 #[cfg(test)]
 mod tests;
 mod token_generation;
+// Test-only: re-export of the outstanding-capture guard used by
+// iteration_scheduler tests (see token_generation::exact_state_recording).
+#[cfg(test)]
+pub(crate) use token_generation::CaptureTaskOutstandingGuard;
+#[cfg(test)]
+pub(crate) use token_generation::capture_trace;
+
 #[cfg(test)]
 pub(in crate::frontend) use token_generation::resident_capacity_admission_error;
 

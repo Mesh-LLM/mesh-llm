@@ -48,6 +48,7 @@ pub(super) async fn route(
         logging.request_id,
         ResponseRetryPolicy::next_target_available(false),
         logging.response_adapter,
+        logging.served_by,
         logging.route_observer,
     )
     .await;
@@ -368,6 +369,7 @@ mod tests {
                     retry_policy: ResponseRetryPolicy::next_target_available(false),
                     response_adapter:
                         crate::network::openai::request_normalize::ResponseAdapter::None,
+                    served_by: None,
                     route_observer: crate::logging::OpenAiRouteObserver::default(),
                 },
             )

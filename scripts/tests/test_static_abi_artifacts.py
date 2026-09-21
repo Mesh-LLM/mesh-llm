@@ -123,6 +123,10 @@ class StaticAbiArtifactTests(unittest.TestCase):
 
         for backend in ("cpu", "metal", "cuda", "rocm"):
             environment = os.environ.copy()
+            environment.pop("LLAMA_BUILD_DIR", None)
+            environment.pop("LLAMA_STAGE_BUILD_DIR", None)
+            environment.pop("SKIPPY_LLAMA_BUILD_DIR", None)
+            environment.pop("MESH_LLM_LLAMA_BUILD_ROOT", None)
             environment["LLAMA_STAGE_BACKEND"] = backend
             result = subprocess.run(
                 ["bash", str(ROOT / "scripts" / "build-llama.sh"), "--print-build-dir"],

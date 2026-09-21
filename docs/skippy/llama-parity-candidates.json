@@ -169,7 +169,7 @@
       "repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
       "include": "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
       "recurrent": "all",
-      "notes": "package-only certified from unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL; skippy-model-package write-package produced a 40-layer package under /Volumes/External/tmp/skippy-family-packages/qwen36-a3b-ud-q4-k-xl and validate-package passed with all 733 tensors accounted for, 43 artifacts checked, no missing/duplicate owned tensors, and matching checksums; runtime cache policy remains KvRecurrent/sticky recurrent ownership"
+      "notes": "package-only certified from unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL; skippy-model-package write-package produced a 40-layer package under /Volumes/External/tmp/skippy-family-packages/qwen36-a3b-ud-q4-k-xl and verify-package-v2 passed with all 733 tensors accounted for, 43 artifacts checked, no missing/duplicate owned tensors, and matching checksums; runtime cache policy remains KvRecurrent/sticky recurrent ownership"
     },
     {
       "llama_model": "qwen2vl",
@@ -241,7 +241,7 @@
       "repo": "bartowski/mistralai_Mistral-Small-4-119B-2603-GGUF",
       "include": "mistralai_Mistral-Small-4-119B-2603-IQ2_XXS.gguf",
       "search": "mistral4 gguf; Mistral Small 4 119B GGUF; Mistral-Small-4-119B-2603-GGUF",
-      "notes": "package-only certified from bartowski/mistralai_Mistral-Small-4-119B-2603-GGUF:IQ2_XXS after HF re-audit found public Mistral Small 4 GGUF artifacts; skippy-model-package write-package produced a 36-layer package and validate-package passed with all 579 tensors accounted for, 39 artifacts checked, no missing/duplicate owned tensors, and matching checksums; multimodal projector split parity remains separate follow-up"
+      "notes": "package-only certified from bartowski/mistralai_Mistral-Small-4-119B-2603-GGUF:IQ2_XXS after HF re-audit found public Mistral Small 4 GGUF artifacts; skippy-model-package write-package produced a 36-layer package and verify-package-v2 passed with all 579 tensors accounted for, 39 artifacts checked, no missing/duplicate owned tensors, and matching checksums; multimodal projector split parity remains separate follow-up"
     },
     {
       "llama_model": "phi3",
@@ -739,7 +739,7 @@
       "status": "certified_package_only",
       "repo": "ggml-org/Llama-4-Scout-17B-16E-Instruct-GGUF",
       "include": "Llama-4-Scout-17B-16E-Instruct-Q4_K_M-*.gguf",
-      "notes": "package-only certified from ggml-org/Llama-4-Scout-17B-16E-Instruct-GGUF:Q4_K_M; skippy-model-package write-package produced a 48-layer package and validate-package passed with all 627 owned tensors accounted for, 51 artifacts checked, no missing/duplicate owned tensors, and matching checksums; q8/exact-state runtime lanes remain untested until a package-stage smoke is run on larger hardware"
+      "notes": "package-only certified from ggml-org/Llama-4-Scout-17B-16E-Instruct-GGUF:Q4_K_M; skippy-model-package write-package produced a 48-layer package and verify-package-v2 passed with all 627 owned tensors accounted for, 51 artifacts checked, no missing/duplicate owned tensors, and matching checksums; q8/exact-state runtime lanes remain untested until a package-stage smoke is run on larger hardware"
     },
     {
       "llama_model": "afmoe",
@@ -1093,7 +1093,7 @@
       "recurrent": "all",
       "repo": "lmstudio-community/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-GGUF",
       "include": "Nemotron-3-Nano-Omni-30B-A3B-Reasoning-Q4_K_M.gguf",
-      "notes": "package-only certified from lmstudio-community/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-GGUF:Q4_K_M; skippy-model-package write-package produced a 52-layer package and validate-package passed with all 401 tensors accounted for, 55 artifacts checked, no missing/duplicate owned tensors, and matching checksums; runtime cache policy remains KvRecurrent/sticky recurrent ownership and exact-state mobility is rejected-too-large until recurrent handoff is smoke-tested on stage hardware"
+      "notes": "package-only certified from lmstudio-community/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-GGUF:Q4_K_M; skippy-model-package write-package produced a 52-layer package and verify-package-v2 passed with all 401 tensors accounted for, 55 artifacts checked, no missing/duplicate owned tensors, and matching checksums; runtime cache policy remains KvRecurrent/sticky recurrent ownership and exact-state mobility is rejected-too-large until recurrent handoff is smoke-tested on stage hardware"
     },
     {
       "llama_model": "neo-bert",
@@ -1277,7 +1277,7 @@
       "status": "certified_package_only",
       "repo": "lmstudio-community/Seed-OSS-36B-Instruct-GGUF",
       "include": "Seed-OSS-36B-Instruct-Q4_K_M.gguf",
-      "notes": "package-only certified from lmstudio-community/Seed-OSS-36B-Instruct-GGUF:Q4_K_M; skippy-model-package write-package produced a 64-layer package and validate-package passed with all 771 tensors accounted for, 67 artifacts checked, no missing/duplicate owned tensors, and matching checksums; q8/exact-state runtime lanes remain untested until a package-stage smoke is run on larger hardware"
+      "notes": "package-only certified from lmstudio-community/Seed-OSS-36B-Instruct-GGUF:Q4_K_M; skippy-model-package write-package produced a 64-layer package and verify-package-v2 passed with all 771 tensors accounted for, 67 artifacts checked, no missing/duplicate owned tensors, and matching checksums; q8/exact-state runtime lanes remain untested until a package-stage smoke is run on larger hardware"
     },
     {
       "llama_model": "smallthinker",

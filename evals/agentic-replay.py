@@ -22,6 +22,7 @@ import csv
 import hashlib
 import html
 import http.client
+import importlib.util
 import json
 import math
 import os
@@ -33,6 +34,8 @@ import statistics
 import subprocess
 import sys
 import tempfile
+import threading
+import urllib.request
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -44,6 +47,14 @@ from urllib.parse import urlsplit
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+
+from agentic_replay_evidence import (
+    complete_sessions,
+    session_summaries,
+    runtime_context,
+    context_eligibility,
+    recurrent_evidence,
+)
 
 from agentic_replay_engines import (  # noqa: E402
     EngineArm,
@@ -420,8 +431,16 @@ def build_trajectory_manifest(args: argparse.Namespace, output: Path) -> dict[st
         dataset["revision"],
         "--output",
         str(manifest),
-        "--trajectories-per-framework",
-        str(args.trajectories_per_framework),
+        (
+            "--sessions-per-cohort"
+            if args.sessions_per_concurrency is not None
+            else "--trajectories-per-framework"
+        ),
+        str(
+            args.sessions_per_concurrency
+            if args.sessions_per_concurrency is not None
+            else args.trajectories_per_framework
+        ),
         "--min-isl",
         str(args.min_isl),
         "--max-isl",
@@ -505,15 +524,27 @@ def load_trajectory_cohorts(
     missing = [name for name in expected_cohorts if name not in cohorts]
     if missing:
         raise ValueError(f"trajectory manifest is missing cohorts: {missing}")
+    if set(cohorts) != set(expected_cohorts):
+        raise ValueError("trajectory manifest has unexpected cohorts")
+    seen_sessions = set()
     for name, trajectories in cohorts.items():
-        if not isinstance(name, str) or not isinstance(trajectories, list) or not trajectories:
+        if (
+            not isinstance(name, str)
+            or not isinstance(trajectories, list)
+            or not trajectories
+        ):
             raise ValueError("each trajectory cohort must be a nonempty list")
         for trajectory in trajectories:
             if not isinstance(trajectory, dict):
                 raise ValueError(f"cohort {name} contains a non-object trajectory")
             session_id = trajectory.get("session_id")
             if not isinstance(session_id, str) or not session_id:
-                raise ValueError(f"cohort {name} contains a trajectory without session_id")
+                raise ValueError(
+                    f"cohort {name} contains a trajectory without session_id"
+                )
+            if session_id in seen_sessions:
+                raise ValueError(f"duplicate session across cohorts: {session_id}")
+            seen_sessions.add(session_id)
             for field in ("source_dataset", "agent_framework"):
                 if not isinstance(trajectory.get(field), str) or not trajectory[field]:
                     raise ValueError(f"trajectory {session_id} has no {field}")
@@ -526,9 +557,7 @@ def load_trajectory_cohorts(
                 raise ValueError(f"trajectory {session_id} has invalid recorded_model")
             messages = trajectory.get("messages")
             if not isinstance(messages, list) or not messages:
-                raise ValueError(
-                    f"trajectory {session_id} has no messages list"
-                )
+                raise ValueError(f"trajectory {session_id} has no messages list")
             for index, message in enumerate(messages):
                 if not isinstance(message, dict) or not isinstance(
                     message.get("role"), str
@@ -536,6 +565,10 @@ def load_trajectory_cohorts(
                     raise ValueError(
                         f"trajectory {session_id} message {index} has no role"
                     )
+            if not any(
+                m.get("role") == "assistant" for m in trajectory.get("messages", [])
+            ):
+                raise ValueError(f"trajectory {session_id} has no assistant turns")
             tools = trajectory.get("tools")
             if tools is not None:
                 if not isinstance(tools, list) or any(
@@ -742,6 +775,8 @@ def stream_request(
     prompt_tokens = 0
     cached_tokens = 0
     content_events = 0
+    saw_prompt_usage = False
+    saw_cache_usage = False
     content_parts: list[str] = []
     reasoning_parts: list[str] = []
     tool_call_parts: dict[int, dict[str, Any]] = {}
@@ -749,6 +784,7 @@ def stream_request(
     saw_done = False
     connection = http.client.HTTPConnection(DEFAULT_HOST, DEFAULT_PORT, timeout=timeout)
     payload = {
+        "prompt_cache_key": metadata.get("session_id", request_id),
         "model": model_id,
         "messages": list(messages),
         "max_tokens": output_tokens,
@@ -801,10 +837,20 @@ def stream_request(
                 }
             usage = event.get("usage")
             if isinstance(usage, dict):
-                completion_tokens = int(usage.get("completion_tokens") or completion_tokens)
+                saw_prompt_usage = saw_prompt_usage or (
+                    type(usage.get("prompt_tokens")) is int
+                    and usage["prompt_tokens"] > 0
+                )
+                completion_tokens = int(
+                    usage.get("completion_tokens") or completion_tokens
+                )
                 prompt_tokens = int(usage.get("prompt_tokens") or prompt_tokens)
                 details = usage.get("prompt_tokens_details")
                 if isinstance(details, dict):
+                    saw_cache_usage = saw_cache_usage or (
+                        type(details.get("cached_tokens")) is int
+                        and details["cached_tokens"] >= 0
+                    )
                     cached_tokens = int(details.get("cached_tokens") or cached_tokens)
             choices = event.get("choices")
             if not isinstance(choices, list) or not choices:
@@ -847,18 +893,26 @@ def stream_request(
             **metadata,
             "error": "stream ended without terminal [DONE] marker",
         }
-    if first_token_at is None:
+    if first_token_at is None and not metadata.get("qualification_probe"):
         return {
             "request_id": request_id,
             **metadata,
             "error": "stream completed without generated content",
         }
-    if completion_tokens <= 0:
+    if completion_tokens <= 0 and not metadata.get("qualification_probe"):
         return {
             "request_id": request_id,
             **metadata,
             "error": "stream completed without completion-token usage",
         }
+    if not saw_prompt_usage or not saw_cache_usage or cached_tokens > prompt_tokens:
+        return {
+            "request_id": request_id,
+            **metadata,
+            "error": "missing or invalid prompt/cache usage",
+        }
+    if first_token_at is None:
+        first_token_at = completed
     return {
         "request_id": request_id,
         **metadata,
@@ -871,6 +925,7 @@ def stream_request(
         "completion_tokens": completion_tokens,
         "prompt_tokens": prompt_tokens,
         "cached_tokens": cached_tokens,
+        "cache_pct": 100 * cached_tokens / prompt_tokens,
         "content_events": content_events,
         "finish_reason": finish_reason,
         "content_sha256": response_content_sha256(
@@ -939,8 +994,8 @@ def replay_trajectory(
     max_output_tokens: int,
     timeout: float,
     turn_limit: Optional[int] = None,
-    measured_assistant_turns: Optional[set[int]] = None,
-    checkpoint_stage: Optional[str] = None,
+    record_sink=None,
+    qualification_probe=False,
 ) -> list[dict[str, Any]]:
     history: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
@@ -950,36 +1005,34 @@ def replay_trajectory(
         if recorded["role"] == "assistant":
             if turn_limit is not None and assistant_turn >= turn_limit:
                 break
-            if (
-                measured_assistant_turns is None
-                or assistant_turn in measured_assistant_turns
-            ):
-                requested_output_tokens = recorded_output_budget(
-                    recorded, max_output_tokens
-                )
-                metadata = {
-                    "session_id": trajectory["session_id"],
-                    "source_dataset": trajectory["source_dataset"],
-                    "agent_framework": trajectory["agent_framework"],
-                    "recorded_model": trajectory["recorded_model"],
-                    "assistant_turn": assistant_turn,
-                    "recorded_message_index": message_index,
-                    "history_message_count": len(history),
-                    "requested_output_tokens": requested_output_tokens,
-                    "recorded_output_characters": len(recorded.get("content") or ""),
-                    "available_tools": len(tools),
-                    "checkpoint_stage": checkpoint_stage,
-                }
-                result = stream_request(
-                    f"{trajectory['session_id']}:{assistant_turn}",
-                    history,
-                    tools,
-                    metadata,
-                    model_id,
-                    requested_output_tokens,
-                    timeout,
-                )
-                results.append(result)
+            requested_output_tokens = recorded_output_budget(
+                recorded, max_output_tokens
+            )
+            metadata = {
+                "session_id": trajectory["session_id"],
+                "source_dataset": trajectory["source_dataset"],
+                "agent_framework": trajectory["agent_framework"],
+                "recorded_model": trajectory["recorded_model"],
+                "assistant_turn": assistant_turn,
+                "recorded_message_index": message_index,
+                "history_message_count": len(history),
+                "requested_output_tokens": requested_output_tokens,
+                "recorded_output_characters": len(recorded.get("content") or ""),
+                "available_tools": len(tools),
+                "qualification_probe": qualification_probe,
+            }
+            result = stream_request(
+                f"{trajectory['session_id']}:{assistant_turn}",
+                history,
+                tools,
+                metadata,
+                model_id,
+                requested_output_tokens,
+                timeout,
+            )
+            results.append(result)
+            if record_sink is not None:
+                record_sink(result)
             assistant_turn += 1
         # Continue with the recorded trajectory, not the generated benchmark
         # output, so every experiment arm receives the same ordered history.
@@ -991,32 +1044,6 @@ def assistant_turn_count(trajectory: dict[str, Any]) -> int:
     return sum(
         message["role"] == "assistant" for message in trajectory["messages"]
     )
-
-
-def checkpoint_schedule(
-    trajectories: Sequence[dict[str, Any]],
-) -> dict[str, tuple[int, str]]:
-    """Assign deterministic early/middle/late/final checkpoints per framework."""
-    by_framework: dict[str, list[dict[str, Any]]] = {}
-    for trajectory in trajectories:
-        by_framework.setdefault(trajectory["agent_framework"], []).append(trajectory)
-    schedule: dict[str, tuple[int, str]] = {}
-    stage_names = {1: "early", 2: "middle", 3: "late", 4: "final"}
-    for framework_trajectories in by_framework.values():
-        denominator = len(framework_trajectories)
-        for rank, trajectory in enumerate(framework_trajectories, start=1):
-            turns = assistant_turn_count(trajectory)
-            if turns <= 0:
-                raise ValueError(
-                    f"trajectory {trajectory['session_id']} has no assistant turns"
-                )
-            assistant_turn = max(0, math.ceil(turns * rank / denominator) - 1)
-            stage = stage_names.get(rank) if denominator == 4 else None
-            schedule[trajectory["session_id"]] = (
-                assistant_turn,
-                stage or f"{rank}/{denominator}",
-            )
-    return schedule
 
 
 def summarize_requests(
@@ -1164,18 +1191,19 @@ def run_trajectory_cell(
     if not trajectories:
         raise ValueError("trajectory cell cannot be empty")
     requests: list[dict[str, Any]] = []
-    if replay_mode == "checkpoints":
-        checkpoints = checkpoint_schedule(trajectories)
-    elif replay_mode == "final":
-        checkpoints = {
-            trajectory["session_id"]: (
-                assistant_turn_count(trajectory) - 1,
-                "final",
+    if replay_mode != "all":
+        raise ValueError("agentic replay requires complete sessions; use all")
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_path.write_text("")
+    record_lock = threading.Lock()
+
+    def preserve_record(request):
+        with record_lock, raw_path.open("a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps({**request, "concurrency": concurrency, "warmup": False})
+                + "\n"
             )
-            for trajectory in trajectories
-        }
-    else:
-        checkpoints = {}
+
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=min(concurrency, len(trajectories))
     ) as pool:
@@ -1186,31 +1214,21 @@ def run_trajectory_cell(
                 model_id,
                 max_output_tokens,
                 timeout,
-                measured_assistant_turns=(
-                    {checkpoints[trajectory["session_id"]][0]}
-                    if replay_mode in {"checkpoints", "final"}
-                    else None
-                ),
-                checkpoint_stage=(
-                    checkpoints[trajectory["session_id"]][1]
-                    if replay_mode in {"checkpoints", "final"}
-                    else None
-                ),
+                record_sink=preserve_record,
             )
             for trajectory in trajectories
         ]
         for future in futures:
             requests.extend(future.result())
     write_request_records(raw_path, requests, concurrency)
+    completeness = complete_sessions(trajectories, requests)
     summary = summarize_requests(requests, concurrency)
     framework_counts: dict[str, int] = {}
     for trajectory in trajectories:
         framework = trajectory["agent_framework"]
         framework_counts[framework] = framework_counts.get(framework, 0) + 1
     successful_sessions = {
-        request["session_id"]
-        for request in requests
-        if "error" not in request
+        request["session_id"] for request in requests if "error" not in request
     }
     failed_sessions = {
         request["session_id"] for request in requests if "error" in request
@@ -1219,11 +1237,16 @@ def run_trajectory_cell(
         {
             "concurrency": concurrency,
             "trajectories": len(trajectories),
-            "successful_trajectories": len(successful_sessions - failed_sessions),
+            "successful_trajectories": sum(
+                item["complete"] for item in session_summaries(trajectories, requests)
+            ),
             "failed_trajectories": len(failed_sessions),
             "framework_trajectories": framework_counts,
             "max_output_tokens": max_output_tokens,
             "ordered_replay": True,
+            "completeness": completeness,
+            "session_cohort_sha256": stable_hash(list(trajectories)),
+            "sessions": session_summaries(trajectories, requests),
             "replay_mode": replay_mode,
             "recorded_assistant_turns": sum(
                 assistant_turn_count(trajectory) for trajectory in trajectories
@@ -1246,6 +1269,7 @@ def isolated_server_env(
             "XDG_CACHE_HOME": str(state_dir / "xdg-cache"),
             "XDG_CONFIG_HOME": str(state_dir / "xdg-config"),
             "MESH_LLM_RUNTIME_ROOT": str(state_dir / "runtime"),
+            "SKIPPY_TELEMETRY_STDERR": "1",
             "MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR": str(runtime_root),
         }
     )
@@ -1322,6 +1346,101 @@ def collect_runtime_logs(state_dir: Path, output_dir: Path) -> None:
         shutil.copy2(source, destination)
 
 
+def preflight_long_context(args, build, cohorts, output):
+    """Probe every formatted turn on a disposable server, then discard its cache.
+
+    The text-only tokenize endpoint cannot render mesh tool emulation/templates.
+    One-token chat probes therefore obtain the serving tokenizer's exact counts.
+    These are costly calibration requests, never measured replay turns.
+    """
+    target = output / "context-preflight" / build["label"]
+    target.mkdir(parents=True, exist_ok=True)
+    state = Path(tempfile.mkdtemp(prefix="replay-context-"))
+    process = None
+    result = {"passed": False, "cohorts": {}}
+    try:
+        process, _ = start_server(
+            build, args.model, state, target / "mesh.log", args.hf_home
+        )
+        model_id = wait_for_model(DEFAULT_BASE_URL, args.startup_timeout, process)
+        with urllib.request.urlopen(
+            "http://127.0.0.1:3131/api/runtime", timeout=30
+        ) as response:
+            runtime = json.load(response)
+        write_json(target / "runtime.json", runtime)
+        context = runtime_context(runtime, args.minimum_context_tokens)
+        if not args.expected_model_sha256 or any(
+            stage.get("source_model_sha256") != args.expected_model_sha256
+            for stage in runtime["stages"]
+        ):
+            raise ValueError("runtime model digest does not match the pinned GGUF")
+        spec = importlib.util.spec_from_file_location(
+            "replay_gguf", REPO / "scripts/skippy-llama-parity.py"
+        )
+        gguf = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gguf)
+        model_path = Path(runtime["stages"][0]["source_model_path"])
+        metadata = gguf.gguf_metadata(model_path)
+        architecture = metadata.get("general.architecture")
+        native_context = metadata.get(f"{architecture}.context_length")
+        if (
+            type(native_context) is not int
+            or native_context < args.minimum_context_tokens
+        ):
+            raise ValueError("actual GGUF does not declare the required native context")
+        result["model"] = {
+            "sha256": args.expected_model_sha256,
+            "architecture": architecture,
+            "native_context_tokens": native_context,
+        }
+        result["started_at"] = utc_now()
+        preflight_started = time.monotonic()
+        for name, trajectories in cohorts.items():
+            probes = []
+            path = target / f"{name}-probes.jsonl"
+            path.write_text("")
+
+            def preserve(probe):
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(probe, sort_keys=True) + "\n")
+
+            for trajectory in trajectories:
+                probes.extend(
+                    replay_trajectory(
+                        trajectory,
+                        model_id,
+                        1,
+                        args.request_timeout,
+                        record_sink=preserve,
+                        qualification_probe=True,
+                    )
+                )
+            evidence = context_eligibility(
+                trajectories,
+                probes,
+                context,
+                args.max_output_tokens,
+                args.minimum_session_prompt_tokens if name != "warmup" else 0,
+                recorded_output_budget,
+            )
+            result["cohorts"][name] = evidence
+            write_json(target / "eligibility.json", result)
+        result["elapsed_seconds"] = time.monotonic() - preflight_started
+        result["passed"] = all(item["passed"] for item in result["cohorts"].values())
+        if not result["passed"]:
+            raise RuntimeError(f"long-context eligibility failed; see {target}")
+        return result
+    except Exception as error:
+        result["error"] = str(error)
+        raise
+    finally:
+        write_json(target / "eligibility.json", result)
+        if process is not None:
+            stop_server(process)
+        collect_runtime_logs(state, target / "native-runtime")
+        shutil.rmtree(state, ignore_errors=True)
+
+
 def run_arm_pass(
     *,
     args: argparse.Namespace,
@@ -1348,6 +1467,18 @@ def run_arm_pass(
             build, args.model, state_dir, log_path, args.hf_home
         )
         model_id = wait_for_model(DEFAULT_BASE_URL, args.startup_timeout, process)
+        if args.minimum_context_tokens:
+            with urllib.request.urlopen(
+                "http://127.0.0.1:3131/api/runtime", timeout=30
+            ) as response:
+                current_runtime = json.load(response)
+            write_json(pass_dir / "runtime.json", current_runtime)
+            runtime_context(current_runtime, args.minimum_context_tokens)
+            if any(
+                stage.get("source_model_sha256") != args.expected_model_sha256
+                for stage in current_runtime["stages"]
+            ):
+                raise ValueError("measured runtime differs from the qualified model")
         warmup = run_warmup(
             trajectories=cohorts["warmup"],
             model_id=model_id,
@@ -1381,6 +1512,54 @@ def run_arm_pass(
         finally:
             collect_runtime_logs(state_dir, pass_dir / "native-runtime")
             shutil.rmtree(state_dir, ignore_errors=True)
+    eligibility_path = output / "context-preflight" / label / "eligibility.json"
+    qualified = (
+        json.loads(eligibility_path.read_text())
+        if args.minimum_context_tokens
+        else None
+    )
+    for cell in cells:
+        problems = list(cell["completeness"]["problems"])
+        raw = pass_dir / f"c-{cell['concurrency']}-requests.jsonl"
+        requests = [json.loads(line) for line in raw.read_text().splitlines()]
+        if qualified:
+            expected_tokens = {
+                turn["request_id"]: turn["prompt_tokens"]
+                for turn in qualified["cohorts"][str(cell["concurrency"])]["turns"]
+            }
+            if any(
+                request.get("prompt_tokens")
+                != expected_tokens.get(request["request_id"])
+                for request in requests
+            ):
+                problems.append(
+                    "measured prompt token count differs from context preflight"
+                )
+        if getattr(args, "minimum_session_prompt_tokens", 0):
+            for session in cell["sessions"]:
+                if session["max_prompt_tokens"] < args.minimum_session_prompt_tokens:
+                    problems.append(
+                        f"{session['session_id']}: long-context coverage missing"
+                    )
+        if args.minimum_context_tokens:
+            for session in cell["sessions"]:
+                if not any(
+                    request.get("assistant_turn", 0) > 0
+                    and request.get("cached_tokens", 0) > 0
+                    and request.get("session_id") == session["session_id"]
+                    for request in requests
+                ):
+                    problems.append(
+                        f"{session['session_id']}: no later-turn prompt reuse"
+                    )
+        if getattr(args, "require_recurrent_restores", False):
+            logs = [log_path, *sorted((pass_dir / "native-runtime").rglob("*.log"))]
+            cell["recurrent_state"] = recurrent_evidence(
+                logs, requests, max(1, args.minimum_session_prompt_tokens)
+            )
+            problems.extend(cell["recurrent_state"]["problems"])
+        cell["acceptance"] = {"passed": not problems, "problems": problems}
+        write_json(pass_dir / f"c-{cell['concurrency']}.json", cell)
     return {
         "label": label,
         "ref": build["ref"],
@@ -1926,7 +2105,7 @@ def write_report(output: Path, run_document: dict[str, Any]) -> Path:
         )
         lines.append(
             f"| {concurrency} | {cohort['trajectory_count']} | "
-            f"{cohort['trajectory_count'] if run_document['config'].get('replay_mode', 'all') in {'checkpoints', 'final'} else cohort['assistant_turns']} | "
+            f"{cohort['assistant_turns']} | "
             f"{cohort['assistant_turns']} | {breakdown} |"
         )
     lines.extend(
@@ -1960,9 +2139,7 @@ def write_report(output: Path, run_document: dict[str, Any]) -> Path:
                     row["decode_tokens_per_second_min"],
                     row["decode_tokens_per_second_max"],
                 ),
-                decode_delta=fmt(
-                    row["decode_tokens_per_second_delta_pct"], 1, "%"
-                ),
+                decode_delta=fmt(row["decode_tokens_per_second_delta_pct"], 1, "%"),
                 output_tps=fmt(row["workload_output_tokens_per_second"]),
                 output_range=fmt_range(
                     row["workload_output_tokens_per_second_min"],
@@ -2013,8 +2190,8 @@ def write_report(output: Path, run_document: dict[str, Any]) -> Path:
             f"- Dataset revision: `{run_document['inputs']['dataset']['revision']}`.",
             f"- Selected trajectories: `{selected_trajectories}` unique whole sessions across disjoint concurrency cohorts.",
             f"- Recorded source steps: `{selected_turns}` assistant turns are represented across the selected trajectories.",
-            f"- Replay mode: `{run_document['config'].get('replay_mode', 'all')}`. Checkpoint and final modes measure one request per trajectory; skipped recorded turns are still appended in order to reconstruct the exact prefix.",
-            "- Within each framework's trajectories, checkpoint mode deterministically spreads one measured turn per trajectory across the trajectory timeline. Four trajectories are labeled early, middle, late, and final; other cohort sizes use rank/count labels. Different trajectories may overlap up to the offered client concurrency.",
+            f"- Replay mode: `{run_document['config'].get('replay_mode', 'all')}`. Every selected session executes every assistant turn in order using recorded history.",
+            "- Each selected session runs all turns sequentially; different sessions overlap up to the offered client concurrency. Cache namespaces are stable per session.",
             "- Realized concurrency is the time-weighted mean number of in-flight requests. Slot use makes cohort tail drain explicit; do not interpret offered-concurrency scaling as steady-state when utilization is low.",
             "- Each next request uses the recorded conversation history, so experiment arms receive identical growing prefixes and tool observations.",
             "- Per-turn output budgets approximate each recorded assistant action from its character length, capped by the configured maximum; generated output is measured but never fed into the next turn.",
@@ -2025,7 +2202,7 @@ def write_report(output: Path, run_document: dict[str, Any]) -> Path:
                 if run_document["inputs"].get("kind") == "captured"
                 else "- Tool definitions preserve recorded names but use permissive synthetic schemas. This benchmark measures serving performance on reconstructed prompts, not answer quality or byte-identical production prompts."
             ),
-            "- Selection is deterministic hash order, not stratified by context length or difficulty. Treat small deltas as directional unless repeated with a larger cohort.",
+            "- Selection is deterministic within the recorded-length window; runtime-formatted per-session lengths are reported separately.",
             f"- Trajectory manifest SHA-256: `{run_document['inputs']['manifest_sha256']}`.",
             "- Raw request records, server logs, build logs, commands, and exact binary/runtime hashes are retained beside this report.",
             "",
@@ -2051,7 +2228,9 @@ def write_report(output: Path, run_document: dict[str, Any]) -> Path:
         if path.name == "artifact-sha256.txt":
             continue
         inventory.append(f"{sha256(path)}  {path.relative_to(output).as_posix()}")
-    (output / "artifact-sha256.txt").write_text("\n".join(inventory) + "\n", encoding="utf-8")
+    (output / "artifact-sha256.txt").write_text(
+        "\n".join(inventory) + "\n", encoding="utf-8"
+    )
     return report_path
 
 
@@ -2064,6 +2243,9 @@ def benchmark_plan(
     config = load_competitive_config()
     dataset = config["thoughtworks"]["dataset"]
     order_specs = combined_specs(specs, engine_config, version_sha256_by_label)
+    sessions = getattr(args, "sessions_per_concurrency", None)
+    if sessions is None and args.trajectories_per_framework is not None:
+        sessions = len(args.framework) * args.trajectories_per_framework
     return {
         "schema_version": 3,
         "repo": str(args.repo),
@@ -2109,18 +2291,11 @@ def benchmark_plan(
             "source_datasets": args.source_dataset,
             "frameworks": args.framework,
             "trajectories_per_framework_per_concurrency": args.trajectories_per_framework,
+            "sessions_per_concurrency": getattr(args, "sessions_per_concurrency", None),
             "measured_unique_trajectory_count": (
-                len(args.concurrency)
-                * len(args.framework)
-                * args.trajectories_per_framework
-                if args.trajectories_per_framework is not None
-                else None
+                len(args.concurrency) * sessions if sessions is not None else None
             ),
-            "warmup_unique_trajectory_count": (
-                len(args.framework) * args.trajectories_per_framework
-                if args.trajectories_per_framework is not None
-                else None
-            ),
+            "warmup_unique_trajectory_count": sessions,
             "min_isl": args.min_isl,
             "max_isl_exclusive": args.max_isl,
             "min_assistant_turns": args.min_turns,
@@ -2130,25 +2305,16 @@ def benchmark_plan(
             "passes": args.passes,
             "minimum_worker_waves": getattr(args, "minimum_worker_waves", 2),
             "replay_mode": args.replay_mode,
+            "minimum_context_tokens": getattr(args, "minimum_context_tokens", 0),
+            "minimum_session_prompt_tokens": getattr(
+                args, "minimum_session_prompt_tokens", 0
+            ),
+            "require_recurrent_restores": getattr(
+                args, "require_recurrent_restores", False
+            ),
             "ordered_recorded_prefix_replay": True,
-            "measured_requests_per_arm_pass": (
-                len(args.concurrency)
-                * len(args.framework)
-                * args.trajectories_per_framework
-                if args.replay_mode in {"checkpoints", "final"}
-                and args.trajectories_per_framework is not None
-                else None
-            ),
-            "measured_requests_total": (
-                len(args.concurrency)
-                * len(args.framework)
-                * args.trajectories_per_framework
-                * len(order_specs)
-                * args.passes
-                if args.replay_mode in {"checkpoints", "final"}
-                and args.trajectories_per_framework is not None
-                else None
-            ),
+            "measured_requests_per_arm_pass": None,
+            "measured_requests_total": None,
             "max_output_tokens": args.max_output_tokens,
             "warmup_turns_per_arm_pass": args.warmup_turns,
         },
@@ -2157,9 +2323,7 @@ def benchmark_plan(
             "prompt_token_range": getattr(args, "prompt_token_range", None),
             "min_cache_pct": getattr(args, "min_cache_pct", None),
             "require_output_match": getattr(args, "require_output_match", False),
-            "max_ttft_regression_pct": getattr(
-                args, "max_ttft_regression_pct", None
-            ),
+            "max_ttft_regression_pct": getattr(args, "max_ttft_regression_pct", None),
         },
         "outputs": [
             "raw request JSONL",
@@ -2202,7 +2366,9 @@ def run_benchmark(args: argparse.Namespace) -> Path:
     args.output.mkdir(parents=True, exist_ok=True)
     existing = args.output / "run.json"
     if existing.exists() and not args.resume:
-        raise RuntimeError(f"output already contains run.json; pass --resume: {args.output}")
+        raise RuntimeError(
+            f"output already contains run.json; pass --resume: {args.output}"
+        )
     write_json(args.output / "plan.json", plan)
     commands = CommandLog(args.output / "commands.jsonl")
     inputs = build_trajectory_inputs(args, args.output)
@@ -2212,9 +2378,7 @@ def run_benchmark(args: argparse.Namespace) -> Path:
     validate_measured_cohort_capacity(
         cohorts, args.concurrency, args.minimum_worker_waves
     )
-    validate_required_frameworks(
-        cohorts, args.concurrency, args.require_framework
-    )
+    validate_required_frameworks(cohorts, args.concurrency, args.require_framework)
     worktree_root = (
         args.worktree_root or (args.repo.parent / ".agentic-replay-worktrees")
     ).resolve()
@@ -2222,7 +2386,9 @@ def run_benchmark(args: argparse.Namespace) -> Path:
     for spec in specs:
         worktree = prepare_worktree(args.repo, worktree_root, spec)
         builds.append(
-            build_ref(spec, worktree, args.backend, args.output, commands, args.skip_build)
+            build_ref(
+                spec, worktree, args.backend, args.output, commands, args.skip_build
+            )
         )
     builds.extend(external_builds)
     run_document: dict[str, Any] = {
@@ -2240,6 +2406,13 @@ def run_benchmark(args: argparse.Namespace) -> Path:
             "passes": args.passes,
             "minimum_worker_waves": args.minimum_worker_waves,
             "replay_mode": args.replay_mode,
+            "minimum_context_tokens": getattr(args, "minimum_context_tokens", 0),
+            "minimum_session_prompt_tokens": getattr(
+                args, "minimum_session_prompt_tokens", 0
+            ),
+            "require_recurrent_restores": getattr(
+                args, "require_recurrent_restores", False
+            ),
             "max_output_tokens": args.max_output_tokens,
             "warmup_turns": args.warmup_turns,
             "required_frameworks": args.require_framework,
@@ -2264,10 +2437,16 @@ def run_benchmark(args: argparse.Namespace) -> Path:
         "results": [],
     }
     build_by_label = {build["label"]: build for build in builds}
-    completed = {
-        (item["pass"], item["label"])
-        for item in json.loads(existing.read_text(encoding="utf-8")).get("results", [])
-    } if existing.exists() and args.resume else set()
+    completed = (
+        {
+            (item["pass"], item["label"])
+            for item in json.loads(existing.read_text(encoding="utf-8")).get(
+                "results", []
+            )
+        }
+        if existing.exists() and args.resume
+        else set()
+    )
     if existing.exists() and args.resume:
         previous = json.loads(existing.read_text(encoding="utf-8"))
         if previous.get("plan_sha256") != run_document["plan_sha256"]:
@@ -2277,8 +2456,7 @@ def run_benchmark(args: argparse.Namespace) -> Path:
             for build in previous.get("builds", [])
         }
         current_builds = {
-            build["label"]: build_resume_identity(build)
-            for build in builds
+            build["label"]: build_resume_identity(build) for build in builds
         }
         if previous_builds != current_builds:
             raise RuntimeError(
@@ -2286,9 +2464,26 @@ def run_benchmark(args: argparse.Namespace) -> Path:
                 "run.json (commit, binary or runtime hashes, or reported "
                 "engine version_sha256 changed)"
             )
-        if previous.get("inputs", {}).get("manifest_sha256") != inputs["manifest_sha256"]:
-            raise RuntimeError("cannot resume: Thoughtworks trajectory manifest differs")
+        if (
+            previous.get("inputs", {}).get("manifest_sha256")
+            != inputs["manifest_sha256"]
+        ):
+            raise RuntimeError(
+                "cannot resume: Thoughtworks trajectory manifest differs"
+            )
         run_document["results"] = previous["results"]
+    write_json(existing, run_document)
+    if args.minimum_context_tokens:
+        run_document["context_preflight"] = {}
+        for build in builds:
+            if build.get("engine", "mesh") != "mesh":
+                raise ValueError(
+                    "runtime context qualification currently requires mesh arms"
+                )
+            run_document["context_preflight"][build["label"]] = preflight_long_context(
+                args, build, cohorts, args.output
+            )
+            write_json(existing, run_document)
     for pass_index, spec in ab_order(order_specs, args.passes):
         key = (pass_index + 1, spec.label)
         if key in completed:
@@ -2314,6 +2509,15 @@ def run_benchmark(args: argparse.Namespace) -> Path:
         require_output_match=args.require_output_match,
         max_ttft_regression_pct=args.max_ttft_regression_pct,
     )
+    acceptance_failures = [
+        cell["acceptance"]
+        for result in run_document["results"]
+        for cell in result["cells"]
+        if not cell["acceptance"]["passed"]
+    ]
+    if acceptance_failures:
+        run_document["gates"]["passed"] = False
+        run_document["gates"]["session_acceptance_failures"] = acceptance_failures
     write_json(existing, run_document)
     report = write_report(args.output, run_document)
     if run_document["gates"]["passed"] is False:
@@ -2332,7 +2536,9 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
             "multiple labels must resolve to distinct commits"
         ),
     )
-    parser.add_argument("--model", required=True, help="model URI or local package path")
+    parser.add_argument(
+        "--model", required=True, help="model URI or local package path"
+    )
     parser.add_argument(
         "--engine-config",
         type=Path,
@@ -2347,9 +2553,9 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--replay-mode",
-        choices=("checkpoints", "final", "all"),
-        default="checkpoints",
-        help="measure one stage-balanced checkpoint, the final prefix, or every assistant turn",
+        choices=("all",),
+        default="all",
+        help="replay every recorded assistant turn (the only supported mode)",
     )
     parser.add_argument("--concurrency", type=int, action="append", default=[])
     parser.add_argument(
@@ -2366,6 +2572,15 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         type=int,
         help="whole trajectories from each framework in each concurrency cohort",
     )
+    parser.add_argument(
+        "--sessions-per-concurrency",
+        type=int,
+        help="total complete sessions per measured cohort, balanced across frameworks",
+    )
+    parser.add_argument("--expected-model-sha256")
+    parser.add_argument("--minimum-context-tokens", type=int, default=0)
+    parser.add_argument("--minimum-session-prompt-tokens", type=int, default=0)
+    parser.add_argument("--require-recurrent-restores", action="store_true")
     parser.add_argument("--max-output-tokens", type=int, default=2048)
     parser.add_argument(
         "--warmup-turns",
@@ -2419,7 +2634,9 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     if args.command == "run" and (
         (args.dataset_file is None) == (args.trajectory_manifest is None)
     ):
-        parser.error("run requires exactly one of --dataset-file or --trajectory-manifest")
+        parser.error(
+            "run requires exactly one of --dataset-file or --trajectory-manifest"
+        )
     if not args.concurrency:
         args.concurrency = [1, 2, 4]
     if len(set(args.concurrency)) != len(args.concurrency) or any(
@@ -2436,10 +2653,25 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     )
     if any(value <= 0 for value in positive):
         parser.error("passes and workload sizes must be positive")
-    if args.trajectories_per_framework is not None and args.trajectories_per_framework <= 0:
+    if (
+        args.trajectories_per_framework is not None
+        and args.trajectories_per_framework <= 0
+    ):
         parser.error("--trajectories-per-framework must be positive")
-    if args.trajectory_manifest is None and args.trajectories_per_framework is None:
-        parser.error("--trajectories-per-framework is required with Thoughtworks input")
+    if args.sessions_per_concurrency is not None:
+        if (
+            args.sessions_per_concurrency <= 0
+            or args.trajectories_per_framework is not None
+        ):
+            parser.error(
+                "use one positive session count, not both total and per-framework"
+            )
+    if (
+        args.trajectory_manifest is None
+        and args.trajectories_per_framework is None
+        and args.sessions_per_concurrency is None
+    ):
+        parser.error("--sessions-per-concurrency is required with Thoughtworks input")
     if args.max_isl <= args.min_isl:
         parser.error("--max-isl must exceed --min-isl")
     if args.prompt_token_range is not None:
@@ -2469,17 +2701,20 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         except (OSError, ValueError, json.JSONDecodeError) as error:
             parser.error(f"invalid --engine-config: {error}")
         if config.comparison.model != args.model:
-            parser.error(
-                "--model must exactly match engine config comparison.model"
-            )
+            parser.error("--model must exactly match engine config comparison.model")
         args.engine_config_snapshot = config
     trajectories_per_cohort = (
         args.trajectories_per_framework * len(args.framework)
         if args.trajectories_per_framework is not None
         else None
     )
+    if args.sessions_per_concurrency is not None:
+        trajectories_per_cohort = args.sessions_per_concurrency
     minimum_trajectories = args.minimum_worker_waves * max(args.concurrency)
-    if trajectories_per_cohort is not None and trajectories_per_cohort < minimum_trajectories:
+    if (
+        trajectories_per_cohort is not None
+        and trajectories_per_cohort < minimum_trajectories
+    ):
         parser.error(
             "each concurrency cohort must contain the configured minimum worker "
             f"waves ({minimum_trajectories} trajectories required)"

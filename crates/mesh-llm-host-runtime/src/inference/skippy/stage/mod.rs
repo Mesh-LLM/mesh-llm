@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow};
 use skippy_coordinator::{ClaimDecision, ClaimFence, LoadClaimRef};
-use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig, StageConfig};
+use skippy_protocol::{FlashAttentionType, PeerConfig, StageConfig};
 use skippy_server::{EmbeddedServerHandle, binary_transport::BinaryStageOptions};
 use tokio::{
     sync::{mpsc, oneshot},
@@ -723,11 +723,8 @@ fn stage_config(
         kv_unified: load.runtime_settings.kv_unified,
         swa_full: load.runtime_settings.swa_full,
         cache_idle_slots: load.runtime_settings.cache_idle_slots,
-        filter_tensors_on_load: matches!(
-            load.load_mode,
-            LoadMode::RuntimeSlice | LoadMode::LayerPackage
-        ),
         resident_tensor_names,
+        execution_contract: load.admission.execution_contract.clone(),
         activation_import_identities: frontier_profile.activation_imports.clone(),
         activation_import_bindings: frontier_profile.activation_import_bindings.clone(),
         activation_export_identities: frontier_profile.activation_exports.clone(),
