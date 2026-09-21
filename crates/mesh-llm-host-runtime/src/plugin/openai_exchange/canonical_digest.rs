@@ -38,23 +38,39 @@
 /// when `body` contains a JSON integer literal outside the reference's safe
 /// range; see [`MAX_SAFE_INTEGER`].
 pub fn request_body_digest(body: &serde_json::Value, source_json: Option<&[u8]>) -> Option<String> {
-    if contains_unsafe_integer(body) || source_json.is_some_and(contains_oversized_integer_literal)
-    {
-        return None;
-    }
-    Some(hex::encode(canonical_digest_bytes(body)))
+    checked_canonical_digest_bytes(body, source_json).map(hex::encode)
 }
 
 /// The raw SHA-256 bytes over `JCS(stringify_floats(value))` — the same
 /// construction [`request_body_digest`] hex-encodes, minus its safe-integer
 /// guard. Used for response-side digests (`ExchangeOutputDigests`, in
-/// `openai_exchange.rs`), which digest host-generated JSON rather than a
-/// client-controlled request body, so the oversized-integer refusal above
-/// does not apply.
+/// `openai_exchange.rs`).
+///
+/// Callers that may hold a body the reference would refuse must go through
+/// [`checked_canonical_digest_bytes`] instead: a served response is no more
+/// trustworthy here than a request body — the numbers in it come from the
+/// model (tool-call arguments, structured output), not from this host.
 pub(crate) fn canonical_digest_bytes(value: &serde_json::Value) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let canonical = jcs_bytes(&stringify_floats(value));
     Sha256::digest(&canonical).into()
+}
+
+/// [`canonical_digest_bytes`], refusing any value the Python reference would
+/// refuse: a JSON integer literal outside `+/-(2^53-1)` (`source_json`, when
+/// the caller still holds the original bytes, additionally catches an integer
+/// literal above `u64::MAX` that `serde_json` has already rounded to an
+/// `f64`). Callers omit the digest rather than publish one the reference
+/// would never produce.
+pub(crate) fn checked_canonical_digest_bytes(
+    value: &serde_json::Value,
+    source_json: Option<&[u8]>,
+) -> Option<[u8; 32]> {
+    if contains_unsafe_integer(value) || source_json.is_some_and(contains_oversized_integer_literal)
+    {
+        return None;
+    }
+    Some(canonical_digest_bytes(value))
 }
 
 /// The reference's safe-integer boundary (`agent_action_capsule.canonical`

@@ -195,23 +195,41 @@ impl ExchangeOutputDigests {
     /// Compute the response / tool_calls / reasoning digests over a served
     /// OpenAI chat-completion (or Responses-API) response body, at a point the
     /// caller holds the whole body in hand. A body that does not parse as JSON
-    /// yields an all-`None` bundle rather than a fabricated digest.
+    /// — or that carries an integer the Python reference refuses to digest
+    /// (see [`checked_canonical_digest_bytes`]) — yields an all-`None` bundle
+    /// rather than a fabricated digest or one the reference would never
+    /// produce.
     pub fn from_response_body(body: &[u8]) -> Self {
         let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
             return Self::default();
         };
-        Self::from_response_value(&value)
+        Self::from_response_value_with_source(&value, Some(body))
     }
 
     /// As [`Self::from_response_body`], over an already-parsed response value
     /// — the entry point the streaming assembler uses once it has built the
-    /// equivalent of a served response from the chunks it observed.
+    /// equivalent of a served response from the chunks it observed. The
+    /// assembler's value was rebuilt from parsed chunks, so it has no original
+    /// bytes to lex; the parsed-value safe-integer check still applies.
     pub(crate) fn from_response_value(value: &serde_json::Value) -> Self {
-        let response = Some(canonical_digest_bytes(value));
+        Self::from_response_value_with_source(value, None)
+    }
+
+    fn from_response_value_with_source(
+        value: &serde_json::Value,
+        source_json: Option<&[u8]>,
+    ) -> Self {
+        // One refusal covers all three digests: the tool-call and reasoning
+        // arrays are extracted from this same body, so a body holding an
+        // integer the reference refuses cannot yield a trustworthy digest for
+        // any of them.
+        let Some(response) = checked_canonical_digest_bytes(value, source_json) else {
+            return Self::default();
+        };
         let tool_calls = collect_response_tool_calls(value);
         let reasoning = collect_response_reasoning(value);
         Self {
-            response,
+            response: Some(response),
             tool_calls: (!tool_calls.is_empty())
                 .then(|| canonical_digest_bytes(&serde_json::Value::Array(tool_calls))),
             reasoning: (!reasoning.is_empty())
@@ -227,10 +245,16 @@ impl ExchangeOutputDigests {
     }
 }
 
-/// Flatten the `tool_calls` array across every assistant `choices[].message`
-/// (the host-served single response has one choice; this tolerates more).
-/// Returns an empty vec — never a synthetic entry — when the response has
-/// none.
+/// Flatten the model's tool calls across the served response, in order.
+/// Covers both shapes the host can serve:
+///
+/// - chat completions: `choices[].message.tool_calls` (the host-served single
+///   response has one choice; this tolerates more);
+/// - the Responses API, where the calls are `output[]` items of type
+///   `function_call` (`name` / `arguments` / `call_id`) instead.
+///
+/// Returns an empty vec — never a synthetic entry — when the response carried
+/// none in either shape.
 fn collect_response_tool_calls(response: &serde_json::Value) -> Vec<serde_json::Value> {
     let mut out = Vec::new();
     if let Some(choices) = response.get("choices").and_then(|c| c.as_array()) {
@@ -241,6 +265,13 @@ fn collect_response_tool_calls(response: &serde_json::Value) -> Vec<serde_json::
                 .and_then(|t| t.as_array())
             {
                 out.extend(tool_calls.iter().cloned());
+            }
+        }
+    }
+    if let Some(items) = response.get("output").and_then(|o| o.as_array()) {
+        for item in items {
+            if item.get("type").and_then(|t| t.as_str()) == Some("function_call") {
+                out.push(item.clone());
             }
         }
     }
@@ -557,8 +588,8 @@ impl OpenAiExchangeEnvelope {
 }
 
 mod canonical_digest;
-use canonical_digest::canonical_digest_bytes;
 pub use canonical_digest::request_body_digest;
+use canonical_digest::{canonical_digest_bytes, checked_canonical_digest_bytes};
 
 /// Publishes [`OpenAiExchangeEnvelope`]s to whatever is subscribed on
 /// [`OPENAI_EXCHANGE_CHANNEL`] — an out-of-process plugin in production, a
@@ -1479,6 +1510,120 @@ mod tests {
             ExchangeOutputDigests::from_response_body(&serde_json::to_vec(&without).unwrap())
                 .tool_calls;
         assert_ne!(with_null_digest, without_digest);
+    }
+
+    /// A Responses-API body carries the model's calls as `output[]` items of
+    /// type `function_call`, not as chat `message.tool_calls`. The host serves
+    /// both shapes, so `tool_calls_digest` has to be populated for the
+    /// Responses shape too — an absent digest there would be indistinguishable
+    /// from "the model emitted no calls".
+    #[test]
+    fn output_digests_tool_calls_present_for_a_responses_api_function_call() {
+        let call = serde_json::json!({
+            "type": "function_call",
+            "id": "fc_1",
+            "call_id": "call_1",
+            "name": "get_weather",
+            "arguments": "{\"city\":\"Sydney\"}",
+            "status": "completed"
+        });
+        let body = serde_json::json!({
+            "id": "resp_1",
+            "object": "response",
+            "status": "completed",
+            "output": [
+                {"type": "message", "role": "assistant", "content": [
+                    {"type": "output_text", "text": "checking"}
+                ]},
+                call.clone()
+            ]
+        });
+        let digests =
+            ExchangeOutputDigests::from_response_body(&serde_json::to_vec(&body).unwrap());
+        assert!(digests.response.is_some());
+        assert_eq!(
+            digests.tool_calls,
+            Some(canonical_digest_bytes(&serde_json::Value::Array(vec![
+                call
+            ]))),
+            "the Responses function_call item itself is what gets flattened"
+        );
+
+        // A Responses body that called no tool still omits the digest.
+        let no_calls = serde_json::json!({
+            "id": "resp_2",
+            "object": "response",
+            "status": "completed",
+            "output": [{"type": "message", "role": "assistant", "content": [
+                {"type": "output_text", "text": "no tools needed"}
+            ]}]
+        });
+        assert!(
+            ExchangeOutputDigests::from_response_body(&serde_json::to_vec(&no_calls).unwrap())
+                .tool_calls
+                .is_none()
+        );
+    }
+
+    /// A served response is not more trustworthy than a request body: the
+    /// numbers in it come from the model. An integer *literal* outside the
+    /// reference's safe range anywhere in the body must omit every digest in
+    /// the bundle, not publish one the reference would have raised on. (An
+    /// integer-looking sequence inside a JSON *string* — e.g. tool-call
+    /// arguments — is not a literal and does not trigger this.)
+    #[test]
+    fn output_digests_omit_every_digest_for_a_body_with_an_unsafe_integer() {
+        let body = serde_json::json!({
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "f", "arguments": "{}"}
+                    }],
+                    "reasoning_content": "thinking"
+                },
+                "finish_reason": "tool_calls",
+                "logprobs": 9_007_199_254_740_993_i64
+            }]
+        });
+        let digests =
+            ExchangeOutputDigests::from_response_body(&serde_json::to_vec(&body).unwrap());
+        assert_eq!(digests, ExchangeOutputDigests::default());
+        assert!(!digests.has_any());
+
+        // A body whose numeric literals are all inside the safe range still
+        // digests, including one whose *string* holds an out-of-range integer.
+        let safe = serde_json::json!({
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "call_1", "type": "function",
+                     "function": {"name": "f", "arguments": "{\"n\": 9007199254740993}"}}
+                ]},
+                "finish_reason": "tool_calls",
+                "logprobs": 9_007_199_254_740_991_i64
+            }]
+        });
+        assert!(
+            ExchangeOutputDigests::from_response_body(&serde_json::to_vec(&safe).unwrap())
+                .has_any()
+        );
+    }
+
+    /// An integer literal above `u64::MAX` is rounded to an `f64` by
+    /// `serde_json` before any value-level check can see it, so the
+    /// response path lexes the original bytes exactly as the request path
+    /// does.
+    #[test]
+    fn output_digests_omit_every_digest_for_an_integer_literal_above_u64_max() {
+        let body = br#"{"id":"resp_1","object":"response","output":[{"type":"function_call","name":"f","arguments":"{}","call_id":"c","n":18446744073709551616}]}"#;
+        let digests = ExchangeOutputDigests::from_response_body(body);
+        assert_eq!(digests, ExchangeOutputDigests::default());
+        assert!(!digests.has_any());
     }
 
     /// `with_output_digests` on an all-`None` bundle (a non-JSON or unassembled

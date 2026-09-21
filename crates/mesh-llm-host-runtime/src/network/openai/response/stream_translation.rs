@@ -41,6 +41,13 @@ struct StreamedChatAssembly {
     reasoning_content: String,
     saw_reasoning: bool,
     tool_calls: std::collections::BTreeMap<u64, AssembledStreamToolCall>,
+    /// Set when a chunk carried more than one choice, or a choice whose
+    /// `index` is not 0 — a stream that asked for `n > 1` choices. The
+    /// assembly folds `choices[0]` only (there is one served message to fold
+    /// into), so a multi-choice stream would digest choice 0 and silently
+    /// omit every later choice: a *wrong* digest, which is worse than an
+    /// absent one. No digest is published for such a stream at all.
+    multi_choice: bool,
 }
 
 impl StreamedChatAssembly {
@@ -53,12 +60,20 @@ impl StreamedChatAssembly {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
             return;
         };
-        let Some(delta) = value
-            .get("choices")
-            .and_then(|choices| choices.as_array())
-            .and_then(|choices| choices.first())
-            .and_then(|choice| choice.get("delta"))
-        else {
+        let Some(choices) = value.get("choices").and_then(|choices| choices.as_array()) else {
+            return;
+        };
+        if choices.len() > 1
+            || choices.first().is_some_and(|choice| {
+                choice
+                    .get("index")
+                    .and_then(serde_json::Value::as_u64)
+                    .is_some_and(|index| index != 0)
+            })
+        {
+            self.multi_choice = true;
+        }
+        let Some(delta) = choices.first().and_then(|choice| choice.get("delta")) else {
             return;
         };
         if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
@@ -134,8 +149,13 @@ impl StreamedChatAssembly {
     }
 
     /// Compute the response/tool_calls/reasoning digests over the assembled
-    /// result, or an all-`None` bundle when nothing was assembled.
+    /// result, or an all-`None` bundle when nothing was assembled — or when
+    /// the stream carried more than one choice, which this fold cannot
+    /// honestly cover (see [`Self::multi_choice`]).
     fn output_digests(&self) -> ExchangeOutputDigests {
+        if self.multi_choice {
+            return ExchangeOutputDigests::default();
+        }
         self.assembled_response()
             .map(|value| ExchangeOutputDigests::from_response_value(&value))
             .unwrap_or_default()
@@ -1411,6 +1431,44 @@ mod tests {
             }}]
         }));
         assert_ne!(digests.tool_calls, last_fragment_only.tool_calls);
+    }
+
+    /// A stream the client asked for with `n > 1` delivers several choices per
+    /// chunk. The fold covers `choices[0]`, so digesting it would publish a
+    /// response digest that silently omits every later choice — wrong, not
+    /// merely incomplete. Such a stream publishes no digest at all, and the
+    /// single-choice stream the host normally serves still does.
+    #[test]
+    fn multi_choice_streams_publish_no_digest() {
+        let single = r#"{"choices":[{"index":0,"delta":{"content":"hi"}}]}"#;
+        let mut assembly = StreamedChatAssembly::default();
+        assembly.ingest_chunk(single);
+        assert!(
+            assembly.output_digests().response.is_some(),
+            "the normal single-choice stream still digests"
+        );
+
+        // Two choices in one chunk.
+        let mut assembly = StreamedChatAssembly::default();
+        assembly.ingest_chunk(single);
+        assembly.ingest_chunk(
+            r#"{"choices":[{"index":0,"delta":{"content":" a"}},{"index":1,"delta":{"content":" b"}}]}"#,
+        );
+        assert_eq!(
+            assembly.output_digests(),
+            ExchangeOutputDigests::default(),
+            "a chunk carrying two choices must not yield a digest over choice 0 alone"
+        );
+
+        // One choice per chunk, but the chunk is choice 1 — the fold covers
+        // choice 0, so this is still a stream it cannot honestly digest.
+        let mut assembly = StreamedChatAssembly::default();
+        assembly.ingest_chunk(r#"{"choices":[{"index":1,"delta":{"content":"only choice 1"}}]}"#);
+        assert_eq!(
+            assembly.output_digests(),
+            ExchangeOutputDigests::default(),
+            "a non-zero choice index means the fold is not looking at the whole response"
+        );
     }
 
     #[test]
