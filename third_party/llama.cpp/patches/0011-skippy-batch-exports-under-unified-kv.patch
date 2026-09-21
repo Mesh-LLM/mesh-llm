@@ -1,0 +1,60 @@
+From a42fe4c700ba784d8f07eee6033923331087f6da Mon Sep 17 00:00:00 2001
+From: sat <sat@local>
+Date: Mon, 21 Sep 2026 17:43:20 +1000
+Subject: [PATCH] skippy: batch activation exports under a unified KV cache
+ regardless of lane order
+
+---
+ src/llama-context.cpp          | 4 ++++
+ src/llama-context.h            | 1 +
+ src/skippy/execution-batch.cpp | 6 +++++-
+ 3 files changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 814a487f8..c063d1918 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -837,6 +837,10 @@ uint32_t llama_context::n_ubatch() const {
+     return cparams.n_ubatch;
+ }
+ 
++bool llama_context::kv_unified() const {
++    return cparams.kv_unified;
++}
++
+ uint32_t llama_context::n_seq_max() const {
+     return cparams.n_seq_max;
+ }
+diff --git a/src/llama-context.h b/src/llama-context.h
+index 1c1d02c02..556ef93b8 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -91,6 +91,7 @@ struct llama_context {
+     uint32_t n_ctx_seq() const;
+     uint32_t n_batch()   const;
+     uint32_t n_ubatch()  const;
++    bool     kv_unified() const;
+     uint32_t n_seq_max() const;
+ 
+     uint32_t n_threads()       const;
+diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
+index 767298b94..2277499fe 100644
+--- a/src/skippy/execution-batch.cpp
++++ b/src/skippy/execution-batch.cpp
+@@ -270,8 +270,12 @@ enum skippy_status skippy_iteration_batch_sampled(
+         offsets[index + 1] = offsets[index] + request.token_count;
+         if (request.sample_last && request_logits) ++sampled_count;
+     }
++    // A unified KV cache decodes through split_simple, which keeps batch order, so
++    // exports can be sliced by request offset regardless of lane ids. Only the
++    // per-sequence-stream path (split_equal, sequential) needs consecutive ids.
++    const bool ordered_by_lane = first->ctx->kv_unified() || consecutive_sequence_ids;
+     if (request_exports &&
+-            (!uniform_token_counts || !consecutive_sequence_ids ||
++            (!uniform_token_counts || !ordered_by_lane ||
+              offsets.back() > static_cast<size_t>(first->ctx->n_ubatch()))) {
+         skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED,
+                 "activation export batch would span more than one native microbatch");
+-- 
+2.50.1 (Apple Git-155)
+
