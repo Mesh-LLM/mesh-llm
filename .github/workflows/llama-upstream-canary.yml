@@ -101,8 +101,8 @@ jobs:
       previous_package: ${{ needs.repair-1.outputs.package }}
       previous_identity: ${{ needs.repair-1.outputs.identity }}
       previous_head: ${{ needs.repair-1.outputs.head }}
-      feedback_pattern: llama-family-${{ github.run_id }}-${{ github.run_attempt }}-*-1-*
-      feedback_build_pattern: llama-build-${{ github.run_id }}-${{ github.run_attempt }}-*-1
+      feedback_pattern: llama-family-${{ github.run_id }}-*-*-*-1-*
+      feedback_build_pattern: llama-build-${{ github.run_id }}-*-*-1
 
   verify-2:
     needs: [resolve, repair-2]
@@ -129,8 +129,8 @@ jobs:
       previous_package: ${{ needs.repair-2.outputs.package }}
       previous_identity: ${{ needs.repair-2.outputs.identity }}
       previous_head: ${{ needs.repair-2.outputs.head }}
-      feedback_pattern: llama-family-${{ github.run_id }}-${{ github.run_attempt }}-*-2-*
-      feedback_build_pattern: llama-build-${{ github.run_id }}-${{ github.run_attempt }}-*-2
+      feedback_pattern: llama-family-${{ github.run_id }}-*-*-*-2-*
+      feedback_build_pattern: llama-build-${{ github.run_id }}-*-*-2
 
   verify-3:
     needs: [resolve, repair-3]

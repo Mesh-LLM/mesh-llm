@@ -183,10 +183,15 @@ jobs:
         if: ${{ success() || failure() || cancelled() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: llama-family-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ matrix.shard_index }}
+          name: llama-family-${{ github.run_id }}-${{ needs.build.outputs.identity }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ matrix.shard_index }}
           path: ${{ env.FAMILY_BATTERY_ARTIFACT_ROOT }}/${{ env.FAMILY_BATTERY_RUN_ID }}/
           if-no-files-found: error
           retention-days: 14
+      - name: Require successful family certification
+        if: ${{ !cancelled() }}
+        env:
+          OUTCOME: ${{ steps.certify.outcome }}
+        run: test "$OUTCOME" = success
   aggregate:
     needs: [build, family]
     if: ${{ !cancelled() && needs.build.result == 'success' }}
@@ -204,7 +209,7 @@ jobs:
           path: ${{ runner.temp }}/aggregate-input
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: llama-family-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-*
+          pattern: llama-family-${{ github.run_id }}-${{ needs.build.outputs.identity }}-*-${{ inputs.pass_id }}-*
           path: ${{ runner.temp }}/aggregate-evidence
       - name: Require every planned family and lane
         id: aggregate

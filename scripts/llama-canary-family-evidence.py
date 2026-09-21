@@ -214,6 +214,12 @@ def pack(args) -> None:
            identity_sha256=sha(dest / "identity.json"), candidate=args.candidate, branch=args.branch)
 
 
+def run_attempt(value) -> int:
+    if not isinstance(value, str) or not re.fullmatch(r"[1-9][0-9]*", value):
+        raise ValueError("invalid workflow run attempt")
+    return int(value)
+
+
 def verify_package(directory: Path, expected: str) -> tuple[dict, dict]:
     if sha(directory / "identity.json") != expected:
         raise ValueError("build identity digest mismatch")
@@ -223,9 +229,11 @@ def verify_package(directory: Path, expected: str) -> tuple[dict, dict]:
     for key in ("candidate", "base"):
         if not re.fullmatch(r"[0-9a-f]{40}", identity[key]):
             raise ValueError("invalid source identity")
-    for env, key in (("GITHUB_RUN_ID", "run_id"), ("GITHUB_RUN_ATTEMPT", "run_attempt")):
-        if identity[key] != os.environ[env]:
-            raise ValueError("foreign workflow run or attempt")
+    # Failed-job reruns retain the successful producer and its immutable digest.
+    # The consumer attempt advances; the producer's provenance must not change.
+    if (identity["run_id"] != os.environ["GITHUB_RUN_ID"]
+            or run_attempt(identity["run_attempt"]) > run_attempt(os.environ["GITHUB_RUN_ATTEMPT"])):
+        raise ValueError("foreign workflow run or attempt")
     for name, key in (("plan.json", "plan_sha256"), ("binaries.tar", "binaries_sha256"),
                       (WORKLOAD_ORACLES_TAR, "workload_oracles_sha256")):
         if sha(directory / name) != identity[key]:
@@ -314,6 +322,7 @@ def receipt(args) -> None:
     path = args.evidence / "results.jsonl"
     write(args.evidence / "receipt.json", {"identity_sha256": args.identity, "family": args.family,
           "candidate": identity["candidate"], "pass_id": identity["pass_id"],
+          "run_id": os.environ["GITHUB_RUN_ID"], "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
           "runner": os.environ.get("RUNNER_NAME", "unknown"), "outcome": args.outcome,
           "results_sha256": sha(path) if path.is_file() else None})
 
@@ -358,16 +367,34 @@ def aggregate(args) -> None:
     seen = set()
     errors = []
     passed = []
+    latest = {}
+    attempts = set()
     for path in receipts:
         family = path.parent.name
         try:
             item = read(path)
             family = item["family"]
-            if family not in models or family in seen:
-                raise ValueError("duplicate or unplanned family receipt")
-            seen.add(family)
+            if family not in models:
+                raise ValueError("unplanned family receipt")
             if (item["identity_sha256"] != args.identity or item["candidate"] != identity["candidate"]
-                    or item["pass_id"] != identity["pass_id"] or item["outcome"] != "success"):
+                    or item["pass_id"] != identity["pass_id"] or item["run_id"] != identity["run_id"]):
+                raise ValueError("mismatched worker receipt")
+            attempt = run_attempt(item["run_attempt"])
+            if not run_attempt(identity["run_attempt"]) <= attempt <= run_attempt(os.environ["GITHUB_RUN_ATTEMPT"]):
+                raise ValueError("worker attempt outside producer/current bounds")
+            if (family, attempt) in attempts:
+                raise ValueError("duplicate family receipt in workflow attempt")
+            attempts.add((family, attempt))
+            if family not in latest or attempt > latest[family][0]:
+                latest[family] = (attempt, path, item)
+        except (ValueError, OSError, KeyError, TypeError) as error:
+            errors.append(f"{family}: {error}")
+    # Select before validation: a newer failure or corrupt result must never
+    # silently fall back to a successful receipt from an earlier attempt.
+    for family, (_, path, item) in sorted(latest.items()):
+        seen.add(family)
+        try:
+            if item["outcome"] != "success":
                 raise ValueError("failed or mismatched worker receipt "
                                  f"(runner={item.get('runner', 'unknown')}, outcome={item.get('outcome', 'unknown')})")
             results = path.parent / "results.jsonl"

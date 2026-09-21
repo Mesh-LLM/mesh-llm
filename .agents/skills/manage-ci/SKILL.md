@@ -434,6 +434,23 @@ same commit. A hosted aggregate rejects missing, duplicate, failed, cancelled,
 or mismatched results. Only the final hosted publisher receives the repair
 credential, and exhausted attempts publish no branch or PR.
 
+The family matrix is submitted in ascending estimated model bytes, with family
+name breaking ties. Balanced shard membership remains unchanged. This puts
+small models first in the canary's one-family-per-job matrix; parallel runner
+availability can still change actual start and completion order.
+
+Partial GitHub reruns may reuse an earlier producer attempt from the same run
+only through the exact dependency-provided identity digest. Producer provenance
+and all source/plan/executable checks remain immutable. Family artifacts are
+namespaced by that identity and worker attempt. Aggregation chooses the newest
+receipt per family, rejects duplicate same-attempt receipts and invalid attempt
+bounds, and never falls back from a newer failure to an older success. The
+family job-result gate remains mandatory so missing uploads cannot hide failures.
+Failed certifications upload their evidence and then fail the family job, so
+GitHub's failed-job rerun can select them instead of only retrying aggregation.
+Repair feedback retains attempt-labelled history; it is diagnostic input, never
+certification authority. Rebuilding a producer invalidates its prior receipts.
+
 ## Validation contract
 
 For every workflow or local-action edit:
