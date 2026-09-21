@@ -2208,7 +2208,20 @@ fn exchange_output_digests_from_outcome_lifts_real_digests_and_omits_otherwise()
     };
     assert_eq!(exchange_output_digests_from_outcome(&with_digests), digests);
 
-    // Every non-`RespondedWithUsage` outcome yields an all-`None` bundle.
+    // A delivered body with no `usage` still publishes its digests: the
+    // no-usage outcome carries the same bundle. This is the shape a JSON
+    // error relay (`relay_error_response`) and any backend that omits the
+    // OpenAI `usage` object produce.
+    let without_usage = proxy::RouteDispatchOutcome::RespondedWithDigests {
+        status_code: 200,
+        output_digests: digests,
+    };
+    assert_eq!(
+        exchange_output_digests_from_outcome(&without_usage),
+        digests
+    );
+
+    // Every non-delivered outcome yields an all-`None` bundle.
     assert_eq!(
         exchange_output_digests_from_outcome(&proxy::RouteDispatchOutcome::Responded(200)),
         Default::default()
@@ -2234,4 +2247,61 @@ fn exchange_output_digests_from_outcome_lifts_real_digests_and_omits_otherwise()
         exchange_output_digests_from_outcome(&without_digests),
         Default::default()
     );
+}
+
+/// Digests are independent of the backend reporting `usage` (PR #1946 review
+/// regression): a delivered attempt whose body was captured still reports its
+/// digests when `usage` is absent — otherwise the digest is computed and then
+/// dropped one layer short of the envelope. Only an attempt that captured
+/// nothing at all stays a bare `Responded`.
+#[test]
+fn delivered_outcome_carries_digests_without_usage() {
+    use mesh_llm_events::logging::events::TokenUsage;
+
+    let digests = crate::plugin::openai_exchange::ExchangeOutputDigests {
+        response: Some([0x5a; 32]),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        proxy::delivered_outcome(200, None, digests),
+        proxy::RouteDispatchOutcome::RespondedWithDigests {
+            status_code: 200,
+            output_digests: digests,
+        }
+    );
+    assert_eq!(
+        proxy::delivered_outcome(200, None, Default::default()),
+        proxy::RouteDispatchOutcome::Responded(200),
+        "nothing captured means nothing to carry"
+    );
+
+    // A usage-bearing delivery is unchanged, bundle included.
+    let usage = TokenUsage {
+        prompt_tokens: Some(1),
+        cached_prompt_tokens: None,
+        completion_tokens: Some(1),
+        total_tokens: Some(2),
+    };
+    assert_eq!(
+        proxy::delivered_outcome(200, Some(usage), digests),
+        proxy::RouteDispatchOutcome::RespondedWithUsage {
+            status_code: 200,
+            usage,
+            output_digests: digests,
+        }
+    );
+
+    // The new variant classifies the same way `Responded` does, so a
+    // digest-bearing outcome cannot change how the terminal log reads.
+    for status_code in [200_u16, 503] {
+        assert_eq!(
+            proxy::RouteDispatchOutcome::RespondedWithDigests {
+                status_code,
+                output_digests: digests,
+            }
+            .terminal_outcome(),
+            proxy::RouteDispatchOutcome::Responded(status_code).terminal_outcome()
+        );
+    }
 }
