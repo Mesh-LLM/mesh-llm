@@ -62,6 +62,7 @@ async fn fragmented_exchange() -> Result<()> {
     let invoice = seller.create_invoice(Some(40)).await?;
     let input = Frame::InputInvoice {
         terms: mesh_llm_payments::ledger::RequestTerms {
+            exchange_id: None,
             id: id.clone(),
             peer: peer.to_string(),
             payee: Some(invoice.payee.clone()),

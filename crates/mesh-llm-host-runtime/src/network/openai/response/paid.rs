@@ -121,7 +121,9 @@ async fn start(
     raw: &[u8],
     price: Pricing,
 ) -> Result<StartedExchange> {
-    let request = PaidRequest::parse(raw)?;
+    let mut request = PaidRequest::parse(raw)?;
+    // Ignore client-supplied correlation; use the host-minted evidence scope.
+    request.exchange_id = crate::network::payments::lifecycle::exchange_id();
     let (mut send, recv) = node.open_http_tunnel(peer).await?;
     let service = node.payment_service().await?;
     ensure!(
@@ -210,6 +212,7 @@ pub(crate) async fn exchange(
         "fixed-amount inference invoice required"
     );
     // Peer identity is from authenticated QUIC, never a peer-supplied field.
+    terms.exchange_id = request.exchange_id.clone();
     terms.peer = peer.to_string();
     terms.payee = Some(invoice.payee.clone());
     tokio::select! {

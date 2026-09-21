@@ -16,6 +16,7 @@ use crate::{
 };
 
 mod failure_boundaries;
+mod lifecycle;
 mod payment_notifications;
 mod provisioning;
 mod recovery_boundaries;
@@ -43,6 +44,7 @@ fn invoice_with_expiry(number: u8, amount: u64, seconds: u64) -> Invoice {
 
 fn terms(id: &str, cap: u64) -> RequestTerms {
     RequestTerms {
+        exchange_id: None,
         id: id.into(),
         peer: "peer".into(),
         payee: None,

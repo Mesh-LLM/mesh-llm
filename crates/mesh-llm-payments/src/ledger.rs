@@ -1,5 +1,6 @@
 //! SQLite owns approvals and reservations across processes and restarts.
 
+mod lifecycle;
 mod migrations;
 pub mod receivables;
 
@@ -49,6 +50,9 @@ impl Policy {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RequestTerms {
     pub id: String,
+    /// Public evidence correlation, never the bearer payment recovery ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exchange_id: Option<String>,
     pub peer: String,
     #[serde(default)]
     pub payee: Option<String>,
@@ -78,6 +82,7 @@ pub struct Charge {
 
 pub struct Ledger {
     connection: Mutex<Connection>,
+    events: tokio::sync::broadcast::Sender<crate::lifecycle::PaymentEvent>,
 }
 
 impl Ledger {
@@ -93,6 +98,7 @@ impl Ledger {
         migrations::initialize(&mut connection)?;
         Ok(Self {
             connection: Mutex::new(connection),
+            events: tokio::sync::broadcast::channel(256).0,
         })
     }
 
@@ -261,6 +267,8 @@ impl Ledger {
         }
         transaction.execute("UPDATE requests SET state='approved' WHERE id=?", [id])?;
         transaction.commit()?;
+        drop(connection);
+        self.observe_payment(id);
         Ok(())
     }
 
@@ -407,6 +415,8 @@ impl Ledger {
         );
         transaction.execute("INSERT INTO charges(hash,request_id,segment,invoice,amount,max_total,state,total) VALUES (?1,?2,?3,?4,?5,?6,'prepared',0)", params![charge.invoice.payment_hash,charge.request_id,charge.segment,charge.invoice.bolt11,sql_amount(charge.amount_msat)?,sql_amount(charge.max_total_msat)?])?;
         transaction.commit()?;
+        drop(connection);
+        self.observe_payment(&charge.request_id);
         Ok(true)
     }
 
@@ -464,6 +474,8 @@ impl Ledger {
         )?;
         finalize_terminal_requests(&transaction)?;
         transaction.commit()?;
+        drop(connection);
+        self.observe_payment(&request_id);
         Ok(())
     }
 
@@ -504,6 +516,8 @@ impl Ledger {
             changed == 1 || completed,
             "request has uncertain payments or is not approved"
         );
+        drop(connection);
+        self.observe_payment(id);
         Ok(())
     }
 }

@@ -77,6 +77,7 @@ impl Ledger {
     pub fn finish_serving(&self, id: &str) -> Result<()> {
         self.lock()?
             .execute("UPDATE serving_accounting SET finished=1 WHERE id=?", [id])?;
+        self.observe_payment(id);
         Ok(())
     }
 
@@ -116,6 +117,8 @@ impl Ledger {
             "unknown serving request"
         );
         connection.execute("INSERT INTO receivables(hash,request_id,peer,segment,invoice,tokens,state) VALUES (?1,?2,?3,?4,?5,?6,'unpaid')", params![receipt.invoice.payment_hash,receipt.request_id,receipt.peer,receipt.segment,receipt.invoice.bolt11,sql_amount(receipt.tokens)?])?;
+        drop(connection);
+        self.observe_payment(&receipt.request_id);
         Ok(())
     }
 
@@ -147,8 +150,19 @@ impl Ledger {
     }
 
     pub fn mark_received(&self, hash: &str) -> Result<()> {
-        self.lock()?
-            .execute("UPDATE receivables SET state='paid' WHERE hash=?", [hash])?;
+        let connection = self.lock()?;
+        connection.execute("UPDATE receivables SET state='paid' WHERE hash=?", [hash])?;
+        let id: Option<String> = connection
+            .query_row(
+                "SELECT request_id FROM receivables WHERE hash=?",
+                [hash],
+                |r| r.get(0),
+            )
+            .optional()?;
+        drop(connection);
+        if let Some(id) = id {
+            self.observe_payment(&id);
+        }
         Ok(())
     }
 

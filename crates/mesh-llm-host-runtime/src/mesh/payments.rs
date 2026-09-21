@@ -40,6 +40,7 @@ impl super::Node {
                 .get_or_try_init(|| async {
                     let directory = self.config_state.lock().await.payment_directory();
                     let service = Arc::new(PaymentService::open(&directory)?);
+                    crate::network::payments::lifecycle::subscribe(self.clone(), &service);
                     let recovery_service = Arc::downgrade(&service);
                     let node = self.clone();
                     tokio::spawn(async move {

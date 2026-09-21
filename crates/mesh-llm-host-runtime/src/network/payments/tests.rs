@@ -346,7 +346,9 @@ async fn paid_exchange(
         .await?;
     let (mut send, recv) = connection.open_bi().await?;
     let id = uuid::Uuid::new_v4().to_string();
-    let request = paid_request(requested)?;
+    let mut request = paid_request(requested)?;
+    let evidence_id = uuid::Uuid::new_v4().to_string();
+    request.exchange_id = Some(evidence_id.clone());
     wire::write(
         &mut send,
         &Frame::Request {
@@ -392,6 +394,7 @@ async fn paid_exchange(
         payer_service.ledger.requests()?[0].terms.max_output_tokens,
         u64::from(output_allowance)
     );
+    assert_evidence_correlation(&payer_service, &provider_service, &evidence_id)?;
     payer.endpoint.close().await;
     provider.endpoint.close().await;
     Ok(())
@@ -501,4 +504,26 @@ fn allow_paid(service: &PaymentService) -> Result<()> {
             max_output_msat_per_million: 1_000_000,
             max_total_msat: 100_000,
         })
+}
+
+fn assert_evidence_correlation(
+    payer_service: &PaymentService,
+    provider_service: &PaymentService,
+    evidence_id: &str,
+) -> Result<()> {
+    let request_id = payer_service.ledger.requests()?[0].terms.id.clone();
+    let payer_events = payer_service.ledger.payment_observations(&request_id)?;
+    let provider_events = provider_service.ledger.payment_observations(&request_id)?;
+    assert!(!payer_events.is_empty() && !provider_events.is_empty());
+    assert!(
+        payer_events
+            .iter()
+            .chain(&provider_events)
+            .all(|event| event.exchange_id == evidence_id)
+    );
+    assert_eq!(
+        payer_events[0].terms_digest,
+        provider_events[0].terms_digest
+    );
+    Ok(())
 }

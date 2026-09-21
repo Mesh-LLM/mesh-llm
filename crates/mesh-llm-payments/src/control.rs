@@ -165,6 +165,7 @@ impl PaymentService {
         // The payment hash is the idempotency key, including retries after a
         // CLI disconnect or node restart. Changing its authorization is refused.
         self.ledger.propose(&RequestTerms {
+            exchange_id: None,
             id: id.clone(),
             peer: "wallet-send".into(),
             payee: Some(invoice.payee.clone()),
