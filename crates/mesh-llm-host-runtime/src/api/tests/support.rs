@@ -561,7 +561,7 @@ async fn spawn_management_test_server_on(
     let addr = listener.local_addr().unwrap();
     let handle = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        handle_request(stream, &state).await
+        Box::pin(handle_request(stream, &state)).await
     });
     (addr, handle)
 }
