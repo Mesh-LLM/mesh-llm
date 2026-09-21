@@ -1,0 +1,63 @@
+From 9399a717910cfec70f8bc8bb62b548288226cbc0 Mon Sep 17 00:00:00 2001
+From: sat <sat@local>
+Date: Mon, 21 Sep 2026 15:28:06 +1000
+Subject: [PATCH] skippy: SAT per-ubatch graph trace (SKIPPY_GRAPH_TRACE)
+
+---
+ src/llama-context.cpp | 26 +++++++++++++++++++++++++-
+ 1 file changed, 25 insertions(+), 1 deletion(-)
+
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 4843b073f..814a487f8 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -1420,7 +1420,8 @@ llm_graph_result * llama_context::process_ubatch(
+     // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
+     const auto gparams = graph_params(res, ubatch, mctx, gtype, graph_build_inputs);
+ 
+-    if (!graph_reuse_disable && res->can_reuse(gparams)) {
++    const bool sat_reuse_ok = !graph_reuse_disable && res->can_reuse(gparams);
++    if (sat_reuse_ok) {
+         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
+ 
+         // with pipeline parallelism, the previous graph_compute_async may still be running
+@@ -1466,6 +1467,16 @@ llm_graph_result * llama_context::process_ubatch(
+         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
+     }
+ 
++    // SAT instrumentation: per-ubatch graph trace, enabled by SKIPPY_GRAPH_TRACE=1.
++    // Reports batch shape, whether the graph was reused, node and split counts and
++    // the synchronized wall time of the compute, on a log scale then every 500th.
++    static const bool graph_trace = [] {
++        const char * value = getenv("SKIPPY_GRAPH_TRACE");
++        return value != nullptr && value[0] != '\0' && value[0] != '0';
++    }();
++    const bool reused_now = sat_reuse_ok;
++    const int64_t t_trace_start_us = graph_trace ? ggml_time_us() : 0;
++
+     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
+     if (status != GGML_STATUS_SUCCESS) {
+         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
+@@ -1473,6 +1484,19 @@ llm_graph_result * llama_context::process_ubatch(
+         return nullptr;
+     }
+ 
++    if (graph_trace) {
++        static uint64_t trace_count = 0;
++        ggml_backend_sched_synchronize(sched.get());
++        const int64_t t_us = ggml_time_us() - t_trace_start_us;
++        ++trace_count;
++        const bool pow2 = (trace_count & (trace_count - 1)) == 0;
++        if (pow2 || trace_count % 500 == 0) {
++            LLAMA_LOG_WARN("SAT-TRACE ubatch=%" PRIu64 " n_tokens=%u n_seqs=%u n_outputs=%u reused=%d nodes=%d splits=%d compute_us=%" PRId64 "\n",
++                    trace_count, ubatch.n_tokens, ubatch.n_seqs, n_outputs, reused_now ? 1 : 0,
++                    ggml_graph_n_nodes(res->get_gf()), ggml_backend_sched_get_n_splits(sched.get()), t_us);
++        }
++    }
++
+     ret = GGML_STATUS_SUCCESS;
+ 
+     return res;
+-- 
+2.50.1 (Apple Git-155)
+
