@@ -31,7 +31,7 @@ pub(super) async fn route(
         )
         .await;
     }
-    let (pipe, mut ready, cancel) = match start(node, peer, raw, price).await {
+    let (pipe, mut ready, cancel) = match start(node, peer, raw, price, logging.exchange_id).await {
         Ok(pipe) => pipe,
         Err(_) => return payment_error(client, "could not start paid inference").await,
     };
@@ -120,6 +120,7 @@ async fn start(
     peer: iroh::EndpointId,
     raw: &[u8],
     price: Pricing,
+    exchange_id: Option<&str>,
 ) -> Result<StartedExchange> {
     let request = PaidRequest::parse(raw)?;
     let (mut send, recv) = node.open_http_tunnel(peer).await?;
@@ -143,6 +144,7 @@ async fn start(
     let (pipe, mut output) = tokio::io::duplex(64 * 1024);
     let (ready, wait_ready) = tokio::sync::oneshot::channel();
     let (cancel, cancellation) = tokio::sync::watch::channel(false);
+    let evidence = exchange_id.map(|id| (node.clone(), id.to_owned()));
     tokio::spawn(async move {
         let result = exchange(
             service,
@@ -155,6 +157,7 @@ async fn start(
             &mut output,
             ready,
             cancellation,
+            evidence,
         )
         .await;
         if result.is_err() {
@@ -178,6 +181,7 @@ pub(crate) async fn exchange(
     output: &mut DuplexStream,
     ready: tokio::sync::oneshot::Sender<()>,
     mut cancellation: tokio::sync::watch::Receiver<bool>,
+    evidence: Option<(Node, String)>,
 ) -> Result<()> {
     let Frame::InputInvoice { mut terms, invoice } = wire::read(&mut recv).await? else {
         bail!("expected input invoice");
@@ -210,6 +214,7 @@ pub(crate) async fn exchange(
         "fixed-amount inference invoice required"
     );
     // Peer identity is from authenticated QUIC, never a peer-supplied field.
+    terms.exchange_id = evidence.as_ref().map(|(_, id)| id.clone());
     terms.peer = peer.to_string();
     terms.payee = Some(invoice.payee.clone());
     tokio::select! {
@@ -225,6 +230,11 @@ pub(crate) async fn exchange(
         let _ = wire::write(&mut send, &Frame::Cancel).await;
         bail!("client payment intent changed before submission");
     }
+    let observations =
+        super::paid_events::Observations::for_exchange(evidence.as_ref(), &terms).await;
+    observations.accepted(terms.max_total_msat);
+    observations.invoice(0, &invoice);
+    let mut accounted_msat = 0u64;
     // Start durable submission and terminal reconciliation, then read the
     // provider stream concurrently. The provider releases output only after
     // its own receiving wallet sees the payment arrive, so the payer's later
@@ -248,7 +258,9 @@ pub(crate) async fn exchange(
         let frame = loop {
             tokio::select! {
                 result = &mut input_payment, if !input_settled => {
-                    result.context("input payment task failed")??;
+                    let payment = result.context("input payment task failed")??;
+                    accounted_msat = accounted_msat.saturating_add(payment.amount_msat).saturating_add(payment.fee_msat);
+                    observations.settled(0, &payment);
                     input_settled = true;
                 }
                 frame = &mut reading => break frame?,
@@ -275,14 +287,24 @@ pub(crate) async fn exchange(
                     !output_settled && request_id == id,
                     "unexpected output invoice"
                 );
-                settle_output(&service, &terms, tokens, invoice).await?;
+                observations.invoice(1, &invoice);
+                let payment = settle_output(&service, &terms, tokens, invoice).await?;
+                accounted_msat = accounted_msat
+                    .saturating_add(payment.amount_msat)
+                    .saturating_add(payment.fee_msat);
+                observations.settled(1, &payment);
                 output_settled = true;
             }
             Frame::Complete => {
                 if !input_settled {
-                    input_payment.await.context("input payment task failed")??;
+                    let payment = input_payment.await.context("input payment task failed")??;
+                    accounted_msat = accounted_msat
+                        .saturating_add(payment.amount_msat)
+                        .saturating_add(payment.fee_msat);
+                    observations.settled(0, &payment);
                 }
                 service.ledger.finish(&id)?;
+                observations.final_amount(accounted_msat);
                 return Ok(());
             }
             _ => bail!("invalid payment exchange frame"),
@@ -295,7 +317,7 @@ pub(crate) async fn settle_output(
     terms: &RequestTerms,
     tokens: u64,
     invoice: mesh_llm_payments::invoice::Invoice,
-) -> Result<()> {
+) -> Result<mesh_llm_payments::wallet::Transaction> {
     ensure!(
         tokens > 0 && tokens <= terms.max_output_tokens,
         "output token allowance exceeded"
@@ -319,8 +341,7 @@ pub(crate) async fn settle_output(
                 .checked_add(FEE_ALLOWANCE_MSAT)
                 .context("fee overflow")?,
         })
-        .await?;
-    Ok(())
+        .await
 }
 
 pub(super) fn effective_intent(
@@ -366,6 +387,7 @@ mod tests {
                     minimum_invoice_msat: 1,
                 },
                 RouteAttemptLoggingContext {
+                    exchange_id: None,
                     request_id: Default::default(),
                     retry_policy: ResponseRetryPolicy::next_target_available(false),
                     response_adapter:

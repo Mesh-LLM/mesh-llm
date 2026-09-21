@@ -32,5 +32,6 @@ pub(crate) use send::{
 };
 
 pub(crate) mod paid;
+mod paid_events;
 
 pub(crate) mod payment_recovery;

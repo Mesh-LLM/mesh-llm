@@ -4,6 +4,7 @@ use super::*;
 #[cfg(test)]
 fn terms(id: &str, cap: u64) -> RequestTerms {
     RequestTerms {
+        exchange_id: None,
         id: id.into(),
         peer: "peer".into(),
         payee: None,
@@ -116,4 +117,27 @@ fn approvals_cannot_change_terms_or_revive_rejected_requests() {
             })
             .is_err()
     );
+}
+
+#[test]
+fn evidence_correlation_survives_reopen_without_schema_change() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let mut request = terms("private-recovery", 100);
+    request.exchange_id = Some("public-exchange".into());
+    let ledger = Ledger::open(directory.path())?;
+    ledger.propose(&request)?;
+    drop(ledger);
+    let reopened = Ledger::open(directory.path())?;
+    assert_eq!(
+        reopened.requests()?[0].terms.exchange_id,
+        request.exchange_id
+    );
+    let mut legacy = serde_json::to_value(&request)?;
+    legacy.as_object_mut().unwrap().remove("exchange_id");
+    assert!(
+        serde_json::from_value::<RequestTerms>(legacy)?
+            .exchange_id
+            .is_none()
+    );
+    Ok(())
 }

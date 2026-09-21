@@ -25,6 +25,7 @@ pub(in crate::network::openai::response) fn sse_data_frame_is_openai_error(data:
 
 #[derive(Clone, Copy)]
 pub(in crate::network::openai) struct RouteAttemptLoggingContext<'a> {
+    pub(in crate::network::openai) exchange_id: Option<&'a str>,
     pub(in crate::network::openai) request_id: RequestId,
     pub(in crate::network::openai) retry_policy: ResponseRetryPolicy,
     pub(in crate::network::openai) response_adapter: ResponseAdapter,

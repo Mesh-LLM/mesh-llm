@@ -3,6 +3,7 @@ use crate::network::openai::routing_rank::{RankedCandidates, rank_targets_by_con
 use crate::network::reservations::RoutingReservation;
 
 pub(crate) struct RouteModelRequestContext<'a> {
+    pub(crate) exchange_id: Option<&'a str>,
     pub(crate) required_tokens: Option<u32>,
     pub(crate) affinity: &'a AffinityRouter,
     pub(crate) route_observer: OpenAiRouteObserver<'a>,
@@ -33,6 +34,7 @@ pub async fn route_model_request(
         targets,
         model,
         request,
+        exchange_id: context.exchange_id,
         required_tokens: context.required_tokens,
         affinity: context.affinity,
         route_observer: context.route_observer,
@@ -48,6 +50,7 @@ struct RouteModelRequestArgs<'a> {
     targets: &'a election::ModelTargets,
     model: &'a str,
     request: &'a BufferedHttpRequest,
+    exchange_id: Option<&'a str>,
     required_tokens: Option<u32>,
     affinity: &'a AffinityRouter,
     route_observer: OpenAiRouteObserver<'a>,
@@ -105,6 +108,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         model,
         request,
         required_tokens,
+        exchange_id,
         affinity,
         route_observer,
         served_by_header,
@@ -195,6 +199,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
             forwarding_raw,
             retry_policy,
             RouteAttemptLoggingContext {
+                exchange_id,
                 request_id: request.request_id,
                 retry_policy,
                 response_adapter: request.response_adapter,
@@ -1101,6 +1106,7 @@ mod tests {
             model,
             &request,
             RouteModelRequestContext {
+                exchange_id: None,
                 required_tokens: None,
                 affinity: &affinity,
                 route_observer: OpenAiRouteObserver::default(),

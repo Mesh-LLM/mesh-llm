@@ -155,6 +155,7 @@ impl Authorization {
         self.events
             .send(GateEvent::InputInvoice(Box::new(Frame::InputInvoice {
                 terms: RequestTerms {
+                    exchange_id: None,
                     id: self.request_id.clone(),
                     peer: self.peer.clone(),
                     payee: Some(invoice.payee.clone()),

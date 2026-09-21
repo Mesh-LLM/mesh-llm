@@ -48,6 +48,9 @@ impl Policy {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RequestTerms {
+    /// Host evidence correlation, separate from the private recovery capability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exchange_id: Option<String>,
     pub id: String,
     pub peer: String,
     #[serde(default)]

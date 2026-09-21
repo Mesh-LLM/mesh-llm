@@ -27,6 +27,7 @@ pub(in crate::network::openai) async fn route_local_attempt(
     logging: RouteAttemptLoggingContext<'_>,
 ) -> RouteAttemptResult {
     let RouteAttemptLoggingContext {
+        exchange_id: _,
         request_id,
         retry_policy,
         response_adapter,
@@ -229,6 +230,7 @@ pub(in crate::network::openai) async fn route_remote_attempt(
     logging: RouteAttemptLoggingContext<'_>,
 ) -> RouteAttemptResult {
     let RouteAttemptLoggingContext {
+        exchange_id: _,
         request_id,
         retry_policy,
         response_adapter,

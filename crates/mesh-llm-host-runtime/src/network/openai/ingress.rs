@@ -858,6 +858,7 @@ async fn route_missing_local_model(
                 model_name,
                 request,
                 proxy::RouteModelRequestContext {
+                    exchange_id: Some(&exchange_id),
                     required_tokens,
                     affinity: ctx.affinity,
                     route_observer,
@@ -1417,6 +1418,7 @@ async fn route_request(
             model_name,
             request,
             proxy::RouteModelRequestContext {
+                exchange_id: announce.as_ref().map(|(_, id)| id.as_str()),
                 required_tokens,
                 affinity: ctx.affinity,
                 route_observer,

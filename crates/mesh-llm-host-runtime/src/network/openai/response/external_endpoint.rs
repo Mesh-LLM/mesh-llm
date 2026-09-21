@@ -26,6 +26,7 @@ pub(in crate::network::openai) async fn route_http_endpoint_attempt(
     logging: RouteAttemptLoggingContext<'_>,
 ) -> RouteAttemptResult {
     let RouteAttemptLoggingContext {
+        exchange_id: _,
         request_id,
         retry_policy,
         response_adapter,

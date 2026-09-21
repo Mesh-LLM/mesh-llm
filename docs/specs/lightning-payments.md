@@ -492,3 +492,41 @@ age describes peer contact, not a guaranteed quote timestamp. Mixed free/paid
 providers remain separate offers. Local advertised seller prices describe remote
 service; ordinary local inference does not pay itself. Unknown external-plugin
 pricing is not inferred from these offers. Invoice terms remain authoritative.
+
+## Payer-side evidence hooks
+
+`RequestTerms.exchange_id` optionally retains the host's existing OpenAI evidence
+exchange ID in the payer's existing JSON terms record. It is not the private
+payment recovery ID. Older records omit it; there is no SQL schema migration.
+The provider protocol and provider evidence emission are unchanged.
+
+A trusted local plugin declaring `payment.lifecycle.v1` can observe the active
+payer exchange: `terms_accepted`, `input_invoice_issued`,
+`input_settlement_observed`, `output_invoice_issued`,
+`output_settlement_observed`, and `final_accounted`. Subscribe to
+`openai.exchange.v1` as well to obtain the host exchange and join on `exchange_id`.
+Events contain `exchange_id`, stable `event_ref`, `terms_digest`, `phase`, `source`,
+nullable `segment` (0=input, 1=output), nullable `payment_hash`, nullable
+`settlement` (`terminal` for wallet success), and `amount_msat`.
+Terms acceptance is `payer_asserted` (amount is the approved cap); invoice issuance
+is `provider_asserted` as observed by the payer, not independently verified
+issuance. Settlement is `wallet_reported`, amount excluding fees. Final accounting
+is `payer_asserted`, summing successful debits including fees. No provider-side
+claiming observation is implied by this payer-only stream.
+
+The terms digest is lowercase SHA-256 over checked JCS JSON using the existing
+host `request_body_digest` helper, applied to the object containing exactly
+`exchange_id`, `payee`, `model`, `pricing`, `input_tokens`, `max_output_tokens`,
+`max_total_msat`, and `expires_at_ms` (including nulls). Pricing retains its three
+named rate/minimum fields. Recovery ID and local peer are excluded. Event refs
+use the same construction over the event object with `event_ref` set to `""`.
+Integers outside the helper's safe range suppress evidence, not payment.
+
+An eight-event per-exchange queue and one-second publication timeout bound
+best-effort delivery. No plugin delivery is awaited by settlement; terms hashing
+is skipped without a subscriber. No per-token observation is added. Missing
+correlation, disconnects, queue drops, process exits and restart recovery can
+leave incomplete evidence; there is no replay or complete audit-log guarantee.
+The persisted correlation remains available to recovery tooling, but recovery
+currently emits no events. No raw invoice, preimage, wallet transaction ID,
+prompt or response text is published. Payment hashes are linkable metadata.

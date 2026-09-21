@@ -766,6 +766,7 @@ async fn route_mesh_request_attempts(
             &request.raw,
             ResponseRetryPolicy::next_target_available(idx + 1 < total_targets),
             RouteAttemptLoggingContext {
+                exchange_id: None,
                 request_id: request.request_id,
                 retry_policy: ResponseRetryPolicy::next_target_available(idx + 1 < total_targets),
                 response_adapter: request.response_adapter,
@@ -1357,6 +1358,7 @@ async fn route_attempt_for_target(
     logging: RouteAttemptLoggingContext<'_>,
 ) -> RouteAttemptResult {
     let logging = RouteAttemptLoggingContext {
+        exchange_id: None,
         retry_policy,
         ..logging
     };
@@ -1408,6 +1410,7 @@ async fn route_local_transport_attempt(
     logging: RouteAttemptLoggingContext<'_>,
 ) -> RouteAttemptResult {
     let logging = RouteAttemptLoggingContext {
+        exchange_id: None,
         retry_policy,
         ..logging
     };
@@ -1473,6 +1476,7 @@ async fn route_remote_transport_attempt(
     logging: RouteAttemptLoggingContext<'_>,
 ) -> RouteAttemptResult {
     let logging = RouteAttemptLoggingContext {
+        exchange_id: None,
         retry_policy,
         ..logging
     };
@@ -1562,6 +1566,7 @@ pub async fn route_to_target(
         prefetched,
         retry_policy,
         RouteAttemptLoggingContext {
+            exchange_id: None,
             request_id,
             retry_policy,
             response_adapter,
@@ -1655,6 +1660,7 @@ pub async fn route_http_endpoint_request(
         &request.raw,
         &request.path,
         RouteAttemptLoggingContext {
+            exchange_id: None,
             request_id: request.request_id,
             retry_policy: ResponseRetryPolicy::next_target_available(false),
             response_adapter: request.response_adapter,

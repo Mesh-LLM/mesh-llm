@@ -361,6 +361,7 @@ async fn paid_exchange(
     let (ready, _ready_receiver) = tokio::sync::oneshot::channel();
     let (cancel, cancellation) = tokio::sync::watch::channel(false);
     let payer_for_exchange = payer_service.clone();
+    let evidence = Some((payer.clone(), "host-evidence-id".to_owned()));
     let exchange = tokio::spawn(async move {
         crate::network::openai::test_payment_exchange(
             payer_for_exchange,
@@ -373,6 +374,7 @@ async fn paid_exchange(
             &mut output,
             ready,
             cancellation,
+            evidence,
         )
         .await
     });
@@ -382,6 +384,7 @@ async fn paid_exchange(
     release_held_payment_after_backend_output(hold_input_payment, &network, &mut receiver).await?;
     let response = receive_and_cancel(&mut receiver, cancel_after_output, cancel).await?;
     exchange.await??;
+    assert_payer_correlation(&payer_service)?;
     assert!(response.contains("test output"));
     let (_server_connection, result) = serving.await??;
     result?;
@@ -501,4 +504,12 @@ fn allow_paid(service: &PaymentService) -> Result<()> {
             max_output_msat_per_million: 1_000_000,
             max_total_msat: 100_000,
         })
+}
+
+fn assert_payer_correlation(service: &PaymentService) -> Result<()> {
+    assert_eq!(
+        service.ledger.requests()?[0].terms.exchange_id.as_deref(),
+        Some("host-evidence-id")
+    );
+    Ok(())
 }
