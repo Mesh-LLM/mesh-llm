@@ -6,7 +6,7 @@ use super::{
     configure_run_auto_process_state, emit_shutdown, openai_guardrail_policy_handle,
     preflight_pinned_startup_models, resolve_local_model_only_startup_models,
     runtime_model_required_bytes, skippy_telemetry_options, start_local_openai_model,
-    startup_device_override, wait_shutdown_signal,
+    startup_device_override, wait_for_shutdown_signal,
 };
 use crate::inference::election;
 use crate::plugin;
@@ -407,7 +407,7 @@ async fn wait_for_openai_exit_or_shutdown(
     let mut interval = tokio::time::interval(OPENAI_STATUS_POLL_INTERVAL);
     loop {
         tokio::select! {
-            signal = wait_shutdown_signal() => return Ok(signal),
+            signal = wait_for_shutdown_signal() => return Ok(signal),
             _ = interval.tick() => {
                 let status = model.openai_server_status();
                 match status.state {

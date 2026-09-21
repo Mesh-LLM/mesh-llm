@@ -247,6 +247,12 @@ pub(super) async fn run_runtime_cli(
     legacy_warning: Option<String>,
     embedded_control_rx: Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
 ) -> Result<()> {
+    // Register termination-signal handling before any startup work. Startup
+    // publishes readiness well before the serving loops await the signal, so a
+    // handler installed at loop entry can miss a SIGTERM that arrives in
+    // between and leave the daemon running until it is killed (#1812).
+    super::shutdown_signal::install_shutdown_signals();
+
     options.validate_discovery_mode_args()?;
 
     if let Some(warning) = legacy_warning {
