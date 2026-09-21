@@ -108,6 +108,14 @@ Definite preflight rejection and terminal failure close unused authorization,
 while uncertain sibling charges remain reserved. Successful standalone sends
 also release their unused fee allowance during recovery without needing the
 original CLI or GUI caller to return.
+Startup releases abandoned approvals only when no charge was ever recorded.
+Live cancellation atomically closes pending or approved requests only before
+charge preparation; periodic reconciliation does not sweep live approvals.
+Prepared and uncertain charges retain their reservations.
+
+Recovery refreshes input receipts from authoritative wallet status, including
+zero-output requests. Output invoices require terminal input success; claiming,
+unknown, failed, or unavailable input status preserves debt without invoicing it.
 Recovery never reruns inference. Delivered-output debt survives provider restart;
 KV state does not. No payment retry can replace a recorded segment invoice.
 Receiving-wallet identity is pinned by the input invoice's signed payee key.

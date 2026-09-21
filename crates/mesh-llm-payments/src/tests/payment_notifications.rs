@@ -1,7 +1,12 @@
 use super::*;
 use std::time::Duration;
 
-fn publish(wallet: &MockWallet, invoice: &Invoice, inbound: bool, status: PaymentStatus) {
+pub(super) fn publish(
+    wallet: &MockWallet,
+    invoice: &Invoice,
+    inbound: bool,
+    status: PaymentStatus,
+) {
     wallet.payments.lock().unwrap().insert(
         invoice.payment_hash.clone(),
         Transaction {

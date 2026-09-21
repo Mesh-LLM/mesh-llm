@@ -264,6 +264,19 @@ impl Ledger {
         Ok(())
     }
 
+    /// Run only while opening the exclusively locked service, before live approvals.
+    pub fn close_abandoned_approvals(&self) -> Result<()> {
+        self.lock()?.execute("UPDATE requests SET state='failed' WHERE state='approved' AND NOT EXISTS(SELECT 1 FROM charges WHERE request_id=requests.id)", [])?;
+        Ok(())
+    }
+
+    /// Serialize cancellation with approval and charge preparation in SQLite.
+    /// Any recorded charge retains ownership of settlement and its reservation.
+    pub fn cancel_unstarted(&self, id: &str) -> Result<()> {
+        self.lock()?.execute("UPDATE requests SET state='rejected' WHERE id=?1 AND state IN ('pending','approved') AND NOT EXISTS(SELECT 1 FROM charges WHERE request_id=?1)", [id])?;
+        Ok(())
+    }
+
     pub fn reject(&self, id: &str) -> Result<()> {
         let changed = self.lock()?.execute(
             "UPDATE requests SET state='rejected' WHERE id=? AND state='pending'",

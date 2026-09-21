@@ -226,6 +226,8 @@ async fn uninvoiced_debt_blocks_admission_after_crash_and_invoice_failure() -> R
         service
             .ledger
             .begin_serving("debt", "debtor", &pricing, 8)?;
+        let input = super::recovery_boundaries::record_input(&service, "debt", "debtor")?;
+        service.ledger.mark_received(&input.payment_hash)?;
         service.ledger.record_delivered_tokens("debt", 3)?;
     }
     let service = PaymentService::with_provider(dir.path(), wallet.clone())?;

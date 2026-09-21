@@ -65,6 +65,7 @@ impl PaymentService {
         fs2::FileExt::try_lock_exclusive(&process_lock)
             .context("payment service is already running; use its local API")?;
         ledger.close_interrupted_serving()?;
+        ledger.close_abandoned_approvals()?;
         ledger.finalize_terminal_requests()?;
         Ok(Self {
             ledger,
@@ -215,6 +216,16 @@ impl PaymentService {
 
     pub async fn recover_output_debt(&self) -> Result<()> {
         let mut first_error = None;
+        // Input observation tasks do not survive restart, including requests
+        // with no output or with an output invoice already persisted.
+        for receipt in self.ledger.receivables(None)? {
+            if receipt.segment == 0
+                && !receipt.paid
+                && let Err(error) = self.input_received(&receipt.request_id).await
+            {
+                first_error.get_or_insert(error);
+            }
+        }
         for id in self.ledger.uninvoiced_output()? {
             if let Err(error) = self.output_receivable(&id).await {
                 first_error.get_or_insert(error);
@@ -223,11 +234,49 @@ impl PaymentService {
         first_error.map_or(Ok(()), Err)
     }
 
+    /// Refresh the durable input receipt without treating arrival or expiry as settlement.
+    pub async fn input_received(&self, id: &str) -> Result<bool> {
+        let Some(receipt) = self
+            .ledger
+            .receivables(Some(id))?
+            .into_iter()
+            .find(|r| r.segment == 0)
+        else {
+            return Ok(false);
+        };
+        if receipt.paid {
+            return Ok(true);
+        }
+        let Some(payment) = self
+            .wallet()
+            .await?
+            .lookup(&receipt.invoice.payment_hash)
+            .await?
+        else {
+            return Ok(false);
+        };
+        validate_payment_update(&payment, &receipt.invoice.payment_hash, true)?;
+        if payment.status != PaymentStatus::Succeeded {
+            return Ok(false);
+        }
+        self.ledger.mark_received(&receipt.invoice.payment_hash)?;
+        Ok(true)
+    }
+
     pub async fn output_receivable(
         &self,
         id: &str,
     ) -> Result<Option<crate::ledger::receivables::Receivable>> {
         let _guard = self.receivable_lock.lock().await;
+        let (peer, pricing, tokens, finished) = self.ledger.serving_account(id)?;
+        ensure!(finished, "generation is still active");
+        if tokens == 0 {
+            return Ok(None);
+        }
+        ensure!(
+            self.input_received(id).await?,
+            "input settlement is not confirmed"
+        );
         if let Some(receipt) = self
             .ledger
             .receivables(Some(id))?
@@ -235,11 +284,6 @@ impl PaymentService {
             .find(|r| r.segment == 1)
         {
             return Ok(Some(receipt));
-        }
-        let (peer, pricing, tokens, finished) = self.ledger.serving_account(id)?;
-        ensure!(finished, "generation is still active");
-        if tokens == 0 {
-            return Ok(None);
         }
         let invoice = self
             .wallet()

@@ -297,7 +297,7 @@ async fn refresh_receivables(service: &PaymentService, peer: &str) -> Result<()>
     Ok(())
 }
 
-async fn recover(
+pub(super) async fn recover(
     service: &PaymentService,
     id: &str,
     writer: &mut (impl AsyncWrite + Unpin),
@@ -307,6 +307,10 @@ async fn recover(
     // when the client's ephemeral mesh identity changes after restart.
     let (_, _, _, finished) = service.ledger.serving_account(id)?;
     if !finished {
+        return wire::write(writer, &Frame::Pending).await;
+    }
+    let receipts = service.ledger.receivables(Some(id))?;
+    if receipts.iter().any(|r| r.segment == 0) && !service.input_received(id).await? {
         return wire::write(writer, &Frame::Pending).await;
     }
     if let Some(receipt) = service.output_receivable(id).await? {

@@ -18,6 +18,7 @@ use crate::{
 mod failure_boundaries;
 mod payment_notifications;
 mod provisioning;
+mod recovery_boundaries;
 mod review_regressions;
 
 fn invoice(number: u8, amount: u64) -> Invoice {

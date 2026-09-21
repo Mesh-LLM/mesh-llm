@@ -49,6 +49,7 @@ pub(super) async fn route(
         ResponseRetryPolicy::next_target_available(false),
         logging.response_adapter,
         logging.served_by,
+        logging.peer_capsule_id,
         logging.route_observer,
     )
     .await;
@@ -214,7 +215,7 @@ pub(crate) async fn exchange(
     tokio::select! {
         result = service.await_authorization(&terms) => result?,
         _ = cancellation.changed() => {
-            let _ = service.ledger.reject(&id);
+            let _ = service.ledger.cancel_unstarted(&id);
             let _ = wire::write(&mut send, &Frame::Cancel).await;
             bail!("application disconnected before approval");
         }
@@ -370,6 +371,7 @@ mod tests {
                     response_adapter:
                         crate::network::openai::request_normalize::ResponseAdapter::None,
                     served_by: None,
+                    peer_capsule_id: None,
                     route_observer: crate::logging::OpenAiRouteObserver::default(),
                 },
             )

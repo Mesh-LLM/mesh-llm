@@ -18,6 +18,16 @@ async fn sequential_admission_waits_for_terminal_output_payment() -> Result<()> 
         minimum_invoice_msat: 1,
     };
     service.ledger.begin_serving("first", "peer", &price, 8)?;
+    let invoice = service.wallet().await?.create_invoice(Some(1)).await?;
+    service.ledger.record_receivable(&Receivable {
+        request_id: "first".into(),
+        peer: "peer".into(),
+        segment: 0,
+        invoice: invoice.clone(),
+        tokens: 1,
+        paid: false,
+    })?;
+    service.ledger.mark_received(&invoice.payment_hash)?;
     service.ledger.record_delivered_tokens("first", 3)?;
     service.ledger.finish_serving("first")?;
     // Reproduce the old immediate-next-request rejection before the output
@@ -95,5 +105,67 @@ async fn admission_deadline_preserves_unpaid_debt() -> Result<()> {
             .begin_serving("second", "peer", &price, 8)
             .is_err()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn recovery_reports_pending_until_input_settles() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let network = Arc::new(Network::default());
+    let service = PaymentService::with_provider(
+        directory.path(),
+        Arc::new(TestWallet {
+            owner: 1,
+            network: network.clone(),
+        }),
+    )?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let price = Pricing {
+        input_msat_per_million: 1,
+        output_msat_per_million: 1,
+        minimum_invoice_msat: 1,
+    };
+    service.ledger.begin_serving(&id, "peer", &price, 8)?;
+    let invoice = service.wallet().await?.create_invoice(Some(1)).await?;
+    service.ledger.record_receivable(&Receivable {
+        request_id: id.clone(),
+        peer: "peer".into(),
+        segment: 0,
+        invoice: invoice.clone(),
+        tokens: 1,
+        paid: false,
+    })?;
+    service.ledger.record_delivered_tokens(&id, 3)?;
+    service.ledger.finish_serving(&id)?;
+    for status in [PaymentStatus::Pending, PaymentStatus::Failed] {
+        {
+            let mut entries = network.entries.lock().unwrap();
+            let payment = &mut entries.get_mut(&invoice.payment_hash).unwrap().1;
+            payment.status = status;
+            payment.status_msg = Some("claiming".into());
+        }
+        let (mut writer, mut reader) = tokio::io::duplex(8192);
+        super::super::server::recover(&service, &id, &mut writer).await?;
+        assert!(matches!(wire::read(&mut reader).await?, Frame::Pending));
+        assert_eq!(service.ledger.receivables(Some(&id))?.len(), 1);
+    }
+    network
+        .entries
+        .lock()
+        .unwrap()
+        .get_mut(&invoice.payment_hash)
+        .unwrap()
+        .1
+        .status = PaymentStatus::Succeeded;
+    for _ in 0..2 {
+        let (mut writer, mut reader) = tokio::io::duplex(8192);
+        super::super::server::recover(&service, &id, &mut writer).await?;
+        assert!(matches!(
+            wire::read(&mut reader).await?,
+            Frame::OutputInvoice { tokens: 3, .. }
+        ));
+        assert!(matches!(wire::read(&mut reader).await?, Frame::Complete));
+    }
+    assert_eq!(service.ledger.receivables(Some(&id))?.len(), 2);
     Ok(())
 }
