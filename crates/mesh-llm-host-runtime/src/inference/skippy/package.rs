@@ -18,6 +18,8 @@ use skippy_runtime::package::PackageGenerationInfo;
 
 use super::hash_cache::{self, SidecarDigestCache};
 
+#[cfg(test)]
+mod abi_provenance_tests;
 mod content_addressed;
 mod legacy_identity;
 
@@ -308,17 +310,9 @@ pub fn identity_from_package_v2(package_dir: &Path) -> Result<SkippyPackageIdent
         manifest.package_id == computed_package_id,
         "package-v2 manifest package_id does not match its content"
     );
-    let required_native_abi = format!(
-        "{}.{}.{}",
-        skippy_ffi::ABI_VERSION_MAJOR,
-        skippy_ffi::ABI_VERSION_MINOR,
-        skippy_ffi::ABI_VERSION_PATCH
-    );
-    anyhow::ensure!(
-        manifest.native_abi_version == required_native_abi,
-        "package-v2 native ABI {} differs from runtime ABI {required_native_abi}",
-        manifest.native_abi_version
-    );
+    // The producer's native ABI is provenance, not a package-format requirement.
+    // Schema, carrier and artifact validation govern package compatibility; the
+    // host/native-library ABI is checked separately when loading the runtime.
 
     let metadata_artifact = manifest
         .artifact_catalog
@@ -1538,17 +1532,9 @@ fn identity_from_package_v2_metadata(
         manifest.package_id == computed_package_id,
         "package-v2 manifest package_id does not match its content"
     );
-    let required_native_abi = format!(
-        "{}.{}.{}",
-        skippy_ffi::ABI_VERSION_MAJOR,
-        skippy_ffi::ABI_VERSION_MINOR,
-        skippy_ffi::ABI_VERSION_PATCH
-    );
-    anyhow::ensure!(
-        manifest.native_abi_version == required_native_abi,
-        "package-v2 native ABI {} differs from runtime ABI {required_native_abi}",
-        manifest.native_abi_version
-    );
+    // The producer's native ABI is provenance, not a package-format requirement.
+    // Schema, carrier and artifact validation govern package compatibility; the
+    // host/native-library ABI is checked separately when loading the runtime.
     let metadata_artifact = manifest
         .artifact_catalog
         .entries
