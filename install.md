@@ -51,8 +51,10 @@ installed binary:
 
 Do not make a mesh public unless the user explicitly asks. Do not post an
 invite token, credentials, host inventory, or private paths to a public service.
-An ordinary private invite is connectivity material, not a strong
-identity/admission policy. For an untrusted network or controlled membership,
+An ordinary legacy join token is connectivity material, not a bearer authorization
+credential or a strong identity/admission policy. Unpublished is not the same
+as access-controlled; the publication status `private` only means unpublished.
+For an untrusted network or controlled membership,
 stop and discuss the owner identity and trust-policy options in
 <https://meshllm.cloud/MESHES.md> before enrolling nodes.
 
@@ -368,7 +370,7 @@ Tell the user that the final command remains in the foreground and should keep
 running. If a block fails before the node joins, the main node cannot see its
 local error. Ask for the terminal output, or offer SSH-based inspection.
 
-To run a private-mesh node as a service instead of a foreground process, do not
+To run a node joining a mesh as a service instead of a foreground process, do not
 hand-edit the generated unit. `setup --service` installs a unit whose command
 is a bare `serve`, and the only non-default inputs it reads are
 `~/.mesh-llm/config.toml` and `~/.config/mesh-llm/service.env` (systemd loads

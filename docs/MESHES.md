@@ -4,6 +4,37 @@ Mesh LLM nodes expose an OpenAI-compatible inference API on `9337` and a
 management API plus optional web console on `3131`. A node can serve models,
 join as an API-only client, or do both.
 
+## Join tokens, discovery, and admission
+
+These are separate properties; a **join token** (also called an invite token)
+does not by itself mean a mesh is private:
+
+- **Token delivery:** `--join`, `--join-file`, `MESH_LLM_JOIN`, and
+  `MESH_LLM_JOIN_FILE` supply the same kind of join input. The default
+  `invite.token` file is another delivery mechanism. All can target an
+  unpublished or published mesh; reading a file does not enable admission control.
+- **Discoverability:** `--publish` advertises a mesh for discovery. A mesh you
+  create without publishing is **unpublished**, not necessarily access-controlled.
+  The existing publication status value `private` means unpublished; it is not
+  evidence of an admission policy. `--auto` discovers published meshes.
+- **Admission:** describe the actual enforced policy, such as owner allowlisting
+  or mesh version/build requirements. For a controlled private deployment,
+  configure and verify that policy on the participating nodes rather than relying
+  on the publication label or secrecy of an address.
+
+An ordinary legacy invite encodes an endpoint identity and connection addresses.
+It is connectivity material, **not a bearer authorization credential** proving
+that its holder is allowed to join or run inference. Treat it as sensitive
+connection information, but do not mistake withholding it for strong admission
+control. Signed bootstrap tokens bind mesh genesis policy and bootstrap endpoints
+and can expire; a signature does not by itself mean the joining owner is
+allowlisted. Owner trust policy is separate (see [Ownership and admission
+control](#ownership-and-admission-control)).
+
+QUIC encryption protects traffic in transit; it does not decide which peers
+are permitted to participate. This terminology clarification does not change
+token formats, admission behavior, or the existing status enum values.
+
 ## Try the public mesh
 
 ```bash
@@ -36,8 +67,8 @@ classify as `missing`; stamped packages require `--public-key-file` and
 otherwise report `invalid` with an explicit error. Even `invalid` binaries still
 follow the normal startup path unless mesh policy requires certified builds.
 
-Requirement-aware meshes use signed bootstrap tokens. Unrestricted legacy and
-private meshes still keep the older unsigned invite-token path.
+Requirement-aware meshes use signed bootstrap tokens. Unrestricted meshes can
+use the older unsigned endpoint-token path; unpublished does not imply signed or owner-restricted.
 
 Create an unrestricted mesh:
 
@@ -89,15 +120,19 @@ For an API-only node that does not serve models:
 mesh-llm client --auto
 ```
 
-## Start a private mesh
+<a id="start-a-private-mesh"></a>
+
+## Create an unpublished mesh and join by token
 
 ```bash
 mesh-llm serve --model Qwen3-8B-Q4_K_M
 ```
 
-This starts a private mesh, loads the requested model, opens the local API and
-console, and prints an invite token. Only nodes with the token can join. Traffic
-between Mesh nodes—including prompts, responses, and split-model activations—is
+This creates an unpublished mesh, loads the requested model, opens the local API
+and console, and prints a join token. Share it to let another node locate this
+mesh; configure admission policy separately if membership must be restricted.
+
+Traffic between Mesh nodes—including prompts, responses, and split-model activations—is
 end-to-end encrypted by QUIC. If iroh falls back to a relay, the relay forwards
 encrypted packets and cannot read the inference payload.
 
@@ -116,7 +151,8 @@ mesh-llm client --join <token>
 ### Join without putting the token in argv
 
 The invite token can also come from a file or from the environment, which is
-what a background service needs:
+what a background service needs. These sources work for both unpublished and
+published meshes and do not change their admission policy:
 
 ```bash
 mesh-llm serve --join-file /home/you/.mesh-llm/invite.token
@@ -146,7 +182,7 @@ empty or unreadable, rather than a node that quietly serves standalone.
 
 `mesh-llm setup --service` installs a unit that runs a bare `serve` and loads
 `~/.config/mesh-llm/service.env`, so writing the token to
-`~/.mesh-llm/invite.token` is enough to run a private-mesh node as a service
+`~/.mesh-llm/invite.token` is enough to run a node joining that mesh as a service
 with no unit edits and no env line at all;
 `MESH_LLM_JOIN_FILE=/path/to/invite.token` remains available when the token
 lives somewhere else. `MESH_LLM_JOIN` that is set but blank is an error, not a
@@ -221,8 +257,8 @@ mesh-llm serve --discover "lab-a"
 mesh-llm client --discover "lab-a"
 ```
 
-Without `--publish`, `--mesh-name` is only a local/friendly label. The mesh is
-still private unless you share the invite token.
+Without `--publish`, `--mesh-name` is only a local/friendly label. The name does
+not publish the mesh. Sharing its join token lets recipients locate it without public discovery; neither action defines admission policy.
 
 ## Blackboard privacy
 
@@ -235,8 +271,8 @@ mesh-llm plugins install blackboard
 
 On a public mesh, blackboard posts are visible to all peers in that mesh. Do not
 post secrets, credentials, private model paths, customer data, or anything that
-should not leave your trust boundary. Use a private mesh plus owner/trust flags
-when blackboard messages need to stay inside a controlled group.
+should not leave your trust boundary. Use an unpublished mesh with enforced
+owner/trust admission when blackboard messages need to stay inside a controlled group.
 
 ## Browse discovery
 
@@ -299,10 +335,14 @@ gossiped, not persisted as mesh trust, and not proof of a peer's identity or
 model honesty. See [NODE_REP.md](NODE_REP.md) for the local reputation model,
 status fields, and testing boundary.
 
-## Private ownership and trust
+<a id="private-ownership-and-trust"></a>
 
-For owner-attested private deployments, initialize an owner key and start nodes
-with the current runtime flags:
+## Ownership and admission control
+
+For controlled membership, initialize an owner key and configure owner
+allowlisting on the participating nodes. The default trust policy is `off`;
+`require-owned` requires valid ownership but is not an owner allowlist.
+`allowlist` additionally checks the owner against the local trusted-owner set:
 
 ```bash
 mesh-llm auth init

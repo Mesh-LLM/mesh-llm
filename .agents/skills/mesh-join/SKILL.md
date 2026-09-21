@@ -16,12 +16,14 @@ itself. Full reference: `docs/MESHES.md`.
 
 - A node can **serve** models (`serve`), be an **API-only client** (`client`),
   or both at once.
-- Starting `serve` with no `--join`/`--discover`/`--auto` **creates a private
-  mesh** and emits an invite token.
+- Starting `serve` without join sources or discovery **creates an unpublished
+  mesh** and emits a join token (unless `--publish` is requested).
 - `--auto` discovers published meshes (Nostr by default) and joins the best
   one — the public community mesh in practice.
-- `--publish` makes your mesh discoverable; without it the mesh is private and
-  joinable only via the invite token.
+- `--publish` makes your mesh discoverable; not publishing is not admission
+  control. An ordinary legacy join token supplies
+  connectivity information, not bearer authorization. Use explicit owner/trust
+  policy for controlled membership (see `docs/MESHES.md`).
 - Every node exposes the same OpenAI API on `:9337`; `/v1/models` returns the
   union of local + peer models and requests route by the `model` field.
 
@@ -36,7 +38,7 @@ mesh-llm client --auto                 # API-only client, no GPU needed
 Confirm joining via `discovery_joined` in the log (use `--log-format json` for
 machine-readable events) or `peers` in `/api/status`.
 
-## Private mesh: create + join
+## Unpublished mesh: create + join
 
 ```bash
 # Node A — creates the mesh, prints an invite token
@@ -55,8 +57,10 @@ mesh-llm client --join <token>
 ```
 
 `--join` is repeatable. Requirement-aware meshes (version/attestation policy)
-use signed bootstrap tokens; legacy/private meshes use the older unsigned
-token. Either way, the flow above is the same.
+use signed bootstrap tokens; unrestricted meshes can use the older unsigned
+endpoint token. Neither token delivery nor publication defines owner admission.
+`--join-file` and the join environment variables are alternative token sources
+for both published and unpublished meshes. Either way, the flow above is the same.
 
 ## Published / named meshes
 
@@ -75,8 +79,8 @@ mesh-llm discover --model qwen --min-vram 24
 mesh-llm discover --auto        # prints the best invite token (script-friendly)
 ```
 
-`--mesh-name` without `--publish` is only a local label — the mesh stays
-private.
+`--mesh-name` without `--publish` is only a local label — the name does not
+publish the mesh.
 
 ## LAN-only discovery
 
@@ -126,7 +130,7 @@ mechanics plus `--split` and a layer-package model on every serving node. See
 
 For owner-attested meshes: `mesh-llm auth init`, then start nodes with
 `--owner-key`, `--node-label`, `--trust-policy`, `--trust-owner`. Details in
-`docs/MESHES.md` ("Private ownership and trust").
+`docs/MESHES.md` ("Ownership and admission control").
 
 ## Gotchas
 
