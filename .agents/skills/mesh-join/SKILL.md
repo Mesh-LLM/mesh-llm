@@ -21,7 +21,7 @@ itself. Full reference: `docs/MESHES.md`.
 - `--auto` discovers published meshes (Nostr by default) and joins the best
   one — the public community mesh in practice.
 - `--publish` makes your mesh discoverable; not publishing is not admission
-  control. An ordinary legacy join token supplies
+  control. The default join token supplies
   connectivity information, not bearer authorization. Use explicit owner/trust
   policy for controlled membership (see `docs/MESHES.md`).
 - Every node exposes the same OpenAI API on `:9337`; `/v1/models` returns the
@@ -57,7 +57,7 @@ mesh-llm client --join <token>
 ```
 
 `--join` is repeatable. Requirement-aware meshes (version/attestation policy)
-use signed bootstrap tokens; unrestricted meshes can use the older unsigned
+use signed bootstrap tokens; unrestricted meshes can use the default unsigned
 endpoint token. Neither token delivery nor publication defines owner admission.
 `--join-file` and the join environment variables are alternative token sources
 for both published and unpublished meshes. Either way, the flow above is the same.

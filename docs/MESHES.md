@@ -22,7 +22,7 @@ does not by itself mean a mesh is private:
   configure and verify that policy on the participating nodes rather than relying
   on the publication label or secrecy of an address.
 
-An ordinary legacy invite encodes an endpoint identity and connection addresses.
+The default join token encodes an endpoint identity and connection addresses.
 It is connectivity material, **not a bearer authorization credential** proving
 that its holder is allowed to join or run inference. Treat it as sensitive
 connection information, but do not mistake withholding it for strong admission
@@ -68,7 +68,7 @@ otherwise report `invalid` with an explicit error. Even `invalid` binaries still
 follow the normal startup path unless mesh policy requires certified builds.
 
 Requirement-aware meshes use signed bootstrap tokens. Unrestricted meshes can
-use the older unsigned endpoint-token path; unpublished does not imply signed or owner-restricted.
+use the default unsigned endpoint-token path; unpublished does not imply signed or owner-restricted.
 
 Create an unrestricted mesh:
 
@@ -111,7 +111,7 @@ If a node does not satisfy the certified-build gate, the human-facing outcome is
 and evidence are underscored: `certified_binary_required`,
 `build_proof_invalid`, and `release_signer_untrusted`.
 
-When migrating from an unrestricted legacy mesh to a requirement-aware mesh,
+When migrating from an unrestricted mesh to a requirement-aware mesh,
 recreate the mesh, republish it, and issue new signed bootstrap tokens.
 
 For an API-only node that does not serve models:

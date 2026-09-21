@@ -51,7 +51,7 @@ installed binary:
 
 Do not make a mesh public unless the user explicitly asks. Do not post an
 invite token, credentials, host inventory, or private paths to a public service.
-An ordinary legacy join token is connectivity material, not a bearer authorization
+The default join token is connectivity material, not a bearer authorization
 credential or a strong identity/admission policy. Unpublished is not the same
 as access-controlled; the publication status `private` only means unpublished.
 For an untrusted network or controlled membership,
