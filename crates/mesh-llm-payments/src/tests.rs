@@ -204,6 +204,13 @@ async fn lost_payment_response_recovers_after_restart_without_double_spend() {
     let charge = charge("one", 0, 1, 100, 200);
     {
         let service = PaymentService::with_provider(dir.path(), wallet.clone()).unwrap();
+        service
+            .ledger
+            .set_policy(&Policy {
+                mode: ApprovalMode::Automatic,
+                daily_budget_msat: Some(100_000),
+            })
+            .unwrap();
         service.ledger.propose(&request).unwrap();
         service.approve("one").await.unwrap();
         assert!(service.pay_charge(&charge).await.is_err());
@@ -256,6 +263,12 @@ async fn output_payment_uses_the_original_authorization_and_actual_fees() {
 fn duplicate_segments_and_hashes_cannot_change_the_debit() {
     let dir = tempfile::tempdir().unwrap();
     let ledger = Ledger::open(dir.path()).unwrap();
+    ledger
+        .set_policy(&Policy {
+            mode: ApprovalMode::Automatic,
+            daily_budget_msat: Some(100_000),
+        })
+        .unwrap();
     ledger.propose(&terms("one", 1000)).unwrap();
     ledger.approve("one", 100_000, crate::now_ms()).unwrap();
     let original = charge("one", 0, 1, 100, 200);
@@ -316,4 +329,70 @@ async fn oversized_wire_frame_is_rejected_before_allocation() {
     let (mut writer, mut reader) = tokio::io::duplex(64);
     writer.write_u32(u32::MAX).await.unwrap();
     assert!(crate::wire::read(&mut reader).await.is_err());
+}
+
+#[tokio::test]
+async fn one_policy_command_enables_paid_use_and_free_only_stops_new_work() -> Result<()> {
+    use crate::control::ControlCommand;
+    use crate::intent::PaymentIntent;
+    let dir = tempfile::tempdir()?;
+    let wallet = Arc::new(MockWallet::default());
+    let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
+    let read = service
+        .control(ControlCommand::Policy { value: None })
+        .await?;
+    assert_eq!(read["mode"], "free_only");
+    assert!(
+        service
+            .await_authorization(&terms("off", 1000))
+            .await
+            .is_err()
+    );
+    assert!(service.ledger.requests()?.is_empty());
+    service
+        .control(ControlCommand::Policy {
+            value: Some(Policy {
+                mode: ApprovalMode::Automatic,
+                daily_budget_msat: Some(1000),
+            }),
+        })
+        .await?;
+    assert!(matches!(
+        service.ledger.payment_intent()?,
+        PaymentIntent::AllowPaid { .. }
+    ));
+    service.await_authorization(&terms("paid", 700)).await?;
+    assert!(
+        service
+            .await_authorization(&terms("over", 400))
+            .await
+            .is_err()
+    );
+    let status = service
+        .control(ControlCommand::Policy { value: None })
+        .await?;
+    assert_eq!(status["reserved_msat"], 700);
+    assert_eq!(status["remaining_daily_budget_msat"], 300);
+    service
+        .control(ControlCommand::Policy {
+            value: Some(Policy::default()),
+        })
+        .await?;
+    assert!(
+        service
+            .await_authorization(&terms("off-again", 100))
+            .await
+            .is_err()
+    );
+    // Previously authorized settlement survives disabling new paid inference.
+    service.pay_charge(&charge("paid", 0, 90, 100, 200)).await?;
+    service.ledger.finish("paid")?;
+    let status = service
+        .control(ControlCommand::Policy { value: None })
+        .await?;
+    assert_eq!(status["spent_today_msat"], 110);
+    assert_eq!(status["reserved_msat"], 0);
+    assert_eq!(status["remaining_daily_budget_msat"], 0);
+    assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
+    Ok(())
 }

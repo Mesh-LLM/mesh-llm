@@ -214,7 +214,7 @@ async fn simulated_backend(
 async fn payments_two_quic_nodes_gate_decode_and_settle_actual_output() -> Result<()> {
     tokio::time::timeout(
         Duration::from_secs(20),
-        paid_exchange(false, false, false, Some(8), 8),
+        paid_exchange(false, false, Some(8), 8),
     )
     .await??;
     Ok(())
@@ -224,17 +224,7 @@ async fn payments_two_quic_nodes_gate_decode_and_settle_actual_output() -> Resul
 async fn payments_decode_runs_while_input_payment_is_pending_but_delivery_waits() -> Result<()> {
     tokio::time::timeout(
         Duration::from_secs(20),
-        paid_exchange(false, false, true, Some(8), 8),
-    )
-    .await??;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn payments_manual_approval_gates_both_invoices() -> Result<()> {
-    tokio::time::timeout(
-        Duration::from_secs(20),
-        paid_exchange(true, false, false, Some(8), 8),
+        paid_exchange(false, true, Some(8), 8),
     )
     .await??;
     Ok(())
@@ -244,7 +234,7 @@ async fn payments_manual_approval_gates_both_invoices() -> Result<()> {
 async fn payments_cancellation_settles_transmitted_output() -> Result<()> {
     tokio::time::timeout(
         Duration::from_secs(20),
-        paid_exchange(false, true, false, Some(8), 8),
+        paid_exchange(true, false, Some(8), 8),
     )
     .await??;
     Ok(())
@@ -254,7 +244,7 @@ async fn payments_cancellation_settles_transmitted_output() -> Result<()> {
 async fn payments_omitted_limit_uses_backend_context_and_settles_long_output() -> Result<()> {
     tokio::time::timeout(
         Duration::from_secs(20),
-        paid_exchange(false, false, false, None, 6000),
+        paid_exchange(false, false, None, 6000),
     )
     .await??;
     Ok(())
@@ -264,14 +254,13 @@ async fn payments_omitted_limit_uses_backend_context_and_settles_long_output() -
 async fn payments_explicit_large_limit_can_be_clamped_to_context() -> Result<()> {
     tokio::time::timeout(
         Duration::from_secs(20),
-        paid_exchange(true, false, false, Some(65_536), 6000),
+        paid_exchange(false, false, Some(65_536), 6000),
     )
     .await??;
     Ok(())
 }
 
 async fn paid_exchange(
-    manual: bool,
     cancel_after_output: bool,
     hold_input_payment: bool,
     requested: Option<u32>,
@@ -299,11 +288,7 @@ async fn paid_exchange(
     )?);
     allow_paid(&payer_service)?;
     payer_service.ledger.set_policy(&Policy {
-        mode: if manual {
-            ApprovalMode::Manual
-        } else {
-            ApprovalMode::Automatic
-        },
+        mode: ApprovalMode::Automatic,
         daily_budget_msat: Some(10_000),
     })?;
     let price = Pricing {
@@ -378,9 +363,6 @@ async fn paid_exchange(
         )
         .await
     });
-    if manual {
-        approve_pending_request(&payer_service, &network).await?;
-    }
     release_held_payment_after_backend_output(hold_input_payment, &network, &mut receiver).await?;
     let response = receive_and_cancel(&mut receiver, cancel_after_output, cancel).await?;
     exchange.await??;
@@ -443,20 +425,6 @@ async fn release_held_payment_after_backend_output(
     Ok(())
 }
 
-async fn approve_pending_request(service: &PaymentService, network: &Network) -> Result<()> {
-    loop {
-        let pending = service.ledger.requests()?;
-        if let Some(request) = pending.first() {
-            assert_eq!(request.state, "pending");
-            assert_eq!(network.payments.load(Ordering::SeqCst), 0);
-            service.approve(&request.terms.id).await?;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    Ok(())
-}
-
 async fn receive_and_cancel(
     receiver: &mut tokio::io::DuplexStream,
     cancel_after_output: bool,
@@ -497,13 +465,10 @@ fn assert_settlement(
 }
 
 fn allow_paid(service: &PaymentService) -> Result<()> {
-    service
-        .ledger
-        .set_payment_intent(&mesh_llm_payments::intent::PaymentIntent::AllowPaid {
-            max_input_msat_per_million: 1_000_000,
-            max_output_msat_per_million: 1_000_000,
-            max_total_msat: 100_000,
-        })
+    service.ledger.set_policy(&Policy {
+        mode: ApprovalMode::Automatic,
+        daily_budget_msat: Some(100_000),
+    })
 }
 
 fn assert_payer_correlation(service: &PaymentService) -> Result<()> {

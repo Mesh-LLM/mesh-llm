@@ -84,6 +84,12 @@ fn independent_connections_cannot_double_reserve() {
     let directory = tempfile::tempdir().unwrap();
     let first = Ledger::open(directory.path()).unwrap();
     let second = Ledger::open(directory.path()).unwrap();
+    first
+        .set_policy(&Policy {
+            mode: ApprovalMode::Automatic,
+            daily_budget_msat: Some(1000),
+        })
+        .unwrap();
     first.propose(&terms("one", 700)).unwrap();
     second.propose(&terms("two", 700)).unwrap();
     let barrier = std::sync::Barrier::new(2);
@@ -138,6 +144,35 @@ fn evidence_correlation_survives_reopen_without_schema_change() -> Result<()> {
         serde_json::from_value::<RequestTerms>(legacy)?
             .exchange_id
             .is_none()
+    );
+    Ok(())
+}
+
+#[test]
+fn single_policy_controls_eligibility_and_preserves_reservations() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let ledger = Ledger::open(directory.path())?;
+    assert_eq!(ledger.policy()?.mode, ApprovalMode::FreeOnly);
+    assert!(matches!(
+        ledger.payment_intent()?,
+        crate::intent::PaymentIntent::FreeOnly
+    ));
+    assert_eq!(ledger.available_budget(1000, 1)?, 0);
+    ledger.propose(&terms("disabled", 500))?;
+    assert!(ledger.approve("disabled", 1000, 1).is_err());
+    ledger.set_policy(&Policy {
+        mode: ApprovalMode::Automatic,
+        daily_budget_msat: Some(1000),
+    })?;
+    ledger.approve("disabled", 1000, 1)?;
+    let status = ledger.policy_status(1)?;
+    assert_eq!(status["reserved_msat"], 500);
+    assert_eq!(status["remaining_daily_budget_msat"], 500);
+    ledger.set_policy(&Policy::default())?;
+    assert_eq!(ledger.policy_status(1)?["remaining_daily_budget_msat"], 0);
+    assert_eq!(
+        ledger.request_state("disabled")?.as_deref(),
+        Some("approved")
     );
     Ok(())
 }

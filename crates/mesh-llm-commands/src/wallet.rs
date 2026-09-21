@@ -78,8 +78,6 @@ fn control_command(command: &WalletCommand) -> Result<ControlCommand> {
             max_fee_msat: *max_fee_msat,
         },
         WalletCommand::Pending => ControlCommand::Pending,
-        WalletCommand::Approve { id } => ControlCommand::Approve { id: id.clone() },
-        WalletCommand::Reject { id } => ControlCommand::Reject { id: id.clone() },
         WalletCommand::Policy {
             mode,
             daily_budget_sats,
@@ -88,7 +86,7 @@ fn control_command(command: &WalletCommand) -> Result<ControlCommand> {
                 .map(|mode| -> Result<Policy> {
                     Ok(Policy {
                         mode: match mode {
-                            PaymentMode::Manual => ApprovalMode::Manual,
+                            PaymentMode::FreeOnly => ApprovalMode::FreeOnly,
                             PaymentMode::Automatic => ApprovalMode::Automatic,
                         },
                         daily_budget_msat: daily_budget_sats
@@ -123,4 +121,38 @@ fn control_command(command: &WalletCommand) -> Result<ControlCommand> {
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn automatic_policy_is_one_command_and_inspection_is_read_only() -> Result<()> {
+        let command = control_command(&WalletCommand::Policy {
+            mode: Some(PaymentMode::Automatic),
+            daily_budget_sats: Some(100),
+        })?;
+        assert_eq!(
+            serde_json::to_value(command)?,
+            serde_json::json!({
+                "command": "policy", "value": {"mode":"automatic", "daily_budget_msat":100000}
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(control_command(&WalletCommand::Policy {
+                mode: None,
+                daily_budget_sats: None,
+            })?)?,
+            serde_json::json!({"command":"policy","value":null})
+        );
+        assert!(
+            control_command(&WalletCommand::Policy {
+                mode: Some(PaymentMode::Automatic),
+                daily_budget_sats: Some(u64::MAX),
+            })
+            .is_err()
+        );
+        Ok(())
+    }
 }

@@ -23,7 +23,7 @@ const DAY_MS: u64 = 86_400_000;
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalMode {
     #[default]
-    Manual,
+    FreeOnly,
     Automatic,
 }
 
@@ -187,6 +187,36 @@ impl Ledger {
         Ok(())
     }
 
+    /// Report policy and accounting without provisioning or querying a wallet.
+    pub fn policy_status(&self, now_ms: u64) -> Result<serde_json::Value> {
+        let policy = self.policy()?;
+        let connection = self.lock()?;
+        let reserved: u64 = connection.query_row(
+            "SELECT COALESCE(SUM(MAX(cap-spent,0)),0) FROM requests WHERE state='approved'",
+            [],
+            |r| read_amount(r, 0),
+        )?;
+        let spent: u64 = connection.query_row(
+            "SELECT COALESCE(SUM(total),0) FROM charges WHERE state='succeeded' AND settled_day=?",
+            [sql_amount(now_ms / DAY_MS)?],
+            |r| read_amount(r, 0),
+        )?;
+        let remaining = if policy.mode == ApprovalMode::Automatic {
+            policy
+                .daily_budget_msat
+                .unwrap_or(0)
+                .saturating_sub(spent)
+                .saturating_sub(reserved)
+        } else {
+            0
+        };
+        Ok(serde_json::json!({
+            "mode": policy.mode, "daily_budget_msat": policy.daily_budget_msat,
+            "spent_today_msat": spent, "reserved_msat": reserved,
+            "remaining_daily_budget_msat": remaining,
+        }))
+    }
+
     /// Reserve funds in an immediate transaction; independent processes cannot
     /// authorize against the same unreserved balance or daily allowance.
     pub fn available_budget(&self, balance_msat: u64, now_ms: u64) -> Result<u64> {
@@ -198,8 +228,8 @@ impl Ledger {
             |r| read_amount(r, 0),
         )?;
         let available = balance_msat.saturating_sub(reserved);
-        if policy.mode == ApprovalMode::Manual {
-            return Ok(available);
+        if policy.mode == ApprovalMode::FreeOnly {
+            return Ok(0);
         }
         let spent: u64 = connection.query_row(
             "SELECT COALESCE(SUM(total),0) FROM charges WHERE state='succeeded' AND settled_day=?",
@@ -249,6 +279,11 @@ impl Ledger {
             .map(|j| serde_json::from_str(&j))
             .transpose()?
             .unwrap_or_default();
+        ensure!(
+            policy.mode == ApprovalMode::Automatic
+                || terms.model == "wallet-send" && terms.peer == "wallet-send",
+            "paid inference is disabled by free-only policy"
+        );
         if policy.mode == ApprovalMode::Automatic {
             policy.validate()?;
             let spent: u64 = transaction.query_row("SELECT COALESCE(SUM(total),0) FROM charges WHERE state='succeeded' AND settled_day=?", [sql_amount(now_ms / DAY_MS)?], |r| read_amount(r, 0))?;

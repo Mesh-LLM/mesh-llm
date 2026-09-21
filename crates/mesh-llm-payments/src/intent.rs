@@ -1,4 +1,4 @@
-//! Client willingness to pay is distinct from wallet approval and balance.
+//! Request-local restrictions over the profile spending policy; never a saved opt-in.
 use crate::{ledger::Ledger, pricing::Pricing};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -78,16 +78,18 @@ impl PaymentIntent {
 }
 
 impl Ledger {
+    /// Derive request eligibility from the single spending policy. No separate opt-in.
     pub fn payment_intent(&self) -> Result<PaymentIntent> {
-        self.get_setting("payment_intent")?.map_or_else(
-            || Ok(PaymentIntent::default()),
-            |value| Ok(serde_json::from_str(&value)?),
-        )
-    }
-
-    pub fn set_payment_intent(&self, intent: &PaymentIntent) -> Result<()> {
-        intent.validate()?;
-        self.set_setting("payment_intent", &serde_json::to_string(intent)?)
+        let policy = self.policy()?;
+        policy.validate()?;
+        Ok(match policy.mode {
+            crate::ledger::ApprovalMode::FreeOnly => PaymentIntent::FreeOnly,
+            crate::ledger::ApprovalMode::Automatic => PaymentIntent::AllowPaid {
+                max_input_msat_per_million: u64::MAX,
+                max_output_msat_per_million: u64::MAX,
+                max_total_msat: policy.daily_budget_msat.unwrap_or(0),
+            },
+        })
     }
 }
 
@@ -132,10 +134,9 @@ mod tests {
         {
             let ledger = Ledger::open(directory.path())?;
             assert!(!ledger.payment_intent()?.permits(&price, 4000));
-            ledger.set_payment_intent(&PaymentIntent::AllowPaid {
-                max_input_msat_per_million: 10,
-                max_output_msat_per_million: 20,
-                max_total_msat: 4000,
+            ledger.set_policy(&crate::ledger::Policy {
+                mode: crate::ledger::ApprovalMode::Automatic,
+                daily_budget_msat: Some(4000),
             })?;
         }
         let ledger = Ledger::open(directory.path())?;
@@ -146,8 +147,8 @@ mod tests {
             input_msat_per_million: 11,
             ..price
         };
-        assert!(!intent.permits(&expensive, 2000));
-        ledger.set_payment_intent(&PaymentIntent::FreeOnly)?;
+        assert!(intent.permits(&expensive, 2000));
+        ledger.set_policy(&crate::ledger::Policy::default())?;
         assert!(!ledger.payment_intent()?.permits(&expensive, 1));
         assert!(
             serde_json::from_str::<PaymentIntent>(r#"{"mode":"allow_paid","max_total_msat":1000}"#)

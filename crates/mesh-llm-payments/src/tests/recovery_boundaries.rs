@@ -60,6 +60,10 @@ async fn startup_releases_only_approvals_without_charges() -> Result<()> {
         let wallet = Arc::new(MockWallet::default());
         {
             let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
+            service.ledger.set_policy(&Policy {
+                mode: ApprovalMode::Automatic,
+                daily_budget_msat: Some(100_000),
+            })?;
             service.ledger.propose(&terms("request", 700))?;
             service.approve("request").await?;
             if state != "absent" {
@@ -86,6 +90,10 @@ async fn cancellation_and_preparation_have_only_one_winner() -> Result<()> {
     for prepare_first in [false, true] {
         let dir = tempfile::tempdir()?;
         let service = PaymentService::with_provider(dir.path(), Arc::new(MockWallet::default()))?;
+        service.ledger.set_policy(&Policy {
+            mode: ApprovalMode::Automatic,
+            daily_budget_msat: Some(100_000),
+        })?;
         service.ledger.propose(&terms("request", 700))?;
         service.approve("request").await?;
         let charge = charge("request", 0, 3, 600, 700);
@@ -108,6 +116,10 @@ async fn cancellation_and_preparation_have_only_one_winner() -> Result<()> {
 async fn periodic_reconciliation_preserves_live_zero_charge_approval() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let service = PaymentService::with_provider(dir.path(), Arc::new(MockWallet::default()))?;
+    service.ledger.set_policy(&Policy {
+        mode: ApprovalMode::Automatic,
+        daily_budget_msat: Some(100_000),
+    })?;
     service.ledger.propose(&terms("live", 700))?;
     service.approve("live").await?;
     service.reconcile_pending().await?;
@@ -116,6 +128,10 @@ async fn periodic_reconciliation_preserves_live_zero_charge_approval() -> Result
         Some("approved")
     );
     service.ledger.cancel_unstarted("live")?;
+    service.ledger.set_policy(&Policy {
+        mode: ApprovalMode::Automatic,
+        daily_budget_msat: Some(100_000),
+    })?;
     service.ledger.propose(&terms("pending", 700))?;
     service.ledger.cancel_unstarted("pending")?;
     assert!(service.approve("pending").await.is_err());

@@ -117,10 +117,14 @@ async fn pending_htlc_recovers(outcome: PaymentStatus) -> Result<()> {
 }
 
 #[tokio::test]
-async fn expired_manual_approval_never_calls_the_wallet() -> Result<()> {
+async fn expired_automatic_authorization_never_calls_the_wallet() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let wallet = Arc::new(MockWallet::default());
     let service = PaymentService::with_provider(directory.path(), wallet.clone())?;
+    service.ledger.set_policy(&Policy {
+        mode: ApprovalMode::Automatic,
+        daily_budget_msat: Some(100_000),
+    })?;
     let mut request = terms("expired", 700);
     request.expires_at_ms = crate::now_ms().saturating_sub(1);
     assert!(service.await_authorization(&request).await.is_err());

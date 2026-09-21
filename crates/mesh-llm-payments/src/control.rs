@@ -29,17 +29,8 @@ pub enum ControlCommand {
         max_fee_msat: u64,
     },
     Pending,
-    Approve {
-        id: String,
-    },
-    Reject {
-        id: String,
-    },
     Policy {
         value: Option<Policy>,
-    },
-    PaymentIntent {
-        value: Option<crate::intent::PaymentIntent>,
     },
     Pricing,
     SetPricing {
@@ -86,25 +77,11 @@ impl PaymentService {
                 max_fee_msat,
             } => self.send_invoice(&invoice, amount_msat, max_fee_msat).await,
             ControlCommand::Pending => Ok(serde_json::to_value(self.ledger.requests()?)?),
-            ControlCommand::Approve { id } => {
-                self.approve(&id).await?;
-                Ok(json!({"approved": id}))
-            }
-            ControlCommand::Reject { id } => {
-                self.ledger.reject(&id)?;
-                Ok(json!({"rejected": id}))
-            }
             ControlCommand::Policy { value } => {
                 if let Some(value) = value {
                     self.ledger.set_policy(&value)?;
                 }
-                Ok(serde_json::to_value(self.ledger.policy()?)?)
-            }
-            ControlCommand::PaymentIntent { value } => {
-                if let Some(value) = value {
-                    self.ledger.set_payment_intent(&value)?;
-                }
-                Ok(serde_json::to_value(self.ledger.payment_intent()?)?)
+                self.ledger.policy_status(crate::now_ms())
             }
             ControlCommand::Pricing => Ok(serde_json::to_value(self.ledger.pricing()?)?),
             ControlCommand::SetPricing { model, value } => {

@@ -13,8 +13,8 @@ validation results and remaining gaps are recorded below.
 2. The provider prefills the complete model-tokenized input, then sends an input
    BOLT11 invoice with frozen prices, input count, the backend's resolved output
    allowance, and total cap.
-3. The payer validates the invoice and obtains per-request manual approval or
-   reserves against its automatic spending budget.
+3. The payer validates the invoice and reserves its maximum debit against
+   the automatic spending budget.
 4. After successful prefill, decode runs concurrently with invoice creation and
    payment observation. The provider buffers backend HTTP output in a bounded
    256 KiB queue, applying backpressure when full. No response headers or body
@@ -24,7 +24,7 @@ validation results and remaining gaps are recorded below.
    payer reads concurrently with its terminal payment reconciliation; neither
    ledger records settlement until terminal success is observed.
 6. The provider invoices actual output transmitted, and the payer settles under
-   the original authorization. No second manual approval is needed.
+   the original authorization. No human approval is needed.
 
 Prices and counts are the provider's claims. Proof of prefill, proof of correct
 inference, refunds, and encrypted output are not implemented. Prefill before
@@ -80,8 +80,7 @@ Incoming unpaid waits are bounded by invoice expiry; an already-expired invoice
 gets a single authoritative lookup to recognize an existing receipt. Outgoing HTLC waits have no
 invoice-expiry deadline: an expired invoice does not establish payment failure.
 The independent 15-second recovery scan still reconciles durable state after
-crashes or observation errors. Local manual-approval polling is separate from
-wallet settlement notifications.
+crashes or observation errors. Wallet settlement notifications do not require operator polling.
 
 Each config directory owns a `payments/` directory (normally
 `~/.mesh-llm/payments`). Wallet operations provision the wallet lazily; merely
@@ -185,32 +184,47 @@ or trigger an automatic refund.
 
 ## Approval and routing
 
-Manual mode is the default. Each approval covers both invoices and their fee
-allowances. Automatic mode requires a positive daily budget. The budget uses UTC
-calendar days and actual settlement timestamps, and includes fees. Outstanding
-reservations carry across midnight. Approval atomically checks both unreserved
-wallet balance and remaining budget so concurrent requests cannot reserve the
-same funds.
+Free-only is the default. Automatic policy enables paid providers when available
+and pays without per-inference approval, subject to a positive daily budget and
+available wallet funds. There is no separate saved payment opt-in.
 
-Client intent defaults to `free_only`, independently of wallet funding or automatic
-approval. Configure deliberate paid use through the trusted-local wallet API:
+For a funded wallet, configure the client once:
 
-```json
-{"command":"payment_intent","value":{"mode":"allow_paid","max_input_msat_per_million":1000000,"max_output_msat_per_million":1000000,"max_total_msat":10000}}
+```sh
+mesh-llm client --auto
+# In another terminal, create and externally pay a funding invoice if needed:
+mesh-llm wallet fund-wallet --amount-sats 1000
+mesh-llm wallet policy --mode automatic --daily-budget-sats 100
+# Use an ordinary OpenAI client at http://127.0.0.1:9337/v1.
+mesh-llm wallet policy
+mesh-llm wallet policy --mode free-only
 ```
 
-Read it with `{"command":"payment_intent"}`; reset with
-`{"command":"payment_intent","value":{"mode":"free_only"}}`. This profile-level
-setting works for ordinary OpenAI clients without custom request fields. Paid
-intent retains free providers as candidates. Rate caps and total debit (including
-both fee allowances and invoice rounding) are enforced during ranking and against
-exact input-invoice terms before approval, then rechecked after approval. Existing
-remote-ingress restrictions remain authoritative. Once submission starts,
-changing intent does not cancel existing settlement obligations. Requests may include `mesh_payment` with the same tagged intent shape to
-**tighten** their local profile (for example `{"mode":"free_only"}`). Paid caps
-are intersected with the profile caps; a request cannot expand a free-only
-profile into paid authority. The field is stripped before ordinary backend or
-remote forwarding. A dedicated CLI command is not implemented yet.
+`client --auto` selects mesh discovery, not payment authorization. Funding alone
+does not enable spending. Automatic policy retains free providers as candidates;
+it neither requires nor guarantees a paid provider. A request whose maximum cost
+does not fit the remaining budget is not authorized. There are no mandatory
+per-token price caps or extra setup calls. Seller pricing is independent.
+
+Policy persists across restarts and mesh switches. `wallet policy` without flags
+reads it without changing it, returning `mode`, `daily_budget_msat`,
+`spent_today_msat`, `reserved_msat`, and `remaining_daily_budget_msat`. The latter
+is the budget allowance, not a guarantee of wallet funds. Reading policy does not
+provision a wallet. Applications use the same `policy` command through
+`POST /api/wallet`; no second setting is required.
+
+The budget uses UTC calendar days and actual settlement timestamps, including
+fees. Outstanding reservations carry across midnight. Authorization atomically
+checks unreserved wallet balance and remaining budget. Switching to free-only
+stops new paid inference, but does not cancel already-submitted settlement.
+Manual per-inference approval is not supported. Provider/model approvals and
+price browsing are separate future features.
+
+Requests may still include `mesh_payment` to **restrict** the profile for that
+request (for example `{"mode":"free_only"}`). This is not an opt-in or a stored
+setting: requests cannot enable paid use under free-only policy or expand the
+budget. The field is stripped before backend or remote forwarding. Existing
+remote-ingress restrictions remain authoritative.
 
 Routing prefers local inference, eligible paid peers, then free peers. Paid peers
 are ranked by estimated input plus maximum output cost for the exact model.
@@ -245,10 +259,8 @@ mesh-llm wallet fund-wallet --amount-sats 10000
 mesh-llm wallet send lnbc... --max-fee-msat 1000
 mesh-llm wallet send lnbc... --amount-msat 10000 --max-fee-msat 1000
 mesh-llm wallet pending
-mesh-llm wallet approve REQUEST_UUID
-mesh-llm wallet reject REQUEST_UUID
 mesh-llm wallet policy --mode automatic --daily-budget-sats 100
-mesh-llm wallet policy --mode manual
+mesh-llm wallet policy --mode free-only
 mesh-llm wallet pricing MODEL --input-msat-per-million 500 --output-msat-per-million 1500
 mesh-llm wallet pricing MODEL --free
 ```
@@ -266,16 +278,17 @@ Applications POST JSON to `/api/wallet` on the local management port:
 
 Commands are `balance`, `transactions` (`limit`), `fund`, `inspect_invoice`
 (`invoice`), `send` (`invoice`, optional `amount_msat`, `max_fee_msat`), `pending`,
-`approve`/`reject` (`id`), `policy` (optional `value`), `pricing`, and `set_pricing`
+`policy` (optional `value`), `pricing`, and `set_pricing`
 (`model`, nullable `value`). `expected_pid` and `expected_directory` are optional
 local destination checks. The balance response exposes `spendable_msat` and
 `available_for_inference_msat` after policy and reservations. `pending` returns
 durable request records, including completed history; filter `state="pending"`
-for approvals. Transactions and invoices use provider-neutral JSON types.
+when inspecting unfinished work. Transactions and invoices use provider-neutral JSON types.
 
 The [companion mesh-app fork](https://github.com/benthecarman/mesh-app/tree/lightning-wallet)
 adds native Wallet menu controls for balance,
-funding, sending, history, request approvals and manual/automatic policy. It uses
+funding, sending and history. Its earlier manual-approval controls need updating
+to this branch’s free-only/automatic policy. It uses
 this API and the retained engine PID, with network calls off the UI thread. It
 requires this branch's engine; the previously pinned released engine lacks these
 routes. It does not embed a second wallet or SDK.
@@ -458,10 +471,9 @@ For operator-run mainnet validation:
 3. Serve a small text model on the provider. Get its exact ID from `/v1/models`,
    enable prices, and verify the peer advertisement before requesting inference.
    Use prices large enough for practical mainnet routing during this test.
-4. On the payer (client-only), select manual policy and request that exact model
-   with a small output cap. Confirm the pending request appears after prefill,
-   approve it, then verify two settled payments on the payer and two receipts on
-   the provider. Compare their amounts, token usage and routing fees.
+4. On the payer (client-only), configure automatic policy with an explicit small
+   daily budget and request that exact model through the local OpenAI endpoint.
+   Verify two settled payments on the payer and two receipts on the provider.
 5. Repeat in automatic mode with a small budget. Launch concurrent requests that
    together exceed the budget and verify rejected reservations do not spend.
 6. Cancel a streaming request after output begins. Confirm generation stops and

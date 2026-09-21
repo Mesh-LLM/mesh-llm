@@ -2,7 +2,7 @@ use clap::{Subcommand, ValueEnum};
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum PaymentMode {
-    Manual,
+    FreeOnly,
     Automatic,
 }
 
@@ -34,14 +34,7 @@ pub enum WalletCommand {
     },
     /// Inspect durable inference payment requests.
     Pending,
-    /// Authorize one request up to its displayed total including fees.
-    Approve {
-        id: String,
-    },
-    Reject {
-        id: String,
-    },
-    /// Inspect or change automatic payment policy.
+    /// Use free providers only, or automatically pay for inference within a daily budget.
     Policy {
         #[arg(long, value_enum)]
         mode: Option<PaymentMode>,
@@ -60,4 +53,42 @@ pub enum WalletCommand {
         #[arg(long, requires = "model")]
         free: bool,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct WalletCli {
+        #[command(subcommand)]
+        command: WalletCommand,
+    }
+
+    #[test]
+    fn policy_has_two_modes_and_no_approval_or_opt_in_commands() {
+        for args in [
+            vec!["wallet", "policy"],
+            vec!["wallet", "policy", "--mode", "free-only"],
+            vec![
+                "wallet",
+                "policy",
+                "--mode",
+                "automatic",
+                "--daily-budget-sats",
+                "100",
+            ],
+        ] {
+            assert!(WalletCli::try_parse_from(args).is_ok());
+        }
+        for args in [
+            vec!["wallet", "policy", "--mode", "manual"],
+            vec!["wallet", "payment-intent"],
+            vec!["wallet", "approve", "id"],
+            vec!["wallet", "reject", "id"],
+        ] {
+            assert!(WalletCli::try_parse_from(args).is_err());
+        }
+    }
 }

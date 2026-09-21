@@ -127,7 +127,7 @@ async fn start(
     let service = node.payment_service().await?;
     ensure!(
         effective_intent(&service, &request)?.permits(&price, 0),
-        "paid inference is excluded by client payment intent"
+        "paid inference is excluded by spending policy or request restriction"
     );
     let id = uuid::Uuid::new_v4().to_string();
     send.write_all(wire::HTTP_UPGRADE).await?;
@@ -206,7 +206,7 @@ pub(crate) async fn exchange(
     );
     ensure!(
         effective_intent(&service, &request)?.permits(&price, total),
-        "paid inference is excluded by client payment intent"
+        "paid inference is excluded by spending policy or request restriction"
     );
     invoice.validate_payment(input_amount, mesh_llm_payments::now_ms())?;
     ensure!(
@@ -228,7 +228,7 @@ pub(crate) async fn exchange(
     if !effective_intent(&service, &request)?.permits(&price, total) {
         service.ledger.fail_authorization_if_idle(&id)?;
         let _ = wire::write(&mut send, &Frame::Cancel).await;
-        bail!("client payment intent changed before submission");
+        bail!("spending policy or request restriction changed before submission");
     }
     let observations =
         super::paid_events::Observations::for_exchange(evidence.as_ref(), &terms).await;

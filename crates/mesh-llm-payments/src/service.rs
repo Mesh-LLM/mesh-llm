@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use tokio::sync::{Mutex, OnceCell};
 
 use crate::invoice::Invoice;
@@ -101,25 +101,12 @@ impl PaymentService {
     }
 
     pub async fn await_authorization(&self, terms: &RequestTerms) -> Result<()> {
+        ensure!(
+            self.ledger.policy()?.mode == ApprovalMode::Automatic,
+            "paid inference is disabled by free-only policy"
+        );
         self.ledger.propose(terms)?;
-        if self.ledger.policy()?.mode == ApprovalMode::Automatic {
-            self.approve(&terms.id).await?;
-        }
-        loop {
-            ensure!(
-                crate::now_ms() < terms.expires_at_ms,
-                "input invoice expired while awaiting approval"
-            );
-            let state = self
-                .ledger
-                .request_state(&terms.id)?
-                .context("payment request disappeared")?;
-            match state.as_str() {
-                "approved" => return Ok(()),
-                "pending" => tokio::time::sleep(Duration::from_millis(250)).await,
-                _ => bail!("payment request was rejected or closed"),
-            }
-        }
+        self.approve(&terms.id).await
     }
 
     pub async fn pay_charge(&self, charge: &Charge) -> Result<Transaction> {
