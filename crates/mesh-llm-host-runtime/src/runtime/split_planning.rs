@@ -117,6 +117,60 @@ pub(super) struct SplitTopologyResourceInputs {
     pub(super) auto_balance: bool,
 }
 
+/// Per-stage capacity-model inputs resolved for a finished plan: the context
+/// and lane shape the topology planner planned for, plus the KV and
+/// recurrent-state costs it charged per layer. [`validate_split_capacity`]
+/// re-checks every stage against this model, so boundaries moved after
+/// planning — the initial-cut override — are judged by the same budget the
+/// runtime's stage admissions will charge, not by weight bytes alone.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct SplitCapacityModel {
+    kv_bytes_per_token: u64,
+    recurrent_bytes_per_sequence_by_layer: Vec<u64>,
+    context_length: u32,
+    parallel_lanes: usize,
+    /// Whether the planner behind the validated plan already budgeted its
+    /// stages against VRAM minus [`default_runtime_headroom_bytes`]. The
+    /// resource-aware planners do — re-charging the same headroom here is
+    /// idempotent for their output and is what judges an override-moved cut.
+    /// The test-only package-identity planner budgets against raw VRAM, so
+    /// its backstop charges none rather than double-counting.
+    budgets_runtime_headroom: bool,
+}
+
+impl SplitCapacityModel {
+    pub(super) fn new(
+        resources: &SplitTopologyResourceInputs,
+        context_length: u32,
+        parallel_lanes: usize,
+    ) -> Self {
+        Self {
+            kv_bytes_per_token: resources.kv_bytes_per_token,
+            recurrent_bytes_per_sequence_by_layer: resources
+                .recurrent_bytes_per_sequence_by_layer
+                .clone(),
+            context_length,
+            parallel_lanes,
+            budgets_runtime_headroom: true,
+        }
+    }
+
+    /// Weight-only backstop for planning paths with no context model (the
+    /// test-only package-identity planner). Stages are priced from the
+    /// ranges they hold against the raw node budget, exactly what that
+    /// planner fit them against, with no KV, recurrent, or headroom terms.
+    #[cfg(test)]
+    pub(super) fn weights_only() -> Self {
+        Self {
+            kv_bytes_per_token: 0,
+            recurrent_bytes_per_sequence_by_layer: Vec::new(),
+            context_length: 0,
+            parallel_lanes: 1,
+            budgets_runtime_headroom: false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct PlannedRuntimeSliceTopology {
     pub(super) stages: Vec<RuntimeSliceStagePlan>,
@@ -246,6 +300,7 @@ pub(super) fn plan_runtime_slice_topology_with_resources_and_stage0(
 
     let participant_by_id = participant_index_by_id(participants);
     let plan_auto_balance = resources.auto_balance;
+    let capacity_resources = resources.clone();
     let plan_input = runtime_slice_plan_input(package, participants, resources.clone());
     let plan = plan_runtime_slice_topology_result(
         SplitPlanAttempt {
@@ -272,7 +327,19 @@ pub(super) fn plan_runtime_slice_topology_with_resources_and_stage0(
     let mut stages = map_runtime_slice_stages(plan.stages, &participant_by_id)?;
     stages.sort_by_key(|stage| stage.stage_index);
     apply_initial_cut_override(&mut stages, package, plan_auto_balance);
-    validate_split_capacity(model_ref, package, participants, &stages, excluded)?;
+    let capacity = SplitCapacityModel::new(
+        &capacity_resources,
+        plan.context_length,
+        plan.parallel_lanes,
+    );
+    validate_split_capacity(
+        model_ref,
+        package,
+        participants,
+        &stages,
+        excluded,
+        &capacity,
+    )?;
     log_planned_slice_topology(
         topology_id,
         model_ref,
@@ -366,12 +433,25 @@ pub(super) fn plan_locked_runtime_slice_topology_with_resources(
             layer_end: stage.layer_end,
         })
         .collect::<Vec<_>>();
+    let capacity_resources = resources.clone();
     let input = runtime_slice_plan_input(package, participants, resources);
     let plan = plan_locked_topology(&topology_planning_input(input), &locked_stages)
         .context("validate locked skippy split topology")?;
     let mut stages = map_runtime_slice_stages(plan.stages, &participant_by_id)?;
     stages.sort_by_key(|stage| stage.stage_index);
-    validate_split_capacity(model_ref, package, participants, &stages, excluded)?;
+    let capacity = SplitCapacityModel::new(
+        &capacity_resources,
+        plan.context_length,
+        plan.parallel_lanes,
+    );
+    validate_split_capacity(
+        model_ref,
+        package,
+        participants,
+        &stages,
+        excluded,
+        &capacity,
+    )?;
     tracing::info!(
         topology_id,
         model_ref,
@@ -621,10 +701,11 @@ fn apply_initial_cut_override(
 
 /// Recompute each stage's weight bytes for the range it now holds.
 ///
-/// `validate_split_capacity` prices a stage from `parameter_bytes`, so leaving
-/// the planner's original totals behind after moving the boundaries would have
-/// it approve an override against the weights of a cut that no longer exists —
-/// and admissions are built from the new ranges, not the old ones.
+/// [`validate_split_capacity`] re-prices a stage from its range before
+/// applying the planner's capacity model, so leaving the planner's original
+/// totals behind after moving the boundaries would have it approve an
+/// override against the weights of a cut that no longer exists — and
+/// admissions are built from the new ranges, not the old ones.
 fn reprice_stages(stages: &mut [RuntimeSliceStagePlan], package: &skippy::SkippyPackageIdentity) {
     let layer_weights = package_layer_weight_bytes(package);
     if layer_weights.is_empty() {
@@ -647,6 +728,62 @@ fn reprice_stages(stages: &mut [RuntimeSliceStagePlan], package: &skippy::Skippy
             .iter()
             .fold(0u64, |acc, bytes| acc.saturating_add(*bytes));
     }
+}
+
+/// Per-layer weights covering every layer, exactly what the topology planner
+/// prices ranges from: the package's per-layer detail when complete,
+/// otherwise an even share of the model.
+fn planner_layer_weight_bytes(package: &skippy::SkippyPackageIdentity) -> Vec<u64> {
+    let layer_weights = package_layer_weight_bytes(package);
+    if layer_weights.len() == package.layer_count as usize {
+        return layer_weights;
+    }
+    let per_layer = package
+        .source_model_bytes
+        .div_ceil(u64::from(package.layer_count.max(1)));
+    vec![per_layer; package.layer_count as usize]
+}
+
+/// Per-layer recurrent-state bytes, mirroring the topology planner: the
+/// declared per-layer costs when complete for every layer, otherwise zero.
+fn planner_recurrent_bytes_by_layer(recurrent: &[u64], layer_count: u32) -> Vec<u64> {
+    if recurrent.len() == layer_count as usize {
+        return recurrent.to_vec();
+    }
+    vec![0; layer_count as usize]
+}
+
+/// What a stage costs under the topology planner's capacity model: the
+/// weights of the range it holds, context-scaled KV charged at the compute
+/// reserve, and lane-scaled recurrent state. Mirrors
+/// `layer_required_bytes` in `skippy_coordinator::topology`, including the
+/// 100/85 KV compute-reserve charge from `split_candidate_bytes_per_layer`;
+/// KV is a single shared allocation, so the lane count never multiplies it.
+fn stage_required_bytes(
+    stage: &RuntimeSliceStagePlan,
+    layer_weights: &[u64],
+    recurrent_by_layer: &[u64],
+    kv_per_layer: u64,
+    context_length: u32,
+    parallel_lanes: usize,
+) -> u64 {
+    let start = (stage.layer_start as usize).min(layer_weights.len());
+    let end = (stage.layer_end as usize).min(layer_weights.len());
+    layer_weights[start..end]
+        .iter()
+        .zip(recurrent_by_layer[start..end].iter())
+        .fold(0u128, |total, (weight, recurrent)| {
+            let kv_with_compute_reserve = u128::from(kv_per_layer)
+                .saturating_mul(u128::from(context_length))
+                .saturating_mul(KV_COMPUTE_RESERVE_NUMERATOR)
+                .div_ceil(KV_COMPUTE_RESERVE_DENOMINATOR);
+            let recurrent = u128::from(*recurrent).saturating_mul(parallel_lanes as u128);
+            total
+                .saturating_add(u128::from(*weight))
+                .saturating_add(kv_with_compute_reserve)
+                .saturating_add(recurrent)
+        })
+        .min(u128::from(u64::MAX)) as u64
 }
 
 /// Move the cut to `boundaries`, keeping each stage's node and order. Ignored
@@ -849,12 +986,23 @@ pub(super) fn split_participant_exclusion_labels(
         .collect()
 }
 
+/// Validate a finished split placement against aggregate mesh capacity and
+/// the topology planner's per-node capacity model.
+///
+/// The per-stage check re-runs the planner's own budgeting — usable VRAM
+/// after runtime headroom, context-scaled KV charged at the compute reserve,
+/// and lane-scaled recurrent state — over the ranges the stages actually
+/// hold. For planner-produced placement this is idempotent: the planner never
+/// emits a stage exceeding the same budget it planned with. For boundaries
+/// moved after planning by `apply_initial_cut_override` it is the only real
+/// check, because the planner never saw the overridden cut.
 pub(super) fn validate_split_capacity(
     model_ref: &str,
     package: &skippy::SkippyPackageIdentity,
     participants: &[SplitParticipant],
     stages: &[RuntimeSliceStagePlan],
     excluded: &[SplitParticipantExclusion],
+    capacity: &SplitCapacityModel,
 ) -> Result<()> {
     let total_vram_bytes = participants
         .iter()
@@ -879,21 +1027,45 @@ pub(super) fn validate_split_capacity(
         .iter()
         .map(|participant| (participant.node_id, participant.vram_bytes))
         .collect::<HashMap<_, _>>();
+    let layer_weights = planner_layer_weight_bytes(package);
+    let recurrent_by_layer = planner_recurrent_bytes_by_layer(
+        &capacity.recurrent_bytes_per_sequence_by_layer,
+        package.layer_count,
+    );
+    let kv_per_layer = capacity
+        .kv_bytes_per_token
+        .div_ceil(u64::from(package.layer_count.max(1)));
     for stage in stages {
         let node_vram = vram_by_node
             .get(&stage.node_id)
             .copied()
             .unwrap_or_default();
-        // The topology planner already budgets VRAM including KV cache and
-        // headroom.  Do not re-apply the solo-load 10% headroom here — it
-        // double-counts and rejects topologies the planner approved.
+        let headroom = if capacity.budgets_runtime_headroom {
+            default_runtime_headroom_bytes(node_vram)
+        } else {
+            0
+        };
+        let usable_vram_bytes = node_vram.saturating_sub(headroom);
+        let required_bytes = stage_required_bytes(
+            stage,
+            &layer_weights,
+            &recurrent_by_layer,
+            kv_per_layer,
+            capacity.context_length,
+            capacity.parallel_lanes,
+        );
         anyhow::ensure!(
-            node_vram >= stage.parameter_bytes,
-            "{} assigned to {} for {model_ref} requires {}, which exceeds node capacity {}",
+            usable_vram_bytes >= required_bytes,
+            "{} assigned to {} for {model_ref} exceeds node capacity: requires {} against usable {} (node budget {} minus {} runtime headroom) for {} layer(s) of repriced weights plus context-scaled KV at the compute reserve and recurrent state (context {}, {} lane(s))",
             stage.stage_id,
             stage.node_id.fmt_short(),
-            format_gb(stage.parameter_bytes),
-            format_gb(node_vram)
+            format_gb(required_bytes),
+            format_gb(usable_vram_bytes),
+            format_gb(node_vram),
+            format_gb(headroom),
+            stage.layer_end.saturating_sub(stage.layer_start),
+            capacity.context_length,
+            capacity.parallel_lanes,
         );
     }
     Ok(())
@@ -1051,6 +1223,135 @@ mod tests {
         reprice_stages(&mut stages, &pkg);
         assert_eq!(stages[0].parameter_bytes, 12 * 100);
         assert_eq!(stages[1].parameter_bytes, 24 * 100);
+    }
+
+    const GIB: u64 = 1024 * 1024 * 1024;
+
+    /// An overridden 12/24 cut of a 24-layer, 24 GiB model on two 20 GiB
+    /// nodes: 12 GiB of weights per node leaves 6 GiB of usable budget for
+    /// KV, compute reserve, and recurrent state.
+    fn overridden_stages() -> (
+        skippy::SkippyPackageIdentity,
+        Vec<SplitParticipant>,
+        Vec<RuntimeSliceStagePlan>,
+    ) {
+        let mut pkg = package(24, 24 * GIB);
+        pkg.layer_weight_bytes = vec![GIB; 24];
+        let participants = vec![participant(1, 20 * GIB), participant(2, 20 * GIB)];
+        let mut stages = vec![stage(0, 1, 0, 12), stage(1, 2, 12, 24)];
+        apply_boundaries(&mut stages, &[12], 24);
+        reprice_stages(&mut stages, &pkg);
+        (pkg, participants, stages)
+    }
+
+    fn capacity_model(
+        kv_bytes_per_token: u64,
+        recurrent_bytes_per_sequence_by_layer: Vec<u64>,
+        context_length: u32,
+        parallel_lanes: usize,
+    ) -> SplitCapacityModel {
+        SplitCapacityModel {
+            kv_bytes_per_token,
+            recurrent_bytes_per_sequence_by_layer,
+            context_length,
+            parallel_lanes,
+            budgets_runtime_headroom: true,
+        }
+    }
+
+    #[test]
+    fn an_overridden_cut_that_fits_the_planner_budget_validates() {
+        let (pkg, participants, stages) = overridden_stages();
+        validate_split_capacity(
+            "model-a",
+            &pkg,
+            &participants,
+            &stages,
+            &[],
+            &capacity_model(128, Vec::new(), 65_536, 1),
+        )
+        .expect("12 GiB of weights plus negligible KV fits an 18 GiB usable budget");
+    }
+
+    #[test]
+    fn an_override_that_fits_by_weights_but_exceeds_the_kv_budget_is_rejected() {
+        let (pkg, participants, stages) = overridden_stages();
+        // ~12.9 GB of context-scaled KV per stage on top of 12 GiB of weights
+        // blows the 18 GiB usable budget even though the weights alone fit.
+        let error = validate_split_capacity(
+            "model-a",
+            &pkg,
+            &participants,
+            &stages,
+            &[],
+            &capacity_model(4_000_000, Vec::new(), 65_536, 1),
+        )
+        .expect_err("weights that fit must not approve a cut exceeding the KV budget");
+        assert!(
+            error.to_string().contains("context-scaled KV"),
+            "error should name the KV terms: {error}"
+        );
+    }
+
+    #[test]
+    fn an_override_that_exceeds_the_lane_scaled_recurrent_budget_is_rejected() {
+        let (pkg, participants, stages) = overridden_stages();
+        let recurrent = vec![256 * 1024 * 1024; 24];
+        // One lane of recurrent state fits; four lanes of the same state do
+        // not — recurrent cost scales with lanes, weights do not.
+        validate_split_capacity(
+            "model-a",
+            &pkg,
+            &participants,
+            &stages,
+            &[],
+            &capacity_model(0, recurrent.clone(), 65_536, 1),
+        )
+        .expect("a single recurrent lane fits beside the weights");
+        let error = validate_split_capacity(
+            "model-a",
+            &pkg,
+            &participants,
+            &stages,
+            &[],
+            &capacity_model(0, recurrent, 65_536, 4),
+        )
+        .expect_err("four recurrent lanes must exceed the budget the weights left");
+        assert!(
+            error.to_string().contains("recurrent state"),
+            "error should name the recurrent terms: {error}"
+        );
+    }
+
+    #[test]
+    fn weights_that_only_fit_before_runtime_headroom_are_rejected() {
+        // 13.5 GB of weights per stage on 13.9 GB nodes fit the old raw-VRAM
+        // check; the planner's 10% headroom leaves 12.51 GB usable, so the
+        // same placement is rejected.
+        let weights_per_layer = 1_125_000_000u64;
+        let mut pkg = package(24, weights_per_layer * 24);
+        pkg.layer_weight_bytes = vec![weights_per_layer; 24];
+        let participants = vec![
+            participant(1, 13_900_000_000),
+            participant(2, 13_900_000_000),
+        ];
+        let mut stages = vec![stage(0, 1, 0, 12), stage(1, 2, 12, 24)];
+        apply_boundaries(&mut stages, &[12], 24);
+        reprice_stages(&mut stages, &pkg);
+        assert_eq!(stages[0].parameter_bytes, weights_per_layer * 12);
+        let error = validate_split_capacity(
+            "model-a",
+            &pkg,
+            &participants,
+            &stages,
+            &[],
+            &capacity_model(0, Vec::new(), 1, 1),
+        )
+        .expect_err("weights sized against raw VRAM must fail once headroom is charged");
+        assert!(
+            error.to_string().contains("runtime headroom"),
+            "error should name the headroom terms: {error}"
+        );
     }
 
     #[test]
