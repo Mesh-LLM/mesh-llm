@@ -207,6 +207,7 @@ struct MeshRequestPlan {
 }
 
 enum MeshRequestFailure {
+    PaymentRequired(&'static str),
     UnsupportedMedia,
     UnsupportedWorkload,
     ModelUnavailable(String),
@@ -594,6 +595,7 @@ async fn build_mesh_request_plan(
             request.body_json.as_ref(),
         )
         .await
+        .map_err(MeshRequestFailure::PaymentRequired)?
         {
             target_hosts = ranked
                 .ordered
@@ -719,6 +721,10 @@ async fn handle_mesh_request_failure(
 ) {
     let mut tcp_stream = Some(tcp_stream);
     match failure {
+        MeshRequestFailure::PaymentRequired(reason) => {
+            let _ =
+                send_error_observed(tcp_stream.take().unwrap(), 402, reason, route_observer).await;
+        }
         MeshRequestFailure::UnsupportedWorkload => {
             let _ = send_error_observed(
                 tcp_stream.take().unwrap(),
@@ -1103,6 +1109,9 @@ fn terminal_outcome_for_mesh_request_failure(
     failure: &MeshRequestFailure,
 ) -> crate::logging::TerminalOutcome {
     match failure {
+        MeshRequestFailure::PaymentRequired(_) => {
+            crate::logging::TerminalOutcome::Rejected(Some("payment_required".into()))
+        }
         MeshRequestFailure::UnsupportedWorkload => {
             crate::logging::TerminalOutcome::Rejected(Some("unsupported_workload".into()))
         }

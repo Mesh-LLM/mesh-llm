@@ -10,7 +10,7 @@ pub(super) async fn rank(
     max_output: u64,
     candidates: &mut RankedCandidates<InferenceTarget>,
     request_body: Option<&serde_json::Value>,
-) -> bool {
+) -> Result<bool, &'static str> {
     let mut prices = std::collections::HashMap::new();
     for target in &candidates.ordered {
         if let InferenceTarget::Remote(peer) = target
@@ -20,7 +20,7 @@ pub(super) async fn rank(
         }
     }
     if prices.is_empty() {
-        return false;
+        return Ok(false);
     }
     // Do not provision an empty wallet merely because a paid peer appeared.
     let service = node.payment_service().await.ok();
@@ -86,7 +86,24 @@ pub(super) async fn rank(
         .iter()
         .take_while(|target| key(target) == first)
         .count();
-    true
+    if candidates.ordered.is_empty() {
+        return Err(
+            "paid providers are unavailable under the current payment policy, wallet balance or daily budget",
+        );
+    }
+    Ok(true)
+}
+
+pub(super) fn cache_candidates<'a>(
+    payment_ranked: bool,
+    ranked: &'a RankedCandidates<InferenceTarget>,
+    ordered: &'a [InferenceTarget],
+) -> &'a [InferenceTarget] {
+    if payment_ranked {
+        &ranked.ordered[..ranked.equivalent_prefix]
+    } else {
+        ordered
+    }
 }
 
 /// Keep cache affinity inside the selected price tier.
@@ -141,8 +158,26 @@ mod tests {
             ],
             equivalent_prefix: 2,
         };
-        assert!(rank(&node, "test", 1, 1, &mut candidates, None).await);
+        assert!(
+            rank(&node, "test", 1, 1, &mut candidates, None)
+                .await
+                .unwrap()
+        );
         assert_eq!(candidates.ordered, vec![InferenceTarget::Remote(free)]);
+        let mut paid_only = RankedCandidates {
+            ordered: vec![InferenceTarget::Remote(seller.id())],
+            equivalent_prefix: 1,
+        };
+        assert!(
+            rank(&node, "test", 1, 1, &mut paid_only, None)
+                .await
+                .is_err()
+        );
+        let mut empty = RankedCandidates {
+            ordered: vec![],
+            equivalent_prefix: 0,
+        };
+        assert!(!rank(&node, "test", 1, 1, &mut empty, None).await.unwrap());
         assert!(!service.has_wallet());
         assert!(service.ledger.requests()?.is_empty());
         assert!(matches!(

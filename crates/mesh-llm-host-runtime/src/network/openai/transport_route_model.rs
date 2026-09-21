@@ -124,7 +124,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
     )
     .await;
     let mut ranked = rank_targets_by_context(&node, model, required_tokens, &candidates).await;
-    let payment_ranked = crate::network::openai::payment_routing::rank(
+    let payment_ranking = crate::network::openai::payment_routing::rank(
         &node,
         model,
         (request.body_len_bytes as u64).div_ceil(4),
@@ -134,6 +134,15 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
     )
     .await;
 
+    let payment_ranked = match payment_ranking {
+        Ok(ranked) => ranked,
+        Err(reason) => {
+            return response_outcome(
+                402,
+                send_error_observed(tcp_stream, 402, reason, route_observer).await,
+            );
+        }
+    };
     let ordered_candidates = affinity.route_eligible_candidates(model, &ranked.ordered);
     if ordered_candidates.is_empty() {
         record_route_model_unavailable(&node, model, 0);
@@ -147,11 +156,11 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
 
     let affinity_body = super::super::workload_routing::affinity_body(request);
     let prefix_hash = crate::network::affinity::cache_prefix_hash(affinity_body);
-    let cache_candidates = if payment_ranked {
-        &ranked.ordered[..ranked.equivalent_prefix]
-    } else {
-        &ordered_candidates
-    };
+    let cache_candidates = super::super::payment_routing::cache_candidates(
+        payment_ranked,
+        &ranked,
+        &ordered_candidates,
+    );
 
     let cache_target =
         cache_target_for_request(&node, affinity, model, prefix_hash, cache_candidates).await;
