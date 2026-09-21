@@ -271,7 +271,7 @@ pub(super) fn plan_runtime_slice_topology_with_resources_and_stage0(
     };
     let mut stages = map_runtime_slice_stages(plan.stages, &participant_by_id)?;
     stages.sort_by_key(|stage| stage.stage_index);
-    apply_initial_cut_override(&mut stages, package.layer_count);
+    apply_initial_cut_override(&mut stages, package, plan_auto_balance);
     validate_split_capacity(model_ref, package, participants, &stages, excluded)?;
     log_planned_slice_topology(
         topology_id,
@@ -563,7 +563,7 @@ fn runtime_slice_plan_input(
                 decode_bytes_per_second: participant.decode_bytes_per_second,
             })
             .collect(),
-        auto_balance: resources.auto_balance && initial_cut_override().is_none(),
+        auto_balance: resources.auto_balance,
     }
 }
 
@@ -599,10 +599,53 @@ fn parse_initial_cut(raw: &str) -> Option<Vec<u32>> {
 }
 
 /// Repoint an already-planned topology at [`initial_cut_override`]'s
-/// boundaries. Left alone when the override is absent.
-fn apply_initial_cut_override(stages: &mut [RuntimeSliceStagePlan], layer_count: u32) {
+/// boundaries.
+///
+/// Only for `--auto-balance` plans. The override is an acceptance-test knob for
+/// the controller, and the controller only exists on an auto-balancing split;
+/// letting the variable move boundaries on an ordinary fixed split would change
+/// placement with nothing watching it.
+fn apply_initial_cut_override(
+    stages: &mut [RuntimeSliceStagePlan],
+    package: &skippy::SkippyPackageIdentity,
+    auto_balance: bool,
+) {
+    if !auto_balance {
+        return;
+    }
     if let Some(boundaries) = initial_cut_override() {
-        apply_boundaries(stages, &boundaries, layer_count);
+        apply_boundaries(stages, &boundaries, package.layer_count);
+        reprice_stages(stages, package);
+    }
+}
+
+/// Recompute each stage's weight bytes for the range it now holds.
+///
+/// `validate_split_capacity` prices a stage from `parameter_bytes`, so leaving
+/// the planner's original totals behind after moving the boundaries would have
+/// it approve an override against the weights of a cut that no longer exists —
+/// and admissions are built from the new ranges, not the old ones.
+fn reprice_stages(stages: &mut [RuntimeSliceStagePlan], package: &skippy::SkippyPackageIdentity) {
+    let layer_weights = package_layer_weight_bytes(package);
+    if layer_weights.is_empty() {
+        // No per-layer detail: fall back to an even share of the model so the
+        // capacity check still sees the moved boundaries rather than stale
+        // totals.
+        let per_layer = package
+            .source_model_bytes
+            .checked_div(u64::from(package.layer_count).max(1))
+            .unwrap_or(0);
+        for stage in stages.iter_mut() {
+            stage.parameter_bytes =
+                u64::from(stage.layer_end - stage.layer_start).saturating_mul(per_layer);
+        }
+        return;
+    }
+    for stage in stages.iter_mut() {
+        stage.parameter_bytes = layer_weights
+            [stage.layer_start as usize..(stage.layer_end as usize).min(layer_weights.len())]
+            .iter()
+            .fold(0u64, |acc, bytes| acc.saturating_add(*bytes));
     }
 }
 
@@ -981,6 +1024,44 @@ mod tests {
         let one_gb = 1024 * 1024 * 1024;
         assert_eq!(default_runtime_headroom_bytes(one_gb), one_gb / 2);
         assert_eq!(default_runtime_headroom_bytes(0), 0);
+    }
+
+    #[test]
+    fn an_override_reprices_every_stage_for_its_new_range() {
+        // validate_split_capacity prices a stage from parameter_bytes, so a
+        // moved boundary with stale weights would be checked against a cut
+        // that no longer exists.
+        let mut pkg = package(36, 36 * 100);
+        pkg.layer_weight_bytes = (0..36).map(|_| 100u64).collect();
+        let mut stages = vec![stage(0, 1, 0, 18), stage(1, 2, 18, 36)];
+        for s in stages.iter_mut() {
+            s.parameter_bytes = 1_800;
+        }
+        apply_boundaries(&mut stages, &[12], 36);
+        reprice_stages(&mut stages, &pkg);
+        assert_eq!(stages[0].parameter_bytes, 12 * 100);
+        assert_eq!(stages[1].parameter_bytes, 24 * 100);
+    }
+
+    #[test]
+    fn repricing_falls_back_to_an_even_share_without_per_layer_weights() {
+        let pkg = package(36, 3_600);
+        let mut stages = vec![stage(0, 1, 0, 18), stage(1, 2, 18, 36)];
+        apply_boundaries(&mut stages, &[12], 36);
+        reprice_stages(&mut stages, &pkg);
+        assert_eq!(stages[0].parameter_bytes, 12 * 100);
+        assert_eq!(stages[1].parameter_bytes, 24 * 100);
+    }
+
+    #[test]
+    fn a_fixed_split_ignores_the_override_entirely() {
+        // The knob exists to exercise the controller. On a fixed split there
+        // is no controller, so it must not move placement.
+        let pkg = package(36, 3_600);
+        let original = vec![stage(0, 1, 0, 18), stage(1, 2, 18, 36)];
+        let mut stages = original.clone();
+        apply_initial_cut_override(&mut stages, &pkg, false);
+        assert_eq!(stages, original);
     }
 
     #[test]
