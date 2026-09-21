@@ -4,6 +4,7 @@ use std::sync::{
 };
 use std::{thread, time::Duration};
 
+use super::token_generation::capture_trace;
 use crate::frontend::SpeculativeDecodeConfig;
 use crate::frontend::admission::GenerationTokenBudget;
 use crate::frontend::generation::{
@@ -66,6 +67,90 @@ impl GenerationReceiptSink for RecordingReceiptSink {
         }
         Ok(())
     }
+}
+
+/// Compare RETAINED record identities (stored by the recorder, then verified
+/// against the radix after the drain) against the second request's restore
+/// lookup candidates, and name the FIRST divergence: not retained, missing
+/// candidate namespace, token-prefix divergence, or a matched candidate the
+/// radix did not find. Evidence only — the hit/parity assertions stay the
+/// pass/fail proof.
+fn first_identity_divergence(
+    stored: &[capture_trace::IdentityDiag],
+    candidates: &[capture_trace::IdentityDiag],
+) -> String {
+    if stored.is_empty() {
+        return "no record identity was enqueued by the first request".to_string();
+    }
+    if candidates.is_empty() {
+        return "the cached request attempted no exact-state lookup candidates".to_string();
+    }
+    stored
+        .iter()
+        .find_map(|record| classify_stored_identity(record, candidates))
+        .unwrap_or_else(|| {
+            format!(
+                "no divergence: all {} retained identities matched a lookup candidate and were found",
+                stored.len()
+            )
+        })
+}
+
+/// Classify one stored identity against the lookup candidates: `None` when it
+/// was retained, matched a candidate exactly, and the radix found it;
+/// otherwise `Some` with the first divergence.
+fn classify_stored_identity(
+    record: &capture_trace::IdentityDiag,
+    candidates: &[capture_trace::IdentityDiag],
+) -> Option<String> {
+    if record.retained != Some(true) {
+        return Some(format!(
+            "stored identity was NOT retained after the drain (namespace {}, {} tokens)",
+            record.namespace,
+            record.tokens.len()
+        ));
+    }
+    let matching: Vec<&capture_trace::IdentityDiag> = candidates
+        .iter()
+        .filter(|candidate| candidate.namespace == record.namespace)
+        .collect();
+    if matching.is_empty() {
+        let seen: Vec<&str> = candidates
+            .iter()
+            .map(|candidate| candidate.namespace.as_str())
+            .collect();
+        return Some(format!(
+            "stored namespace {} was never among the lookup candidates (candidate namespaces: {seen:?})",
+            record.namespace
+        ));
+    }
+    let exact = matching
+        .iter()
+        .copied()
+        .find(|candidate| candidate.tokens == record.tokens);
+    let Some(candidate) = exact else {
+        let candidate = matching[0];
+        let diverged_at = record
+            .tokens
+            .iter()
+            .zip(candidate.tokens.iter())
+            .position(|(a, b)| a != b)
+            .unwrap_or(record.tokens.len().min(candidate.tokens.len()));
+        return Some(format!(
+            "token divergence at index {diverged_at} (namespace {}, stored_len={} candidate_len={} stored[..diverged_at]={:?})",
+            record.namespace,
+            record.tokens.len(),
+            candidate.tokens.len(),
+            &record.tokens[..diverged_at.min(record.tokens.len())]
+        ));
+    };
+    if candidate.found != Some(true) {
+        return Some(format!(
+            "stored identity matched candidate tokens exactly but the radix did not find it (namespace {}, stored_token_count={:?})",
+            record.namespace, candidate.stored_token_count
+        ));
+    }
+    None
 }
 
 fn wait_for_receipts(sink: &RecordingReceiptSink, expected: usize) {
@@ -309,6 +394,9 @@ fn recurrent_post_decode_checkpoint_reuses_a_growing_prompt() -> Result<()> {
         None,
     );
     let mut first_output = Vec::new();
+    // Deterministic branch counters (telemetry is lossy): reset so the
+    // post-request deltas below are exact for THIS request.
+    capture_trace::reset();
     let first_stats = backend.generate_local_tokens(
         LocalGeneration {
             prompt_token_ids: &first_prompt,
@@ -330,6 +418,29 @@ fn recurrent_post_decode_checkpoint_reuses_a_growing_prompt() -> Result<()> {
     )?;
     assert_eq!(first_stats.cached_prompt_tokens, 0);
     assert_eq!(first_output.len(), 2);
+
+    // The first request's exact-state checkpoints are captured on detached
+    // scheduler tasks and stored by the recorder worker asynchronously. The
+    // second request must not race that pipeline: establish the completion
+    // boundary (every scheduled capture task reached a terminal outcome),
+    // then drain the recorder, or fail naming the stage that did not finish.
+    let kv = backend
+        .kv
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("recurrent cache test had no KV integration"))?;
+    kv.wait_for_exact_state_captures_idle(std::time::Duration::from_secs(30))
+        .map_err(anyhow::Error::msg)?;
+    kv.wait_for_exact_state_recording(std::time::Duration::from_secs(30))
+        .map_err(anyhow::Error::msg)?;
+    // Branch-exact evidence (telemetry is lossy): the post-decode capture
+    // must have been scheduled, executed, and recorded without a skip; the
+    // counters name the exact branch otherwise.
+    let trace = capture_trace::render();
+    let recorded = capture_trace::POST_DECODE_RECORDED.load(std::sync::atomic::Ordering::Acquire);
+    assert!(
+        recorded >= 1,
+        "post-decode capture did not complete: recorded={recorded}; {trace}"
+    );
 
     // The next prompt extends the exact state captured after the first
     // generated token was consumed. The final token is deliberately new so
@@ -417,6 +528,9 @@ fn recurrent_chat_checkpoint_preserves_cached_output_parity() -> Result<()> {
             "first rendered prompt boundary was not an exact token prefix"
         );
 
+        // Deterministic branch counters (telemetry is lossy): reset so the
+        // post-request deltas below are exact for THIS request.
+        capture_trace::reset();
         let first_response = backend.chat_completion(first_request).await?;
         let first_content = first_response
             .choices
@@ -428,6 +542,74 @@ fn recurrent_chat_checkpoint_preserves_cached_output_parity() -> Result<()> {
                 "first chat response had empty assistant content"
             ));
         }
+
+        // The first request's exact-state checkpoints follow the same two-stage
+        // async recording pipeline; establish the completion boundary for the
+        // detached capture tasks and drain the recorder before the cached
+        // second request, or fail naming the stage that did not finish.
+        let kv = backend
+            .kv
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("recurrent chat cache test had no KV integration"))?;
+        kv.wait_for_exact_state_captures_idle(std::time::Duration::from_secs(30))
+            .map_err(anyhow::Error::msg)?;
+        kv.wait_for_exact_state_recording(std::time::Duration::from_secs(30))
+            .map_err(anyhow::Error::msg)?;
+        // Branch-exact evidence (telemetry is lossy): the post-decode capture
+        // must have been scheduled, executed, and recorded without a skip; the
+        // counters name the exact branch otherwise. POST_DECODE_RECORDED means
+        // ENQUEUED (stored=false); the stored-identity snapshot below plus the
+        // recorder drain are what tie the record to storage.
+        let trace = capture_trace::render();
+        let recorded =
+            capture_trace::POST_DECODE_RECORDED.load(std::sync::atomic::Ordering::Acquire);
+        assert!(
+            recorded >= 1,
+            "post-decode capture did not complete: recorded={recorded}; {trace}"
+        );
+        // Stored identities (storage-completion observations from the
+        // recorder), each verified against the radix for RETENTION after the
+        // drain; also discard the first request's own lookup attempts so the
+        // post-second-request snapshot covers exactly the cached request's
+        // restore candidates.
+        let stored_identities = capture_trace::drain_stored_identities();
+        let stored_identities: Vec<capture_trace::IdentityDiag> = stored_identities
+            .into_iter()
+            .map(|diag| capture_trace::IdentityDiag {
+                retained: Some(kv.retained_exact_identity(&diag.namespace, &diag.tokens)),
+                ..diag
+            })
+            .collect();
+        // Capture accounting for EVERY decision prefix of the first request,
+        // including the prefill-ladder boundary checkpoint.
+        let capture_decisions = capture_trace::drain_capture_decisions();
+        let decisions_report: Vec<String> = capture_decisions
+            .iter()
+            .map(|decision| {
+                format!(
+                    "{}: {} at checkpoint={} runtime_position={:?} namespace={:?}",
+                    decision.decision_prefix,
+                    decision.outcome,
+                    decision.checkpoint_token_count,
+                    decision.runtime_position,
+                    decision.namespace
+                )
+            })
+            .collect();
+        // The common-prefix boundary the assertions already prove is an exact
+        // token prefix of BOTH prompts: what did the ladder plan for it, and
+        // is any retained identity at that boundary? The capture path sizes
+        // the shared checkpoint from prefill_tokens = prompt minus its last
+        // token, so the expectation uses the same basis.
+        let expected_shared_checkpoint = kv.exact_shared_checkpoint_token_count(
+            (first_prompt_tokens.len().saturating_sub(1)) as u64,
+        );
+        let boundary_retained = stored_identities
+            .iter()
+            .filter(|diag| diag.retained == Some(true))
+            .map(|diag| diag.tokens.len())
+            .collect::<Vec<_>>();
+        capture_trace::drain_lookup_candidates();
 
         let second_messages = serde_json::json!([
             {"role": "system", "content": "You are a deterministic cache test."},
@@ -457,6 +639,22 @@ fn recurrent_chat_checkpoint_preserves_cached_output_parity() -> Result<()> {
             first_boundary_tokens.as_slice(),
             "first message-history boundary was not a prefix of growing chat prompt"
         );
+        // Restore eligibility: for every retained namespace, how many tokens
+        // of the SECOND prompt the retained state would serve (read-only
+        // peek). The boundary prefix assertion above says a retained
+        // boundary-length checkpoint would be eligible; this measures it.
+        let eligibility: Vec<String> = stored_identities
+            .iter()
+            .filter(|diag| diag.retained == Some(true))
+            .map(|diag| {
+                let served = kv.eligible_exact_match_tokens(&diag.namespace, &second_prompt_tokens);
+                format!(
+                    "stored {} tokens -> would serve {served:?} of the second prompt's {} tokens",
+                    diag.tokens.len(),
+                    second_prompt_tokens.len()
+                )
+            })
+            .collect();
         let cached_response = backend.chat_completion(cached_request).await?;
         let cached_content = cached_response
             .choices
@@ -469,6 +667,10 @@ fn recurrent_chat_checkpoint_preserves_cached_output_parity() -> Result<()> {
             .as_ref()
             .map(|details| details.cached_tokens)
             .unwrap_or(0);
+        // Restore-outcome evidence: what the cached request actually tried to
+        // look up, vs what the first request stored and retained.
+        let lookup_candidates = capture_trace::drain_lookup_candidates();
+        let divergence = first_identity_divergence(&stored_identities, &lookup_candidates);
 
         let uncached_request: ChatCompletionRequest = serde_json::from_value(serde_json::json!({
             "model": "recurrent-chat-cache-test",
@@ -493,7 +695,16 @@ fn recurrent_chat_checkpoint_preserves_cached_output_parity() -> Result<()> {
 
         assert!(
             cached_tokens > 0,
-            "growing chat request did not hit KV cache"
+            "growing chat request did not hit KV cache (cached_tokens={cached_tokens}); \
+             first divergence: {divergence}; \
+             boundary_tokens={} expected_shared_checkpoint={expected_shared_checkpoint:?}; \
+             retained_token_counts={boundary_retained:?}; \
+             capture_decisions={decisions_report:?}; \
+             eligibility={eligibility:?}; \
+             stored identities: {:?}; lookup candidates: {:?}",
+            first_boundary_tokens.len(),
+            stored_identities,
+            lookup_candidates
         );
         assert_eq!(uncached_tokens, 0);
         assert_eq!(cached_content, uncached_content);

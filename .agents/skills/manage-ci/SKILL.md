@@ -378,8 +378,12 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Operational safety
 
-- Agentic replay is a daily trusted-main benchmark, without a repository
-  opt-in flag. The persistent micstudio runner must execute natively as arm64
+- Agentic replay executes complete recorded sessions only on trusted main.
+  Long-context qualification is currently manual-only; restore the daily
+  schedule only after reviewed calibration of all model/concurrency cells.
+  Require at least 128K model/runtime context, complete turn evidence, and
+  actual recurrent restores for the recurrent lane. Never substitute shorter
+  sessions or checkpoint sampling to make a failing cohort pass. The persistent micstudio runner must execute natively as arm64
   before checkout. Its shared model cache is writable and permits pinned model
   and trajectory downloads. Repair uses Goose with the llama canary's provider
   and model defaults. Only a complete, gated performance
@@ -410,6 +414,25 @@ checked-in expiry are the maintainer-controlled approval boundary.
   deterministic failure.
 - Validate with the narrowest safe workflow. A run is not successful until all
   required jobs reach a terminal successful conclusion; state expected skips.
+
+## Llama canary family fan-out
+
+The trusted-main canary releases its build runner before scheduling one job
+per certified family. Every worker consumes the exact source, plan, manifest,
+and executable handoff from its producer; family workers never rebuild.
+The immutable model cache remains offline and read-only. One workflow-level
+non-cancelling concurrency group prevents overlapping canary runs, while
+family jobs have no shared concurrency group and use at most eight runners.
+
+Changed pins have at most three distributed repair attempts. Within each
+attempt, prepare/build failures return to the same bounded Goose session.
+Family or independent-verification failures feed the preserved candidate and
+all available worker/build evidence into a new session in the next attempt.
+Every edit invalidates all family results. A complete green repair pass must
+be followed by a fresh independent build and complete per-family pass on the
+same commit. A hosted aggregate rejects missing, duplicate, failed, cancelled,
+or mismatched results. Only the final hosted publisher receives the repair
+credential, and exhausted attempts publish no branch or PR.
 
 ## Validation contract
 

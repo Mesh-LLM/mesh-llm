@@ -8,6 +8,8 @@ import subprocess
 import tempfile
 import textwrap
 import unittest
+from unittest.mock import patch
+from urllib.error import HTTPError, URLError
 from pathlib import Path
 
 import yaml
@@ -61,8 +63,8 @@ class NightlyWorkflowTests(unittest.TestCase):
     def test_shared_cache_allows_pinned_model_and_trajectory_downloads(self):
         inputs = self.step("Verify pinned replay inputs")["run"]
         self.assertNotIn("--cache-dir", inputs)
-        self.assertNotIn("hf download", inputs)
-        self.assertIn('repo_type="dataset", token=False', inputs)
+        self.assertNotIn("import hf_hub_download", inputs)
+        self.assertIn('--repo-type dataset --revision "$dataset_revision" --format quiet', inputs)
         self.assertEqual(self.job["env"]["HF_HUB_OFFLINE"], "0")
         toolchain = self.step("Verify runner toolchain")["run"]
         self.assertIn('export HF_HOME="$HF_CACHE"', toolchain)
@@ -71,10 +73,10 @@ class NightlyWorkflowTests(unittest.TestCase):
         self.assertEqual(self.job["env"]["HF_HUB_DISABLE_IMPLICIT_TOKEN"], "1")
         self.assertNotIn("env", self.step("Download cohort-matched history"))
 
-    def test_input_verification_uses_api_paths_and_fails_closed(self):
+    def test_input_verification_uses_cli_paths_without_python_package(self):
         # Execute the actual workflow step with small pinned files. The fake
-        # CLI reproduces the runner's decorated stdout, while the API returns
-        # a real path and may emit unrelated status text of its own.
+        # CLI reproduces the runner's decorated stdout unless quiet is selected.
+        # System Python deliberately cannot import the Hugging Face package.
         cases = ("success", "model-corrupt", "dataset-corrupt", "model-download", "dataset-download")
         for failure in cases:
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
@@ -102,29 +104,41 @@ class NightlyWorkflowTests(unittest.TestCase):
                 (root / "evals/skippy-competitive-benchmark.json").write_text(
                     json.dumps({"thoughtworks": {"dataset": canonical}})
                 )
-                (root / "huggingface_hub.py").write_text(textwrap.dedent(r'''
-                    import json, os
+                (root / "huggingface_hub.py").write_text(
+                    "raise ModuleNotFoundError(\"No module named 'huggingface_hub'\")\n"
+                )
+                hf = root / "hf"
+                hf.write_text("#!/usr/bin/env python3\n" + textwrap.dedent(r'''
+                    import argparse, json, os, sys
                     from pathlib import Path
 
-                    def hf_hub_download(*, repo_id, filename, revision, token, repo_type="model"):
-                        assert token is False
-                        assert os.environ["HF_HUB_OFFLINE"] == "0"
-                        matrix = json.loads(Path("matrix.json").read_text())
-                        expected = matrix["models"] if repo_type == "model" else [{
-                            "repo": matrix["replay"]["dataset"],
-                            "file": matrix["replay"]["dataset_file"],
-                            "revision": matrix["replay"]["dataset_revision"],
-                        }]
-                        assert any((row["repo"], row["file"], row["revision"]) ==
-                                   (repo_id, filename, revision) for row in expected)
-                        if os.environ["FAILURE"] == repo_type + "-download":
-                            raise RuntimeError("fixture download failure")
-                        path = Path(os.environ["HF_HUB_CACHE"]) / filename
+                    parser = argparse.ArgumentParser()
+                    parser.add_argument("command", choices=["download"])
+                    parser.add_argument("repo")
+                    parser.add_argument("filename")
+                    parser.add_argument("--revision", required=True)
+                    parser.add_argument("--repo-type", default="model")
+                    parser.add_argument("--format", default="human")
+                    args = parser.parse_args()
+                    assert os.environ["HF_HUB_OFFLINE"] == "0"
+                    assert os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] == "1"
+                    matrix = json.loads(Path("matrix.json").read_text())
+                    expected = matrix["models"] if args.repo_type == "model" else [{
+                        "repo": matrix["replay"]["dataset"],
+                        "file": matrix["replay"]["dataset_file"],
+                        "revision": matrix["replay"]["dataset_revision"],
+                    }]
+                    assert any((row["repo"], row["file"], row["revision"]) ==
+                               (args.repo, args.filename, args.revision) for row in expected)
+                    if os.environ["FAILURE"] == args.repo_type + "-download":
+                        sys.exit("fixture download failure")
+                    path = Path(os.environ["HF_HUB_CACHE"]) / args.filename
+                    print("download progress", file=sys.stderr)
+                    if args.format == "quiet":
+                        print(path)
+                    else:
                         print("\x1b[32m✓ Downloaded\x1b[0m\n  path: " + str(path))
-                        return str(path)
                 '''))
-                hf = root / "hf"
-                hf.write_text("#!/bin/sh\nprintf '\\033[32m✓ Downloaded\\033[0m\\n  path: /not/a/path\\n'\n")
                 hf.chmod(0o755)
                 if failure == "model-corrupt":
                     (cache / matrix["models"][0]["file"]).write_bytes(b"bad model")
@@ -134,7 +148,8 @@ class NightlyWorkflowTests(unittest.TestCase):
                 env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}",
                            PYTHONPATH=str(root), MATRIX_FILE=str(root / "matrix.json"),
                            RUNNER_TEMP=str(root), GITHUB_ENV=str(env_file),
-                           HF_HUB_CACHE=str(cache), HF_HUB_OFFLINE="0", FAILURE=failure)
+                           HF_HUB_CACHE=str(cache), HF_HUB_OFFLINE="0",
+                           HF_HUB_DISABLE_IMPLICIT_TOKEN="1", FAILURE=failure)
                 result = subprocess.run(
                     ["bash", "-c", self.step("Verify pinned replay inputs")["run"]],
                     cwd=root, env=env, capture_output=True, text=True,
@@ -148,6 +163,55 @@ class NightlyWorkflowTests(unittest.TestCase):
                     self.assertNotIn("DATASET_FILE=", env_file.read_text())
                     expected = "SHA-256 mismatch" if failure.endswith("corrupt") else "fixture download failure"
                     self.assertIn(expected, result.stderr)
+
+    def test_history_probe_only_bootstraps_on_http_404(self):
+        script = self.step("Download cohort-matched history")["run"]
+        probe = script.split("<<'PY'", 1)[1].split("\n", 1)[1].split("\nPY", 1)[0]
+        for code in (200, 401, 403, 404, 500, "network"):
+            with self.subTest(code=code):
+                error = None if code == 200 else (
+                    URLError("offline") if code == "network" else
+                    HTTPError("https://huggingface.co/api/datasets/owner/repo", code, "fixture", {}, None)
+                )
+                with patch("sys.argv", ["-", "owner/repo"]), patch(
+                    "urllib.request.urlopen", side_effect=error
+                ) as request:
+                    status = 0
+                    try:
+                        exec(compile(probe, "history-probe", "exec"), {})
+                    except SystemExit as exc:
+                        status = exc.code
+                    self.assertEqual(status, 0 if code == 200 else 3 if code == 404 else 1)
+                    if isinstance(error, HTTPError):
+                        error.close()
+                    request.assert_called_once_with(
+                        "https://huggingface.co/api/datasets/owner/repo", timeout=30
+                    )
+
+    def test_replay_environment_is_locked_and_prepared_before_inputs(self):
+        prepare = self.step("Prepare pinned replay Python environment")
+        self.assertLess(
+            self.steps.index(prepare),
+            self.steps.index(self.step("Verify pinned replay inputs")),
+        )
+        self.assertIn(
+            "uv sync --locked --project ci/agentic-replay-nightly", prepare["run"]
+        )
+        self.assertIn("import duckdb", prepare["run"])
+        self.assertIn('"$GITHUB_PATH"', prepare["run"])
+        self.assertTrue((ROOT / "ci/agentic-replay-nightly/uv.lock").is_file())
+        self.assertIn(
+            "SCCACHE_SERVER_UDS=$RUNNER_TEMP/agentic-replay-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sock",
+            self.step("Verify runner toolchain")["run"],
+        )
+        self.assertIn(
+            "ulimit -n 65536",
+            self.step("Replay granite-3.1-2b complete sessions")["run"],
+        )
+        self.assertIn(
+            "ulimit -n 65536",
+            self.step("Prepare repair PR artifact on regression (Goose)")["run"],
+        )
 
     def test_repair_requires_explicit_regression_and_preserves_evidence(self):
         repair = self.step("Prepare repair PR artifact on regression (Goose)")
@@ -176,8 +240,11 @@ class NightlyWorkflowTests(unittest.TestCase):
                     self.assertGreater(timeout, 0)
                     self.assertLessEqual(timeout, 360)
         repair = self.step("Prepare repair PR artifact on regression (Goose)")
-        replay = self.step("Replay each pinned model")
-        self.assertGreater(self.job["timeout-minutes"], replay["timeout-minutes"] + repair["timeout-minutes"])
+        replay = self.step("Replay granite-3.1-2b complete sessions")
+        self.assertGreater(
+            self.job["timeout-minutes"],
+            3 * replay["timeout-minutes"] + repair["timeout-minutes"],
+        )
 
 
 if __name__ == "__main__":

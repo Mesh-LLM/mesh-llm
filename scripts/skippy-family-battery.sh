@@ -783,6 +783,13 @@ run_mmproj_smoke() {
     echo "env SKIPPY_MM_MODEL='$target' SKIPPY_MM_PROJECTOR='$mmproj' SKIPPY_MM_IMAGE='$ROOT/ci/llama-canary/fixtures/multimodal-smoke.png' SKIPPY_MM_ACTIVATION_WIDTH='$activation_width' SKIPPY_MM_SPLIT_LAYER='$split_layer' cargo test --manifest-path '$ROOT/Cargo.toml' -p skippy-server --lib frontend::tests::multimodal -- --nocapture --test-threads=1"
     return 0
   fi
+  local -a smoke_command
+  if [[ -n "${FAMILY_BATTERY_MM_TEST_BIN:-}" ]]; then
+    [[ -x "$FAMILY_BATTERY_MM_TEST_BIN" ]] || return 1
+    smoke_command=("$FAMILY_BATTERY_MM_TEST_BIN" frontend::tests::multimodal --nocapture --test-threads=1)
+  else
+    smoke_command=(cargo test --manifest-path "$ROOT/Cargo.toml" -p skippy-server --lib frontend::tests::multimodal -- --nocapture --test-threads=1)
+  fi
   exit_code=0
   "$ROOT/scripts/run-command-with-timeout.py" \
     --seconds "$smoke_timeout" \
@@ -797,7 +804,7 @@ run_mmproj_smoke() {
       SKIPPY_MM_N_GPU_LAYERS=999 \
       SKIPPY_MM_SPLIT_LAYER="$split_layer" \
       LLAMA_STAGE_BACKEND=metal \
-      cargo test --manifest-path "$ROOT/Cargo.toml" -p skippy-server --lib frontend::tests::multimodal -- --nocapture --test-threads=1 \
+      "${smoke_command[@]}" \
       >"$log_path" 2>&1 || exit_code=$?
   if (( exit_code != 0 )); then
     echo "mmproj smoke failed for $family; log: $log_path" >&2

@@ -69,16 +69,18 @@ wrapper checks these limits before it accepts the tree, and the full battery
 independently verifies every corrected tensor-byte value against the pinned
 local artifact.
 
-Returning from the coding session is not a success signal. The trusted harness
-runs the complete gate sequence on the working tree. If a gate is red, it
-returns the current logs to this same session and you continue the task within
-the repair admission window. Each returned candidate gets a fresh bounded
-verification pass; previous repair and test time does not shorten it. After the
-admission window expires, a failing pass ends the task without another coding
-turn. Only a green repair pass may create the
-local candidate commit. A separate job then independently reruns the same
-sequence on that exact tree before a later success-gated step owns GitHub
-publication.
+Returning from the coding session is not certification. The trusted harness
+runs prepare, manifest-policy, build and smoke gates; local failures return to
+the same named session within the coding admission window. Once those gates
+pass, the job exports an uncertified immutable candidate and releases its
+runner. Separate jobs certify every family using the exact producer binaries.
+
+A failed family pass or independent verification supplies its candidate and
+all available failure logs to a new session in the next attempt. Read those
+logs before continuing. There are at most three distributed repair attempts;
+every edit requires a new complete build and family pass. Both the first full
+family pass and the fresh independent build/family pass must be green on the
+same commit before the hosted publisher can create a branch or PR.
 
 ## New upstream model families
 

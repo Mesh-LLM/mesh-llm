@@ -1,5 +1,5 @@
 {
-  "full_patch_sha256": "675da0cbeef6aeb0928784375ccc829adb8c7b14fcb8b57e767bea01e19a6b31",
+  "full_patch_sha256": "90b45387a2af65f6b051383fc3f55ecbcb89d0cc7a0d18bd2f0cdc8ede048c9c",
   "generator_version": "0.5.0",
   "schema_version": 1,
   "shards": [
@@ -404,7 +404,7 @@
         "kimi-k3"
       ],
       "file": "0040-family-kimi-k3.patch",
-      "sha256": "408dbad0882f21435284522c38073bc79bba98da5debeae8e38a3d0aa2a43259",
+      "sha256": "8910cc7722f21216d3f559634d81192f4e26af68aa54a06bddb9b70807eca2d6",
       "sources": [
         "src/models/kimi-k3.cpp"
       ]

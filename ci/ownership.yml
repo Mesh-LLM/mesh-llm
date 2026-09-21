@@ -257,6 +257,223 @@
         "scripts/build-linux.sh",
         "scripts/build-windows.ps1"
       ]
+    },
+    {
+      "domain": "tooling",
+      "patterns": [
+        "skippy/evals/**",
+        "mesh/evals/**",
+        "mesh/scripts/**",
+        "skippy/scripts/**"
+      ]
+    },
+    {
+      "domain": "docs",
+      "patterns": [
+        "mesh/docs/**",
+        "skippy/docs/**"
+      ]
+    },
+    {
+      "domain": "website",
+      "patterns": [
+        "mesh/website/**",
+        "mesh/install.sh",
+        "mesh/install.ps1",
+        "mesh/docs/index.html",
+        "mesh/docs/CNAME",
+        "mesh/docs/assets/**",
+        "mesh/docs/catalog/**",
+        "mesh/docs/pagefind/**",
+        "mesh/docs/.well-known/**"
+      ]
+    },
+    {
+      "domain": "cli",
+      "patterns": [
+        "mesh/crates/mesh-llm-cli/src/parser.rs",
+        "mesh/crates/mesh-llm-cli/src/models.rs",
+        "mesh/crates/mesh-llm-cli/src/runtime.rs",
+        "mesh/crates/mesh-llm-cli/src/benchmark.rs"
+      ]
+    },
+    {
+      "domain": "rust",
+      "patterns": [
+        "mesh/crates/**",
+        "skippy/crates/**"
+      ]
+    },
+    {
+      "domain": "ui",
+      "patterns": [
+        "mesh/crates/mesh-llm-ui/**"
+      ]
+    },
+    {
+      "domain": "runtime-product",
+      "patterns": [
+        "mesh/scripts/build-*.sh",
+        "skippy/scripts/build-*.sh",
+        "mesh/scripts/build-*.ps1",
+        "skippy/scripts/build-*.ps1",
+        "mesh/scripts/ci-*-smoke.sh",
+        "skippy/scripts/ci-*-smoke.sh",
+        "mesh/scripts/ci-*-smoke.py",
+        "skippy/scripts/ci-*-smoke.py",
+        "mesh/scripts/ci-*-smoke.cjs",
+        "skippy/scripts/ci-*-smoke.cjs",
+        "mesh/scripts/compose-product*",
+        "skippy/scripts/compose-product*",
+        "mesh/scripts/package-release*",
+        "skippy/scripts/package-release*",
+        "mesh/scripts/verify-host-dependencies.py",
+        "skippy/scripts/verify-host-dependencies.py",
+        "mesh/deploy/docker/**",
+        "mesh/deploy/fly/**",
+        "mesh/deploy/**"
+      ]
+    },
+    {
+      "domain": "native-abi",
+      "patterns": [
+        "skippy/third_party/llama.cpp/**",
+        "skippy/scripts/prepare-llama.sh",
+        "skippy/scripts/build-llama.sh",
+        "skippy/scripts/package-native-runtime.sh",
+        "skippy/scripts/verify-native-runtime-package.sh",
+        "skippy/crates/skippy-ffi/**",
+        "skippy/crates/llama-quant-ffi/**"
+      ]
+    },
+    {
+      "domain": "protocol",
+      "patterns": [
+        "mesh/crates/mesh-llm-protocol/**",
+        "mesh/crates/mesh-llm-routing/**",
+        "mesh/crates/mesh-llm-types/**",
+        "skippy/crates/skippy-protocol/**"
+      ]
+    },
+    {
+      "domain": "split-serving",
+      "patterns": [
+        "skippy/crates/skippy-cache/**",
+        "skippy/crates/skippy-coordinator/**",
+        "skippy/crates/skippy-correctness/**",
+        "skippy/crates/skippy-package-builder/**",
+        "skippy/crates/skippy-prompt/**",
+        "skippy/crates/skippy-runtime/**",
+        "skippy/crates/skippy-serving/**",
+        "skippy/crates/skippy-cli/**",
+        "skippy/crates/skippy-commands/**",
+        "skippy/crates/skippy-config/**",
+        "skippy/crates/skippy-topology/**"
+      ]
+    },
+    {
+      "domain": "model-download",
+      "patterns": [
+        "skippy/crates/skippy-model-artifact/**",
+        "skippy/crates/skippy-model-hf/**",
+        "skippy/crates/skippy-model-package/**",
+        "skippy/crates/skippy-model-ref/**",
+        "skippy/crates/skippy-model-resolver/**",
+        "skippy/crates/skippy-model/**",
+        "mesh/scripts/ci-hf-download-smoke.sh",
+        "skippy/scripts/ci-hf-download-smoke.sh"
+      ]
+    },
+    {
+      "domain": "sdk-rust",
+      "patterns": [
+        "mesh/crates/mesh-llm-sdk/**",
+        "mesh/crates/mesh-llm-api-client/**",
+        "mesh/crates/mesh-llm-api-server/**",
+        "mesh/scripts/ci-rust-sdk-smoke.sh",
+        "skippy/scripts/ci-rust-sdk-smoke.sh",
+        "mesh/sdk/**"
+      ]
+    },
+    {
+      "domain": "sdk-kotlin",
+      "patterns": [
+        "mesh/sdk/kotlin/**",
+        "mesh/scripts/ci-kotlin-sdk-smoke.sh",
+        "skippy/scripts/ci-kotlin-sdk-smoke.sh"
+      ]
+    },
+    {
+      "domain": "sdk-swift",
+      "patterns": [
+        "mesh/sdk/swift/**",
+        "mesh/scripts/ci-swift-sdk-smoke.sh",
+        "skippy/scripts/ci-swift-sdk-smoke.sh"
+      ]
+    },
+    {
+      "domain": "platform-macos",
+      "patterns": [
+        "mesh/scripts/build-mac.sh",
+        "skippy/scripts/build-mac.sh",
+        "mesh/scripts/ci-swift-sdk-smoke.sh",
+        "skippy/scripts/ci-swift-sdk-smoke.sh"
+      ]
+    },
+    {
+      "domain": "platform-windows",
+      "patterns": [
+        "mesh/scripts/build-windows.ps1",
+        "skippy/scripts/build-windows.ps1",
+        "mesh/scripts/install-windows-sdk.ps1",
+        "skippy/scripts/install-windows-sdk.ps1",
+        "mesh/scripts/windows-native-runtime-deps.py",
+        "skippy/scripts/windows-native-runtime-deps.py"
+      ]
+    },
+    {
+      "domain": "backend-cuda",
+      "patterns": [
+        "mesh/scripts/detect-cuda-arch.sh",
+        "skippy/scripts/detect-cuda-arch.sh",
+        "mesh/scripts/build-linux.sh",
+        "skippy/scripts/build-linux.sh",
+        "mesh/scripts/build-windows.ps1",
+        "skippy/scripts/build-windows.ps1"
+      ]
+    },
+    {
+      "domain": "backend-rocm",
+      "patterns": [
+        "mesh/scripts/detect-rocm-arch.sh",
+        "skippy/scripts/detect-rocm-arch.sh",
+        "mesh/scripts/build-linux-rocm.sh",
+        "skippy/scripts/build-linux-rocm.sh",
+        "mesh/scripts/build-windows.ps1",
+        "skippy/scripts/build-windows.ps1"
+      ]
+    },
+    {
+      "domain": "backend-vulkan",
+      "patterns": [
+        "mesh/scripts/build-linux.sh",
+        "skippy/scripts/build-linux.sh",
+        "mesh/scripts/build-windows.ps1",
+        "skippy/scripts/build-windows.ps1"
+      ]
+    },
+    {
+      "domain": "runtime-product",
+      "patterns": [
+        "crates/mesh-llm-skippy-adapter/**",
+        "crates/mesh-llm-membership/**",
+        "crates/mesh-llm-control-api/**",
+        "crates/mesh-llm-runtime/**",
+        "mesh/crates/mesh-llm-skippy-adapter/**",
+        "mesh/crates/mesh-llm-membership/**",
+        "mesh/crates/mesh-llm-control-api/**",
+        "mesh/crates/mesh-llm-runtime/**"
+      ]
     }
   ],
   "crate_rules": [
@@ -349,6 +566,59 @@
     {
       "domain": "backend-vulkan",
       "crates": ["llama-spec-bench", "mesh-llm-gpu-bench", "skippy-bench"]
+    },
+    {
+      "domain": "runtime-product",
+      "crates": [
+        "mesh-llm-skippy-adapter",
+        "mesh-llm-membership",
+        "mesh-llm-control-api",
+        "mesh-llm-runtime"
+      ]
+    },
+    {
+      "domain": "runtime-product",
+      "crates": [
+        "mesh-llm-transport",
+        "skippy-openai-frontend"
+      ]
+    },
+    {
+      "domain": "split-serving",
+      "crates": [
+        "skippy-package-builder",
+        "skippy-serving",
+        "skippy-cli",
+        "skippy-commands",
+        "skippy-config"
+      ]
+    },
+    {
+      "domain": "model-download",
+      "crates": [
+        "skippy-model-artifact",
+        "skippy-model-hf",
+        "skippy-model-ref",
+        "skippy-model-resolver"
+      ]
+    },
+    {
+      "domain": "backend-cuda",
+      "crates": [
+        "skippy-gpu-bench"
+      ]
+    },
+    {
+      "domain": "backend-rocm",
+      "crates": [
+        "skippy-gpu-bench"
+      ]
+    },
+    {
+      "domain": "backend-vulkan",
+      "crates": [
+        "skippy-gpu-bench"
+      ]
     }
   ]
 }
