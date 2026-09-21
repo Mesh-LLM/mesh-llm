@@ -259,10 +259,88 @@ async fn finish_relay_pair(
     first.and(second)
 }
 
+/// Emulated one-way link delay for stage traffic, from
+/// `MESH_LLM_STAGE_LINK_DELAY_MS`.
+///
+/// Splitting a model across a wide-area link is bounded by round-trip time,
+/// not bandwidth: activations measured ~0.7 MB/s on gigabit, while a real
+/// Sydney-Melbourne hop cost 30 ms against ~6 ms of compute per token. This
+/// knob makes that variable sweepable on co-located hardware so parity can be
+/// measured against RTT with everything else held fixed.
+///
+/// Only the stage transport bridge consults it, so it delays inter-node
+/// activation traffic and nothing else. Shaping the interface instead would
+/// also delay the benchmark harness's own liveness traffic, and a node that
+/// misses heartbeats gets declared dead mid-run.
+fn stage_link_delay() -> Option<Duration> {
+    static DELAY: std::sync::OnceLock<Option<Duration>> = std::sync::OnceLock::new();
+    *DELAY.get_or_init(|| {
+        let millis = std::env::var("MESH_LLM_STAGE_LINK_DELAY_MS")
+            .ok()?
+            .trim()
+            .parse::<u64>()
+            .ok()
+            .filter(|millis| *millis > 0)?;
+        tracing::warn!(
+            delay_ms = millis,
+            "emulating stage link delay; throughput figures are not from an unshaped link"
+        );
+        Some(Duration::from_millis(millis))
+    })
+}
+
+/// Forward TCP to QUIC holding every chunk for `delay` before release.
+///
+/// The reader keeps reading while queued chunks wait, so only latency changes.
+/// Sleeping in the read loop instead would also cap throughput at one chunk
+/// per `delay` and quietly turn a latency sweep into a bandwidth sweep.
+///
+/// The delay is applied to this direction only. A stage exchange crosses one
+/// bridge, so a request-response pair gains exactly `delay` — which is the
+/// round trip the pipeline actually pays per token.
+async fn relay_tcp_to_quic_delayed(
+    mut tcp_read: tokio::io::ReadHalf<TcpStream>,
+    mut quic_send: iroh::endpoint::SendStream,
+    delay: Duration,
+) -> Result<()> {
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<(tokio::time::Instant, Vec<u8>)>(1024);
+    let writer = tokio::spawn(async move {
+        let mut total: u64 = 0;
+        while let Some((release_at, chunk)) = rx.recv().await {
+            tokio::time::sleep_until(release_at).await;
+            quic_send.write_all(&chunk).await?;
+            total += chunk.len() as u64;
+            BYTES_TRANSFERRED.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+        }
+        quic_send.finish()?;
+        tracing::info!("TCP→QUIC (delayed): {total} bytes");
+        Ok::<(), anyhow::Error>(())
+    });
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = tcp_read.read(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        if tx
+            .send((tokio::time::Instant::now() + delay, buf[..n].to_vec()))
+            .await
+            .is_err()
+        {
+            break;
+        }
+    }
+    drop(tx);
+    writer.await?
+}
+
 async fn relay_tcp_to_quic(
     mut tcp_read: tokio::io::ReadHalf<TcpStream>,
     mut quic_send: iroh::endpoint::SendStream,
 ) -> Result<()> {
+    if let Some(delay) = stage_link_delay() {
+        return relay_tcp_to_quic_delayed(tcp_read, quic_send, delay).await;
+    }
     let mut buf = vec![0u8; 64 * 1024];
     let mut total: u64 = 0;
     loop {
@@ -584,5 +662,85 @@ mod tests {
             forwarded,
             b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"
         );
+    }
+}
+
+#[cfg(test)]
+mod stage_link_delay_tests {
+    use super::*;
+
+    /// The delay line must hold each chunk without serialising the stream:
+    /// many chunks sent back to back should all arrive about one delay late,
+    /// not one delay apart. That difference is exactly the bandwidth artifact
+    /// a naive sleep-in-the-read-loop would introduce.
+    #[tokio::test(start_paused = true)]
+    async fn queued_chunks_keep_their_pipelining() {
+        let delay = Duration::from_millis(50);
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<(tokio::time::Instant, Vec<u8>)>(64);
+        let start = tokio::time::Instant::now();
+        for _ in 0..10 {
+            tx.send((tokio::time::Instant::now() + delay, vec![0u8; 8]))
+                .await
+                .unwrap();
+        }
+        drop(tx);
+
+        let mut released = Vec::new();
+        while let Some((release_at, chunk)) = rx.recv().await {
+            tokio::time::sleep_until(release_at).await;
+            released.push((tokio::time::Instant::now() - start, chunk.len()));
+        }
+
+        assert_eq!(released.len(), 10);
+        // Every chunk lands one delay after it was queued, and the last one is
+        // not 10 delays late.
+        let last = released.last().unwrap().0;
+        assert!(
+            last < delay * 2,
+            "last chunk released after {last:?}, expected about {delay:?}"
+        );
+    }
+
+    #[test]
+    fn an_unset_or_zero_delay_leaves_the_relay_alone() {
+        // Parsing only; the OnceLock means the env cannot be re-read in-process.
+        let parse = |raw: &str| {
+            raw.trim()
+                .parse::<u64>()
+                .ok()
+                .filter(|millis| *millis > 0)
+                .map(Duration::from_millis)
+        };
+        assert_eq!(parse("0"), None);
+        assert_eq!(parse(""), None);
+        assert_eq!(parse("not-a-number"), None);
+        assert_eq!(parse(" 30 "), Some(Duration::from_millis(30)));
+    }
+
+    /// A delayed relay still forwards every byte in order.
+    #[tokio::test]
+    async fn the_delayed_relay_forwards_the_whole_stream() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let payload: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
+        let expected = payload.clone();
+        let client = tokio::spawn(async move {
+            let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+            stream.write_all(&payload).await.unwrap();
+            stream.shutdown().await.unwrap();
+        });
+        let (server, _) = listener.accept().await.unwrap();
+        let (mut read_half, _write_half) = tokio::io::split(server);
+        let mut got = Vec::new();
+        let mut buf = vec![0u8; 1024];
+        loop {
+            let n = read_half.read(&mut buf).await.unwrap();
+            if n == 0 {
+                break;
+            }
+            got.extend_from_slice(&buf[..n]);
+        }
+        client.await.unwrap();
+        assert_eq!(got, expected);
     }
 }
