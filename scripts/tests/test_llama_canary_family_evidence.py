@@ -104,6 +104,72 @@ class FamilyEvidenceTests(unittest.TestCase):
     def test_complete_distributed_pass(self):
         self.aggregate()
 
+    def rerun_receipt(self, family='dense', outcome='success', attempt='3'):
+        previous = self.evidence / f'{family}-previous'
+        shutil.copytree(self.evidence / family, previous)
+        with patch.dict(os.environ, GITHUB_RUN_ATTEMPT=attempt):
+            self.make_receipt(family, outcome)
+
+    def test_partial_rerun_reuses_build_and_successful_sibling(self):
+        self.make_receipt('dense', 'failure')
+        self.rerun_receipt()
+        with patch.dict(os.environ, GITHUB_RUN_ATTEMPT='3'):
+            self.aggregate()
+
+    def test_aggregate_only_rerun_reuses_complete_prior_pass(self):
+        with patch.dict(os.environ, GITHUB_RUN_ATTEMPT='4'):
+            self.aggregate()
+
+    def test_newer_failure_never_falls_back_to_old_success(self):
+        for outcome in ('failure', 'cancelled', 'skipped'):
+            with self.subTest(outcome=outcome):
+                if (self.evidence / 'dense-previous').exists():
+                    shutil.rmtree(self.evidence / 'dense-previous')
+                self.make_receipt('dense')
+                self.rerun_receipt(outcome=outcome)
+                with patch.dict(os.environ, GITHUB_RUN_ATTEMPT='3'):
+                    with self.assertRaisesRegex(ValueError, 'failed or mismatched'):
+                        self.aggregate()
+
+    def test_newer_corrupt_results_never_fall_back(self):
+        self.rerun_receipt()
+        (self.evidence / 'dense/results.jsonl').write_text('{}\n')
+        with patch.dict(os.environ, GITHUB_RUN_ATTEMPT='3'):
+            with self.assertRaisesRegex(ValueError, 'digest mismatch'):
+                self.aggregate()
+
+    def test_worker_provenance_must_be_valid(self):
+        path = self.evidence / 'dense/receipt.json'
+        original = E.read(path)
+        for key, value in (('run_id', '999'), ('run_attempt', '1'),
+                           ('run_attempt', '3'), ('run_attempt', '0'),
+                           ('run_attempt', 'x'), ('run_attempt', 2)):
+            with self.subTest(key=key, value=value):
+                E.write(path, dict(original, **{key: value}))
+                with self.assertRaises(ValueError):
+                    self.aggregate()
+
+    def test_rebuilt_producer_cannot_reuse_previous_receipts(self):
+        self.identity['run_attempt'] = '3'
+        self.save_identity()
+        with patch.dict(os.environ, GITHUB_RUN_ATTEMPT='3'):
+            with self.assertRaisesRegex(ValueError, 'mismatched'):
+                self.aggregate()
+
+    def test_invalid_producer_attempt_is_rejected(self):
+        for value in ('0', '-1', 'x', '02', 2, None):
+            with self.subTest(value=value):
+                self.identity['run_attempt'] = value
+                self.save_identity()
+                with self.assertRaisesRegex(ValueError, 'invalid workflow'):
+                    E.verify_package(self.package, self.digest)
+
+    def test_rerun_still_rejects_tampered_package(self):
+        (self.package / 'binaries.tar').write_bytes(b'wrong')
+        with patch.dict(os.environ, GITHUB_RUN_ATTEMPT='3'):
+            with self.assertRaisesRegex(ValueError, 'digest mismatch'):
+                E.verify_package(self.package, self.digest)
+
     def test_reports_all_failed_workers_without_emitting_green(self):
         for family in ('dense', 'hybrid'):
             self.make_receipt(family, 'failure')
@@ -335,6 +401,49 @@ class FamilyEvidenceTests(unittest.TestCase):
     def test_publisher_rejects_repair_only_package(self):
         with self.assertRaisesRegex(ValueError, 'independent verifier'):
             E.publication(SimpleNamespace(package=self.package, identity=self.digest))
+
+
+class WorkflowRerunContractTests(unittest.TestCase):
+    def test_artifact_selection_is_bound_to_producer_across_attempts(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/llama-canary-family-pass.yml').read_text())
+        jobs = workflow['jobs']
+        upload = next(step for step in jobs['family']['steps'] if step.get('name') == 'Upload family evidence')
+        download = next(step for step in jobs['aggregate']['steps'] if 'pattern' in step.get('with', {}))
+        name = upload['with']['name']
+        pattern = download['with']['pattern']
+        import fnmatch
+        def expand(text, attempt, identity):
+            for key, value in {'github.run_id': '123', 'github.run_attempt': str(attempt),
+                               'needs.build.outputs.identity': identity,
+                               'inputs.pass_id': 'repair-1', 'matrix.shard_index': '0'}.items():
+                text = text.replace('${{ ' + key + ' }}', value)
+            return text
+        selected = expand(pattern, 3, 'a'*64)
+        self.assertTrue(fnmatch.fnmatchcase(expand(name, 2, 'a'*64), selected))
+        self.assertTrue(fnmatch.fnmatchcase(expand(name, 3, 'a'*64), selected))
+        self.assertFalse(fnmatch.fnmatchcase(expand(name, 2, 'b'*64), selected))
+        self.assertNotIn('merge-multiple', download['with'])
+        gate = next(step for step in jobs['aggregate']['steps'] if step.get('id') == 'aggregate')
+        self.assertIn('test "$FAMILY_RESULT" = success', gate['run'])
+
+    def test_failed_certification_is_retryable_after_evidence_upload(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/llama-canary-family-pass.yml').read_text())
+        steps = workflow['jobs']['family']['steps']
+        upload = next(i for i, step in enumerate(steps) if step.get('name') == 'Upload family evidence')
+        gate = next(i for i, step in enumerate(steps) if step.get('name') == 'Require successful family certification')
+        self.assertGreater(gate, upload)
+        self.assertNotIn('continue-on-error', steps[gate])
+        for outcome in ('success', 'failure', 'cancelled', 'skipped', ''):
+            result = subprocess.run(['bash', '-c', steps[gate]['run']], env={**os.environ, 'OUTCOME': outcome})
+            self.assertEqual(result.returncode == 0, outcome == 'success')
+
+    def test_feedback_preserves_attempt_history(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/llama-upstream-canary.yml').read_text())
+        for name in ('repair-2', 'repair-3'):
+            inputs = workflow['jobs'][name]['with']
+            for key in ('feedback_pattern', 'feedback_build_pattern'):
+                self.assertNotIn('github.run_attempt', inputs[key])
+                self.assertIn('github.run_id', inputs[key])
 
 
 class WorkflowTerminalGateTests(unittest.TestCase):
