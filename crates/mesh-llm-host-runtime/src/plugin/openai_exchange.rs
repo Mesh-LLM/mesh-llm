@@ -80,8 +80,7 @@ pub enum ClientNonceSource {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ServingProvenance {
     /// The node that actually served the inference — this host's own mesh
-    /// endpoint id. On a plugin-served (raw-proxy) exchange this is the node
-    /// whose plugin endpoint produced the response.
+    /// endpoint id.
     pub served_by_node_id: String,
     /// Serving host name, when the hardware survey resolved one.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -230,17 +229,22 @@ pub struct OpenAiExchangeEnvelope {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nonce_source: Option<ClientNonceSource>,
     /// What ran, at what fidelity, on whose hardware — see [`ServingProvenance`].
-    /// Present on a `Terminal` envelope only when the dispatch outcome was an
-    /// actual 2xx response (`Responded`/`RespondedWithUsage`); `None` on
-    /// effective-request envelopes and on any non-2xx terminal envelope (a
+    /// Present on a `Terminal` envelope only when the exchange was served
+    /// locally (this node's own weights, not a plugin endpoint) AND the
+    /// dispatch outcome was an actual 2xx response (`Responded`/
+    /// `RespondedWithUsage`); `None` on effective-request envelopes, on the
+    /// plugin-served path regardless of status (a plugin endpoint can proxy
+    /// anywhere — none of this node's own hardware/weights identity is
+    /// honest to attach to it), and on any non-2xx terminal envelope (a
     /// denial/error before dispatch, a 503, or a dropped/failed connection) —
     /// those served nothing, so there is nothing this field can honestly
     /// report.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub serving_provenance: Option<ServingProvenance>,
     /// The real token usage the served backend reported for this exchange (see
-    /// [`ExchangeUsage`]). Present on a terminal envelope for a host-served
-    /// exchange whose response carried a `usage` object; `None` on
+    /// [`ExchangeUsage`]). Present on a terminal envelope on either dispatch
+    /// path whenever the dispatch outcome carried the backend's real token
+    /// counts (`RespondedWithUsage`), regardless of status; `None` on
     /// effective-request envelopes and wherever the dispatch produced no usage
     /// (a plugin-served stub, a denial, or a non-usage-bearing backend).
     #[serde(skip_serializing_if = "Option::is_none")]
