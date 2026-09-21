@@ -1,6 +1,8 @@
 //! Only this module may depend on Lexe SDK types.
 
-use std::fs::{File, OpenOptions};
+#[cfg(unix)]
+use std::fs::File;
+use std::fs::OpenOptions;
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
@@ -58,7 +60,10 @@ impl LexeProvider {
                 seed.write_to_path(&seed_path)
                     .map_err(|_| anyhow::anyhow!("could not persist wallet seed"))?;
                 // Persist recovery material before any provisioning side effect.
-                File::open(&seed_path)?.sync_all()?;
+                OpenOptions::new()
+                    .write(true)
+                    .open(&seed_path)?
+                    .sync_all()?;
                 #[cfg(unix)]
                 File::open(directory)?.sync_all()?;
                 seed
