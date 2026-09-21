@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use mdns_sd::{DaemonStatus, ResolvedService, ServiceDaemon, ServiceEvent, ServiceInfo};
+use mesh_llm_events::{OutputEvent, emit_event};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -336,7 +337,9 @@ pub(crate) async fn publish_lan_loop(node: crate::mesh::Node, config: LanPublish
 
     let instance_name = lan_instance_name(&node).await;
     let host_name = format!("{instance_name}.local.");
-    eprintln!("Publishing mesh on local LAN via mDNS ({LAN_SERVICE_TYPE})");
+    let _ = emit_event(OutputEvent::NostrPublishing {
+        message: format!("Publishing mesh on local LAN via mDNS ({LAN_SERVICE_TYPE})"),
+    });
 
     let mut last_reported = None;
     loop {

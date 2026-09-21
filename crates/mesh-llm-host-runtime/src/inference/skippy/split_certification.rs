@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-use super::{SkippyPackageIdentity, is_content_addressed_gguf_ref};
+use super::SkippyPackageIdentity;
 
 const ROSTER_JSON: &str = include_str!("split-certified.json");
 
@@ -26,7 +26,7 @@ impl SplitCertificationAdmission {
 struct SplitCertificationRoster {
     schema_version: u32,
     native_recipe: NativeRecipe,
-    models: Vec<CertifiedModel>,
+    architectures: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -34,15 +34,6 @@ struct NativeRecipe {
     llama_upstream_sha: String,
     skippy_abi: String,
     patch_queue_sha256: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct CertifiedModel {
-    family: String,
-    package_kind: String,
-    source_model_sha256: String,
-    #[serde(default)]
-    manifest_sha256: Option<String>,
 }
 
 fn roster() -> Result<&'static SplitCertificationRoster> {
@@ -67,7 +58,7 @@ fn compiled_skippy_abi() -> String {
 
 fn validate_recipe(roster: &SplitCertificationRoster) -> Result<()> {
     anyhow::ensure!(
-        roster.schema_version == 1,
+        roster.schema_version == 2,
         "unsupported split certification roster schema {}",
         roster.schema_version
     );
@@ -90,54 +81,41 @@ fn validate_recipe(roster: &SplitCertificationRoster) -> Result<()> {
     Ok(())
 }
 
-fn certified_model<'a>(
-    roster: &'a SplitCertificationRoster,
-    package: &SkippyPackageIdentity,
-) -> Option<&'a CertifiedModel> {
-    roster.models.iter().find(|model| {
-        model.source_model_sha256 == package.source_model_sha256
-            && match model.package_kind.as_str() {
-                "content-addressed-direct-gguf" => {
-                    model.manifest_sha256.is_none()
-                        && is_content_addressed_gguf_ref(&package.package_ref)
-                }
-                "package-v2" => model
-                    .manifest_sha256
-                    .as_deref()
-                    .is_some_and(|digest| digest == package.manifest_sha256),
-                _ => false,
-            }
-    })
-}
-
-fn certified_family(package: &SkippyPackageIdentity) -> Result<Option<&'static str>> {
+fn architecture_is_certified(architecture: &str) -> Result<bool> {
     let roster = roster().context("load split certification roster")?;
     validate_recipe(roster).context("validate split certification roster recipe")?;
-    Ok(certified_model(roster, package).map(|model| model.family.as_str()))
+    Ok(roster
+        .architectures
+        .iter()
+        .any(|certified| certified == architecture))
 }
 
 pub(crate) fn require_split_certification(
     package: &SkippyPackageIdentity,
+    architecture: &str,
     allow_uncertified: bool,
 ) -> Result<SplitCertificationAdmission> {
-    let family = match certified_family(package) {
-        Ok(Some(family)) => family,
-        Ok(None) => return handle_uncertified(package, allow_uncertified, None),
-        Err(error) => return handle_uncertified(package, allow_uncertified, Some(error)),
+    match architecture_is_certified(architecture) {
+        Ok(true) => {}
+        Ok(false) => return handle_uncertified(package, architecture, allow_uncertified, None),
+        Err(error) => {
+            return handle_uncertified(package, architecture, allow_uncertified, Some(error));
+        }
     };
     tracing::info!(
-        family,
+        architecture,
         package_ref = package.package_ref,
         source_model_sha256 = package.source_model_sha256,
         manifest_sha256 = package.manifest_sha256,
         split_certification = "certified",
-        "admitted split-serving model from exact-artifact certification roster"
+        "admitted split-serving model from architecture certification roster"
     );
     Ok(SplitCertificationAdmission::Certified)
 }
 
 fn handle_uncertified(
     package: &SkippyPackageIdentity,
+    architecture: &str,
     allow_uncertified: bool,
     roster_error: Option<anyhow::Error>,
 ) -> Result<SplitCertificationAdmission> {
@@ -149,7 +127,7 @@ fn handle_uncertified(
             ));
         }
         anyhow::bail!(
-            "split serving is not certified for model artifact {} (source SHA-256 {}, manifest SHA-256 {}); retry explicitly with --split --allow-uncertified-split to run it experimentally",
+            "split serving architecture {architecture} is not certified for model artifact {} (source SHA-256 {}, manifest SHA-256 {}); retry explicitly with --split --allow-uncertified-split to run it experimentally",
             package.package_ref,
             package.source_model_sha256,
             package.manifest_sha256
@@ -158,6 +136,7 @@ fn handle_uncertified(
     if let Some(error) = roster_error {
         tracing::warn!(
             package_ref = package.package_ref,
+            architecture,
             source_model_sha256 = package.source_model_sha256,
             manifest_sha256 = package.manifest_sha256,
             error = %error,
@@ -167,6 +146,7 @@ fn handle_uncertified(
     } else {
         tracing::warn!(
             package_ref = package.package_ref,
+            architecture,
             source_model_sha256 = package.source_model_sha256,
             manifest_sha256 = package.manifest_sha256,
             split_certification = "uncertified_override",
@@ -174,36 +154,6 @@ fn handle_uncertified(
         );
     }
     Ok(SplitCertificationAdmission::UncertifiedOverride)
-}
-
-pub(crate) fn split_certification_label(
-    package_ref: Option<&str>,
-    source_model_sha256: Option<&str>,
-    manifest_sha256: Option<&str>,
-) -> Option<&'static str> {
-    let (package_ref, source_model_sha256, manifest_sha256) =
-        (package_ref?, source_model_sha256?, manifest_sha256?);
-    let package = SkippyPackageIdentity {
-        package_ref: package_ref.to_string(),
-        manifest_sha256: manifest_sha256.to_string(),
-        source_model_path: Default::default(),
-        source_model_sha256: source_model_sha256.to_string(),
-        source_model_bytes: 0,
-        source_files: Vec::new(),
-        layer_weight_bytes: Vec::new(),
-        layer_count: 0,
-        activation_width: 0,
-        tensor_count: 0,
-        generation: None,
-    };
-    Some(
-        if certified_family(&package).ok().flatten().is_some() {
-            SplitCertificationAdmission::Certified
-        } else {
-            SplitCertificationAdmission::UncertifiedOverride
-        }
-        .as_str(),
-    )
 }
 
 #[cfg(test)]
@@ -227,19 +177,20 @@ mod tests {
     }
 
     #[test]
-    fn admits_exact_certified_artifact() {
+    fn admits_different_artifact_of_certified_architecture() {
         let roster = roster().unwrap();
         validate_recipe(roster).unwrap();
-        let certified = package(&roster.models[0].source_model_sha256);
+        let architecture = &roster.architectures[0];
         assert_eq!(
-            require_split_certification(&certified, false).unwrap(),
+            require_split_certification(&package(&"f".repeat(64)), architecture, false).unwrap(),
             SplitCertificationAdmission::Certified
         );
     }
 
     #[test]
-    fn rejects_uncertified_artifact_with_actionable_override() {
-        let error = require_split_certification(&package(&"f".repeat(64)), false).unwrap_err();
+    fn rejects_uncertified_architecture_with_actionable_override() {
+        let error =
+            require_split_certification(&package(&"f".repeat(64)), "unknown", false).unwrap_err();
         assert!(
             error
                 .to_string()
@@ -248,18 +199,20 @@ mod tests {
     }
 
     #[test]
-    fn explicit_override_admits_uncertified_artifact() {
+    fn explicit_override_admits_uncertified_architecture() {
         assert_eq!(
-            require_split_certification(&package(&"f".repeat(64)), true).unwrap(),
+            require_split_certification(&package(&"f".repeat(64)), "unknown", true).unwrap(),
             SplitCertificationAdmission::UncertifiedOverride
         );
     }
 
     #[test]
-    fn package_v2_needs_an_exact_manifest_entry() {
-        let roster = roster().unwrap();
-        let mut package = package(&roster.models[0].source_model_sha256);
+    fn package_v2_uses_the_same_architecture_admission() {
+        let mut package = package(&"f".repeat(64));
         package.package_ref = "hf://example/package".to_string();
-        assert!(require_split_certification(&package, false).is_err());
+        assert_eq!(
+            require_split_certification(&package, "inkling", false).unwrap(),
+            SplitCertificationAdmission::Certified
+        );
     }
 }

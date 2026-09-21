@@ -9,6 +9,7 @@ use mesh_llm_host_runtime::command_support::models::{
 };
 use mesh_llm_system::hardware;
 use serde_json::{Value, json};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -145,7 +146,8 @@ pub(crate) fn sort_label(sort: SearchSort) -> &'static str {
 }
 
 pub(crate) fn print_json(value: Value) -> Result<()> {
-    println!("{}", serde_json::to_string_pretty(&value)?);
+    let mut out = mesh_llm_events::machine_out();
+    writeln!(out, "{}", serde_json::to_string_pretty(&value)?)?;
     Ok(())
 }
 

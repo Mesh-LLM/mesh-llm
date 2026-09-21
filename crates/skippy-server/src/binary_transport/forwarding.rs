@@ -171,7 +171,6 @@ mod tests {
             kv_unified: None,
             swa_full: None,
             cache_idle_slots: None,
-            filter_tensors_on_load: true,
             resident_tensor_names: Vec::new(),
             selected_device: None::<StageDevice>,
             kv_cache: None::<StageKvCacheConfig>,

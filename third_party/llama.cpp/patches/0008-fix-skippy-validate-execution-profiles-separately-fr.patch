@@ -1,0 +1,736 @@
+From 01e671b42a3334bbbf1de0b2b74946e792d2130b Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Sun, 20 Sep 2026 10:04:24 +1000
+Subject: [PATCH] fix(skippy): validate execution profiles separately from
+ shared residency
+
+---
+ src/CMakeLists.txt                            |  11 +-
+ src/llama-graph.cpp                           |   3 +-
+ src/llama-graph.h                             |   1 +
+ src/skippy/activation.cpp                     |   1 +
+ src/skippy/graph_build_inputs.h               |   1 +
+ src/skippy/model_loading.cpp                  |  11 +-
+ src/skippy/model_source.cpp                   |   8 +-
+ src/skippy/runtime_types.h                    |   1 +
+ src/skippy/stage_execution_contract.cpp       |  60 ++++++
+ src/skippy/stage_execution_contract.h         |  13 ++
+ src/skippy/stage_plan.cpp                     |  41 ++++-
+ src/skippy/stage_realization.cpp              |  21 ++-
+ src/skippy/stage_slice_plan.h                 |   2 +
+ src/skippy/tests/graph_build_inputs.cpp       |  56 ++++++
+ src/skippy/tests/profile_residency.cpp        | 173 ++++++++++++++++++
+ .../tests/renamed_multishard_planning.cpp     |  20 ++
+ 16 files changed, 406 insertions(+), 17 deletions(-)
+ create mode 100644 src/skippy/stage_execution_contract.cpp
+ create mode 100644 src/skippy/stage_execution_contract.h
+ create mode 100644 src/skippy/tests/profile_residency.cpp
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 0cc6123c7..8726265a6 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -69,6 +69,7 @@ add_library(llama
+             skippy/stage_slice_plan.cpp
+             skippy/stage_plan.cpp
+             skippy/stage_realization.cpp
++            skippy/stage_execution_contract.cpp
+             skippy/state.cpp
+             skippy/state_effects.cpp
+             skippy/speculative_decoding.cpp
+@@ -166,6 +167,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     set_tests_properties(skippy_mtp_width PROPERTIES FIXTURES_REQUIRED mtp-width-model)
+ 
+ 
++    add_executable(skippy-profile-residency skippy/tests/profile_residency.cpp)
++    target_include_directories(skippy-profile-residency PRIVATE .)
++    target_compile_features(skippy-profile-residency PRIVATE cxx_std_17)
++    target_link_libraries(skippy-profile-residency PRIVATE llama)
++    add_test(NAME skippy_profile_residency COMMAND skippy-profile-residency
++        "${MTP_WIDTH_FIXTURE_DIR}/deepseek4-mtp-moe.gguf")
++    set_tests_properties(skippy_profile_residency PROPERTIES FIXTURES_REQUIRED mtp-width-model)
++
+     add_executable(skippy-model-loader-accounting
+         ../tests/test-skippy-model-loader-accounting.cpp)
+     target_include_directories(skippy-model-loader-accounting PRIVATE .)
+@@ -222,7 +231,7 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     target_include_directories(skippy-graph-build-inputs PRIVATE .)
+     target_compile_features(skippy-graph-build-inputs PRIVATE cxx_std_17)
+     target_link_libraries(skippy-graph-build-inputs PRIVATE llama)
+-    add_dependencies(skippy-stage-slice-plan skippy-graph-build-inputs)
++    add_dependencies(skippy-stage-slice-plan skippy-graph-build-inputs skippy-profile-residency)
+     add_test(NAME skippy_decode_input_width COMMAND skippy-graph-build-inputs --input-width)
+ 
+     add_test(
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index 6b7f64bf9..2e24a8933 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -30,7 +30,8 @@ bool skippy_graph_build_inputs::topology_equal(const skippy_graph_build_inputs &
+             activation_import_bindings != other.activation_import_bindings ||
+             activation_export_identities != other.activation_export_identities ||
+             activation_export_bindings != other.activation_export_bindings ||
+-            resident_tensor_names != other.resident_tensor_names) return false;
++            resident_tensor_names != other.resident_tensor_names ||
++            execution_contract != other.execution_contract) return false;
+     if (activation_frontier.size() != other.activation_frontier.size()) return false;
+     for (size_t index = 0; index < activation_frontier.size(); ++index) {
+         const auto & left = activation_frontier[index];
+diff --git a/src/llama-graph.h b/src/llama-graph.h
+index 4730915b1..ba320bff1 100644
+--- a/src/llama-graph.h
++++ b/src/llama-graph.h
+@@ -94,6 +94,7 @@ struct skippy_graph_build_inputs {
+     std::vector<std::string> activation_export_identities;
+     std::vector<std::string> activation_export_bindings;
+     std::vector<std::string> resident_tensor_names;
++    std::string execution_contract;
+ 
+     bool topology_equal(const skippy_graph_build_inputs & other) const;
+ };
+diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
+index 7b61f5575..d5d4c59e4 100644
+--- a/src/skippy/activation.cpp
++++ b/src/skippy/activation.cpp
+@@ -460,6 +460,7 @@ enum skippy_status skippy_decode_batch(
+     inputs.activation_export_identities = configured_inputs.activation_export_identities;
+     inputs.activation_export_bindings = configured_inputs.activation_export_bindings;
+     inputs.resident_tensor_names = configured_inputs.resident_tensor_names;
++    inputs.execution_contract = configured_inputs.execution_contract;
+     const char * phase_log = getenv("SKIPPY_GLM_DSA_LOG_DIRECT_SPARSE_DECISIONS");
+     if (phase_log != nullptr && atoi(phase_log) != 0) {
+         LLAMA_LOG_INFO(
+diff --git a/src/skippy/graph_build_inputs.h b/src/skippy/graph_build_inputs.h
+index 16b33929d..c08f2d510 100644
+--- a/src/skippy/graph_build_inputs.h
++++ b/src/skippy/graph_build_inputs.h
+@@ -20,6 +20,7 @@ inline skippy_graph_build_inputs skippy_graph_build_inputs_from_config(
+             has_phase_hint) {
+         inputs.selection.enabled = skippy_runtime_has_stage_plan(config);
+         if (config != nullptr) {
++            if (config->execution_contract != nullptr) inputs.execution_contract = config->execution_contract;
+             inputs.selection.layer_start = config->layer_start;
+             inputs.selection.layer_end = config->layer_end;
+             inputs.selection.glm_dsa_policy_profile = config->glm_dsa_policy_profile;
+diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
+index 20b7abad7..f38f4a936 100644
+--- a/src/skippy/model_loading.cpp
++++ b/src/skippy/model_loading.cpp
+@@ -442,6 +442,9 @@ static const char * skippy_validate_stage_plan_config(const struct skippy_runtim
+     if (config->resident_tensor_name_count == 0 || config->resident_tensor_names == nullptr) {
+         return "filtered stage loading requires explicit resident tensor names";
+     }
++    if (config->execution_contract == nullptr || config->execution_contract[0] == '\0') {
++        return "filtered stage loading requires an admitted execution contract";
++    }
+     for (size_t i = 0; i < config->resident_tensor_name_count; ++i) {
+         const char * name = config->resident_tensor_names[i];
+         if (name == nullptr || name[0] == '\0') {
+@@ -561,11 +564,11 @@ static bool skippy_should_create_native_mtp_sidecar(
+ static void skippy_enable_integrated_mtp_tensors(
+         const skippy_runtime_config * config,
+         llama_model_params & params) {
+-    // A terminal stage does not imply MTP ownership. Only the resolved
+-    // integrated source keeps optional NextN tensors in the target load.
++    // Exact stage residency decides which optional weights are loaded, even
++    // when drafting is disabled. Unfiltered loads retain the source policy.
+     params.load_mtp = config != nullptr &&
+                       skippy_runtime_is_terminal_stage(config) &&
+-                      config->mtp_source == SKIPPY_MTP_SOURCE_INTEGRATED;
++                      (skippy_runtime_has_stage_plan(config) || config->mtp_source == SKIPPY_MTP_SOURCE_INTEGRATED);
+ }
+ 
+ // Applies a tri-state config override on top of a derived default. Auto
+@@ -687,6 +690,8 @@ enum skippy_status skippy_finish_model_open(
+         stage_model->config.activation_export_identities = stage_model->activation_export_identity_ptrs.data();
+         stage_model->config.activation_export_bindings = stage_model->activation_export_binding_ptrs.data();
+         stage_model->config.resident_tensor_names = stage_model->resident_tensor_name_ptrs.data();
++        stage_model->execution_contract = config->execution_contract == nullptr ? "" : config->execution_contract;
++        stage_model->config.execution_contract = stage_model->execution_contract.c_str();
+     }
+     stage_model->lane_count = lane_count;
+ 
+diff --git a/src/skippy/model_source.cpp b/src/skippy/model_source.cpp
+index e03242e0d..02ad771ad 100644
+--- a/src/skippy/model_source.cpp
++++ b/src/skippy/model_source.cpp
+@@ -346,6 +346,12 @@ static enum skippy_status skippy_model_open_from_source_impl(
+         skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "layer_start must be non-negative and less than layer_end");
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
++    if (skippy_runtime_has_stage_plan(config) &&
++            (config->execution_contract == nullptr || config->execution_contract[0] == '\0')) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                "filtered stage loading requires an admitted execution contract");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
+     skippy_imatrix_map imatrix;
+     std::vector<llama_model_imatrix_data> native_imatrix;
+     std::string imatrix_error;
+@@ -386,7 +392,7 @@ static enum skippy_status skippy_model_open_from_source_impl(
+ 
+     llama_model_params params = llama_model_default_params();
+     params.load_mtp = config != nullptr && skippy_runtime_is_terminal_stage(config) &&
+-                      config->mtp_source == SKIPPY_MTP_SOURCE_INTEGRATED;
++                      (skippy_runtime_has_stage_plan(config) || config->mtp_source == SKIPPY_MTP_SOURCE_INTEGRATED);
+     if (config != nullptr) {
+         params.n_gpu_layers = config->n_gpu_layers;
+         skippy_apply_model_load_memory_config(config, params);
+diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
+index f0c55102a..e498d33d5 100644
+--- a/src/skippy/runtime_types.h
++++ b/src/skippy/runtime_types.h
+@@ -99,6 +99,7 @@ struct skippy_model {
+     std::vector<std::string> activation_export_bindings;
+     std::vector<const char *> activation_export_binding_ptrs;
+     std::vector<std::string> resident_tensor_names;
++    std::string execution_contract;
+     std::vector<const char *> resident_tensor_name_ptrs;
+     skippy_glm_dsa_op_timing glm_dsa_timing = {};
+     bool executable = true;
+diff --git a/src/skippy/stage_execution_contract.cpp b/src/skippy/stage_execution_contract.cpp
+new file mode 100644
+index 000000000..7e85c82dc
+--- /dev/null
++++ b/src/skippy/stage_execution_contract.cpp
+@@ -0,0 +1,60 @@
++#include "stage_execution_contract.h"
++#include "llama-graph.h"
++#include "../vendor/nlohmann/json.hpp"
++
++#include <algorithm>
++#include <set>
++#include <stdexcept>
++
++namespace {
++std::vector<std::string> canonical(std::vector<std::string> values) {
++    std::sort(values.begin(), values.end());
++    values.erase(std::unique(values.begin(), values.end()), values.end());
++    return values;
++}
++
++std::vector<std::string> read_parameters(const nlohmann::json & value) {
++    const auto parameters = value.get<std::vector<std::string>>();
++    if (parameters.empty() || canonical(parameters) != parameters ||
++            std::any_of(parameters.begin(), parameters.end(), [](const std::string & name) { return name.empty(); })) {
++        throw std::runtime_error("admitted profile parameters must be nonempty, sorted and unique");
++    }
++    return parameters;
++}
++}
++
++void skippy_validate_execution_dependencies(
++        const skippy_graph_build_inputs & inputs, bool auxiliary, int32_t offset,
++        const std::vector<std::string> & parameters) {
++    const auto residents = canonical(inputs.resident_tensor_names);
++    const auto realized = canonical(parameters);
++    if (inputs.execution_contract.empty()) {
++        throw std::runtime_error("staged execution requires an admitted execution contract");
++    }
++    const auto contract = nlohmann::json::parse(inputs.execution_contract);
++    if (contract.at("version") != 1 ||
++            contract.at("layer_start") != inputs.selection.layer_start ||
++            contract.at("layer_end") != inputs.selection.layer_end) {
++        throw std::runtime_error("admitted execution contract version or stage range mismatch");
++    }
++    const auto decoder = read_parameters(contract.at("decoder"));
++    std::set<std::string> union_parameters(decoder.begin(), decoder.end());
++    std::vector<std::string> expected = auxiliary ? std::vector<std::string>() : decoder;
++    int32_t expected_offset = 0;
++    const auto & mtp = contract.at("mtp");
++    if (!mtp.is_array()) throw std::runtime_error("admitted auxiliary profiles must be an array");
++    for (const auto & profile : mtp) {
++        if (profile.at("offset") != expected_offset++) {
++            throw std::runtime_error("admitted auxiliary profile offsets must be contiguous and unique");
++        }
++        const auto required = read_parameters(profile.at("parameters"));
++        union_parameters.insert(required.begin(), required.end());
++        if (auxiliary && profile.at("offset") == offset) expected = required;
++    }
++    if (residents != std::vector<std::string>(union_parameters.begin(), union_parameters.end())) {
++        throw std::runtime_error("admitted stage residents do not match the execution profile union");
++    }
++    if (expected.empty() || expected != realized) {
++        throw std::runtime_error("realized graph parameters do not match the admitted execution profile");
++    }
++}
+diff --git a/src/skippy/stage_execution_contract.h b/src/skippy/stage_execution_contract.h
+new file mode 100644
+index 000000000..73b5c6379
+--- /dev/null
++++ b/src/skippy/stage_execution_contract.h
+@@ -0,0 +1,13 @@
++#pragma once
++
++#include <cstdint>
++#include <string>
++#include <vector>
++
++struct skippy_graph_build_inputs;
++
++// Validate the selected decoder or auxiliary profile separately from the
++// complete shared resident set. Throws before graph execution on disagreement.
++void skippy_validate_execution_dependencies(
++        const skippy_graph_build_inputs & inputs, bool auxiliary, int32_t offset,
++        const std::vector<std::string> & parameters);
+diff --git a/src/skippy/stage_plan.cpp b/src/skippy/stage_plan.cpp
+index 7dc097dad..be00dd281 100644
+--- a/src/skippy/stage_plan.cpp
++++ b/src/skippy/stage_plan.cpp
+@@ -5,6 +5,7 @@
+ #include "graph_identity.h"
+ #include "package_tensor_binding.h"
+ #include "stage_slice_plan.h"
++#include "../vendor/nlohmann/json.hpp"
+ 
+ #include "ggml-backend.h"
+ #include "gguf.h"
+@@ -174,6 +175,41 @@ bool append_frontier_values(
+     return true;
+ }
+ 
++bool build_execution_contract(skippy_stage_plan & plan, const skippy_stage_planner & planner,
++        std::string & error) {
++    std::map<std::string, std::string> names;
++    for (const auto & binding : planner.bindings) names.emplace(binding.identity, ggml_get_name(binding.tensor));
++    const auto native_names = [&](const std::vector<std::string> & identities) {
++        std::vector<std::string> result;
++        for (const auto & identity : identities) result.push_back(names.at(identity));
++        std::sort(result.begin(), result.end());
++        return result;
++    };
++    const auto decoder = native_names(plan.guarded.profiles.front().slice.parameter_identities);
++    for (const auto & profile : plan.guarded.profiles) {
++        if (native_names(profile.slice.parameter_identities) != decoder) {
++            error = "decoder execution profiles disagree on parameter dependencies";
++            return false;
++        }
++    }
++    std::map<int32_t, std::vector<std::string>> mtp;
++    for (const auto & profile : plan.guarded.auxiliary_profiles) {
++        const auto parameters = native_names(profile.parameter_identities);
++        const auto inserted = mtp.emplace(profile.nextn_layer_offset, parameters);
++        if (!inserted.second && inserted.first->second != parameters) {
++            error = "MTP execution profiles disagree on parameter dependencies";
++            return false;
++        }
++    }
++    nlohmann::ordered_json auxiliary = nlohmann::ordered_json::array();
++    for (const auto & entry : mtp) auxiliary.push_back({{"offset", entry.first}, {"parameters", entry.second}});
++    nlohmann::ordered_json contract = {{"version", 1},
++        {"layer_start", plan.guarded.layer_start}, {"layer_end", plan.guarded.layer_end},
++        {"decoder", decoder}, {"mtp", auxiliary}};
++    plan.descriptor.execution_contract = plan.add_string(contract.dump());
++    return true;
++}
++
+ bool build_descriptors(skippy_stage_plan & plan, std::string & error) {
+     if (!skippy_build_stage_plan_identity(plan.package_id, plan.guarded, plan.plan_id, error)) {
+         return false;
+@@ -344,7 +380,7 @@ bool add_mtp_profiles(
+             }
+             const std::string auxiliary_profile_id = profile.profile_id + ":mtp-" +
+                     std::to_string(nextn_layer_offset);
+-            plan.guarded.auxiliary_profiles.push_back({auxiliary_profile_id, auxiliary.graph_identity});
++            plan.guarded.auxiliary_profiles.push_back({auxiliary_profile_id, auxiliary.graph_identity, auxiliary.parameter_identities, nextn_layer_offset});
+             residents.insert(auxiliary.parameter_identities.begin(), auxiliary.parameter_identities.end());
+             plan.contexts.push_back(std::move(context));
+         }
+@@ -512,7 +548,8 @@ skippy_status skippy_stage_planner_realize_v1(
+         }
+         if (!skippy_build_guarded_stage_slice_plan(inputs, layer_start, layer_end,
+                     plan->guarded, error) ||
+-                !add_mtp_profiles(*planner, *plan, error) || !build_descriptors(*plan, error)) {
++                !add_mtp_profiles(*planner, *plan, error) ||
++                !build_execution_contract(*plan, *planner, error) || !build_descriptors(*plan, error)) {
+             return fail(out_error, SKIPPY_STATUS_UNSUPPORTED, error);
+         }
+         *out_plan = plan.release();
+diff --git a/src/skippy/stage_realization.cpp b/src/skippy/stage_realization.cpp
+index 33b47ef3f..abb17284e 100644
+--- a/src/skippy/stage_realization.cpp
++++ b/src/skippy/stage_realization.cpp
+@@ -1,6 +1,7 @@
+ #include "stage_realization.h"
+ 
+ #include "stage_slice_plan.h"
++#include "stage_execution_contract.h"
+ 
+ #include "llama-graph.h"
+ #include "llama-model.h"
+@@ -25,12 +26,6 @@ std::vector<skippy_parameter_binding> parameter_bindings(const llama_model & mod
+     return result;
+ }
+ 
+-std::vector<std::string> sorted(std::vector<std::string> values) {
+-    std::sort(values.begin(), values.end());
+-    values.erase(std::unique(values.begin(), values.end()), values.end());
+-    return values;
+-}
+-
+ void require_equal(
+         const char * kind,
+         const std::vector<std::string> & planned,
+@@ -131,6 +126,16 @@ void skippy_realize_stage_graph(
+     const auto parameters = parameter_bindings(model);
+     skippy_stage_slice_selection selection;
+     std::string error;
++    if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
++        skippy_auxiliary_graph_plan auxiliary;
++        if (!skippy_build_auxiliary_graph_plan(result.get_gf(), result.get_state_effects(),
++                    parameters, result.get_request_input_bindings(), auxiliary, error)) {
++            throw std::runtime_error("cannot realize admitted MTP graph: " + error);
++        }
++        skippy_validate_execution_dependencies(params.build_inputs, true,
++                params.cparams.nextn_layer_offset, auxiliary.parameter_identities);
++        return;
++    }
+     if (!skippy_select_stage_slice(
+                 result.get_gf(),
+                 result.get_block_boundaries(),
+@@ -146,9 +151,7 @@ void skippy_realize_stage_graph(
+         throw std::runtime_error("cannot realize admitted stage graph: " + error);
+     }
+ 
+-    require_equal("resident tensors",
+-            sorted(params.build_inputs.resident_tensor_names),
+-            sorted(selection.parameter_identities));
++    skippy_validate_execution_dependencies(params.build_inputs, false, 0, selection.parameter_identities);
+     std::vector<std::string> realized_import_identities;
+     std::vector<std::string> realized_import_bindings;
+     std::vector<std::string> realized_export_identities;
+diff --git a/src/skippy/stage_slice_plan.h b/src/skippy/stage_slice_plan.h
+index 61c3ee850..2272a3fec 100644
+--- a/src/skippy/stage_slice_plan.h
++++ b/src/skippy/stage_slice_plan.h
+@@ -73,6 +73,8 @@ struct skippy_auxiliary_graph_plan {
+ struct skippy_auxiliary_profile_plan {
+     std::string profile_id;
+     std::string graph_identity;
++    std::vector<std::string> parameter_identities;
++    int32_t nextn_layer_offset = 0;
+ };
+ 
+ struct skippy_guarded_stage_slice_plan {
+diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
+index ce17404c3..7c146f14a 100644
+--- a/src/skippy/tests/graph_build_inputs.cpp
++++ b/src/skippy/tests/graph_build_inputs.cpp
+@@ -1,5 +1,7 @@
+ #include "llama-context.h"
+ #include "llama-graph.h"
++#include "skippy/stage_execution_contract.h"
++#include "../../vendor/nlohmann/json.hpp"
+ #include "llama-memory.h"
+ #include "llama-model.h"
+ #include "llama.h"
+@@ -391,6 +393,10 @@ static bool make_stage_inputs(
+     inputs.selection.layer_start = layer_start;
+     inputs.selection.layer_end = layer_end;
+     inputs.resident_tensor_names = selection.parameter_identities;
++    std::sort(inputs.resident_tensor_names.begin(), inputs.resident_tensor_names.end());
++    inputs.execution_contract = nlohmann::json({{"version", 1},
++        {"layer_start", layer_start}, {"layer_end", layer_end},
++        {"decoder", inputs.resident_tensor_names}, {"mtp", nlohmann::json::array()}}).dump();
+     return append_frontier_contract(selection.activation_imports,
+                    inputs.activation_import_identities, inputs.activation_import_bindings) &&
+            append_frontier_contract(selection.activation_exports,
+@@ -584,7 +590,57 @@ static int check_decode_input_width() {
+     return 0;
+ }
+ 
++static int check_execution_profile_residency() {
++    skippy_graph_build_inputs inputs;
++    inputs.selection.enabled = true;
++    inputs.selection.layer_start = 0;
++    inputs.selection.layer_end = 2;
++    inputs.resident_tensor_names = {"decoder", "mtp.0", "mtp.1", "shared"};
++    const nlohmann::json contract = {{"version", 1}, {"layer_start", 0}, {"layer_end", 2},
++        {"decoder", {"decoder", "shared"}},
++        {"mtp", {{{"offset", 0}, {"parameters", {"mtp.0", "shared"}}},
++                 {{"offset", 1}, {"parameters", {"mtp.1", "shared"}}}}}};
++    inputs.execution_contract = contract.dump();
++    skippy_validate_execution_dependencies(inputs, false, 0, {"decoder", "shared"});
++    skippy_validate_execution_dependencies(inputs, true, 0, {"mtp.0", "shared"});
++    skippy_validate_execution_dependencies(inputs, true, 1, {"mtp.1", "shared"});
++    const auto rejects = [](const skippy_graph_build_inputs & build, bool auxiliary,
++            int32_t offset, const std::vector<std::string> & parameters) {
++        try { skippy_validate_execution_dependencies(build, auxiliary, offset, parameters); }
++        catch (const std::exception &) { return true; }
++        return false;
++    };
++    if (!rejects(inputs, false, 0, {"mtp.0", "shared"}) ||
++            !rejects(inputs, true, 0, {"mtp.1", "shared"}) ||
++            !rejects(inputs, true, 2, {"mtp.1", "shared"}) ||
++            !rejects(inputs, false, 0, {"decoder"})) return 30;
++    auto invalid = inputs;
++    invalid.resident_tensor_names.pop_back();
++    if (!rejects(invalid, false, 0, {"decoder", "shared"})) return 31;
++    invalid = inputs;
++    invalid.resident_tensor_names.push_back("unadmitted");
++    if (!rejects(invalid, false, 0, {"decoder", "shared"})) return 32;
++    invalid = inputs;
++    invalid.selection.layer_start = 1;
++    if (!rejects(invalid, false, 0, {"decoder", "shared"})) return 33;
++    invalid = inputs;
++    invalid.execution_contract.clear();
++    if (!rejects(invalid, false, 0, {"decoder", "shared"})) return 34;
++    if (inputs.topology_equal(invalid)) return 35;
++    invalid.resident_tensor_names = {"decoder", "shared"};
++    if (!rejects(invalid, false, 0, invalid.resident_tensor_names)) return 37;
++    auto single_profile = contract;
++    single_profile["mtp"] = nlohmann::json::array();
++    invalid.execution_contract = single_profile.dump();
++    skippy_validate_execution_dependencies(invalid, false, 0, invalid.resident_tensor_names);
++    invalid = inputs;
++    invalid.execution_contract = "{}";
++    if (!rejects(invalid, false, 0, {"decoder", "shared"})) return 36;
++    return 0;
++}
++
+ int main(int argc, char ** argv) {
++    if (const int rc = check_execution_profile_residency()) return rc;
+     if (argc == 2 && std::strcmp(argv[1], "--input-width") == 0) {
+         return check_decode_input_width();
+     }
+diff --git a/src/skippy/tests/profile_residency.cpp b/src/skippy/tests/profile_residency.cpp
+new file mode 100644
+index 000000000..e2ec9e4a6
+--- /dev/null
++++ b/src/skippy/tests/profile_residency.cpp
+@@ -0,0 +1,173 @@
++#include "skippy.h"
++#include "skippy/runtime_types.h"
++#include "skippy/execution_internal.h"
++#include "skippy/graph_build_inputs.h"
++#include "skippy/speculative_internal.h"
++#include "llama-context.h"
++#include "llama-model.h"
++#include "llama-memory.h"
++#include "gguf.h"
++
++#include <algorithm>
++#include <cstdio>
++#include <cstring>
++#include <memory>
++#include <string>
++#include <vector>
++
++static std::string read_string(skippy_stage_plan * plan, skippy_stage_plan_string_ref_v1 ref) {
++    const char * value = nullptr;
++    size_t size = 0;
++    skippy_error * error = nullptr;
++    if (skippy_stage_plan_string_v1(plan, ref, &value, &size, &error) != SKIPPY_STATUS_OK) {
++        skippy_error_free(error);
++        return {};
++    }
++    return std::string(value, size);
++}
++
++static int run(const char * path, bool integrated) {
++    ggml_context * tensor_context = nullptr;
++    const gguf_init_params inspect = {true, &tensor_context};
++    std::unique_ptr<gguf_context, decltype(&gguf_free)> metadata(gguf_init_from_file(path, inspect), gguf_free);
++    std::unique_ptr<ggml_context, decltype(&ggml_free)> tensors_owner(tensor_context, ggml_free);
++    if (!metadata || !tensor_context) return 1;
++    std::vector<skippy_stage_planner_tensor_v1> tensors;
++    for (int64_t index = 0; index < gguf_get_n_tensors(metadata.get()); ++index) {
++        const char * name = gguf_get_tensor_name(metadata.get(), index);
++        const auto * tensor = ggml_get_tensor(tensor_context, name);
++        skippy_stage_planner_tensor_v1 descriptor{};
++        descriptor.abi_version = 1;
++        descriptor.struct_size = sizeof(descriptor);
++        descriptor.tensor_id = name;
++        descriptor.native_name = name;
++        descriptor.ggml_type = tensor->type;
++        descriptor.dimension_count = ggml_n_dims(tensor);
++        std::copy(tensor->ne, tensor->ne + descriptor.dimension_count, descriptor.dimensions);
++        descriptor.data_offset = gguf_get_data_offset(metadata.get()) + gguf_get_tensor_offset(metadata.get(), index);
++        descriptor.stored_length = ggml_nbytes(tensor);
++        tensors.push_back(descriptor);
++    }
++    std::sort(tensors.begin(), tensors.end(), [](const auto & left, const auto & right) {
++        return std::strcmp(left.tensor_id, right.tensor_id) < 0;
++    });
++    llama_model_params mp = llama_model_default_params();
++    mp.n_gpu_layers = 0;
++    mp.no_alloc = true;
++    mp.load_mode = LLAMA_LOAD_MODE_NONE;
++    mp.use_extra_bufts = false;
++    mp.load_mtp = true;
++    std::unique_ptr<llama_model, decltype(&llama_model_free)> model(llama_model_load_from_file(path, mp), llama_model_free);
++    if (!model || llama_model_n_layer_nextn(model.get()) == 0) return 2;
++    const int32_t layer_count = llama_model_n_layer(model.get());
++    model.reset();
++    const skippy_stage_planner_profile_v1 profiles[] = {
++        {1, sizeof(skippy_stage_planner_profile_v1), "decode", 1, 1, 1, 0},
++        {1, sizeof(skippy_stage_planner_profile_v1), "prefill", 8, 1, 8, 0},
++    };
++    const std::string package_id = "sha256:" + std::string(64, 'a');
++    const skippy_stage_planner_config_v1 pc = {1, sizeof(skippy_stage_planner_config_v1),
++        package_id.c_str(), &path, 1, tensors.data(), tensors.size(), profiles, 2, "test", "cpu"};
++    skippy_error * error = nullptr;
++    skippy_stage_planner * planner_raw = nullptr;
++    if (skippy_stage_planner_create_v1(&pc, &planner_raw, &error) != SKIPPY_STATUS_OK) {
++        fprintf(stderr, "planner: %s\n", error ? error->message : "unknown"); return 3;
++    }
++    std::unique_ptr<skippy_stage_planner, decltype(&skippy_stage_planner_free)> planner(planner_raw, skippy_stage_planner_free);
++    skippy_stage_plan * plan_raw = nullptr;
++    if (skippy_stage_planner_realize_v1(planner.get(), 0, layer_count, &plan_raw, &error) != SKIPPY_STATUS_OK) {
++        fprintf(stderr, "plan: %s\n", error ? error->message : "unknown"); return 4;
++    }
++    std::unique_ptr<skippy_stage_plan, decltype(&skippy_stage_plan_free)> plan(plan_raw, skippy_stage_plan_free);
++    skippy_stage_plan_desc_v1 descriptor{};
++    if (skippy_stage_plan_describe_v1(plan.get(), &descriptor, &error) != SKIPPY_STATUS_OK) return 5;
++    std::string contract = read_string(plan.get(), descriptor.execution_contract);
++    std::vector<std::string> residents;
++    for (size_t index = 0; index < descriptor.resident_tensor_count; ++index) {
++        skippy_stage_plan_value_desc_v1 resident{};
++        if (skippy_stage_plan_resident_tensor_at_v1(plan.get(), index, &resident, &error) != SKIPPY_STATUS_OK) return 6;
++        residents.push_back(read_string(plan.get(), resident.identity));
++    }
++    std::vector<const char *> names;
++    for (const auto & name : residents) names.push_back(name.c_str());
++    // The runtime must own the contract after planner destruction.
++    plan.reset(); planner.reset();
++    skippy_runtime_config config = skippy_runtime_config_default();
++    config.layer_start = 0;
++    config.layer_end = layer_count;
++    config.ctx_size = 32;
++    config.n_batch = 8;
++    config.n_ubatch = 8;
++    config.n_gpu_layers = 0;
++    config.n_threads = config.n_threads_batch = 1;
++    config.flash_attn_type = 0;
++    config.op_offload = SKIPPY_TRISTATE_FALSE;
++    config.disable_repack = true;
++    config.mtp_source = integrated ? SKIPPY_MTP_SOURCE_INTEGRATED : SKIPPY_MTP_SOURCE_DISABLED;
++    config.resident_tensor_names = names.data();
++    config.resident_tensor_name_count = names.size();
++    skippy_model * runtime = nullptr;
++    for (const char * missing : {static_cast<const char *>(nullptr), ""}) {
++        config.execution_contract = missing;
++        if (skippy_model_open(path, &config, &runtime, &error) != SKIPPY_STATUS_INVALID_ARGUMENT ||
++                runtime != nullptr || error == nullptr ||
++                std::strstr(error->message, "execution contract") == nullptr) return 14;
++        skippy_error_free(error);
++        error = nullptr;
++    }
++    config.execution_contract = contract.c_str();
++    if (skippy_model_open(path, &config, &runtime, &error) != SKIPPY_STATUS_OK) {
++        fprintf(stderr, "runtime: %s\n", error ? error->message : "unknown"); return 7;
++    }
++    contract.clear();
++    if (runtime->ctx == nullptr || (integrated && runtime->mtp_ctx == nullptr) ||
++            (!integrated && runtime->mtp_ctx != nullptr)) return 8;
++    for (const auto & name : residents) {
++        const auto found = std::find_if(runtime->model->tensors_by_name.begin(), runtime->model->tensors_by_name.end(),
++                [&](const auto & entry) { return entry.first == name; });
++        if (found == runtime->model->tensors_by_name.end() || found->second == nullptr ||
++                (found->second->data == nullptr && found->second->buffer == nullptr)) return 13;
++    }
++    skippy_session * session = nullptr;
++    if (skippy_session_create(runtime, &session, &error) != SKIPPY_STATUS_OK) return 9;
++    llama_token tokens[] = {3, 7};
++    llama_batch batch = llama_batch_init(2, 0, 1);
++    batch.n_tokens = 2;
++    for (int row = 0; row < 2; ++row) {
++        batch.token[row] = tokens[row];
++        batch.pos[row] = row;
++        batch.n_seq_id[row] = 1;
++        batch.seq_id[row][0] = session->seq_id;
++        batch.logits[row] = 1;
++    }
++    const auto rc = skippy_decode_batch(session, batch, 2, -1, &error, nullptr);
++    llama_batch_free(batch);
++    if (rc != 0) return 10;
++    if (!integrated) {
++        skippy_session_free(session, &error);
++        skippy_model_free(runtime, &error);
++        skippy_error_free(error);
++        return 0;
++    }
++    if (skippy_mtp_sync_target_inputs(session, tokens, nullptr, 2, 0, &error) != SKIPPY_STATUS_OK) {
++        fprintf(stderr, "MTP sync: %s\n", error ? error->message : "unknown"); return 11;
++    }
++    session->n_past = 2;
++    skippy_native_mtp_draft draft{};
++    if (skippy_mtp_propose_next(session, 31, 2, &draft, &error) != SKIPPY_STATUS_OK || draft.token_count != 2) {
++        fprintf(stderr, "MTP draft: %s\n", error ? error->message : "unknown"); return 12;
++    }
++    skippy_session_free(session, &error);
++    skippy_model_free(runtime, &error);
++    skippy_error_free(error);
++    return 0;
++}
++
++int main(int argc, char ** argv) {
++    if (argc != 2) return 64;
++    llama_backend_init();
++    int result = run(argv[1], false);
++    if (result == 0) result = run(argv[1], true);
++    llama_backend_free();
++    return result;
++}
+diff --git a/src/skippy/tests/renamed_multishard_planning.cpp b/src/skippy/tests/renamed_multishard_planning.cpp
+index a4a7117f6..bcafb8e6b 100644
+--- a/src/skippy/tests/renamed_multishard_planning.cpp
++++ b/src/skippy/tests/renamed_multishard_planning.cpp
+@@ -787,6 +787,9 @@ std::string plan_string(const skippy_stage_plan * plan, skippy_stage_plan_string
+ }
+ 
+ struct runtime_stage_plan {
++    std::string execution_contract;
++    std::string source_execution_contract;
++    std::string full_execution_contract;
+     int32_t layer_start = 0;
+     int32_t layer_end = 0;
+     std::vector<std::string> resident_names;
+@@ -928,6 +931,20 @@ bool check_public_stage_plan_abi(
+     }
+     if (runtime_stage != nullptr) {
+         *runtime_stage = {};
++        runtime_stage->execution_contract = plan_string(final, final_descriptor.execution_contract);
++        runtime_stage->source_execution_contract = plan_string(source, descriptor.execution_contract);
++        skippy_stage_plan * full = nullptr;
++        if (skippy_stage_planner_realize_v1(planner, 0, layer_count, &full, &error) != SKIPPY_STATUS_OK) {
++            skippy_error_free(error);
++            return false;
++        }
++        std::unique_ptr<skippy_stage_plan, decltype(&skippy_stage_plan_free)> full_owner(full, skippy_stage_plan_free);
++        skippy_stage_plan_desc_v1 full_descriptor{};
++        if (skippy_stage_plan_describe_v1(full, &full_descriptor, &error) != SKIPPY_STATUS_OK) {
++            skippy_error_free(error);
++            return false;
++        }
++        runtime_stage->full_execution_contract = plan_string(full, full_descriptor.execution_contract);
+         runtime_stage->layer_start = 1;
+         runtime_stage->layer_end = layer_count;
+         for (size_t index = 0; index < descriptor.resident_tensor_count; ++index) {
+@@ -1260,6 +1277,7 @@ int run_proof(const char * source_path, const char * output_directory, bool expe
+     runtime_config.n_threads_batch = 1;
+     runtime_config.n_gpu_layers = 0;
+     runtime_config.load_mode = SKIPPY_LOAD_MODE_RUNTIME_SLICE;
++    runtime_config.execution_contract = terminal_stage.full_execution_contract.c_str();
+     runtime_config.resident_tensor_names = resident_name_ptrs.data();
+     runtime_config.resident_tensor_name_count = resident_name_ptrs.size();
+     skippy_model * carrier_model = nullptr;
+@@ -1305,6 +1323,7 @@ int run_proof(const char * source_path, const char * output_directory, bool expe
+     runtime_config.stage_index = 1;
+     runtime_config.layer_start = terminal_stage.layer_start;
+     runtime_config.layer_end = terminal_stage.layer_end;
++    runtime_config.execution_contract = terminal_stage.execution_contract.c_str();
+     runtime_config.resident_tensor_names = terminal_resident_ptrs.data();
+     runtime_config.resident_tensor_name_count = terminal_resident_ptrs.size();
+     runtime_config.activation_import_identities = terminal_import_identity_ptrs.data();
+@@ -1371,6 +1390,7 @@ int run_proof(const char * source_path, const char * output_directory, bool expe
+     runtime_config.stage_index = 0;
+     runtime_config.layer_start = 0;
+     runtime_config.layer_end = 1;
++    runtime_config.execution_contract = terminal_stage.source_execution_contract.c_str();
+     runtime_config.resident_tensor_names = source_resident_ptrs.data();
+     runtime_config.resident_tensor_name_count = source_resident_ptrs.size();
+     runtime_config.activation_import_identities = nullptr;
+-- 
+2.54.0 (Apple Git-157)
+

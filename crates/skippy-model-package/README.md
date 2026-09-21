@@ -1,6 +1,6 @@
 # skippy-model-package
 
-Model inspection and stage-package CLI.
+Model inspection and source-complete package-v2 CLI.
 
 This tool uses llama-backed model introspection through the C ABI. GGUF writing
 must go through llama.cpp writer code exposed by the ABI; Rust owns package
@@ -8,26 +8,19 @@ planning, manifests, checksums, and CLI behavior.
 
 ## Architecture Role
 
-`skippy-model-package` prepares the per-stage model artifacts consumed by
-`skippy-server` through the mesh materialization cache. Each stage owns one
-contiguous layer range and loads a sparse GGUF shard or a materialized package
-slice:
+`skippy-model-package` prepares the source-complete package consumed by
+`skippy-server`. Package creation is independent of stage count and cut
+locations. At serving time the native graph planner derives each stage's exact
+resident tensor closure from the normal unsplit graph:
 
 ```mermaid
 flowchart LR
-    M["source model.gguf"] --> Slice["skippy-model-package"]
-    Slice --> G0["stage-0.gguf<br/>layers 0..10<br/>embeddings"]
-    Slice --> G1["stage-1.gguf<br/>layers 10..20"]
-    Slice --> G2["stage-2.gguf<br/>layers 20..30"]
-    Slice --> G3["stage-3.gguf<br/>layers 30..40<br/>output tensors"]
-    G0 --> Cache["mesh materialized stage cache<br/>derived artifacts"]
-    G1 --> Cache
-    G2 --> Cache
-    G3 --> Cache
-    Cache --> S0["stage-0 server"]
-    Cache --> S1["stage-1 server"]
-    Cache --> S2["stage-2 server"]
-    Cache --> S3["final stage server"]
+    M["source model GGUF set"] --> Package["source-complete package v2"]
+    Package --> Graph["metadata-only unsplit graph"]
+    Graph --> Plan["graph-derived stage plan"]
+    Plan --> Closure["exact resident tensor closure"]
+    Closure --> Cache["mesh materialized stage cache"]
+    Cache --> Stage["admitted stage runtime"]
 ```
 
 Mesh treats these generated shards as derived cache. Package-backed models use
@@ -39,25 +32,11 @@ model id.
 
 ```bash
 skippy-model-package inspect model.gguf
-skippy-model-package plan model.gguf --stages 4
-skippy-model-package write model.gguf --layers 0..12 --out stage-0.gguf --manifest stage-0.json
-skippy-model-package write-stages model.gguf --stages 4 --out-dir slices/
 skippy-model-package write-package org/repo:Q4_K_M --out-dir model-package/
 skippy-model-package write-package org/repo:Q4_K_M --projector mmproj-model-f16.gguf --out-dir model-package/
-skippy-model-package validate model.gguf slices/stage-*.gguf
-skippy-model-package validate-package model.gguf model-package/
+skippy-model-package verify-package-v2 model-package/ --source model.gguf
 skippy-model-package validate-glm-dsa-contract model-package/
 ```
-
-`write` and `write-stages` call the llama C ABI, which uses llama.cpp GGUF
-writer code for artifact metadata and streams selected tensor bytes from the
-source model. The Rust CLI owns planning, manifests, file checksums, and
-validation reports.
-
-`validate` checks that every owned tensor from the source model appears exactly
-once across the supplied artifact slices, with no unknown tensors and no
-duplicate owned tensors. Shared metadata and tokenizer KVs are preserved by the
-llama-backed writer.
 
 `write-package` prefers model coordinates such as `org/repo:Q4_K_M`. It resolves
 the coordinate through `model-ref`, `model-artifact`, and the `huggingface-hub`
@@ -65,22 +44,24 @@ backed `model-hf` adapter, downloads the resolved source artifact, and records
 the resolved repo, revision, primary file, canonical ref, distribution id, and
 artifact file set in `model-package.json`.
 
-### Package v2 writer (development branch)
+### Package v2 writer
 
 `write-package` emits the shared `skippy-package-format` schema v2. It captures
-all source GGUF directories and native stored sizes before writing, copies whole
-source shards into generic `artifacts/source-NNNNN.gguf` containers, reopens each
-copy, and compares exact names, types, dimensions, absolute offsets, lengths,
-alignment and file SHA-256 against that independent inventory. Padding is not
-counted as tensor storage. Shard counts and total tensors are checked against
-GGUF split metadata; duplicate source names and missing source files fail closed.
-No stage count, tensor role, endpoint, or tensor-name predicate selects content.
+all source GGUF directories and native stored sizes before writing. The native
+role classifier assigns every tensor exactly once to a shared common group or a
+layer group. The writer emits `shared/common.gguf` and
+`layers/layer-NNNNN.gguf`, subdividing an oversized group into stable
+`*-partNN.gguf` artifacts. It then emits the metadata-only carrier
+`shared/metadata.gguf`, whose descriptors and payload locators cover the
+verified artifact catalog.
 
-Whole-shard copying preserves the original typed model and tokenizer metadata;
-the manifest also records the decoded metadata map. This first writer unit does
-not optimize physical grouping into per-layer files. Layer ordinals are absent
-because GGUF directories do not contain a structural per-tensor layer field;
-the native inspector's name-derived layer index is deliberately not reused.
+The writer reopens every payload and compares exact names, types, dimensions,
+stored lengths, alignment, and file SHA-256 against the independent inventory.
+Padding is not counted as tensor storage. Shard counts and total tensors are
+checked against GGUF split metadata; duplicate source names, missing source
+files, unbound tensors, and unexpected tensor copies fail closed. Physical
+grouping does not assign stage ownership: runtime admission derives each
+executable slice and exact tensor closure from the native graph plan.
 
 The catalog supports explicit storage aliases. The pinned native GGUF inspector
 currently rejects shared-offset tensor directories, so such sources are rejected
@@ -90,11 +71,9 @@ are **not** aliases.
 
 Pass `--projector path/to/mmproj*.gguf` to copy and verify explicit projector
 sidecars. This writer does not infer generation policy/defaults from tensor names
-or implement offline conversion. The existing `plan`, `write`, `write-stages`,
-`validate`, `validate-package`, `preflight`, and GLM-DSA commands still serve their
-existing slice/v1 contracts; they are not v2 certification or serving paths.
-Runtime admission, metadata-graph certification and atomic serving cutover remain
-separate integration work. Do not publish these packages for the current v1 runtime.
+or implement offline conversion. The retired schema-v1 planning, slicing,
+validation, and preflight commands are not available. Runtime admission derives
+the executable slice and exact tensor closure from the native graph plan.
 
 ### Standalone v2 verification
 
@@ -131,8 +110,7 @@ shared-offset aliases are not supported. Uploaded artifacts must be restored
 locally before verification. Caller-supplied source provenance remains a trust
 boundary: matching bytes do not authenticate a repository/revision label or prove
 that a caller-provided source is the intended model. Success is not metadata-graph,
-runtime-admission or inference certification; legacy `validate-package` and
-`preflight` are unchanged.
+runtime-admission or inference certification.
 
 Local paths are only accepted for package creation when the caller supplies
 explicit provenance:

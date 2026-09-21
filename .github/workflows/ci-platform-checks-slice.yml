@@ -150,43 +150,62 @@ jobs:
         shell: pwsh
         run: cargo test --locked -p mesh-llm-log-store --lib sqlite_root_database_and_sidecars_have_only_current_user_acl
       - name: Install macOS unit-test dependencies
-        if: ${{ matrix.check.kind == 'unit' }}
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' }}
         run: brew install cmake ninja jq
       - name: Resolve macOS unit-test toolchain epoch
-        if: ${{ matrix.check.kind == 'unit' }}
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' }}
         id: native_toolchain
         uses: ./.github/actions/resolve-native-toolchain-epoch
         with:
           include_tool_versions: "true"
       - name: Ensure static Metal ABI cache directory
-        if: ${{ matrix.check.kind == 'unit' }}
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' }}
         run: mkdir -p "$LLAMA_STAGE_BUILD_DIR"
       - name: Restore static Metal ABI build
-        if: ${{ matrix.check.kind == 'unit' && needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' && needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
         id: llama_cache
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
           key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-${{ runner.arch }}-skippy-abi-static-metal-${{ steps.native_toolchain.outputs.epoch }}-${{ hashFiles('scripts/build-mac.sh', 'scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', 'just/**', '.github/cache-version.txt') }}
       - name: Prepare patched llama.cpp ABI checkout
-        if: ${{ matrix.check.kind == 'unit' }}
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' }}
         run: scripts/prepare-llama.sh pinned
       - name: Verify cached patched llama.cpp ABI libraries
-        if: ${{ matrix.check.kind == 'unit' && steps.llama_cache.outputs.cache-hit == 'true' }}
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' && steps.llama_cache.outputs.cache-hit == 'true' }}
         run: scripts/build-llama.sh --require-existing
       - name: Build patched llama.cpp ABI libraries
-        if: ${{ matrix.check.kind == 'unit' && steps.llama_cache.outputs.cache-hit != 'true' }}
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' && steps.llama_cache.outputs.cache-hit != 'true' }}
         run: scripts/build-llama.sh
       - name: Save static Metal ABI build
-        if: ${{ matrix.check.kind == 'unit' && needs.runner_policy.outputs.allow_native_github_cache == 'true' && steps.llama_cache.outputs.cache-hit != 'true' && (inputs.original_event_name == 'pull_request' || (github.ref == 'refs/heads/main' && inputs.original_event_name != 'pull_request_target')) }}
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' && needs.runner_policy.outputs.allow_native_github_cache == 'true' && steps.llama_cache.outputs.cache-hit != 'true' && (inputs.original_event_name == 'pull_request' || (github.ref == 'refs/heads/main' && inputs.original_event_name != 'pull_request_target')) }}
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
           key: ${{ steps.llama_cache.outputs.cache-primary-key }}
       - name: Run macOS unit tests
-        if: ${{ matrix.check.kind == 'unit' }}
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' }}
         run: |
           set -euo pipefail
           cargo test --locked -p model-artifact --lib
           cargo test --locked -p mesh-llm-host-runtime --lib
           cargo test --locked -p mesh-llm --lib
+      - name: Run Windows unit tests
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'windows' }}
+        shell: pwsh
+        env:
+          # One host-runtime test peaks between 2.0 and 2.25 MiB of stack on
+          # MSVC debug frames since #1887, and a 2 MiB test thread dies of
+          # STATUS_STACK_OVERFLOW, taking the whole harness with it. Reserve
+          # more until the frame is found; the measurements are in the stack
+          # overflow issue linked from #1554.
+          RUST_MIN_STACK: "8388608"
+        run: |
+          # The same three crate suites as the macOS unit row, in the
+          # dynamic link mode the shipped Windows host uses, so no native ABI
+          # build is needed. pwsh does not stop on a failing native command,
+          # hence the explicit exit check after each one.
+          foreach ($crate in 'model-artifact', 'mesh-llm-host-runtime', 'mesh-llm') {
+            cargo test --locked -p $crate --lib
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }

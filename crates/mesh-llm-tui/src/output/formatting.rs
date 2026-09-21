@@ -439,6 +439,10 @@ impl OutputEventPresentation for OutputEvent {
             OutputEvent::RequestRouted { model, target } => {
                 json!({ "model": model, "target": target })
             }
+            OutputEvent::NostrPublishing { message } => json!({ "message": message }),
+            OutputEvent::AutoUpdate { message, version } => {
+                json!({ "message": message, "version": version })
+            }
             OutputEvent::Warning { message, context } => {
                 json!({ "warning": message, "context": context })
             }

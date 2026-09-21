@@ -80,14 +80,14 @@ pub use package::{
 };
 pub(crate) use package::{
     direct_gguf_planning_manifest_from_identity, direct_gguf_source_paths, is_package_v2_ref,
-    synthetic_content_addressed_gguf_package,
+    synthetic_content_addressed_gguf_package, synthetic_huggingface_gguf_package,
 };
 pub(crate) use resolver::{
     ResolvedEmbeddedOpenAiArgs, ResolvedSkippyConfig, SkippyConfigResolveRequest,
     effective_safety_margin_bytes, resolve_skippy_config_for_selector,
 };
 pub(crate) use skippy_server::OpenAiGuardrailsStatus as SkippyOpenAiGuardrailsStatus;
-pub(crate) use split_certification::{require_split_certification, split_certification_label};
+pub(crate) use split_certification::{SplitCertificationAdmission, require_split_certification};
 #[cfg(test)]
 pub(crate) use stage::test_stage_admission;
 pub(crate) use stage::{
@@ -1328,8 +1328,8 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
         kv_unified: options.kv_unified,
         swa_full: options.swa_full,
         cache_idle_slots: options.cache_idle_slots,
-        filter_tensors_on_load: false,
         resident_tensor_names: Vec::new(),
+        execution_contract: String::new(),
         activation_import_identities: Vec::new(),
         activation_import_bindings: Vec::new(),
         activation_export_identities: Vec::new(),

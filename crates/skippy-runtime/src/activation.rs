@@ -1012,7 +1012,7 @@ impl StageSession {
 }
 
 fn iteration_request_should_emit_sample(request: &IterationBatchRequest<'_>) -> bool {
-    request.sample_last && request.session.include_output
+    request.sample_last && request.session.terminal_stage
 }
 
 fn validate_serial_decode_request(request: &IterationBatchRequest<'_>) -> Result<()> {
@@ -1118,7 +1118,7 @@ mod tests {
         let mut session = StageSession {
             raw: ptr::null_mut(),
             token_count: 4,
-            include_output: true,
+            terminal_stage: true,
         };
         let request = IterationBatchRequest {
             session: &mut session,
@@ -1139,7 +1139,7 @@ mod tests {
             let mut session = StageSession {
                 raw: ptr::null_mut(),
                 token_count: 0,
-                include_output: true,
+                terminal_stage: true,
             };
             let frame = ActivationFrame {
                 desc: activation_desc(1),
@@ -1170,7 +1170,7 @@ mod tests {
             let mut session = StageSession {
                 raw: ptr::null_mut(),
                 token_count: session_tokens,
-                include_output: true,
+                terminal_stage: true,
             };
             let request = IterationBatchRequest {
                 session: &mut session,
@@ -1191,7 +1191,7 @@ mod tests {
         let mut session = StageSession {
             raw: ptr::null_mut(),
             token_count: 4,
-            include_output: true,
+            terminal_stage: true,
         };
         let request = IterationBatchRequest {
             session: &mut session,
@@ -1210,7 +1210,7 @@ mod tests {
         let mut session = StageSession {
             raw: ptr::null_mut(),
             token_count: 4,
-            include_output: false,
+            terminal_stage: false,
         };
         let request = IterationBatchRequest {
             session: &mut session,

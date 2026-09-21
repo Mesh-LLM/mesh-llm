@@ -81,6 +81,7 @@ pub(super) struct SplitGenerationLoadSpec<'a> {
     pub(super) projector_path: Option<String>,
     pub(super) ctx_size: u32,
     pub(super) compact_meta: &'a models::gguf::GgufCompactMeta,
+    pub(super) split_certification: skippy::SplitCertificationAdmission,
     pub(super) capacity_budget_bytes: Option<u64>,
     pub(super) pinned_gpu: Option<&'a crate::runtime::StartupPinnedGpuTarget>,
     pub(super) device_override: Option<&'a str>,
@@ -477,7 +478,6 @@ pub(super) async fn stage0_runtime_options(
     runtime_options.config.lane_count = spec.slots as u32;
     runtime_options.config.activation_codec = spec.generation.activation_codec;
     runtime_options.config.activation_codec_policy = spec.generation.activation_codec_policy;
-    runtime_options.config.filter_tensors_on_load = true;
     runtime_options.config.resident_tensor_names = skippy::admitted_resident_tensor_names(
         verified_stage0_load.as_ref().unwrap_or(&stage0_load),
         resolved_stage0_package.as_ref(),
@@ -504,6 +504,7 @@ pub(super) fn apply_admitted_activation_frontier(
     load: &skippy::StageLoadRequest,
 ) -> Result<()> {
     let frontier_profile = skippy::admitted_activation_frontier(load)?;
+    config.execution_contract = load.admission.execution_contract.clone();
     config.activation_import_identities = frontier_profile.activation_imports.clone();
     config.activation_import_bindings = frontier_profile.activation_import_bindings.clone();
     config.activation_export_identities = frontier_profile.activation_exports.clone();
@@ -765,6 +766,7 @@ pub(super) fn split_runtime_stage_load_request(
         }),
         source_model_bytes: Some(spec.package.source_model_bytes),
         source_model_sha256: Some(spec.package.source_model_sha256.clone()),
+        split_certification: Some(spec.split_certification.as_str().to_string()),
         local_source_required: spec.local_source_required,
         projector_path: (!spec.local_source_required || stage.stage_index == 0)
             .then(|| resolved_config.projector_path.clone())
@@ -1358,7 +1360,7 @@ mod activation_boundary_tests {
     #[test]
     fn missing_graph_boundary_is_not_reconstructed_from_manifest_width() {
         let error = required_boundary(None, "stage-1", "input")
-            .expect_err("generation 10 requires graph-observed boundary descriptors");
+            .expect_err("generation 11 requires graph-observed boundary descriptors");
         assert!(
             error
                 .to_string()

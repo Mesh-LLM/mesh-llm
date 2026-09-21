@@ -17,6 +17,9 @@ pub struct NativeRuntimePlatform {
     pub arch: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
+    /// Lowest glibc major.minor version required by packaged Linux ELF files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_glibc: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -175,6 +178,21 @@ fn validate_artifact(artifact: &NativeRuntimeArtifact) -> Result<()> {
             artifact.id
         );
     }
+    if let Some(min_glibc) = &artifact.platform.min_glibc {
+        parse_glibc_version(min_glibc).with_context(|| {
+            format!(
+                "native runtime artifact {} has invalid platform min_glibc",
+                artifact.id
+            )
+        })?;
+        if artifact.platform.os != "linux" {
+            bail!(
+                "native runtime artifact {} declares platform min_glibc for non-Linux OS {}",
+                artifact.id,
+                artifact.platform.os
+            );
+        }
+    }
     if artifact.libraries.is_empty() {
         bail!(
             "native runtime artifact {} must declare at least one library",
@@ -191,6 +209,23 @@ fn validate_artifact(artifact: &NativeRuntimeArtifact) -> Result<()> {
         })?;
     }
     Ok(())
+}
+
+pub(crate) fn parse_glibc_version(value: &str) -> Result<(u32, u32)> {
+    let value = value.trim();
+    let Some((major, minor)) = value.split_once('.') else {
+        bail!("expected GLIBC major.minor version");
+    };
+    if major.is_empty() || minor.is_empty() || minor.contains('.') {
+        bail!("expected GLIBC major.minor version");
+    }
+    let major = major
+        .parse()
+        .context("GLIBC major version must be an unsigned integer")?;
+    let minor = minor
+        .parse()
+        .context("GLIBC minor version must be an unsigned integer")?;
+    Ok((major, minor))
 }
 
 fn verify_file_checksums(
@@ -363,6 +398,7 @@ mod tests {
                     os: "linux".to_string(),
                     arch: "x86_64".to_string(),
                     target: None,
+                    min_glibc: None,
                 },
                 backend: NativeRuntimeBackend::cpu(),
                 rank: 0,
@@ -401,6 +437,7 @@ mod tests {
                     os: "linux".to_string(),
                     arch: "x86_64".to_string(),
                     target: None,
+                    min_glibc: None,
                 },
                 backend: NativeRuntimeBackend::cuda(12, vec!["sm_90".to_string()]),
                 rank: 0,
@@ -484,6 +521,7 @@ mod tests {
                 os: "linux".to_string(),
                 arch: "x86_64".to_string(),
                 target: None,
+                min_glibc: None,
             },
             backend: NativeRuntimeBackend::cpu(),
             rank: 0,
@@ -498,5 +536,65 @@ mod tests {
         let error = validate_artifact(&artifact).unwrap_err();
 
         assert!(error.to_string().contains("safe relative file path"));
+    }
+
+    #[test]
+    fn legacy_manifest_without_glibc_metadata_is_accepted() {
+        let manifest = NativeRuntimeReleaseManifest::from_json_str(
+            r#"{
+  "mesh_version": "0.68.0",
+  "skippy_abi": "0.1.25",
+  "artifacts": [{
+    "id": "meshllm-runtime-linux-x86_64-cpu",
+    "skippy_abi": "0.1.25",
+    "platform": {"os": "linux", "arch": "x86_64"},
+    "backend": {"kind": "cpu"},
+    "libraries": ["lib/libllama.so"]
+  }]
+}"#,
+        )
+        .unwrap();
+
+        assert_eq!(manifest.artifacts[0].platform.min_glibc, None);
+    }
+
+    #[test]
+    fn invalid_manifest_glibc_metadata_is_rejected() {
+        let error = NativeRuntimeReleaseManifest::from_json_str(
+            r#"{
+  "mesh_version": "0.68.0",
+  "skippy_abi": "0.1.25",
+  "artifacts": [{
+    "id": "meshllm-runtime-linux-x86_64-cpu",
+    "skippy_abi": "0.1.25",
+    "platform": {"os": "linux", "arch": "x86_64", "min_glibc": "2.35.1"},
+    "backend": {"kind": "cpu"},
+    "libraries": ["lib/libllama.so"]
+  }]
+}"#,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("invalid platform min_glibc"));
+    }
+
+    #[test]
+    fn non_linux_manifest_glibc_metadata_is_rejected() {
+        let error = NativeRuntimeReleaseManifest::from_json_str(
+            r#"{
+  "mesh_version": "0.68.0",
+  "skippy_abi": "0.1.25",
+  "artifacts": [{
+    "id": "meshllm-runtime-macos-aarch64-cpu",
+    "skippy_abi": "0.1.25",
+    "platform": {"os": "macos", "arch": "aarch64", "min_glibc": "2.35"},
+    "backend": {"kind": "cpu"},
+    "libraries": ["lib/libllama.dylib"]
+  }]
+}"#,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("for non-Linux OS"));
     }
 }

@@ -186,6 +186,28 @@ not report, lock, or clean a second artifact tree.
 
 On native Windows, `just check-release` runs the host-safe Rust/doc invariant subset and skips the Bash-only `install.sh` / `package-release.sh` parity checks. Run it on macOS or Linux when you need full shell parity coverage.
 
+### Line endings on native Windows
+
+`.gitattributes` checks every text file out with LF on every platform. A
+checkout created before that landed, with `core.autocrlf=true`, keeps its CRLF
+working copy until the files are re-extracted, and five host-runtime tests
+still fail locally on content they read verbatim: both `config_schema`
+snapshots, the `plugin::config` fixture, `inference::skippy::topology`, which
+greps its own source, and `inference::skippy::split_certification`, whose
+`build.rs` patch-queue digest is hashed from the bytes of the llama.cpp
+patches and gates production split certification rather than tests alone.
+
+Renormalise once, after committing or stashing anything in progress, since the
+second command discards uncommitted work:
+
+```powershell
+git rm --cached -r .
+git reset --hard HEAD
+```
+
+`git ls-files --eol` should then report `i/lf w/lf` for every text file. A
+fresh clone needs none of this.
+
 ### Testing crates on native Windows
 
 A bare Windows checkout cannot build the test targets of crates that pull in

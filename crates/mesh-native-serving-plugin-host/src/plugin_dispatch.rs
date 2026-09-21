@@ -442,7 +442,7 @@ impl Drop for PluginDriver {
         if let Some(active) = Arc::get_mut(&mut self.active)
             && let Err(error) = active.shutdown()
         {
-            eprintln!("native serving plugin shutdown failed: {error:#}");
+            tracing::warn!("native serving plugin shutdown failed: {error:#}");
         }
     }
 }
@@ -455,7 +455,7 @@ impl Drop for PluginDriver {
 fn stop_worker(queue: &Arc<PluginCommandQueue>, worker: &WorkerHandle, label: &str) {
     queue.close();
     if !worker.exit.wait_for_exit(CLEAN_SHUTDOWN_TIMEOUT) {
-        eprintln!(
+        tracing::warn!(
             "native serving plugin {label} worker did not stop within {CLEAN_SHUTDOWN_TIMEOUT:?}; \
              deferring plugin shutdown to that thread"
         );
@@ -512,31 +512,24 @@ fn plugin_worker(
                 lifecycle_delivery_failures.fetch_add(1, Ordering::Relaxed);
             } else {
                 report_delivery_failures.fetch_add(1, Ordering::Relaxed);
-                eprintln!("native serving plugin report handoff failed: {error:#}");
+                tracing::warn!("native serving plugin report handoff failed: {error:#}");
             }
         }
     }
 }
 
-fn run_proposal(
-    active: &ActivePlugin,
+/// `Some(_)` is the response to send *instead of* dispatching the proposal;
+/// `None` means the proposal may run.
+fn proposal_predispatch_gate(
     passive_queue: &PluginCommandQueue,
-    enqueued_at: Instant,
-    query: LinearProposalQuery,
-    reply: &SyncSender<ProposalResponse>,
-) {
-    let deadline = query.deadline;
-    let queue_wait_us = elapsed_us(enqueued_at);
+    deadline: Instant,
+    queue_wait_us: u64,
+) -> Option<ProposalResponse> {
     if Instant::now() >= deadline {
-        send_proposal_response(
-            passive_queue,
-            reply,
-            abstention(
-                queue_wait_us,
-                LinearProposalSourceOutcome::DeadlineExceededBeforeDispatch,
-            ),
-        );
-        return;
+        return Some(abstention(
+            queue_wait_us,
+            LinearProposalSourceOutcome::DeadlineExceededBeforeDispatch,
+        ));
     }
 
     // Reports and discards run on the passive worker so they cannot consume
@@ -548,40 +541,41 @@ fn run_proposal(
     let fence_consumes_query_deadline = remaining <= CLEAN_SHUTDOWN_TIMEOUT;
     if let Err(error) = fence_passive(passive_queue, fence_timeout) {
         if fence_consumes_query_deadline && matches!(&error, PassiveFenceError::Timeout(_)) {
-            send_proposal_response(
-                passive_queue,
-                reply,
-                abstention(
-                    queue_wait_us,
-                    LinearProposalSourceOutcome::HostDeadlineExceeded,
-                ),
-            );
-            return;
+            return Some(abstention(
+                queue_wait_us,
+                LinearProposalSourceOutcome::HostDeadlineExceeded,
+            ));
         }
-        eprintln!("native serving plugin proposal fence failed: {error}");
-        send_proposal_response(
-            passive_queue,
-            reply,
-            ProposalResponse {
-                proposal: Err(error.to_string()),
-                telemetry: LinearProposalSourceTelemetry {
-                    queue_wait_us,
-                    callback_elapsed_us: 0,
-                    outcome: LinearProposalSourceOutcome::SourceError,
-                },
+        tracing::warn!("native serving plugin proposal fence failed: {error}");
+        return Some(ProposalResponse {
+            proposal: Err(error.to_string()),
+            telemetry: LinearProposalSourceTelemetry {
+                queue_wait_us,
+                callback_elapsed_us: 0,
+                outcome: LinearProposalSourceOutcome::SourceError,
             },
-        );
-        return;
+        });
     }
     if Instant::now() >= deadline {
-        send_proposal_response(
-            passive_queue,
-            reply,
-            abstention(
-                queue_wait_us,
-                LinearProposalSourceOutcome::DeadlineExceededBeforeDispatch,
-            ),
-        );
+        return Some(abstention(
+            queue_wait_us,
+            LinearProposalSourceOutcome::DeadlineExceededBeforeDispatch,
+        ));
+    }
+    None
+}
+
+fn run_proposal(
+    active: &ActivePlugin,
+    passive_queue: &PluginCommandQueue,
+    enqueued_at: Instant,
+    query: LinearProposalQuery,
+    reply: &SyncSender<ProposalResponse>,
+) {
+    let deadline = query.deadline;
+    let queue_wait_us = elapsed_us(enqueued_at);
+    if let Some(response) = proposal_predispatch_gate(passive_queue, deadline, queue_wait_us) {
+        send_proposal_response(passive_queue, reply, response);
         return;
     }
 
@@ -610,7 +604,7 @@ fn run_proposal(
         Err(error) => {
             // Fail open, but surface the plugin's message instead of
             // silently degrading a failure into an abstention.
-            eprintln!("native serving plugin proposal failed: {error:#}");
+            tracing::warn!("native serving plugin proposal failed: {error:#}");
             (
                 Err(format!("{error:#}")),
                 LinearProposalSourceOutcome::SourceError,
@@ -655,7 +649,7 @@ fn send_proposal_response(
             LinearProposalDiscardReason::DeadlineExceeded,
         ))
     {
-        eprintln!(
+        tracing::warn!(
             "native serving plugin could not deliver the terminal discard for a detached proposal reply: {error:?}"
         );
     }
@@ -667,7 +661,7 @@ fn discard_late_candidate(passive_queue: &PluginCommandQueue, proposal: &LinearP
         proposal.decision_id.as_bytes().to_vec(),
         LinearProposalDiscardReason::DeadlineExceeded,
     )) {
-        eprintln!(
+        tracing::warn!(
             "native serving plugin could not deliver the terminal discard for a late proposal: \
              {error:?}"
         );
@@ -775,7 +769,7 @@ fn plugin_passive_worker(
             PluginCommand::Report(event, ack) => {
                 let result = active.report(&event);
                 if ack.send(result).is_err() {
-                    eprintln!(
+                    tracing::warn!(
                         "native serving plugin report callback acknowledgement receiver dropped"
                     );
                 }

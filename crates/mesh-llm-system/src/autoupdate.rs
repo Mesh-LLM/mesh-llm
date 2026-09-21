@@ -1,4 +1,6 @@
 use anyhow::{Context, Result, bail};
+use mesh_llm_events::{OutputEvent, emit_event};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::backend;
@@ -141,16 +143,18 @@ pub async fn maybe_auto_update(options: AutoUpdateOptions) -> Result<bool> {
 }
 
 pub async fn run_update_command(options: UpdateCommandOptions<'_>) -> Result<()> {
+    let mut console = mesh_llm_events::console_err();
     let target = require_update_target(options.flavor, options.detect_flavor)?;
     let requested_version = options.requested_version;
     let Some(release) = resolve_release_info(requested_version).await? else {
         bail!("Could not check for a release right now. Try again shortly.");
     };
     if requested_version.is_none() && !version_newer(&release.version, options.current_version) {
-        eprintln!(
+        writeln!(
+            console,
             "mesh-llm is already up to date (v{}).",
             options.current_version
-        );
+        )?;
         return Ok(());
     }
     let asset_preference = if requested_version.is_some() {
@@ -172,7 +176,8 @@ pub async fn run_update_command(options: UpdateCommandOptions<'_>) -> Result<()>
         bail!("{} is not writable.", target.exe.display());
     }
 
-    eprintln!(
+    writeln!(
+        console,
         "⬇️ {} mesh-llm v{} -> v{} ({})...",
         describe_requested_update(
             &release.version,
@@ -182,7 +187,7 @@ pub async fn run_update_command(options: UpdateCommandOptions<'_>) -> Result<()>
         options.current_version,
         release.version,
         target.bundle_flavor.suffix()
-    );
+    )?;
     match install_latest_bundle(
         &target.exe,
         &target.install_dir,
@@ -194,18 +199,19 @@ pub async fn run_update_command(options: UpdateCommandOptions<'_>) -> Result<()>
     .await
     {
         Ok(InstallOutcome::ExitNow) => {
-            eprintln!("✅ Updated to v{}", release.version);
+            writeln!(console, "✅ Updated to v{}", release.version)?;
             Ok(())
         }
         Ok(InstallOutcome::HandoffAndExit) => {
-            eprintln!(
+            writeln!(
+                console,
                 "✅ Applying update to v{}; exiting so the installer can finish",
                 release.version
-            );
+            )?;
             std::process::exit(0);
         }
         Ok(InstallOutcome::RestartNow) => {
-            eprintln!("✅ Updated to v{}", release.version);
+            writeln!(console, "✅ Updated to v{}", release.version)?;
             Ok(())
         }
         Err(err) => Err(err),
@@ -294,18 +300,24 @@ async fn apply_update_if_available(
         return Ok(false);
     };
     if !path_is_writable(&target.exe) {
-        eprintln!(
-            "⚠️  Auto-update skipped: {} is not writable",
-            target.exe.display()
-        );
+        let _ = emit_event(OutputEvent::AutoUpdate {
+            message: format!(
+                "⚠️  Auto-update skipped: {} is not writable",
+                target.exe.display()
+            ),
+            version: None,
+        });
         return Ok(true);
     }
 
-    eprintln!(
-        "⬇️ Updating mesh-llm v{current_version} -> v{} ({})...",
-        release.version,
-        target.bundle_flavor.suffix()
-    );
+    let _ = emit_event(OutputEvent::AutoUpdate {
+        message: format!(
+            "⬇️ Updating mesh-llm v{current_version} -> v{} ({})...",
+            release.version,
+            target.bundle_flavor.suffix()
+        ),
+        version: Some(release.version.clone()),
+    });
     match install_latest_bundle(
         &target.exe,
         &target.install_dir,
@@ -317,18 +329,30 @@ async fn apply_update_if_available(
     .await
     {
         Ok(InstallOutcome::RestartNow) => {
-            eprintln!("✅ Updated to v{}; restarting", release.version);
+            let _ = emit_event(OutputEvent::AutoUpdate {
+                message: format!("✅ Updated to v{}; restarting", release.version),
+                version: Some(release.version.clone()),
+            });
             exec_current_binary(&target.exe, SELF_UPDATE_ATTEMPTED_ENV, "1")?;
         }
         Ok(InstallOutcome::ExitNow) => {
-            eprintln!("✅ Updated to v{}", release.version);
+            let _ = emit_event(OutputEvent::AutoUpdate {
+                message: format!("✅ Updated to v{}", release.version),
+                version: Some(release.version.clone()),
+            });
         }
         Ok(InstallOutcome::HandoffAndExit) => {
-            eprintln!("✅ Updated to v{}; restarting", release.version);
+            let _ = emit_event(OutputEvent::AutoUpdate {
+                message: format!("✅ Updated to v{}; restarting", release.version),
+                version: Some(release.version.clone()),
+            });
             std::process::exit(0);
         }
         Err(err) => {
-            eprintln!("⚠️  Auto-update failed: {err}");
+            let _ = emit_event(OutputEvent::AutoUpdate {
+                message: format!("⚠️  Auto-update failed: {err}"),
+                version: None,
+            });
         }
     }
 

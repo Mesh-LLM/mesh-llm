@@ -86,6 +86,7 @@
       "additionalProperties": false,
       "required": [
         "family",
+        "architecture",
         "profile",
         "artifact",
         "execution",
@@ -94,6 +95,7 @@
       ],
       "properties": {
         "family": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+        "architecture": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
         "profile": {"enum": ["full", "package-oracle", "graph-only"]},
         "artifact": {"$ref": "#/$defs/artifact"},
         "draft_artifact": {"$ref": "#/$defs/artifact"},

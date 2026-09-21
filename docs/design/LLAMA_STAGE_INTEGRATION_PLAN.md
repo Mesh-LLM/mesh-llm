@@ -20,6 +20,12 @@ terminal refactor patch. Source include paths are allowed to break, but exported
 binary ABI changes still require a version bump and synchronized Rust FFI
 constants.
 
+The durable queue applies in three explicit lanes: top-level core patches,
+family-enablement patches listed in `patches/model_support/series`, and finally
+mechanically generated graph-semantics patches listed in
+`patches/generated/series`. New family implementations must stay out of the
+core lane.
+
 ## Archived migration record
 
 Everything below this heading records the superseded migration proposal. It is

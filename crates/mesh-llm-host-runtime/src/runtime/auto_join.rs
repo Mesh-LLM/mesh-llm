@@ -1122,6 +1122,8 @@ pub(super) async fn spawn_run_auto_post_join_tasks(options: &RuntimeOptions, nod
                     tracing::debug!("Rejoin failed: {e}");
                 }
             }
+            rejoin_node.redial_join_targets().await;
+            rejoin_node.refresh_adopted_mesh_membership().await;
         }
     });
 

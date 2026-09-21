@@ -122,6 +122,7 @@ fn planned(m: &PackageManifest, tensors: &[&str], profiles: &[&str]) -> PlannedS
     PlannedStageAdmission {
         package_id: m.package_id.clone(),
         plan_id: "skippy-plan:v1:t0".to_string(),
+        execution_contract: String::new(),
         layer_start: 0,
         layer_end: 16,
         resident_tensor_ids: tensors.iter().map(|t| t.to_string()).collect(),
@@ -134,6 +135,7 @@ fn realized(m: &PackageManifest, tensors: &[&str], profiles: &[&str]) -> Realize
     RealizedStagePlan {
         package_id: m.package_id.clone(),
         plan_id: "skippy-plan:v1:t0".to_string(),
+        execution_contract: String::new(),
         layer_start: 0,
         layer_end: 16,
         resident_tensor_ids: tensors.iter().map(|t| t.to_string()).collect(),
@@ -458,4 +460,17 @@ fn realizes_and_admits_a_real_package_v2_chain() {
                 .all(|path| !path.starts_with(package_dir.join("artifacts")))
         );
     }
+}
+
+#[test]
+fn rejects_changed_execution_contract_with_unchanged_plan_identity() {
+    let m = manifest();
+    let mut p = planned(&m, &[], &["decode"]);
+    let mut r = realized(&m, &[], &["decode"]);
+    p.execution_contract = "admitted".into();
+    r.execution_contract = "different".into();
+    assert!(matches!(
+        admit_stage_plan(&p, &r, &m),
+        Err(StagePlanAdmissionError::ExecutionContractMismatch)
+    ));
 }

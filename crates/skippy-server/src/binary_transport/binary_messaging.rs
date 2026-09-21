@@ -25,7 +25,10 @@ use crate::{
     config::validate_config,
     frontend::{self, EmbeddedOpenAiArgs, iteration_scheduler::IterationScheduler},
     kv_integration::KvStageIntegration,
-    runtime_state::{RuntimeLaunchOverrides, load_runtime_with_overrides, loaded_model_state_kind},
+    runtime_state::{
+        RuntimeLaunchOverrides, load_runtime_with_overrides, loaded_model_has_indexer_memory,
+        loaded_model_state_kind,
+    },
     telemetry::{Telemetry, lifecycle_attrs},
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -350,6 +353,7 @@ fn run_binary_stage(
     let kv = KvStageIntegration::from_loaded_model(
         &config,
         loaded_model_state_kind(Some(&runtime)),
+        loaded_model_has_indexer_memory(Some(&runtime)),
         None,
     )?
     .map(Arc::new);
@@ -422,7 +426,7 @@ fn run_binary_stage(
                 )
                 .await
             {
-                eprintln!("embedded OpenAI server failed: {error:#}");
+                tracing::warn!("embedded OpenAI server failed: {error:#}");
             }
         });
     }
@@ -432,7 +436,7 @@ fn run_binary_stage(
         })
         .transpose()
         .context("spawn downstream preconnector")?;
-    println!(
+    tracing::info!(
         "skippy-server listening: binary={} stage_id={} layer_range={}..{} input_activation_width={} output_activation_width={}",
         bind_addr,
         config.stage_id,
@@ -467,7 +471,7 @@ fn run_binary_stage(
             };
             prepare_binary_stage_connection(&upstream)?;
             let peer_addr = upstream.peer_addr().ok();
-            eprintln!(
+            tracing::debug!(
                 "binary accepted connection: stage_id={} peer={peer_addr:?}",
                 config.stage_id
             );
@@ -488,7 +492,7 @@ fn run_binary_stage(
             let task_control = worker_control.clone();
             let task = thread::spawn(move || {
                 let connection_result = (|| -> Result<()> {
-                    eprintln!(
+                    tracing::debug!(
                         "binary sending ready: stage_id={} peer={peer_addr:?}",
                         config.stage_id
                     );
@@ -496,7 +500,7 @@ fn run_binary_stage(
                         .context("consume optional client ready hello")?;
                     send_ready(&mut upstream).context("failed to send binary ready")?;
                     upstream.flush().ok();
-                    eprintln!(
+                    tracing::debug!(
                         "binary sent ready: stage_id={} peer={peer_addr:?}",
                         config.stage_id
                     );
@@ -565,7 +569,7 @@ fn run_binary_stage(
                         attrs.insert("llama_stage.peer_addr".to_string(), json!(peer_addr));
                     }
                     attrs.insert("llama_stage.error".to_string(), json!(error.to_string()));
-                    eprintln!("{error:#}");
+                    tracing::warn!("{error:#}");
                     telemetry.emit("stage.binary_connection_error", attrs);
                 }
                 task_control.clear();

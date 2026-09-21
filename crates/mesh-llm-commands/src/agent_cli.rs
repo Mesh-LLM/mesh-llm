@@ -1,5 +1,9 @@
+mod model_inventory;
+use model_inventory::ModelInventory;
+
 use anyhow::{Context, Result};
 use mesh_llm_plugin_manager::SkillAgent;
+use std::io::Write;
 use std::process::{Command, Stdio};
 
 use crate::skills::install_skills_for_agent;
@@ -48,6 +52,13 @@ fn configure_opencode_launch_command(command: &mut Command, spec: &OpenCodeLaunc
     // initializing its TTY write streams.
 }
 
+fn configure_claude_launch_command(command: &mut Command, args: [&str; 6]) {
+    command.args(args);
+    // Claude Code's native build runs on Bun, which expects the original
+    // terminal file descriptors. Reopening /dev/tty here can make Bun fail
+    // while initializing its kqueue-registered stdin (EINVAL on macOS).
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct OpenCodeLaunchSpec {
     provider_id: &'static str,
@@ -63,7 +74,6 @@ struct OpenCodeTarget {
     input: String,
     api_base_url: String,
     api_models_url: String,
-    management_models_url: String,
     mcp_url: String,
     auto_start_local_mesh: bool,
     local_port: Option<u16>,
@@ -171,7 +181,8 @@ fn write_goose_mcp_config_to_path(path: &std::path::Path, mcp_url: &str) -> Resu
     let mut config = read_goose_config(path)?;
     merge_goose_mcp_config(&mut config, mcp_url, path)?;
     std::fs::write(path, serde_yaml::to_string(&config)?)?;
-    eprintln!("✅ Wrote mesh MCP extension to {}", path.display());
+    let mut err = mesh_llm_events::console_err();
+    writeln!(err, "✅ Wrote mesh MCP extension to {}", path.display())?;
     Ok(())
 }
 
@@ -262,7 +273,6 @@ fn normalize_mesh_host_with_label(host: &str, label: &str) -> Result<OpenCodeTar
         input: trimmed.to_string(),
         api_base_url: api_base.to_string(),
         api_models_url: api_models.to_string(),
-        management_models_url: management.to_string(),
         mcp_url: mcp.to_string(),
         auto_start_local_mesh,
         local_port: api_base.port_or_known_default(),
@@ -388,7 +398,8 @@ fn pi_missing_binary_guidance(model_arg: &str) -> Vec<String> {
 
 fn cleanup_mesh_child(mesh_child: &mut Option<std::process::Child>) {
     if let Some(child) = mesh_child {
-        eprintln!("🧹 Stopping mesh-llm node we started...");
+        let mut err = mesh_llm_events::console_err();
+        let _ = writeln!(err, "🧹 Stopping mesh-llm node we started...");
         let _ = child.kill();
         let _ = child.wait();
     }
@@ -399,12 +410,16 @@ async fn check_mesh(
     client: &reqwest::Client,
     port: u16,
     model: &Option<String>,
-) -> Result<(Vec<String>, String, Option<std::process::Child>)> {
+) -> Result<(ModelInventory, String, Option<std::process::Child>)> {
+    let mut err = mesh_llm_events::console_err();
     let url = format!("http://127.0.0.1:{port}/v1/models");
 
     let mut child: Option<std::process::Child> = None;
     if client.get(&url).send().await.is_err() {
-        eprintln!("🚀 No mesh-llm on port {port}; starting background auto-join node");
+        writeln!(
+            err,
+            "🚀 No mesh-llm on port {port}; starting background auto-join node"
+        )?;
         let exe = std::env::current_exe().unwrap_or_else(|_| "mesh-llm".into());
         child = Some(
             std::process::Command::new(&exe)
@@ -417,31 +432,27 @@ async fn check_mesh(
     }
 
     let models_url = format!("http://127.0.0.1:{port}/v1/models");
-    let mut models = Vec::new();
+    let mut models = ModelInventory::default();
     for attempt in 0..40 {
         if let Ok(resp) = client.get(&models_url).send().await
             && let Ok(body) = resp.json::<serde_json::Value>().await
         {
-            models = body["data"]
-                .as_array()
-                .unwrap_or(&vec![])
-                .iter()
-                .filter_map(|model| model["id"].as_str().map(String::from))
-                .collect();
-            if !models.is_empty() {
+            models = ModelInventory::from_response(&body);
+            if !models.names.is_empty() {
                 break;
             }
         }
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
         if attempt % 5 == 4 {
-            eprintln!(
+            writeln!(
+                err,
                 "⏳ Waiting for mesh/models... ({:.0}s)",
                 (attempt + 1) as f64 * 3.0
-            );
+            )?;
         }
     }
 
-    if models.is_empty() {
+    if models.names.is_empty() {
         if let Some(mut child) = child {
             let _ = child.kill();
             let _ = child.wait();
@@ -451,10 +462,11 @@ async fn check_mesh(
              Ensure at least one serving peer is available on the mesh."
         );
     }
+    models.report_fallbacks();
 
-    let chosen = choose_requested_or_agent_model(&models, model, &mut child)?;
-    eprintln!("   Models: {}", models.join(", "));
-    eprintln!("   Using: {chosen}");
+    let chosen = choose_requested_or_agent_model(&models.names, model, &mut child)?;
+    writeln!(err, "   Models: {}", models.names.join(", "))?;
+    writeln!(err, "   Using: {chosen}")?;
     Ok((models, chosen, child))
 }
 
@@ -496,7 +508,7 @@ async fn fetch_mesh_models(
     client: &reqwest::Client,
     models_url: &str,
     requested_model: &Option<String>,
-) -> Result<(Vec<String>, String)> {
+) -> Result<(ModelInventory, String)> {
     let resp = client
         .get(models_url)
         .send()
@@ -510,37 +522,34 @@ async fn fetch_mesh_models(
         .await
         .with_context(|| format!("Failed to parse model list from {models_url}"))?;
 
-    let models: Vec<String> = body["data"]
-        .as_array()
-        .unwrap_or(&vec![])
-        .iter()
-        .filter_map(|m| m["id"].as_str().map(String::from))
-        .collect();
+    let models = ModelInventory::from_response(&body);
 
-    if models.is_empty() {
+    if models.names.is_empty() {
         anyhow::bail!(
             "mesh target at {models_url} has no models yet (or could not be reached).\n\
              Ensure at least one serving peer is available on the mesh."
         );
     }
+    models.report_fallbacks();
 
     let chosen = if let Some(model) = requested_model {
-        if !models.iter().any(|name| name == model) {
+        if !models.names.iter().any(|name| name == model) {
             anyhow::bail!(
                 "Model '{}' not available. Available: {}",
                 model,
-                models.join(", ")
+                models.names.join(", ")
             );
         }
         model.clone()
     } else {
         // Pre-startup path: no live routing metrics yet, so candidates
         // are scored as cold (uniform weight).
-        choose_agent_model(&models)
+        choose_agent_model(&models.names)
     };
 
-    eprintln!("   Models: {}", models.join(", "));
-    eprintln!("   Using: {chosen}");
+    let mut err = mesh_llm_events::console_err();
+    writeln!(err, "   Models: {}", models.names.join(", "))?;
+    writeln!(err, "   Using: {chosen}")?;
 
     Ok((models, chosen))
 }
@@ -558,10 +567,7 @@ pub async fn run_goose(model: Option<String>, port: u16) -> Result<()> {
         .join("custom_providers");
     std::fs::create_dir_all(&goose_config_dir)?;
 
-    let provider_models: Vec<serde_json::Value> = models
-        .iter()
-        .map(|name| serde_json::json!({"name": name, "context_limit": 65536}))
-        .collect();
+    let provider_models = models.goose_models();
 
     let provider = serde_json::json!({
         "name": "mesh",
@@ -579,13 +585,15 @@ pub async fn run_goose(model: Option<String>, port: u16) -> Result<()> {
 
     let provider_path = goose_config_dir.join("mesh.json");
     std::fs::write(&provider_path, serde_json::to_string_pretty(&provider)?)?;
-    eprintln!("✅ Wrote {}", provider_path.display());
+    let mut err = mesh_llm_events::console_err();
+    writeln!(err, "✅ Wrote {}", provider_path.display())?;
     write_goose_mcp_config(DEFAULT_MESH_MCP_URL)?;
     install_skills_for_agent(SkillAgent::Goose);
 
     let goose_app = std::path::Path::new("/Applications/Goose.app");
     if goose_app.exists() {
-        eprintln!("🪿 Launching Goose.app...");
+        writeln!(err, "🪿 Launching Goose.app...")?;
+        let _ = err.flush();
         std::process::Command::new("open")
             .arg("-a")
             .arg(goose_app)
@@ -593,12 +601,14 @@ pub async fn run_goose(model: Option<String>, port: u16) -> Result<()> {
             .env("GOOSE_MODEL", &chosen)
             .spawn()?;
         if mesh_child.is_some() {
-            eprintln!(
+            writeln!(
+                err,
                 "ℹ️  mesh-llm node running in background (kill manually or use `mesh-llm stop`)"
-            );
+            )?;
         }
     } else {
-        eprintln!("🪿 Launching goose session...");
+        writeln!(err, "🪿 Launching goose session...")?;
+        let _ = err.flush();
         let mut command = Command::new("goose");
         command
             .arg("session")
@@ -608,15 +618,21 @@ pub async fn run_goose(model: Option<String>, port: u16) -> Result<()> {
         let status = command.status();
         match status {
             Ok(s) if s.success() => {}
-            Ok(s) => eprintln!("goose exited with {s}"),
+            Ok(s) => writeln!(err, "goose exited with {s}")?,
             Err(_) => {
-                eprintln!("goose not found. Install: https://github.com/block/goose");
-                eprintln!("Or run manually:");
-                eprintln!("  GOOSE_PROVIDER=mesh GOOSE_MODEL={chosen} goose session");
+                writeln!(
+                    err,
+                    "goose not found. Install: https://github.com/block/goose"
+                )?;
+                writeln!(err, "Or run manually:")?;
+                writeln!(
+                    err,
+                    "  GOOSE_PROVIDER=mesh GOOSE_MODEL={chosen} goose session"
+                )?;
             }
         }
         if let Some(ref mut c) = mesh_child {
-            eprintln!("🧹 Stopping mesh-llm node we started...");
+            writeln!(err, "🧹 Stopping mesh-llm node we started...")?;
             let _ = c.kill();
             let _ = c.wait();
         }
@@ -628,10 +644,10 @@ pub async fn run_claude(model: Option<String>, port: u16) -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()?;
-    let (_models, chosen, mut mesh_child) = check_mesh(&client, port, &model).await?;
+    let (models, chosen, mut mesh_child) = check_mesh(&client, port, &model).await?;
 
     let base_url = format!("http://127.0.0.1:{port}");
-    let settings = serde_json::json!({
+    let mut settings = serde_json::json!({
         "env": {
             "ANTHROPIC_BASE_URL": &base_url,
             "ANTHROPIC_API_KEY": "",
@@ -640,7 +656,6 @@ pub async fn run_claude(model: Option<String>, port: u16) -> Result<()> {
             "ANTHROPIC_DEFAULT_SONNET_MODEL": &chosen,
             "ANTHROPIC_DEFAULT_HAIKU_MODEL": &chosen,
             "CLAUDE_CODE_SUBAGENT_MODEL": &chosen,
-            "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "128000",
             "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
             "CLAUDE_CODE_ENABLE_TELEMETRY": "0",
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
@@ -657,33 +672,52 @@ pub async fn run_claude(model: Option<String>, port: u16) -> Result<()> {
         "prefersReducedMotion": true,
         "terminalProgressBarEnabled": false
     });
+    let context = models.context_limit(&chosen);
+    model_inventory::apply_claude_limits(&mut settings, &chosen, context);
+    if context < 20_000 {
+        let mut err = mesh_llm_events::console_err();
+        writeln!(
+            err,
+            "⚠️  Claude Code is configured for a {context}-token window on {chosen}; compaction may leave limited working room."
+        )?;
+    }
     let settings_json = serde_json::to_string(&settings)?;
     let mcp_config_json = mesh_mcp_claude_config_json(DEFAULT_MESH_MCP_URL)?;
     install_skills_for_agent(SkillAgent::Claude);
 
-    eprintln!("🚀 Launching Claude Code with {chosen} → {base_url}\n");
+    let mut err = mesh_llm_events::console_err();
+    writeln!(err, "🚀 Launching Claude Code with {chosen} → {base_url}\n")?;
+    let _ = err.flush();
     let mut command = Command::new("claude");
-    command.args([
-        "--model",
-        &chosen,
-        "--settings",
-        &settings_json,
-        "--mcp-config",
-        &mcp_config_json,
-    ]);
-    configure_interactive_stdio(&mut command);
+    configure_claude_launch_command(
+        &mut command,
+        [
+            "--model",
+            &chosen,
+            "--settings",
+            &settings_json,
+            "--mcp-config",
+            &mcp_config_json,
+        ],
+    );
     let status = command.status();
     match status {
         Ok(s) if s.success() => {}
-        Ok(s) => eprintln!("claude exited with {s}"),
+        Ok(s) => writeln!(err, "claude exited with {s}")?,
         Err(_) => {
-            eprintln!("claude not found. Install: https://docs.anthropic.com/en/docs/claude-code");
-            eprintln!("Or run manually:");
-            eprintln!("  ANTHROPIC_BASE_URL={base_url} ANTHROPIC_API_KEY= claude --model {chosen}");
+            writeln!(
+                err,
+                "claude not found. Install: https://docs.anthropic.com/en/docs/claude-code"
+            )?;
+            writeln!(err, "Or run manually:")?;
+            writeln!(
+                err,
+                "  ANTHROPIC_BASE_URL={base_url} ANTHROPIC_API_KEY= claude --model {chosen}"
+            )?;
         }
     }
     if let Some(ref mut c) = mesh_child {
-        eprintln!("🧹 Stopping mesh-llm node we started...");
+        writeln!(err, "🧹 Stopping mesh-llm node we started...")?;
         let _ = c.kill();
         let _ = c.wait();
     }
@@ -843,11 +877,13 @@ fn write_pi_config_to_path_with_limits(
     merge_provider(&mut config, "providers", "mesh", provider, models_path)?;
 
     std::fs::write(models_path, serde_json::to_string_pretty(&config)?)?;
-    eprintln!(
+    let mut err = mesh_llm_events::console_err();
+    writeln!(
+        err,
         "✅ Wrote mesh provider to {} ({} models)",
         models_path.display(),
         model_names.len()
-    );
+    )?;
 
     Ok(())
 }
@@ -879,12 +915,11 @@ pub async fn run_pi(model: Option<String>, host: &str, write: bool) -> Result<()
         (models, chosen, None)
     };
 
-    let context_lengths = fetch_model_context_lengths(&client, &target.management_models_url).await;
     let result = run_pi_with_mesh(
-        &models,
+        &models.names,
         &chosen,
         &target.api_base_url,
-        &context_lengths,
+        &models.context_lengths,
         write,
     );
 
@@ -908,17 +943,19 @@ fn run_pi_with_mesh(
     }
 
     let model_arg = format!("mesh/{chosen}");
-    eprintln!("🚀 Launching pi with {chosen} → {base_url}\n");
+    let mut err = mesh_llm_events::console_err();
+    writeln!(err, "🚀 Launching pi with {chosen} → {base_url}\n")?;
+    let _ = err.flush();
     let mut command = Command::new("pi");
     command.args(["--model", &model_arg]);
     configure_interactive_stdio(&mut command);
     let status = command.status();
     match status {
         Ok(s) if s.success() => {}
-        Ok(s) => eprintln!("pi exited with {s}"),
+        Ok(s) => writeln!(err, "pi exited with {s}")?,
         Err(_) => {
             for line in pi_missing_binary_guidance(&model_arg) {
-                eprintln!("{line}");
+                writeln!(err, "{line}")?;
             }
         }
     }
@@ -945,35 +982,36 @@ pub async fn run_opencode(model: Option<String>, host: &str, write: bool) -> Res
 
     let result = if write {
         install_skills_for_agent(SkillAgent::Opencode);
-        write_opencode_config(&client, &models, &chosen, &target).await
+        write_opencode_config(&models.names, &chosen, &target, &models.context_lengths)
     } else {
-        let context_lengths =
-            fetch_model_context_lengths(&client, &target.management_models_url).await;
-        match write_opencode_config(&client, &models, &chosen, &target).await {
+        match write_opencode_config(&models.names, &chosen, &target, &models.context_lengths) {
             Ok(()) => {
                 let spec = build_opencode_launch_spec_with_limits(
-                    &models,
+                    &models.names,
                     &chosen,
                     &target.api_base_url,
                     &target.mcp_url,
-                    &context_lengths,
+                    &models.context_lengths,
                 );
 
-                eprintln!(
+                let mut err = mesh_llm_events::console_err();
+                writeln!(
+                    err,
                     "🚀 Launching OpenCode with {} → {}\n",
                     chosen, target.api_base_url
-                );
+                )?;
+                let _ = err.flush();
                 install_skills_for_agent(SkillAgent::Opencode);
                 let mut command = Command::new("opencode");
                 configure_opencode_launch_command(&mut command, &spec);
                 let status = command.status();
                 match status {
                     Ok(s) if s.success() => {}
-                    Ok(s) => eprintln!("opencode exited with {s}"),
+                    Ok(s) => writeln!(err, "opencode exited with {s}")?,
                     Err(_) => {
                         for line in opencode_missing_binary_guidance(&chosen, &target.input, &spec)
                         {
-                            eprintln!("{line}");
+                            writeln!(err, "{line}")?;
                         }
                     }
                 }
@@ -1023,89 +1061,39 @@ fn merge_mesh_provider(
     merge_provider(config, "provider", "mesh", mesh_provider, config_path)
 }
 
-async fn fetch_model_context_lengths(
-    client: &reqwest::Client,
-    management_models_url: &str,
-) -> std::collections::HashMap<String, Option<u32>> {
-    let models_json = fetch_json(client, management_models_url).await;
-
-    // Query /api/runtime/processes for the actual running context_lengths.
-    let processes_url = management_models_url.replace("/api/models", "/api/runtime/processes");
-    let processes_json = fetch_json(client, &processes_url).await;
-
-    merge_context_lengths(&models_json, &processes_json)
-}
-
-async fn fetch_json(client: &reqwest::Client, url: &str) -> serde_json::Value {
-    match client.get(url).send().await {
-        Ok(resp) => resp.json::<serde_json::Value>().await.unwrap_or_default(),
-        Err(_) => serde_json::Value::Null,
-    }
-}
-
-fn merge_context_lengths(
-    models_json: &serde_json::Value,
-    processes_json: &serde_json::Value,
-) -> std::collections::HashMap<String, Option<u32>> {
-    let mut context_map = std::collections::HashMap::new();
-
-    // Primary source: runtime process data — the actual context_length the
-    // model is running with (from CLI --ctx-size, config.toml, or auto-computed
-    // from VRAM by plan_runtime_resources).
-    if let Some(processes) = processes_json["processes"].as_array() {
-        for process in processes {
-            let name = process["name"].as_str().map(String::from);
-            let ctx_len = process["context_length"].as_u64().map(|v| v as u32);
-            if let (Some(n), Some(ctx_len)) = (name, ctx_len) {
-                context_map.insert(n, Some(ctx_len));
-            }
-        }
-    }
-
-    // Fallback: GGUF metadata / peer metadata for any model whose runtime
-    // context_length is unknown (e.g. remote models or stopped instances).
-    if let Some(mesh_models) = models_json["mesh_models"].as_array() {
-        for model in mesh_models {
-            let name = model["name"].as_str().map(String::from);
-            let ctx_len = model["context_length"].as_u64().map(|v| v as u32);
-            if let Some(n) = name {
-                context_map.entry(n).or_insert(ctx_len);
-            }
-        }
-    }
-
-    context_map
-}
-
-async fn write_opencode_config(
-    client: &reqwest::Client,
+fn write_opencode_config(
     model_names: &[String],
     resolved_model: &str,
     target: &OpenCodeTarget,
+    context_lengths: &std::collections::HashMap<String, Option<u32>>,
 ) -> Result<()> {
     let config_path = resolve_opencode_config_path()?;
-    write_opencode_config_to_path(client, model_names, resolved_model, target, &config_path).await
+    write_opencode_config_to_path(
+        model_names,
+        resolved_model,
+        target,
+        &config_path,
+        context_lengths,
+    )
 }
 
-async fn write_opencode_config_to_path(
-    client: &reqwest::Client,
+fn write_opencode_config_to_path(
     model_names: &[String],
     resolved_model: &str,
     target: &OpenCodeTarget,
     config_path: &std::path::Path,
+    context_lengths: &std::collections::HashMap<String, Option<u32>>,
 ) -> Result<()> {
     std::fs::create_dir_all(config_path.parent().expect("config path must have parent"))?;
 
     let existing_config = load_existing_config(config_path)?;
-
-    let context_lengths = fetch_model_context_lengths(client, &target.management_models_url).await;
 
     let spec = build_opencode_launch_spec_with_limits(
         model_names,
         resolved_model,
         &target.api_base_url,
         &target.mcp_url,
-        &context_lengths,
+        context_lengths,
     );
     let config_value: serde_json::Value = serde_json::from_str(&spec.config_content)?;
     let mesh_provider = config_value["provider"]["mesh"].clone();
@@ -1134,11 +1122,13 @@ async fn write_opencode_config_to_path(
     let formatted_json = serde_json::to_string_pretty(&merged_config)?;
     std::fs::write(config_path, &formatted_json)?;
 
-    eprintln!(
+    let mut err = mesh_llm_events::console_err();
+    writeln!(
+        err,
         "✅ Wrote {} ({} models)",
         config_path.display(),
         model_names.len()
-    );
+    )?;
 
     Ok(())
 }
@@ -1149,18 +1139,14 @@ pub(crate) async fn write_opencode_config_for_test(
     models: &[String],
     host: &str,
 ) -> Result<(), anyhow::Error> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()?;
     let target = normalize_opencode_host(host)?;
     write_opencode_config_to_path(
-        &client,
         models,
         &models.first().cloned().unwrap_or_default(),
         &target,
         config_path,
+        &std::collections::HashMap::new(),
     )
-    .await
 }
 
 #[cfg(test)]

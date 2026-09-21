@@ -37,7 +37,8 @@ Each packaged runtime directory contains `manifest.json`:
     "platform": {
       "os": "linux",
       "arch": "x86_64",
-      "target": "x86_64-unknown-linux-gnu"
+      "target": "x86_64-unknown-linux-gnu",
+      "min_glibc": "2.38"
     },
     "backend": {
       "kind": "cuda",
@@ -81,6 +82,7 @@ Important fields:
 - `id`: stable runtime ID used for explicit selection and cache paths.
 - `skippy_abi`: exact ABI version required by the loader.
 - `platform`: OS/arch/optional Rust target triple.
+- `platform.min_glibc`: observed minimum glibc major.minor required by packaged Linux ELF libraries and tools. Older release manifests may omit it and remain parseable for legacy catalog resolution, but automatic startup refuses to load a locally installed Linux artifact without this metadata.
 - `backend`: structured backend requirements.
 - `rank`: optional rank adjustment. Higher compatible ranks win.
 - `libraries`: runtime-relative load-order library paths. Linux CUDA manifests
@@ -128,6 +130,7 @@ let profile = HostRuntimeProfile {
     os: "linux".to_string(),
     arch: "x86_64".to_string(),
     target_triple: Some("x86_64-unknown-linux-gnu".to_string()),
+    glibc_version: Some("2.39".to_string()),
     available_flavors: BTreeSet::from([
         NativeRuntimeBackendKind::Cpu,
         NativeRuntimeBackendKind::Cuda,
@@ -213,6 +216,8 @@ Compatibility checks:
 
 - exact Skippy ABI
 - OS/arch/target triple
+- Linux glibc version when both the artifact requirement and host detection are known
+- automatic startup requires glibc metadata on locally installed Linux artifacts
 - backend kind support
 - CUDA toolkit major
 - CUDA SM architecture

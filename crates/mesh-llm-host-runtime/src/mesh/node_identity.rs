@@ -447,6 +447,10 @@ impl Node {
             .map_err(|reason| anyhow::anyhow!("join rejected: {}", reason.code()))?
         {
             InviteTokenMaterial::Signed(token) => {
+                let token_is_expired = matches!(
+                    token.verify(),
+                    Err(MeshRequirementRejectReason::BootstrapTokenExpired)
+                );
                 let addrs = match self.validate_bootstrap_token(&token).await {
                     Ok(addrs) => addrs,
                     Err(reason) => {
@@ -463,14 +467,24 @@ impl Node {
                     anyhow::anyhow!("bootstrap token does not contain any endpoint addresses")
                 })?;
                 self.reject_join_to_own_identity(&addr).await?;
-                self.install_requirement_aware_mesh_state(
-                    token.mesh_id.clone(),
-                    token.policy_hash.clone(),
-                    token.genesis_policy.clone(),
-                    None,
-                    Some(*token),
-                )
-                .await?;
+                if token_is_expired {
+                    if !self
+                        .restore_adopted_mesh_membership(&[invite_token.to_owned()])
+                        .await
+                    {
+                        anyhow::bail!("join rejected: could not restore adopted mesh membership");
+                    }
+                    tracing::info!("join_token_expired_using_persisted_membership");
+                } else {
+                    self.install_requirement_aware_mesh_state(
+                        token.mesh_id.clone(),
+                        token.policy_hash.clone(),
+                        token.genesis_policy.clone(),
+                        None,
+                        Some(*token),
+                    )
+                    .await?;
+                }
                 addr
             }
             InviteTokenMaterial::Legacy(addr) => {

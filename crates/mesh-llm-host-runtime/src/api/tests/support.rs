@@ -1042,6 +1042,7 @@ async fn seed_runtime_data_api_state(state: &MeshApi) {
             manifest_sha256: Some("manifest-sha".into()),
             source_model_path: Some("/models/test.gguf".into()),
             source_model_sha256: Some("source-sha".into()),
+            split_certification: Some("certified".into()),
             source_model_bytes: Some(1_234),
             materialized_path: Some("/tmp/mesh/stage-0.gguf".into()),
             materialized_pinned: true,
@@ -1131,6 +1132,10 @@ fn assert_runtime_status_payload(status_body: &serde_json::Value) {
     assert_eq!(
         status_body["runtime"]["stages"][0]["package_ref"],
         json!("hf://mesh/test-model")
+    );
+    assert_eq!(
+        status_body["runtime"]["stages"][0]["split_certification"],
+        json!("certified")
     );
     assert_eq!(
         status_body["runtime"]["stages"][0]["materialized_pinned"],

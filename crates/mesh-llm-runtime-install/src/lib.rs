@@ -6,7 +6,7 @@ mod types;
 
 pub use discovery::{
     NATIVE_RUNTIME_BUNDLE_DIR_ENV, discover_local_native_runtimes,
-    discover_native_runtime_bundle_dirs,
+    discover_local_native_runtimes_with_filter, discover_native_runtime_bundle_dirs,
 };
 pub use mesh_llm_native_runtime::{
     CachePrunePlan, CandidateEvaluation, CandidateRejection, HostGpuProfile, HostRuntimeProfile,
@@ -69,6 +69,7 @@ mod tests {
                 os: "linux".to_string(),
                 arch: "x86_64".to_string(),
                 target: Some("x86_64-unknown-linux-gnu".to_string()),
+                min_glibc: None,
             },
             backend: NativeRuntimeBackend::cpu(),
             rank: 0,
@@ -715,6 +716,7 @@ mod tests {
             os: "windows".to_string(),
             arch: "x86_64".to_string(),
             target: Some("x86_64-pc-windows-msvc".to_string()),
+            min_glibc: None,
         };
         artifact.libraries = vec!["lib/llama.dll".to_string()];
         artifact.url = None;
@@ -731,6 +733,7 @@ mod tests {
             os: "windows".to_string(),
             arch: "x86_64".to_string(),
             target: Some("x86_64-pc-windows-msvc".to_string()),
+            min_glibc: None,
         };
         artifact.backend = NativeRuntimeBackend {
             kind: NativeRuntimeBackendKind::Cuda,
@@ -930,6 +933,7 @@ mod tests {
             os: "windows".to_string(),
             arch: "x86_64".to_string(),
             target_triple: Some("x86_64-pc-windows-msvc".to_string()),
+            glibc_version: None,
             available_flavors: std::collections::BTreeSet::from([
                 NativeRuntimeBackendKind::Cpu,
                 NativeRuntimeBackendKind::Cuda,
@@ -1020,6 +1024,7 @@ mod tests {
             os: "windows".to_string(),
             arch: "x86_64".to_string(),
             target_triple: Some("x86_64-pc-windows-msvc".to_string()),
+            glibc_version: None,
             available_flavors: std::collections::BTreeSet::from([NativeRuntimeBackendKind::Cpu]),
             gpus: Vec::new(),
             cuda: None,
@@ -1135,6 +1140,7 @@ mod tests {
             os: "windows".to_string(),
             arch: "x86_64".to_string(),
             target_triple: Some("x86_64-pc-windows-msvc".to_string()),
+            glibc_version: None,
             available_flavors: std::collections::BTreeSet::from([
                 NativeRuntimeBackendKind::Cpu,
                 NativeRuntimeBackendKind::Cuda,
@@ -1228,6 +1234,7 @@ mod tests {
             os: "linux".to_string(),
             arch: "x86_64".to_string(),
             target: Some("x86_64-unknown-linux-gnu".to_string()),
+            min_glibc: None,
         };
         let manifest_path = release_manifest_file(
             temp.path(),
@@ -1247,6 +1254,7 @@ mod tests {
             os: "windows".to_string(),
             arch: "x86_64".to_string(),
             target_triple: Some("x86_64-pc-windows-msvc".to_string()),
+            glibc_version: None,
             available_flavors: std::collections::BTreeSet::from([
                 NativeRuntimeBackendKind::Cpu,
                 NativeRuntimeBackendKind::Cuda,

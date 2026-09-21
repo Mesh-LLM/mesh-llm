@@ -1115,9 +1115,9 @@ async fn resolve_startup_models_with_package_discovery(
             None => None,
         };
         // A remote model ref can resolve to a GGUF in the Hugging Face cache.
-        // Its synthetic split package is content-addressed just like an
-        // explicit local GGUF, so every participant must index its own cached
-        // bytes before coordinator election.
+        // Its synthetic split package keeps the same content-addressed shape
+        // as an explicit local GGUF, but derives the shard digests from the
+        // immutable Hub blob identities rather than rereading every payload.
         // Monolithic Hugging Face snapshot entries may already have been
         // canonicalized to an extensionless blob path by model resolution, so
         // the resolved filename cannot distinguish GGUF from SafeTensors.
@@ -1130,9 +1130,16 @@ async fn resolve_startup_models_with_package_discovery(
                 .unwrap_or(requested_ref.as_str())
                 .to_string();
             let model_path = resolved_path.clone();
+            let huggingface_identity = (!direct_local_gguf)
+                .then(|| models::huggingface_identity_for_path(&model_path))
+                .flatten();
             Some(
                 tokio::task::spawn_blocking(move || {
-                    skippy::synthetic_direct_gguf_package(&model_id, &model_path)
+                    if let Some(identity) = huggingface_identity {
+                        skippy::synthetic_huggingface_gguf_package(&model_id, &identity)
+                    } else {
+                        skippy::synthetic_direct_gguf_package(&model_id, &model_path)
+                    }
                 })
                 .await
                 .context("join direct GGUF indexing task")??,
