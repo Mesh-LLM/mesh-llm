@@ -1,0 +1,45 @@
+From 68933cf3b55a0455c8026ee097e1d5c871968228 Mon Sep 17 00:00:00 2001
+From: sat <sat@local>
+Date: Mon, 21 Sep 2026 23:02:43 +1000
+Subject: [PATCH] skippy: SAT graph trace: include graph build/alloc time
+
+---
+ src/llama-context.cpp | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 81f7ca083..6b17641d9 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -1424,6 +1424,7 @@ llm_graph_result * llama_context::process_ubatch(
+     // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
+     const auto gparams = graph_params(res, ubatch, mctx, gtype, graph_build_inputs);
+ 
++    const int64_t sat_t_build_start_us = ggml_time_us();
+     const bool sat_reuse_ok = !graph_reuse_disable && res->can_reuse(gparams);
+     if (sat_reuse_ok) {
+         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
+@@ -1461,6 +1462,8 @@ llm_graph_result * llama_context::process_ubatch(
+         }
+     }
+ 
++    const int64_t sat_build_us = ggml_time_us() - sat_t_build_start_us;
++
+     // set the input data for the input tensors
+     {
+         //const auto t_start_us = ggml_time_us();
+@@ -1495,9 +1498,9 @@ llm_graph_result * llama_context::process_ubatch(
+         ++trace_count;
+         const bool pow2 = (trace_count & (trace_count - 1)) == 0;
+         if (trace_count <= 64 || pow2 || trace_count % 200 == 0) {
+-            fprintf(stderr, "SAT-TRACE ubatch=%" PRIu64 " n_tokens=%u n_seqs=%u n_outputs=%u reused=%d nodes=%d splits=%d compute_us=%" PRId64 "\n",
++            fprintf(stderr, "SAT-TRACE ubatch=%" PRIu64 " n_tokens=%u n_seqs=%u n_outputs=%u reused=%d nodes=%d splits=%d compute_us=%" PRId64 " build_us=%" PRId64 "\n",
+                     trace_count, ubatch.n_tokens, ubatch.n_seqs, n_outputs, reused_now ? 1 : 0,
+-                    ggml_graph_n_nodes(res->get_gf()), ggml_backend_sched_get_n_splits(sched.get()), t_us);
++                    ggml_graph_n_nodes(res->get_gf()), ggml_backend_sched_get_n_splits(sched.get()), t_us, sat_build_us);
+             fflush(stderr);
+         }
+     }
+-- 
+2.50.1 (Apple Git-155)
+
