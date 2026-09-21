@@ -2,8 +2,11 @@
 
 # Meshes for Your Own Machines
 
-Use a named mesh to connect your own machines. Use the same discovery name on
-each machine you want to connect; the name is not an access-control credential.
+Use a named mesh to connect your own machines through Nostr discovery. This
+is not a private-mesh setup: the name is not an access-control credential.
+For an unpublished mesh, start without `--discover` or `--publish` and share its
+join token out of band; see the
+[token-based setup](https://github.com/Mesh-LLM/mesh-llm/blob/main/docs/MESHES.md#create-an-unpublished-mesh-and-join-by-token).
 
 Traffic between those Mesh nodes is end-to-end
 encrypted by QUIC. If iroh uses a relay, the relay forwards encrypted packets
@@ -25,7 +28,7 @@ See [ownership and admission control](https://github.com/Mesh-LLM/mesh-llm/blob/
 ## Start the first serving node
 
 ```sh
-mesh-llm serve --discover my-private-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
+mesh-llm serve --discover my-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
 ```
 
 ## Add another serving machine
@@ -33,7 +36,7 @@ mesh-llm serve --discover my-private-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD
 Install Mesh on the second machine, then use the same mesh name:
 
 ```sh
-mesh-llm serve --discover my-private-mesh --model <model-ref>
+mesh-llm serve --discover my-mesh --model <model-ref>
 ```
 
 ## Join as an API-only client
@@ -41,7 +44,7 @@ mesh-llm serve --discover my-private-mesh --model <model-ref>
 Use this for a laptop that should send requests but not serve a model:
 
 ```sh
-mesh-llm client --discover my-private-mesh
+mesh-llm client --discover my-mesh
 ```
 
 ## Check that peers are visible

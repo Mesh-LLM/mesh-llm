@@ -56,19 +56,20 @@ On interactive macOS and Linux terminals, setup can offer to install and enable 
 
 ## 3. Start one node
 
-The discovery name below is not an access-control credential. See
+The commands below use named Nostr discovery, not a private-mesh setup.
+The discovery name is not an access-control credential. See
 [discovery, join tokens, and admission policy](/docs/pages/private-meshes/#discovery-and-admission).
 
 Use this model first on a 12GB+ machine:
 
 ```sh
-mesh-llm serve --discover my-private-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
+mesh-llm serve --discover my-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
 ```
 
 On Windows PowerShell:
 
 ```powershell
-mesh-llm serve --discover my-private-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
+mesh-llm serve --discover my-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
 ```
 
 Keep this terminal open. A ready node exposes:
@@ -116,7 +117,7 @@ The model-first command above remains the easiest first run. You can also start
 the daemon with no local model:
 
 ```sh
-mesh-llm serve --discover my-private-mesh
+mesh-llm serve --discover my-mesh
 ```
 
 The console, API, mesh, plugins, and owner-control surfaces start independently
@@ -163,7 +164,7 @@ Traffic between the two Mesh nodes is end-to-end encrypted by QUIC, whether iroh
 connects them directly or forwards the encrypted packets through a relay:
 
 ```sh
-mesh-llm serve --discover my-private-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
+mesh-llm serve --discover my-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
 ```
 
 Mesh nodes using the same mesh name find each other and advertise their models to the same local API.
