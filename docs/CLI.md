@@ -988,3 +988,42 @@ Automation tips:
 1. Prefer explicit refs in scripts.
 2. Pin `@<commit-sha>` when reproducibility matters.
 3. Parse stable keys such as `type`, `ref`, `fit`, `path`, and `results`.
+
+### `hermes --write` / `openclaw --write`
+
+Add a named Mesh provider to an independently operated harness, without launching
+an agent or starting Mesh. Mesh must already be running. Requires current Hermes
+with the `providers` mapping and provider-scoped context overrides, or OpenClaw's
+`models.providers` OpenAI-completions schema (qualified against 2026.9.4).
+
+```bash
+mesh-llm hermes --write
+mesh-llm openclaw --write --host 127.0.0.1:9337
+mesh-llm hermes --write --model auto --config-path /path/to/profile/config.yaml
+```
+
+The default wire model is `auto`; select provider `mesh` and model `auto` in
+Hermes, or `mesh/auto` in OpenClaw. `--model mesh` opts into the ensemble route;
+an exact advertised model ID pins the connection instead. Existing defaults,
+credentials for other providers, and tool permissions are preserved. These
+commands do not install plugins/skills or restart anything. Bare commands require
+`--write`; there is no Hermes/OpenClaw launcher.
+
+Default paths are `$HERMES_HOME/config.yaml` (otherwise `~/.hermes/config.yaml`)
+and `$OPENCLAW_CONFIG_PATH` (otherwise `$OPENCLAW_STATE_DIR/openclaw.json`, falling
+back to `~/.openclaw/openclaw.json`). Use `--config-path` for another profile.
+An absent file is created. Existing files receive an exact sibling `.mesh-*.bak`
+backup; serialization normalizes formatting and removes comments. On Unix,
+new config and backup files are mode 0600. Symlink files, included configs,
+malformed mappings, legacy Hermes `custom_providers`, and conflicting existing
+`mesh` providers are refused rather than overwritten. An identical provider is
+accepted. Backups may contain secrets: keep them private. To undo, restore the
+backup only if no later edits occurred, otherwise remove just the Mesh entries.
+
+Context budgets come from `/v1/models` served metadata; aliases use the smallest
+advertised budget. Missing metadata uses a warned 8192-token assumption, not a
+capacity guarantee. `--context-length` can lower the budget. These are setup-time
+snapshots: rerun/review configuration when the mesh's models or limits change.
+Older Hermes versions may ignore provider context overrides; upgrade rather than
+relying on the old alias fallback. Remote endpoints should use HTTPS or a trusted
+tunnel. No credentials are discovered or read from the OS Keychain.

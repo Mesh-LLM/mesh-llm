@@ -100,3 +100,13 @@ every peer — never post secrets, credentials, private paths, or customer data.
 - An empty `/v1/models` usually means the model is still loading or no mesh was
   joined yet — check `/api/status` on `:3131` (see `mesh-join`).
 - The response `"model"` field tells you which node/model actually answered.
+
+## Config-only Hermes and OpenClaw
+
+`mesh-llm hermes --write` and `mesh-llm openclaw --write` add a named Mesh
+provider without changing the default or launching anything. They require a
+running endpoint; use `--host`, `--model` (default `auto`), `--config-path` for
+custom profiles, and `--context-length` to lower the serving-derived budget.
+OpenClaw selects `mesh/auto`; Hermes selects provider `mesh`, model `auto`.
+Existing files are backed up; formatting/comments normalize, and conflicts or
+includes are refused. See `docs/CLI.md` for schema requirements and context caveats.
