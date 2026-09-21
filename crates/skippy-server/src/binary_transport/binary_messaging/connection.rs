@@ -44,12 +44,14 @@ use crate::binary_transport::stage_execution::decode_record_tokens_sideband;
 use crate::binary_transport::stage_execution::elapsed_ms;
 use crate::binary_transport::stage_execution::empty_activation_frame;
 use crate::binary_transport::stage_execution::input_activation_frame;
-use crate::binary_transport::stage_execution::is_decode_frame_batch_candidate;
 use crate::binary_transport::stage_execution::nanos_delta_ms;
 use crate::binary_transport::stage_execution::runtime_sampling_config;
 use crate::binary_transport::stage_execution::split_native_mtp_reply;
 use crate::binary_transport::stage_execution::stage_mask;
 use crate::binary_transport::stage_execution::token_sideband_or_fill;
+use crate::binary_transport::stage_execution::{
+    is_decode_frame_batch_candidate, last_stage_decode_batch_enabled,
+};
 use crate::binary_transport::stage_output_activation_capacity;
 use crate::binary_transport::write_stage_message_conditioned;
 use crate::frontend::iteration_scheduler::IterationScheduler;
@@ -149,6 +151,7 @@ fn handle_binary_connection_messages(
     first_message: StageWireMessage,
     session_tracker: &mut ConnectionSessionTracker,
 ) -> Result<()> {
+    let last_stage_batching = last_stage_decode_batch_enabled();
     let connection_session_id = session_tracker.connection_id;
     let max_deferred_prefill_replies =
         reply_credit_limit.unwrap_or_else(|| max_inflight.saturating_sub(1));
@@ -497,8 +500,13 @@ fn handle_binary_connection_messages(
                 };
                 compute_start_unix_nanos = now_unix_nanos() as u64;
                 let compute_started = Instant::now();
-                let use_decode_frame_batch =
-                    is_decode_frame_batch_candidate(config, &message, executable_token_ids);
+                let use_decode_frame_batch = is_decode_frame_batch_candidate(
+                    config,
+                    &message,
+                    executable_token_ids,
+                    native_mtp_enabled,
+                    last_stage_batching,
+                );
                 let result = if use_decode_frame_batch {
                     let token_id = executable_token_ids
                         .first()
@@ -537,7 +545,14 @@ fn handle_binary_connection_messages(
                         session_auto_align_ms = observation.elapsed_ms;
                         session_auto_align_trimmed_tokens = observation.trimmed_tokens;
                     }
-                    (outcome.predicted, Vec::new(), outcome.output, None)
+                    // The final stage reports its sampled token as the predicted
+                    // token list, matching the unbatched final-stage path.
+                    let predicted_tokens = if config.downstream.is_none() {
+                        vec![outcome.predicted]
+                    } else {
+                        Vec::new()
+                    };
+                    (outcome.predicted, predicted_tokens, outcome.output, None)
                 } else {
                     let eviction_plan = binary_proactive_eviction_plan(
                         message.kind,

@@ -35,10 +35,10 @@ pub(super) use super::local_package::{
     runtime_model_planning_bytes, scan_layer_package_metadata,
 };
 pub(super) use super::local_split::{
-    SplitCoordinatorAck, SplitCoordinatorEvent, SplitCoordinatorLocalFallbackEvent,
-    SplitCoordinatorReplaceEvent, SplitGenerationCleanup, SplitRuntimeReason, SplitRuntimeStart,
-    StartupRuntimePlan, now_unix_nanos, start_runtime_split_model, startup_runtime_plan,
-    stop_split_generation_cleanup,
+    SplitCoordinatorAck, SplitCoordinatorDrainEvent, SplitCoordinatorEvent,
+    SplitCoordinatorLocalFallbackEvent, SplitCoordinatorReplaceEvent, SplitGenerationCleanup,
+    SplitRuntimeReason, SplitRuntimeStart, StartupRuntimePlan, now_unix_nanos,
+    start_runtime_split_model, startup_runtime_plan, stop_split_generation_cleanup,
 };
 pub(super) fn skippy_native_model_open_event_reporter(
     model_name: String,
@@ -242,6 +242,7 @@ pub(super) struct LocalRuntimeModelStartSpec<'a> {
     pub(super) local_source_required: bool,
     pub(super) allow_uncertified_split: bool,
     pub(super) split_topology_lock: Option<&'a Path>,
+    pub(super) auto_balance: bool,
     pub(super) planning_profile: RuntimeResourcePlanningProfile,
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     pub(super) skippy_telemetry: skippy::SkippyTelemetryOptions,
@@ -1525,6 +1526,7 @@ mod tests {
             local_source_required: false,
             allow_uncertified_split: false,
             split_topology_lock: None,
+            auto_balance: false,
             planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
             openai_guardrail_policy: openai_guardrail_policy_handle(
                 openai_frontend::GuardrailMode::Disabled,

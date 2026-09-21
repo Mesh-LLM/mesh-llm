@@ -53,6 +53,7 @@ where
         "--quant",
         "--checkpoint-imatrix",
         "--join",
+        "--join-file",
         "--discover",
         "--mesh-name",
         "--region",

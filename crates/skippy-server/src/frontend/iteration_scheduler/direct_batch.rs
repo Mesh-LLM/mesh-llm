@@ -24,6 +24,24 @@ pub(super) fn direct_coalesce_target(
         .min(max_direct_batch_size)
 }
 
+/// Environment switch: split each coalesced decode wave into this many
+/// pipeline groups, so a pipelined split keeps more than one batch in flight
+/// (group A computes on one stage while group B computes on the next).
+pub(super) const PIPELINE_DECODE_GROUPS_ENV: &str = "SKIPPY_PIPELINE_DECODE_GROUPS";
+
+pub(super) fn pipeline_decode_groups_from_value(value: Option<&str>) -> usize {
+    value
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|groups| *groups > 0)
+        .unwrap_or(1)
+}
+
+/// Largest decode batch per pipeline group: the lane count divided across
+/// groups, rounded up so every lane still fits in one wave of groups.
+pub(super) fn pipeline_group_batch_size(max_direct_batch_size: usize, groups: usize) -> usize {
+    max_direct_batch_size.div_ceil(groups.max(1)).max(1)
+}
+
 pub(super) fn scheduler_safe_mode_from_value(value: Option<&str>) -> bool {
     value.is_some_and(|value| {
         matches!(
@@ -103,4 +121,31 @@ pub(super) fn validate_direct_iteration(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod pipeline_group_tests {
+    use super::*;
+
+    #[test]
+    fn groups_default_to_one_and_ignore_invalid_values() {
+        assert_eq!(pipeline_decode_groups_from_value(None), 1);
+        assert_eq!(pipeline_decode_groups_from_value(Some("0")), 1);
+        assert_eq!(pipeline_decode_groups_from_value(Some("two")), 1);
+        assert_eq!(pipeline_decode_groups_from_value(Some(" 2 ")), 2);
+    }
+
+    #[test]
+    fn group_batch_size_divides_lanes_rounding_up() {
+        assert_eq!(pipeline_group_batch_size(4, 1), 4);
+        assert_eq!(pipeline_group_batch_size(4, 2), 2);
+        assert_eq!(pipeline_group_batch_size(5, 2), 3);
+        assert_eq!(pipeline_group_batch_size(1, 4), 1);
+    }
+
+    #[test]
+    fn coalescing_stops_at_the_group_size() {
+        let group = pipeline_group_batch_size(4, 2);
+        assert_eq!(direct_coalesce_target(4, 1, group), 2);
+    }
 }

@@ -113,6 +113,46 @@ Join from an API-only client:
 mesh-llm client --join <token>
 ```
 
+### Join without putting the token in argv
+
+The invite token can also come from a file or from the environment, which is
+what a background service needs:
+
+```bash
+mesh-llm serve --join-file /home/you/.mesh-llm/invite.token
+```
+
+| Source | Flag / variable | Re-read after startup |
+|---|---|---|
+| argv | `--join <TOKEN>` | no |
+| file | `--join-file <PATH>`, `MESH_LLM_JOIN_FILE` | yes — on every rejoin attempt |
+| environment | `MESH_LLM_JOIN` | no |
+| default file | `invite.token` beside the resolved config file | yes — on every rejoin attempt |
+
+A file-backed token is re-read on every rejoin, so rotating an invite token is
+just replacing the file's contents. That is true for the default file too: any
+file-derived token is re-resolved on each rejoin attempt and is never frozen
+into the running process, so a rotation retires the old token immediately.
+
+When neither `--join-file` nor `MESH_LLM_JOIN_FILE` names a file, an
+`invite.token` sitting beside the resolved config file is used automatically —
+`~/.mesh-llm/invite.token` by default, or beside `MESH_LLM_CONFIG=<path>` in a
+project-local setup, so rejoin state travels with the config. Exactly one fixed
+filename is consulted, never a scan of the directory: owner keys, membership,
+and genesis files live there too. An explicit `--join-file` or
+`MESH_LLM_JOIN_FILE` always wins outright, and the default is only used when
+that file exists — an operator who created it gets a startup error if it is
+empty or unreadable, rather than a node that quietly serves standalone.
+
+`mesh-llm setup --service` installs a unit that runs a bare `serve` and loads
+`~/.config/mesh-llm/service.env`, so writing the token to
+`~/.mesh-llm/invite.token` is enough to run a private-mesh node as a service
+with no unit edits and no env line at all;
+`MESH_LLM_JOIN_FILE=/path/to/invite.token` remains available when the token
+lives somewhere else. `MESH_LLM_JOIN` that is set but blank is an error, not a
+silent skip. Keeping the token out of argv and out of the unit file also keeps
+it out of `ps`, `pgrep -a`, and `systemctl list-units` output.
+
 ### Multi-interface Linux and Docker hosts
 
 On Linux hosts with several kernel-visible interfaces, especially

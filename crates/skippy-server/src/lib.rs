@@ -5,6 +5,7 @@
 
 pub mod binary_transport;
 pub mod cli;
+pub mod compute_meter;
 pub mod config;
 pub mod embedded;
 pub mod frontend;

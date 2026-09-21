@@ -363,6 +363,8 @@ pub(super) fn runtime_status_for_stage(
         flash_attn_type: FlashAttentionType::Auto,
         error: None,
         shutdown_generation: generation.generation,
+        compute_busy_nanos: 0,
+        compute_operations: 0,
     }
 }
 
@@ -938,6 +940,8 @@ pub(super) fn test_stage_status_from_load(
         coordinator_term: load.coordinator_term,
         coordinator_id: load.coordinator_id,
         lease_until_unix_ms: load.lease_until_unix_ms,
+        compute_busy_nanos: 0,
+        compute_operations: 0,
     }
 }
 
@@ -990,6 +994,8 @@ pub(super) fn test_stage_status_from_stop(
         coordinator_term: stop.coordinator_term,
         coordinator_id: None,
         lease_until_unix_ms: 0,
+        compute_busy_nanos: 0,
+        compute_operations: 0,
     }
 }
 

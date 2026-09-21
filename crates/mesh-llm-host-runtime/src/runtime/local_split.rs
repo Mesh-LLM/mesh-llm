@@ -1,4 +1,5 @@
 mod attestation;
+mod auto_balance;
 mod coordinator;
 mod loading;
 mod recovery;
@@ -86,9 +87,24 @@ pub(super) struct SplitRuntimeGenerationHandle {
 }
 
 pub(super) enum SplitCoordinatorEvent {
+    /// Stop admitting new requests to the serving generation and hand back its
+    /// lifecycle record so the coordinator can wait for in-flight work before
+    /// a planned cutover. Admission resumes when the next `Replace` re-arms
+    /// the record, or when the coordinator re-arms it after a failed load.
+    Drain(SplitCoordinatorDrainEvent),
     Replace(Box<SplitCoordinatorReplaceEvent>),
     LocalFallback(SplitCoordinatorLocalFallbackEvent),
     Withdraw(SplitCoordinatorWithdrawEvent),
+}
+
+pub(super) struct SplitCoordinatorDrainEvent {
+    pub(super) reason: &'static str,
+    pub(super) deadline: std::time::Instant,
+    pub(super) ack: tokio::sync::oneshot::Sender<
+        Option<
+            std::sync::Arc<tokio::sync::Mutex<super::instance_lifecycle::InstanceLifecycleRecord>>,
+        >,
+    >,
 }
 
 pub(super) struct SplitCoordinatorReplaceEvent {
@@ -309,6 +325,7 @@ pub(super) async fn start_runtime_split_model(
                 .recurrent_bytes_per_configured_lane_by_layer(),
             ctx_size_override: spec.ctx_size_override,
             parallel_override: spec.parallel_override,
+            auto_balance: spec.auto_balance,
         },
         cache_type_k_override: spec.cache_type_k_override.map(str::to_string),
         cache_type_v_override: spec.cache_type_v_override.map(str::to_string),
@@ -325,6 +342,11 @@ pub(super) async fn start_runtime_split_model(
         event_tx: coordinator_tx,
         stage_loss_first_seen: None,
         previously_unavailable_stage_nodes: Vec::new(),
+        auto_balance: (spec.auto_balance && !topology_locked).then(|| {
+            auto_balance::AutoBalanceController::new(
+                auto_balance::AutoBalanceControllerConfig::from_env(),
+            )
+        }),
         topology_locked,
         local_source_required,
         health_interval: loading::configured_stage_lifecycle_intervals(
@@ -392,6 +414,7 @@ async fn prepare_split_runtime_start(
             .recurrent_bytes_per_configured_lane_by_layer(),
         ctx_size_override: spec.ctx_size_override,
         parallel_override: spec.parallel_override,
+        auto_balance: spec.auto_balance,
     };
     let configured_locked_stages = load_configured_split_assignments(
         spec.mesh_config,

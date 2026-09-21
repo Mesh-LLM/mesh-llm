@@ -281,6 +281,7 @@ fn run_binary_stage(
         native_mtp_enabled,
         continuous_batching,
         openai,
+        compute_meter,
     } = options;
     let native_mtp_enabled = native_mtp_enabled && config.native_mtp_enabled;
     validate_config(&config, topology.as_ref())?;
@@ -341,6 +342,12 @@ fn run_binary_stage(
             json!(timer.elapsed().as_secs_f64() * 1000.0),
         );
         telemetry.emit("stage.binary_runtime_prewarm", attrs);
+    }
+    if let Some(meter) = compute_meter {
+        runtime
+            .lock()
+            .map_err(|_| anyhow!("runtime lock poisoned"))?
+            .set_compute_meter(meter);
     }
     let iteration_scheduler = IterationScheduler::new(
         runtime.clone(),
