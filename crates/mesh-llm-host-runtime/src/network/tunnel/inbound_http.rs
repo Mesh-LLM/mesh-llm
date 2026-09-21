@@ -42,25 +42,6 @@ pub(super) async fn handle_inbound_http_stream(
     // private assertion. Direct API requests have it stripped before they can
     // reach this tunnel, so they retain normal target frontend ownership.
     let prefix = read_tunneled_http_header_prefix(&mut quic_recv).await?;
-    if crate::network::payments::vetting::is_upgrade(&prefix) {
-        let (offset, _) = crate::network::openai::request_parse::http_header_terminator(&prefix)
-            .context("incomplete probe upgrade")?;
-        let remainder = std::io::Cursor::new(prefix[offset..].to_vec());
-        let targets = ingress
-            .as_ref()
-            .context("probe ingress unavailable")?
-            .targets
-            .borrow()
-            .clone();
-        return crate::network::payments::vetting::serve(
-            remote,
-            &node,
-            remainder.chain(quic_recv),
-            quic_send,
-            targets,
-        )
-        .await;
-    }
     if crate::network::payments::is_payment_upgrade(&prefix) {
         let (offset, _) = crate::network::openai::request_parse::http_header_terminator(&prefix)
             .context("incomplete payment upgrade")?;

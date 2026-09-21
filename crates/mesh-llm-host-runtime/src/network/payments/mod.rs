@@ -5,7 +5,6 @@ mod delivery;
 mod gate;
 pub(crate) mod request;
 mod server;
-pub(crate) mod vetting;
 
 pub(crate) use server::serve;
 
