@@ -864,3 +864,22 @@ Explicit SDK/platform overrides remain supported. The full Swift SDK passes
 its selected macOS target to both Cargo and CMake while retaining its separate
 iOS targets. Setting a deployment target is not proof of oldest-OS runtime
 compatibility; validate on the minimum OS before making that claim.
+
+
+### Mesh and Skippy physical-layout catalog prerequisite
+
+The catalog registers future `mesh/crates/` and `skippy/crates/` paths alongside
+existing paths, including product scripts, docs, website, SDK, deployment and
+native sources. Future Mesh adapter, membership, control API and composition
+crates select `runtime-product`. Unknown product subtrees still fail closed.
+
+This additive prerequisite changes no source layout, slice, workflow, runner,
+permission or protected catalog comparison. Land it on the protected default
+branch before the dependent relocation; the latter must use identical catalogs.
+Path consumers and Cargo discovery still require updates with the physical move.
+
+Renamed frontend, serving, model and GPU benchmark crates retain their direct
+semantic aliases. The current `skippy-model-package` name is reused by model
+acquisition after extraction: retain its existing split-serving rule on main,
+with model-download ownership on the relocated path. That conservatively runs
+both domains until the later catalog cleanup; existing main routing is unchanged.
