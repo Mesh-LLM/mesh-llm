@@ -1,8 +1,6 @@
 //! Only this module may depend on Lexe SDK types.
 
-#[cfg(unix)]
-use std::fs::File;
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
