@@ -518,6 +518,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
             downstream_connect_timeout_secs: 5,
             native_mtp_enabled: true,
             continuous_batching: true,
+            compute_meter: None,
             openai: None,
         });
     // Large filtered GGUF slices can take several minutes to materialize on

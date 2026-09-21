@@ -8,7 +8,8 @@ use self::cache_runtime::{
     should_suppress_cache_runtime,
 };
 use self::direct_batch::{
-    direct_coalesce_target, effective_scheduler_lane_count, scheduler_safe_mode_from_value,
+    PIPELINE_DECODE_GROUPS_ENV, direct_coalesce_target, effective_scheduler_lane_count,
+    pipeline_decode_groups_from_value, pipeline_group_batch_size, scheduler_safe_mode_from_value,
     should_serve_direct, take_direct_iteration_batch, validate_direct_iteration,
 };
 use crate::frontend::admission::DECODE_BATCH_HEADROOM_TOKENS;
@@ -163,7 +164,7 @@ fn ensure_direct_iteration_active(
     Ok(())
 }
 
-type RuntimeOperationFn = Box<dyn FnOnce(&Arc<Mutex<RuntimeState>>) + Send>;
+type RuntimeOperationFn = Box<dyn FnOnce(&Arc<Mutex<RuntimeState>>) -> Duration + Send>;
 type RuntimeSetupOutcome = (Vec<String>, Vec<(String, OpenAiError)>);
 
 struct RuntimeOperation {
@@ -253,20 +254,30 @@ where
         run: Box::new(move |runtime: &Arc<Mutex<RuntimeState>>| {
             let queue_wait_ms = enqueued_at.elapsed().as_secs_f64() * 1_000.0;
             let lock_started = Instant::now();
+            // The compute meter covers lock-held work only: from guard
+            // acquisition to the end of the runtime operation, so
+            // scheduler-thread lock contention does not count as model time.
+            let mut metered = Duration::ZERO;
             let outcome = runtime
                 .lock()
                 .map_err(|_| OpenAiError::backend("runtime lock poisoned"))
                 .and_then(|mut runtime| {
                     let runtime_lock_wait_ms = lock_started.elapsed().as_secs_f64() * 1_000.0;
                     let hold_started = Instant::now();
-                    operation(&mut runtime).map(|value| SchedulerRuntimeOutcome {
-                        value,
-                        queue_wait_ms,
-                        runtime_lock_wait_ms,
-                        runtime_lock_hold_ms: hold_started.elapsed().as_secs_f64() * 1_000.0,
-                    })
+                    let result = operation(&mut runtime).map(|value| {
+                        let runtime_lock_hold_ms = hold_started.elapsed().as_secs_f64() * 1_000.0;
+                        SchedulerRuntimeOutcome {
+                            value,
+                            queue_wait_ms,
+                            runtime_lock_wait_ms,
+                            runtime_lock_hold_ms,
+                        }
+                    });
+                    metered = hold_started.elapsed();
+                    result
                 });
             let _ = reply.send(outcome);
+            metered
         }),
     };
     (operation, result)
@@ -296,6 +307,8 @@ where
         run: Box::new(move |runtime: &Arc<Mutex<RuntimeState>>| {
             let queue_wait_ms = enqueued_at.elapsed().as_secs_f64() * 1_000.0;
             let lock_started = Instant::now();
+            // Compute meter: lock-held work only, as in `runtime_operation`.
+            let mut metered = Duration::ZERO;
             let outcome = worker_control.ensure_active().and_then(|()| {
                 runtime
                     .lock()
@@ -305,14 +318,20 @@ where
                 worker_control.ensure_active()?;
                 let runtime_lock_wait_ms = lock_started.elapsed().as_secs_f64() * 1_000.0;
                 let hold_started = Instant::now();
-                operation(&mut runtime, &worker_control).map(|value| SchedulerRuntimeOutcome {
-                    value,
-                    queue_wait_ms,
-                    runtime_lock_wait_ms,
-                    runtime_lock_hold_ms: hold_started.elapsed().as_secs_f64() * 1_000.0,
-                })
+                let result = operation(&mut runtime, &worker_control).map(|value| {
+                    let runtime_lock_hold_ms = hold_started.elapsed().as_secs_f64() * 1_000.0;
+                    SchedulerRuntimeOutcome {
+                        value,
+                        queue_wait_ms,
+                        runtime_lock_wait_ms,
+                        runtime_lock_hold_ms,
+                    }
+                });
+                metered = hold_started.elapsed();
+                result
             });
             let _ = reply.send(outcome);
+            metered
         }),
     };
     (runtime_operation, result, control)
@@ -354,6 +373,7 @@ struct RequestState {
 
 struct SchedulerWorker {
     runtime: Arc<Mutex<RuntimeState>>,
+    compute_meter: Arc<crate::compute_meter::StageComputeMeter>,
     scheduler: Scheduler,
     requests: BTreeMap<String, RequestState>,
     direct_iterations: VecDeque<DirectIteration>,
@@ -361,6 +381,9 @@ struct SchedulerWorker {
     commands: std_mpsc::Receiver<SchedulerCommand>,
     kv_capacity_tokens: usize,
     max_direct_batch_size: usize,
+    /// Decode batch cap per pipeline group; equals `max_direct_batch_size`
+    /// unless `SKIPPY_PIPELINE_DECODE_GROUPS` splits waves into groups.
+    direct_group_batch_size: usize,
     max_direct_iteration_tokens: usize,
     max_commands_per_turn: usize,
     iteration_interval: Duration,
@@ -385,16 +408,19 @@ impl IterationScheduler {
         continuous_batching: bool,
         telemetry: Telemetry,
     ) -> OpenAiResult<Self> {
-        let (lane_count, kv_pool_tokens) = {
+        let (lane_count, kv_pool_tokens, compute_meter) = {
             let runtime = runtime
                 .lock()
                 .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
             (
                 runtime.lane_count() as usize,
                 runtime.kv_pool_tokens() as usize,
+                runtime.compute_meter(),
             )
         };
         let safe_mode = scheduler_safe_mode_from_value(env::var(SAFE_MODE_ENV).ok().as_deref());
+        let pipeline_decode_groups =
+            pipeline_decode_groups_from_value(env::var(PIPELINE_DECODE_GROUPS_ENV).ok().as_deref());
         let scheduler_lane_count =
             effective_scheduler_lane_count(lane_count, safe_mode, continuous_batching);
         let scheduler_config = build_scheduler_config(
@@ -462,12 +488,17 @@ impl IterationScheduler {
                     commands: receiver,
                     kv_capacity_tokens,
                     max_direct_batch_size: scheduler_lane_count.max(1),
+                    direct_group_batch_size: pipeline_group_batch_size(
+                        scheduler_lane_count.max(1),
+                        pipeline_decode_groups,
+                    ),
                     max_direct_iteration_tokens,
                     max_commands_per_turn: command_queue_capacity.min(MAX_COMMANDS_PER_TURN),
                     iteration_interval,
                     active_runtime_sessions: 0,
                     direct_wave_full: false,
                     telemetry: Some(telemetry),
+                    compute_meter,
                     last_served_direct: false,
                     last_served_cache_runtime: false,
                     last_emitted_lifecycle_counters: (0, 0, 0, 0),
@@ -1035,7 +1066,10 @@ impl SchedulerWorker {
         let started = Instant::now();
         let label = operation.label;
         let cache_operation = operation.control.clone();
-        (operation.run)(&self.runtime);
+        // Only lock-held runtime work counts as compute time; scheduler-side
+        // waits, including lock contention, are excluded from the meter.
+        let compute = (operation.run)(&self.runtime);
+        self.record_compute(compute);
         if let Ok(runtime) = self.runtime.lock() {
             self.active_runtime_sessions = runtime.active_session_count();
             if self.active_runtime_sessions < self.max_direct_batch_size {
@@ -1104,7 +1138,7 @@ impl SchedulerWorker {
         let target = direct_coalesce_target(
             self.active_runtime_sessions,
             self.direct_iterations.len(),
-            self.max_direct_batch_size,
+            self.direct_group_batch_size,
         );
         if target <= self.direct_iterations.len() {
             return true;
@@ -1310,7 +1344,7 @@ impl SchedulerWorker {
     fn run_direct_iteration_batch(&mut self) {
         let batch = take_direct_iteration_batch(
             &mut self.direct_iterations,
-            self.max_direct_batch_size,
+            self.direct_group_batch_size,
             self.max_direct_iteration_tokens,
         );
         debug_assert!(!batch.is_empty(), "validated direct queue must yield work");
@@ -1364,6 +1398,10 @@ impl SchedulerWorker {
             return;
         }
         let batch_size = runnable.len();
+        let decode_steps = runnable
+            .iter()
+            .filter(|(request, _)| request.phase == IterationBatchPhase::Decode)
+            .count();
         let token_count = runnable
             .iter()
             .map(|(request, _)| request.token_ids.len())
@@ -1387,8 +1425,11 @@ impl SchedulerWorker {
         let result = runtime
             .iteration_batch_sampled(&requests)
             .map_err(openai_backend_error);
-        let runtime_lock_hold_ms = hold_started.elapsed().as_secs_f64() * 1_000.0;
+        let hold = hold_started.elapsed();
+        let runtime_lock_hold_ms = hold.as_secs_f64() * 1_000.0;
         drop(runtime);
+        self.record_compute(hold);
+        self.compute_meter.record_decode_tokens(decode_steps as u64);
         if let Some(telemetry) = self.telemetry.as_ref() {
             telemetry.emit_debug(
                 "stage.scheduler_feature_iteration",
@@ -1704,6 +1745,10 @@ impl SchedulerWorker {
         Ok((configured, failures))
     }
 
+    fn record_compute(&self, elapsed: Duration) {
+        self.compute_meter.record(elapsed);
+    }
+
     fn execute_plan(
         &self,
         plan: &skippy_scheduler::IterationPlan,
@@ -1712,6 +1757,7 @@ impl SchedulerWorker {
             .runtime
             .lock()
             .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
+        let hold_started = Instant::now();
         let requests = plan
             .work
             .iter()
@@ -1733,8 +1779,16 @@ impl SchedulerWorker {
                 },
             })
             .collect::<Vec<_>>();
-        runtime
-            .iteration_batch_sampled(&requests)
+        let result = runtime.iteration_batch_sampled(&requests);
+        drop(runtime);
+        self.record_compute(hold_started.elapsed());
+        let decode_steps = plan
+            .work
+            .iter()
+            .filter(|work| work.phase == IterationPhase::Decode)
+            .count();
+        self.compute_meter.record_decode_tokens(decode_steps as u64);
+        result
             .map(|outputs| {
                 outputs
                     .samples

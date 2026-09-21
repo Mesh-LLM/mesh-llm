@@ -368,6 +368,38 @@ Tell the user that the final command remains in the foreground and should keep
 running. If a block fails before the node joins, the main node cannot see its
 local error. Ask for the terminal output, or offer SSH-based inspection.
 
+To run a private-mesh node as a service instead of a foreground process, do not
+hand-edit the generated unit. `setup --service` installs a unit whose command
+is a bare `serve`, and the only non-default inputs it reads are
+`~/.mesh-llm/config.toml` and `~/.config/mesh-llm/service.env` (systemd loads
+the latter through `EnvironmentFile=-`; the launchd runner sources it before
+executing `serve`). Write the invite token to a file the operator owns. A token
+at `~/.mesh-llm/invite.token` needs no further configuration, since that is the
+default location when no explicit file is named; the env line below pins the
+source explicitly, which is worth doing when the config path is not the default
+(the default file then sits beside the resolved config instead):
+
+```sh
+install -m 600 /dev/null ~/.mesh-llm/invite.token
+read -r -s -p 'Invite token: ' invite_token
+printf '\n' >&2
+printf '%s\n' "$invite_token" > ~/.mesh-llm/invite.token
+unset invite_token
+printf 'MESH_LLM_JOIN_FILE=%s\n' "$HOME/.mesh-llm/invite.token" >> ~/.config/mesh-llm/service.env
+systemctl --user restart mesh-llm.service
+# macOS: launchctl kickstart -k gui/$(id -u)/com.mesh-llm.mesh-llm
+```
+
+The token file is re-read on every rejoin attempt, so replacing its contents is
+all a rotation needs: no unit edit and no restart. The same holds for a token at
+the default location, which is re-resolved on each attempt rather than frozen at
+startup. An empty or unreadable token file is a startup error, never a silent
+standalone run. Never put the invite token in
+argv or in the unit file — both are visible to any process listing on the host.
+`MESH_LLM_JOIN` takes the token inline instead, and `serve --join-file <PATH>`
+is the foreground equivalent. On a `[mesh_requirements]` mesh the signed token
+expires, so give the operator a rotation step in the completion report.
+
 If the user approved SSH, first inspect the named target rather than scanning
 the network. Explain the exact remote commands, then use SSH to install, survey,
 join, and observe logs. Do not copy private SSH keys, alter SSH configuration,

@@ -309,6 +309,7 @@ mod tests {
     use skippy_scheduler::StageCacheAffinity;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
+    use std::time::Duration;
 
     fn operation(selected: &mpsc::Sender<&'static str>, label: &'static str) -> RuntimeOperation {
         let selected = selected.clone();
@@ -317,6 +318,7 @@ mod tests {
             control: None,
             run: Box::new(move |_| {
                 selected.send(label).unwrap();
+                Duration::ZERO
             }),
         }
     }
