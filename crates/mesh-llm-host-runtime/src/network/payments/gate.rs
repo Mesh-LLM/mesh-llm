@@ -20,7 +20,6 @@ pub(super) enum GateEvent {
 pub(super) struct InvoiceGate {
     pub service: Arc<PaymentService>,
     pub request_id: String,
-    pub exchange_id: Option<String>,
     pub peer: String,
     pub model: String,
     pub pricing: Pricing,
@@ -68,7 +67,6 @@ impl InvoiceGate {
         Ok(Authorization {
             service: self.service.clone(),
             request_id: self.request_id.clone(),
-            exchange_id: self.exchange_id.clone(),
             peer: self.peer.clone(),
             model: self.model.clone(),
             pricing: self.pricing.clone(),
@@ -118,7 +116,6 @@ impl InvoiceGate {
 struct Authorization {
     service: Arc<PaymentService>,
     request_id: String,
-    exchange_id: Option<String>,
     peer: String,
     model: String,
     pricing: Pricing,
@@ -147,19 +144,6 @@ impl Authorization {
             ms = self.stalled.elapsed().as_millis() as u64,
             "receiver invoice"
         );
-        let terms = RequestTerms {
-            exchange_id: self.exchange_id.clone(),
-            id: self.request_id.clone(),
-            peer: self.peer.clone(),
-            payee: Some(invoice.payee.clone()),
-            model: self.model.clone(),
-            pricing: self.pricing.clone(),
-            input_tokens: self.input,
-            max_output_tokens: u64::from(self.output),
-            max_total_msat: self.max_total_msat,
-            expires_at_ms: invoice.expires_at_ms,
-        };
-        self.service.ledger.record_serving_terms(&terms)?;
         self.service.ledger.record_receivable(&Receivable {
             request_id: self.request_id.clone(),
             peer: self.peer.clone(),
@@ -170,7 +154,17 @@ impl Authorization {
         })?;
         self.events
             .send(GateEvent::InputInvoice(Box::new(Frame::InputInvoice {
-                terms,
+                terms: RequestTerms {
+                    id: self.request_id.clone(),
+                    peer: self.peer.clone(),
+                    payee: Some(invoice.payee.clone()),
+                    model: self.model.clone(),
+                    pricing: self.pricing.clone(),
+                    input_tokens: self.input,
+                    max_output_tokens: u64::from(self.output),
+                    max_total_msat: self.max_total_msat,
+                    expires_at_ms: invoice.expires_at_ms,
+                },
                 invoice: invoice.clone(),
             })))
             .context("payment transport closed")?;

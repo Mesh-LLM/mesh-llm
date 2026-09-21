@@ -851,22 +851,19 @@ async fn route_missing_local_model(
             // (that happens in whatever later pulls the capsule via a later
             // out-of-band fetch and checks its digest).
             let peer_capsule_id_sink = proxy::PeerCapsuleIdSink::new();
-            let outcome = crate::network::payments::lifecycle::scope(
-                Some(exchange_id.clone()),
-                proxy::route_model_request(
-                    ctx.node.clone(),
-                    tcp_stream,
-                    &mesh_targets,
-                    model_name,
-                    request,
-                    proxy::RouteModelRequestContext {
-                        required_tokens,
-                        affinity: ctx.affinity,
-                        route_observer,
-                        served_by_header: served_by_hex.as_deref(),
-                        peer_capsule_id: Some(&peer_capsule_id_sink),
-                    },
-                ),
+            let outcome = proxy::route_model_request(
+                ctx.node.clone(),
+                tcp_stream,
+                &mesh_targets,
+                model_name,
+                request,
+                proxy::RouteModelRequestContext {
+                    required_tokens,
+                    affinity: ctx.affinity,
+                    route_observer,
+                    served_by_header: served_by_hex.as_deref(),
+                    peer_capsule_id: Some(&peer_capsule_id_sink),
+                },
             )
             .await;
             if let Some(ch) = channel {
@@ -1413,25 +1410,22 @@ async fn route_request(
         let served_by_hex = target
             .filter(|id| *id == self_id)
             .map(|id| hex::encode(id.as_bytes()));
-        let outcome = crate::network::payments::lifecycle::scope(
-            announce.as_ref().map(|(_, id)| id.clone()),
-            proxy::route_model_request(
-                ctx.node.clone(),
-                tcp_stream,
-                ctx.targets,
-                model_name,
-                request,
-                proxy::RouteModelRequestContext {
-                    required_tokens,
-                    affinity: ctx.affinity,
-                    route_observer,
-                    served_by_header: served_by_hex.as_deref(),
-                    // Not the `RemoteMesh` dispatch path -- this node is serving
-                    // (or election-selecting among candidates that may include
-                    // itself) the exchange, not merely routing to a peer.
-                    peer_capsule_id: None,
-                },
-            ),
+        let outcome = proxy::route_model_request(
+            ctx.node.clone(),
+            tcp_stream,
+            ctx.targets,
+            model_name,
+            request,
+            proxy::RouteModelRequestContext {
+                required_tokens,
+                affinity: ctx.affinity,
+                route_observer,
+                served_by_header: served_by_hex.as_deref(),
+                // Not the `RemoteMesh` dispatch path -- this node is serving
+                // (or election-selecting among candidates that may include
+                // itself) the exchange, not merely routing to a peer.
+                peer_capsule_id: None,
+            },
         )
         .await;
         if let Some((plugin_manager, exchange_id)) = announce.as_ref() {

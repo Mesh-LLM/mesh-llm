@@ -4,7 +4,6 @@ use super::*;
 #[cfg(test)]
 fn terms(id: &str, cap: u64) -> RequestTerms {
     RequestTerms {
-        exchange_id: None,
         id: id.into(),
         peer: "peer".into(),
         payee: None,

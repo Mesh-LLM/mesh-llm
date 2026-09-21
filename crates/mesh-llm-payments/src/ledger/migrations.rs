@@ -2,7 +2,7 @@
 use anyhow::{Result, ensure};
 use rusqlite::Connection;
 
-const VERSION: u32 = 2;
+const VERSION: u32 = 1;
 
 pub(super) fn initialize(connection: &mut Connection) -> Result<()> {
     let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
@@ -18,12 +18,6 @@ pub(super) fn initialize(connection: &mut Connection) -> Result<()> {
     if version == 0 {
         let transaction = connection.transaction()?;
         transaction.execute_batch(include_str!("schema.sql"))?;
-        transaction.pragma_update(None, "user_version", 1)?;
-        transaction.commit()?;
-    }
-    if version < 2 {
-        let transaction = connection.transaction()?;
-        transaction.execute_batch("CREATE TABLE IF NOT EXISTS serving_terms(id TEXT PRIMARY KEY REFERENCES serving_requests(id), terms TEXT NOT NULL);")?;
         transaction.pragma_update(None, "user_version", VERSION)?;
         transaction.commit()?;
     }

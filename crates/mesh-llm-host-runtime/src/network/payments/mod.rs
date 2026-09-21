@@ -3,7 +3,6 @@
 
 mod delivery;
 mod gate;
-pub(crate) mod lifecycle;
 pub(crate) mod request;
 mod server;
 

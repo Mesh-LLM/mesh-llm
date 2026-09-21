@@ -91,7 +91,6 @@ async fn serve_inner(
     let gate = Arc::new(InvoiceGate {
         service: service.clone(),
         request_id: id.clone(),
-        exchange_id: request.exchange_id.clone(),
         peer: peer.clone(),
         model,
         pricing: pricing.clone(),

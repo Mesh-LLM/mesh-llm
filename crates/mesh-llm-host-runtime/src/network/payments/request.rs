@@ -3,7 +3,6 @@ use serde_json::Value;
 
 pub(crate) struct PaidRequest {
     pub model: String,
-    pub exchange_id: Option<String>,
     pub max_tokens: Option<u32>,
     pub path: String,
     pub body: Value,
@@ -27,17 +26,6 @@ impl PaidRequest {
             matches!(path, "/v1/chat/completions" | "/v1/completions"),
             "paid endpoint unsupported"
         );
-        let exchange_id = request
-            .headers
-            .iter()
-            .find(|header| {
-                header
-                    .name
-                    .eq_ignore_ascii_case("x-mesh-payment-exchange-id")
-            })
-            .and_then(|header| std::str::from_utf8(header.value).ok())
-            .and_then(|value| uuid::Uuid::parse_str(value).ok())
-            .map(|value| value.to_string());
         let mut body: Value = serde_json::from_slice(&raw[offset..])?;
         let intent = body
             .as_object_mut()
@@ -79,7 +67,6 @@ impl PaidRequest {
         }
         Ok(Self {
             model,
-            exchange_id,
             max_tokens,
             path: path.into(),
             body,
@@ -97,12 +84,7 @@ impl PaidRequest {
 
     pub fn backend_http(&self, request_id: &str) -> Result<Vec<u8>> {
         let bytes = serde_json::to_vec(&self.body)?;
-        let correlation = self
-            .exchange_id
-            .as_ref()
-            .map(|id| format!("x-mesh-payment-exchange-id: {id}\r\n"))
-            .unwrap_or_default();
-        let mut raw = format!("POST {} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nConnection: close\r\nx-request-id: {}\r\n{correlation}Content-Length: {}\r\n\r\n", self.path, request_id, bytes.len()).into_bytes();
+        let mut raw = format!("POST {} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nConnection: close\r\nx-request-id: {}\r\nContent-Length: {}\r\n\r\n", self.path, request_id, bytes.len()).into_bytes();
         raw.extend(bytes);
         Ok(raw)
     }
@@ -144,13 +126,6 @@ pub(crate) fn strip_intent(raw: &[u8]) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn invalid_correlation_cannot_bypass_paid_request_detection() {
-        let request = PaidRequest::parse(b"POST /v1/completions HTTP/1.1\r\nx-mesh-payment-exchange-id: invalid\r\n\r\n{\"model\":\"m\"}").unwrap();
-        assert!(request.exchange_id.is_none());
-        assert_eq!(request.model, "m");
-    }
 
     #[test]
     fn request_intent_is_validated_and_not_forwarded() {

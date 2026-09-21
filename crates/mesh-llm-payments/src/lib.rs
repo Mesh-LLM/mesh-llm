@@ -5,7 +5,6 @@ pub mod control;
 pub mod intent;
 pub mod invoice;
 pub mod ledger;
-pub mod lifecycle;
 pub mod pricing;
 pub mod provisioning;
 pub mod service;
