@@ -1,6 +1,6 @@
 //! Stage configuration, topology, and activation contracts.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct StageIdentity {
     pub run_id: String,
@@ -280,11 +280,13 @@ pub struct StageConfig {
     pub swa_full: Option<bool>,
     #[serde(default)]
     pub cache_idle_slots: Option<u32>,
-    #[serde(default)]
-    pub filter_tensors_on_load: bool,
     /// Exact native tensor names resolved locally from admitted package-v2
-    /// tensor IDs. Empty preserves the legacy range-based loader filter.
-    #[serde(default)]
+    /// tensor IDs. Empty is valid only for an unsplit full-model load.
+    #[serde(
+        default,
+        alias = "filter_tensors_on_load",
+        deserialize_with = "deserialize_resident_tensor_names"
+    )]
     pub resident_tensor_names: Vec<String>,
     /// Planner value identities imported by this stage, in native frontier order.
     #[serde(default)]
@@ -310,6 +312,28 @@ pub struct StageConfig {
     pub upstream: Option<PeerConfig>,
     #[serde(default)]
     pub downstream: Option<PeerConfig>,
+}
+
+fn deserialize_resident_tensor_names<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum ResidentTensorNames {
+        Names(Vec<String>),
+        Obsolete(bool),
+    }
+
+    match ResidentTensorNames::deserialize(deserializer)? {
+        ResidentTensorNames::Names(names) => Ok(names),
+        ResidentTensorNames::Obsolete(obsolete) => {
+            let _ = obsolete;
+            Err(de::Error::custom(
+                "filter_tensors_on_load is obsolete; provide resident_tensor_names from package-v2 stage admission",
+            ))
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

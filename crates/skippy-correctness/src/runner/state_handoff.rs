@@ -13,7 +13,7 @@ use skippy_runtime::{
 };
 
 use crate::{
-    cli::{StageLoadMode, StateHandoffArgs, StatePayloadKind},
+    cli::{StateHandoffArgs, StatePayloadKind},
     report::{
         StageModelReport, StateHandoffReport, StatePayloadBlockDigestReport,
         StatePayloadDigestReport,
@@ -402,7 +402,6 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
         "n_ubatch": args.n_ubatch,
         "n_gpu_layers": args.n_gpu_layers,
         "flash_attn_type": protocol_flash_attn(args.flash_attn),
-        "filter_tensors_on_load": should_filter_state_handoff_tensors(&args),
         "resident_tensor_names": runtime_plan.resident_tensor_names.clone(),
         "activation_import_identities": runtime_plan.activation_import_identities.clone(),
         "activation_import_bindings": runtime_plan.activation_import_bindings.clone(),
@@ -436,7 +435,6 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
         "n_ubatch": args.n_ubatch,
         "n_gpu_layers": args.n_gpu_layers,
         "flash_attn_type": protocol_flash_attn(args.flash_attn),
-        "filter_tensors_on_load": should_filter_state_handoff_tensors(&args),
         "resident_tensor_names": runtime_plan.resident_tensor_names,
         "activation_import_identities": runtime_plan.activation_import_identities,
         "activation_import_bindings": runtime_plan.activation_import_bindings,
@@ -702,10 +700,7 @@ fn run_local_state_handoff(
         image_max_tokens: None,
         batch_max_tokens: None,
         glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
-        include_embeddings,
-        include_output,
         mtp_source: MtpSource::Disabled,
-        filter_tensors_on_load: should_filter_state_handoff_tensors(args),
         resident_tensor_names: runtime_plan.resident_tensor_names,
         activation_import_identities: runtime_plan.activation_import_identities,
         activation_import_bindings: runtime_plan.activation_import_bindings,
@@ -1417,12 +1412,6 @@ fn hex_sha256_finish(hasher: Sha256) -> String {
     out
 }
 
-fn should_filter_state_handoff_tensors(args: &BinaryStateHandoffConfig) -> bool {
-    args.stage_load_mode != StageLoadMode::RuntimeSlice
-        || args.state_layer_start != 0
-        || args.state_layer_end != args.layer_end
-}
-
 fn build_state_handoff_inputs(
     args: &BinaryStateHandoffConfig,
     input_resolution: Option<&StageModelResolution>,
@@ -1482,10 +1471,7 @@ fn build_state_handoff_inputs(
         image_max_tokens: None,
         batch_max_tokens: None,
         glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
-        include_embeddings: true,
-        include_output: false,
         mtp_source: MtpSource::Disabled,
-        filter_tensors_on_load: true,
         resident_tensor_names: runtime_plan.resident_tensor_names,
         activation_import_identities: runtime_plan.activation_import_identities,
         activation_import_bindings: runtime_plan.activation_import_bindings,

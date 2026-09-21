@@ -48,6 +48,21 @@ impl PluginManager {
             .await
             .is_some_and(|manifest| manifest_declares_mesh_channel(&manifest, channel))
     }
+
+    /// Whether any currently loaded plugin declares `channel` — a cached
+    /// manifest lookup per plugin, cheap next to the work a caller typically
+    /// gates behind it (canonicalizing and hashing a request body, cloning a
+    /// served-model descriptor). Lets a publisher skip that work entirely
+    /// when nobody on [`Self::broadcast_channel_message`]'s per-plugin filter
+    /// would have kept the message anyway.
+    pub async fn any_plugin_declares_mesh_channel(&self, channel: &str) -> bool {
+        for plugin_id in self.inner.plugins.keys() {
+            if self.plugin_declares_mesh_channel(plugin_id, channel).await {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 /// Turn per-plugin delivery outcomes from [`PluginManager::broadcast_channel_message`]
@@ -163,6 +178,26 @@ mod tests {
             )
             .await
             .expect("broadcasting with no plugins loaded is a no-op, not an error");
+
+        manager.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn any_plugin_declares_mesh_channel_is_false_with_no_plugins_loaded() {
+        let specs = ResolvedPlugins {
+            externals: Vec::new(),
+            inactive: Vec::new(),
+        };
+        let (mesh_tx, _mesh_rx) = mpsc::channel(1);
+        let manager = PluginManager::start(&specs, private_host_mode(), mesh_tx)
+            .await
+            .expect("empty plugin set starts cleanly");
+
+        assert!(
+            !manager
+                .any_plugin_declares_mesh_channel("openai.exchange.v1")
+                .await
+        );
 
         manager.shutdown().await;
     }

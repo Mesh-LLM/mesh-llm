@@ -1,25 +1,25 @@
-From 8e7461b60642c5299d72916e81c9021b99c12f89 Mon Sep 17 00:00:00 2001
-From: Mesh-LLM CI <ci@mesh-llm.local>
-Date: Mon, 7 Sep 2026 06:22:42 +1000
-Subject: [PATCH 002/113] skippy: define public runtime ABI
+From 78740a2c0426866dd93d808c816fb10a41449ece Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Sat, 19 Sep 2026 15:17:03 +1000
+Subject: [PATCH 1/6] skippy: define graph-derived stage ABI
 
 ---
  include/skippy.h                      |  28 +++
- include/skippy/activation.h           |  69 +++++++
- include/skippy/common.h               | 128 +++++++++++++
+ include/skippy/activation.h           |  66 +++++++
+ include/skippy/common.h               | 142 ++++++++++++++
  include/skippy/devices.h              |  56 ++++++
- include/skippy/events.h               | 106 +++++++++++
+ include/skippy/events.h               | 229 ++++++++++++++++++++++
  include/skippy/execution.h            | 264 ++++++++++++++++++++++++++
- include/skippy/model_package.h        | 103 ++++++++++
+ include/skippy/model_package.h        |  93 +++++++++
  include/skippy/model_source.h         |  84 ++++++++
- include/skippy/runtime.h              | 261 +++++++++++++++++++++++++
+ include/skippy/runtime.h              | 264 ++++++++++++++++++++++++++
  include/skippy/sampling.h             |  74 ++++++++
  include/skippy/signals.h              |  53 ++++++
  include/skippy/speculative_decoding.h |  71 +++++++
- include/skippy/stage_plan.h           | 243 ++++++++++++++++++++++++
+ include/skippy/stage_plan.h           | 250 ++++++++++++++++++++++++
  include/skippy/state.h                | 187 ++++++++++++++++++
  include/skippy/tokenization.h         |  85 +++++++++
- 15 files changed, 1812 insertions(+)
+ 15 files changed, 1946 insertions(+)
  create mode 100644 include/skippy.h
  create mode 100644 include/skippy/activation.h
  create mode 100644 include/skippy/common.h
@@ -72,10 +72,10 @@ index 000000000..33a47b244
 +#endif // SKIPPY_H
 diff --git a/include/skippy/activation.h b/include/skippy/activation.h
 new file mode 100644
-index 000000000..347576e05
+index 000000000..673c1d81c
 --- /dev/null
 +++ b/include/skippy/activation.h
-@@ -0,0 +1,69 @@
+@@ -0,0 +1,66 @@
 +#ifndef SKIPPY_ACTIVATION_H
 +#define SKIPPY_ACTIVATION_H
 +
@@ -83,8 +83,8 @@ index 000000000..347576e05
 + * @file skippy/activation.h
 + * @brief Describes activation-frame payloads exchanged between stages.
 + *
-+ * The descriptor carries the payload representation, layer range, token and
-+ * sequence shape, and model-family sideband flags needed by downstream stages.
++ * The descriptor carries a typed directory for every tensor crossing a stage
++ * frontier. Parts are matched by planner identity rather than model family.
 + */
 +
 +#include "common.h"
@@ -93,51 +93,48 @@ index 000000000..347576e05
 +extern "C" {
 +#endif
 +
-+enum skippy_activation_dtype {
-+    SKIPPY_ACTIVATION_DTYPE_UNKNOWN       = 0,
-+    SKIPPY_ACTIVATION_DTYPE_F32           = 1,
-+    SKIPPY_ACTIVATION_DTYPE_F16           = 2,
-+    SKIPPY_ACTIVATION_DTYPE_BF16          = 3,
++#define SKIPPY_ACTIVATION_FRAME_VERSION 2
++#define SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION 2
++#define SKIPPY_ACTIVATION_IDENTITY_BYTES 32
++#define SKIPPY_ACTIVATION_MAX_DIMS 4
++#define SKIPPY_ACTIVATION_MAX_PARTS 16
++
++#define SKIPPY_ACTIVATION_PART_OPTIONAL (UINT32_C(1) << 0)
++
++/** @brief One typed tensor in a stage-frontier frame. */
++struct skippy_activation_part_desc {
++    uint8_t identity[SKIPPY_ACTIVATION_IDENTITY_BYTES];
++    uint32_t ggml_type;
++    uint32_t rank;
++    int32_t token_axis;
++    uint32_t flags;
++    int64_t dimensions[SKIPPY_ACTIVATION_MAX_DIMS];
++    uint64_t byte_strides[SKIPPY_ACTIVATION_MAX_DIMS];
++    uint64_t payload_offset;
++    uint64_t payload_bytes;
 +};
 +
-+enum skippy_activation_layout {
-+    SKIPPY_ACTIVATION_LAYOUT_OPAQUE       = 0,
-+    SKIPPY_ACTIVATION_LAYOUT_TOKEN_MAJOR  = 1,
-+};
-+
-+#define SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION 1
-+
-+/** @brief Stable, graph-observed representation for one token at a stage edge. */
++/** @brief Stable, graph-observed multipart contract at one stage edge. */
 +struct skippy_activation_boundary_desc {
 +    uint32_t version;
-+    uint32_t ggml_type;
-+    uint32_t layout;
-+    uint32_t reserved;
-+    uint64_t elements_per_token;
-+    uint64_t bytes_per_token;
-+    uint64_t required_frame_flags;
-+    uint64_t required_sidebands;
++    uint32_t part_count;
++    uint8_t frontier_identity[SKIPPY_ACTIVATION_IDENTITY_BYTES];
++    struct skippy_activation_part_desc parts[SKIPPY_ACTIVATION_MAX_PARTS];
 +};
-+
-+#define SKIPPY_ACTIVATION_SIDEBAND_TOKEN_IDS (UINT64_C(1) << 0)
-+
-+#define SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST   (UINT64_C(1) << 0)
-+#define SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP   (UINT64_C(1) << 1)
-+#define SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD (UINT64_C(1) << 2)
-+#define SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K     (UINT64_C(1) << 3)
 +
 +/** @brief Metadata for an activation payload passed between staged runtimes. */
 +struct skippy_activation_desc {
 +    uint32_t version;
-+    enum skippy_activation_dtype dtype;
-+    enum skippy_activation_layout layout;
 +    int32_t producer_stage_index;
 +    int32_t layer_start;
 +    int32_t layer_end;
 +    uint32_t token_count;
 +    uint32_t sequence_count;
++    uint32_t part_count;
++    uint32_t reserved;
 +    uint64_t payload_bytes;
-+    uint64_t flags;
++    uint8_t frontier_identity[SKIPPY_ACTIVATION_IDENTITY_BYTES];
++    struct skippy_activation_part_desc parts[SKIPPY_ACTIVATION_MAX_PARTS];
 +};
 +
 +#ifdef __cplusplus
@@ -147,10 +144,10 @@ index 000000000..347576e05
 +#endif // SKIPPY_ACTIVATION_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
 new file mode 100644
-index 000000000..b156cb5eb
+index 000000000..5ac737396
 --- /dev/null
 +++ b/include/skippy/common.h
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,142 @@
 +#ifndef SKIPPY_COMMON_H
 +#define SKIPPY_COMMON_H
 +
@@ -199,7 +196,7 @@ index 000000000..b156cb5eb
 +
 +#define SKIPPY_ABI_VERSION_MAJOR 0
 +#define SKIPPY_ABI_VERSION_MINOR 1
-+#define SKIPPY_ABI_VERSION_PATCH 52
++#define SKIPPY_ABI_VERSION_PATCH 59
 +
 +#if defined(_MSC_VER)
 +#define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -214,7 +211,6 @@ index 000000000..b156cb5eb
 +    SKIPPY_FEATURE_LAYER_PACKAGE          = 1 << 1,
 +    SKIPPY_FEATURE_ARTIFACT_SLICE         = 1 << 2,
 +    SKIPPY_FEATURE_MODEL_INTROSPECTION    = 1 << 3,
-+    SKIPPY_FEATURE_GGUF_SLICE_WRITE       = 1 << 4,
 +    SKIPPY_FEATURE_STATE_IMPORT_EXPORT    = 1 << 5,
 +    SKIPPY_FEATURE_TOKENIZE_DETOKENIZE    = 1 << 6,
 +    SKIPPY_FEATURE_ACTIVATION_FRAME       = 1 << 7,
@@ -242,6 +238,21 @@ index 000000000..b156cb5eb
 +    SKIPPY_FEATURE_ACTIVATION_BOUNDARY     = 1 << 29,
 +    SKIPPY_FEATURE_MODEL_SOURCE            = 1 << 30,
 +};
++
++// Feature bit 31 is declared as a `uint64_t` constant, not an `enum
++// skippy_feature` member: later bits in this same numbering space (32-36,
++// added by sibling capability patches) exceed the range a C11 `enum`'s
++// underlying type is portably guaranteed to hold (ISO C11 6.7.2.2p4 only
++// requires the type to represent `int`-range values). Bit 31 is kept
++// consistent with those siblings rather than split across two declaration
++// styles. `skippy_abi_features()` already returns `uint64_t`, so callers
++// combine these with the enum bits identically either way.
++#define SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER ((uint64_t)1 << 31)
++#define SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2   ((uint64_t)1 << 32)
++#define SKIPPY_FEATURE_KV_EVENTS              ((uint64_t)1 << 33)
++#define SKIPPY_FEATURE_DEVICE_EVENTS          ((uint64_t)1 << 34)
++#define SKIPPY_FEATURE_DIAGNOSTIC_EVENTS      ((uint64_t)1 << 35)
++#define SKIPPY_FEATURE_UNLOAD_EVENTS          ((uint64_t)1 << 36)
 +
 +enum skippy_status {
 +    SKIPPY_STATUS_OK                      = 0,
@@ -343,10 +354,10 @@ index 000000000..36c6eb641
 +#endif
 diff --git a/include/skippy/events.h b/include/skippy/events.h
 new file mode 100644
-index 000000000..9fee2715f
+index 000000000..2e0aa446f
 --- /dev/null
 +++ b/include/skippy/events.h
-@@ -0,0 +1,106 @@
+@@ -0,0 +1,229 @@
 +#ifndef SKIPPY_EVENTS_H
 +#define SKIPPY_EVENTS_H
 +
@@ -373,6 +384,9 @@ index 000000000..9fee2715f
 +    SKIPPY_RUNTIME_EVENT_CATEGORY_SESSION    = 3,
 +    SKIPPY_RUNTIME_EVENT_CATEGORY_KV         = 4,
 +    SKIPPY_RUNTIME_EVENT_CATEGORY_WARNING    = 5,
++    SKIPPY_RUNTIME_EVENT_CATEGORY_DEVICE     = 6,
++    SKIPPY_RUNTIME_EVENT_CATEGORY_DIAGNOSTIC = 7,
++    SKIPPY_RUNTIME_EVENT_CATEGORY_UNLOAD     = 8,
 +};
 +
 +typedef uint32_t skippy_runtime_event_kind;
@@ -382,6 +396,47 @@ index 000000000..9fee2715f
 +    SKIPPY_RUNTIME_EVENT_KIND_BACKEND_DEVICE_SELECTED  = 3,
 +    SKIPPY_RUNTIME_EVENT_KIND_MODEL_OPEN_FINISHED      = 4,
 +    SKIPPY_RUNTIME_EVENT_KIND_MODEL_OPEN_FAILED_HANDLED = 5,
++
++    // SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 (coarse load-phase facts, category
++    // MODEL_OPEN). Kept in the shared kind space so a MODEL_OPEN-category
++    // event's `kind` is decodable without a second enum lookup per category.
++    SKIPPY_RUNTIME_EVENT_KIND_MODEL_LOAD_PHASE_CHANGED       = 100,
++    SKIPPY_RUNTIME_EVENT_KIND_MODEL_LOAD_MEMORY_ALLOCATED    = 101,
++    SKIPPY_RUNTIME_EVENT_KIND_MODEL_LOAD_TENSORS_OFFLOADED   = 102,
++    SKIPPY_RUNTIME_EVENT_KIND_MODEL_LOAD_TOKENIZER_READY     = 103,
++    SKIPPY_RUNTIME_EVENT_KIND_MODEL_LOAD_AUX_COMPONENT_READY = 104,
++
++    // SKIPPY_FEATURE_KV_EVENTS (category KV).
++    SKIPPY_RUNTIME_EVENT_KIND_KV_INITIALIZED                  = 200,
++    SKIPPY_RUNTIME_EVENT_KIND_KV_PRESSURE_CROSSED             = 201,
++    SKIPPY_RUNTIME_EVENT_KIND_KV_PRESSURE_CLEARED             = 202,
++    SKIPPY_RUNTIME_EVENT_KIND_KV_CONTEXT_APPROACHING_CAPACITY = 203,
++    SKIPPY_RUNTIME_EVENT_KIND_KV_CONTEXT_CAPACITY_EXHAUSTED   = 204,
++
++    // SKIPPY_FEATURE_DEVICE_EVENTS (category DEVICE).
++    SKIPPY_RUNTIME_EVENT_KIND_DEVICE_BACKEND_INITIALIZED = 300,
++    SKIPPY_RUNTIME_EVENT_KIND_DEVICE_READY               = 301,
++    SKIPPY_RUNTIME_EVENT_KIND_DEVICE_DEGRADED            = 302,
++    SKIPPY_RUNTIME_EVENT_KIND_DEVICE_UNAVAILABLE         = 303,
++    SKIPPY_RUNTIME_EVENT_KIND_DEVICE_RECOVERED           = 304,
++    SKIPPY_RUNTIME_EVENT_KIND_DEVICE_LOST                = 305,
++    SKIPPY_RUNTIME_EVENT_KIND_DEVICE_RESOURCE_ALLOCATED  = 306,
++    SKIPPY_RUNTIME_EVENT_KIND_DEVICE_OUT_OF_MEMORY       = 307,
++    SKIPPY_RUNTIME_EVENT_KIND_DEVICE_FALLBACK_ACTIVATED  = 308,
++
++    // SKIPPY_FEATURE_DIAGNOSTIC_EVENTS (category DIAGNOSTIC).
++    SKIPPY_RUNTIME_EVENT_KIND_DIAGNOSTIC_WARNING_RAISED      = 400,
++    SKIPPY_RUNTIME_EVENT_KIND_DIAGNOSTIC_WARNING_CLEARED     = 401,
++    SKIPPY_RUNTIME_EVENT_KIND_DIAGNOSTIC_RECOVERABLE_FAILURE = 402,
++    SKIPPY_RUNTIME_EVENT_KIND_DIAGNOSTIC_FATAL_FAILURE       = 403,
++    SKIPPY_RUNTIME_EVENT_KIND_DIAGNOSTIC_INVARIANT_VIOLATION = 404,
++
++    // SKIPPY_FEATURE_UNLOAD_EVENTS (category UNLOAD).
++    SKIPPY_RUNTIME_EVENT_KIND_UNLOAD_STARTED          = 500,
++    SKIPPY_RUNTIME_EVENT_KIND_UNLOAD_COMPLETED        = 501,
++    SKIPPY_RUNTIME_EVENT_KIND_UNLOAD_FAILED           = 502,
++    SKIPPY_RUNTIME_EVENT_KIND_UNLOAD_FORCED           = 503,
++    SKIPPY_RUNTIME_EVENT_KIND_UNLOAD_SESSION_DRAINING = 504,
 +};
 +
 +typedef uint32_t skippy_runtime_event_emitter_kind;
@@ -433,6 +488,14 @@ index 000000000..9fee2715f
 +    uint32_t reserved1;
 +    const char * detail_ptr;
 +    uint64_t detail_len;
++
++    // Append-only extension fields. Advertised by `struct_size` under the
++    // unchanged SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION; a caller only reads a
++    // field when `struct_size` covers its offset.
++    uint64_t numeric_summary_0;
++    uint64_t numeric_summary_1;
++    uint64_t numeric_summary_2;
++    uint64_t numeric_summary_3;
 +};
 +
 +/** @brief Callback type used by a runtime event reporter. */
@@ -447,6 +510,77 @@ index 000000000..9fee2715f
 +    skippy_runtime_event_callback callback;
 +    void * user_data;
 +};
++
++/**
++ * @brief Installs one process-global runtime-scoped event reporter.
++ *
++ * Requires SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER. Replaces any previously
++ * installed global reporter. The per-call model-open reporter passed to a
++ * `*_with_events` entrypoint still takes precedence for
++ * SKIPPY_RUNTIME_EVENT_CATEGORY_MODEL_OPEN events during that call; the
++ * global reporter receives events published through it by any capability
++ * module (backend/device/KV/diagnostic/unload/model-load-v2, added by
++ * sibling patches) via the shared internal dispatch path.
++ *
++ * Returns SKIPPY_STATUS_INVALID_ARGUMENT if `reporter` is null or its
++ * `struct_size` is smaller than `sizeof(struct
++ * skippy_runtime_event_reporter_v1)`, or if called from a reporter callback.
++ * When replacing an existing reporter, waits until every in-flight callback
++ * using the previous reporter has returned before installing the replacement.
++ */
++LLAMA_API enum skippy_status skippy_set_runtime_event_reporter(
++        const struct skippy_runtime_event_reporter_v1 * reporter);
++
++/**
++ * @brief Removes the process-global runtime-scoped event reporter.
++ *
++ * Returns only after every in-flight callback invocation of the previously
++ * installed reporter has returned, so no callback occurs after this call
++ * returns. Idempotent: clearing when no reporter is installed is a no-op.
++ * When called from a reporter callback, disables future callback admission
++ * and returns immediately; the calling callback remains active until it
++ * returns normally.
++ */
++LLAMA_API void skippy_clear_runtime_event_reporter(void);
++
++/**
++ * @brief Emits SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 category MODEL_OPEN
++ * events through the global reporter. No-op if no reporter is installed.
++ */
++LLAMA_API void skippy_emit_model_load_event_v2(
++        skippy_runtime_event_kind kind,
++        uint64_t model_id,
++        uint64_t numeric_summary_0,
++        uint64_t numeric_summary_1,
++        const char * detail_ptr,
++        uint64_t detail_len);
++
++/** @brief Emits SKIPPY_FEATURE_KV_EVENTS category KV events. */
++LLAMA_API void skippy_emit_kv_event(
++        skippy_runtime_event_kind kind,
++        uint64_t session_id,
++        uint64_t numeric_summary_0,
++        uint64_t numeric_summary_1);
++
++/** @brief Emits SKIPPY_FEATURE_DEVICE_EVENTS category DEVICE events. */
++LLAMA_API void skippy_emit_device_event(
++        skippy_runtime_event_kind kind,
++        uint64_t numeric_summary_0,
++        const char * detail_ptr,
++        uint64_t detail_len);
++
++/** @brief Emits SKIPPY_FEATURE_DIAGNOSTIC_EVENTS category DIAGNOSTIC events. */
++LLAMA_API void skippy_emit_diagnostic_event(
++        skippy_runtime_event_kind kind,
++        skippy_runtime_event_failure_code failure_code,
++        const char * detail_ptr,
++        uint64_t detail_len);
++
++/** @brief Emits SKIPPY_FEATURE_UNLOAD_EVENTS category UNLOAD events. */
++LLAMA_API void skippy_emit_unload_event(
++        skippy_runtime_event_kind kind,
++        uint64_t model_id,
++        uint64_t numeric_summary_0);
 +
 +#ifdef __cplusplus
 +}
@@ -725,16 +859,16 @@ index 000000000..7098677d8
 +#endif // SKIPPY_EXECUTION_H
 diff --git a/include/skippy/model_package.h b/include/skippy/model_package.h
 new file mode 100644
-index 000000000..22639b8f5
+index 000000000..75df15827
 --- /dev/null
 +++ b/include/skippy/model_package.h
-@@ -0,0 +1,103 @@
+@@ -0,0 +1,93 @@
 +#ifndef SKIPPY_MODEL_PACKAGE_H
 +#define SKIPPY_MODEL_PACKAGE_H
 +
 +/**
 + * @file skippy/model_package.h
-+ * @brief Inspects GGUF tensors and writes layer-range or multi-part packages.
++ * @brief Inspects GGUF tensors and writes metadata and multi-part packages.
 + */
 +
 +#include "common.h"
@@ -754,7 +888,6 @@ index 000000000..22639b8f5
 +};
 +
 +struct skippy_model_info;
-+struct skippy_slice_plan;
 +
 +/** @brief Metadata for one tensor discovered in a GGUF model. */
 +struct skippy_tensor_info {
@@ -790,38 +923,29 @@ index 000000000..22639b8f5
 +        struct skippy_tensor_info * out_tensor,
 +        struct skippy_error ** out_error);
 +
-+/** @brief Creates an empty layer-range package-writing plan. */
-+LLAMA_API enum skippy_status skippy_slice_plan_create(
-+        struct skippy_model_info * info,
-+        struct skippy_slice_plan ** out_plan,
-+        struct skippy_error ** out_error);
-+
-+/** @brief Releases a package-writing plan. */
-+LLAMA_API enum skippy_status skippy_slice_plan_free(
-+        struct skippy_slice_plan * plan,
-+        struct skippy_error ** out_error);
-+
-+/** @brief Adds a stage layer range and its shared-tensor ownership to a plan. */
-+LLAMA_API enum skippy_status skippy_slice_plan_add_layer_range(
-+        struct skippy_slice_plan * plan,
-+        int32_t stage_index,
-+        int32_t layer_start,
-+        int32_t layer_end,
-+        bool include_embeddings,
-+        bool include_output,
-+        bool include_per_layer_token_embd,
-+        struct skippy_error ** out_error);
-+
-+/** @brief Writes one planned stage slice as a GGUF file. */
-+LLAMA_API enum skippy_status skippy_write_slice_gguf(
-+        struct skippy_model_info * info,
-+        const struct skippy_slice_plan * plan,
-+        int32_t stage_index,
++/** @brief Writes complete GGUF model metadata and tensor descriptors without payload bytes. */
++LLAMA_API enum skippy_status skippy_write_gguf_metadata_from_parts(
++        const char * const * input_paths,
++        size_t input_count,
 +        const char * output_path,
 +        struct skippy_error ** out_error);
 +
 +/** @brief Composes ordered GGUF parts into one output GGUF file. */
 +LLAMA_API enum skippy_status skippy_write_gguf_from_parts(
++        const char * const * input_paths,
++        size_t input_count,
++        const char * output_path,
++        struct skippy_error ** out_error);
++
++/**
++ * @brief Materialize a GGUF while consuming scratch input parts.
++ *
++ * Each input is unlinked after its last selected tensor is copied. If the
++ * operation fails, earlier inputs may already be deleted and the output may be
++ * incomplete; later inputs remain available. Use only with disposable staging
++ * parts, never published package files that must survive.
++ */
++LLAMA_API enum skippy_status skippy_write_gguf_from_parts_consuming(
 +        const char * const * input_paths,
 +        size_t input_count,
 +        const char * output_path,
@@ -924,10 +1048,10 @@ index 000000000..5d77f4804
 +#endif // SKIPPY_MODEL_SOURCE_H
 diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
 new file mode 100644
-index 000000000..ea5b56324
+index 000000000..97989af15
 --- /dev/null
 +++ b/include/skippy/runtime.h
-@@ -0,0 +1,261 @@
+@@ -0,0 +1,264 @@
 +#ifndef SKIPPY_RUNTIME_H
 +#define SKIPPY_RUNTIME_H
 +
@@ -993,13 +1117,16 @@ index 000000000..ea5b56324
 +    bool disable_repack;
 +    bool use_mmap_prefetch;
 +    bool use_mmap_buffer;
-+    bool filter_tensors_on_load;
-+    // Optional exact tensor closure for filtered stage loads. When non-empty,
-+    // the loader retains only these canonical GGUF tensor names.
++    // Exact tensor closure for a graph-admitted stage. An empty closure means
++    // an unsplit full-model load; there is no range-based loader fallback.
 +    const char * const * resident_tensor_names;
 +    size_t resident_tensor_name_count;
-+    bool include_embeddings;
-+    bool include_output;
++    const char * const * activation_import_identities;
++    size_t activation_import_identity_count;
++    const char * const * activation_import_bindings;
++    const char * const * activation_export_identities;
++    size_t activation_export_identity_count;
++    const char * const * activation_export_bindings;
 +    enum skippy_mtp_source mtp_source;
 +
 +    // Optional ggml backend device name, for example "CUDA0", "MTL0",
@@ -1407,10 +1534,10 @@ index 000000000..0b5994482
 +#endif // SKIPPY_SPECULATIVE_DECODING_H
 diff --git a/include/skippy/stage_plan.h b/include/skippy/stage_plan.h
 new file mode 100644
-index 000000000..852145ebf
+index 000000000..17dbba5ef
 --- /dev/null
 +++ b/include/skippy/stage_plan.h
-@@ -0,0 +1,243 @@
+@@ -0,0 +1,250 @@
 +#ifndef SKIPPY_STAGE_PLAN_H
 +#define SKIPPY_STAGE_PLAN_H
 +
@@ -1509,6 +1636,12 @@ index 000000000..852145ebf
 +    SKIPPY_STAGE_PLAN_STATE_WRITE = 1,
 +};
 +
++/** @brief Residency policy for persistent state. */
++enum skippy_stage_plan_state_residency {
++    SKIPPY_STAGE_PLAN_STATE_LAYER_LOCAL = 0,
++    SKIPPY_STAGE_PLAN_STATE_PER_STAGE = 1,
++};
++
 +/** @brief Pointer-free summary of one realized guarded stage plan. */
 +struct skippy_stage_plan_desc_v1 {
 +    uint32_t abi_version;
@@ -1549,6 +1682,7 @@ index 000000000..852145ebf
 +    uint32_t abi_version;
 +    uint32_t struct_size;
 +    struct skippy_stage_plan_string_ref_v1 identity;
++    struct skippy_stage_plan_string_ref_v1 binding;
 +};
 +
 +/** @brief Pointer-free persistent-state effect descriptor. */
@@ -1559,7 +1693,7 @@ index 000000000..852145ebf
 +    int32_t kind;
 +    int32_t access;
 +    int32_t layer;
-+    int32_t reserved;
++    int32_t residency;
 +    int64_t write_ordinal;
 +};
 +
@@ -1939,5 +2073,4 @@ index 000000000..c9697cf6c
 +
 +#endif // SKIPPY_TOKENIZATION_H
 -- 
-2.55.0
-
+2.54.0 (Apple Git-157)

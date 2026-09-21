@@ -91,6 +91,7 @@ pub struct RealizedStageStateEffect {
     pub identity: String,
     pub kind: skippy_ffi::StagePlanStateKind,
     pub access: skippy_ffi::StagePlanStateAccess,
+    pub residency: skippy_ffi::StagePlanStateResidency,
     pub layer: i32,
     pub write_ordinal: i64,
 }
@@ -1095,10 +1096,6 @@ fn read_native_profile(
             state.struct_size,
             std::mem::size_of::<skippy_ffi::StagePlanStateDescV1>(),
         )?;
-        anyhow::ensure!(
-            state.reserved == 0,
-            "native state effect reserved field is nonzero"
-        );
         let identity = read_plan_string(raw, state.identity)?;
         anyhow::ensure!(
             state_identities.insert(identity.clone()),
@@ -1131,10 +1128,20 @@ fn read_native_profile(
             }
             unknown => anyhow::bail!("native state effect access {unknown} is unsupported"),
         };
+        let residency = match state.residency {
+            value if value == skippy_ffi::StagePlanStateResidency::LayerLocal as i32 => {
+                skippy_ffi::StagePlanStateResidency::LayerLocal
+            }
+            value if value == skippy_ffi::StagePlanStateResidency::PerStage as i32 => {
+                skippy_ffi::StagePlanStateResidency::PerStage
+            }
+            unknown => anyhow::bail!("native state residency {unknown} is unsupported"),
+        };
         state_effects.push(RealizedStageStateEffect {
             identity,
             kind,
             access,
+            residency,
             layer: state.layer,
             write_ordinal: state.write_ordinal,
         });

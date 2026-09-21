@@ -90,7 +90,6 @@ fn write_local_configs(
             kv_unified: None,
             swa_full: None,
             cache_idle_slots: None,
-            filter_tensors_on_load: true,
             resident_tensor_names: Vec::new(),
             activation_import_identities: Vec::new(),
             activation_import_bindings: Vec::new(),

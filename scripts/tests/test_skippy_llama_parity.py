@@ -109,7 +109,7 @@ class SkippyLlamaParityTests(unittest.TestCase):
             with patch("sys.stderr"):
                 failures = self.parity.validate_runtime_slice_admission(llama_root)
 
-        self.assertEqual(failures, 6)
+        self.assertEqual(failures, 5)
 
     def test_runtime_slice_admission_rejects_detached_failure_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -239,7 +239,7 @@ class SkippyLlamaParityTests(unittest.TestCase):
             with patch("sys.stderr"):
                 failures = self.parity.validate_runtime_slice_admission(llama_root)
 
-        self.assertEqual(failures, 6)
+        self.assertEqual(failures, 5)
 
     def test_runtime_slice_admission_accepts_architecture_independent_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -287,9 +287,8 @@ class SkippyLlamaParityTests(unittest.TestCase):
     ) -> str:
         checks = (
             "layer_end exceeds model layer count",
-            "only the first runtime slice may include token embeddings",
-            "the first runtime slice must include token embeddings",
-            "only the final runtime slice may include output tensors",
+            "admitted activation imports disagree with the source-stage range",
+            "admitted activation exports disagree with the terminal-stage range",
             "stage graph output frontier does not match its admitted planner identities",
             "stage graph input frontier does not match its admitted planner identities",
         )
@@ -299,16 +298,12 @@ class SkippyLlamaParityTests(unittest.TestCase):
                 checks[0],
             ),
             (
-                "config->include_embeddings && config->layer_start != 0 && !config->include_output",
+                "skippy_runtime_is_source_stage(config) != (config->layer_start == 0)",
                 checks[1],
             ),
             (
-                "config->layer_start == 0 && !config->include_embeddings",
+                "skippy_runtime_is_terminal_stage(config) != (config->layer_end == n_layer)",
                 checks[2],
-            ),
-            (
-                "config->include_output && config->layer_end != n_layer",
-                checks[3],
             ),
         )
         def invalid_argument_failure(message: str) -> str:
@@ -356,20 +351,20 @@ class SkippyLlamaParityTests(unittest.TestCase):
         if controls:
             boundary_lines = (
                 "if (!build_boundary(false, stage_model->output_activation_boundary)) { "
-                f'return fail_boundary_load("{checks[4]}"); }}',
+                f'return fail_boundary_load("{checks[3]}"); }}',
                 "if (!build_boundary(true, stage_model->input_activation_boundary)) { "
-                f'return fail_boundary_load("{checks[5]}"); }}',
+                f'return fail_boundary_load("{checks[4]}"); }}',
             )
             if nested_boundary_failure:
                 boundary_lines = (
                     "if (!build_boundary(false, stage_model->output_activation_boundary)) { "
-                    f'if (false) {{ return fail_boundary_load("{checks[4]}"); }} }}',
+                    f'if (false) {{ return fail_boundary_load("{checks[3]}"); }} }}',
                     boundary_lines[1],
                 )
             if unbraced_boundary_failure:
                 boundary_lines = (
                     "if (!build_boundary(false, stage_model->output_activation_boundary)) { "
-                    f'if (false) return fail_boundary_load("{checks[4]}"); }}',
+                    f'if (false) return fail_boundary_load("{checks[3]}"); }}',
                     boundary_lines[1],
                 )
         else:

@@ -62,10 +62,7 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
         image_max_tokens: None,
         batch_max_tokens: None,
         glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
-        include_embeddings: true,
-        include_output: true,
         mtp_source: MtpSource::Disabled,
-        filter_tensors_on_load: !tokenizer_materialized,
         resident_tensor_names: Vec::new(),
         activation_import_identities: Vec::new(),
         activation_import_bindings: Vec::new(),
@@ -136,10 +133,7 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
             image_max_tokens: None,
             batch_max_tokens: None,
             glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
-            include_embeddings: true,
-            include_output: true,
             mtp_source: MtpSource::Disabled,
-            filter_tensors_on_load: true,
             resident_tensor_names: Vec::new(),
             activation_import_identities: Vec::new(),
             activation_import_bindings: Vec::new(),
@@ -377,8 +371,8 @@ fn materialize_tokenizer_package_if_needed(
         stage_id: "tokenizer".to_string(),
         layer_start: 0,
         layer_end: 1,
-        include_embeddings: true,
-        include_output: true,
+        source_stage: true,
+        terminal_stage: true,
     })?;
     Ok(Some(tokenizer_gguf))
 }
