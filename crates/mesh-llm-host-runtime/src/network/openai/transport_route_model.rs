@@ -12,6 +12,11 @@ pub(crate) struct RouteModelRequestContext<'a> {
     /// will serve the request; `None` everywhere else, including ordinary
     /// multi-candidate remote-mesh routing.
     pub(crate) served_by_header: Option<&'a str>,
+    /// Where to record a peer's `X-Capsule-Id` response header. Set only by
+    /// the `RemoteMesh` dispatch path (`ingress::route_missing_local_model`),
+    /// which reads it back out after this call to attach it to its own
+    /// terminal plugin event; `None` for every other caller.
+    pub(crate) peer_capsule_id: Option<&'a PeerCapsuleIdSink>,
 }
 
 pub async fn route_model_request(
@@ -32,6 +37,7 @@ pub async fn route_model_request(
         affinity: context.affinity,
         route_observer: context.route_observer,
         served_by_header: context.served_by_header,
+        peer_capsule_id: context.peer_capsule_id,
     };
     route_model_request_inner(args).await
 }
@@ -46,6 +52,7 @@ struct RouteModelRequestArgs<'a> {
     affinity: &'a AffinityRouter,
     route_observer: OpenAiRouteObserver<'a>,
     served_by_header: Option<&'a str>,
+    peer_capsule_id: Option<&'a PeerCapsuleIdSink>,
 }
 
 struct RouteModelState {
@@ -101,6 +108,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         affinity,
         route_observer,
         served_by_header,
+        peer_capsule_id,
     } = args;
     let route_started = Instant::now();
     let mut tcp_stream = tcp_stream;
@@ -147,6 +155,15 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
     // the identical nonce instead of letting each target's frontend mint its own.
     let forwarding_raw = request.raw.as_slice();
     for (idx, target) in ordered.into_iter().enumerate() {
+        // A prior attempt in this same loop may have probed a response,
+        // recorded ITS peer's `X-Capsule-Id` into the sink, and then still
+        // been classified retryable (e.g. context overflow) -- drain that
+        // stale value before moving on, or a retry that never sees (or
+        // never sets) the header would silently inherit the PREVIOUS
+        // peer's capsule_id and misattribute it to this attempt.
+        if let Some(sink) = peer_capsule_id {
+            sink.take();
+        }
         reservation.transfer_to(&target);
         state.attempts += 1;
         let attempt_started = Instant::now();
@@ -163,6 +180,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
                 response_adapter: request.response_adapter,
                 route_observer,
                 served_by: served_by_header,
+                peer_capsule_id,
             },
         )
         .await;
@@ -938,5 +956,161 @@ mod tests {
         assert_eq!(entry.queue_delay_micros, 4_000);
         assert_eq!(entry.restore_micros, 8_000);
         assert_eq!(entry.prefill_micros_per_token, 250);
+    }
+
+    /// Regression for the sink-drain gap `ndizazzo` flagged on PR #1944: the
+    /// FIRST target's response carries an `X-Capsule-Id` header but is itself
+    /// retryable (a context-overflow 400), so the loop moves on to a SECOND
+    /// target that delivers successfully without ever asserting a
+    /// capsule_id. Without draining the sink before the next attempt, the
+    /// terminal event would misattribute the first (failed) peer's asserted
+    /// capsule_id to the second (actually serving) peer.
+    #[tokio::test]
+    async fn a_retry_to_a_different_target_does_not_inherit_the_previous_peers_stale_capsule_id() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        async fn drain_request_headers(stream: &mut tokio::net::TcpStream) {
+            let mut buffer = [0u8; 4096];
+            let mut accumulated = Vec::new();
+            loop {
+                let read = stream.read(&mut buffer).await.expect("backend request");
+                if read == 0 {
+                    break;
+                }
+                accumulated.extend_from_slice(&buffer[..read]);
+                if accumulated.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+        }
+
+        let model = "qwen";
+        let connect_order = Arc::new(AtomicUsize::new(0));
+
+        let mut backend_ports = Vec::new();
+        let mut backend_tasks = Vec::new();
+        for _ in 0..2 {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            backend_ports.push(listener.local_addr().unwrap().port());
+            let connect_order = Arc::clone(&connect_order);
+            backend_tasks.push(tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                drain_request_headers(&mut stream).await;
+                // Whichever backend the loop dials FIRST plays the failed,
+                // capsule_id-asserting peer; whichever it dials second plays
+                // the eventual, silent success -- this pins the scenario to
+                // connection order rather than to which port the router
+                // happens to rank first.
+                let response = if connect_order.fetch_add(1, Ordering::SeqCst) == 0 {
+                    let body = r#"{"error":"prompt exceeds the context window limit"}"#;
+                    format!(
+                        "HTTP/1.1 400 Bad Request\r\nX-Capsule-Id: cap-from-the-first-peer\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                } else {
+                    let body = r#"{"id":"c1","model":"qwen","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                };
+                stream.write_all(response.as_bytes()).await.unwrap();
+                stream.shutdown().await.unwrap();
+            }));
+        }
+
+        let downstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let downstream_address = downstream.local_addr().unwrap();
+        let client = tokio::spawn(async move {
+            let mut stream = tokio::net::TcpStream::connect(downstream_address)
+                .await
+                .unwrap();
+            let mut response = Vec::new();
+            stream.read_to_end(&mut response).await.unwrap();
+        });
+        let (downstream_stream, _) = downstream.accept().await.unwrap();
+
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+            .await
+            .unwrap();
+        let affinity = AffinityRouter::new();
+        let sink = PeerCapsuleIdSink::new();
+
+        let mut targets = election::ModelTargets::default();
+        targets.targets.insert(
+            model.to_string(),
+            backend_ports
+                .iter()
+                .map(|port| election::InferenceTarget::Local(*port))
+                .collect(),
+        );
+
+        let request_body = r#"{"model":"qwen","messages":[{"role":"user","content":"hi"}]}"#;
+        let raw = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            request_body.len(),
+            request_body
+        )
+        .into_bytes();
+        let request = BufferedHttpRequest {
+            raw,
+            method: "POST".to_owned(),
+            path: "/v1/chat/completions".to_owned(),
+            client_path: "/v1/chat/completions".to_owned(),
+            request_id: RequestId::default(),
+            body_json: None,
+            body_json_attempted: false,
+            body_bytes: None,
+            body_len_bytes: request_body.len(),
+            completion_tokens: None,
+            stream: None,
+            model_name: Some(model.to_owned()),
+            request_object_request_ids: Vec::new(),
+            response_adapter: ResponseAdapter::None,
+            correlation_id: None,
+        };
+
+        let outcome = route_model_request(
+            node,
+            downstream_stream.into(),
+            &targets,
+            model,
+            &request,
+            RouteModelRequestContext {
+                required_tokens: None,
+                affinity: &affinity,
+                route_observer: OpenAiRouteObserver::default(),
+                served_by_header: None,
+                peer_capsule_id: Some(&sink),
+            },
+        )
+        .await;
+
+        assert!(
+            matches!(
+                outcome,
+                RouteDispatchOutcome::RespondedWithUsage {
+                    status_code: 200,
+                    ..
+                }
+            ),
+            "expected the surviving target to deliver 200, got {outcome:?}"
+        );
+
+        for task in backend_tasks {
+            task.await.unwrap();
+        }
+        client.await.unwrap();
+
+        assert_eq!(
+            sink.take(),
+            None,
+            "the sink must not carry the FIRST (retried-away-from) peer's \
+             capsule_id onto a later attempt that never asserted one itself"
+        );
     }
 }
