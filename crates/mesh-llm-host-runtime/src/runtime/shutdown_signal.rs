@@ -93,9 +93,26 @@ pub(crate) async fn wait_for_shutdown_signal() -> &'static str {
     install_shutdown_signals();
     match DELIVERY.get() {
         Some(delivery) => delivery.wait().await,
-        None => {
-            let _ = tokio::signal::ctrl_c().await;
-            FALLBACK_SIGNAL
+        None => resolve_fallback_registration(tokio::signal::ctrl_c().await).await,
+    }
+}
+
+/// Resolve the fallback wait from the result of registering the platform
+/// ctrl-c handler.
+///
+/// A registration error is not a signal. Reporting the fallback name for one
+/// would make every waiter start a shutdown that nothing requested, so the
+/// error is logged and the wait stays pending: the platform default
+/// disposition, which this module documents for that case, still applies.
+async fn resolve_fallback_registration(result: io::Result<()>) -> &'static str {
+    match result {
+        Ok(()) => FALLBACK_SIGNAL,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "fallback termination-signal handler unavailable; the platform default disposition applies"
+            );
+            std::future::pending::<&'static str>().await
         }
     }
 }
@@ -221,6 +238,29 @@ mod tests {
         let (observed, delivered) = tokio::join!(waiter, deliver);
         delivered.expect("the retained receiver keeps the delivery channel open");
         assert_eq!(observed, "SIGINT");
+    }
+
+    /// A fallback registration error must not be reported as a shutdown
+    /// request: returning the fallback name there starts a shutdown nobody
+    /// asked for, and every waiter acts on it (#1969 review).
+    #[tokio::test]
+    async fn a_fallback_registration_error_never_reports_a_signal() {
+        let registration_error = io::Error::from(io::ErrorKind::PermissionDenied);
+        let outcome = tokio::time::timeout(
+            Duration::from_millis(100),
+            resolve_fallback_registration(Err(registration_error)),
+        )
+        .await;
+        assert!(
+            outcome.is_err(),
+            "a registration error must leave the wait pending instead of reporting a signal"
+        );
+    }
+
+    /// The successful fallback still reports the platform ctrl-c signal.
+    #[tokio::test]
+    async fn a_registered_fallback_reports_the_platform_signal() {
+        assert_eq!(resolve_fallback_registration(Ok(())).await, FALLBACK_SIGNAL);
     }
 
     /// The platform path must observe a raised signal that arrived before the
