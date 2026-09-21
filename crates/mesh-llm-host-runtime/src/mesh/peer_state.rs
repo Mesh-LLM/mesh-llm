@@ -539,6 +539,16 @@ pub(crate) const PEER_STALE_SECS: u64 = 180; // 3 minutes
 /// can be re-discovered through normal gossip propagation. If the peer is
 /// genuinely gone, no bridge peer will mention it and it stays forgotten.
 pub(crate) const DEAD_PEER_TTL: std::time::Duration = std::time::Duration::from_secs(300); // 5 minutes
+
+/// How long a confirmed-departed peer id stays barred from transitive
+/// re-admission. [`DEAD_PEER_TTL`] expires quickly so reconnection attempts
+/// can resume, but gossip bridges can keep carrying the departed id's final
+/// announcement long after that (issue #1756): re-admitting it transitively
+/// resurrects a ghost `state: serving` entry with no direct connection.
+/// Only direct proof of life (a gossip exchange or connection with the id
+/// itself) clears this record early; otherwise it expires silently.
+pub(crate) const DEPARTED_PEER_TRANSITIVE_BLOCK_TTL: std::time::Duration =
+    std::time::Duration::from_secs(3600); // 1 hour
 pub(crate) const PEER_DOWN_REPORTER_COOLDOWN_SECS: u64 = 600; // 10 minutes
 
 pub(crate) struct MeshState {
@@ -550,9 +560,16 @@ pub(crate) struct MeshState {
     pub(crate) remote_tunnel_maps: HashMap<EndpointId, HashMap<EndpointId, u16>>,
     /// Peers confirmed dead — don't reconnect from gossip discovery.
     /// Cleared when the peer successfully reconnects via rejoin/join.
-    /// Entries expire after [`DEAD_PEER_TTL`] so that peers recovered
-    /// on other paths can be re-learned transitively through gossip.
+    /// Entries expire after [`DEAD_PEER_TTL`] so that reconnection attempts
+    /// resume. Transitive re-admission of the id stays blocked for
+    /// [`DEPARTED_PEER_TRANSITIVE_BLOCK_TTL`] via [`MeshState::departed_peers`]
+    /// so stale bridge announcements cannot resurrect it (issue #1756).
     pub(crate) dead_peers: HashMap<EndpointId, std::time::Instant>,
+    /// Peer ids whose departure was confirmed (heartbeat failure or accepted
+    /// PeerDown), with the instant of confirmation. Direct proof of life
+    /// clears this wherever [`MeshState::dead_peers`] is cleared; otherwise
+    /// entries expire after [`DEPARTED_PEER_TRANSITIVE_BLOCK_TTL`].
+    pub(crate) departed_peers: HashMap<EndpointId, std::time::Instant>,
     /// Tracks (reporter, target) pairs where a PeerDown claim was rejected
     /// (target was still reachable). Used to suppress repeated false reports
     /// from unreliable reporters (e.g. relay-partitioned nodes).
@@ -569,6 +586,29 @@ pub(crate) struct MeshState {
     /// streams from disclosing topology after a deterministic requirement reject.
     pub(crate) requirement_rejected_peers: HashSet<EndpointId>,
     pub(crate) recent_mesh_rejections: VecDeque<MeshRequirementRejectionEvent>,
+}
+
+impl MeshState {
+    /// The initial empty mesh state. `next_pending_connection_attempt` starts
+    /// at 1 so a zero attempt counter can mean "unset".
+    pub(crate) fn new() -> Self {
+        Self {
+            peers: HashMap::new(),
+            connections: HashMap::new(),
+            pending_connections: HashMap::new(),
+            next_pending_connection_attempt: 1,
+            remote_tunnel_maps: HashMap::new(),
+            dead_peers: HashMap::new(),
+            departed_peers: HashMap::new(),
+            peer_down_rejections: HashMap::new(),
+            direct_path_request_last_at: HashMap::new(),
+            seen_plugin_messages: HashMap::new(),
+            seen_plugin_message_order: VecDeque::new(),
+            policy_rejected_peers: HashMap::new(),
+            requirement_rejected_peers: HashSet::new(),
+            recent_mesh_rejections: VecDeque::new(),
+        }
+    }
 }
 
 /// Returns `true` if the given peer has completed gossip validation and is
@@ -1312,6 +1352,7 @@ impl Node {
         ));
         let mut state = self.state.lock().await;
         state.dead_peers.insert(id, std::time::Instant::now());
+        state.departed_peers.insert(id, std::time::Instant::now());
         state.connections.remove(&id);
         drop(state);
         self.remove_peer(id, MeshPeerRemovalReason::PeerDownProbeFailed)

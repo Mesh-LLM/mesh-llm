@@ -702,6 +702,7 @@ impl Node {
     ) -> (bool, bool) {
         let mut state = self.state.lock().await;
         let was_dead = state.dead_peers.remove(&remote).is_some();
+        state.departed_peers.remove(&remote);
         let admitted = state.peers.contains_key(&remote);
         if was_dead {
             emit_mesh_info(format!(
@@ -1488,6 +1489,7 @@ impl Node {
         {
             let mut state = self.state.lock().await;
             state.dead_peers.remove(&peer_id);
+            state.departed_peers.remove(&peer_id);
             state.connections.insert(peer_id, conn.clone());
         }
 
