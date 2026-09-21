@@ -1,5 +1,5 @@
 {
-  "full_patch_sha256": "90b45387a2af65f6b051383fc3f55ecbcb89d0cc7a0d18bd2f0cdc8ede048c9c",
+  "full_patch_sha256": "abbc8eafb618dcd2b8210e0f76145dd64fec0e6d535cd4dd4ccc75d23aad485c",
   "generator_version": "0.5.0",
   "schema_version": 1,
   "shards": [
@@ -8,7 +8,7 @@
         "afmoe"
       ],
       "file": "0001-family-afmoe.patch",
-      "sha256": "6891b375fb24713c6cc0fa90901db4562b7ed4a8eaf15fa03bae59f30ee743ff",
+      "sha256": "f24da42643df886f3d854c46722ddafe0713d046a712547b976c77ece30f9b95",
       "sources": [
         "src/models/afmoe.cpp"
       ]
@@ -79,7 +79,7 @@
         "cohere2"
       ],
       "file": "0008-family-cohere2.patch",
-      "sha256": "0e17633f7d87545f5ef47c6673fefb4c35415f25fa819043fc59b39d02b5ba62",
+      "sha256": "cce6eadde22dff2d5cb9720fcade13cce5fa161da7efb638eefee9c383127483",
       "sources": [
         "src/models/cohere2.cpp"
       ]
@@ -140,7 +140,7 @@
         "exaone4"
       ],
       "file": "0014-family-exaone4.patch",
-      "sha256": "97a3888cde03225fb2344af36b98838d979fd71ab13f3a0b7fd32c8af8e2cf51",
+      "sha256": "bc819700a71a117c4d1cb0f4b22c96c8a3b2f9dd38307a3f1d3f2f9c946a6628",
       "sources": [
         "src/models/exaone4.cpp"
       ]
@@ -180,7 +180,7 @@
         "gemma2"
       ],
       "file": "0018-family-gemma2.patch",
-      "sha256": "cd82c84fd4c01d9654ae9f18182e0df4e6de178abbca3b50af5c82e037c61048",
+      "sha256": "9b70c288ae9c560dfa8f42df161a2f481cceb885c1a3715d9c125dd72ae377b1",
       "sources": [
         "src/models/gemma2.cpp"
       ]
@@ -190,7 +190,7 @@
         "gemma3"
       ],
       "file": "0019-family-gemma3.patch",
-      "sha256": "117a6e8874c8e809204f2167a8456c0dae5faa9b9a716d5ca98d7da3ada1fd27",
+      "sha256": "32a37050c33d977ca86e8436c9cc299b0821ac27fe715aef4f76f3d5311a099c",
       "sources": [
         "src/models/gemma3.cpp"
       ]
@@ -200,7 +200,7 @@
         "gemma3n"
       ],
       "file": "0020-family-gemma3n.patch",
-      "sha256": "b809dee3aee21c67d2d17300fcf2ecf5300f7aa6fc36d64d49c0d6b648c3cd09",
+      "sha256": "ba93dfb182e10698a25c93fee93e25830c37cc01e4c2be02e13f33994856bf6d",
       "sources": [
         "src/models/gemma3n.cpp"
       ]
@@ -210,7 +210,7 @@
         "gemma4"
       ],
       "file": "0021-family-gemma4.patch",
-      "sha256": "f54f325dfc43a60340426cd0ba5a8f924d78c6edb13b4ed48f51a83acbea4a11",
+      "sha256": "f49db1c3cb945c6cc25a5445a767622a76831c64e709789bc2546f17da1c6bdf",
       "sources": [
         "src/models/gemma4.cpp"
       ]
@@ -262,7 +262,7 @@
         "gpt-oss"
       ],
       "file": "0026-family-gpt-oss.patch",
-      "sha256": "622bdaf6759b2e5ce0616b59285a560d77fbdbd6e30dff695cbd46b907a100ae",
+      "sha256": "6ba209ea0e596a4335414603e849ab723fd4892dcf7279cb4e6b762b984c1da7",
       "sources": [
         "src/models/openai-moe.cpp"
       ]
@@ -424,7 +424,7 @@
         "laguna"
       ],
       "file": "0042-family-laguna.patch",
-      "sha256": "e7ac00788ec09929ca21fa0472a1b4fb8135ba537a4ea0aa5abb83eb2c9a2ad3",
+      "sha256": "4374fe0d187fd654f2b74d3db9a807f981b16ca39adbc7fb0ca890fc05376ff9",
       "sources": [
         "src/models/laguna.cpp"
       ]
@@ -457,7 +457,7 @@
         "olmo2"
       ],
       "file": "0045-family-llama--olmo2.patch",
-      "sha256": "032a5462d17ba4dd52b3dd0e5f80d7157b04d653671ad95744326e9322e2d0a5",
+      "sha256": "25ea4b62d552c26192e74d90f8a19418941123c6d602362a48b701a33649914a",
       "sources": [
         "src/models/olmo2.cpp"
       ]
@@ -467,7 +467,7 @@
         "llama4"
       ],
       "file": "0046-family-llama4.patch",
-      "sha256": "c60e50de855a649a49d051c974304e1ee86941b7cc995fd71bee9d50b6787442",
+      "sha256": "60d865657f235fd0896c320b9d1f002290680d70c79cbc5b60eafaf832e37040",
       "sources": [
         "src/models/llama4.cpp"
       ]
@@ -498,7 +498,7 @@
         "mellum"
       ],
       "file": "0049-family-mellum.patch",
-      "sha256": "40f81b197e0dfaa9a5336ef04e9fd70113c100a639ed33228f602b37cc1d0054",
+      "sha256": "1cfade4dc679a3689d98453b722499d471344cb72dc40583375ccc507a1086f9",
       "sources": [
         "src/models/mellum.cpp"
       ]
@@ -508,7 +508,7 @@
         "mimo2"
       ],
       "file": "0050-family-mimo2.patch",
-      "sha256": "6944d5036a1050c3f36fb9d5e7dfa94c74874c8906aea13ada3fb2702da856e0",
+      "sha256": "9091e13bd54af222657aa826a9ebc92ae74b6182c1e6b16fb2371e38cb801824",
       "sources": [
         "src/models/mimo2.cpp"
       ]
@@ -558,7 +558,7 @@
         "nemotron"
       ],
       "file": "0055-family-nemotron.patch",
-      "sha256": "ba2ee8d95a7cc47995a54db7737dc72ea8e90691d5b848e9e1f7415e9d8f5352",
+      "sha256": "b6cc3f558a86de051b4da33bdfc2e7731d4eb3e32b1405b975f61a2348c4b2bd",
       "sources": [
         "src/models/nemotron-h.cpp"
       ]
@@ -699,7 +699,7 @@
         "qwen4exp"
       ],
       "file": "0069-family-qwen4exp.patch",
-      "sha256": "8f3ffaa0905cecfd4dc38c213e2df5027fe0adf6153ff47bac52706a4317259d",
+      "sha256": "fef4126fd13d4df9a77b7dbcd61a0b6570a76d2d64534f2e2c20eea9bda39faa",
       "sources": [
         "src/models/qwen4exp.cpp"
       ]
@@ -770,7 +770,7 @@
         "step35"
       ],
       "file": "0076-family-step35.patch",
-      "sha256": "2ca051977ebddb5e87b562cc1719aaf1366344e072db3f457ea5bd0dda03fe5f",
+      "sha256": "8c44d676a31cf6c5c10d614e0a1819065c9cd199b67ccc6c4a2cc65f39e55a70",
       "sources": [
         "src/models/step35.cpp"
       ]
@@ -778,7 +778,7 @@
     {
       "families": [],
       "file": "0077-family-unmapped.patch",
-      "sha256": "f9ce20fa730f852265c82b42289fc2838ea2c401a758a951f90a36e7f77e9aa8",
+      "sha256": "bf4dcde816e7ca5698a8975e615185c931307522c411a35593c42f3f86f2c974",
       "sources": [
         "src/models/arctic.cpp",
         "src/models/baichuan.cpp",
@@ -806,6 +806,7 @@
         "src/models/hy-v4.cpp",
         "src/models/llada-moe.cpp",
         "src/models/llada.cpp",
+        "src/models/maple.cpp",
         "src/models/minimax-01.cpp",
         "src/models/minimax-m2.cpp",
         "src/models/modern-bert.cpp",

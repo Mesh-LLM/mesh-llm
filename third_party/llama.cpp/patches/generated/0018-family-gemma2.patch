@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/gemma2.cpp b/src/models/gemma2.cpp
-index 2fbfb15a94a39a605d2e3ba1426304d7dc922e27..17b070fde483d3e0bcdc62504def6d8a7ec519a1 100644
+index 9e52434655435eae323b4f94a1a9d2b590357a05..5f40aac4568c0555a85ea8a893294d8648fbb037 100644
 --- a/src/models/gemma2.cpp
 +++ b/src/models/gemma2.cpp
-@@ -78,6 +78,8 @@ llama_model_gemma2::graph::graph(const llama_model & model, const llm_graph_para
+@@ -76,6 +76,8 @@ llama_model_gemma2::graph::graph(const llama_model & model, const llm_graph_para
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 2fbfb15a94a39a605d2e3ba1426304d7dc922e27..17b070fde483d3e0bcdc62504def6d8a
          const float freq_base_l  = model.get_rope_freq_base (cparams, il);
          const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
  
-@@ -152,6 +154,7 @@ llama_model_gemma2::graph::graph(const llama_model & model, const llm_graph_para
+@@ -150,6 +152,7 @@ llama_model_gemma2::graph::graph(const llama_model & model, const llm_graph_para
  
          // input for next layer
          inpL = cur;

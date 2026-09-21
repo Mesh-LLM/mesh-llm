@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/nemotron-h.cpp b/src/models/nemotron-h.cpp
-index 51a0855f57f2dac8d5d4dd6fdd20b12d1183cd93..bd85bcf64cfcba6d7aee68a6c1d051a2c5324f0e 100644
+index 0d97f3f68128e13c9cba2fa38a7ce145f5d5b61d..359ed660324cc2a403bbf7f4d33f7148fc15765a 100644
 --- a/src/models/nemotron-h.cpp
 +++ b/src/models/nemotron-h.cpp
-@@ -205,6 +205,8 @@ llama_model_nemotron_h::graph::graph(const llama_model & model, const llm_graph_
+@@ -207,6 +207,8 @@ llama_model_nemotron_h::graph::graph(const llama_model & model, const llm_graph_
      const bool extract_final_inp = (size_t) n_layer < cparams.embeddings_layer_inp.size() && cparams.embeddings_layer_inp[n_layer];
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 51a0855f57f2dac8d5d4dd6fdd20b12d1183cd93..bd85bcf64cfcba6d7aee68a6c1d051a2
          res->t_layer_inp[il] = inpL;
  
          struct ggml_tensor * inpSA = inpL;
-@@ -234,6 +236,7 @@ llama_model_nemotron_h::graph::graph(const llama_model & model, const llm_graph_
+@@ -236,6 +238,7 @@ llama_model_nemotron_h::graph::graph(const llama_model & model, const llm_graph_
  
          // input for next layer
          inpL = cur;

@@ -1,17 +1,17 @@
-From c20d8becfb0e6e6c6a95632c0150be9c3e843892 Mon Sep 17 00:00:00 2001
+From 7cbd939c6000d61a810032a59f0c4b965975e4b0 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 12 Sep 2026 01:36:02 -0700
-Subject: [PATCH 08/11] skippy: configure non-chat model loading
+Subject: [PATCH 11/14] skippy: configure non-chat model loading
 
 ---
  src/skippy/model_loading.cpp | 25 ++++++++++++++++++++++---
  1 file changed, 22 insertions(+), 3 deletions(-)
 
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
-index 20b7abad7..2b4f72e2e 100644
+index f38f4a936..15b29abfa 100644
 --- a/src/skippy/model_loading.cpp
 +++ b/src/skippy/model_loading.cpp
-@@ -645,9 +645,19 @@ enum skippy_status skippy_finish_model_open(
+@@ -648,9 +648,19 @@ enum skippy_status skippy_finish_model_open(
          }
      }
  
@@ -32,7 +32,7 @@ index 20b7abad7..2b4f72e2e 100644
      uint32_t context_size_per_lane = 0;
      uint32_t context_size_total = 0;
      if (!skippy_context_capacity(config, lane_count, context_size_per_lane, context_size_total)) {
-@@ -709,8 +719,17 @@ enum skippy_status skippy_finish_model_open(
+@@ -714,8 +724,17 @@ enum skippy_status skippy_finish_model_open(
      params.type_k = config != nullptr && config->cache_type_k > 0 ? static_cast<ggml_type>(config->cache_type_k) : GGML_TYPE_F16;
      params.type_v = config != nullptr && config->cache_type_v > 0 ? static_cast<ggml_type>(config->cache_type_v) : GGML_TYPE_F16;
      params.flash_attn_type = config != nullptr ? static_cast<llama_flash_attn_type>(config->flash_attn_type) : LLAMA_FLASH_ATTN_TYPE_AUTO;
@@ -53,4 +53,5 @@ index 20b7abad7..2b4f72e2e 100644
      const bool glm_dsa_tensor_trace_enabled = skippy_glm_dsa_tensor_trace_enabled();
      if (model->arch == LLM_ARCH_GLM_DSA && (glm_dsa_op_timing_enabled || glm_dsa_tensor_trace_enabled)) {
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
+

@@ -1,7 +1,7 @@
-From ee77aeeb04152719c5bf48cfb689bff525d1b8b1 Mon Sep 17 00:00:00 2001
+From dab302cdb723320377fbe12f1f2aa912d0fa0586 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 18:30:01 +1000
-Subject: [PATCH] models: add inkling family support
+Subject: [PATCH 1/2] models: add inkling family support
 
 ---
  common/chat.cpp                     |   8 +
@@ -52,10 +52,10 @@ Subject: [PATCH] models: add inkling family support
  create mode 100644 tools/mtmd/models/inkling.cpp
 
 diff --git a/common/chat.cpp b/common/chat.cpp
-index 508f64658..afdbe5005 100644
+index d385bcd25..d4b743b81 100644
 --- a/common/chat.cpp
 +++ b/common/chat.cpp
-@@ -1256,6 +1256,14 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
+@@ -1264,6 +1264,14 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
          return common_chat_params_init_cohere2moe(tmpl, params);
      }
  
@@ -194,12 +194,12 @@ index 000000000..fce3cc0ef
 +    return data;
 +}
 diff --git a/common/parsers/parsers.h b/common/parsers/parsers.h
-index 73fc719fd..14cfa68a9 100644
+index f86636007..81f4993a9 100644
 --- a/common/parsers/parsers.h
 +++ b/common/parsers/parsers.h
-@@ -63,6 +63,8 @@ common_chat_params common_chat_params_init_kimi_k2(const common_chat_template &
+@@ -65,6 +65,8 @@ common_chat_params common_chat_params_init_kimi_k3(const common_chat_template &
  
- common_chat_params common_chat_params_init_kimi_k3(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
+ common_chat_params common_chat_params_init_ling3(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
  
 +common_chat_params common_chat_params_init_inkling(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
 +
@@ -207,22 +207,22 @@ index 73fc719fd..14cfa68a9 100644
  common_chat_params common_chat_params_init_lfm2(const common_chat_template & tmpl, const autoparser::generation_params & inputs, bool tool_list_tokens);
  
 diff --git a/common/parsers/sources.cmake b/common/parsers/sources.cmake
-index 9d7fb0992..16d518835 100644
+index 70af84e25..bfae5460b 100644
 --- a/common/parsers/sources.cmake
 +++ b/common/parsers/sources.cmake
-@@ -9,6 +9,7 @@ set(LLAMA_CHAT_PARSERS_SOURCES
-     ${CMAKE_CURRENT_LIST_DIR}/gemma4.cpp
-     ${CMAKE_CURRENT_LIST_DIR}/gigachat-v3.cpp
-     ${CMAKE_CURRENT_LIST_DIR}/gpt-oss.cpp
-+    ${CMAKE_CURRENT_LIST_DIR}/inkling.cpp
+@@ -12,6 +12,7 @@ set(LLAMA_CHAT_PARSERS_SOURCES
      ${CMAKE_CURRENT_LIST_DIR}/kimi-k2.cpp
      ${CMAKE_CURRENT_LIST_DIR}/kimi-k3.cpp
+     ${CMAKE_CURRENT_LIST_DIR}/ling3.cpp
++    ${CMAKE_CURRENT_LIST_DIR}/inkling.cpp
      ${CMAKE_CURRENT_LIST_DIR}/lfm2.cpp
+     ${CMAKE_CURRENT_LIST_DIR}/minicpm5.cpp
+     ${CMAKE_CURRENT_LIST_DIR}/minimax-m3.cpp
 diff --git a/conversion/__init__.py b/conversion/__init__.py
-index 4d58bcd10..ead783c7a 100644
+index d48861e46..d09c7c0b3 100644
 --- a/conversion/__init__.py
 +++ b/conversion/__init__.py
-@@ -126,6 +126,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
+@@ -127,6 +127,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
      "HYV3ForCausalLM": "hunyuan",
      "HYV4ForCausalLM": "hy_v4",
      "IQuestCoderForCausalLM": "llama",
@@ -230,7 +230,7 @@ index 4d58bcd10..ead783c7a 100644
      "InternLM2ForCausalLM": "internlm",
      "InternLM3ForCausalLM": "internlm",
      "JAISLMHeadModel": "jais",
-@@ -308,6 +309,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
+@@ -310,6 +311,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
      "GraniteSpeechPlusForConditionalGeneration": "granite",
      "HunYuanVLForConditionalGeneration": "hunyuan",
      "Idefics3ForConditionalGeneration": "smolvlm",
@@ -239,7 +239,7 @@ index 4d58bcd10..ead783c7a 100644
      "JanusForConditionalGeneration": "januspro",
      "KimiK25ForConditionalGeneration": "kimivl",
 diff --git a/conversion/base.py b/conversion/base.py
-index 7a3373c0e..e0bc8fa1c 100644
+index 4771671e0..826716990 100644
 --- a/conversion/base.py
 +++ b/conversion/base.py
 @@ -562,6 +562,20 @@ class ModelBase:
@@ -692,10 +692,10 @@ index 000000000..079842903
 +
 +        raise ValueError(f"unexpected Inkling vision tensor {name!r}")
 diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
-index d3a639f37..c095649d0 100644
+index 80eb60b40..5b9b58de6 100644
 --- a/gguf-py/gguf/constants.py
 +++ b/gguf-py/gguf/constants.py
-@@ -630,6 +630,7 @@ class MODEL_ARCH(IntEnum):
+@@ -638,6 +638,7 @@ class MODEL_ARCH(IntEnum):
      NANBEIGE         = auto()
      QWEN3TTS         = auto()
      POCKETTTS        = auto()
@@ -703,7 +703,7 @@ index d3a639f37..c095649d0 100644
  
  
  class VISION_PROJECTOR_TYPE(IntEnum):
-@@ -878,6 +879,14 @@ class MODEL_TENSOR(IntEnum):
+@@ -887,6 +888,14 @@ class MODEL_TENSOR(IntEnum):
      SHORTCONV_CONV       = auto()
      SHORTCONV_INPROJ     = auto()
      SHORTCONV_OUTPROJ    = auto()
@@ -718,7 +718,7 @@ index d3a639f37..c095649d0 100644
      VISEXP_ATTN_QKV      = auto()
      VISEXP_ATTN_OUT      = auto()
      VISEXP_GATE          = auto()
-@@ -1385,6 +1394,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
+@@ -1396,6 +1405,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
      MODEL_ARCH.NANBEIGE:         "nanbeige",
      MODEL_ARCH.QWEN3TTS:         "qwen3tts",
      MODEL_ARCH.POCKETTTS:        "pockettts",
@@ -726,7 +726,7 @@ index d3a639f37..c095649d0 100644
  }
  
  VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
-@@ -1631,6 +1641,13 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
+@@ -1643,6 +1653,13 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
      MODEL_TENSOR.SHORTCONV_CONV:            "blk.{bid}.shortconv.conv",
      MODEL_TENSOR.SHORTCONV_INPROJ:          "blk.{bid}.shortconv.in_proj",
      MODEL_TENSOR.SHORTCONV_OUTPROJ:         "blk.{bid}.shortconv.out_proj",
@@ -740,7 +740,7 @@ index d3a639f37..c095649d0 100644
      MODEL_TENSOR.VISEXP_ATTN_QKV:           "blk.{bid}.vis_attn_qkv",
      MODEL_TENSOR.VISEXP_ATTN_OUT:           "blk.{bid}.vis_attn_output",
      MODEL_TENSOR.VISEXP_GATE:               "blk.{bid}.vis_gate",
-@@ -4931,6 +4948,38 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+@@ -4974,6 +4991,38 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
          MODEL_TENSOR.FFN_UP_EXP,
          MODEL_TENSOR.FFN_EXP_PROBS_B,
      ],
@@ -779,7 +779,7 @@ index d3a639f37..c095649d0 100644
      MODEL_ARCH.SMALLTHINKER: [
          MODEL_TENSOR.TOKEN_EMBD,
          MODEL_TENSOR.OUTPUT_NORM,
-@@ -5767,6 +5816,7 @@ class GGUFValueType(IntEnum):
+@@ -5810,6 +5859,7 @@ class GGUFValueType(IntEnum):
  
  
  class VisionProjectorType:
@@ -1382,10 +1382,10 @@ index 000000000..95874d23d
 +{%- endif -%}
 +{#- Unsloth translation to jinja from TML's parser #}
 diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
-index 794519601..207271da5 100644
+index 5e2aa6963..843da23c2 100644
 --- a/src/llama-arch.cpp
 +++ b/src/llama-arch.cpp
-@@ -156,6 +156,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
+@@ -158,6 +158,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
      { LLM_ARCH_NANBEIGE,         "nanbeige"         },
      { LLM_ARCH_QWEN3TTS,         "qwen3tts"         },
      { LLM_ARCH_POCKETTTS,        "pockettts"        },
@@ -1393,7 +1393,7 @@ index 794519601..207271da5 100644
      { LLM_ARCH_UNKNOWN,          "(unknown)"        },
  };
  
-@@ -368,6 +369,18 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
+@@ -374,6 +375,18 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
      { LLM_KV_DFLASH_SELECTOR_TOP_K,   "%s.selector_top_k"   },
  
      { LLM_KV_SHORTCONV_L_CACHE, "%s.shortconv.l_cache" },
@@ -1412,7 +1412,7 @@ index 794519601..207271da5 100644
      // sentence-transformers dense modules feature dims
      { LLM_KV_DENSE_2_FEAT_IN,        "%s.dense_2_feat_in"  },
      { LLM_KV_DENSE_2_FEAT_OUT,       "%s.dense_2_feat_out" },
-@@ -1105,6 +1118,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
+@@ -1113,6 +1126,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
          case LLM_ARCH_QWEN4EXP:
          case LLM_ARCH_DEEPSEEK4:
          case LLM_ARCH_MINIMAX_01:
@@ -1420,7 +1420,7 @@ index 794519601..207271da5 100644
              return true;
          default:
              return false;
-@@ -1173,6 +1187,7 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
+@@ -1181,6 +1195,7 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
          case LLM_ARCH_KIMI_K3:
          case LLM_ARCH_QWEN3TTS:
          case LLM_ARCH_QWEN4EXP:   // TODO: fix test-llama-archs
@@ -1429,18 +1429,18 @@ index 794519601..207271da5 100644
          default:
              return true;
 diff --git a/src/llama-arch.h b/src/llama-arch.h
-index e3b60ddcc..ec4eca1b3 100644
+index e6732e854..c48613aca 100644
 --- a/src/llama-arch.h
 +++ b/src/llama-arch.h
-@@ -161,6 +161,7 @@ enum llm_arch {
-     LLM_ARCH_QWEN3TTS,
+@@ -163,6 +163,7 @@ enum llm_arch {
      LLM_ARCH_POCKETTTS,
      LLM_ARCH_MINIMAX_01,
+     LLM_ARCH_HRM_TEXT,
 +    LLM_ARCH_INKLING,
      LLM_ARCH_UNKNOWN,
  };
  
-@@ -414,6 +415,17 @@ enum llm_kv {
+@@ -420,6 +421,17 @@ enum llm_kv {
  
      LLM_KV_SHORTCONV_L_CACHE,
  
@@ -1458,7 +1458,7 @@ index e3b60ddcc..ec4eca1b3 100644
      LLM_KV_XIELU_ALPHA_N,
      LLM_KV_XIELU_ALPHA_P,
      LLM_KV_XIELU_BETA,
-@@ -481,6 +493,10 @@ enum llm_tensor {
+@@ -487,6 +499,10 @@ enum llm_tensor {
      LLM_TENSOR_FFN_DOWN_CHEXPS,
      LLM_TENSOR_FFN_GATE_CHEXPS,
      LLM_TENSOR_FFN_UP_CHEXPS,
@@ -1469,7 +1469,7 @@ index e3b60ddcc..ec4eca1b3 100644
      LLM_TENSOR_FFN_EXP_PROBS_B,
      LLM_TENSOR_FFN_EXP_PROBS_B_VL,
      LLM_TENSOR_FFN_LATENT_DOWN,
-@@ -667,6 +683,14 @@ enum llm_tensor {
+@@ -673,6 +689,14 @@ enum llm_tensor {
      LLM_TENSOR_SHORTCONV_CONV,
      LLM_TENSOR_SHORTCONV_INPROJ,
      LLM_TENSOR_SHORTCONV_OUTPROJ,
@@ -1485,7 +1485,7 @@ index e3b60ddcc..ec4eca1b3 100644
      LLM_TENSOR_VISEXP_ATTN_OUT,
      LLM_TENSOR_VISEXP_FFN_GATE,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 14beecf90..b518a7330 100644
+index 1ac8ef1cf..57cacad5a 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -180,6 +180,12 @@ llama_context::llama_context(
@@ -1502,10 +1502,10 @@ index 14beecf90..b518a7330 100644
      // the trunk tensors through ctx_other (see graph_mtp in nemotron-h-moe.cpp).
      // Without this clause the constructor silently drops params.ctx_other and
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 8bdb9016c..cbc0a3297 100644
+index a39cc0214..a1ff07f47 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -3085,9 +3085,26 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+@@ -3102,9 +3102,26 @@ ggml_tensor * llm_graph_context::build_attn_mha(
  
      ggml_tensor * cur;
  
@@ -1548,7 +1548,7 @@ index 5df8bfd4c..c8f5d3490 100644
      }
  
 diff --git a/src/llama-hparams.h b/src/llama-hparams.h
-index 5eeee5580..7cc319685 100644
+index de8cfdd3d..9387f526b 100644
 --- a/src/llama-hparams.h
 +++ b/src/llama-hparams.h
 @@ -93,9 +93,17 @@ struct llama_hparams {
@@ -1594,22 +1594,22 @@ index 9d855f1d5..fea4ce1c6 100644
      void set_input_k_rot(ggml_tensor * dst) const;
      void set_input_v_rot(ggml_tensor * dst) const;
 diff --git a/src/llama-model-saver.cpp b/src/llama-model-saver.cpp
-index 66f8bdec3..ee117fc2d 100644
+index 39160a417..e466919d5 100644
 --- a/src/llama-model-saver.cpp
 +++ b/src/llama-model-saver.cpp
-@@ -33,6 +33,7 @@ bool llama_model_saver_supports_arch(llm_arch arch) {
-         case LLM_ARCH_LAGUNA:
-         case LLM_ARCH_GRANITE_SWA:
-         case LLM_ARCH_DOTS3NOTE: // TODO: need to handle SWA pattern and MLA+SWA config
+@@ -20,6 +20,7 @@ bool llama_model_saver_supports_arch(llm_arch arch) {
+         case LLM_ARCH_T5:
+         case LLM_ARCH_APERTUS:
+         case LLM_ARCH_STEP35:
 +        case LLM_ARCH_INKLING:
              return false;
          default:
              return true;
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index aa1be8df5..1cbcfe758 100644
+index f2bb90ab6..69ac10bf0 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -339,6 +339,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
+@@ -343,6 +343,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
              return new llama_model_step35(params);
          case LLM_ARCH_SPARK2_5:
              return new llama_model_spark2_5(params);
@@ -1618,7 +1618,7 @@ index aa1be8df5..1cbcfe758 100644
          default:
              throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
      }
-@@ -2655,8 +2657,19 @@ llama_memory_i * llama_model::create_memory(
+@@ -2682,8 +2684,19 @@ llama_memory_i * llama_model::create_memory(
                      llama_memory_hybrid::layer_filter_cb filter_idx  = nullptr;
                      const bool needs_mem_idx = (arch == LLM_ARCH_QWEN4EXP);
                      if (arch == LLM_ARCH_FALCON_H1) {
@@ -1638,7 +1638,7 @@ index aa1be8df5..1cbcfe758 100644
                      } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
                          filter_attn = [&](uint32_t il) {
                              return !hparams.is_recr(il) && hparams.n_ff(il) == 0;
-@@ -3025,6 +3038,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+@@ -3052,6 +3065,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
          case LLM_ARCH_NEMOTRON_H_MOE:
          case LLM_ARCH_KIMI_LINEAR:
          case LLM_ARCH_KIMI_K3:
@@ -1647,7 +1647,7 @@ index aa1be8df5..1cbcfe758 100644
  
          // use what we call a normal RoPE, operating on pairs of consecutive head values
 diff --git a/src/llama-model.h b/src/llama-model.h
-index e0c6f7353..ffe2ecafb 100644
+index c394542e2..fe05b611d 100644
 --- a/src/llama-model.h
 +++ b/src/llama-model.h
 @@ -593,6 +593,15 @@ struct llama_layer {
@@ -1688,7 +1688,7 @@ index 4a22b95d4..e7cb08315 100644
      quantize &= name.find("indexer.k_proj.weight") == std::string::npos;
      quantize &= name.find("indexer.q_proj.weight") == std::string::npos;
 diff --git a/src/llama-vocab.cpp b/src/llama-vocab.cpp
-index ee65faf23..3e64d1520 100644
+index e038637ce..5fee4fdaa 100644
 --- a/src/llama-vocab.cpp
 +++ b/src/llama-vocab.cpp
 @@ -443,6 +443,12 @@ struct llm_tokenizer_bpe : llm_tokenizer {
@@ -1704,7 +1704,7 @@ index ee65faf23..3e64d1520 100644
              case LLAMA_VOCAB_PRE_TYPE_GRANITE_EMB_MULTI:
                  // Same lookaheads as GPT4O but with \p{M} added so combining marks
                  // (diacritics) attach to their base letters. Avoids excessive
-@@ -2324,6 +2330,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
+@@ -2340,6 +2346,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                  tokenizer_pre == "talkie") {
                  pre_type = LLAMA_VOCAB_PRE_TYPE_GPT4O;
                  clean_spaces = false;
@@ -1716,14 +1716,14 @@ index ee65faf23..3e64d1520 100644
                  tokenizer_pre == "granite-embed-multi-97m") {
                  pre_type = LLAMA_VOCAB_PRE_TYPE_GRANITE_EMB_MULTI;
 diff --git a/src/llama-vocab.h b/src/llama-vocab.h
-index 65293c026..b4219ed39 100644
+index 3fb061f0e..e7d5f5dfb 100644
 --- a/src/llama-vocab.h
 +++ b/src/llama-vocab.h
-@@ -67,6 +67,7 @@ enum llama_vocab_pre_type {
-     LLAMA_VOCAB_PRE_TYPE_LAGUNA            = 56,
+@@ -68,6 +68,7 @@ enum llama_vocab_pre_type {
      LLAMA_VOCAB_PRE_TYPE_HY_V4             = 57,
      LLAMA_VOCAB_PRE_TYPE_SPARK2_5          = 58,
-+    LLAMA_VOCAB_PRE_TYPE_INKLING           = 59,
+     LLAMA_VOCAB_PRE_TYPE_UFAKZEKA          = 59,
++    LLAMA_VOCAB_PRE_TYPE_INKLING           = 60,
  };
  
  struct LLM_KV;
@@ -2421,10 +2421,10 @@ index 000000000..0310612ef
 +    ggml_build_forward_expand(gf, cur);
 +}
 diff --git a/src/models/models.h b/src/models/models.h
-index 87195fddd..3f8854a64 100644
+index 3f9c67c63..527ea4ba6 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
-@@ -2139,6 +2139,19 @@ struct llama_model_lfm2moe : public llama_model_base {
+@@ -2173,6 +2173,19 @@ struct llama_model_lfm2moe : public llama_model_base {
  };
  
  
@@ -2458,7 +2458,7 @@ index bd8408d5a..ce1cec84f 100644
      ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens
                            : (model.tok_embd          ? model.tok_embd
 diff --git a/src/skippy/speculative_decoding.cpp b/src/skippy/speculative_decoding.cpp
-index 2dfac488a..7bb3267e4 100644
+index 59b311dd2..18f39a7d9 100644
 --- a/src/skippy/speculative_decoding.cpp
 +++ b/src/skippy/speculative_decoding.cpp
 @@ -7,6 +7,7 @@
@@ -2536,7 +2536,7 @@ index 2dfac488a..7bb3267e4 100644
      // MTP consumes complete pre-norm output rows, which can be wider than
      // token embeddings (for example DeepSeek4 hyperconnections).
      const int32_t n_hidden = llama_model_n_embd_out(session->stage_model->model);
-@@ -329,9 +356,55 @@ enum skippy_status skippy_mtp_sync_target_inputs(
+@@ -337,9 +364,55 @@ enum skippy_status skippy_mtp_sync_target_inputs(
  }
  
  int skippy_external_decode_observe(llama_context * ctx, const llama_batch & batch) {
@@ -2595,7 +2595,7 @@ index 2dfac488a..7bb3267e4 100644
  }
  
  skippy_graph_build_inputs skippy_external_decode_build_inputs(llama_context * ctx) {
-@@ -382,7 +455,7 @@ enum skippy_status skippy_mtp_propose_next(
+@@ -390,7 +463,7 @@ enum skippy_status skippy_mtp_propose_next(
              max_draft_tokens,
              SKIPPY_NATIVE_MTP_MAX_DRAFT_TOKENS);
      const bool chain_heads = mtp_depth_scope.chains_heads();
@@ -2605,7 +2605,7 @@ index 2dfac488a..7bb3267e4 100644
          draft_limit = std::min<size_t>(draft_limit, mtp_depth_scope.depth_count);
      }
 diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
-index 5a05642b3..90825aa3a 100644
+index bbbf6b40d..9a3d3c780 100644
 --- a/tests/test-chat.cpp
 +++ b/tests/test-chat.cpp
 @@ -2991,6 +2991,97 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
@@ -2706,7 +2706,7 @@ index 5a05642b3..90825aa3a 100644
      {
          // Google Gemma 2 2B - does not support tool calling
          auto tst = peg_tester("models/templates/google-gemma-2-2b-it.jinja");
-@@ -7086,6 +7177,28 @@ static void test_template_generation_prompt() {
+@@ -7314,6 +7405,28 @@ static void test_template_generation_prompt() {
          check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>\nI'm");
      }
  
@@ -2735,7 +2735,7 @@ index 5a05642b3..90825aa3a 100644
      {
          // The stage alias hardening must win when thinking is explicitly disabled.
          auto render_disabled = [](const char * template_path) {
-@@ -7119,6 +7232,8 @@ static void test_template_generation_prompt() {
+@@ -7347,6 +7460,8 @@ static void test_template_generation_prompt() {
          assert_contains(qwen, "<think>\n\n</think>\n\n");
          const auto gpt_oss = render_disabled("models/templates/openai-gpt-oss-120b.jinja");
          assert_contains(gpt_oss, "Reasoning: 0");
@@ -2745,10 +2745,10 @@ index 5a05642b3..90825aa3a 100644
  }
  
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index 8d7b01741..32a7fde50 100644
+index 5a3202ce8..97e44eb30 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -663,6 +663,10 @@ static bool arch_supported(const llm_arch arch) {
+@@ -691,6 +691,10 @@ static bool arch_supported(const llm_arch arch) {
      if (arch == LLM_ARCH_DEEPSEEK2OCR) {
          return false;
      }
@@ -2760,7 +2760,7 @@ index 8d7b01741..32a7fde50 100644
  #ifdef GGML_USE_WEBGPU
      if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_DOTS3NOTE || arch == LLM_ARCH_QWEN4EXP ||
 diff --git a/tools/mtmd/CMakeLists.txt b/tools/mtmd/CMakeLists.txt
-index 176eb1505..6bbc4c7f2 100644
+index 907468e87..392ffe068 100644
 --- a/tools/mtmd/CMakeLists.txt
 +++ b/tools/mtmd/CMakeLists.txt
 @@ -43,6 +43,7 @@ add_library(mtmd
@@ -2836,7 +2836,7 @@ index f737ccc24..f47a30054 100644
      ggml_tensor * patch_norm_1_w = nullptr;
      ggml_tensor * patch_norm_1_b = nullptr;
 diff --git a/tools/mtmd/clip.cpp b/tools/mtmd/clip.cpp
-index cd6421def..45d44e62a 100644
+index 1783c7ddf..115993c82 100644
 --- a/tools/mtmd/clip.cpp
 +++ b/tools/mtmd/clip.cpp
 @@ -933,6 +933,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const
@@ -2935,7 +2935,7 @@ index cd6421def..45d44e62a 100644
          case PROJECTOR_TYPE_MLP:
          case PROJECTOR_TYPE_MLP_NORM:
          case PROJECTOR_TYPE_JANUS_PRO:
-@@ -4579,6 +4631,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
+@@ -4582,6 +4634,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
  
      // set input per projector
      switch (ctx->model.proj_type) {
@@ -2946,7 +2946,7 @@ index cd6421def..45d44e62a 100644
          case PROJECTOR_TYPE_MUSE_GLIMMER:
              {
                  const int grid_w = pos_w;            // image_size_width  / patch_size
-@@ -5910,6 +5966,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
+@@ -5913,6 +5969,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
  
  int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
      switch (ctx->model.proj_type) {
@@ -3386,5 +3386,5 @@ index 00ecadcf4..c1dfced1b 100644
                      // other models, we only need the total number of tokens
                      image_tokens->nx = n_tokens;
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
 

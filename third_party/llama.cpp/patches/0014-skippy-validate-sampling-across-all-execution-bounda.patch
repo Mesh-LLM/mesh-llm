@@ -1,7 +1,7 @@
-From bc3608bccfa823cbe86bf871242bc5fefcb3d963 Mon Sep 17 00:00:00 2001
+From b4b040d4fcc7f501bc571982f7a9f11fd5c5bf50 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 12 Sep 2026 18:24:13 -0700
-Subject: [PATCH 11/11] skippy: validate sampling across all execution
+Subject: [PATCH 14/14] skippy: validate sampling across all execution
  boundaries
 
 ---
@@ -16,7 +16,7 @@ Subject: [PATCH 11/11] skippy: validate sampling across all execution
  8 files changed, 98 insertions(+), 33 deletions(-)
 
 diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
-index 767298b94..a8b731502 100644
+index 0e90ceaac..aacfc628f 100644
 --- a/src/skippy/execution-batch.cpp
 +++ b/src/skippy/execution-batch.cpp
 @@ -353,10 +353,15 @@ enum skippy_status skippy_iteration_batch_sampled(
@@ -179,10 +179,10 @@ index c785d62cf..29024ed0c 100644
  
  enum skippy_status skippy_session_configure_chat_sampling(
 diff --git a/src/skippy/speculative_decoding.cpp b/src/skippy/speculative_decoding.cpp
-index fa69599c4..e4610e698 100644
+index 2a8b34ab3..59b311dd2 100644
 --- a/src/skippy/speculative_decoding.cpp
 +++ b/src/skippy/speculative_decoding.cpp
-@@ -327,8 +327,16 @@ enum skippy_status skippy_mtp_sync_target_inputs(
+@@ -300,8 +300,16 @@ enum skippy_status skippy_mtp_sync_target_inputs(
              for (int32_t out_i = 0; out_i + 1 < n_decode; ++out_i) {
                  batch.token[out_i] = batch.token[out_i + 1];
              }
@@ -201,7 +201,20 @@ index fa69599c4..e4610e698 100644
          }
          if (batch.token != nullptr) {
              std::free(batch.token);
-@@ -512,8 +520,13 @@ enum skippy_status skippy_mtp_propose_next(
+@@ -439,8 +447,10 @@ enum skippy_status skippy_mtp_propose_next(
+             }
+ 
+             token = skippy_greedy_sample_context(llama_get_model(mtp_ctx), mtp_ctx, -1);
+-            if (token == LLAMA_TOKEN_NULL) {
+-                break;
++            const skippy_status sample_status = skippy_store_sampled_token(token, &token, out_error);
++            if (sample_status != SKIPPY_STATUS_OK) {
++                skippy_mtp_clear_session_state(session);
++                return sample_status;
+             }
+             if (out_mtp_draft != nullptr) {
+                 out_mtp_draft->token_ids[token_count] = token;
+@@ -502,8 +512,13 @@ enum skippy_status skippy_mtp_propose_next(
              }
  
              token = skippy_greedy_sample_context(llama_get_model(mtp_ctx), mtp_ctx, -1);
@@ -213,19 +226,6 @@ index fa69599c4..e4610e698 100644
 +                std::free(batch.token);
 +                batch.token = nullptr;
 +                llama_batch_free(batch);
-+                return sample_status;
-             }
-             if (out_mtp_draft != nullptr) {
-                 out_mtp_draft->token_ids[token_count] = token;
-@@ -575,8 +588,10 @@ enum skippy_status skippy_mtp_propose_next(
-             }
- 
-             token = skippy_greedy_sample_context(llama_get_model(mtp_ctx), mtp_ctx, -1);
--            if (token == LLAMA_TOKEN_NULL) {
--                break;
-+            const skippy_status sample_status = skippy_store_sampled_token(token, &token, out_error);
-+            if (sample_status != SKIPPY_STATUS_OK) {
-+                skippy_mtp_clear_session_state(session);
 +                return sample_status;
              }
              if (out_mtp_draft != nullptr) {
@@ -291,4 +291,5 @@ index 4cf702bef..3f797cbe8 100644
      if (merged.size() != caller_biases.size()) {
          std::fprintf(stderr, "models without suppress tokens lost caller logit biases\n");
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
+
