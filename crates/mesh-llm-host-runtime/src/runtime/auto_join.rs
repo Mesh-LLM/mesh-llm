@@ -23,8 +23,11 @@ pub(super) async fn maybe_discover_join_candidates(
     has_startup_models: bool,
     auto_join_candidates: &mut Vec<(String, Option<String>)>,
 ) -> Result<()> {
+    // Ask the resolver rather than `options.join`: a token that lives only in
+    // a file is still a configured token, and discovery must not run over it.
+    let effective_join_tokens = options.effective_join_tokens();
     let discover_active = options.auto || options.discover.is_some();
-    if !discover_active || !options.join.is_empty() {
+    if !discover_active || !effective_join_tokens.is_empty() {
         return Ok(());
     }
 
@@ -62,7 +65,7 @@ pub(super) async fn maybe_discover_join_candidates(
             };
             let candidates = mesh_discovery::discover_lan_join_candidates(
                 &filter,
-                options.join.first().map(String::as_str),
+                effective_join_tokens.first().map(String::as_str),
                 std::time::Duration::from_secs(5),
             )
             .await
@@ -688,8 +691,11 @@ pub(super) async fn check_unserved_model(
     reason = "retained runtime-side MCP join compatibility entrypoint"
 )]
 pub(super) async fn join_mesh_for_mcp(options: &RuntimeOptions, node: &mesh::Node) -> Result<()> {
-    if !options.join.is_empty() {
-        return join_mcp_with_tokens(&options.join, node).await;
+    // Resolve before deciding: a token that only exists in a file still means
+    // this node has somewhere explicit to join, so discovery must not run.
+    let effective_join_tokens = options.effective_join_tokens();
+    if !effective_join_tokens.is_empty() {
+        return join_mcp_with_tokens(&effective_join_tokens, node).await;
     }
 
     if options.auto || options.discover.is_some() {
@@ -749,7 +755,7 @@ pub(super) async fn join_mcp_via_lan_discovery(
     });
     let candidates = mesh_discovery::discover_lan_join_candidates(
         &filter,
-        options.join.first().map(String::as_str),
+        options.effective_join_tokens().first().map(String::as_str),
         std::time::Duration::from_secs(5),
     )
     .await?;
@@ -1043,7 +1049,13 @@ pub(super) fn update_cli_with_successful_run_auto_join(
 
     options.join.clear();
     if let Some((token, mesh_name)) = successful_join {
-        options.join.push(token);
+        // A token that came from a file-backed source must never be recorded
+        // as a literal: the rejoin loop re-reads that file on every tick, and
+        // a frozen copy would survive the next rotation and be retried
+        // forever. Literals and discovery-supplied tokens are still recorded.
+        if !join_sources::file_backed_join_tokens(options).contains(&token) {
+            options.join.push(token);
+        }
         if options.mesh_name.is_none()
             && let Some(name) = mesh_name
         {
@@ -1057,11 +1069,13 @@ pub(super) async fn run_auto_join_existing_mesh(
     node: &mesh::Node,
     auto_join_candidates: &[(String, Option<String>)],
 ) {
-    let join_attempts: Vec<(String, Option<String>)> = if !options.join.is_empty() {
-        options
-            .join
-            .iter()
-            .cloned()
+    // Resolve rather than read `options.join`: a token that lives only in a
+    // file is still a configured token, and this is what keeps such a token
+    // out of `options.join` as a frozen literal.
+    let effective_join_tokens = options.effective_join_tokens();
+    let join_attempts: Vec<(String, Option<String>)> = if !effective_join_tokens.is_empty() {
+        effective_join_tokens
+            .into_iter()
             .map(|token| (token, None))
             .collect()
     } else {
@@ -1086,21 +1100,28 @@ pub(super) fn should_prefer_fast_auto_join(
     options: &RuntimeOptions,
     auto_join_candidates: &[(String, Option<String>)],
 ) -> bool {
-    options.client || (options.join.is_empty() && !auto_join_candidates.is_empty())
+    options.client
+        || (options.effective_join_tokens().is_empty() && !auto_join_candidates.is_empty())
 }
 
-/// Resolve one rejoin tick's invite tokens, plus the first unusable
-/// file-backed source.
+/// Resolve one rejoin tick's invite tokens, plus one message describing every
+/// unusable source on that tick.
 ///
 /// File-backed tokens are read here rather than captured once at startup, so a
 /// rotated invite token is picked up by the next tick with no service restart
-/// and no unit edit.
+/// and no unit edit. `literals` is argv/`MESH_LLM_JOIN` only — a file-derived
+/// token is resolved from its file on every tick and never frozen, which is
+/// what stops a rotated-out token from being retried forever.
 pub(super) fn resolve_rejoin_tokens(
     literals: &[String],
     join_files: &[PathBuf],
+    config_override: Option<&Path>,
 ) -> (Vec<String>, Option<String>) {
-    let (tokens, errors) = join_sources::resolve_invite_tokens(literals, join_files);
-    (tokens, errors.into_iter().next())
+    let resolved = join_sources::resolve_invite_tokens(literals, join_files, config_override);
+    // Report every broken source, not just the first: with two, an operator
+    // should not have to fix one to discover the other.
+    let failure = (!resolved.errors.is_empty()).then(|| resolved.errors.join("; "));
+    (resolved.tokens, failure)
 }
 
 pub(super) async fn spawn_run_auto_post_join_tasks(options: &RuntimeOptions, node: &mesh::Node) {
@@ -1127,8 +1148,12 @@ pub(super) async fn spawn_run_auto_post_join_tasks(options: &RuntimeOptions, nod
     });
 
     let rejoin_node = node.clone();
+    // Literals only, by construction: `options.join` never carries a
+    // file-derived token, so re-solving the sources each tick cannot
+    // resurrect a token a rotation retired.
     let rejoin_tokens: Vec<String> = options.join.clone();
     let rejoin_join_files: Vec<PathBuf> = options.join_files.clone();
+    let rejoin_config: Option<PathBuf> = options.config.clone();
     tokio::spawn(async move {
         // A node is expected to stay joined, so report each change into a
         // failing rejoin once. An expired invite token or an unreadable token
@@ -1140,7 +1165,8 @@ pub(super) async fn spawn_run_auto_post_join_tasks(options: &RuntimeOptions, nod
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
             // Re-resolve file-backed tokens on every tick so a rotated invite
             // token is picked up without a service restart or a unit edit.
-            let (tokens, file_failure) = resolve_rejoin_tokens(&rejoin_tokens, &rejoin_join_files);
+            let (tokens, file_failure) =
+                resolve_rejoin_tokens(&rejoin_tokens, &rejoin_join_files, rejoin_config.as_deref());
             let mut join_failure: Option<String> = None;
             for t in &tokens {
                 if let Err(e) = rejoin_node.join(t).await {
@@ -1154,7 +1180,11 @@ pub(super) async fn spawn_run_auto_post_join_tasks(options: &RuntimeOptions, nod
             if failure != last_failure {
                 match failure.as_deref() {
                     Some(message) => {
-                        let message = format!("{message} — invite join keeps retrying");
+                        // Scope the wording to the token source: another
+                        // source may have joined fine, in which case the node
+                        // is not the thing that is failing.
+                        let message =
+                            format!("invite token source: {message} — invite join keeps retrying");
                         tracing::warn!("{message}");
                         let _ = emit_event(OutputEvent::Warning {
                             message,
@@ -1186,9 +1216,12 @@ pub(super) async fn spawn_run_auto_post_join_tasks(options: &RuntimeOptions, nod
             rediscover_relay_urls,
             rediscover_mesh_name,
         )));
-    } else if should_start_lan_rediscovery(options.mesh_discovery_mode, &options.join) {
+    } else if should_start_lan_rediscovery(
+        options.mesh_discovery_mode,
+        &options.effective_join_tokens(),
+    ) {
         let rediscover_node = node.clone();
-        let rediscover_join_tokens = options.join.clone();
+        let rediscover_join_tokens = options.effective_join_tokens();
         let rediscover_mesh_name = options.mesh_name.clone();
         let rediscover_region = options.region.clone();
         tokio::spawn(Box::pin(lan_rediscovery(
@@ -1314,7 +1347,7 @@ pub(super) async fn run_auto_join_mesh_phase(
     node: &mesh::Node,
     auto_join_candidates: &[(String, Option<String>)],
 ) -> Result<()> {
-    if !options.join.is_empty() || !auto_join_candidates.is_empty() {
+    if !options.effective_join_tokens().is_empty() || !auto_join_candidates.is_empty() {
         record_discovery_operational_event(DiscoveryOperationalEvent::DecisionJoin);
         run_auto_join_existing_mesh(options, node, auto_join_candidates).await;
     } else {
@@ -1354,7 +1387,7 @@ mod tests {
         let join_files = vec![token_path.clone()];
 
         std::fs::write(&token_path, "first-token\n").expect("token file should write");
-        let (tokens, failure) = resolve_rejoin_tokens(&[], &join_files);
+        let (tokens, failure) = resolve_rejoin_tokens(&[], &join_files, None);
         assert_eq!(tokens, ["first-token"]);
         assert!(failure.is_none(), "{failure:?}");
 
@@ -1362,13 +1395,14 @@ mod tests {
         // property that lets a private-mesh service rotate an expiring invite
         // token without a restart or a unit-file edit.
         std::fs::write(&token_path, "rotated-token\n").expect("token file should rewrite");
-        let (tokens, failure) = resolve_rejoin_tokens(&[], &join_files);
+        let (tokens, failure) = resolve_rejoin_tokens(&[], &join_files, None);
         assert_eq!(tokens, ["rotated-token"]);
         assert!(failure.is_none(), "{failure:?}");
 
         // Argv tokens stay in play even when the file-backed source breaks.
         std::fs::remove_file(&token_path).expect("token file should remove");
-        let (tokens, failure) = resolve_rejoin_tokens(&["argv-token".to_string()], &join_files);
+        let (tokens, failure) =
+            resolve_rejoin_tokens(&["argv-token".to_string()], &join_files, None);
         assert_eq!(tokens, ["argv-token"]);
         assert!(
             failure
@@ -1376,5 +1410,65 @@ mod tests {
                 .is_some_and(|message| message.contains("cannot read join token file")),
             "{failure:?}"
         );
+    }
+
+    /// Regression for the rotation gap in the original design: a startup
+    /// fold of the file token into `options.join` meant the rejoin tick
+    /// resolved `[stale-startup-token, fresh-file-token]` after a rotation and
+    /// drove a rejected wire join on the dead token every 60s, forever, on a
+    /// node that was already joined. The pre-existing test above used an empty
+    /// literal set, which is exactly the shape that hides it.
+    #[test]
+    fn rejoin_ticks_drop_a_rotated_out_file_token_even_with_literals() {
+        let temp = tempfile::tempdir().expect("tempdir should exist");
+        let token_path = temp.path().join("invite.token");
+        let options = RuntimeOptions {
+            join: vec!["argv-token".to_string()],
+            join_files: vec![token_path.clone()],
+            ..RuntimeOptions::default()
+        };
+
+        std::fs::write(&token_path, "first-token\n").expect("token file should write");
+        join_sources::validate_join_token_sources(&options)
+            .expect("startup validation should pass");
+
+        // The rejoin task captures the literal set exactly the way the runtime
+        // does, after the startup step has run.
+        let rejoin_literals = options.join.clone();
+        let rejoin_join_files = options.join_files.clone();
+        assert_eq!(
+            rejoin_literals,
+            ["argv-token"],
+            "startup must not fold the file-backed token into the literal set"
+        );
+
+        let (tokens, failure) = resolve_rejoin_tokens(&rejoin_literals, &rejoin_join_files, None);
+        assert_eq!(tokens, ["argv-token", "first-token"]);
+        assert!(failure.is_none(), "{failure:?}");
+
+        std::fs::write(&token_path, "rotated-token\n").expect("token file should rewrite");
+        let (tokens, failure) = resolve_rejoin_tokens(&rejoin_literals, &rejoin_join_files, None);
+        assert_eq!(tokens, ["argv-token", "rotated-token"]);
+        assert!(
+            !tokens.iter().any(|token| token == "first-token"),
+            "the pre-rotation token must not survive in the tick's set: {tokens:?}"
+        );
+        assert!(failure.is_none(), "{failure:?}");
+    }
+
+    /// Two unusable sources must both be visible on one tick: an operator
+    /// should not have to fix the first to discover the second.
+    #[test]
+    fn rejoin_reports_every_unusable_token_source() {
+        let temp = tempfile::tempdir().expect("tempdir should exist");
+        let first = temp.path().join("first.token");
+        let second = temp.path().join("second.token");
+
+        let (tokens, failure) = resolve_rejoin_tokens(&[], &[first.clone(), second.clone()], None);
+
+        assert!(tokens.is_empty(), "{tokens:?}");
+        let failure = failure.expect("both sources are unusable");
+        assert!(failure.contains(&first.display().to_string()), "{failure}");
+        assert!(failure.contains(&second.display().to_string()), "{failure}");
     }
 }

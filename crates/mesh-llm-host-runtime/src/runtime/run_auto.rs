@@ -309,7 +309,7 @@ pub(super) async fn run_runtime_cli(
         options.checkpoint_imatrix.as_deref(),
     )?;
     apply_runtime_config_options(&mut options, &config);
-    join_sources::apply_join_token_sources(&mut options)?;
+    join_sources::validate_join_token_sources(&options)?;
 
     initialize_audit_logging_for_options(&options)?;
 

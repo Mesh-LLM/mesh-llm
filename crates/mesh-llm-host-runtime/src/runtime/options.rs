@@ -192,6 +192,23 @@ impl Default for RuntimeOptions {
 }
 
 impl RuntimeOptions {
+    /// Every invite token this process should try right now: the `join` /
+    /// `MESH_LLM_JOIN` literals plus the current contents of every file-backed
+    /// source.
+    ///
+    /// `self.join` deliberately holds literals only (see `join_sources`), so a
+    /// consumer asking "does this process have a configured invite token?"
+    /// must ask here rather than testing `self.join`; a token that lives only
+    /// in a file is still a configured token.
+    pub(crate) fn effective_join_tokens(&self) -> Vec<String> {
+        super::join_sources::resolve_invite_tokens(
+            &self.join,
+            &self.join_files,
+            self.config.as_deref(),
+        )
+        .tokens
+    }
+
     pub fn validate_discovery_mode_args(&self) -> anyhow::Result<()> {
         if self.mesh_discovery_mode != MeshDiscoveryMode::Mdns {
             return Ok(());
