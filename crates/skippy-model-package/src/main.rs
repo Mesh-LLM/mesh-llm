@@ -47,7 +47,11 @@ const MAIN_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    if !matches!(args.command, Command::VerifyPackageV2 { .. }) {
+    // Local inspection and verification must not touch download caches.
+    if !matches!(
+        args.command,
+        Command::Inspect { .. } | Command::VerifyPackageV2 { .. }
+    ) {
         prepare_model_download_directories();
     }
 
