@@ -902,6 +902,9 @@ fn stale_serving_announcement(
         latency_age_ms: None,
         latency_observer_id: None,
         inference_admission_state: None,
+        // The fixture models a bridge rebroadcast, which carries no opinion on
+        // the departed peer's claimed log head.
+        claimed_log_head: None,
     };
     (addr, ann)
 }
