@@ -161,7 +161,9 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         worker = yaml.safe_load(PASS_WORKFLOW.read_text())["jobs"]["family"]
         cache_action = "./.github/actions/use-canary-cache"
         self.assertEqual(setup["runs"]["steps"][0]["uses"], cache_action)
-        self.assertEqual(worker["steps"][1]["uses"], cache_action)
+        cache_index = next(i for i, step in enumerate(worker["steps"]) if step.get("uses") == cache_action)
+        certify_index = next(i for i, step in enumerate(worker["steps"]) if step.get("id") == "certify")
+        self.assertLess(cache_index, certify_index)
         self.assertFalse(any(key.startswith("HF_") for key in worker["env"]))
         self.assertNotIn("/Users/lab", SETUP_ACTION.read_text() + PASS_WORKFLOW.read_text())
         cache = yaml.safe_load((ROOT / cache_action / "action.yml").read_text())
