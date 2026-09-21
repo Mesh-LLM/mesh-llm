@@ -70,7 +70,7 @@ produces a clear startup error rather than a partial start.
 | Key path | Type | Allowed values / default (`auto`) | `[defaults]` / `[[models]]` | Restart | Status | CLI equivalent |
 |---|---|---|---|---|---|---|
 | `gpu.assignment` | enum | `auto` (default), `pinned` | node-level | process restart | wired | none |
-| `gpu.parallel` | integer | optional total parallel slot count; unset lets the runtime choose | node-level | process restart | wired | none |
+| `gpu.parallel` | integer | optional total parallel slot count; unset lets the runtime choose (currently 4) | node-level | process restart | wired | `--parallel` |
 | `mesh_requirements.min_node_version`<br>`mesh_requirements.max_node_version` | string (semver) | optional peer version bounds; unset means no bound | node-level | process restart | wired | none |
 | `mesh_requirements.min_protocol_version`<br>`mesh_requirements.max_protocol_version` | integer | `0` means no bound | node-level | process restart | wired | none |
 | `mesh_requirements.require_release_attestation` | boolean | `false` | node-level | process restart | wired | none |

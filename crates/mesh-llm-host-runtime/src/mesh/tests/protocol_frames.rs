@@ -324,6 +324,7 @@ async fn transitive_peer_update_refreshes_last_mentioned() {
         latency_age_ms: None,
         latency_observer_id: None,
         inference_admission_state: None,
+        claimed_log_head: None,
     };
 
     node.update_transitive_peer(peer_id, &addr, &ann, make_test_endpoint_id(0xee))
@@ -843,6 +844,266 @@ async fn dead_peer_ttl_expires() {
             .get(&fresh_peer_id)
             .is_some_and(|t| t.elapsed() < super::DEAD_PEER_TTL),
         "fresh dead_peers entry must block reconnection"
+    );
+}
+
+/// A stale third-party announcement for a departed worker: still advertising
+/// a served model, indistinguishable from a live announcement. This is what
+/// gossip bridges keep carrying after a peer dies (issue #1756).
+fn stale_serving_announcement(
+    peer_id: EndpointId,
+    model: &str,
+) -> (EndpointAddr, super::PeerAnnouncement) {
+    let addr = EndpointAddr {
+        id: peer_id,
+        addrs: Default::default(),
+    };
+    let ann = super::PeerAnnouncement {
+        addr: addr.clone(),
+        role: super::NodeRole::Worker,
+        first_joined_mesh_ts: Some(1_789_065_385_138),
+        models: vec![model.to_string()],
+        vram_bytes: 8 * 1024 * 1024 * 1024,
+        model_source: None,
+        serving_models: vec![model.to_string()],
+        hosted_models: None,
+        available_models: vec![],
+        requested_models: vec![],
+        explicit_model_interests: vec![],
+        version: None,
+        model_demand: HashMap::new(),
+        mesh_id: None,
+        mesh_policy_hash: None,
+        gpu_name: None,
+        hostname: None,
+        is_soc: None,
+        gpu_vram: None,
+        gpu_reserved_bytes: None,
+        memory: None,
+        gpu_mem_bandwidth_gbps: None,
+        gpu_compute_tflops_fp32: None,
+        gpu_compute_tflops_fp16: None,
+        available_model_metadata: vec![],
+        experts_summary: None,
+        available_model_sizes: HashMap::new(),
+        served_model_descriptors: vec![],
+        served_model_runtime: vec![],
+        owner_attestation: None,
+        genesis_policy: None,
+        release_attestation: None,
+        direct_admission_proof: None,
+        artifact_transfer_supported: true,
+        stage_protocol_generation_supported: true,
+        stage_status_list_supported: true,
+        local_gguf_content_id_supported: true,
+        advertised_model_throughput: vec![],
+        cache_affinity: None,
+        latency_ms: None,
+        latency_source: None,
+        latency_age_ms: None,
+        latency_observer_id: None,
+        inference_admission_state: None,
+        // The fixture models a bridge rebroadcast, which carries no opinion on
+        // the departed peer's claimed log head.
+        claimed_log_head: None,
+        lightning_offers: Default::default(),
+    };
+    (addr, ann)
+}
+
+/// Reproduction for release issue #1756: after a departed peer's tombstone
+/// has expired, a bridge peer's stale announcement re-admits the departed id
+/// as `state: serving` with populated models and no direct connection (rtt
+/// stays `None`). The operator then sees a node that is genuinely gone listed
+/// as actively serving, and the entry can persist while bridges keep
+/// mentioning it.
+///
+/// Desired contract: a known-departed id must not be resurrected into a
+/// serving state by transitive gossip alone. Only direct proof of life (an
+/// actual gossip exchange with the departed id itself) may restore it.
+#[tokio::test]
+async fn expired_tombstone_does_not_resurrect_dead_peer_from_stale_transitive_announcement() {
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xF2; 32]).public());
+    let node = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
+
+    // The peer died; its tombstone expired a minute ago. Both records were
+    // written at death time — dead_peers has expired (reconnection may be
+    // attempted again) while the departure record is still within its window.
+    let death_at = std::time::Instant::now()
+        .checked_sub(super::DEAD_PEER_TTL + std::time::Duration::from_secs(60))
+        .expect("monotonic clock too fresh to test TTL expiry");
+    {
+        let mut state = node.state.lock().await;
+        state.dead_peers.insert(peer_id, death_at);
+        state.departed_peers.insert(peer_id, death_at);
+    }
+
+    // A bridge peer still carries the dead peer's final announcement
+    // (state: serving, stale first-joined timestamp) and mentions it during a
+    // gossip exchange.
+    let (addr, ann) = stale_serving_announcement(peer_id, "GhostModel-Q4_K_M");
+
+    node.update_transitive_peer(peer_id, &addr, &ann, make_test_endpoint_id(0xF3))
+        .await;
+
+    let state = node.state.lock().await;
+    let resurrected = state.peers.get(&peer_id);
+    let serving_again = resurrected
+        .map(|peer| !peer.serving_models.is_empty() || !peer.models.is_empty())
+        .unwrap_or(false);
+    assert!(
+        !serving_again,
+        "departed peer {} must not be re-advertised as serving from stale \
+         transitive gossip after its tombstone expired (entry present: {}, \
+         rtt: {:?})",
+        peer_id.fmt_short(),
+        resurrected.is_some(),
+        resurrected.and_then(|peer| peer.rtt_ms)
+    );
+}
+
+/// Guard for the #1756 fix: a departed peer that genuinely comes back (direct
+/// proof of life via the direct gossip admission path) must still be
+/// recovered — the departure record is cleared and the peer is admitted with
+/// its served models.
+#[tokio::test]
+async fn direct_gossip_exchange_recovers_departed_peer_and_clears_departure() {
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xF4; 32]).public());
+    let node = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
+
+    // The peer departed and both liveness records were written.
+    {
+        let mut state = node.state.lock().await;
+        state.dead_peers.insert(peer_id, std::time::Instant::now());
+        state
+            .departed_peers
+            .insert(peer_id, std::time::Instant::now());
+    }
+
+    let (addr, ann) = stale_serving_announcement(peer_id, "ReturningModel-Q4_K_M");
+
+    let admitted = node
+        .add_peer_after_direct_requirements_validated(peer_id, addr, &ann, None)
+        .await;
+
+    assert!(
+        admitted,
+        "direct gossip exchange with a departed peer must admit it"
+    );
+    let state = node.state.lock().await;
+    assert!(
+        !state.dead_peers.contains_key(&peer_id),
+        "direct recovery must clear the dead-peer record"
+    );
+    assert!(
+        !state.departed_peers.contains_key(&peer_id),
+        "direct recovery must clear the departure record"
+    );
+    let peer = state
+        .peers
+        .get(&peer_id)
+        .expect("rejoining peer must be present after direct gossip exchange");
+    assert!(
+        !peer.serving_models.is_empty(),
+        "rejoining peer must be serving again after direct recovery"
+    );
+}
+
+/// Guard for the #1756 review fix: a dial attempt must not clear the
+/// departure record — only successful direct admission may. Otherwise a
+/// failed dial reopens the stale-gossip resurrection window.
+#[tokio::test]
+async fn dial_attempt_does_not_clear_departure_record() {
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xF5; 32]).public());
+    let node = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
+    {
+        let mut state = node.state.lock().await;
+        state.dead_peers.insert(peer_id, std::time::Instant::now());
+        state
+            .departed_peers
+            .insert(peer_id, std::time::Instant::now());
+    }
+
+    // No reachable addresses: the dial cannot succeed, but its pre-dial
+    // bookkeeping runs either way.
+    let addr = EndpointAddr {
+        id: peer_id,
+        addrs: Default::default(),
+    };
+    let dial = tokio::spawn({
+        let node = node.clone();
+        async move { node.dial_peer_addr(addr).await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    {
+        let state = node.state.lock().await;
+        assert!(
+            state.departed_peers.contains_key(&peer_id),
+            "a dial attempt must not clear the departure record"
+        );
+        assert!(
+            !state.dead_peers.contains_key(&peer_id),
+            "the dial must still clear the short tombstone to permit the attempt"
+        );
+    }
+    dial.abort();
+    let _ = dial.await;
+}
+
+/// Regression for the #1756 review finding: a cleanly departed peer (graceful
+/// leaving broadcast) is recorded in departed_peers, so stale transitive
+/// gossip cannot resurrect it once the five-minute tombstone expires.
+#[tokio::test]
+async fn clean_departure_blocks_stale_transitive_resurrection_after_tombstone_expiry() {
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xF6; 32]).public());
+    let node = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
+
+    node.cleanup_peer_leaving(peer_id).await;
+    {
+        let state = node.state.lock().await;
+        assert!(
+            state.dead_peers.contains_key(&peer_id),
+            "clean departure must write the tombstone"
+        );
+        assert!(
+            state.departed_peers.contains_key(&peer_id),
+            "clean departure must write the departure record"
+        );
+    }
+
+    // Both records written at departure time; the tombstone has since expired
+    // while the departure record is still within its longer window.
+    let death_at = std::time::Instant::now()
+        .checked_sub(super::DEAD_PEER_TTL + std::time::Duration::from_secs(60))
+        .expect("monotonic clock too fresh to test TTL expiry");
+    {
+        let mut state = node.state.lock().await;
+        state.dead_peers.insert(peer_id, death_at);
+        state.departed_peers.insert(peer_id, death_at);
+    }
+
+    let (addr, ann) = stale_serving_announcement(peer_id, "GhostModel-Q4_K_M");
+    node.update_transitive_peer(peer_id, &addr, &ann, make_test_endpoint_id(0xF7))
+        .await;
+
+    let state = node.state.lock().await;
+    let resurrected = state.peers.get(&peer_id);
+    let serving_again = resurrected
+        .map(|peer| !peer.serving_models.is_empty() || !peer.models.is_empty())
+        .unwrap_or(false);
+    assert!(
+        !serving_again,
+        "cleanly departed peer {} must not be resurrected as serving from \
+         stale transitive gossip after its tombstone expired",
+        peer_id.fmt_short()
     );
 }
 

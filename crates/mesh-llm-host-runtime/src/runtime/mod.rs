@@ -28,6 +28,7 @@ mod release_attestation;
 mod run_auto;
 mod runtime_registry;
 mod serving_surface;
+mod shutdown_signal;
 mod split_participant_settle;
 mod split_planning;
 mod split_topology_lock;
@@ -101,6 +102,7 @@ pub(crate) use self::run_auto::{
 };
 use self::runtime_registry::*;
 use self::serving_surface::*;
+use self::shutdown_signal::*;
 use self::startup_handles::*;
 pub(crate) use self::startup_models::StartupPinnedGpuTarget;
 use self::startup_models::*;

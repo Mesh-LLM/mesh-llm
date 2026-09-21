@@ -102,7 +102,9 @@ pub(super) async fn handle_inbound_http_stream(
     tcp_stream.set_nodelay(true)?;
     tcp_stream.write_all(&prefix).await?;
     let (tcp_read, tcp_write) = tokio::io::split(tcp_stream);
-    super::relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv).await
+    // HTTP relay traffic is never link-delayed; the emulation applies only
+    // to stage transport.
+    super::relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv, None).await
 }
 
 async fn legacy_bridge_requires_payment_ingress(node: &Node) -> Result<bool> {

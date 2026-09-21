@@ -2310,3 +2310,46 @@ fn per_model_parallel_fallback_to_global_for_missing_entry() {
 // ---------------------------------------------------------------------------
 // Publication-state matrix (Issue #240)
 // ---------------------------------------------------------------------------
+
+/// `--parallel N` is the config file's `[gpu].parallel` spelled on the command line, so it
+/// has to resolve exactly as that value does: applied to a model with no lane setting of
+/// its own, and beaten by a model's `[models.throughput].parallel`.
+#[test]
+fn cli_parallel_override_lands_on_the_gpu_default_and_yields_to_a_model_setting() {
+    let mut config: plugin::MeshConfig = toml::from_str(
+        r#"
+[gpu]
+parallel = 4
+
+[[models]]
+model = "test/plain"
+
+[[models]]
+model = "test/tuned"
+
+[models.throughput]
+parallel = 6
+"#,
+    )
+    .expect("config parses");
+
+    apply_runtime_cli_parallel_override(&mut config, None);
+    assert_eq!(
+        config.gpu.parallel,
+        Some(4),
+        "no flag leaves the file's value alone"
+    );
+
+    apply_runtime_cli_parallel_override(&mut config, Some(32));
+    assert_eq!(config.gpu.parallel, Some(32));
+    assert_eq!(
+        resolve_model_parallel_override(None, &config.gpu),
+        Some(32),
+        "a model without its own setting takes the CLI value"
+    );
+    assert_eq!(
+        resolve_model_parallel_override(Some(6), &config.gpu),
+        Some(6),
+        "a model's own setting still wins, as it does over the file"
+    );
+}

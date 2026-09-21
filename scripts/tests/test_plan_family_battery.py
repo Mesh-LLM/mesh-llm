@@ -782,6 +782,19 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("has no GGUF shard", result.stderr)
 
+    def test_canary_matrix_submits_smallest_models_first(self) -> None:
+        result = self._run(MANIFEST, "--shard-count", "256")
+        self.assertEqual(0, result.returncode, result.stderr)
+        plan = json.loads(result.stdout)
+        rows = plan["github_matrix"]["include"]
+        expected = sorted(plan["selected_models"],
+                          key=lambda model: (model["resources"]["estimated_model_bytes"], model["family"]))
+        self.assertEqual([model["family"] for model in expected], [row["families"] for row in rows])
+        self.assertEqual(len(expected), len({row["shard_index"] for row in rows}))
+        for row in rows:
+            shard = next(item for item in plan["shards"] if item["shard_index"] == row["shard_index"])
+            self.assertEqual([row["families"]], shard["families"])
+
     def test_shards_are_deterministic_and_preserve_every_family_once(self) -> None:
         """Sharding must be reproducible and neither duplicate nor omit a selected family."""
         first = self._run(MANIFEST, "--shard-count", "4")
