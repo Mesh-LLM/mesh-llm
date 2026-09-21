@@ -339,7 +339,7 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         # install-action were deleted outright (both are baked in the
         # image) rather than gated -- unlike ui_quality/ui_e2e above, this
         # job has no native-cache consumer left to assert on.
-        self.assertIn("working-directory: website", web)
+        self.assertIn("working-directory: ${{ steps.layout.outputs.website_dir }}", web)
         self.assertIn("run: npm ci", web)
 
 

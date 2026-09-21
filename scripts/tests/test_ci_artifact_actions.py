@@ -1721,7 +1721,7 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn("max-parallel: ${{ inputs.max_parallel }}", producer)
         self.assertEqual(producer.count("- aarch64-apple-ios\n"), 1)
         self.assertIn(
-            'build-xcframework.sh --target "${{ matrix.target }}"',
+            'build-xcframework.sh" --target "${{ matrix.target }}"',
             producer,
         )
         self.assertIn(
@@ -1738,7 +1738,7 @@ class CiArtifactActionTests(unittest.TestCase):
             producer,
         )
         self.assertIn(
-            "build-xcframework.sh --assemble-from dist/swift-targets",
+            'build-xcframework.sh" --assemble-from dist/swift-targets',
             producer,
         )
         self.assertIn(
