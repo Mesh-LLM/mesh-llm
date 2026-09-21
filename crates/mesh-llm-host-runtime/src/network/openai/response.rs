@@ -13,6 +13,7 @@ mod send;
 mod stream_translation;
 
 pub(super) use cache_cost::CacheCostObservation;
+pub(crate) use common::PeerCapsuleIdSink;
 pub(super) use common::{
     ResponseRetryPolicy, RouteAttemptLoggingContext, RouteAttemptResult,
     attempt_outcome_for_result, completion_tokens_for_result, parse_token_usage_from_json_body,

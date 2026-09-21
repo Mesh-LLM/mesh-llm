@@ -25,9 +25,9 @@ pub use super::request_parse::{
     read_http_request, rewrite_model_field, rewrite_public_model_alias,
 };
 pub(crate) use super::response::{
-    PipelineCapsuleNonce, PipelineProxyResult, append_safe_header, pipeline_proxy_local,
-    send_400_observed, send_409_observed, send_503_observed, send_error_observed,
-    send_json_ok_with_headers, send_json_with_status_and_headers_observed,
+    PeerCapsuleIdSink, PipelineCapsuleNonce, PipelineProxyResult, append_safe_header,
+    pipeline_proxy_local, send_400_observed, send_409_observed, send_503_observed,
+    send_error_observed, send_json_ok_with_headers, send_json_with_status_and_headers_observed,
     send_models_list_with_descriptors,
 };
 pub(crate) use super::routing_rank::{
@@ -736,6 +736,11 @@ async fn route_mesh_request_attempts(
                 // candidate hosts, not the `x-mesh-target` forced single-peer
                 // path -- there is no one chosen target to echo here.
                 served_by: None,
+                // Not the `RemoteMesh` dispatch path (see
+                // `network::openai::ingress::route_missing_local_model`) —
+                // this fan-out has no plugin-channel pair to attach a peer
+                // capsule id to.
+                peer_capsule_id: None,
             },
         )
         .await;
@@ -1524,6 +1529,7 @@ pub async fn route_to_target(
             response_adapter,
             route_observer,
             served_by: None,
+            peer_capsule_id: None,
         },
     )
     .await;
@@ -1616,6 +1622,7 @@ pub async fn route_http_endpoint_request(
             response_adapter: request.response_adapter,
             route_observer,
             served_by: None,
+            peer_capsule_id: None,
         },
     )
     .await;
