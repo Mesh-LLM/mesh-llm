@@ -102,6 +102,22 @@ pub struct IterationBatchRequest<'a> {
     pub phase: IterationBatchPhase,
 }
 
+
+/// SAT instrumentation: count silent serial fallbacks of the batched
+/// iteration path and report them on a log scale so a persistent fallback is
+/// visible in serve.log without flooding it.
+fn note_serial_fallback(request_count: usize, error: *mut skippy_ffi::Error) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static FALLBACKS: AtomicU64 = AtomicU64::new(0);
+    let n = FALLBACKS.fetch_add(1, Ordering::Relaxed) + 1;
+    if n.is_power_of_two() || n % 10_000 == 0 {
+        let message = crate::error::error_message(error);
+        eprintln!(
+            "SAT-TRACE serial_fallback count={n} batch={request_count} reason={message}"
+        );
+    }
+}
+
 impl StageSession {
     pub fn iteration_batch_sampled(
         requests: &mut [IterationBatchRequest<'_>],
@@ -188,6 +204,7 @@ impl StageSession {
             return Self::iteration_batch_sampled_raw(requests, &output_bytes);
         }
         if status == Status::Unsupported {
+            note_serial_fallback(requests.len(), error);
             free_error(error);
             return Self::iteration_batch_sampled_serial(requests);
         }

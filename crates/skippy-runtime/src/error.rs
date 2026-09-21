@@ -24,7 +24,7 @@ pub(crate) fn ensure_ok(status: Status, error: *mut RawError) -> Result<()> {
     }
 }
 
-fn error_message(error: *mut RawError) -> String {
+pub(crate) fn error_message(error: *mut RawError) -> String {
     if error.is_null() {
         return String::new();
     }
