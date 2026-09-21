@@ -1,10 +1,13 @@
 use super::cancellation::{CancelUpstream, cancel_upstream_if_client_disconnected};
 use super::common::{
-    ResponseRetryPolicy, RouteAttemptLoggingContext, RouteAttemptResult,
+    PeerCapsuleIdSink, ResponseRetryPolicy, RouteAttemptLoggingContext, RouteAttemptResult,
     retryable_route_result_from_error,
 };
 use super::dispatch::{RelayAttemptContext, relay_attempted_response};
-use super::probe::{ResponseProbe, probe_http_response, probe_http_response_local};
+use super::probe::{
+    PEER_CAPSULE_ID_HEADER, ResponseProbe, peer_response_header_value, probe_http_response,
+    probe_http_response_local,
+};
 use crate::logging::OpenAiRouteObserver;
 use crate::mesh;
 use crate::network::openai::client_stream::ClientStream;
@@ -29,6 +32,7 @@ pub(in crate::network::openai) async fn route_local_attempt(
         response_adapter,
         route_observer,
         served_by,
+        peer_capsule_id,
     } = logging;
     let Ok((_instance_request, mut upstream)) = acquire_local_attempt_upstream(node, port).await
     else {
@@ -50,6 +54,7 @@ pub(in crate::network::openai) async fn route_local_attempt(
         retry_policy,
         response_adapter,
         served_by,
+        peer_capsule_id,
         route_observer,
     )
     .await
@@ -82,6 +87,7 @@ async fn route_local_attempt_after_forward<U: AsyncRead + Unpin + CancelUpstream
     retry_policy: ResponseRetryPolicy,
     response_adapter: ResponseAdapter,
     served_by: Option<&str>,
+    peer_capsule_id: Option<&PeerCapsuleIdSink>,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> RouteAttemptResult {
     match probe_with_downstream_disconnect(tcp_stream, probe_http_response_local(upstream)).await {
@@ -90,6 +96,7 @@ async fn route_local_attempt_after_forward<U: AsyncRead + Unpin + CancelUpstream
                 .await
         }
         ProbeOutcome::Response(Ok(probe)) => {
+            record_peer_capsule_id(peer_capsule_id, &probe);
             let result = relay_attempted_response(
                 tcp_stream,
                 upstream,
@@ -148,6 +155,7 @@ async fn route_remote_attempt_after_forward<R: AsyncRead + Unpin + CancelUpstrea
     retry_policy: ResponseRetryPolicy,
     response_adapter: ResponseAdapter,
     served_by: Option<&str>,
+    peer_capsule_id: Option<&PeerCapsuleIdSink>,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> RouteAttemptResult {
     match probe_with_downstream_disconnect(tcp_stream, probe_http_response(quic_recv)).await {
@@ -159,6 +167,7 @@ async fn route_remote_attempt_after_forward<R: AsyncRead + Unpin + CancelUpstrea
             .await
         }
         ProbeOutcome::Response(Ok(probe)) => {
+            record_peer_capsule_id(peer_capsule_id, &probe);
             let result = relay_attempted_response(
                 tcp_stream,
                 quic_recv,
@@ -199,6 +208,7 @@ pub(in crate::network::openai) async fn route_remote_attempt(
         response_adapter,
         route_observer,
         served_by,
+        peer_capsule_id,
     } = logging;
     let (mut quic_send, mut quic_recv) = match node.open_http_tunnel(host_id).await {
         Ok(tunnel) => tunnel,
@@ -226,6 +236,7 @@ pub(in crate::network::openai) async fn route_remote_attempt(
         retry_policy,
         response_adapter,
         served_by,
+        peer_capsule_id,
         route_observer,
     )
     .await
@@ -264,6 +275,22 @@ async fn forward_buffered_request<W: AsyncWrite + Unpin>(
     prefetched: &[u8],
 ) -> std::io::Result<()> {
     upstream.write_all(prefetched).await
+}
+
+/// Peek the just-probed, untouched response headers for a peer's
+/// `X-Capsule-Id` and stash it in `sink`, before any relay/adapter rewrite
+/// runs. A no-op when `sink` is `None` (every attempt except the
+/// `RemoteMesh` dispatch path) or the header is absent — never invents a
+/// value.
+fn record_peer_capsule_id(sink: Option<&PeerCapsuleIdSink>, probe: &ResponseProbe) {
+    let Some(sink) = sink else {
+        return;
+    };
+    if let Some(capsule_id) =
+        peer_response_header_value(&probe.buffered, probe.header_end, PEER_CAPSULE_ID_HEADER)
+    {
+        sink.set(capsule_id);
+    }
 }
 
 #[cfg(test)]
@@ -372,6 +399,7 @@ mod tests {
                 ResponseRetryPolicy::next_target_available(false),
                 ResponseAdapter::None,
                 None,
+                None,
                 OpenAiRouteObserver::default(),
             )
             .await
@@ -416,6 +444,7 @@ mod tests {
                 RequestId::new(),
                 ResponseRetryPolicy::next_target_available(false),
                 ResponseAdapter::None,
+                None,
                 None,
                 OpenAiRouteObserver::default(),
             )
@@ -468,6 +497,7 @@ mod tests {
                 RequestId::new(),
                 ResponseRetryPolicy::next_target_available(false),
                 ResponseAdapter::None,
+                None,
                 None,
                 OpenAiRouteObserver::default(),
             )
@@ -555,6 +585,7 @@ mod tests {
                 ResponseRetryPolicy::next_target_available(false),
                 ResponseAdapter::None,
                 None,
+                None,
                 OpenAiRouteObserver::default(),
             )
             .await
@@ -567,6 +598,88 @@ mod tests {
 
         assert!(matches!(result, RouteAttemptResult::Delivered { .. }));
         assert_eq!(cancels.load(Ordering::SeqCst), 0);
+    }
+
+    /// A `RemoteMesh` attempt records the
+    /// peer's `X-Capsule-Id` response header into the caller-supplied sink —
+    /// this is how the routing node learns what to thread onto its own
+    /// terminal plugin event (see `ingress.rs`'s remote-mesh routing).
+    #[tokio::test]
+    async fn a_remote_attempt_records_the_peers_capsule_id_into_the_sink() {
+        let body = "x".repeat(8);
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nX-Capsule-Id: cap-peer-1\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let mut upstream = ScriptedUpstream::new(vec![Ok(header.into_bytes())]);
+        let host_id = iroh::SecretKey::generate().public();
+        let sink = PeerCapsuleIdSink::new();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (client, _) = listener.accept().await.unwrap();
+            let mut client: ClientStream = client.into();
+            route_remote_attempt_after_forward(
+                &mut client,
+                &mut upstream,
+                host_id,
+                RequestId::new(),
+                ResponseRetryPolicy::next_target_available(false),
+                ResponseAdapter::None,
+                None,
+                Some(&sink),
+                OpenAiRouteObserver::default(),
+            )
+            .await;
+            sink
+        });
+        let mut socket = TcpStream::connect(address).await.unwrap();
+        let mut relayed = Vec::new();
+        socket.read_to_end(&mut relayed).await.unwrap();
+
+        let sink = task.await.unwrap();
+        assert_eq!(sink.take(), Some("cap-peer-1".to_string()));
+    }
+
+    /// Mutant: no `X-Capsule-Id` on the peer's response — the sink stays
+    /// empty. Never invented.
+    #[tokio::test]
+    async fn a_remote_attempt_without_a_capsule_id_header_leaves_the_sink_empty() {
+        let body = "x".repeat(8);
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let mut upstream = ScriptedUpstream::new(vec![Ok(header.into_bytes())]);
+        let host_id = iroh::SecretKey::generate().public();
+        let sink = PeerCapsuleIdSink::new();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (client, _) = listener.accept().await.unwrap();
+            let mut client: ClientStream = client.into();
+            route_remote_attempt_after_forward(
+                &mut client,
+                &mut upstream,
+                host_id,
+                RequestId::new(),
+                ResponseRetryPolicy::next_target_available(false),
+                ResponseAdapter::None,
+                None,
+                Some(&sink),
+                OpenAiRouteObserver::default(),
+            )
+            .await;
+            sink
+        });
+        let mut socket = TcpStream::connect(address).await.unwrap();
+        let mut relayed = Vec::new();
+        socket.read_to_end(&mut relayed).await.unwrap();
+
+        let sink = task.await.unwrap();
+        assert_eq!(sink.take(), None);
     }
 
     #[tokio::test]
@@ -591,6 +704,7 @@ mod tests {
                 RequestId::new(),
                 ResponseRetryPolicy::next_target_available(false),
                 ResponseAdapter::None,
+                None,
                 None,
                 OpenAiRouteObserver::default(),
             )

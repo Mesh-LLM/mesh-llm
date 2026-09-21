@@ -32,6 +32,38 @@ pub(in crate::network::openai) struct RouteAttemptLoggingContext<'a> {
     /// Hex-encoded `EndpointId` to echo back as `x-mesh-served-by` on
     /// delivery. See `RouteModelRequestContext::served_by_header`.
     pub(in crate::network::openai) served_by: Option<&'a str>,
+    /// Where to record a peer's `X-Capsule-Id` response header, when this
+    /// attempt targets a remote peer this node is routing to (not serving).
+    /// `None` on every attempt that isn't the `RemoteMesh` dispatch path.
+    pub(in crate::network::openai) peer_capsule_id: Option<&'a PeerCapsuleIdSink>,
+}
+
+/// A single-slot, write-once-per-attempt side channel for the peer's
+/// `X-Capsule-Id` response header, threaded through
+/// [`RouteAttemptLoggingContext`] rather than added to [`RouteAttemptResult`]
+/// — the latter is constructed at call sites across local, remote, and
+/// adapted-response paths that have nothing to do with the `RemoteMesh`
+/// dispatch path this exists for.
+///
+/// A plain `std::sync::Mutex` (not `RefCell`): route attempts run inside a
+/// per-connection tokio task, and a type reachable from an `.await` point
+/// must stay `Send`, which `RefCell` is not. The lock is never held across
+/// an `.await`.
+#[derive(Default)]
+pub(crate) struct PeerCapsuleIdSink(std::sync::Mutex<Option<String>>);
+
+impl PeerCapsuleIdSink {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(in crate::network::openai) fn set(&self, value: String) {
+        *self.0.lock().unwrap() = Some(value);
+    }
+
+    pub(crate) fn take(&self) -> Option<String> {
+        self.0.lock().unwrap().take()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

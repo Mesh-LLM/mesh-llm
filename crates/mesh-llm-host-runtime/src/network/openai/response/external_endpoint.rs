@@ -31,6 +31,7 @@ pub(in crate::network::openai) async fn route_http_endpoint_attempt(
         response_adapter,
         route_observer,
         served_by: _,
+        peer_capsule_id: _,
     } = logging;
     let target = match build_external_endpoint_target(base_url, request_path, prefetched) {
         Ok(target) => target,
