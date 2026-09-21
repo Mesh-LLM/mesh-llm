@@ -13,6 +13,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use super::*;
+use crate::AudioTranscriptionRequest;
 
 /// A valid UUIDv4 the frontend will now accept and forward verbatim.
 const CLIENT_NONCE: &str = "6d7d8d2e-3f4a-4b5c-8d9e-0a1b2c3d4e5f";
@@ -565,6 +566,85 @@ impl OpenAiBackend for FakeBackend {
             )),
         ])))
     }
+
+    /// Return indexed embedding fixtures with the requested encoding.
+    async fn embeddings(
+        &self,
+        request: EmbeddingsRequest,
+        _context: OpenAiRequestContext,
+    ) -> OpenAiResult<EmbeddingResponse> {
+        let embeddings = (0..request.input.len())
+            .map(|index| crate::Embedding {
+                values: vec![index as f32 + 1.0, -0.5],
+                index,
+            })
+            .collect();
+        Ok(EmbeddingResponse::from_embeddings(
+            request.model,
+            embeddings,
+            7,
+            &request.encoding_format,
+        ))
+    }
+
+    /// Return ranked fixtures honoring `top_n` and document inclusion.
+    async fn rerank(
+        &self,
+        request: RerankRequest,
+        _context: OpenAiRequestContext,
+    ) -> OpenAiResult<RerankResponse> {
+        let mut results = request
+            .documents
+            .iter()
+            .enumerate()
+            .map(|(index, document)| crate::RerankResult {
+                index,
+                relevance_score: (index + 1) as f32 / 10.0,
+                document: request.return_documents.then(|| document.clone()),
+            })
+            .collect::<Vec<_>>();
+        results.sort_by(|left, right| right.relevance_score.total_cmp(&left.relevance_score));
+        results.truncate(request.top_n.unwrap_or(results.len()));
+        Ok(RerankResponse {
+            id: "rerank_test".to_string(),
+            results,
+            usage: Usage::new(11, 0),
+        })
+    }
+
+    /// Return a binary speech fixture with the requested content type.
+    async fn audio_speech(
+        &self,
+        request: AudioSpeechRequest,
+        _context: OpenAiRequestContext,
+    ) -> OpenAiResult<AudioResponse> {
+        AudioResponse::new(
+            vec![0x52, 0x49, 0x46, 0x46],
+            request.response_format.content_type(),
+        )
+    }
+
+    /// Return a transcription fixture containing the upload length.
+    async fn audio_transcription(
+        &self,
+        request: AudioTranscriptionRequest,
+        _context: OpenAiRequestContext,
+    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        Ok(AudioTranscriptionResponse {
+            text: format!("transcribed {} bytes", request.file.len()),
+        })
+    }
+
+    /// Return a translation fixture containing the upload length.
+    async fn audio_translation(
+        &self,
+        request: AudioTranscriptionRequest,
+        _context: OpenAiRequestContext,
+    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        Ok(AudioTranscriptionResponse {
+            text: format!("translated {} bytes", request.file.len()),
+        })
+    }
 }
 
 struct SlowBackend;
@@ -774,6 +854,9 @@ async fn models_route_returns_model_list() {
     assert_eq!(body["object"], "list");
     assert_eq!(body["data"][0]["id"], "org/repo:Q4_K_M");
 }
+
+#[path = "router_tests/non_chat.rs"]
+mod non_chat;
 
 #[tokio::test]
 async fn health_route_returns_liveness_probe() {

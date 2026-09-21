@@ -6,6 +6,7 @@
 //! should use that model instead of spending an agent turn on a target we just
 //! proved unhealthy or too small.
 
+use super::workload_routing;
 use crate::inference::election;
 use crate::mesh;
 use crate::network::affinity::AffinityRouter;
@@ -53,25 +54,31 @@ async fn context_compatible_targets(
     compatible
 }
 
+/// Require a workload-compatible target that fits context and passes strict health routing.
 pub(crate) async fn model_has_eligible_target(
     node: &mesh::Node,
     model: &str,
     required_tokens: Option<u32>,
+    request_path: &str,
     candidates: &[election::InferenceTarget],
     affinity: &AffinityRouter,
 ) -> bool {
+    let candidates =
+        workload_routing::eligible_targets(node, model, request_path, candidates).await;
     let context_compatible =
-        context_compatible_targets(node, model, required_tokens, candidates).await;
+        context_compatible_targets(node, model, required_tokens, &candidates).await;
     if !has_routable_candidate(&context_compatible) {
         return false;
     }
     has_routable_candidate(&affinity.route_strict_eligible_candidates(model, &context_compatible))
 }
 
+/// Apply the same workload, context, and health admission to advertised remote hosts.
 pub(crate) async fn model_has_eligible_remote_host(
     node: &mesh::Node,
     model: &str,
     required_tokens: Option<u32>,
+    request_path: &str,
     affinity: &AffinityRouter,
 ) -> bool {
     let targets: Vec<election::InferenceTarget> = node
@@ -80,7 +87,15 @@ pub(crate) async fn model_has_eligible_remote_host(
         .into_iter()
         .map(election::InferenceTarget::Remote)
         .collect();
-    model_has_eligible_target(node, model, required_tokens, &targets, affinity).await
+    model_has_eligible_target(
+        node,
+        model,
+        required_tokens,
+        request_path,
+        &targets,
+        affinity,
+    )
+    .await
 }
 
 /// Whether this node itself serves `model`, independent of the target table.
@@ -111,15 +126,25 @@ pub(crate) fn pool_for_ready_models<'a>(
     }
 }
 
+/// Select model names with a ready remote host for this endpoint and context budget.
 pub(crate) async fn ready_remote_models<'a>(
     node: &mesh::Node,
     required_tokens: Option<u32>,
+    request_path: &str,
     available: &[router::RoutingCandidate<'a>],
     affinity: &AffinityRouter,
 ) -> Vec<&'a str> {
     let mut ready_models = Vec::new();
     for candidate in available {
-        if model_has_eligible_remote_host(node, candidate.name, required_tokens, affinity).await {
+        if model_has_eligible_remote_host(
+            node,
+            candidate.name,
+            required_tokens,
+            request_path,
+            affinity,
+        )
+        .await
+        {
             ready_models.push(candidate.name);
         }
     }

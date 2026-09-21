@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from pathlib import Path
 import tempfile
 import unittest
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 GENERATOR = ROOT / "scripts/generate-skippy-family-patch.py"
@@ -20,6 +19,28 @@ def load_generator():
 
 
 class GenerateSkippyFamilyPatchTests(unittest.TestCase):
+    def test_canonical_roster_requires_only_causal_source_mappings(self) -> None:
+        """Six independently certified non-chat classes must not become decoder shard owners."""
+        generator = load_generator()
+        manifest = ROOT / "ci/llama-canary/family-certified.json"
+        families = generator.load_certified_families(manifest)
+        models = json.loads(manifest.read_text())["models"]
+        self.assertEqual(83, len(families))
+        self.assertTrue({"inkling", "llama4"}.issubset(families))
+        self.assertEqual({model["family"] for model in models
+                          if model["class"] == "causal_generation"}, families)
+
+    def test_missing_unknown_and_misclassified_workloads_fail_closed(self) -> None:
+        """An invalid workload class or profile cannot remove a target's mapping requirement."""
+        generator = load_generator()
+        for fields in ({}, {"class": "future"}, {"class": "embedding", "profile": "full"},
+                       {"class": "causal_generation", "profile": "workload-oracle"}):
+            with self.subTest(fields=fields), tempfile.TemporaryDirectory() as temporary:
+                manifest = Path(temporary) / "manifest.json"
+                manifest.write_text(json.dumps({"models": [{"family": "test", **fields}]}))
+                with self.assertRaises(RuntimeError):
+                    generator.load_certified_families(manifest)
+
     def test_capture_uses_exact_utf8_bytes_without_newline_translation(self) -> None:
         generator = load_generator()
         with tempfile.TemporaryDirectory() as temporary:

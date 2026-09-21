@@ -1,4 +1,6 @@
 use super::*;
+#[path = "request_parse/audio_multipart_tests.rs"]
+mod audio_multipart_tests;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
@@ -650,6 +652,44 @@ async fn test_read_http_request_allows_large_object_upload_body() {
     assert!(request.raw.ends_with(&body));
     assert!(request.body_json.is_none());
     assert!(request.request_object_request_ids.is_empty());
+}
+
+#[tokio::test]
+/// Audio uploads use their own body ceiling instead of the ordinary JSON limit.
+async fn test_read_http_request_allows_large_audio_upload_body() {
+    let file_bytes = vec![b'x'; MAX_BODY_BYTES + 1];
+    let mut body =
+        b"--audio\r\nContent-Disposition: form-data; name=\"file\"; filename=\"large.wav\"\r\n\r\n"
+            .to_vec();
+    body.extend_from_slice(&file_bytes);
+    body.extend_from_slice(b"\r\n--audio\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\naudio-model\r\n--audio--\r\n");
+    let headers = format!(
+        "POST /v1/audio/transcriptions HTTP/1.1\r\nHost: localhost\r\nContent-Type: multipart/form-data; boundary=audio\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+
+    let request = read_request_from_parts(vec![headers, body.clone()]).await;
+
+    assert_eq!(request.path, "/v1/audio/transcriptions");
+    assert!(request.raw.ends_with(&body));
+    assert_eq!(request.body_len_bytes, body.len());
+    assert_eq!(request.model_name.as_deref(), Some("audio-model"));
+}
+
+#[test]
+/// Only the upload endpoints receive the larger binary-body budget.
+fn audio_upload_limits_are_path_scoped() {
+    let audio = body_limits_for_path("/v1/audio/translations?trace=1", HTTP_READ_LIMITS);
+    assert_eq!(audio.max_body_bytes, MAX_AUDIO_UPLOAD_BODY_BYTES);
+    assert_eq!(
+        audio.max_chunked_wire_bytes,
+        MAX_AUDIO_UPLOAD_CHUNKED_WIRE_BYTES
+    );
+
+    let embedding = body_limits_for_path("/v1/embeddings", HTTP_READ_LIMITS);
+    assert_eq!(embedding.max_body_bytes, MAX_BODY_BYTES);
+    assert_eq!(embedding.max_chunked_wire_bytes, MAX_CHUNKED_WIRE_BYTES);
 }
 
 #[tokio::test]

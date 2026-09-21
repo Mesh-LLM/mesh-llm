@@ -116,8 +116,14 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
     } = args;
     let route_started = Instant::now();
     let mut tcp_stream = tcp_stream;
-    let mut ranked =
-        rank_targets_by_context(&node, model, required_tokens, &targets.candidates(model)).await;
+    let candidates = super::super::workload_routing::ingress_candidates(
+        &node,
+        model,
+        &request.client_path,
+        targets,
+    )
+    .await;
+    let mut ranked = rank_targets_by_context(&node, model, required_tokens, &candidates).await;
     let payment_ranked = crate::network::openai::payment_routing::rank(
         &node,
         model,
@@ -127,6 +133,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         request.body_json.as_ref(),
     )
     .await;
+
     let ordered_candidates = affinity.route_eligible_candidates(model, &ranked.ordered);
     if ordered_candidates.is_empty() {
         record_route_model_unavailable(&node, model, 0);
@@ -138,20 +145,18 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
     }
     route_observer.route_selected(Some(model));
 
-    let prefix_hash = crate::network::affinity::cache_prefix_hash(request.body_json.as_ref());
+    let affinity_body = super::super::workload_routing::affinity_body(request);
+    let prefix_hash = crate::network::affinity::cache_prefix_hash(affinity_body);
     let cache_candidates = if payment_ranked {
         &ranked.ordered[..ranked.equivalent_prefix]
     } else {
         &ordered_candidates
     };
+
     let cache_target =
         cache_target_for_request(&node, affinity, model, prefix_hash, cache_candidates).await;
-    // A remembered free or more expensive route must not override the price tier.
-    let cache_target = if payment_ranked {
-        cache_target.or_else(|| ranked.ordered.first().cloned())
-    } else {
-        cache_target
-    };
+    let cache_target =
+        super::super::payment_routing::prefer_price_tier(payment_ranked, &ranked, cache_target);
     let Some(ReservedModelRoute {
         selection,
         ordered,
@@ -160,7 +165,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         targets,
         &ranked,
         model,
-        request.body_json.as_ref(),
+        affinity_body,
         affinity,
         cache_target,
     )

@@ -68,7 +68,7 @@ async fn payments_real_model_prefills_before_gate_and_streams_usage_after_releas
         load_mode: LoadMode::RuntimeSlice,
         ..StageConfig::default()
     };
-    let backend = Arc::new(multimodal::local_openai_backend(config)?);
+    let backend = Arc::new(support::local_openai_backend(config, "mm-smoke")?);
     let gate = Arc::new(TestGate {
         prefilled: tokio::sync::Notify::new(),
         released: AtomicBool::new(false),

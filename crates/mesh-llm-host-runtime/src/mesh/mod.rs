@@ -6,9 +6,10 @@
 //! latency-sensitive `skippy-stage/2` ALPN.
 
 pub use mesh_llm_types::mesh::{
-    ModelDemand, ModelRuntimeDescriptor, ModelSourceKind, ServedModelDescriptor,
-    ServedModelIdentity, ServedModelMetadata, infer_available_model_descriptors,
-    infer_local_served_model_descriptor, infer_served_model_descriptors,
+    ModelDemand, ModelRuntimeDescriptor, ModelSourceKind, ModelWorkloadClass,
+    ServedModelDescriptor, ServedModelIdentity, ServedModelMetadata,
+    infer_available_model_descriptors, infer_local_served_model_descriptor,
+    infer_served_model_descriptors,
 };
 
 use anyhow::{Context, Result};
@@ -90,7 +91,7 @@ mod heartbeat;
 mod host_role_claims;
 mod identity_persistence;
 mod lan_bootstrap;
-mod model_identity;
+pub(crate) mod model_identity;
 mod node;
 mod node_identity;
 mod node_requirements;
@@ -114,6 +115,9 @@ use connection_reservation::*;
 use connections::*;
 pub(crate) use host_role_claims::{HostRoleClaim, HostRoleClaims};
 use model_identity::*;
+// Main's openai::model_names calls this through the mesh:: path; keep the
+// pub(crate) surface stable across the model_identity move.
+pub(crate) use model_identity::public_model_id_from_identity;
 use node_identity::*;
 #[cfg(test)]
 use operational_logging::capture_mesh_operational_audits;
@@ -164,7 +168,7 @@ pub use node::{
 pub(crate) use node::{PeerDownReport, peer_down_endpoint_id};
 pub(crate) use peer_state::{
     ControlListenerLifecycle, DEAD_PEER_TTL, MeshState, PEER_DOWN_REPORTER_COOLDOWN_SECS,
-    PEER_STALE_SECS, public_model_id_from_identity, resolve_peer_leaving,
+    PEER_STALE_SECS, resolve_peer_leaving,
 };
 #[expect(
     unused_imports,

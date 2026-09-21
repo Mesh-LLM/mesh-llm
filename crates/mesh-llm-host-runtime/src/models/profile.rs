@@ -34,6 +34,7 @@ pub(crate) fn served_model_metadata_for_path(
             let parameter_count_b = parameter_count.map(|total| total as f64 / 1e9);
             let kv_head_count = meta.effective_kv_head_count();
             crate::mesh::ServedModelMetadata {
+                workload_class: None,
                 architecture: non_empty(meta.architecture),
                 parameter_size,
                 parameter_count_b,

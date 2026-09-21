@@ -44,6 +44,25 @@ impl RuntimeState {
         self.model.has_media_projector()
     }
 
+    /// Probe speech support from the runtime's actual native model and projector.
+    pub fn supports_speech_synthesis(&self) -> bool {
+        self.model.supports_speech_synthesis()
+    }
+
+    /// Run bounded speech generation in the named session with cancellation checks.
+    pub fn synthesize_speech(
+        &mut self,
+        session_id: &str,
+        config: &SpeechSynthesisConfig,
+        cancellation_requested: impl Fn() -> bool,
+    ) -> Result<SpeechAudio> {
+        let model = &self.model as *const StageModel;
+        let session = self.session(session_id)?;
+        // The outer RuntimeState mutex serializes both projector and session
+        // access; this splits borrows across those independently owned fields.
+        unsafe { (&*model).synthesize_speech(session, config, cancellation_requested) }
+    }
+
     pub fn prefill_media(
         &mut self,
         session_id: &str,

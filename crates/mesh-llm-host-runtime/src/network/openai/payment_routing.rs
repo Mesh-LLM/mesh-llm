@@ -89,6 +89,19 @@ pub(super) async fn rank(
     true
 }
 
+/// Keep cache affinity inside the selected price tier.
+pub(super) fn prefer_price_tier(
+    payment_ranked: bool,
+    ranked: &RankedCandidates<InferenceTarget>,
+    cached: Option<InferenceTarget>,
+) -> Option<InferenceTarget> {
+    if payment_ranked {
+        cached.or_else(|| ranked.ordered.first().cloned())
+    } else {
+        cached
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

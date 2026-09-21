@@ -291,17 +291,14 @@ fn parse_query(path: &str) -> Result<ParsedQuery, LogsError> {
                     ));
                 }
             }
-            "severity" => {
-                if audit_mode {
-                    let severity = parse_audit_severity(&value)?;
-                    if audit_selection.severity.is_some() {
-                        return Err(LogsError::InvalidQuery("duplicate audit severity"));
-                    }
-                    audit_selection.severity = Some(severity);
-                } else {
-                    return Err(LogsError::InvalidQuery("unknown event stream parameter"));
+            "severity" if audit_mode => {
+                let severity = parse_audit_severity(&value)?;
+                if audit_selection.severity.is_some() {
+                    return Err(LogsError::InvalidQuery("duplicate audit severity"));
                 }
+                audit_selection.severity = Some(severity);
             }
+            "severity" => return Err(LogsError::InvalidQuery("unknown event stream parameter")),
             "cursor" if cursor.is_none() && !audit_mode => {
                 cursor = Some(Cursor::parse(nonempty(&value)?)?);
             }

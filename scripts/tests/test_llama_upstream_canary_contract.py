@@ -3,13 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path
 import signal
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
+
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -427,17 +429,29 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                 )
-                assert wrapper.stdout is not None
-                child_pid = int(wrapper.stdout.readline())
-                wrapper.send_signal(received_signal)
-                _, stderr = wrapper.communicate(timeout=15)
+                child_pid = None
+                try:
+                    assert wrapper.stdout is not None
+                    child_pid = int(wrapper.stdout.readline())
+                    wrapper.send_signal(received_signal)
+                    _, stderr = wrapper.communicate(timeout=15)
 
-                self.assertEqual(128 + received_signal, wrapper.returncode)
-                self.assertIn(
-                    f"signal-fixture received signal {received_signal}", stderr
-                )
-                with self.assertRaises(ProcessLookupError):
-                    os.kill(child_pid, 0)
+                    self.assertEqual(128 + received_signal, wrapper.returncode)
+                    self.assertIn(
+                        f"signal-fixture received signal {received_signal}", stderr
+                    )
+                    with self.assertRaises(ProcessLookupError):
+                        os.kill(child_pid, 0)
+                finally:
+                    # A regression must not leave its fixture running on CI.
+                    if wrapper.poll() is None:
+                        wrapper.kill()
+                    if child_pid is not None:
+                        try:
+                            os.killpg(child_pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    wrapper.communicate(timeout=5)
 
     def test_timeout_runner_closes_manifest_stdin_for_children(self) -> None:
         result = subprocess.run(
@@ -464,6 +478,7 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
 class SkippyFamilyBatteryTests(unittest.TestCase):
     @staticmethod
     def _manifest(model: dict[str, object]) -> dict[str, object]:
+        """Wrap a fixture model in the complete five-profile certification policy."""
         return {
             "schema_version": 1,
             "policy": {
@@ -495,15 +510,27 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
                             "stage-load",
                         ],
                     },
-                }
+                    "workload-smoke": {
+                        "status": "provisional",
+                        "oracle": "none",
+                        "required_lanes": ["class-specific-smoke"],
+                    },
+                    "workload-oracle": {
+                        "status": "certified",
+                        "oracle": "local-monolithic",
+                        "required_lanes": ["class-specific-smoke", "class-specific-oracle"],
+                    },
+                },
             },
             "models": [model],
         }
 
     @staticmethod
     def _model(revision: str = "a" * 40) -> dict[str, object]:
+        """Provide a tiny causal target with immutable artifact identity and no MTP layers."""
         return {
             "family": "test-family",
+            "class": "causal_generation",
             "architecture": "test",
             "profile": "full",
             "artifact": {
@@ -532,6 +559,7 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
     def _dry_run(
         self, *args: str, models: list[dict[str, object]] | None = None
     ) -> subprocess.CompletedProcess[str]:
+        """Exercise the real shell battery against an isolated manifest without native execution."""
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             bin_dir = temp / "bin"
@@ -549,6 +577,12 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
                 json.dumps(policy) + "\n", encoding="utf-8"
             )
             env = os.environ.copy()
+            for key in (
+                "SKIPPY_WORKLOAD_ORACLE_SERVER",
+                "SKIPPY_WORKLOAD_ORACLE_COMPLETION",
+                "SKIPPY_WORKLOAD_ORACLE_TTS",
+            ):
+                env.pop(key, None)
             env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
             return subprocess.run(
                 [
@@ -583,6 +617,39 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
                 )
             )
 
+    def test_workload_dry_run_needs_no_oracle_and_forwards_startup_deadline(self) -> None:
+        """Keep planning independent of oracle availability while forwarding the startup deadline."""
+        model = self._model()
+        model.update({
+            "class": "embedding",
+            "profile": "workload-oracle",
+            "evidence": {"fixture": "fixture", "comparison": "fixture"},
+        })
+        model["execution"]["speculative_policy"] = "disabled"
+        model["resources"]["startup_timeout_secs"] = 600
+        result = self._dry_run("--skip-build", models=[model])
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("--startup-timeout-secs 600", result.stdout)
+        self.assertIn("--require-oracle", result.stdout)
+        self.assertNotIn("skippy-topology-plan", result.stdout)
+        self.assertNotIn(str(FAMILY_CERTIFY) + " ", result.stdout)
+
+    def test_mixed_roster_keeps_workload_and_split_certification_separate(self) -> None:
+        """Execute one distinct lane family per row without staging a non-chat workload."""
+        causal = self._model()
+        workload = self._model()
+        workload.update({
+            "family": "embedding-family", "class": "embedding", "profile": "workload-oracle",
+            "evidence": {"fixture": "fixture", "comparison": "fixture"},
+        })
+        workload["execution"]["speculative_policy"] = "disabled"
+        result = self._dry_run("--skip-build", models=[causal, workload])
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(1, result.stdout.count("/skippy-topology-plan "))
+        self.assertEqual(1, result.stdout.count(str(FAMILY_CERTIFY) + " "))
+        self.assertEqual(1, result.stdout.count("/skippy-workload-certify.sh "))
+        self.assertIn("2 certifications planned; no lanes executed", result.stdout)
+
     def test_family_battery_has_no_activation_wire_dtype_switches(self) -> None:
         script = BATTERY.read_text(encoding="utf-8")
 
@@ -614,6 +681,37 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
         self.assertIn("--family test-family", commands[0])
         self.assertIn("--family second-family", commands[1])
 
+    def test_supplied_plan_cannot_omit_a_manifest_selected_family(self) -> None:
+        """Reject a supplied plan that drops a manifest-selected family."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            first = self._model()
+            second = self._model()
+            second["family"] = "second-family"
+            manifest = temp / "manifest.json"
+            policy = self._manifest(first)
+            policy["models"] = [first, second]
+            manifest.write_text(json.dumps(policy) + "\n", encoding="utf-8")
+            generated = subprocess.run(
+                [str(ROOT / "scripts" / "plan-family-battery.py"), "--manifest", str(manifest)],
+                cwd=ROOT, text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(0, generated.returncode, generated.stderr)
+            plan = json.loads(generated.stdout)
+            plan["selected_models"].pop()
+            plan["selected_family_count"] = 1
+            plan["shards"][0]["families"] = ["test-family"]
+            supplied = temp / "tampered-plan.json"
+            supplied.write_text(json.dumps(plan), encoding="utf-8")
+            result = subprocess.run(
+                [str(BATTERY), "--manifest", str(manifest), "--plan", str(supplied),
+                 "--dry-run", "--skip-build"],
+                cwd=ROOT, text=True, capture_output=True, check=False,
+            )
+        self.assertEqual(2, result.returncode)
+        self.assertIn("differs from the canonical manifest and selection", result.stderr)
+        self.assertNotIn("model-scans", result.stdout)
+
     def test_family_filter_limits_the_resolved_dry_run(self) -> None:
         selected = self._dry_run("--families", "test-family")
         self.assertEqual(0, selected.returncode, selected.stderr)
@@ -630,6 +728,7 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
         self.assertNotIn("cargo build -p skippy-correctness", result.stdout)
 
     def test_mmproj_smoke_lane_runs_only_for_families_with_a_projector(self) -> None:
+        """Only causal rows with a pinned projector schedule the separate multimodal split smoke."""
         result = self._dry_run("--skip-build")
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertNotIn("mmproj", result.stdout)
@@ -655,12 +754,16 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
         self.assertIn("SKIPPY_MM_PROJECTOR=", smokes[0])
         self.assertIn("frontend::tests::multimodal", smokes[0])
         self.assertIn("--test-threads=1", smokes[0])
-        self.assertIn("family battery complete: 1/1", with_mmproj.stdout)
+        self.assertIn(
+            "family battery dry run complete: 1 certifications planned; no lanes executed",
+            with_mmproj.stdout,
+        )
 
     def test_mmproj_failure_is_accounted_separately_from_core_certification(self) -> None:
+        """A failed projector smoke must remain visible independently of core parity outcomes."""
         script = BATTERY.read_text(encoding="utf-8")
         smoke_body = script.split("run_mmproj_smoke() {", 1)[1].split(
-            "\n}\n\nrun_resolved_manifest()", 1
+            "\n}\n\nrun_workload_certify()", 1
         )[0]
 
         self.assertIn("MM_SMOKE_FAILURE_COUNT=0", script)
@@ -682,6 +785,7 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
         )
 
     def test_preflight_pins_snapshot_and_records_native_mtp_models(self) -> None:
+        """Resolve exact HF snapshots and reject incomplete or mismatched native MTP metadata."""
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             revision = "a" * 40
@@ -695,7 +799,22 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
                 / "model.gguf"
             )
             model.parent.mkdir(parents=True)
-            model.write_bytes(b"gguf-fixture")
+            def gguf_string(value: str) -> bytes:
+                """Encode UTF-8 text using the GGUF length-prefixed representation."""
+                encoded = value.encode("utf-8")
+                return struct.pack("<Q", len(encoded)) + encoded
+
+            model.write_bytes(
+                b"GGUF"
+                + struct.pack("<IQQ", 3, 0, 3)
+                + gguf_string("general.architecture")
+                + struct.pack("<I", 8)
+                + gguf_string("fixture")
+                + gguf_string("fixture.block_count")
+                + struct.pack("<II", 4, 6)
+                + gguf_string("fixture.embedding_length")
+                + struct.pack("<II", 4, 1024)
+            )
 
             bin_dir = temp / "bin"
             bin_dir.mkdir()
@@ -809,8 +928,12 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
                 check=False,
                 timeout=30,
             )
-            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
             run_dir = next(artifacts.iterdir())
+            environment = json.loads(
+                (run_dir / "preflight" / "environment.json").read_text(encoding="utf-8")
+            )
+            self.assertFalse(environment["port_range"]["checked"])
             resolved = (run_dir / "resolved-models.tsv").read_text(encoding="utf-8")
             self.assertIn(revision, resolved)
             self.assertIn("|1|1024|5|", resolved)
