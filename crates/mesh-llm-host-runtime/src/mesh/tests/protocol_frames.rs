@@ -902,6 +902,7 @@ fn stale_serving_announcement(
         latency_age_ms: None,
         latency_observer_id: None,
         inference_admission_state: None,
+        claimed_log_head: None,
     };
     (addr, ann)
 }
