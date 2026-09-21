@@ -148,7 +148,10 @@ async fn handle_inbound_stage_transport(
         bind_addr
     );
     let (tcp_read, tcp_write) = tokio::io::split(tcp_stream);
-    relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv).await
+    // The link delay, when configured, is applied by the outbound bridge
+    // that initiates a stage exchange; the inbound side forwards immediately
+    // so the response leg is not delayed a second time.
+    relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv, None).await
 }
 
 async fn resolve_stage_transport_bind_addr(
@@ -225,8 +228,10 @@ pub async fn relay_bidirectional(
     tcp_write: tokio::io::WriteHalf<TcpStream>,
     quic_send: iroh::endpoint::SendStream,
     quic_recv: iroh::endpoint::RecvStream,
+    link_delay: Option<Duration>,
 ) -> Result<()> {
-    let mut t1 = tokio::spawn(async move { relay_tcp_to_quic(tcp_read, quic_send).await });
+    let mut t1 =
+        tokio::spawn(async move { relay_tcp_to_quic(tcp_read, quic_send, link_delay).await });
     let mut t2 = tokio::spawn(async move { relay_quic_to_tcp(quic_recv, tcp_write).await });
     // Either direction may finish first:
     //   - tcp→quic finishes when the TCP side closes after responding
@@ -268,25 +273,51 @@ async fn finish_relay_pair(
 /// knob makes that variable sweepable on co-located hardware so parity can be
 /// measured against RTT with everything else held fixed.
 ///
-/// Only the stage transport bridge consults it, so it delays inter-node
-/// activation traffic and nothing else. Shaping the interface instead would
-/// also delay the benchmark harness's own liveness traffic, and a node that
-/// misses heartbeats gets declared dead mid-run.
-fn stage_link_delay() -> Option<Duration> {
-    static DELAY: std::sync::OnceLock<Option<Duration>> = std::sync::OnceLock::new();
-    *DELAY.get_or_init(|| {
-        let millis = std::env::var("MESH_LLM_STAGE_LINK_DELAY_MS")
-            .ok()?
-            .trim()
-            .parse::<u64>()
+/// Only the outbound stage-transport bridge consults it — the side that
+/// initiates a stage exchange. A request-response pair therefore gains
+/// exactly `delay` even when every node in the sweep exports the variable,
+/// and relayed HTTP traffic is never delayed. Shaping the interface instead
+/// would also delay the benchmark harness's own liveness traffic, and a node
+/// that misses heartbeats gets declared dead mid-run.
+///
+/// Unset disables the delay. A present but empty, non-numeric, or zero value
+/// is an error: silently falling through to "disabled" would turn a
+/// misconfigured sweep into results that look valid but measure nothing.
+pub(crate) fn stage_link_delay() -> Result<Option<Duration>> {
+    let parsed = parse_stage_link_delay(
+        std::env::var("MESH_LLM_STAGE_LINK_DELAY_MS")
             .ok()
-            .filter(|millis| *millis > 0)?;
-        tracing::warn!(
-            delay_ms = millis,
-            "emulating stage link delay; throughput figures are not from an unshaped link"
+            .as_deref(),
+    )?;
+    if parsed.is_some() {
+        static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        if WARNED.set(()).is_ok() {
+            tracing::warn!(
+                "emulating stage link delay; throughput figures are not from an unshaped link"
+            );
+        }
+    }
+    Ok(parsed)
+}
+
+/// Parse [`stage_link_delay`]'s environment value: unset is disabled, a
+/// positive whole number of milliseconds is the delay, and any other present
+/// value is an error.
+fn parse_stage_link_delay(raw: Option<&str>) -> Result<Option<Duration>> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let millis = raw.trim().parse::<u64>().map_err(|_| {
+        anyhow::anyhow!(
+            "MESH_LLM_STAGE_LINK_DELAY_MS must be a whole number of milliseconds, got {raw:?}"
+        )
+    })?;
+    if millis == 0 {
+        anyhow::bail!(
+            "MESH_LLM_STAGE_LINK_DELAY_MS must be greater than zero; unset the variable to disable the delay"
         );
-        Some(Duration::from_millis(millis))
-    })
+    }
+    Ok(Some(Duration::from_millis(millis)))
 }
 
 /// Forward TCP to QUIC holding every chunk for `delay` before release.
@@ -295,9 +326,10 @@ fn stage_link_delay() -> Option<Duration> {
 /// Sleeping in the read loop instead would also cap throughput at one chunk
 /// per `delay` and quietly turn a latency sweep into a bandwidth sweep.
 ///
-/// The delay is applied to this direction only. A stage exchange crosses one
-/// bridge, so a request-response pair gains exactly `delay` — which is the
-/// round trip the pipeline actually pays per token.
+/// The caller applies this to exactly one TCP→QUIC leg per stage exchange —
+/// the outbound bridge that initiates it — so a request-response pair gains
+/// exactly `delay`, which is the round trip the pipeline actually pays per
+/// token.
 async fn relay_tcp_to_quic_delayed(
     mut tcp_read: tokio::io::ReadHalf<TcpStream>,
     mut quic_send: iroh::endpoint::SendStream,
@@ -337,8 +369,9 @@ async fn relay_tcp_to_quic_delayed(
 async fn relay_tcp_to_quic(
     mut tcp_read: tokio::io::ReadHalf<TcpStream>,
     mut quic_send: iroh::endpoint::SendStream,
+    link_delay: Option<Duration>,
 ) -> Result<()> {
-    if let Some(delay) = stage_link_delay() {
+    if let Some(delay) = link_delay {
         return relay_tcp_to_quic_delayed(tcp_read, quic_send, delay).await;
     }
     let mut buf = vec![0u8; 64 * 1024];
@@ -701,22 +734,6 @@ mod stage_link_delay_tests {
         );
     }
 
-    #[test]
-    fn an_unset_or_zero_delay_leaves_the_relay_alone() {
-        // Parsing only; the OnceLock means the env cannot be re-read in-process.
-        let parse = |raw: &str| {
-            raw.trim()
-                .parse::<u64>()
-                .ok()
-                .filter(|millis| *millis > 0)
-                .map(Duration::from_millis)
-        };
-        assert_eq!(parse("0"), None);
-        assert_eq!(parse(""), None);
-        assert_eq!(parse("not-a-number"), None);
-        assert_eq!(parse(" 30 "), Some(Duration::from_millis(30)));
-    }
-
     /// A delayed relay still forwards every byte in order.
     #[tokio::test]
     async fn the_delayed_relay_forwards_the_whole_stream() {
@@ -742,5 +759,35 @@ mod stage_link_delay_tests {
         }
         client.await.unwrap();
         assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn an_unset_delay_is_disabled() {
+        assert_eq!(parse_stage_link_delay(None).unwrap(), None);
+    }
+
+    #[test]
+    fn a_positive_delay_parses_to_a_duration() {
+        assert_eq!(
+            parse_stage_link_delay(Some("30")).unwrap(),
+            Some(Duration::from_millis(30))
+        );
+        assert_eq!(
+            parse_stage_link_delay(Some(" 30 ")).unwrap(),
+            Some(Duration::from_millis(30))
+        );
+    }
+
+    #[test]
+    fn present_but_invalid_delay_values_are_errors() {
+        // Empty, non-numeric, zero, negative, and fractional values must
+        // fail loudly: silently treating them as "disabled" would turn a
+        // misconfigured latency sweep into results that look valid.
+        for raw in ["", "   ", "abc", "0", "-5", "1.5"] {
+            assert!(
+                parse_stage_link_delay(Some(raw)).is_err(),
+                "{raw:?} must be rejected"
+            );
+        }
     }
 }
