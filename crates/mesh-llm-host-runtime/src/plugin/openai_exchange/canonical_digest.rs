@@ -271,7 +271,7 @@ fn jcs_value(v: &serde_json::Value, out: &mut String) {
             items.sort_by(|(a, _), (b, _)| {
                 let au: Vec<u16> = a.encode_utf16().collect();
                 let bu: Vec<u16> = b.encode_utf16().collect();
-                au.cmp(&bu).then_with(|| a.cmp(b))
+                au.cmp(&bu)
             });
             out.push('{');
             for (i, (k, val)) in items.iter().enumerate() {
@@ -489,9 +489,9 @@ mod tests {
         );
     }
 
-    /// A nested array, a non-object top-level value, a non-BMP key, and a
-    /// control character in a string all digest without panicking, and match
-    /// the same live Python reference run as the other vectors here.
+    /// A nested array/object, a non-BMP key, and a control character in a
+    /// string all digest without panicking, and match the same live Python
+    /// reference run as the other vectors here.
     #[test]
     fn request_body_digest_matches_python_reference_for_structural_edge_cases() {
         assert_eq!(

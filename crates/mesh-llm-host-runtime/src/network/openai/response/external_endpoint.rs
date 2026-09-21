@@ -30,6 +30,8 @@ pub(in crate::network::openai) async fn route_http_endpoint_attempt(
         retry_policy,
         response_adapter,
         route_observer,
+        served_by: _,
+        peer_capsule_id: _,
     } = logging;
     let target = match build_external_endpoint_target(base_url, request_path, prefetched) {
         Ok(target) => target,
@@ -113,6 +115,7 @@ async fn route_http_endpoint_attempt_after_forward(
                     request_id,
                     disconnect_message: "API proxy (external endpoint): downstream client disconnected during relay",
                     commit_message: "API proxy (external endpoint) ended after commit",
+                    served_by: None,
                     route_observer,
                 },
                 retry_policy,

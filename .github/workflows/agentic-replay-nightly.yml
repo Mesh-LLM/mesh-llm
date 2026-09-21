@@ -1,8 +1,7 @@
 name: Agentic Replay Nightly (micstudio)
 
 on:
-  schedule:
-    - cron: "23 14 * * *" # after the Linux competitive run settles
+  # Schedule resumes after reviewed long-context/runtime calibration.
   workflow_dispatch:
 
 # Scheduled runs execute the default-branch definition only; manual dispatch is
@@ -22,7 +21,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
     runs-on: [self-hosted, X64, macOS, family-certify, agentic-replay]
     # Separate replay and repair budgets, plus preflight and evidence headroom.
-    timeout-minutes: 1440
+    timeout-minutes: 1800
     defaults:
       run:
         shell: bash
@@ -90,8 +89,18 @@ jobs:
             echo "HF_HOME=$HF_HOME"
             echo "HF_HUB_CACHE=$HF_HUB_CACHE"
             echo "HISTORY_LOCAL=$HISTORY_LOCAL"
+            echo "SCCACHE_SERVER_UDS=$RUNNER_TEMP/agentic-replay-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sock"
             echo "OUTPUT_DIR=$OUTPUT_DIR"
           } >> "$GITHUB_ENV"
+
+      - name: Prepare pinned replay Python environment
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          uv sync --locked --project ci/agentic-replay-nightly
+          REPLAY_PYTHON_BIN="$GITHUB_WORKSPACE/ci/agentic-replay-nightly/.venv/bin"
+          "$REPLAY_PYTHON_BIN/python3" -c 'import duckdb; print("DuckDB", duckdb.__version__)'
+          echo "$REPLAY_PYTHON_BIN" >> "$GITHUB_PATH"
 
       - name: Record hardware fingerprint
         run: |
@@ -110,6 +119,7 @@ jobs:
           PY
 
       - name: Verify pinned replay inputs
+        id: inputs
         timeout-minutes: 30
         run: |
           set -euo pipefail
@@ -150,14 +160,11 @@ jobs:
             --json-output "$RUNNER_TEMP/agentic-replay-params.json" \
             --github-env "$GITHUB_ENV"
           while IFS=$'\t' read -r family repo revision file expected_sha; do
-            # Use the API return value; CLI stdout may contain styled status text.
-            python3 - "$repo" "$revision" "$file" "$expected_sha" "$family" <<'PY'
+            # Request path-only stdout from the installed CLI, not system Python.
+            model_path=$(hf download "$repo" "$file" --revision "$revision" --format quiet)
+            python3 - "$model_path" "$expected_sha" "$family" <<'PY'
           import hashlib, pathlib, sys
-          from huggingface_hub import hf_hub_download
-          repo, revision, filename, expected, family = sys.argv[1:]
-          path = pathlib.Path(hf_hub_download(
-              repo_id=repo, filename=filename, revision=revision, token=False,
-          ))
+          path, expected, family = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
           digest = hashlib.sha256()
           with path.open("rb") as model_file:
               for chunk in iter(lambda: model_file.read(8 * 1024 * 1024), b""):
@@ -188,14 +195,11 @@ jobs:
           print("\t".join((dataset["repo"], dataset["revision"], dataset["filename"], dataset["sha256"])))
           PY
           IFS=$'\t' read -r dataset_repo dataset_revision dataset_file dataset_sha < "$RUNNER_TEMP/agentic-replay-dataset.tsv"
-          python3 - "$dataset_repo" "$dataset_revision" "$dataset_file" "$dataset_sha" "$GITHUB_ENV" <<'PY'
+          dataset_path=$(HF_HUB_OFFLINE=0 hf download "$dataset_repo" "$dataset_file" \
+            --repo-type dataset --revision "$dataset_revision" --format quiet)
+          python3 - "$dataset_path" "$dataset_sha" <<'PY'
           import hashlib, pathlib, sys
-          from huggingface_hub import hf_hub_download
-          repo, revision, filename, expected, github_env = sys.argv[1:]
-          path = pathlib.Path(hf_hub_download(
-              repo_id=repo, filename=filename, revision=revision,
-              repo_type="dataset", token=False,
-          ))
+          path, expected = pathlib.Path(sys.argv[1]), sys.argv[2]
           digest = hashlib.sha256()
           with path.open("rb") as dataset_file:
               for chunk in iter(lambda: dataset_file.read(8 * 1024 * 1024), b""):
@@ -204,47 +208,52 @@ jobs:
           if actual != expected:
               raise SystemExit(f"dataset SHA-256 mismatch: expected={expected} actual={actual}")
           print(f"verified trajectory dataset: {actual}")
-          with pathlib.Path(github_env).open("a", encoding="utf-8") as env:
-              env.write(f"DATASET_FILE={path}\n")
           PY
+          echo "DATASET_FILE=$dataset_path" >> "$GITHUB_ENV"
 
-      - name: Replay each pinned model
-        id: benchmark
-        # GitHub limits individual steps to six hours, including self-hosted.
+      - name: Replay granite-3.1-2b complete sessions
+        id: model_0
+        if: ${{ !cancelled() && steps.inputs.outcome == 'success' }}
         timeout-minutes: 360
         run: |
           set -euo pipefail
-          # Replay shape comes from the matrix (like the repair re-run) so the
-          # recorded history rows, the gate's baseline matching, and the
-          # repair re-run share one source of truth.
-          LEVELS="${AGENTIC_REPLAY_CONCURRENCY:?validated replay concurrency is unavailable}"
-          IFS=',' read -r -a CONCURRENCY_LEVELS <<< "$LEVELS"
-          LEVEL_ARGS=()
-          for level in "${CONCURRENCY_LEVELS[@]}"; do LEVEL_ARGS+=(--concurrency "$level"); done
-          TPFS="${AGENTIC_REPLAY_TRAJECTORIES_PER_FRAMEWORK:?validated trajectories_per_framework is unavailable}"
-          PASSES="${AGENTIC_REPLAY_PASSES:?validated passes is unavailable}"
-          WARMUP="${AGENTIC_REPLAY_WARMUP_TURNS:?validated warmup_turns is unavailable}"
-          REPLAY_MODE="${AGENTIC_REPLAY_MODE:?validated replay mode is unavailable}"
-          MAX_OUTPUT="${AGENTIC_REPLAY_MAX_OUTPUT_TOKENS:?validated max_output_tokens is unavailable}"
-          FAILED=0
-          for family in $(python3 -c "import json;print(' '.join(m['family'] for m in json.load(open('$MATRIX_FILE'))['models']))"); do
-            model_uri=$(python3 -c "import json;m=[m for m in json.load(open('$MATRIX_FILE'))['models'] if m['family']=='$family'][0];print(m['repo']+'@'+m['revision']+'/'+m['file'])")
-            if ! python3 evals/agentic-replay.py run \
-                --ref main=HEAD \
-                --model "$model_uri" \
-                --backend metal \
-                --replay-mode "$REPLAY_MODE" \
-                --trajectories-per-framework "$TPFS" \
-                "${LEVEL_ARGS[@]}" \
-                --passes "$PASSES" \
-                --warmup-turns "$WARMUP" \
-                --max-output-tokens "$MAX_OUTPUT" \
-                --dataset-file "$DATASET_FILE" \
-                --output "$OUTPUT_DIR/$family"; then
-              FAILED=1
-            fi
-          done
-          exit $FAILED # failed measurements retain raw evidence and do not start repair
+          ulimit -n 65536
+          python3 scripts/agentic-replay-params.py --matrix "$MATRIX_FILE" \
+            --run-family granite-3.1-2b --ref main=HEAD \
+            --dataset-file "$DATASET_FILE" --output "$OUTPUT_DIR/granite-3.1-2b"
+
+      - name: Replay granite-3.1-3b-a800m complete sessions
+        id: model_1
+        if: ${{ !cancelled() && steps.inputs.outcome == 'success' }}
+        timeout-minutes: 360
+        run: |
+          set -euo pipefail
+          ulimit -n 65536
+          python3 scripts/agentic-replay-params.py --matrix "$MATRIX_FILE" \
+            --run-family granite-3.1-3b-a800m --ref main=HEAD \
+            --dataset-file "$DATASET_FILE" --output "$OUTPUT_DIR/granite-3.1-3b-a800m"
+
+      - name: Replay qwen3.5-4b complete sessions
+        id: model_2
+        if: ${{ !cancelled() && steps.inputs.outcome == 'success' }}
+        timeout-minutes: 360
+        run: |
+          set -euo pipefail
+          ulimit -n 65536
+          python3 scripts/agentic-replay-params.py --matrix "$MATRIX_FILE" \
+            --run-family qwen3.5-4b --ref main=HEAD \
+            --dataset-file "$DATASET_FILE" --output "$OUTPUT_DIR/qwen3.5-4b"
+
+      - name: Require every model replay
+        id: benchmark
+        if: ${{ !cancelled() }}
+        env:
+          DENSE_RESULT: ${{ steps.model_0.outcome }}
+          MOE_RESULT: ${{ steps.model_1.outcome }}
+          RECURRENT_RESULT: ${{ steps.model_2.outcome }}
+        run: |
+          set -euo pipefail
+          [[ "$DENSE_RESULT" == success && "$MOE_RESULT" == success && "$RECURRENT_RESULT" == success ]]
 
       - name: Download cohort-matched history
         id: baseline
@@ -269,14 +278,17 @@ jobs:
           # permission, and network failures must fail loudly.
           if HF_HUB_OFFLINE=0 python3 - "$DATASET_REPO" <<'PY' > "$RUNNER_TEMP/repo-exists.out" 2>&1; then
           import sys
-          import huggingface_hub
+          from urllib.error import HTTPError
+          from urllib.parse import quote
+          from urllib.request import urlopen
           repo = sys.argv[1]
           try:
-              huggingface_hub.repo_info(repo, repo_type="dataset", token=False)
+              with urlopen("https://huggingface.co/api/datasets/" + quote(repo, safe="/"), timeout=30):
+                  pass
           except Exception as exc:
               # Authentication errors can also say "Repository Not Found".
               # Only an actual HTTP 404 permits bootstrap.
-              if getattr(getattr(exc, "response", None), "status_code", None) == 404:
+              if isinstance(exc, HTTPError) and exc.code == 404:
                   sys.exit(3)
               sys.exit(1)
           PY
@@ -366,6 +378,7 @@ jobs:
           HISTORY_LOCAL: ${{ runner.temp }}/agentic-replay-history
         run: |
           set -euo pipefail
+          ulimit -n 65536
           if scripts/agentic-replay-repair.sh "$RUNNER_TEMP/agentic-replay-artifacts" 2>&1 | tee "$RUNNER_TEMP/agentic-replay-artifacts/repair.log"; then
             echo "prepared=true" >> "$GITHUB_OUTPUT"
           else

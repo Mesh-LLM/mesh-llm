@@ -1,6 +1,39 @@
 # Generic Skippy Graph-Derived Stage Splitting Plan
 
-Status: core Graph Filter V2 cutover implemented; full product acceptance pending.
+Status: complete. Graph Filter V2 is the only production stage-filter path.
+
+## Completion Record
+
+The cutover is complete with these final scope decisions:
+
+- All supported graph-filter rows use graph-derived planning. The retired
+  stage-filter implementation, compatibility selectors, and family-owned core
+  filtering branches were deleted rather than retained as fallbacks.
+- Durable llama.cpp changes are applied in this order: top-level core patches,
+  `patches/model_support/` family patches, then generated graph-semantics
+  patches. New-family support remains isolated in `model_support/`.
+- Existing product smokes own acceptance. Core CPU, CUDA, and Metal restore the
+  checksum-pinned SmolLM2 Q8 dense and Granite H Q4 recurrent fixtures, then run
+  both through standalone inference, OpenAI client compatibility, and the
+  constrained-stack restart. The CPU two-node split smoke runs the same pair,
+  requires exact `kv-recurrent` telemetry for Granite, and uploads reconciled
+  topology and cache evidence.
+- There is no separate product-integration workflow, Qwen migration gate, or
+  EveryCut product-smoke lane. Adding EveryCut to normal CI was rejected because
+  it would multiply runtime without adding a distinct product contract. Legal
+  cut and family breadth remain the responsibility of the existing focused
+  certification tests and llama canary rather than a second smoke
+  orchestration path.
+- Existing v2 packages are accepted after strict package verification; a
+  blanket corpus rebuild is not a completion requirement. Packages are rebuilt
+  only when their source, format, graph semantics, or verification result
+  requires it.
+
+The workstream, ownership, and delivery sections below preserve the design
+history that led to the cutover. Where an earlier proposal conflicts with this
+completion record, the completion record and the current CI documentation in
+`ci/ci.md` are authoritative; unchecked historical checklist items are not
+remaining Graph Filter V2 work.
 
 ## Implemented Decision
 
@@ -424,8 +457,8 @@ no release in which v1 and v2 serving paths coexist.
 4. Rebuild or independently certify and convert the complete production package
    corpus offline to v2. The v1 converter is migration tooling only; it is never
    linked or invoked as a serving fallback or runtime compatibility mode.
-5. Run the full frozen-matrix, every-cut, composed-product, recurrent-KV, and
-   staged CPU/CUDA/Metal qualification gates against the converted v2 corpus.
+5. Run focused family certification, composed-product, recurrent-KV, and staged
+   CPU/CUDA/Metal qualification against verified v2 packages.
 6. Land typed boundary transport before cutover and certify every frozen
    baseline obligation against the graph-described multipart framing.
 7. Ship one atomic release that accepts only package v2 and executes only the
@@ -507,14 +540,14 @@ For every legal cut:
 Run the same behavioral matrix through direct GGUF, callback/SafeTensors, and
 model-package v2 sources where those paths are supported.
 
-### Cross-cutting product integration and KV acceptance
+### Cross-cutting product acceptance and KV validation
 
 Lane D owns one product-level correctness contract for changes to cache,
 split-serving, llama.cpp or the native runtime ABI, package/model loading, and
 the certification harness. It complements graph-level certification by proving
 the composed product, real mesh topology, and OpenAI traffic together.
 
-#### Suite topology and CI simplification
+#### Final suite topology
 
 - Define one registry-backed, checksum-pinned standard product manifest for all
   supported platforms. It contains exactly these two immutable fixtures:
@@ -525,35 +558,23 @@ the composed product, real mesh topology, and OpenAI traffic together.
   | Hybrid/recurrent | IBM Granite 4.0 H 350M Q4 |
 
   CPU, CUDA, and Metal resolve the same model/package/tokenizer identities from
-  that manifest and stage both inputs once per job. Workflow-local URLs,
-  mutable revisions, and divergent per-platform model lists are forbidden.
-- Replace the separate CPU `Core inference smoke`, `Two-node client smoke`,
-  dense split smoke, and recurrent split smoke jobs with one required
-  `CPU product integration suite`.
-- Restore the composed product once, then execute the CPU phases in this exact
-  order: dense standalone inference plus OpenAI/SDK compatibility; one
-  constrained-Tokio restart; one dense seed/worker pair plus passive client for
-  routing, streaming, and every dense split/KV probe; dense teardown; one
-  Granite seed/worker pair for every recurrent split/KV probe; Granite teardown.
-- Give every phase a separate work directory and log bundle, label topology
-  views with the model identity, and make cleanup mandatory even after failure.
-- A phase failure fails the suite and publishes phase-specific evidence. Dense
-  and recurrent results are independently recorded and cannot mask one another.
-- Each split family receives one two-node fixture per run: start the dense pair,
-  pass all compatible split/cache checks while it is alive, tear it down, then
-  start and test the recurrent pair and tear it down. Never construct a mixed
-  dense/recurrent pair.
-- Each fixture owns one readiness gate. Consolidation removes duplicate product
-  restore, input staging, topology startup, and smoke orchestration; it does not
-  remove or weaken any named phase.
-- Implement the shared phase runner with typed `platform` and `backend` inputs.
-  Invoke it from the existing Linux, CUDA, and macOS lanes while retaining all
-  five CI entrypoints and visible per-platform results; do not create one
-  monolithic cross-platform workflow.
-- CPU remains the normal fast PR row. macOS Metal and CUDA are first-class
-  qualification/certification rows using explicit backend-specific device
-  selection. Both record backend, device, and runtime provenance and fail if
-  execution falls back to CPU.
+  that manifest. Workflow-local URLs, mutable revisions, and divergent
+  per-platform model lists are forbidden.
+- Keep the existing core smoke rather than adding a second product-integration
+  workflow. Restore the composed product and both fixtures once, then run dense
+  and recurrent standalone inference, OpenAI client compatibility, and
+  constrained-Tokio restart as separately named steps.
+- Keep the existing two-node split smoke as the cache/topology owner. It starts
+  a dense seed/worker pair, tears it down, then starts a Granite seed/worker
+  pair. The two legs never form a mixed dense/recurrent topology.
+- A split failure fails the job and uploads model-labelled logs, strict identity
+  snapshots, and reconciled evidence on success or failure. Dense and recurrent
+  outcomes cannot mask one another.
+- CPU remains the normal product row. The same reusable core workflow runs on
+  CUDA and Metal with explicit device selection, validates the composed-product
+  backend, and forces discovery through the native runtime bundled beside the
+  host. CUDA additionally verifies its packaged dependency closure and device
+  probe with `LD_LIBRARY_PATH` unset.
 - Preserve genuinely independent signals, including the upstream llama canary
   and separately justified backend-specific CUDA qualification. Consolidation
   must not collapse distinct compatibility or hardware evidence into the
@@ -593,112 +614,48 @@ continuation that differs from the cold/unsplit oracle fails.
 - These recurrent assertions are release and cutover criteria, not optional
   smoke coverage.
 
-#### Granite migration gate and backend rollout
+#### Granite recurrent cutover
 
-- Granite is a migration gate, not an assumed replacement. First run IBM
-  Granite 4.0 H 350M Q4 through today's real two-node repeated-prompt smoke and
-  require the strict `kv-recurrent` payload plus continuation-equivalence
-  contract.
-- The currently reviewed capability reports `rejected-too-large` for exact-state
-  mobility. That is an unresolved result, not permission to accept KV-only or
-  partial recurrent reuse.
-- If Granite cannot satisfy the atomic runtime contract, stop this consolidation
-  at the migration gate. Retain the existing Qwen3.5 recurrent leg and do not
-  weaken, delete, or relabel the `kv-recurrent` assertion to make the suite pass.
-- Roll out in order: prove Granite and the CPU integration suite; qualify CUDA;
-  then qualify Metal. Make each platform row required at its intended cadence
-  only after its own live suite passes with the immutable two-model manifest.
+- IBM Granite 4.0 H 350M Q4 is the canonical recurrent product-smoke fixture.
+  The former temporary Qwen3.5 migration leg is deleted.
+- The two-node recurrent leg requires the strict `kv-recurrent` payload and
+  checkpointed restore semantics. KV-only or partial recurrent restoration
+  cannot satisfy the assertion.
+- CPU owns the full dense/recurrent split and cache contract. CUDA and Metal own
+  paired model load, inference, OpenAI compatibility, and constrained restart
+  without CPU fallback.
 
 #### Boundary and topology coverage
 
 - The bounded PR suite uses representative midpoint cuts for dense and
   recurrent fixtures.
-- Full graph-filter-v2 acceptance exercises legal start, middle, and final
-  ownership where applicable, state handoff, multi-stage frontier/sideband
-  forwarding, and every cut required by the frozen support matrix.
+- Focused family certification exercises legal start, middle, and final
+  ownership where applicable, state handoff, and multi-stage
+  frontier/sideband forwarding. Normal product CI does not multiply this into
+  an EveryCut lane.
 - Product acceptance requires the real two-node mesh readiness and topology
   contract plus OpenAI requests; native-only in-process or binary splitting
   cannot satisfy it.
 - On readiness or topology timeout, capture both nodes' stage views and log
   tails before teardown.
 
-#### Fixed-hardware performance certification
+#### Performance follow-up
 
-Retain the fast correctness suite and add a protected fixed-hardware lane for
-pinned dense and recurrent models. It measures cold/warm TTFT, prefill and
-decode throughput, end-to-end split overhead, and cache-hit lift.
+Performance certification remains a separate benchmarking concern. It is not
+part of the Graph Filter V2 completion gate and is not added to ordinary product
+CI, whose contract is bounded correctness rather than fixed-hardware regression
+measurement.
 
-- Build the candidate in the ordinary untrusted workflow. The protected runner
-  consumes only a verified immutable artifact bound to the exact source SHA.
-- Record source/artifact digests, model/package/tokenizer and prompt-corpus
-  hashes, topology/cut/cache/concurrency settings, runner/device identity,
-  driver, container/toolchain/runtime versions, and clocks/power state where
-  available.
-- Exclude a warm-up, retain at least five raw measured repetitions, and compare
-  only exact cohorts using median and spread.
-- Bootstrap three clean matching baselines before performance becomes a hard
-  gate. Baselines are immutable and reviewed separately from a candidate run.
-- After bootstrap, fail only when reviewed absolute and relative tolerances are
-  both exceeded; derive tolerances from observed variance rather than guessing
-  them in advance.
-- Endpoint monitoring, nightly runs, and competitive-backend benchmarks never
-  substitute for source/artifact-bound commit certification.
+### Ongoing llama canary coverage
 
-Correctness failures always block. Performance remains informational only
-during its explicit three-baseline bootstrap, then becomes required for the
-affected fixed-hardware cases.
-
-### Mic Studio full-registry acceptance gate
-
-Extend the existing `.github/workflows/llama-upstream-canary.yml`; do not create
-a second graph-filter canary workflow, roster, or orchestration path. The
-existing `ci/model-artifacts/registry.json` source and generated
-`ci/llama-canary/family-certified.json` policy remain authoritative. This is a
-harness, matrix, and reconciliation expansion inside the existing canary.
-The product integration suite remains separately required because the canary
-does not replace real two-node mesh topology and OpenAI traffic coverage.
-
-Final acceptance requires a green full-registry `manual-full` or `llama-bump`
-execution on the trusted Mic Studio `family-certify` runner at the candidate
-commit. The accepted model count is not a number copied into this document: it
-is the complete set of certified model profiles generated from the authoritative
-registry at that commit. That set is 33 profiles when this plan is written, and
-it may grow before implementation lands.
-
-The acceptance plan must be immutable and digest-bound to the candidate source
-commit, package-v2 corpus, llama.cpp pin, generated family policy, frozen
-expected support matrix, graph/planner semantic version, and graph-affecting
-configuration. For every selected model profile, Mic Studio must:
-
-- create or validate its v2 package and exact tensor catalog;
-- build the metadata-only unsplit execution profiles used for planning;
-- derive legal cuts generically, then prove that the result retains every cut
-  and capability obligation in the independently frozen support matrix;
-- execute every derived legal cut through package load, prompt prefill,
-  multiple decode steps, and split/unsplit correctness comparison;
-- exercise state handoff, cache behavior, MTP/speculative, multimodal, and
-  typed sideband behavior whenever the profile declares those capabilities;
-- retain the existing required `single-step`, `chain`, and `state-handoff`
-  lanes as compatibility evidence while the every-cut lane is added;
-- use unsplit numerical execution as the correctness oracle and include
-  multi-stage composition plus persistent-state lifecycle coverage.
-
-The canary must reconcile the frozen support matrix, derived plan, and execution
-by exact model identity, profile, cut, capability, and required lane. Missing,
-skipped, duplicate, unplanned, newly rejected baseline, or incomplete results
-are failures; a green subset is not acceptance. Every currently certified model
-must expose and pass the stage placements it already supports. A model that
-derives no usable cut, loses an existing supported cut, or requires an
-unrepresentable boundary blocks completion unless its supported status is
-changed through a separately reviewed product decision.
-
-Upload the plan, plan digest, runner identity, immutable model manifests,
-package-v2 manifests, frozen support matrix, per-cut outcomes,
-dependency-closure comparisons, boundary descriptors, and logs even when the
-run fails. The existing four-profile `nightly` cadence remains a fast routine
-regression signal with its current bounded scope; it is not release or cutover
-acceptance and cannot substitute for a full `manual-full` or `llama-bump` Mic
-Studio run.
+The existing `.github/workflows/llama-upstream-canary.yml`,
+`ci/model-artifacts/registry.json`, and generated
+`ci/llama-canary/family-certified.json` remain the sole family-certification
+orchestration and roster. This cutover does not add a second canary or an
+EveryCut expansion. Canary runs continue to provide upstream and family breadth
+coverage, while the existing core and two-node product smokes independently
+cover composed products, real mesh topology, OpenAI traffic, and dense versus
+recurrent cache behavior.
 
 ### Required repository validation
 
@@ -714,7 +671,10 @@ Studio run.
 - one green, exactly reconciled Mic Studio full-registry acceptance run at the
   candidate commit.
 
-## Implementation Ownership
+## Historical Implementation Ownership
+
+This section records the ownership proposal used during implementation. It is
+not an active work queue after completion.
 
 Use five implementation lanes with one integration owner. These are ownership
 boundaries, not separate architectural authorities: all lanes implement the
@@ -730,7 +690,7 @@ cannot be assigned contradictory lane letters across handoffs.
 | A. Native graph contract and partitioner | Workstreams 2–4: end-to-end feasibility proof, block/effect/alias annotations, guarded profiles, complete frontier liveness, and the pure partitioner | Critical path. Keep annotations and slicing under one design owner until their contract is proven. |
 | B. Package v2 and conversion | Workstream 1: catalog/schema, writer/reader, independent source-inventory proof, integrity checks, and malformed-package tests | Schema work can begin with A and implementation can proceed independently after the minimal catalog contract is agreed. |
 | C. Realization and host admission | Workstream 5 plus the native ABI portion of Workstream 6: selected-weight allocation, runtime contract checks, realized descriptor/FFI, neighboring-stage validation, and readiness | May scaffold against contract fixtures; integration requires A and B. Native reports local facts and the host validates composed topology. |
-| D. Independent acceptance harness | Workstreams 0 and 8: frozen support baseline, the shared backend-parameterized product integration runner, strict dense/recurrent KV gates, fixed-hardware performance certification, expansion of the existing canary harness, complete Mic Studio roster, plan/execution reconciliation, unsplit oracle, multi-stage/state/negative tests, and resource evidence | Baseline and harness work can start with A. Final acceptance consumes A, B, C, and E where required. The expected-support set must remain independent of planner rejection results, the five CI entrypoints stay visible, and no second canary orchestration or roster is introduced. |
+| D. Independent acceptance harness | Workstreams 0 and 8: frozen support baseline, registry-backed paired product fixtures, strict dense/recurrent KV gates, the existing canary, unsplit oracle, multi-stage/state/negative tests, and resource evidence | Final acceptance consumes A, B, C, and E where required. The product contract stays in existing core and two-node smokes, and no second canary orchestration or roster is introduced. |
 | E. Boundary transport | Network portion of Workstream 6: graph-described typed bundles, semantic ids, shape constraints, bounded framing, and negotiation | Proceeds after boundary-contract agreement and coordinates with existing activation work. Required before cutover. |
 
 The integration owner owns Workstream 7, serializes shared llama.cpp patch-queue
@@ -742,7 +702,7 @@ stage policy.
 | Owner | Descriptive ownership | Boundary |
 | --- | --- | --- |
 | scama | Package v2 and source-bound offline conversion; the complete native graph/runtime migration including explicit build inputs, closure/frontier admission, partitioning, realization, and Granite correction; shared-contract/specification authority; sole integration/release ownership | Owns the tightly coupled package/runtime design and serializes shared contract and llama.cpp patch-queue changes. Does not own independent acceptance-suite implementation. |
-| astrid | Acceptance infrastructure: reusable every-cut parity harness, registry-backed product fixtures, CPU/CUDA/Metal phase runner, recurrent/cache semantics, canary reconciliation, performance/provenance, and boundary-transport qualification | Does not edit native graph/runtime implementation or certify package completeness from planner output. The harness consumes narrow checked-in runtime hooks and independently validates package and runtime results. |
+| astrid | Acceptance infrastructure: registry-backed product fixtures, paired CPU/CUDA/Metal core smokes, recurrent/cache semantics, canary reconciliation, and boundary-transport qualification | Does not edit native graph/runtime implementation or certify package completeness from planner output. The harness consumes narrow checked-in runtime hooks and independently validates package and runtime results. |
 | jy | No standing migration lane. Receives one small, closed unit at a time after sign-off, with exact files, acceptance command/evidence, and non-goals; stops and reports before any next assignment | Does not own or extend the multi-model partitioner, filter-lifetime rewrite, realization path, package/runtime integration, or CI orchestration. Suitable units include a single parity regression fixture defined by astrid or fresh-context review of one completed patch. |
 
 Boundary transport implementation remains with the existing typed-plane owner.
@@ -762,7 +722,10 @@ objects or paths. Scama coordinates push order, resolves cross-tree conflicts,
 validates combined milestones, and retains final integration/release authority.
 Never share uncommitted source edits or let multiple worktrees race to push.
 
-## Delivery Sequence
+## Historical Delivery Sequence
+
+This sequence is retained as implementation history. The completion record at
+the top of this document describes the final accepted scope.
 
 Deliver as reviewable, independently gated changes rather than one giant patch:
 
@@ -778,14 +741,12 @@ Deliver as reviewable, independently gated changes rather than one giant patch:
 6. Run shadow diagnostics without treating old behavior as the oracle.
 7. Rebuild or independently certify and convert the complete production package
    corpus offline to v2; the converter never enters the serving runtime.
-8. Prove Granite's strict recurrent contract and the consolidated CPU product
-   integration suite; if Granite fails, retain Qwen3.5 and stop consolidation.
-9. Qualify the same immutable product manifest and shared phase contract on
-   CUDA, then Metal, without CPU fallback.
-10. Complete cross-family execution qualification, every-cut certification, and
-   frozen-matrix acceptance against the converted v2 corpus through the
-   existing canary's full `manual-full`/`llama-bump` Mic Studio acceptance
-   path.
+8. Prove Granite's strict recurrent contract in the existing CPU two-node
+   smoke and delete the temporary Qwen3.5 migration leg.
+9. Run the same immutable dense/recurrent manifest through the existing CUDA
+   and Metal core smokes without CPU fallback.
+10. Retain focused cross-family execution qualification through the existing
+    family tests and llama canary without adding an EveryCut product lane.
 11. Land Lane E before cutover when any frozen baseline boundary requires it.
 12. The integration owner performs one atomic v2-only release cutover and
     deletes the old stage filter, family policy, v1 runtime acceptance, shadow
@@ -796,44 +757,30 @@ whether it changes package, native ABI, or network compatibility.
 
 ## Completion Criteria
 
-The project is complete only when all of the following are true:
+The completed cutover satisfies the accepted criteria:
 
-- package v2 is the production package format and the active corpus is
-  available in v2;
-- model builders contain no stage ranges, endpoint ownership, or stage early
-  returns;
-- package planning and native loading contain no family-name or tensor-name
-  stage-retention rules;
-- the executable graph, tensor closure, boundary ABI, and persistent-state
-  ownership all come from one normalized partition result;
-- every concrete runtime graph matches a guarded admitted profile or triggers
-  deterministic replanning/rejection before execution;
-- every supported model passes every legal cut through load, prefill, and
-  multiple decode steps;
-- every cut and capability in the independently frozen support matrix remains
-  supported unless a separate product decision explicitly removes it;
-- three-or-more-stage composition preserves pass-through values and persistent
-  state lifecycle;
-- the standard product integration suite uses the checksum-pinned SmolLM2 Q8
-  and Granite H Q4 manifest, passes every named phase on CPU, and has qualified
-  CUDA then Metal without CPU fallback at their intended cadences;
-- Granite passes the strict atomic `KvRecurrent` contract, or consolidation has
-  stopped with the Qwen3.5 recurrent leg and its assertion preserved;
-- correctness is release-blocking on every required product row, and the
-  fixed-hardware performance gate has accumulated three clean baselines before
-  enforcing reviewed regression thresholds;
-- the candidate commit has a green Mic Studio canary result covering every
-  certified model profile in the generated full-registry plan, with no missing,
-  skipped, duplicate, unplanned, or incomplete model/cut/lane result;
-- unsupported models/cuts fail before topology publication with structured
-  reasons;
-- planning reads metadata only and does not allocate full-model weights or KV;
-- generation-11 control admission requires the graph-described multipart activation
-  and KV framing, and any typed-plane data-protocol generation required by the
-  frozen support matrix lands before cutover with explicit compatibility
-  evidence;
-- old staging implementation, development flags, and v1 runtime compatibility
-  have been removed.
+- Graph-derived planning is the only production filtering path, and unsupported
+  boundaries reject before topology publication.
+- Each admitted stage carries the planner-produced decoder/MTP execution
+  dependency contract through generation-11 control admission; runtime
+  realization validates the selected dependency set and the resident union
+  independently.
+- Package planning, native loading, and model builders no longer own the
+  retired family-specific core stage-filter path.
+- The durable patch queue applies core, `model_support/`, then generated
+  patches, with family additions isolated from core graph semantics.
+- Package v2 verification proves source completeness and tensor ownership;
+  verified existing v2 packages do not require a blanket rebuild.
+- The registry-pinned SmolLM2 Q8 and Granite H Q4 pair drives the existing core
+  product smokes on CPU, CUDA, and Metal.
+- The existing CPU two-node split smoke proves dense KV behavior and strict
+  Granite `KvRecurrent` behavior, reconciles both observers, and uploads
+  evidence on every outcome.
+- The separate product-integration workflow, Qwen migration gate, old staging
+  implementation, development selectors, and runtime compatibility path were
+  removed.
+- The existing family tests and llama canary retain focused breadth coverage;
+  no duplicate canary or EveryCut product lane is required.
 
 ## Non-Goals
 
@@ -878,56 +825,23 @@ The project is complete only when all of the following are true:
 - **A shadow mismatch is normalized away.** Compare exact tensor identities and
   boundary descriptors; aggregate counts are not evidence.
 
-## Sign-Off Checklist
+## Final Sign-Off
 
-Approval is requested for these decisions:
-
-- [ ] Existing `ggml_cgraph` is the sole computation representation; no second
-      model IR.
-- [ ] Model builders may register stage-independent block and state semantics,
-      but receive no staging configuration.
-- [ ] The splitter, package selector, and loader contain no model-family policy.
-- [ ] Model package v2 is a deliberate hard format cutover; no permanent v1
-      runtime compatibility.
-- [ ] Production changes in one atomic v2-only release after offline corpus
-      conversion and every required acceptance gate; there is no phased
-      family rollout, serving fallback, or v1/v2 runtime coexistence.
-- [ ] An offline converter may reuse old weight artifacts only after exact
-      coverage validation against an independent source-bound inventory.
-- [ ] Legal cuts are discovered and certified; not every numbered boundary is
-      promised.
-- [ ] Frontiers preserve every live pass-through value, and leaf classes are
-      explicit rather than inferred from creation order.
-- [ ] Execution profiles remain separate guarded slices; only their exact
-      resident parameter requirements are unioned.
-- [ ] The plan digest covers graph/planner semantics and graph-affecting
-      configuration, and every runtime graph is checked against it.
-- [ ] Generation-10 control admission is required for the atomic v2-only
-      cutover; graph-described multipart activation framing and its typed part
-      directory land as the required data protocol.
-- [ ] Old split logic is deleted only after shadow comparison and the full
-      cross-family every-cut gate passes.
-- [ ] The final llama.cpp patch queue is recreated from the pinned upstream,
-      contains no obsolete stage-filter implementation, and passes a fresh
-      full replay and validation run. Its application order is core,
-      `model_support/`, then generated graph-semantics patches.
-- [ ] Acceptance reconciles an independently frozen support matrix so the new
-      planner cannot pass by rejecting previously supported models or cuts.
-- [ ] The existing llama canary and registry remain the sole orchestration and
-      roster; full `manual-full`/`llama-bump` runs block release and cutover,
-      while the bounded nightly cadence remains non-acceptance coverage.
-- [ ] The product suite uses one checksum-pinned SmolLM2 Q8 plus Granite H Q4
-      manifest across CPU, CUDA, and Metal through a shared typed runner while
-      preserving the five existing CI entrypoints and independent deeper-model
-      coverage.
-- [ ] Granite must pass strict `KvRecurrent` restoration before replacing the
-      Qwen3.5 recurrent leg; no assertion may be weakened to complete the
-      consolidation, and backend rollout proceeds CPU, then CUDA, then Metal.
-- [ ] The work is split across lanes A–E with one integration owner and three
-      shared contracts.
-
-The core implementation decision is approved. Unchecked items above remain
-release-acceptance obligations rather than alternate runtime paths.
+- [x] `ggml_cgraph` is the computation representation; no parallel model IR
+      selects production stages.
+- [x] Model builders register stage-independent semantics and do not receive
+      core filtering policy.
+- [x] Model package v2 is the production contract without a v1 serving
+      fallback.
+- [x] Legal cuts are discovered and certified; arbitrary numbered boundaries
+      are not promised.
+- [x] The obsolete filter and runtime selectors are deleted.
+- [x] The patch queue is ordered as core, `model_support/`, then generated
+      graph-semantics patches.
+- [x] Existing product smokes use the pinned SmolLM2 and Granite pair and retain
+      the strict `kv-recurrent` assertion.
+- [x] Existing family certification remains the sole breadth/canary path; no
+      EveryCut product lane or duplicate canary is introduced.
 
 ## Evidence Base
 

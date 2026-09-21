@@ -1,615 +1,228 @@
 name: llama.cpp Upstream Canary
-
 on:
   schedule:
     - cron: "47 3 * * *"
   workflow_dispatch:
     inputs:
       upstream_sha:
-        description: "Optional llama.cpp upstream SHA to validate instead of origin/master"
-        required: false
+        description: Optional exact upstream commit (defaults to upstream master)
+        type: string
+        default: ''
       force_certify:
-        description: "Run build, smoke, and the supported-families battery even when the requested upstream SHA already matches the pin."
-        required: false
+        description: Run the complete family roster even when the pin is unchanged
         type: boolean
         default: false
-
-# This workflow always checks out and executes trusted default-branch content.
-# It must never execute a caller-selected ref on the persistent
-# `family-certify` self-hosted runner. The job token is read-only. Changed pins
-# are repaired by one agent, independently verified by the harness, and then
-# published from a fresh GitHub-hosted job; unchanged nightly sentinels remain
-# read-only.
 permissions:
   contents: read
-
+defaults:
+  run:
+    shell: bash
+concurrency:
+  group: llama-upstream-canary
+  cancel-in-progress: false
 jobs:
-  latest-upstream:
-    concurrency:
-      group: llama-upstream-canary-runner
-      # A scheduled run queues behind an active manual repair instead of
-      # discarding hours of agent and native-build work on the persistent runner.
-      cancel-in-progress: false
-    runs-on: [self-hosted, family-certify]
-    # 11.5h repair admission + final 12h gate pass + setup/upload margin.
-    timeout-minutes: 1430
+  resolve:
+    if: github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
     outputs:
-      changed: ${{ steps.sha.outputs.changed }}
-      candidate_ready: ${{ steps.changed_result.outputs.ready }}
-      candidate_branch: ${{ steps.changed_canary.outputs.branch }}
-      candidate_head: ${{ steps.changed_canary.outputs.head }}
-      candidate_upstream: ${{ steps.sha.outputs.new_sha }}
-    permissions:
-      contents: read
-    env:
-      LLAMA_UPSTREAM_CANARY_SMOKE: ${{ vars.LLAMA_UPSTREAM_CANARY_SMOKE || '1' }}
-      MESH_LLM_REQUIRE_SCCACHE: "1"
-      SCCACHE_DIR: /Users/lab/Library/Caches/mesh-llm/sccache/llama-canary-arm64
-      # A persistent runner can retain a CMake cache from a different host
-      # architecture. Build every canary in a run-unique directory, and feed
-      # that exact native closure to all Rust, smoke, and battery commands.
-      LLAMA_BUILD_DIR: ${{ github.workspace }}/.deps/llama-canary-${{ github.run_id }}-${{ github.run_attempt }}
-      LLAMA_STAGE_BUILD_DIR: ${{ github.workspace }}/.deps/llama-canary-${{ github.run_id }}-${{ github.run_attempt }}
-      LLAMA_STAGE_BACKEND: metal
-      # Models are never cached through GitHub Actions cache. The
-      # family-certify runner ships a large pre-warmed HF cache exported as
-      # HF_CACHE; scripts/skippy-family-battery.sh normalizes it into
-      # HF_HOME/HF_HUB_CACHE for read-only resolution.
-      FORCE_CERTIFY: ${{ inputs.force_certify && 'true' || 'false' }}
+      source: ${{ steps.resolve.outputs.source }}
+      upstream: ${{ steps.resolve.outputs.upstream }}
+      changed: ${{ steps.resolve.outputs.changed }}
+      certify: ${{ steps.resolve.outputs.certify }}
+      mode: ${{ steps.resolve.outputs.mode }}
     steps:
-      # A manual dispatch can be issued from any ref, but the persistent runner
-      # always executes the trusted default branch with a read-only token.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: main
-          fetch-depth: 1
+          ref: ${{ github.sha }}
           persist-credentials: false
-
-      - name: Configure canary Git identity
-        run: |
-          git config --local user.name "mesh-llama-canary-bot"
-          git config --local user.email "llama-canary-bot@meshllm.invalid"
-
-      - name: Verify runner toolchain
-        run: |
-          set -euo pipefail
-          source scripts/lib/macos-deployment-target.sh
-          echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET" >> "$GITHUB_ENV"
-          missing=0
-          goose_dir="/Users/lab/.local/bin"
-          export PATH="$goose_dir:$PATH"
-          echo "$goose_dir" >> "$GITHUB_PATH"
-          for cmd in cargo just sccache jq python3 uv cmake ninja hf git-lfs lipo brew xcrun goose; do
-            if ! command -v "$cmd" >/dev/null 2>&1; then
-              echo "missing on family-certify image: $cmd" >&2
-              missing=1
-            fi
-          done
-          if command -v goose >/dev/null 2>&1; then
-            goose_status=0
-            goose_version="$(goose --version 2>&1)" || goose_status=$?
-            if (( goose_status != 0 )); then
-              echo "goose failed its executable preflight with status $goose_status; repair the family-certify runner installation" >&2
-              missing=1
-            elif [[ -z "$goose_version" ]]; then
-              echo "goose returned no version; repair the family-certify runner installation" >&2
-              missing=1
-            else
-              echo "goose version: $goose_version"
-            fi
-          fi
-          expected_hf_cache="/Users/lab/models/huggingface"
-          if [[ "${HF_CACHE:-}" != "$expected_hf_cache" ]]; then
-            echo "HF_CACHE must be $expected_hf_cache on this runner; got: ${HF_CACHE:-<unset>}" >&2
-            missing=1
-          fi
-          if [[ ! -d "$expected_hf_cache/hub" ]]; then
-            echo "pre-warmed Hugging Face hub cache is missing: $expected_hf_cache/hub" >&2
-            missing=1
-          fi
-          if [[ "${HF_HUB_OFFLINE:-}" != "1" ]]; then
-            echo "HF_HUB_OFFLINE must be 1 on the read-only family-certify runner" >&2
-            missing=1
-          fi
-          {
-            echo "HF_HOME=$expected_hf_cache"
-            echo "HF_HUB_CACHE=$expected_hf_cache/hub"
-            echo "HF_HUB_OFFLINE=1"
-          } >> "$GITHUB_ENV"
-          # Match scripts/check-skippy-generated-family-patch.sh: prefer the
-          # pinned llvm@22, but accept any Homebrew LLVM that provides Clang
-          # LibTooling (bin/clang + ClangConfig.cmake) so a runner image whose
-          # pinned keg was rotated out does not fail the whole canary.
-          llvm_prefix="$(brew --prefix llvm@22 2>/dev/null || true)"
-          llvm_ok() {
-            [[ -n "$1" && -x "$1/bin/clang" && -f "$1/lib/cmake/clang/ClangConfig.cmake" ]]
-          }
-          if ! llvm_ok "$llvm_prefix"; then
-            echo "pinned llvm@22 missing or incomplete on the family-certify image; falling back to $(brew --prefix llvm 2>/dev/null || echo 'brew llvm')" >&2
-            llvm_prefix="$(brew --prefix llvm 2>/dev/null || true)"
-          fi
-          if ! llvm_ok "$llvm_prefix"; then
-            echo "no Homebrew LLVM with Clang LibTooling is installed on the family-certify image" >&2
-            missing=1
-          else
-            echo "SKIPPY_REWRITER_LLVM_PREFIX=$llvm_prefix" >> "$GITHUB_ENV"
-          fi
-          git lfs install --force
-          if (( missing == 1 )); then
-            echo "bake the missing tools into the family-certify runner image; this job installs nothing" >&2
-            exit 1
-          fi
-
-      - name: Isolate compiler cache identity
-        run: |
-          set -euo pipefail
-          mkdir -p "$SCCACHE_DIR"
-          cache_buster="$({
-            printf '%s\n' 'platform=macos' 'architecture=arm64' 'backend=metal' 'profile=release' 'cmake-osx-architectures=arm64'
-            printf 'macos-deployment-target=%s\n' "$MACOSX_DEPLOYMENT_TARGET"
-            rustc -vV
-            cc --version
-            xcrun --show-sdk-path
-            xcrun --show-sdk-build-version
-            git ls-files -s -- .cargo/config.toml scripts/build-llama.sh scripts/package-native-runtime.sh third_party/llama.cpp/upstream.txt third_party/llama.cpp/patches
-          } | shasum -a 256 | awk '{print $1}')"
-          echo "SCCACHE_C_CUSTOM_CACHE_BUSTER=$cache_buster" >> "$GITHUB_ENV"
-          sccache --start-server >/dev/null 2>&1 || true
-          sccache --zero-stats
-
-      - name: Resolve requested llama.cpp upstream
-        id: sha
+      - name: Freeze trusted source and requested upstream
+        id: resolve
         env:
-          UPSTREAM_SHA: ${{ github.event.inputs.upstream_sha || 'latest' }}
+          UPSTREAM: ${{ inputs.upstream_sha }}
+          FORCE: ${{ inputs.force_certify }}
         run: |
           set -euo pipefail
-          old_sha="$(tr -d '[:space:]' < third_party/llama.cpp/upstream.txt)"
-          new_sha="$UPSTREAM_SHA"
-          if [[ "$new_sha" == "latest" || -z "$new_sha" ]]; then
-            new_sha="$(git ls-remote https://github.com/ggml-org/llama.cpp.git master | awk '{print $1}')"
+          old="$(tr -d '[:space:]' < third_party/llama.cpp/upstream.txt)"
+          upstream="$UPSTREAM"
+          if [[ -z "$upstream" || "$upstream" == latest ]]; then
+            upstream="$(git ls-remote https://github.com/ggml-org/llama.cpp.git master | awk '{print $1}')"
           fi
-          if [[ ! "$new_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "requested upstream must resolve to a 40-hex commit" >&2
-            exit 1
+          [[ "$upstream" =~ ^[0-9a-f]{40}$ ]]
+          changed=false
+          mode=pinned-build
+          certify=false
+          if [[ "$old" != "$upstream" ]]; then
+            changed=true
+            mode=repair-build
+          fi
+          if [[ "$changed" == true || "$FORCE" == true || "$GITHUB_EVENT_NAME" == schedule ]]; then
+            certify=true
           fi
           {
-            echo "old_sha=$old_sha"
-            echo "new_sha=$new_sha"
-            if [[ "$old_sha" == "$new_sha" ]]; then
-              echo "changed=false"
-            else
-              echo "changed=true"
-            fi
-            if [[ "$old_sha" != "$new_sha" ]]; then
-              echo "certify=true"
-              echo "cadence=llama-bump"
-            elif [[ "$FORCE_CERTIFY" == "true" ]]; then
-              echo "certify=true"
-              echo "cadence=manual-full"
-            elif [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
-              echo "certify=true"
-              echo "cadence=nightly"
-            else
-              echo "certify=false"
-              echo "cadence="
-            fi
+            echo "source=$(git rev-parse HEAD)"
+            echo "upstream=$upstream"
+            echo "changed=$changed"
+            echo "mode=$mode"
+            echo "certify=$certify"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Changed-pin agent developer task
-        id: changed_canary
-        if: steps.sha.outputs.changed == 'true'
-        timeout-minutes: 1420
-        continue-on-error: true
-        env:
-          CANARY_AGENT_PROVIDER: ${{ vars.LLAMA_CANARY_GOOSE_PROVIDER || 'zai_coding_plan' }}
-          CANARY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_GOOSE_MODEL || 'glm-5.3-flash' }}
-          # Admit coding turns for 11.5h; each returned candidate gets a full
-          # 12h gate pass. Independent verification follows in its own job.
-          CANARY_AGENT_TIMEOUT_SECONDS: "41400"
-          CANARY_VERIFICATION_TIMEOUT_SECONDS: "43200"
-          CANARY_HARNESS_MODE: repair
-          FAMILY_BATTERY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-          UPSTREAM_SHA_INPUT: ${{ steps.sha.outputs.new_sha }}
-        run: scripts/llama-canary-agent-repair.sh
+  repair-1:
+    needs: [resolve]
+    if: ${{ needs.resolve.outputs.certify == 'true' }}
+    uses: ./.github/workflows/llama-canary-family-pass.yml
+    with:
+      source: ${{ needs.resolve.outputs.source }}
+      upstream: ${{ needs.resolve.outputs.upstream }}
+      pass_id: repair-1
+      mode: ${{ needs.resolve.outputs.mode }}
 
-      - name: Upload changed-pin agent candidate
-        id: candidate_upload
-        if: >-
-          !cancelled()
-          && steps.sha.outputs.changed == 'true'
-          && steps.changed_canary.outcome == 'success'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: llama-canary-agent-candidate-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ steps.changed_canary.outputs.candidate_bundle }}
-          if-no-files-found: error
-          retention-days: 1
+  verify-1:
+    needs: [resolve, repair-1]
+    if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.repair-1.outputs.green == 'true' }}
+    uses: ./.github/workflows/llama-canary-family-pass.yml
+    with:
+      source: ${{ needs.resolve.outputs.source }}
+      upstream: ${{ needs.resolve.outputs.upstream }}
+      pass_id: verify-1
+      mode: verify-build
+      previous_package: ${{ needs.repair-1.outputs.package }}
+      previous_identity: ${{ needs.repair-1.outputs.identity }}
+      previous_head: ${{ needs.repair-1.outputs.head }}
 
-      - name: Upload changed-pin canary evidence
-        if: ${{ steps.sha.outputs.changed == 'true' && (success() || failure() || cancelled()) }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: llama-canary-changed-pin-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            .deps/llama-canary-state-${{ github.run_id }}-${{ github.run_attempt }}/
-          if-no-files-found: warn
-          retention-days: 14
+  repair-2:
+    needs: [resolve, repair-1, verify-1]
+    if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.repair-1.outputs.head != '' && needs.verify-1.outputs.green != 'true' }}
+    uses: ./.github/workflows/llama-canary-family-pass.yml
+    with:
+      source: ${{ needs.resolve.outputs.source }}
+      upstream: ${{ needs.resolve.outputs.upstream }}
+      pass_id: repair-2
+      mode: ${{ needs.resolve.outputs.mode }}
+      previous_package: ${{ needs.repair-1.outputs.package }}
+      previous_identity: ${{ needs.repair-1.outputs.identity }}
+      previous_head: ${{ needs.repair-1.outputs.head }}
+      feedback_pattern: llama-family-${{ github.run_id }}-${{ github.run_attempt }}-*-1-*
+      feedback_build_pattern: llama-build-${{ github.run_id }}-${{ github.run_attempt }}-*-1
 
-      - name: Report changed-pin result
-        id: changed_result
-        if: ${{ !cancelled() && steps.sha.outputs.changed == 'true' }}
-        env:
-          CHANGED_CANARY_OUTCOME: ${{ steps.changed_canary.outcome }}
-          CANDIDATE_UPLOAD_OUTCOME: ${{ steps.candidate_upload.outcome }}
-        run: |
-          set -euo pipefail
-          {
-            echo "## llama.cpp changed-pin canary"
-            echo
-            if [[ "$CHANGED_CANARY_OUTCOME" != "success" ]]; then
-              echo "The agent task failed. No canary branch or pull request was published; inspect the uploaded evidence."
-            elif [[ "$CANDIDATE_UPLOAD_OUTCOME" != "success" ]]; then
-              echo "The agent finished, but its candidate bundle could not be handed to the isolated verifier. No branch or pull request was published."
-            else
-              echo "The agent completed the update. Its candidate bundle is ready for the separate verification job."
-              echo "ready=true" >> "$GITHUB_OUTPUT"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-          if [[ "$CHANGED_CANARY_OUTCOME" != "success" || "$CANDIDATE_UPLOAD_OUTCOME" != "success" ]]; then
-            exit 1
-          fi
+  verify-2:
+    needs: [resolve, repair-2]
+    if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.repair-2.outputs.green == 'true' }}
+    uses: ./.github/workflows/llama-canary-family-pass.yml
+    with:
+      source: ${{ needs.resolve.outputs.source }}
+      upstream: ${{ needs.resolve.outputs.upstream }}
+      pass_id: verify-2
+      mode: verify-build
+      previous_package: ${{ needs.repair-2.outputs.package }}
+      previous_identity: ${{ needs.repair-2.outputs.identity }}
+      previous_head: ${{ needs.repair-2.outputs.head }}
 
-      - name: Prepare pinned llama.cpp upstream
-        id: prepare
-        if: steps.sha.outputs.changed != 'true' && steps.sha.outputs.certify == 'true'
-        run: scripts/prepare-llama.sh pinned
+  repair-3:
+    needs: [resolve, repair-2, verify-2]
+    if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.repair-2.outputs.head != '' && needs.verify-2.outputs.green != 'true' }}
+    uses: ./.github/workflows/llama-canary-family-pass.yml
+    with:
+      source: ${{ needs.resolve.outputs.source }}
+      upstream: ${{ needs.resolve.outputs.upstream }}
+      pass_id: repair-3
+      mode: ${{ needs.resolve.outputs.mode }}
+      previous_package: ${{ needs.repair-2.outputs.package }}
+      previous_identity: ${{ needs.repair-2.outputs.identity }}
+      previous_head: ${{ needs.repair-2.outputs.head }}
+      feedback_pattern: llama-family-${{ github.run_id }}-${{ github.run_attempt }}-*-2-*
+      feedback_build_pattern: llama-build-${{ github.run_id }}-${{ github.run_attempt }}-*-2
 
-      - name: Parity manifest validation (boundary registration gate)
-        id: parity_validate
-        # Fail closed when llama-parity-candidates.json is not fully
-        # classified: runnable rows must register begin_block/end_block (or
-        # carry an explicit unsupported_reason on a non-runnable
-        # classification), and every model_pin must be immutable. A failure
-        # here is a manifest defect. Keep the remaining evidence-producing
-        # steps available, then fail the unchanged-pin run at the final gate.
-        if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true'
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          python3 scripts/skippy-llama-parity.py --llama-src .deps/llama.cpp validate
+  verify-3:
+    needs: [resolve, repair-3]
+    if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.repair-3.outputs.green == 'true' }}
+    uses: ./.github/workflows/llama-canary-family-pass.yml
+    with:
+      source: ${{ needs.resolve.outputs.source }}
+      upstream: ${{ needs.resolve.outputs.upstream }}
+      pass_id: verify-3
+      mode: verify-build
+      previous_package: ${{ needs.repair-3.outputs.package }}
+      previous_identity: ${{ needs.repair-3.outputs.identity }}
+      previous_head: ${{ needs.repair-3.outputs.head }}
 
-      - name: Plan and verify family certification cache
-        id: family_plan
-        if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true'
-        env:
-          FAMILY_BATTERY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          plan="target/family-battery/$FAMILY_BATTERY_RUN_ID/policy-plan.json"
-          python3 scripts/plan-family-battery.py \
-            --manifest ci/llama-canary/family-certified.json \
-            --shard-count 1 \
-            --check-cache \
-            --cache-root "$HF_CACHE" \
-            --output "$plan" \
-            --github-output "$GITHUB_OUTPUT"
-
-      - name: Build patched llama.cpp ABI
-        if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true'
-        # The family-certify service can itself be launched under Rosetta.
-        # Select the native slice for the build shell as well as the CMake
-        # target so host detection and produced archives are both arm64. Build
-        # and run the complete upstream llama.cpp CTest suite in addition to
-        # the private Skippy native tests.
-        env:
-          LLAMA_STAGE_UPSTREAM_TESTS: "ON"
-        run: uv run --no-project --with jinja2==3.1.6 -- arch -arm64 bash scripts/build-llama.sh -DCMAKE_OSX_ARCHITECTURES=arm64
-
-      - name: Verify native archive architecture
-        if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true'
-        run: |
-          set -euo pipefail
-          archive="${LLAMA_STAGE_BUILD_DIR:?}/src/libllama.a"
-          arches="$(lipo -archs "$archive")"
-          if [[ "$arches" != "arm64" ]]; then
-            echo "canary native archive must be arm64, got: $arches" >&2
-            exit 1
-          fi
-          sccache --show-stats
-
-      - name: Verify generated model-family patch
-        id: family_patch
-        if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true'
-        continue-on-error: true
-        env:
-          SKIPPY_REWRITER_ARTIFACT_ROOT: ${{ github.workspace }}/target/skippy-stage-rewriter-check
-        run: scripts/check-skippy-generated-family-patch.sh
-
-      - name: Build stage runtime crates
-        if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' && steps.family_patch.outcome == 'success'
-        # Do not select skippy-ffi directly here: its default dynamic-runtime
-        # feature would be unified into the statically linked certification binaries.
-        run: cargo build -p skippy-runtime -p skippy-server -p skippy-model-package -p skippy-correctness -p skippy-topology --bins
-
-      - name: Skippy smoke tests
-        if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' && steps.family_patch.outcome == 'success' && env.LLAMA_UPSTREAM_CANARY_SMOKE != '0' && env.LLAMA_UPSTREAM_CANARY_SMOKE != 'false'
-        timeout-minutes: 45
-        env:
-          WORK_DIR: ${{ runner.temp }}/skippy-ci-smoke
-        run: scripts/skippy-ci-smoke.sh
-
-      - name: Supported-families certification battery (parity gate)
-        id: battery
-        if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' && steps.family_patch.outcome == 'success'
-        # Continue so evidence uploads and the explicit unchanged-pin failure
-        # summary still run after a red family lane.
-        continue-on-error: true
-        # Preflight resolves every cached model to an immutable snapshot before
-        # any certification starts. Individual certifications are bounded by
-        # the script; this outer ceiling leaves room for the complete manifest.
-        timeout-minutes: 720
-        env:
-          FAMILY_BATTERY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-        run: scripts/skippy-family-battery.sh --skip-build --plan "${{ steps.family_plan.outputs.plan_path }}"
-
-      - name: Verify split certification roster
-        id: split_roster
-        if: steps.battery.outcome == 'success'
-        continue-on-error: true
-        run: python3 scripts/generate-split-certified.py --check
-
-      - name: Upload supported-families battery evidence
-        if: ${{ steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' && (success() || failure() || cancelled()) }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: llama-family-battery-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            target/family-battery/${{ github.run_id }}-${{ github.run_attempt }}/
-            target/skippy-stage-rewriter-check/
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Generate summary
-        if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' && steps.family_patch.outcome == 'success'
-        env:
-          SKIPPY_CI_SMOKE: ${{ env.LLAMA_UPSTREAM_CANARY_SMOKE }}
-        run: |
-          scripts/summarize-llama-upstream.sh \
-            "${{ steps.sha.outputs.old_sha }}" \
-            "${{ steps.sha.outputs.new_sha }}" \
-            .deps/llama.cpp \
-            > /tmp/llama-upstream-pr.md
-
-      - name: Report forced certification result
-        # Same truthfulness: all certification lanes green, not battery only.
-        if: >-
-          steps.prepare.outcome == 'success'
-          && steps.sha.outputs.cadence == 'manual-full'
-          && steps.battery.outcome == 'success'
-          && steps.split_roster.outcome == 'success'
-          && steps.parity_validate.outcome == 'success'
-          && steps.family_patch.outcome == 'success'
-        run: |
-          {
-            echo "## llama.cpp upstream canary (forced certification)"
-            echo
-            echo "The pinned upstream passed the requested full family battery. No pin update was needed."
-            echo
-            cat /tmp/llama-upstream-pr.md
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Report nightly family result
-        # Nightly: generated patch, parity, and battery gates must all
-        # be green.
-        if: >-
-          steps.prepare.outcome == 'success'
-          && steps.sha.outputs.cadence == 'nightly'
-          && steps.battery.outcome == 'success'
-          && steps.split_roster.outcome == 'success'
-          && steps.parity_validate.outcome == 'success'
-          && steps.family_patch.outcome == 'success'
-        run: |
-          {
-            echo "## llama.cpp nightly family sentinels"
-            echo
-            echo "The pinned upstream passed the dense, hybrid/composite, and recurrent sentinel battery."
-            echo
-            echo "Certified families: ${{ steps.family_plan.outputs.family_count }}"
-            cat /tmp/llama-upstream-pr.md
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Fail unsuccessful unchanged-pin certification
-        if: >-
-          steps.sha.outputs.changed != 'true'
-          && steps.sha.outputs.certify == 'true'
-          && (steps.battery.outcome == 'failure'
-              || steps.split_roster.outcome == 'failure'
-              || steps.parity_validate.outcome == 'failure'
-              || steps.family_patch.outcome == 'failure')
-        run: |
-          {
-            echo "## llama.cpp unchanged-pin certification failed"
-            echo
-            echo "Inspect the uploaded family evidence. Agent repair is reserved for changed upstream pins; unchanged nightly and forced checks never modify or publish repository state."
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit 1
-
-  verify-changed-canary:
-    name: Independently verify changed-pin candidate
-    needs: latest-upstream
-    if: ${{ needs.latest-upstream.outputs.candidate_ready == 'true' }}
-    concurrency:
-      group: llama-upstream-canary-runner
-      cancel-in-progress: false
-    runs-on: [self-hosted, family-certify]
-    timeout-minutes: 780
+  result:
+    needs: [resolve, repair-1, verify-1, repair-2, verify-2, repair-3, verify-3]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
     outputs:
-      certified_ready: ${{ steps.verification_result.outputs.ready }}
-      certified_branch: ${{ steps.verify.outputs.branch }}
-      certified_head: ${{ steps.verify.outputs.head }}
-    permissions:
-      contents: read
-    env:
-      MESH_LLM_REQUIRE_SCCACHE: "1"
-      SCCACHE_DIR: /Users/lab/Library/Caches/mesh-llm/sccache/llama-canary-arm64
-      LLAMA_BUILD_DIR: ${{ github.workspace }}/.deps/llama-canary-verify-${{ github.run_id }}-${{ github.run_attempt }}
-      LLAMA_STAGE_BUILD_DIR: ${{ github.workspace }}/.deps/llama-canary-verify-${{ github.run_id }}-${{ github.run_attempt }}
-      LLAMA_STAGE_BACKEND: metal
-      HF_CACHE: /Users/lab/models/huggingface
-      HF_HOME: /Users/lab/models/huggingface
-      HF_HUB_CACHE: /Users/lab/models/huggingface/hub
-      HF_HUB_OFFLINE: "1"
+      package: ${{ steps.result.outputs.package }}
+      identity: ${{ steps.result.outputs.identity }}
+      head: ${{ steps.result.outputs.head }}
+      branch: ${{ steps.result.outputs.branch }}
+      publish: ${{ steps.result.outputs.publish }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          ref: main
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Configure canary Git identity
-        run: |
-          git config --local user.name "mesh-llama-canary-bot"
-          git config --local user.email "llama-canary-bot@meshllm.invalid"
-
-      - name: Configure verifier LLVM
+      - name: Require complete certification and independent verification
+        id: result
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
         run: |
           set -euo pipefail
-          source scripts/lib/macos-deployment-target.sh
-          echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET" >> "$GITHUB_ENV"
-          llvm_prefix="$(brew --prefix llvm@22 2>/dev/null || true)"
-          llvm_ok() {
-            [[ -n "$1" && -x "$1/bin/clang" && -f "$1/lib/cmake/clang/ClangConfig.cmake" ]]
-          }
-          if ! llvm_ok "$llvm_prefix"; then
-            echo "pinned llvm@22 missing or incomplete on the family-certify image; falling back to $(brew --prefix llvm 2>/dev/null || echo 'brew llvm')" >&2
-            llvm_prefix="$(brew --prefix llvm 2>/dev/null || true)"
-          fi
-          if ! llvm_ok "$llvm_prefix"; then
-            echo "no Homebrew LLVM with Clang LibTooling is installed on the family-certify image" >&2
-            exit 1
-          fi
-          echo "SKIPPY_REWRITER_LLVM_PREFIX=$llvm_prefix" >> "$GITHUB_ENV"
-
-      - name: Isolate compiler cache identity
-        run: |
-          set -euo pipefail
-          mkdir -p "$SCCACHE_DIR"
-          cache_buster="$({
-            printf '%s\n' 'platform=macos' 'architecture=arm64' 'backend=metal' 'profile=release' 'cmake-osx-architectures=arm64'
-            printf 'macos-deployment-target=%s\n' "$MACOSX_DEPLOYMENT_TARGET"
-            rustc -vV
-            cc --version
-            xcrun --show-sdk-path
-            xcrun --show-sdk-build-version
-            git ls-files -s -- .cargo/config.toml scripts/build-llama.sh scripts/package-native-runtime.sh third_party/llama.cpp/upstream.txt third_party/llama.cpp/patches
-          } | shasum -a 256 | awk '{print $1}')"
-          echo "SCCACHE_C_CUSTOM_CACHE_BUSTER=$cache_buster" >> "$GITHUB_ENV"
-          sccache --start-server >/dev/null 2>&1 || true
-          sccache --zero-stats
-
-      - name: Download agent candidate
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: llama-canary-agent-candidate-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/llama-canary-agent-candidate
-
-      - name: Run independent changed-pin verification
-        id: verify
-        continue-on-error: true
-        env:
-          CANARY_HARNESS_MODE: verify
-          CANARY_INPUT_BUNDLE: ${{ runner.temp }}/llama-canary-agent-candidate/candidate.bundle
-          CANARY_CANDIDATE_SHA: ${{ needs.latest-upstream.outputs.candidate_head }}
-          CANARY_VERIFICATION_TIMEOUT_SECONDS: "43200"
-          FAMILY_BATTERY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-          UPSTREAM_SHA_INPUT: ${{ needs.latest-upstream.outputs.candidate_upstream }}
-        run: scripts/llama-canary-agent-repair.sh
-
-      - name: Show compiler cache stats
-        if: ${{ success() || failure() }}
-        run: sccache --show-stats
-
-      - name: Upload independently certified candidate
-        id: certified_upload
-        if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: llama-canary-certified-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ steps.verify.outputs.candidate_bundle }}
-            ${{ steps.verify.outputs.pr_body }}
-          if-no-files-found: error
-          retention-days: 1
-
-      - name: Upload changed-pin verification evidence
-        if: ${{ success() || failure() || cancelled() }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: llama-canary-verification-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .deps/llama-canary-state-${{ github.run_id }}-${{ github.run_attempt }}/
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Report independent verification result
-        id: verification_result
-        if: ${{ !cancelled() }}
-        env:
-          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
-          UPLOAD_OUTCOME: ${{ steps.certified_upload.outcome }}
-        run: |
-          if [[ "$VERIFY_OUTCOME" == "success" && "$UPLOAD_OUTCOME" == "success" ]]; then
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "The independent changed-pin verification or certified-bundle upload failed. No branch or pull request was published." >> "$GITHUB_STEP_SUMMARY"
-          exit 1
+          python3 - <<'PYCODE'
+          import json, os
+          needs = json.loads(os.environ['NEEDS_JSON'])
+          resolve = needs['resolve']
+          if resolve['result'] != 'success':
+              raise SystemExit('trusted source resolution failed')
+          if resolve['outputs']['certify'] != 'true':
+              raise SystemExit(0)
+          changed = resolve['outputs']['changed'] == 'true'
+          if not changed:
+              if needs['repair-1']['outputs'].get('green') != 'true':
+                  raise SystemExit('unchanged-pin family certification failed')
+              raise SystemExit(0)
+          for attempt in range(1, 4):
+              repair = needs[f'repair-{attempt}']['outputs']
+              verify = needs[f'verify-{attempt}']['outputs']
+              if repair.get('green') == verify.get('green') == 'true' and repair['head'] == verify['head']:
+                  with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+                      output.write('publish=true\n')
+                      for key in ('package', 'identity', 'head', 'branch'):
+                          output.write(f'{key}={verify[key]}\n')
+                  break
+          else:
+              raise SystemExit('repair or independent family verification exhausted three attempts; publication denied')
+          PYCODE
 
   publish-certified-canary:
-    name: Publish certified changed-pin PR
-    needs: verify-changed-canary
-    if: ${{ needs.verify-changed-canary.outputs.certified_ready == 'true' }}
+    needs: [resolve, result]
+    if: ${{ needs.result.outputs.publish == 'true' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: main
+          ref: ${{ needs.resolve.outputs.source }}
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Download exact certified candidate
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: llama-canary-certified-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .canary-candidate
-
+          name: ${{ needs.result.outputs.package }}
+          path: ${{ runner.temp }}/certified-canary
+      - name: Verify final handoff and write evidence summary
+        env:
+          IDENTITY: ${{ needs.result.outputs.identity }}
+        run: |
+          set -euo pipefail
+          python3 scripts/llama-canary-family-evidence.py publication --package "$RUNNER_TEMP/certified-canary" --identity "$IDENTITY"
       - name: Publish ready pull request
         id: publish
         env:
-          CANARY_BRANCH: ${{ needs.verify-changed-canary.outputs.certified_branch }}
-          CANARY_CERTIFIED_SHA: ${{ needs.verify-changed-canary.outputs.certified_head }}
-          CANARY_BUNDLE: ${{ github.workspace }}/.canary-candidate/candidate.bundle
-          CANARY_PR_BODY: ${{ github.workspace }}/.canary-candidate/pr-body.md
+          CANARY_BRANCH: ${{ needs.result.outputs.branch }}
+          CANARY_CERTIFIED_SHA: ${{ needs.result.outputs.head }}
+          CANARY_BUNDLE: ${{ runner.temp }}/certified-canary/candidate.bundle
+          CANARY_PR_BODY: ${{ runner.temp }}/certified-canary/pr-body.md
           CANARY_REPAIR_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}
         run: scripts/llama-canary-publish.sh
-
-      - name: Report published pull request
-        env:
-          PR_URL: ${{ steps.publish.outputs.pr_url }}
-        run: |
-          {
-            echo "## llama.cpp changed-pin canary"
-            echo
-            echo "The agent completed the update, the isolated verification handoff passed, and a ready-for-review PR was published at ${PR_URL}."
-          } >> "$GITHUB_STEP_SUMMARY"
 
   alert-consecutive-failures:
     name: Alert after consecutive scheduled failures
     if: ${{ !cancelled() && github.event_name == 'schedule' }}
-    needs: [latest-upstream, verify-changed-canary, publish-certified-canary]
+    needs: [resolve, result, publish-certified-canary]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -621,9 +234,9 @@ jobs:
         continue-on-error: true
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         env:
-          CHANGED: ${{ needs.latest-upstream.outputs.changed }}
-          REPAIR_RESULT: ${{ needs.latest-upstream.result }}
-          VERIFY_RESULT: ${{ needs.verify-changed-canary.result }}
+          CHANGED: ${{ needs.resolve.outputs.changed }}
+          REPAIR_RESULT: ${{ needs.result.result }}
+          VERIFY_RESULT: ${{ needs.result.result }}
           PUBLISH_RESULT: ${{ needs.publish-certified-canary.result }}
         with:
           script: |
