@@ -424,6 +424,14 @@ The immutable model cache remains offline and read-only. One workflow-level
 non-cancelling concurrency group prevents overlapping canary runs, while
 family jobs have no shared concurrency group and use at most eight runners.
 
+Manual `mesh_ref` is an explicitly authorized trusted-code path, not a PR
+runner exception. Keep the workflow/controller on protected main, resolve only
+same-repository branch-reachable commits once, and bind the controller and
+selected source independently in every handoff. Certify the selected revision's
+existing pin and patches without repair or publication. Selected build scripts
+and battery code execute on persistent lab runners, so operators must choose
+trusted revisions; a main controller does not sandbox that source.
+
 Changed pins have at most three distributed repair attempts. Within each
 attempt, prepare/build failures return to the same bounded Goose session.
 Family or independent-verification failures feed the preserved candidate and

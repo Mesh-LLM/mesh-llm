@@ -105,8 +105,12 @@ def build(args) -> None:
         raise ValueError("invalid distributed build mode")
     if not re.fullmatch(r"(?:repair|verify)-[1-3]", pass_id):
         raise ValueError("invalid bounded pass identity")
-    root = Path.cwd()
+    root = Path(os.environ.get("CANARY_SOURCE_ROOT", Path.cwd()))
     env = dict(os.environ)
+    selected = env.get("CANARY_MESH_SOURCE")
+    if selected and (mode != "pinned-build" or env.get("CANARY_PREVIOUS_PACKAGE")
+                     or git(root, "rev-parse", "HEAD") != selected):
+        raise ValueError("selected source requires an unchanged pinned-build checkout")
     previous = env.get("CANARY_PREVIOUS_PACKAGE")
     if previous:
         package = Path(previous)
@@ -116,7 +120,7 @@ def build(args) -> None:
         env["CANARY_INPUT_BUNDLE"] = str(package / "candidate.bundle")
     elif mode == "verify-build":
         raise ValueError("independent verification requires a candidate")
-    subprocess.run([str(root / "scripts/llama-canary-agent-repair.sh")], env=env, check=True)
+    subprocess.run([str(Path(__file__).resolve().with_name("llama-canary-agent-repair.sh"))], env=env, check=True)
 
 
 def publication(args) -> None:
@@ -168,7 +172,7 @@ def pack(args) -> None:
     root, dest = args.root.resolve(), args.output.resolve()
     dest.mkdir(parents=True, exist_ok=False)
     git(root, "diff", "--exit-code", args.candidate, "--")
-    planner = load_planner(root)
+    planner = load_planner(Path(__file__).resolve().parents[1])
     plan = planner.build_plan(root / "ci/llama-canary/family-certified.json", shard_count=256,
                               cache_root=Path(os.environ["HF_CACHE"]))
     validate_plan(plan)
@@ -209,6 +213,11 @@ def pack(args) -> None:
                 "manifest_sha256": plan["manifest_sha256"], "binaries_sha256": sha(dest / "binaries.tar"),
                 "workload_oracles_sha256": sha(dest / WORKLOAD_ORACLES_TAR),
                 "bundle_sha256": sha(dest / "candidate.bundle") if (dest / "candidate.bundle").exists() else None}
+    identity["controller"] = os.environ.get("CANARY_CONTROLLER_SHA", args.base)
+    identity["mesh_source"] = os.environ.get("CANARY_MESH_SOURCE", "")
+    if identity["mesh_source"] and (args.candidate != identity["mesh_source"] or args.base != args.candidate
+                                    or git(root, "rev-parse", "HEAD") != args.candidate):
+        raise ValueError("certify-only source changed during build")
     write(dest / "identity.json", identity)
     output(matrix=json.dumps(plan["github_matrix"], separators=(",", ":")),
            identity_sha256=sha(dest / "identity.json"), candidate=args.candidate, branch=args.branch)
@@ -229,6 +238,15 @@ def verify_package(directory: Path, expected: str) -> tuple[dict, dict]:
     for key in ("candidate", "base"):
         if not re.fullmatch(r"[0-9a-f]{40}", identity[key]):
             raise ValueError("invalid source identity")
+    controller = os.environ.get("CANARY_CONTROLLER_SHA")
+    if controller and identity.get("controller") != controller:
+        raise ValueError("controller revision mismatch")
+    selected = os.environ.get("CANARY_MESH_SOURCE", "")
+    if identity.get("mesh_source", "") != selected:
+        raise ValueError("selected source identity mismatch")
+    if selected and (identity["candidate"] != selected or identity["base"] != selected
+                     or identity["bundle_sha256"] or identity["pass_id"] != "repair-1"):
+        raise ValueError("certify-only package changed selected source")
     # Failed-job reruns retain the successful producer and its immutable digest.
     # The consumer attempt advances; the producer's provenance must not change.
     if (identity["run_id"] != os.environ["GITHUB_RUN_ID"]

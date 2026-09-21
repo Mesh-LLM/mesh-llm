@@ -4,6 +4,10 @@ on:
     - cron: "47 3 * * *"
   workflow_dispatch:
     inputs:
+      mesh_ref:
+        description: Trusted same-repository branch or full commit to certify as-is (no repair)
+        type: string
+        default: ''
       upstream_sha:
         description: Optional exact upstream commit (defaults to upstream master)
         type: string
@@ -25,6 +29,7 @@ jobs:
     if: github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     outputs:
+      mesh_source: ${{ steps.resolve.outputs.mesh_source }}
       source: ${{ steps.resolve.outputs.source }}
       upstream: ${{ steps.resolve.outputs.upstream }}
       changed: ${{ steps.resolve.outputs.changed }}
@@ -40,8 +45,14 @@ jobs:
         env:
           UPSTREAM: ${{ inputs.upstream_sha }}
           FORCE: ${{ inputs.force_certify }}
+          MESH_REF: ${{ inputs.mesh_ref }}
         run: |
           set -euo pipefail
+          echo "source=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          if [[ -n "$MESH_REF" ]]; then
+            python3 scripts/llama-canary-resolve-mesh-ref.py
+            exit 0
+          fi
           old="$(tr -d '[:space:]' < third_party/llama.cpp/upstream.txt)"
           upstream="$UPSTREAM"
           if [[ -z "$upstream" || "$upstream" == latest ]]; then
@@ -73,6 +84,7 @@ jobs:
     with:
       source: ${{ needs.resolve.outputs.source }}
       upstream: ${{ needs.resolve.outputs.upstream }}
+      mesh_source: ${{ needs.resolve.outputs.mesh_source }}
       pass_id: repair-1
       mode: ${{ needs.resolve.outputs.mode }}
 
@@ -170,6 +182,13 @@ jobs:
               raise SystemExit('trusted source resolution failed')
           if resolve['outputs']['certify'] != 'true':
               raise SystemExit(0)
+          selected = resolve['outputs'].get('mesh_source')
+          if selected:
+              repair = needs['repair-1']['outputs']
+              if (resolve['outputs']['changed'] != 'false' or repair.get('green') != 'true'
+                      or repair.get('head') != selected):
+                  raise SystemExit('selected MeshLLM revision certification failed')
+              raise SystemExit(0)
           changed = resolve['outputs']['changed'] == 'true'
           if not changed:
               if needs['repair-1']['outputs'].get('green') != 'true':
@@ -206,6 +225,7 @@ jobs:
       - name: Verify final handoff and write evidence summary
         env:
           IDENTITY: ${{ needs.result.outputs.identity }}
+          CANARY_CONTROLLER_SHA: ${{ needs.resolve.outputs.source }}
         run: |
           set -euo pipefail
           python3 scripts/llama-canary-family-evidence.py publication --package "$RUNNER_TEMP/certified-canary" --identity "$IDENTITY"

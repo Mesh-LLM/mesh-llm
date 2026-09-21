@@ -398,6 +398,37 @@ class FamilyEvidenceTests(unittest.TestCase):
             E.restore(SimpleNamespace(package=self.package, identity=self.digest, root=checkout))
         self.assertEqual(E.git(checkout, 'rev-parse', 'HEAD'), self.identity['base'])
 
+    def test_selected_source_and_controller_are_bound_across_reruns(self):
+        self.identity.update(controller='c'*40, mesh_source='a'*40, run_attempt='1')
+        self.save_identity()
+        with patch.dict(os.environ, CANARY_CONTROLLER_SHA='c'*40, CANARY_MESH_SOURCE='a'*40):
+            E.verify_package(self.package, self.digest)
+            for field, value in (('controller', 'd'*40), ('candidate', 'b'*40),
+                                 ('base', 'b'*40), ('mesh_source', ''), ('pass_id', 'verify-1')):
+                with self.subTest(field=field):
+                    original = self.identity[field]
+                    self.identity[field] = value
+                    self.save_identity()
+                    with self.assertRaises(ValueError):
+                        E.verify_package(self.package, self.digest)
+                    self.identity[field] = original
+            self.save_identity()
+        with self.assertRaisesRegex(ValueError, 'selected source identity'):
+            E.verify_package(self.package, self.digest)
+
+    def test_selected_source_build_uses_controller_wrapper_and_denies_repair(self):
+        env = dict(CANARY_SOURCE_ROOT=str(self.root), CANARY_MESH_SOURCE='a'*40,
+                   CANARY_HARNESS_MODE='pinned-build', CANARY_PASS_ID='repair-1',
+                   CANARY_PREVIOUS_PACKAGE='')
+        with patch.dict(os.environ, env), patch.object(E, 'git', return_value='a'*40), \
+                patch.object(E.subprocess, 'run') as run:
+            E.build(SimpleNamespace())
+            self.assertEqual(run.call_args.args[0], [str(ROOT / 'scripts/llama-canary-agent-repair.sh')])
+            os.environ['CANARY_HARNESS_MODE'] = 'repair-build'
+            with self.assertRaisesRegex(ValueError, 'unchanged pinned-build'):
+                E.build(SimpleNamespace())
+            self.assertEqual(run.call_count, 1)
+
     def test_publisher_rejects_repair_only_package(self):
         with self.assertRaisesRegex(ValueError, 'independent verifier'):
             E.publication(SimpleNamespace(package=self.package, identity=self.digest))
@@ -447,12 +478,12 @@ class WorkflowRerunContractTests(unittest.TestCase):
 
 
 class WorkflowTerminalGateTests(unittest.TestCase):
-    def run_gate(self, *, changed=True, certify=True, repair=None, verify=None):
+    def run_gate(self, *, changed=True, certify=True, repair=None, verify=None, mesh_source=""):
         workflow = yaml.safe_load((ROOT / '.github/workflows/llama-upstream-canary.yml').read_text())
         step = workflow['jobs']['result']['steps'][0]
         body = step['run'].split("python3 - <<'PYCODE'\n", 1)[1].rsplit('PYCODE', 1)[0]
         needs = {'resolve': {'result': 'success', 'outputs': {
-            'changed': str(changed).lower(), 'certify': str(certify).lower()}}}
+            'changed': str(changed).lower(), 'certify': str(certify).lower(), 'mesh_source': mesh_source}}}
         for attempt in range(1, 4):
             for mode, values in (('repair', repair or {}), ('verify', verify or {})):
                 outputs = values.get(attempt, {})
@@ -492,6 +523,15 @@ class WorkflowTerminalGateTests(unittest.TestCase):
         self.assertEqual(out, '')
         code, _ = self.run_gate(changed=False)
         self.assertNotEqual(code, 0)
+
+    def test_selected_source_requires_exact_head_and_never_publishes(self):
+        code, out = self.run_gate(changed=False, mesh_source='a'*40, repair={1: self.green()})
+        self.assertEqual(code, 0)
+        self.assertEqual(out, '')
+        for changed, head in ((True, 'a'*40), (False, 'b'*40)):
+            code, out = self.run_gate(changed=changed, mesh_source='a'*40, repair={1: self.green(head)})
+            self.assertNotEqual(code, 0)
+            self.assertEqual(out, '')
 
     def test_non_forced_unchanged_manual_is_read_only_noop(self):
         code, out = self.run_gate(changed=False, certify=False)

@@ -78,6 +78,30 @@ scheduled/forced runs build once and certify the complete roster. Changed pins
 use up to three repair attempts, each followed (only when all families pass) by
 an independent build and complete verification pass on the exact same commit.
 
+
+Manual `mesh_ref` dispatches accept an explicitly trusted same-repository branch
+or full commit SHA. Resolution freezes the SHA once, requires it to be reachable
+from a repository branch, and reads its existing llama.cpp pin. `upstream_sha`
+cannot be combined with this input. Keep the Actions workflow ref on `main`;
+selecting `mesh_ref` always runs a complete certify-only pass, without Goose,
+source repair, an independent upgrade-verification pass, or PR publication.
+The main controller, planner, handoff validation, and aggregation remain at the
+workflow revision; source build scripts and the battery run from a separate
+checkout of the selected SHA. The package binds both revisions, and workers
+reject any changed source identity. This is an operator-authorized trusted-code
+path on persistent lab machines, not isolation for untrusted PRs or fork code.
+Leaving `mesh_ref` empty preserves scheduled and upstream-upgrade behavior.
+
+To certify a recovered branch after this workflow is on main:
+
+```sh
+gh workflow run llama-upstream-canary.yml --ref main \
+  -f mesh_ref=scammed/recover-llama-pin-35582541955
+```
+
+The run summary records the resolved MeshLLM SHA and existing llama.cpp pin;
+a branch moving later cannot change the selected source for that run.
+
 `llama-canary-family-pass.yml` owns the reusable build → family matrix → hosted
 aggregate. The producer performs prepare, manifest-policy, full native and Rust
 builds, generated-family validation, smoke, and split-roster checks. It validates
