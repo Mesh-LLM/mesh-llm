@@ -325,11 +325,11 @@ impl Node {
     /// established in one direction (multi-homed initiator), the other side
     /// dials back on the direction that works.
     pub async fn dial_peer_addr(&self, addr: EndpointAddr) -> Result<()> {
-        {
-            let mut state = self.state.lock().await;
-            state.dead_peers.remove(&addr.id);
-            state.departed_peers.remove(&addr.id);
-        }
+        // Permit the dial by clearing the short tombstone only. The departure
+        // record is cleared by successful direct admission, not by the
+        // attempt, so a failed dial cannot reopen the ghost-resurrection
+        // window (issue #1756 review).
+        self.state.lock().await.dead_peers.remove(&addr.id);
         self.connect_to_peer(addr).await
     }
 
@@ -501,12 +501,10 @@ impl Node {
 
     pub async fn join(&self, invite_token: &str) -> Result<()> {
         let addr = self.prepare_join_target(invite_token).await?;
-        // Clear dead status — explicit join should always attempt connection
-        {
-            let mut state = self.state.lock().await;
-            state.dead_peers.remove(&addr.id);
-            state.departed_peers.remove(&addr.id);
-        }
+        // Clear dead status — explicit join should always attempt connection.
+        // As with dial_peer_addr, the departure record is only cleared by
+        // successful direct admission.
+        self.state.lock().await.dead_peers.remove(&addr.id);
         self.remember_join_target(addr.clone()).await;
         self.connect_to_peer(addr).await
     }
@@ -569,11 +567,7 @@ impl Node {
         // 15s were not enough.  Three at 30s with 5s/10s gaps give ~105s
         // total budget which covers all but the worst relay conditions.
         let backoffs = [5, 10];
-        {
-            let mut state = self.state.lock().await;
-            state.dead_peers.remove(&addr.id);
-            state.departed_peers.remove(&addr.id);
-        }
+        self.state.lock().await.dead_peers.remove(&addr.id);
         self.remember_join_target(addr.clone()).await;
         let mut last_err = match self.connect_to_peer(addr.clone()).await {
             Ok(()) => return Ok(()),
@@ -585,11 +579,7 @@ impl Node {
                 attempt + 1
             );
             tokio::time::sleep(std::time::Duration::from_secs(*delay_secs)).await;
-            {
-                let mut state = self.state.lock().await;
-                state.dead_peers.remove(&addr.id);
-                state.departed_peers.remove(&addr.id);
-            }
+            self.state.lock().await.dead_peers.remove(&addr.id);
             match self.connect_to_peer(addr.clone()).await {
                 Ok(()) => return Ok(()),
                 Err(e) => last_err = e,

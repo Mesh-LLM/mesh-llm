@@ -1158,6 +1158,9 @@ impl Node {
         state
             .dead_peers
             .insert(leaving_id, std::time::Instant::now());
+        state
+            .departed_peers
+            .insert(leaving_id, std::time::Instant::now());
         state.connections.remove(&leaving_id);
         drop(state);
         self.remove_peer(leaving_id, MeshPeerRemovalReason::CleanShutdown)
