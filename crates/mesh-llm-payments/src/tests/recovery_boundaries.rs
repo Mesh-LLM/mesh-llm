@@ -157,3 +157,45 @@ async fn recovery_refreshes_zero_output_input_and_rejects_wrong_direction() -> R
     assert!(service.output_receivable("empty").await?.is_none());
     Ok(())
 }
+
+#[tokio::test]
+async fn unpaid_input_batches_progress_and_wrap_without_deleting_debt() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let wallet = Arc::new(MockWallet::default());
+    let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
+    for n in 1..=35 {
+        let id = format!("batch-{n}");
+        let peer = format!("peer-{n}");
+        service
+            .ledger
+            .begin_serving(&id, &peer, &terms(&id, 1000).pricing, 8)?;
+        service.ledger.record_receivable(&Receivable {
+            request_id: id,
+            peer,
+            segment: 0,
+            invoice: invoice(n, 1),
+            tokens: 1,
+            paid: false,
+        })?;
+    }
+    let first = service.ledger.unpaid_input_batch(0)?;
+    assert_eq!(first.len(), 32);
+    let second = service.ledger.unpaid_input_batch(first.last().unwrap().0)?;
+    assert_eq!(second.len(), 3);
+    assert_eq!(
+        service
+            .ledger
+            .unpaid_input_batch(second.last().unwrap().0)?,
+        first
+    );
+    // Lookup errors still advance the service cursor, rather than starving later rows.
+    wallet.lookup_unavailable.store(true, Ordering::SeqCst);
+    assert!(service.recover_output_debt().await.is_err());
+    wallet.lookup_unavailable.store(false, Ordering::SeqCst);
+    let last = invoice(35, 1);
+    super::payment_notifications::publish(&wallet, &last, true, PaymentStatus::Succeeded);
+    service.recover_output_debt().await?;
+    assert!(service.ledger.receivables(Some("batch-35"))?[0].paid);
+    assert_eq!(service.ledger.receivables(None)?.len(), 35);
+    Ok(())
+}

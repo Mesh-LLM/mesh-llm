@@ -22,26 +22,13 @@ pub(crate) async fn recover(node: &Node, service: &PaymentService) -> Result<()>
         let Ok(original_peer) = request.terms.peer.parse::<iroh::EndpointId>() else {
             continue;
         };
-        let mut candidates = vec![original_peer];
-        for peer in node.peers().await {
-            if peer.lightning_offers.contains_key(&request.terms.model)
-                && !candidates.contains(&peer.addr.id)
-            {
-                candidates.push(peer.addr.id);
-            }
-        }
-        for peer in candidates.into_iter().take(128) {
-            if matches!(
-                tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
-                    recover_request(node, service, &request.terms, peer)
-                )
-                .await,
-                Ok(Ok(()))
-            ) {
-                break;
-            }
-        }
+        // Recovery stays bound to the original authenticated endpoint. Replacing
+        // that identity while retaining the wallet/database is not supported.
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            recover_request(node, service, &request.terms, original_peer),
+        )
+        .await;
     }
     Ok(())
 }
@@ -61,7 +48,6 @@ async fn recover_request(
         },
     )
     .await?;
-    let mut authenticated_invoice = false;
     loop {
         match wire::read(&mut recv).await? {
             Frame::OutputInvoice {
@@ -71,13 +57,8 @@ async fn recover_request(
             } => {
                 ensure!(request_id == terms.id, "recovery request mismatch");
                 super::paid::settle_output(service, terms, tokens, invoice).await?;
-                authenticated_invoice = true;
             }
             Frame::Complete => {
-                ensure!(
-                    peer.to_string() == terms.peer || authenticated_invoice,
-                    "recovery completion from an unverified provider"
-                );
                 service.ledger.finish(&terms.id)?;
                 return Ok(());
             }

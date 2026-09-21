@@ -121,9 +121,9 @@ Receiving-wallet identity is pinned by the input invoice's signed payee key.
 
 An uncertain payment is not released just because its invoice expired. If the
 provider remains unreachable or a payment cannot be conclusively reconciled, its
-reservation remains held; the PoC has no force-release command. Recovery of
-zero-output completion after a provider changes its endpoint identity also
-remains unresolved rather than trusting an unrelated peer's completion claim.
+reservation remains held; the PoC has no force-release command. Recovery contacts only the original authenticated peer. Replacing its endpoint
+identity while retaining its wallet/database is deliberately unsupported; unrelated
+same-model peers are never asked to settle that debt.
 
 Providers reject a peer with unpaid recorded invoices or finished, delivered
 output debt awaiting invoice creation. Background recovery creates missing
@@ -542,3 +542,19 @@ leave incomplete evidence; there is no replay or complete audit-log guarantee.
 The persisted correlation remains available to recovery tooling, but recovery
 currently emits no events. No raw invoice, preimage, wallet transaction ID,
 prompt or response text is published. Payment hashes are linkable metadata.
+
+
+### Failure and recovery boundaries
+
+Connection/write failure or a transport drop while awaiting the initial input
+invoice can return to ordinary mesh routing before any payment-capable task is
+spawned. Provider-reported prefill failure is also retryable at that boundary.
+Malformed invoices, invalid terms and policy refusal remain terminal. After the
+validated invoice is handed to the payer task, failures remain terminal even if
+its payment is still pending: no fallback may create another bill. Client
+disconnection during foreground setup drops that setup without spawning a payer.
+
+Background unpaid-input observation reads at most 32 records per batch and
+rotates past unpaid/error records, wrapping at the end. This bounds lookup count,
+not wallet-call duration. The cursor is in memory; restart begins at the first
+record without deleting or forgiving debt.

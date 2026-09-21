@@ -25,6 +25,7 @@ use crate::{
 mod admission;
 mod expiry;
 mod forwarding;
+mod handoff;
 mod review_regressions;
 
 #[derive(Default)]
@@ -348,6 +349,8 @@ async fn paid_exchange(
     let payer_for_exchange = payer_service.clone();
     let evidence = Some((payer.clone(), "host-evidence-id".to_owned()));
     let exchange = tokio::spawn(async move {
+        let mut recv = recv;
+        let initial = wire::read(&mut recv).await?;
         crate::network::openai::test_payment_exchange(
             payer_for_exchange,
             provider_id,
@@ -356,6 +359,7 @@ async fn paid_exchange(
             price,
             send,
             recv,
+            initial,
             &mut output,
             ready,
             cancellation,

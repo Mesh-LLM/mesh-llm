@@ -94,6 +94,8 @@ async fn fragmented_exchange() -> Result<()> {
     let payer_service = service.clone();
     let request_id = id.clone();
     let exchange = tokio::spawn(async move {
+        let mut reader = reader;
+        let initial = wire::read(&mut reader).await?;
         crate::network::openai::test_payment_exchange(
             payer_service,
             peer,
@@ -102,6 +104,7 @@ async fn fragmented_exchange() -> Result<()> {
             price,
             payer_write,
             reader,
+            initial,
             &mut output,
             ready,
             cancellation,

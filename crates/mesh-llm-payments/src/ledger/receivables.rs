@@ -119,6 +119,25 @@ impl Ledger {
         Ok(())
     }
 
+    /// Bounded rotating scan; rowid is local bookkeeping, never payment identity.
+    pub fn unpaid_input_batch(&self, after: i64) -> Result<Vec<(i64, String)>> {
+        let connection = self.lock()?;
+        let query = |cursor| -> Result<Vec<(i64, String)>> {
+            let mut statement = connection.prepare(
+                "SELECT rowid,request_id FROM receivables WHERE segment=0 AND state='unpaid' AND rowid>? ORDER BY rowid LIMIT 32",
+            )?;
+            Ok(statement
+                .query_map([cursor], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
+        };
+        let rows = query(after)?;
+        if rows.is_empty() && after != 0 {
+            query(0)
+        } else {
+            Ok(rows)
+        }
+    }
+
     pub fn receivables(&self, request_id: Option<&str>) -> Result<Vec<Receivable>> {
         let connection = self.lock()?;
         let mut statement = connection.prepare("SELECT request_id,peer,segment,invoice,tokens,state FROM receivables WHERE (?1 IS NULL OR request_id=?1) ORDER BY segment")?;

@@ -1399,7 +1399,6 @@ async fn route_attempt_for_target(
     logging: RouteAttemptLoggingContext<'_>,
 ) -> RouteAttemptResult {
     let logging = RouteAttemptLoggingContext {
-        exchange_id: None,
         retry_policy,
         ..logging
     };
@@ -1451,7 +1450,6 @@ async fn route_local_transport_attempt(
     logging: RouteAttemptLoggingContext<'_>,
 ) -> RouteAttemptResult {
     let logging = RouteAttemptLoggingContext {
-        exchange_id: None,
         retry_policy,
         ..logging
     };
@@ -1517,7 +1515,6 @@ async fn route_remote_transport_attempt(
     logging: RouteAttemptLoggingContext<'_>,
 ) -> RouteAttemptResult {
     let logging = RouteAttemptLoggingContext {
-        exchange_id: None,
         retry_policy,
         ..logging
     };
@@ -1779,3 +1776,87 @@ pub async fn route_http_endpoint_request(
 #[cfg(test)]
 #[path = "transport_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) async fn test_paid_target_attempt(
+    node: &mesh::Node,
+    client: &mut ClientStream,
+    peer: iroh::EndpointId,
+    raw: &[u8],
+    exchange_id: &str,
+) -> bool {
+    let result = route_attempt_for_target(
+        node,
+        client,
+        &election::InferenceTarget::Remote(peer),
+        raw,
+        ResponseRetryPolicy::next_target_available(true),
+        RouteAttemptLoggingContext {
+            exchange_id: Some(exchange_id),
+            request_id: Default::default(),
+            retry_policy: ResponseRetryPolicy::next_target_available(true),
+            response_adapter: ResponseAdapter::None,
+            route_observer: OpenAiRouteObserver::default(),
+            served_by: None,
+            peer_capsule_id: None,
+        },
+    )
+    .await;
+    should_retry_uncommitted_remote_attempt(result)
+}
+
+#[cfg(test)]
+pub(crate) async fn test_paid_multi_target(
+    node: mesh::Node,
+    client: ClientStream,
+    peers: Vec<iroh::EndpointId>,
+) -> RouteDispatchOutcome {
+    let body = serde_json::json!({"model":"test","prompt":"hi","max_tokens":8});
+    let bytes = serde_json::to_vec(&body).unwrap();
+    let request = BufferedHttpRequest {
+        raw: format!(
+            "POST /v1/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n{}",
+            bytes.len(),
+            body
+        )
+        .into_bytes(),
+        method: "POST".into(),
+        path: "/v1/completions".into(),
+        client_path: "/v1/completions".into(),
+        request_id: Default::default(),
+        body_json: Some(body),
+        body_json_attempted: true,
+        body_len_bytes: bytes.len(),
+        body_bytes: Some(bytes),
+        completion_tokens: Some(8),
+        stream: None,
+        model_name: Some("test".into()),
+        request_object_request_ids: vec![],
+        response_adapter: ResponseAdapter::None,
+        correlation_id: None,
+    };
+    let mut targets = election::ModelTargets::default();
+    targets.targets.insert(
+        "test".into(),
+        peers
+            .into_iter()
+            .map(election::InferenceTarget::Remote)
+            .collect(),
+    );
+    route_model_request(
+        node,
+        client,
+        &targets,
+        "test",
+        &request,
+        RouteModelRequestContext {
+            exchange_id: Some("multi-provider-exchange"),
+            required_tokens: None,
+            affinity: &AffinityRouter::new(),
+            route_observer: OpenAiRouteObserver::default(),
+            served_by_header: None,
+            peer_capsule_id: None,
+        },
+    )
+    .await
+}

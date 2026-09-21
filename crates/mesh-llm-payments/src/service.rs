@@ -40,6 +40,7 @@ pub struct PaymentService {
     factory: Arc<dyn crate::provisioning::WalletFactory>,
     payment_lock: Mutex<()>,
     receivable_lock: Mutex<()>,
+    input_recovery_cursor: Mutex<i64>,
     _process_lock: std::fs::File,
 }
 
@@ -74,6 +75,7 @@ impl PaymentService {
             factory,
             payment_lock: Mutex::new(()),
             receivable_lock: Mutex::new(()),
+            input_recovery_cursor: Mutex::new(0),
             _process_lock: process_lock,
         })
     }
@@ -205,14 +207,14 @@ impl PaymentService {
         let mut first_error = None;
         // Input observation tasks do not survive restart, including requests
         // with no output or with an output invoice already persisted.
-        for receipt in self.ledger.receivables(None)? {
-            if receipt.segment == 0
-                && !receipt.paid
-                && let Err(error) = self.input_received(&receipt.request_id).await
-            {
+        let mut cursor = self.input_recovery_cursor.lock().await;
+        for (row, id) in self.ledger.unpaid_input_batch(*cursor)? {
+            *cursor = row;
+            if let Err(error) = self.input_received(&id).await {
                 first_error.get_or_insert(error);
             }
         }
+        drop(cursor);
         for id in self.ledger.uninvoiced_output()? {
             if let Err(error) = self.output_receivable(&id).await {
                 first_error.get_or_insert(error);

@@ -31,8 +31,15 @@ pub(super) async fn route(
         )
         .await;
     }
-    let (pipe, mut ready, cancel) = match start(node, peer, raw, price, logging.exchange_id).await {
+    let started = tokio::select! {
+        result = start(node, peer, raw, price, logging.exchange_id) => result,
+        _ = client.wait_for_response_disconnect() => return RouteAttemptResult::ClientDisconnected,
+    };
+    let (pipe, mut ready, cancel) = match started {
         Ok(pipe) => pipe,
+        Err(error) if error.is::<PrePaymentTransportFailure>() => {
+            return RouteAttemptResult::RetryableUnavailable;
+        }
         Err(_) => return payment_error(client, "could not start paid inference").await,
     };
     let _cancel_on_drop = CancelOnDrop(cancel);
@@ -115,6 +122,17 @@ type StartedExchange = (
     tokio::sync::watch::Sender<bool>,
 );
 
+/// Constructed only before any payment-capable task exists.
+#[derive(Debug)]
+struct PrePaymentTransportFailure;
+
+impl std::fmt::Display for PrePaymentTransportFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("provider transport failed before payment handoff")
+    }
+}
+impl std::error::Error for PrePaymentTransportFailure {}
+
 async fn start(
     node: &Node,
     peer: iroh::EndpointId,
@@ -123,14 +141,19 @@ async fn start(
     exchange_id: Option<&str>,
 ) -> Result<StartedExchange> {
     let request = PaidRequest::parse(raw)?;
-    let (mut send, recv) = node.open_http_tunnel(peer).await?;
+    let (mut send, mut recv) = node
+        .open_http_tunnel(peer)
+        .await
+        .map_err(|_| PrePaymentTransportFailure)?;
     let service = node.payment_service().await?;
     ensure!(
         effective_intent(&service, &request)?.permits(&price, 0),
         "paid inference is excluded by spending policy or request restriction"
     );
     let id = uuid::Uuid::new_v4().to_string();
-    send.write_all(wire::HTTP_UPGRADE).await?;
+    send.write_all(wire::HTTP_UPGRADE)
+        .await
+        .map_err(|_| PrePaymentTransportFailure)?;
     wire::write(
         &mut send,
         &Frame::Request {
@@ -140,7 +163,16 @@ async fn start(
             http: request.backend_http(&id)?,
         },
     )
-    .await?;
+    .await
+    .map_err(|_| PrePaymentTransportFailure)?;
+    // Prefill/invoice receipt happens before spawning anything that can pay.
+    let initial = tokio::time::timeout(
+        std::time::Duration::from_secs(300),
+        read_initial_invoice(&mut recv),
+    )
+    .await
+    .map_err(|_| PrePaymentTransportFailure)??;
+    validate_initial_invoice(&service, &request, &price, &id, &initial)?;
     let (pipe, mut output) = tokio::io::duplex(64 * 1024);
     let (ready, wait_ready) = tokio::sync::oneshot::channel();
     let (cancel, cancellation) = tokio::sync::watch::channel(false);
@@ -154,6 +186,7 @@ async fn start(
             price,
             send,
             recv,
+            initial,
             &mut output,
             ready,
             cancellation,
@@ -169,25 +202,34 @@ async fn start(
     Ok((pipe, wait_ready, cancel))
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn exchange(
-    service: Arc<PaymentService>,
-    peer: iroh::EndpointId,
-    id: String,
-    request: PaidRequest,
-    price: Pricing,
-    mut send: impl AsyncWrite + Unpin,
-    mut recv: impl AsyncRead + Unpin,
-    output: &mut DuplexStream,
-    ready: tokio::sync::oneshot::Sender<()>,
-    mut cancellation: tokio::sync::watch::Receiver<bool>,
-    evidence: Option<(Node, String)>,
-) -> Result<()> {
-    let Frame::InputInvoice { mut terms, invoice } = wire::read(&mut recv).await? else {
+async fn read_initial_invoice(recv: &mut (impl AsyncRead + Unpin)) -> Result<Frame> {
+    let frame = wire::read(recv).await.map_err(|error| {
+        if error.downcast_ref::<std::io::Error>().is_some() {
+            anyhow::Error::from(PrePaymentTransportFailure)
+        } else {
+            error
+        }
+    })?;
+    // A provider-side prefill failure cannot have charged this payer: no
+    // invoice has been accepted and no payment task has been spawned.
+    if matches!(frame, Frame::Error { .. }) {
+        return Err(PrePaymentTransportFailure.into());
+    }
+    Ok(frame)
+}
+
+fn validate_initial_invoice(
+    service: &PaymentService,
+    request: &PaidRequest,
+    price: &Pricing,
+    id: &str,
+    initial: &Frame,
+) -> Result<(u64, u64)> {
+    let Frame::InputInvoice { terms, invoice } = initial else {
         bail!("expected input invoice");
     };
     ensure!(
-        terms.id == id && terms.model == request.model && terms.pricing == price,
+        terms.id == id && terms.model == request.model && terms.pricing == *price,
         "payment terms mismatch"
     );
     ensure!(
@@ -205,7 +247,7 @@ pub(crate) async fn exchange(
         "payment limit mismatch"
     );
     ensure!(
-        effective_intent(&service, &request)?.permits(&price, total),
+        effective_intent(service, request)?.permits(price, total),
         "paid inference is excluded by spending policy or request restriction"
     );
     invoice.validate_payment(input_amount, mesh_llm_payments::now_ms())?;
@@ -213,6 +255,29 @@ pub(crate) async fn exchange(
         invoice.amount_msat == Some(input_amount),
         "fixed-amount inference invoice required"
     );
+    Ok((input_amount, total))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn exchange(
+    service: Arc<PaymentService>,
+    peer: iroh::EndpointId,
+    id: String,
+    request: PaidRequest,
+    price: Pricing,
+    mut send: impl AsyncWrite + Unpin,
+    mut recv: impl AsyncRead + Unpin,
+    initial: Frame,
+    output: &mut DuplexStream,
+    ready: tokio::sync::oneshot::Sender<()>,
+    mut cancellation: tokio::sync::watch::Receiver<bool>,
+    evidence: Option<(Node, String)>,
+) -> Result<()> {
+    let (input_amount, total) =
+        validate_initial_invoice(&service, &request, &price, &id, &initial)?;
+    let Frame::InputInvoice { mut terms, invoice } = initial else {
+        bail!("expected input invoice");
+    };
     // Peer identity is from authenticated QUIC, never a peer-supplied field.
     terms.exchange_id = evidence.as_ref().map(|(_, id)| id.clone());
     terms.peer = peer.to_string();
@@ -358,6 +423,27 @@ pub(super) fn effective_intent(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn initial_transport_drop_is_retryable_but_malformed_frame_is_terminal() -> Result<()> {
+        let (writer, mut reader) = tokio::io::duplex(64);
+        drop(writer);
+        assert!(
+            read_initial_invoice(&mut reader)
+                .await
+                .unwrap_err()
+                .is::<PrePaymentTransportFailure>()
+        );
+        let (mut writer, mut reader) = tokio::io::duplex(64);
+        writer.write_all(&[0, 0, 0, 1, b'!']).await?;
+        assert!(
+            !read_initial_invoice(&mut reader)
+                .await
+                .unwrap_err()
+                .is::<PrePaymentTransportFailure>()
+        );
+        Ok(())
+    }
 
     #[tokio::test]
     async fn payments_cross_site_loopback_requests_are_denied_before_wallet_or_peer_access()
