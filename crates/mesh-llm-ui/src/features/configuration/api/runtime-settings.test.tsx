@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import { parse } from 'smol-toml'
 import type {
   RuntimeConfigControlStatePayload,
   RuntimeConfigSchemaEntry,
   RuntimeConfigSchemaReference
 } from '@/features/configuration/api/config-adapter'
 import { createRuntimePolicySettingsFromSchema } from '@/features/configuration/api/runtime-settings'
+import { buildTOML } from '@/features/configuration/lib/build-toml'
 
 function runtimeSetting(
   canonicalPath: string,
@@ -112,9 +114,10 @@ describe('createRuntimePolicySettingsFromSchema', () => {
       expect(setting.tomlSection ?? '').not.toMatch(/reserve/i)
     }
 
-    // Setting uses the runtime TOML section, not a reserved or separate one
+    // Nested activity settings keep their own TOML sub-table (issue #1784),
+    // never a reserved section and never flattened into `[runtime]`.
     const activitySetting = result.settings.find((s) => s.id === 'runtime.activity.enabled')!
-    expect(activitySetting.tomlSection).toBe('runtime')
+    expect(activitySetting.tomlSection).toBe('runtime.activity')
   })
 
   it('marks restart-required mutability from schema entry', () => {
@@ -191,5 +194,93 @@ describe('createRuntimePolicySettingsFromSchema', () => {
       { value: 'metal', label: 'Metal', description: 'Available on this host' },
       { value: 'vulkan', label: 'Vulkan', description: 'No Vulkan runtime was detected' }
     ])
+  })
+})
+
+const NESTED_RUNTIME_SCHEMA: RuntimeConfigSchemaReference = {
+  settings: [
+    runtimeSetting('runtime.mode', { kind: 'enum', values: ['client', 'serve', 'on_demand'] }),
+    runtimeSetting('runtime.drain_timeout_max_secs', { kind: 'integer' }),
+    runtimeSetting('runtime.activity.enabled', { kind: 'boolean' }),
+    runtimeSetting('runtime.activity.idle_after_secs', { kind: 'integer' }),
+    runtimeSetting('runtime.activity.advertisement', {
+      kind: 'enum',
+      values: ['none', 'availability_only', 'coarse_state', 'private_coarse_state']
+    }),
+    runtimeSetting('runtime.native_runtime.selection', { kind: 'string' }),
+    runtimeSetting('runtime.kv_cache.disk.mode', { kind: 'enum', values: ['off', 'auto', 'fixed'] })
+  ]
+}
+
+describe('runtime policy TOML placement', () => {
+  it('derives each nested runtime sub-table from the canonical path', () => {
+    const byPath = new Map(
+      createRuntimePolicySettingsFromSchema(NESTED_RUNTIME_SCHEMA).settings.map((setting) => [setting.id, setting])
+    )
+
+    expect(byPath.get('runtime.mode')?.tomlSection).toBe('runtime')
+    expect(byPath.get('runtime.drain_timeout_max_secs')?.tomlSection).toBe('runtime')
+    expect(byPath.get('runtime.activity.enabled')?.tomlSection).toBe('runtime.activity')
+    expect(byPath.get('runtime.activity.idle_after_secs')?.tomlSection).toBe('runtime.activity')
+    expect(byPath.get('runtime.activity.advertisement')?.tomlSection).toBe('runtime.activity')
+    expect(byPath.get('runtime.native_runtime.selection')?.tomlSection).toBe('runtime.native_runtime')
+    expect(byPath.get('runtime.kv_cache.disk.mode')?.tomlSection).toBe('runtime.kv_cache.disk')
+  })
+
+  it('keeps the last canonical path segment as the TOML key', () => {
+    const settings = createRuntimePolicySettingsFromSchema(NESTED_RUNTIME_SCHEMA).settings
+
+    for (const setting of settings) {
+      expect(setting.tomlKey).toBe(setting.id.split('.').at(-1))
+    }
+  })
+})
+
+describe('buildTOML runtime policy round-trip', () => {
+  // Issue #1784: nested runtime sub-tables must not collapse into `[runtime]`,
+  // where mesh-llm silently ignores the misplaced keys.
+  const sourceValues: Record<string, string> = {
+    'runtime.mode': 'client',
+    'runtime.drain_timeout_max_secs': '120',
+    'runtime.activity.enabled': 'on',
+    'runtime.activity.idle_after_secs': '600',
+    'runtime.activity.advertisement': 'coarse_state',
+    'runtime.native_runtime.selection': 'metal',
+    'runtime.kv_cache.disk.mode': 'fixed'
+  }
+
+  function renderedToml(): string {
+    const defaults = createRuntimePolicySettingsFromSchema(NESTED_RUNTIME_SCHEMA)
+    return buildTOML([], [], [], { defaults, defaultsValues: sourceValues })
+  }
+
+  it('places nested runtime settings in their own tables', () => {
+    const toml = renderedToml()
+
+    expect(toml).toContain('[runtime]')
+    expect(toml).toContain('[runtime.activity]')
+    expect(toml).toContain('[runtime.native_runtime]')
+    expect(toml).toContain('[runtime.kv_cache.disk]')
+  })
+
+  it('parses back to the nested runtime config without flattening', () => {
+    const parsed = parse(renderedToml()) as unknown as { runtime: Record<string, unknown> }
+
+    expect(parsed.runtime.mode).toBe('client')
+    expect(parsed.runtime.drain_timeout_max_secs).toBe(120)
+    expect(parsed.runtime.activity).toEqual({
+      enabled: true,
+      idle_after_secs: 600,
+      advertisement: 'coarse_state'
+    })
+    expect(parsed.runtime.native_runtime).toEqual({ selection: 'metal' })
+    expect(parsed.runtime.kv_cache).toEqual({ disk: { mode: 'fixed' } })
+
+    // Regression guard: the flattened preview used to emit these keys directly
+    // under `[runtime]`, which mesh-llm accepts as unknown fields.
+    expect(parsed.runtime.selection).toBeUndefined()
+    expect(parsed.runtime.advertisement).toBeUndefined()
+    expect(parsed.runtime.enabled).toBeUndefined()
+    expect(parsed.runtime.idle_after_secs).toBeUndefined()
   })
 })
