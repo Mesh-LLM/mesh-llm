@@ -136,6 +136,16 @@ jobs:
       FAMILY_BATTERY_MM_TEST_BIN: ${{ github.workspace }}/target/debug/skippy-mm-test
       PACKAGE: ${{ github.workspace }}/.deps/canary-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ matrix.shard_index }}
       IDENTITY: ${{ needs.build.outputs.identity }}
+      # Restored workload oracle closure (llama-canary-family-evidence.py
+      # restore). The battery's non-chat lanes consume the CPU candidate and
+      # native oracle executables from this immutable handoff instead of
+      # compiling on the worker.
+      SKIPPY_WORKLOAD_ORACLE_SERVER: ${{ github.workspace }}/.deps/canary-workload-oracles/native/bin/llama-server
+      SKIPPY_WORKLOAD_ORACLE_COMPLETION: ${{ github.workspace }}/.deps/canary-workload-oracles/native/bin/llama-completion
+      SKIPPY_WORKLOAD_ORACLE_TTS: ${{ github.workspace }}/.deps/canary-workload-oracles/native/bin/llama-tts
+      SKIPPY_WORKLOAD_NATIVE_BUILD_DIR: ${{ github.workspace }}/.deps/canary-workload-oracles/native
+      SKIPPY_WORKLOAD_CANDIDATE_BIN_DIR: ${{ github.workspace }}/.deps/canary-workload-oracles/cargo/debug
+      SKIPPY_WORKLOAD_PRODUCER_MANIFEST: ${{ github.workspace }}/.deps/canary-workload-oracles/producer.json
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:

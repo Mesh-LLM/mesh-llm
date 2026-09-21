@@ -143,3 +143,5 @@ mod durable_artifacts;
 mod lifecycle;
 #[path = "transport_tests/routing.rs"]
 mod routing;
+#[path = "transport_tests/workload_routing.rs"]
+mod workload_routing;

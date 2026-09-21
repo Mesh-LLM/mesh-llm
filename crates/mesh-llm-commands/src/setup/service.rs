@@ -107,6 +107,10 @@ fn install_systemd_service(
         paths.service_env_file.display()
     ));
     messages.push(format!(
+        "Private mesh: set MESH_LLM_JOIN_FILE=<token file> in {} (re-read on every rejoin)",
+        paths.service_env_file.display()
+    ));
+    messages.push(format!(
         "Edit startup models: {}",
         paths.mesh_config_file.display()
     ));
@@ -229,6 +233,10 @@ fn install_launchd_service(
     ));
     messages.push(format!(
         "Optional env: {}",
+        paths.service_env_file.display()
+    ));
+    messages.push(format!(
+        "Private mesh: set MESH_LLM_JOIN_FILE=<token file> in {} (re-read on every rejoin)",
         paths.service_env_file.display()
     ));
     messages.push(format!(

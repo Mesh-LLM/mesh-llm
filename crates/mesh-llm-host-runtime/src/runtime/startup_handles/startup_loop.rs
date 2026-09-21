@@ -128,6 +128,7 @@ pub(in crate::runtime) struct StartupLaunchRuntimeContext<'a> {
     pub(super) local_source_required: bool,
     pub(super) allow_uncertified_split: bool,
     pub(super) split_topology_lock: Option<&'a Path>,
+    pub(super) auto_balance: bool,
     pub(super) resource_planning_profile: RuntimeResourcePlanningProfile,
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     pub(super) skippy_telemetry: &'a skippy::SkippyTelemetryOptions,
@@ -268,6 +269,7 @@ pub(in crate::runtime) async fn startup_handle_local_fallback_event(
             local_source_required: ctx.local_source_required,
             allow_uncertified_split: ctx.allow_uncertified_split,
             split_topology_lock: None,
+            auto_balance: false,
             planning_profile: ctx.resource_planning_profile,
             openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),
             skippy_telemetry: ctx.skippy_telemetry.clone(),
@@ -378,6 +380,7 @@ pub(in crate::runtime) async fn startup_handle_replace_event(
             Some(ctx.instance_id),
         );
     }
+    rearm_lifecycle_for_cutover(ctx.lifecycle).await;
     let payload = startup_register_loaded_runtime(ctx, &next.loaded_name, &next.handle).await;
     if let Some(cs) = ctx.console_state {
         cs.upsert_local_process(payload).await;
@@ -432,6 +435,34 @@ pub(in crate::runtime) async fn startup_handle_replace_event(
     StartupLoopControl::Continue
 }
 
+async fn startup_handle_drain_event(
+    ctx: &StartupLoopContext<'_>,
+    state: &StartupLoopState,
+    event: local::SplitCoordinatorDrainEvent,
+) -> StartupLoopControl {
+    let marked = ctx.lifecycle.lock().await.mark_draining(event.deadline);
+    match marked {
+        Ok(()) => {
+            tracing::info!(
+                model = state.loaded_name,
+                reason = event.reason,
+                "split runtime draining for a planned cutover; new requests are turned away until it completes"
+            );
+            let _ = event.ack.send(Some(ctx.lifecycle.clone()));
+        }
+        Err(error) => {
+            tracing::warn!(
+                model = state.loaded_name,
+                reason = event.reason,
+                %error,
+                "split runtime could not enter draining for a planned cutover"
+            );
+            let _ = event.ack.send(None);
+        }
+    }
+    StartupLoopControl::Continue
+}
+
 pub(in crate::runtime) async fn startup_handle_split_event(
     ctx: &StartupLoopContext<'_>,
     state: &mut StartupLoopState,
@@ -440,6 +471,7 @@ pub(in crate::runtime) async fn startup_handle_split_event(
     model_bytes: u64,
 ) -> StartupLoopControl {
     match event {
+        SplitCoordinatorEvent::Drain(event) => startup_handle_drain_event(ctx, state, event).await,
         SplitCoordinatorEvent::Replace(event) => {
             startup_handle_replace_event(ctx, state, *event).await
         }
@@ -682,6 +714,26 @@ async fn prepare_startup_local_model_task(
     .await
 }
 
+/// Re-arm a serving (or draining) instance's lifecycle for a generation
+/// cutover: a fresh record walked up to `Warming`, so registering the new
+/// generation can take it to `Serving`. In-flight requests of the previous
+/// generation keep their own tracker, and `Draining` is otherwise one-way.
+pub(in crate::runtime) async fn rearm_lifecycle_for_cutover(
+    lifecycle: &Arc<tokio::sync::Mutex<InstanceLifecycleRecord>>,
+) {
+    let mut record = lifecycle.lock().await;
+    *record = InstanceLifecycleRecord::new(InstanceLifecycleState::Planned, 32);
+    for next in [
+        InstanceLifecycleState::Resolving,
+        InstanceLifecycleState::Loading,
+        InstanceLifecycleState::Warming,
+    ] {
+        record
+            .transition_to(next)
+            .expect("fresh lifecycle record walks planned to warming");
+    }
+}
+
 async fn reset_startup_lifecycle(lifecycle: &Arc<tokio::sync::Mutex<InstanceLifecycleRecord>>) {
     let mut record = lifecycle.lock().await;
     *record = InstanceLifecycleRecord::new(InstanceLifecycleState::Planned, 32);
@@ -723,6 +775,7 @@ async fn launch_startup_local_model_task(
         local_source_required: params.local_source_required,
         allow_uncertified_split: params.allow_uncertified_split,
         split_topology_lock: params.split_topology_lock.as_deref(),
+        auto_balance: params.auto_balance,
         resource_planning_profile: params.resource_planning_profile,
         openai_guardrail_policy: params.openai_guardrail_policy.clone(),
         skippy_telemetry: &params.skippy_telemetry,

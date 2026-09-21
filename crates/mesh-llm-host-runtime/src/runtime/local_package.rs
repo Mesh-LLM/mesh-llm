@@ -283,6 +283,9 @@ pub(super) struct SplitParticipant {
     pub(super) rtt_ms: Option<u32>,
     pub(super) artifact_transfer_supported: bool,
     availability_score: u32,
+    /// Weight bytes per second this node streams during decode, from its GPU
+    /// memory-bandwidth benchmark. Used by `--auto-balance` placement.
+    pub(super) decode_bytes_per_second: Option<u64>,
 }
 
 impl SplitParticipant {
@@ -300,7 +303,13 @@ impl SplitParticipant {
             rtt_ms: None,
             artifact_transfer_supported: false,
             availability_score: 0,
+            decode_bytes_per_second: None,
         }
+    }
+
+    pub(super) fn with_decode_speed(mut self, decode_bytes_per_second: Option<u64>) -> Self {
+        self.decode_bytes_per_second = decode_bytes_per_second;
+        self
     }
 
     pub(super) fn local_package(
@@ -512,6 +521,30 @@ pub(super) async fn collect_split_participant_membership(
     }
 }
 
+/// Total GPU memory bandwidth across a node's GPUs, as bytes per second.
+///
+/// A stage runs on one device, but on Apple Silicon there is one GPU and on
+/// multi-GPU hosts a stage spans the devices its layers are spread over, so
+/// the sum is the right first-order rate. Absolute accuracy does not matter —
+/// only the ratio between nodes moves the cut — and runtime measurement
+/// replaces it once stages are serving.
+pub(super) fn decode_bytes_per_second_from_gbps(gbps: Option<&[f64]>) -> Option<u64> {
+    let total: f64 = gbps?
+        .iter()
+        .filter(|value| value.is_finite() && **value > 0.0)
+        .sum();
+    (total > 0.0).then_some((total * 1_000_000_000.0) as u64)
+}
+
+/// Parse the comma-joined per-GPU bandwidth a peer gossips.
+pub(super) fn decode_bytes_per_second_from_gossip(gbps: Option<&str>) -> Option<u64> {
+    let values = gbps?
+        .split(',')
+        .filter_map(|value| value.trim().parse::<f64>().ok())
+        .collect::<Vec<_>>();
+    decode_bytes_per_second_from_gbps(Some(&values))
+}
+
 pub(super) async fn collect_split_participants(
     node: &mesh::Node,
     model_name: &str,
@@ -521,12 +554,18 @@ pub(super) async fn collect_split_participants(
     local_vram_override: Option<u64>,
     local_source_required: bool,
 ) -> SplitParticipantSnapshot {
-    let mut participants = vec![SplitParticipant::local_package(
-        node.id(),
-        local_vram_override.unwrap_or_else(|| node.vram_bytes()),
-        Some(node.first_joined_mesh_ts().await.unwrap_or(0)),
-        package,
-    )];
+    let local_bandwidth = node.gpu_mem_bandwidth_gbps.lock().await.clone();
+    let mut participants = vec![
+        SplitParticipant::local_package(
+            node.id(),
+            local_vram_override.unwrap_or_else(|| node.vram_bytes()),
+            Some(node.first_joined_mesh_ts().await.unwrap_or(0)),
+            package,
+        )
+        .with_decode_speed(decode_bytes_per_second_from_gbps(
+            local_bandwidth.as_deref(),
+        )),
+    ];
     let mut excluded = Vec::new();
     for peer in node.peers().await {
         if let Some(reason) = split_peer_preflight_exclusion_reason(
@@ -561,7 +600,10 @@ pub(super) async fn collect_split_participants(
                             package_signal,
                             peer.rtt_ms,
                             artifact_transfer_allowed,
-                        ),
+                        )
+                        .with_decode_speed(decode_bytes_per_second_from_gossip(
+                            peer.gpu_mem_bandwidth_gbps.as_deref(),
+                        )),
                 );
             }
             Err(reason) => {

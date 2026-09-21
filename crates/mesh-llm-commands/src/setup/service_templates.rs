@@ -10,6 +10,15 @@ pub(crate) fn render_service_env_file() -> String {
         "# Example:",
         "# RUST_LOG=mesh_inference=debug",
         "",
+        "# Join a private mesh without editing the generated unit.",
+        "# The token file is re-read on every rejoin, so rotating the invite",
+        "# token is just replacing the file's contents.",
+        "# A token at the default location needs no line here at all: an",
+        "# invite.token beside the resolved config file, which is",
+        "# ~/.mesh-llm/invite.token for the default config path.",
+        "# MESH_LLM_JOIN_FILE=/home/you/.mesh-llm/invite.token",
+        "# MESH_LLM_JOIN=<complete invite token>",
+        "",
     ]
     .join("\n")
 }

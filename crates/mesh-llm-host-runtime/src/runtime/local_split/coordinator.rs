@@ -147,6 +147,9 @@ pub(super) struct SplitTopologyCoordinator {
     pub(super) topology_locked: bool,
     pub(super) local_source_required: bool,
     pub(super) health_interval: Duration,
+    /// `--auto-balance` closed-loop rebalancing; `None` when off or the
+    /// topology is locked.
+    pub(super) auto_balance: Option<super::auto_balance::AutoBalanceController>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -186,6 +189,7 @@ impl SplitTopologyCoordinator {
                     if !self.evaluate_replan("periodic_check").await {
                         break;
                     }
+                    self.evaluate_auto_balance().await;
                 }
             }
         }
@@ -836,6 +840,351 @@ fn split_candidate_stage0_is_local(
         .is_some_and(|stage0| stage0.node_id == local_node_id)
 }
 
+/// Longest a planned performance cutover waits for in-flight requests.
+const AUTO_BALANCE_DRAIN_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// Lifecycle record the runtime loop hands back once a generation drained.
+type DrainAckLifecycle =
+    std::sync::Arc<tokio::sync::Mutex<crate::runtime::instance_lifecycle::InstanceLifecycleRecord>>;
+/// Smallest predicted bottleneck improvement worth a cutover.
+const AUTO_BALANCE_MIN_PREDICTED_GAIN: f64 = 0.10;
+
+impl SplitTopologyCoordinator {
+    /// Sample stage busy time and let the performance controller decide.
+    async fn evaluate_auto_balance(&mut self) {
+        if self.auto_balance.is_none() {
+            return;
+        }
+        let Some(sample) = self.auto_balance_sample().await else {
+            return;
+        };
+        let decision = match self.auto_balance.as_mut() {
+            Some(controller) => controller.observe(sample),
+            None => return,
+        };
+        match decision {
+            super::auto_balance::AutoBalanceDecision::Hold { why } => {
+                tracing::debug!(model_ref = self.model_ref, why, "auto-balance holding");
+            }
+            super::auto_balance::AutoBalanceDecision::Accept { baseline, observed } => {
+                tracing::info!(
+                    model_ref = self.model_ref,
+                    baseline_tokens_per_second = baseline,
+                    observed_tokens_per_second = observed,
+                    stages = ?split_stage_plan_labels(&self.active.stages),
+                    "auto-balance kept"
+                );
+            }
+            super::auto_balance::AutoBalanceDecision::Rebalance { measurement } => {
+                self.try_auto_rebalance(measurement).await;
+            }
+            super::auto_balance::AutoBalanceDecision::Rollback {
+                boundaries,
+                baseline,
+                observed,
+            } => {
+                self.apply_auto_balance_rollback(boundaries, baseline, observed)
+                    .await;
+            }
+        }
+    }
+
+    async fn apply_auto_balance_rollback(
+        &mut self,
+        boundaries: Vec<(u32, u32)>,
+        baseline: f64,
+        observed: f64,
+    ) {
+        tracing::warn!(
+            model_ref = self.model_ref,
+            baseline_tokens_per_second = baseline,
+            observed_tokens_per_second = observed,
+            "auto-balance lowered throughput; restoring previous layer boundaries"
+        );
+        let mut stages = self.active.stages.clone();
+        stages.sort_by_key(|stage| stage.stage_index);
+        let restore = stages
+            .iter()
+            .zip(boundaries)
+            .map(|(stage, (start, end))| (stage.node_id, start, end))
+            .collect::<Vec<_>>();
+        if self
+            .cut_over_to_boundaries("auto_balance_rollback", restore)
+            .await
+        {
+            if let Some(controller) = self.auto_balance.as_mut() {
+                controller.note_rolled_back(Instant::now());
+            }
+        } else {
+            // The degraded candidate is still active. Keep the trial open so
+            // the next sample can retry the rollback instead of cooling down
+            // around a move that never completed.
+            tracing::warn!(
+                model_ref = self.model_ref,
+                "auto-balance rollback cutover failed; keeping the trial open for the next sample"
+            );
+        }
+    }
+
+    /// Cumulative busy time per active stage plus stage-0 decode tokens.
+    async fn auto_balance_sample(&self) -> Option<super::auto_balance::AutoBalanceSample> {
+        let stage0 = skippy::stage0_compute_meter(&self.active.run_id)?.snapshot();
+        let statuses = self.node.stage_runtime_statuses().await;
+        let mut stages = self.active.stages.clone();
+        stages.sort_by_key(|stage| stage.stage_index);
+        let mut busy = Vec::with_capacity(stages.len());
+        for stage in &stages {
+            let busy_nanos = if stage.stage_index == 0 {
+                stage0.busy_nanos
+            } else {
+                statuses
+                    .iter()
+                    .find(|status| {
+                        status.run_id == self.active.run_id && status.stage_id == stage.stage_id
+                    })?
+                    .compute_busy_nanos
+            };
+            busy.push(super::auto_balance::StageBusy {
+                layer_start: stage.layer_start,
+                layer_end: stage.layer_end,
+                weight_bytes: stage.parameter_bytes,
+                busy_nanos,
+            });
+        }
+        Some(super::auto_balance::AutoBalanceSample {
+            at: Instant::now(),
+            stages: busy,
+            decode_tokens: stage0.decode_tokens,
+        })
+    }
+
+    /// The planner's answer for this window, or `None` when nothing is worth a
+    /// cutover: either the solver found no better cut, or the predicted gain is
+    /// under [`AUTO_BALANCE_MIN_PREDICTED_GAIN`]. Logging lives here so both
+    /// reasons are visible in the log without the caller re-deriving them.
+    fn propose_rebalance(
+        &self,
+        measurement: &super::auto_balance::WindowMeasurement,
+        stages: &[RuntimeSliceStagePlan],
+    ) -> Option<crate::runtime::split_planning::MeasuredRebalance> {
+        let rates = stages
+            .iter()
+            .zip(&measurement.bytes_per_second)
+            .map(|(stage, rate)| (stage.node_id, *rate))
+            .collect::<std::collections::HashMap<_, _>>();
+        let resources = SplitTopologyResourceInputs {
+            ctx_size_override: Some(self.ctx_size),
+            parallel_override: Some(self.slots),
+            ..self.topology_resources.clone()
+        };
+        let proposal = crate::runtime::split_planning::measured_rebalance(
+            &self.package,
+            &self.active.participants,
+            resources,
+            stages,
+            self.ctx_size,
+            self.slots,
+            &rates,
+        );
+        let Some(proposal) = proposal else {
+            tracing::info!(
+                model_ref = self.model_ref,
+                utilization = ?measurement.utilization,
+                "auto-balance found no better cut"
+            );
+            return None;
+        };
+        let gain = proposal.bottleneck_before_nanos as f64
+            / proposal.bottleneck_after_nanos.max(1) as f64
+            - 1.0;
+        tracing::info!(
+            model_ref = self.model_ref,
+            decode_tokens_per_second = measurement.decode_tokens_per_second,
+            utilization = ?measurement.utilization,
+            current = ?split_stage_plan_labels(stages),
+            proposed = ?proposal
+                .boundaries
+                .iter()
+                .map(|(_, start, end)| format!("{start}..{end}"))
+                .collect::<Vec<_>>(),
+            predicted_gain_pct = gain * 100.0,
+            "auto-balance proposed from measured stage busy time"
+        );
+        (gain >= AUTO_BALANCE_MIN_PREDICTED_GAIN).then_some(proposal)
+    }
+
+    async fn try_auto_rebalance(&mut self, measurement: super::auto_balance::WindowMeasurement) {
+        let mut stages = self.active.stages.clone();
+        stages.sort_by_key(|stage| stage.stage_index);
+        let Some(proposal) = self.propose_rebalance(&measurement, &stages) else {
+            if let Some(controller) = self.auto_balance.as_mut() {
+                controller.note_not_moved(Instant::now());
+            }
+            return;
+        };
+        let previous = stages
+            .iter()
+            .map(|stage| (stage.layer_start, stage.layer_end))
+            .collect::<Vec<_>>();
+        let target = proposal
+            .boundaries
+            .iter()
+            .map(|(_, start, end)| (*start, *end))
+            .collect::<Vec<_>>();
+        let damped = super::auto_balance::damped_boundaries(&previous, &target);
+        let next = stages
+            .iter()
+            .zip(&damped)
+            .map(|(stage, (start, end))| (stage.node_id, *start, *end))
+            .collect::<Vec<_>>();
+        tracing::info!(
+            model_ref = self.model_ref,
+            next = ?damped,
+            "auto-balance moving part of the way toward the proposed cut"
+        );
+        let moved = self
+            .cut_over_to_boundaries("auto_balance_rebalance", next)
+            .await;
+        if let Some(controller) = self.auto_balance.as_mut() {
+            if moved {
+                controller.note_moved(measurement.decode_tokens_per_second, previous);
+            } else {
+                controller.note_not_moved(Instant::now());
+            }
+        }
+    }
+
+    /// Drain the serving generation, load one with `boundaries` (same nodes
+    /// and order), and cut over. Returns whether the cutover completed.
+    async fn cut_over_to_boundaries(
+        &mut self,
+        reason: &'static str,
+        boundaries: Vec<(iroh::EndpointId, u32, u32)>,
+    ) -> bool {
+        let candidate = match self.plan_boundary_candidate(&boundaries) {
+            Ok(candidate) => candidate,
+            Err(error) => {
+                tracing::warn!(model_ref = self.model_ref, reason, %error, "auto-balance cutover plan failed");
+                return false;
+            }
+        };
+        let Some(lifecycle) = self.drain_serving_generation(reason).await else {
+            return false;
+        };
+        let previous_run_id = self.active.run_id.clone();
+        match self.load_and_publish_candidate(reason, candidate).await {
+            Ok(()) => {
+                skippy::forget_stage0_compute_meter(&previous_run_id);
+                true
+            }
+            Err(error) => {
+                tracing::warn!(
+                    model_ref = self.model_ref,
+                    reason,
+                    %error,
+                    "auto-balance cutover load failed; resuming the current generation"
+                );
+                crate::runtime::startup_handles::rearm_lifecycle_for_cutover(&lifecycle).await;
+                let _ = lifecycle.lock().await.transition_to(
+                    crate::runtime::instance_lifecycle::InstanceLifecycleState::Serving,
+                );
+                false
+            }
+        }
+    }
+
+    /// Bounded wait for the runtime loop's drain acknowledgement. `None` when
+    /// the acknowledgement does not arrive within the cutover deadline.
+    async fn await_drain_ack(
+        &self,
+        reason: &'static str,
+        ack_rx: tokio::sync::oneshot::Receiver<Option<DrainAckLifecycle>>,
+    ) -> Option<DrainAckLifecycle> {
+        match tokio::time::timeout(AUTO_BALANCE_DRAIN_TIMEOUT, ack_rx).await {
+            Ok(Ok(Some(lifecycle))) => Some(lifecycle),
+            _ => {
+                tracing::warn!(
+                    model_ref = self.model_ref,
+                    reason,
+                    "runtime loop did not acknowledge the drain within the cutover deadline"
+                );
+                None
+            }
+        }
+    }
+
+    /// Stop new admissions and wait (bounded) for in-flight requests.
+    async fn drain_serving_generation(&self, reason: &'static str) -> Option<DrainAckLifecycle> {
+        let (ack, ack_rx) = tokio::sync::oneshot::channel();
+        let event = SplitCoordinatorEvent::Drain(super::SplitCoordinatorDrainEvent {
+            reason,
+            deadline: Instant::now() + AUTO_BALANCE_DRAIN_TIMEOUT,
+            ack,
+        });
+        self.event_tx.send(event).await.ok()?;
+        let lifecycle = self.await_drain_ack(reason, ack_rx).await?;
+        let started = Instant::now();
+        let result = crate::runtime::instance_lifecycle::DrainCoordinator::default()
+            .wait_for_unload_ready(&lifecycle)
+            .await;
+        tracing::info!(
+            model_ref = self.model_ref,
+            reason,
+            drain_ms = started.elapsed().as_millis() as u64,
+            graceful = matches!(
+                result,
+                crate::runtime::instance_lifecycle::DrainResult::Graceful
+            ),
+            "split generation drained for a planned cutover"
+        );
+        Some(lifecycle)
+    }
+
+    fn plan_boundary_candidate(
+        &self,
+        boundaries: &[(iroh::EndpointId, u32, u32)],
+    ) -> Result<SplitTopologyGeneration> {
+        let generation = self.active.generation.saturating_add(1);
+        let run_id = format!("mesh-split-{}-g{}", now_unix_nanos(), generation);
+        let topology_id = format!("topology-{run_id}");
+        let resources = SplitTopologyResourceInputs {
+            ctx_size_override: Some(self.ctx_size),
+            parallel_override: Some(self.slots),
+            ..self.topology_resources.clone()
+        };
+        let locked = boundaries
+            .iter()
+            .map(|(node_id, layer_start, layer_end)| {
+                crate::runtime::split_topology_lock::LockedSplitStageAssignment {
+                    node_id: *node_id,
+                    layer_start: *layer_start,
+                    layer_end: *layer_end,
+                }
+            })
+            .collect::<Vec<_>>();
+        let planned = super::plan_locked_runtime_slice_topology_with_resources(
+            &topology_id,
+            &self.model_ref,
+            &self.package,
+            &self.active.participants,
+            &[],
+            resources,
+            &locked,
+        )?;
+        let admissions = super::realize_split_stage_admissions(
+            &self.model_path,
+            &self.model_ref,
+            &self.package,
+            &planned,
+            &self.runtime_profile,
+        )?;
+        let stages = planned.stages;
+        let participants = split_participants_for_stages(&self.active.participants, &stages);
+        SplitTopologyGeneration::new(topology_id, run_id, generation, participants, stages)
+            .with_admissions(admissions)
+    }
+}
+
 #[cfg(test)]
 pub(super) fn split_replan_decision(
     active: &SplitTopologyGeneration,
@@ -937,6 +1286,11 @@ pub(super) async fn stop_split_generation(
             &stage0.stage_id,
         )
         .await;
+        // Drop this node's compute-meter entry for the run: teardown paths
+        // (withdraw, replan replace, failed load, local fallback, model
+        // stop) all come through here, so the registry cannot outlive the
+        // generation it describes.
+        skippy::forget_stage0_compute_meter(&generation.run_id);
     }
     for stage in generation.stages.iter().skip(1) {
         let stop = skippy::StageStopRequest {

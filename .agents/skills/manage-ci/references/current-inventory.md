@@ -82,16 +82,36 @@ an independent build and complete verification pass on the exact same commit.
 aggregate. The producer performs prepare, manifest-policy, full native and Rust
 builds, generated-family validation, smoke, and split-roster checks. It validates
 the immutable HF cache before compilation and exports a candidate Git bundle,
-one-family-per-shard plan, four arm64 certification binaries, and a prebuilt
-multimodal library-test executable. Static Metal resources are embedded; an
-unpackaged non-system dylib makes the handoff fail. SHA-256 digests bind all
-handoff bytes to the candidate, main base, run/attempt, and pass identity.
+one-family-per-shard plan, four arm64 certification binaries, a prebuilt
+multimodal library-test executable, and the run-scoped CPU workload oracle
+closure built by `just skippy-workload-oracles-build`. Static Metal resources
+are embedded; an unpackaged non-system dylib makes the handoff fail. SHA-256
+digests bind all handoff bytes to the candidate, main base, run/attempt, and
+pass identity.
+
+`scripts/plan-family-battery.py` validates the versioned JSON family policy
+before native compilation: the three core parity lanes for certified causal
+rows, and a class-specific smoke plus independent local-monolithic oracle pair
+for each of the six registry-generated non-chat rows (`embedding`, `rerank`,
+`encoder_decoder`, `ocr`, `speech_synthesis`, `speech_recognition`), each
+paired with its `-oracle` lane. Every family row declares its workload `class`
+and GGUF `architecture` separately; only causal rows with complete split-parity
+policy contribute to the architecture admission roster, and every row's
+immutable revisions/files must resolve in the verified read-only lab cache.
+Workload readiness uses the planned per-model deadline for both servers;
+embedding certification additionally requires the official Python SDK smoke.
+Dry-run planning needs no oracle tools; a missing execution prerequisite
+records failed lanes without discarding later family results.
 
 Each named family job runs `--skip-build --shard-index` on the matching
-`family-certify` pool, with max-parallel 8 and fail-fast disabled. No build
-runner is held while workers queue: one machine can execute all jobs serially,
-and more machines can run them concurrently. Each machine must have the same
-arm64/Metal toolchain/runtime compatibility and an existing readable HF cache.
+`family-certify` pool, with max-parallel 8 and fail-fast disabled. Workers
+restore the executable handoff, including the workload oracle closure, and
+point the battery's `SKIPPY_WORKLOAD_*` variables at the restored closure; its
+source- and executable-bound `producer.json` is re-verified before consumption,
+so no worker compiles or downloads. No build runner is held while workers
+queue: one machine can execute all jobs serially, and more machines can run
+them concurrently. Each machine must have the same arm64/Metal
+toolchain/runtime compatibility and an existing readable HF cache.
 The shared `use-canary-cache` action loads the runner account's interactive login
 shell for both producer and family jobs. It uses `HF_HOME` (falling back to legacy
 `HF_CACHE` or the standard user cache), validates its `hub` directory and any
@@ -102,13 +122,16 @@ masked before export. `HF_HUB_OFFLINE=1` is applied as certification policy rath
 than required in the machine environment. Compiler-cache and local-tool defaults
 use the runner account's home directory instead of a fixed username. One service
 per physical certification machine avoids competing model loads and ports.
-There is no Actions model cache and no worker-side compilation or download.
+There is no Actions model cache.
 
 The aggregate requires every planned family exactly once, successful worker
-status, matching candidate/plan/build digests, successful core lanes, and any
-required multimodal result. The battery itself reconciles the production
-planner's selected cuts, immutable revisions, tensor bytes, and native MTP
-requirements. Missing, cancelled, duplicate, or stale evidence cannot certify.
+status, matching candidate/plan/build digests, and each family's required
+lanes from the plan — split-parity lanes for causal rows, class-specific smoke
+plus oracle lanes for the non-chat rows — plus any required multimodal result,
+so the non-chat rows are hard gates on every certified run. The battery itself
+reconciles the production planner's selected cuts, immutable revisions, tensor
+bytes, and native MTP requirements. Missing, cancelled, duplicate, or stale
+evidence cannot certify.
 Aggregation reports every failed receipt, including its runner and outcome, in
 the job log and Actions summary before rejecting the pass. Worker/aggregate
 failures remain recoverable by later bounded repair passes; only complete

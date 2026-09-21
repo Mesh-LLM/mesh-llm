@@ -10,6 +10,7 @@ mod discovery;
 pub mod instance;
 mod instance_lifecycle;
 mod interactive;
+mod join_sources;
 mod local;
 mod local_model_only;
 mod local_package;

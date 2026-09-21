@@ -1,8 +1,9 @@
 use crate::inference::skippy;
 use anyhow::{Context, Result};
 use skippy_coordinator::topology::{
-    LockedTopologyStage, TopologyNode, TopologyPlanningInput, TopologyStagePlan,
-    minimum_valid_context, plan_locked_topology, plan_topology, plan_topology_with_stage0,
+    LockedTopologyStage, ThroughputEstimate, TopologyNode, TopologyPlan, TopologyPlanningInput,
+    TopologyStagePlan, estimate_plan_throughput, minimum_valid_context, plan_locked_topology,
+    plan_topology, plan_topology_with_stage0, rebalance_topology,
 };
 use std::collections::HashMap;
 
@@ -54,6 +55,7 @@ pub(super) struct SplitTopologyPlanInput {
     pub(super) target_decode_tpot_ms: Option<u32>,
     pub(super) minimum_nodes: usize,
     pub(super) nodes: Vec<SplitTopologyPlanNode>,
+    pub(super) auto_balance: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -63,6 +65,7 @@ pub(super) struct SplitTopologyPlanNode {
     pub(super) max_vram_bytes: Option<u64>,
     pub(super) runtime_headroom_bytes: u64,
     pub(super) stage_transfer_latency_ms: Option<u32>,
+    pub(super) decode_bytes_per_second: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -72,6 +75,7 @@ pub(super) struct SplitTopologyPlan {
     pub(super) estimated_decode_network_ms_per_token: Option<u32>,
     pub(super) decode_tpot_target_met: Option<bool>,
     pub(super) stages: Vec<TopologyStagePlan>,
+    pub(super) throughput: Option<ThroughputEstimate>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -91,6 +95,8 @@ pub(super) struct SplitTopologyResourceInputs {
     pub(super) recurrent_bytes_per_sequence_by_layer: Vec<u64>,
     pub(super) ctx_size_override: Option<u32>,
     pub(super) parallel_override: Option<usize>,
+    /// Balance layer boundaries by node decode speed (`--auto-balance`).
+    pub(super) auto_balance: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -124,6 +130,7 @@ fn split_topology_plan(plan: skippy_coordinator::topology::TopologyPlan) -> Spli
         estimated_decode_network_ms_per_token: plan.estimated_decode_network_ms_per_token,
         decode_tpot_target_met: plan.decode_tpot_target_met,
         stages: plan.stages,
+        throughput: plan.throughput,
     }
 }
 
@@ -146,11 +153,13 @@ fn topology_planning_input(input: SplitTopologyPlanInput) -> TopologyPlanningInp
                 max_vram_bytes: node.max_vram_bytes,
                 runtime_headroom_bytes: node.runtime_headroom_bytes,
                 stage_transfer_latency_ms: node.stage_transfer_latency_ms,
+                decode_bytes_per_second: node.decode_bytes_per_second,
             })
             .collect(),
         context_length_override: input.context_length_override,
         parallel_lanes_override: input.parallel_lanes_override,
         target_decode_tpot_ms: input.target_decode_tpot_ms,
+        auto_balance: input.auto_balance,
     }
 }
 
@@ -213,6 +222,7 @@ pub(super) fn plan_runtime_slice_topology_with_resources_and_stage0(
     );
 
     let participant_by_id = participant_index_by_id(participants);
+    let plan_auto_balance = resources.auto_balance;
     let plan_input = runtime_slice_plan_input(package, participants, resources.clone());
     let plan = plan_runtime_slice_topology_result(
         SplitPlanAttempt {
@@ -227,24 +237,82 @@ pub(super) fn plan_runtime_slice_topology_with_resources_and_stage0(
         required_stage0,
     )?;
 
+    let plan_labels = PlannedSliceTopologyLabels {
+        context_length: plan.context_length,
+        slots: plan.parallel_lanes,
+        estimated_decode_network_ms_per_token: plan.estimated_decode_network_ms_per_token,
+        decode_tpot_target_met: plan.decode_tpot_target_met,
+        auto_balance_applied: plan.throughput.is_some(),
+        stage_decode_ms: plan.throughput.as_ref().map(stage_decode_ms_labels),
+        stage_idle_pct: plan.throughput.as_ref().map(stage_idle_pct_labels),
+    };
     let mut stages = map_runtime_slice_stages(plan.stages, &participant_by_id)?;
     stages.sort_by_key(|stage| stage.stage_index);
     validate_split_capacity(model_ref, package, participants, &stages, excluded)?;
-    tracing::info!(
+    log_planned_slice_topology(
         topology_id,
         model_ref,
-        context_length = plan.context_length,
-        slots = plan.parallel_lanes,
-        estimated_decode_network_ms_per_token = plan.estimated_decode_network_ms_per_token,
-        decode_tpot_target_met = plan.decode_tpot_target_met,
-        stages = ?split_stage_plan_labels(&stages),
-        "planned resource-aware split runtime topology"
+        plan_auto_balance,
+        plan_labels,
+        &stages,
     );
     Ok(PlannedRuntimeSliceTopology {
         stages,
         context_length: plan.context_length,
         slots: plan.parallel_lanes,
     })
+}
+
+/// Summary of a finished plan, captured before its stages are mapped so the
+/// placement summary can be logged after capacity validation.
+struct PlannedSliceTopologyLabels {
+    context_length: u32,
+    slots: usize,
+    estimated_decode_network_ms_per_token: Option<u32>,
+    decode_tpot_target_met: Option<bool>,
+    auto_balance_applied: bool,
+    stage_decode_ms: Option<Vec<String>>,
+    stage_idle_pct: Option<Vec<String>>,
+}
+
+/// Log the planned placement, calling out an auto-balance request that fell
+/// back to the memory-only cut because a placed peer has no measured speed.
+fn log_planned_slice_topology(
+    topology_id: &str,
+    model_ref: &str,
+    plan_auto_balance: bool,
+    labels: PlannedSliceTopologyLabels,
+    stages: &[RuntimeSliceStagePlan],
+) {
+    let PlannedSliceTopologyLabels {
+        context_length,
+        slots,
+        estimated_decode_network_ms_per_token,
+        decode_tpot_target_met,
+        auto_balance_applied,
+        stage_decode_ms,
+        stage_idle_pct,
+    } = labels;
+    if plan_auto_balance && !auto_balance_applied {
+        tracing::warn!(
+            model_ref,
+            "auto-balance requested but at least one placed peer has no measured decode speed; keeping the memory-only placement"
+        );
+    }
+    tracing::info!(
+        topology_id,
+        model_ref,
+        context_length,
+        slots,
+        estimated_decode_network_ms_per_token,
+        decode_tpot_target_met,
+        stages = ?split_stage_plan_labels(stages),
+        auto_balance_requested = plan_auto_balance,
+        auto_balance_applied,
+        stage_decode_ms = ?stage_decode_ms,
+        stage_idle_pct = ?stage_idle_pct,
+        "planned resource-aware split runtime topology"
+    );
 }
 
 pub(super) fn plan_locked_runtime_slice_topology_with_resources(
@@ -339,6 +407,102 @@ fn plan_runtime_slice_topology_result(
     }
 }
 
+/// A throughput re-cut of a running split, from measured per-node rates.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct MeasuredRebalance {
+    pub(super) boundaries: Vec<(iroh::EndpointId, u32, u32)>,
+    pub(super) bottleneck_before_nanos: u64,
+    pub(super) bottleneck_after_nanos: u64,
+}
+
+/// Re-cut `stages` (same nodes, same order) so stage decode times balance
+/// under `measured_rates` (weight bytes per busy second, per stage node).
+/// `None` when a node has no measurement, no feasible cut exists, or the
+/// current cut is already the balanced one.
+pub(super) fn measured_rebalance(
+    package: &skippy::SkippyPackageIdentity,
+    participants: &[SplitParticipant],
+    resources: SplitTopologyResourceInputs,
+    stages: &[RuntimeSliceStagePlan],
+    context_length: u32,
+    parallel_lanes: usize,
+    measured_rates: &HashMap<iroh::EndpointId, u64>,
+) -> Option<MeasuredRebalance> {
+    let measured = participants
+        .iter()
+        .map(|participant| {
+            participant.with_decode_speed(measured_rates.get(&participant.node_id).copied())
+        })
+        .collect::<Vec<_>>();
+    let input = topology_planning_input(runtime_slice_plan_input(package, &measured, resources));
+    let current = TopologyPlan {
+        context_length,
+        parallel_lanes,
+        stages: stages
+            .iter()
+            .map(|stage| TopologyStagePlan {
+                stage_id: stage.stage_id.clone(),
+                stage_index: stage.stage_index,
+                node_id: stage.node_id.to_string(),
+                layer_start: stage.layer_start,
+                layer_end: stage.layer_end,
+                parameter_bytes: stage.parameter_bytes,
+            })
+            .collect(),
+        estimated_decode_network_ms_per_token: None,
+        decode_tpot_target_met: None,
+        throughput: None,
+    };
+    let before = estimate_plan_throughput(&input, &current)?;
+    let rebalanced = rebalance_topology(&input, &current)?;
+    let after = rebalanced.throughput.as_ref()?;
+    let node_by_id = stages
+        .iter()
+        .map(|stage| (stage.node_id.to_string(), stage.node_id))
+        .collect::<HashMap<_, _>>();
+    let boundaries = rebalanced
+        .stages
+        .iter()
+        .map(|stage| {
+            node_by_id
+                .get(&stage.node_id)
+                .map(|node| (*node, stage.layer_start, stage.layer_end))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(MeasuredRebalance {
+        boundaries,
+        bottleneck_before_nanos: before.bottleneck_decode_nanos,
+        bottleneck_after_nanos: after.bottleneck_decode_nanos,
+    })
+}
+
+/// `stage-N@node:ms` per stage, for plan logs.
+pub(super) fn stage_decode_ms_labels(throughput: &ThroughputEstimate) -> Vec<String> {
+    throughput
+        .stages
+        .iter()
+        .map(|stage| {
+            format!(
+                "stage-{}:{}..{}:{:.1}ms",
+                stage.stage_index,
+                stage.layer_start,
+                stage.layer_end,
+                stage.decode_nanos as f64 / 1_000_000.0
+            )
+        })
+        .collect()
+}
+
+/// Share of each pipeline cycle a stage waits on the bottleneck, as percent.
+pub(super) fn stage_idle_pct_labels(throughput: &ThroughputEstimate) -> Vec<String> {
+    throughput
+        .idle_basis_points()
+        .into_iter()
+        .enumerate()
+        .map(|(index, idle)| format!("stage-{index}:{:.0}%", f64::from(idle) / 100.0))
+        .collect()
+}
+
 fn participant_index_by_id(participants: &[SplitParticipant]) -> HashMap<String, SplitParticipant> {
     participants
         .iter()
@@ -372,8 +536,13 @@ fn runtime_slice_plan_input(
                 max_vram_bytes: Some(participant.vram_bytes),
                 runtime_headroom_bytes: default_runtime_headroom_bytes(participant.vram_bytes),
                 stage_transfer_latency_ms: participant.rtt_ms,
+                decode_bytes_per_second: participant.decode_bytes_per_second,
             })
             .collect(),
+        // `MESH_LLM_AUTO_BALANCE_INITIAL_CUT=memory` starts from the memory-only
+        // cut so runtime rebalancing can be exercised from a poor placement.
+        auto_balance: resources.auto_balance
+            && std::env::var("MESH_LLM_AUTO_BALANCE_INITIAL_CUT").as_deref() != Ok("memory"),
     }
 }
 
@@ -799,6 +968,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: None,
                 parallel_override: None,
+                auto_balance: false,
             },
         )
         .expect("resource-aware topology");
@@ -829,6 +999,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: Some(1),
                 parallel_override: Some(1),
+                auto_balance: false,
             },
         )
         .expect("resource-aware topology with exact layer weights");
@@ -864,6 +1035,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: Some(1),
                 parallel_override: Some(1),
+                auto_balance: false,
             },
         )
         .expect("MI300X and smaller accelerator should form a valid topology");
@@ -907,6 +1079,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: None,
                 parallel_override: None,
+                auto_balance: false,
             },
         )
         .expect("latency-aware runtime topology");
@@ -960,6 +1133,7 @@ mod tests {
                 recurrent_bytes_per_sequence_by_layer: Vec::new(),
                 ctx_size_override: None,
                 parallel_override: None,
+                auto_balance: false,
             },
         );
 
