@@ -290,6 +290,13 @@ snapshot_candidate_tree() {
   assert_agent_control_unchanged || return 1
   verify_repair_pin || return 1
   validate_agent_manifest_changes || return 1
+  # Verify the dirty-tree producer before snapshotting changes its source identity.
+  local closure="${LLAMA_STAGE_BUILD_DIR:?}-workloads"
+  python3 "$ROOT/scripts/check-skippy-workload-candidate.py" \
+    --candidate-binary "$closure/cargo/debug/skippy-server" \
+    --native-build-dir "$closure/native" --producer-manifest "$closure/producer.json"
+  CANARY_VERIFIED_WORKLOAD_PRODUCER="$(shasum -a 256 "$closure/producer.json" | awk '{print $1}')"
+  export CANARY_VERIFIED_WORKLOAD_PRODUCER
   git add -A
   if git diff --cached --quiet; then
     echo "agent produced no candidate changes to verify" >&2
