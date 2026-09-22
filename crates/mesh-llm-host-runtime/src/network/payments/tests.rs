@@ -56,11 +56,13 @@ impl WalletProvider for TestWallet {
     async fn transactions(&self, _: usize) -> Result<Vec<Transaction>> {
         Ok(Vec::new())
     }
-    async fn create_invoice(&self, amount: Option<u64>) -> Result<Invoice> {
+    async fn create_invoice(&self, amount: Option<u64>, expiry_secs: u32) -> Result<Invoice> {
         let number = self.network.next.fetch_add(1, Ordering::SeqCst) + 1;
         let key = SecretKey::from_slice(&[7; 32])?;
+        // The simulated wallet honours the host's expiry unless a test forces
+        // a shorter one to exercise the expiry paths quickly.
         let expiry = match self.network.invoice_expiry_seconds.load(Ordering::SeqCst) {
-            0 => 3600,
+            0 => u64::from(expiry_secs),
             seconds => seconds as u64,
         };
         let invoice = InvoiceBuilder::new(Currency::Bitcoin)
@@ -84,6 +86,7 @@ impl WalletProvider for TestWallet {
                     amount_msat: amount.unwrap_or(1),
                     fee_msat: 10,
                     status: PaymentStatus::Pending,
+                    claiming: false,
                     status_msg: None,
                     created_at_ms: mesh_llm_payments::now_ms(),
                     settled_at_ms: None,
@@ -290,7 +293,7 @@ async fn paid_exchange(
     allow_paid(&payer_service)?;
     payer_service.ledger.set_policy(&Policy {
         mode: ApprovalMode::Automatic,
-        daily_budget_msat: Some(10_000),
+        daily_budget_msat: Some(20_000),
     })?;
     let price = Pricing {
         input_msat_per_million: 1_000_000,

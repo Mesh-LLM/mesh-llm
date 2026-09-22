@@ -4,7 +4,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use anyhow::{Context, Result, ensure};
 use mesh_llm_payments::{
     ledger::{RequestTerms, receivables::Receivable},
-    pricing::{FEE_ALLOWANCE_MSAT, Pricing},
+    lifetimes::{INPUT_ARRIVAL_WAIT, INPUT_INVOICE_EXPIRY_SECS},
+    pricing::Pricing,
     service::{Arrival, PaymentService},
     wire::Frame,
 };
@@ -60,10 +61,7 @@ impl InvoiceGate {
             .ledger
             .resolve_serving_output_allowance(&self.request_id, u64::from(output))?;
         let amount = self.pricing.input_charge(input as u64)?;
-        let max_total_msat = amount
-            .checked_add(self.pricing.output_charge(u64::from(output))?)
-            .and_then(|total| total.checked_add(2 * FEE_ALLOWANCE_MSAT))
-            .context("request price overflow")?;
+        let max_total_msat = self.pricing.request_cap_msat(amount, u64::from(output))?;
         Ok(Authorization {
             service: self.service.clone(),
             request_id: self.request_id.clone(),
@@ -136,7 +134,7 @@ impl Authorization {
             .service
             .wallet()
             .await?
-            .create_invoice(Some(self.amount))
+            .create_invoice(Some(self.amount), INPUT_INVOICE_EXPIRY_SECS)
             .await?;
         tracing::debug!(
             target: "mesh_llm::payments::timing",
@@ -172,9 +170,11 @@ impl Authorization {
         // Open output delivery on the earliest receiver-side evidence that
         // the HTLC arrived. Settlement is still recorded only on a completed
         // payment, by the task spawned below and awaited before the request
-        // finishes.
+        // finishes. The wait is bounded separately from the invoice: giving up
+        // releases the backend, while the (longer) invoice expiry still makes a
+        // late payment fail at this node instead of landing unnoticed.
         let arrival = tokio::select! {
-            claiming = self.service.wait_arrival(&invoice) => claiming?,
+            claiming = self.service.wait_arrival(&invoice, INPUT_ARRIVAL_WAIT) => claiming?,
             _ = async {
                 while !self.cancelled.load(Ordering::Acquire) {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;

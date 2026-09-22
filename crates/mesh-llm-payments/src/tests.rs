@@ -86,6 +86,8 @@ struct MockWallet {
     terminal_failure: AtomicBool,
     hide_payments: AtomicBool,
     invoice_unavailable: AtomicBool,
+    /// Expiry the service asked for on each `create_invoice`.
+    invoice_expiries: Mutex<Vec<u32>>,
 }
 
 #[async_trait]
@@ -98,12 +100,17 @@ impl WalletProvider for MockWallet {
     async fn transactions(&self, _: usize) -> Result<Vec<Transaction>> {
         Ok(self.payments.lock().unwrap().values().cloned().collect())
     }
-    async fn create_invoice(&self, amount: Option<u64>) -> Result<Invoice> {
+    async fn create_invoice(&self, amount: Option<u64>, expiry_secs: u32) -> Result<Invoice> {
         anyhow::ensure!(
             !self.invoice_unavailable.load(Ordering::SeqCst),
             "invoice service unavailable"
         );
-        Ok(invoice(200, amount.unwrap_or(1000)))
+        self.invoice_expiries.lock().unwrap().push(expiry_secs);
+        Ok(invoice_with_expiry(
+            200,
+            amount.unwrap_or(1000),
+            u64::from(expiry_secs),
+        ))
     }
     async fn lookup(&self, hash: &str) -> Result<Option<Transaction>> {
         self.lookups.fetch_add(1, Ordering::SeqCst);
@@ -177,6 +184,7 @@ impl WalletProvider for MockWallet {
             } else {
                 PaymentStatus::Succeeded
             },
+            claiming: false,
             status_msg: None,
             created_at_ms: crate::now_ms(),
             settled_at_ms: (!pending).then(crate::now_ms),

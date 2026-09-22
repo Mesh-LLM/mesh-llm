@@ -51,10 +51,16 @@ pub struct Transaction {
     pub amount_msat: u64,
     pub fee_msat: u64,
     pub status: PaymentStatus,
-    /// Provider-specific detailed status, preserved verbatim. The coarse
-    /// `status` collapses distinct provider states (Lexe maps both
-    /// `InvoiceGenerated` and `Claiming` to `Pending`), so this field is the
-    /// only way to observe receiver-side HTLC arrival.
+    /// Normalized receiver-side arrival evidence for an inbound payment that
+    /// is still `Pending`: the HTLC has been irrevocably committed to this
+    /// node and it is claiming the funds. Providers set this only when their
+    /// API exposes such a state; `false` means "not observed", never "not
+    /// arrived". Meaningless for outbound or terminal payments, and no
+    /// substitute for `Succeeded`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub claiming: bool,
+    /// Provider-specific detailed status for display and diagnostics only.
+    /// Nothing in the payment path may branch on its contents.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_msg: Option<String>,
     pub created_at_ms: u64,
@@ -65,9 +71,7 @@ impl Transaction {
     /// Receiver-side evidence that the HTLC arrived and the node is claiming
     /// it. Advisory only: it is a transient state and may be missed entirely.
     pub fn is_claiming(&self) -> bool {
-        self.inbound
-            && self.status == PaymentStatus::Pending
-            && self.status_msg.as_deref() == Some("claiming")
+        self.inbound && self.status == PaymentStatus::Pending && self.claiming
     }
 }
 
@@ -75,7 +79,15 @@ impl Transaction {
 pub trait WalletProvider: Send + Sync {
     async fn balance(&self) -> Result<Balance>;
     async fn transactions(&self, limit: usize) -> Result<Vec<Transaction>>;
-    async fn create_invoice(&self, amount_msat: Option<u64>) -> Result<Invoice>;
+    /// Create a BOLT11 invoice that expires `expiry_secs` from now.
+    ///
+    /// The caller decides how long the invoice stays payable; a provider must
+    /// not substitute its own default. Implementations may clamp to the
+    /// provider's supported range but must not silently lengthen a short
+    /// expiry: the host relies on expiry to bound how long an unpaid inference
+    /// invoice pins state and to make a late payment fail at the payee rather
+    /// than land unexpectedly.
+    async fn create_invoice(&self, amount_msat: Option<u64>, expiry_secs: u32) -> Result<Invoice>;
 
     /// Start or recover payment of this invoice. The implementation must not
     /// initiate a payment whose amount plus fees exceeds `max_total_msat`.

@@ -68,7 +68,10 @@ impl PaymentService {
                     ensure!(amount_msat > 0, "amount must be greater than zero");
                 }
                 Ok(serde_json::to_value(
-                    self.wallet().await?.create_invoice(amount_msat).await?,
+                    self.wallet()
+                        .await?
+                        .create_invoice(amount_msat, crate::lifetimes::FUNDING_INVOICE_EXPIRY_SECS)
+                        .await?,
                 )?)
             }
             ControlCommand::Send {

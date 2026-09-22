@@ -11,8 +11,9 @@
 //! `wallet.v2`.
 //!
 //! The host, not the plugin, owns token metering, output gating, the ledger,
-//! budgets and settlement bookkeeping. The plugin only turns wallet intents
-//! into wallet facts: invoices, payments, balances and settlement observation.
+//! budgets, settlement bookkeeping, invoice lifetimes and fee caps. The plugin
+//! only turns wallet intents into wallet facts: invoices, payments, balances
+//! and settlement observation.
 
 use serde::{Deserialize, Serialize};
 
@@ -116,6 +117,9 @@ pub struct TransactionsRequest {
 pub struct CreateInvoiceRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub amount_msat: Option<u64>,
+    /// Seconds until the invoice expires. Required: the host owns invoice
+    /// lifetime and the plugin must not fall back to a provider default.
+    pub expiry_secs: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

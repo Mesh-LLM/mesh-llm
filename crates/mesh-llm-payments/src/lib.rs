@@ -9,6 +9,7 @@
 pub mod control;
 pub mod intent;
 pub mod ledger;
+pub mod lifetimes;
 pub mod pricing;
 pub mod provisioning;
 pub mod service;

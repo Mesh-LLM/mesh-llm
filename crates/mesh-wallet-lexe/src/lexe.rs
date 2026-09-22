@@ -79,6 +79,10 @@ impl LexeProvider {
                 seed
             }
         };
+        // The seed is plaintext recovery material. The SDK creates it 0600;
+        // re-assert that on every open so a seed copied or restored with looser
+        // permissions is tightened rather than trusted as-is.
+        restrict_seed_permissions(&seed_path)?;
         let wallet = load_wallet(&seed, directory)?;
         // Signup is idempotent, including recovery after a crash between seed
         // persistence and provisioning.
@@ -104,22 +108,45 @@ impl LexeProvider {
     }
 
     fn transaction(payment: Payment) -> Transaction {
+        let inbound = payment.direction == PaymentDirection::Inbound;
+        let status = match payment.status {
+            lexe::types::payment::PaymentStatus::Pending => PaymentStatus::Pending,
+            lexe::types::payment::PaymentStatus::Completed => PaymentStatus::Succeeded,
+            lexe::types::payment::PaymentStatus::Failed => PaymentStatus::Failed,
+        };
         Transaction {
             id: payment.index.to_string(),
             payment_hash: payment.hash.map(|hash| hash.to_string()),
-            inbound: payment.direction == PaymentDirection::Inbound,
+            inbound,
             amount_msat: payment.amount.map_or(0, |amount| amount.msat()),
             fee_msat: payment.fees.msat(),
-            status: match payment.status {
-                lexe::types::payment::PaymentStatus::Pending => PaymentStatus::Pending,
-                lexe::types::payment::PaymentStatus::Completed => PaymentStatus::Succeeded,
-                lexe::types::payment::PaymentStatus::Failed => PaymentStatus::Failed,
-            },
+            status,
+            claiming: inbound
+                && status == PaymentStatus::Pending
+                && is_claiming_status(&payment.status_msg),
             status_msg: Some(payment.status_msg),
             created_at_ms: payment.created_at.to_millis(),
             settled_at_ms: payment.finalized_at.map(|time| time.to_millis()),
         }
     }
+}
+
+#[cfg(unix)]
+fn restrict_seed_permissions(seed_path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let metadata = std::fs::metadata(seed_path).context("wallet seed is unreadable")?;
+    if metadata.permissions().mode() & 0o077 != 0 {
+        std::fs::set_permissions(seed_path, std::fs::Permissions::from_mode(0o600))
+            .context("could not restrict wallet seed permissions")?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn restrict_seed_permissions(_seed_path: &Path) -> Result<()> {
+    // The wallet directory inherits the user profile ACL on Windows; there is
+    // no portable mode bit to tighten.
+    Ok(())
 }
 
 fn load_wallet(seed: &RootSeed, directory: &Path) -> Result<LexeWallet> {
@@ -168,14 +195,23 @@ impl WalletProvider for LexeProvider {
             .collect())
     }
 
-    async fn create_invoice(&self, amount_msat: Option<u64>) -> Result<Invoice> {
+    async fn create_invoice(&self, amount_msat: Option<u64>, expiry_secs: u32) -> Result<Invoice> {
         ensure!(
             amount_msat != Some(0),
             "zero amount invoice is not supported"
         );
+        ensure!(expiry_secs > 0, "invoice expiry must be positive");
+        ensure!(
+            expiry_secs <= MAX_INVOICE_EXPIRY_SECS,
+            "invoice expiry exceeds the provider maximum of {MAX_INVOICE_EXPIRY_SECS}s"
+        );
         let result = self
             .wallet
             .create_invoice(CreateInvoiceRequest {
+                // Always explicit: `None` would silently become the SDK's
+                // one-day default, and the host relies on short inference
+                // invoices expiring at the payee.
+                expiration_secs: Some(expiry_secs),
                 amount: amount_msat.map(Amount::from_msat),
                 description: Some("mesh-llm".into()),
                 ..Default::default()
@@ -346,8 +382,45 @@ impl LexeProvider {
 
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
 
+/// Lexe rejects invoice expiries above one week
+/// (`lexe_api_core::models::command::CreateInvoiceRequest::MAX_EXPIRATION_SECS`).
+const MAX_INVOICE_EXPIRY_SECS: u32 =
+    lexe_api_core::models::command::CreateInvoiceRequest::MAX_EXPIRATION_SECS;
+
+/// Map Lexe's per-type display status onto the normalized `claiming` flag.
+///
+/// The SDK documents `status_msg` as a human-readable string produced by the
+/// node, so this is the one place the wire string is interpreted. The
+/// comparison is deliberately loose (case, surrounding whitespace) and a miss
+/// only degrades the receiver to waiting for `completed`, which the contract
+/// permits. LDK only reports claiming once the HTLC is irrevocably committed.
+fn is_claiming_status(status_msg: &str) -> bool {
+    status_msg.trim().eq_ignore_ascii_case("claiming")
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn claiming_is_normalized_from_the_display_status_only_for_pending_inbound() {
+        assert!(super::is_claiming_status("claiming"));
+        assert!(super::is_claiming_status(" Claiming "));
+        assert!(!super::is_claiming_status("invoice generated"));
+        assert!(!super::is_claiming_status("completed"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn seed_permissions_are_tightened_on_open() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let seed_path = directory.path().join("seedphrase.txt");
+        std::fs::write(&seed_path, "legacy seed\n").unwrap();
+        std::fs::set_permissions(&seed_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        super::restrict_seed_permissions(&seed_path).unwrap();
+        let mode = std::fs::metadata(&seed_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
     #[tokio::test]
     async fn wallet_constructs_without_mesh_tls_initialization() {
         let directory = tempfile::tempdir().unwrap();

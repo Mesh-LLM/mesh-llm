@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail, ensure};
 use mesh_llm_payments::{
     ledger::{Charge, RequestTerms},
-    pricing::{FEE_ALLOWANCE_MSAT, Pricing},
+    pricing::{Pricing, payment_cap_msat},
     service::PaymentService,
     wire::{self, Frame},
 };
@@ -239,10 +239,7 @@ fn validate_initial_invoice(
     );
     request.validate_output_allowance(terms.max_output_tokens)?;
     let input_amount = price.input_charge(terms.input_tokens)?;
-    let total = input_amount
-        .checked_add(price.output_charge(terms.max_output_tokens)?)
-        .and_then(|n| n.checked_add(2 * FEE_ALLOWANCE_MSAT))
-        .context("price overflow")?;
+    let total = price.request_cap_msat(input_amount, terms.max_output_tokens)?;
     ensure!(
         terms.max_total_msat == total && terms.expires_at_ms == invoice.expires_at_ms,
         "payment limit mismatch"
@@ -311,7 +308,7 @@ pub(crate) async fn exchange(
         segment: 0,
         invoice,
         amount_msat: input_amount,
-        max_total_msat: input_amount + FEE_ALLOWANCE_MSAT,
+        max_total_msat: payment_cap_msat(input_amount)?,
     };
     let mut input_payment = tokio::spawn(async move { payment_service.pay_charge(&charge).await });
     let mut input_settled = false;
@@ -403,9 +400,7 @@ pub(crate) async fn settle_output(
             segment: 1,
             invoice,
             amount_msat,
-            max_total_msat: amount_msat
-                .checked_add(FEE_ALLOWANCE_MSAT)
-                .context("fee overflow")?,
+            max_total_msat: payment_cap_msat(amount_msat)?,
         })
         .await
 }

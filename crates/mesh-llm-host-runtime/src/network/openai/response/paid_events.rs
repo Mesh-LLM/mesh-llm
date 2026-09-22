@@ -235,6 +235,7 @@ mod tests {
             amount_msat: 10,
             fee_msat: 1,
             status: mesh_llm_payments::wallet::PaymentStatus::Pending,
+            claiming: false,
             status_msg: None,
             created_at_ms: 0,
             settled_at_ms: None,

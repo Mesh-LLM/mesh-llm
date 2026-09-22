@@ -8,9 +8,11 @@
 //!   names plus the JSON request/response/error shapes that cross the plugin
 //!   IPC boundary.
 //!
-//! No wallet SDK (Lexe or otherwise) is linked here. Concrete wallets live in
-//! plugin executables that implement [`backend::WalletBackend`] and are
-//! projected onto the plugin runtime by the `plugin-server` feature.
+//! No wallet SDK (Lexe or otherwise) is linked here. Concrete wallets are
+//! plugin processes that implement [`backend::WalletBackend`] and are
+//! projected onto the plugin runtime by the `plugin-server` feature; the
+//! shipped one (`mesh-wallet-lexe`) is served from the mesh-llm executable as
+//! `--plugin wallet-lexe`, external ones from their own.
 #![forbid(unsafe_code)]
 
 pub mod contract;

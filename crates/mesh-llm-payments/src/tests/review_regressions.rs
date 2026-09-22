@@ -114,10 +114,12 @@ async fn unindexed_uncertain_payment_is_never_resubmitted_or_released() -> Resul
 }
 
 #[tokio::test]
-async fn prepared_payment_can_resume_without_resubmitting_started_payment() -> Result<()> {
+async fn prepared_output_payment_can_resume_without_resubmitting_started_payment() -> Result<()> {
+    // Segment 1: the seller has delivered and is owed, so a never-submitted
+    // output charge survives a restart and is paid exactly once.
     let dir = tempfile::tempdir()?;
     let wallet = Arc::new(MockWallet::default());
-    let charge = charge("prepared", 0, 4, 600, 700);
+    let charge = charge("prepared", 1, 4, 600, 700);
     {
         let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
         automatic(&service)?;
@@ -129,6 +131,133 @@ async fn prepared_payment_can_resume_without_resubmitting_started_payment() -> R
     service.pay_charge(&charge).await?;
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
     assert_eq!(service.ledger.requests()?[0].spent_msat, 610);
+    Ok(())
+}
+
+#[tokio::test]
+async fn prepared_input_payment_is_failed_on_reopen_without_a_wallet_call() -> Result<()> {
+    // Segment 0 and still `prepared`: `begin_submission` never ran, so the
+    // wallet was never called, and the seller's prefill state did not survive
+    // our restart. Paying it would buy nothing; fail it and release the
+    // reservation instead.
+    let dir = tempfile::tempdir()?;
+    let wallet = Arc::new(MockWallet::default());
+    let charge = charge("unsent", 0, 5, 600, 700);
+    {
+        let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
+        automatic(&service)?;
+        service.await_authorization(&terms("unsent", 700)).await?;
+        service.ledger.prepare_charge(&charge)?;
+        assert_eq!(
+            service.ledger.available_budget(100_000, crate::now_ms())?,
+            300
+        );
+    }
+    let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
+    service.reconcile_pending().await?;
+    assert_eq!(wallet.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        service
+            .ledger
+            .charge_state(&charge.invoice.payment_hash)?
+            .as_deref(),
+        Some("failed")
+    );
+    assert_eq!(service.ledger.requests()?[0].state, "failed");
+    assert_eq!(
+        service.ledger.available_budget(100_000, crate::now_ms())?,
+        1000,
+        "the request's reservation is released"
+    );
+    // The closed authorization cannot be reused to pay after the fact.
+    assert!(service.pay_charge(&charge).await.is_err());
+    assert_eq!(wallet.calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn pending_input_payment_survives_reopen_and_is_reconciled_not_failed() -> Result<()> {
+    // `pending` means submission may have reached the wallet: the startup
+    // sweep must leave it alone and reconciliation must find the payment.
+    let dir = tempfile::tempdir()?;
+    let wallet = Arc::new(MockWallet::default());
+    wallet.lose_response.store(true, Ordering::SeqCst);
+    let charge = charge("inflight", 0, 6, 600, 700);
+    {
+        let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
+        automatic(&service)?;
+        service.await_authorization(&terms("inflight", 700)).await?;
+        assert!(service.pay_charge(&charge).await.is_err());
+        assert_eq!(
+            service
+                .ledger
+                .charge_state(&charge.invoice.payment_hash)?
+                .as_deref(),
+            Some("pending")
+        );
+    }
+    let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
+    assert_eq!(
+        service
+            .ledger
+            .charge_state(&charge.invoice.payment_hash)?
+            .as_deref(),
+        Some("pending")
+    );
+    service.reconcile_pending().await?;
+    assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(service.ledger.requests()?[0].spent_msat, 610);
+    Ok(())
+}
+
+#[tokio::test]
+async fn prepared_wallet_send_survives_reopen() -> Result<()> {
+    // An explicit `wallet send` is user intent, not inference; a crash between
+    // preparing and submitting must not fail it behind the user's back.
+    let dir = tempfile::tempdir()?;
+    let wallet = Arc::new(MockWallet::default());
+    let invoice = invoice(7, 100);
+    let id = format!("send-{}", invoice.payment_hash);
+    let charge = Charge {
+        request_id: id.clone(),
+        segment: 0,
+        invoice: invoice.clone(),
+        amount_msat: 100,
+        max_total_msat: 200,
+    };
+    {
+        let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
+        automatic(&service)?;
+        service.ledger.propose(&RequestTerms {
+            exchange_id: None,
+            id: id.clone(),
+            peer: "wallet-send".into(),
+            payee: Some(invoice.payee.clone()),
+            model: "wallet-send".into(),
+            pricing: Pricing {
+                input_msat_per_million: 1,
+                output_msat_per_million: 1,
+                minimum_invoice_msat: 1,
+            },
+            input_tokens: 0,
+            max_output_tokens: 1,
+            max_total_msat: 200,
+            expires_at_ms: invoice.expires_at_ms,
+        })?;
+        service.approve(&id).await?;
+        service.ledger.prepare_charge(&charge)?;
+    }
+    let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
+    assert_eq!(
+        service
+            .ledger
+            .charge_state(&invoice.payment_hash)?
+            .as_deref(),
+        Some("prepared")
+    );
+    let result = service.control(send(&invoice)).await?;
+    assert_eq!(result["status"], "succeeded");
+    assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
     Ok(())
 }
 

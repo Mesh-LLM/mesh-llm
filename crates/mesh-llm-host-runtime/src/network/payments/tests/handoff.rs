@@ -257,17 +257,17 @@ async fn fake_paid_provider(
         owner: 1,
         network: network.clone(),
     };
-    let invoice = seller.create_invoice(Some(1)).await?;
+    let invoice = seller.create_invoice(Some(1), 3600).await?;
     let terms = RequestTerms {
         exchange_id: None,
         id,
         peer: String::new(),
         payee: None,
         model: "test".into(),
+        max_total_msat: price.request_cap_msat(price.input_charge(1)?, 8)?,
         pricing: price,
         input_tokens: 1,
         max_output_tokens: 8,
-        max_total_msat: 2009,
         expires_at_ms: invoice.expires_at_ms,
     };
     wire::write(&mut send, &Frame::InputInvoice { terms, invoice }).await?;
@@ -324,10 +324,10 @@ async fn recover_original() -> Result<()> {
         peer: original.id().to_string(),
         payee: None,
         model: "test".into(),
+        max_total_msat: price.request_cap_msat(price.input_charge(1)?, 8)?,
         pricing: price,
         input_tokens: 1,
         max_output_tokens: 8,
-        max_total_msat: 2009,
         expires_at_ms: u64::MAX,
     };
     service.await_authorization(&terms).await?;
@@ -338,7 +338,7 @@ async fn recover_original() -> Result<()> {
     );
     assert_eq!(
         service.ledger.policy_status(mesh_llm_payments::now_ms())?["reserved_msat"],
-        2009
+        terms.max_total_msat
     );
     assert!(
         tokio::time::timeout(Duration::from_millis(100), alternate.endpoint.accept())

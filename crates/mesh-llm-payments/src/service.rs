@@ -66,6 +66,7 @@ impl PaymentService {
             .context("payment service is already running; use its local API")?;
         ledger.close_interrupted_serving()?;
         ledger.close_abandoned_approvals()?;
+        ledger.fail_unsubmitted_input_charges()?;
         ledger.finalize_terminal_requests()?;
         Ok(Self {
             ledger,
@@ -276,7 +277,10 @@ impl PaymentService {
         let invoice = self
             .wallet()
             .await?
-            .create_invoice(Some(pricing.output_charge(tokens)?))
+            .create_invoice(
+                Some(pricing.output_charge(tokens)?),
+                crate::lifetimes::OUTPUT_INVOICE_EXPIRY_SECS,
+            )
             .await?;
         let receipt = crate::ledger::receivables::Receivable {
             request_id: id.into(),
@@ -295,11 +299,16 @@ impl PaymentService {
     /// delivered. It is **not** a settlement record: the caller must still
     /// `wait_received` before treating the payment as received.
     ///
+    /// `deadline` is how long the caller is willing to hold work for this
+    /// payment. It is independent of, and should be shorter than, the invoice
+    /// expiry: giving up here releases the caller's resources, while the
+    /// invoice keeps bounding when a late payment can still land.
+    ///
     /// The returned [`Arrival`] records which evidence opened the gate, so a
     /// caller can tell an early claiming observation from the terminal
     /// fallback. It is diagnostic only and must not change settlement.
-    pub async fn wait_arrival(&self, invoice: &Invoice) -> Result<Arrival> {
-        let payment = self.await_incoming(invoice, true).await?;
+    pub async fn wait_arrival(&self, invoice: &Invoice, deadline: Duration) -> Result<Arrival> {
+        let payment = self.await_incoming(invoice, true, Some(deadline)).await?;
         ensure!(
             payment.status == PaymentStatus::Succeeded || payment.is_claiming(),
             "incoming payment did not succeed"
@@ -312,7 +321,7 @@ impl PaymentService {
     }
 
     pub async fn wait_received(&self, invoice: &Invoice) -> Result<()> {
-        let payment = self.await_incoming(invoice, false).await?;
+        let payment = self.await_incoming(invoice, false, None).await?;
         ensure!(
             payment.status == PaymentStatus::Succeeded,
             "incoming payment did not succeed"
@@ -320,9 +329,22 @@ impl PaymentService {
         Ok(())
     }
 
-    async fn await_incoming(&self, invoice: &Invoice, claiming: bool) -> Result<Transaction> {
+    async fn await_incoming(
+        &self,
+        invoice: &Invoice,
+        claiming: bool,
+        deadline: Option<Duration>,
+    ) -> Result<Transaction> {
         let wallet = self.wallet().await?;
-        let remaining = invoice.expires_at_ms.saturating_sub(crate::now_ms());
+        let until_expiry = invoice.expires_at_ms.saturating_sub(crate::now_ms());
+        let deadline_ms =
+            deadline.map(|deadline| u64::try_from(deadline.as_millis()).unwrap_or(u64::MAX));
+        let remaining = deadline_ms.map_or(until_expiry, |limit| limit.min(until_expiry));
+        let timed_out = if deadline_ms.is_some_and(|limit| limit < until_expiry) {
+            "incoming payment did not arrive in time"
+        } else {
+            "payment invoice expired"
+        };
         let payment = if remaining == 0 {
             // Expiry ends an unpaid wait, but must not hide an existing receipt.
             let payment = wallet
@@ -344,7 +366,7 @@ impl PaymentService {
             };
             tokio::time::timeout(Duration::from_millis(remaining), waiting)
                 .await
-                .context("payment invoice expired")??
+                .context(timed_out)??
         };
         validate_payment_update(&payment, &invoice.payment_hash, true)?;
         ensure!(

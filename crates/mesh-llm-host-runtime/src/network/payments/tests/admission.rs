@@ -18,7 +18,11 @@ async fn sequential_admission_waits_for_terminal_output_payment() -> Result<()> 
         minimum_invoice_msat: 1,
     };
     service.ledger.begin_serving("first", "peer", &price, 8)?;
-    let invoice = service.wallet().await?.create_invoice(Some(1)).await?;
+    let invoice = service
+        .wallet()
+        .await?
+        .create_invoice(Some(1), 3600)
+        .await?;
     service.ledger.record_receivable(&Receivable {
         request_id: "first".into(),
         peer: "peer".into(),
@@ -51,7 +55,7 @@ async fn sequential_admission_waits_for_terminal_output_payment() -> Result<()> 
     {
         let mut entries = network.entries.lock().unwrap();
         let payment = &mut entries.get_mut(&receipt.invoice.payment_hash).unwrap().1;
-        payment.status_msg = Some("claiming".into());
+        payment.claiming = true;
     }
     // Arrival may open this request's output gate, but cannot clear previous debt.
     assert!(
@@ -84,7 +88,11 @@ async fn admission_deadline_preserves_unpaid_debt() -> Result<()> {
         minimum_invoice_msat: 1,
     };
     service.ledger.begin_serving("first", "peer", &price, 8)?;
-    let invoice = service.wallet().await?.create_invoice(Some(1)).await?;
+    let invoice = service
+        .wallet()
+        .await?
+        .create_invoice(Some(1), 3600)
+        .await?;
     service.ledger.record_receivable(&Receivable {
         request_id: "first".into(),
         peer: "peer".into(),
@@ -126,7 +134,11 @@ async fn recovery_reports_pending_until_input_settles() -> Result<()> {
         minimum_invoice_msat: 1,
     };
     service.ledger.begin_serving(&id, "peer", &price, 8)?;
-    let invoice = service.wallet().await?.create_invoice(Some(1)).await?;
+    let invoice = service
+        .wallet()
+        .await?
+        .create_invoice(Some(1), 3600)
+        .await?;
     service.ledger.record_receivable(&Receivable {
         request_id: id.clone(),
         peer: "peer".into(),
@@ -142,7 +154,7 @@ async fn recovery_reports_pending_until_input_settles() -> Result<()> {
             let mut entries = network.entries.lock().unwrap();
             let payment = &mut entries.get_mut(&invoice.payment_hash).unwrap().1;
             payment.status = status;
-            payment.status_msg = Some("claiming".into());
+            payment.claiming = true;
         }
         let (mut writer, mut reader) = tokio::io::duplex(8192);
         super::super::server::recover(&service, &id, &mut writer).await?;

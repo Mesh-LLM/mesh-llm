@@ -208,7 +208,7 @@ pub fn wallet_operation_router<B: WalletBackend>(server: &Arc<WalletServer<B>>) 
         |s, req: CreateInvoiceRequest| async move {
             s.provider()
                 .await?
-                .create_invoice(req.amount_msat)
+                .create_invoice(req.amount_msat, req.expiry_secs)
                 .await
                 .map_err(provider_failed)
         },
@@ -336,7 +336,11 @@ mod tests {
         async fn transactions(&self, _limit: usize) -> Result<Vec<Transaction>> {
             Ok(Vec::new())
         }
-        async fn create_invoice(&self, _amount_msat: Option<u64>) -> Result<Invoice> {
+        async fn create_invoice(
+            &self,
+            _amount_msat: Option<u64>,
+            _expiry_secs: u32,
+        ) -> Result<Invoice> {
             anyhow::bail!("no invoices in tests")
         }
         async fn pay(&self, _: &Invoice, _: u64, _: u64) -> Result<Transaction, PayError> {

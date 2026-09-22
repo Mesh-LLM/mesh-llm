@@ -60,21 +60,48 @@ payment hash, and asynchronous `wait_for_payment(payment_hash)` completion.
 `mesh-llm-payments` re-exports it under `mesh_llm_payments::wallet` and drives
 it from the ledger; neither crate links a wallet SDK.
 
-Concrete wallets are separate plugin executables that advertise the `wallet.v1`
+Concrete wallets are plugin processes that advertise the `wallet.v1`
 capability (`mesh-llm-wallet::contract`). The host resolves the provider by
 capability, never by plugin name. `mesh-wallet-lexe` is the shipped
-implementation: Lexe 0.1.23 on mainnet, bundled beside the `mesh-llm` binary
-and auto-registered as the optional plugin `wallet-lexe`. The process starts
-with the host but is idle until the first wallet operation; starting it never
-provisions or contacts a wallet.
-`[[plugin]] name = "wallet-lexe" enabled = false` turns it off at runtime;
-an explicit `command` swaps in a different `wallet.v1` implementation.
+implementation: Lexe 0.1.23 on mainnet, built into the `mesh-llm` executable
+behind the `wallet-lexe` cargo feature and served blobstore-style as
+`mesh-llm --plugin wallet-lexe`, auto-registered as the optional built-in
+plugin `wallet-lexe`. No second binary ships. The process starts with the host
+but is idle until the first wallet operation; starting it never provisions or
+contacts a wallet. `[[plugin]] name = "wallet-lexe" enabled = false` turns it
+off at runtime (only `enabled` may be set on a built-in); a different
+`wallet.v1` implementation is configured as an ordinary external plugin under
+its own name, with the built-in disabled. A build without the `wallet-lexe`
+feature (SDK consumers) accepts the same stanza and registers nothing.
 NWC, BOLT12 and multi-provider selection are deferred.
 
+Feature layering, so embedding applications never link a wallet SDK:
+`payments` (host-runtime, `mesh-llm`, `mesh-llm-embedded-runtime`,
+`mesh-llm-sdk`) is the ledger, gates and the `wallet.v1` adapter; `wallet-lexe`
+(host-runtime, `mesh-llm`) is the built-in Lexe implementation and the only
+feature that links Lexe. The shipped CLI enables both. `mesh-llm-sdk` with
+`serving` compiles neither; with `serving,payments` it compiles the ledger and
+adapter and expects an external `wallet.v1` plugin.
+
 What stays in the host: token metering, output gating, budgets, the ledger,
-settlement bookkeeping and recovery. What the plugin does: turn wallet intents
-into wallet facts. Response bytes never cross the plugin boundary, and no
-per-token IPC exists.
+settlement bookkeeping, recovery, invoice lifetimes and fee policy. What the
+plugin does: turn wallet intents into wallet facts. Response bytes never cross
+the plugin boundary, and no per-token IPC exists.
+
+The host supplies every invoice's expiry (`wallet_create_invoice.expiry_secs`);
+a plugin must not substitute a provider default. `mesh-llm-payments::lifetimes`
+owns the values: input inference invoices expire after 5 minutes, output
+invoices after 60 minutes, `fund-wallet` invoices after 24 hours. The seller's
+wait for an input payment to arrive is a separate, shorter 90-second deadline:
+giving up releases the backend, while the longer invoice expiry still makes a
+late HTLC fail at the payee's node instead of landing after the seller has moved
+on. This also bounds how long an unpaid input invoice keeps a peer blocked.
+
+Receiver-side arrival is a normalized field, `Transaction.claiming`, set by the
+plugin only for a pending inbound payment whose HTLC is irrevocably committed.
+`status_msg` is display text and nothing in the payment path branches on it.
+A plugin that cannot observe claiming leaves the flag false and the receiver
+waits for completion, which the contract permits.
 
 `wallet.v1` operations return structured errors with a kind:
 `not_open`, `invalid_request`, `not_submitted`, `uncertain`, `failed`. The
@@ -124,9 +151,10 @@ seeing a paid provider does not provision one. The directory contains:
 - `lexe/`: handed to the wallet plugin as its data directory. For
   `mesh-wallet-lexe` it holds `seedphrase.txt`, recovery material persisted
   before wallet provisioning with the SDK's exclusive creation and private file
-  permissions. Unix payment and wallet directories are mode 0700. Protect and
-  back up this directory; no seed export UI or encrypted-at-rest application
-  keystore is added by this PoC.
+  permissions; the plugin re-asserts mode 0600 on the seed at every open. Unix
+  payment and wallet directories are mode 0700. Protect and back up this
+  directory; no seed export UI or encrypted-at-rest application keystore is
+  added by this PoC.
 - Process locks: one service per directory in the host, one wallet writer per
   directory in the plugin. CLI commands use the running node's API. When the
   node is not running, ledger-only commands (policy, pricing, pending) fall back
@@ -195,12 +223,16 @@ small requests at those rates usually round to 1 msat. A 1 msat accounting unit
 is not evidence of economical routing: channel minima, routing fees and liquidity
 can dominate. Validate amounts and receiving liquidity with Lexe on mainnet.
 
-The payer allows 1000 msat for each inference payment's additional debit, for a
-maximum of 2000 msat per request beyond the capped inference charge. Lexe
-preflights a route and submits that same route only when its total debit fits.
-Route minimums can increase the sent amount; that increase also counts against
-the cap. Actual outgoing amount and fees are recorded. Operators can choose a
-different cap for an explicit `wallet send`.
+The payer reserves a routing-fee allowance for each inference payment of
+`max(3000 msat, 1% of the amount)` (`pricing::fee_allowance_msat`), so a
+request's cap is both inference charges plus both allowances. Seller and payer
+compute the cap from the same function and the payer rejects terms that
+disagree. The wallet is told the resulting cap per payment and must not submit
+a payment whose amount plus fees exceeds it; Lexe preflights a route and
+submits that same route only when its total debit fits. Route minimums can
+increase the sent amount; that increase also counts against the cap. Actual
+outgoing amount and fees are recorded. Operators can choose a different cap for
+an explicit `wallet send`.
 
 Input includes templates, system messages and tools, including cached input at
 the ordinary rate. Output counts canonical accepted tokens, excluding EOS and

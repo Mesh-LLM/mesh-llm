@@ -245,10 +245,13 @@ impl WalletProvider for PluginWalletProvider {
         .await
     }
 
-    async fn create_invoice(&self, amount_msat: Option<u64>) -> Result<Invoice> {
+    async fn create_invoice(&self, amount_msat: Option<u64>, expiry_secs: u32) -> Result<Invoice> {
         self.call_reopening(
             ops::CREATE_INVOICE,
-            &contract::CreateInvoiceRequest { amount_msat },
+            &contract::CreateInvoiceRequest {
+                amount_msat,
+                expiry_secs,
+            },
             QUERY_TIMEOUT,
         )
         .await

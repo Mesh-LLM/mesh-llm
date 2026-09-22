@@ -16,6 +16,7 @@ pub(super) fn publish(
             amount_msat: invoice.amount_msat.unwrap(),
             fee_msat: if inbound { 0 } else { 10 },
             status,
+            claiming: false,
             status_msg: None,
             created_at_ms: crate::now_ms(),
             settled_at_ms: (status != PaymentStatus::Pending).then(crate::now_ms),
@@ -243,7 +244,9 @@ fn publish_claiming(wallet: &MockWallet, invoice: &Invoice) {
             amount_msat: invoice.amount_msat.unwrap(),
             fee_msat: 0,
             status: PaymentStatus::Pending,
-            status_msg: Some("claiming".into()),
+            claiming: true,
+            // Display text is provider-specific and must not drive the gate.
+            status_msg: Some("Claiming inbound HTLC".into()),
             created_at_ms: crate::now_ms(),
             settled_at_ms: None,
         },
@@ -260,7 +263,12 @@ async fn arrival_returns_on_claiming_while_receipt_still_requires_completion() -
     publish_claiming(&wallet, &invoice);
 
     // The gate opens on the transient claiming state, and says so.
-    assert_eq!(service.wait_arrival(&invoice).await?, Arrival::Claiming);
+    assert_eq!(
+        service
+            .wait_arrival(&invoice, Duration::from_secs(90))
+            .await?,
+        Arrival::Claiming
+    );
 
     // Settlement does not: it stays blocked until the payment completes.
     let settling = tokio::spawn({
@@ -285,7 +293,11 @@ async fn arrival_without_a_claiming_state_falls_back_to_completion() -> Result<(
     publish(&wallet, &invoice, true, PaymentStatus::Pending);
     let waiting = tokio::spawn({
         let (service, invoice) = (service.clone(), invoice.clone());
-        async move { service.wait_arrival(&invoice).await }
+        async move {
+            service
+                .wait_arrival(&invoice, Duration::from_secs(90))
+                .await
+        }
     });
     for _ in 0..100 {
         if wallet.arrival_waits.load(Ordering::SeqCst) == 1 {
@@ -308,6 +320,103 @@ async fn a_failed_incoming_payment_never_opens_the_gate() -> Result<()> {
     let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
     let invoice = invoice(1, 100);
     publish(&wallet, &invoice, true, PaymentStatus::Failed);
-    assert!(service.wait_arrival(&invoice).await.is_err());
+    assert!(
+        service
+            .wait_arrival(&invoice, Duration::from_secs(90))
+            .await
+            .is_err()
+    );
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn arrival_wait_gives_up_at_its_own_deadline_before_the_invoice_expires() -> Result<()> {
+    // The seller stops holding work long before the invoice stops being
+    // payable, so a late payment fails at the payee instead of landing after
+    // the seller has moved on. The wait error is distinct from expiry.
+    let dir = tempfile::tempdir()?;
+    let wallet = Arc::new(MockWallet::default());
+    let service = Arc::new(PaymentService::with_provider(dir.path(), wallet.clone())?);
+    let invoice = invoice_with_expiry(1, 100, 300);
+    publish(&wallet, &invoice, true, PaymentStatus::Pending);
+    let waiting = tokio::spawn({
+        let (service, invoice) = (service.clone(), invoice.clone());
+        async move {
+            service
+                .wait_arrival(&invoice, Duration::from_secs(90))
+                .await
+        }
+    });
+    for _ in 0..100 {
+        if wallet.arrival_waits.load(Ordering::SeqCst) == 1 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    tokio::time::advance(Duration::from_secs(89)).await;
+    assert!(!waiting.is_finished());
+    tokio::time::advance(Duration::from_secs(2)).await;
+    let error = waiting.await?.unwrap_err().to_string();
+    assert!(error.contains("did not arrive in time"), "{error}");
+    // Settlement observation, by contrast, is bounded only by the invoice.
+    let settling = tokio::spawn({
+        let (service, invoice) = (service.clone(), invoice.clone());
+        async move { service.wait_received(&invoice).await }
+    });
+    wait_until_subscribed(&wallet, 1).await;
+    tokio::time::advance(Duration::from_secs(150)).await;
+    assert!(!settling.is_finished());
+    publish(&wallet, &invoice, true, PaymentStatus::Succeeded);
+    settling.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn output_invoice_expiry_is_chosen_by_the_host_not_the_wallet() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let wallet = Arc::new(MockWallet::default());
+    let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
+    let pricing = Pricing {
+        input_msat_per_million: 1000,
+        output_msat_per_million: 1000,
+        minimum_invoice_msat: 1,
+    };
+    service
+        .ledger
+        .begin_serving("served", "peer", &pricing, 1000)?;
+    service.ledger.record_delivered_tokens("served", 10)?;
+    service.ledger.finish_serving("served")?;
+    // Input receipt is a precondition for invoicing output.
+    let input = invoice(9, 1);
+    service
+        .ledger
+        .record_receivable(&crate::ledger::receivables::Receivable {
+            request_id: "served".into(),
+            peer: "peer".into(),
+            segment: 0,
+            invoice: input.clone(),
+            tokens: 1,
+            paid: false,
+        })?;
+    publish(&wallet, &input, true, PaymentStatus::Succeeded);
+    let receipt = service
+        .output_receivable("served")
+        .await?
+        .expect("output invoice");
+    assert_eq!(receipt.segment, 1);
+    assert_eq!(
+        wallet.invoice_expiries.lock().unwrap().as_slice(),
+        [crate::lifetimes::OUTPUT_INVOICE_EXPIRY_SECS]
+    );
+    // Funding invoices get the long human-facing lifetime.
+    service
+        .control(crate::control::ControlCommand::Fund {
+            amount_msat: Some(1000),
+        })
+        .await?;
+    assert_eq!(
+        wallet.invoice_expiries.lock().unwrap().last().copied(),
+        Some(crate::lifetimes::FUNDING_INVOICE_EXPIRY_SECS)
+    );
     Ok(())
 }

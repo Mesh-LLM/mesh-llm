@@ -302,6 +302,29 @@ impl Ledger {
         Ok(())
     }
 
+    /// Run only while opening the exclusively locked service, before live
+    /// approvals. A `prepared` charge is one for which `begin_submission` never
+    /// ran, so the wallet was never called and nothing is lost by failing it.
+    /// For an input charge (segment 0) there is also nothing to gain: the
+    /// seller's prefill state did not survive our restart, so paying now would
+    /// buy nothing. Output charges (segment 1) are left alone because the
+    /// seller has delivered and is owed; `pending` charges may have been
+    /// submitted and must be reconciled, never failed here. Explicit
+    /// `wallet send` requests are excluded: the user's intent to pay that
+    /// invoice does not expire with the process, and their resumption path
+    /// (`send` again) is idempotent by payment hash.
+    pub fn fail_unsubmitted_input_charges(&self) -> Result<()> {
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "UPDATE charges SET state='failed' WHERE segment=0 AND state='prepared' AND request_id IN (SELECT id FROM requests WHERE json_extract(terms,'$.peer')!='wallet-send')",
+            [],
+        )?;
+        finalize_terminal_requests(&tx)?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Run only while opening the exclusively locked service, before live approvals.
     pub fn close_abandoned_approvals(&self) -> Result<()> {
         self.lock()?.execute("UPDATE requests SET state='failed' WHERE state='approved' AND NOT EXISTS(SELECT 1 FROM charges WHERE request_id=requests.id)", [])?;

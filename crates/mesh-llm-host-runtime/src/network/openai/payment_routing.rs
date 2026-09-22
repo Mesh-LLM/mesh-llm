@@ -66,12 +66,9 @@ pub(super) async fn rank(
             InferenceTarget::Local(_) => Some((0, 0)),
             InferenceTarget::Remote(peer) => match prices.get(peer) {
                 Some(price) => {
-                    let cost = price
-                        .input_charge(input_estimate)
-                        .ok()?
-                        .checked_add(price.output_charge(max_output).ok()?)?;
-                    let total =
-                        cost.checked_add(2 * mesh_llm_payments::pricing::FEE_ALLOWANCE_MSAT)?;
+                    let input_amount = price.input_charge(input_estimate).ok()?;
+                    let cost = input_amount.checked_add(price.output_charge(max_output).ok()?)?;
+                    let total = price.request_cap_msat(input_amount, max_output).ok()?;
                     (intent.permits(price, total) && total <= available).then_some((1, cost))
                 }
                 None => Some((2, 0)),

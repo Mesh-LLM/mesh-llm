@@ -54,8 +54,18 @@ async fn output_recovery_requires_terminal_input_and_reuses_invoice() -> Result<
 }
 
 #[tokio::test]
-async fn startup_releases_only_approvals_without_charges() -> Result<()> {
-    for state in ["absent", "prepared", "pending"] {
+async fn startup_releases_approvals_that_never_reached_the_wallet() -> Result<()> {
+    // Released: no charge at all, or an input charge that was prepared but
+    // never submitted (the wallet was never called and the seller's prefill did
+    // not survive our restart). Retained: anything that may have reached the
+    // wallet, and a prepared output charge, which is owed for delivered work.
+    for (segment, state, released) in [
+        (0, "absent", true),
+        (0, "prepared", true),
+        (0, "pending", false),
+        (1, "prepared", false),
+        (1, "pending", false),
+    ] {
         let dir = tempfile::tempdir()?;
         let wallet = Arc::new(MockWallet::default());
         {
@@ -67,7 +77,7 @@ async fn startup_releases_only_approvals_without_charges() -> Result<()> {
             service.ledger.propose(&terms("request", 700))?;
             service.approve("request").await?;
             if state != "absent" {
-                let charge = charge("request", 0, 3, 600, 700);
+                let charge = charge("request", segment, 3, 600, 700);
                 service.ledger.prepare_charge(&charge)?;
                 if state == "pending" {
                     service
@@ -76,11 +86,13 @@ async fn startup_releases_only_approvals_without_charges() -> Result<()> {
                 }
             }
         }
-        let service = PaymentService::with_provider(dir.path(), wallet)?;
+        let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
         assert_eq!(
             service.ledger.available_budget(1000, crate::now_ms())?,
-            if state == "absent" { 1000 } else { 300 }
+            if released { 1000 } else { 300 },
+            "segment {segment} {state}"
         );
+        assert_eq!(wallet.calls.load(Ordering::SeqCst), 0, "startup never pays");
     }
     Ok(())
 }

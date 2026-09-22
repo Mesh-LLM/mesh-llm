@@ -59,7 +59,7 @@ async fn fragmented_exchange() -> Result<()> {
         output_msat_per_million: 1_000_000,
         minimum_invoice_msat: 1,
     };
-    let invoice = seller.create_invoice(Some(40)).await?;
+    let invoice = seller.create_invoice(Some(40), 3600).await?;
     let input = Frame::InputInvoice {
         terms: mesh_llm_payments::ledger::RequestTerms {
             exchange_id: None,
@@ -67,10 +67,10 @@ async fn fragmented_exchange() -> Result<()> {
             peer: peer.to_string(),
             payee: Some(invoice.payee.clone()),
             model: "test".into(),
+            max_total_msat: price.request_cap_msat(price.input_charge(40)?, 8)?,
             pricing: price.clone(),
             input_tokens: 40,
             max_output_tokens: 8,
-            max_total_msat: 2048,
             expires_at_ms: invoice.expires_at_ms,
         },
         invoice: invoice.clone(),
@@ -148,7 +148,7 @@ async fn settle_after_cancel(
 ) -> Result<()> {
     assert!(matches!(wire::read(reader).await?, Frame::Cancel));
     writer.write_all(tail).await?;
-    let invoice = seller.create_invoice(Some(3)).await?;
+    let invoice = seller.create_invoice(Some(3), 3600).await?;
     wire::write(
         writer,
         &Frame::OutputInvoice {

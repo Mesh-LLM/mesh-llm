@@ -37,6 +37,8 @@ enum Script {
 struct FakeWalletPlugin {
     scripts: std::sync::Mutex<BTreeMap<String, Vec<Script>>>,
     calls: std::sync::Mutex<Vec<String>>,
+    /// Raw arguments of every call, so tests can assert what crossed the wire.
+    arguments: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
     opens: AtomicUsize,
     /// Mirrors the real plugin's open state; `crash()` models a restart that
     /// lost it, so every unscripted operation answers `not_open` until the
@@ -50,6 +52,7 @@ impl FakeWalletPlugin {
         Arc::new(Self {
             scripts: Default::default(),
             calls: Default::default(),
+            arguments: Default::default(),
             opens: AtomicUsize::new(0),
             open: std::sync::atomic::AtomicBool::new(false),
             identity: std::sync::Mutex::new(identity(wallet_id)),
@@ -114,6 +117,10 @@ impl PluginRpcBridge for Arc<FakeWalletPlugin> {
             let request: mesh_llm_plugin::OperationRequest =
                 serde_json::from_str(&params_json).map_err(|e| transport_error(&e.to_string()))?;
             this.calls.lock().unwrap().push(request.name.clone());
+            this.arguments
+                .lock()
+                .unwrap()
+                .push((request.name.clone(), request.arguments.clone()));
 
             if let Some(step) = this.next(&request.name) {
                 return match step {
@@ -188,6 +195,7 @@ fn transaction(hash: &str, status: PaymentStatus) -> Transaction {
         amount_msat: 1000,
         fee_msat: 1,
         status,
+        claiming: false,
         status_msg: None,
         created_at_ms: 1,
         settled_at_ms: None,
@@ -415,6 +423,43 @@ async fn lookup_decodes_optional_transaction() {
     );
     let found = wallet.lookup("h").await.unwrap().unwrap();
     assert_eq!(found.status, PaymentStatus::Succeeded);
+}
+
+#[tokio::test]
+async fn invoice_expiry_is_sent_by_the_host_and_claiming_survives_the_wire() {
+    let plugin = FakeWalletPlugin::new("w1");
+    let manager = manager_for(&plugin).await;
+    let wallet = PluginWalletFactory::new(slot(manager))
+        .open(tempfile::tempdir().unwrap().path())
+        .await
+        .unwrap();
+    plugin.script(
+        ops::CREATE_INVOICE,
+        vec![Script::Ok(serde_json::to_value(sample_invoice()).unwrap())],
+    );
+    wallet.create_invoice(Some(1000), 300).await.unwrap();
+    let (_, arguments) = plugin
+        .arguments
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(op, _)| op == ops::CREATE_INVOICE)
+        .cloned()
+        .expect("create_invoice reached the plugin");
+    assert_eq!(arguments["expiry_secs"], 300, "{arguments}");
+    assert_eq!(arguments["amount_msat"], 1000, "{arguments}");
+
+    let mut arrived = transaction("h", PaymentStatus::Pending);
+    arrived.inbound = true;
+    arrived.claiming = true;
+    arrived.status_msg = Some("some provider text".into());
+    plugin.script(
+        ops::WAIT_FOR_ARRIVAL,
+        vec![Script::Ok(serde_json::to_value(&arrived).unwrap())],
+    );
+    let observed = wallet.wait_for_arrival("h").await.unwrap();
+    assert!(observed.is_claiming());
+    assert_eq!(observed, arrived);
 }
 
 #[tokio::test]
