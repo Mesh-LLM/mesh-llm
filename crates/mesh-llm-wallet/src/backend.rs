@@ -1,6 +1,6 @@
 //! What a wallet plugin author implements.
 //!
-//! A [`WalletBackend`] is a factory over a concrete wallet: it inspects and
+//! A [`WalletBackend`] is a factory over a concrete wallet: it
 //! opens persisted state under a host-supplied directory and hands back a
 //! [`WalletProvider`] plus its [`WalletIdentity`]. Everything else — the
 //! operation router, error mapping, open-state tracking — is provided by
@@ -27,9 +27,6 @@ pub struct OpenedWallet {
 pub trait WalletBackend: Send + Sync + 'static {
     /// Short provider label, e.g. `"lexe"`. Reported in [`WalletIdentity`].
     fn provider_name(&self) -> &'static str;
-
-    /// Inspect local state without network calls or side effects.
-    fn is_provisioned(&self, directory: &Path) -> bool;
 
     /// Open or provision the wallet under `directory`. May contact the
     /// provider network. Must be safe to call again after a crash between

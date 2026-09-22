@@ -18,7 +18,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::invoice::Invoice;
-use crate::provider::{Balance, PayError, Transaction};
+use crate::provider::{PayError, Transaction};
 
 /// Capability name a wallet plugin declares in its manifest.
 pub const CAPABILITY: &str = "wallet.v1";
@@ -29,8 +29,6 @@ pub const CAPABILITY: &str = "wallet.v1";
 pub mod ops {
     /// Open (or provision) the wallet under the host-supplied directory.
     pub const OPEN: &str = "wallet_open";
-    /// Report whether persisted wallet state exists. No network, no side effects.
-    pub const STATUS: &str = "wallet_status";
     pub const BALANCE: &str = "wallet_balance";
     pub const TRANSACTIONS: &str = "wallet_transactions";
     pub const CREATE_INVOICE: &str = "wallet_create_invoice";
@@ -40,18 +38,6 @@ pub mod ops {
     pub const WAIT_FOR_PAYMENT: &str = "wallet_wait_for_payment";
     /// Long-poll until receiver-side arrival evidence or a terminal state.
     pub const WAIT_FOR_ARRIVAL: &str = "wallet_wait_for_arrival";
-
-    pub const ALL: &[&str] = &[
-        OPEN,
-        STATUS,
-        BALANCE,
-        TRANSACTIONS,
-        CREATE_INVOICE,
-        PAY,
-        LOOKUP,
-        WAIT_FOR_PAYMENT,
-        WAIT_FOR_ARRIVAL,
-    ];
 }
 
 /// Stable identity of a specific wallet instance.
@@ -84,22 +70,6 @@ pub struct OpenResponse {
     pub identity: WalletIdentity,
     /// True if this call created a brand-new wallet rather than loading one.
     pub created: bool,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "plugin-server", derive(schemars::JsonSchema))]
-pub struct StatusRequest {
-    pub directory: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct StatusResponse {
-    /// Persisted wallet state exists under `directory`.
-    pub provisioned: bool,
-    /// The plugin currently holds this wallet open.
-    pub open: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub identity: Option<WalletIdentity>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -250,9 +220,6 @@ impl From<PayError> for WalletError {
     }
 }
 
-// `Balance` is re-exported so contract consumers need only this module.
-pub type BalanceResponse = Balance;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,15 +265,6 @@ mod tests {
                 WalletError::new(kind, "x").into_pay_error(),
                 PayError::Uncertain(_)
             ));
-        }
-    }
-
-    #[test]
-    fn op_names_are_unique_and_prefixed() {
-        let mut seen = std::collections::BTreeSet::new();
-        for op in ops::ALL {
-            assert!(op.starts_with("wallet_"), "{op}");
-            assert!(seen.insert(*op), "duplicate op {op}");
         }
     }
 }

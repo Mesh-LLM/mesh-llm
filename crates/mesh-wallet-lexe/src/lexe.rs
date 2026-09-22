@@ -1,5 +1,6 @@
 //! Lexe-backed `WalletProvider`. This is the only module in the workspace
-//! that depends on Lexe SDK types; the host never links it.
+//! that depends on Lexe SDK types. The shipped binary links this module for
+//! its built-in wallet plugin, which executes in a separate child process.
 
 use std::fs::{File, OpenOptions};
 use std::path::Path;
@@ -22,11 +23,6 @@ use lexe_api_core::types::payments::{PaymentId, PaymentKind};
 use mesh_llm_wallet::contract::WalletIdentity;
 use mesh_llm_wallet::invoice::Invoice;
 use mesh_llm_wallet::provider::{Balance, PayError, PaymentStatus, Transaction, WalletProvider};
-
-/// Persisted wallet state exists under `directory`. No network, no side effects.
-pub fn is_provisioned(directory: &Path) -> bool {
-    directory.join("seedphrase.txt").exists()
-}
 
 pub struct LexeProvider {
     wallet: LexeWallet,

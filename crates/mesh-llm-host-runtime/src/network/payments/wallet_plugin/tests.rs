@@ -528,7 +528,7 @@ async fn plugin_manager_is_resolved_at_open_time_not_construction() {
 }
 
 #[tokio::test]
-async fn concurrent_reopens_after_restart_open_once() {
+async fn concurrent_queries_recover_after_restart_and_preserve_pin() {
     let plugin = FakeWalletPlugin::new("w1");
     let manager = manager_for(&plugin).await;
     let dir = tempfile::tempdir().unwrap();

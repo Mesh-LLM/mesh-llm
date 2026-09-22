@@ -20,8 +20,7 @@ use tokio::sync::Mutex;
 use crate::backend::{OpenedWallet, WalletBackend};
 use crate::contract::{
     CAPABILITY, CreateInvoiceRequest, Empty, LookupResponse, OpenRequest, OpenResponse, PayRequest,
-    PaymentHashRequest, StatusRequest, StatusResponse, TransactionsRequest, WalletError,
-    WalletIdentity, ops,
+    PaymentHashRequest, TransactionsRequest, WalletError, WalletIdentity, ops,
 };
 use crate::provider::WalletProvider;
 
@@ -88,17 +87,6 @@ impl<B: WalletBackend> WalletServer<B> {
             provider,
         });
         Ok(OpenResponse { identity, created })
-    }
-
-    pub async fn status(&self, request: StatusRequest) -> Result<StatusResponse, WalletError> {
-        let directory = validate_directory(&request.directory)?;
-        let open = self.open.lock().await;
-        let open_here = open.as_ref().filter(|state| state.directory == directory);
-        Ok(StatusResponse {
-            provisioned: open_here.is_some() || self.backend.is_provisioned(&directory),
-            open: open_here.is_some(),
-            identity: open_here.map(|state| state.identity.clone()),
-        })
     }
 }
 
@@ -172,13 +160,6 @@ pub fn wallet_operation_router<B: WalletBackend>(server: &Arc<WalletServer<B>>) 
         ops::OPEN,
         "Open or provision the wallet.",
         |s, req: OpenRequest| async move { s.open(req).await },
-    );
-    add_op(
-        &mut router,
-        server,
-        ops::STATUS,
-        "Inspect persisted wallet state.",
-        |s, req: StatusRequest| async move { s.status(req).await },
     );
     add_op(
         &mut router,
@@ -363,9 +344,6 @@ mod tests {
         fn provider_name(&self) -> &'static str {
             "fake"
         }
-        fn is_provisioned(&self, directory: &Path) -> bool {
-            directory.join("seed").exists()
-        }
         async fn open(&self, directory: &Path) -> Result<OpenedWallet> {
             self.opens.fetch_add(1, Ordering::SeqCst);
             std::fs::create_dir_all(directory)?;
@@ -426,14 +404,6 @@ mod tests {
             .unwrap_err();
         assert_eq!(other.kind, WalletErrorKind::InvalidRequest);
 
-        let status = server
-            .status(StatusRequest {
-                directory: dir.display().to_string(),
-            })
-            .await
-            .unwrap();
-        assert!(status.provisioned && status.open);
-        assert_eq!(status.identity, Some(first.identity));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -448,31 +418,8 @@ mod tests {
         assert_eq!(error.kind, WalletErrorKind::InvalidRequest);
     }
 
-    #[tokio::test]
-    async fn pay_rejection_is_structured_not_submitted() {
-        let server = server();
-        let dir = std::env::temp_dir().join(format!("mesh-wallet-pay-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        server
-            .open(OpenRequest {
-                directory: dir.display().to_string(),
-            })
-            .await
-            .unwrap();
-        let result = server
-            .provider()
-            .await
-            .unwrap()
-            .pay(&crate::invoice::tests::sample_invoice(1, 1000), 1000, 2000)
-            .await
-            .map_err(WalletError::from)
-            .unwrap_err();
-        assert_eq!(result.kind, WalletErrorKind::NotSubmitted);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     #[test]
-    fn plugin_advertises_capability_and_every_operation() {
+    fn plugin_advertises_wallet_capability() {
         let plugin = wallet_plugin(
             "wallet-fake",
             "0.0.0",

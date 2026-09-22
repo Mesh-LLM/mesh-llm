@@ -35,10 +35,6 @@ impl WalletBackend for LexeBackend {
         "lexe"
     }
 
-    fn is_provisioned(&self, directory: &Path) -> bool {
-        lexe::is_provisioned(directory)
-    }
-
     async fn open(&self, directory: &Path) -> Result<OpenedWallet> {
         let opened = lexe::LexeProvider::open(directory).await?;
         Ok(OpenedWallet {
