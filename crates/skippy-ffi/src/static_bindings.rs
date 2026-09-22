@@ -200,6 +200,11 @@ unsafe extern "C" {
     ) -> Status;
 
     /// Compute one normalized token-input embedding into a caller-owned buffer.
+    ///
+    /// `out_dimensions` always receives the required embedding length before the
+    /// call can fail on capacity: when `output_capacity` is smaller it holds that
+    /// length while `Status::BufferTooSmall` is returned, so a caller can size its
+    /// buffer from the value and retry. It stays zero on every earlier failure.
     pub fn skippy_session_embed(
         session: *mut Session,
         token_ids: *const i32,
