@@ -1,12 +1,13 @@
 //! Bridge between CLI dispatch and [`mesh_llm_analytics`].
 //!
-//! Kept separate from the analytics crate so the reporting decisions specific
-//! to this binary — which commands report, what a `serve` session records —
-//! live next to the dispatch they describe.
+//! Kept out of `mesh_llm_analytics` so that crate stays a leaf with no CLI or
+//! hardware dependencies, and out of the shipped binary crate because these
+//! are reporting policy decisions, not dispatch wiring.
 
 use mesh_llm_analytics::{Event, Properties};
 use mesh_llm_cli::{Cli, Command};
 use mesh_llm_events::{CliCommandFamily, CliCommandOutcome};
+use std::ffi::OsString;
 use std::path::Path;
 use std::time::Instant;
 
@@ -17,30 +18,32 @@ use std::time::Instant;
 /// whose purpose is to stop reporting is the worst possible moment to report.
 /// `mesh-llm analytics status` is excluded for the same reason — asking what
 /// is collected should not itself be collected.
-pub(crate) fn init_for_cli(cli: &Cli) {
+pub fn init_for_cli(cli: &Cli) {
     if matches!(cli.command, Some(Command::Analytics { .. })) {
         return;
     }
-    let config_enabled = mesh_llm_config::load_config(cli.config.as_deref())
-        .ok()
-        .and_then(|config| config.analytics.enabled);
-    mesh_llm_analytics::init(config_enabled);
+    mesh_llm_analytics::init(crate::analytics::config_preference(cli.config.as_deref()));
 }
 
 /// Start reporting when the CLI failed to parse, so install and version
 /// counts are not silently biased toward well-formed invocations.
-pub(crate) fn init_for_unparsed(config_path: Option<&Path>) {
-    let config_enabled = mesh_llm_config::load_config(config_path)
-        .ok()
-        .and_then(|config| config.analytics.enabled);
-    mesh_llm_analytics::init(config_enabled);
+///
+/// `raw_args` is argv. A malformed analytics invocation
+/// (`mesh-llm analytics --typo`, `mesh-llm analytics --help`) never reaches
+/// the parsed exclusion in [`init_for_cli`], so it is excluded here too —
+/// otherwise the one command family promised not to report would report.
+pub fn init_for_unparsed(raw_args: &[OsString], config_path: Option<&Path>) {
+    if mesh_llm_cli::raw_args_invoke_analytics(raw_args) {
+        return;
+    }
+    mesh_llm_analytics::init(crate::analytics::config_preference(config_path));
 }
 
 /// Record the outcome of a one-shot command.
 ///
 /// Only the family and the outcome are reported. Both are closed enums, so no
 /// argument, path, model name, or error text can ride along.
-pub(crate) fn record_cli_command(family: CliCommandFamily, outcome: CliCommandOutcome) {
+pub fn record_cli_command(family: CliCommandFamily, outcome: CliCommandOutcome) {
     mesh_llm_analytics::capture(
         Event::CliCommand,
         Properties::new()
@@ -50,13 +53,13 @@ pub(crate) fn record_cli_command(family: CliCommandFamily, outcome: CliCommandOu
 }
 
 /// A `serve` session being measured from start to shutdown.
-pub(crate) struct ServeSession {
+pub struct ServeSession {
     started: Instant,
 }
 
 impl ServeSession {
     /// Record that a runtime surface started, and begin timing it.
-    pub(crate) fn start(cli: &Cli) -> Self {
+    pub fn start(cli: &Cli) -> Self {
         mesh_llm_analytics::capture(Event::ServeStarted, serve_properties(cli));
         report_hardware_profile();
         Self {
@@ -68,7 +71,7 @@ impl ServeSession {
     ///
     /// Session length is the signal that separates a node someone actually
     /// runs from one that crashed or was tried once.
-    pub(crate) fn finish(self, succeeded: bool) {
+    pub fn finish(self, succeeded: bool) {
         mesh_llm_analytics::capture(
             Event::ServeStopped,
             Properties::new()
@@ -104,7 +107,7 @@ fn serve_properties(cli: &Cli) -> Properties {
 ///
 /// Hardware probes shell out to platform tools, so this runs on a blocking
 /// thread and reports whenever it finishes. Startup never waits for it.
-pub(crate) fn report_hardware_profile() {
+pub fn report_hardware_profile() {
     tokio::task::spawn_blocking(|| {
         use mesh_llm_system::hardware::Metric;
 
@@ -158,6 +161,12 @@ fn hardware_properties(
             mesh_llm_analytics::bucket_gigabytes(survey.vram_bytes),
         );
     }
+    if let Some(system_ram) = survey.system_ram_bytes.filter(|bytes| *bytes > 0) {
+        properties = properties.with(
+            "system_ram",
+            mesh_llm_analytics::bucket_gigabytes(system_ram),
+        );
+    }
     if let Some(name) = survey.gpu_name.as_deref() {
         properties = properties.with("gpu_model", mesh_llm_analytics::Label::slug_or_redact(name));
     }
@@ -166,7 +175,7 @@ fn hardware_properties(
 
 /// Record a model download attempt, which is the clearest signal of what
 /// people are *trying* — a failed download still answers the question.
-pub(crate) fn record_model_download(model_ref: &str, succeeded: bool) {
+pub fn record_model_download(model_ref: &str, succeeded: bool) {
     mesh_llm_analytics::capture(
         Event::ModelDownload,
         Properties::new()
@@ -179,7 +188,7 @@ pub(crate) fn record_model_download(model_ref: &str, succeeded: bool) {
 }
 
 /// Deliver anything still queued, within the crate's shutdown budget.
-pub(crate) async fn shutdown() {
+pub async fn shutdown() {
     mesh_llm_analytics::shutdown().await;
 }
 
@@ -231,6 +240,9 @@ mod tests {
             gpu_vram: Vec::new(),
             gpu_reserved: Vec::new(),
             gpus: Vec::new(),
+            gpu_name_source: None,
+            system_ram_bytes: None,
+            ram_offload_bytes: 0,
         }
     }
 
@@ -307,5 +319,23 @@ mod tests {
         let cli = Cli::parse_from(["mesh-llm", "analytics", "disable"]);
         assert!(matches!(cli.command, Some(Command::Analytics { .. })));
         init_for_cli(&cli);
+    }
+
+    #[test]
+    fn malformed_analytics_invocations_do_not_start_reporting() {
+        // These never produce a parsed `Cli`, so they bypass the check above
+        // and land on the parse-exit path instead.
+        for raw in [
+            &["mesh-llm", "analytics", "--typo"][..],
+            &["mesh-llm", "analytics", "--help"][..],
+            &["mesh-llm", "--debug", "analytics", "bogus"][..],
+        ] {
+            let args: Vec<OsString> = raw.iter().map(OsString::from).collect();
+            assert!(
+                mesh_llm_cli::raw_args_invoke_analytics(&args),
+                "{raw:?} must be recognized as an analytics invocation",
+            );
+            init_for_unparsed(&args, None);
+        }
     }
 }

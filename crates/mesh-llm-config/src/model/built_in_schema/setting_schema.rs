@@ -27,9 +27,13 @@ fn telemetry_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSetti
     setting
 }
 
-/// Anonymous product analytics. Config-file only: the opt-out must not be
-/// reversible from the API surface, so a remote caller cannot turn reporting
-/// back on for a machine whose owner turned it off.
+/// Anonymous product analytics. Declared `ConfigFile`-only to record that the
+/// opt-out is meant to be a local decision.
+///
+/// Note this is declaration, not enforcement: `control_surfaces` is metadata
+/// that nothing currently checks, so an owner-equivalent `apply-config` can
+/// still set this key. That gap is workspace-wide rather than specific to
+/// analytics, and closing it means enforcing the field for every setting.
 fn analytics_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSchema {
     let mut setting = basic_setting(path, value_schema);
     setting.control_surfaces = vec![ConfigControlSurface::ConfigFile];

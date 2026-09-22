@@ -667,3 +667,56 @@ mod tests {
         assert_eq!(cli.mesh_discovery_mode, MeshDiscoveryMode::Mdns);
     }
 }
+
+/// Whether raw argv invokes the `analytics` subcommand.
+///
+/// Needed on the parse-failure path, where there is no parsed `Cli` to match
+/// on. `mesh-llm analytics --typo` fails clap parsing, and without this it
+/// would report a `cli_command` event for the very command family that
+/// promises not to report.
+///
+/// Scans for the first non-flag token after the executable, so global flags
+/// before the subcommand (`mesh-llm --debug analytics status`) still match.
+#[must_use]
+pub fn raw_args_invoke_analytics(args: &[std::ffi::OsString]) -> bool {
+    args.iter()
+        .skip(1)
+        .filter_map(|arg| arg.to_str())
+        .find(|arg| !arg.starts_with('-'))
+        .is_some_and(|first| first == "analytics")
+}
+
+#[cfg(test)]
+mod analytics_classification_tests {
+    use super::raw_args_invoke_analytics;
+    use std::ffi::OsString;
+
+    fn args(raw: &[&str]) -> Vec<OsString> {
+        raw.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn matches_analytics_invocations_including_malformed_ones() {
+        for raw in [
+            &["mesh-llm", "analytics"][..],
+            &["mesh-llm", "analytics", "status"][..],
+            &["mesh-llm", "analytics", "--typo"][..],
+            &["mesh-llm", "--debug", "analytics", "disable"][..],
+            &["mesh-llm", "analytics", "--help"][..],
+        ] {
+            assert!(raw_args_invoke_analytics(&args(raw)), "missed {raw:?}");
+        }
+    }
+
+    #[test]
+    fn does_not_match_other_commands() {
+        for raw in [
+            &["mesh-llm", "gpus"][..],
+            &["mesh-llm"][..],
+            &["mesh-llm", "--version"][..],
+            &["mesh-llm", "download", "analytics"][..],
+        ] {
+            assert!(!raw_args_invoke_analytics(&args(raw)), "matched {raw:?}");
+        }
+    }
+}

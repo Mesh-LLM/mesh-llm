@@ -36,6 +36,13 @@ pub enum Disposition {
     DisabledByDoNotTrack,
     /// `[analytics] enabled = false` in the config file.
     DisabledByConfig,
+    /// The config file exists but could not be read or parsed.
+    ///
+    /// A privacy control has to fail closed. A config with one mistyped key
+    /// anywhere fails to deserialize as a whole, and treating that as "no
+    /// preference stated" would silently re-enable reporting for someone who
+    /// had opted out.
+    DisabledConfigUnreadable,
     /// No project key, so there is nowhere to report. Source builds land here.
     DisabledNoKey,
     /// A continuous-integration environment was detected.
@@ -57,10 +64,29 @@ impl Disposition {
             Self::DisabledByEnv => "disabled by MESH_LLM_ANALYTICS",
             Self::DisabledByDoNotTrack => "disabled by DO_NOT_TRACK",
             Self::DisabledByConfig => "disabled by [analytics] enabled = false in config.toml",
+            Self::DisabledConfigUnreadable => {
+                "disabled: the config file could not be read, so the recorded preference is unknown"
+            }
             Self::DisabledNoKey => "disabled: this build has no analytics key compiled in",
             Self::DisabledInCi => "disabled: continuous integration environment detected",
         }
     }
+}
+
+/// What the config file says about analytics.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ConfigPreference {
+    /// The config loaded and did not mention analytics.
+    #[default]
+    Unstated,
+    /// `[analytics] enabled` was stated explicitly.
+    Stated(bool),
+    /// The config exists but could not be read or parsed.
+    ///
+    /// Distinct from [`ConfigPreference::Unstated`] on purpose: an absent
+    /// config is an ordinary first run, while an unreadable one may be hiding
+    /// an opt-out and must not be read as consent.
+    Unreadable,
 }
 
 /// Inputs to the consent decision, gathered from the environment.
@@ -70,8 +96,8 @@ pub struct ConsentInputs {
     pub env_override: Option<String>,
     /// Whether `DO_NOT_TRACK` is set to a truthy value.
     pub do_not_track: bool,
-    /// `[analytics] enabled`, if the config file states it.
-    pub config_enabled: Option<bool>,
+    /// What the config file says.
+    pub config: ConfigPreference,
     /// Whether a project key is available.
     pub has_key: bool,
     /// Whether this looks like CI.
@@ -81,13 +107,13 @@ pub struct ConsentInputs {
 impl ConsentInputs {
     /// Read every input from the process environment.
     #[must_use]
-    pub fn from_env(config_enabled: Option<bool>) -> Self {
+    pub fn from_env(config: ConfigPreference) -> Self {
         Self {
             env_override: env::var(ENV_ANALYTICS).ok(),
             do_not_track: env::var(ENV_DO_NOT_TRACK)
                 .ok()
                 .is_some_and(|value| is_truthy(&value)),
-            config_enabled,
+            config,
             has_key: project_key().is_some(),
             in_ci: detect_ci(),
         }
@@ -112,8 +138,10 @@ impl ConsentInputs {
         if self.do_not_track {
             return Disposition::DisabledByDoNotTrack;
         }
-        if self.config_enabled == Some(false) {
-            return Disposition::DisabledByConfig;
+        match self.config {
+            ConfigPreference::Stated(false) => return Disposition::DisabledByConfig,
+            ConfigPreference::Unreadable => return Disposition::DisabledConfigUnreadable,
+            ConfigPreference::Stated(true) | ConfigPreference::Unstated => {}
         }
         if self.in_ci {
             return Disposition::DisabledInCi;

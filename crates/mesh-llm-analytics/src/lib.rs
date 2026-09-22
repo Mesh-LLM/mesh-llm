@@ -35,14 +35,14 @@ mod notice;
 mod properties;
 
 pub use consent::{
-    ConsentInputs, DEFAULT_POSTHOG_HOST, Disposition, ENV_ANALYTICS, ENV_DO_NOT_TRACK,
-    ENV_POSTHOG_HOST, ENV_POSTHOG_KEY, ingestion_host, project_key,
+    ConfigPreference, ConsentInputs, DEFAULT_POSTHOG_HOST, Disposition, ENV_ANALYTICS,
+    ENV_DO_NOT_TRACK, ENV_POSTHOG_HOST, ENV_POSTHOG_KEY, ingestion_host, project_key,
 };
 pub use event::{
     Event, Label, Properties, Value, bucket_count, bucket_duration_secs, bucket_gigabytes,
 };
-pub use install_id::{INSTALL_ID_FILE, InstallId, load_or_create, state_dir};
-pub use notice::NOTICE;
+pub use install_id::{INSTALL_ID_FILE, InstallId, load, load_or_create, state_dir};
+pub use notice::{NOTICE, NOTICE_MARKER_FILE};
 pub use properties::{BuildChannel, LIB_NAME, base_properties};
 
 use chrono::Utc;
@@ -101,30 +101,32 @@ pub struct Status {
 
 /// Initialize analytics for this process.
 ///
-/// `config_enabled` is `[analytics] enabled` from the mesh-llm config, or
-/// `None` when the config does not state it. Call once, early; later calls
-/// return the first result.
+/// `config` is what the mesh-llm config file says about analytics. Call once,
+/// early; later calls return the first result.
 ///
 /// On a first run with reporting enabled, this prints the disclosure notice
 /// and captures [`Event::InstallFirstRun`].
-pub fn init(config_enabled: Option<bool>) -> Status {
-    let inputs = ConsentInputs::from_env(config_enabled);
+pub fn init(config: ConfigPreference) -> Status {
+    let inputs = ConsentInputs::from_env(config);
     let disposition = inputs.resolve();
-
     let dir = state_dir().ok();
-    let install = dir.as_deref().and_then(|dir| load_or_create(dir).ok());
 
+    // Nothing is written while reporting is off: no identifier, no marker.
+    // An opted-out machine should not accumulate analytics state at all.
     if !disposition.is_enabled() {
         let _ = REPORTER.set(None);
         return Status {
             disposition,
-            install_id: install.as_ref().map(|id| id.as_str().to_owned()),
+            install_id: dir
+                .as_deref()
+                .and_then(load)
+                .map(|id| id.as_str().to_owned()),
             endpoint: None,
             install_id_path: dir.map(|dir| dir.join(INSTALL_ID_FILE)),
         };
     }
 
-    let Some(install) = install else {
+    let Some(dir) = dir else {
         // Without a readable state directory there is no stable identifier,
         // and reporting every run as a new install would be worse than not
         // reporting at all.
@@ -137,12 +139,28 @@ pub fn init(config_enabled: Option<bool>) -> Status {
         };
     };
 
+    // Disclose before anything is queued, and independently of whether the
+    // identifier already exists. The marker is what makes this once-only.
+    if !notice::was_shown(&dir) {
+        notice::print_notice(&dir);
+    }
+
+    let Some(install) = load_or_create(&dir).ok() else {
+        let _ = REPORTER.set(None);
+        return Status {
+            disposition,
+            install_id: None,
+            endpoint: None,
+            install_id_path: Some(dir.join(INSTALL_ID_FILE)),
+        };
+    };
+
     let endpoint = client::batch_endpoint(&ingestion_host());
     let status = Status {
         disposition,
         install_id: Some(install.as_str().to_owned()),
         endpoint: Some(endpoint.clone()),
-        install_id_path: dir.map(|dir| dir.join(INSTALL_ID_FILE)),
+        install_id_path: Some(dir.join(INSTALL_ID_FILE)),
     };
 
     let Some(api_key) = project_key() else {
@@ -155,6 +173,19 @@ pub fn init(config_enabled: Option<bool>) -> Status {
             ..status
         };
     };
+
+    // `tokio::spawn` panics outside a runtime. Every call site in this binary
+    // is under `block_on`, but this is a public API whose stated contract is
+    // that it is never load-bearing, so an embedder gets a clean disable
+    // rather than a panic.
+    if tokio::runtime::Handle::try_current().is_err() {
+        tracing::debug!("analytics disabled: no tokio runtime at init");
+        let _ = REPORTER.set(None);
+        return Status {
+            endpoint: None,
+            ..status
+        };
+    }
 
     let (sender, receiver) = mpsc::channel(QUEUE_CAPACITY);
     let worker = tokio::spawn(flush_loop(
@@ -169,7 +200,6 @@ pub fn init(config_enabled: Option<bool>) -> Status {
     }));
 
     if install.is_first_run() {
-        notice::print_notice();
         capture(Event::InstallFirstRun, Properties::new());
     }
 

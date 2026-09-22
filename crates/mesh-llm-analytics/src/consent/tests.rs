@@ -4,7 +4,7 @@ fn inputs() -> ConsentInputs {
     ConsentInputs {
         env_override: None,
         do_not_track: false,
-        config_enabled: None,
+        config: ConfigPreference::Unstated,
         has_key: true,
         in_ci: false,
     }
@@ -36,8 +36,27 @@ fn do_not_track_disables_reporting() {
 #[test]
 fn config_opt_out_disables_reporting() {
     let mut configured = inputs();
-    configured.config_enabled = Some(false);
+    configured.config = ConfigPreference::Stated(false);
     assert_eq!(configured.resolve(), Disposition::DisabledByConfig);
+}
+
+#[test]
+fn an_unreadable_config_fails_closed() {
+    // A config with one mistyped key anywhere fails to deserialize as a
+    // whole. Treating that as "no preference" would silently re-enable
+    // reporting for someone who had opted out.
+    let mut broken = inputs();
+    broken.config = ConfigPreference::Unreadable;
+    assert_eq!(broken.resolve(), Disposition::DisabledConfigUnreadable);
+    assert!(!broken.resolve().is_enabled());
+}
+
+#[test]
+fn an_absent_config_is_not_treated_as_unreadable() {
+    // No config at all is an ordinary first run, not a failure.
+    let mut absent = inputs();
+    absent.config = ConfigPreference::Unstated;
+    assert_eq!(absent.resolve(), Disposition::EnabledByDefault);
 }
 
 #[test]
@@ -59,7 +78,7 @@ fn explicit_env_override_beats_every_other_signal() {
     forced_on.env_override = Some("true".to_owned());
     forced_on.in_ci = true;
     forced_on.do_not_track = true;
-    forced_on.config_enabled = Some(false);
+    forced_on.config = ConfigPreference::Stated(false);
     assert_eq!(forced_on.resolve(), Disposition::EnabledByEnv);
 }
 
@@ -81,6 +100,7 @@ fn every_disposition_explains_itself() {
         Disposition::DisabledByEnv,
         Disposition::DisabledByDoNotTrack,
         Disposition::DisabledByConfig,
+        Disposition::DisabledConfigUnreadable,
         Disposition::DisabledNoKey,
         Disposition::DisabledInCi,
     ] {

@@ -12,7 +12,7 @@ pub use commands::{
 pub use logging_help::logging_help;
 pub use normalization::{
     NormalizedRuntimeArgs, RuntimeSurface, legacy_runtime_surface_warning,
-    normalize_runtime_surface_args,
+    normalize_runtime_surface_args, raw_args_invoke_analytics,
 };
 pub use runtime_surface_help::runtime_surface_help;
 pub use validation::validate_discovery_mode_args;

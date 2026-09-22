@@ -15,7 +15,8 @@ metrics to an endpoint the operator chooses and never leaves their network.
   API even by mistake, and an unrecognized value becomes `redacted`.
 - **No key, no reporting.** The project key is compiled in by the release
   pipeline via `MESH_LLM_POSTHOG_KEY`. Source and development builds have no
-  key and are completely inert.
+  compiled-in key and are inert unless that same variable is set at run time,
+  which is the documented self-hosting path.
 - **Never load-bearing.** Capture is non-blocking and delivery is best effort.
   No failure here changes a command's behavior, output, or exit code, and
   shutdown gives up after a short budget rather than holding a command open.

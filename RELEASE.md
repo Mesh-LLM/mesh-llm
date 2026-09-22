@@ -308,7 +308,9 @@ Release binaries report anonymous usage only when `MESH_LLM_POSTHOG_KEY` is
 present at compile time. The release workflow supplies it from the
 `MESH_LLM_POSTHOG_KEY` repository secret; `scripts/build-host.sh` prints
 whether a key was present (never the key itself), so a release log confirms
-it. A build without the secret is valid and simply reports nothing.
+it. A build without the secret is valid and reports nothing unless someone sets
+`MESH_LLM_POSTHOG_KEY` in the environment at run time, which is the documented
+self-hosting path.
 
 Forks build without the secret and therefore never report. See
 `website/src/docs/pages/analytics.md` for the collected surface and the

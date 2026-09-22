@@ -139,7 +139,7 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
         .hint("number")),
         "analytics.enabled" => Some(sp(
             "Anonymous usage reporting",
-            "Report anonymous usage (version, platform, command names, node and model counts) to the mesh-llm maintainers. Never includes prompts, completions, file paths, or peer addresses. Equivalent to `mesh-llm analytics disable`.",
+            "Report anonymous usage (version, platform, command names, node and model counts) to the mesh-llm maintainers. Never includes prompts, completions, file paths, or peer addresses. Turning this setting off is equivalent to `mesh-llm analytics disable`.",
             ANALYTICS_CATEGORY,
             10,
         )

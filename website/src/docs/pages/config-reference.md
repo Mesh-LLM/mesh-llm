@@ -85,7 +85,7 @@ produces a clear startup error rather than a partial start.
 | `telemetry.queue_size` | integer | `2048` | node-level | process restart | wired | none |
 | `telemetry.prompt_shape_metrics` | boolean | `false` | node-level | process restart | wired; exports token-count histograms only when explicitly enabled | none |
 | `telemetry.metrics.endpoint` | URL | unset (falls back to `telemetry.endpoint`) | node-level | process restart | wired | none |
-| `analytics.enabled` | boolean | unset (anonymous usage reporting is on); `false` opts out permanently | node-level | process restart | wired | `mesh-llm analytics disable` |
+| `analytics.enabled` | boolean | unset (anonymous usage reporting is on when the build has an analytics key); `false` opts out permanently | node-level | process restart | wired | `mesh-llm analytics disable` |
 | `logging.audit.enabled` | boolean | unset | node-level | process restart | wired | none |
 | `logging.audit.log_path` | path | unset | node-level | process restart | wired | none |
 | `logging.audit.log_format` | enum | `json_lines` | node-level | process restart | wired | none |

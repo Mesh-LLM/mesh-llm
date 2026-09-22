@@ -4,7 +4,17 @@
 //! so plainly, in the same breath as how to turn it off. The notice goes to
 //! stderr so it never contaminates machine-readable stdout.
 
-use std::io::{self, IsTerminal, Write};
+use std::fs;
+use std::io::{self, Write};
+use std::path::Path;
+
+/// Marker recording that the disclosure has been shown.
+///
+/// Deliberately separate from the install identifier. Tying disclosure to
+/// identifier creation meant a first run under `DO_NOT_TRACK`, or a first
+/// `analytics status`, consumed the first-run signal and the notice was then
+/// never shown on any later run.
+pub const NOTICE_MARKER_FILE: &str = "analytics-notice-shown";
 
 /// The disclosure text shown once per install.
 pub const NOTICE: &str = "\
@@ -18,24 +28,58 @@ anything about your mesh peers.
 
 This notice is shown once.";
 
-/// Print the notice to stderr, unless stderr is redirected.
+/// Whether the disclosure has already been shown for this install.
+#[must_use]
+pub fn was_shown(dir: &Path) -> bool {
+    dir.join(NOTICE_MARKER_FILE).exists()
+}
+
+/// Record that the disclosure has been shown.
+fn mark_shown(dir: &Path) {
+    let _ = fs::create_dir_all(dir);
+    let _ = fs::write(dir.join(NOTICE_MARKER_FILE), b"1\n");
+}
+
+/// Print the notice to stderr and record that it was shown.
 ///
-/// A redirected stderr usually means a log file or a pipe, where a one-time
-/// human-facing notice is noise rather than disclosure. The documented
-/// opt-out remains available either way.
-pub fn print_notice() {
+/// Emitted whether or not stderr is a terminal. A notice in a service log is
+/// still disclosure; a notice suppressed because the process happened to be
+/// daemonized is not, and on-by-default reporting is only defensible if the
+/// disclosure actually happens. It goes to stderr so machine-readable command
+/// output on stdout stays intact.
+pub fn print_notice(dir: &Path) {
     let stderr = io::stderr();
-    if !stderr.is_terminal() {
-        return;
-    }
     let mut handle = stderr.lock();
     let _ = writeln!(handle, "\n{NOTICE}\n");
     let _ = handle.flush();
+    mark_shown(dir);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn marker_is_absent_until_the_notice_is_printed() {
+        let dir = TempDir::new().expect("tempdir");
+        assert!(!was_shown(dir.path()));
+        print_notice(dir.path());
+        assert!(was_shown(dir.path()));
+    }
+
+    #[test]
+    fn marker_is_independent_of_the_install_identifier() {
+        // The bug this guards: creating the install id used to consume the
+        // first-run signal, so a first run under DO_NOT_TRACK meant the
+        // notice was never shown on any later run.
+        let dir = TempDir::new().expect("tempdir");
+        crate::load_or_create(dir.path()).expect("create id");
+        assert!(
+            !was_shown(dir.path()),
+            "install id must not mark disclosure"
+        );
+    }
 
     #[test]
     fn notice_states_the_opt_out_and_the_exclusions() {

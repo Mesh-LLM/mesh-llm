@@ -295,6 +295,7 @@ pub(crate) fn mesh_requirements_survive_owner_control_config_round_trip() {
         },
         owner_control: OwnerControlConfig::default(),
         telemetry: Default::default(),
+        analytics: Default::default(),
         defaults: None,
         runtime: Default::default(),
         models: vec![],
@@ -420,6 +421,7 @@ fn config_sync_config_hash_determinism() {
         mesh_requirements: Default::default(),
         owner_control: Default::default(),
         telemetry: Default::default(),
+        analytics: Default::default(),
         defaults: None,
         runtime: Default::default(),
         models: vec![ModelConfigEntry {
@@ -454,6 +456,7 @@ fn config_sync_config_hash_determinism() {
         mesh_requirements: Default::default(),
         owner_control: Default::default(),
         telemetry: Default::default(),
+        analytics: Default::default(),
         defaults: None,
         runtime: Default::default(),
         models: vec![ModelConfigEntry {
@@ -522,6 +525,7 @@ fn pinned_gpu_proto_roundtrip() {
         mesh_requirements: Default::default(),
         owner_control: Default::default(),
         telemetry: Default::default(),
+        analytics: Default::default(),
         defaults: None,
         runtime: Default::default(),
         models: vec![ModelConfigEntry {

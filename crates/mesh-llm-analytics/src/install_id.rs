@@ -41,6 +41,21 @@ pub fn state_dir() -> Result<PathBuf> {
     Ok(home.join(".mesh-llm"))
 }
 
+/// Read the install identifier without creating one.
+///
+/// `mesh-llm analytics status` uses this: asking what is collected must not
+/// itself write state, and creating the identifier here would consume the
+/// first-run signal so the real first run never reports as one.
+pub fn load(dir: &Path) -> Option<InstallId> {
+    let raw = fs::read_to_string(dir.join(INSTALL_ID_FILE)).ok()?;
+    let trimmed = raw.trim();
+    Uuid::parse_str(trimmed).ok()?;
+    Some(InstallId {
+        id: trimmed.to_owned(),
+        first_run: false,
+    })
+}
+
 /// Load the install identifier from `dir`, generating it on first use.
 ///
 /// A malformed or empty file is replaced rather than treated as an error: a

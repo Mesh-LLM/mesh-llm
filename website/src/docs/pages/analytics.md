@@ -2,8 +2,9 @@
 
 mesh-llm reports a small amount of anonymous usage data to the maintainers so
 we can see which platforms to support, which commands matter, and where nodes
-fall over. It is on by default, disclosed on first run, and takes one command
-to turn off permanently.
+fall over. Official release builds have an analytics key compiled in, so for
+them it is on by default, disclosed on first run, and takes one command to
+turn off permanently. Builds without a key report nothing at all.
 
 This page is the complete description of what is collected. If something
 happens that is not on this page, it is a bug — please
@@ -25,7 +26,7 @@ survives restarts and upgrades. Any of these also turns reporting off:
 | `MESH_LLM_ANALYTICS=0` | Off for one invocation or one shell |
 | `DO_NOT_TRACK=1` | Off, honoring the [console opt-out convention](https://consoledonottrack.com) |
 | `CI=true` (or another CI variable) | Off automatically; CI runs are not users |
-| A build with no analytics key | Off; source builds report nothing at all |
+| A build with no analytics key | Off; source builds and forks report nothing unless `MESH_LLM_POSTHOG_KEY` is set at run time |
 
 To see what your machine is doing right now:
 
@@ -63,6 +64,7 @@ And one of these events:
 | `gpu_model` | `apple-m1-pro`, `nvidia-geforce-rtx-4090` | The device name, lowercased and hyphenated |
 | `gpu_count` | `1`, `3-4`, `33+` | Bucketed |
 | `vram_total` | `8-16`, `32-64` | Bucketed gigabytes across all GPUs |
+| `system_ram` | `16-32`, `64-128` | Bucketed gigabytes of system RAM, when the platform reports it |
 | `unified_memory` | `true` | Whether this is a unified-memory SoC |
 | `backend_metal`, `backend_cuda`, `backend_rocm`, `backend_vulkan` | `true` / `false` | Which backends this machine can run |
 
