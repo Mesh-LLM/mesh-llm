@@ -59,17 +59,18 @@ pub async fn run(args: &AgentConfigArgs, hermes: bool) -> Result<()> {
         &args.model,
         context,
     )?;
-    if original.is_some() {
+    if original.is_some() && original.as_deref() != Some(updated.as_slice()) {
         writeln!(
             mesh_llm_events::console_err(),
             "Writing harness config: comments/formatting will be normalized; an exact sibling backup will be retained."
         )?;
     }
-    storage::save(&path, original.as_deref(), &updated)?;
+    let outcome = storage::save(&path, original.as_deref(), &updated)?;
     writeln!(
         mesh_llm_events::console_out(),
-        "Mesh provider saved to {}. Default model and permissions unchanged. Select {} in your agent. Context budget: {context}; rerun when serving limits change. Comments/formatting normalized; existing file backed up alongside it.",
+        "Mesh provider saved to {}. {}. Default model and permissions unchanged. Select {} in your agent. Context budget: {context}; rerun when serving limits change.",
         path.display(),
+        outcome_note(&outcome),
         if hermes {
             format!("provider mesh, model {}", args.model)
         } else {
@@ -79,6 +80,20 @@ pub async fn run(args: &AgentConfigArgs, hermes: bool) -> Result<()> {
     Ok(())
 }
 
+/// What to tell the user about the file the write touched.
+fn outcome_note(outcome: &storage::SaveOutcome) -> &'static str {
+    match outcome {
+        storage::SaveOutcome::Replaced => {
+            "Previous file backed up alongside it; comments/formatting normalized"
+        }
+        storage::SaveOutcome::Created => {
+            "New file created; there was no previous file to back up; comments/formatting normalized"
+        }
+        storage::SaveOutcome::Unchanged => "Config already matched; nothing was written",
+    }
+}
+
+/// Config file each harness reads when `--config-path` is not given.
 fn default_path(hermes: bool) -> Result<PathBuf> {
     let home = dirs::home_dir().context("Cannot locate home; use --config-path")?;
     if hermes {
@@ -98,16 +113,19 @@ fn default_path(hermes: bool) -> Result<PathBuf> {
     }
 }
 
+/// View a config node as a mapping, refusing to replace malformed settings.
 fn object(value: &mut Value) -> Result<&mut serde_json::Map<String, Value>> {
     value
         .as_object_mut()
         .context("Expected a config mapping; refusing to replace malformed settings")
 }
 
+/// Get or create a nested config table, rejecting a non-mapping parent.
 fn child<'a>(value: &'a mut Value, key: &str) -> Result<&'a mut Value> {
     Ok(object(value)?.entry(key).or_insert_with(|| json!({})))
 }
 
+/// Refuse YAML/JSON include or merge keys anywhere in the config.
 fn reject_includes(value: &Value) -> Result<()> {
     match value {
         Value::Object(map) => {
@@ -128,6 +146,7 @@ fn reject_includes(value: &Value) -> Result<()> {
     Ok(())
 }
 
+/// Merge the Mesh provider into the parsed config, preserving everything else.
 fn merge(
     original: Option<&[u8]>,
     hermes: bool,

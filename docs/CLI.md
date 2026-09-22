@@ -1013,8 +1013,12 @@ Default paths are `$HERMES_HOME/config.yaml` (otherwise `~/.hermes/config.yaml`)
 and `$OPENCLAW_CONFIG_PATH` (otherwise `$OPENCLAW_STATE_DIR/openclaw.json`, falling
 back to `~/.openclaw/openclaw.json`). Use `--config-path` for another profile.
 An absent file is created. Existing files receive an exact sibling `.mesh-*.bak`
-backup; serialization normalizes formatting and removes comments. On Unix,
-new config and backup files are mode 0600. Symlink files, included configs,
+backup (no backup is written when the file already matches); serialization
+normalizes formatting and removes comments, and concurrent `mesh-llm` writes to
+the same file are serialized by an advisory lock beside it, so two invocations
+cannot interleave. An editor that does not take that lock is still caught only
+by the pre-write content check. On Unix, new config and backup files are mode
+0600. Symlink files, included configs,
 malformed mappings, legacy Hermes `custom_providers`, and conflicting existing
 `mesh` providers are refused rather than overwritten. An identical provider is
 accepted. Backups may contain secrets: keep them private. To undo, restore the
