@@ -427,7 +427,7 @@ def validate_inventory(
                 file=sys.stderr,
             )
 
-    failures += validate_runtime_slice_admission()
+    failures += validate_runtime_slice_admission(llama_src)
     failures += validate_boundary_registration(
         rows, boundary_registered_models(llama_src)
     )

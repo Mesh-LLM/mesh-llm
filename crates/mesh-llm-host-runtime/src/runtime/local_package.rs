@@ -2,7 +2,7 @@ use super::split_planning::{
     RuntimeSliceStagePlan, split_participant_exclusion_labels, split_participant_labels,
 };
 #[cfg(test)]
-use super::split_planning::{split_stage_plan_labels, validate_split_capacity};
+use super::split_planning::{SplitCapacityModel, split_stage_plan_labels, validate_split_capacity};
 use crate::inference::{election, skippy};
 use crate::mesh::{self, NodeRole};
 use crate::models;
@@ -1015,7 +1015,16 @@ pub(super) fn plan_runtime_slice_topology_with_exclusions(
         })
         .collect::<Vec<_>>();
     stages.sort_by_key(|stage| stage.stage_index);
-    validate_split_capacity(model_ref, package, participants, &stages, excluded)?;
+    // The package-identity planner has no context model of its own, so this
+    // test-only path validates stages against the weight-only backstop.
+    validate_split_capacity(
+        model_ref,
+        package,
+        participants,
+        &stages,
+        excluded,
+        &SplitCapacityModel::weights_only(),
+    )?;
     tracing::info!(
         topology_id,
         model_ref,

@@ -49,6 +49,41 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
         ):
             self.assertNotIn(obsolete, self.wrapper)
 
+    def test_certification_rejects_failed_or_empty_producer_environment(self) -> None:
+        """A failed print-env must not fall through to certification on default binaries."""
+        function = self.wrapper.split("run_certification() {", 1)[1].split("run_candidate_gates() {", 1)[0]
+        for output, status, accepted in (("PARTIAL=1", 9, False), ("", 0, False), ("PRODUCER=1", 0, True)):
+            with self.subTest(output=output, status=status):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    fixture = "\n".join([
+                        "set -euo pipefail",
+                        "LLAMA_STAGE_BUILD_DIR=native HF_CACHE=cache PLAN_PATH=plan FAMILY_BATTERY_RUN_ID=fixture",
+                        f'CERTIFY_LOG="{temp_dir}/certify.log"',
+                        f"bash() {{ printf '%s' '{output}'; return {status}; }}",
+                        "run_verification_logged() { printf 'gate:%s\\n' \"$*\"; }",
+                        "run_certification() {" + function,
+                        "run_certification",
+                    ])
+                    result = subprocess.run(["bash", "-c", fixture], text=True, capture_output=True, check=False)
+                self.assertEqual(0 if accepted else 1, result.returncode, result.stderr)
+                self.assertEqual(3 if accepted else 0, sum(line.startswith("gate:") for line in result.stdout.splitlines()))
+                if accepted:
+                    self.assertIn("PRODUCER=1", result.stdout)
+
+    def test_pinned_build_checks_pin_without_rewriting_it(self) -> None:
+        function = self.wrapper.split("write_repair_pin() {", 1)[1].split("verify_repair_pin() {", 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            scripts = Path(directory) / 'scripts'
+            scripts.mkdir()
+            (scripts / 'update-llama-pin.sh').write_text('#!/bin/sh\nexit 99\n')
+            (scripts / 'update-llama-pin.sh').chmod(0o755)
+            for pin_status in (0, 1):
+                body = (f'set -euo pipefail\nHARNESS_MODE=pinned-build\nUPSTREAM_SHA=unused\n'
+                        f'verify_repair_pin() {{ return {pin_status}; }}\n'
+                        'write_repair_pin() {' + function + '\nwrite_repair_pin')
+                result = subprocess.run(['bash', '-c', body], cwd=directory)
+                self.assertEqual(result.returncode, pin_status)
+
     def test_wrapper_reexecs_natively_before_state_initialization(self) -> None:
         reexec = self.wrapper.index('exec arch -arm64 "${BASH_SOURCE[0]}" "$@"')
         root = self.wrapper.index('ROOT="$(cd')

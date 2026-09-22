@@ -152,6 +152,10 @@
       "domain": "platform-windows-storage",
       "slices": ["platform-checks"]
     },
+    {
+      "domain": "platform-windows-cfg",
+      "slices": ["platform-checks"]
+    },
     {"domain": "backend-cuda", "slices": ["runtime-product", "product-smoke"]},
     {"domain": "backend-rocm", "slices": ["runtime-product", "product-smoke"]},
     {"domain": "backend-vulkan", "slices": ["runtime-product", "product-smoke"]},
@@ -189,7 +193,8 @@
   "platform_domain_rows": {
   "platform-macos": ["macos-portable", "macos-unit"],
     "platform-windows": ["windows-portable", "windows-unit"],
-    "platform-windows-storage": ["windows-log-store"]
+    "platform-windows-storage": ["windows-log-store"],
+    "platform-windows-cfg": ["windows-unit"]
   },
   "sdk_domain_rows": {
     "sdk-rust": ["rust"],

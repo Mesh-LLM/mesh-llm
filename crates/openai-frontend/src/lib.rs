@@ -1,19 +1,26 @@
+pub mod audio;
 pub mod backend;
 mod backend_lifecycle;
 pub mod chat;
 pub mod common;
 pub mod completions;
+pub mod embeddings;
 pub mod errors;
 mod guardrails;
 pub mod hooks;
 pub mod lifecycle;
 pub mod models;
 mod request_lifecycle;
+pub mod rerank;
 pub mod responses;
 pub mod router;
 pub mod sse;
 mod stream_lifecycle;
 
+pub use audio::{
+    AudioFormat, AudioResponse, AudioSpeechRequest, AudioTranscriptionRequest,
+    AudioTranscriptionResponse,
+};
 pub use backend::{
     CancellationToken, ChatCompletionStream, CompletionStream, OpenAiBackend, OpenAiRequestContext,
     OpenAiResult,
@@ -33,6 +40,9 @@ pub use common::{
 pub use completions::{
     CompletionChoice, CompletionChunk, CompletionChunkChoice, CompletionPrompt, CompletionRequest,
     CompletionResponse,
+};
+pub use embeddings::{
+    Embedding, EmbeddingInput, EmbeddingOutput, EmbeddingResponse, EmbeddingsRequest,
 };
 pub use errors::{OpenAiError, OpenAiErrorKind, already_openai_error, map_upstream_error_body};
 pub use guardrails::{
@@ -56,6 +66,7 @@ pub use lifecycle::{
     parse_single_request_id, request_id_from_headers_or_generate, request_id_response_header,
 };
 pub use models::{ModelId, ModelIdError, ModelObject, ModelsResponse};
+pub use rerank::{RerankDocument, RerankRequest, RerankResponse, RerankResult};
 pub use responses::{
     NormalizationOutcome, ResponseAdapterMode, ResponsesRequest, StreamUsage,
     chat_usage_to_responses_usage, normalize_openai_compat_request, parse_chat_stream_chunk,

@@ -7,6 +7,9 @@ use crate::network::openai::auto_route;
 use crate::network::openai::automatic;
 use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::transport as proxy;
+use crate::network::openai::workload_routing::{
+    self, is_audio_upload_path, model_satisfies_request_workload, request_workload_class,
+};
 use crate::network::router;
 use crate::plugin::openai_exchange::{
     ClientNonceSource, ExchangeUsage, OpenAiExchangeChannel, OpenAiExchangeDispatchPath,
@@ -23,6 +26,7 @@ fn plugin_route_status(outcome: &proxy::RouteDispatchOutcome) -> Option<u16> {
     match *outcome {
         proxy::RouteDispatchOutcome::Responded(status) => Some(status),
         proxy::RouteDispatchOutcome::RespondedWithUsage { status_code, .. } => Some(status_code),
+        proxy::RouteDispatchOutcome::RespondedWithDigests { status_code, .. } => Some(status_code),
         proxy::RouteDispatchOutcome::FailedWithStatus { status_code, .. } => Some(status_code),
         proxy::RouteDispatchOutcome::Failed(_) | proxy::RouteDispatchOutcome::Dropped(_) => None,
     }
@@ -117,6 +121,10 @@ fn outcome_was_served(outcome: &proxy::RouteDispatchOutcome) -> bool {
     matches!(
         outcome,
         proxy::RouteDispatchOutcome::Responded(200..=299)
+            | proxy::RouteDispatchOutcome::RespondedWithDigests {
+                status_code: 200..=299,
+                ..
+            }
             | proxy::RouteDispatchOutcome::RespondedWithUsage {
                 status_code: 200..=299,
                 ..
@@ -187,7 +195,38 @@ async fn publish_raw_proxy_terminal(
     if let Some(digest) = request_digest {
         envelope = envelope.with_request_digest(digest.to_string());
     }
+    // The digests over the REAL served response (response body / tool_calls /
+    // reasoning), computed at the JSON-relay delivery point — or, on a
+    // streamed delivery, assembled from the chunks actually sent to the
+    // client — and carried up on the dispatch outcome. A no-op for an
+    // all-`None` bundle (nothing was captured or assembled), so nothing is
+    // fabricated. Unlike `serving_provenance`, this is not gated on
+    // `served_locally`/2xx: a digest of what the host actually returned is
+    // defined on every outcome that had a body, plugin-served included;
+    // absent exactly when there was no body to digest.
+    let output_digests = exchange_output_digests_from_outcome(final_outcome);
+    if output_digests.has_any() {
+        envelope = envelope.with_output_digests(output_digests);
+    }
     channel.publish(&envelope).await;
+}
+
+/// Lift the response / tool_calls / reasoning digests off a dispatch outcome.
+/// Only `RespondedWithUsage` carries them (the outcome the host-served
+/// `route_model_request` returns after the JSON-relay delivery point, or the
+/// streaming assembler, computed them); every other outcome yields an
+/// all-`None` bundle, so the terminal envelope simply omits those digests
+/// rather than fabricating any.
+fn exchange_output_digests_from_outcome(
+    outcome: &proxy::RouteDispatchOutcome,
+) -> crate::plugin::openai_exchange::ExchangeOutputDigests {
+    match outcome {
+        proxy::RouteDispatchOutcome::RespondedWithUsage { output_digests, .. }
+        | proxy::RouteDispatchOutcome::RespondedWithDigests { output_digests, .. } => {
+            *output_digests
+        }
+        _ => Default::default(),
+    }
 }
 
 /// Path 2's own "effective request" moment: the plugin/endpoint is resolved
@@ -242,6 +281,13 @@ enum AutoRouteResolution {
         classification: Option<router::Classification>,
     },
     MediaUnsupported,
+    WorkloadUnsupported(mesh::ModelWorkloadClass),
+}
+
+#[derive(Debug)]
+enum AutoRouteRejection {
+    MediaUnsupported,
+    WorkloadUnsupported(mesh::ModelWorkloadClass),
 }
 
 struct IngressRouteContext<'a> {
@@ -285,6 +331,10 @@ fn model_access_succeeded(outcome: proxy::RouteDispatchOutcome) -> bool {
     matches!(
         outcome,
         proxy::RouteDispatchOutcome::Responded(200..=299)
+            | proxy::RouteDispatchOutcome::RespondedWithDigests {
+                status_code: 200..=299,
+                ..
+            }
             | proxy::RouteDispatchOutcome::RespondedWithUsage {
                 status_code: 200..=299,
                 ..
@@ -304,6 +354,9 @@ fn response_outcome(status_code: u16, result: std::io::Result<()>) -> proxy::Rou
 }
 
 /// Check activity policy admission and reject with 503 if paused.
+// `RouteDispatchOutcome` is deliberately `Copy`; its usage-plus-output-digests variant
+// (three optional 32-byte digests inline) exceeds clippy's 128-byte `Err` threshold.
+#[allow(clippy::result_large_err)]
 async fn check_activity_admission(
     tcp_stream: ClientStream,
     guard: &crate::runtime::ActivityPolicyGuard,
@@ -441,6 +494,7 @@ async fn collect_available_models_for_auto_route(
     available_models
 }
 
+/// Admit explicit workloads or select a compatible automatic route, preserving committee mode.
 async fn resolve_auto_routed_model(
     node: &mesh::Node,
     request: &mut proxy::BufferedHttpRequest,
@@ -450,6 +504,7 @@ async fn resolve_auto_routed_model(
     required_tokens: Option<u32>,
     affinity: &affinity::AffinityRouter,
 ) -> AutoRouteResolution {
+    let requested_workload = request_workload_class(&request.client_path);
     // An explicitly named model routes to itself. The automatic directive (in
     // either spelling) resolves here, so `mesh` reaches the same
     // media-capability filter and readiness/affinity selection as `auto` —
@@ -458,6 +513,11 @@ async fn resolve_auto_routed_model(
     if let Some(model) = request.model_name.as_deref()
         && !automatic::is_directive(model)
     {
+        if let Some(workload) = requested_workload
+            && !model_satisfies_request_workload(model, workload, &request.client_path, descriptors)
+        {
+            return AutoRouteResolution::WorkloadUnsupported(workload);
+        }
         return AutoRouteResolution::Continue {
             effective_model: request.model_name.clone(),
             classification: None,
@@ -465,22 +525,28 @@ async fn resolve_auto_routed_model(
     }
 
     request.ensure_body_json();
-    let Some(body_json) = request.body_json.as_ref() else {
+    let body_json = request.body_json.as_ref();
+    if body_json.is_none() && requested_workload.is_none() {
         return AutoRouteResolution::Continue {
             effective_model: None,
             classification: None,
         };
-    };
+    }
 
     automatic::warn_if_deprecated_alias(request.model_name.as_deref());
 
-    let mode = automatic::serving_mode(automatic::AutomaticRequest {
-        model: request.model_name.as_deref(),
-        // The forwarded path: `/v1/responses` has already been normalised onto
-        // chat completions by this point, so it stays committee-eligible.
-        path: &request.path,
-        body: body_json,
-    });
+    let mode = body_json.map_or(
+        automatic::ServingMode::SingleModel(automatic::SingleModelReason::NonChatRequest),
+        |body| {
+            automatic::serving_mode(automatic::AutomaticRequest {
+                model: request.model_name.as_deref(),
+                // The forwarded path: `/v1/responses` has already been normalised onto
+                // chat completions by this point, so it stays committee-eligible.
+                path: &request.path,
+                body,
+            })
+        },
+    );
     match mode {
         // Committee mode keeps the directive as the effective model so the MoA
         // gateway picks the request up.
@@ -498,36 +564,41 @@ async fn resolve_auto_routed_model(
         ),
     }
 
-    let classification = router::classify(body_json);
-    let media = router::media_requirements(body_json);
+    let classification = body_json.map_or_else(
+        || router::Classification {
+            category: router::Category::Chat,
+            complexity: router::Complexity::Quick,
+            needs_tools: false,
+            has_media_inputs: is_audio_upload_path(&request.client_path),
+        },
+        router::classify,
+    );
+    let media = workload_routing::request_media(&request.client_path, body_json);
     let available_models =
         collect_available_models_for_auto_route(node, targets, plugin_manager).await;
-    let metrics = node.routing_metrics();
-    let available: Vec<router::RoutingCandidate<'_>> = available_models
-        .iter()
-        .map(|name| {
-            let caps = proxy::capabilities_for_model(name, descriptors);
-            let (tps_hint, throughput_samples) = metrics
-                .tps_for_model(name)
-                .map(|(t, s)| (Some(t), s))
-                .unwrap_or((None, 0));
-            router::RoutingCandidate {
-                name: name.as_str(),
-                caps,
-                parameter_count_b: proxy::descriptor_metadata_for_model(name, descriptors)
-                    .and_then(|metadata| metadata.parameter_count_b),
-                tps_hint,
-                throughput_samples,
-            }
-        })
-        .collect();
+    let available = workload_routing::routing_candidates(
+        node,
+        &available_models,
+        &request.client_path,
+        descriptors,
+    );
+    if available.is_empty()
+        && let Some(workload) = requested_workload
+    {
+        return AutoRouteResolution::WorkloadUnsupported(workload);
+    }
     let Some(available) = router::filter_media_compatible_candidates(&available, &media) else {
-        proxy::release_request_objects(node, &request.request_object_request_ids).await;
         return AutoRouteResolution::MediaUnsupported;
     };
-    let available =
-        auto_route_pool_for_ready_models(node, targets, required_tokens, &available, affinity)
-            .await;
+    let available = auto_route_pool_for_ready_models(
+        node,
+        targets,
+        required_tokens,
+        &request.client_path,
+        &available,
+        affinity,
+    )
+    .await;
 
     let effective_model = router::pick_model_classified(&classification, &available).map(|name| {
         tracing::info!(
@@ -545,10 +616,12 @@ async fn resolve_auto_routed_model(
     }
 }
 
+/// Prefer ready ingress models, retaining the admitted pool if none is ready yet.
 async fn auto_route_pool_for_ready_models<'a>(
     node: &mesh::Node,
     targets: &election::ModelTargets,
     required_tokens: Option<u32>,
+    request_path: &str,
     available: &[router::RoutingCandidate<'a>],
     affinity: &affinity::AffinityRouter,
 ) -> Vec<router::RoutingCandidate<'a>> {
@@ -559,6 +632,7 @@ async fn auto_route_pool_for_ready_models<'a>(
             targets,
             candidate.name,
             required_tokens,
+            request_path,
             affinity,
         )
         .await
@@ -569,19 +643,23 @@ async fn auto_route_pool_for_ready_models<'a>(
     auto_route::pool_for_ready_models(available, &ready_models)
 }
 
+/// Check workload-aware ingress readiness, including remote and local-startup fallbacks.
 async fn auto_route_model_has_ready_ingress_target(
     node: &mesh::Node,
     targets: &election::ModelTargets,
     model: &str,
     required_tokens: Option<u32>,
+    request_path: &str,
     affinity: &affinity::AffinityRouter,
 ) -> bool {
-    let local_candidates = targets.candidates(model);
+    let local_candidates =
+        workload_routing::ingress_candidates(node, model, request_path, targets).await;
     if contains_routable_candidate(&local_candidates) {
         return auto_route::model_has_eligible_target(
             node,
             model,
             required_tokens,
+            request_path,
             &local_candidates,
             affinity,
         )
@@ -599,6 +677,7 @@ async fn auto_route_model_has_ready_ingress_target(
             node,
             model,
             required_tokens,
+            request_path,
             &remote_candidates,
             affinity,
         )
@@ -696,7 +775,15 @@ async fn try_pipeline_proxy(
             Some(proxy::RouteDispatchOutcome::Responded(status))
         }
         proxy::PipelineProxyResult::RespondedWithUsage { status_code, usage } => {
-            Some(proxy::RouteDispatchOutcome::RespondedWithUsage { status_code, usage })
+            Some(proxy::RouteDispatchOutcome::RespondedWithUsage {
+                status_code,
+                usage,
+                // The pipeline (planner+strong-model) proxy path does not yet
+                // forward response-body output digests; the primary
+                // host-served path (`route_model_request`) does. Honest
+                // absence here until the pipeline path threads them too.
+                output_digests: Default::default(),
+            })
         }
         proxy::PipelineProxyResult::Dropped => Some(proxy::RouteDispatchOutcome::Dropped(
             "pipeline_response_write_failed",
@@ -1474,14 +1561,14 @@ fn prepare_cache_routing_body(
 
 /// Run model-name resolution for a `model: "auto"` request, returning an
 /// [`AutoRouteDecision`] on success or `Err(())` when no served model can
-/// satisfy the media inputs in the request body. Side-effects: enables auto
-/// route hooks on the buffered request if a model is selected, and records
-/// the model hit on the node for activity tracking.
+/// satisfy the media inputs or workload class of the request. Side-effects:
+/// enables auto route hooks on the buffered request if a model is selected,
+/// and records the model hit on the node for activity tracking.
 async fn prepare_auto_route_decision(
     request: &mut proxy::BufferedHttpRequest,
     ctx: &IngressRouteContext<'_>,
     descriptors: &[crate::mesh::ServedModelDescriptor],
-) -> Result<AutoRouteDecision, ()> {
+) -> Result<AutoRouteDecision, AutoRouteRejection> {
     let required_tokens = proxy::request_context_budget(request);
     match resolve_auto_routed_model(
         ctx.node,
@@ -1508,8 +1595,29 @@ async fn prepare_auto_route_decision(
                 required_tokens,
             })
         }
-        AutoRouteResolution::MediaUnsupported => Err(()),
+        AutoRouteResolution::MediaUnsupported => Err(AutoRouteRejection::MediaUnsupported),
+        AutoRouteResolution::WorkloadUnsupported(workload) => {
+            Err(AutoRouteRejection::WorkloadUnsupported(workload))
+        }
     }
+}
+
+/// Return a path-specific unsupported-workload response and record the rejection.
+async fn send_workload_unsupported(
+    tcp_stream: ClientStream,
+    workload: mesh::ModelWorkloadClass,
+    path: &str,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> proxy::RouteDispatchOutcome {
+    let message = if is_audio_upload_path(path) {
+        "no served model advertises support for this audio-to-text endpoint".to_string()
+    } else {
+        format!("no served model advertises the required {workload:?} workload")
+    };
+    response_outcome(
+        422,
+        proxy::send_error_observed(tcp_stream, 422, &message, route_observer).await,
+    )
 }
 
 /// Respond with 422 when the auto-route resolver determines no served model
@@ -1530,6 +1638,26 @@ async fn send_media_unsupported(
         )
         .await,
     )
+}
+
+/// Release request-scoped media objects before reporting an automatic-routing rejection.
+async fn send_auto_route_rejection(
+    tcp_stream: ClientStream,
+    rejection: AutoRouteRejection,
+    node: &mesh::Node,
+    request_object_request_ids: &[String],
+    path: &str,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> proxy::RouteDispatchOutcome {
+    proxy::release_request_objects(node, request_object_request_ids).await;
+    match rejection {
+        AutoRouteRejection::MediaUnsupported => {
+            send_media_unsupported(tcp_stream, route_observer).await
+        }
+        AutoRouteRejection::WorkloadUnsupported(workload) => {
+            send_workload_unsupported(tcp_stream, workload, path, route_observer).await
+        }
+    }
 }
 
 /// Build the sorted list of model names visible to the `/v1/models` endpoint:
@@ -1638,6 +1766,9 @@ fn mesh_routing_unsupported_dispatch_kind(
 /// still runs unconditionally here, ahead of MoA -- only the *unsupported
 /// dispatch kind* rejection (409) excludes `model: "mesh"`; see
 /// `mesh_routing_unsupported_dispatch_kind`.
+// `RouteDispatchOutcome` is deliberately `Copy`; its usage-plus-output-digests variant
+// (three optional 32-byte digests inline) exceeds clippy's 128-byte `Err` threshold.
+#[allow(clippy::result_large_err)]
 async fn enforce_mesh_routing_headers_before_dispatch(
     tcp_stream: ClientStream,
     request: &proxy::BufferedHttpRequest,
@@ -1676,6 +1807,9 @@ async fn enforce_mesh_routing_headers_before_dispatch(
 /// Apply activity-policy admission to an inference request that has already
 /// passed the control-plane gate. Returns the stream to continue dispatch, or
 /// an outcome (already written to the stream) when admission is denied.
+// `RouteDispatchOutcome` is deliberately `Copy`; its usage-plus-output-digests variant
+// (three optional 32-byte digests inline) exceeds clippy's 128-byte `Err` threshold.
+#[allow(clippy::result_large_err)]
 async fn admit_buffered_api_request(
     tcp_stream: ClientStream,
     ctx: &ProxyConnectionContext<'_>,
@@ -1784,6 +1918,9 @@ async fn try_handle_moa_intercept(
             MoaInterceptResult::Handled(proxy::RouteDispatchOutcome::RespondedWithUsage {
                 status_code,
                 usage,
+                // The MoA gateway aggregation path: no single buffered
+                // response body is captured here to digest.
+                output_digests: Default::default(),
             })
         }
         crate::network::openai::moa_gateway::MoaDispatchResult::FailedWithStatus {
@@ -1875,8 +2012,16 @@ async fn handle_buffered_api_request(
 
     let decision = match prepare_auto_route_decision(&mut request, &ctx.route, &descriptors).await {
         Ok(decision) => decision,
-        Err(()) => {
-            let outcome = send_media_unsupported(tcp_stream, lifecycle.route_observer()).await;
+        Err(rejection) => {
+            let outcome = send_auto_route_rejection(
+                tcp_stream,
+                rejection,
+                ctx.route.node,
+                &request.request_object_request_ids,
+                &request.client_path,
+                lifecycle.route_observer(),
+            )
+            .await;
             lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
             return;
         }
@@ -2160,6 +2305,14 @@ mod durable_artifacts;
 #[cfg(test)]
 #[path = "ingress_tests/automatic_routing.rs"]
 mod automatic_routing;
+
+#[cfg(test)]
+#[path = "ingress_tests/audio_workloads.rs"]
+mod audio_workloads;
+
+#[cfg(test)]
+#[path = "ingress_tests/request_object_cleanup.rs"]
+mod request_object_cleanup;
 
 #[cfg(test)]
 #[path = "ingress_tests/tests.rs"]

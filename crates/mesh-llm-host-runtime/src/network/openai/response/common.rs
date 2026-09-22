@@ -72,6 +72,14 @@ pub(in crate::network::openai) enum RouteAttemptResult {
         status_code: u16,
         usage: Option<TokenUsage>,
         cache_cost: Option<CacheCostObservation>,
+        /// Digests over the REAL served response body (response body /
+        /// tool_calls / reasoning), captured at the JSON-relay delivery point
+        /// where the whole body — or, on a streamed delivery, the assembled
+        /// result of the chunks actually sent to the client — is in hand.
+        /// `Copy` (raw sha-256 bytes) so this variant stays `Copy`. Default
+        /// (all-`None`) wherever no such body was assembled, so the terminal
+        /// event simply omits those digests rather than fabricating any.
+        output_digests: crate::plugin::openai_exchange::ExchangeOutputDigests,
     },
     RetryableTimeout,
     RetryableUnavailable,
@@ -343,6 +351,7 @@ mod tests {
                 status_code: 200,
                 usage: None,
                 cache_cost: None,
+                output_digests: Default::default(),
             }),
             "delivered"
         );
@@ -377,6 +386,7 @@ mod tests {
                 status_code: 200,
                 usage: None,
                 cache_cost: None,
+                output_digests: Default::default(),
             }),
             TargetHealthOutcome::Success
         );
@@ -385,6 +395,7 @@ mod tests {
                 status_code: 503,
                 usage: None,
                 cache_cost: None,
+                output_digests: Default::default(),
             }),
             TargetHealthOutcome::Unavailable
         );
@@ -393,6 +404,7 @@ mod tests {
                 status_code: 400,
                 usage: None,
                 cache_cost: None,
+                output_digests: Default::default(),
             }),
             TargetHealthOutcome::Rejected
         );

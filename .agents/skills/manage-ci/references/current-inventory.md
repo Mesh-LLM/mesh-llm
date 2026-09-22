@@ -78,20 +78,96 @@ scheduled/forced runs build once and certify the complete roster. Changed pins
 use up to three repair attempts, each followed (only when all families pass) by
 an independent build and complete verification pass on the exact same commit.
 
+
+Manual `mesh_ref` dispatches accept an explicitly trusted same-repository branch
+or full commit SHA. Resolution freezes the SHA once, requires it to be reachable
+from a repository branch, and reads its existing llama.cpp pin. `upstream_sha`
+cannot be combined with this input. Keep the Actions workflow ref on `main`;
+selecting `mesh_ref` always runs a complete certify-only pass, without Goose,
+source repair, an independent upgrade-verification pass, or PR publication.
+The main controller, handoff validation, and aggregation remain at the workflow
+revision; the canonical planner, source build scripts, and battery run from a
+separate checkout of the selected SHA. The controller sorts only the scheduling
+matrix, leaving the source-owned canonical plan unchanged. The package binds both revisions, and workers
+reject any changed source identity. This is an operator-authorized trusted-code
+path on persistent lab machines, not isolation for untrusted PRs or fork code.
+Leaving `mesh_ref` empty preserves scheduled and upstream-upgrade behavior.
+
+To certify a recovered branch after this workflow is on main:
+
+```sh
+gh workflow run llama-upstream-canary.yml --ref main \
+  -f mesh_ref=scammed/recover-llama-pin-35582541955
+```
+
+The run summary records the resolved MeshLLM SHA and existing llama.cpp pin;
+a branch moving later cannot change the selected source for that run.
+
 `llama-canary-family-pass.yml` owns the reusable build → family matrix → hosted
 aggregate. The producer performs prepare, manifest-policy, full native and Rust
 builds, generated-family validation, smoke, and split-roster checks. It validates
 the immutable HF cache before compilation and exports a candidate Git bundle,
-one-family-per-shard plan, four arm64 certification binaries, and a prebuilt
-multimodal library-test executable. Static Metal resources are embedded; an
-unpackaged non-system dylib makes the handoff fail. SHA-256 digests bind all
-handoff bytes to the candidate, main base, run/attempt, and pass identity.
+one-family-per-shard plan, four arm64 certification binaries, a prebuilt
+multimodal library-test executable, and the run-scoped CPU workload oracle
+closure built by `just skippy-workload-oracles-build`. Static Metal resources
+are embedded; an unpackaged non-system dylib makes the handoff fail. SHA-256
+digests bind all handoff bytes to the candidate, main base, run/attempt, and
+pass identity.
+
+Before compilation, the controller runs the selected battery in cache-free
+`--dry-run --skip-build` mode against its own planner output. This checks the
+actual producer/consumer plan contract, including older planner order and
+source-relative manifest paths. Handoff schema 3 also carries a digest-bound,
+one-commit prepared llama.cpp bundle and preparation markers. Workers restore
+and verify that source against the selected pin and patch queue before lanes
+start; they cannot accidentally depend on a previous runner checkout.
+The agent supervisor terminates remaining process-group members after normal
+completion and waits for live members to stop before handing the workspace back.
+Repair snapshots first verify the workload producer against the dirty source,
+then bind its unchanged files to the identical committed candidate tree.
+Pinned and independent verification builds keep their original source identity.
+
+The family matrix is submitted in ascending estimated model bytes, with family
+name breaking ties. Balanced shard membership remains unchanged. This puts
+small models first in the canary's one-family-per-job matrix; parallel runner
+availability can still change actual start and completion order.
+
+Partial reruns reuse the successful producer's exact identity digest from the
+same workflow run, retaining its original attempt. Family artifacts include
+that digest and their worker attempt; aggregation downloads all attempts for
+that identity and pass, then selects the latest receipt per family. Newer
+failures supersede older successes; duplicate same-attempt receipts, missing
+families, foreign identities, and out-of-range attempts fail closed. The matrix
+job-result gate also rejects failed/cancelled jobs whose receipts never upload.
+Rebuilt producers have distinct identities and cannot reuse old receipts.
+Failed certifications upload their evidence and then fail the family job, so
+GitHub's failed-job rerun can select them instead of only retrying aggregation.
+Repair feedback includes attempt-labelled family/build history across reruns;
+these diagnostics never substitute for either complete certification pass.
+
+`scripts/plan-family-battery.py` validates the versioned JSON family policy
+before native compilation: the three core parity lanes for certified causal
+rows, and a class-specific smoke plus independent local-monolithic oracle pair
+for each of the six registry-generated non-chat rows (`embedding`, `rerank`,
+`encoder_decoder`, `ocr`, `speech_synthesis`, `speech_recognition`), each
+paired with its `-oracle` lane. Every family row declares its workload `class`
+and GGUF `architecture` separately; only causal rows with complete split-parity
+policy contribute to the architecture admission roster, and every row's
+immutable revisions/files must resolve in the verified read-only lab cache.
+Workload readiness uses the planned per-model deadline for both servers;
+embedding certification additionally requires the official Python SDK smoke.
+Dry-run planning needs no oracle tools; a missing execution prerequisite
+records failed lanes without discarding later family results.
 
 Each named family job runs `--skip-build --shard-index` on the matching
-`family-certify` pool, with max-parallel 8 and fail-fast disabled. No build
-runner is held while workers queue: one machine can execute all jobs serially,
-and more machines can run them concurrently. Each machine must have the same
-arm64/Metal toolchain/runtime compatibility and an existing readable HF cache.
+`family-certify` pool, with max-parallel 8 and fail-fast disabled. Workers
+restore the executable handoff, including the workload oracle closure, and
+point the battery's `SKIPPY_WORKLOAD_*` variables at the restored closure; its
+source- and executable-bound `producer.json` is re-verified before consumption,
+so no worker compiles or downloads. No build runner is held while workers
+queue: one machine can execute all jobs serially, and more machines can run
+them concurrently. Each machine must have the same arm64/Metal
+toolchain/runtime compatibility and an existing readable HF cache.
 The shared `use-canary-cache` action loads the runner account's interactive login
 shell for both producer and family jobs. It uses `HF_HOME` (falling back to legacy
 `HF_CACHE` or the standard user cache), validates its `hub` directory and any
@@ -102,13 +178,16 @@ masked before export. `HF_HUB_OFFLINE=1` is applied as certification policy rath
 than required in the machine environment. Compiler-cache and local-tool defaults
 use the runner account's home directory instead of a fixed username. One service
 per physical certification machine avoids competing model loads and ports.
-There is no Actions model cache and no worker-side compilation or download.
+There is no Actions model cache.
 
 The aggregate requires every planned family exactly once, successful worker
-status, matching candidate/plan/build digests, successful core lanes, and any
-required multimodal result. The battery itself reconciles the production
-planner's selected cuts, immutable revisions, tensor bytes, and native MTP
-requirements. Missing, cancelled, duplicate, or stale evidence cannot certify.
+status, matching candidate/plan/build digests, and each family's required
+lanes from the plan — split-parity lanes for causal rows, class-specific smoke
+plus oracle lanes for the non-chat rows — plus any required multimodal result,
+so the non-chat rows are hard gates on every certified run. The battery itself
+reconciles the production planner's selected cuts, immutable revisions, tensor
+bytes, and native MTP requirements. Missing, cancelled, duplicate, or stale
+evidence cannot certify.
 Aggregation reports every failed receipt, including its runner and outcome, in
 the job log and Actions summary before rejecting the pass. Worker/aggregate
 failures remain recoverable by later bounded repair passes; only complete
@@ -883,3 +962,36 @@ semantic aliases. The current `skippy-model-package` name is reused by model
 acquisition after extraction: retain its existing split-serving rule on main,
 with model-download ownership on the relocated path. That conservatively runs
 both domains until the later catalog cleanup; existing main routing is unchanged.
+
+### Canary memory admission and Python SDK
+
+The controller projects each immutable source plan onto `family-certify` plus
+`accelerator-memory-128plus` (108.8 GiB) or `accelerator-memory-256plus`
+(217.6 GiB), reserving 15% of physical RAM. The source plan and its digest are
+unchanged, including historical `mesh_ref` certification. Missing artifact sizes
+and peaks beyond the larger tier fail planning. No family is silently skipped.
+
+`scripts/lib/canary_family_memory.py` uses the greater of pinned file sizes and
+the model estimate, including projector/draft artifacts. Causal parity releases
+the monolithic oracle before partitioned execution and releases state source
+before restore: one aggregate weight copy plus a 25% tensor/KV/state/scratch
+allowance and 2 GiB per each of three processes. Non-chat candidate/oracle
+execution budgets two complete weight copies plus 25% and 2 GiB per process.
+These are explicit admission estimates for the current short-context harness,
+not measured peak guarantees; changes to concurrency/context require review.
+
+The worker recomputes placement from the digest-verified plan, holds one local
+per-account host lock, checks actual physical capacity and available memory,
+and polls availability once per second while running the battery. Available
+memory is macOS free + inactive + speculative pages; purgeable pages are not
+counted twice. A reserve violation or monitoring failure stops only this
+family's process group and fails certification. `memory-admission.json` retains
+the estimate and host observations even on failure. Sampling cannot guarantee
+that instantaneous allocations never cross the reserve. Unrelated workloads
+must leave enough headroom at admission; labels alone are insufficient.
+
+The shared `setup-canary-python` action restores `ci/canary-python/uv.lock` into
+a controller-owned virtual environment and exports `SKIPPY_WORKLOAD_SDK_PYTHON`.
+Historical source workers consume that exact SDK interpreter. This is managed
+project dependency restoration, not an installation into system Python or the
+read-only model cache. The runner still requires preinstalled `uv`.

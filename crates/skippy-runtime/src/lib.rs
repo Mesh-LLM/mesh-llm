@@ -24,7 +24,9 @@ mod session;
 mod stage_planning;
 mod types;
 
-pub use activation::{DecodeFrameBatchRequest, IterationBatchPhase, IterationBatchRequest};
+pub use activation::{
+    DecodeFrameBatchRequest, IterationBatchPhase, IterationBatchRequest, PartialBatchExecution,
+};
 pub use capability_probe::{CapabilityReport, probe_capabilities};
 pub use checkpoint::{CheckpointQuantization, is_safetensors_checkpoint};
 pub use config::{
@@ -45,7 +47,8 @@ pub use logging::{
     set_filtered_native_logs_enabled, suppress_native_logs, unregister_filtered_native_logs,
     write_native_log_note,
 };
-pub use native::{StageModel, StageModelReader};
+pub use media::{SpeechAudio, SpeechOutputFormat, SpeechSynthesisConfig};
+pub use native::{ModelWorkload, PoolingType, StageModel, StageModelReader, WorkloadInfo};
 pub use native_mtp::NativeMtpDraft;
 pub use native_test_evidence::write_evidence_marker;
 pub use ngram::{Cache as NgramCache, NGRAM_CACHE_MAX_NGRAM};

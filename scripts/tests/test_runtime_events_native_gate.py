@@ -356,9 +356,31 @@ class LinuxRuntimeSliceTests(unittest.TestCase):
                 self.assertEqual(len(resolved["sha256"]), 64)
                 self.assertGreater(int(resolved["size_bytes"]), 0)
 
+    def test_missing_gate_model_cadence_still_fails_closed(self) -> None:
+        """The gate must reject a fixture not authorized for its event cadence."""
+        inputs = self.steps["Restore runtime-event gate model"]["with"]
+        source = json.loads((ROOT / inputs["model_manifest"]).read_text())
+        for cadence in ("pull-request", "main", "manual"):
+            with self.subTest(cadence=cadence), tempfile.TemporaryDirectory() as directory:
+                manifest = json.loads(json.dumps(source))
+                artifact = next(row for row in manifest["artifacts"]
+                                if row["id"] == inputs["model_artifact_id"])
+                artifact["cadences"].remove(cadence)
+                path = Path(directory) / "manifest.json"
+                path.write_text(json.dumps(manifest))
+                result = subprocess.run(
+                    ["python3", str(ROOT / "scripts/resolve-test-model-manifest.py"),
+                     str(path), "--artifact-id", inputs["model_artifact_id"],
+                     "--cadence", cadence, "--require-single-file"],
+                    cwd=ROOT, text=True, capture_output=True, check=False,
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("is not allowed at cadence", result.stderr)
+
     def test_family_certification_has_one_complete_model_list(self) -> None:
+        """The full family roster is independent of ordinary CI artifact cadence authorization."""
         manifest = json.loads((ROOT / "ci/llama-canary/family-certified.json").read_text())
-        self.assertEqual(83, len(manifest["models"]))
+        self.assertEqual(89, len(manifest["models"]))
         self.assertTrue(all("cadences" not in model for model in manifest["models"]))
 
     def test_gate_model_cadences_cover_pr_and_main(self) -> None:

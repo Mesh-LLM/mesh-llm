@@ -325,6 +325,10 @@ impl Node {
     /// established in one direction (multi-homed initiator), the other side
     /// dials back on the direction that works.
     pub async fn dial_peer_addr(&self, addr: EndpointAddr) -> Result<()> {
+        // Permit the dial by clearing the short tombstone only. The departure
+        // record is cleared by successful direct admission, not by the
+        // attempt, so a failed dial cannot reopen the ghost-resurrection
+        // window (issue #1756 review).
         self.state.lock().await.dead_peers.remove(&addr.id);
         self.connect_to_peer(addr).await
     }
@@ -497,7 +501,9 @@ impl Node {
 
     pub async fn join(&self, invite_token: &str) -> Result<()> {
         let addr = self.prepare_join_target(invite_token).await?;
-        // Clear dead status — explicit join should always attempt connection
+        // Clear dead status — explicit join should always attempt connection.
+        // As with dial_peer_addr, the departure record is only cleared by
+        // successful direct admission.
         self.state.lock().await.dead_peers.remove(&addr.id);
         self.remember_join_target(addr.clone()).await;
         self.connect_to_peer(addr).await
