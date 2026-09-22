@@ -3,7 +3,10 @@ use std::{fs, net::SocketAddr, process::Command, time::Instant};
 use anyhow::{Context, Result, bail};
 use model_artifact::ModelIdentity;
 use serde_json::json;
-use skippy_protocol::binary::{StageWireMessage, WireReplyKind, recv_reply, write_stage_message};
+use skippy_protocol::binary::{
+    StageMessageContext, StageWireMessage, WireReplyKind, decode_activation_frame, recv_reply,
+    write_stage_message,
+};
 use skippy_runtime::{GGML_TYPE_F16, MtpSource, RuntimeConfig, RuntimeLoadMode, StageModel};
 
 use crate::{
@@ -429,7 +432,13 @@ pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<Bin
         boundary_layer_end: boundary.desc.layer_end,
         boundary_token_count: boundary.desc.token_count,
         boundary_payload_bytes: boundary.desc.payload_bytes,
-        boundary_wire_payload_bytes: message.activation.len(),
+        boundary_wire_payload_bytes: stream
+            .activation_agreement()
+            .context("activation agreement missing from established stream")?
+            .wire_bytes(
+                message.state.activation_codec,
+                &decode_activation_frame(message.state.activation_codec, &message.activation)?.desc,
+            )?,
         stage_models: vec![stage0_resolution.report, stage1_resolution.report],
     })
 }

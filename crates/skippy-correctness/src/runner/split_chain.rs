@@ -9,7 +9,10 @@ use std::{
 use anyhow::{Context, Result, bail};
 use model_artifact::ModelIdentity;
 use serde_json::json;
-use skippy_protocol::binary::{StageWireMessage, WireReplyKind, write_stage_message};
+use skippy_protocol::binary::{
+    StageMessageContext, StageWireMessage, WireReplyKind, decode_activation_frame,
+    write_stage_message,
+};
 use skippy_runtime::{GGML_TYPE_F16, MtpSource, RuntimeConfig, StageModel};
 
 use crate::{
@@ -639,7 +642,13 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         native_mtp,
         native_mtp_verification_compute_us,
         activation_width,
-        stage0_wire_payload_bytes: message.activation.len(),
+        stage0_wire_payload_bytes: stream
+            .activation_agreement()
+            .context("activation agreement missing from established stream")?
+            .wire_bytes(
+                message.state.activation_codec,
+                &decode_activation_frame(message.state.activation_codec, &message.activation)?.desc,
+            )?,
         stage0_payload_bytes: boundary.desc.payload_bytes,
         split_layer_1: args.split_layer_1,
         split_layer_2: args.split_layer_2,
