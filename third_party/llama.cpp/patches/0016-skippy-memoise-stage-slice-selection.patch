@@ -1,15 +1,15 @@
-From e106c2d00b106fb9cceb5803168d2e753d12854d Mon Sep 17 00:00:00 2001
+From 1a1ea8119526239487a09b1c93245e7401c339dd Mon Sep 17 00:00:00 2001
 From: sat <sat@local>
-Date: Tue, 22 Sep 2026 16:50:12 +1000
+Date: Tue, 22 Sep 2026 22:08:06 +1000
 Subject: [PATCH] skippy: remember the stage slice selection across identical
  graph builds
 
 ---
- src/skippy/stage_slice_plan.cpp | 161 +++++++++++++++++++++++++++++++-
- 1 file changed, 160 insertions(+), 1 deletion(-)
+ src/skippy/stage_slice_plan.cpp | 172 +++++++++++++++++++++++++++++++-
+ 1 file changed, 171 insertions(+), 1 deletion(-)
 
 diff --git a/src/skippy/stage_slice_plan.cpp b/src/skippy/stage_slice_plan.cpp
-index dda2df504..c2d80e00b 100644
+index dda2df504..c1143d898 100644
 --- a/src/skippy/stage_slice_plan.cpp
 +++ b/src/skippy/stage_slice_plan.cpp
 @@ -4,6 +4,7 @@
@@ -20,7 +20,7 @@ index dda2df504..c2d80e00b 100644
  #include <set>
  #include <tuple>
  #include <unordered_map>
-@@ -594,6 +595,153 @@ struct selector {
+@@ -594,6 +595,164 @@ struct selector {
  
  }
  
@@ -112,6 +112,17 @@ index dda2df504..c2d80e00b 100644
 +        hash = fingerprint_bytes(hash, name, std::strlen(name) + 1);
 +    }
 +
++    // Commit each list's length before its contents. Without this the lists run
++    // together: a parameter binding and a request binding encode identically -- a
++    // tensor pointer, an identity, a terminator -- so {parameters:[A], requests:[B]}
++    // and {parameters:[A,B], requests:[]} produce the same byte stream and the same
++    // fingerprint, despite meaning different things. The node loop already commits its
++    // count; these four did not.
++    const uint32_t list_sizes[4] = {
++        static_cast<uint32_t>(boundaries.size()), static_cast<uint32_t>(state_effects.size()),
++        static_cast<uint32_t>(parameters.size()), static_cast<uint32_t>(request_inputs.size())};
++    hash = fingerprint_bytes(hash, list_sizes, sizeof(list_sizes));
++
 +    for (const auto & boundary : boundaries) {
 +        const int32_t kind = static_cast<int32_t>(boundary.kind);
 +        hash = fingerprint_bytes(hash, &boundary.tensor, sizeof(boundary.tensor));
@@ -174,7 +185,7 @@ index dda2df504..c2d80e00b 100644
  bool skippy_select_stage_slice(
          ggml_cgraph * graph,
          const std::vector<skippy_block_boundary> & boundaries,
-@@ -608,6 +756,13 @@ bool skippy_select_stage_slice(
+@@ -608,6 +767,13 @@ bool skippy_select_stage_slice(
          const ggml_tensor * explicit_output) {
      selection = {};
      error.clear();
@@ -188,7 +199,7 @@ index dda2df504..c2d80e00b 100644
      std::vector<skippy_state_effect> effective_state_effects;
      if (!skippy_infer_state_effects(
                  state_effects, graph, boundaries, effective_state_effects, error)) {
-@@ -634,7 +789,11 @@ bool skippy_select_stage_slice(
+@@ -634,7 +800,11 @@ bool skippy_select_stage_slice(
      for (const auto & request : request_inputs) {
          state.request_names.emplace(canonical_storage(request.tensor), request.identity);
      }
