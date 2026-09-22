@@ -37,12 +37,25 @@ Permanent Depot PR execution still requires the cache and runner-group
 isolation gates in `ci/DEPOT_MIGRATION.md`. Do not change Depot settings or
 runner groups as part of an ordinary CI refactor.
 
-Preserve the five-entry PR shape exactly. Do not create an all-platform PR
-workflow, an all-lanes reusable composer, or a PR controller whose visible job
-only dispatches detached runs. Quality, Website, Linux, macOS, and Windows must
-remain separate PR-associated workflows with directly drillable nested jobs
-and one stable `PR / <lane>` result each. Do not add path filters; planning owns
-skips so every stable result exists.
+Preserve the five-entry required PR shape exactly. Do not create an all-platform
+PR workflow, an all-lanes reusable composer, or a PR controller whose visible
+job only dispatches detached runs. Quality, Website, Linux, macOS, and Windows
+must remain separate PR-associated workflows with directly drillable nested
+jobs and one stable `PR / <lane>` result each. Do not add path filters; planning
+owns skips so every stable result exists.
+
+The optional `pr_ci_canary.yml` diagnostic is the narrow exception to the
+five-entry census. It is label-gated by `ci:canary`, non-required, and must stay
+separate from the five required workflows and the sibling-canceller target
+list. It uses a local merge-commit reusable lane, a fixed Linux amd64 CPU
+UI/host/runtime/product chain, read-only contents/packages permissions, no
+secrets or environments, and a plain step-summary result. It must not request
+`checks: write`, use `secrets: inherit`, select Depot or a persistent
+self-hosted runner, or execute macOS, Windows, GPU, SDK, smoke, or release
+graphs. Unrelated label events must not cancel an active canary; removing the
+`ci:canary` label may use an active-group no-op to cancel it. Hosted placement
+is not a security boundary against edited PR workflow or action YAML, and no
+canary rollout authorizes the unrestricted shared persistent runner group.
 
 The protected `workflow_run` sibling-failure monitor is control infrastructure,
 not a sixth PR validation entrypoint. It may cancel only queued or in-progress

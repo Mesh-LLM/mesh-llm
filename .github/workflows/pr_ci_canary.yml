@@ -1,0 +1,71 @@
+name: PR · CI canary
+run-name: PR · CI canary · #${{ github.event.pull_request.number }}
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+
+permissions:
+  contents: read
+  packages: read
+
+# A ci:canary label event uses the active group. Unrelated label events get a
+# run-specific group, so they cannot cancel an active diagnostic.
+concurrency:
+  group: >-
+    pr-ci-canary-${{ github.event.pull_request.number }}-${{
+      ((github.event.action == 'labeled' || github.event.action == 'unlabeled') &&
+        github.event.label.name != 'ci:canary') &&
+      format('unrelated-label-{0}', github.run_id) ||
+      'active'
+    }}
+  cancel-in-progress: true
+
+jobs:
+  canary:
+    name: Canary / CI
+    if: >-
+      ${{
+        contains(github.event.pull_request.labels.*.name, 'ci:canary') &&
+        (
+          github.event.action == 'opened' ||
+          github.event.action == 'synchronize' ||
+          github.event.action == 'reopened' ||
+          github.event.action == 'ready_for_review' ||
+          (github.event.action == 'labeled' && github.event.label.name == 'ci:canary')
+        )
+      }}
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/ci-pr-canary-lane.yml
+    with:
+      merge_sha: ${{ github.sha }}
+      head_sha: ${{ github.event.pull_request.head.sha }}
+      base_sha: ${{ github.event.pull_request.base.sha }}
+      draft: ${{ github.event.pull_request.draft || false }}
+      pr_number: ${{ github.event.pull_request.number }}
+
+  inactive:
+    name: Canary / CI (inactive)
+    if: >-
+      ${{ !(
+        contains(github.event.pull_request.labels.*.name, 'ci:canary') &&
+        (
+          github.event.action == 'opened' ||
+          github.event.action == 'synchronize' ||
+          github.event.action == 'reopened' ||
+          github.event.action == 'ready_for_review' ||
+          (github.event.action == 'labeled' && github.event.label.name == 'ci:canary')
+        )
+      ) }}
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - name: Record inactive canary event
+        env:
+          ACTION: ${{ github.event.action }}
+          LABEL: ${{ github.event.label.name || '' }}
+        run: |
+          set -euo pipefail
+          echo "Canary inactive for pull_request action=$ACTION label=$LABEL" >> "$GITHUB_STEP_SUMMARY"

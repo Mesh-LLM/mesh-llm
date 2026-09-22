@@ -1,0 +1,264 @@
+name: Canary · CI
+run-name: Canary · CI · ${{ inputs.merge_sha }}
+
+on:
+  workflow_call:
+    inputs:
+      merge_sha:
+        description: Synthetic pull-request merge commit built by the canary.
+        required: true
+        type: string
+      head_sha:
+        description: Pull-request head SHA retained as separate identity evidence.
+        required: true
+        type: string
+      base_sha:
+        description: Pull-request base SHA used for the planner diff.
+        required: true
+        type: string
+      draft:
+        description: Whether the pull request is still a draft.
+        required: true
+        type: boolean
+      pr_number:
+        description: Pull-request number used to bind diagnostics to one review.
+        required: true
+        type: number
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  plan:
+    name: Canary source and plan
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      plan_digest: ${{ steps.plan.outputs.plan_digest }}
+      profile: ${{ steps.plan.outputs.profile }}
+      host_matrix: ${{ steps.source_matrix.outputs.host_matrix }}
+      runtime_matrix: ${{ steps.source_matrix.outputs.runtime_matrix }}
+      product_matrix: ${{ steps.source_matrix.outputs.product_matrix }}
+    steps:
+      - name: Checkout merge source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.merge_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate merge and head identities
+        env:
+          BASE_SHA: ${{ inputs.base_sha }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          MERGE_SHA: ${{ inputs.merge_sha }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          for value in BASE_SHA HEAD_SHA MERGE_SHA; do
+            sha="${!value}"
+            if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "$value is not a lowercase commit SHA" >&2
+              exit 1
+            fi
+          done
+          if [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "pr_number is not a positive decimal number" >&2
+            exit 1
+          fi
+          # Fetch the base-repository PR ref so fork heads remain reachable
+          # without assuming that the head SHA is a base-repository ref.
+          git fetch --no-tags origin "$BASE_SHA" "$MERGE_SHA" "refs/pull/${PR_NUMBER}/head"
+          for value in BASE_SHA HEAD_SHA MERGE_SHA; do
+            git cat-file -e "${!value}^{commit}"
+          done
+          parent_count="$(git rev-list --parents -n1 "$MERGE_SHA" | wc -w | tr -d ' ')"
+          if (( parent_count < 3 )); then
+            echo "merge_sha is not a two-parent pull-request merge commit" >&2
+            exit 1
+          fi
+          git merge-base --is-ancestor "$HEAD_SHA" "$MERGE_SHA"
+          if ! git diff --quiet "$BASE_SHA" "$MERGE_SHA" -- ci/ownership.yml ci/slices.yml; then
+            echo "the canary requires ownership and slice catalogs to match the pull-request base" >&2
+            exit 1
+          fi
+          {
+            echo "Merge source: \`$MERGE_SHA\`"
+            echo "PR head identity: \`$HEAD_SHA\`"
+            echo "PR base: \`$BASE_SHA\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Compute changed files and affected crates
+        id: changes
+        uses: ./.github/actions/compute-changes
+        with:
+          event_name: pull_request
+          base_sha: ${{ inputs.base_sha }}
+          head_sha: ${{ inputs.merge_sha }}
+
+      - name: Build canonical planner contract
+        id: plan
+        uses: ./.github/actions/plan-ci
+        with:
+          event_name: pull_request
+          source_sha: ${{ inputs.merge_sha }}
+          base_sha: ${{ inputs.base_sha }}
+          draft: ${{ inputs.draft }}
+          changed_files: ${{ steps.changes.outputs.changed_files }}
+          affected_crates: ${{ steps.changes.outputs.affected_crates }}
+
+      - name: Bind the plan to the merge source
+        env:
+          MERGE_SHA: ${{ inputs.merge_sha }}
+        run: |
+          set -euo pipefail
+          jq -e --arg merge_sha "$MERGE_SHA" '.source_sha == $merge_sha' ci-plan.json >/dev/null
+
+      - name: Resolve the catalog-owned CPU canary row
+        id: source_matrix
+        run: |
+          set -euo pipefail
+          runtime_row="$(jq -ce '
+            .runtime_rows
+            | map(select(.id == "linux-cpu"))
+            | if length == 1 then .[0] else error("expected exactly one linux-cpu runtime row") end
+            | select(
+                .platform == "linux" and
+                .architecture == "amd64" and
+                .backend == "cpu" and
+                .target == "x86_64-unknown-linux-gnu" and
+                (.build_dir | type == "string" and length > 0) and
+                (.toolchain_epoch | type == "string" and length > 0) and
+                (.container_image | test("^ghcr.io/[^@]+@sha256:[0-9a-f]{64}$")) and
+                .verify_backend == "public"
+              )
+          ' ci/slices.yml)"
+          host_matrix="$(jq -cn --argjson row "$runtime_row" '[{
+            id: $row.id,
+            platform: $row.platform,
+            architecture: $row.architecture
+          }]')"
+          product_matrix="$(jq -cn --argjson row "$runtime_row" '[{
+            id: $row.id,
+            platform: $row.platform,
+            architecture: $row.architecture,
+            backend: $row.backend
+          }]')"
+          runtime_matrix="$(jq -cn --argjson row "$runtime_row" '[$row]')"
+          {
+            echo "host_matrix=$host_matrix"
+            echo "runtime_matrix=$runtime_matrix"
+            echo "product_matrix=$product_matrix"
+          } >> "$GITHUB_OUTPUT"
+
+  ui_artifact:
+    name: Canary UI artifact
+    needs: plan
+    if: ${{ needs.plan.result == 'success' }}
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/ci-ui-artifact-slice.yml
+    with:
+      source_sha: ${{ inputs.merge_sha }}
+      policy_source_sha: ${{ inputs.merge_sha }}
+      original_event_name: pull_request
+      force_hosted: true
+      artifact_name: ci-pr-canary-ui-${{ github.run_id }}
+      retention_days: 1
+
+  hosts:
+    name: Canary Linux host
+    needs: [plan, ui_artifact]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.ui_artifact.result == 'success' }}
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/ci-linux-host-slice.yml
+    with:
+      source_sha: ${{ inputs.merge_sha }}
+      policy_source_sha: ${{ inputs.merge_sha }}
+      original_event_name: pull_request
+      force_hosted: true
+      hosts_matrix: ${{ needs.plan.outputs.host_matrix }}
+      ui_artifact_name: ci-pr-canary-ui-${{ github.run_id }}
+      profile: release
+      max_parallel: 1
+      fail_fast: true
+      use_depot: false
+
+  native_runtime:
+    name: Canary Linux CPU runtime
+    needs: plan
+    if: ${{ needs.plan.result == 'success' }}
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/ci-linux-runtime-slice.yml
+    with:
+      source_sha: ${{ inputs.merge_sha }}
+      policy_source_sha: ${{ inputs.merge_sha }}
+      original_event_name: pull_request
+      force_hosted: true
+      runtime_matrix: ${{ needs.plan.outputs.runtime_matrix }}
+      max_parallel: 1
+      fail_fast: true
+      use_depot: false
+
+  product:
+    name: Canary Linux product
+    needs: [plan, hosts, native_runtime]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.hosts.result == 'success' && needs.native_runtime.result == 'success' }}
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/ci-linux-product-slice.yml
+    with:
+      source_sha: ${{ inputs.merge_sha }}
+      policy_source_sha: ${{ inputs.merge_sha }}
+      original_event_name: pull_request
+      force_hosted: true
+      runtime_matrix: ${{ needs.plan.outputs.product_matrix }}
+      max_parallel: 1
+      fail_fast: true
+
+  summary:
+    name: Canary / CI
+    needs: [plan, ui_artifact, hosts, native_runtime, product]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - name: Validate canary graph
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          UI_RESULT: ${{ needs.ui_artifact.result }}
+          HOST_RESULT: ${{ needs.hosts.result }}
+          RUNTIME_RESULT: ${{ needs.native_runtime.result }}
+          PRODUCT_RESULT: ${{ needs.product.result }}
+          PLAN_DIGEST: ${{ needs.plan.outputs.plan_digest }}
+          PROFILE: ${{ needs.plan.outputs.profile }}
+          MERGE_SHA: ${{ inputs.merge_sha }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          [[ "$PLAN_RESULT" == success ]]
+          [[ "$UI_RESULT" == success ]]
+          [[ "$HOST_RESULT" == success ]]
+          [[ "$RUNTIME_RESULT" == success ]]
+          [[ "$PRODUCT_RESULT" == success ]]
+          {
+            echo "## Canary / CI"
+            echo
+            echo "- Result: **success**"
+            echo "- PR: #$PR_NUMBER"
+            echo "- Profile: \`$PROFILE\`"
+            echo "- Plan digest: \`$PLAN_DIGEST\`"
+            echo "- Built merge source: \`$MERGE_SHA\`"
+            echo "- Head identity: \`$HEAD_SHA\`"
+            echo "- Coverage: Linux amd64 CPU UI, host, native runtime, native runtime-event gate, and product composition"
+            echo "- Not covered: Quality, Website, macOS, Windows, GPU, SDK, standalone product smoke, Linux lane orchestration, and release paths"
+          } >> "$GITHUB_STEP_SUMMARY"

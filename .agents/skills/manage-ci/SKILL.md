@@ -75,7 +75,7 @@ owning source, and update the inventory and topology in the same change.
 
 ### PR workflow visibility and split invariant
 
-- PR validation has exactly five event entrypoints:
+- Required PR validation has exactly five event entrypoints:
   `pr_quality.yml`, `pr_website.yml`, `pr_linux.yml`, `pr_macos.yml`, and
   `pr_windows.yml`. Keep this topic/platform split unless a maintainer
   explicitly changes the architecture contract.
@@ -101,6 +101,56 @@ owning source, and update the inventory and topology in the same change.
   must be created for every relevant PR synchronization; the checked planner
   makes an unselected lane skip its expensive work and lets its stable result
   succeed. This prevents required checks from remaining absent or pending.
+
+### Optional PR CI canary exception
+
+- `pr_ci_canary.yml` is an optional, non-required diagnostic entrypoint. It is
+  outside the five-workflow required-check census and the sibling-failure
+  monitor's cancellation target list. It must never replace, merge into, or
+  add required status to the Quality, Website, Linux, macOS, or Windows PR
+  entrypoints.
+- When preparing or reviewing a PR that changes workflow YAML, local actions,
+  planner contracts, runner selection, or other CI plumbing, recommend adding
+  `ci:canary` for pre-merge pipeline evidence. Explain that it covers only one
+  hosted Linux amd64 CPU UI/host/native-runtime/product chain (including the
+  native runtime-event gate), not the five lane orchestrators, macOS, Windows,
+  GPU, SDK, smoke, or release paths.
+- The canary uses `pull_request` only and has no path filters. The `ci:canary`
+  label opts a PR into a bounded run on `opened`, `synchronize`, `reopened`,
+  and `ready_for_review`, plus the matching label event. Unrelated label events
+  use a unique concurrency group and must not cancel an active canary. Removing
+  `ci:canary` starts a no-op run in the active group so concurrency cancels the
+  prior run without executing PR code.
+- The entrypoint must call a local reusable canary workflow with a static
+  `uses: ./.github/workflows/...` edge. That local workflow and its local
+  actions resolve from the PR merge commit, so the canary exercises the
+  proposed workflow/action graph before merge. The merge SHA is the source
+  built by product jobs; the PR head SHA remains separate identity evidence and
+  must not be substituted for the merge source.
+- The canary planner may inspect the merge source and must reject changes to
+  protected ownership/slice catalogs unless the base already contains the same
+  catalog. The fixed canary graph, not PR-controlled routing data, owns its
+  bounded matrix and artifact names. Runner-policy jobs may opt into the merge
+  source through an explicit validated source input while their ordinary
+  caller default remains the protected default branch.
+- The canary's only real build graph is one Linux amd64 CPU production chain:
+  console UI artifact, release host, native CPU runtime, and immutable product
+  composition. It may call those existing typed slices, but must not copy their
+  build commands or call the all-platform Linux lane. macOS, Windows, GPU,
+  SDK, smoke, detached dispatch, and release paths are outside its coverage.
+- The canary caller and every canary summary use read-only `contents` and
+  `packages` permissions as needed to pull the pinned runner image. No
+  `checks: write`, secrets, `secrets: inherit`, environments, OIDC, Depot, or
+  persistent self-hosted runner is allowed. Its final `Canary / CI` result is a
+  plain step summary and is non-required. A read-only caller must not reach a
+  nested reusable summary that requests `checks: write`, even when that job is
+  conditionally skipped, because GitHub validates the permission union at run
+  creation.
+- Hosted placement and a read-only token are containment controls for this
+  diagnostic, not a security boundary against edited PR workflow/action YAML.
+  Do not use the canary to justify access to a persistent self-hosted runner;
+  any future rollout still requires runner-group restrictions to protected
+  main-owned workflow references.
 
 ### Main workflow visibility and split invariant
 
