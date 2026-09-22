@@ -430,12 +430,13 @@ impl IterationScheduler {
             config.n_batch,
             config.n_ubatch,
             queue_capacity,
+            config.emits_activation_frame(),
         );
         let iteration_interval = scheduler_config.iteration_interval;
         let max_consecutive_prefill_iterations =
             scheduler_config.max_consecutive_prefill_iterations;
         let mixed_prefill_decode = scheduler_config.mixed_prefill_decode;
-        let max_direct_iteration_tokens = direct_iteration_token_budget(
+        let max_direct_iteration_tokens = iteration_token_budget(
             config.emits_activation_frame(),
             scheduler_config.max_tokens_per_iteration,
             config.n_ubatch,
@@ -1873,7 +1874,7 @@ impl SchedulerWorker {
 /// is a scheduler guarantee rather than a native error. Stages that export
 /// nothing keep the full budget, including whole-prompt prefill up to
 /// `n_batch`.
-fn direct_iteration_token_budget(
+fn iteration_token_budget(
     exports_activation_frame: bool,
     max_tokens_per_iteration: usize,
     n_ubatch: Option<u32>,
@@ -1895,10 +1896,13 @@ fn build_scheduler_config(
     n_batch: Option<u32>,
     n_ubatch: Option<u32>,
     queue_capacity: usize,
+    exports_activation_frame: bool,
 ) -> SchedulerConfig {
     let max_tokens_per_iteration = usize::try_from(n_batch.unwrap_or(2048))
         .unwrap_or(MAX_NATIVE_ITERATION_TOKENS)
         .clamp(1, MAX_NATIVE_ITERATION_TOKENS);
+    let max_tokens_per_iteration =
+        iteration_token_budget(exports_activation_frame, max_tokens_per_iteration, n_ubatch);
     let prefill_chunk_tokens = usize::try_from(n_ubatch.unwrap_or(256))
         .unwrap_or(max_tokens_per_iteration)
         .clamp(1, max_tokens_per_iteration);

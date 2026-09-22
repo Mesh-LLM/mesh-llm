@@ -1374,6 +1374,23 @@ mod tests {
     }
 
     #[test]
+    fn native_invalid_argument_is_returned_without_serial_fallback() {
+        let mut first = batch_session(false, true);
+        let mut second = batch_session(false, true);
+        let error = StageSession::iteration_batch_sampled(&mut [
+            decode_request(&mut first, None),
+            decode_request(&mut second, None),
+        ])
+        .err()
+        .expect("null native sessions must be rejected");
+
+        assert!(error.to_string().contains("InvalidArgument"), "{error:#}");
+        assert!(error.downcast_ref::<PartialBatchExecution>().is_none());
+        assert_eq!(first.token_count, 0);
+        assert_eq!(second.token_count, 0);
+    }
+
+    #[test]
     fn exporting_stages_that_cannot_batch_exports_run_one_at_a_time() {
         let mut dense = batch_session(false, true);
         assert!(
