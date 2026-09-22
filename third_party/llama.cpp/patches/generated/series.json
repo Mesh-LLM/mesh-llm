@@ -1,5 +1,5 @@
 {
-  "full_patch_sha256": "abbc8eafb618dcd2b8210e0f76145dd64fec0e6d535cd4dd4ccc75d23aad485c",
+  "full_patch_sha256": "34b09a6cbd99762fabc9b3186dff5f6fa48d0b1827d495ff47bd576260b47473",
   "generator_version": "0.5.0",
   "schema_version": 1,
   "shards": [
@@ -231,7 +231,7 @@
         "glm4-expansion"
       ],
       "file": "0023-family-glm4--glm4-expansion.patch",
-      "sha256": "8f20cbe4dc0604cad357d420a36aaccc83826a2b89d92012c8369b8cfddcf31f",
+      "sha256": "c157392a502584f7fb8ac6035aabb21d40127d893546a710bb2871520ee36302",
       "sources": [
         "src/models/glm4.cpp"
       ]
@@ -252,7 +252,7 @@
         "glm47-flash"
       ],
       "file": "0025-family-glm45-air--glm47-flash.patch",
-      "sha256": "4980f98fbaa6c426387d39f4bf4750576e5c6b5a9eae05f6460c3dc66a58d1cb",
+      "sha256": "15988eecd86547147bbba8a02a6df814e4481fd3fec6851c8e5a20584bf31c38",
       "sources": [
         "src/models/glm4-moe.cpp"
       ]
