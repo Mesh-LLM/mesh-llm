@@ -20,6 +20,7 @@ import time
 
 GIB = 1024 ** 3
 TIERS = (128, 256)
+RESERVE_PERCENT = 10
 
 
 def positive_bytes(value, name):
@@ -63,9 +64,9 @@ def memory_estimate(model):
 def tier_for(peak):
     positive_bytes(peak, "estimated peak bytes")
     for tier in TIERS:
-        if peak <= tier * GIB * 85 // 100:
+        if peak <= tier * GIB * (100 - RESERVE_PERCENT) // 100:
             return f"accelerator-memory-{tier}plus"
-    raise ValueError(f"estimated peak {peak / GIB:.2f} GiB exceeds largest runner budget (217.6 GiB)")
+    raise ValueError(f"estimated peak {peak / GIB:.2f} GiB exceeds largest runner budget (230.4 GiB)")
 
 
 def placement(model):
@@ -101,12 +102,12 @@ def host_memory():
 
 
 def admission(estimate, total, available):
-    reserve = (total * 15 + 99) // 100
+    reserve = (total * RESERVE_PERCENT + 99) // 100
     peak = estimate["estimated_peak_bytes"]
     if peak > total - reserve:
-        raise ValueError("assigned host is too small for the family with 15% reserved")
+        raise ValueError(f"assigned host is too small for the family with {RESERVE_PERCENT}% reserved")
     if peak > available - reserve:
-        raise ValueError("insufficient available host memory after reserving 15%; other workloads must finish")
+        raise ValueError(f"insufficient available host memory after reserving {RESERVE_PERCENT}%; other workloads must finish")
     return reserve
 
 
@@ -150,7 +151,7 @@ def stop_group(process):
 def guarded_run(model, expected_tier, command, evidence, *, cwd=None):
     import fcntl
     evidence.mkdir(parents=True, exist_ok=True)
-    report = {"family": model["family"], "reserve_percent": 15, "status": "failed"}
+    report = {"family": model["family"], "reserve_percent": RESERVE_PERCENT, "status": "failed"}
     process = None
     # macOS per-user temp root is outside runner workspaces and survives jobs.
     import tempfile
@@ -189,7 +190,7 @@ def guarded_run(model, expected_tier, command, evidence, *, cwd=None):
                     observed_total, available = host_memory()
                     report["minimum_available_bytes"] = min(report["minimum_available_bytes"], available)
                     if observed_total != total or available < reserve:
-                        raise ValueError("host available memory crossed the 15% reserve; stopping family")
+                        raise ValueError(f"host available memory crossed the {RESERVE_PERCENT}% reserve; stopping family")
                     time.sleep(1)
                 report["exit_code"] = process.returncode
                 report["status"] = "passed" if process.returncode == 0 else "failed"
