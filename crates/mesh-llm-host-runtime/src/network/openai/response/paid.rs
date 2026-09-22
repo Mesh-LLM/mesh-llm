@@ -106,6 +106,7 @@ pub(super) async fn payment_error(client: &mut ClientStream, message: &str) -> R
         status_code: 402,
         usage: None,
         cache_cost: None,
+        output_digests: Default::default(),
     }
 }
 

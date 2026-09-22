@@ -90,6 +90,7 @@
     "globals": "^17.12.0",
     "jsdom": "^30.0.1",
     "prettier": "3.9.6",
+    "smol-toml": "^1.8.0",
     "tailwindcss": "4.3.3",
     "typescript": "npm:@typescript/typescript6@6.0.2",
     "typescript-eslint": "^8.69.0",

@@ -45,6 +45,7 @@ fn passive_moa_chat_and_responses_streams_record_usage_lifecycle() {
         let outcome = RouteDispatchOutcome::RespondedWithUsage {
             status_code: 200,
             usage,
+            output_digests: Default::default(),
         };
 
         record_moa_stream_lifecycle(attachment.route_observer(), adapter, outcome);
@@ -146,6 +147,7 @@ async fn transport_attempt_records_reuse_lifecycle_ids_and_keep_one_parent_termi
                 status_code: 200,
                 usage: None,
                 cache_cost: None,
+                output_digests: Default::default(),
             },
         ),
         (
@@ -160,6 +162,7 @@ async fn transport_attempt_records_reuse_lifecycle_ids_and_keep_one_parent_termi
                 status_code: 502,
                 usage: None,
                 cache_cost: None,
+                output_digests: Default::default(),
             },
         ),
         (
@@ -322,6 +325,7 @@ async fn retry_then_stream_cancellation_keeps_one_metadata_only_parent() {
             status_code: 200,
             usage: None,
             cache_cost: None,
+            output_digests: Default::default(),
         },
     );
     observer.stream_cancelled();
@@ -539,6 +543,7 @@ fn local_inference_attempt_success_stays_under_one_parent() {
             status_code: 200,
             usage: None,
             cache_cost: None,
+            output_digests: Default::default(),
         },
     );
     assert_eq!(
@@ -547,6 +552,7 @@ fn local_inference_attempt_success_stays_under_one_parent() {
             status_code: 200,
             usage: None,
             cache_cost: None,
+            output_digests: Default::default(),
         }
     );
 
@@ -678,6 +684,7 @@ fn remote_transports_record_target_failover_and_retry_under_one_parent() {
             status_code: 202,
             usage: None,
             cache_cost: None,
+            output_digests: Default::default(),
         },
     );
 
@@ -690,6 +697,7 @@ fn remote_transports_record_target_failover_and_retry_under_one_parent() {
             status_code: 200,
             usage: None,
             cache_cost: None,
+            output_digests: Default::default(),
         },
     );
 
