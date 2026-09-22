@@ -264,6 +264,7 @@ async fn publish_raw_proxy_terminal_attaches_full_provenance_and_usage_on_a_serv
             completion_tokens: Some(5),
             total_tokens: Some(15),
         },
+        output_digests: Default::default(),
     };
 
     publish_raw_proxy_terminal(
@@ -418,6 +419,51 @@ async fn publish_raw_proxy_terminal_on_the_plugin_served_path_omits_the_whole_bl
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].status, Some(200));
     assert!(events[0].serving_provenance.is_none());
+}
+
+/// Unlike `serving_provenance`, the response/tool_calls/reasoning output
+/// digests are NOT gated on `served_locally`: a digest of what the host
+/// actually returned is defined on every outcome that had a body, plugin-
+/// served included. This is the exact property #7b guards -- only
+/// `serving_provenance`/`usage` sit behind the `served_locally`/2xx gate;
+/// mutating this attachment to gate on `served_locally` must turn this test
+/// red.
+#[tokio::test]
+async fn publish_raw_proxy_terminal_on_the_plugin_served_path_still_attaches_output_digests() {
+    let node = node_with_hardware_and_descriptor("test-model").await;
+    let channel = RecordingChannel::default();
+    let digests = crate::plugin::openai_exchange::ExchangeOutputDigests::from_response_body(
+        br#"{"choices":[{"index":0,"message":{"role":"assistant","content":"hi"}}]}"#,
+    );
+    let outcome = proxy::RouteDispatchOutcome::RespondedWithUsage {
+        status_code: 200,
+        usage: TokenUsage {
+            prompt_tokens: Some(1),
+            cached_prompt_tokens: None,
+            completion_tokens: Some(1),
+            total_tokens: Some(2),
+        },
+        output_digests: digests,
+    };
+
+    publish_raw_proxy_terminal(
+        &node,
+        &channel,
+        "exchange-1",
+        "test-model",
+        &outcome,
+        false, // plugin-served
+        None,
+    )
+    .await;
+
+    let events = channel.events();
+    assert_eq!(events.len(), 1);
+    assert!(events[0].serving_provenance.is_none());
+    assert!(
+        events[0].response_digest.is_some(),
+        "output digests must attach on the plugin-served path -- not gated on served_locally"
+    );
 }
 
 /// A served 2xx outcome for a model this node has no served-model descriptor

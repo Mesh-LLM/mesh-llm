@@ -1,0 +1,15 @@
+name: Set up canary Python SDK
+description: Restore locked SDK dependencies in a controller-owned virtual environment.
+runs:
+  using: composite
+  steps:
+    - name: Prepare locked embedding SDK
+      shell: bash
+      run: |
+        set -euo pipefail
+        export PATH="$HOME/.local/bin:$PATH"
+        export UV_PYTHON_DOWNLOADS=never
+        uv sync --locked --project ci/canary-python
+        sdk_python="$PWD/ci/canary-python/.venv/bin/python"
+        "$sdk_python" -c 'from openai import OpenAI'
+        echo "SKIPPY_WORKLOAD_SDK_PYTHON=$sdk_python" >> "$GITHUB_ENV"

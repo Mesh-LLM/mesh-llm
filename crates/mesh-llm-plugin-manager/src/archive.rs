@@ -490,6 +490,7 @@ mod tests {
         .into_bytes()
     }
 
+    #[cfg(unix)]
     struct SymlinkArchive<'a> {
         archive_path: &'a Path,
         plugin_name: &'a str,
@@ -498,6 +499,7 @@ mod tests {
         files: &'a [(&'a str, &'a [u8])],
     }
 
+    #[cfg(unix)]
     fn write_tar_gz_with_symlink(fixture: SymlinkArchive<'_>) -> Result<()> {
         let archive_file = fs::File::create(fixture.archive_path)?;
         let encoder = GzEncoder::new(archive_file, Compression::default());
@@ -845,6 +847,7 @@ mod tests {
         assert!(web_ui.validation.reason.unwrap().contains("remote URL"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn symlink_escape_web_ui_bundle_path_records_invalid_ui() {
         let temp = TempDir::new().unwrap();

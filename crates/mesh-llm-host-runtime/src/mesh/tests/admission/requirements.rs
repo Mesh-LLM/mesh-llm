@@ -544,6 +544,8 @@ pub(crate) fn assert_requirement_aware_mesh_without_attestation_accepts_valid_di
     });
 }
 
+/// Asserts that a peer whose release attestation is signed by a key outside
+/// the mesh's trusted signer set is rejected, not admitted.
 pub(crate) fn assert_mesh_requirements_add_peer_rejects_untrusted_release_signer() {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     runtime.block_on(async {
@@ -610,6 +612,7 @@ pub(crate) fn assert_mesh_requirements_add_peer_rejects_untrusted_release_signer
             latency_age_ms: None,
             latency_observer_id: None,
             inference_admission_state: None,
+            claimed_log_head: None,
         };
 
         node.add_peer(
@@ -634,6 +637,8 @@ pub(crate) fn assert_mesh_requirements_add_peer_rejects_untrusted_release_signer
     });
 }
 
+/// Asserts that a peer whose release attestation signature does not verify
+/// against its claimed signer is rejected, not admitted.
 pub(crate) fn assert_mesh_requirements_add_peer_rejects_invalid_release_attestation_signature() {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     runtime.block_on(async {
@@ -703,6 +708,7 @@ pub(crate) fn assert_mesh_requirements_add_peer_rejects_invalid_release_attestat
             latency_age_ms: None,
             latency_observer_id: None,
             inference_admission_state: None,
+            claimed_log_head: None,
         };
 
         node.add_peer(
@@ -727,6 +733,8 @@ pub(crate) fn assert_mesh_requirements_add_peer_rejects_invalid_release_attestat
     });
 }
 
+/// Asserts that a peer advertising a genesis policy hash for a different
+/// mesh is rejected, not admitted.
 pub(crate) fn assert_mesh_requirements_add_peer_rejects_wrong_mesh_id() {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     runtime.block_on(async {
@@ -793,6 +801,7 @@ pub(crate) fn assert_mesh_requirements_add_peer_rejects_wrong_mesh_id() {
             latency_age_ms: None,
             latency_observer_id: None,
             inference_admission_state: None,
+            claimed_log_head: None,
         };
 
         node.add_peer(

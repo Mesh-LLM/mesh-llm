@@ -70,6 +70,20 @@ class LlamaCanaryDeveloperHarnessContractTests(unittest.TestCase):
                 if accepted:
                     self.assertIn("PRODUCER=1", result.stdout)
 
+    def test_pinned_build_checks_pin_without_rewriting_it(self) -> None:
+        function = self.wrapper.split("write_repair_pin() {", 1)[1].split("verify_repair_pin() {", 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            scripts = Path(directory) / 'scripts'
+            scripts.mkdir()
+            (scripts / 'update-llama-pin.sh').write_text('#!/bin/sh\nexit 99\n')
+            (scripts / 'update-llama-pin.sh').chmod(0o755)
+            for pin_status in (0, 1):
+                body = (f'set -euo pipefail\nHARNESS_MODE=pinned-build\nUPSTREAM_SHA=unused\n'
+                        f'verify_repair_pin() {{ return {pin_status}; }}\n'
+                        'write_repair_pin() {' + function + '\nwrite_repair_pin')
+                result = subprocess.run(['bash', '-c', body], cwd=directory)
+                self.assertEqual(result.returncode, pin_status)
+
     def test_wrapper_reexecs_natively_before_state_initialization(self) -> None:
         reexec = self.wrapper.index('exec arch -arm64 "${BASH_SOURCE[0]}" "$@"')
         root = self.wrapper.index('ROOT="$(cd')

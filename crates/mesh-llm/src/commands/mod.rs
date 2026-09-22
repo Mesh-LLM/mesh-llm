@@ -44,6 +44,10 @@ async fn dispatch_command(cli: &Cli, cmd: &Command) -> Result<()> {
     match cmd {
         Command::Auth { command } => mesh_llm_commands::auth::run_auth_command(command),
         Command::ModelPrepare { .. } => dispatch_model_prepare(cmd).await,
+        Command::Hermes(args) => mesh_llm_commands::agent_cli::config_write::run(args, true).await,
+        Command::Openclaw(args) => {
+            mesh_llm_commands::agent_cli::config_write::run(args, false).await
+        }
         _ => dispatch_general_command(cli, cmd).await,
     }
 }
@@ -153,8 +157,10 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
             mesh_llm_commands::benchmark::dispatch_benchmark_command(cli.config.as_deref(), command)
                 .await
         }
-        Command::ModelPrepare { .. } => dispatch_model_prepare(cmd).await,
-        Command::Auth { command } => mesh_llm_commands::auth::run_auth_command(command),
+        Command::ModelPrepare { .. }
+        | Command::Auth { .. }
+        | Command::Hermes(_)
+        | Command::Openclaw(_) => unreachable!("handled by dispatch_command"),
         Command::ExternalPlugin(args) => run_external_plugin_command(cli, args).await,
     }
 }

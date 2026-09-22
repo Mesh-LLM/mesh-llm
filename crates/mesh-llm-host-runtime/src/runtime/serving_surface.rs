@@ -8,7 +8,7 @@ use super::{
     next_runtime_instance_id, node_display_name, nostr_relays, resolve_runtime_owner_key_path,
     resolved_model_name, runtime_resource_planning_profile, select_run_auto_model_path,
     setup_passive_publication, shutdown_passive_runtime, sort_dashboard_endpoint_rows,
-    spawn_embedded_runtime_control_forwarder, startup_local_model_loop, wait_shutdown_signal,
+    spawn_embedded_runtime_control_forwarder, startup_local_model_loop, wait_for_shutdown_signal,
 };
 use crate::api;
 use crate::inference::{election, skippy};
@@ -1643,7 +1643,7 @@ pub(super) async fn run_passive_listener_loop(
                     _ => {}
                 }
             }
-            signal = wait_shutdown_signal() => {
+            signal = wait_for_shutdown_signal() => {
                 shutdown_passive_runtime(&node, &plugin_manager, &mut console_server_handle, signal)
                     .await;
                 return Ok(None);

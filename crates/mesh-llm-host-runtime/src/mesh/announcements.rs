@@ -467,6 +467,8 @@ impl Node {
             })
     }
 
+    /// Builds the gossip announcement re-broadcast on behalf of an already
+    /// admitted peer, from that peer's locally tracked state.
     pub(crate) fn announcement_from_peer(peer: &PeerInfo) -> PeerAnnouncement {
         let latency = peer.display_latency();
         PeerAnnouncement {
@@ -518,6 +520,10 @@ impl Node {
             latency_age_ms: Some(latency.age_ms),
             latency_observer_id: latency.observer_id,
             inference_admission_state: peer.inference_admission_state,
+            // No live-mesh claimed-log-head state is tracked on `PeerInfo` yet — a
+            // rebroadcast of a peer we already admitted carries no opinion on
+            // its claimed log head.
+            claimed_log_head: None,
         }
     }
 
@@ -533,6 +539,8 @@ impl Node {
         })
     }
 
+    /// Builds this node's own gossip announcement from freshly collected
+    /// local data.
     pub(crate) fn build_local_announcement(&self, data: LocalAnnouncementData) -> PeerAnnouncement {
         PeerAnnouncement {
             addr: self.endpoint_addr_for_advertisement(),
@@ -582,6 +590,9 @@ impl Node {
             latency_age_ms: None,
             latency_observer_id: None,
             inference_admission_state: data.inference_admission_state,
+            // No local claimed-log-head source is wired yet — this node never
+            // advertises its own until a companion process is plumbed in.
+            claimed_log_head: None,
         }
     }
 }

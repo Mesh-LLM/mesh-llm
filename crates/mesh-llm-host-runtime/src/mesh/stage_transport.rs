@@ -1117,6 +1117,19 @@ impl Node {
             .reserve_stage_transport_bridge(key.clone(), &label)
             .await?;
 
+        // The emulated link delay applies on this (initiating) side only, so
+        // a stage exchange gains exactly one delay no matter how many nodes
+        // export the variable. A misconfigured value fails the bridge here
+        // rather than silently running an unshaped sweep.
+        let link_delay = match crate::network::tunnel::stage_link_delay() {
+            Ok(delay) => delay,
+            Err(error) => {
+                self.remove_stage_transport_bridge_if_owner(&key, &owner)
+                    .await;
+                return Err(error);
+            }
+        };
+
         let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
             Ok(listener) => listener,
             Err(error) => {
@@ -1177,8 +1190,10 @@ impl Node {
                             .open_stage_transport_stream(peer_id, topology_id, run_id, stage_id)
                             .await?;
                         let (tcp_read, tcp_write) = tokio::io::split(tcp_stream);
-                        crate::network::tunnel::relay_bidirectional(tcp_read, tcp_write, send, recv)
-                            .await
+                        crate::network::tunnel::relay_bidirectional(
+                            tcp_read, tcp_write, send, recv, link_delay,
+                        )
+                        .await
                     }
                     .await
                     {
