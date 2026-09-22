@@ -1,0 +1,111 @@
+From 5a199ef3ce2fff2b4d84cfc9222112d5b00bdf85 Mon Sep 17 00:00:00 2001
+From: sat <sat@local>
+Date: Tue, 22 Sep 2026 21:26:25 +1000
+Subject: [PATCH] sat: count which condition refuses graph reuse
+
+---
+ src/llama-context.cpp | 11 +++++++++--
+ src/llama-graph.h     | 21 +++++++++++++++++++--
+ 2 files changed, 28 insertions(+), 4 deletions(-)
+
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index eebc23467..a4198c889 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -1507,7 +1507,10 @@ llm_graph_result * llama_context::process_ubatch(
+                     "SAT-STATS exec=%" PRIu64 " outputs=%" PRIu64 " reused=%" PRIu64
+                     " compute_ms_per_exec=%.1f build_ms_per_exec=%.1f realize_ms_per_exec=%.1f"
+                     " builds=%" PRIu64 " realizes=%" PRIu64
+-                    " | params=%.1f select=%.1f validate=%.1f frontier=%.1f graph=%.1f\n",
++                    " | params=%.1f select=%.1f validate=%.1f frontier=%.1f graph=%.1f"
++                    " | noreuse ubatch=%" PRIu64 " nout=%" PRIu64 " topo=%" PRIu64
++                    " samplers=%" PRIu64 " nodata=%" PRIu64 " out_i=%" PRIu64
++                    " seqid_i=%" PRIu64 " nextn=%" PRIu64 "\n",
+                     sat_exec, sat_out, sat_reused,
+                     (double) sat_us / 1000.0 / (double) sat_exec,
+                     (double) g_sat_build_us / 1000.0 / (double) sat_exec,
+@@ -1517,7 +1520,11 @@ llm_graph_result * llama_context::process_ubatch(
+                     (double) g_sat_select_us / 1000.0 / (double) sat_exec,
+                     (double) g_sat_validate_us / 1000.0 / (double) sat_exec,
+                     (double) g_sat_frontier_us / 1000.0 / (double) sat_exec,
+-                    (double) g_sat_graph_us / 1000.0 / (double) sat_exec);
++                    (double) g_sat_graph_us / 1000.0 / (double) sat_exec,
++                    llm_graph_params::reuse_reason(0), llm_graph_params::reuse_reason(1),
++                    llm_graph_params::reuse_reason(2), llm_graph_params::reuse_reason(3),
++                    llm_graph_params::reuse_reason(4), llm_graph_params::reuse_reason(5),
++                    llm_graph_params::reuse_reason(6), llm_graph_params::reuse_reason(7));
+             fflush(stderr);
+         }
+     }
+diff --git a/src/llama-graph.h b/src/llama-graph.h
+index 732af4c7b..783e0b695 100644
+--- a/src/llama-graph.h
++++ b/src/llama-graph.h
+@@ -993,6 +993,13 @@ struct llm_graph_params {
+ 
+     llm_graph_result * res;
+ 
++    // SAT instrumentation: count refusals by reason, so a change meant to unblock
++    // reuse can be shown to have unblocked the reason it targeted.
++    static uint64_t & reuse_reason(size_t index) {
++        static uint64_t counters[8] = {};
++        return counters[index];
++    }
++
+     // return true if the "other" params would result in a graph with the same topology as with the current params
+     //   having the same topology allows us to reuse the graph in some cases
+     bool allow_reuse(const llm_graph_params & other) const {
+@@ -1024,31 +1031,40 @@ struct llm_graph_params {
+         }
+ 
+         if (!can_reuse_ubatch) {
++            reuse_reason(0) += 1;
+             return false;
+         }
+ 
+         if (n_outputs != other.n_outputs) {
++            reuse_reason(1) += 1;
+             return false;
+         }
+ 
+         if (!build_inputs.topology_equal(other.build_inputs) ||
+                 activation_export_token_axes != other.activation_export_token_axes) {
++            reuse_reason(2) += 1;
+             return false;
+         }
+ 
+         if (!samplers_equal(samplers, other.samplers)) {
++            reuse_reason(3) += 1;
+             return false;
+         }
+ 
+         if (samplers.size() > 0) {
+             if (!ubatch.data || !other.ubatch.data) {
++                reuse_reason(4) += 1;
+                 return false;
+             }
+ 
+             // check that the outputs are the same for all samplers
+             for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+-                if (ubatch.output[i]    != other.ubatch.output[i] ||
+-                    ubatch.seq_id[i][0] != other.ubatch.seq_id[i][0]) {
++                if (ubatch.output[i] != other.ubatch.output[i]) {
++                    reuse_reason(5) += 1;
++                    return false;
++                }
++                if (ubatch.seq_id[i][0] != other.ubatch.seq_id[i][0]) {
++                    reuse_reason(6) += 1;
+                     return false;
+                 }
+             }
+@@ -1056,6 +1072,7 @@ struct llm_graph_params {
+ 
+         // TODO: https://github.com/ggml-org/llama.cpp/pull/24340#discussion_r3448035248
+         if (cparams.nextn_layer_offset != other.cparams.nextn_layer_offset) {
++            reuse_reason(7) += 1;
+             return false;
+         }
+ 
+-- 
+2.50.1 (Apple Git-155)
+
