@@ -115,6 +115,12 @@ async fn serve_inner(
     let transport_alive = stream_output(reader, writer, &mut backend, &gate, &mut receiver).await?;
     drop(backend);
     service.ledger.finish_serving(&id)?;
+    // Generation is over. Release the runtime's in-flight slot and the gate
+    // registration before waiting on the payer's wallet: those waits can last
+    // up to the output invoice lifetime, and the debt they settle is already
+    // durable, so recovery finishes it if this task ends first.
+    drop(_registration);
+    drop(_instance);
     // Delivery opened on receiver-side HTLC arrival; the input payment must
     // still be recorded as settled before this request is complete.
     gate.await_input_settlement().await?;
