@@ -2140,7 +2140,7 @@ index 000000000..0310612ef
 +        ggml_tensor * proj = ggml_cont(ctx0, ggml_transpose(ctx0, layer.attn_rel_proj)); // {d_rel, E}
 +
 +        ggml_tensor * rel = ggml_mul_mat(ctx0, proj, r2); // {E, n_head*n_tokens}
-+        ggml_mul_mat_set_prec(rel, GGML_PREC_F32);
++        ggml_prec_set_acc(rel, GGML_PREC_F32);
 +        rel = ggml_reshape_3d(ctx0, rel, rel_extent, n_head, n_tokens);
 +
 +        if (tau && !is_swa) {
@@ -2967,7 +2967,7 @@ index 000000000..5f9b4bd16
 +
 +ggml_tensor * clip_graph_inkling::build_mm(ggml_tensor * w, ggml_tensor * x) const {
 +    ggml_tensor * cur = ggml_mul_mat(ctx0, w, x);
-+    ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
++    ggml_prec_set_acc(cur, GGML_PREC_F32);
 +    return cur;
 +}
 +

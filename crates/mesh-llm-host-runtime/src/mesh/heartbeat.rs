@@ -7,10 +7,10 @@
 use super::direct_rescue::DirectRescueEndpoint;
 use super::node::startup_transport_config;
 use super::{
-    ConnectionCaptureEvent, ControlProtocol, DEAD_PEER_TTL, MeshPeerRemovalReason,
-    ModelRuntimeDescriptor, Node, PEER_DOWN_REPORTER_COOLDOWN_SECS, PEER_STALE_SECS, PeerInfo,
-    PeerLifecycleCaptureEvent, ServedModelDescriptor, connect_mesh, connection_protocol,
-    endpoint_id_hex, selected_path_observation,
+    ConnectionCaptureEvent, ControlProtocol, DEAD_PEER_TTL, DEPARTED_PEER_TRANSITIVE_BLOCK_TTL,
+    MeshPeerRemovalReason, ModelRuntimeDescriptor, Node, PEER_DOWN_REPORTER_COOLDOWN_SECS,
+    PEER_STALE_SECS, PeerInfo, PeerLifecycleCaptureEvent, ServedModelDescriptor, connect_mesh,
+    connection_protocol, endpoint_id_hex, selected_path_observation,
 };
 use crate::protocol::{
     NODE_PROTOCOL_GENERATION, STREAM_PEER_DOWN, STREAM_PEER_LEAVING, write_len_prefixed,
@@ -1036,7 +1036,11 @@ impl Node {
                 previous_failures,
                 failure_policy.failure_threshold,
             ));
-            self.state.lock().await.dead_peers.remove(&peer_id);
+            {
+                let mut state = self.state.lock().await;
+                state.dead_peers.remove(&peer_id);
+                state.departed_peers.remove(&peer_id);
+            }
         }
     }
 
@@ -1206,6 +1210,9 @@ impl Node {
             .dead_peers
             .retain(|_, ts| ts.elapsed() < DEAD_PEER_TTL);
         state
+            .departed_peers
+            .retain(|_, ts| ts.elapsed() < DEPARTED_PEER_TRANSITIVE_BLOCK_TTL);
+        state
             .peer_down_rejections
             .retain(|_, ts| ts.elapsed().as_secs() < PEER_DOWN_REPORTER_COOLDOWN_SECS);
         state.direct_path_request_last_at.retain(|_, ts| {
@@ -1236,6 +1243,9 @@ impl Node {
             // via handle_gossip_stream → add_peer → clear dead_peers.
             // Don't remove: state.connections.remove(&dead_id);
             state.dead_peers.insert(dead_id, std::time::Instant::now());
+            state
+                .departed_peers
+                .insert(dead_id, std::time::Instant::now());
         }
         self.capture_peer_lifecycle_snapshot(
             "peer_dead_marked",

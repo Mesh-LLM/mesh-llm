@@ -474,6 +474,7 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         split_topology_lock: cli.split_topology_lock,
         auto_balance: cli.auto_balance,
         ctx_size: cli.ctx_size,
+        parallel: cli.parallel.map(std::num::NonZeroUsize::get),
         max_vram: cli.max_vram,
         no_enumerate_host: cli.no_enumerate_host,
         bin_dir: cli.bin_dir,

@@ -695,6 +695,11 @@ pub struct Cli {
     #[arg(long, hide = true)]
     pub ctx_size: Option<u32>,
 
+    /// Parallel lanes (concurrent sequences) for served models. Overrides `[gpu].parallel`
+    /// from the config file. Default: planned, currently 4.
+    #[arg(long, hide = true)]
+    pub parallel: Option<std::num::NonZeroUsize>,
+
     /// Cap VRAM used for planning, local-fit decisions, and mesh advertisement (GB).
     #[arg(long)]
     pub max_vram: Option<f64>,
@@ -1010,6 +1015,10 @@ pub enum Command {
         #[arg(long)]
         write: bool,
     },
+    /// Add a Mesh provider to Hermes config without launching it.
+    Hermes(crate::agent_config::AgentConfigArgs),
+    /// Add a Mesh provider to OpenClaw config without launching it.
+    Openclaw(crate::agent_config::AgentConfigArgs),
     /// Stop running mesh-llm processes.
     Stop,
     /// Plugin management.
@@ -1236,6 +1245,21 @@ mod tests {
     use crate::models::{ModelSearchSort, ModelsCommand};
     use clap::{CommandFactory, Parser, error::ErrorKind};
     use mesh_llm_events::LogFormat;
+
+    /// `--parallel` mirrors `--ctx-size`: a runtime-surface flag that must survive the
+    /// serve normalisation and refuse a value the planner could not use.
+    #[test]
+    fn parallel_lanes_parse_and_reject_zero() {
+        let cli = Cli::parse_from(["mesh-llm", "--parallel", "32", "--model", "x.gguf"]);
+        assert_eq!(cli.parallel.map(std::num::NonZeroUsize::get), Some(32));
+
+        let none = Cli::parse_from(["mesh-llm", "--model", "x.gguf"]);
+        assert_eq!(none.parallel, None);
+
+        let err = Cli::try_parse_from(["mesh-llm", "--parallel", "0"])
+            .expect_err("zero lanes is not a configuration");
+        assert!(err.to_string().contains("--parallel"), "{err}");
+    }
 
     #[test]
     fn native_serving_plugin_deadline_rejects_zero() {

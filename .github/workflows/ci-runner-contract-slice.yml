@@ -119,3 +119,7 @@ jobs:
           test "$(uname -m)" = "$EXPECTED_MACHINE"
           verify-runner-image self-hosted
           cargo check --locked -p mesh-llm-config
+      - name: Clean self-hosted contract outputs
+        if: ${{ (success() || failure() || cancelled()) }}
+        timeout-minutes: 5
+        run: python3 scripts/cleanup-self-hosted.py --job runner-contract --evidence-uploaded false

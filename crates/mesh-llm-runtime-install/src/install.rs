@@ -1,6 +1,6 @@
 //! Native runtime resolution, download, and installation.
 
-use crate::cache::{host_runtime_profile, native_runtime_cache};
+use crate::cache::{current_skippy_abi_version, host_runtime_profile, native_runtime_cache};
 use crate::manifest::{
     NativeRuntimeCatalogSources, load_release_manifest_with_sources, normalize_sha256,
 };
@@ -42,10 +42,16 @@ pub async fn install_native_runtime(
         )
         .into());
     }
-    let skippy_abi_version = options
-        .skippy_abi_version
-        .clone()
-        .unwrap_or_else(|| manifest.skippy_abi.clone());
+    let skippy_abi_version = options.skippy_abi_version.clone().unwrap_or_else(|| {
+        // A release catalog can lag behind a locally built host with the
+        // same MeshLLM version. Match the ABI that this host can load,
+        // while retaining catalog defaults when staging another version.
+        if options.mesh_version == CURRENT_MESH_VERSION {
+            current_skippy_abi_version()
+        } else {
+            manifest.skippy_abi.clone()
+        }
+    });
     let cache = native_runtime_cache(options.cache_dir.as_deref())?;
     let resolver = NativeRuntimeResolver::new(
         &options.mesh_version,

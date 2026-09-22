@@ -90,6 +90,7 @@ jobs:
             echo "HF_HUB_CACHE=$HF_HUB_CACHE"
             echo "HISTORY_LOCAL=$HISTORY_LOCAL"
             echo "SCCACHE_SERVER_UDS=$RUNNER_TEMP/agentic-replay-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sock"
+            echo "AGENTIC_REPLAY_WORKTREE_ROOT=$RUNNER_TEMP/agentic-replay-worktrees"
             echo "OUTPUT_DIR=$OUTPUT_DIR"
           } >> "$GITHUB_ENV"
 
@@ -387,11 +388,19 @@ jobs:
           fi
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        id: upload_evidence
         if: ${{ success() || failure() || cancelled() }}
         with:
           name: replay-artifacts
           path: ${{ runner.temp }}/agentic-replay-artifacts/
           retention-days: 30
+
+      - name: Clean replay job outputs
+        if: ${{ (success() || failure() || cancelled()) }}
+        timeout-minutes: 5
+        env:
+          EVIDENCE_UPLOADED: ${{ steps.upload_evidence.outcome == 'success' }}
+        run: python3 scripts/cleanup-self-hosted.py --job replay --evidence-uploaded "$EVIDENCE_UPLOADED"
 
   publish-repair:
     needs: replay

@@ -1,5 +1,3 @@
-/// Wait for either SIGINT (ctrl-c) or SIGTERM. Without this, an unhandled
-/// SIGTERM aborts the process before runtime cleanup can run.
 use super::{
     DASHBOARD_CONTEXT_USAGE_REFRESH_INTERVAL, IntentSource, MODEL_TARGET_RECONCILIATION_INTERVAL,
     ModelIntent, ModelTargetReconciliationState, OpenAiGuardrailPolicyHandle,
@@ -18,55 +16,13 @@ use super::{
     shutdown_runtime_loaded_models, shutdown_runtime_managed_models,
     spawn_run_auto_startup_model_tasks, startup_default_backend_device, startup_launch_plan,
     suppress_desired_for_resolved_unload_candidate, unpublish_run_auto_nostr_listing,
+    wait_for_shutdown_signal,
 };
 use crate::api;
 use crate::inference::skippy;
 use anyhow::Result;
 use mesh_llm_events::{OutputEvent, emit_event, flush_output};
 use std::time::Instant;
-
-pub(super) async fn wait_shutdown_signal() -> &'static str {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{SignalKind, signal};
-        let mut term = match signal(SignalKind::terminate()) {
-            Ok(s) => s,
-            Err(_) => {
-                let _ = tokio::signal::ctrl_c().await;
-                return "SIGINT";
-            }
-        };
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => "SIGINT",
-            _ = term.recv() => "SIGTERM",
-        }
-    }
-    #[cfg(windows)]
-    {
-        use tokio::signal::windows::ctrl_break;
-
-        // CTRL_BREAK_EVENT is distinct from CTRL_C_EVENT on Windows. The CI
-        // readiness smoke starts MeshLLM in a dedicated process group and
-        // uses CTRL_BREAK_EVENT to request graceful shutdown.
-        let mut ctrl_break = match ctrl_break() {
-            Ok(signal) => signal,
-            Err(_) => {
-                let _ = tokio::signal::ctrl_c().await;
-                return "CTRL-C";
-            }
-        };
-
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => "CTRL-C",
-            _ = ctrl_break.recv() => "CTRL-BREAK",
-        }
-    }
-    #[cfg(all(not(unix), not(windows)))]
-    {
-        let _ = tokio::signal::ctrl_c().await;
-        "CTRL-C"
-    }
-}
 
 async fn drain_pending_startup_commands(
     ctx: &mut RunAutoRuntimeLoopContext<'_>,
@@ -812,7 +768,7 @@ pub(super) async fn run_auto_runtime_event_loop(
             _ = model_target_reconciliation_tick.tick() => {
                 run_auto_reconcile_model_targets(ctx).await;
             }
-            signal = wait_shutdown_signal() => {
+            signal = wait_for_shutdown_signal() => {
                 let _ = emit_event(OutputEvent::ShutdownRequested { signal });
                 ctx.startup_ready_reporter.mark_shutdown_requested();
                 let _ = flush_output().await;

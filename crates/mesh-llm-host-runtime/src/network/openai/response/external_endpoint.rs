@@ -56,6 +56,9 @@ pub(in crate::network::openai) async fn route_http_endpoint_attempt(
     .await
 }
 
+// `RouteAttemptResult` is deliberately `Copy`; its usage-plus-output-digests variant
+// (three optional 32-byte digests inline) exceeds clippy's 128-byte `Err` threshold.
+#[allow(clippy::result_large_err)]
 async fn connect_external_endpoint(
     base_url: &str,
     target: &ExternalEndpointTarget,
@@ -77,6 +80,9 @@ async fn connect_external_endpoint(
     }
 }
 
+// `RouteAttemptResult` is deliberately `Copy`; its usage-plus-output-digests variant
+// (three optional 32-byte digests inline) exceeds clippy's 128-byte `Err` threshold.
+#[allow(clippy::result_large_err)]
 async fn forward_external_endpoint_request(
     upstream: &mut ClientStream,
     base_url: &str,

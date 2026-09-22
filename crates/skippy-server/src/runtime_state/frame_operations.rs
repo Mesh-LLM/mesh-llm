@@ -336,9 +336,22 @@ impl RuntimeState {
         for (session_id, lane_session) in lane_sessions {
             self.sessions.insert(session_id, lane_session);
         }
-        if result.is_ok() {
-            for request in requests {
-                self.add_session_tokens(request.session_id, 1);
+        match &result {
+            Ok(_) => {
+                for request in requests {
+                    self.add_session_tokens(request.session_id, 1);
+                }
+            }
+            Err(error) => {
+                // A one-at-a-time batch reports how far it got. Those sessions
+                // have already advanced natively and cannot be rolled back, so
+                // their tracked positions have to move with them.
+                if let Some(partial) = error.downcast_ref::<skippy_runtime::PartialBatchExecution>()
+                {
+                    for request in requests.iter().take(partial.executed()) {
+                        self.add_session_tokens(request.session_id, 1);
+                    }
+                }
             }
         }
         result
@@ -404,9 +417,22 @@ impl RuntimeState {
         for (session_id, lane_session) in lane_sessions {
             self.sessions.insert(session_id, lane_session);
         }
-        if result.is_ok() {
-            for request in requests {
-                self.add_session_tokens(request.session_id, request.token_ids.len() as u64);
+        match &result {
+            Ok(_) => {
+                for request in requests {
+                    self.add_session_tokens(request.session_id, request.token_ids.len() as u64);
+                }
+            }
+            Err(error) => {
+                // A one-at-a-time batch reports how far it got. Those sessions
+                // have already advanced natively and cannot be rolled back, so
+                // their tracked positions have to move with them.
+                if let Some(partial) = error.downcast_ref::<skippy_runtime::PartialBatchExecution>()
+                {
+                    for request in requests.iter().take(partial.executed()) {
+                        self.add_session_tokens(request.session_id, request.token_ids.len() as u64);
+                    }
+                }
             }
         }
         result
