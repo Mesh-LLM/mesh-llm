@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS serving_requests(id TEXT PRIMARY KEY,peer TEXT NOT NU
 CREATE TABLE IF NOT EXISTS serving_accounting(
     id TEXT PRIMARY KEY REFERENCES serving_requests(id), pricing TEXT NOT NULL,
     max_output INTEGER NOT NULL, tokens INTEGER NOT NULL DEFAULT 0,
-    finished INTEGER NOT NULL DEFAULT 0
+    finished INTEGER NOT NULL DEFAULT 0, forgiven INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS receivables_peer_state ON receivables(peer,state);

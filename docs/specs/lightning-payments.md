@@ -202,9 +202,16 @@ settle, refreshing only that peer's unpaid invoices. No backend starts during
 this wait. The transactional admission check still rejects outstanding debt
 after the deadline; claiming alone does not clear it. This covers the window
 where the previous HTTP response finished but its trailing invoice is settling. Peer identities
-can be replaced, so this blacklist is only a PoC deterrent. Rejecting an input
-invoice leaves that peer blocked too; the PoC has no operator unblock command or
-automatic removal of expired unpaid receivables.
+can be replaced, so this blacklist is only a PoC deterrent. An unpaid input
+invoice keeps that peer blocked after it expires and can no longer be paid; the
+block is deliberate and does not clear on its own. `mesh-llm wallet blocked`
+lists blocked peers with the full peer identifier and each recorded debt, and
+`mesh-llm wallet unblock PEER` (the full identifier or a unique prefix of at
+least eight characters) forgives that peer's recorded debt: unpaid invoices are
+marked forgiven and delivered-but-uninvoiced output is never invoiced. Both are
+ledger-only commands and work while the node is stopped. Forgiveness is an
+operator override, not a refund; a forgiven invoice that is paid later is still
+recorded as received.
 
 Definitively failed inference payments stop automatic recovery attempts and
 release unused payer authorization; provider debt is not forgiven. The PoC does
@@ -332,6 +339,8 @@ mesh-llm wallet fund-wallet --amount-sats 10000
 mesh-llm wallet send lnbc... --max-fee-msat 1000
 mesh-llm wallet send lnbc... --amount-msat 10000 --max-fee-msat 1000
 mesh-llm wallet pending
+mesh-llm wallet blocked
+mesh-llm wallet unblock PEER_ID
 mesh-llm wallet policy --mode automatic --daily-budget-sats 100
 mesh-llm wallet policy --mode free-only
 mesh-llm wallet pricing MODEL --input-msat-per-million 500 --output-msat-per-million 1500
