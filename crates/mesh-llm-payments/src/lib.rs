@@ -1,37 +1,32 @@
-//! Provider-neutral wallets and crash-recoverable inference payments.
+//! Crash-recoverable inference payments over a provider-neutral wallet.
+//!
+//! The wallet itself lives behind [`mesh_llm_wallet::provider::WalletProvider`]
+//! and is supplied by a plugin through [`provisioning::WalletFactory`]. This
+//! crate owns everything the host must stay authoritative for: the ledger,
+//! pricing, budgets, payment intents and settlement orchestration.
 #![forbid(unsafe_code)]
 
 pub mod control;
 pub mod intent;
-pub mod invoice;
 pub mod ledger;
 pub mod pricing;
 pub mod provisioning;
 pub mod service;
-pub mod wallet;
 pub mod wire;
 
-#[cfg(feature = "lexe")]
-mod lexe;
-
-/// Open the embedded mainnet wallet without exposing provider SDK types.
-#[cfg(feature = "lexe")]
-pub async fn open_wallet(
-    directory: &std::path::Path,
-) -> anyhow::Result<std::sync::Arc<dyn wallet::WalletProvider>> {
-    Ok(std::sync::Arc::new(
-        lexe::LexeProvider::open(directory).await?,
-    ))
+/// Wallet types re-exported under their historical paths.
+pub mod invoice {
+    pub use mesh_llm_wallet::invoice::Invoice;
 }
 
-pub fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX)
+/// Wallet types re-exported under their historical paths.
+pub mod wallet {
+    pub use mesh_llm_wallet::provider::{
+        Balance, PayError, PaymentStatus, Transaction, WalletProvider,
+    };
 }
+
+pub use mesh_llm_wallet::now_ms;
 
 #[cfg(test)]
 mod tests;

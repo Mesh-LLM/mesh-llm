@@ -588,6 +588,16 @@ main() {
             "$bundle_binary" \
             --report "$bundle_dir/host-imports.json"
 
+        # The wallet plugin ships beside the host so one archive (and one
+        # signing pass) carries both. It is a separate process and is not
+        # subject to the host import policy; a build without it still yields a
+        # valid, wallet-free product.
+        if [[ -f "$RELEASE_BIN_DIR/mesh-wallet-lexe${BIN_EXT}" ]]; then
+            # Backend-neutral: no GPU flavor suffix, the host looks it up by name.
+            cp "$RELEASE_BIN_DIR/mesh-wallet-lexe${BIN_EXT}" \
+                "$bundle_dir/mesh-wallet-lexe${BIN_EXT}"
+        fi
+
         runtime_dir="$(select_native_runtime_dir)"
         bundled_runtime="$bundle_dir/native-runtimes/$(basename "$runtime_dir")"
         mkdir -p "$(dirname "$bundled_runtime")"

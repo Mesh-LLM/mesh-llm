@@ -1,4 +1,5 @@
-//! Only this module may depend on Lexe SDK types.
+//! Lexe-backed `WalletProvider`. This is the only module in the workspace
+//! that depends on Lexe SDK types; the host never links it.
 
 use std::fs::{File, OpenOptions};
 use std::path::Path;
@@ -18,22 +19,31 @@ use lexe_api_core::models::command::{
 };
 use lexe_api_core::types::payments::{PaymentId, PaymentKind};
 
-use crate::invoice::Invoice;
-use crate::wallet::{Balance, PayError, PaymentStatus, Transaction, WalletProvider};
+use mesh_llm_wallet::contract::WalletIdentity;
+use mesh_llm_wallet::invoice::Invoice;
+use mesh_llm_wallet::provider::{Balance, PayError, PaymentStatus, Transaction, WalletProvider};
 
-pub(crate) fn is_provisioned(directory: &Path) -> bool {
-    directory.join("lexe/seedphrase.txt").exists()
+/// Persisted wallet state exists under `directory`. No network, no side effects.
+pub fn is_provisioned(directory: &Path) -> bool {
+    directory.join("seedphrase.txt").exists()
 }
 
-pub(crate) struct LexeProvider {
+pub struct LexeProvider {
     wallet: LexeWallet,
     // Lexe's local cache is not a multiprocess ledger. CLI clients should use
     // the running node's management API while it owns this lock.
     _lock: File,
 }
 
+/// Result of opening: the provider plus the identity the host pins.
+pub struct Opened {
+    pub provider: LexeProvider,
+    pub identity: WalletIdentity,
+    pub created: bool,
+}
+
 impl LexeProvider {
-    pub(crate) async fn open(directory: &Path) -> Result<Self> {
+    pub async fn open(directory: &Path) -> Result<Opened> {
         std::fs::create_dir_all(directory)?;
         #[cfg(unix)]
         {
@@ -49,11 +59,13 @@ impl LexeProvider {
         lock.try_lock_exclusive()
             .context("wallet is already open; use the running node's wallet API")?;
         let seed_path = directory.join("seedphrase.txt");
+        let mut created = false;
         let seed = match RootSeed::read_from_path(&seed_path)
             .map_err(|_| anyhow::anyhow!("could not read wallet seed"))?
         {
             Some(seed) => seed,
             None => {
+                created = true;
                 let seed = RootSeed::generate();
                 seed.write_to_path(&seed_path)
                     .map_err(|_| anyhow::anyhow!("could not persist wallet seed"))?;
@@ -74,9 +86,20 @@ impl LexeProvider {
             .signup(&seed, None)
             .await
             .map_err(|_| anyhow::anyhow!("Lexe wallet provisioning failed"))?;
-        Ok(Self {
-            wallet,
-            _lock: lock,
+        // The Lexe user public key is derived from the seed and is stable for
+        // the life of the wallet, which is exactly what the host pin needs.
+        let identity = WalletIdentity {
+            wallet_id: wallet.user_config().user_pk.to_string(),
+            provider: "lexe".into(),
+            network: "mainnet".into(),
+        };
+        Ok(Opened {
+            provider: Self {
+                wallet,
+                _lock: lock,
+            },
+            identity,
+            created,
         })
     }
 
@@ -175,7 +198,7 @@ impl WalletProvider for LexeProvider {
         let lap = |phase: &'static str, mark: &mut std::time::Instant| {
             let now = std::time::Instant::now();
             tracing::debug!(
-                target: "mesh_llm::payments::timing",
+                target: "mesh_wallet_lexe::timing",
                 phase,
                 ms = now.duration_since(*mark).as_millis() as u64,
                 total_ms = now.duration_since(started).as_millis() as u64,
@@ -184,7 +207,7 @@ impl WalletProvider for LexeProvider {
             *mark = now;
         };
         invoice
-            .validate_payment(amount_msat, crate::now_ms())
+            .validate_payment(amount_msat, mesh_llm_wallet::now_ms())
             .map_err(PayError::NotSubmitted)?;
         if let Some(existing) = self
             .lookup(&invoice.payment_hash)
@@ -307,7 +330,7 @@ impl LexeProvider {
             let started = std::time::Instant::now();
             let payment = self.lookup(payment_hash).await?;
             tracing::debug!(
-                target: "mesh_llm::payments::timing",
+                target: "mesh_wallet_lexe::timing",
                 phase = "lookup",
                 ms = started.elapsed().as_millis() as u64,
                 "wallet lookup"

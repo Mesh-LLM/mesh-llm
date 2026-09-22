@@ -1,12 +1,13 @@
 # mesh-llm-payments
 
-Provider-neutral Lightning wallet operations, BOLT11 validation, integer-msat
-pricing, durable spending authorization, and two-payment inference settlement.
-The default private adapter uses Lexe on Bitcoin mainnet. Public contracts expose
-only this crate's wallet types; applications use the local management API.
+Integer-msat pricing, durable spending authorization, and two-payment inference
+settlement over a provider-neutral wallet. The wallet trait, BOLT11 validation
+and the `wallet.v1` plugin contract live in `mesh-llm-wallet`; the shipped
+Lexe implementation is the `mesh-wallet-lexe` plugin executable. This crate
+links no wallet SDK. Applications use the local management API.
 
 `WalletProvider::wait_for_payment` awaits an authoritative terminal payment
-update. Adapters may use native events; Lexe polls behind this interface.
+update. Adapters may use native events or poll behind this interface.
 Subscriptions must also observe already-settled payments and close the
 subscribe/lookup race. Cancelling observation never cancels the payment or
 releases an uncertain reservation. Durable recovery continues independently.

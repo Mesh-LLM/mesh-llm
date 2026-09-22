@@ -1,0 +1,35 @@
+[package]
+name = "mesh-llm-wallet"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Provider-neutral Lightning wallet abstraction and the wallet.v1 plugin contract"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Adapter that projects a `WalletBackend` onto a mesh-llm plugin operation
+# router. Wallet plugin executables enable this; the host and the payment
+# ledger do not.
+plugin-server = ["dep:mesh-llm-plugin", "dep:rmcp", "dep:schemars", "dep:tokio"]
+
+[dependencies]
+anyhow.workspace = true
+async-trait = "0.1"
+hex = "0.4"
+lightning-invoice = { version = "0.35.0-rc1", features = ["std"] }
+mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.76.1", optional = true }
+rmcp = { version = "3", features = ["server"], optional = true }
+schemars = { version = "1", optional = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio = { version = "1", features = ["sync"], optional = true }
+
+[dev-dependencies]
+bitcoin = { version = "0.32", features = ["secp-recovery"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

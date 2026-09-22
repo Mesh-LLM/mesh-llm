@@ -99,6 +99,12 @@ use mesh_llm_plugin::MeshVisibility;
 use mesh_llm_plugin_manager::store::InstalledPluginWebUiValidationStatus;
 
 pub const BLOBSTORE_PLUGIN_ID: &str = "blobstore";
+/// Plugin name of the wallet executable bundled beside the host binary.
+pub const BUNDLED_WALLET_PLUGIN_ID: &str = "wallet-lexe";
+/// Executable file name (without `.exe`) looked up next to `mesh-llm`.
+pub const BUNDLED_WALLET_PLUGIN_BIN: &str = "mesh-wallet-lexe";
+/// Override the bundled wallet plugin path (tests, dev builds).
+pub const BUNDLED_WALLET_PLUGIN_ENV: &str = "MESH_LLM_BUNDLED_WALLET_PLUGIN";
 pub(crate) const PROTOCOL_VERSION: u32 = mesh_llm_plugin::PROTOCOL_VERSION;
 const REQUEST_TIMEOUT_SECS: u64 = 30;
 #[cfg(test)]
@@ -1564,6 +1570,151 @@ mod tests {
         assert_eq!(resolved.externals[0].name, BLOBSTORE_PLUGIN_ID);
         assert!(resolved.externals[0].startup.optional);
         assert!(resolved.inactive.is_empty());
+    }
+
+    /// Thread-local bundled-wallet override; cleared on drop.
+    struct BundledWalletEnv(std::path::PathBuf);
+
+    impl BundledWalletEnv {
+        fn present() -> Self {
+            let path = std::path::PathBuf::from("/opt/mesh-llm/mesh-wallet-lexe");
+            super::config::TEST_BUNDLED_WALLET_PLUGIN
+                .with(|slot| *slot.borrow_mut() = Some(path.clone()));
+            Self(path)
+        }
+    }
+
+    impl Drop for BundledWalletEnv {
+        fn drop(&mut self) {
+            super::config::TEST_BUNDLED_WALLET_PLUGIN.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+
+    fn wallet_entry(enabled: Option<bool>) -> PluginConfigEntry {
+        PluginConfigEntry {
+            name: BUNDLED_WALLET_PLUGIN_ID.into(),
+            enabled,
+            web_ui_enabled: None,
+            command: None,
+            args: Vec::new(),
+            url: None,
+            settings: Default::default(),
+            startup: Default::default(),
+        }
+    }
+
+    #[test]
+    fn bundled_wallet_is_registered_when_present_beside_host() {
+        let env = BundledWalletEnv::present();
+        let resolved = resolve_plugins(&MeshConfig::default(), private_host_mode()).unwrap();
+        let names: Vec<_> = resolved.externals.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, [BLOBSTORE_PLUGIN_ID, BUNDLED_WALLET_PLUGIN_ID]);
+        let wallet = &resolved.externals[1];
+        assert_eq!(wallet.command, env.0.display().to_string());
+        assert!(
+            wallet.startup.optional,
+            "a missing wallet must never block startup"
+        );
+        assert!(
+            !wallet.startup.lazy_start,
+            "capability resolution needs the manifest, so the process starts eagerly"
+        );
+        assert!(wallet.args.is_empty());
+    }
+
+    #[test]
+    fn bundled_wallet_is_absent_without_an_executable() {
+        let resolved = resolve_plugins(&MeshConfig::default(), private_host_mode()).unwrap();
+        assert_eq!(resolved.externals.len(), 1);
+        assert_eq!(resolved.externals[0].name, BLOBSTORE_PLUGIN_ID);
+    }
+
+    #[test]
+    fn bundled_wallet_can_be_disabled_at_runtime() {
+        let _env = BundledWalletEnv::present();
+        let config = MeshConfig {
+            plugins: vec![wallet_entry(Some(false))],
+            defaults: None,
+            ..MeshConfig::default()
+        };
+        let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
+        assert_eq!(resolved.externals.len(), 1);
+        assert_eq!(resolved.externals[0].name, BLOBSTORE_PLUGIN_ID);
+        assert!(resolved.inactive.is_empty());
+    }
+
+    #[test]
+    fn bundled_wallet_entry_keeps_startup_overrides() {
+        let _env = BundledWalletEnv::present();
+        let mut entry = wallet_entry(Some(true));
+        entry.startup = PluginStartupConfig {
+            init_timeout_secs: Some(5),
+            ..PluginStartupConfig::default()
+        };
+        let config = MeshConfig {
+            plugins: vec![entry],
+            defaults: None,
+            ..MeshConfig::default()
+        };
+        let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
+        let wallet = resolved
+            .externals
+            .iter()
+            .find(|s| s.name == BUNDLED_WALLET_PLUGIN_ID)
+            .expect("wallet registered once");
+        assert_eq!(
+            resolved
+                .externals
+                .iter()
+                .filter(|s| s.name == BUNDLED_WALLET_PLUGIN_ID)
+                .count(),
+            1
+        );
+        assert_eq!(
+            wallet.startup.init_timeout,
+            std::time::Duration::from_secs(5)
+        );
+        assert!(wallet.startup.optional && !wallet.startup.lazy_start);
+    }
+
+    #[test]
+    fn bundled_wallet_rejects_url_or_args_without_command() {
+        let _env = BundledWalletEnv::present();
+        let mut entry = wallet_entry(Some(true));
+        entry.url = Some("http://example.test".into());
+        let config = MeshConfig {
+            plugins: vec![entry],
+            defaults: None,
+            ..MeshConfig::default()
+        };
+        let error = resolve_plugins(&config, private_host_mode())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("bundled with mesh-llm"), "{error}");
+    }
+
+    #[test]
+    fn explicit_command_replaces_bundled_wallet() {
+        let _env = BundledWalletEnv::present();
+        let mut entry = wallet_entry(Some(true));
+        entry.command = Some("/opt/wallets/my-wallet".into());
+        let config = MeshConfig {
+            plugins: vec![entry],
+            defaults: None,
+            ..MeshConfig::default()
+        };
+        let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
+        let wallets: Vec<_> = resolved
+            .externals
+            .iter()
+            .filter(|s| s.name == BUNDLED_WALLET_PLUGIN_ID)
+            .collect();
+        assert_eq!(wallets.len(), 1);
+        assert_eq!(wallets[0].command, "/opt/wallets/my-wallet");
+        assert!(
+            !wallets[0].startup.optional,
+            "explicit plugins keep their own startup"
+        );
     }
 
     #[test]

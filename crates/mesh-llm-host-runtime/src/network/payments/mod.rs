@@ -5,6 +5,7 @@ mod delivery;
 mod gate;
 pub(crate) mod request;
 mod server;
+pub(crate) mod wallet_plugin;
 
 pub(crate) use server::serve;
 

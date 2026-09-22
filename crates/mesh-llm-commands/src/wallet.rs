@@ -36,6 +36,13 @@ pub async fn run(command: &WalletCommand, port: u16, config: Option<&Path>) -> R
         }
         // Never repeat a request after it may have reached the server.
         Err(error) if error.is_connect() => {
+            if requires_wallet(&command) {
+                bail!(
+                    "mesh-llm is not running on port {port}; wallet operations need the running \
+                     node because only it owns the wallet plugin. Start `mesh-llm` and retry. \
+                     (ledger-only commands such as policy, pricing and pending work offline)"
+                );
+            }
             let directory = if let Some(config) = config {
                 config.parent().unwrap_or(Path::new(".")).join("payments")
             } else {
@@ -53,6 +60,17 @@ pub async fn run(command: &WalletCommand, port: u16, config: Option<&Path>) -> R
         serde_json::to_string_pretty(&value)?
     )?;
     Ok(())
+}
+
+/// Commands that need a live wallet, which only the running node can reach.
+fn requires_wallet(command: &ControlCommand) -> bool {
+    matches!(
+        command,
+        ControlCommand::Balance
+            | ControlCommand::Transactions { .. }
+            | ControlCommand::Fund { .. }
+            | ControlCommand::Send { .. }
+    )
 }
 
 fn control_command(command: &WalletCommand) -> Result<ControlCommand> {

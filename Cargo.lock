@@ -4472,6 +4472,7 @@ dependencies = [
  "mesh-llm-system",
  "mesh-llm-types",
  "mesh-llm-ui",
+ "mesh-llm-wallet",
  "mesh-mixture-of-agents",
  "mesh-native-serving-plugin-host",
  "model-artifact",
@@ -4607,12 +4608,9 @@ dependencies = [
  "async-trait",
  "bitcoin",
  "fs2",
- "hex",
- "lexe",
- "lexe-api-core",
  "lightning-invoice",
+ "mesh-llm-wallet",
  "rusqlite",
- "rustls",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -4820,6 +4818,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "mesh-llm-wallet"
+version = "0.76.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bitcoin",
+ "hex",
+ "lightning-invoice",
+ "mesh-llm-plugin",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tokio",
+]
+
+[[package]]
 name = "mesh-mixture-of-agents"
 version = "0.76.1"
 dependencies = [
@@ -4846,6 +4862,24 @@ dependencies = [
  "skippy-server",
  "skippy-tokenizer",
  "tracing",
+]
+
+[[package]]
+name = "mesh-wallet-lexe"
+version = "0.76.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "fs2",
+ "lexe",
+ "lexe-api-core",
+ "mesh-llm-plugin",
+ "mesh-llm-wallet",
+ "rustls",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

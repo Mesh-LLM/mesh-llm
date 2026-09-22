@@ -54,15 +54,46 @@ original terms. Older payment implementations still apply their own limits.
 
 ## Wallet and persistence
 
-`mesh-llm-payments::wallet::WalletProvider` exposes balance, recent transactions,
-invoice creation, bounded payment, lookup by payment hash, and asynchronous
-`wait_for_payment(payment_hash)` completion. Lexe types stay
-inside its private adapter. The default feature selects Lexe 0.1.23 on mainnet.
-NWC, BOLT12, and operator-facing provider selection are deferred. Embedders can
-inject a `WalletFactory` through `PaymentService::with_factory`; discovery is
-side-effect-free and opening remains lazy/single-flight. The default factory
-keeps the existing Lexe directory and wallet identity. Routing and settlement
-no longer inspect Lexe seed paths themselves.
+The wallet is a plugin. `mesh-llm-wallet::provider::WalletProvider` exposes
+balance, recent transactions, invoice creation, bounded payment, lookup by
+payment hash, and asynchronous `wait_for_payment(payment_hash)` completion.
+`mesh-llm-payments` re-exports it under `mesh_llm_payments::wallet` and drives
+it from the ledger; neither crate links a wallet SDK.
+
+Concrete wallets are separate plugin executables that advertise the `wallet.v1`
+capability (`mesh-llm-wallet::contract`). The host resolves the provider by
+capability, never by plugin name. `mesh-wallet-lexe` is the shipped
+implementation: Lexe 0.1.23 on mainnet, bundled beside the `mesh-llm` binary
+and auto-registered as the optional plugin `wallet-lexe`. The process starts
+with the host but is idle until the first wallet operation; starting it never
+provisions or contacts a wallet.
+`[[plugin]] name = "wallet-lexe" enabled = false` turns it off at runtime;
+an explicit `command` swaps in a different `wallet.v1` implementation.
+NWC, BOLT12 and multi-provider selection are deferred.
+
+What stays in the host: token metering, output gating, budgets, the ledger,
+settlement bookkeeping and recovery. What the plugin does: turn wallet intents
+into wallet facts. Response bytes never cross the plugin boundary, and no
+per-token IPC exists.
+
+`wallet.v1` operations return structured errors with a kind:
+`not_open`, `invalid_request`, `not_submitted`, `uncertain`, `failed`. The
+host adapter (`network/payments/wallet_plugin.rs`) maps these back onto
+`PayError`: only `not_submitted` and `invalid_request` become `NotSubmitted`;
+IPC loss, timeouts, `failed` and unstructured errors are `Uncertain` and are
+never re-sent. A `not_open` (plugin restarted and lost its open wallet) is
+answered with exactly one re-open and one retry. `pay` and the `wait_for_*`
+long-polls carry no IPC deadline; the caller owns cancellation by dropping the
+future.
+
+The host pins the wallet identity. After the first successful open it writes
+`payments/wallet-provider.json` (`plugin`, `wallet_id`, `provider`, `network`)
+and refuses to open a plugin or wallet that does not match, because outstanding
+reservations and receivables are only meaningful against the wallet that created
+them. `has_persisted_wallet` reads this pin; it is side-effect-free and never
+starts the plugin. Embedders can still inject their own `WalletFactory` through
+`PaymentService::with_factory`; without a plugin manager the service is
+ledger-only and every wallet operation fails with a clear error.
 
 The payment service awaits provider completion for incoming and pending outgoing
 payments. A second method awaits the earliest receiver-side evidence that an
@@ -89,12 +120,18 @@ seeing a paid provider does not provision one. The directory contains:
 - `payments.sqlite3` and its WAL: policy, seller prices, frozen request terms,
   approvals, reservations, invoices, payment outcomes, receivables and output
   delivery counts. SQLite uses WAL and synchronous FULL.
-- `lexe/seedphrase.txt`: recovery material persisted before wallet provisioning,
-  with the SDK's exclusive creation and private file permissions. Unix payment
-  and wallet directories are mode 0700. Protect and back up this directory; no
-  seed export UI or encrypted-at-rest application keystore is added by this PoC.
-- Process locks: one service and wallet writer per directory. CLI commands use
-  the running node's API, falling back to direct access only on connect failure.
+- `wallet-provider.json`: the host-owned wallet pin described above.
+- `lexe/`: handed to the wallet plugin as its data directory. For
+  `mesh-wallet-lexe` it holds `seedphrase.txt`, recovery material persisted
+  before wallet provisioning with the SDK's exclusive creation and private file
+  permissions. Unix payment and wallet directories are mode 0700. Protect and
+  back up this directory; no seed export UI or encrypted-at-rest application
+  keystore is added by this PoC.
+- Process locks: one service per directory in the host, one wallet writer per
+  directory in the plugin. CLI commands use the running node's API. When the
+  node is not running, ledger-only commands (policy, pricing, pending) fall back
+  to direct access; wallet commands (balance, fund, send, transactions) need the
+  node running because only it owns the wallet plugin.
 
 Payment intent is committed as `prepared` before wallet I/O and changes durably
 to `pending` immediately before submission. Only prepared intents may be

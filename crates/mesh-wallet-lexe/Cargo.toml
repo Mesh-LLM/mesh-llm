@@ -1,0 +1,31 @@
+[package]
+name = "mesh-wallet-lexe"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Lexe Lightning wallet plugin for mesh-llm (wallet.v1)"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "mesh-wallet-lexe"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+async-trait = "0.1"
+fs2 = "0.4"
+lexe = { version = "=0.1.23", features = ["unstable"] }
+lexe-api-core = { version = "=0.1.23" }
+mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.76.1" }
+mesh-llm-wallet = { path = "../mesh-llm-wallet", version = "0.76.1", features = ["plugin-server"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+[dev-dependencies]
+tempfile = "3"

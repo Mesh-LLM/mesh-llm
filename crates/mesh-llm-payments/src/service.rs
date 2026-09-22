@@ -45,11 +45,10 @@ pub struct PaymentService {
 }
 
 impl PaymentService {
+    /// Ledger-only service. Wallet operations fail until a factory is injected
+    /// with [`Self::with_factory`] or a provider with [`Self::with_provider`].
     pub fn open(directory: &Path) -> Result<Self> {
-        Self::with_factory(
-            directory,
-            Arc::new(crate::provisioning::DefaultWalletFactory),
-        )
+        Self::with_factory(directory, Arc::new(crate::provisioning::NoWalletFactory))
     }
 
     pub fn with_factory(

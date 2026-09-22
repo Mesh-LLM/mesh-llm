@@ -40,6 +40,5 @@ async fn factory_is_lazy_single_flight_and_survives_service_restart() -> Result<
     assert_eq!(factory.opens.load(Ordering::SeqCst), 1);
     service.wallet().await?;
     assert_eq!(factory.opens.load(Ordering::SeqCst), 2);
-    assert!(!directory.path().join("lexe").exists());
     Ok(())
 }

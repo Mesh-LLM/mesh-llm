@@ -17,37 +17,87 @@ pub trait WalletFactory: Send + Sync {
     async fn open(&self, payment_directory: &Path) -> Result<Arc<dyn WalletProvider>>;
 }
 
-/// The shipped default. Alternative embedders inject their factory into the
-/// payment service; no Lexe SDK type crosses this boundary.
-pub struct DefaultWalletFactory;
+/// A factory with no wallet behind it. `PaymentService::open` uses this so
+/// ledger-only operations (policy, pricing, pending) work without any wallet
+/// plugin; every wallet operation fails with a clear error. Embedders inject a
+/// real factory with `PaymentService::with_factory`.
+pub struct NoWalletFactory;
 
 #[async_trait]
-impl WalletFactory for DefaultWalletFactory {
+impl WalletFactory for NoWalletFactory {
     fn is_provisioned(&self, directory: &Path) -> bool {
-        #[cfg(feature = "lexe")]
-        {
-            crate::lexe::is_provisioned(directory)
-        }
-        #[cfg(not(feature = "lexe"))]
-        {
-            let _ = directory;
-            false
-        }
+        WalletPin::load(directory).is_some()
     }
 
-    async fn open(&self, directory: &Path) -> Result<Arc<dyn WalletProvider>> {
-        #[cfg(feature = "lexe")]
-        {
-            crate::open_wallet(&directory.join("lexe")).await
-        }
-        #[cfg(not(feature = "lexe"))]
-        {
-            let _ = directory;
-            anyhow::bail!("no wallet provider configured")
-        }
+    async fn open(&self, _directory: &Path) -> Result<Arc<dyn WalletProvider>> {
+        anyhow::bail!("no wallet provider available; a wallet plugin must be running")
     }
 }
 
+/// Host-owned record of which wallet backs this payment directory.
+///
+/// Written after the first successful plugin open; read on every later open.
+/// Outstanding reservations and receivables in the ledger are only meaningful
+/// against this exact wallet, so a different plugin or a different wallet
+/// identity is refused rather than silently adopted.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct WalletPin {
+    pub plugin: String,
+    pub wallet_id: String,
+    pub provider: String,
+    pub network: String,
+}
+
+impl WalletPin {
+    pub const FILE_NAME: &'static str = "wallet-provider.json";
+
+    pub fn path(directory: &Path) -> std::path::PathBuf {
+        directory.join(Self::FILE_NAME)
+    }
+
+    /// Side-effect free: absent or unreadable pins read as `None`.
+    pub fn load(directory: &Path) -> Option<Self> {
+        let raw = std::fs::read(Self::path(directory)).ok()?;
+        serde_json::from_slice(&raw).ok()
+    }
+
+    /// Persist durably before anything that depends on the pin.
+    pub fn store(&self, directory: &Path) -> Result<()> {
+        std::fs::create_dir_all(directory)?;
+        let path = Self::path(directory);
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, serde_json::to_vec_pretty(self)?)?;
+        std::fs::File::open(&tmp)?.sync_all()?;
+        std::fs::rename(&tmp, &path)?;
+        #[cfg(unix)]
+        std::fs::File::open(directory)?.sync_all()?;
+        Ok(())
+    }
+}
+
+/// Persisted wallet state exists for this payment directory. Side-effect free.
 pub fn has_persisted_wallet(directory: &Path) -> bool {
-    DefaultWalletFactory.is_provisioned(directory)
+    NoWalletFactory.is_provisioned(directory)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pin_round_trips_and_is_absent_by_default() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(WalletPin::load(dir.path()).is_none());
+        assert!(!has_persisted_wallet(dir.path()));
+        let pin = WalletPin {
+            plugin: "wallet-lexe".into(),
+            wallet_id: "abc".into(),
+            provider: "lexe".into(),
+            network: "mainnet".into(),
+        };
+        pin.store(dir.path()).unwrap();
+        assert_eq!(WalletPin::load(dir.path()), Some(pin));
+        assert!(has_persisted_wallet(dir.path()));
+        assert!(!dir.path().join("wallet-provider.json.tmp").exists());
+    }
 }
