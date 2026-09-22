@@ -1,17 +1,17 @@
-From 0024f810fb91018585c54e5b51dcdfc7d1934ef1 Mon Sep 17 00:00:00 2001
+From 4056e9342bf4e4f2159877a6eff8aff31ddea1fd Mon Sep 17 00:00:00 2001
 From: sat <sat@local>
-Date: Wed, 23 Sep 2026 05:42:49 +1000
+Date: Wed, 23 Sep 2026 06:41:46 +1000
 Subject: [PATCH] llama: emit split_simple ubatches in canonical sequence order
 
 ---
- src/llama-batch.cpp | 22 ++++++++++++++++++++++
- 1 file changed, 22 insertions(+)
+ src/llama-batch.cpp | 34 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 34 insertions(+)
 
 diff --git a/src/llama-batch.cpp b/src/llama-batch.cpp
-index 2b98a552f..a8f605d58 100644
+index 2b98a552f..df5d39f0f 100644
 --- a/src/llama-batch.cpp
 +++ b/src/llama-batch.cpp
-@@ -504,6 +504,28 @@ llama_ubatch llama_batch_allocr::split_simple(uint32_t n_ubatch) {
+@@ -504,6 +504,40 @@ llama_ubatch llama_batch_allocr::split_simple(uint32_t n_ubatch) {
          }
      }
  
@@ -28,6 +28,18 @@ index 2b98a552f..a8f605d58 100644
 +    // safe for prefill: a sequence's own tokens keep their relative order, and only the
 +    // sequences move relative to each other. Output attribution is unaffected because
 +    // ubatch_add records each token's original batch index in out_ids.
++    // Only when this batch carries real tokens.
++    //
++    // A split's interior stage does not: it receives activations from the stage before
++    // it and imports them POSITIONALLY, so its ubatch order must match the order the
++    // sending stage used. Sorting independently in each process breaks that alignment
++    // and aborts the interior stage under load -- measured on a two-process split as a
++    // core dump, 0 tok/s, every request failing.
++    //
++    // The stage that needs the canonical order is the one that owns the API and the
++    // backend samplers, and that stage is fed real tokens. Gating on batch.token applies
++    // it exactly there and leaves the activation-importing stage's order untouched.
++    if (batch.token != nullptr)
 +    std::stable_sort(idxs.begin(), idxs.end(), [this](int32_t a, int32_t b) {
 +        const llama_seq_id sa = batch.n_seq_id[a] > 0 ? batch.seq_id[a][0] : -1;
 +        const llama_seq_id sb = batch.n_seq_id[b] > 0 ? batch.seq_id[b][0] : -1;
