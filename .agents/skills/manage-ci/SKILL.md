@@ -378,6 +378,13 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Operational safety
 
+- Self-hosted jobs must finish with bounded cleanup of their own generated
+  files after artifact uploads and explicit cache saves. Preserve shared model,
+  compiler and package caches, source checkouts, and local recovery artifacts
+  whose upload failed. Cleanup must run on success, failure and cancellation,
+  validate deletion boundaries, and never sweep another job's directories.
+  Runner loss or force termination may prevent the final step from running.
+
 - Agentic replay executes complete recorded sessions only on trusted main.
   Long-context qualification is currently manual-only; restore the daily
   schedule only after reviewed calibration of all model/concurrency cells.
