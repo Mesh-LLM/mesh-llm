@@ -52,6 +52,18 @@ Use this skill when changing the Skippy staged-runtime ABI carried in
 - Do not preserve retired source include paths unless the task explicitly asks
   for compatibility. Continue to version and mirror any binary ABI change.
 
+## Graph input capabilities
+
+- Derive planned input modes from what the graph can execute, not merely from
+  allocated input tensors. Shared builders may allocate an embedding input that
+  a particular model's metadata forbids using.
+- Carry capability declarations through both helper construction and direct
+  input-bundle registration. Keep model restrictions at graph construction;
+  do not add family-name dispatch to the generic planner.
+- When adding an input-mode profile, cover both an accepting synthetic model
+  and a rejecting variant. Preserve the graph's existing rejection of invalid
+  direct input while ensuring metadata-only planning never probes that mode.
+
 ## Native API documentation
 
 - Treat Doxygen-style comments in `include/skippy.h` and
