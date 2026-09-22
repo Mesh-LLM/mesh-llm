@@ -355,7 +355,8 @@ startup_timeout_for_bytes() {
 
 cert_timeout_for_startup() {
   local startup_timeout="$1"
-  local timeout=$(( CERT_TIMEOUT_MIN_SECS + startup_timeout * CERT_TIMEOUT_STARTUP_MULTIPLIER ))
+  local extra_startups="${2:-0}"
+  local timeout=$(( CERT_TIMEOUT_MIN_SECS + startup_timeout * (CERT_TIMEOUT_STARTUP_MULTIPLIER + extra_startups) ))
   if (( timeout > CERT_TIMEOUT_MAX_SECS )); then
     timeout="$CERT_TIMEOUT_MAX_SECS"
   fi
@@ -501,7 +502,8 @@ run_certify() {
   local cert_run_id cert_run_dir exit_code manifest_path cert_timeout port_base started_at elapsed_seconds
   cert_run_id="$(printf '%03d-%s' "$TOTAL" "$(slugify "$family")")"
   cert_run_dir="$CERT_DIR/$cert_run_id"
-  cert_timeout="$(cert_timeout_for_startup "$startup_timeout")"
+  # The all-head lane opens the integrated model and then its clean baseline.
+  cert_timeout="$(cert_timeout_for_startup "$startup_timeout" "$((2 * native_mtp))")"
   port_base=$((19000 + ((TOTAL - 1) % 20) * 50))
   echo "==> family-certify: family=$family split=$split_layer chain=$chain_splits mtp=$native_mtp startup_timeout=${startup_timeout}s cert_timeout=${cert_timeout}s model=$(basename "$target")"
   local command=(
@@ -627,6 +629,9 @@ preflight_manifest() {
     local expected_lane_csv
     expected_lane_csv="$(jq -r --arg model_class "$model_class" --arg profile "$profile" \
       '.model_class_lanes[$model_class] | if $profile == "workload-smoke" then .[:1] else . end | join(",")' "$plan")"
+    if [[ "$model_class" == "causal_generation" ]] && (( expected_mtp_layers > 0 )); then
+      expected_lane_csv+=",native-mtp-heads"
+    fi
     if [[ -z "$expected_lane_csv" || "$lane_csv" != "$expected_lane_csv" ]]; then
       echo "family $family does not preserve the $model_class lane contract" >&2
       exit 1
@@ -653,6 +658,10 @@ preflight_manifest() {
     if ! scan_model "$family" "$target" "$model_id" "$source_revision"; then
       PREFLIGHT_FAILURE_COUNT=$((PREFLIGHT_FAILURE_COUNT + 1))
       continue
+    fi
+    if (( DRY_RUN == 1 && expected_mtp_layers > 0 )); then
+      # Planning uses the declared count; execution still requires the scan below.
+      MODEL_HAS_MTP=1
     fi
     if (( DRY_RUN == 0 )); then
       local actual_mtp_layers=0
@@ -1072,7 +1081,7 @@ if (( DRY_RUN == 0 )); then
     echo "- Native MTP models: $(( $(wc -l < "$NATIVE_MTP_MODELS_TSV") - 1 ))"
     echo "- Preflight failures: $PREFLIGHT_FAILURE_COUNT"
     echo "- Startup timeout policy: min ${STARTUP_TIMEOUT_MIN_SECS}s + ${STARTUP_TIMEOUT_PER_GIB_SECS}s/GiB, capped at ${STARTUP_TIMEOUT_MAX_SECS}s"
-    echo "- Certification wall-clock policy: min ${CERT_TIMEOUT_MIN_SECS}s + ${CERT_TIMEOUT_STARTUP_MULTIPLIER}x startup timeout, capped at ${CERT_TIMEOUT_MAX_SECS}s"
+    echo "- Certification wall-clock policy: min ${CERT_TIMEOUT_MIN_SECS}s + ${CERT_TIMEOUT_STARTUP_MULTIPLIER}x startup timeout (+2x for native MTP head/baseline loads), capped at ${CERT_TIMEOUT_MAX_SECS}s"
     echo "- Minimum free space: ${MIN_FREE_GIB} GiB"
     echo
     echo "## Typed outcomes"

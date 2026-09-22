@@ -68,6 +68,21 @@ class FamilyEvidenceTests(unittest.TestCase):
         E.write(self.package / 'identity.json', self.identity)
         self.digest = E.sha(self.package / 'identity.json')
 
+    def test_mtp_family_cannot_certify_without_its_all_head_lane(self):
+        model = copy.deepcopy(self.plan['selected_models'][0])
+        model['certification_lanes'].append('native-mtp-heads')
+        path = self.evidence / 'dense/results.jsonl'
+        with self.assertRaisesRegex(ValueError, 'native-mtp-heads incomplete'):
+            E.validate_results(path, 'dense', model)
+        row = json.loads(path.read_text())
+        row['outcomes'].append({'name': 'native-mtp-heads', 'status': 'pass', 'exit_code': 0})
+        path.write_text(json.dumps(row) + '\n')
+        E.validate_results(path, 'dense', model)
+        row['outcomes'][-1]['status'] = 'fail'
+        path.write_text(json.dumps(row) + '\n')
+        with self.assertRaisesRegex(ValueError, 'native-mtp-heads incomplete'):
+            E.validate_results(path, 'dense', model)
+
     def build_closure(self):
         """Create a synthetic workload oracle closure and its handoff tar."""
         directory = self.root / 'closure-src'
