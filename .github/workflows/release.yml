@@ -40,6 +40,10 @@ permissions:
   packages: read
 
 env:
+  # Compiled into release binaries by `mesh-llm-analytics`. Unset in forks and
+  # in local builds, which then report no usage data at all. See
+  # website/src/docs/pages/analytics.md.
+  MESH_LLM_POSTHOG_KEY: ${{ secrets.MESH_LLM_POSTHOG_KEY }}
   CACHE_NAMESPACE: mesh-llm
   SCCACHE_DIR: ${{ github.workspace }}/../.sccache
   SCCACHE_GHA_ENABLED: "true"

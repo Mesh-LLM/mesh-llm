@@ -5,9 +5,9 @@ mod runtime_surface_help;
 mod validation;
 
 pub use commands::{
-    AuthCommand, BinaryFlavor, Cli, Command, ConfigCommand, DiscoveryScope, DoctorCommand,
-    GpuCommand, MeshDiscoveryMode, MeshGuardrailCliMode, PluginCommand, SkillAgentArg,
-    SkillCommand, TrustCommand, TrustPolicy,
+    AnalyticsCommand, AuthCommand, BinaryFlavor, Cli, Command, ConfigCommand, DiscoveryScope,
+    DoctorCommand, GpuCommand, MeshDiscoveryMode, MeshGuardrailCliMode, PluginCommand,
+    SkillAgentArg, SkillCommand, TrustCommand, TrustPolicy,
 };
 pub use logging_help::logging_help;
 pub use normalization::{

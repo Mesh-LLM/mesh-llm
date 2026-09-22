@@ -1,3 +1,4 @@
+mod analytics;
 mod config;
 mod discover;
 mod doctor;
@@ -10,6 +11,7 @@ mod setup;
 use anyhow::Result;
 use mesh_llm_cli::{Cli, Command};
 
+use self::analytics::dispatch_analytics_command;
 use self::config::dispatch_config_command;
 use self::discover::{DiscoverOptions, run_discover, run_stop};
 use self::doctor::dispatch_doctor_command;
@@ -77,6 +79,9 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
         }
         Command::Setup { .. } => {
             dispatch_setup_command(cmd, cli.config.as_deref(), cli.llama_flavor).await
+        }
+        Command::Analytics { command } => {
+            dispatch_analytics_command(command, cli.config.as_deref())
         }
         Command::Uninstall {
             dry_run,

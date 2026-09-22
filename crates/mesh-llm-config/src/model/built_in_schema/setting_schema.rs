@@ -27,6 +27,17 @@ fn telemetry_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSetti
     setting
 }
 
+/// Anonymous product analytics. Config-file only: the opt-out must not be
+/// reversible from the API surface, so a remote caller cannot turn reporting
+/// back on for a machine whose owner turned it off.
+fn analytics_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSchema {
+    let mut setting = basic_setting(path, value_schema);
+    setting.control_surfaces = vec![ConfigControlSurface::ConfigFile];
+    setting.apply_mode = ConfigApplyMode::StaticOnLoad;
+    setting.restart_scope = ConfigRestartScope::ProcessRestart;
+    setting
+}
+
 fn logging_audit_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSchema {
     let mut setting = basic_setting(path, value_schema);
     setting.control_surfaces = vec![ConfigControlSurface::ConfigFile, ConfigControlSurface::Api];

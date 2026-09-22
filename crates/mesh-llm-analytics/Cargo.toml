@@ -1,0 +1,31 @@
+[package]
+name = "mesh-llm-analytics"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Anonymous, opt-out product analytics for mesh-llm"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+keywords = ["llm", "mesh", "analytics"]
+categories = ["command-line-interface"]
+build = "build.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6.0.0"
+mesh-llm-build-info.workspace = true
+reqwest = { version = "0.13", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json.workspace = true
+tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["full"] }

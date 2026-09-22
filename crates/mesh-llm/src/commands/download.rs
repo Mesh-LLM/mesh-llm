@@ -14,7 +14,11 @@ pub(crate) async fn dispatch_download_command(name: Option<&str>, draft: bool) -
                 })
                 .unwrap_or_else(|| query.to_string());
             let download =
-                mesh_llm_host_runtime::command_support::models::download_model_ref_with_progress_details(&model_ref, true).await?;
+                mesh_llm_host_runtime::command_support::models::download_model_ref_with_progress_details(&model_ref, true).await;
+            // Reported before `?` so an attempt that fails still counts: what
+            // people try and cannot get is the more useful half of this.
+            crate::usage_reporting::record_model_download(&model_ref, download.is_ok());
+            let download = download?;
             if draft {
                 if let Some(draft_name) = download
                     .details

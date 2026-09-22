@@ -417,6 +417,25 @@ pub(super) fn remove_runtime_local_target(
     }
 }
 
+/// Report an anonymous `model_loaded` alongside the local `ModelLoaded`
+/// presentation event.
+///
+/// The name goes through the analytics label grammar, so a catalog or
+/// repository identifier is reported as-is and anything path-shaped — a
+/// direct `--gguf` on a local file — becomes `redacted`. The count still
+/// lands either way.
+fn report_model_loaded_analytics(model: &str, source: &'static str) {
+    mesh_llm_analytics::capture(
+        mesh_llm_analytics::Event::ModelLoaded,
+        mesh_llm_analytics::Properties::new()
+            .with(
+                "model",
+                mesh_llm_analytics::Label::sanitize_or_redact(model),
+            )
+            .with("source", source),
+    );
+}
+
 pub(super) async fn advertise_model_ready(
     node: &mesh::Node,
     primary_model_name: &str,
@@ -1003,6 +1022,7 @@ async fn start_local_skippy_model(
         model: model_name.clone(),
         bytes: None,
     });
+    report_model_loaded_analytics(&model_name, "direct_gguf");
     let http = skippy_model.start_http_on(spec.http_bind_addr)?;
     let (death_tx, death_rx) = tokio::sync::oneshot::channel();
 
@@ -1166,6 +1186,7 @@ async fn start_local_package_v2_model(
     .await
     .context("join load skippy package-v2 task")??;
     let workload_class = handle.workload_class()?;
+    report_model_loaded_analytics(&model_ref, "layer_package");
     let _ = emit_event(OutputEvent::ModelLoaded {
         model: model_ref,
         bytes: None,

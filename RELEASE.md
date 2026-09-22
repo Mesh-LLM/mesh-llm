@@ -301,3 +301,15 @@ script relies on `cargo publish` to report crate versions that were already
 uploaded, continues past those already-uploaded crates, and retries HTTP 429
 new-crate rate-limit responses using the retry time from crates.io when one is
 provided.
+
+## Analytics key
+
+Release binaries report anonymous usage only when `MESH_LLM_POSTHOG_KEY` is
+present at compile time. The release workflow supplies it from the
+`MESH_LLM_POSTHOG_KEY` repository secret; `scripts/build-host.sh` prints
+whether a key was present (never the key itself), so a release log confirms
+it. A build without the secret is valid and simply reports nothing.
+
+Forks build without the secret and therefore never report. See
+`website/src/docs/pages/analytics.md` for the collected surface and the
+opt-out, and `crates/mesh-llm-analytics/README.md` for the design.
