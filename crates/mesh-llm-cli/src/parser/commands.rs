@@ -1015,6 +1015,10 @@ pub enum Command {
         #[arg(long)]
         write: bool,
     },
+    /// Add a Mesh provider to Hermes config without launching it.
+    Hermes(crate::agent_config::AgentConfigArgs),
+    /// Add a Mesh provider to OpenClaw config without launching it.
+    Openclaw(crate::agent_config::AgentConfigArgs),
     /// Stop running mesh-llm processes.
     Stop,
     /// Plugin management.
