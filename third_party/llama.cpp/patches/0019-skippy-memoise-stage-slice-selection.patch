@@ -1,15 +1,15 @@
-From e106c2d00b106fb9cceb5803168d2e753d12854d Mon Sep 17 00:00:00 2001
+From 0adb8e247180c9b6ae06d325a24b4b10c05821b6 Mon Sep 17 00:00:00 2001
 From: sat <sat@local>
-Date: Tue, 22 Sep 2026 16:50:12 +1000
+Date: Tue, 22 Sep 2026 17:50:48 +1000
 Subject: [PATCH] skippy: remember the stage slice selection across identical
  graph builds
 
 ---
- src/skippy/stage_slice_plan.cpp | 161 +++++++++++++++++++++++++++++++-
- 1 file changed, 160 insertions(+), 1 deletion(-)
+ src/skippy/stage_slice_plan.cpp | 170 +++++++++++++++++++++++++++++++-
+ 1 file changed, 169 insertions(+), 1 deletion(-)
 
 diff --git a/src/skippy/stage_slice_plan.cpp b/src/skippy/stage_slice_plan.cpp
-index dda2df504..c2d80e00b 100644
+index dda2df504..53844518f 100644
 --- a/src/skippy/stage_slice_plan.cpp
 +++ b/src/skippy/stage_slice_plan.cpp
 @@ -4,6 +4,7 @@
@@ -20,7 +20,7 @@ index dda2df504..c2d80e00b 100644
  #include <set>
  #include <tuple>
  #include <unordered_map>
-@@ -594,6 +595,153 @@ struct selector {
+@@ -594,6 +595,162 @@ struct selector {
  
  }
  
@@ -138,23 +138,28 @@ index dda2df504..c2d80e00b 100644
 +    return hash;
 +}
 +
-+// A stage alternates between a handful of graphs in practice -- the decode profile,
-+// whatever prefill shapes it is currently serving, and any auxiliary profile -- so a
-+// small ring holds the working set without a long tail of prefill shapes evicting it.
-+constexpr size_t REMEMBERED_SELECTIONS = 8;
++// A stage works a small hot set of graphs -- one per decode group, plus the full-width
++// prefill ubatch -- interleaved with a long tail of one-off shapes, since the last
++// ubatch of each prefill is whatever remainder the prompt leaves. Evicting in arrival
++// order lets that tail flush the hot entries between uses, and every flushed entry
++// costs a full rebuild to recover. Retire the least recently used entry instead, which
++// holds the hot set against the churn and spends the remaining slots on the tail.
++constexpr size_t REMEMBERED_SELECTIONS = 12;
 +
 +struct remembered_selection {
 +    uint64_t fingerprint = 0;
-+    bool occupied = false;
++    // Zero marks a slot that has never been filled; the clock starts at one.
++    uint64_t last_used = 0;
 +    skippy_stage_slice_selection selection;
 +};
 +
 +thread_local remembered_selection g_remembered[REMEMBERED_SELECTIONS];
-+thread_local size_t g_remembered_next = 0;
++thread_local uint64_t g_remembered_clock = 0;
 +
 +const skippy_stage_slice_selection * recall_selection(uint64_t fingerprint) {
-+    for (const auto & entry : g_remembered) {
-+        if (entry.occupied && entry.fingerprint == fingerprint) {
++    for (auto & entry : g_remembered) {
++        if (entry.last_used != 0 && entry.fingerprint == fingerprint) {
++            entry.last_used = ++g_remembered_clock;
 +            return &entry.selection;
 +        }
 +    }
@@ -162,11 +167,15 @@ index dda2df504..c2d80e00b 100644
 +}
 +
 +void remember_selection(uint64_t fingerprint, const skippy_stage_slice_selection & selection) {
-+    auto & entry = g_remembered[g_remembered_next];
-+    entry.fingerprint = fingerprint;
-+    entry.occupied = true;
-+    entry.selection = selection;
-+    g_remembered_next = (g_remembered_next + 1) % REMEMBERED_SELECTIONS;
++    auto * victim = &g_remembered[0];
++    for (auto & entry : g_remembered) {
++        if (entry.last_used < victim->last_used) {
++            victim = &entry;
++        }
++    }
++    victim->fingerprint = fingerprint;
++    victim->last_used = ++g_remembered_clock;
++    victim->selection = selection;
 +}
 +
 +}
@@ -174,7 +183,7 @@ index dda2df504..c2d80e00b 100644
  bool skippy_select_stage_slice(
          ggml_cgraph * graph,
          const std::vector<skippy_block_boundary> & boundaries,
-@@ -608,6 +756,13 @@ bool skippy_select_stage_slice(
+@@ -608,6 +765,13 @@ bool skippy_select_stage_slice(
          const ggml_tensor * explicit_output) {
      selection = {};
      error.clear();
@@ -188,7 +197,7 @@ index dda2df504..c2d80e00b 100644
      std::vector<skippy_state_effect> effective_state_effects;
      if (!skippy_infer_state_effects(
                  state_effects, graph, boundaries, effective_state_effects, error)) {
-@@ -634,7 +789,11 @@ bool skippy_select_stage_slice(
+@@ -634,7 +798,11 @@ bool skippy_select_stage_slice(
      for (const auto & request : request_inputs) {
          state.request_names.emplace(canonical_storage(request.tensor), request.identity);
      }

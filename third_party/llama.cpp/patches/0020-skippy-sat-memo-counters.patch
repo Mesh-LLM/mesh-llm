@@ -1,6 +1,6 @@
-From 64b30ad3ce855676673df8d265c8ed48a58899a1 Mon Sep 17 00:00:00 2001
+From 2af2414b0a29b0a5636ad36f2b6f1589e30594d3 Mon Sep 17 00:00:00 2001
 From: sat <sat@local>
-Date: Tue, 22 Sep 2026 16:50:22 +1000
+Date: Tue, 22 Sep 2026 17:51:35 +1000
 Subject: [PATCH] sat: count stage slice memo hits and misses
 
 ---
@@ -41,13 +41,13 @@ index eebc23467..e448c80d9 100644
          }
      }
 diff --git a/src/skippy/stage_slice_plan.cpp b/src/skippy/stage_slice_plan.cpp
-index c2d80e00b..b3a6f07e1 100644
+index 53844518f..4d204a80b 100644
 --- a/src/skippy/stage_slice_plan.cpp
 +++ b/src/skippy/stage_slice_plan.cpp
-@@ -722,13 +722,22 @@ struct remembered_selection {
+@@ -726,14 +726,23 @@ struct remembered_selection {
  
  thread_local remembered_selection g_remembered[REMEMBERED_SELECTIONS];
- thread_local size_t g_remembered_next = 0;
+ thread_local uint64_t g_remembered_clock = 0;
 +}
 +
 +// SAT instrumentation: whether the memo actually fires is the whole question, so
@@ -57,8 +57,9 @@ index c2d80e00b..b3a6f07e1 100644
 +namespace {
  
  const skippy_stage_slice_selection * recall_selection(uint64_t fingerprint) {
-     for (const auto & entry : g_remembered) {
-         if (entry.occupied && entry.fingerprint == fingerprint) {
+     for (auto & entry : g_remembered) {
+         if (entry.last_used != 0 && entry.fingerprint == fingerprint) {
+             entry.last_used = ++g_remembered_clock;
 +            g_sat_memo_hit += 1;
              return &entry.selection;
          }
