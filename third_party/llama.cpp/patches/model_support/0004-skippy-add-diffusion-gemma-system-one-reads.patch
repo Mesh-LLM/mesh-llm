@@ -1,7 +1,7 @@
-From f7792646fef8a62254b99dd69db98556960cddfb Mon Sep 17 00:00:00 2001
+From 14a2071b1d3e0b51bca80d144c0b60139eadd3f7 Mon Sep 17 00:00:00 2001
 From: Codex <codex@openai.com>
 Date: Sun, 20 Sep 2026 11:19:07 +1000
-Subject: [PATCH 3/3] skippy: add DiffusionGemma system-one reads
+Subject: [PATCH] skippy: add DiffusionGemma system-one reads
 
 Expose a narrow native operation that prefills a DiffusionGemma prompt, performs one zero-self-conditioning canvas read, and returns normalized probabilities over caller-declared label tokens.
 
@@ -11,7 +11,7 @@ Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
 ---
  include/skippy.h            |   1 +
  include/skippy/common.h     |   3 +-
- include/skippy/system_one.h |  60 +++++++++++
+ include/skippy/system_one.h |  60 ++++++++++
  src/CMakeLists.txt          |   1 +
  src/skippy/abi.cpp          |   3 +-
  src/skippy/system_one.cpp   | 232 ++++++++++++++++++++++++++++++++++++
@@ -20,40 +20,40 @@ Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
  create mode 100644 src/skippy/system_one.cpp
 
 diff --git a/include/skippy.h b/include/skippy.h
-index 33a47b244..2d2e37c62 100644
+index dc8cbb431..571841a60 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
-@@ -24,5 +24,6 @@
- #include "skippy/tokenization.h"
+@@ -25,5 +25,6 @@
  #include "skippy/model_package.h"
  #include "skippy/signals.h"
+ #include "skippy/workloads.h"
 +#include "skippy/system_one.h"
  
  #endif // SKIPPY_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 5ac737396..584c72255 100644
+index c0c7e6aa4..d7f5b53e0 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 60
-+#define SKIPPY_ABI_VERSION_PATCH 61
+-#define SKIPPY_ABI_VERSION_PATCH 61
++#define SKIPPY_ABI_VERSION_PATCH 62
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
-@@ -103,6 +103,7 @@ enum skippy_feature {
- #define SKIPPY_FEATURE_DEVICE_EVENTS          ((uint64_t)1 << 34)
- #define SKIPPY_FEATURE_DIAGNOSTIC_EVENTS      ((uint64_t)1 << 35)
+@@ -105,6 +105,7 @@ enum skippy_feature {
  #define SKIPPY_FEATURE_UNLOAD_EVENTS          ((uint64_t)1 << 36)
-+#define SKIPPY_FEATURE_SYSTEM_ONE             ((uint64_t)1 << 37)
+ /** @brief Full-model embedding, reranking, and encoder-decoder execution. */
+ #define SKIPPY_FEATURE_NON_CHAT_WORKLOADS     ((uint64_t)1 << 37)
++#define SKIPPY_FEATURE_SYSTEM_ONE             ((uint64_t)1 << 38)
  
  enum skippy_status {
      SKIPPY_STATUS_OK                      = 0,
 diff --git a/include/skippy/system_one.h b/include/skippy/system_one.h
 new file mode 100644
-index 000000000..582e956ce
+index 000000000..4faf057ba
 --- /dev/null
 +++ b/include/skippy/system_one.h
 @@ -0,0 +1,60 @@
@@ -118,10 +118,10 @@ index 000000000..582e956ce
 +
 +#endif // SKIPPY_SYSTEM_ONE_H
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 0cc6123c7..6ae303deb 100644
+index 69e05396a..72591c7ca 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -74,6 +74,7 @@ add_library(llama
+@@ -77,6 +77,7 @@ add_library(llama
              skippy/speculative_decoding.cpp
              skippy/tokenization.cpp
              skippy/events.cpp
@@ -130,15 +130,15 @@ index 0cc6123c7..6ae303deb 100644
              ${LLAMA_MODELS_SOURCES}
              )
 diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
-index cfc6a2e66..acf0b086e 100644
+index 45e3b4b86..79dc77162 100644
 --- a/src/skippy/abi.cpp
 +++ b/src/skippy/abi.cpp
-@@ -44,7 +44,8 @@ uint64_t skippy_abi_features(void) {
-            SKIPPY_FEATURE_KV_EVENTS |
+@@ -45,7 +45,8 @@ uint64_t skippy_abi_features(void) {
             SKIPPY_FEATURE_DEVICE_EVENTS |
             SKIPPY_FEATURE_DIAGNOSTIC_EVENTS |
--           SKIPPY_FEATURE_UNLOAD_EVENTS;
-+           SKIPPY_FEATURE_UNLOAD_EVENTS |
+            SKIPPY_FEATURE_UNLOAD_EVENTS |
+-           SKIPPY_FEATURE_NON_CHAT_WORKLOADS;
++           SKIPPY_FEATURE_NON_CHAT_WORKLOADS |
 +           SKIPPY_FEATURE_SYSTEM_ONE;
  }
  
@@ -383,3 +383,4 @@ index 000000000..d60467a46
 +}
 -- 
 2.54.0 (Apple Git-157)
+

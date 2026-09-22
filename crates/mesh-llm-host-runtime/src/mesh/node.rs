@@ -806,21 +806,7 @@ impl Node {
             relay_policy: relay.policy,
             owner_keypair,
             local_mesh_requirements,
-            state: Arc::new(Mutex::new(MeshState {
-                peers: HashMap::new(),
-                connections: HashMap::new(),
-                pending_connections: HashMap::new(),
-                next_pending_connection_attempt: 1,
-                remote_tunnel_maps: HashMap::new(),
-                dead_peers: HashMap::new(),
-                peer_down_rejections: HashMap::new(),
-                direct_path_request_last_at: HashMap::new(),
-                seen_plugin_messages: HashMap::new(),
-                seen_plugin_message_order: VecDeque::new(),
-                policy_rejected_peers: HashMap::new(),
-                requirement_rejected_peers: HashSet::new(),
-                recent_mesh_rejections: VecDeque::new(),
-            })),
+            state: Arc::new(Mutex::new(MeshState::new())),
             direct_rescue_endpoints: super::direct_rescue::DirectRescueEndpoints::default(),
             role: Arc::new(Mutex::new(role)),
             host_role_claims: Arc::new(Mutex::new(HostRoleClaims::default())),
@@ -991,21 +977,7 @@ impl Node {
             relay_policy: RelayPolicy::Disabled,
             owner_keypair: None,
             local_mesh_requirements: crate::MeshRequirements::unrestricted(),
-            state: Arc::new(Mutex::new(MeshState {
-                peers: HashMap::new(),
-                connections: HashMap::new(),
-                pending_connections: HashMap::new(),
-                next_pending_connection_attempt: 1,
-                remote_tunnel_maps: HashMap::new(),
-                dead_peers: HashMap::new(),
-                peer_down_rejections: HashMap::new(),
-                direct_path_request_last_at: HashMap::new(),
-                seen_plugin_messages: HashMap::new(),
-                seen_plugin_message_order: VecDeque::new(),
-                policy_rejected_peers: HashMap::new(),
-                requirement_rejected_peers: HashSet::new(),
-                recent_mesh_rejections: VecDeque::new(),
-            })),
+            state: Arc::new(Mutex::new(MeshState::new())),
             direct_rescue_endpoints: super::direct_rescue::DirectRescueEndpoints::default(),
             role: Arc::new(Mutex::new(role)),
             host_role_claims: Arc::new(Mutex::new(HostRoleClaims::default())),
@@ -1462,6 +1434,8 @@ impl Node {
     /// on that: gossip strips `weights_digest` before it crosses the wire
     /// (see `protocol/convert.rs`), so a peer descriptor would silently read
     /// back `None` even when this host's own load-time digest is known.
+    /// Endpoint-local workload admission also snapshots only this node's
+    /// models, never a peer's copy.
     pub async fn served_model_descriptors(&self) -> Vec<ServedModelDescriptor> {
         self.served_model_descriptors.lock().await.clone()
     }

@@ -30,6 +30,10 @@ pub struct StageSession {
     pub(crate) raw: *mut RawSession,
     pub(crate) token_count: u64,
     pub(crate) terminal_stage: bool,
+    /// Whether one native batch may carry activation exports for more than one
+    /// request. False for memory layouts that split an all-output batch by
+    /// sequence, where only the last microbatch's exports stay live.
+    pub(crate) batched_activation_exports: bool,
 }
 
 pub struct DecodeBatchRequest<'a> {
@@ -85,6 +89,76 @@ impl StageSession {
         ensure_ok(status, error)?;
         self.token_count = 0;
         Ok(())
+    }
+
+    /// Produce one native pooled vector with a positive, caller-verified dimension.
+    pub fn embed(&mut self, token_ids: &[i32], dimensions: usize) -> Result<Vec<f32>> {
+        if dimensions == 0 {
+            return Err(anyhow!("embedding dimensions must be greater than zero"));
+        }
+        let mut output = vec![0.0_f32; dimensions];
+        let mut actual_dimensions = 0usize;
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_session_embed(
+                self.raw,
+                token_ids.as_ptr(),
+                token_ids.len(),
+                output.as_mut_ptr(),
+                output.len(),
+                &mut actual_dimensions,
+                &mut error,
+            )
+        };
+        ensure_ok(status, error)?;
+        if actual_dimensions != dimensions {
+            return Err(anyhow!(
+                "native embedding dimensions changed from {dimensions} to {actual_dimensions}"
+            ));
+        }
+        self.token_count = u64::try_from(token_ids.len()).context("token count exceeds u64")?;
+        Ok(output)
+    }
+
+    /// Score a query/document pair and return the native template's consumed tokens.
+    pub fn rerank(&mut self, query: &str, document: &str) -> Result<(f32, usize)> {
+        let query = CString::new(query).context("rerank query contains an interior NUL byte")?;
+        let document =
+            CString::new(document).context("rerank document contains an interior NUL byte")?;
+        let mut score = 0.0_f32;
+        let mut token_count = 0usize;
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_session_rerank(
+                self.raw,
+                query.as_ptr(),
+                document.as_ptr(),
+                &mut score,
+                &mut token_count,
+                &mut error,
+            )
+        };
+        ensure_ok(status, error)?;
+        self.token_count = u64::try_from(token_count).context("token count exceeds u64")?;
+        Ok((score, token_count))
+    }
+
+    /// Encode source tokens and reset decoder position, returning its first input token.
+    pub fn encode_prompt(&mut self, token_ids: &[i32]) -> Result<i32> {
+        let mut decoder_start_token = 0_i32;
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_session_encode_prompt(
+                self.raw,
+                token_ids.as_ptr(),
+                token_ids.len(),
+                &mut decoder_start_token,
+                &mut error,
+            )
+        };
+        ensure_ok(status, error)?;
+        self.token_count = 0;
+        Ok(decoder_start_token)
     }
 
     pub fn configure_chat_sampling(

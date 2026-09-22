@@ -86,6 +86,20 @@ pub fn assert_mesh_requirements_docs_examples_parse() {
         vec!["signed-bootstrap-token".to_string()]
     );
 
+    let join_file_args = normalize_runtime_surface_args([
+        "mesh-llm",
+        "serve",
+        "--join-file",
+        "/home/example/.mesh-llm/invite.token",
+    ]);
+    let join_file = Cli::parse_from(join_file_args.normalized.clone());
+    assert_eq!(
+        join_file.join_file,
+        vec![std::path::PathBuf::from(
+            "/home/example/.mesh-llm/invite.token"
+        )]
+    );
+
     let runtime_bootstrap = Cli::parse_from(["mesh-llm", "runtime", "bootstrap", "--port", "3131"]);
     match runtime_bootstrap.command.expect("runtime command expected") {
         Command::Runtime {

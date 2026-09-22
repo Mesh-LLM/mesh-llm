@@ -253,6 +253,7 @@ fn recurrent_test_backend(
         IterationScheduler::new(runtime.clone(), &config, 1, true, telemetry.clone())?;
     let backend = StageOpenAiBackend {
         runtime: runtime.clone(),
+        workload: Default::default(),
         config,
         telemetry,
         model_id: backend_model_id.to_string(),
@@ -305,6 +306,7 @@ fn local_generation_signal_window_uses_configured_value() {
         IterationScheduler::new(runtime.clone(), &config, 1, true, telemetry.clone()).unwrap();
     let backend = StageOpenAiBackend {
         runtime,
+        workload: Default::default(),
         config,
         telemetry,
         model_id: "signal-window-test".to_string(),
@@ -785,6 +787,7 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
         IterationScheduler::new(runtime.clone(), &config, 1, true, telemetry.clone())?;
     let backend = StageOpenAiBackend {
         runtime: runtime.clone(),
+        workload: Default::default(),
         config,
         telemetry,
         model_id: "generation-receipt-test".to_string(),

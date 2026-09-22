@@ -1444,7 +1444,7 @@ fn http_route_stats(
 
 #[cfg(test)]
 mod tests {
-    use super::RuntimeDataCollector;
+    use super::{FieldId, RuntimeDataCollector};
     use crate::models::LocalModelInventorySnapshot;
     use crate::runtime_data::RuntimeDataDirty;
     use crate::runtime_events::engine::RuntimeEventEngine;
@@ -1465,13 +1465,20 @@ mod tests {
         let collector = RuntimeDataCollector::new();
         let concurrent_collector = collector.clone();
         collector.shared.set_shadow_test_hook(move || {
+            // Other tests publish to the same engine without sharing this
+            // collector. Reproduce that extra global divergence deterministically.
+            RuntimeDataCollector::new().update_runtime_status(RuntimeDataDirty::STATUS, |status| {
+                status.llama_ready = true;
+                true
+            });
             concurrent_collector.update_runtime_status(RuntimeDataDirty::STATUS, |status| {
                 status.llama_ready = false;
                 true
             });
         });
 
-        let before = engine.health().snapshot().event_cutover_divergence;
+        let health = &collector.shared.event_cutover_health;
+        let before = health.divergence_count(FieldId::Status);
         assert!(
             collector.update_runtime_status(RuntimeDataDirty::STATUS, |status| {
                 status.llama_ready = true;
@@ -1480,7 +1487,7 @@ mod tests {
         );
 
         assert_eq!(
-            engine.health().snapshot().event_cutover_divergence,
+            health.divergence_count(FieldId::Status),
             before + 1,
             "the first writer's true value must be compared even after a concurrent writer replaces it"
         );
@@ -1491,12 +1498,18 @@ mod tests {
 
         let concurrent_collector = collector.clone();
         collector.shared.set_shadow_test_hook(move || {
+            RuntimeDataCollector::new().replace_local_inventory_snapshot(
+                LocalModelInventorySnapshot {
+                    model_names: HashSet::from(["unrelated".to_string()]),
+                    ..LocalModelInventorySnapshot::default()
+                },
+            );
             concurrent_collector.replace_local_inventory_snapshot(LocalModelInventorySnapshot {
                 model_names: HashSet::new(),
                 ..LocalModelInventorySnapshot::default()
             });
         });
-        let before = engine.health().snapshot().event_cutover_divergence;
+        let before = health.divergence_count(FieldId::Inventory);
         assert!(
             collector.replace_local_inventory_snapshot(LocalModelInventorySnapshot {
                 model_names: HashSet::from(["first".to_string()]),
@@ -1505,7 +1518,7 @@ mod tests {
         );
 
         assert_eq!(
-            engine.health().snapshot().event_cutover_divergence,
+            health.divergence_count(FieldId::Inventory),
             before + 1,
             "the first inventory writer's model set must be compared after a concurrent replacement"
         );

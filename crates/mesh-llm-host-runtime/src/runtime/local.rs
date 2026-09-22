@@ -35,10 +35,10 @@ pub(super) use super::local_package::{
     runtime_model_planning_bytes, scan_layer_package_metadata,
 };
 pub(super) use super::local_split::{
-    SplitCoordinatorAck, SplitCoordinatorEvent, SplitCoordinatorLocalFallbackEvent,
-    SplitCoordinatorReplaceEvent, SplitGenerationCleanup, SplitRuntimeReason, SplitRuntimeStart,
-    StartupRuntimePlan, now_unix_nanos, start_runtime_split_model, startup_runtime_plan,
-    stop_split_generation_cleanup,
+    SplitCoordinatorAck, SplitCoordinatorDrainEvent, SplitCoordinatorEvent,
+    SplitCoordinatorLocalFallbackEvent, SplitCoordinatorReplaceEvent, SplitGenerationCleanup,
+    SplitRuntimeReason, SplitRuntimeStart, StartupRuntimePlan, now_unix_nanos,
+    start_runtime_split_model, startup_runtime_plan, stop_split_generation_cleanup,
 };
 pub(super) fn skippy_native_model_open_event_reporter(
     model_name: String,
@@ -97,6 +97,7 @@ pub(super) struct LocalRuntimeModelHandle {
     pub(super) context_length: u32,
     pub(super) slots: usize,
     pub(super) capabilities: models::ModelCapabilities,
+    pub(super) workload_class: mesh::ModelWorkloadClass,
     pub(super) inner: LocalRuntimeBackendHandle,
 }
 
@@ -242,6 +243,7 @@ pub(super) struct LocalRuntimeModelStartSpec<'a> {
     pub(super) local_source_required: bool,
     pub(super) allow_uncertified_split: bool,
     pub(super) split_topology_lock: Option<&'a Path>,
+    pub(super) auto_balance: bool,
     pub(super) planning_profile: RuntimeResourcePlanningProfile,
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     pub(super) skippy_telemetry: skippy::SkippyTelemetryOptions,
@@ -563,11 +565,13 @@ fn weights_digest_toctou_recheck_passes(
     after.is_some() && after == before
 }
 
+/// Publish runtime-probed capabilities and workload class without losing identity updates.
 pub(super) async fn set_runtime_verified_served_model_capabilities(
     node: &mesh::Node,
     primary_model_name: &str,
     model_name: &str,
     capabilities: models::ModelCapabilities,
+    workload_class: mesh::ModelWorkloadClass,
 ) {
     node.update_served_model_descriptor(model_name, |existing| {
         runtime_verified_served_model_descriptor(
@@ -575,16 +579,20 @@ pub(super) async fn set_runtime_verified_served_model_capabilities(
             primary_model_name,
             model_name,
             capabilities,
+            workload_class,
         )
     })
     .await;
 }
 
+/// Preserve existing model identity while replacing inferred capabilities with runtime facts.
+/// Missing descriptors receive a fallback identity before their workload is advertised.
 pub(super) fn runtime_verified_served_model_descriptor(
     existing: Option<mesh::ServedModelDescriptor>,
     primary_model_name: &str,
     model_name: &str,
     capabilities: models::ModelCapabilities,
+    workload_class: mesh::ModelWorkloadClass,
 ) -> mesh::ServedModelDescriptor {
     let mut descriptor = existing.unwrap_or_else(|| mesh::ServedModelDescriptor {
         identity: mesh::ServedModelIdentity {
@@ -603,6 +611,10 @@ pub(super) fn runtime_verified_served_model_descriptor(
     descriptor.identity.is_primary = model_name == primary_model_name;
     descriptor.capabilities_known = true;
     descriptor.capabilities = capabilities;
+    descriptor
+        .metadata
+        .get_or_insert_with(Default::default)
+        .workload_class = Some(workload_class);
     descriptor
 }
 
@@ -986,6 +998,7 @@ async fn start_local_skippy_model(
     })
     .await
     .context("join load skippy direct GGUF task")??;
+    let workload_class = skippy_model.workload_class()?;
     let _ = emit_event(OutputEvent::ModelLoaded {
         model: model_name.clone(),
         bytes: None,
@@ -1001,6 +1014,7 @@ async fn start_local_skippy_model(
             context_length,
             slots: plan.slots,
             capabilities,
+            workload_class,
             inner: LocalRuntimeBackendHandle::Skippy {
                 model: skippy_model,
                 http,
@@ -1151,6 +1165,7 @@ async fn start_local_package_v2_model(
     })
     .await
     .context("join load skippy package-v2 task")??;
+    let workload_class = handle.workload_class()?;
     let _ = emit_event(OutputEvent::ModelLoaded {
         model: model_ref,
         bytes: None,
@@ -1166,6 +1181,7 @@ async fn start_local_package_v2_model(
             context_length,
             slots: plan.slots,
             capabilities,
+            workload_class,
             inner: LocalRuntimeBackendHandle::Skippy {
                 model: handle,
                 http,
@@ -1226,6 +1242,10 @@ pub(super) fn local_process_snapshot(
         health: Some("ready".into()),
     }
 }
+
+#[cfg(test)]
+#[path = "local/descriptor_tests.rs"]
+mod descriptor_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1525,6 +1545,7 @@ mod tests {
             local_source_required: false,
             allow_uncertified_split: false,
             split_topology_lock: None,
+            auto_balance: false,
             planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
             openai_guardrail_policy: openai_guardrail_policy_handle(
                 openai_frontend::GuardrailMode::Disabled,

@@ -43,7 +43,13 @@ pub fn plan_locked_topology(
                 context_length,
                 parallel_lanes,
             ) {
-                return Ok(candidate.plan);
+                // A lock pins the boundaries, so auto-balance planning only
+                // reports the throughput estimate here; it never moves the cut.
+                let throughput = super::estimate_plan_throughput(input, &candidate.plan);
+                return Ok(TopologyPlan {
+                    throughput,
+                    ..candidate.plan
+                });
             }
         }
     }
@@ -168,6 +174,7 @@ fn fit_locked_candidate(
                 estimated_decode_network_ms_per_token,
                 input.target_decode_tpot_ms,
             ),
+            throughput: None,
         },
         minimum_remaining_vram,
         total_remaining_vram,
@@ -188,6 +195,7 @@ mod tests {
             max_vram_bytes: None,
             runtime_headroom_bytes: 0,
             stage_transfer_latency_ms: None,
+            decode_bytes_per_second: None,
         }
     }
 
@@ -205,6 +213,7 @@ mod tests {
             context_length_override: None,
             parallel_lanes_override: None,
             target_decode_tpot_ms: None,
+            auto_balance: false,
         }
     }
 

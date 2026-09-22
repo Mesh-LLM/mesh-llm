@@ -558,6 +558,7 @@ dependencies = [
  "matchit",
  "memchr",
  "mime",
+ "multer",
  "percent-encoding",
  "pin-project-lite",
  "serde_core",
@@ -3911,6 +3912,7 @@ dependencies = [
  "rmcp",
  "rpassword",
  "rustls",
+ "ryu",
  "same-file",
  "schemars",
  "semver",
@@ -4401,6 +4403,23 @@ name = "more-asserts"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fafa6961cabd9c63bcd77a45d7e3b7f3b552b70417831fb0f56db717e72407e"
+
+[[package]]
+name = "multer"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83e87776546dc87511aa5ee218730c92b666d7264ab6ed41f9d215af9cd5224b"
+dependencies = [
+ "bytes",
+ "encoding_rs",
+ "futures-util",
+ "http",
+ "httparse",
+ "memchr",
+ "mime",
+ "spin 0.9.9",
+ "version_check",
+]
 
 [[package]]
 name = "multimap"
@@ -5178,6 +5197,7 @@ version = "0.76.1"
 dependencies = [
  "async-trait",
  "axum",
+ "base64 0.22.1",
  "futures-core",
  "futures-util",
  "http-body-util",

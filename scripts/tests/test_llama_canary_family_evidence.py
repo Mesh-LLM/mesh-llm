@@ -35,7 +35,8 @@ class FamilyEvidenceTests(unittest.TestCase):
         self.addCleanup(self.env.stop)
         self.plan = {
             'required_certification_lanes': sorted(E.CORE),
-            'selected_models': [{'family': f, 'mmproj_artifact': None} for f in ('dense', 'hybrid')],
+            'selected_models': [{'family': f, 'mmproj_artifact': None, 'class': 'causal_generation',
+                                 'certification_lanes': sorted(E.CORE)} for f in ('dense', 'hybrid')],
             'shards': [{'shard_index': i, 'families': [f]} for i, f in enumerate(('dense', 'hybrid'))],
             'github_matrix': {'include': [{'shard_index': i, 'families': f} for i, f in enumerate(('dense', 'hybrid'))]},
         }
@@ -46,11 +47,20 @@ class FamilyEvidenceTests(unittest.TestCase):
                 content = b'#!/bin/sh\nexit 0\n'
                 info.size = len(content)
                 archive.addfile(info, io.BytesIO(content))
-        self.identity = {'schema': 1, 'candidate': 'a'*40, 'base': 'a'*40,
+        self.build_closure()
+        for name in (E.LLAMA_BUNDLE, E.LLAMA_PROVENANCE):
+            (self.package / name).write_text('fixture')
+        restore_source = patch.object(E, 'restore_llama_source')
+        restore_source.start()
+        self.addCleanup(restore_source.stop)
+        self.identity = {'schema': 3, 'candidate': 'a'*40, 'base': 'a'*40,
                          'branch': 'llama-canary/repair-123-2-aaaaaaaaaa', 'pass_id': 'repair-1',
                          'platform': 'macos-arm64-metal', 'run_id': '123', 'run_attempt': '2',
                          'plan_sha256': E.sha(self.package / 'plan.json'),
                          'binaries_sha256': E.sha(self.package / 'binaries.tar'),
+                         'workload_oracles_sha256': E.sha(self.package / E.WORKLOAD_ORACLES_TAR),
+                         'llama_bundle_sha256': E.sha(self.package / E.LLAMA_BUNDLE),
+                         'llama_provenance_sha256': E.sha(self.package / E.LLAMA_PROVENANCE),
                          'bundle_sha256': None, 'manifest_sha256': 'b'*64}
         self.save_identity()
         for family in ('dense', 'hybrid'):
@@ -65,6 +75,32 @@ class FamilyEvidenceTests(unittest.TestCase):
         E.write(self.package / 'identity.json', self.identity)
         self.digest = E.sha(self.package / 'identity.json')
 
+    def build_closure(self):
+        """Create a synthetic workload oracle closure and its handoff tar."""
+        directory = self.root / 'closure-src'
+        directory.mkdir(exist_ok=True)
+        files = {
+            'candidate': 'cargo/debug/skippy-server',
+            'test_binary': 'cargo/debug/deps/smoke-test',
+            'model_package': 'cargo/debug/skippy-model-package',
+            'correctness': 'cargo/debug/skippy-correctness',
+            'topology_plan': 'cargo/debug/skippy-topology-plan',
+            'native_stamp': 'native/.mesh-llm-build-stamp',
+            'oracle_server': 'native/bin/llama-server',
+            'oracle_completion': 'native/bin/llama-completion',
+            'oracle_tts': 'native/bin/llama-tts',
+        }
+        manifest = {'schema_version': 1, 'source': {'head': 'x'*40, 'worktree_sha256': 'y'*64},
+                    'files': {name: {'path': relative, 'sha256': 'z'*64} for name, relative in files.items()}}
+        (directory / 'producer.json').write_text(json.dumps(manifest, sort_keys=True) + '\n')
+        for relative in files.values():
+            target = directory / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b'closure:' + relative.encode())
+        with tarfile.open(self.package / E.WORKLOAD_ORACLES_TAR, 'w') as archive:
+            for relative in sorted({'producer.json', *files.values()}):
+                archive.add(directory / relative, arcname=relative)
+
     def make_receipt(self, family, outcome='success'):
         E.receipt(SimpleNamespace(package=self.package, identity=self.digest, evidence=self.evidence / family,
                                   family=family, outcome=outcome))
@@ -74,6 +110,72 @@ class FamilyEvidenceTests(unittest.TestCase):
 
     def test_complete_distributed_pass(self):
         self.aggregate()
+
+    def rerun_receipt(self, family='dense', outcome='success', attempt='3'):
+        previous = self.evidence / f'{family}-previous'
+        shutil.copytree(self.evidence / family, previous)
+        with patch.dict(os.environ, GITHUB_RUN_ATTEMPT=attempt):
+            self.make_receipt(family, outcome)
+
+    def test_partial_rerun_reuses_build_and_successful_sibling(self):
+        self.make_receipt('dense', 'failure')
+        self.rerun_receipt()
+        with patch.dict(os.environ, GITHUB_RUN_ATTEMPT='3'):
+            self.aggregate()
+
+    def test_aggregate_only_rerun_reuses_complete_prior_pass(self):
+        with patch.dict(os.environ, GITHUB_RUN_ATTEMPT='4'):
+            self.aggregate()
+
+    def test_newer_failure_never_falls_back_to_old_success(self):
+        for outcome in ('failure', 'cancelled', 'skipped'):
+            with self.subTest(outcome=outcome):
+                if (self.evidence / 'dense-previous').exists():
+                    shutil.rmtree(self.evidence / 'dense-previous')
+                self.make_receipt('dense')
+                self.rerun_receipt(outcome=outcome)
+                with patch.dict(os.environ, GITHUB_RUN_ATTEMPT='3'):
+                    with self.assertRaisesRegex(ValueError, 'failed or mismatched'):
+                        self.aggregate()
+
+    def test_newer_corrupt_results_never_fall_back(self):
+        self.rerun_receipt()
+        (self.evidence / 'dense/results.jsonl').write_text('{}\n')
+        with patch.dict(os.environ, GITHUB_RUN_ATTEMPT='3'):
+            with self.assertRaisesRegex(ValueError, 'digest mismatch'):
+                self.aggregate()
+
+    def test_worker_provenance_must_be_valid(self):
+        path = self.evidence / 'dense/receipt.json'
+        original = E.read(path)
+        for key, value in (('run_id', '999'), ('run_attempt', '1'),
+                           ('run_attempt', '3'), ('run_attempt', '0'),
+                           ('run_attempt', 'x'), ('run_attempt', 2)):
+            with self.subTest(key=key, value=value):
+                E.write(path, dict(original, **{key: value}))
+                with self.assertRaises(ValueError):
+                    self.aggregate()
+
+    def test_rebuilt_producer_cannot_reuse_previous_receipts(self):
+        self.identity['run_attempt'] = '3'
+        self.save_identity()
+        with patch.dict(os.environ, GITHUB_RUN_ATTEMPT='3'):
+            with self.assertRaisesRegex(ValueError, 'mismatched'):
+                self.aggregate()
+
+    def test_invalid_producer_attempt_is_rejected(self):
+        for value in ('0', '-1', 'x', '02', 2, None):
+            with self.subTest(value=value):
+                self.identity['run_attempt'] = value
+                self.save_identity()
+                with self.assertRaisesRegex(ValueError, 'invalid workflow'):
+                    E.verify_package(self.package, self.digest)
+
+    def test_rerun_still_rejects_tampered_package(self):
+        (self.package / 'binaries.tar').write_bytes(b'wrong')
+        with patch.dict(os.environ, GITHUB_RUN_ATTEMPT='3'):
+            with self.assertRaisesRegex(ValueError, 'digest mismatch'):
+                E.verify_package(self.package, self.digest)
 
     def test_reports_all_failed_workers_without_emitting_green(self):
         for family in ('dense', 'hybrid'):
@@ -155,9 +257,65 @@ class FamilyEvidenceTests(unittest.TestCase):
             self.aggregate()
 
     def test_missing_multimodal_smoke_is_rejected(self):
-        model = {'mmproj_artifact': {'files': ['projector.gguf']}}
+        model = {'mmproj_artifact': {'files': ['projector.gguf']}, 'class': 'causal_generation',
+                 'certification_lanes': sorted(E.CORE)}
         with self.assertRaisesRegex(ValueError, 'multimodal'):
             E.validate_results(self.evidence / 'dense/results.jsonl', 'dense', model)
+
+    def test_workload_family_requires_its_class_lanes(self):
+        """Non-chat evidence must contain exactly its own smoke and oracle lanes."""
+        model = {'family': 'dense', 'class': 'embedding', 'mmproj_artifact': None,
+                 'certification_lanes': ['embedding-smoke', 'embedding-oracle']}
+        row = {'family': 'dense', 'exit_code': 0, 'workload_class': 'embedding',
+               'outcomes': [{'name': lane, 'status': 'pass', 'exit_code': 0}
+                            for lane in ('embedding-smoke', 'embedding-oracle')]}
+        path = self.evidence / 'dense/results.jsonl'
+        path.write_text(json.dumps(row) + '\n')
+        E.validate_results(path, 'dense', model)
+        row['outcomes'] = row['outcomes'][:1]
+        path.write_text(json.dumps(row) + '\n')
+        with self.assertRaisesRegex(ValueError, 'required lane embedding-oracle'):
+            E.validate_results(path, 'dense', model)
+
+    def test_workload_class_mismatch_is_rejected(self):
+        """A family result cannot substitute another class for the immutable plan."""
+        model = {'family': 'dense', 'class': 'embedding', 'mmproj_artifact': None,
+                 'certification_lanes': ['embedding-smoke', 'embedding-oracle']}
+        row = {'family': 'dense', 'exit_code': 0, 'workload_class': 'rerank',
+               'outcomes': [{'name': lane, 'status': 'pass', 'exit_code': 0}
+                            for lane in ('embedding-smoke', 'embedding-oracle')]}
+        path = self.evidence / 'dense/results.jsonl'
+        path.write_text(json.dumps(row) + '\n')
+        with self.assertRaisesRegex(ValueError, 'class mismatch'):
+            E.validate_results(path, 'dense', model)
+
+    def test_tampered_workload_closure_is_rejected(self):
+        """Reject a changed producer closure before allowing any worker execution."""
+        (self.package / E.WORKLOAD_ORACLES_TAR).write_bytes(b'wrong')
+        with self.assertRaisesRegex(ValueError, 'digest mismatch'):
+            E.verify_package(self.package, self.digest)
+
+    def test_restore_materializes_relocatable_workload_closure(self):
+        """Restored workers consume verified producer bytes without rebuilding them."""
+        checkout = self.root / 'closure-checkout'
+        checkout.mkdir()
+        subprocess.run(['git', 'init', '-q', str(checkout)], check=True)
+        manifest = checkout / 'ci/llama-canary/family-certified.json'
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text('{}\n')
+        subprocess.run(['git', '-C', str(checkout), 'add', '.'], check=True)
+        subprocess.run(['git', '-C', str(checkout), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                        '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture'], check=True)
+        self.identity['base'] = self.identity['candidate'] = E.git(checkout, 'rev-parse', 'HEAD')
+        self.identity['manifest_sha256'] = E.sha(manifest)
+        self.save_identity()
+        E.restore(SimpleNamespace(package=self.package, identity=self.digest, root=checkout))
+        closure = checkout / E.WORKLOAD_CLOSURE_ROOT
+        stamp = closure / 'native/.mesh-llm-build-stamp'
+        candidate = closure / 'cargo/debug/skippy-server'
+        self.assertEqual(candidate.read_bytes(), b'closure:cargo/debug/skippy-server')
+        self.assertLess(stamp.stat().st_mtime_ns, candidate.stat().st_mtime_ns,
+                        'restored stamp must predate restored executables')
 
     def test_foreign_run_and_attempt_are_rejected(self):
         for key in ('run_id', 'run_attempt'):
@@ -168,6 +326,16 @@ class FamilyEvidenceTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'foreign workflow'):
                     E.verify_package(self.package, self.digest)
                 self.identity[key] = original
+
+    def test_prepared_source_inputs_are_digest_bound(self):
+        for name in (E.LLAMA_BUNDLE, E.LLAMA_PROVENANCE):
+            with self.subTest(name=name):
+                path = self.package / name
+                original = path.read_bytes()
+                path.write_bytes(b'replaced')
+                with self.assertRaisesRegex(ValueError, 'digest mismatch'):
+                    E.verify_package(self.package, self.digest)
+                path.write_bytes(original)
 
     def test_tampered_package_is_rejected(self):
         (self.package / 'binaries.tar').write_bytes(b'wrong')
@@ -247,18 +415,92 @@ class FamilyEvidenceTests(unittest.TestCase):
             E.restore(SimpleNamespace(package=self.package, identity=self.digest, root=checkout))
         self.assertEqual(E.git(checkout, 'rev-parse', 'HEAD'), self.identity['base'])
 
+    def test_selected_source_and_controller_are_bound_across_reruns(self):
+        self.identity.update(controller='c'*40, mesh_source='a'*40, run_attempt='1')
+        self.save_identity()
+        with patch.dict(os.environ, CANARY_CONTROLLER_SHA='c'*40, CANARY_MESH_SOURCE='a'*40):
+            E.verify_package(self.package, self.digest)
+            for field, value in (('controller', 'd'*40), ('candidate', 'b'*40),
+                                 ('base', 'b'*40), ('mesh_source', ''), ('pass_id', 'verify-1')):
+                with self.subTest(field=field):
+                    original = self.identity[field]
+                    self.identity[field] = value
+                    self.save_identity()
+                    with self.assertRaises(ValueError):
+                        E.verify_package(self.package, self.digest)
+                    self.identity[field] = original
+            self.save_identity()
+        with self.assertRaisesRegex(ValueError, 'selected source identity'):
+            E.verify_package(self.package, self.digest)
+
+    def test_selected_source_build_uses_controller_wrapper_and_denies_repair(self):
+        env = dict(CANARY_SOURCE_ROOT=str(self.root), CANARY_MESH_SOURCE='a'*40,
+                   CANARY_HARNESS_MODE='pinned-build', CANARY_PASS_ID='repair-1',
+                   CANARY_PREVIOUS_PACKAGE='')
+        with patch.dict(os.environ, env), patch.object(E, 'git', return_value='a'*40), \
+                patch.object(E, 'preflight_battery'), patch.object(E.subprocess, 'run') as run:
+            E.build(SimpleNamespace())
+            self.assertEqual(run.call_args.args[0], [str(ROOT / 'scripts/llama-canary-agent-repair.sh')])
+            os.environ['CANARY_HARNESS_MODE'] = 'repair-build'
+            with self.assertRaisesRegex(ValueError, 'unchanged pinned-build'):
+                E.build(SimpleNamespace())
+            self.assertEqual(run.call_count, 1)
+
     def test_publisher_rejects_repair_only_package(self):
         with self.assertRaisesRegex(ValueError, 'independent verifier'):
             E.publication(SimpleNamespace(package=self.package, identity=self.digest))
 
 
+class WorkflowRerunContractTests(unittest.TestCase):
+    def test_artifact_selection_is_bound_to_producer_across_attempts(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/llama-canary-family-pass.yml').read_text())
+        jobs = workflow['jobs']
+        upload = next(step for step in jobs['family']['steps'] if step.get('name') == 'Upload family evidence')
+        download = next(step for step in jobs['aggregate']['steps'] if 'pattern' in step.get('with', {}))
+        name = upload['with']['name']
+        pattern = download['with']['pattern']
+        import fnmatch
+        def expand(text, attempt, identity):
+            for key, value in {'github.run_id': '123', 'github.run_attempt': str(attempt),
+                               'needs.build.outputs.identity': identity,
+                               'inputs.pass_id': 'repair-1', 'matrix.shard_index': '0'}.items():
+                text = text.replace('${{ ' + key + ' }}', value)
+            return text
+        selected = expand(pattern, 3, 'a'*64)
+        self.assertTrue(fnmatch.fnmatchcase(expand(name, 2, 'a'*64), selected))
+        self.assertTrue(fnmatch.fnmatchcase(expand(name, 3, 'a'*64), selected))
+        self.assertFalse(fnmatch.fnmatchcase(expand(name, 2, 'b'*64), selected))
+        self.assertNotIn('merge-multiple', download['with'])
+        gate = next(step for step in jobs['aggregate']['steps'] if step.get('id') == 'aggregate')
+        self.assertIn('test "$FAMILY_RESULT" = success', gate['run'])
+
+    def test_failed_certification_is_retryable_after_evidence_upload(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/llama-canary-family-pass.yml').read_text())
+        steps = workflow['jobs']['family']['steps']
+        upload = next(i for i, step in enumerate(steps) if step.get('name') == 'Upload family evidence')
+        gate = next(i for i, step in enumerate(steps) if step.get('name') == 'Require successful family certification')
+        self.assertGreater(gate, upload)
+        self.assertNotIn('continue-on-error', steps[gate])
+        for outcome in ('success', 'failure', 'cancelled', 'skipped', ''):
+            result = subprocess.run(['bash', '-c', steps[gate]['run']], env={**os.environ, 'OUTCOME': outcome})
+            self.assertEqual(result.returncode == 0, outcome == 'success')
+
+    def test_feedback_preserves_attempt_history(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/llama-upstream-canary.yml').read_text())
+        for name in ('repair-2', 'repair-3'):
+            inputs = workflow['jobs'][name]['with']
+            for key in ('feedback_pattern', 'feedback_build_pattern'):
+                self.assertNotIn('github.run_attempt', inputs[key])
+                self.assertIn('github.run_id', inputs[key])
+
+
 class WorkflowTerminalGateTests(unittest.TestCase):
-    def run_gate(self, *, changed=True, certify=True, repair=None, verify=None):
+    def run_gate(self, *, changed=True, certify=True, repair=None, verify=None, mesh_source=""):
         workflow = yaml.safe_load((ROOT / '.github/workflows/llama-upstream-canary.yml').read_text())
         step = workflow['jobs']['result']['steps'][0]
         body = step['run'].split("python3 - <<'PYCODE'\n", 1)[1].rsplit('PYCODE', 1)[0]
         needs = {'resolve': {'result': 'success', 'outputs': {
-            'changed': str(changed).lower(), 'certify': str(certify).lower()}}}
+            'changed': str(changed).lower(), 'certify': str(certify).lower(), 'mesh_source': mesh_source}}}
         for attempt in range(1, 4):
             for mode, values in (('repair', repair or {}), ('verify', verify or {})):
                 outputs = values.get(attempt, {})
@@ -298,6 +540,15 @@ class WorkflowTerminalGateTests(unittest.TestCase):
         self.assertEqual(out, '')
         code, _ = self.run_gate(changed=False)
         self.assertNotEqual(code, 0)
+
+    def test_selected_source_requires_exact_head_and_never_publishes(self):
+        code, out = self.run_gate(changed=False, mesh_source='a'*40, repair={1: self.green()})
+        self.assertEqual(code, 0)
+        self.assertEqual(out, '')
+        for changed, head in ((True, 'a'*40), (False, 'b'*40)):
+            code, out = self.run_gate(changed=changed, mesh_source='a'*40, repair={1: self.green(head)})
+            self.assertNotEqual(code, 0)
+            self.assertEqual(out, '')
 
     def test_non_forced_unchanged_manual_is_read_only_noop(self):
         code, out = self.run_gate(changed=False, certify=False)

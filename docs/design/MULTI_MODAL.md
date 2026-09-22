@@ -12,7 +12,10 @@ Phases 1 through 5 in this plan are complete:
 - multimodal `/v1/chat/completions`
 - multimodal `/v1/responses` for both non-streaming and streaming requests
 
-What remains is polish and hardening of the existing path, not new endpoint scope.
+The original chat/Responses phases are complete. Full-model audio endpoints
+and OCR family certification are documented separately in
+[NON_CHAT_MODELS.md](../NON_CHAT_MODELS.md); projector execution remains
+colocated with its model trunk.
 
 ## Goals
 
@@ -26,10 +29,8 @@ What remains is polish and hardening of the existing path, not new endpoint scop
 
 - Permanent distributed file storage
 - IPFS/libp2p-first design
-- `POST /v1/audio/transcriptions`
-- `POST /v1/audio/speech`
 - `v1/realtime`
-- Audio generation from llama alone
+- Distributed projector execution
 - Native end-to-end video inference on the current llama.cpp path
 
 ## API Targets
@@ -46,6 +47,15 @@ This is the shortest path because llama.cpp already supports multimodal chat her
 - `POST /v1/responses`
 
 Implement as a mesh-llm compatibility shim after chat completions are solid.
+
+### Full-model audio extensions
+
+- `POST /v1/audio/speech`
+- `POST /v1/audio/transcriptions`
+- `POST /v1/audio/translations`
+
+These routes are available for runtime-compatible local model/projector pairs.
+They do not imply a split projector or distributed audio-generation graph.
 
 ## Capability Model
 

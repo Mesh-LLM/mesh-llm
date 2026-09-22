@@ -6,7 +6,7 @@ use super::{
     configure_run_auto_process_state, emit_shutdown, openai_guardrail_policy_handle,
     preflight_pinned_startup_models, resolve_local_model_only_startup_models,
     runtime_model_required_bytes, skippy_telemetry_options, start_local_openai_model,
-    startup_device_override, wait_shutdown_signal,
+    startup_device_override, wait_for_shutdown_signal,
 };
 use crate::inference::election;
 use crate::plugin;
@@ -180,6 +180,7 @@ async fn run_local_model_only_inner(
     let serving_hooks_factory = native_serving_plugin_factory(&options)?;
     let mut config = plugin::load_config(options.config.as_deref())?;
     apply_runtime_cli_speculative_overrides(&mut config, options.speculative_overrides.as_ref());
+    super::run_auto::apply_runtime_cli_parallel_override(&mut config, options.parallel);
     apply_runtime_cli_checkpoint_overrides(
         &mut config,
         options.checkpoint_quantization.as_deref(),
@@ -261,7 +262,13 @@ async fn run_local_model_only_inner(
         n_batch_override: model.n_batch,
         n_ubatch_override: model.n_ubatch,
         flash_attention_override: model.flash_attention,
-        parallel_override: model.parallel,
+        // The gpu-level default applies here too: without it a `[gpu].parallel` (or
+        // `--parallel`) that every mesh-serving path honours was ignored by exactly the
+        // mode most likely to be used for a single busy box.
+        parallel_override: super::startup_models::resolve_model_parallel_override(
+            model.parallel,
+            &config.gpu,
+        ),
         planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
         openai_guardrail_policy: openai_guardrail_policy_handle(
             super::status::mesh_guardrail_mode_to_openai(options.mesh_guardrails),
@@ -407,7 +414,7 @@ async fn wait_for_openai_exit_or_shutdown(
     let mut interval = tokio::time::interval(OPENAI_STATUS_POLL_INTERVAL);
     loop {
         tokio::select! {
-            signal = wait_shutdown_signal() => return Ok(signal),
+            signal = wait_for_shutdown_signal() => return Ok(signal),
             _ = interval.tick() => {
                 let status = model.openai_server_status();
                 match status.state {

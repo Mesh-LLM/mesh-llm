@@ -20,6 +20,8 @@ async fn select_clones(
 ) -> Vec<(InferenceTarget, Option<RoutingReservation>)> {
     use crate::proto::node::InferenceAdmissionState;
 
+    let candidates = super::workload_admission::eligible_targets(node, name, &candidates).await;
+
     let deprioritized: std::collections::HashSet<_> = node
         .peers()
         .await

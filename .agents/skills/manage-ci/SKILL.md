@@ -424,6 +424,14 @@ The immutable model cache remains offline and read-only. One workflow-level
 non-cancelling concurrency group prevents overlapping canary runs, while
 family jobs have no shared concurrency group and use at most eight runners.
 
+Manual `mesh_ref` is an explicitly authorized trusted-code path, not a PR
+runner exception. Keep the workflow/controller on protected main, resolve only
+same-repository branch-reachable commits once, and bind the controller and
+selected source independently in every handoff. Certify the selected revision's
+existing pin and patches without repair or publication. Selected build scripts
+and battery code execute on persistent lab runners, so operators must choose
+trusted revisions; a main controller does not sandbox that source.
+
 Changed pins have at most three distributed repair attempts. Within each
 attempt, prepare/build failures return to the same bounded Goose session.
 Family or independent-verification failures feed the preserved candidate and
@@ -433,6 +441,23 @@ be followed by a fresh independent build and complete per-family pass on the
 same commit. A hosted aggregate rejects missing, duplicate, failed, cancelled,
 or mismatched results. Only the final hosted publisher receives the repair
 credential, and exhausted attempts publish no branch or PR.
+
+The family matrix is submitted in ascending estimated model bytes, with family
+name breaking ties. Balanced shard membership remains unchanged. This puts
+small models first in the canary's one-family-per-job matrix; parallel runner
+availability can still change actual start and completion order.
+
+Partial GitHub reruns may reuse an earlier producer attempt from the same run
+only through the exact dependency-provided identity digest. Producer provenance
+and all source/plan/executable checks remain immutable. Family artifacts are
+namespaced by that identity and worker attempt. Aggregation chooses the newest
+receipt per family, rejects duplicate same-attempt receipts and invalid attempt
+bounds, and never falls back from a newer failure to an older success. The
+family job-result gate remains mandatory so missing uploads cannot hide failures.
+Failed certifications upload their evidence and then fail the family job, so
+GitHub's failed-job rerun can select them instead of only retrying aggregation.
+Repair feedback retains attempt-labelled history; it is diagnostic input, never
+certification authority. Rebuilding a producer invalidates its prior receipts.
 
 ## Validation contract
 

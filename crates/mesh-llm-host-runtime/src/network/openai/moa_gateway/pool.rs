@@ -8,6 +8,7 @@
 use super::context_selection;
 use super::self_fill::self_fill_from_extra_instances;
 use super::workers::{LocalModelBackend, RemoteModelBackend};
+use super::workload_admission;
 use crate::inference::election;
 use crate::mesh;
 use mesh_mixture_of_agents as moa;
@@ -36,6 +37,9 @@ enum SizeTier {
 async fn gossiped_sizes(node: &mesh::Node) -> HashMap<String, f64> {
     let mut by_base: HashMap<String, f64> = HashMap::new();
     for descriptor in node.all_served_model_descriptors().await {
+        if !workload_admission::descriptor_supports_committee(&descriptor) {
+            continue;
+        }
         if let Some(b) = descriptor
             .metadata
             .as_ref()
@@ -83,7 +87,11 @@ async fn model_routing_hints(
     use crate::proto::node::InferenceAdmissionState;
 
     let mut hints = HashMap::new();
+    let local_descriptors = node.served_model_descriptors().await;
     for local in node.hosted_models().await {
+        if !workload_admission::model_supports_committee(&local, &local_descriptors) {
+            continue;
+        }
         hints.insert(
             canonical_base_name(&local),
             (AvailabilityRank::Healthy, None),
@@ -100,6 +108,10 @@ async fn model_routing_hints(
             _ => AvailabilityRank::Healthy,
         };
         for model in peer.http_routable_models() {
+            if !workload_admission::model_supports_committee(&model, &peer.served_model_descriptors)
+            {
+                continue;
+            }
             let model_base = canonical_base_name(&model);
             let throughput = peer
                 .advertised_model_throughput
@@ -264,7 +276,15 @@ async fn add_worker_backend(
             })
         })
     });
-    if let Some(port) = local_port {
+    if let Some(port) = local_port
+        && !workload_admission::eligible_targets(
+            resolution.node,
+            name,
+            &[election::InferenceTarget::Local(port)],
+        )
+        .await
+        .is_empty()
+    {
         let context_length = resolution.node.local_model_context_length(name).await;
         if context_selection::context_can_satisfy(resolution.required_tokens, context_length) {
             let backend_idx = backends.len();
@@ -334,6 +354,7 @@ pub(super) async fn assemble_worker_pool(
     let mut backends: Vec<std::sync::Arc<dyn moa::ModelBackend>> = Vec::new();
     let mut models: Vec<moa::ModelEntry> = Vec::new();
     let mut local_count = 0usize;
+    let descriptors = node.all_served_model_descriptors().await;
 
     // Full mesh-wide model list (local + every peer's advertised routable
     // models).
@@ -342,6 +363,7 @@ pub(super) async fn assemble_worker_pool(
         .await
         .into_iter()
         .filter(|n| n != moa::VIRTUAL_MODEL_NAME)
+        .filter(|name| workload_admission::model_supports_committee(name, &descriptors))
         .collect();
 
     // Verified sizes gossiped by peers (metadata.parameter_count_b). The
@@ -641,6 +663,9 @@ pub(super) async fn compute_actor_candidates(
     let mut tool_use_by_base: std::collections::HashMap<String, crate::models::CapabilityLevel> =
         std::collections::HashMap::new();
     for descriptor in node.all_served_model_descriptors().await {
+        if !workload_admission::descriptor_supports_committee(&descriptor) {
+            continue;
+        }
         let base = canonical_base_name(&descriptor.identity.model_name);
         let level = descriptor.capabilities.tool_use;
         tool_use_by_base

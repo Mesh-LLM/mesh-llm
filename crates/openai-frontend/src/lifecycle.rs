@@ -73,6 +73,11 @@ pub enum OpenAiFrontendRoute {
     Healthz,
     Readyz,
     Models,
+    Embeddings,
+    Rerank,
+    AudioSpeech,
+    AudioTranscriptions,
+    AudioTranslations,
     ChatCompletions,
     Completions,
     Responses,
@@ -84,6 +89,11 @@ pub enum OpenAiFrontendRoute {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OpenAiBackendOperation {
     Models,
+    Embeddings,
+    Rerank,
+    AudioSpeech,
+    AudioTranscription,
+    AudioTranslation,
     ChatCompletion,
     ChatCompletionStream,
     Completion,

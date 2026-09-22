@@ -386,21 +386,27 @@ async fn register_runtime_instance_preserves_existing_known_descriptor_capabilit
     register_runtime_instance(
         &registry,
         &node,
-        vision_model,
-        vision_model,
-        "runtime-vision",
-        Some(8192),
-        vision_capabilities,
+        RuntimeModelRegistration {
+            primary_model_name: vision_model,
+            model_name: vision_model,
+            instance_id: "runtime-vision",
+            context_length: Some(8192),
+            capabilities: vision_capabilities,
+            workload_class: mesh::ModelWorkloadClass::CausalGeneration,
+        },
     )
     .await;
     register_runtime_instance(
         &registry,
         &node,
-        vision_model,
-        text_model,
-        "runtime-text",
-        Some(8192),
-        models::ModelCapabilities::default(),
+        RuntimeModelRegistration {
+            primary_model_name: vision_model,
+            model_name: text_model,
+            instance_id: "runtime-text",
+            context_length: Some(8192),
+            capabilities: models::ModelCapabilities::default(),
+            workload_class: mesh::ModelWorkloadClass::Embedding,
+        },
     )
     .await;
 

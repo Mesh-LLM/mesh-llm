@@ -4,7 +4,8 @@ use crate::{
     ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, ActivationBoundaryDesc,
     ActivationPartDesc, StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1,
     StagePlanStateKind, StagePlanStringRefV1, StagePlanValueDescV1, StagePlannerConfigV1,
-    StagePlannerProfileV1, StagePlannerTensorV1, runtime_abi_supported,
+    StagePlannerProfileV1, StagePlannerTensorV1, WORKLOAD_INFO_V1_ABI_VERSION, WorkloadInfoV1,
+    WorkloadKind, WorkloadPooling, runtime_abi_supported,
 };
 
 #[cfg(target_pointer_width = "64")]
@@ -25,12 +26,94 @@ const fn version(major: u32, minor: u32, patch: u32) -> AbiVersion {
 }
 
 #[test]
+/// Runtime-event families must never masquerade as full-model workload support.
+fn workload_feature_is_distinct_from_runtime_event_features() {
+    let events = crate::FEATURE_RUNTIME_EVENT_REPORTER
+        | crate::FEATURE_MODEL_LOAD_EVENTS_V2
+        | crate::FEATURE_KV_EVENTS
+        | crate::FEATURE_DEVICE_EVENTS
+        | crate::FEATURE_DIAGNOSTIC_EVENTS
+        | crate::FEATURE_UNLOAD_EVENTS;
+    assert_eq!(crate::FEATURE_NON_CHAT_WORKLOADS, 1_u64 << 37);
+    assert_eq!(events & crate::FEATURE_NON_CHAT_WORKLOADS, 0);
+}
+
+/// The linked native library must advertise the same independent feature bits.
+#[test]
+#[cfg(not(feature = "dynamic-runtime"))]
+fn native_workload_feature_preserves_runtime_event_features() {
+    // SAFETY: This process-global ABI query takes no pointers or mutable state.
+    let features = unsafe { crate::skippy_abi_features() };
+    for expected in [
+        crate::FEATURE_NON_CHAT_WORKLOADS,
+        crate::FEATURE_RUNTIME_EVENT_REPORTER,
+        crate::FEATURE_MODEL_LOAD_EVENTS_V2,
+        crate::FEATURE_KV_EVENTS,
+        crate::FEATURE_DEVICE_EVENTS,
+        crate::FEATURE_DIAGNOSTIC_EVENTS,
+        crate::FEATURE_UNLOAD_EVENTS,
+    ] {
+        assert_ne!(
+            features & expected,
+            0,
+            "native feature {expected:#x} is absent"
+        );
+    }
+}
+
+#[test]
+/// Pin the C descriptor's field offsets, including booleans and reserved padding.
+fn workload_descriptor_matches_native_layout_and_discriminants() {
+    assert_eq!(WORKLOAD_INFO_V1_ABI_VERSION, 1);
+    assert_eq!(size_of::<WorkloadInfoV1>(), 28);
+    assert_eq!(offset_of!(WorkloadInfoV1, abi_version), 0);
+    assert_eq!(offset_of!(WorkloadInfoV1, struct_size), 4);
+    assert_eq!(offset_of!(WorkloadInfoV1, kind), 8);
+    assert_eq!(offset_of!(WorkloadInfoV1, pooling), 12);
+    assert_eq!(offset_of!(WorkloadInfoV1, output_dimensions), 16);
+    assert_eq!(offset_of!(WorkloadInfoV1, classifier_outputs), 20);
+    assert_eq!(offset_of!(WorkloadInfoV1, has_encoder), 24);
+    assert_eq!(offset_of!(WorkloadInfoV1, has_decoder), 25);
+    assert_eq!(offset_of!(WorkloadInfoV1, full_model_only), 26);
+    assert_eq!(offset_of!(WorkloadInfoV1, reserved0), 27);
+    assert_eq!(WorkloadKind::CausalGeneration as i32, 0);
+    assert_eq!(WorkloadKind::Embedding as i32, 1);
+    assert_eq!(WorkloadKind::Rerank as i32, 2);
+    assert_eq!(WorkloadKind::EncoderDecoder as i32, 3);
+    assert_eq!(WorkloadPooling::Unspecified as i32, -1);
+    assert_eq!(WorkloadPooling::None as i32, 0);
+    assert_eq!(WorkloadPooling::Mean as i32, 1);
+    assert_eq!(WorkloadPooling::Cls as i32, 2);
+    assert_eq!(WorkloadPooling::Last as i32, 3);
+    assert_eq!(WorkloadPooling::Rank as i32, 4);
+}
+
+#[test]
 fn accepts_current_patch_runtime() {
     assert!(runtime_abi_supported(version(
         ABI_VERSION_MAJOR,
         ABI_VERSION_MINOR,
         ABI_VERSION_PATCH,
     )));
+}
+
+#[test]
+fn rejects_pre_workload_abi_even_with_the_same_major_and_minor() {
+    // 0.1.60 predates the mandatory workload exports in the dynamic facade.
+    assert!(!runtime_abi_supported(version(0, 1, 60)));
+}
+
+#[test]
+#[cfg(not(feature = "dynamic-runtime"))]
+fn linked_native_abi_matches_the_rust_facade() {
+    unsafe extern "C" {
+        fn skippy_abi_version() -> AbiVersion;
+    }
+    // SAFETY: The ABI query takes no arguments and owns no mutable state.
+    let native = unsafe { skippy_abi_version() };
+    assert_eq!(native.major, ABI_VERSION_MAJOR);
+    assert_eq!(native.minor, ABI_VERSION_MINOR);
+    assert_eq!(native.patch, ABI_VERSION_PATCH);
 }
 
 #[test]

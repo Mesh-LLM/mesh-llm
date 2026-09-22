@@ -19,20 +19,76 @@ fn direct_iteration(session_id: &str, token_count: usize) -> DirectIteration {
     }
 }
 
+/// An exporting stage must fit one native microbatch, while a stage that
+/// exports nothing (terminal or unsplit) keeps its whole-iteration budget.
+#[test]
+fn activation_export_stages_cap_iteration_tokens_at_the_native_microbatch() {
+    assert_eq!(
+        iteration_token_budget(true, 2048, None),
+        usize::try_from(skippy_runtime::LLAMA_SERVER_DEFAULT_N_UBATCH).unwrap(),
+        "an exporting stage without an explicit n_ubatch caps at the default microbatch"
+    );
+    assert_eq!(
+        iteration_token_budget(true, 2048, Some(512)),
+        512,
+        "an exporting stage caps at its configured microbatch"
+    );
+    assert_eq!(
+        iteration_token_budget(true, 128, Some(512)),
+        128,
+        "the microbatch cap never raises the stage budget"
+    );
+    assert_eq!(
+        iteration_token_budget(false, 2048, Some(512)),
+        2048,
+        "a stage that exports nothing keeps the full iteration budget"
+    );
+}
+
+#[test]
+fn planned_prefills_share_the_export_microbatch_budget() {
+    for (exports, expected_tokens) in [(true, 512), (false, 1024)] {
+        let config = build_scheduler_config(4, 4096, 0, Some(2048), Some(512), 8, exports);
+        let mut scheduler = Scheduler::new(config);
+        for index in 0..4 {
+            scheduler
+                .submit(Sequence::new(
+                    format!("request-{index}"),
+                    vec![1; 256],
+                    1,
+                    None,
+                    0,
+                ))
+                .unwrap();
+        }
+        let plan = scheduler.plan_iteration();
+        assert_eq!(
+            plan.work
+                .iter()
+                .map(|work| work.tokens.len())
+                .sum::<usize>(),
+            expected_tokens
+        );
+        assert_eq!(plan.work.len(), expected_tokens / 256);
+    }
+}
+
 #[test]
 fn expired_direct_iteration_behind_blocked_worker_never_reaches_native_runtime() {
     let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
     let (commands, receiver) = std_mpsc::sync_channel(8);
     let worker = thread::spawn(move || {
         SchedulerWorker {
+            compute_meter: std::sync::Arc::default(),
             runtime,
-            scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8)),
+            scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
             requests: BTreeMap::new(),
             direct_iterations: VecDeque::new(),
             cache_runtime_queue: CacheRuntimeQueue::new(CACHE_AGING_COST_PER_TURN, true),
             commands: receiver,
             kv_capacity_tokens: 64,
             max_direct_batch_size: 1,
+            direct_group_batch_size: 1,
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
@@ -54,6 +110,7 @@ fn expired_direct_iteration_behind_blocked_worker_never_reaches_native_runtime()
             run: Box::new(move |_| {
                 worker_blocked.send(()).unwrap();
                 release_worker_rx.recv().unwrap();
+                Duration::ZERO
             }),
         }))
         .unwrap();
@@ -175,7 +232,7 @@ fn direct_coalescing_tracks_active_sessions_without_penalizing_singletons() {
 
 #[test]
 fn server_scheduler_config_uses_runtime_lanes_and_native_batch_limits() {
-    let config = build_scheduler_config(32, 131_072, 1024, Some(4096), Some(128), 64);
+    let config = build_scheduler_config(32, 131_072, 1024, Some(4096), Some(128), 64, false);
     assert_eq!(config.max_active_sequences, 32);
     assert_eq!(config.max_waiting_sequences, 64);
     assert_eq!(config.max_tokens_per_iteration, 2048);
@@ -186,7 +243,7 @@ fn server_scheduler_config_uses_runtime_lanes_and_native_batch_limits() {
     assert_eq!(config.memory_components[1].bytes_per_sequence, 1024);
     assert_eq!(config.memory_components[1].capacity_bytes, 65_536);
 
-    let non_recurrent = build_scheduler_config(32, 131_072, 0, Some(4096), Some(128), 64);
+    let non_recurrent = build_scheduler_config(32, 131_072, 0, Some(4096), Some(128), 64, false);
     assert!(non_recurrent.mixed_prefill_decode);
 }
 
@@ -195,14 +252,16 @@ fn server_scheduler_worker_batches_and_completes_default_generations() {
     let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(2)));
     let (_commands, receiver) = std_mpsc::channel();
     let mut worker = SchedulerWorker {
+        compute_meter: std::sync::Arc::default(),
         runtime,
-        scheduler: Scheduler::new(build_scheduler_config(2, 64, 0, Some(8), Some(8), 8)),
+        scheduler: Scheduler::new(build_scheduler_config(2, 64, 0, Some(8), Some(8), 8, false)),
         requests: BTreeMap::new(),
         direct_iterations: VecDeque::new(),
         cache_runtime_queue: CacheRuntimeQueue::new(CACHE_AGING_COST_PER_TURN, true),
         commands: receiver,
         kv_capacity_tokens: 64,
         max_direct_batch_size: 2,
+        direct_group_batch_size: 2,
         max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
         max_commands_per_turn: 8,
         iteration_interval: Duration::ZERO,
@@ -341,14 +400,16 @@ fn token_control_is_applied_without_blocking_the_scheduler_iteration() {
     let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
     let (_commands, receiver) = std_mpsc::channel();
     let mut worker = SchedulerWorker {
+        compute_meter: std::sync::Arc::default(),
         runtime,
-        scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8)),
+        scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
         requests: BTreeMap::new(),
         direct_iterations: VecDeque::new(),
         cache_runtime_queue: CacheRuntimeQueue::new(CACHE_AGING_COST_PER_TURN, true),
         commands: receiver,
         kv_capacity_tokens: 64,
         max_direct_batch_size: 1,
+        direct_group_batch_size: 1,
         max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
         max_commands_per_turn: 8,
         iteration_interval: Duration::ZERO,
@@ -398,14 +459,16 @@ fn resumed_request_cancellation_leaves_runtime_for_caller_cleanup() {
         .track_session_tokens_for_test("resumed", 1);
     let (_commands, receiver) = std_mpsc::channel();
     let mut worker = SchedulerWorker {
+        compute_meter: std::sync::Arc::default(),
         runtime: Arc::clone(&runtime),
-        scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8)),
+        scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
         requests: BTreeMap::new(),
         direct_iterations: VecDeque::new(),
         cache_runtime_queue: CacheRuntimeQueue::new(CACHE_AGING_COST_PER_TURN, true),
         commands: receiver,
         kv_capacity_tokens: 64,
         max_direct_batch_size: 1,
+        direct_group_batch_size: 1,
         max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
         max_commands_per_turn: 8,
         iteration_interval: Duration::ZERO,
@@ -453,14 +516,16 @@ fn feature_runtime_operations_execute_on_the_scheduler_worker() {
     let (commands, receiver) = std_mpsc::sync_channel(8);
     let worker = thread::spawn(move || {
         SchedulerWorker {
+            compute_meter: std::sync::Arc::default(),
             runtime,
-            scheduler: Scheduler::new(build_scheduler_config(3, 64, 0, Some(8), Some(8), 8)),
+            scheduler: Scheduler::new(build_scheduler_config(3, 64, 0, Some(8), Some(8), 8, false)),
             requests: BTreeMap::new(),
             direct_iterations: VecDeque::new(),
             cache_runtime_queue: CacheRuntimeQueue::new(CACHE_AGING_COST_PER_TURN, true),
             commands: receiver,
             kv_capacity_tokens: 64,
             max_direct_batch_size: 3,
+            direct_group_batch_size: 3,
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
@@ -497,14 +562,16 @@ fn detached_runtime_operation_returns_before_work_completes() {
     let (commands, receiver) = std_mpsc::sync_channel(8);
     let worker = thread::spawn(move || {
         SchedulerWorker {
+            compute_meter: std::sync::Arc::default(),
             runtime,
-            scheduler: Scheduler::new(build_scheduler_config(3, 64, 0, Some(8), Some(8), 8)),
+            scheduler: Scheduler::new(build_scheduler_config(3, 64, 0, Some(8), Some(8), 8, false)),
             requests: BTreeMap::new(),
             direct_iterations: VecDeque::new(),
             cache_runtime_queue: CacheRuntimeQueue::new(CACHE_AGING_COST_PER_TURN, true),
             commands: receiver,
             kv_capacity_tokens: 64,
             max_direct_batch_size: 3,
+            direct_group_batch_size: 3,
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
@@ -638,14 +705,16 @@ fn full_direct_wave_suppresses_cache_runtime_while_direct_queue_is_temporarily_e
     let (_commands, receiver) = std_mpsc::channel();
     let (selected, selected_rx) = std_mpsc::channel();
     let mut worker = SchedulerWorker {
+        compute_meter: std::sync::Arc::default(),
         runtime,
-        scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8)),
+        scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
         requests: BTreeMap::new(),
         direct_iterations: VecDeque::new(),
         cache_runtime_queue: CacheRuntimeQueue::new(CACHE_AGING_COST_PER_TURN, true),
         commands: receiver,
         kv_capacity_tokens: 64,
         max_direct_batch_size: 1,
+        direct_group_batch_size: 1,
         max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
         max_commands_per_turn: 8,
         iteration_interval: Duration::ZERO,
@@ -662,6 +731,7 @@ fn full_direct_wave_suppresses_cache_runtime_while_direct_queue_is_temporarily_e
             control: None,
             run: Box::new(move |_| {
                 selected.send(()).unwrap();
+                Duration::ZERO
             }),
         },
         skippy_scheduler::CacheAffinity::default(),
@@ -683,14 +753,16 @@ fn resident_kv_does_not_engage_direct_wave_gate() {
     let (_commands, receiver) = std_mpsc::channel();
     let (selected, selected_rx) = std_mpsc::channel();
     let mut worker = SchedulerWorker {
+        compute_meter: std::sync::Arc::default(),
         runtime,
-        scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8)),
+        scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
         requests: BTreeMap::new(),
         direct_iterations: VecDeque::new(),
         cache_runtime_queue: CacheRuntimeQueue::new(CACHE_AGING_COST_PER_TURN, true),
         commands: receiver,
         kv_capacity_tokens: 64,
         max_direct_batch_size: 1,
+        direct_group_batch_size: 1,
         max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
         max_commands_per_turn: 8,
         iteration_interval: Duration::ZERO,
@@ -707,6 +779,7 @@ fn resident_kv_does_not_engage_direct_wave_gate() {
             control: None,
             run: Box::new(move |_| {
                 selected.send(()).unwrap();
+                Duration::ZERO
             }),
         },
         skippy_scheduler::CacheAffinity::default(),
@@ -775,14 +848,16 @@ fn worker_panic_is_contained_and_fails_active_requests() {
     let (commands, receiver) = std_mpsc::sync_channel(8);
     let worker = thread::spawn(move || {
         SchedulerWorker {
+            compute_meter: std::sync::Arc::default(),
             runtime,
-            scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8)),
+            scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
             requests: BTreeMap::new(),
             direct_iterations: VecDeque::new(),
             cache_runtime_queue: CacheRuntimeQueue::new(CACHE_AGING_COST_PER_TURN, true),
             commands: receiver,
             kv_capacity_tokens: 64,
             max_direct_batch_size: 1,
+            direct_group_batch_size: 1,
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
@@ -804,6 +879,7 @@ fn worker_panic_is_contained_and_fails_active_requests() {
             run: Box::new(move |_| {
                 worker_blocked.send(()).unwrap();
                 release_worker_rx.recv().unwrap();
+                Duration::ZERO
             }),
         }))
         .unwrap();
@@ -827,7 +903,7 @@ fn worker_panic_is_contained_and_fails_active_requests() {
         .send(SchedulerCommand::ExecuteRuntime(RuntimeOperation {
             label: "panic-test",
             control: None,
-            run: Box::new(|_| panic!("injected scheduler worker panic")),
+            run: Box::new(|_| -> Duration { panic!("injected scheduler worker panic") }),
         }))
         .unwrap();
     release_worker.send(()).unwrap();
@@ -891,13 +967,15 @@ fn detached_capture_unit_releases_on_completion_rejection_and_shutdown_drop() {
     let worker = thread::spawn(move || {
         SchedulerWorker {
             runtime,
-            scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8)),
+            compute_meter: std::sync::Arc::default(),
+            scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
             requests: BTreeMap::new(),
             direct_iterations: VecDeque::new(),
             cache_runtime_queue: CacheRuntimeQueue::new(CACHE_AGING_COST_PER_TURN, true),
             commands: receiver,
             kv_capacity_tokens: 64,
             max_direct_batch_size: 1,
+            direct_group_batch_size: 1,
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
@@ -920,6 +998,7 @@ fn detached_capture_unit_releases_on_completion_rejection_and_shutdown_drop() {
             run: Box::new(move |_| {
                 let _guard = run_guard;
                 ran.send(()).unwrap();
+                Duration::ZERO
             }),
         }))
         .unwrap();
@@ -940,6 +1019,7 @@ fn capture_operation(counter: &Arc<AtomicUsize>, label: &'static str) -> Runtime
         control: None,
         run: Box::new(move |_| {
             let _guard = guard;
+            Duration::ZERO
         }),
     }
 }
