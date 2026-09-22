@@ -134,6 +134,14 @@ smoke and oracle evidence, not split certification. Every selected
 GGUF/projector must exist in the verified read-only lab cache; provisioning
 that cache is an external runner operation.
 
+The pinned projector roster includes twelve causal image fixtures: LFM2-VL,
+Qwen2-VL, Qwen3-VL, Qwen3-VL-MoE, Gemma 4, Inkling, Qwen4exp, Qwen3.5,
+Qwen3.5-MoE, Mistral Small, Mistral4, and Llama4. Each requires the local and
+split image smoke lane; a text-only parity pass does not certify its image
+path. OCR, speech synthesis, and speech recognition retain their separate
+projector-backed workload lanes. Projectors are pinned to the same repository
+revision as their trunk fixtures, with independent file sizes and digests.
+
 Every family row declares its workload `class` and GGUF `architecture`
 separately. Cache preflight compares the target's architecture with its
 immutable GGUF metadata. Only causal rows with complete split-parity policy
