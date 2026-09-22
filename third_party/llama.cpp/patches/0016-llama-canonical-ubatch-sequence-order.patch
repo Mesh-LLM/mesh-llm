@@ -1,0 +1,46 @@
+From 3ca8c1f2628fac222a2fd6a478baa2de00e4ed69 Mon Sep 17 00:00:00 2001
+From: sat <sat@local>
+Date: Tue, 22 Sep 2026 21:25:11 +1000
+Subject: [PATCH] llama: emit ubatch sequence sets in a canonical order
+
+---
+ src/llama-batch.cpp | 23 +++++++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/src/llama-batch.cpp b/src/llama-batch.cpp
+index 2b98a552f..c88f4e887 100644
+--- a/src/llama-batch.cpp
++++ b/src/llama-batch.cpp
+@@ -550,6 +550,29 @@ llama_ubatch llama_batch_allocr::split_equal(uint32_t n_ubatch, bool sequential,
+         }
+     }
+ 
++    // Emit the participating sequence sets in a canonical order rather than the order
++    // they happened to appear in the incoming batch.
++    //
++    // Graph reuse compares the ubatch's per-token sequence ids positionally, so an
++    // identical set of sequences arriving in a different order reads as a different
++    // graph and forces a full rebuild. The set is what decides the attention streams;
++    // the order within the ubatch is an artifact of how the caller filled the batch.
++    //
++    // Measured on a two-node split serving 16 requests over 4 lanes: the terminal
++    // stage refused reuse on 86.5% of decode steps at exactly this check, while the
++    // interior stage -- which owns no samplers and so never reaches it -- reused 88.6%.
++    // Sorting by lowest participating sequence id is stable for a given set and agrees
++    // with the sequential split, which already accepts only increasing ids.
++    std::sort(cur_seq_set.begin(), cur_seq_set.end(),
++        [](const seq_set_t & lhs, const seq_set_t & rhs) -> bool {
++            for (uint32_t i = 0; i < LLAMA_MAX_SEQ; ++i) {
++                if (lhs[i] != rhs[i]) {
++                    return bool(lhs[i]);
++                }
++            }
++            return false;
++        });
++
+     uint32_t n_seqs = cur_seq_set.size();
+ 
+     // we are done
+-- 
+2.50.1 (Apple Git-155)
+
