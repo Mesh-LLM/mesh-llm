@@ -1,0 +1,97 @@
+From d11f89686bc4e5d130e49b64f5fdcc2a757b92ba Mon Sep 17 00:00:00 2001
+From: sat <sat@local>
+Date: Tue, 22 Sep 2026 15:59:45 +1000
+Subject: [PATCH] skippy: memoise admitted execution-contract validation
+
+---
+ src/skippy/stage_execution_contract.cpp | 59 +++++++++++++++++++++++++
+ 1 file changed, 59 insertions(+)
+
+diff --git a/src/skippy/stage_execution_contract.cpp b/src/skippy/stage_execution_contract.cpp
+index 7e85c82dc..0e613aafb 100644
+--- a/src/skippy/stage_execution_contract.cpp
++++ b/src/skippy/stage_execution_contract.cpp
+@@ -3,6 +3,7 @@
+ #include "../vendor/nlohmann/json.hpp"
+ 
+ #include <algorithm>
++#include <cstdint>
+ #include <set>
+ #include <stdexcept>
+ 
+@@ -23,9 +24,66 @@ std::vector<std::string> read_parameters(const nlohmann::json & value) {
+ }
+ }
+ 
++namespace {
++// The admitted contract, the stage's resident tensors and the realized parameter set are
++// fixed for the life of a stage, but graph-derived filtering calls this on every graph
++// build -- which is every decode step that does not reuse its graph. The check below
++// parses the contract JSON and sorts several hundred parameter names each time. Nothing
++// it inspects varies between those calls, so remember the signatures that have already
++// passed and let repeats return immediately. A signature that has not been seen still
++// runs the full check, so a genuine mismatch is still caught.
++uint64_t fnv1a(uint64_t hash, const void * data, size_t size) {
++    const auto * bytes = static_cast<const unsigned char *>(data);
++    for (size_t i = 0; i < size; ++i) {
++        hash = (hash ^ bytes[i]) * 0x100000001b3ULL;
++    }
++    return hash;
++}
++
++uint64_t fnv1a(uint64_t hash, const std::string & value) {
++    return fnv1a(hash, value.data(), value.size());
++}
++
++uint64_t dependency_signature(
++        const skippy_graph_build_inputs & inputs, bool auxiliary, int32_t offset,
++        const std::vector<std::string> & parameters) {
++    uint64_t hash = 0xcbf29ce484222325ULL;
++    hash = fnv1a(hash, inputs.execution_contract);
++    const int32_t scalars[4] = {inputs.selection.layer_start, inputs.selection.layer_end,
++                                offset, auxiliary ? 1 : 0};
++    hash = fnv1a(hash, scalars, sizeof(scalars));
++    for (const auto & name : inputs.resident_tensor_names) hash = fnv1a(hash, name);
++    hash = fnv1a(hash, "|", 1);
++    for (const auto & name : parameters) hash = fnv1a(hash, name);
++    return hash;
++}
++
++// One entry per (stage, profile) pair in play; decode and MTP profiles alternate, so a
++// single slot would thrash.
++constexpr size_t VALIDATED_SLOTS = 8;
++thread_local uint64_t g_validated[VALIDATED_SLOTS] = {};
++thread_local size_t g_validated_next = 0;
++
++bool already_validated(uint64_t signature) {
++    for (size_t i = 0; i < VALIDATED_SLOTS; ++i) {
++        if (g_validated[i] == signature) return true;
++    }
++    return false;
++}
++
++void remember_validated(uint64_t signature) {
++    g_validated[g_validated_next] = signature;
++    g_validated_next = (g_validated_next + 1) % VALIDATED_SLOTS;
++}
++}
++
+ void skippy_validate_execution_dependencies(
+         const skippy_graph_build_inputs & inputs, bool auxiliary, int32_t offset,
+         const std::vector<std::string> & parameters) {
++    const uint64_t signature = dependency_signature(inputs, auxiliary, offset, parameters);
++    if (signature != 0 && already_validated(signature)) {
++        return;
++    }
+     const auto residents = canonical(inputs.resident_tensor_names);
+     const auto realized = canonical(parameters);
+     if (inputs.execution_contract.empty()) {
+@@ -57,4 +115,5 @@ void skippy_validate_execution_dependencies(
+     if (expected.empty() || expected != realized) {
+         throw std::runtime_error("realized graph parameters do not match the admitted execution profile");
+     }
++    remember_validated(signature);
+ }
+-- 
+2.50.1 (Apple Git-155)
+
