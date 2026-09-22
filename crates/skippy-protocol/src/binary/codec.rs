@@ -6,24 +6,12 @@ use super::{
     MAX_STAGE_ACTIVATION_BYTES, MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES,
     MAX_STAGE_DRY_SEQUENCE_BREAKERS, MAX_STAGE_LOGIT_BIAS, MAX_STAGE_PREDICTED_TOKENS,
     MAX_STAGE_SAMPLERS, MAX_STAGE_SAMPLING_STRING_BYTES, MAX_STAGE_SIDEBAND_VALUES,
-    MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC, STAGE_STATE_VERSION, StageLogitBias,
+    MAX_STAGE_STATE_IMPORT_BYTES, STAGE_STATE_VERSION, StageLogitBias, StageMessageContext,
     StageNativeMtpDraft, StageReply, StageReplyStats, StageReplyWindow, StageSamplingConfig,
     StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
     activation::{decode_activation_frame, encode_raw_activation_frame},
     invalid_data, invalid_input,
 };
-
-pub fn send_ready(mut writer: impl Write) -> io::Result<()> {
-    write_i32(&mut writer, READY_MAGIC)
-}
-
-pub fn recv_ready(mut reader: impl Read) -> io::Result<()> {
-    let magic = read_i32(&mut reader)?;
-    if magic != READY_MAGIC {
-        return Err(invalid_data("stage ready magic mismatch"));
-    }
-    Ok(())
-}
 
 pub fn send_reply_ack(mut writer: impl Write) -> io::Result<()> {
     send_reply_ack_with_stats(&mut writer, StageReplyStats::default())
@@ -237,33 +225,23 @@ fn read_native_mtp_draft(mut reader: impl Read) -> io::Result<Option<StageNative
     }
 }
 
-pub fn write_stage_message(mut writer: impl Write, message: &StageWireMessage) -> io::Result<()> {
-    // Wire v4 fixed prefix, little-endian:
+pub fn write_stage_message(
+    mut writer: impl Write + StageMessageContext,
+    message: &StageWireMessage,
+) -> io::Result<()> {
+    // Current generation fixed prefix, little-endian:
     // kind, pos_start, token_count, token_sideband_count, position_sideband_count (5 x i32);
     // StageStateHeader (10 x i32); activation wire byte count (1 x i32);
     // request_id, session_id (2 x u64);
     // optional StageSamplingConfig follows when state_flags::SAMPLING is set.
     // Token sideband, raw StateImport bytes, or activation bytes follow this
     // prefix, so prefill overhead stays independent of ID string length.
-    write_i32(&mut writer, message.kind as i32)?;
-    write_i32(&mut writer, message.pos_start)?;
-    write_i32(&mut writer, message.token_count)?;
     if message.tokens.len() > MAX_STAGE_SIDEBAND_VALUES {
         return Err(invalid_input("too many tokens"));
     }
-    write_i32(
-        &mut writer,
-        i32::try_from(message.tokens.len()).map_err(|_| invalid_input("too many tokens"))?,
-    )?;
     if message.positions.len() > MAX_STAGE_SIDEBAND_VALUES {
         return Err(invalid_input("too many position sideband values"));
     }
-    write_i32(
-        &mut writer,
-        i32::try_from(message.positions.len())
-            .map_err(|_| invalid_input("too many position sideband values"))?,
-    )?;
-
     let mut state = message.state;
     if message.sampling.is_some() {
         state.flags |= super::state_flags::SAMPLING;
@@ -275,6 +253,7 @@ pub fn write_stage_message(mut writer: impl Write, message: &StageWireMessage) -
     } else {
         state.flags &= !super::state_flags::CHAT_SAMPLING_METADATA;
     }
+    let mut activation_bytes = Vec::new();
     let activation_wire_byte_count = if message.kind == WireMessageKind::StateImport
         || message.kind == WireMessageKind::Stop
         || state.source_stage_index < 0
@@ -294,9 +273,19 @@ pub fn write_stage_message(mut writer: impl Write, message: &StageWireMessage) -
         }
         let frame = decode_activation_frame(state.activation_codec, &message.activation)?;
         validate_activation_frame_header(&frame, message.token_count, state.source_stage_index)?;
-        i32::try_from(message.activation.len())
+        activation_bytes = writer
+            .activation_agreement()
+            .ok_or_else(|| invalid_input("activation requires an established agreement"))?
+            .encode_existing(state.activation_codec, &message.activation)?;
+        i32::try_from(activation_bytes.len())
             .map_err(|_| invalid_input("activation payload byte count exceeds maximum"))?
     };
+    // Validate/reframe activations before writing any prefix to the shared stream.
+    write_i32(&mut writer, message.kind as i32)?;
+    write_i32(&mut writer, message.pos_start)?;
+    write_i32(&mut writer, message.token_count)?;
+    write_i32(&mut writer, message.tokens.len() as i32)?;
+    write_i32(&mut writer, message.positions.len() as i32)?;
     write_state_header(&mut writer, state)?;
     write_i32(&mut writer, activation_wire_byte_count)?;
     write_u64(&mut writer, message.request_id)?;
@@ -331,16 +320,19 @@ pub fn write_stage_message(mut writer: impl Write, message: &StageWireMessage) -
     }
     write_i32_slice(&mut writer, &message.tokens)?;
     write_i32_slice(&mut writer, &message.positions)?;
-    writer.write_all(&message.activation)?;
+    writer.write_all(&activation_bytes)?;
     Ok(())
 }
 
-pub fn read_stage_message(reader: impl Read, _n_embd: i32) -> io::Result<StageWireMessage> {
+pub fn read_stage_message(
+    reader: impl Read + StageMessageContext,
+    _n_embd: i32,
+) -> io::Result<StageWireMessage> {
     read_stage_message_inner(reader, None)
 }
 
 pub fn read_stage_message_for_codec(
-    reader: impl Read,
+    reader: impl Read + StageMessageContext,
     _n_embd: i32,
     expected_codec: StageActivationCodec,
 ) -> io::Result<StageWireMessage> {
@@ -351,7 +343,7 @@ pub fn read_stage_message_for_codec(
 }
 
 pub fn read_stage_message_for_codec_policy(
-    reader: impl Read,
+    reader: impl Read + StageMessageContext,
     _n_embd: i32,
     configured_codec: StageActivationCodec,
     policy: StageActivationCodecPolicy,
@@ -360,7 +352,7 @@ pub fn read_stage_message_for_codec_policy(
 }
 
 fn read_stage_message_inner(
-    mut reader: impl Read,
+    mut reader: impl Read + StageMessageContext,
     expected_codec: Option<(StageActivationCodec, StageActivationCodecPolicy)>,
 ) -> io::Result<StageWireMessage> {
     let kind = WireMessageKind::try_from(read_i32(&mut reader)?)?;
@@ -485,7 +477,10 @@ fn read_stage_message_inner(
     let activation = if wire_activation.is_empty() {
         Vec::new()
     } else {
-        let frame = decode_activation_frame(state.activation_codec, &wire_activation)?;
+        let frame = reader
+            .activation_agreement()
+            .ok_or_else(|| invalid_data("activation requires an established agreement"))?
+            .decode(state.activation_codec, &wire_activation)?;
         validate_activation_frame_header(&frame, token_count, state.source_stage_index)?;
         encode_raw_activation_frame(&frame)?
     };

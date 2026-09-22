@@ -5,6 +5,7 @@ use crate::binary_transport::PredictionReturnReceiver;
 use crate::binary_transport::forwarded_stage_message_timed;
 use crate::binary_transport::run_binary_stage_message;
 use crate::binary_transport::stage_output_activation_capacity;
+use crate::binary_transport::stage_setup::StageStream as TcpStream;
 use crate::binary_transport::write_stage_message_conditioned;
 use crate::frontend::generation::EmbeddedExecutionStats;
 use crate::frontend::generation::EmbeddedLocalOutput;
@@ -27,7 +28,6 @@ use skippy_protocol::binary::StageWireMessage;
 use skippy_protocol::binary::WireMessageKind;
 use skippy_protocol::binary::WireReplyKind;
 use skippy_protocol::binary::recv_reply;
-use std::net::TcpStream;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -602,6 +602,7 @@ mod tests {
     use super::*;
     use crate::binary_transport::PredictionReturnHub;
     use skippy_protocol::binary::StageStateHeader;
+    use skippy_protocol::binary::StageStream as TcpStream;
     use std::net::TcpListener;
     use std::sync::Arc;
 
@@ -683,6 +684,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
+        let server = skippy_protocol::binary::StageStream::new(server);
         (client, server)
     }
 

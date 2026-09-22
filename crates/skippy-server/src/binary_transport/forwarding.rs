@@ -187,6 +187,75 @@ mod tests {
         }
     }
 
+    fn admitted<T>(
+        io: T,
+        message: &StageWireMessage,
+    ) -> skippy_protocol::binary::StageMessageIo<T> {
+        use skippy_protocol::binary::{
+            ActivationAgreement, ActivationDimension, ActivationPartProfile, ActivationProfile,
+            StageMessageIo,
+        };
+        let desc = skippy_protocol::binary::decode_activation_frame(
+            message.state.activation_codec,
+            &message.activation,
+        )
+        .unwrap()
+        .desc;
+        let profile = ActivationProfile {
+            id: 1,
+            producer_stage_index: desc.producer_stage_index,
+            layer_start: desc.layer_start,
+            layer_end: desc.layer_end,
+            frontier_identity: desc.frontier_identity,
+            max_tokens: 4096,
+            max_sequences: 4096,
+            parts: desc
+                .parts
+                .iter()
+                .map(|part| ActivationPartProfile {
+                    identity: part.identity,
+                    ggml_type: part.ggml_type,
+                    rank: part.rank,
+                    token_axis: part.token_axis as u32,
+                    optional: part.is_optional(),
+                    dimensions: std::array::from_fn(|axis| {
+                        if axis == part.token_axis as usize {
+                            ActivationDimension::Tokens
+                        } else {
+                            ActivationDimension::Fixed(if axis < part.rank as usize {
+                                part.dimensions[axis] as u64
+                            } else {
+                                1
+                            })
+                        }
+                    }),
+                })
+                .collect(),
+        };
+        let mut stream = StageMessageIo::new(io);
+        stream
+            .establish(ActivationAgreement {
+                generation: [7; 16],
+                profiles: vec![profile],
+            })
+            .unwrap();
+        stream
+    }
+
+    fn assert_frame_descriptor_matches(
+        mut actual: skippy_protocol::binary::StageActivationDesc,
+        expected: skippy_protocol::binary::StageActivationDesc,
+    ) {
+        // Dimensions outside rank are not part of the agreed tensor layout.
+        for (actual, expected) in actual.parts.iter_mut().zip(&expected.parts) {
+            for axis in actual.rank as usize..4 {
+                actual.dimensions[axis] = expected.dimensions[axis];
+                actual.byte_strides[axis] = expected.byte_strides[axis];
+            }
+        }
+        assert_eq!(actual, expected);
+    }
+
     fn incoming_message() -> StageWireMessage {
         StageWireMessage {
             kind: WireMessageKind::DecodeEmbd,
@@ -244,16 +313,16 @@ mod tests {
             skippy_protocol::StageActivationCodec::F16RneV1
         );
 
-        let mut wire = Vec::new();
+        let mut wire = admitted(Vec::new(), &forwarded.message);
         skippy_protocol::binary::write_stage_message(&mut wire, &forwarded.message).unwrap();
         let decoded = skippy_protocol::binary::read_stage_message_for_codec(
-            std::io::Cursor::new(wire),
+            admitted(std::io::Cursor::new(wire.into_inner()), &forwarded.message),
             2,
             skippy_protocol::StageActivationCodec::F16RneV1,
         )
         .unwrap();
         let decoded = decoded.activation_frame().unwrap().unwrap();
-        assert_eq!(decoded.desc, stage_activation_desc(&source.desc).unwrap());
+        assert_frame_descriptor_matches(decoded.desc, stage_activation_desc(&source.desc).unwrap());
         assert_eq!(decoded.payload, source.payload);
     }
 
@@ -289,16 +358,16 @@ mod tests {
         let forwarded =
             forwarded_stage_message_timed(&config, &incoming_message(), &frame, 2).unwrap();
 
-        let mut wire = Vec::new();
+        let mut wire = admitted(Vec::new(), &forwarded.message);
         skippy_protocol::binary::write_stage_message(&mut wire, &forwarded.message).unwrap();
         let decoded = skippy_protocol::binary::read_stage_message_for_codec(
-            std::io::Cursor::new(wire),
+            admitted(std::io::Cursor::new(wire.into_inner()), &forwarded.message),
             2,
             skippy_protocol::StageActivationCodec::F16RneV1,
         )
         .unwrap();
         let decoded = decoded.activation_frame().unwrap().unwrap();
-        assert_eq!(decoded.desc, stage_activation_desc(&frame.desc).unwrap());
+        assert_frame_descriptor_matches(decoded.desc, stage_activation_desc(&frame.desc).unwrap());
         assert_eq!(&decoded.payload[8..], top_k);
     }
 

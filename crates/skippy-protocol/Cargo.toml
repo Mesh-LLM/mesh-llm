@@ -8,12 +8,13 @@ repository = "https://github.com/Mesh-LLM/mesh-llm"
 homepage = "https://github.com/Mesh-LLM/mesh-llm"
 
 [dependencies]
+anyhow.workspace = true
 prost = "0.14"
 serde.workspace = true
+serde_json.workspace = true
+uuid = { version = "1", features = ["v4"] }
 skippy-tokenizer = { path = "../skippy-tokenizer", version = "0.76.1" }
 
-[dev-dependencies]
-serde_json.workspace = true
 
 [build-dependencies]
 prost-build = "0.14"

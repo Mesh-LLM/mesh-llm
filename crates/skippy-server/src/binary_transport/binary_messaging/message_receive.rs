@@ -1,10 +1,11 @@
+use crate::binary_transport::stage_setup::StageStream as TcpStream;
 use anyhow::{Context, Result};
 use skippy_protocol::{
     StageActivationCodec, StageActivationCodecPolicy,
     binary::{StageWireMessage, read_stage_message_for_codec_policy},
 };
 use std::io;
-use std::net::{Shutdown, TcpStream};
+use std::net::Shutdown;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
@@ -135,7 +136,7 @@ pub(super) fn spawn_message_reader(
             // `&TcpStream` implements `Read`, so the framed read runs on the
             // shared handle that `Drop` can shut down.
             match read_stage_message_for_codec_policy(
-                &mut &*reader,
+                &*reader,
                 activation_width,
                 activation_codec,
                 activation_codec_policy,
@@ -144,7 +145,7 @@ pub(super) fn spawn_message_reader(
                     if message.kind.is_stale_window_discard() {
                         registry.record_message(&message);
                     }
-                    let message_bytes = message.estimated_wire_bytes();
+                    let message_bytes = message.estimated_buffer_bytes();
                     reader_queued_bytes.fetch_add(message_bytes, Ordering::AcqRel);
                     if sender.send(Ok(message)).is_err() {
                         return;
@@ -186,7 +187,7 @@ impl InboundMessageReader {
             Ok(Ok(message)) => {
                 // Saturating, not a load-then-subtract: the counter must
                 // never wrap, or the reader parks on the ceiling forever.
-                let bytes = message.estimated_wire_bytes();
+                let bytes = message.estimated_buffer_bytes();
                 self.queued_bytes
                     .fetch_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
                         Some(queued.saturating_sub(bytes))
@@ -212,6 +213,7 @@ impl InboundMessageReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use skippy_protocol::binary::StageStream as TcpStream;
     use skippy_protocol::binary::{StageStateHeader, WireMessageKind, write_stage_message};
     use std::io::Write;
     use std::net::TcpListener;
@@ -261,6 +263,7 @@ mod tests {
         let address = listener.local_addr().expect("local addr");
         let client = TcpStream::connect(address).expect("connect");
         let (server, _) = listener.accept().expect("accept");
+        let server = TcpStream::new(server);
         (client, server)
     }
 

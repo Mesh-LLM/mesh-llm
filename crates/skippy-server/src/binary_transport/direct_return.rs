@@ -1,7 +1,8 @@
+use crate::binary_transport::stage_setup::StageStream as TcpStream;
 use std::{
     collections::HashMap,
     io::{self, Read},
-    net::{IpAddr, SocketAddr, TcpListener, TcpStream},
+    net::{IpAddr, SocketAddr, TcpListener},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -17,15 +18,12 @@ use skippy_protocol::{
     StageConfig, StageTopology,
     binary::{
         STAGE_WIRE_FIXED_HEADER_BYTES, StageReply, StageStateHeader, StageWireMessage,
-        WireMessageKind, WireReplyKind, read_stage_message, recv_ready, recv_reply, send_ready,
-        send_reply_message, write_stage_message,
+        WireMessageKind, WireReplyKind, read_stage_message, recv_reply, send_reply_message,
+        write_stage_message,
     },
 };
 
 use super::socket::{connect_downstream_socket, downstream_source_ip, resolve_downstream_endpoint};
-use super::stage_execution::{
-    consume_optional_client_ready_hello, send_client_ready_hello_if_enabled,
-};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct PredictionReturnKey {
@@ -85,6 +83,7 @@ impl PredictionReturnListener {
             while !thread_shutdown.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((stream, _)) => {
+                        let stream = TcpStream::new(stream);
                         if let Err(error) = stream.set_nonblocking(false) {
                             tracing::warn!(
                                 "direct prediction return connection failed: set blocking: {error}"
@@ -92,8 +91,13 @@ impl PredictionReturnListener {
                             continue;
                         }
                         let hub = thread_hub.clone();
+                        let connection_shutdown = thread_shutdown.clone();
                         thread::spawn(move || {
-                            if let Err(error) = handle_prediction_return_connection(hub, stream) {
+                            if let Err(error) = handle_prediction_return_connection(
+                                hub,
+                                stream,
+                                &connection_shutdown,
+                            ) {
                                 tracing::warn!(
                                     "direct prediction return connection failed: {error:#}"
                                 );
@@ -135,10 +139,19 @@ impl Drop for PredictionReturnListener {
 fn handle_prediction_return_connection(
     hub: Arc<PredictionReturnHub>,
     mut stream: TcpStream,
+    shutdown: &AtomicBool,
 ) -> Result<()> {
-    consume_optional_client_ready_hello(&mut stream)
-        .context("consume optional direct prediction return client ready hello")?;
-    send_ready(&mut stream).context("send direct prediction return ready")?;
+    let role = super::stage_setup::server_setup(
+        &mut stream,
+        None,
+        None,
+        None,
+        std::time::Instant::now() + RETURN_SINK_READY_READ_TIMEOUT,
+        shutdown,
+    )?;
+    if role != super::stage_setup::ConnectionRole::PredictionReturn {
+        bail!("return listener requires prediction-return role");
+    }
     let open = read_prediction_return_open(&mut stream)?;
     hub.handle_return_connection(open, stream)
 }
@@ -365,7 +378,7 @@ impl PredictionReturnSinks {
     }
 }
 
-/// Read timeout for the return-sink ready handshake. `recv_ready` is a blocking
+/// Read timeout for the return-sink ready handshake. The setup exchange is a blocking
 /// `read_exact`; without this a stalled downstream connection hangs the open
 /// forever, which mid-generation blocks the request from ever falling back to
 /// the upstream reply. Cleared afterwards so the sink's normal reads stay
@@ -397,26 +410,19 @@ fn open_return_sink_once(
     session_id: u64,
     not_ready_context: &'static str,
 ) -> Result<TcpStream> {
+    let deadline = std::time::Instant::now() + RETURN_SINK_READY_READ_TIMEOUT;
     let mut stream = connect_downstream_socket(return_addr, source_ip, Duration::from_secs(2))
         .map_err(|error| anyhow!(error))?;
     stream.set_nodelay(true).ok();
-    send_client_ready_hello_if_enabled(&mut stream)
-        .context("send prediction return client ready hello")?;
-    // Bound the ready handshake read. `recv_ready` is a blocking `read_exact`;
-    // without a timeout a stalled downstream connection hangs the return-sink
-    // open forever, blocking generation from falling back to the upstream reply.
-    // A single short deadline (no outer retry) fails fast to that fallback.
-    // Both the set and the clear are propagated: if the set fails, `recv_ready`
-    // would be unbounded (defeating the fix); if the clear fails, the handshake
-    // timeout would leak into the sink's later reads.
-    stream
-        .set_read_timeout(Some(RETURN_SINK_READY_READ_TIMEOUT))
-        .context("set prediction return ready read timeout")?;
-    let ready = recv_ready(&mut stream).context(not_ready_context);
-    stream
-        .set_read_timeout(None)
-        .context("clear prediction return ready read timeout")?;
-    ready?;
+    super::stage_setup::client_setup(
+        &mut stream,
+        super::stage_setup::ConnectionRole::PredictionReturn,
+        None,
+        None,
+        deadline,
+        &AtomicBool::new(false),
+    )
+    .context(not_ready_context)?;
     write_stage_message(
         &mut stream,
         &prediction_return_open_message(request_id, session_id),
@@ -524,9 +530,8 @@ fn prediction_return_open_message(request_id: u64, session_id: u64) -> StageWire
 #[cfg(test)]
 mod tests {
     use super::*;
-    use skippy_protocol::binary::{
-        recv_ready, recv_reply, send_reply_predicted_with_stats, state_flags,
-    };
+    use skippy_protocol::binary::StageStream as TcpStream;
+    use skippy_protocol::binary::{recv_reply, send_reply_predicted_with_stats, state_flags};
     use std::io::Write;
 
     #[test]
@@ -539,6 +544,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let mut client = TcpStream::connect(addr).unwrap();
         let (server, _) = listener.accept().unwrap();
+        let server = skippy_protocol::binary::StageStream::new(server);
         let open = prediction_return_open_message(request_id, session_id);
         let handle = {
             let hub = hub.clone();
@@ -562,12 +568,25 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
+        let server = skippy_protocol::binary::StageStream::new(server);
         let (result_tx, result_rx) = std::sync::mpsc::channel();
         let handle = thread::spawn(move || {
-            let _ = result_tx.send(handle_prediction_return_connection(hub, server));
+            let _ = result_tx.send(handle_prediction_return_connection(
+                hub,
+                server,
+                &AtomicBool::new(false),
+            ));
         });
 
-        recv_ready(&mut client).unwrap();
+        skippy_protocol::binary::client_setup(
+            &mut client,
+            skippy_protocol::binary::ConnectionRole::PredictionReturn,
+            None,
+            None,
+            std::time::Instant::now() + Duration::from_secs(2),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
 
         let mut header = Vec::new();
         write_stage_message(&mut header, &prediction_return_open_message(1, 2)).unwrap();
@@ -610,6 +629,7 @@ mod tests {
         let listener = TcpListener::bind("localhost:0").unwrap();
         let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
+        let server = skippy_protocol::binary::StageStream::new(server);
         let open = prediction_return_open_message(request_id, session_id);
         let handle = {
             let hub = hub.clone();
@@ -630,7 +650,8 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let mut client = TcpStream::connect(addr).unwrap();
-        let (mut server, _) = listener.accept().unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let mut server = skippy_protocol::binary::StageStream::new(server);
 
         let reply = StageReply {
             kind: WireReplyKind::PredictedToken,
@@ -668,6 +689,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let client = TcpStream::connect(addr).unwrap();
         let (server, _) = listener.accept().unwrap();
+        let server = skippy_protocol::binary::StageStream::new(server);
 
         sinks
             .insert_opened_sink(
@@ -691,6 +713,7 @@ mod tests {
         for request_id in 0..MAX_PENDING_PREDICTION_RETURN_SINKS as u64 {
             let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
             let (server, _) = listener.accept().unwrap();
+            let server = skippy_protocol::binary::StageStream::new(server);
             sinks
                 .insert_opened_sink(prediction_return_open_message(request_id, 1), server)
                 .unwrap();
@@ -699,6 +722,7 @@ mod tests {
 
         let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
+        let server = skippy_protocol::binary::StageStream::new(server);
         let error = sinks
             .insert_opened_sink(prediction_return_open_message(u64::MAX, 1), server)
             .expect_err("pending prediction return sink limit must be enforced");
@@ -712,6 +736,7 @@ mod tests {
         sinks.remove(0, 1);
         let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
+        let server = skippy_protocol::binary::StageStream::new(server);
         sinks
             .insert_opened_sink(prediction_return_open_message(u64::MAX, 1), server)
             .expect("released capacity must admit the next sink");
@@ -730,6 +755,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
+        let server = skippy_protocol::binary::StageStream::new(server);
 
         sinks
             .insert_opened_sink(

@@ -18,9 +18,7 @@ use crate::{
         StageModelReport, StateHandoffReport, StatePayloadBlockDigestReport,
         StatePayloadDigestReport,
     },
-    support::{
-        ChildGuard, activation_width, connect_ready_child, generate_run_id, temp_config_path_for,
-    },
+    support::{ChildGuard, activation_width, generate_run_id, temp_config_path_for},
 };
 
 use super::native_mtp::emit_report;
@@ -354,9 +352,13 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
             },
         )?)
     };
-    let (prefill_input, decode_input, stage_activation_width) =
-        build_state_handoff_inputs(&args, input_resolution.as_ref(), &prefix, continuation)
-            .context("build state handoff input activations")?;
+    let StateHandoffInputs {
+        prefill_input,
+        decode_input,
+        stage_activation_width,
+        input_vocabulary,
+    } = build_state_handoff_inputs(&args, input_resolution.as_ref(), &prefix, continuation)
+        .context("build state handoff input activations")?;
     let input_build_ms = elapsed_ms(input_started);
     let use_binary_control = args.binary_control
         && include_output
@@ -475,10 +477,12 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
     configure_child_logs(&mut source_command, args.child_logs);
     let mut source = ChildGuard::spawn(source_command)?;
 
-    let mut source_stream = connect_ready_child(
+    let mut source_stream = crate::support::connect_ready_child_with_boundary(
         args.source_bind_addr,
         args.startup_timeout_secs,
         &mut source,
+        &source_config,
+        input_vocabulary,
     )
     .context("source binary server did not become ready")?;
     let source_prefill_started = Instant::now();
@@ -522,10 +526,12 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
     configure_child_logs(&mut restore_command, args.child_logs);
     let mut restore = ChildGuard::spawn(restore_command)?;
 
-    let mut restore_stream = connect_ready_child(
+    let mut restore_stream = crate::support::connect_ready_child_with_boundary(
         args.restore_bind_addr,
         args.startup_timeout_secs,
         &mut restore,
+        &restore_config,
+        input_vocabulary,
     )
     .context("restore binary server did not become ready")?;
     let restore_import_started = Instant::now();
@@ -1415,26 +1421,48 @@ fn hex_sha256_finish(hasher: Sha256) -> String {
     out
 }
 
+struct StateHandoffInputs {
+    prefill_input: Option<ActivationFrame>,
+    decode_input: Option<ActivationFrame>,
+    stage_activation_width: i32,
+    input_vocabulary: Option<skippy_runtime::ActivationBoundaryDesc>,
+}
+
 fn build_state_handoff_inputs(
     args: &BinaryStateHandoffConfig,
     input_resolution: Option<&StageModelResolution>,
     prefix: &[i32],
     continuation: i32,
-) -> Result<(Option<ActivationFrame>, Option<ActivationFrame>, i32)> {
+) -> Result<StateHandoffInputs> {
     if args.synthetic_input_activation {
         if args.state_layer_start == 0 {
             bail!("--synthetic-input-activation requires --state-layer-start greater than zero");
         }
         let prefill_input = synthetic_activation_frame(args, prefix.len() as u32, 0);
         let decode_input = synthetic_activation_frame(args, 1, continuation);
-        return Ok((
-            Some(prefill_input),
-            Some(decode_input),
-            args.activation_width,
-        ));
+        let mut vocabulary = skippy_runtime::ActivationBoundaryDesc {
+            version: prefill_input.desc.version,
+            part_count: prefill_input.desc.part_count,
+            frontier_identity: prefill_input.desc.frontier_identity,
+            parts: prefill_input.desc.parts,
+        };
+        for part in &mut vocabulary.parts[..vocabulary.part_count as usize] {
+            part.dimensions[part.token_axis as usize] = -1;
+        }
+        return Ok(StateHandoffInputs {
+            prefill_input: Some(prefill_input),
+            decode_input: Some(decode_input),
+            stage_activation_width: args.activation_width,
+            input_vocabulary: Some(vocabulary),
+        });
     }
     let Some(input_resolution) = input_resolution else {
-        return Ok((None, None, args.activation_width));
+        return Ok(StateHandoffInputs {
+            prefill_input: None,
+            decode_input: None,
+            stage_activation_width: args.activation_width,
+            input_vocabulary: None,
+        });
     };
     let runtime_plan = stage_runtime_plan_for_range(
         args.stage_load_mode,
@@ -1509,7 +1537,12 @@ fn build_state_handoff_inputs(
             "state handoff input width changed between prefill ({prefill_width}) and decode ({decode_width})"
         );
     }
-    Ok((Some(prefill_input), Some(decode_input), prefill_width))
+    Ok(StateHandoffInputs {
+        prefill_input: Some(prefill_input),
+        decode_input: Some(decode_input),
+        stage_activation_width: prefill_width,
+        input_vocabulary: input_model.output_activation_vocabulary(),
+    })
 }
 
 fn synthetic_activation_frame(
@@ -1564,7 +1597,7 @@ fn synthetic_activation_frame(
 }
 
 fn send_prefill_for_state_handoff(
-    stream: &mut std::net::TcpStream,
+    stream: &mut skippy_protocol::binary::StageStream,
     tokens: &[i32],
     input: Option<&ActivationFrame>,
     activation_width: i32,
@@ -1604,7 +1637,7 @@ fn send_prefill_for_state_handoff(
 }
 
 fn export_state_over_binary(
-    stream: &mut std::net::TcpStream,
+    stream: &mut skippy_protocol::binary::StageStream,
     activation_width: i32,
     full_state: bool,
 ) -> Result<Vec<u8>> {
@@ -1639,7 +1672,7 @@ fn export_state_over_binary(
 }
 
 fn import_state_over_binary(
-    stream: &mut std::net::TcpStream,
+    stream: &mut skippy_protocol::binary::StageStream,
     state_bytes: &[u8],
     full_state: bool,
 ) -> Result<()> {
@@ -1671,7 +1704,7 @@ fn import_state_over_binary(
 }
 
 fn decode_for_state_handoff(
-    stream: &mut std::net::TcpStream,
+    stream: &mut skippy_protocol::binary::StageStream,
     token_id: i32,
     pos_start: usize,
     input: Option<&ActivationFrame>,

@@ -17,8 +17,8 @@ const GGML_TYPE_F32: u32 = 0;
 const GGML_TYPE_F16: u32 = 1;
 const GGML_TYPE_I32: u32 = 26;
 const GGML_TYPE_BF16: u32 = 30;
-const FRAME_FIXED_HEADER_BYTES: usize = 68;
-const PART_HEADER_BYTES: usize = 128;
+pub(super) const FRAME_FIXED_HEADER_BYTES: usize = 68;
+pub(super) const PART_HEADER_BYTES: usize = 128;
 
 pub fn activation_frame_wire_bytes(
     codec: StageActivationCodec,
@@ -55,6 +55,17 @@ pub fn encode_activation_frame(
     validate_descriptor(desc, Some(payload.len()))?;
     let mut encoded = Vec::with_capacity(activation_frame_wire_bytes(codec, desc)?);
     write_descriptor(&mut encoded, desc)?;
+    encoded.extend_from_slice(&encode_profile_payload(codec, desc, payload)?);
+    Ok(encoded)
+}
+
+pub(super) fn encode_profile_payload(
+    codec: StageActivationCodec,
+    desc: &StageActivationDesc,
+    payload: &[u8],
+) -> io::Result<Vec<u8>> {
+    validate_descriptor(desc, Some(payload.len()))?;
+    let mut encoded = Vec::new();
     for part in &desc.parts {
         let bytes = part_payload(part, payload)?;
         if part.ggml_type == GGML_TYPE_F32 {
@@ -81,7 +92,23 @@ pub fn decode_activation_frame(
     if activation_frame_wire_bytes(codec, &desc)? != encoded.len() {
         return Err(invalid_data("activation frame wire byte count mismatch"));
     }
-    let mut wire_offset = header_bytes;
+    decode_profile_payload(codec, desc, &encoded[header_bytes..])
+}
+
+pub(super) fn decode_profile_payload(
+    codec: StageActivationCodec,
+    desc: StageActivationDesc,
+    encoded: &[u8],
+) -> io::Result<StageActivationFrame> {
+    validate_descriptor(&desc, None)?;
+    let expected = desc.parts.iter().try_fold(0usize, |n, part| {
+        n.checked_add(part_wire_bytes(codec, part)?)
+            .ok_or_else(|| invalid_data("activation wire size overflow"))
+    })?;
+    if expected != encoded.len() {
+        return Err(invalid_data("activation frame wire byte count mismatch"));
+    }
+    let mut wire_offset = 0usize;
     let mut payload = Vec::with_capacity(
         usize::try_from(desc.payload_bytes)
             .map_err(|_| invalid_data("activation payload byte count exceeds usize"))?,
@@ -183,7 +210,10 @@ fn codec_is_lossless(
     Ok(true)
 }
 
-fn validate_descriptor(desc: &StageActivationDesc, payload_len: Option<usize>) -> io::Result<()> {
+pub(super) fn validate_descriptor(
+    desc: &StageActivationDesc,
+    payload_len: Option<usize>,
+) -> io::Result<()> {
     if desc.version != STAGE_ACTIVATION_FRAME_VERSION {
         return Err(invalid_data("unsupported activation frame version"));
     }
@@ -272,7 +302,7 @@ fn validate_descriptor(desc: &StageActivationDesc, payload_len: Option<usize>) -
     Ok(())
 }
 
-fn ggml_type_bytes(ggml_type: u32) -> io::Result<usize> {
+pub(super) fn ggml_type_bytes(ggml_type: u32) -> io::Result<usize> {
     match ggml_type {
         GGML_TYPE_F32 | GGML_TYPE_I32 => Ok(4),
         GGML_TYPE_F16 | GGML_TYPE_BF16 => Ok(2),
@@ -350,7 +380,7 @@ fn write_descriptor(output: &mut Vec<u8>, desc: &StageActivationDesc) -> io::Res
     Ok(())
 }
 
-fn read_descriptor(encoded: &[u8]) -> io::Result<(StageActivationDesc, usize)> {
+pub(super) fn read_descriptor(encoded: &[u8]) -> io::Result<(StageActivationDesc, usize)> {
     let mut reader = Cursor::new(encoded);
     let version = read_u32(&mut reader)?;
     let producer_stage_index = read_i32(&mut reader)?;

@@ -465,6 +465,10 @@ fn embedded_openai_backend_with_scheduler(
     .into_string();
     let lane_pool = PersistentStageLanePool::new(
         &args.config,
+        args.runtime
+            .lock()
+            .map_err(|_| anyhow!("runtime lock poisoned"))?
+            .output_activation_vocabulary(),
         args.generation_concurrency,
         args.downstream_connect_timeout_secs,
         args.telemetry.clone(),

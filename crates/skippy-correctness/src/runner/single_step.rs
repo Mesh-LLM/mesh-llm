@@ -9,9 +9,7 @@ use skippy_runtime::{GGML_TYPE_F16, MtpSource, RuntimeConfig, RuntimeLoadMode, S
 use crate::{
     cli::{RuntimeArgs, ServerArgs, SingleStepArgs},
     report::SingleStepReport,
-    support::{
-        ChildGuard, activation_width, connect_ready_child, generate_run_id, temp_config_path_for,
-    },
+    support::{ChildGuard, activation_width, generate_run_id, temp_config_path_for},
 };
 
 use super::{
@@ -367,10 +365,12 @@ pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<Bin
     configure_child_logs(&mut stage_command, args.child_logs);
     let mut stage1 = ChildGuard::spawn(stage_command)?;
 
-    let mut stream = connect_ready_child(
+    let mut stream = crate::support::connect_ready_child_with_boundary(
         args.stage1_bind_addr,
         args.startup_timeout_secs,
         &mut stage1,
+        &config,
+        stage0.output_activation_vocabulary(),
     )
     .context("stage 1 binary server did not become ready")?;
     let request_id = 1;

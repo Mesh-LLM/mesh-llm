@@ -10,6 +10,7 @@ mod prefill_execution;
 mod restore_prefill_decode;
 mod socket;
 mod stage_execution;
+pub(crate) mod stage_setup;
 mod wire;
 
 pub(crate) use self::binary_messaging::async_forwarder::{AsyncForwardReceipt, AsyncForwarder};
@@ -24,7 +25,7 @@ pub(crate) use self::forwarding::{forwarded_stage_message, forwarded_stage_messa
 pub use self::options::{BinaryStageOptions, EmbeddedOpenAiStageOptions};
 pub(crate) use self::stage_execution::{
     BinaryStageExecutionOptions, connect_binary_downstream, run_binary_stage_message,
-    send_client_ready_hello_if_enabled, stage_output_activation_capacity,
+    stage_output_activation_capacity,
 };
 pub use self::wire::WireCondition;
 pub(crate) use self::wire::write_stage_message_after_propagation;

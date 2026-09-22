@@ -412,8 +412,17 @@ async fn binary_stage_ready_probe_waits_for_wire_handshake() {
     let bind_addr = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(75));
-        let (mut stream, _) = listener.accept().unwrap();
-        skippy_protocol::binary::send_ready(&mut stream).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let mut stream = skippy_protocol::binary::StageStream::new(stream);
+        skippy_protocol::binary::server_setup(
+            &mut stream,
+            Some(&StageConfig::default()),
+            None,
+            None,
+            Instant::now() + Duration::from_secs(2),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
     });
 
     let started = Instant::now();

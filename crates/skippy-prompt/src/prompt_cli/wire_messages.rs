@@ -418,7 +418,7 @@ struct ReplPrefillChunk<'a> {
 }
 
 fn send_prefill_chunk(
-    stream: &mut std::net::TcpStream,
+    stream: &mut skippy_protocol::binary::StageStream,
     chunk: ReplPrefillChunk<'_>,
 ) -> Result<()> {
     let mut state = StageStateHeader::new(WireMessageKind::PrefillEmbd);

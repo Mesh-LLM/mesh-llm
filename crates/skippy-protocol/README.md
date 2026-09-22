@@ -22,6 +22,13 @@ sequenceDiagram
     participant S1 as stage-1
     participant SF as final stage
 
+    D->>S0: versioned token/control setup
+    S0->>S1: versioned activation contract
+    S1->>SF: versioned activation contract
+    SF-->>S1: accept + ready
+    S1-->>S0: accept + ready
+    S0-->>D: ready (all outgoing edges agreed)
+
     D->>S0: PrefillEmbd token IDs
     S0->>S1: activation frame
     S1->>SF: activation frame
@@ -37,23 +44,43 @@ sequenceDiagram
     S0-->>D: PredictedToken
 ```
 
-Activation payloads dominate the wire path. Protocol generation 11 carries a
-versioned multipart directory with identity, dtype, dimensions, strides, and a
-token axis for every graph-frontier value. The selected frame codec applies to
-F32 parts; other typed parts remain byte-exact.
+Protocol generation 12 agrees activation profiles during connection setup.
+Each profile binds the realized frontier, part identities/types, token axis,
+fixed dimensions, bounded non-token dynamic dimensions and optional-part
+vocabulary. Both peers explicitly accept count-limit intersections. A middle
+stage completes its outgoing agreement before confirming upstream readiness.
+Prediction-return connections identify their role using the same mandatory
+version framing and carry no activation table.
 
-Generation 10 requires mesh-subprotocol control, list-valued status responses,
-strict local-content identity, canonical stage-admission descriptors, and stale
-verify-window discard as one fail-closed capability bundle. Participants validate
-the descriptor while loading and echo it when ready; any package, plan, range,
-tensor, sidecar, profile, backend, or graph-configuration mismatch rejects the
-stage. The dedicated `skippy-stage/2` ALPN accepts activation transport only.
+Generation activation frames carry the connection generation, profile ID,
+actual token/sequence counts, optional-part presence, bounded dynamic values,
+and payload. Receivers reconstruct full dense native descriptors locally and
+validate bounds and payload length before execution. F32 parts use the selected
+codec; other typed parts remain byte-exact. Full descriptors are still used for
+internal messages, but are not accepted as an alternative wire encoding.
+
+Agreements are immutable and shared by established stream clones. Callers must
+serialize whole-frame writes and retain one logical reader. Reconnection uses
+a fresh generation; reconfiguration closes/drains the previous connection.
+Unknown profiles, stale generations and incompatible versions fail closed.
+There is no generation-time schema renegotiation or legacy READY fallback.
+
+Wire agreement preserves the scheduler's batching policy. Native executable
+reuse remains independently guarded by batch, KV and sampler state; a miss may
+build locally without changing the connection agreement. Configured wire limits
+are upper bounds, not a promise that every KV/sampler execution is admissible.
+
+The generation also requires mesh-subprotocol control, list-valued status
+responses, strict local-content identity, canonical stage-admission descriptors,
+and stale verify-window discard. Participants validate the descriptor while
+loading and echo it when ready; package, plan, range, tensor, sidecar, profile,
+backend or graph-configuration mismatches reject the stage.
 
 ## Responsibilities
 
 - binary stage message and reply codecs
 - multipart typed activation framing and codec policy
-- ready handshake encoding
+- versioned role setup and immutable activation agreements
 - stage config fields that must survive JSON generation, including K/V cache
   type strings consumed by the runtime layer
 - protocol compatibility constants

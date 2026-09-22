@@ -1,6 +1,6 @@
-//! Canonical generation-11 stage admission descriptors.
+//! Canonical generation-12 stage admission descriptors.
 
-/// Current descriptor schema carried by stage-control generation 11.
+/// Current descriptor schema carried by stage-control generation 12.
 pub const STAGE_ADMISSION_DESCRIPTOR_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Eq, PartialEq)]

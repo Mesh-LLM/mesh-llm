@@ -1,4 +1,5 @@
-use std::{collections::BTreeMap, net::TcpStream, sync::Arc, time::Instant};
+use crate::binary_transport::stage_setup::StageStream as TcpStream;
+use std::{collections::BTreeMap, sync::Arc, time::Instant};
 
 use anyhow::{Context, Result, bail};
 use serde_json::json;

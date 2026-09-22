@@ -1,9 +1,10 @@
+use skippy_protocol::binary::StageStream as TcpStream;
 use std::{
     collections::hash_map::RandomState,
     fs,
     hash::{BuildHasher, Hasher},
     io::ErrorKind,
-    net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs},
+    net::{IpAddr, SocketAddr, ToSocketAddrs},
     path::{Path, PathBuf},
     process::Command,
     thread,
@@ -1144,10 +1145,18 @@ mod tests {
         let return_addr = return_listener.local_addr();
         thread::spawn(move || {
             use skippy_protocol::binary::{
-                StageStateHeader, StageWireMessage, recv_ready, write_stage_message,
+                StageStateHeader, StageWireMessage, write_stage_message,
             };
             let mut client = TcpStream::connect(return_addr).unwrap();
-            recv_ready(&mut client).unwrap();
+            skippy_protocol::binary::client_setup(
+                &mut client,
+                skippy_protocol::binary::ConnectionRole::PredictionReturn,
+                None,
+                None,
+                Instant::now() + Duration::from_secs(5),
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .unwrap();
             write_stage_message(
                 &mut client,
                 &StageWireMessage {

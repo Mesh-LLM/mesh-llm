@@ -576,10 +576,12 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
     configure_child_logs(&mut stage1_command, args.child_logs);
     let mut stage1 = ChildGuard::spawn(stage1_command)?;
 
-    let mut stream = connect_ready_child(
+    let mut stream = crate::support::connect_ready_child_with_boundary(
         args.stage1_bind_addr,
         args.startup_timeout_secs,
         &mut stage1,
+        &stage1_config,
+        stage0.output_activation_vocabulary(),
     )
     .context("stage 1 binary server did not become ready")?;
     let request_id = 2;

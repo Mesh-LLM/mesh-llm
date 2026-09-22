@@ -193,6 +193,14 @@ impl StageModel {
         present.then(|| raw.into())
     }
 
+    pub fn output_activation_vocabulary(&self) -> Option<ActivationBoundaryDesc> {
+        let mut raw = skippy_ffi::ActivationBoundaryDesc::default();
+        let present = unsafe {
+            skippy_ffi::skippy_model_output_activation_vocabulary(self.inner.raw, &mut raw)
+        };
+        present.then(|| raw.into())
+    }
+
     pub fn input_activation_boundary(&self) -> Option<ActivationBoundaryDesc> {
         let mut raw = skippy_ffi::ActivationBoundaryDesc::default();
         let present =

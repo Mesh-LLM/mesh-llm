@@ -53,6 +53,7 @@ use crate::binary_transport::stage_execution::{
     is_decode_frame_batch_candidate, last_stage_decode_batch_enabled,
 };
 use crate::binary_transport::stage_output_activation_capacity;
+use crate::binary_transport::stage_setup::StageStream as TcpStream;
 use crate::binary_transport::write_stage_message_conditioned;
 use crate::frontend::iteration_scheduler::IterationScheduler;
 use crate::kv_integration::KvStageIntegration;
@@ -70,7 +71,6 @@ use skippy_protocol::binary::send_reply_ack;
 use skippy_protocol::binary::send_reply_ack_with_stats;
 use skippy_protocol::{StageConfig, StageTopology};
 use std::collections::BTreeMap;
-use std::net::TcpStream;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -201,6 +201,7 @@ fn handle_binary_connection_messages(
         let session_key = session_id.to_string();
         session_tracker.touch(&session_key);
         emit_binary_message_received(
+            skippy_protocol::binary::StageMessageContext::activation_agreement(upstream),
             telemetry,
             config,
             session_id,

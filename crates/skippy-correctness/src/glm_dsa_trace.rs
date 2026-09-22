@@ -1,8 +1,9 @@
+use skippy_protocol::binary::StageStream as TcpStream;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
     io::{self, ErrorKind, Read, Write},
-    net::{SocketAddr, TcpListener, TcpStream},
+    net::{SocketAddr, TcpListener},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -19,8 +20,8 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use skippy_protocol::binary::{
     StageReplyStats, StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
-    read_stage_message, recv_ready, recv_reply, send_ready, send_reply_ack_with_stats,
-    send_reply_predicted_with_stats, write_stage_message,
+    read_stage_message, recv_reply, send_reply_ack_with_stats, send_reply_predicted_with_stats,
+    write_stage_message,
 };
 
 use crate::{
@@ -81,6 +82,12 @@ struct FakeDownstreamGuard {
 struct StopAwareReader<'a> {
     stream: &'a mut TcpStream,
     stop: &'a AtomicBool,
+}
+
+impl skippy_protocol::binary::StageMessageContext for StopAwareReader<'_> {
+    fn activation_agreement(&self) -> Option<&skippy_protocol::binary::ActivationAgreement> {
+        skippy_protocol::binary::StageMessageContext::activation_agreement(self.stream)
+    }
 }
 
 impl Read for StopAwareReader<'_> {
@@ -241,8 +248,12 @@ fn run_variant(
     let prompt_log_path = variant_root.join("prompt.log");
     write_stage_config(args, run_id, variant.name, &stage_config_path)?;
 
-    let fake = FakeDownstreamGuard::start(args.fake_downstream_bind_addr, args.activation_width)
-        .context("start fake downstream")?;
+    let fake = FakeDownstreamGuard::start(
+        args.fake_downstream_bind_addr,
+        args.activation_width,
+        serde_json::from_slice(&fs::read(&stage_config_path)?)?,
+    )
+    .context("start fake downstream")?;
     let mut stage =
         start_stage0(args, &stage_config_path, &stage_log_path, variant).context("start stage0")?;
     drop(wait_for_stage_ready_or_exit(
@@ -840,7 +851,14 @@ fn try_connect_ready(addr: SocketAddr) -> Result<TcpStream> {
     stream
         .set_write_timeout(Some(Duration::from_millis(500)))
         .ok();
-    recv_ready(&mut stream).context("ready handshake failed")?;
+    skippy_protocol::binary::client_setup(
+        &mut stream,
+        skippy_protocol::binary::ConnectionRole::TokensAndControl,
+        None,
+        None,
+        Instant::now() + Duration::from_millis(500),
+        &AtomicBool::new(false),
+    )?;
     Ok(stream)
 }
 
@@ -854,7 +872,26 @@ fn log_tail(path: &Path, max_lines: usize) -> String {
 }
 
 impl FakeDownstreamGuard {
-    fn start(addr: SocketAddr, activation_width: i32) -> Result<Self> {
+    fn start(
+        addr: SocketAddr,
+        activation_width: i32,
+        source: skippy_protocol::StageConfig,
+    ) -> Result<Self> {
+        let target = source
+            .downstream
+            .clone()
+            .context("recording sink requires an admitted downstream")?;
+        let mut config = source.clone();
+        config.stage_id = target.stage_id;
+        config.stage_index = target.stage_index;
+        config.layer_start = source.layer_end;
+        config.layer_end = source.layer_end + 1;
+        config.upstream = Some(skippy_protocol::PeerConfig {
+            stage_id: source.stage_id,
+            stage_index: source.stage_index,
+            endpoint: "driver".into(),
+        });
+        config.downstream = None;
         let listener = TcpListener::bind(addr).with_context(|| format!("bind fake {addr}"))?;
         listener
             .set_nonblocking(true)
@@ -868,14 +905,21 @@ impl FakeDownstreamGuard {
             ready_tx.send(()).ok();
             while !thread_stop.load(Ordering::Relaxed) {
                 match listener.accept() {
-                    Ok((mut stream, _)) => {
+                    Ok((stream, _)) => {
+                        let mut stream = TcpStream::new(stream);
                         stream
                             .set_nonblocking(false)
                             .context("set fake downstream stream blocking")?;
                         stream
                             .set_read_timeout(Some(Duration::from_millis(100)))
                             .context("set fake downstream stream read timeout")?;
-                        send_ready(&mut stream).context("send fake downstream ready")?;
+                        skippy_protocol::binary::recording_setup(
+                            &mut stream,
+                            &config,
+                            Instant::now() + Duration::from_secs(20),
+                            &thread_stop,
+                        )?;
+                        stream.set_read_timeout(Some(Duration::from_millis(100)))?;
                         loop {
                             let reader = StopAwareReader {
                                 stream: &mut stream,
@@ -1516,14 +1560,9 @@ fn path_str(path: &Path) -> Result<&str> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        net::{TcpListener, TcpStream},
-        sync::mpsc,
-        thread,
-        time::Duration,
-    };
+    use std::{net::TcpListener, sync::mpsc, thread, time::Duration};
 
-    use skippy_protocol::binary::recv_ready;
+    use skippy_protocol::binary::StageStream as TcpStream;
 
     use super::{
         FakeDownstreamGuard, FakeDownstreamMessage, WireMessageKind, active_top_k_window_count,
@@ -1595,9 +1634,18 @@ mod tests {
         let addr = probe.local_addr().expect("free port address");
         drop(probe);
 
-        let fake = FakeDownstreamGuard::start(addr, 1).expect("start fake downstream");
+        let source = serde_json::from_value(serde_json::json!({"run_id":"r","topology_id":"p","model_id":"m","stage_id":"s0","stage_index":0,"layer_start":0,"layer_end":1,"execution_contract":"test","load_mode":"runtime-slice","bind_addr":"127.0.0.1:0","downstream":{"stage_id":"s1","stage_index":1,"endpoint":addr.to_string()}})).unwrap();
+        let fake = FakeDownstreamGuard::start(addr, 1, source).expect("start fake downstream");
         let mut stream = TcpStream::connect(addr).expect("connect fake downstream");
-        recv_ready(&mut stream).expect("receive fake downstream ready");
+        skippy_protocol::binary::client_setup(
+            &mut stream,
+            skippy_protocol::binary::ConnectionRole::TokensAndControl,
+            None,
+            None,
+            std::time::Instant::now() + Duration::from_secs(2),
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
 
         let (finished_tx, finished_rx) = mpsc::channel();
         thread::spawn(move || {

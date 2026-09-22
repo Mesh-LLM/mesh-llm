@@ -185,6 +185,7 @@ dynamic_symbols! {
     skippy_model_free(model: *mut Model, out_error: *mut *mut Error) -> Status;
     skippy_model_llama_model(model: *const Model) -> *const Opaque;
     skippy_model_output_activation_boundary(model: *const Model, out_desc: *mut ActivationBoundaryDesc) -> bool;
+    skippy_model_output_activation_vocabulary(model: *const Model, out_desc: *mut ActivationBoundaryDesc) -> bool;
     skippy_model_input_activation_boundary(model: *const Model, out_desc: *mut ActivationBoundaryDesc) -> bool;
     skippy_model_workload_info_v1(model: *const Model, out_info: *mut WorkloadInfoV1, out_error: *mut *mut Error) -> Status;
     skippy_session_create(model: *mut Model, out_session: *mut *mut Session, out_error: *mut *mut Error) -> Status;

@@ -1,6 +1,6 @@
+use crate::binary_transport::stage_setup::StageStream as TcpStream;
 use std::{
     io,
-    net::TcpStream,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},

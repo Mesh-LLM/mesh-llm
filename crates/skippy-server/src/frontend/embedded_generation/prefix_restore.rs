@@ -1,6 +1,6 @@
 use super::*;
+use crate::binary_transport::stage_setup::StageStream as TcpStream;
 use crate::frontend::generation::EmbeddedFusedFirstDecode;
-use std::net::TcpStream;
 use std::time::Instant;
 
 pub(super) struct EmbeddedPrefixRestore {

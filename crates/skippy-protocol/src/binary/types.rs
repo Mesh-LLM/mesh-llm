@@ -7,7 +7,7 @@ use super::invalid_data;
 // v16 replaces family-specific activation state bits with a typed multipart frontier frame.
 // Stage peers must be upgraded together because the activation payload now starts with its
 // descriptor directory rather than an implicit F32 tensor.
-pub const STAGE_STATE_VERSION: i32 = 16;
+pub const STAGE_STATE_VERSION: i32 = 17;
 pub const MAX_STAGE_LOGIT_BIAS: usize = 256;
 pub const MAX_STAGE_SAMPLERS: usize = 16;
 pub const MAX_STAGE_DRY_SEQUENCE_BREAKERS: usize = 8;
@@ -23,7 +23,6 @@ pub const STAGE_ACTIVATION_IDENTITY_BYTES: usize = 32;
 pub const MAX_STAGE_ACTIVATION_DIMS: usize = 4;
 pub const MAX_STAGE_ACTIVATION_PARTS: usize = 16;
 pub const STAGE_ACTIVATION_PART_OPTIONAL: u32 = 1 << 0;
-pub const READY_MAGIC: i32 = 0x5352_4459; // "SRDY"
 pub const LLAMA_TOKEN_NULL: i32 = -1;
 pub const STAGE_STATE_HEADER_BYTES: usize = 10 * 4;
 pub const STAGE_SAMPLING_CONFIG_BASE_BYTES: usize = 27 * 4;
@@ -477,7 +476,21 @@ impl StageWireMessage {
         (self.kind == WireMessageKind::VerifyWindow).then_some(self.token_count)
     }
 
-    pub fn estimated_wire_bytes(&self) -> usize {
+    pub fn wire_bytes(
+        &self,
+        agreement: Option<&super::ActivationAgreement>,
+    ) -> std::io::Result<usize> {
+        if self.activation.is_empty() {
+            return Ok(self.estimated_buffer_bytes());
+        }
+        let (desc, _) = super::activation::read_descriptor(&self.activation)?;
+        let bytes = agreement
+            .ok_or_else(|| super::invalid_data("activation requires an established agreement"))?
+            .wire_bytes(self.state.activation_codec, &desc)?;
+        Ok(self.estimated_buffer_bytes() - self.activation.len() + bytes)
+    }
+
+    pub fn estimated_buffer_bytes(&self) -> usize {
         let sampling_bytes = self.sampling.as_ref().map_or(0, |sampling| {
             STAGE_SAMPLING_CONFIG_BASE_BYTES
                 + sampling.logit_bias.len().min(MAX_STAGE_LOGIT_BIAS) * STAGE_LOGIT_BIAS_WIRE_BYTES

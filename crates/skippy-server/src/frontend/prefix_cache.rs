@@ -2,6 +2,7 @@ use crate::binary_transport::BinaryStageExecutionOptions;
 use crate::binary_transport::forwarded_stage_message_timed;
 use crate::binary_transport::run_binary_stage_message;
 use crate::binary_transport::stage_output_activation_capacity;
+use crate::binary_transport::stage_setup::StageStream as TcpStream;
 use crate::binary_transport::write_stage_message_conditioned;
 use crate::frontend::NativeMtpDraft;
 use crate::frontend::generation::ChainPrefixRestore;
@@ -41,7 +42,6 @@ use skippy_protocol::binary::recv_reply;
 use skippy_runtime::ActivationFrame;
 use skippy_runtime::SamplingConfig;
 use std::collections::BTreeMap;
-use std::net::TcpStream;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

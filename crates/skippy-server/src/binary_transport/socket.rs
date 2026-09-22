@@ -1,6 +1,7 @@
+use crate::binary_transport::stage_setup::StageStream as TcpStream;
 use std::{
     io,
-    net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs},
+    net::{IpAddr, SocketAddr, ToSocketAddrs},
     sync::atomic::{AtomicBool, Ordering},
     sync::mpsc,
     thread,
@@ -270,7 +271,7 @@ pub(super) fn connect_bound_with_timeout(
         bind_socket_to_source_interface(&socket, source_ip)?;
     }
     socket.connect_timeout(&SockAddr::from(downstream_addr), timeout)?;
-    Ok(socket.into())
+    Ok(TcpStream::new(socket.into()))
 }
 
 pub(super) fn connect_blocking_with_timeout(
@@ -315,7 +316,7 @@ pub(super) fn connect_bound_blocking(
         bind_socket_to_source_interface(&socket, source_ip)?;
     }
     socket.connect(&SockAddr::from(downstream_addr))?;
-    Ok(socket.into())
+    Ok(TcpStream::new(socket.into()))
 }
 
 #[cfg(target_os = "macos")]

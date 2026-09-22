@@ -1,9 +1,10 @@
+use skippy_protocol::binary::StageStream as TcpStream;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque, hash_map::DefaultHasher},
     fs,
     hash::{Hash, Hasher},
     io::{self, BufRead, BufReader, IsTerminal, Read, Write},
-    net::{Shutdown, SocketAddr, TcpStream},
+    net::{Shutdown, SocketAddr},
     path::{Component, Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
@@ -22,7 +23,7 @@ use openai_frontend::{ReasoningConfig, normalize_reasoning_template_options};
 use rustyline::{DefaultEditor, error::ReadlineError};
 use serde_json::Value;
 use skippy_protocol::binary::{
-    LLAMA_TOKEN_NULL, READY_MAGIC, StageReply, StageReplyStats, StageStateHeader, StageWireMessage,
+    LLAMA_TOKEN_NULL, StageReply, StageReplyStats, StageStateHeader, StageWireMessage,
     WireMessageKind, WireReplyKind, recv_reply, write_stage_message,
 };
 use skippy_protocol::{

@@ -1,5 +1,6 @@
+use skippy_protocol::binary::StageStream as TcpStream;
 use std::{
-    net::{SocketAddr, TcpStream},
+    net::SocketAddr,
     path::PathBuf,
     process::{Child, Command, ExitStatus},
     thread,
@@ -8,7 +9,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 use skippy_protocol::binary::{
-    StageActivationDesc, StageActivationPartDesc, encode_activation_frame, recv_ready,
+    StageActivationDesc, StageActivationPartDesc, encode_activation_frame,
 };
 
 pub struct ChildGuard {
@@ -36,7 +37,7 @@ impl Drop for ChildGuard {
 }
 
 pub fn connect_ready(addr: SocketAddr, timeout_secs: u64) -> Result<TcpStream> {
-    connect_ready_until(addr, timeout_secs, || Ok(()))
+    connect_ready_until(addr, timeout_secs, || Ok(()), None)
 }
 
 pub fn connect_ready_child(
@@ -44,18 +45,107 @@ pub fn connect_ready_child(
     timeout_secs: u64,
     child: &mut ChildGuard,
 ) -> Result<TcpStream> {
-    connect_ready_until(addr, timeout_secs, || {
-        if let Some(status) = child.try_wait()? {
-            bail!("child process exited before readiness with status {status}");
-        }
-        Ok(())
-    })
+    connect_ready_until(
+        addr,
+        timeout_secs,
+        || {
+            if let Some(status) = child.try_wait()? {
+                bail!("child process exited before readiness with status {status}");
+            }
+            Ok(())
+        },
+        None,
+    )
+}
+
+pub fn connect_ready_child_with_boundary(
+    addr: SocketAddr,
+    timeout_secs: u64,
+    child: &mut ChildGuard,
+    receiver: &serde_json::Value,
+    boundary: Option<skippy_runtime::ActivationBoundaryDesc>,
+) -> Result<TcpStream> {
+    let Some(boundary) = boundary else {
+        return connect_ready_child(addr, timeout_secs, child);
+    };
+    let receiver: skippy_protocol::StageConfig = serde_json::from_value(receiver.clone())?;
+    let mut source = receiver.clone();
+    let upstream = receiver
+        .upstream
+        .clone()
+        .unwrap_or(skippy_protocol::PeerConfig {
+            stage_id: "stage-0".into(),
+            stage_index: receiver.stage_index.saturating_sub(1),
+            endpoint: "driver".into(),
+        });
+    source.stage_id = upstream.stage_id;
+    source.stage_index = upstream.stage_index;
+    source.layer_start = 0;
+    source.layer_end = receiver.layer_start;
+    source.downstream = Some(skippy_protocol::PeerConfig {
+        stage_id: receiver.stage_id,
+        stage_index: receiver.stage_index,
+        endpoint: addr.to_string(),
+    });
+    use skippy_protocol::binary::{
+        ActivationDimension, ActivationPartProfile, ActivationProfile,
+        MAX_STAGE_DECODED_ACTIVATION_BYTES,
+    };
+    let profile = ActivationProfile {
+        id: 1,
+        producer_stage_index: source.stage_index as i32,
+        layer_start: 0,
+        layer_end: source.layer_end as i32,
+        frontier_identity: boundary.frontier_identity,
+        max_tokens: i32::MAX as u32,
+        max_sequences: u32::MAX,
+        parts: boundary
+            .parts()?
+            .iter()
+            .map(|p| ActivationPartProfile {
+                identity: p.identity,
+                ggml_type: p.ggml_type,
+                rank: p.rank,
+                token_axis: p.token_axis as u32,
+                optional: p.flags & skippy_protocol::binary::STAGE_ACTIVATION_PART_OPTIONAL != 0,
+                dimensions: std::array::from_fn(|axis| {
+                    if axis == p.token_axis as usize {
+                        ActivationDimension::Tokens
+                    } else if axis >= p.rank as usize {
+                        ActivationDimension::Fixed(1)
+                    } else if p.dimensions[axis] > 0 {
+                        ActivationDimension::Fixed(p.dimensions[axis] as u64)
+                    } else {
+                        ActivationDimension::Dynamic {
+                            min: 1,
+                            max: MAX_STAGE_DECODED_ACTIVATION_BYTES as u64,
+                        }
+                    }
+                }),
+            })
+            .collect(),
+    };
+    connect_ready_until(
+        addr,
+        timeout_secs,
+        || {
+            if let Some(status) = child.try_wait()? {
+                bail!("stage server exited before ready: {status}");
+            }
+            Ok(())
+        },
+        Some((&source, &profile)),
+    )
 }
 
 fn connect_ready_until(
     addr: SocketAddr,
     timeout_secs: u64,
     mut check_child: impl FnMut() -> Result<()>,
+    setup: Option<(
+        &skippy_protocol::StageConfig,
+        &skippy_protocol::binary::ActivationProfile,
+    )>,
 ) -> Result<TcpStream> {
     let attempts = timeout_secs.saturating_mul(2).max(1);
     let mut last_error = None;
@@ -70,7 +160,18 @@ fn connect_ready_until(
                 stream
                     .set_write_timeout(Some(Duration::from_millis(500)))
                     .ok();
-                match recv_ready(&mut stream) {
+                match skippy_protocol::binary::client_setup(
+                    &mut stream,
+                    if setup.is_some() {
+                        skippy_protocol::binary::ConnectionRole::Activation
+                    } else {
+                        skippy_protocol::binary::ConnectionRole::TokensAndControl
+                    },
+                    setup.map(|s| s.0),
+                    setup.map(|s| s.1.clone()),
+                    std::time::Instant::now() + Duration::from_millis(500),
+                    &std::sync::atomic::AtomicBool::new(false),
+                ) {
                     Ok(()) => {
                         stream
                             .set_read_timeout(Some(Duration::from_secs(timeout_secs.max(1))))

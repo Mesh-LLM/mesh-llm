@@ -133,6 +133,11 @@ unsafe extern "C" {
         out_desc: *mut ActivationBoundaryDesc,
     ) -> bool;
 
+    pub fn skippy_model_output_activation_vocabulary(
+        model: *const Model,
+        out_desc: *mut ActivationBoundaryDesc,
+    ) -> bool;
+
     pub fn skippy_model_input_activation_boundary(
         model: *const Model,
         out_desc: *mut ActivationBoundaryDesc,

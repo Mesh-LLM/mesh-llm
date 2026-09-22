@@ -1,7 +1,8 @@
+use skippy_protocol::binary::StageStream as TcpStream;
 use std::{
-    env, io,
+    io,
     io::Write,
-    net::{Shutdown, SocketAddr, TcpListener, TcpStream},
+    net::{Shutdown, SocketAddr, TcpListener},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -12,13 +13,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use skippy_protocol::binary::{
-    READY_MAGIC, StageReply, WireMessageKind, read_stage_message, recv_ready, recv_reply,
-    send_ready,
-};
-
-const CLIENT_READY_HELLO_ENV: &str = "SKIPPY_STAGE_CLIENT_READY_HELLO";
-const CLIENT_READY_HELLO_PEEK_TIMEOUT: Duration = Duration::from_millis(500);
+use skippy_protocol::binary::{StageReply, WireMessageKind, read_stage_message, recv_reply};
 
 pub(super) struct PredictionReturnListener {
     bind_addr: SocketAddr,
@@ -97,7 +92,7 @@ fn accept_prediction_return(
     connection: &Mutex<Option<TcpStream>>,
     sender: &mpsc::Sender<Result<StageReply, String>>,
 ) -> Result<()> {
-    let mut stream = loop {
+    let stream = loop {
         match listener.accept() {
             Ok((stream, _)) => break stream,
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -110,6 +105,7 @@ fn accept_prediction_return(
             Err(error) => return Err(error).context("accept direct prediction return"),
         }
     };
+    let mut stream = TcpStream::new(stream);
     stream
         .set_nonblocking(false)
         .context("set direct prediction return stream blocking")?;
@@ -125,8 +121,14 @@ fn accept_prediction_return(
         }
         *connection = Some(shutdown_stream);
     }
-    consume_optional_client_ready_hello(&mut stream)?;
-    send_ready(&mut stream).context("send direct prediction return ready")?;
+    skippy_protocol::binary::server_setup(
+        &mut stream,
+        None,
+        None,
+        None,
+        std::time::Instant::now() + Duration::from_secs(20),
+        shutdown,
+    )?;
     stream.flush().ok();
     let open =
         read_stage_message(&mut stream, 0).context("read direct prediction return open message")?;
@@ -151,45 +153,6 @@ fn accept_prediction_return(
     }
 }
 
-fn consume_optional_client_ready_hello(stream: &mut TcpStream) -> Result<()> {
-    if !client_ready_hello_enabled() {
-        return Ok(());
-    }
-    let previous_timeout = stream
-        .read_timeout()
-        .context("read direct prediction return timeout")?;
-    stream
-        .set_read_timeout(Some(CLIENT_READY_HELLO_PEEK_TIMEOUT))
-        .context("set direct prediction return hello timeout")?;
-    let mut bytes = [0_u8; 4];
-    let peek_result = stream.peek(&mut bytes);
-    stream
-        .set_read_timeout(previous_timeout)
-        .context("restore direct prediction return timeout")?;
-
-    match peek_result {
-        Ok(4) if i32::from_le_bytes(bytes) == READY_MAGIC => {
-            recv_ready(stream).context("consume direct prediction return client ready hello")?;
-        }
-        Ok(_) => {}
-        Err(error)
-            if matches!(
-                error.kind(),
-                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-            ) => {}
-        Err(error) => {
-            return Err(error).context("peek direct prediction return client ready hello");
-        }
-    }
-    Ok(())
-}
-
-fn client_ready_hello_enabled() -> bool {
-    env::var(CLIENT_READY_HELLO_ENV)
-        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
-        .unwrap_or(false)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,10 +167,15 @@ mod tests {
         let address = endpoint.strip_prefix("tcp://").unwrap().to_string();
         let client = thread::spawn(move || {
             let mut stream = TcpStream::connect(address).unwrap();
-            if client_ready_hello_enabled() {
-                send_ready(&mut stream).unwrap();
-            }
-            recv_ready(&mut stream).unwrap();
+            skippy_protocol::binary::client_setup(
+                &mut stream,
+                skippy_protocol::binary::ConnectionRole::PredictionReturn,
+                None,
+                None,
+                std::time::Instant::now() + Duration::from_secs(2),
+                &AtomicBool::new(false),
+            )
+            .unwrap();
             let kind = WireMessageKind::PredictionReturnOpen;
             let open = StageWireMessage {
                 kind,
@@ -242,10 +210,15 @@ mod tests {
             .unwrap()
             .to_string();
         let mut stream = TcpStream::connect(address).unwrap();
-        if client_ready_hello_enabled() {
-            send_ready(&mut stream).unwrap();
-        }
-        recv_ready(&mut stream).unwrap();
+        skippy_protocol::binary::client_setup(
+            &mut stream,
+            skippy_protocol::binary::ConnectionRole::PredictionReturn,
+            None,
+            None,
+            std::time::Instant::now() + Duration::from_secs(2),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
 
         let started = std::time::Instant::now();
         drop(listener);
@@ -263,10 +236,15 @@ mod tests {
             .to_string();
         let client = thread::spawn(move || {
             let mut stream = TcpStream::connect(address).unwrap();
-            if client_ready_hello_enabled() {
-                send_ready(&mut stream).unwrap();
-            }
-            recv_ready(&mut stream).unwrap();
+            skippy_protocol::binary::client_setup(
+                &mut stream,
+                skippy_protocol::binary::ConnectionRole::PredictionReturn,
+                None,
+                None,
+                std::time::Instant::now() + Duration::from_secs(2),
+                &AtomicBool::new(false),
+            )
+            .unwrap();
             let kind = WireMessageKind::PredictionReturnOpen;
             let open = StageWireMessage {
                 kind,

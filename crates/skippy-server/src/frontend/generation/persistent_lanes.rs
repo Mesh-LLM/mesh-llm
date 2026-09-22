@@ -1,5 +1,5 @@
 use crate::binary_transport::connect_binary_downstream;
-use crate::binary_transport::send_client_ready_hello_if_enabled;
+
 use crate::frontend::generation::OpenAiGenerationIds;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::prefill::PrefillChunkObservation;
@@ -16,9 +16,9 @@ use openai_frontend::OpenAiResult;
 use serde_json::json;
 use skippy_protocol::StageConfig;
 use skippy_protocol::binary::StageReplyStats;
-use skippy_protocol::binary::recv_ready;
+
+use crate::binary_transport::stage_setup::StageStream as TcpStream;
 use std::collections::BTreeMap;
-use std::net::TcpStream;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicU64;
@@ -27,6 +27,7 @@ use std::time::Duration;
 
 pub(in crate::frontend) struct PersistentStageLanePool {
     pub(in crate::frontend) config: StageConfig,
+    pub(in crate::frontend) output_profile: skippy_protocol::binary::ActivationProfile,
     pub(in crate::frontend) timeout_secs: u64,
     pub(in crate::frontend) telemetry: Telemetry,
     pub(in crate::frontend) lanes: Mutex<Vec<PersistentStageLane>>,
@@ -65,6 +66,7 @@ impl PersistentStageLanePool {
 
     pub(in crate::frontend) fn new(
         config: &StageConfig,
+        boundary: Option<skippy_runtime::ActivationBoundaryDesc>,
         capacity: usize,
         timeout_secs: u64,
         telemetry: Telemetry,
@@ -74,6 +76,10 @@ impl PersistentStageLanePool {
         }
         let pool = Arc::new(Self {
             config: config.clone(),
+            output_profile: crate::binary_transport::stage_setup::output_profile(
+                config,
+                boundary.context("downstream requires output boundary")?,
+            )?,
             timeout_secs,
             telemetry,
             lanes: Mutex::new(Vec::with_capacity(capacity)),
@@ -364,6 +370,7 @@ impl PersistentStageLanePool {
         connect_timeout: Duration,
         ready_timeout: Duration,
     ) -> Result<TcpStream> {
+        let deadline = std::time::Instant::now() + ready_timeout.max(connect_timeout);
         let mut stream = connect_binary_downstream(&self.config, connect_timeout)?
             .ok_or_else(|| anyhow!("embedded stage0 has no downstream"))?;
         let local_addr = stream.local_addr().ok();
@@ -372,9 +379,14 @@ impl PersistentStageLanePool {
             "openai downstream lane waiting ready: stage_id={} lane_id={lane_id} local={local_addr:?} peer={peer_addr:?}",
             self.config.stage_id
         );
-        send_client_ready_hello_if_enabled(&mut stream)
-            .context("send persistent downstream lane client ready hello")?;
-        receive_persistent_lane_ready(&mut stream, ready_timeout)?;
+        crate::binary_transport::stage_setup::client_setup(
+            &mut stream,
+            crate::binary_transport::stage_setup::ConnectionRole::Activation,
+            Some(&self.config),
+            Some(self.output_profile.clone()),
+            deadline,
+            &std::sync::atomic::AtomicBool::new(false),
+        )?;
         configure_persistent_lane_io_deadlines(&stream)?;
         tracing::debug!(
             "openai downstream lane received ready: stage_id={} lane_id={lane_id} local={local_addr:?} peer={peer_addr:?}",
@@ -394,20 +406,6 @@ pub(in crate::frontend) fn configure_persistent_lane_io_deadlines(
     stream
         .set_write_timeout(Some(timeout))
         .context("set persistent downstream lane write timeout")
-}
-
-pub(in crate::frontend) fn receive_persistent_lane_ready(
-    stream: &mut TcpStream,
-    timeout: Duration,
-) -> Result<()> {
-    stream
-        .set_read_timeout(Some(timeout))
-        .context("set persistent downstream lane ready timeout")?;
-    let ready = recv_ready(&mut *stream).context("persistent downstream lane did not become ready");
-    stream
-        .set_read_timeout(None)
-        .context("restore persistent downstream lane read timeout")?;
-    ready
 }
 
 fn lane_stream_is_live(stream: &TcpStream) -> bool {

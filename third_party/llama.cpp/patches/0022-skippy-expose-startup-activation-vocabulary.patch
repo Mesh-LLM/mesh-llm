@@ -1,0 +1,150 @@
+From 74ada37bb958ed01884480f7eed382c215dda4b4 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Wed, 23 Sep 2026 07:58:18 +1000
+Subject: [PATCH] skippy: expose optional activation vocabulary for startup
+ agreement
+
+---
+ include/skippy/common.h                    |  2 +-
+ include/skippy/runtime.h                   |  5 +++++
+ src/CMakeLists.txt                         |  7 ++++++
+ src/skippy/model_lifecycle.cpp             |  8 +++++++
+ src/skippy/speculative_decoding.cpp        |  5 +++++
+ src/skippy/speculative_internal.h          |  5 +++++
+ src/skippy/tests/activation_vocabulary.cpp | 25 ++++++++++++++++++++++
+ 7 files changed, 56 insertions(+), 1 deletion(-)
+ create mode 100644 src/skippy/tests/activation_vocabulary.cpp
+
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index ba62a2c8b..3ad592c16 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -46,7 +46,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 62
++#define SKIPPY_ABI_VERSION_PATCH 63
+ 
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
+index b0881ead6..5d6c9ac77 100644
+--- a/include/skippy/runtime.h
++++ b/include/skippy/runtime.h
+@@ -182,6 +182,11 @@ LLAMA_API bool skippy_model_output_activation_boundary(
+         const struct skippy_model * model,
+         struct skippy_activation_boundary_desc * out_desc);
+ 
++/** @brief Reads the output wire vocabulary, including optional exports known before requests run. */
++LLAMA_API bool skippy_model_output_activation_vocabulary(
++        const struct skippy_model * model,
++        struct skippy_activation_boundary_desc * out_desc);
++
+ /** @brief Reads the configured stage graph's observed input boundary descriptor. */
+ LLAMA_API bool skippy_model_input_activation_boundary(
+         const struct skippy_model * model,
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 80ac609e3..b33e38562 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -267,6 +267,13 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     target_compile_features(skippy-graph-build-inputs PRIVATE cxx_std_17)
+     target_link_libraries(skippy-graph-build-inputs PRIVATE llama)
+     add_dependencies(skippy-stage-slice-plan skippy-graph-build-inputs skippy-profile-residency)
++    add_executable(skippy-activation-vocabulary skippy/tests/activation_vocabulary.cpp)
++    target_include_directories(skippy-activation-vocabulary PRIVATE .)
++    target_compile_features(skippy-activation-vocabulary PRIVATE cxx_std_17)
++    target_link_libraries(skippy-activation-vocabulary PRIVATE llama)
++    add_test(NAME skippy_activation_vocabulary COMMAND skippy-activation-vocabulary)
++    add_dependencies(skippy-stage-slice-plan skippy-activation-vocabulary)
++
+     add_test(NAME skippy_decode_input_width COMMAND skippy-graph-build-inputs --input-width)
+ 
+     add_test(
+diff --git a/src/skippy/model_lifecycle.cpp b/src/skippy/model_lifecycle.cpp
+index caa9fcd6d..2891f5694 100644
+--- a/src/skippy/model_lifecycle.cpp
++++ b/src/skippy/model_lifecycle.cpp
+@@ -4,6 +4,7 @@
+ #include "skippy/glm_dsa.h"
+ #include "skippy-verify-checkpoint.h"
+ #include "skippy/devices.h"
++#include "skippy/speculative_internal.h"
+ 
+ #include <mutex>
+ #include "gguf.h"
+@@ -141,6 +142,13 @@ bool skippy_model_output_activation_boundary(
+     return true;
+ }
+ 
++bool skippy_model_output_activation_vocabulary(
++        const struct skippy_model * model,
++        struct skippy_activation_boundary_desc * out_desc) {
++    return skippy_model_output_activation_boundary(model, out_desc) &&
++            skippy_append_optional_activation_vocabulary(model, out_desc);
++}
++
+ bool skippy_model_input_activation_boundary(
+         const struct skippy_model * model,
+         struct skippy_activation_boundary_desc * out_desc) {
+diff --git a/src/skippy/speculative_decoding.cpp b/src/skippy/speculative_decoding.cpp
+index 59b311dd2..3a0a23394 100644
+--- a/src/skippy/speculative_decoding.cpp
++++ b/src/skippy/speculative_decoding.cpp
+@@ -550,3 +550,8 @@ enum skippy_status skippy_mtp_propose_next(
+     }
+     return skippy_success(out_error);
+ }
++
++bool skippy_append_optional_activation_vocabulary(
++        const skippy_model * model, skippy_activation_boundary_desc * desc) {
++    return model != nullptr && desc != nullptr;
++}
+diff --git a/src/skippy/speculative_internal.h b/src/skippy/speculative_internal.h
+index d8276944d..fd07e6130 100644
+--- a/src/skippy/speculative_internal.h
++++ b/src/skippy/speculative_internal.h
+@@ -30,3 +30,8 @@ enum skippy_status skippy_mtp_propose_next(
+         size_t max_draft_tokens,
+         skippy_native_mtp_draft * out_mtp_draft,
+         skippy_error ** out_error);
++
++struct skippy_model;
++struct skippy_activation_boundary_desc;
++bool skippy_append_optional_activation_vocabulary(
++        const skippy_model * model, skippy_activation_boundary_desc * desc);
+diff --git a/src/skippy/tests/activation_vocabulary.cpp b/src/skippy/tests/activation_vocabulary.cpp
+new file mode 100644
+index 000000000..ab3ee4d3a
+--- /dev/null
++++ b/src/skippy/tests/activation_vocabulary.cpp
+@@ -0,0 +1,25 @@
++#include "skippy.h"
++#include "skippy/runtime_types.h"
++#include "llama-model.h"
++#include <cstdio>
++#include <cstring>
++
++int main() {
++    std::unique_ptr<llama_model> owner(llama_model_create(LLM_ARCH_LLAMA, llama_model_default_params()));
++    if (!owner) return 8;
++    auto & native = *owner;
++    native.arch = LLM_ARCH_LLAMA;
++    native.hparams.n_embd = 8;
++    skippy_model stage;
++    stage.model = &native;
++    stage.has_output_activation_boundary = true;
++    stage.output_activation_boundary.part_count = 1;
++    stage.output_activation_boundary.version = SKIPPY_ACTIVATION_FRAME_VERSION;
++    skippy_activation_boundary_desc vocabulary = {};
++    if (!skippy_model_output_activation_vocabulary(&stage, &vocabulary) || vocabulary.part_count != 1) return 1;
++    if (std::memcmp(&vocabulary, &stage.output_activation_boundary, sizeof(vocabulary)) != 0) return 2;
++    if (skippy_model_output_activation_vocabulary(nullptr, &vocabulary) ||
++            skippy_model_output_activation_vocabulary(&stage, nullptr)) return 3;
++    std::puts("PASS startup activation vocabulary");
++    return 0;
++}
+-- 
+2.54.0 (Apple Git-157)
+

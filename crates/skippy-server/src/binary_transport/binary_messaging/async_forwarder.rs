@@ -1,5 +1,6 @@
 use crate::binary_transport::WireCondition;
 use crate::binary_transport::stage_execution::elapsed_ms;
+use crate::binary_transport::stage_setup::StageStream as TcpStream;
 use crate::binary_transport::write_stage_message_after_propagation;
 use crate::telemetry::Telemetry;
 use crate::telemetry::now_unix_nanos;
@@ -11,7 +12,6 @@ use serde_json::json;
 use skippy_protocol::binary::StageWireMessage;
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
-use std::net::TcpStream;
 use std::sync::mpsc;
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::mpsc::TryRecvError;
@@ -207,6 +207,7 @@ impl AsyncForwardReceipt {
 
 #[cfg(test)]
 mod tests {
+    use skippy_protocol::binary::StageStream as TcpStream;
     use std::net::TcpListener;
 
     use skippy_protocol::binary::{StageStateHeader, WireMessageKind, read_stage_message};
@@ -244,7 +245,8 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let mut client = TcpStream::connect(address).unwrap();
-        let (mut server, _) = listener.accept().unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let mut server = skippy_protocol::binary::StageStream::new(server);
         let telemetry = Telemetry::new(None, 1, prefix_cache_test_config(), TelemetryLevel::Off);
         let mut forwarder = AsyncForwarder::new(&client, telemetry, 8).unwrap();
         // 250ms of simulated propagation: without the drop-time join, the
@@ -287,7 +289,8 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let mut lane = TcpStream::connect(address).unwrap();
-        let (mut server, _) = listener.accept().unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let mut server = skippy_protocol::binary::StageStream::new(server);
         let telemetry = Telemetry::new(None, 1, prefix_cache_test_config(), TelemetryLevel::Off);
         let mut forwarder = AsyncForwarder::new(&lane, telemetry, 8).unwrap();
         let delayed = WireCondition::new(250.0, None).unwrap();
@@ -341,7 +344,8 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let client = TcpStream::connect(address).unwrap();
-        let (mut server, _) = listener.accept().unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let mut server = skippy_protocol::binary::StageStream::new(server);
         let telemetry = Telemetry::new(None, 1, prefix_cache_test_config(), TelemetryLevel::Off);
         let mut forwarder = AsyncForwarder::new(&client, telemetry, 3).unwrap();
         let condition = WireCondition::new(0.0, None).unwrap();

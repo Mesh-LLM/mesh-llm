@@ -1,4 +1,4 @@
-use std::net::TcpStream;
+use crate::binary_transport::stage_setup::StageStream as TcpStream;
 
 use openai_frontend::{OpenAiError, OpenAiResult};
 use skippy_protocol::binary::{StageNativeMtpDraft, WireReplyKind};

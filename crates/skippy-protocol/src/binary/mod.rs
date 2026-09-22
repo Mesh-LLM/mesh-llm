@@ -1,3 +1,14 @@
+mod setup;
+pub use setup::{
+    ConnectionRole, StageStream, client_setup, recording_setup, server_setup,
+    server_setup_with_prepare,
+};
+mod agreed_io;
+pub use agreed_io::{StageMessageContext, StageMessageIo};
+mod agreement;
+pub use agreement::{
+    ActivationAgreement, ActivationDimension, ActivationPartProfile, ActivationProfile,
+};
 mod activation;
 mod activation_codec;
 mod codec;
@@ -9,8 +20,8 @@ pub use activation::{
 };
 pub use codec::{
     read_stage_message, read_stage_message_for_codec, read_stage_message_for_codec_policy,
-    recv_ready, recv_reply, send_ready, send_reply_ack, send_reply_ack_with_stats,
-    send_reply_message, send_reply_predicted, send_reply_predicted_tokens_with_stats,
+    recv_reply, send_reply_ack, send_reply_ack_with_stats, send_reply_message,
+    send_reply_predicted, send_reply_predicted_tokens_with_stats,
     send_reply_predicted_tokens_with_window_and_stats, send_reply_predicted_with_stats,
     send_reply_predicted_with_tokens_and_stats, send_reply_predicted_with_tokens_window_and_stats,
     write_stage_message,
@@ -21,14 +32,13 @@ pub use types::{
     MAX_STAGE_ACTIVATION_PARTS, MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES,
     MAX_STAGE_DECODED_ACTIVATION_BYTES, MAX_STAGE_DRY_SEQUENCE_BREAKERS, MAX_STAGE_LOGIT_BIAS,
     MAX_STAGE_PREDICTED_TOKENS, MAX_STAGE_SAMPLERS, MAX_STAGE_SAMPLING_STRING_BYTES,
-    MAX_STAGE_SIDEBAND_VALUES, MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC,
-    STAGE_ACTIVATION_FRAME_VERSION, STAGE_ACTIVATION_IDENTITY_BYTES,
-    STAGE_ACTIVATION_PART_OPTIONAL, STAGE_LOGIT_BIAS_WIRE_BYTES, STAGE_SAMPLING_CONFIG_BASE_BYTES,
-    STAGE_STATE_HEADER_BYTES, STAGE_STATE_VERSION, STAGE_WIRE_FIXED_HEADER_BYTES,
-    StageActivationDesc, StageActivationFrame, StageActivationPartDesc, StageLogitBias,
-    StageNativeMtpDraft, StageReply, StageReplyStats, StageReplyWindow, StageRequestEpoch,
-    StageSamplingConfig, StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
-    WireStagePhase, state_flags,
+    MAX_STAGE_SIDEBAND_VALUES, MAX_STAGE_STATE_IMPORT_BYTES, STAGE_ACTIVATION_FRAME_VERSION,
+    STAGE_ACTIVATION_IDENTITY_BYTES, STAGE_ACTIVATION_PART_OPTIONAL, STAGE_LOGIT_BIAS_WIRE_BYTES,
+    STAGE_SAMPLING_CONFIG_BASE_BYTES, STAGE_STATE_HEADER_BYTES, STAGE_STATE_VERSION,
+    STAGE_WIRE_FIXED_HEADER_BYTES, StageActivationDesc, StageActivationFrame,
+    StageActivationPartDesc, StageLogitBias, StageNativeMtpDraft, StageReply, StageReplyStats,
+    StageReplyWindow, StageRequestEpoch, StageSamplingConfig, StageStateHeader, StageWireMessage,
+    WireMessageKind, WireReplyKind, WireStagePhase, state_flags,
 };
 
 pub(crate) fn invalid_data(message: &'static str) -> std::io::Error {
@@ -97,6 +107,64 @@ mod tests {
         assert_eq!(error.to_string(), expected);
     }
 
+    fn agreed<T>(io: T, message: &StageWireMessage) -> StageMessageIo<T> {
+        let mut io = StageMessageIo::new(io);
+        if !message.activation.is_empty() {
+            let frame =
+                decode_activation_frame(message.state.activation_codec, &message.activation)
+                    .unwrap();
+            let d = frame.desc;
+            let profile = ActivationProfile {
+                id: 1,
+                producer_stage_index: d.producer_stage_index,
+                layer_start: d.layer_start,
+                layer_end: d.layer_end,
+                frontier_identity: d.frontier_identity,
+                max_tokens: 4096,
+                max_sequences: 4096,
+                parts: d
+                    .parts
+                    .iter()
+                    .map(|p| ActivationPartProfile {
+                        identity: p.identity,
+                        ggml_type: p.ggml_type,
+                        rank: p.rank,
+                        token_axis: p.token_axis as u32,
+                        optional: p.is_optional(),
+                        dimensions: std::array::from_fn(|axis| {
+                            if axis == p.token_axis as usize {
+                                ActivationDimension::Tokens
+                            } else {
+                                ActivationDimension::Fixed(if axis < p.rank as usize {
+                                    p.dimensions[axis] as u64
+                                } else {
+                                    1
+                                })
+                            }
+                        }),
+                    })
+                    .collect(),
+            };
+            io.establish(ActivationAgreement {
+                generation: [7; 16],
+                profiles: vec![profile],
+            })
+            .unwrap();
+        }
+        io
+    }
+
+    impl StageMessageContext for CountingReader {
+        fn activation_agreement(&self) -> Option<&ActivationAgreement> {
+            None
+        }
+    }
+    impl StageMessageContext for CountingWriter {
+        fn activation_agreement(&self) -> Option<&ActivationAgreement> {
+            None
+        }
+    }
+
     struct CountingReader {
         inner: Cursor<Vec<u8>>,
         calls: Rc<Cell<usize>>,
@@ -124,13 +192,6 @@ mod tests {
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
-    }
-
-    #[test]
-    fn ready_round_trips() {
-        let mut bytes = Vec::new();
-        send_ready(&mut bytes).unwrap();
-        recv_ready(Cursor::new(bytes)).unwrap();
     }
 
     #[test]
@@ -353,6 +414,21 @@ mod tests {
     }
 
     #[test]
+    fn rejected_activation_does_not_write_a_partial_prefix() {
+        let frame = multipart_activation_frame(1);
+        let message = activation_message(&frame, crate::StageActivationCodec::RawF32V1);
+        let mut unadmitted = Vec::new();
+        assert!(write_stage_message(&mut unadmitted, &message).is_err());
+        assert!(unadmitted.is_empty());
+        let mut admitted = agreed(Vec::new(), &message);
+        let mut wrong_frame = frame;
+        wrong_frame.desc.frontier_identity = [99; 32];
+        let wrong = activation_message(&wrong_frame, crate::StageActivationCodec::RawF32V1);
+        assert!(write_stage_message(&mut admitted, &wrong).is_err());
+        assert!(admitted.into_inner().is_empty());
+    }
+
+    #[test]
     fn stage_message_round_trips_multipart_activation_and_sampling() {
         let frame = multipart_activation_frame(1);
         let mut message = activation_message(&frame, crate::StageActivationCodec::RawF32V1);
@@ -370,8 +446,8 @@ mod tests {
         });
 
         let mut bytes = Vec::new();
-        write_stage_message(&mut bytes, &message).unwrap();
-        let decoded = read_stage_message(Cursor::new(bytes), 2).unwrap();
+        write_stage_message(agreed(&mut bytes, &message), &message).unwrap();
+        let decoded = read_stage_message(agreed(Cursor::new(bytes), &message), 2).unwrap();
         assert_eq!(decoded.kind, WireMessageKind::DecodeEmbd);
         assert_eq!(decoded.tokens, vec![11]);
         assert_eq!(decoded.activation_frame().unwrap(), Some(frame));
@@ -411,8 +487,10 @@ mod tests {
                 activation_frame_wire_bytes(codec, &frame.desc).unwrap()
             );
             let mut bytes = Vec::new();
-            write_stage_message(&mut bytes, &message).unwrap();
-            let decoded = read_stage_message_for_codec(Cursor::new(bytes), 2, codec).unwrap();
+            write_stage_message(agreed(&mut bytes, &message), &message).unwrap();
+            let decoded =
+                read_stage_message_for_codec(agreed(Cursor::new(bytes), &message), 2, codec)
+                    .unwrap();
             let decoded_frame = decoded.activation_frame().unwrap().unwrap();
             assert_eq!(decoded_frame.desc, frame.desc);
             assert_eq!(
@@ -429,10 +507,10 @@ mod tests {
         let codec = crate::StageActivationCodec::F16RneV1;
         let message = activation_message(&frame, codec);
         let mut bytes = Vec::new();
-        write_stage_message(&mut bytes, &message).unwrap();
+        write_stage_message(agreed(&mut bytes, &message), &message).unwrap();
         assert_invalid_data(
             read_stage_message_for_codec(
-                Cursor::new(bytes.clone()),
+                agreed(Cursor::new(bytes.clone()), &message),
                 2,
                 crate::StageActivationCodec::RawF32V1,
             ),
@@ -442,7 +520,7 @@ mod tests {
         let mut wrong_size = bytes.clone();
         wrong_size[60..64].copy_from_slice(&5_i32.to_le_bytes());
         assert_eq!(
-            read_stage_message_for_codec(Cursor::new(wrong_size), 2, codec)
+            read_stage_message_for_codec(agreed(Cursor::new(wrong_size), &message), 2, codec)
                 .unwrap_err()
                 .kind(),
             std::io::ErrorKind::UnexpectedEof
@@ -450,7 +528,7 @@ mod tests {
 
         bytes[56..60].copy_from_slice(&99_i32.to_le_bytes());
         assert_invalid_data(
-            read_stage_message(Cursor::new(bytes), 2),
+            read_stage_message(agreed(Cursor::new(bytes), &message), 2),
             "unknown stage activation codec",
         );
     }
@@ -465,9 +543,9 @@ mod tests {
         ] {
             let message = activation_message(&frame, codec);
             let mut bytes = Vec::new();
-            write_stage_message(&mut bytes, &message).unwrap();
+            write_stage_message(agreed(&mut bytes, &message), &message).unwrap();
             let decoded = read_stage_message_for_codec_policy(
-                Cursor::new(bytes),
+                agreed(Cursor::new(bytes), &message),
                 2,
                 crate::StageActivationCodec::RawF32V1,
                 crate::StageActivationCodecPolicy::AutoLosslessV1,
@@ -478,10 +556,10 @@ mod tests {
 
         let message = activation_message(&frame, crate::StageActivationCodec::S8RowF32RneV1);
         let mut bytes = Vec::new();
-        write_stage_message(&mut bytes, &message).unwrap();
+        write_stage_message(agreed(&mut bytes, &message), &message).unwrap();
         assert_invalid_data(
             read_stage_message_for_codec_policy(
-                Cursor::new(bytes),
+                agreed(Cursor::new(bytes), &message),
                 2,
                 crate::StageActivationCodec::RawF32V1,
                 crate::StageActivationCodecPolicy::AutoLosslessV1,
@@ -611,8 +689,10 @@ mod tests {
         };
 
         let mut bytes = Vec::new();
-        write_stage_message(&mut bytes, &message).unwrap();
-        assert_eq!(message.estimated_wire_bytes(), bytes.len());
+        let mut writer = agreed(&mut bytes, &message);
+        let expected = message.wire_bytes(writer.activation_agreement()).unwrap();
+        write_stage_message(&mut writer, &message).unwrap();
+        assert_eq!(expected, bytes.len());
     }
 
     #[test]

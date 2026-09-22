@@ -1,3 +1,4 @@
+use crate::binary_transport::stage_setup::StageStream as TcpStream;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::util::openai_io_error;
 use anyhow::Context;
@@ -9,7 +10,6 @@ use openai_frontend::OpenAiResult;
 use skippy_protocol::binary::StageReplyStats;
 use skippy_protocol::binary::WireReplyKind;
 use skippy_protocol::binary::recv_reply;
-use std::net::TcpStream;
 
 pub(super) fn prefill_chunk_end(
     pos_start: usize,

@@ -1,50 +1,51 @@
-From dab302cdb723320377fbe12f1f2aa912d0fa0586 Mon Sep 17 00:00:00 2001
+From 21f4fd9ec32fdcb5151a2b2e22274213b46c850f Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 18:30:01 +1000
-Subject: [PATCH 1/2] models: add inkling family support
+Subject: [PATCH] models: add inkling family support
 
 ---
- common/chat.cpp                     |   8 +
- common/parsers/inkling.cpp          | 117 +++++
- common/parsers/parsers.h            |   2 +
- common/parsers/sources.cmake        |   1 +
- conversion/__init__.py              |   2 +
- conversion/base.py                  |  14 +
- conversion/inkling.py               | 422 +++++++++++++++++
- gguf-py/gguf/constants.py           |  50 ++
- gguf-py/gguf/tensor_mapping.py      |  49 ++
- models/templates/Inkling.jinja      | 514 +++++++++++++++++++++
- src/llama-arch.cpp                  |  15 +
- src/llama-arch.h                    |  24 +
- src/llama-context.cpp               |   6 +
- src/llama-graph.cpp                 |  21 +-
- src/llama-hparams.cpp               |   2 +-
- src/llama-hparams.h                 |  10 +-
- src/llama-kv-cache.h                |   5 +
- src/llama-model-saver.cpp           |   1 +
- src/llama-model.cpp                 |  14 +
- src/llama-model.h                   |   9 +
- src/llama-quant.cpp                 |  10 +
- src/llama-vocab.cpp                 |  10 +
- src/llama-vocab.h                   |   1 +
- src/models/inkling.cpp              | 687 ++++++++++++++++++++++++++++
- src/models/models.h                 |  13 +
- src/models/nemotron-h-moe.cpp       |   2 +-
- src/skippy/speculative_decoding.cpp |  93 +++-
- tests/test-chat.cpp                 | 115 +++++
- tests/test-llama-archs.cpp          |   4 +
- tools/mtmd/CMakeLists.txt           |   1 +
- tools/mtmd/clip-impl.h              |   9 +
- tools/mtmd/clip-model.h             |  12 +
- tools/mtmd/clip.cpp                 |  62 ++-
- tools/mtmd/models/inkling.cpp       | 105 +++++
- tools/mtmd/models/models.h          |  11 +
- tools/mtmd/mtmd-audio.cpp           |  69 +++
- tools/mtmd/mtmd-audio.h             |  10 +
- tools/mtmd/mtmd-image.cpp           |  72 +++
- tools/mtmd/mtmd-image.h             |  20 +
- tools/mtmd/mtmd.cpp                 |  37 +-
- 40 files changed, 2607 insertions(+), 22 deletions(-)
+ common/chat.cpp                            |   8 +
+ common/parsers/inkling.cpp                 | 117 ++++
+ common/parsers/parsers.h                   |   2 +
+ common/parsers/sources.cmake               |   1 +
+ conversion/__init__.py                     |   2 +
+ conversion/base.py                         |  14 +
+ conversion/inkling.py                      | 422 +++++++++++++
+ gguf-py/gguf/constants.py                  |  50 ++
+ gguf-py/gguf/tensor_mapping.py             |  49 ++
+ models/templates/Inkling.jinja             | 514 +++++++++++++++
+ src/llama-arch.cpp                         |  15 +
+ src/llama-arch.h                           |  24 +
+ src/llama-context.cpp                      |   6 +
+ src/llama-graph.cpp                        |  21 +-
+ src/llama-hparams.cpp                      |   2 +-
+ src/llama-hparams.h                        |  10 +-
+ src/llama-kv-cache.h                       |   5 +
+ src/llama-model-saver.cpp                  |   1 +
+ src/llama-model.cpp                        |  14 +
+ src/llama-model.h                          |   9 +
+ src/llama-quant.cpp                        |  10 +
+ src/llama-vocab.cpp                        |  10 +
+ src/llama-vocab.h                          |   1 +
+ src/models/inkling.cpp                     | 687 +++++++++++++++++++++
+ src/models/models.h                        |  13 +
+ src/models/nemotron-h-moe.cpp              |   2 +-
+ src/skippy/speculative_decoding.cpp        | 114 +++-
+ src/skippy/tests/activation_vocabulary.cpp |  11 +
+ tests/test-chat.cpp                        | 115 ++++
+ tests/test-llama-archs.cpp                 |   4 +
+ tools/mtmd/CMakeLists.txt                  |   1 +
+ tools/mtmd/clip-impl.h                     |   9 +
+ tools/mtmd/clip-model.h                    |  12 +
+ tools/mtmd/clip.cpp                        |  62 +-
+ tools/mtmd/models/inkling.cpp              | 105 ++++
+ tools/mtmd/models/models.h                 |  11 +
+ tools/mtmd/mtmd-audio.cpp                  |  69 +++
+ tools/mtmd/mtmd-audio.h                    |  10 +
+ tools/mtmd/mtmd-image.cpp                  |  72 +++
+ tools/mtmd/mtmd-image.h                    |  20 +
+ tools/mtmd/mtmd.cpp                        |  37 +-
+ 41 files changed, 2638 insertions(+), 23 deletions(-)
  create mode 100644 common/parsers/inkling.cpp
  create mode 100644 conversion/inkling.py
  create mode 100644 models/templates/Inkling.jinja
@@ -1485,7 +1486,7 @@ index e6732e854..c48613aca 100644
      LLM_TENSOR_VISEXP_ATTN_OUT,
      LLM_TENSOR_VISEXP_FFN_GATE,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 1ac8ef1cf..57cacad5a 100644
+index 028d98b99..31787a331 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -180,6 +180,12 @@ llama_context::llama_context(
@@ -1502,10 +1503,10 @@ index 1ac8ef1cf..57cacad5a 100644
      // the trunk tensors through ctx_other (see graph_mtp in nemotron-h-moe.cpp).
      // Without this clause the constructor silently drops params.ctx_other and
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index a39cc0214..a1ff07f47 100644
+index 6f248659a..6e10019fe 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -3102,9 +3102,26 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+@@ -3111,9 +3111,26 @@ ggml_tensor * llm_graph_context::build_attn_mha(
  
      ggml_tensor * cur;
  
@@ -1729,7 +1730,7 @@ index 3fb061f0e..e7d5f5dfb 100644
  struct LLM_KV;
 diff --git a/src/models/inkling.cpp b/src/models/inkling.cpp
 new file mode 100644
-index 000000000..0310612ef
+index 000000000..79c9f9286
 --- /dev/null
 +++ b/src/models/inkling.cpp
 @@ -0,0 +1,687 @@
@@ -2458,7 +2459,7 @@ index bd8408d5a..ce1cec84f 100644
      ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens
                            : (model.tok_embd          ? model.tok_embd
 diff --git a/src/skippy/speculative_decoding.cpp b/src/skippy/speculative_decoding.cpp
-index 59b311dd2..18f39a7d9 100644
+index 3a0a23394..0513d7abd 100644
 --- a/src/skippy/speculative_decoding.cpp
 +++ b/src/skippy/speculative_decoding.cpp
 @@ -7,6 +7,7 @@
@@ -2604,6 +2605,54 @@ index 59b311dd2..18f39a7d9 100644
      if (chain_heads) {
          draft_limit = std::min<size_t>(draft_limit, mtp_depth_scope.depth_count);
      }
+@@ -553,5 +626,24 @@ enum skippy_status skippy_mtp_propose_next(
+ 
+ bool skippy_append_optional_activation_vocabulary(
+         const skippy_model * model, skippy_activation_boundary_desc * desc) {
+-    return model != nullptr && desc != nullptr;
++    if (model == nullptr || model->model == nullptr || desc == nullptr) return false;
++    if (model->model->arch != LLM_ARCH_INKLING) return true;
++    for (uint32_t index = 0; index < desc->part_count; ++index) {
++        if (std::memcmp(desc->parts[index].identity, SKIPPY_MTP_INPUT_EMBEDDING_IDENTITY,
++                SKIPPY_ACTIVATION_IDENTITY_BYTES) == 0) return true;
++    }
++    if (desc->part_count >= SKIPPY_ACTIVATION_MAX_PARTS) return false;
++    auto & part = desc->parts[desc->part_count++];
++    part = {};
++    std::memcpy(part.identity, SKIPPY_MTP_INPUT_EMBEDDING_IDENTITY, sizeof(part.identity));
++    part.ggml_type = GGML_TYPE_F32;
++    part.rank = 2;
++    part.token_axis = 1;
++    part.flags = SKIPPY_ACTIVATION_PART_OPTIONAL;
++    part.dimensions[0] = llama_model_n_embd(model->model);
++    part.dimensions[1] = -1;
++    part.dimensions[2] = part.dimensions[3] = 1;
++    part.byte_strides[0] = sizeof(float);
++    part.byte_strides[1] = part.dimensions[0] * sizeof(float);
++    return part.dimensions[0] > 0;
+ }
+diff --git a/src/skippy/tests/activation_vocabulary.cpp b/src/skippy/tests/activation_vocabulary.cpp
+index cfc521e63..a669d377c 100644
+--- a/src/skippy/tests/activation_vocabulary.cpp
++++ b/src/skippy/tests/activation_vocabulary.cpp
+@@ -18,6 +18,17 @@ int main() {
+     if (std::memcmp(&vocabulary, &stage.output_activation_boundary, sizeof(vocabulary)) != 0) return 2;
+     if (skippy_model_output_activation_vocabulary(nullptr, &vocabulary) ||
+             skippy_model_output_activation_vocabulary(&stage, nullptr)) return 3;
++    native.arch = LLM_ARCH_INKLING;
++    if (!skippy_model_output_activation_vocabulary(&stage, &vocabulary) || vocabulary.part_count != 2) return 4;
++    const auto optional = vocabulary.parts[1];
++    if (optional.flags != SKIPPY_ACTIVATION_PART_OPTIONAL || optional.ggml_type != GGML_TYPE_F32 ||
++            optional.rank != 2 || optional.token_axis != 1 || optional.dimensions[0] != 8 ||
++            optional.dimensions[1] != -1 || stage.output_activation_boundary.part_count != 1) return 5;
++    skippy_activation_boundary_desc repeated = {};
++    if (!skippy_model_output_activation_vocabulary(&stage, &repeated) ||
++            std::memcmp(&vocabulary, &repeated, sizeof(vocabulary)) != 0) return 6;
++    stage.output_activation_boundary.part_count = SKIPPY_ACTIVATION_MAX_PARTS;
++    if (skippy_model_output_activation_vocabulary(&stage, &repeated)) return 7;
+     std::puts("PASS startup activation vocabulary");
+     return 0;
+ }
 diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
 index bbbf6b40d..9a3d3c780 100644
 --- a/tests/test-chat.cpp
@@ -2745,7 +2794,7 @@ index bbbf6b40d..9a3d3c780 100644
  }
  
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index 5a3202ce8..97e44eb30 100644
+index 9906e8048..f43a2df79 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
 @@ -691,6 +691,10 @@ static bool arch_supported(const llm_arch arch) {
@@ -2959,7 +3008,7 @@ index 1783c7ddf..115993c82 100644
          case PROJECTOR_TYPE_LDPV2:
 diff --git a/tools/mtmd/models/inkling.cpp b/tools/mtmd/models/inkling.cpp
 new file mode 100644
-index 000000000..5f9b4bd16
+index 000000000..c04a8c989
 --- /dev/null
 +++ b/tools/mtmd/models/inkling.cpp
 @@ -0,0 +1,105 @@
@@ -3386,5 +3435,5 @@ index 00ecadcf4..c1dfced1b 100644
                      // other models, we only need the total number of tokens
                      image_tokens->nx = n_tokens;
 -- 
-2.55.0
+2.54.0 (Apple Git-157)
 

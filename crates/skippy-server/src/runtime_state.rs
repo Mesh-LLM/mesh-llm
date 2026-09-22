@@ -194,6 +194,10 @@ impl RuntimeState {
         self.model.input_activation_boundary()
     }
 
+    pub fn output_activation_vocabulary(&self) -> Option<ActivationBoundaryDesc> {
+        self.model.output_activation_vocabulary()
+    }
+
     pub fn output_activation_boundary(&self) -> Option<ActivationBoundaryDesc> {
         self.model.output_activation_boundary()
     }

@@ -260,6 +260,7 @@ pub(super) fn emit_upstream_reply_write_span(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn emit_binary_message_received(
+    agreement: Option<&skippy_protocol::binary::ActivationAgreement>,
     telemetry: &Telemetry,
     config: &StageConfig,
     session_id: u64,
@@ -295,12 +296,28 @@ pub(super) fn emit_binary_message_received(
     );
     attrs.insert(
         "llama_stage.message_wire_bytes".to_string(),
-        json!(message.estimated_wire_bytes()),
+        json!(message.wire_bytes(agreement).ok()),
     );
     attrs.insert(
         "skippy.activation_bytes".to_string(),
         json!(message.activation.len()),
     );
+    if let Some(agreement) = agreement
+        && !message.activation.is_empty()
+    {
+        attrs.insert(
+            "skippy.activation_wire_format".into(),
+            json!("profile-reference"),
+        );
+        attrs.insert(
+            "skippy.agreement_generation".into(),
+            json!(agreement.generation),
+        );
+        attrs.insert(
+            "skippy.admitted_profiles".into(),
+            json!(agreement.profiles.iter().map(|p| p.id).collect::<Vec<_>>()),
+        );
+    }
     telemetry.emit_debug_span("stage.binary_recv", attrs, start_unix_nanos, end_unix_nanos);
 }
 

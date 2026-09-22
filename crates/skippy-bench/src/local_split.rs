@@ -444,8 +444,15 @@ fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {
     }
     let _stage1 = ChildGuard::spawn(stage_command)?;
 
-    let mut stream = connect_ready(args.stage1_bind_addr, args.startup_timeout_secs)
-        .context("stage 1 binary server did not become ready")?;
+    let mut stream = connect_ready(
+        args.stage1_bind_addr,
+        args.startup_timeout_secs,
+        &config,
+        stage0
+            .output_activation_vocabulary()
+            .context("stage 0 output vocabulary absent")?,
+    )
+    .context("stage 1 binary server did not become ready")?;
     let request_id = 1;
     let session_id = 1;
     send_generation_config(&mut stream, request_id, session_id, 1)
@@ -718,8 +725,15 @@ fn run_binary_chain(args: LocalSplitChainBinaryArgs) -> Result<BinaryChainResult
     configure_child_logs(&mut stage1_command, args.child_logs);
     let _stage1 = ChildGuard::spawn(stage1_command)?;
 
-    let mut stream = connect_ready(args.stage1_bind_addr, args.startup_timeout_secs)
-        .context("stage 1 binary server did not become ready")?;
+    let mut stream = connect_ready(
+        args.stage1_bind_addr,
+        args.startup_timeout_secs,
+        &stage1_config,
+        stage0
+            .output_activation_vocabulary()
+            .context("stage 0 output vocabulary absent")?,
+    )
+    .context("stage 1 binary server did not become ready")?;
     let request_id = 2;
     let session_id = 2;
     send_generation_config(&mut stream, request_id, session_id, 1)
@@ -795,7 +809,7 @@ fn local_split_topology(
 }
 
 fn send_generation_config(
-    stream: &mut std::net::TcpStream,
+    stream: &mut skippy_protocol::binary::StageStream,
     request_id: u64,
     session_id: u64,
     prompt_token_count: usize,

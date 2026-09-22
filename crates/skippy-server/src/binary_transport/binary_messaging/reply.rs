@@ -1,5 +1,6 @@
 use crate::binary_transport::direct_return;
 use crate::binary_transport::direct_return::PredictionReturnSinks;
+use crate::binary_transport::stage_setup::StageStream as TcpStream;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
@@ -13,7 +14,6 @@ use skippy_protocol::binary::WireReplyKind;
 use skippy_protocol::binary::recv_reply;
 use skippy_protocol::binary::send_reply_message;
 use std::collections::BTreeMap;
-use std::net::TcpStream;
 use std::time::Duration;
 
 pub(super) fn drain_deferred_prefill_replies(

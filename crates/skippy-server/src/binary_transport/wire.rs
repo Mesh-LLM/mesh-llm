@@ -103,9 +103,9 @@ impl WireCondition {
         Duration::from_secs_f64(delay_ms.min(MAX_SIMULATED_DELAY_MS) / 1000.0)
     }
 
-    fn sleep_for(&self, message: &StageWireMessage) {
+    fn sleep_for(&self, bytes: usize) {
         thread::sleep(self.propagation_delay());
-        self.sleep_for_bandwidth(message);
+        self.sleep_for_bandwidth(bytes);
     }
 
     /// Serialization delay for `bytes` on this link. A near-zero `mbps` makes
@@ -131,8 +131,8 @@ impl WireCondition {
         Duration::from_secs_f64(millis.min(MAX_SIMULATED_DELAY_MS) / 1000.0)
     }
 
-    fn sleep_for_bandwidth(&self, message: &StageWireMessage) {
-        let delay = self.bandwidth_delay(message.estimated_wire_bytes());
+    fn sleep_for_bandwidth(&self, bytes: usize) {
+        let delay = self.bandwidth_delay(bytes);
         if !delay.is_zero() {
             thread::sleep(delay);
         }
@@ -190,20 +190,20 @@ fn next_uniform_sample() -> f64 {
 }
 
 pub(crate) fn write_stage_message_conditioned(
-    writer: impl io::Write,
+    writer: impl io::Write + skippy_protocol::binary::StageMessageContext,
     message: &StageWireMessage,
     condition: WireCondition,
 ) -> io::Result<()> {
-    condition.sleep_for(message);
+    condition.sleep_for(message.wire_bytes(writer.activation_agreement())?);
     write_stage_message(writer, message)
 }
 
 pub(crate) fn write_stage_message_after_propagation(
-    writer: impl io::Write,
+    writer: impl io::Write + skippy_protocol::binary::StageMessageContext,
     message: &StageWireMessage,
     condition: WireCondition,
 ) -> io::Result<()> {
-    condition.sleep_for_bandwidth(message);
+    condition.sleep_for_bandwidth(message.wire_bytes(writer.activation_agreement())?);
     write_stage_message(writer, message)
 }
 

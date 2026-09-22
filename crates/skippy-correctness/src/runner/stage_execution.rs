@@ -185,7 +185,7 @@ pub(in crate::runner) fn correctness_topology(
 }
 
 pub(in crate::runner) fn send_generation_config(
-    stream: &mut std::net::TcpStream,
+    stream: &mut skippy_protocol::binary::StageStream,
     request_id: u64,
     session_id: u64,
     prompt_token_count: usize,

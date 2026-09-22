@@ -194,6 +194,7 @@ fn prefill_transport_ewma_seeds_adaptive_ramp() {
     let config = prefix_cache_test_config();
     let pool = PersistentStageLanePool {
         config: config.clone(),
+        output_profile: crate::binary_transport::stage_setup::test_profile(&config),
         timeout_secs: 5,
         telemetry: Telemetry::new(None, 1, config, crate::telemetry::TelemetryLevel::Off),
         lanes: Mutex::new(Vec::new()),
@@ -228,6 +229,7 @@ fn prefill_calibration_uses_slowest_downstream_stage() {
     let config = prefix_cache_test_config();
     let pool = PersistentStageLanePool {
         config: config.clone(),
+        output_profile: crate::binary_transport::stage_setup::test_profile(&config),
         timeout_secs: 5,
         telemetry: Telemetry::new(None, 1, config, crate::telemetry::TelemetryLevel::Off),
         lanes: Mutex::new(Vec::new()),
@@ -307,17 +309,22 @@ fn persistent_lane_ready_handshake_times_out_for_silent_downstream() {
     let address = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || {
         let (_stream, _) = listener.accept().unwrap();
+        let _stream = skippy_protocol::binary::StageStream::new(_stream);
         std::thread::sleep(Duration::from_millis(200));
     });
-    let mut client = std::net::TcpStream::connect(address).unwrap();
+    let mut client = crate::binary_transport::stage_setup::StageStream::connect(address).unwrap();
 
-    let error = receive_persistent_lane_ready(&mut client, Duration::from_millis(25)).unwrap_err();
+    let error = skippy_protocol::binary::client_setup(
+        &mut client,
+        skippy_protocol::binary::ConnectionRole::PredictionReturn,
+        None,
+        None,
+        std::time::Instant::now() + Duration::from_millis(25),
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap_err();
 
-    assert!(
-        error
-            .to_string()
-            .contains("persistent downstream lane did not become ready")
-    );
+    assert!(error.to_string().contains("stage setup deadline expired"));
     server.join().unwrap();
 }
 
@@ -332,7 +339,7 @@ fn persistent_lane_steady_state_io_is_bounded() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || listener.accept().unwrap().0);
-    let client = std::net::TcpStream::connect(address).unwrap();
+    let client = crate::binary_transport::stage_setup::StageStream::connect(address).unwrap();
     let peer = server.join().unwrap();
 
     configure_persistent_lane_io_deadlines(&client).unwrap();
@@ -348,19 +355,24 @@ fn steady_state_ready_handshake_times_out_fast_for_silent_downstream() {
     let address = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || {
         let (_stream, _) = listener.accept().unwrap();
+        let _stream = skippy_protocol::binary::StageStream::new(_stream);
         std::thread::sleep(Duration::from_millis(200));
     });
-    let mut client = std::net::TcpStream::connect(address).unwrap();
+    let mut client = crate::binary_transport::stage_setup::StageStream::connect(address).unwrap();
 
     let start = std::time::Instant::now();
-    let error = receive_persistent_lane_ready(&mut client, Duration::from_millis(25)).unwrap_err();
+    let error = skippy_protocol::binary::client_setup(
+        &mut client,
+        skippy_protocol::binary::ConnectionRole::PredictionReturn,
+        None,
+        None,
+        std::time::Instant::now() + Duration::from_millis(25),
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap_err();
     let elapsed = start.elapsed();
 
-    assert!(
-        error
-            .to_string()
-            .contains("persistent downstream lane did not become ready")
-    );
+    assert!(error.to_string().contains("stage setup deadline expired"));
     assert!(
         elapsed < Duration::from_secs(1),
         "handshake read must fail within the supplied deadline, took {elapsed:?}"

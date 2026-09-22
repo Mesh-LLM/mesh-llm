@@ -269,7 +269,7 @@ fn connect_ready(addr: &str, timeout_secs: u64) -> Result<TcpStream> {
                 stream
                     .set_read_timeout(Some(Duration::from_millis(500)))
                     .ok();
-                match recv_ready_until_deadline(&mut stream, deadline) {
+                match skippy_protocol::binary::client_setup(&mut stream, skippy_protocol::binary::ConnectionRole::TokensAndControl, None, None, deadline, &AtomicBool::new(false)) {
                     Ok(()) => {
                         stream.set_read_timeout(None).ok();
                         return Ok(stream);
@@ -286,46 +286,7 @@ fn connect_ready(addr: &str, timeout_secs: u64) -> Result<TcpStream> {
     Err(last_error.unwrap_or_else(|| anyhow!("timed out")))
 }
 
-fn recv_ready_until_deadline(stream: &mut TcpStream, deadline: Instant) -> io::Result<()> {
-    let mut bytes = [0_u8; 4];
-    let mut offset = 0usize;
-    while offset < bytes.len() {
-        if Instant::now() >= deadline {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "timed out waiting for ready handshake",
-            ));
-        }
-        match stream.read(&mut bytes[offset..]) {
-            Ok(0) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "ready handshake stream closed",
-                ));
-            }
-            Ok(read) => offset += read,
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::Interrupted
-                        | io::ErrorKind::WouldBlock
-                        | io::ErrorKind::TimedOut
-                ) =>
-            {
-                thread::sleep(Duration::from_millis(20));
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    let magic = i32::from_le_bytes(bytes);
-    if magic != READY_MAGIC {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "stage ready magic mismatch",
-        ));
-    }
-    Ok(())
-}
+
 
 fn unix_millis() -> u128 {
     std::time::SystemTime::now()

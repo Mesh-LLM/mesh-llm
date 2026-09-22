@@ -1,7 +1,7 @@
+use skippy_protocol::binary::StageStream as TcpStream;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    net::TcpStream,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
@@ -13,7 +13,9 @@ use model_artifact::ModelIdentity;
 use model_ref::ModelRef;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use skippy_protocol::binary::{StageWireMessage, recv_ready, write_stage_message};
+use skippy_protocol::binary::{
+    ConnectionRole, StageWireMessage, client_setup, write_stage_message,
+};
 use skippy_protocol::{LoadMode, StageTopology, StageTopologyEntry};
 use skippy_runtime::write_gguf_from_parts;
 use skippy_topology::{
@@ -1001,23 +1003,40 @@ fn terminate_remote_stage(stage: &StageAssignment, pid: Option<u32>) -> Result<(
 }
 
 pub(super) fn connect_endpoint_ready(endpoint: &str, timeout_secs: u64) -> Result<TcpStream> {
+    use std::net::ToSocketAddrs;
     let endpoint = endpoint.strip_prefix("tcp://").unwrap_or(endpoint);
-    let attempts = timeout_secs.saturating_mul(2).max(1);
+    let addresses = endpoint.to_socket_addrs()?.collect::<Vec<_>>();
+    let deadline = std::time::Instant::now() + Duration::from_secs(timeout_secs);
+    let shutdown = std::sync::atomic::AtomicBool::new(false);
     let mut last_error = None;
-    for _ in 0..attempts {
-        match TcpStream::connect(endpoint) {
-            Ok(mut stream) => {
-                stream.set_nodelay(true).ok();
-                match recv_ready(&mut stream) {
-                    Ok(()) => return Ok(stream),
-                    Err(error) => {
-                        last_error = Some(anyhow!(error).context("ready handshake failed"))
+    while std::time::Instant::now() < deadline {
+        for address in &addresses {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match TcpStream::connect_timeout(address, remaining.min(Duration::from_secs(1))) {
+                Ok(mut stream) => {
+                    stream.set_nodelay(true)?;
+                    match client_setup(
+                        &mut stream,
+                        ConnectionRole::TokensAndControl,
+                        None,
+                        None,
+                        deadline,
+                        &shutdown,
+                    ) {
+                        Ok(()) => return Ok(stream),
+                        Err(error) => last_error = Some(error.context("stage setup failed")),
                     }
                 }
+                Err(error) => last_error = Some(anyhow!(error).context("connect failed")),
             }
-            Err(error) => last_error = Some(anyhow!(error).context("connect failed")),
         }
-        thread::sleep(Duration::from_millis(500));
+        thread::sleep(
+            Duration::from_millis(100)
+                .min(deadline.saturating_duration_since(std::time::Instant::now())),
+        );
     }
     Err(last_error.unwrap_or_else(|| anyhow!("timed out")))
 }

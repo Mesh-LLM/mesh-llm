@@ -127,13 +127,11 @@ deadline handling.
 ## Notes
 
 - `serve-binary` is the tuned binary stage-to-stage path.
-- `serve-binary` participates in the breaking generation-11 stage protocol.
-  Stage compatibility requires the complete `stage-generation-11` control,
-  status-list, strict-content-identity, stage-admission, and stale-window-discard
-  bundle. Older peers, including generation 7 peers, are rejected during split
-  planning rather than being mixed into a generation-11 topology. A manually
-  wired `serve-binary --downstream` chain has no generation handshake, so every
-  stage in that chain must be upgraded together.
+- `serve-binary` participates in the breaking generation-12 stage protocol.
+  Stage compatibility requires the complete `stage-generation-12` control,
+  status-list, strict-content-identity, stage-admission, stale-window-discard and
+  startup-profile bundle. Every manually wired connection also performs the
+  mandatory versioned role handshake. Upgrade both endpoints together.
 - `serve-binary` accepts upstream protocol connections concurrently. Model
   execution remains serialized by the per-process runtime lock, but readiness,
   abandoned, or broken connections do not monopolize the listener and block the
@@ -353,3 +351,37 @@ per-request lane checkout timing, and adds pool/lane lifecycle spans:
 - `stage.openai_downstream_pool_ready`
 - `stage.openai_downstream_lane_replaced`
 - `stage.openai_downstream_lane_replace_failed`
+
+## Startup agreements and graph diagnostics
+
+Generation 12 uses mandatory role/version setup on activation, token/control
+and prediction-return connections. Activation edges agree the realized boundary
+vocabulary before readiness; a middle stage establishes its outgoing edge before
+confirming upstream readiness. The OpenAI lane pool establishes its connections
+during startup. Reconnects install a fresh immutable agreement. Normal frames
+reference a profile and carry counts, optional presence, dynamic values and data.
+They do not repeat static tensor descriptors. Batching policy is unchanged;
+local native graph preparation is still permitted on an executable-cache miss.
+
+`stage.connection_setup_ready` records setup elapsed time and downstream
+agreement status. Debug `stage.binary_recv` telemetry records
+`skippy.activation_wire_format=profile-reference`, the agreement generation and
+actual message wire bytes. Native full descriptors remain an internal
+representation; `skippy.activation_bytes` describes that internal buffer, not
+wire overhead.
+
+Set `SKIPPY_GRAPH_TRACE=1` before process startup to emit `SKIPPY-GRAPH-STATS`
+on the first execution, every 256 calls and context teardown. These records
+contain per-context call/build/reuse/retained-restore totals and context/compute
+bytes. Build totals count allocation-retry rebuilds; context creation/reservation
+and unrelated training graphs are outside these execution counters. The same
+record includes thread-local memo hit/miss totals and retained key/selection
+payload capacities. Thread totals may span multiple contexts and must not be
+summed once per context. Payload accounting excludes hash buckets, allocator
+bookkeeping and other process allocations; it is not total RSS. Eight memo
+entries bound entry count, not bytes, and may outlive a model context.
+
+Benchmark reports should include startup time, process memory and these separate
+native/memo measures alongside throughput and full-run errors. Use matching
+candidate/base runtime artifacts and the same instrumentation setting on both
+arms; older throughput results do not validate this protocol.

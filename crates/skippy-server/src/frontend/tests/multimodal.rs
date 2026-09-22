@@ -525,9 +525,11 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
         stage0_config.clone(),
         crate::telemetry::TelemetryLevel::Off,
     );
-    let lane_pool = PersistentStageLanePool::new(&stage0_config, 1, 5, telemetry.clone())?
-        .context("create split smoke lane pool")?;
     let runtime = load_runtime(&stage0_config)?.context("load stage-0 smoke runtime")?;
+    let boundary = runtime.lock().unwrap().output_activation_vocabulary();
+    let lane_pool =
+        PersistentStageLanePool::new(&stage0_config, boundary, 1, 5, telemetry.clone())?
+            .context("create split smoke lane pool")?;
     let ctx_size = usize::try_from(stage0_config.ctx_size).unwrap_or(usize::MAX);
     let iteration_scheduler =
         IterationScheduler::new(runtime.clone(), &stage0_config, 1, true, telemetry.clone())?;

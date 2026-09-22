@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::binary_transport::stage_setup::StageStream as TcpStream;
 use crate::runtime_state::RuntimeState;
 use openai_frontend::FinishReason;
 use openai_frontend::OpenAiError;
@@ -12,9 +14,8 @@ use std::time::UNIX_EPOCH;
 #[cfg(test)]
 use anyhow::{Result, anyhow};
 #[cfg(test)]
-use skippy_protocol::binary::recv_ready;
 #[cfg(test)]
-use std::{net::TcpStream, time::Duration};
+use std::time::Duration;
 
 pub(super) fn trim_at_stop<'a>(text: &'a str, stop_values: &[&str]) -> &'a str {
     let first_stop = stop_values
@@ -126,7 +127,14 @@ pub(super) fn connect_endpoint_ready(endpoint: &str, timeout_secs: u64) -> Resul
         match TcpStream::connect(endpoint) {
             Ok(mut stream) => {
                 stream.set_nodelay(true).ok();
-                match recv_ready(&mut stream) {
+                match crate::binary_transport::stage_setup::client_setup(
+                    &mut stream,
+                    crate::binary_transport::stage_setup::ConnectionRole::TokensAndControl,
+                    None,
+                    None,
+                    std::time::Instant::now() + Duration::from_secs(timeout_secs.max(1)),
+                    &std::sync::atomic::AtomicBool::new(false),
+                ) {
                     Ok(()) => return Ok(stream),
                     Err(error) => {
                         last_error = Some(anyhow!(error).context("ready handshake failed"))

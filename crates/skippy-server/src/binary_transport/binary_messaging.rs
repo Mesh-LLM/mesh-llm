@@ -1,8 +1,9 @@
+use crate::binary_transport::stage_setup::StageStream as TcpStream;
 use std::{
     collections::BTreeMap,
     future::Future,
-    io::{self, Write},
-    net::{TcpListener, TcpStream},
+    io,
+    net::TcpListener,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -12,8 +13,7 @@ use std::{
 };
 
 use super::stage_execution::{
-    consume_optional_client_ready_hello, prepare_binary_stage_connection, take_ready_downstream,
-    warm_downstream_preconnect_enabled,
+    prepare_binary_stage_connection, take_ready_downstream, warm_downstream_preconnect_enabled,
 };
 use super::{
     direct_return::{PredictionReturnHub, PredictionReturnSinks},
@@ -33,7 +33,7 @@ use crate::{
 };
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::json;
-use skippy_protocol::binary::{WireMessageKind, read_stage_message_for_codec_policy, send_ready};
+use skippy_protocol::binary::{WireMessageKind, read_stage_message_for_codec_policy};
 use skippy_runtime::ActivationBoundaryDesc;
 
 pub(in crate::binary_transport) mod async_forwarder;
@@ -61,11 +61,11 @@ const EINVAL: i32 = 22;
 #[derive(Default)]
 struct ConnectionWorkerControl {
     shutting_down: AtomicBool,
-    sockets: Mutex<Vec<std::net::TcpStream>>,
+    sockets: Mutex<Vec<crate::binary_transport::stage_setup::StageStream>>,
 }
 
 impl ConnectionWorkerControl {
-    fn track(&self, stream: &std::net::TcpStream) -> io::Result<()> {
+    fn track(&self, stream: &crate::binary_transport::stage_setup::StageStream) -> io::Result<()> {
         let tracked = stream.try_clone()?;
         let mut sockets = self
             .sockets
@@ -303,19 +303,26 @@ fn run_binary_stage(
         None,
     )?
     .context("binary stage server requires model_path")?;
-    let (input_boundary, output_boundary) = {
+    let (input_boundary, output_boundary, output_vocabulary) = {
         let runtime = runtime
             .lock()
             .map_err(|_| anyhow!("runtime lock poisoned"))?;
         (
             runtime.input_activation_boundary(),
             runtime.output_activation_boundary(),
+            runtime.output_activation_vocabulary(),
         )
     };
     let input_activation_width =
         activation_width_from_graph("input", input_boundary, config.layer_start > 0)?;
     let output_activation_width =
         activation_width_from_graph("output", output_boundary, config.downstream.is_some())?;
+    let input_profile = input_boundary
+        .map(|b| super::stage_setup::output_profile(&config, b))
+        .transpose()?;
+    let output_profile = output_vocabulary
+        .map(|b| super::stage_setup::output_profile(&config, b))
+        .transpose()?;
     if max_inflight > 0 {
         let timer = Instant::now();
         let sessions = runtime
@@ -469,7 +476,7 @@ fn run_binary_stage(
                 );
             }
             let (mut upstream, _) = match listener.accept() {
-                Ok(conn) => conn,
+                Ok((stream, address)) => (TcpStream::new(stream), address),
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(50));
                     continue;
@@ -482,6 +489,8 @@ fn run_binary_stage(
                 "binary accepted connection: stage_id={} peer={peer_addr:?}",
                 config.stage_id
             );
+            let input_profile = input_profile.clone();
+            let output_profile = output_profile.clone();
             let config = config.clone();
             let topology = topology.clone();
             let iteration_scheduler = iteration_scheduler.clone();
@@ -503,10 +512,55 @@ fn run_binary_stage(
                         "binary sending ready: stage_id={} peer={peer_addr:?}",
                         config.stage_id
                     );
-                    consume_optional_client_ready_hello(&mut upstream)
-                        .context("consume optional client ready hello")?;
-                    send_ready(&mut upstream).context("failed to send binary ready")?;
-                    upstream.flush().ok();
+                    let setup_started = Instant::now();
+                    let deadline = setup_started
+                        + Duration::from_secs(downstream_connect_timeout_secs.max(20));
+                    let mut downstream = None;
+                    let role = skippy_protocol::binary::server_setup_with_prepare(
+                        &mut upstream,
+                        &config,
+                        topology.as_ref(),
+                        input_profile.as_ref(),
+                        deadline,
+                        &worker_shutdown,
+                        |role, agreement| {
+                            if role != super::stage_setup::ConnectionRole::PredictionReturn
+                                && let Some(mut output) = output_profile.clone()
+                            {
+                                super::stage_setup::include_forwarded_optional(
+                                    &mut output,
+                                    agreement,
+                                )?;
+                                downstream = take_ready_downstream(
+                                    &config,
+                                    &output,
+                                    &warm_downstream,
+                                    deadline,
+                                    &worker_shutdown,
+                                )?;
+                                if let Some(stream) = downstream.as_ref() {
+                                    task_control
+                                        .track(stream)
+                                        .context("track downstream binary stage connection")?;
+                                }
+                            }
+                            Ok(())
+                        },
+                    )?;
+                    let mut attrs = lifecycle_attrs(&config);
+                    attrs.insert(
+                        "llama_stage.setup_elapsed_ms".into(),
+                        json!(setup_started.elapsed().as_secs_f64() * 1000.0),
+                    );
+                    attrs.insert(
+                        "llama_stage.protocol_generation".into(),
+                        json!(skippy_protocol::STAGE_PROTOCOL_GENERATION),
+                    );
+                    attrs.insert(
+                        "llama_stage.downstream_agreed".into(),
+                        json!(downstream.is_some()),
+                    );
+                    telemetry.emit("stage.connection_setup_ready", attrs);
                     tracing::debug!(
                         "binary sent ready: stage_id={} peer={peer_addr:?}",
                         config.stage_id
@@ -529,23 +583,17 @@ fn run_binary_stage(
                         }
                         Err(error) => return Err(error.into()),
                     };
+                    if (first_message.kind == WireMessageKind::PredictionReturnOpen)
+                        != (role == super::stage_setup::ConnectionRole::PredictionReturn)
+                    {
+                        bail!("first message does not match admitted connection role");
+                    }
                     if first_message.kind == WireMessageKind::PredictionReturnOpen {
                         if config.stage_index == 0 {
                             return prediction_returns
                                 .handle_return_connection(first_message, upstream);
                         }
                         return prediction_return_sinks.insert_opened_sink(first_message, upstream);
-                    }
-                    let downstream = take_ready_downstream(
-                        &config,
-                        &warm_downstream,
-                        downstream_connect_timeout_secs,
-                        &worker_shutdown,
-                    )?;
-                    if let Some(stream) = downstream.as_ref() {
-                        task_control
-                            .track(stream)
-                            .context("track downstream binary stage connection")?;
                     }
                     handle_binary_connection(
                         &config,
@@ -614,9 +662,10 @@ mod shutdown_tests {
     };
     use crate::test_activation::boundary_f32;
     use anyhow::anyhow;
+    use skippy_protocol::binary::StageStream as TcpStream;
     use std::{
         io::{Read, Write},
-        net::{TcpListener, TcpStream},
+        net::TcpListener,
         sync::{
             Arc,
             atomic::{AtomicBool, Ordering},
@@ -680,7 +729,8 @@ mod shutdown_tests {
         // arriving after several expired polls.
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-        let (mut server, _) = listener.accept().unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let mut server = skippy_protocol::binary::StageStream::new(server);
         let control = Arc::new(ConnectionWorkerControl::default());
         control.track(&server).unwrap();
         let task_control = control.clone();
@@ -726,6 +776,7 @@ mod shutdown_tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
+        let server = skippy_protocol::binary::StageStream::new(server);
         let control = Arc::new(ConnectionWorkerControl::default());
         control.track(&server).unwrap();
         control.shutdown();
@@ -741,7 +792,8 @@ mod shutdown_tests {
     fn shutdown_closes_and_joins_an_active_connection_worker() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-        let (mut server, _) = listener.accept().unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let mut server = skippy_protocol::binary::StageStream::new(server);
         let control = Arc::new(ConnectionWorkerControl::default());
         control.track(&server).unwrap();
         let task_control = control.clone();
@@ -770,7 +822,8 @@ mod shutdown_tests {
     fn accept_error_still_closes_and_joins_active_connection_worker() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-        let (mut server, _) = listener.accept().unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let mut server = skippy_protocol::binary::StageStream::new(server);
         let control = Arc::new(ConnectionWorkerControl::default());
         control.track(&server).unwrap();
         let task_control = control.clone();

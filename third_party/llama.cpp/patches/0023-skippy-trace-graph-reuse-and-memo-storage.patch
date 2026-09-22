@@ -1,0 +1,212 @@
+From da49fe2fa498109da0a3b423c8bcd761059441d7 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Wed, 23 Sep 2026 08:25:33 +1000
+Subject: [PATCH] feat(skippy): expose opt-in graph reuse diagnostics
+
+---
+ src/llama-context.cpp                | 30 ++++++++++++++++++++++++++
+ src/llama-context.h                  |  6 ++++++
+ src/skippy/execution_graph_cache.cpp |  1 +
+ src/skippy/selection_memo.cpp        | 32 ++++++++++++++++++++++++++++
+ src/skippy/selection_memo.h          | 10 +++++++++
+ 5 files changed, 79 insertions(+)
+
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 028d98b99..039f6308c 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -14,6 +14,7 @@
+ #include "llama.h"
+ #include "skippy/graph_build_inputs.h"
+ #include "skippy/activation.h"
++#include "skippy/selection_memo.h"
+ 
+ #include <cinttypes>
+ #include <cmath>
+@@ -111,6 +112,8 @@ llama_context::llama_context(
+     //     may need to be backend-dependent
+     LLAMA_LOG_INFO("%s: constructing llama_context\n", __func__);
+ 
++    const char * trace = std::getenv("SKIPPY_GRAPH_TRACE");
++    stage_graph_trace = trace && std::strcmp(trace, "1") == 0;
+     t_start_us = model.t_start_us;
+     t_load_us  = model.t_load_us;
+ 
+@@ -509,6 +512,7 @@ llama_context::llama_context(
+ llama_context::~llama_context() {
+     // wait for any pending asynchronous copies into the output buffers before they are freed
+     synchronize();
++    trace_stage_graph_stats("teardown");
+     clear_retained_stage_graph();
+ 
+     // when training, ggml_opt allocates extra buffers through the scheduler, so the sizes no longer match the expectation
+@@ -1432,7 +1436,9 @@ llm_graph_result * llama_context::process_ubatch(
+     auto gparams = graph_params(res, ubatch, mctx, gtype, graph_build_inputs);
+     bool reused = !graph_reuse_disable && graph_allocation_valid &&
+             gf_res_prev_active == res && res->can_reuse(gparams);
++    ++stage_graph_calls;
+     if (!reused && !graph_reuse_disable && restore_stage_graph(gparams)) {
++        ++stage_graph_restores;
+         res = get_gf_res_prev();
+         gf = res->get_gf();
+         reused = true;
+@@ -1449,6 +1455,7 @@ llm_graph_result * llama_context::process_ubatch(
+         }
+ 
+         n_reused++;
++        ++stage_graph_reuses;
+     } else {
+         if (!graph_reuse_disable) {
+             retain_stage_graph(gparams);
+@@ -1466,6 +1473,7 @@ llm_graph_result * llama_context::process_ubatch(
+ 
+         //const auto t_start_us = ggml_time_us();
+ 
++        ++stage_graph_builds;
+         gf = model.build_graph(gparams);
+ 
+         //LLAMA_LOG_INFO("graph build time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
+@@ -1488,6 +1496,10 @@ llm_graph_result * llama_context::process_ubatch(
+         }
+     }
+ 
++    if (stage_graph_trace && (stage_graph_calls == 1 || stage_graph_calls % 256 == 0)) {
++        trace_stage_graph_stats("execute");
++    }
++
+     // set the input data for the input tensors
+     {
+         //const auto t_start_us = ggml_time_us();
+@@ -3698,6 +3710,24 @@ void llama_context::perf_reset() {
+     n_reused    = 0;
+ }
+ 
++void llama_context::trace_stage_graph_stats(const char * phase) const {
++    if (!stage_graph_trace || model.hparams.no_alloc) return;
++    size_t context_bytes = 0, compute_bytes = 0;
++    for (const auto & entry : memory_breakdown()) {
++        context_bytes += entry.second.context;
++        compute_bytes += entry.second.compute;
++    }
++    const auto memo = skippy_get_selection_memo_stats();
++    LLAMA_LOG_INFO("SKIPPY-GRAPH-STATS phase=%s context=%p calls=%" PRIu64 " builds=%" PRIu64
++            " reuses=%" PRIu64 " retained_restores=%" PRIu64
++            " context_bytes=%zu compute_bytes=%zu memo_thread_hits=%" PRIu64
++            " memo_thread_misses=%" PRIu64 " memo_entries=%zu memo_key_capacity_bytes=%zu"
++            " memo_selection_payload_bytes=%zu\n",
++            phase, static_cast<const void *>(this), stage_graph_calls, stage_graph_builds,
++            stage_graph_reuses, stage_graph_restores, context_bytes, compute_bytes, memo.hits,
++            memo.misses, memo.entries, memo.key_capacity_bytes, memo.selection_payload_bytes);
++}
++
+ llama_memory_breakdown llama_context::memory_breakdown() const {
+     std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> ret;
+     for (const auto & [buft, size] : model.memory_breakdown()) {
+diff --git a/src/llama-context.h b/src/llama-context.h
+index 2c57f1413..a86243e63 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -463,6 +463,12 @@ private:
+ 
+     // env: LLAMA_GRAPH_REUSE_DISABLE
+     bool graph_reuse_disable = false;
++    bool stage_graph_trace = false;
++    uint64_t stage_graph_calls = 0;
++    uint64_t stage_graph_builds = 0;
++    uint64_t stage_graph_reuses = 0;
++    uint64_t stage_graph_restores = 0;
++    void trace_stage_graph_stats(const char * phase) const;
+ 
+     // perf
+     mutable int64_t t_start_us  = 0;
+diff --git a/src/skippy/execution_graph_cache.cpp b/src/skippy/execution_graph_cache.cpp
+index c309c07a8..43f7945a9 100644
+--- a/src/skippy/execution_graph_cache.cpp
++++ b/src/skippy/execution_graph_cache.cpp
+@@ -91,6 +91,7 @@ bool llama_context::allocate_stage_graph(const llm_graph_params & params, ggml_c
+     ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
+     auto retry_params = params;
+     retry_params.sched = sched.get();
++    ++stage_graph_builds;
+     graph = model.build_graph(retry_params);
+     if (graph == nullptr || !ggml_backend_sched_alloc_graph(sched.get(), graph)) {
+         return false;
+diff --git a/src/skippy/selection_memo.cpp b/src/skippy/selection_memo.cpp
+index 1b9051e3e..343b3d931 100644
+--- a/src/skippy/selection_memo.cpp
++++ b/src/skippy/selection_memo.cpp
+@@ -64,6 +64,8 @@ struct remembered_selection {
+ constexpr size_t remembered_selections = 8;
+ thread_local remembered_selection entries[remembered_selections];
+ thread_local size_t next_entry = 0;
++thread_local uint64_t memo_hits = 0;
++thread_local uint64_t memo_misses = 0;
+ 
+ }
+ 
+@@ -128,10 +130,12 @@ const skippy_stage_slice_selection * skippy_recall_stage_slice(const std::string
+     if (!key.empty()) {
+         for (const auto & entry : entries) {
+             if (entry.key == key) {
++                ++memo_hits;
+                 return &entry.selection;
+             }
+         }
+     }
++    ++memo_misses;
+     return nullptr;
+ }
+ 
+@@ -143,3 +147,31 @@ void skippy_remember_stage_slice(std::string key, const skippy_stage_slice_selec
+     entry.key = std::move(key);
+     next_entry = (next_entry + 1) % remembered_selections;
+ }
++
++skippy_selection_memo_stats skippy_get_selection_memo_stats() {
++    skippy_selection_memo_stats stats;
++    stats.hits = memo_hits;
++    stats.misses = memo_misses;
++    for (const auto & entry : entries) {
++        stats.entries += !entry.key.empty();
++        stats.key_capacity_bytes += entry.key.capacity();
++        const auto & s = entry.selection;
++        size_t & bytes = stats.selection_payload_bytes;
++        bytes += s.node_indices.capacity() * sizeof(int32_t);
++        bytes += (s.activation_imports.capacity() + s.activation_exports.capacity() + s.request_inputs.capacity()) * sizeof(const ggml_tensor *);
++        bytes += s.state_effects.capacity() * sizeof(skippy_state_effect);
++        bytes += s.graph_identity.capacity() + s.slice_identity.capacity() + s.source_snapshot_identity.capacity();
++        for (const auto * values : { &s.parameter_identities, &s.node_identities, &s.activation_import_identities,
++                &s.activation_export_identities, &s.request_input_identities, &s.state_effect_identities }) {
++            bytes += values->capacity() * sizeof(std::string);
++            for (const auto & value : *values) bytes += value.capacity();
++        }
++        for (const auto * values : { &s.source_value_identities, &s.source_value_metadata_identities }) {
++            bytes += values->size() * sizeof(decltype(s.source_value_identities)::value_type);
++            for (const auto & value : *values) bytes += value.second.capacity();
++        }
++        bytes += s.source_value_references.size() * sizeof(decltype(s.source_value_references)::value_type);
++        for (const auto & value : s.source_value_references) bytes += value.second.capacity() * sizeof(const ggml_tensor *);
++    }
++    return stats;
++}
+diff --git a/src/skippy/selection_memo.h b/src/skippy/selection_memo.h
+index 6af96e759..af5b1a4be 100644
+--- a/src/skippy/selection_memo.h
++++ b/src/skippy/selection_memo.h
+@@ -15,3 +15,13 @@ std::string skippy_stage_slice_memo_key(
+ 
+ const skippy_stage_slice_selection * skippy_recall_stage_slice(const std::string & key);
+ void skippy_remember_stage_slice(std::string key, const skippy_stage_slice_selection & selection);
++
++// Thread totals; payload accounting excludes container/allocator overhead.
++struct skippy_selection_memo_stats {
++    uint64_t hits = 0;
++    uint64_t misses = 0;
++    size_t entries = 0;
++    size_t key_capacity_bytes = 0;
++    size_t selection_payload_bytes = 0;
++};
++skippy_selection_memo_stats skippy_get_selection_memo_stats();
+-- 
+2.54.0 (Apple Git-157)
+

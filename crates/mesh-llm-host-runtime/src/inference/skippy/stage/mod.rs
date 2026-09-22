@@ -608,12 +608,22 @@ fn probe_binary_stage_ready(
         if cancelled.load(Ordering::Acquire) {
             return Err(anyhow!("binary stage readiness probe cancelled"));
         }
-        match std::net::TcpStream::connect_timeout(&bind_addr, PROBE_IO_TIMEOUT) {
+        match skippy_protocol::binary::StageStream::connect_timeout(
+            &bind_addr,
+            PROBE_IO_TIMEOUT.min(deadline.saturating_duration_since(std::time::Instant::now())),
+        ) {
             Ok(mut stream) => {
                 stream.set_nodelay(true).ok();
                 stream.set_read_timeout(Some(PROBE_IO_TIMEOUT)).ok();
                 stream.set_write_timeout(Some(PROBE_IO_TIMEOUT)).ok();
-                match skippy_protocol::binary::recv_ready(&mut stream) {
+                match skippy_protocol::binary::client_setup(
+                    &mut stream,
+                    skippy_protocol::binary::ConnectionRole::TokensAndControl,
+                    None,
+                    None,
+                    deadline.min(std::time::Instant::now() + PROBE_IO_TIMEOUT),
+                    cancelled,
+                ) {
                     Ok(()) => return Ok(()),
                     Err(error) => {
                         last_error =

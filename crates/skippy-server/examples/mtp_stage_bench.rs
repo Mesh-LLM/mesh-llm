@@ -1,6 +1,6 @@
+use skippy_protocol::binary::StageStream as TcpStream;
 use std::env;
 use std::io::Write;
-use std::net::TcpStream;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -10,8 +10,8 @@ use anyhow::{Context, Result, bail};
 use serde_json::json;
 use skippy_protocol::binary::{
     STAGE_ACTIVATION_FRAME_VERSION, StageActivationDesc, StageActivationPartDesc, StageStateHeader,
-    StageWireMessage, WireMessageKind, WireReplyKind, encode_activation_frame, recv_ready,
-    recv_reply, write_stage_message,
+    StageWireMessage, WireMessageKind, WireReplyKind, encode_activation_frame, recv_reply,
+    write_stage_message,
 };
 
 #[derive(Debug)]
@@ -20,13 +20,16 @@ struct Args {
     requests: usize,
     concurrency: usize,
     activation_width: usize,
+    source: skippy_protocol::StageConfig,
+    profile: skippy_protocol::binary::ActivationProfile,
 }
 
 fn parse_args() -> Result<Args> {
     let mut addr = None;
     let mut requests = 64;
     let mut concurrency = 1;
-    let mut activation_width = 6144;
+    let mut source = None;
+    let mut profile = None;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         let value = args
@@ -36,17 +39,36 @@ fn parse_args() -> Result<Args> {
             "--addr" => addr = Some(value),
             "--requests" => requests = value.parse().context("parse --requests")?,
             "--concurrency" => concurrency = value.parse().context("parse --concurrency")?,
-            "--activation-width" => {
-                activation_width = value.parse().context("parse --activation-width")?
+            "--source-config" => {
+                source = Some(serde_json::from_slice::<skippy_protocol::StageConfig>(
+                    &std::fs::read(value)?,
+                )?)
+            }
+            "--output-profile" => {
+                profile = Some(serde_json::from_slice::<
+                    skippy_protocol::binary::ActivationProfile,
+                >(&std::fs::read(value)?)?)
             }
             _ => bail!("unknown argument {arg}"),
         }
     }
+    let source = source.context("--source-config is required")?;
+    let profile = profile.context("--output-profile must contain the realized output contract")?;
+    let part = profile.parts.first().context("empty output profile")?;
+    let skippy_protocol::binary::ActivationDimension::Fixed(width) = part.dimensions[0] else {
+        bail!("benchmark requires a fixed row width");
+    };
+    if profile.parts.len() != 1 || part.ggml_type != 0 || part.rank != 2 || part.token_axis != 1 {
+        bail!("benchmark requires a single F32 row profile");
+    }
+    let activation_width = usize::try_from(width)?;
     Ok(Args {
         addr: addr.context("--addr is required")?,
         requests,
         concurrency: concurrency.max(1),
         activation_width,
+        source,
+        profile,
     })
 }
 
@@ -57,13 +79,14 @@ fn message(
     pos_start: i32,
     token_ids: Vec<i32>,
     activation_width: usize,
+    profile: &skippy_protocol::binary::ActivationProfile,
 ) -> Result<StageWireMessage> {
     let mut state = StageStateHeader::new(kind);
     state.seq_id = 0;
     state.prompt_token_count = 1;
     state.decode_step = 0;
     state.current_token = token_ids.first().copied().unwrap_or(1);
-    state.source_stage_index = 0;
+    state.source_stage_index = profile.producer_stage_index;
     let token_count = i32::try_from(token_ids.len()).context("token count exceeds i32")?;
     let f32_payload = vec![
         0;
@@ -83,15 +106,15 @@ fn message(
             state.activation_codec,
             &StageActivationDesc {
                 version: STAGE_ACTIVATION_FRAME_VERSION,
-                producer_stage_index: 0,
-                layer_start: 0,
-                layer_end: 1,
+                producer_stage_index: profile.producer_stage_index,
+                layer_start: profile.layer_start,
+                layer_end: profile.layer_end,
                 token_count: u32::try_from(token_count).context("negative token count")?,
                 sequence_count: 1,
                 payload_bytes: f32_payload.len() as u64,
-                frontier_identity: [9; 32],
+                frontier_identity: profile.frontier_identity,
                 parts: vec![StageActivationPartDesc {
-                    identity: [1; 32],
+                    identity: profile.parts[0].identity,
                     ggml_type: 0,
                     rank: 2,
                     token_axis: 1,
@@ -121,14 +144,28 @@ fn message(
     })
 }
 
-fn run_request(addr: &str, index: usize, activation_width: usize) -> Result<serde_json::Value> {
+fn run_request(
+    addr: &str,
+    index: usize,
+    activation_width: usize,
+    source: &skippy_protocol::StageConfig,
+    profile: &skippy_protocol::binary::ActivationProfile,
+) -> Result<serde_json::Value> {
     let started = Instant::now();
     let mut stream = TcpStream::connect(addr).with_context(|| format!("connect {addr}"))?;
     stream.set_nodelay(true).ok();
     stream
         .set_read_timeout(Some(Duration::from_secs(300)))
         .context("set read timeout")?;
-    recv_ready(&mut stream).context("receive stage ready")?;
+    skippy_protocol::binary::client_setup(
+        &mut stream,
+        skippy_protocol::binary::ConnectionRole::Activation,
+        Some(source),
+        Some(profile.clone()),
+        started + Duration::from_secs(300),
+        &std::sync::atomic::AtomicBool::new(false),
+    )?;
+    stream.set_read_timeout(Some(Duration::from_secs(300)))?;
     let request_id = u64::try_from(index).unwrap_or(u64::MAX).saturating_add(1);
     let session_id = request_id;
     let decode = message(
@@ -138,6 +175,7 @@ fn run_request(addr: &str, index: usize, activation_width: usize) -> Result<serd
         0,
         vec![1],
         activation_width,
+        profile,
     )?;
     write_stage_message(&mut stream, &decode).context("write native-MTP decode")?;
     stream.flush().ok();
@@ -160,6 +198,7 @@ fn run_request(addr: &str, index: usize, activation_width: usize) -> Result<serd
             1,
             vec![decode_reply.predicted, draft_token],
             activation_width,
+            profile,
         )?;
         verify.state.seq_id = 1;
         write_stage_message(&mut stream, &verify).context("write native-MTP verify")?;
@@ -177,6 +216,7 @@ fn run_request(addr: &str, index: usize, activation_width: usize) -> Result<serd
             1,
             vec![0, 0],
             activation_width,
+            profile,
         )?;
         retire.tokens.clear();
         retire.activation.clear();
@@ -191,6 +231,7 @@ fn run_request(addr: &str, index: usize, activation_width: usize) -> Result<serd
         0,
         Vec::new(),
         activation_width,
+        profile,
     )?;
     write_stage_message(&mut stream, &stop).context("write stage stop")?;
     stream.flush().ok();
@@ -224,10 +265,16 @@ fn main() -> Result<()> {
                     if index >= args.requests {
                         break;
                     }
-                    let result = run_request(&args.addr, index, args.activation_width)
-                        .unwrap_or_else(
-                            |error| json!({"request_id": index + 1, "error": format!("{error:#}")}),
-                        );
+                    let result = run_request(
+                        &args.addr,
+                        index,
+                        args.activation_width,
+                        &args.source,
+                        &args.profile,
+                    )
+                    .unwrap_or_else(
+                        |error| json!({"request_id": index + 1, "error": format!("{error:#}")}),
+                    );
                     results.lock().expect("result lock poisoned").push(result);
                 }
             })

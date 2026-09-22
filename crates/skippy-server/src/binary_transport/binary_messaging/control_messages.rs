@@ -15,6 +15,7 @@ use crate::binary_transport::restore_prefill_decode::handle_binary_restore_prefi
 use crate::binary_transport::stage_execution::{
     binary_message_attrs, elapsed_ms, runtime_sampling_config, stage_mask, token_sideband_or_fill,
 };
+use crate::binary_transport::stage_setup::StageStream as TcpStream;
 use crate::binary_transport::write_stage_message_conditioned;
 use crate::frontend::iteration_scheduler::IterationScheduler;
 use crate::kv_integration::KvStageIntegration;
@@ -27,7 +28,6 @@ use skippy_protocol::binary::{
 };
 use skippy_protocol::{StageConfig, StageTopology};
 use std::collections::BTreeMap;
-use std::net::TcpStream;
 use std::sync::Arc;
 use std::time::Instant;
 

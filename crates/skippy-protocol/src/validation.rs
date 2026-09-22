@@ -6,13 +6,13 @@ pub const STAGE_ALPN_V2: &[u8] = b"skippy-stage/2";
 pub const STAGE_SUBPROTOCOL_NAME: &str = "skippy-stage";
 pub const STAGE_SUBPROTOCOL_MAJOR: u32 = 2;
 pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL: &str = "stage-control";
-pub const STAGE_PROTOCOL_GENERATION: u32 = 11;
+pub const STAGE_PROTOCOL_GENERATION: u32 = 12;
 /// Generation-scoped stage capability. A peer can advertise `stage-control`
 /// while still rejecting current-generation frames, so split planning gates on
 /// this exact token before sending current-generation control requests.
-pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V11: &str = "stage-generation-11";
+pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V12: &str = "stage-generation-12";
 pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_GENERATION: &str =
-    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V11;
+    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V12;
 pub const STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER: &str = "artifact-transfer";
 pub const STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST: &str = "status-list";
 pub const STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1: &str = "local-gguf-content-id-v1";
@@ -119,23 +119,23 @@ impl std::fmt::Display for StageFrameError {
             StageFrameError::MissingStageAdmissionDescriptor => {
                 write!(
                     f,
-                    "generation 11 stage load/status requires an admission descriptor"
+                    "generation 12 stage load/status requires an admission descriptor"
                 )
             }
             StageFrameError::MissingLoadClaimHashes => {
                 write!(
                     f,
-                    "generation 11 stage load requires participant and topology hashes"
+                    "generation 12 stage load requires participant and topology hashes"
                 )
             }
             StageFrameError::InvalidActivationCodec { got } => {
-                write!(f, "unsupported generation-11 activation codec {got}")
+                write!(f, "unsupported generation-12 activation codec {got}")
             }
             StageFrameError::InvalidActivationCodecPolicy { got } => {
-                write!(f, "unsupported generation-11 activation codec policy {got}")
+                write!(f, "unsupported generation-12 activation codec policy {got}")
             }
             StageFrameError::InvalidTopologyStages(reason) => {
-                write!(f, "invalid generation-11 topology stage list: {reason}")
+                write!(f, "invalid generation-12 topology stage list: {reason}")
             }
             StageFrameError::InvalidStageAdmissionDescriptor(reason) => {
                 write!(f, "invalid stage admission descriptor: {reason}")

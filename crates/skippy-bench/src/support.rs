@@ -1,5 +1,6 @@
+use skippy_protocol::binary::StageStream as TcpStream;
 use std::{
-    net::{SocketAddr, TcpStream},
+    net::SocketAddr,
     path::{Path, PathBuf},
     process::{Child, Command},
     thread,
@@ -8,7 +9,9 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 use skippy_protocol::binary::{
-    StageActivationDesc, StageActivationPartDesc, encode_activation_frame, recv_ready,
+    ActivationAgreement, ActivationDimension, ActivationPartProfile, ActivationProfile,
+    ConnectionRole, StageActivationDesc, StageActivationPartDesc, client_setup,
+    encode_activation_frame,
 };
 
 pub struct ChildGuard {
@@ -60,23 +63,96 @@ pub fn ensure_release_skippy_server_bin(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn connect_ready(addr: SocketAddr, timeout_secs: u64) -> Result<TcpStream> {
-    let attempts = timeout_secs.saturating_mul(2).max(1);
-    let mut last_error = None;
-    for _ in 0..attempts {
-        match TcpStream::connect(addr) {
-            Ok(mut stream) => {
-                stream.set_nodelay(true).ok();
-                match recv_ready(&mut stream) {
-                    Ok(()) => return Ok(stream),
-                    Err(error) => {
-                        last_error = Some(anyhow!(error).context("ready handshake failed"))
+pub fn connect_ready(
+    addr: SocketAddr,
+    timeout_secs: u64,
+    receiver: &serde_json::Value,
+    boundary: skippy_runtime::ActivationBoundaryDesc,
+) -> Result<TcpStream> {
+    let receiver: skippy_protocol::StageConfig = serde_json::from_value(receiver.clone())?;
+    let mut source = receiver.clone();
+    source.stage_index = receiver
+        .stage_index
+        .checked_sub(1)
+        .context("activation driver needs a downstream stage")?;
+    source.stage_id = receiver
+        .upstream
+        .as_ref()
+        .context("driver upstream identity absent")?
+        .stage_id
+        .clone();
+    source.layer_start = 0;
+    source.layer_end = receiver.layer_start;
+    source.downstream = Some(skippy_protocol::PeerConfig {
+        stage_id: receiver.stage_id,
+        stage_index: receiver.stage_index,
+        endpoint: addr.to_string(),
+    });
+    let profile = ActivationProfile {
+        id: 1,
+        producer_stage_index: source.stage_index as i32,
+        layer_start: 0,
+        layer_end: source.layer_end as i32,
+        frontier_identity: boundary.frontier_identity,
+        max_tokens: i32::MAX as u32,
+        max_sequences: u32::MAX,
+        parts: boundary
+            .parts()?
+            .iter()
+            .map(|p| ActivationPartProfile {
+                identity: p.identity,
+                ggml_type: p.ggml_type,
+                rank: p.rank,
+                token_axis: p.token_axis as u32,
+                optional: p.flags & skippy_protocol::binary::STAGE_ACTIVATION_PART_OPTIONAL != 0,
+                dimensions: std::array::from_fn(|axis| {
+                    if axis == p.token_axis as usize {
+                        ActivationDimension::Tokens
+                    } else if axis >= p.rank as usize {
+                        ActivationDimension::Fixed(1)
+                    } else if p.dimensions[axis] > 0 {
+                        ActivationDimension::Fixed(p.dimensions[axis] as u64)
+                    } else {
+                        ActivationDimension::Dynamic {
+                            min: 1,
+                            max: skippy_protocol::binary::MAX_STAGE_DECODED_ACTIVATION_BYTES as u64,
+                        }
                     }
+                }),
+            })
+            .collect(),
+    };
+    ActivationAgreement {
+        generation: [1; 16],
+        profiles: vec![profile.clone()],
+    }
+    .validate()?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(timeout_secs);
+    let shutdown = std::sync::atomic::AtomicBool::new(false);
+    let mut last_error = None;
+    while std::time::Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        match TcpStream::connect_timeout(&addr, remaining.min(Duration::from_secs(1))) {
+            Ok(mut stream) => {
+                stream.set_nodelay(true)?;
+                match client_setup(
+                    &mut stream,
+                    ConnectionRole::Activation,
+                    Some(&source),
+                    Some(profile.clone()),
+                    deadline,
+                    &shutdown,
+                ) {
+                    Ok(()) => return Ok(stream),
+                    Err(error) => last_error = Some(error.context("activation setup failed")),
                 }
             }
             Err(error) => last_error = Some(anyhow!(error).context("connect failed")),
         }
-        thread::sleep(Duration::from_millis(500));
+        thread::sleep(
+            Duration::from_millis(100)
+                .min(deadline.saturating_duration_since(std::time::Instant::now())),
+        );
     }
     Err(last_error.unwrap_or_else(|| anyhow!("timed out")))
 }
