@@ -651,6 +651,7 @@ fn make_test_peer(
         local_gguf_content_id_supported: false,
         owner_summary: crate::crypto::OwnershipSummary::default(),
         advertised_model_throughput: vec![],
+        #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
         cache_affinity: None,
 

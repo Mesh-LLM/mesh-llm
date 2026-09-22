@@ -1786,7 +1786,7 @@ pub async fn route_http_endpoint_request(
 #[path = "transport_tests.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "payments"))]
 pub(crate) async fn test_paid_target_attempt(
     node: &mesh::Node,
     client: &mut ClientStream,
@@ -1814,7 +1814,7 @@ pub(crate) async fn test_paid_target_attempt(
     should_retry_uncommitted_remote_attempt(result)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "payments"))]
 pub(crate) async fn test_paid_multi_target(
     node: mesh::Node,
     client: ClientStream,

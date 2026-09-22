@@ -60,6 +60,7 @@ fn owner_fields_roundtrip_through_proto_announcement() {
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
         advertised_model_throughput: vec![],
+        #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
         cache_affinity: None,
         latency_ms: None,
@@ -199,6 +200,7 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
                 throughput_samples: 99,
             },
         ],
+        #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
         cache_affinity: Some(
             mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement {
@@ -405,6 +407,7 @@ fn inference_admission_state_roundtrips_through_proto_announcement() {
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
         advertised_model_throughput: vec![],
+        #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
         cache_affinity: None,
         latency_ms: None,
@@ -664,6 +667,7 @@ fn test_proto_round_trip_with_bandwidth_and_tflops() {
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
         advertised_model_throughput: vec![],
+        #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
         cache_affinity: None,
         latency_ms: None,
@@ -1078,6 +1082,7 @@ fn claimed_log_head_test_announcement(
         latency_observer_id: None,
         inference_admission_state: None,
         claimed_log_head,
+        #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
     }
 }
@@ -1191,6 +1196,7 @@ fn proto_announcement_without_claimed_log_head_decodes_as_absent() {
         latency_observer_id: None,
         inference_admission_state: None,
         claimed_log_head: None,
+        #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
     };
     // Encode to wire bytes, then decode back — this is what an old peer's
