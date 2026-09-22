@@ -143,7 +143,11 @@ impl PluginRpcBridge for Arc<FakeWalletPlugin> {
             match request.name.as_str() {
                 ops::OPEN => {
                     let open: OpenRequest = serde_json::from_value(request.arguments).unwrap();
-                    assert!(open.directory.ends_with("/lexe"), "{}", open.directory);
+                    assert!(
+                        std::path::Path::new(&open.directory).ends_with("lexe"),
+                        "{}",
+                        open.directory
+                    );
                     this.opens.fetch_add(1, Ordering::SeqCst);
                     this.open.store(true, Ordering::SeqCst);
                     tool_json(CallToolResult::structured(
