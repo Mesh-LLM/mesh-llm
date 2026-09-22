@@ -86,7 +86,11 @@ impl WalletPin {
         let path = Self::path(directory);
         let tmp = directory.join(format!("{}.{}.tmp", Self::FILE_NAME, std::process::id()));
         std::fs::write(&tmp, serde_json::to_vec_pretty(self)?)?;
-        std::fs::File::open(&tmp)?.sync_all()?;
+        // Windows requires write access for FlushFileBuffers (sync_all).
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&tmp)?
+            .sync_all()?;
         std::fs::rename(&tmp, &path)?;
         #[cfg(unix)]
         std::fs::File::open(directory)?.sync_all()?;
@@ -115,8 +119,15 @@ mod tests {
             network: "mainnet".into(),
         };
         pin.store(dir.path()).unwrap();
-        assert_eq!(WalletPin::load(dir.path()).unwrap(), Some(pin));
+        assert_eq!(WalletPin::load(dir.path()).unwrap(), Some(pin.clone()));
         assert!(has_persisted_wallet(dir.path()));
+        // Replacing an existing pin must also flush and rename successfully.
+        let replacement = WalletPin {
+            wallet_id: "replacement".into(),
+            ..pin
+        };
+        replacement.store(dir.path()).unwrap();
+        assert_eq!(WalletPin::load(dir.path()).unwrap(), Some(replacement));
         let leftovers: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
             .filter_map(|e| e.ok())
