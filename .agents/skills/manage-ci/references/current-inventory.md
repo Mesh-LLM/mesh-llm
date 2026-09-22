@@ -85,9 +85,10 @@ from a repository branch, and reads its existing llama.cpp pin. `upstream_sha`
 cannot be combined with this input. Keep the Actions workflow ref on `main`;
 selecting `mesh_ref` always runs a complete certify-only pass, without Goose,
 source repair, an independent upgrade-verification pass, or PR publication.
-The main controller, planner, handoff validation, and aggregation remain at the
-workflow revision; source build scripts and the battery run from a separate
-checkout of the selected SHA. The package binds both revisions, and workers
+The main controller, handoff validation, and aggregation remain at the workflow
+revision; the canonical planner, source build scripts, and battery run from a
+separate checkout of the selected SHA. The controller sorts only the scheduling
+matrix, leaving the source-owned canonical plan unchanged. The package binds both revisions, and workers
 reject any changed source identity. This is an operator-authorized trusted-code
 path on persistent lab machines, not isolation for untrusted PRs or fork code.
 Leaving `mesh_ref` empty preserves scheduled and upstream-upgrade behavior.
@@ -112,6 +113,19 @@ closure built by `just skippy-workload-oracles-build`. Static Metal resources
 are embedded; an unpackaged non-system dylib makes the handoff fail. SHA-256
 digests bind all handoff bytes to the candidate, main base, run/attempt, and
 pass identity.
+
+Before compilation, the controller runs the selected battery in cache-free
+`--dry-run --skip-build` mode against its own planner output. This checks the
+actual producer/consumer plan contract, including older planner order and
+source-relative manifest paths. Handoff schema 3 also carries a digest-bound,
+one-commit prepared llama.cpp bundle and preparation markers. Workers restore
+and verify that source against the selected pin and patch queue before lanes
+start; they cannot accidentally depend on a previous runner checkout.
+The agent supervisor terminates remaining process-group members after normal
+completion and waits for live members to stop before handing the workspace back.
+Repair snapshots first verify the workload producer against the dirty source,
+then bind its unchanged files to the identical committed candidate tree.
+Pinned and independent verification builds keep their original source identity.
 
 The family matrix is submitted in ascending estimated model bytes, with family
 name breaking ties. Balanced shard membership remains unchanged. This puts

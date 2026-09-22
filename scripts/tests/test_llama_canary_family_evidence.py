@@ -48,12 +48,19 @@ class FamilyEvidenceTests(unittest.TestCase):
                 info.size = len(content)
                 archive.addfile(info, io.BytesIO(content))
         self.build_closure()
-        self.identity = {'schema': 2, 'candidate': 'a'*40, 'base': 'a'*40,
+        for name in (E.LLAMA_BUNDLE, E.LLAMA_PROVENANCE):
+            (self.package / name).write_text('fixture')
+        restore_source = patch.object(E, 'restore_llama_source')
+        restore_source.start()
+        self.addCleanup(restore_source.stop)
+        self.identity = {'schema': 3, 'candidate': 'a'*40, 'base': 'a'*40,
                          'branch': 'llama-canary/repair-123-2-aaaaaaaaaa', 'pass_id': 'repair-1',
                          'platform': 'macos-arm64-metal', 'run_id': '123', 'run_attempt': '2',
                          'plan_sha256': E.sha(self.package / 'plan.json'),
                          'binaries_sha256': E.sha(self.package / 'binaries.tar'),
                          'workload_oracles_sha256': E.sha(self.package / E.WORKLOAD_ORACLES_TAR),
+                         'llama_bundle_sha256': E.sha(self.package / E.LLAMA_BUNDLE),
+                         'llama_provenance_sha256': E.sha(self.package / E.LLAMA_PROVENANCE),
                          'bundle_sha256': None, 'manifest_sha256': 'b'*64}
         self.save_identity()
         for family in ('dense', 'hybrid'):
@@ -320,6 +327,16 @@ class FamilyEvidenceTests(unittest.TestCase):
                     E.verify_package(self.package, self.digest)
                 self.identity[key] = original
 
+    def test_prepared_source_inputs_are_digest_bound(self):
+        for name in (E.LLAMA_BUNDLE, E.LLAMA_PROVENANCE):
+            with self.subTest(name=name):
+                path = self.package / name
+                original = path.read_bytes()
+                path.write_bytes(b'replaced')
+                with self.assertRaisesRegex(ValueError, 'digest mismatch'):
+                    E.verify_package(self.package, self.digest)
+                path.write_bytes(original)
+
     def test_tampered_package_is_rejected(self):
         (self.package / 'binaries.tar').write_bytes(b'wrong')
         with self.assertRaisesRegex(ValueError, 'digest mismatch'):
@@ -421,7 +438,7 @@ class FamilyEvidenceTests(unittest.TestCase):
                    CANARY_HARNESS_MODE='pinned-build', CANARY_PASS_ID='repair-1',
                    CANARY_PREVIOUS_PACKAGE='')
         with patch.dict(os.environ, env), patch.object(E, 'git', return_value='a'*40), \
-                patch.object(E.subprocess, 'run') as run:
+                patch.object(E, 'preflight_battery'), patch.object(E.subprocess, 'run') as run:
             E.build(SimpleNamespace())
             self.assertEqual(run.call_args.args[0], [str(ROOT / 'scripts/llama-canary-agent-repair.sh')])
             os.environ['CANARY_HARNESS_MODE'] = 'repair-build'
