@@ -41,6 +41,34 @@ fn web_ui_packaging_rejects_absolute_paths() {
     assert!(error.to_string().contains("absolute path"), "{error}");
 }
 
+/// `/var/lib/plugin-ui` is not `Path::is_absolute` on Windows, so a manifest
+/// carrying a rooted bundle path used to be accepted there and refused
+/// everywhere else. These are the shapes the rooted-path check must reject on
+/// Windows; on Unix `\x`, `C:\x` and `\\server\share` are legal single
+/// filenames, so the cases are Windows-only by construction.
+#[cfg(windows)]
+#[test]
+fn web_ui_packaging_rejects_windows_rooted_paths() {
+    for root_path in [
+        "/plugin-ui",
+        "\\plugin-ui",
+        "C:\\plugin-ui",
+        "\\\\server\\share\\plugin-ui",
+    ] {
+        let manifest = manifest_with_bundle(root_path);
+
+        let error = match PackagedPluginWebUi::try_from(&manifest) {
+            Ok(_) => panic!("rooted root should be rejected on Windows: {root_path}"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error.to_string().contains("absolute path"),
+            "{root_path}: {error}"
+        );
+    }
+}
+
 #[test]
 fn web_ui_packaging_rejects_traversal_paths() {
     let manifest = proto::PluginWebUiManifest {
