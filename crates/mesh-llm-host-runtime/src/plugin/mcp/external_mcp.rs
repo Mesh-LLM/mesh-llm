@@ -281,6 +281,7 @@ use rmcp::transport::streamable_http_server::{
 use rmcp::{RoleServer, ServerHandler};
 #[cfg(test)]
 use serde_json::json;
+#[cfg(unix)]
 #[cfg(test)]
 use std::path::PathBuf;
 
