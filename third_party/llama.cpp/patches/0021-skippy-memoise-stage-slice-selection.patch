@@ -1,8 +1,8 @@
-From 6ae152df2b1bdf16a5cd67c9a72e68113280a855 Mon Sep 17 00:00:00 2001
+From 0c921db21f0c4933135622a80bf4bc4f6e30bac1 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
-Date: Wed, 23 Sep 2026 06:46:50 +1000
-Subject: [PATCH] skippy: memoize stage selection with exact dependency
- metadata
+Date: Wed, 23 Sep 2026 07:00:42 +1000
+Subject: [PATCH] skippy: memoise stage slice selection with exact dependency
+ keys
 
 ---
  src/CMakeLists.txt                           |   1 +
@@ -10,9 +10,9 @@ Subject: [PATCH] skippy: memoize stage selection with exact dependency
  src/skippy/selection_memo.h                  |  17 +++
  src/skippy/stage_slice_plan.cpp              |  14 +-
  src/skippy/state_effects.cpp                 |   7 +-
- src/skippy/tests/selection_memo_regression.h | 116 +++++++++++++++
- src/skippy/tests/stage_slice_plan.cpp        |   8 +-
- 7 files changed, 305 insertions(+), 3 deletions(-)
+ src/skippy/tests/selection_memo_regression.h | 123 ++++++++++++++++
+ src/skippy/tests/stage_slice_plan.cpp        |   9 +-
+ 7 files changed, 313 insertions(+), 3 deletions(-)
  create mode 100644 src/skippy/selection_memo.cpp
  create mode 100644 src/skippy/selection_memo.h
  create mode 100644 src/skippy/tests/selection_memo_regression.h
@@ -260,10 +260,10 @@ index b0224819c..333b89eca 100644
      struct explicit_owner {
 diff --git a/src/skippy/tests/selection_memo_regression.h b/src/skippy/tests/selection_memo_regression.h
 new file mode 100644
-index 000000000..12a0f7c23
+index 000000000..49e5ca442
 --- /dev/null
 +++ b/src/skippy/tests/selection_memo_regression.h
-@@ -0,0 +1,116 @@
+@@ -0,0 +1,123 @@
 +#pragma once
 +
 +// Included after semantic_fixture by stage_slice_plan.cpp.
@@ -364,6 +364,13 @@ index 000000000..12a0f7c23
 +            std::fprintf(stderr, "memo %s warmup failed: %s\n", test.name, error.c_str());
 +            return 92;
 +        }
++        const auto key = skippy_stage_slice_memo_key(fixture.graph, fixture.boundaries,
++                fixture.effects, fixture.parameters, fixture.requests, 2, 0, 1, fixture.exit_1);
++        const auto * recalled = skippy_recall_stage_slice(key);
++        if (key.empty() || recalled == nullptr || !same_selection(warm, *recalled)) {
++            std::fprintf(stderr, "memo %s did not retain the warmed selection\n", test.name);
++            return 94;
++        }
 +        test.mutate(fixture);
 +        const bool cached_ok = select(cached, cached_error);
 +        bool fresh_ok = false;
@@ -381,10 +388,18 @@ index 000000000..12a0f7c23
 +    return 0;
 +}
 diff --git a/src/skippy/tests/stage_slice_plan.cpp b/src/skippy/tests/stage_slice_plan.cpp
-index 1f5a04c98..a8a68a8b4 100644
+index 1f5a04c98..bc25c428c 100644
 --- a/src/skippy/tests/stage_slice_plan.cpp
 +++ b/src/skippy/tests/stage_slice_plan.cpp
-@@ -13,6 +13,9 @@
+@@ -6,6 +6,7 @@
+ #include "../../../ggml/src/ggml-impl.h"
+ #include "skippy/runtime_support.h"
+ #include "skippy/stage_slice_plan.h"
++#include "skippy/selection_memo.h"
+ #include "skippy/state_effects.h"
+ 
+ #include <algorithm>
+@@ -13,6 +14,9 @@
  #include <cmath>
  #include <cstring>
  #include <memory>
@@ -394,7 +409,7 @@ index 1f5a04c98..a8a68a8b4 100644
  #include <string>
  #include <vector>
  
-@@ -1127,8 +1130,11 @@ static int check_auxiliary_graph_parameter_closure() {
+@@ -1127,8 +1131,11 @@ static int check_auxiliary_graph_parameter_closure() {
      return 0;
  }
  
