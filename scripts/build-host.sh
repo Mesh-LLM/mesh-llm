@@ -109,31 +109,20 @@ fi
 
 stamp_build_version
 
+# `payments` is the ledger + `wallet.v1` plugin adapter; `wallet-lexe` is the
+# built-in Lexe wallet served as `mesh-llm --plugin wallet-lexe` (like
+# blobstore). Neither adds a backend library to the host import surface.
+host_features="web-ui,dynamic-native-runtime,payments,wallet-lexe"
 cargo_args=(build --locked -p mesh-llm --bin mesh-llm --no-default-features \
-    --features "web-ui,dynamic-native-runtime,payments")
+    --features "$host_features")
 if [[ "$BUILD_PROFILE" == "release" ]]; then
     cargo_args=(build --release --locked -p mesh-llm --bin mesh-llm --no-default-features \
-        --features "web-ui,dynamic-native-runtime,payments")
+        --features "$host_features")
 fi
 (cd "$REPO_ROOT" && cargo "${cargo_args[@]}")
 
-# The wallet is a plugin process, never linked into the host. Build the shipped
-# implementation beside the host so the runtime auto-registers it (see
-# `bundled_wallet_plugin_spec`). Skip with MESH_LLM_SKIP_WALLET_PLUGIN=1.
-if [[ "${MESH_LLM_SKIP_WALLET_PLUGIN:-0}" != "1" ]]; then
-    wallet_args=(build --locked -p mesh-wallet-lexe --bin mesh-wallet-lexe)
-    if [[ "$BUILD_PROFILE" == "release" ]]; then
-        wallet_args=(build --release --locked -p mesh-wallet-lexe --bin mesh-wallet-lexe)
-    fi
-    (cd "$REPO_ROOT" && cargo "${wallet_args[@]}")
-else
-    echo "Skipping mesh-wallet-lexe plugin build because MESH_LLM_SKIP_WALLET_PLUGIN=1."
-fi
-
 if [[ "$BUILD_PROFILE" == "release" ]]; then
     echo "Mesh host: target/release/mesh-llm"
-    [[ -f "$REPO_ROOT/target/release/mesh-wallet-lexe" ]] && echo "Wallet plugin: target/release/mesh-wallet-lexe"
 else
     echo "Mesh host: target/debug/mesh-llm"
-    [[ -f "$REPO_ROOT/target/debug/mesh-wallet-lexe" ]] && echo "Wallet plugin: target/debug/mesh-wallet-lexe"
 fi

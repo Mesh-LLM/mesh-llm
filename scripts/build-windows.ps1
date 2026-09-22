@@ -1080,17 +1080,9 @@ if ($HostOnly) {
             $hostArgs += "--release"
             $hostOutputProfile = "release"
         }
-        $hostArgs += @("--locked", "-p", "mesh-llm", "--bin", "mesh-llm", "--no-default-features", "--features", "web-ui,dynamic-native-runtime,payments")
+        $hostArgs += @("--locked", "-p", "mesh-llm", "--bin", "mesh-llm", "--no-default-features", "--features", "web-ui,dynamic-native-runtime,payments,wallet-lexe")
         Invoke-NativeCommand "cargo" $hostArgs
         Write-Host "Mesh backend-neutral host: target\\$hostOutputProfile\\mesh-llm.exe"
-        if ($env:MESH_LLM_SKIP_WALLET_PLUGIN -ne "1") {
-            # The wallet is a plugin process beside the host, never linked into it.
-            $walletArgs = @("build")
-            if ($buildProfile -eq "release") { $walletArgs += "--release" }
-            $walletArgs += @("--locked", "-p", "mesh-wallet-lexe", "--bin", "mesh-wallet-lexe")
-            Invoke-NativeCommand "cargo" $walletArgs
-            Write-Host "Wallet plugin: target\\$hostOutputProfile\\mesh-wallet-lexe.exe"
-        }
     }
     return
 }
@@ -1272,7 +1264,7 @@ Invoke-InRepo {
 
     Write-Host "Building mesh-llm..."
     $env:LLAMA_STAGE_BUILD_DIR = $buildDir
-    $cargoFeatureArgs = @("--no-default-features", "--features", "web-ui,dynamic-native-runtime,payments")
+    $cargoFeatureArgs = @("--no-default-features", "--features", "web-ui,dynamic-native-runtime,payments,wallet-lexe")
     Set-BuildVersionStamp
     switch ($buildProfile) {
         "dev" {

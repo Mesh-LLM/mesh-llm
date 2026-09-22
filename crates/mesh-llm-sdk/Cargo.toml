@@ -25,9 +25,13 @@ serving = [
     "dep:serde",
     "dep:serde_json",
 ]
-# Opt-in Lightning wallet + paid inference on top of the serving path. Off by
-# default: an embedding consumer (e.g. Buzz) that enables `serving` alone stays
-# wallet-free and does not compile the lexe/lightning-invoice/bitcoin stack.
+# Opt-in paid inference on top of the serving path: ledger, gates and the
+# `wallet.v1` plugin adapter. Off by default: an embedding consumer (e.g. Buzz)
+# that enables `serving` alone stays payment-free and does not compile the
+# rusqlite/lightning-invoice/bitcoin stack. Enabling it still links no wallet
+# SDK; the built-in Lexe wallet is a separate host-runtime feature
+# (`wallet-lexe`) that only the shipped `mesh-llm` CLI enables. An SDK host with
+# `payments` needs an external `wallet.v1` plugin configured to actually pay.
 payments = ["serving", "mesh-llm-embedded-runtime/payments"]
 
 [lints]

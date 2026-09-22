@@ -3,10 +3,7 @@ use super::installed::{
     configured_disabled_installed_plugin_summary, configured_external_plugin_spec,
 };
 use super::schema_validation::strict_plugin_schema_availability;
-use super::{
-    BLOBSTORE_PLUGIN_ID, BUNDLED_WALLET_PLUGIN_BIN, BUNDLED_WALLET_PLUGIN_ENV,
-    BUNDLED_WALLET_PLUGIN_ID, PluginStartupOptions, PluginSummary,
-};
+use super::{BLOBSTORE_PLUGIN_ID, PluginStartupOptions, PluginSummary, WALLET_LEXE_PLUGIN_ID};
 use crate::{
     MeshRequirementRejectReason, MeshRequirements, NodeVersionBounds, ProtocolGenerationBounds,
     ReleaseAttestationRequirement,
@@ -293,58 +290,20 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
     let mut inactive = Vec::new();
     let mut names = BTreeMap::<String, ()>::new();
     let mut blobstore_enabled = true;
-    let mut bundled_wallet_enabled = true;
+    let mut wallet_lexe_enabled = true;
     for entry in &config.plugins {
         if names.insert(entry.name.clone(), ()).is_some() {
             bail!("Duplicate plugin entry '{}'", entry.name);
         }
         let enabled = entry.enabled.unwrap_or(true);
         if entry.name == BLOBSTORE_PLUGIN_ID {
-            if entry.command.is_some()
-                || !entry.args.is_empty()
-                || entry.url.is_some()
-                || !entry.startup.is_default()
-            {
-                bail!(
-                    "Plugin '{}' is served by mesh-llm itself; only `enabled` may be set",
-                    BLOBSTORE_PLUGIN_ID
-                );
-            }
+            ensure_builtin_entry_only_toggles_enabled(entry)?;
             blobstore_enabled = enabled;
             continue;
         }
-        if entry.name == BUNDLED_WALLET_PLUGIN_ID && entry.command.is_none() {
-            // Bundled wallet: `enabled` is the runtime on/off switch. An
-            // explicit `command` opts out of bundling and is handled as an
-            // ordinary external plugin below.
-            if entry.url.is_some() || !entry.args.is_empty() {
-                bail!(
-                    "Plugin '{}' is bundled with mesh-llm; only `enabled`, `startup` or an explicit `command` may be set",
-                    BUNDLED_WALLET_PLUGIN_ID
-                );
-            }
-            if !enabled {
-                bundled_wallet_enabled = false;
-                if let Some(summary) = configured_disabled_installed_plugin_summary(entry) {
-                    inactive.push(summary);
-                }
-                continue;
-            }
-            if let Some(spec) = bundled_wallet_plugin_spec(&entry.startup)? {
-                externals.push(spec);
-                bundled_wallet_enabled = false;
-                continue;
-            }
-            // Not bundled beside this binary: resolve as an installed plugin
-            // like any other, but never let a stanza the docs recommend turn
-            // a wallet-free build into a startup failure.
-            bundled_wallet_enabled = false;
-            let mut optional_entry = entry.clone();
-            optional_entry.startup.optional = true;
-            match configured_external_plugin_spec(&optional_entry)? {
-                ConfiguredExternalPlugin::Active(spec) => externals.push(spec),
-                ConfiguredExternalPlugin::Inactive(summary) => inactive.push(summary),
-            }
+        if entry.name == WALLET_LEXE_PLUGIN_ID {
+            ensure_builtin_entry_only_toggles_enabled(entry)?;
+            wallet_lexe_enabled = enabled;
             continue;
         }
         if !enabled {
@@ -362,13 +321,10 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
     append_installed_plugins(&mut externals, &mut inactive, &mut names);
 
     if blobstore_enabled {
-        externals.push(blobstore_plugin_spec()?);
+        externals.push(builtin_plugin_spec(BLOBSTORE_PLUGIN_ID)?);
     }
-    if bundled_wallet_enabled
-        && !names.contains_key(BUNDLED_WALLET_PLUGIN_ID)
-        && let Some(spec) = bundled_wallet_plugin_spec(&PluginStartupConfig::default())?
-    {
-        externals.push(spec);
+    if wallet_lexe_enabled && wallet_lexe_compiled_in() {
+        externals.push(builtin_plugin_spec(WALLET_LEXE_PLUGIN_ID)?);
     }
 
     Ok(ResolvedPlugins {
@@ -377,19 +333,62 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
     })
 }
 
-pub fn blobstore_plugin_spec() -> Result<ExternalPluginSpec> {
+/// Built-in plugins are served by this executable; the only thing an operator
+/// may change about them is whether they run.
+fn ensure_builtin_entry_only_toggles_enabled(entry: &PluginConfigEntry) -> Result<()> {
+    if entry.command.is_some()
+        || !entry.args.is_empty()
+        || entry.url.is_some()
+        || !entry.startup.is_default()
+    {
+        bail!(
+            "Plugin '{}' is served by mesh-llm itself; only `enabled` may be set",
+            entry.name
+        );
+    }
+    Ok(())
+}
+
+/// Whether this build carries the built-in Lexe wallet. A `[[plugin]]
+/// name = "wallet-lexe"` stanza stays valid in a build without it (the
+/// documented off switch must not break a wallet-free SDK host); the plugin is
+/// simply not registered.
+///
+/// Under test the answer is forced per thread and defaults to "absent", so the
+/// many resolver tests that count plugins are independent of the cargo
+/// features the test binary happened to be built with.
+#[cfg(not(test))]
+fn wallet_lexe_compiled_in() -> bool {
+    cfg!(feature = "wallet-lexe")
+}
+
+#[cfg(test)]
+fn wallet_lexe_compiled_in() -> bool {
+    TEST_WALLET_LEXE_COMPILED_IN.with(|slot| slot.borrow().unwrap_or(false))
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static TEST_WALLET_LEXE_COMPILED_IN: std::cell::RefCell<Option<bool>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Launch spec for a plugin served by this executable: the host re-executes
+/// itself with `--plugin <name>`. Built-ins are optional so a failure to start
+/// one degrades that capability instead of blocking node startup.
+pub fn builtin_plugin_spec(name: &str) -> Result<ExternalPluginSpec> {
     let command = std::env::current_exe()
         .context("Cannot determine mesh-llm executable path")?
         .display()
         .to_string();
     Ok(ExternalPluginSpec {
-        name: BLOBSTORE_PLUGIN_ID.to_string(),
+        name: name.to_string(),
         command,
         args: vec![
             "--log-format".into(),
             "json".into(),
             "--plugin".into(),
-            BLOBSTORE_PLUGIN_ID.into(),
+            name.into(),
         ],
         url: None,
         env: BTreeMap::new(),
@@ -400,69 +399,6 @@ pub fn blobstore_plugin_spec() -> Result<ExternalPluginSpec> {
         web_ui_enabled: None,
         installed_metadata: None,
     })
-}
-
-/// The wallet plugin shipped beside the host binary, if present.
-///
-/// The host never links a wallet SDK; paid inference needs a `wallet.v1`
-/// provider process. When `mesh-wallet-lexe` (or `.exe`) sits next to
-/// `mesh-llm` it is registered as an optional plugin so a wallet-free install
-/// simply has no provider rather than a startup error. It starts with the host
-/// (capability resolution needs its manifest) but stays idle: the wallet is
-/// only opened or provisioned on an explicit `wallet_open`. Tests never see it
-/// unless the thread-local override points at one.
-pub fn bundled_wallet_plugin_spec(
-    startup: &PluginStartupConfig,
-) -> Result<Option<ExternalPluginSpec>> {
-    let Some(command) = bundled_wallet_plugin_path() else {
-        return Ok(None);
-    };
-    let startup = PluginStartupOptions {
-        optional: true,
-        ..PluginStartupOptions::from_config(startup)
-    };
-    Ok(Some(ExternalPluginSpec {
-        name: BUNDLED_WALLET_PLUGIN_ID.to_string(),
-        command: command.display().to_string(),
-        args: Vec::new(),
-        url: None,
-        env: BTreeMap::new(),
-        startup,
-        web_ui_enabled: None,
-        installed_metadata: None,
-    }))
-}
-
-fn bundled_wallet_plugin_path() -> Option<std::path::PathBuf> {
-    #[cfg(test)]
-    {
-        // Tests inject the path per thread so parallel tests never observe
-        // each other's bundled wallet; the process-wide env var and the
-        // executable-relative lookup are deliberately not consulted.
-        return TEST_BUNDLED_WALLET_PLUGIN.with(|slot| slot.borrow().clone());
-    }
-    #[allow(unreachable_code)]
-    {
-        if let Some(explicit) = std::env::var_os(BUNDLED_WALLET_PLUGIN_ENV) {
-            let path = std::path::PathBuf::from(explicit);
-            return path.is_file().then_some(path);
-        }
-        let exe = std::env::current_exe().ok()?;
-        let dir = exe.parent()?;
-        let file = if cfg!(windows) {
-            format!("{BUNDLED_WALLET_PLUGIN_BIN}.exe")
-        } else {
-            BUNDLED_WALLET_PLUGIN_BIN.to_string()
-        };
-        let path = dir.join(file);
-        path.is_file().then_some(path)
-    }
-}
-
-#[cfg(test)]
-thread_local! {
-    pub(super) static TEST_BUNDLED_WALLET_PLUGIN: std::cell::RefCell<Option<std::path::PathBuf>> =
-        const { std::cell::RefCell::new(None) };
 }
 
 pub fn bundled_cli_plugin_spec(_name: &str) -> Result<Option<ExternalPluginSpec>> {
