@@ -316,6 +316,18 @@ pub struct StageConfig {
     pub downstream: Option<PeerConfig>,
 }
 
+impl StageConfig {
+    /// Whether this stage's plan makes it emit an activation frame for a
+    /// downstream stage.
+    ///
+    /// Mirrors `skippy_runtime::RuntimeConfig::is_terminal_stage` and the native
+    /// `skippy_emits_activation_frame`: an unsplit full-model load carries no
+    /// resident tensor plan, and a terminal stage has no export frontier.
+    pub fn emits_activation_frame(&self) -> bool {
+        !self.resident_tensor_names.is_empty() && !self.activation_export_identities.is_empty()
+    }
+}
+
 fn deserialize_resident_tensor_names<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: Deserializer<'de>,

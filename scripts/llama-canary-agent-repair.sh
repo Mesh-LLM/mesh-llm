@@ -139,8 +139,12 @@ rm -rf /tmp/llama-old-pin /tmp/llama-repair /tmp/llama-repair-* 2>/dev/null || t
 run_for() {
   local label="$1" seconds="$2"
   shift 2
+  local cleanup=()
+  if [[ "$label" == "agent developer task" ]]; then
+    cleanup+=(--cleanup-on-exit)
+  fi
   python3 scripts/run-command-with-timeout.py \
-    --seconds "$seconds" --label "$label" -- "$@"
+    --seconds "$seconds" --label "$label" "${cleanup[@]}" -- "$@"
 }
 
 remaining_verification_seconds() {

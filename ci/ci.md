@@ -109,6 +109,8 @@ source-relative manifest paths. Handoff schema 3 also carries a digest-bound,
 one-commit prepared llama.cpp bundle and preparation markers. Workers restore
 and verify that source against the selected pin and patch queue before lanes
 start; they cannot accidentally depend on a previous runner checkout.
+The agent supervisor terminates remaining process-group members after normal
+completion and waits for live members to stop before handing the workspace back.
 Repair snapshots first verify the workload producer against the dirty source,
 then bind its unchanged files to the identical committed candidate tree.
 Pinned and independent verification builds keep their original source identity.

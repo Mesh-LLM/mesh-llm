@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
 from pathlib import Path
 import signal
 import subprocess
+import sys
+import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -26,7 +30,7 @@ class TimeoutSignalSafetyTests(unittest.TestCase):
                 process = mock.Mock()
                 process.wait.side_effect = subprocess.TimeoutExpired("fixture", 0.1)
                 process.poll.return_value = child_status
-                args = argparse.Namespace(seconds=1, label="fixture", command=["fixture"])
+                args = argparse.Namespace(seconds=1, label="fixture", command=["fixture"], cleanup_on_exit=False)
                 with (
                     mock.patch.object(RUNNER, "parse_args", return_value=args),
                     mock.patch.object(RUNNER.signal, "signal"),
@@ -94,7 +98,7 @@ class TimeoutSignalSafetyTests(unittest.TestCase):
             events.append("cleaned")
 
         process.wait.side_effect = wait
-        args = argparse.Namespace(seconds=30, label="fixture", command=["fixture"])
+        args = argparse.Namespace(seconds=30, label="fixture", command=["fixture"], cleanup_on_exit=False)
         with (
             mock.patch.object(RUNNER, "parse_args", return_value=args),
             mock.patch.object(RUNNER.signal, "signal", side_effect=install_handler),
@@ -120,6 +124,37 @@ class TimeoutSignalSafetyTests(unittest.TestCase):
         for signum in (signal.SIGINT, signal.SIGTERM):
             with self.subTest(signum=signum):
                 self.exercise_signal_boundary("wait", signum)
+
+    @unittest.skipUnless(os.name == "posix", "process groups require POSIX")
+    def test_completed_agent_cannot_leave_a_writer_in_its_process_group(self) -> None:
+        """A real orphan that ignores TERM must stop before the wrapper returns."""
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "writes"
+            ready = Path(directory) / "ready"
+            child = (
+                "import pathlib,signal,time; "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                f"p=pathlib.Path({str(marker)!r}); "
+                f"pathlib.Path({str(ready)!r}).touch(); "
+                "deadline=time.monotonic()+5; "
+                "\nwhile time.monotonic()<deadline:\n p.write_text(str(time.monotonic())); time.sleep(0.01)\n"
+            )
+            parent = (
+                "import subprocess,sys,pathlib,time; "
+                f"subprocess.Popen([sys.executable,'-c',{child!r}], "
+                "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
+                f"p=pathlib.Path({str(ready)!r}); "
+                "\nwhile not p.exists(): time.sleep(0.01)\n"
+            )
+            result = subprocess.run(
+                [sys.executable, str(SOURCE), "--seconds", "10", "--label", "agent",
+                 "--cleanup-on-exit", "--", sys.executable, "-c", parent],
+                capture_output=True, text=True, timeout=20,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            before = marker.read_bytes()
+            time.sleep(0.1)
+            self.assertEqual(before, marker.read_bytes())
 
 
 if __name__ == "__main__":

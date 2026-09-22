@@ -540,6 +540,7 @@ impl StageModel {
             raw,
             token_count: 0,
             terminal_stage: self.inner.terminal_stage,
+            batched_activation_exports: self.supports_batched_activation_exports(),
         })
     }
 
@@ -570,6 +571,7 @@ impl StageModel {
             raw,
             token_count: u64::try_from(token_ids.len()).context("token count exceeds u64")?,
             terminal_stage: self.inner.terminal_stage,
+            batched_activation_exports: self.supports_batched_activation_exports(),
         })
     }
 
@@ -611,6 +613,21 @@ impl StageModel {
 
     pub fn capability(&self) -> Option<&LoadedModelCapability> {
         self.inner.capability.as_ref()
+    }
+
+    /// Whether a multi-request iteration may read activation exports out of a
+    /// single native batch.
+    ///
+    /// The batched path slices exports by request offset out of the last
+    /// native microbatch, so it is only sound while the whole iteration is one
+    /// microbatch. Attention memory with a unified KV cache satisfies that. A
+    /// recurrent or hybrid model splits an all-output batch by sequence
+    /// (`split_seq`) and an indexer memory tier is not part of that contract,
+    /// so both fail closed here and run one request at a time instead.
+    fn supports_batched_activation_exports(&self) -> bool {
+        self.capability().is_some_and(|capability| {
+            capability.state_kind == ModelStateKind::Dense && !capability.has_indexer_memory
+        })
     }
 
     pub fn apply_chat_template(

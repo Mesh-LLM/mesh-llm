@@ -169,6 +169,7 @@ pub(in crate::network::openai::response) async fn relay_attempted_response<R: As
                 status_code,
                 usage: None,
                 cache_cost: None,
+                output_digests: Default::default(),
             }
         }
     }
