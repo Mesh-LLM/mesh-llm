@@ -1,5 +1,8 @@
 import importlib.util
 import os
+import shutil
+import subprocess
+import sys
 from unittest.mock import patch
 from pathlib import Path
 import tempfile
@@ -95,6 +98,79 @@ class CleanupTests(unittest.TestCase):
         for value in ('', 'scripts', '/tmp/output', 'target/../../source'):
             with self.subTest(value=value), self.assertRaises((ValueError, IndexError)):
                 C.targets({**self.env, 'CLEANUP_ARTIFACT_PATH': value}, 'smoke', False, False)
+
+    def test_shallow_smoke_binary_rejects_cleanup_before_any_deletion(self):
+        sentinels = [self.workspace / name for name in
+                     ('native-runtimes', 'target', 'ci-artifacts/linux')]
+        for path in sentinels:
+            self.seed(path)
+        for value in ('target', 'ci-artifacts', str(self.workspace / 'target')):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                C.cleanup(C.targets({**self.env, 'CLEANUP_BINARY_PATH': value},
+                                    'smoke', True, True))
+            self.assertTrue(all((path / 'payload').exists() for path in sentinels))
+
+    def git(self, *args):
+        return subprocess.run(['git', '-C', str(self.workspace), *args], check=True,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
+
+    def init_replay_repository(self):
+        self.git('init')
+        self.git('-c', 'user.name=Cleanup Test', '-c', 'user.email=cleanup@example.invalid',
+                 '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'fixture')
+        return self.temp / 'agentic-replay-worktrees'
+
+    def test_replay_cli_removes_only_owned_registrations_and_is_repeatable(self):
+        root = self.init_replay_repository()
+        owned = root / 'owned worktree\nwith newline'
+        missing = root / 'already-missing'
+        unrelated = self.temp / 'agentic-replay-worktrees-other' / 'keep'
+        stale = self.temp / 'unrelated-missing'
+        for path in (owned, missing, unrelated, stale):
+            self.git('worktree', 'add', '--detach', str(path), 'HEAD')
+        self.seed(owned / 'target')
+        shutil.rmtree(missing)
+        shutil.rmtree(stale)
+        evidence = self.temp / 'agentic-replay-artifacts'
+        self.seed(evidence)
+        for _ in range(2):
+            subprocess.run([sys.executable, str(ROOT / 'scripts/cleanup-self-hosted.py'),
+                            '--job', 'replay', '--evidence-uploaded', 'false'],
+                           env={**os.environ, **self.env}, check=True, stdout=subprocess.PIPE)
+            registered = self.git('worktree', 'list', '--porcelain', '-z').split(b'\0')
+            self.assertNotIn(b'worktree ' + os.fsencode(owned), registered)
+            self.assertNotIn(b'worktree ' + os.fsencode(missing), registered)
+            self.assertIn(b'worktree ' + os.fsencode(unrelated), registered)
+            self.assertIn(b'worktree ' + os.fsencode(stale), registered)
+            self.assertFalse(root.exists())
+            self.assertTrue(unrelated.exists())
+            self.assertTrue((evidence / 'payload').exists())
+
+    def test_replay_symlink_root_rejected_before_cleanup(self):
+        root = self.init_replay_repository()
+        outside = self.base / 'outside'
+        self.seed(outside)
+        root.symlink_to(outside, target_is_directory=True)
+        paths = C.targets(self.env, 'replay', True, True)
+        self.seed(paths[0][1])
+        with self.assertRaises(ValueError):
+            C.cleanup(paths, replay=(self.workspace, root))
+        self.assertTrue((outside / 'payload').exists())
+        self.assertTrue((paths[0][1] / 'payload').exists())
+
+    def test_locked_replay_worktree_failure_preserves_root_and_registration(self):
+        root = self.init_replay_repository()
+        owned = root / 'locked'
+        self.git('worktree', 'add', '--detach', str(owned), 'HEAD')
+        self.git('worktree', 'lock', str(owned))
+        paths = C.targets(self.env, 'replay', True, True)
+        self.seed(paths[0][1])
+        with self.assertRaises(subprocess.CalledProcessError):
+            C.cleanup(paths, replay=(self.workspace, root))
+        self.assertTrue(owned.exists())
+        self.assertTrue((paths[0][1] / 'payload').exists())
+        self.assertIn(b'worktree ' + os.fsencode(owned),
+                      self.git('worktree', 'list', '--porcelain', '-z').split(b'\0'))
 
     def test_every_self_hosted_job_has_final_cleanup_for_every_outcome(self):
         found = set()

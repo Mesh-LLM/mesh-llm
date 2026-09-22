@@ -449,9 +449,9 @@ same commit. A hosted aggregate rejects missing, duplicate, failed, cancelled,
 or mismatched results. Only the final hosted publisher receives the repair
 credential, and exhausted attempts publish no branch or PR.
 
-Canary scheduling reserves 15% of physical memory. The controller projects
+Canary scheduling reserves 10% of physical memory. The controller projects
 source-owned plans onto the existing `accelerator-memory-128plus` and
-`accelerator-memory-256plus` labels (108.8 and 217.6 GiB workload budgets).
+`accelerator-memory-256plus` labels (115.2 and 230.4 GiB workload budgets).
 Never add scheduling fields to a historical source's canonical plan. Estimates
 include pinned artifact bytes, concurrent workload copies, and explicit runtime
 allowances; they are admission estimates, not measured peak guarantees. Workers

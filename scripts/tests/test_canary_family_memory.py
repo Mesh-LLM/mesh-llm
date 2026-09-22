@@ -29,8 +29,8 @@ def model(size=1, kind='causal_generation', projector=0):
 
 class MemoryTests(unittest.TestCase):
     def test_exact_boundaries_and_invalid_estimates(self):
-        small = 128 * M.GIB * 85 // 100
-        large = 256 * M.GIB * 85 // 100
+        small = 128 * M.GIB * 90 // 100
+        large = 256 * M.GIB * 90 // 100
         self.assertEqual(M.tier_for(small), 'accelerator-memory-128plus')
         self.assertEqual(M.tier_for(small + 1), 'accelerator-memory-256plus')
         self.assertEqual(M.tier_for(large), 'accelerator-memory-256plus')
@@ -67,8 +67,8 @@ class MemoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'too small'):
             M.admission(estimate, 128*M.GIB, 128*M.GIB)
         with self.assertRaisesRegex(ValueError, 'available'):
-            M.admission(estimate, 256*M.GIB, 160*M.GIB)
-        self.assertEqual(M.admission(estimate, 256*M.GIB, 256*M.GIB), (256*M.GIB*15+99)//100)
+            M.admission(estimate, 256*M.GIB, 150*M.GIB)
+        self.assertEqual(M.admission(estimate, 256*M.GIB, 256*M.GIB), (256*M.GIB*10+99)//100)
 
     def test_vm_stat_does_not_count_purgeable_twice(self):
         text = ('Mach Virtual Memory Statistics: (page size of 16384 bytes)\n'
@@ -76,6 +76,25 @@ class MemoryTests(unittest.TestCase):
         self.assertEqual(M.parse_vm_stat(text), 33*16384)
         with self.assertRaises(ValueError):
             M.parse_vm_stat(text.replace('Pages inactive', 'Missing'))
+
+    def test_large_fixtures_fit_observed_host_with_ten_percent_reserve(self):
+        policy = json.loads((ROOT / 'ci/llama-canary/family-certified.json').read_text())
+        fixtures = {row['family']: row for row in policy['models']}
+        # Recovery revision e52127b57 adds this pinned Qwen F16 projector;
+        # main's older fixture must also cover its additional admission cost.
+        if not fixtures['qwen4exp'].get('mmproj_artifact'):
+            fixtures['qwen4exp']['mmproj_artifact'] = model(904004000)['artifact']
+        total, available = 128*M.GIB, int(104.4*M.GIB)
+        for family in ('qwen4exp', 'glm45-air'):
+            with self.subTest(family=family):
+                estimate = M.placement(fixtures[family])
+                reserve = M.admission(estimate, total, available)
+                self.assertEqual(reserve, (total*10+99)//100)
+                peak = estimate['estimated_peak_bytes']
+                self.assertGreater(peak + (total*15+99)//100, available)
+                self.assertEqual(M.admission(estimate, total, peak + reserve), reserve)
+                with self.assertRaisesRegex(ValueError, 'available'):
+                    M.admission(estimate, total, peak + reserve - 1)
 
     def run_guard(self, command, observations, tier='accelerator-memory-128plus'):
         temp = tempfile.TemporaryDirectory()
@@ -91,7 +110,7 @@ class MemoryTests(unittest.TestCase):
 
     def test_insufficient_memory_never_starts_child(self):
         with self.assertRaisesRegex(ValueError, 'available'):
-            self.run_guard(['/should/not/run'], [(128*M.GIB, 20*M.GIB)])
+            self.run_guard(['/should/not/run'], [(128*M.GIB, 18*M.GIB)])
 
     @unittest.skipIf(os.name != 'posix', 'process-group guard is macOS/POSIX')
     def test_pressure_stops_real_child_and_records_failure(self):
@@ -105,14 +124,14 @@ class MemoryTests(unittest.TestCase):
                     return 128*M.GIB, 128*M.GIB
                 return 128*M.GIB, M.GIB
             with patch.object(M, 'host_memory', side_effect=observe):
-                with self.assertRaisesRegex(ValueError, '15% reserve'):
+                with self.assertRaisesRegex(ValueError, '10% reserve'):
                     M.guarded_run(model(), 'accelerator-memory-128plus', command, evidence)
             pid = int(pidfile.read_text())
             with self.assertRaises(ProcessLookupError):
                 os.kill(pid, 0)
             report = json.loads((evidence / 'memory-admission.json').read_text())
             self.assertEqual(report['status'], 'failed')
-            self.assertIn('15% reserve', report['error'])
+            self.assertIn('10% reserve', report['error'])
 
     @unittest.skipIf(os.name != 'posix', 'process-group guard is macOS/POSIX')
     def test_child_failure_is_not_certification_success(self):

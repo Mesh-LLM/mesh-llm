@@ -966,8 +966,8 @@ both domains until the later catalog cleanup; existing main routing is unchanged
 ### Canary memory admission and Python SDK
 
 The controller projects each immutable source plan onto `family-certify` plus
-`accelerator-memory-128plus` (108.8 GiB) or `accelerator-memory-256plus`
-(217.6 GiB), reserving 15% of physical RAM. The source plan and its digest are
+`accelerator-memory-128plus` (115.2 GiB) or `accelerator-memory-256plus`
+(230.4 GiB), reserving 10% of physical RAM. The source plan and its digest are
 unchanged, including historical `mesh_ref` certification. Missing artifact sizes
 and peaks beyond the larger tier fail planning. No family is silently skipped.
 
@@ -1011,8 +1011,9 @@ this is not a host-wide garbage collector.
 
 The same helper also owns bounded profiles for agentic replay, GPU smoke,
 CUDA release and the amd64/arm64 runner-contract matrix. Replay creates its
-build worktrees under the job's runner temporary directory and prunes their
-Git registrations after cleanup. CUDA release explicitly saves its native
+build worktrees under the job's runner temporary directory and explicitly removes
+only their Git registrations before deleting the root; unrelated registrations
+are preserved. CUDA release explicitly saves its native
 Actions cache before deleting build outputs; failed runtime uploads retain
 `dist/native-runtimes`. Smoke removes its downloaded product and staged binary,
 retaining shared model caches and diagnostic logs. Runner-contract removes its

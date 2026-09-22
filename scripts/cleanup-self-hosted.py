@@ -72,6 +72,8 @@ def other_targets(env, job, uploaded, workspace, temporary):
             relative = path.relative_to(workspace)
             if not relative.parts or relative.parts[0] not in ('target', 'ci-artifacts'):
                 raise ValueError('smoke output is not in a generated output tree')
+            if key == 'CLEANUP_BINARY_PATH' and len(relative.parts) < 2:
+                raise ValueError('smoke binary must be below a generated output tree')
             paths.append((workspace, path))
             if key == 'CLEANUP_BINARY_PATH':
                 paths.append((workspace, path.parent / 'native-runtimes'))
@@ -93,10 +95,36 @@ def validate_path(base, path):
             raise ValueError(f'cleanup parent is a symlink: {parent}')
 
 
-def cleanup(paths):
+def remove_replay_worktrees(workspace, root):
+    """Unregister only this job's worktrees, leaving unrelated registrations alone."""
+    if root.is_symlink():
+        raise ValueError(f'replay worktree root is a symlink: {root}')
+    result = subprocess.run(
+        ['git', '-C', str(workspace), 'worktree', 'list', '--porcelain', '-z'],
+        check=True, stdout=subprocess.PIPE,
+    )
+    worktrees = []
+    for field in result.stdout.split(b'\0'):
+        if field.startswith(b'worktree '):
+            path = Path(os.fsdecode(field[len(b'worktree '):]))
+            if path != root and path.is_relative_to(root):
+                validate_path(root, path)
+                if path.is_symlink():
+                    raise ValueError(f'replay worktree is a symlink: {path}')
+                worktrees.append(path)
+    for path in worktrees:
+        subprocess.run(
+            ['git', '-C', str(workspace), 'worktree', 'remove', '--force', str(path)],
+            check=True,
+        )
+
+
+def cleanup(paths, replay=None):
     # Validate the complete list before deleting anything.
     for base, path in paths:
         validate_path(base, path)
+    if replay is not None:
+        remove_replay_worktrees(*replay)
     for _, path in paths:
         if path.is_symlink() or path.is_file():
             path.unlink()
@@ -111,9 +139,12 @@ def main():
     parser.add_argument('--evidence-uploaded', choices=('true', 'false'), required=True)
     parser.add_argument('--package-uploaded', choices=('true', 'false'), default='false')
     args = parser.parse_args()
-    cleanup(targets(os.environ, args.job, args.evidence_uploaded == 'true', args.package_uploaded == 'true'))
+    paths = targets(os.environ, args.job, args.evidence_uploaded == 'true', args.package_uploaded == 'true')
+    replay = None
     if args.job == 'replay':
-        subprocess.run(['git', '-C', os.environ['GITHUB_WORKSPACE'], 'worktree', 'prune'], check=True)
+        replay = (Path(os.environ['GITHUB_WORKSPACE']).resolve(),
+                  Path(os.environ['RUNNER_TEMP']).resolve() / 'agentic-replay-worktrees')
+    cleanup(paths, replay=replay)
 
 
 if __name__ == '__main__':
