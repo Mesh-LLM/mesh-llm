@@ -191,6 +191,10 @@ downloadable GPU runtimes. The merged catalog follows these rules:
   bundles the fetch failure is an error, as before.
 - The loaded manifest's `mesh_version` and `skippy_abi` describe the release; a
   bundle's values only stand in when no manifest could be loaded at all.
+- Installing for the current MeshLLM version defaults to the executable's
+  compiled Skippy ABI, even if the release catalog advertises an older ABI.
+  An explicit ABI override takes precedence; staging another MeshLLM version
+  retains that version's catalog ABI default.
 - Candidates present in several sources are deduplicated by identity by the
   resolver, which prefers a bundled copy, then the cache, then a download for
   the same artifact.
