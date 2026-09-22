@@ -1,7 +1,7 @@
 # Synthetic graph-contract coverage
 
-`just skippy-native-tests cpu` (or `metal`) includes 13 synthetic GGUF model
-fixtures and 13 graph-contract tests. No downloaded model or weight allocation
+`just skippy-native-tests cpu` (or `metal`) includes 14 synthetic GGUF model
+fixtures and 14 graph-contract tests. No downloaded model or weight allocation
 is required. The fixtures use real architecture builders with sparse, zero-payload
 GGUF files. They are planning fixtures, not inference or numerical-parity models.
 
@@ -16,6 +16,7 @@ The layer counts and activation widths come from this directory's
 | llama | llama | 16 | 2048 |
 | qwen3-dense | qwen3 | 28 | 1024 |
 | deepseek2 | deepseek2 | 27 | 2048 |
+| deepseek32 | deepseek32 | 4 | 7168 |
 | qwen3-moe | qwen3moe | 48 | 2048 |
 | qwen2-moe | qwen2moe | 24 | 2048 |
 | jamba2 | jamba | 28 | 2560 |
@@ -44,6 +45,10 @@ whole-model plan's parameter set. Layer-local state accesses must belong to thei
 stage, and each causal profile must retain state reads and writes. Negative tests
 reject a missing middle stage and stages planned for incompatible backends.
 
+The DeepSeek32 fixture rejects raw-embedding profiles if state inference assumes
+that the initial input boundary is an executable node. A focused graph regression
+also rejects missing exits, out-of-graph leaves, and noninitial leaf boundaries.
+
 The Kimi and ARWKV fixtures reproduce the incomplete activation frontier when
 `request_derived()` classifies input leaves before checking layer boundaries.
 The tests pass with the boundary-ownership fix. The existing graph-level test also
@@ -51,7 +56,9 @@ checks that request-only auxiliary tensors do not become activation exports.
 
 Implementation is carried in native core patch
 `0021-test-skippy-synthetic-canary-graph-contracts.patch` and its expanded
-`0022-test-skippy-wide-synthetic-graph-contracts.patch`. CTest fixture dependencies
+`0022-test-skippy-wide-synthetic-graph-contracts.patch`. DeepSeek32 coverage
+and initial-input-leaf state ownership regressions are in
+`0023-fix-skippy-state-inference-input-leaves.patch`. CTest fixture dependencies
 ensure generation runs before each contract test. When updating these dimensions,
 keep the table, CMake fixture arguments, and battery rows aligned. Extend this
 matrix with other architecture behaviors as regressions are found; it does not
