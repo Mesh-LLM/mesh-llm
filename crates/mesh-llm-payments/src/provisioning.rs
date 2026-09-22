@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 
 use crate::wallet::WalletProvider;
@@ -26,7 +26,7 @@ pub struct NoWalletFactory;
 #[async_trait]
 impl WalletFactory for NoWalletFactory {
     fn is_provisioned(&self, directory: &Path) -> bool {
-        WalletPin::load(directory).is_some()
+        !matches!(WalletPin::load(directory), Ok(None))
     }
 
     async fn open(&self, _directory: &Path) -> Result<Arc<dyn WalletProvider>> {
@@ -55,17 +55,36 @@ impl WalletPin {
         directory.join(Self::FILE_NAME)
     }
 
-    /// Side-effect free: absent or unreadable pins read as `None`.
-    pub fn load(directory: &Path) -> Option<Self> {
-        let raw = std::fs::read(Self::path(directory)).ok()?;
-        serde_json::from_slice(&raw).ok()
+    /// Side-effect free. Absent reads as `Ok(None)`; a pin that exists but
+    /// cannot be parsed is an error, never `None`, so a damaged file can not
+    /// be silently replaced by whatever wallet opens next.
+    pub fn load(directory: &Path) -> Result<Option<Self>> {
+        let path = Self::path(directory);
+        let raw = match std::fs::read(&path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(anyhow::Error::new(error)
+                    .context(format!("read wallet pin {}", path.display())));
+            }
+        };
+        serde_json::from_slice(&raw)
+            .map(Some)
+            .with_context(|| {
+                format!(
+                    "wallet pin {} is unreadable; refusing to adopt a wallet until it is repaired or removed",
+                    path.display()
+                )
+            })
     }
 
-    /// Persist durably before anything that depends on the pin.
+    /// Persist durably before anything that depends on the pin. The temp
+    /// name is per-process so concurrent writers in different processes
+    /// cannot truncate each other's staging file.
     pub fn store(&self, directory: &Path) -> Result<()> {
         std::fs::create_dir_all(directory)?;
         let path = Self::path(directory);
-        let tmp = path.with_extension("json.tmp");
+        let tmp = directory.join(format!("{}.{}.tmp", Self::FILE_NAME, std::process::id()));
         std::fs::write(&tmp, serde_json::to_vec_pretty(self)?)?;
         std::fs::File::open(&tmp)?.sync_all()?;
         std::fs::rename(&tmp, &path)?;
@@ -87,7 +106,7 @@ mod tests {
     #[test]
     fn pin_round_trips_and_is_absent_by_default() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(WalletPin::load(dir.path()).is_none());
+        assert!(WalletPin::load(dir.path()).unwrap().is_none());
         assert!(!has_persisted_wallet(dir.path()));
         let pin = WalletPin {
             plugin: "wallet-lexe".into(),
@@ -96,8 +115,23 @@ mod tests {
             network: "mainnet".into(),
         };
         pin.store(dir.path()).unwrap();
-        assert_eq!(WalletPin::load(dir.path()), Some(pin));
+        assert_eq!(WalletPin::load(dir.path()).unwrap(), Some(pin));
         assert!(has_persisted_wallet(dir.path()));
-        assert!(!dir.path().join("wallet-provider.json.tmp").exists());
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty());
+    }
+
+    #[test]
+    fn corrupt_pin_is_an_error_not_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(WalletPin::path(dir.path()), b"{not json").unwrap();
+        let error = WalletPin::load(dir.path()).unwrap_err().to_string();
+        assert!(error.contains("unreadable"), "{error}");
+        // Still counts as "a wallet exists" so callers stay conservative.
+        assert!(has_persisted_wallet(dir.path()));
     }
 }

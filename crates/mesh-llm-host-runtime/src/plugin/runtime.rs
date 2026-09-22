@@ -597,17 +597,19 @@ impl ExternalPlugin {
         })
     }
 
-    pub(crate) async fn call_tool_without_timeout(
+    /// `None` waits indefinitely; the caller owns cancellation.
+    pub(crate) async fn call_tool_with_timeout(
         &self,
         tool_name: &str,
         arguments_json: &str,
+        timeout: Option<std::time::Duration>,
     ) -> Result<ToolCallResult> {
         let response = self
             .invoke_service(
                 proto::ServiceKind::Operation,
                 tool_name,
                 arguments_json,
-                None,
+                timeout,
             )
             .await?;
         Ok(ToolCallResult {

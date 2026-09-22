@@ -40,20 +40,14 @@ impl super::Node {
                 .get_or_try_init(|| async {
                     let directory = self.config_state.lock().await.payment_directory();
                     // The wallet is a plugin (`wallet.v1`); the ledger stays
-                    // in-process. Without a plugin manager (embedded/test
-                    // paths) the service is ledger-only and wallet calls fail.
-                    let service = match self.plugin_manager.lock().await.clone() {
-                        Some(plugin_manager) => PaymentService::with_factory(
-                            &directory,
-                            Arc::new(
-                                crate::network::payments::wallet_plugin::PluginWalletFactory::new(
-                                    plugin_manager,
-                                ),
-                            ),
-                        )?,
-                        None => PaymentService::open(&directory)?,
-                    };
-                    let service = Arc::new(service);
+                    // in-process. The factory holds the plugin-manager slot,
+                    // not a manager: this can run during startup (gossip
+                    // advertises prices) before `set_plugin_manager`.
+                    let factory = crate::network::payments::wallet_plugin::PluginWalletFactory::new(
+                        Arc::clone(&self.plugin_manager),
+                    );
+                    let service =
+                        Arc::new(PaymentService::with_factory(&directory, Arc::new(factory))?);
                     let recovery_service = Arc::downgrade(&service);
                     let node = self.clone();
                     tokio::spawn(async move {

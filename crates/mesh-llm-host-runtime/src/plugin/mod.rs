@@ -779,6 +779,19 @@ impl PluginManager {
         tool_name: &str,
         arguments_json: &str,
     ) -> Result<ToolCallResult> {
+        self.call_tool_with_timeout(plugin_name, tool_name, arguments_json, None)
+            .await
+    }
+
+    /// Invoke an operation with an explicit deadline. `None` waits until the
+    /// plugin answers or its connection drops; the caller owns cancellation.
+    pub async fn call_tool_with_timeout(
+        &self,
+        plugin_name: &str,
+        tool_name: &str,
+        arguments_json: &str,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<ToolCallResult> {
         if self.is_test_bridge_enabled(plugin_name) {
             return self.call_tool(plugin_name, tool_name, arguments_json).await;
         }
@@ -795,7 +808,7 @@ impl PluginManager {
             .get(plugin_name)
             .with_context(|| format!("Unknown plugin '{plugin_name}'"))?;
         plugin
-            .call_tool_without_timeout(tool_name, arguments_json)
+            .call_tool_with_timeout(tool_name, arguments_json, timeout)
             .await
     }
 
@@ -816,6 +829,17 @@ impl PluginManager {
         input_json: &str,
     ) -> Result<ToolCallResult> {
         self.call_tool_without_timeout(plugin_name, operation_name, input_json)
+            .await
+    }
+
+    pub async fn invoke_operation_with_timeout(
+        &self,
+        plugin_name: &str,
+        operation_name: &str,
+        input_json: &str,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<ToolCallResult> {
+        self.call_tool_with_timeout(plugin_name, operation_name, input_json, timeout)
             .await
     }
 
@@ -1675,6 +1699,24 @@ mod tests {
             std::time::Duration::from_secs(5)
         );
         assert!(wallet.startup.optional && !wallet.startup.lazy_start);
+    }
+
+    #[test]
+    fn wallet_stanza_without_bundled_binary_does_not_fail_startup() {
+        // No thread-local override: nothing is bundled beside the test binary,
+        // and MESH_LLM_PLUGIN_DIR is unset so nothing is "installed" either.
+        let config = MeshConfig {
+            plugins: vec![wallet_entry(Some(true))],
+            defaults: None,
+            ..MeshConfig::default()
+        };
+        let resolved = resolve_plugins(&config, private_host_mode())
+            .expect("a documented stanza must not break a wallet-free build");
+        assert_eq!(resolved.externals.len(), 1);
+        assert_eq!(resolved.externals[0].name, BLOBSTORE_PLUGIN_ID);
+        assert_eq!(resolved.inactive.len(), 1);
+        assert_eq!(resolved.inactive[0].name, BUNDLED_WALLET_PLUGIN_ID);
+        assert_eq!(resolved.inactive[0].status, "missing");
     }
 
     #[test]

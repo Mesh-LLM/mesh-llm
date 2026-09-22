@@ -29,6 +29,7 @@ use mesh_llm_wallet::contract::{
 use mesh_llm_wallet::invoice::Invoice;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use tokio::sync::Mutex;
 
 use crate::plugin::PluginManager;
 
@@ -37,43 +38,67 @@ use crate::plugin::PluginManager;
 /// in-process implementation this replaces.
 const WALLET_SUBDIR: &str = "lexe";
 
+/// Where the factory finds the plugin manager. It is resolved at `open()`
+/// time, not construction time: the payment service can be created during
+/// startup (gossip advertises prices) before the plugin manager exists, and
+/// capturing `None` then would leave the node wallet-less for its lifetime.
+pub type PluginManagerSlot = Arc<Mutex<Option<PluginManager>>>;
+
 /// Resolves the `wallet.v1` provider through the plugin manager.
 pub struct PluginWalletFactory {
-    plugin_manager: PluginManager,
+    plugin_manager: PluginManagerSlot,
 }
 
 impl PluginWalletFactory {
-    pub fn new(plugin_manager: PluginManager) -> Self {
+    pub fn new(plugin_manager: PluginManagerSlot) -> Self {
         Self { plugin_manager }
     }
 
     fn wallet_directory(payment_directory: &Path) -> PathBuf {
         payment_directory.join(WALLET_SUBDIR)
     }
+
+    /// A wallet provisioned by the in-process implementation this replaces
+    /// has a seed but no pin yet. It must still count as a wallet: paid
+    /// routing and the legacy-bridge ingress guard both key off this, and
+    /// reading "no wallet" after an upgrade would silently disable both.
+    fn legacy_wallet_present(payment_directory: &Path) -> bool {
+        Self::wallet_directory(payment_directory)
+            .join("seedphrase.txt")
+            .is_file()
+    }
+
+    async fn plugin_manager(&self) -> Result<PluginManager> {
+        self.plugin_manager.lock().await.clone().ok_or_else(|| {
+            anyhow!("plugin manager is not running yet; retry once startup completes")
+        })
+    }
 }
 
 #[async_trait]
 impl WalletFactory for PluginWalletFactory {
     fn is_provisioned(&self, payment_directory: &Path) -> bool {
-        // The host pin is the side-effect-free truth. It is written only after
-        // a successful open, so a half-provisioned plugin directory does not
-        // count as a wallet.
-        WalletPin::load(payment_directory).is_some()
+        // Side-effect free. A corrupt pin still reads as "a wallet exists":
+        // `open` refuses to proceed and reports why, which is safer than
+        // pretending there is nothing to protect.
+        !matches!(WalletPin::load(payment_directory), Ok(None))
+            || Self::legacy_wallet_present(payment_directory)
     }
 
     async fn open(&self, payment_directory: &Path) -> Result<Arc<dyn WalletProvider>> {
-        let provider = self
-            .plugin_manager
+        let plugin_manager = self.plugin_manager().await?;
+        let provider = plugin_manager
             .available_provider_for_capability(CAPABILITY)
             .await?
             .ok_or_else(|| {
                 anyhow!("no wallet plugin is running (capability '{CAPABILITY}' unavailable)")
             })?;
         let wallet = PluginWalletProvider {
-            plugin_manager: self.plugin_manager.clone(),
+            plugin_manager,
             plugin_name: provider.plugin_name,
             payment_directory: payment_directory.to_path_buf(),
             wallet_directory: Self::wallet_directory(payment_directory),
+            open_lock: Mutex::new(()),
         };
         wallet.open_and_pin().await?;
         Ok(Arc::new(wallet))
@@ -86,11 +111,19 @@ pub struct PluginWalletProvider {
     plugin_name: String,
     payment_directory: PathBuf,
     wallet_directory: PathBuf,
+    /// Serializes re-opens. After a plugin restart every in-flight request
+    /// observes `not_open` at once; only one of them should drive the open
+    /// and the pin check.
+    open_lock: Mutex<()>,
 }
 
 impl PluginWalletProvider {
     /// Ask the plugin to open the wallet, then verify or write the host pin.
     async fn open_and_pin(&self) -> Result<()> {
+        let _guard = self.open_lock.lock().await;
+        // Read the pin before contacting the plugin so a corrupt pin is
+        // reported without provisioning anything.
+        let pin = WalletPin::load(&self.payment_directory)?;
         let response: OpenResponse = self
             .call(
                 ops::OPEN,
@@ -109,7 +142,7 @@ impl PluginWalletProvider {
                 identity.network
             );
         }
-        match WalletPin::load(&self.payment_directory) {
+        match pin {
             Some(pin) => {
                 if pin.plugin != self.plugin_name || pin.wallet_id != identity.wallet_id {
                     bail!(
@@ -149,24 +182,16 @@ impl PluginWalletProvider {
     ) -> Result<Res, WalletError> {
         let input = serde_json::to_string(request)
             .map_err(|err| WalletError::invalid(format!("encode {operation}: {err}")))?;
-        let result = match timeout {
-            Some(_) => {
-                self.plugin_manager
-                    .invoke_operation(&self.plugin_name, operation, &input)
-                    .await
-            }
-            None => {
-                self.plugin_manager
-                    .invoke_operation_without_timeout(&self.plugin_name, operation, &input)
-                    .await
-            }
-        }
-        .map_err(|err| {
-            WalletError::new(
-                WalletErrorKind::Uncertain,
-                format!("wallet plugin '{}' {operation}: {err}", self.plugin_name),
-            )
-        })?;
+        let result = self
+            .plugin_manager
+            .invoke_operation_with_timeout(&self.plugin_name, operation, &input, timeout)
+            .await
+            .map_err(|err| {
+                WalletError::new(
+                    WalletErrorKind::Uncertain,
+                    format!("wallet plugin '{}' {operation}: {err}", self.plugin_name),
+                )
+            })?;
         if result.is_error {
             return Err(WalletError::decode(&result.content_json));
         }
@@ -201,7 +226,7 @@ impl PluginWalletProvider {
 /// Opening may provision and contact the provider network; give it room but
 /// do not wait forever on a wedged plugin.
 const OPEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
-/// Ordinary queries ride the manager's default request timeout.
+/// Ordinary queries: a wallet lookup that takes longer than this is broken.
 const QUERY_TIMEOUT: Option<std::time::Duration> = Some(std::time::Duration::from_secs(30));
 
 #[async_trait]

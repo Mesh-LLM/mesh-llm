@@ -141,6 +141,13 @@ pub struct LookupResponse {
 /// Why a wallet operation failed. The host maps these back onto
 /// [`PayError`] and keeps the "did money possibly move?" distinction intact
 /// across the IPC boundary.
+///
+/// **Contract requirement for plugin authors:** `NotOpen`, `InvalidRequest`
+/// and `NotSubmitted` may only be returned from `wallet_pay` if the plugin
+/// can guarantee no payment was handed to the network. Once a payment may
+/// have been submitted, every failure must be `Uncertain` (or `Failed`,
+/// which the host treats identically). Getting this wrong lets the host
+/// release a reservation for a payment that later settles.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WalletErrorKind {

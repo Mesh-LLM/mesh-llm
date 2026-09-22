@@ -317,24 +317,35 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
             // Bundled wallet: `enabled` is the runtime on/off switch. An
             // explicit `command` opts out of bundling and is handled as an
             // ordinary external plugin below.
-            if !enabled {
-                bundled_wallet_enabled = false;
-                continue;
-            }
             if entry.url.is_some() || !entry.args.is_empty() {
                 bail!(
                     "Plugin '{}' is bundled with mesh-llm; only `enabled`, `startup` or an explicit `command` may be set",
                     BUNDLED_WALLET_PLUGIN_ID
                 );
             }
+            if !enabled {
+                bundled_wallet_enabled = false;
+                if let Some(summary) = configured_disabled_installed_plugin_summary(entry) {
+                    inactive.push(summary);
+                }
+                continue;
+            }
             if let Some(spec) = bundled_wallet_plugin_spec(&entry.startup)? {
                 externals.push(spec);
                 bundled_wallet_enabled = false;
                 continue;
             }
-            // Fall through: not bundled next to this binary, resolve as an
-            // installed/external plugin like any other.
+            // Not bundled beside this binary: resolve as an installed plugin
+            // like any other, but never let a stanza the docs recommend turn
+            // a wallet-free build into a startup failure.
             bundled_wallet_enabled = false;
+            let mut optional_entry = entry.clone();
+            optional_entry.startup.optional = true;
+            match configured_external_plugin_spec(&optional_entry)? {
+                ConfiguredExternalPlugin::Active(spec) => externals.push(spec),
+                ConfiguredExternalPlugin::Inactive(summary) => inactive.push(summary),
+            }
+            continue;
         }
         if !enabled {
             if let Some(summary) = configured_disabled_installed_plugin_summary(entry) {
