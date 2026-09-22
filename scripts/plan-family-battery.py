@@ -674,7 +674,10 @@ def build_plan(
                 "families": ",".join(shard["families"]),
                 "estimated_work_bytes": shard["estimated_work_bytes"],
             }
-            for shard in shards
+            # Keep balanced shard membership stable, but submit cheaper jobs
+            # first. The canary requests one shard per family, so this is
+            # smallest-to-largest model order with deterministic tie-breaking.
+            for shard in sorted(shards, key=lambda item: (item["estimated_work_bytes"], item["families"]))
         ]
     }
     try:

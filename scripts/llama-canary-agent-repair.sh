@@ -23,6 +23,17 @@ TRUSTED_ROOT="$ROOT"
 # shellcheck disable=SC1091
 source "$ROOT/scripts/lib/macos-deployment-target.sh"
 HARNESS_MODE="${CANARY_HARNESS_MODE:-repair}"
+if [[ -n "${CANARY_MESH_SOURCE:-}" ]]; then
+  if [[ "$HARNESS_MODE" != pinned-build ]]; then
+    echo "selected MeshLLM source requires certify-only pinned-build mode" >&2
+    exit 1
+  fi
+  ROOT="${CANARY_SOURCE_ROOT:?selected source checkout required}"
+  if [[ "$(git -C "$ROOT" rev-parse HEAD)" != "$CANARY_MESH_SOURCE" ]]; then
+    echo "selected MeshLLM checkout does not match frozen revision" >&2
+    exit 1
+  fi
+fi
 UPSTREAM_SHA="${1:-${UPSTREAM_SHA_INPUT:-latest}}"
 if [[ "$UPSTREAM_SHA" == "latest" || -z "$UPSTREAM_SHA" ]]; then
   UPSTREAM_SHA="$(git ls-remote https://github.com/ggml-org/llama.cpp.git master | awk '{print $1}')"
@@ -91,7 +102,7 @@ if [[ -n "$(git status --porcelain)" ]]; then
   echo "changed-pin canary requires a clean trusted-main checkout" >&2
   exit 1
 fi
-if [[ -z "$(git config user.name)" || -z "$(git config user.email)" ]]; then
+if [[ "$HARNESS_MODE" != pinned-build ]] && [[ -z "$(git config user.name)" || -z "$(git config user.email)" ]]; then
   echo "git user.name and user.email must be configured before canary repair" >&2
   exit 1
 fi
@@ -157,6 +168,10 @@ run_verification_logged() {
 }
 
 write_repair_pin() {
+  if [[ "$HARNESS_MODE" == pinned-build ]]; then
+    verify_repair_pin
+    return
+  fi
   scripts/update-llama-pin.sh "$UPSTREAM_SHA"
 }
 

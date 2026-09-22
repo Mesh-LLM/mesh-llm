@@ -46,6 +46,7 @@ where
         "--swarm-capture",
         "--draft-max",
         "--ctx-size",
+        "--parallel",
         "--model",
         "--gguf",
         "--mmproj",
@@ -244,6 +245,29 @@ mod tests {
                 .into_iter()
                 .map(OsString::from)
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn normalize_runtime_surface_args_skips_parallel_value_before_serve() {
+        let args = normalize_runtime_surface_args([
+            "mesh-llm",
+            "--parallel",
+            "32",
+            "serve",
+            "--model",
+            "x.gguf",
+        ]);
+        assert_eq!(args.explicit_surface, Some(RuntimeSurface::Serve));
+        assert_eq!(
+            args.normalized,
+            vec![
+                OsString::from("mesh-llm"),
+                OsString::from("--parallel"),
+                OsString::from("32"),
+                OsString::from("--model"),
+                OsString::from("x.gguf"),
+            ]
         );
     }
 

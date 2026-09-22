@@ -340,6 +340,7 @@ pub(super) async fn run_runtime_cli(
         "--checkpoint-quantization and --checkpoint-imatrix are only valid with mesh-llm serve"
     );
     apply_runtime_cli_speculative_overrides(&mut config, options.speculative_overrides.as_ref());
+    apply_runtime_cli_parallel_override(&mut config, options.parallel);
     apply_runtime_cli_checkpoint_overrides(
         &mut config,
         options.checkpoint_quantization.as_deref(),
@@ -480,6 +481,20 @@ fn initialize_audit_logging_for_options(options: &RuntimeOptions) -> Result<()> 
         )?;
     }
     Ok(())
+}
+
+/// `--parallel N` is the config file's `[gpu].parallel`, spelled on the command line.
+///
+/// It lands on the gpu-level default rather than on any one model so that it reaches
+/// every startup model the same way the config value does, and so a model's own
+/// `[models.throughput].parallel` still wins for that model, as it does for the file.
+pub(in crate::runtime) fn apply_runtime_cli_parallel_override(
+    config: &mut plugin::MeshConfig,
+    parallel: Option<usize>,
+) {
+    if let Some(parallel) = parallel {
+        config.gpu.parallel = Some(parallel);
+    }
 }
 
 pub(in crate::runtime) fn apply_runtime_cli_speculative_overrides(
