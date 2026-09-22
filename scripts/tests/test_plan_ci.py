@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import re
 from fnmatch import fnmatchcase
 import os
 from pathlib import Path
@@ -26,6 +27,56 @@ SPEC.loader.exec_module(PLANNER)
 
 def fixture(name: str) -> dict[str, object]:
     return json.loads((FIXTURE_ROOT / name).read_text(encoding="utf-8"))
+
+
+
+# Crates whose `src/` carries cfg(windows)/cfg(unix) code that no Windows job
+# compiles yet. Their suites have never run on the Windows runner, so enabling
+# them wholesale risks a red main for reasons unrelated to the code under
+# change. Move a crate out of this list (into a platform-windows* crate rule
+# and the windows-unit crate loop) once its suite is confirmed green there.
+WINDOWS_UNVERIFIED_CRATES = {
+    "mesh-llm-commands",
+    "mesh-llm-config",
+    "mesh-llm-events",
+    "mesh-llm-hardware-profile",
+    "mesh-llm-identity",
+    "mesh-llm-native-runtime",
+    "mesh-llm-plugin-manager",
+    "mesh-llm-system",
+    "mesh-llm-tui",
+    "mesh-llm-ui",
+    "model-hf",
+    "skippy-bench",
+    "skippy-model-package",
+    "skippy-quantize",
+    "skippy-runtime",
+    "skippy-server",
+}
+
+
+
+def _windows_unit_row_crates() -> set[str]:
+    """Crates named in the windows-unit row's explicit `cargo test` loop."""
+    slice_source = (
+        ROOT / ".github" / "workflows" / "ci-platform-checks-slice.yml"
+    ).read_text(encoding="utf-8")
+    match = re.search(r"foreach \(\$crate in ([^)]+)\)", slice_source)
+    if match is None:
+        raise AssertionError("windows-unit row no longer runs a crate loop")
+    return set(re.findall(r"'([^']+)'", match.group(1)))
+
+
+def _windows_routed_crates() -> set[str]:
+    """Crates a Windows job compiles: platform-windows* rules plus the unit row."""
+    ownership = json.loads((ROOT / "ci" / "ownership.yml").read_text())
+    routed = {
+        crate
+        for rule in ownership["crate_rules"]
+        if rule["domain"].startswith("platform-windows")
+        for crate in rule["crates"]
+    }
+    return routed | _windows_unit_row_crates()
 
 
 class PlanCiTests(unittest.TestCase):
@@ -371,6 +422,84 @@ class PlanCiTests(unittest.TestCase):
         )
         self.assertEqual(plan["matrices"]["runtime_products"], [])
         self.assertEqual(plan["matrices"]["smoke"], [])
+
+    def test_plugin_crate_selects_only_the_windows_unit_row(self) -> None:
+        payload = fixture("runtime.json")
+        payload["changed_files"] = ["crates/mesh-llm-plugin/src/manifest/web_ui.rs"]
+        payload["workspace_packages"] = [
+            {"name": "mesh-llm-plugin", "path": "crates/mesh-llm-plugin"}
+        ]
+        payload["affected_crates"] = ["mesh-llm-plugin"]
+
+        plan = PLANNER.build_plan(payload, root=ROOT)
+
+        self.assertEqual(
+            [row["id"] for row in plan["matrices"]["platform_checks"]],
+            ["windows-unit"],
+        )
+        # The point of a separate platform-windows-cfg domain: Windows
+        # compiles the crate's test target without buying the host, native
+        # runtime and product builds that platform-windows pulls in.
+        self.assertEqual(plan["matrices"]["runtime_products"], [])
+        self.assertEqual(plan["matrices"]["hosts"], [])
+        self.assertEqual(plan["matrices"]["smoke"], [])
+
+    def test_every_cfg_divergent_crate_is_routed_or_explicitly_unverified(self) -> None:
+        """Platform-divergent code must be compiled on Windows or declared not to be.
+
+        A crate whose `src/` contains `cfg(windows)` / `cfg(unix)` code can
+        break on Windows while every Linux job stays green; that is how
+        #1978 shipped a lib-test target that had never compiled there. Crates
+        are moved out of the exception list one at a time, as each suite is
+        confirmed green on the Windows runner - turning all of them on at
+        once would make main red for reasons unrelated to the routing.
+        """
+        cfg_pattern = re.compile(
+            r"cfg\((?:not\()?(?:windows|unix|target_os\s*=\s*\"windows\")"
+        )
+        divergent = set()
+        for manifest in sorted((ROOT / "crates").glob("*/Cargo.toml")):
+            crate_root = manifest.parent / "src"
+            if not crate_root.is_dir():
+                continue
+            for source in crate_root.rglob("*.rs"):
+                if cfg_pattern.search(source.read_text(encoding="utf-8", errors="ignore")):
+                    divergent.add(manifest.parent.name)
+                    break
+
+        unaccounted = sorted(
+            divergent - _windows_routed_crates() - WINDOWS_UNVERIFIED_CRATES
+        )
+
+        self.assertEqual(
+            [],
+            unaccounted,
+            "these crates carry platform-divergent code but no Windows job "
+            "compiles them; route them to a Windows row or add them to "
+            "WINDOWS_UNVERIFIED_CRATES with a reason",
+        )
+
+    def test_windows_unverified_list_has_no_stale_entries(self) -> None:
+        packages = {
+            manifest.parent.name for manifest in (ROOT / "crates").glob("*/Cargo.toml")
+        }
+
+        self.assertEqual(set(), WINDOWS_UNVERIFIED_CRATES & _windows_routed_crates())
+        self.assertEqual(set(), WINDOWS_UNVERIFIED_CRATES - packages)
+
+    def test_windows_cfg_domain_crates_run_in_the_windows_unit_row(self) -> None:
+        ownership = json.loads((ROOT / "ci" / "ownership.yml").read_text())
+        domain_crates = {
+            crate
+            for rule in ownership["crate_rules"]
+            if rule["domain"] == "platform-windows-cfg"
+            for crate in rule["crates"]
+        }
+
+        # Routing a crate to windows-unit is only signal if that row actually
+        # names it; the row runs an explicit crate list, not the workspace.
+        self.assertTrue(domain_crates)
+        self.assertEqual(set(), domain_crates - _windows_unit_row_crates())
 
     def test_main_covers_every_workspace_crate_once(self) -> None:
         plan = PLANNER.build_plan(fixture("main.json"), root=ROOT)

@@ -201,11 +201,13 @@ jobs:
           # overflow issue linked from #1554.
           RUST_MIN_STACK: "8388608"
         run: |
-          # The same three crate suites as the macOS unit row, in the
-          # dynamic link mode the shipped Windows host uses, so no native ABI
-          # build is needed. pwsh does not stop on a failing native command,
-          # hence the explicit exit check after each one.
-          foreach ($crate in 'model-artifact', 'mesh-llm-host-runtime', 'mesh-llm') {
+          # The macOS unit row's three crate suites, in the dynamic link mode
+          # the shipped Windows host uses, so no native ABI build is needed,
+          # plus the crates routed here by the platform-windows-cfg domain
+          # because they carry cfg(windows)/cfg(unix) code of their own.
+          # pwsh does not stop on a failing native command, hence the
+          # explicit exit check after each one.
+          foreach ($crate in 'model-artifact', 'mesh-llm-host-runtime', 'mesh-llm', 'mesh-llm-plugin') {
             cargo test --locked -p $crate --lib
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
