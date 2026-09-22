@@ -1153,6 +1153,7 @@ impl PluginManager {
         *self.inner.rpc_bridge.lock().await = bridge;
     }
 
+    #[cfg(unix)]
     #[cfg(test)]
     pub(crate) async fn set_test_stream_handler<F>(&self, plugin_name: &str, handler: F)
     where
@@ -1329,6 +1330,7 @@ impl PluginManager {
     }
 }
 
+#[cfg(unix)]
 #[cfg(test)]
 pub(crate) async fn connect_test_side_stream(
     endpoint: &str,
