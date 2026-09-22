@@ -97,8 +97,8 @@ class CiWindowsCompositionTests(unittest.TestCase):
         cpu_routing = routing[: routing.index("WINDOWS_GPU_INPUTS=")]
         gpu_routing = routing[routing.index("WINDOWS_GPU_INPUTS=") :]
 
-        self.assertIn("^crates/mesh-llm-release-footer/", cpu_routing)
-        self.assertNotIn("^crates/mesh-llm-release-footer/", gpu_routing)
+        self.assertIn("^(mesh/|skippy/)?crates/mesh-llm-release-footer/", cpu_routing)
+        self.assertNotIn("^(mesh/|skippy/)?crates/mesh-llm-release-footer/", gpu_routing)
         self.assertIn("package-release", cpu_routing)
         self.assertIn("package-release", gpu_routing)
         for workflow in (

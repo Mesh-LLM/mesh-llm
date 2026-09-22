@@ -32,6 +32,28 @@ update_known_mesh_versions "$2" "$3"
 """
 
 class ReleaseVersionScriptTests(unittest.TestCase):
+    def test_discovered_manifests_bump_path_dependencies_in_both_layouts(self) -> None:
+        script = RELEASE_VERSION_SCRIPT.read_text()
+        discovery = script[script.index('manifests=()'):script.index('versioned_files=()')]
+        helper = re.search(r'update_versioned_path_dependency_versions\(\) \{.*?^}', script, re.S | re.M).group()
+        for owners in [('crates',), ('mesh/crates', 'skippy/crates')]:
+            with self.subTest(owners=owners), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                subprocess.run(['git', 'init', '-q', tmp], check=True)
+                manifests = []
+                for owner in (*owners, 'tools'):
+                    path = root / owner / 'fixture' / 'Cargo.toml'
+                    path.parent.mkdir(parents=True)
+                    path.write_text('[dependencies]\nlocal = { path = "../local", version = "0.76.1" }\nexternal = "0.76.1"\n')
+                    manifests.append(path)
+                subprocess.run(['git', 'add', '.'], cwd=root, check=True)
+                body = helper + '\nREPO_ROOT="$1"\n' + discovery + '\nfor manifest in "${manifests[@]}"; do update_versioned_path_dependency_versions "$REPO_ROOT/$manifest" 0.77.0; done\n'
+                subprocess.run(['bash', '-euc', body, 'bash', tmp], cwd=root, check=True, capture_output=True)
+                for path in manifests:
+                    updated = path.read_text()
+                    self.assertIn('path = "../local", version = "0.77.0"', updated)
+                    self.assertIn('external = "0.76.1"', updated)
+
     def test_known_versions_file_defines_the_function_the_script_edits(self) -> None:
         """The script rewrites known_mesh_llm_versions() by regex.
 

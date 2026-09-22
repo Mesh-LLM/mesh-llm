@@ -128,6 +128,41 @@ class SourceLayoutTests(unittest.TestCase):
                     self.assertIn('Node SDK version mismatch', rejected.stderr)
         self.assertEqual(checked, 3)
 
+    def test_backend_and_sdk_classification_accepts_both_layouts(self):
+        source = (ROOT / '.github/actions/compute-changes/derive-outputs.sh').read_text()
+        script = source[source.index('BACKEND_CHANGED="false"'):source.index('# Inference artifacts are needed')]
+        script += '\nprintf "%s %s %s %s" "$BACKEND_CHANGED" "$WINDOWS_CPU_BUILD_REQUIRED" "$WINDOWS_GPU_BUILD_REQUIRED" "$SDK_SMOKE_REQUIRED"\n'
+        cases = {
+            'third_party/llama.cpp/upstream.txt': 'true true true false',
+            'skippy/third_party/llama.cpp/patches/test.patch': 'true true true false',
+            'sdk/node/index.js': 'false false false true',
+            'mesh/sdk/node/index.js': 'false false false true',
+            'skippy/scripts/build-llama.sh': 'true false false true',
+            'RESEARCH.md': 'false false false false',
+        }
+        for changed, expected in cases.items():
+            with self.subTest(changed=changed):
+                env = {**os.environ, 'CHANGED_FILES': changed, 'ALL_RUST': 'false', 'FORCE_ALL': 'false', 'EVENT_NAME': 'push', 'AFFECTED_CRATES': '[]', 'BACKEND_RECIPE_CHANGED': 'false'}
+                result = subprocess.run(['bash', '-euc', script], env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), expected)
+
+    def test_nightly_pin_resolution_rejects_missing_and_ambiguous_layouts(self):
+        steps = workflow('llama-upstream-canary.yml')['jobs']['resolve']['steps']
+        body = next(s['run'] for s in steps if s.get('id') == 'resolve')
+        script = body[body.index('pins=()'):body.index('upstream="$UPSTREAM"')]
+        script += '\nprintf "%s" "$old"\n'
+        for paths in ([], ['third_party/llama.cpp/upstream.txt'], ['skippy/third_party/llama.cpp/upstream.txt'], ['third_party/llama.cpp/upstream.txt', 'skippy/third_party/llama.cpp/upstream.txt']):
+            with self.subTest(paths=paths), tempfile.TemporaryDirectory() as tmp:
+                for relative in paths:
+                    path = Path(tmp) / relative
+                    path.parent.mkdir(parents=True)
+                    path.write_text('a'*40 + '\n')
+                result = subprocess.run(['bash', '-euc', script], cwd=tmp, capture_output=True, text=True)
+                self.assertEqual(result.returncode == 0, len(paths) == 1, result.stderr)
+                if len(paths) == 1:
+                    self.assertEqual(result.stdout, 'a'*40)
+
     def test_ui_steps_resolve_after_checkout_and_do_not_use_job_defaults(self):
         for name, jobs in [('ci-web-slice.yml', ['ui_quality', 'ui_e2e']), ('ci-ui-artifact-slice.yml', ['ui_artifact'])]:
             for job_name in jobs:

@@ -1182,3 +1182,11 @@ landed on main.
 Node addon release producers also resolve `sdk` or `mesh/sdk` before version
 checks, native builds, npm pack and immutable artifact staging on Linux, macOS
 and Windows. Executable fixtures cover all three producers in both layouts.
+
+Legacy change-detection entrypoints and Windows cache triggers recognize both
+product layouts. Nightly and explicit-revision canary pin readers accept exactly
+one legacy or relocated pin, rejecting missing and ambiguous source trees.
+
+Release version propagation discovers both relocated crate trees, including
+versioned local dependencies. The compiler seed warmer uses the resolved UI
+placeholder directory. Neither change expands runner or cache authority.

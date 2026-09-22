@@ -226,12 +226,14 @@ done < <(
     cd "$REPO_ROOT"
     git ls-files \
         'crates/*/Cargo.toml' \
+        'mesh/crates/*/Cargo.toml' \
+        'skippy/crates/*/Cargo.toml' \
         'tools/*/Cargo.toml' \
         | sort -u
 )
 
 if [[ "${#manifests[@]}" -eq 0 ]]; then
-    echo "no Cargo.toml manifests found under crates/ or tools/" >&2
+    echo "no Cargo.toml manifests found under product crate directories or tools/" >&2
     exit 1
 fi
 
