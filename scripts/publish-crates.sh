@@ -378,6 +378,9 @@ should_skip_initial_dry_run() {
 }
 
 publish_crates=(
+    mesh-llm-plugin
+    mesh-llm-wallet
+    mesh-wallet-lexe
     mesh-llm-payments
     mesh-llm-identity
     skippy-tokenizer
@@ -385,7 +388,6 @@ publish_crates=(
     mesh-llm-routing
     mesh-llm-types
     mesh-llm-guardrails
-    mesh-llm-plugin
     mesh-native-serving-plugin-api
     mesh-llm-skills
     mesh-llm-gpu-bench

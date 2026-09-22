@@ -18,8 +18,6 @@ mesh-llm-wallet = { path = "../mesh-llm-wallet", version = "0.76.1" }
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
-tracing = "0.1"
 tokio = { version = "1", features = ["sync", "time", "rt", "io-util"] }
 
 [dev-dependencies]

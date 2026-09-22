@@ -21,6 +21,8 @@ WORKSPACE_MEMBERS=(
   "mesh-llm-log-store"
   "mesh-llm-native-runtime"
   "mesh-llm-payments"
+  "mesh-llm-wallet"
+  "mesh-wallet-lexe"
   "mesh-llm-protocol"
   "mesh-llm-release-footer"
   "mesh-llm-routing"
