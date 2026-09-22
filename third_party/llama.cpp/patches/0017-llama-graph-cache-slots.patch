@@ -3,13 +3,12 @@ From: sat <sat@local>
 Date: Wed, 23 Sep 2026 07:18:12 +1000
 Subject: [PATCH] llama: keep more than one reusable graph
 
+Opt-in via LLAMA_GRAPH_CACHE_SLOTS (default 1 = previous behaviour).
+A graph taken from the pool is not the one the scheduler last allocated,
+so it is re-allocated before use; skipping build_graph is the saving.
 ---
- src/llama-context.cpp | 40 +++++++++++++++++++++++++++++++++++++++-
- src/llama-context.h   | 16 ++++++++++++++++
- 2 files changed, 55 insertions(+), 1 deletion(-)
-
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 801ac95f2..1ebb87771 100644
+index 801ac95f2..c28433789 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -657,6 +657,19 @@ void llama_context::sched_reserve(const skippy_graph_build_inputs & graph_build_
@@ -40,7 +39,7 @@ index 801ac95f2..1ebb87771 100644
  
          if (!mctx->apply()) {
              LLAMA_LOG_ERROR("%s: failed to apply memory update\n", __func__);
-@@ -1424,7 +1438,24 @@ llm_graph_result * llama_context::process_ubatch(
+@@ -1424,7 +1438,38 @@ llm_graph_result * llama_context::process_ubatch(
      // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
      const auto gparams = graph_params(res, ubatch, mctx, gtype, graph_build_inputs);
  
@@ -57,6 +56,20 @@ index 801ac95f2..1ebb87771 100644
 +                std::swap(gf_res_prev, gf_res_pool[i]);   // the old current stays cached
 +                res = gf_res_prev.get();
 +                gf  = res->get_gf();
++
++                // The scheduler's allocation state belongs to whichever graph it last
++                // allocated. The ordinary reuse path may skip allocation precisely
++                // because that graph is still the current one; a graph taken from the
++                // pool is not, so it has to be allocated before it can be computed.
++                // Skipping build_graph is where the saving is -- allocation is
++                // bookkeeping over existing nodes, not constructing them.
++                ggml_backend_sched_reset(sched.get());
++                ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
++                if (!ggml_backend_sched_alloc_graph(sched.get(), gf)) {
++                    LLAMA_LOG_ERROR("%s: failed to allocate cached graph\n", __func__);
++                    ret = GGML_STATUS_ALLOC_FAILED;
++                    return nullptr;
++                }
 +                reuse_ok = true;
 +                break;
 +            }
@@ -66,7 +79,7 @@ index 801ac95f2..1ebb87771 100644
          //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
  
          // with pipeline parallelism, the previous graph_compute_async may still be running
-@@ -1436,6 +1467,12 @@ llm_graph_result * llama_context::process_ubatch(
+@@ -1436,6 +1481,12 @@ llm_graph_result * llama_context::process_ubatch(
  
          n_reused++;
      } else {
@@ -79,7 +92,7 @@ index 801ac95f2..1ebb87771 100644
          res->reset();
  
          ggml_backend_sched_reset(sched.get());
-@@ -2578,6 +2615,7 @@ ggml_cgraph * llama_context::graph_reserve(
+@@ -2578,6 +2629,7 @@ ggml_cgraph * llama_context::graph_reserve(
  
      // when the scheduler is reset, we cannot reuse the old graph, so we reset the previous graph result to prevent that
      gf_res_prev->reset();
@@ -114,6 +127,5 @@ index 556ef93b8..9255c8b4c 100644
      llm_graph_result_ptr gf_res_reserve;
  
      bool activation_boundary_observed = false;
--- 
-2.50.1 (Apple Git-155)
-
+--
+2.39.5
