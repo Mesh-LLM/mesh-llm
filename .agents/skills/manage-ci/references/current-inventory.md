@@ -980,3 +980,36 @@ semantic aliases. The current `skippy-model-package` name is reused by model
 acquisition after extraction: retain its existing split-serving rule on main,
 with model-download ownership on the relocated path. That conservatively runs
 both domains until the later catalog cleanup; existing main routing is unchanged.
+
+### Canary memory admission and Python SDK
+
+The controller projects each immutable source plan onto `family-certify` plus
+`accelerator-memory-128plus` (108.8 GiB) or `accelerator-memory-256plus`
+(217.6 GiB), reserving 15% of physical RAM. The source plan and its digest are
+unchanged, including historical `mesh_ref` certification. Missing artifact sizes
+and peaks beyond the larger tier fail planning. No family is silently skipped.
+
+`scripts/lib/canary_family_memory.py` uses the greater of pinned file sizes and
+the model estimate, including projector/draft artifacts. Causal parity releases
+the monolithic oracle before partitioned execution and releases state source
+before restore: one aggregate weight copy plus a 25% tensor/KV/state/scratch
+allowance and 2 GiB per each of three processes. Non-chat candidate/oracle
+execution budgets two complete weight copies plus 25% and 2 GiB per process.
+These are explicit admission estimates for the current short-context harness,
+not measured peak guarantees; changes to concurrency/context require review.
+
+The worker recomputes placement from the digest-verified plan, holds one local
+per-account host lock, checks actual physical capacity and available memory,
+and polls availability once per second while running the battery. Available
+memory is macOS free + inactive + speculative pages; purgeable pages are not
+counted twice. A reserve violation or monitoring failure stops only this
+family's process group and fails certification. `memory-admission.json` retains
+the estimate and host observations even on failure. Sampling cannot guarantee
+that instantaneous allocations never cross the reserve. Unrelated workloads
+must leave enough headroom at admission; labels alone are insufficient.
+
+The shared `setup-canary-python` action restores `ci/canary-python/uv.lock` into
+a controller-owned virtual environment and exports `SKIPPY_WORKLOAD_SDK_PYTHON`.
+Historical source workers consume that exact SDK interpreter. This is managed
+project dependency restoration, not an installation into system Python or the
+read-only model cache. The runner still requires preinstalled `uv`.
