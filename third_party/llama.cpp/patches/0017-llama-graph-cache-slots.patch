@@ -1,0 +1,119 @@
+From 9dcbd84e074b7d49921efaefdcf892fec1a2a82f Mon Sep 17 00:00:00 2001
+From: sat <sat@local>
+Date: Wed, 23 Sep 2026 07:18:12 +1000
+Subject: [PATCH] llama: keep more than one reusable graph
+
+---
+ src/llama-context.cpp | 40 +++++++++++++++++++++++++++++++++++++++-
+ src/llama-context.h   | 16 ++++++++++++++++
+ 2 files changed, 55 insertions(+), 1 deletion(-)
+
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 801ac95f2..1ebb87771 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -657,6 +657,19 @@ void llama_context::sched_reserve(const skippy_graph_build_inputs & graph_build_
+     LLAMA_LOG_DEBUG("%s: max_nodes = %zu\n", __func__, max_nodes);
+ 
+     gf_res_prev.reset(new llm_graph_result(max_nodes));
++    {
++        // Each slot carries its own graph arena, so this is opt-in and off by default.
++        const char * slots_env = getenv("LLAMA_GRAPH_CACHE_SLOTS");
++        int slots = slots_env ? atoi(slots_env) : 1;
++        if (slots < 1)  { slots = 1;  }
++        if (slots > 16) { slots = 16; }
++        for (int i = 1; i < slots; ++i) {
++            gf_res_pool.emplace_back(new llm_graph_result(max_nodes));
++        }
++        if (!gf_res_pool.empty()) {
++            LLAMA_LOG_INFO("%s: graph cache slots = %d\n", __func__, slots);
++        }
++    }
+     gf_res_reserve.reset(new llm_graph_result(max_nodes));
+ 
+     sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, cparams.pipeline_parallel, cparams.op_offload));
+@@ -892,6 +905,7 @@ bool llama_context::memory_update(
+         // TODO: change the mctx->apply() to return information if a graph reserve is needed
+         //       reset the graph result only if the memory module did reset the scheduler
+         gf_res_prev->reset();
++    for (auto & r : gf_res_pool) { r->reset(); }
+ 
+         if (!mctx->apply()) {
+             LLAMA_LOG_ERROR("%s: failed to apply memory update\n", __func__);
+@@ -1424,7 +1438,24 @@ llm_graph_result * llama_context::process_ubatch(
+     // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
+     const auto gparams = graph_params(res, ubatch, mctx, gtype, graph_build_inputs);
+ 
+-    if (!graph_reuse_disable && res->can_reuse(gparams)) {
++    bool reuse_ok = !graph_reuse_disable && res->can_reuse(gparams);
++    if (!reuse_ok && !graph_reuse_disable) {
++        // The current graph did not match. A previously built one may: the arrangements
++        // recur even though consecutive steps differ. Each candidate is tested with the
++        // same can_reuse, so nothing is accepted that would not have been accepted before.
++        for (size_t i = 0; i < gf_res_pool.size(); ++i) {
++            auto * cand = gf_res_pool[i].get();
++            const auto cand_params = graph_params(cand, ubatch, mctx, gtype, graph_build_inputs);
++            if (cand->can_reuse(cand_params)) {
++                std::swap(gf_res_prev, gf_res_pool[i]);   // the old current stays cached
++                res = gf_res_prev.get();
++                gf  = res->get_gf();
++                reuse_ok = true;
++                break;
++            }
++        }
++    }
++    if (reuse_ok) {
+         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
+ 
+         // with pipeline parallelism, the previous graph_compute_async may still be running
+@@ -1436,6 +1467,12 @@ llm_graph_result * llama_context::process_ubatch(
+ 
+         n_reused++;
+     } else {
++        if (!gf_res_pool.empty()) {
++            // Keep the graph being replaced: it is likely to come round again.
++            std::swap(gf_res_prev, gf_res_pool[gf_res_rot]);
++            gf_res_rot = (gf_res_rot + 1) % gf_res_pool.size();
++            res = gf_res_prev.get();
++        }
+         res->reset();
+ 
+         ggml_backend_sched_reset(sched.get());
+@@ -2578,6 +2615,7 @@ ggml_cgraph * llama_context::graph_reserve(
+ 
+     // when the scheduler is reset, we cannot reuse the old graph, so we reset the previous graph result to prevent that
+     gf_res_prev->reset();
++    for (auto & r : gf_res_pool) { r->reset(); }
+ 
+     // store the n_outputs as it is, and restore it afterwards
+     // TODO: not sure if needed, might simplify in the future by removing this
+diff --git a/src/llama-context.h b/src/llama-context.h
+index 556ef93b8..9255c8b4c 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -408,6 +408,22 @@ private:
+     std::vector<size_t>                     backend_buf_exp_size; // expected buffer sizes
+ 
+     llm_graph_result_ptr gf_res_prev;
++
++    // Additional graph results kept alongside the current one.
++    //
++    // allow_reuse compares the ubatch's per-token sequence ids positionally, so under
++    // continuous batching a single cached graph collides with whatever arrangement ran
++    // last and is rejected almost every step on the stage that owns backend samplers
++    // (measured: 0.8% reuse there against 88.6% on a stage without them). The
++    // arrangements themselves recur, though -- request slots are stable between
++    // retirements -- so holding a few and testing each against the UNCHANGED can_reuse
++    // lets a recurring one hit. No validation is relaxed: a graph is still only reused
++    // when can_reuse accepts it.
++    //
++    // Empty by default, which is exactly the previous behaviour. Sized by
++    // LLAMA_GRAPH_CACHE_SLOTS, because each slot holds its own graph arena.
++    std::vector<llm_graph_result_ptr> gf_res_pool;
++    size_t gf_res_rot = 0;
+     llm_graph_result_ptr gf_res_reserve;
+ 
+     bool activation_boundary_observed = false;
+-- 
+2.50.1 (Apple Git-155)
+
