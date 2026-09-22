@@ -17,6 +17,11 @@ import time
 import tempfile
 import sys
 
+_MEMORY_SPEC = importlib.util.spec_from_file_location(
+    "canary_family_memory", Path(__file__).resolve().parent / "lib/canary_family_memory.py")
+MEMORY = importlib.util.module_from_spec(_MEMORY_SPEC)
+_MEMORY_SPEC.loader.exec_module(MEMORY)
+
 BINS = ("skippy-correctness", "skippy-server", "skippy-model-package", "skippy-topology-plan")
 CORE = {"single-step", "chain", "state-handoff"}
 # The workload oracle closure ships in the handoff so family workers consume
@@ -107,10 +112,26 @@ def source_plan(root: Path, destination: Path, *, check_cache: bool = False) -> 
 
 
 def scheduling_matrix(plan: dict) -> dict:
-    # Submission order is controller policy, not part of the source's canonical
-    # plan. Never mutate the plan supplied to an older battery's verifier.
-    return {"include": sorted(plan["github_matrix"]["include"],
-                              key=lambda row: (row["estimated_work_bytes"], row["families"]))}
+    # Scheduling is controller policy, never part of a historical source plan.
+    models = validate_plan(plan)
+    rows = [{**row, **MEMORY.placement(models[row["families"]])}
+            for row in plan["github_matrix"]["include"]]
+    return {"include": sorted(rows, key=lambda row: (row["estimated_work_bytes"], row["families"]))}
+
+
+def certify(args) -> None:
+    _, plan = verify_package(args.package, args.identity)
+    models = validate_plan(plan)
+    rows = [row for row in plan["github_matrix"]["include"] if row["shard_index"] == args.shard_index]
+    if len(rows) != 1:
+        raise ValueError("unplanned family shard")
+    model = models[rows[0]["families"]]
+    command = ["arch", "-arm64", str(args.root.resolve() / "scripts/skippy-family-battery.sh"),
+               "--skip-build", "--plan", str(args.package.resolve() / "plan.json"),
+               "--shard-index", str(args.shard_index)]
+    result = MEMORY.guarded_run(model, args.memory_tier, command, args.evidence, cwd=args.root.resolve())
+    if result:
+        raise SystemExit(result if result > 0 else 1)
 
 
 def preflight_battery(root: Path) -> None:
@@ -118,7 +139,8 @@ def preflight_battery(root: Path) -> None:
     print(f"Checking selected battery/plan contract: {root}", flush=True)
     with tempfile.TemporaryDirectory(prefix="canary-contract-") as directory:
         temporary = Path(directory)
-        source_plan(root, temporary / "plan.json")
+        plan = source_plan(root, temporary / "plan.json")
+        scheduling_matrix(plan)
         env = dict(os.environ)
         env.pop("HF_CACHE", None)
         env.pop("SKIPPY_WORKLOAD_PRODUCER_MANIFEST", None)
@@ -573,14 +595,17 @@ def main() -> None:
     for name in ("candidate", "base", "branch", "pass-id"):
         p.add_argument("--" + name, required=True)
     subs.add_parser("build")
-    for command in ("restore", "receipt", "aggregate", "publication"):
+    for command in ("restore", "receipt", "aggregate", "publication", "certify"):
         p = subs.add_parser(command)
         p.add_argument("--package", type=Path, required=True)
         p.add_argument("--identity", required=True)
-        if command == "restore":
+        if command in {"restore", "certify"}:
             p.add_argument("--root", type=Path, required=True)
-        elif command != "publication":
+        if command not in {"restore", "publication"}:
             p.add_argument("--evidence", type=Path, required=True)
+        if command == "certify":
+            p.add_argument("--shard-index", type=int, required=True)
+            p.add_argument("--memory-tier", required=True)
         if command == "receipt":
             p.add_argument("--family", required=True)
             p.add_argument("--outcome", required=True, choices=("success", "failure", "cancelled", "skipped"))
