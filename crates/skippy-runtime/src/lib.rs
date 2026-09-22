@@ -24,7 +24,9 @@ mod session;
 mod stage_planning;
 mod types;
 
-pub use activation::{DecodeFrameBatchRequest, IterationBatchPhase, IterationBatchRequest};
+pub use activation::{
+    DecodeFrameBatchRequest, IterationBatchPhase, IterationBatchRequest, PartialBatchExecution,
+};
 pub use capability_probe::{CapabilityReport, probe_capabilities};
 pub use checkpoint::{CheckpointQuantization, is_safetensors_checkpoint};
 pub use config::{
