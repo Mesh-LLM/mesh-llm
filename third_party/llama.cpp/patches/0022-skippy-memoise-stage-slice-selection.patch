@@ -1,4 +1,4 @@
-From 0c921db21f0c4933135622a80bf4bc4f6e30bac1 Mon Sep 17 00:00:00 2001
+From 7790435419e80c9ea94274c178c01fa30ef9a368 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Wed, 23 Sep 2026 07:00:42 +1000
 Subject: [PATCH] skippy: memoise stage slice selection with exact dependency
@@ -11,8 +11,8 @@ Subject: [PATCH] skippy: memoise stage slice selection with exact dependency
  src/skippy/stage_slice_plan.cpp              |  14 +-
  src/skippy/state_effects.cpp                 |   7 +-
  src/skippy/tests/selection_memo_regression.h | 123 ++++++++++++++++
- src/skippy/tests/stage_slice_plan.cpp        |   9 +-
- 7 files changed, 313 insertions(+), 3 deletions(-)
+ src/skippy/tests/stage_slice_plan.cpp        |   6 +
+ 7 files changed, 311 insertions(+), 2 deletions(-)
  create mode 100644 src/skippy/selection_memo.cpp
  create mode 100644 src/skippy/selection_memo.h
  create mode 100644 src/skippy/tests/selection_memo_regression.h
@@ -204,7 +204,7 @@ index 000000000..6af96e759
 +const skippy_stage_slice_selection * skippy_recall_stage_slice(const std::string & key);
 +void skippy_remember_stage_slice(std::string key, const skippy_stage_slice_selection & selection);
 diff --git a/src/skippy/stage_slice_plan.cpp b/src/skippy/stage_slice_plan.cpp
-index dda2df504..11054e946 100644
+index 75a4da24c..db40efbcd 100644
 --- a/src/skippy/stage_slice_plan.cpp
 +++ b/src/skippy/stage_slice_plan.cpp
 @@ -1,4 +1,5 @@
@@ -388,7 +388,7 @@ index 000000000..49e5ca442
 +    return 0;
 +}
 diff --git a/src/skippy/tests/stage_slice_plan.cpp b/src/skippy/tests/stage_slice_plan.cpp
-index 1f5a04c98..bc25c428c 100644
+index 69370e576..a01ddcd13 100644
 --- a/src/skippy/tests/stage_slice_plan.cpp
 +++ b/src/skippy/tests/stage_slice_plan.cpp
 @@ -6,6 +6,7 @@
@@ -409,19 +409,18 @@ index 1f5a04c98..bc25c428c 100644
  #include <string>
  #include <vector>
  
-@@ -1127,8 +1131,11 @@ static int check_auxiliary_graph_parameter_closure() {
-     return 0;
+@@ -1128,9 +1132,11 @@ static int check_auxiliary_graph_parameter_closure() {
  }
  
+ #include "residual_checkpoint_regression.h"
 +#include "selection_memo_regression.h"
-+
+ 
  int main() {
--    int result = check_semantic_identities();
-+    int result = check_selection_memo_regressions();
-+    if (!result) { result = check_semantic_identities(); }
+     int result = check_raw_embedding_checkpoint();
++    if (!result) { result = check_selection_memo_regressions(); }
+     if (!result) { result = check_semantic_identities(); }
      if (!result) { result = check_tied_parameter_identity(); }
      if (!result) { result = check_middle_stage_selection(); }
-     if (!result) { result = check_inferred_registered_state_write(); }
 -- 
 2.54.0 (Apple Git-157)
 
