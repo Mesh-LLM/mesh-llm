@@ -272,6 +272,14 @@ jobs:
             "${{ inputs.artifact_path }}" \
             "${{ steps.recurrent_model.outputs.model_path }}"
 
+      - name: Clean self-hosted smoke outputs
+        if: ${{ (success() || failure() || cancelled()) && inputs.runner == 'gpu-nvidia' }}
+        timeout-minutes: 5
+        env:
+          CLEANUP_ARTIFACT_PATH: ${{ inputs.artifact_path }}
+          CLEANUP_BINARY_PATH: ${{ inputs.mesh_binary_target }}
+        run: python3 scripts/cleanup-self-hosted.py --job smoke --evidence-uploaded false
+
   smoke_tests_macos:
     name: Skippy Inference Smoke Tests (macOS Metal)
     if: inputs.runner == 'macos-15'

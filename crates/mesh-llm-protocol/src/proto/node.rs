@@ -132,6 +132,87 @@ pub struct PeerAnnouncement {
     /// Positive, short-lived cache evidence. Digests are salted and contain no tokens.
     #[prost(message, optional, tag = "50")]
     pub cache_affinity: ::core::option::Option<CacheAffinityAdvertisement>,
+    /// An optional, self-reported claim this node MAY advertise about the head
+    /// of its own append-only history. Advisory only. Absence has four
+    /// possible causes, and a receiver cannot tell which one applies from this
+    /// field alone: (1) the peer does not advertise one; (2) the peer has not
+    /// produced one yet; (3) the head originated more than one hop away — this
+    /// implementation does not relay `claimed_log_head` transitively (see
+    /// `apply_transitive_ann`), so a receiver only ever sees heads from
+    /// directly-connected peers; (4) a field exceeded its bound and the whole
+    /// head was dropped on decode (see `proto_claimed_log_head_to_local`).
+    /// Never verified by mesh-llm itself — carried opaquely so a receiver MAY
+    /// verify independently.
+    #[prost(message, optional, tag = "51")]
+    pub claimed_log_head: ::core::option::Option<ClaimedLogHead>,
+}
+/// A minimal, self-contained claim about the current head of a peer's
+/// append-only log. `claimed_signature` is claimed by the announcing peer to
+/// be a signature, using the scheme named in `signature_algorithm`, by the
+/// peer's own node key (the same key backing its `endpoint_id`) over the
+/// following byte string ("sig_input"), so a third party can implement a
+/// verifier without consulting any external document. `sig_input` is
+/// constructed the same way as `SignedMeshGenesisPolicy`'s canonical bytes,
+/// using this crate's `write_string`/`write_bytes` conventions (see
+/// `mesh-llm-host-runtime/src/mesh/requirements.rs`):
+///
+///   sig_input = b"mesh-llm-claimed-log-head-v1:"
+///             || u64le(len(log_id))               || log_id
+///             || u64le(size)
+///             || u64le(len(root))                  || root
+///             || u64le(timestamp_unix_ms)
+///             || u64le(len(signature_algorithm))   || signature_algorithm
+///
+/// All integers are little-endian, fixed 8 bytes (u64le) — matching this
+/// crate's existing canonical-bytes convention, the same one used for
+/// `SignedMeshGenesisPolicy`, `SignedBootstrapToken`, and
+/// `DirectNodeAdmissionProof`. `len(log_id)` and `len(signature_algorithm)`
+/// are each the length in bytes of the UTF-8 encoding of the string, not a
+/// character count. Every variable-length field is length-prefixed, so
+/// concatenation cannot be ambiguous between adjacent fields. The leading
+/// domain-separation tag stops a signature produced for another protocol
+/// from being replayed here.
+/// `signature_algorithm` is itself bound into `sig_input` — otherwise an
+/// attacker could strip or swap it on the wire, and algorithm agility would
+/// become an attack surface instead of a feature. The value bound in is
+/// `signature_algorithm.trim()`, the same trimmed value a verifier must
+/// compare against, so two peers that differ only in surrounding whitespace
+/// sign and verify identical bytes.
+/// `signature_algorithm` names the scheme with a lowercase string, e.g.
+/// `"ed25519"` (matching `ED25519_SIGNATURE_ALGORITHM` in
+/// `mesh-llm-host-runtime/src/mesh/requirements.rs`). Comparison is
+/// `.trim()` then exact `==` — whitespace-tolerant, case-sensitive — the
+/// same convention already used to check this field on
+/// `SignedMeshGenesisPolicy`/`SignedBootstrapToken`/
+/// `DirectNodeAdmissionProof`. An absent or empty `signature_algorithm`
+/// means the peer named no scheme: a verifier cannot check the claim and
+/// MUST NOT assume one (in particular, MUST NOT default to Ed25519) — empty
+/// is never defaulted, the same house rule those three messages already
+/// enforce.
+/// mesh-llm carries this opaquely and never verifies it itself — the name
+/// reflects that nothing here has checked the claim. A consumer that does
+/// verify it may define its own `VerifiedLogHead` type; none exists in this
+/// crate.
+/// `log_id`, `root`, `claimed_signature`, and `signature_algorithm` are
+/// bounded at the conversion boundary (see
+/// `mesh-llm-host-runtime/src/protocol/convert.rs`) as a memory-safety limit
+/// on untrusted remote bytes, not a format assertion — the bounds are wide
+/// enough for hash/signature schemes other than the SHA-256/Ed25519 this
+/// node itself uses.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ClaimedLogHead {
+    #[prost(string, tag = "1")]
+    pub log_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub size: u64,
+    #[prost(bytes = "vec", tag = "3")]
+    pub root: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint64, tag = "4")]
+    pub timestamp_unix_ms: u64,
+    #[prost(bytes = "vec", tag = "5")]
+    pub claimed_signature: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "6")]
+    pub signature_algorithm: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AdvertisedModelThroughput {

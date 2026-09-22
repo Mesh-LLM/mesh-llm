@@ -15,6 +15,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--seconds", type=int, required=True)
     parser.add_argument("--label", required=True)
+    parser.add_argument("--cleanup-on-exit", action="store_true",
+                        help="terminate remaining group members even when the command completes")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if args.seconds <= 0:
@@ -38,6 +40,31 @@ def terminate_group(process: subprocess.Popen[bytes]) -> None:
         except ProcessLookupError:
             return
         process.wait()
+
+
+def cleanup_completed_group(process: subprocess.Popen[bytes]) -> None:
+    """Stop descendants before returning a completed agent's workspace to its caller."""
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    # The group leader has already exited; waiting on it cannot wait for its
+    # descendants. Give those children a short grace, then kill survivors.
+    time.sleep(0.1)
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + 10
+    while True:
+        # Orphaned zombies cannot mutate files and may await init's reaper.
+        rows = subprocess.check_output(["ps", "-axo", "pgid=,stat="], text=True)
+        if not any(int(fields[0]) == process.pid and not fields[1].startswith("Z")
+                   for row in rows.splitlines() if len(fields := row.split()) == 2):
+            return
+        if time.monotonic() >= deadline:
+            raise RuntimeError("command process group did not stop before workspace handoff")
+        time.sleep(0.05)
 
 
 def main() -> int:
@@ -71,6 +98,8 @@ def main() -> int:
             if remaining <= 0:
                 returncode = process.poll()
                 if returncode is not None:
+                    if args.cleanup_on_exit:
+                        cleanup_completed_group(process)
                     return returncode
                 print(
                     f"{args.label} timed out after {args.seconds}s; terminating process group",
@@ -83,6 +112,8 @@ def main() -> int:
             except subprocess.TimeoutExpired:
                 continue
             if received_signal is None:
+                if args.cleanup_on_exit:
+                    cleanup_completed_group(process)
                 return returncode
 
         print(

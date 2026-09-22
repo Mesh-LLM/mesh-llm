@@ -8,6 +8,7 @@ import type {
 
 import { CONFIGURATION_HARNESS } from '@/features/app-tabs/data'
 import type { RuntimeConfigControlStatePayload, RuntimeConfigSchemaReference } from './config-adapter'
+import { configSectionForPath, lastPathSegment } from './config-adapter-paths'
 import { createSchemaControl } from './schema-control-factory'
 import {
   DEFAULT_CATEGORY_ORDER,
@@ -180,7 +181,7 @@ function schemaSettingFromEntry(
     id: entry.canonical_path,
     categoryId: category.id,
     canonicalPath: entry.canonical_path,
-    tomlSection: 'runtime',
+    tomlSection: configSectionForPath(entry.canonical_path),
     tomlKey: name,
     rendererId: undefined,
     controlHint: entry.presentation?.control_hint,
@@ -201,8 +202,4 @@ function schemaSettingFromEntry(
     validationConstraints: entry.constraints,
     categoryOrder: category.order ?? DEFAULT_CATEGORY_ORDER
   }
-}
-
-function lastPathSegment(canonicalPath: string) {
-  return canonicalPath.split('.').filter(Boolean).at(-1) ?? canonicalPath
 }

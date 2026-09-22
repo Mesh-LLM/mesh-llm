@@ -378,6 +378,13 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Operational safety
 
+- Self-hosted jobs must finish with bounded cleanup of their own generated
+  files after artifact uploads and explicit cache saves. Preserve shared model,
+  compiler and package caches, source checkouts, and local recovery artifacts
+  whose upload failed. Cleanup must run on success, failure and cancellation,
+  validate deletion boundaries, and never sweep another job's directories.
+  Runner loss or force termination may prevent the final step from running.
+
 - Agentic replay executes complete recorded sessions only on trusted main.
   Long-context qualification is currently manual-only; restore the daily
   schedule only after reviewed calibration of all model/concurrency cells.
@@ -424,6 +431,14 @@ The immutable model cache remains offline and read-only. One workflow-level
 non-cancelling concurrency group prevents overlapping canary runs, while
 family jobs have no shared concurrency group and use at most eight runners.
 
+Manual `mesh_ref` is an explicitly authorized trusted-code path, not a PR
+runner exception. Keep the workflow/controller on protected main, resolve only
+same-repository branch-reachable commits once, and bind the controller and
+selected source independently in every handoff. Certify the selected revision's
+existing pin and patches without repair or publication. Selected build scripts
+and battery code execute on persistent lab runners, so operators must choose
+trusted revisions; a main controller does not sandbox that source.
+
 Changed pins have at most three distributed repair attempts. Within each
 attempt, prepare/build failures return to the same bounded Goose session.
 Family or independent-verification failures feed the preserved candidate and
@@ -445,6 +460,35 @@ Native-head certification budgets include two additional startup allowances
 for the integrated model and independent baseline loads, retaining the existing
 absolute timeout cap. Dry-run planning reflects the declared native-head lane;
 actual execution still requires the immutable metadata and tensor scans.
+
+Canary scheduling reserves 10% of physical memory. The controller projects
+source-owned plans onto the existing `accelerator-memory-128plus` and
+`accelerator-memory-256plus` labels (115.2 and 230.4 GiB workload budgets).
+Never add scheduling fields to a historical source's canonical plan. Estimates
+include pinned artifact bytes, concurrent workload copies, and explicit runtime
+allowances; they are admission estimates, not measured peak guarantees. Workers
+recompute the tier from the verified handoff, check physical and available memory,
+and stop their own process group if available memory falls below the reserve.
+One certification per runner account/host holds a local lock. Oversized families
+fail closed rather than silently skipping certification. The embedding SDK uses
+a locked controller-owned Python project, including with historical sources.
+
+The family matrix is submitted in ascending estimated model bytes, with family
+name breaking ties. Balanced shard membership remains unchanged. This puts
+small models first in the canary's one-family-per-job matrix; parallel runner
+availability can still change actual start and completion order.
+
+Partial GitHub reruns may reuse an earlier producer attempt from the same run
+only through the exact dependency-provided identity digest. Producer provenance
+and all source/plan/executable checks remain immutable. Family artifacts are
+namespaced by that identity and worker attempt. Aggregation chooses the newest
+receipt per family, rejects duplicate same-attempt receipts and invalid attempt
+bounds, and never falls back from a newer failure to an older success. The
+family job-result gate remains mandatory so missing uploads cannot hide failures.
+Failed certifications upload their evidence and then fail the family job, so
+GitHub's failed-job rerun can select them instead of only retrying aggregation.
+Repair feedback retains attempt-labelled history; it is diagnostic input, never
+certification authority. Rebuilding a producer invalidates its prior receipts.
 
 ## Validation contract
 

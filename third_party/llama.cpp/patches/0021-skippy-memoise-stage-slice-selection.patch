@@ -1,18 +1,18 @@
-From 6d47a11e6979ba1b2e1413929d4e77a9ecefdcc4 Mon Sep 17 00:00:00 2001
+From 6ae152df2b1bdf16a5cd67c9a72e68113280a855 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
-Date: Wed, 23 Sep 2026 06:39:09 +1000
+Date: Wed, 23 Sep 2026 06:46:50 +1000
 Subject: [PATCH] skippy: memoize stage selection with exact dependency
  metadata
 
 ---
  src/CMakeLists.txt                           |   1 +
- src/skippy/selection_memo.cpp                | 144 +++++++++++++++++++
+ src/skippy/selection_memo.cpp                | 145 +++++++++++++++++++
  src/skippy/selection_memo.h                  |  17 +++
  src/skippy/stage_slice_plan.cpp              |  14 +-
  src/skippy/state_effects.cpp                 |   7 +-
  src/skippy/tests/selection_memo_regression.h | 116 +++++++++++++++
  src/skippy/tests/stage_slice_plan.cpp        |   8 +-
- 7 files changed, 304 insertions(+), 3 deletions(-)
+ 7 files changed, 305 insertions(+), 3 deletions(-)
  create mode 100644 src/skippy/selection_memo.cpp
  create mode 100644 src/skippy/selection_memo.h
  create mode 100644 src/skippy/tests/selection_memo_regression.h
@@ -31,10 +31,10 @@ index 0659a5dce..80ac609e3 100644
              skippy/stage_realization.cpp
 diff --git a/src/skippy/selection_memo.cpp b/src/skippy/selection_memo.cpp
 new file mode 100644
-index 000000000..6aa59d354
+index 000000000..1b9051e3e
 --- /dev/null
 +++ b/src/skippy/selection_memo.cpp
-@@ -0,0 +1,144 @@
+@@ -0,0 +1,145 @@
 +#include "selection_memo.h"
 +
 +#include "../../ggml/src/ggml-impl.h"
@@ -175,8 +175,9 @@ index 000000000..6aa59d354
 +void skippy_remember_stage_slice(std::string key, const skippy_stage_slice_selection & selection) {
 +    if (key.empty()) { return; }
 +    auto & entry = entries[next_entry];
-+    entry.key = std::move(key);
++    entry.key.clear();
 +    entry.selection = selection;
++    entry.key = std::move(key);
 +    next_entry = (next_entry + 1) % remembered_selections;
 +}
 diff --git a/src/skippy/selection_memo.h b/src/skippy/selection_memo.h

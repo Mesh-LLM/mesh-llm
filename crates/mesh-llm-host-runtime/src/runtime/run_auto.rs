@@ -47,6 +47,7 @@ use anyhow::{Context, Result};
 use mesh_llm_events::{LogFormat, OutputEvent, RuntimeStatus, emit_event, output_sink};
 use skippy_protocol::FlashAttentionType;
 use std::collections::{BTreeSet, HashMap};
+use std::future::Future;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -241,12 +242,48 @@ pub(super) fn options_from_embedded_options(embedded: EmbeddedRuntimeOptions) ->
     }
 }
 
+/// Run the plugin process until it finishes or a termination signal arrives.
+///
+/// `run_runtime_cli` installs the process-wide termination-signal handlers
+/// before this branch, which makes this process the owner of SIGINT and
+/// SIGTERM. The plugin lifecycle is otherwise driven by the host connection
+/// closing, so a branch that did not observe the shared delivery would consume
+/// the signal and leave the plugin running indefinitely (#1969 review).
+async fn run_plugin_until_shutdown(name: String) -> Result<()> {
+    let shutdown = super::shutdown_signal::wait_for_shutdown_signal();
+    run_plugin_until(plugin::run_plugin_process(name), shutdown).await
+}
+
+/// Run `plugin` until it completes, or until `shutdown` observes a
+/// termination signal, whichever happens first.
+async fn run_plugin_until(
+    plugin: impl Future<Output = Result<()>>,
+    shutdown: impl Future<Output = &'static str>,
+) -> Result<()> {
+    tokio::select! {
+        result = plugin => result,
+        signal = shutdown => {
+            tracing::info!(
+                %signal,
+                "termination signal observed; stopping plugin process"
+            );
+            Ok(())
+        }
+    }
+}
+
 pub(super) async fn run_runtime_cli(
     mut options: RuntimeOptions,
     explicit_surface: Option<RuntimeSurface>,
     legacy_warning: Option<String>,
     embedded_control_rx: Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
 ) -> Result<()> {
+    // Register termination-signal handling before any startup work. Startup
+    // publishes readiness well before the serving loops await the signal, so a
+    // handler installed at loop entry can miss a SIGTERM that arrives in
+    // between and leave the daemon running until it is killed (#1812).
+    super::shutdown_signal::install_shutdown_signals();
+
     options.validate_discovery_mode_args()?;
 
     if let Some(warning) = legacy_warning {
@@ -267,7 +304,7 @@ pub(super) async fn run_runtime_cli(
 
     if let Some(name) = options.plugin.clone() {
         initialize_early_topology_audit_logging(&mut options)?;
-        return plugin::run_plugin_process(name).await;
+        return run_plugin_until_shutdown(name).await;
     }
 
     let checked_updates = autoupdate::maybe_auto_update(autoupdate::AutoUpdateOptions {
@@ -303,6 +340,7 @@ pub(super) async fn run_runtime_cli(
         "--checkpoint-quantization and --checkpoint-imatrix are only valid with mesh-llm serve"
     );
     apply_runtime_cli_speculative_overrides(&mut config, options.speculative_overrides.as_ref());
+    apply_runtime_cli_parallel_override(&mut config, options.parallel);
     apply_runtime_cli_checkpoint_overrides(
         &mut config,
         options.checkpoint_quantization.as_deref(),
@@ -443,6 +481,20 @@ fn initialize_audit_logging_for_options(options: &RuntimeOptions) -> Result<()> 
         )?;
     }
     Ok(())
+}
+
+/// `--parallel N` is the config file's `[gpu].parallel`, spelled on the command line.
+///
+/// It lands on the gpu-level default rather than on any one model so that it reaches
+/// every startup model the same way the config value does, and so a model's own
+/// `[models.throughput].parallel` still wins for that model, as it does for the file.
+pub(in crate::runtime) fn apply_runtime_cli_parallel_override(
+    config: &mut plugin::MeshConfig,
+    parallel: Option<usize>,
+) {
+    if let Some(parallel) = parallel {
+        config.gpu.parallel = Some(parallel);
+    }
 }
 
 pub(in crate::runtime) fn apply_runtime_cli_speculative_overrides(
@@ -2069,6 +2121,45 @@ mod tests {
         assert!(
             runtime_event_engine().is_none(),
             "run_auto early errors must clear the installed engine"
+        );
+    }
+
+    /// A termination signal must stop the plugin process. `run_runtime_cli`
+    /// installs the process-wide handlers before the plugin branch, so a
+    /// branch that ignored the shared delivery would consume SIGTERM and keep
+    /// running; this is the regression that guards the fix (#1969 review).
+    #[tokio::test]
+    async fn plugin_process_stops_when_a_termination_signal_arrives() {
+        let result = super::run_plugin_until(std::future::pending::<anyhow::Result<()>>(), async {
+            "SIGTERM"
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "a termination signal must stop the plugin process cleanly"
+        );
+    }
+
+    /// Without a signal, the plugin's own result is what the caller sees: a
+    /// clean completion stays clean, and a failure is not reported as a signal
+    /// stop.
+    #[tokio::test]
+    async fn plugin_process_result_survives_while_no_signal_arrives() {
+        let completed =
+            super::run_plugin_until(async { Ok(()) }, std::future::pending::<&'static str>()).await;
+        assert!(completed.is_ok(), "a completed plugin stays a clean result");
+
+        let failed = super::run_plugin_until(
+            async { Err(anyhow::anyhow!("plugin host connection is closed")) },
+            std::future::pending::<&'static str>(),
+        )
+        .await;
+        let error = failed.expect_err("a plugin failure must not be reported as a signal stop");
+        assert!(
+            error
+                .to_string()
+                .contains("plugin host connection is closed"),
+            "the plugin's own error must be preserved: {error:#}"
         );
     }
 }

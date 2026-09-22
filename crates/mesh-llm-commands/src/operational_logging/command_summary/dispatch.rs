@@ -7,6 +7,20 @@ use super::{
 
 pub(super) fn format_command(command: &Command, assembly: &mut SummaryAssembly) {
     match command {
+        Command::Hermes(args) | Command::Openclaw(args) => {
+            assembly
+                .command
+                .push_str(if matches!(command, Command::Hermes(_)) {
+                    " hermes"
+                } else {
+                    " openclaw"
+                });
+            assembly.flag("write", args.write);
+            assembly.redact("--host", true);
+            assembly.redact("--model", true);
+            assembly.redact("--config-path", args.config_path.is_some());
+            assembly.redact("--context-length", args.context_length.is_some());
+        }
         Command::Serve => assembly.command.push_str(" serve"),
         Command::Client => assembly.command.push_str(" client"),
         Command::Models { command } => models::format_models(command, assembly),

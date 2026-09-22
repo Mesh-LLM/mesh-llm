@@ -1,3 +1,4 @@
+pub mod config_write;
 mod model_inventory;
 use model_inventory::ModelInventory;
 

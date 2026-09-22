@@ -82,6 +82,7 @@ opentelemetry = { version = "0.32.0", default-features = false, features = ["met
 opentelemetry_sdk = { version = "0.32.1", default-features = false, features = ["metrics"] }
 opentelemetry-otlp = { version = "0.32.0", default-features = false, features = ["metrics", "http-proto", "reqwest-blocking-client"] }
 rustls = "0.23.36"
+ryu = "1"
 reqwest = { version = "0.13", features = ["stream", "json"] }
 futures-util = "0.3"
 semver = "1"

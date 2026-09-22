@@ -30,6 +30,10 @@ pub struct StageSession {
     pub(crate) raw: *mut RawSession,
     pub(crate) token_count: u64,
     pub(crate) terminal_stage: bool,
+    /// Whether one native batch may carry activation exports for more than one
+    /// request. False for memory layouts that split an all-output batch by
+    /// sequence, where only the last microbatch's exports stay live.
+    pub(crate) batched_activation_exports: bool,
 }
 
 pub struct DecodeBatchRequest<'a> {

@@ -2055,7 +2055,7 @@ index fd4290cf0..2864b2469 100644
  
 +    if (prec != GGML_PREC_DEFAULT) {
 +        // Set precision on the base MUL_MAT before an optional scale/LoRA attachment changes the root op.
-+        ggml_mul_mat_set_prec(res, prec);
++        ggml_prec_set_acc(res, prec);
 +    }
 +
      if (w_s) {

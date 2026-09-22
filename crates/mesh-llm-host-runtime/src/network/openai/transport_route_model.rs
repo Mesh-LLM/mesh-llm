@@ -365,6 +365,7 @@ fn handle_route_model_attempt_result(
             status_code,
             usage,
             cache_cost,
+            output_digests,
         } => handle_delivered_route_model_attempt(
             DeliveredRouteModelContext {
                 node,
@@ -377,6 +378,7 @@ fn handle_route_model_attempt_result(
             status_code,
             usage,
             cache_cost,
+            output_digests,
         ),
         RouteAttemptResult::RetryableContextOverflow => {
             handle_retryable_route_model_context(target)
@@ -422,6 +424,7 @@ fn handle_delivered_route_model_attempt(
     status_code: u16,
     usage: Option<TokenUsage>,
     cache_cost: Option<CacheCostObservation>,
+    output_digests: crate::plugin::openai_exchange::ExchangeOutputDigests,
 ) -> RouteModelDisposition {
     update_local_cache_evidence(&context, status_code, usage.as_ref(), cache_cost);
     context.node.record_routed_request(
@@ -436,11 +439,7 @@ fn handle_delivered_route_model_attempt(
         route_ms = context.state.route_started.elapsed().as_millis(),
         "openai route_model_request delivered"
     );
-    RouteModelDisposition::Return(
-        usage.map_or(RouteDispatchOutcome::Responded(status_code), |usage| {
-            RouteDispatchOutcome::RespondedWithUsage { status_code, usage }
-        }),
-    )
+    RouteModelDisposition::Return(delivered_outcome(status_code, usage, output_digests))
 }
 
 fn update_local_cache_evidence(
@@ -556,7 +555,10 @@ pub(crate) fn finalize_route_model_result(
     result: RouteDispatchOutcome,
     target: &election::InferenceTarget,
 ) -> RouteDispatchOutcome {
-    if let RouteDispatchOutcome::RespondedWithUsage { status_code, usage } = result {
+    if let RouteDispatchOutcome::RespondedWithUsage {
+        status_code, usage, ..
+    } = result
+    {
         node.record_prompt_shape(
             Some(model),
             usage.prompt_tokens,
