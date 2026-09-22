@@ -283,7 +283,7 @@ pub fn router_for_with_config(
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/completions", post(completions))
         .route("/v1/responses", post(responses))
-        .route("/v1/systemone", post(system_one))
+        .route("/systemone", post(system_one))
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(not_found)
         .layer(middleware::from_fn_with_state(
@@ -1200,7 +1200,7 @@ fn lifecycle_route(uri: &Uri) -> OpenAiFrontendRoute {
         "/v1/chat/completions" => OpenAiFrontendRoute::ChatCompletions,
         "/v1/completions" => OpenAiFrontendRoute::Completions,
         "/v1/responses" => OpenAiFrontendRoute::Responses,
-        "/v1/systemone" => OpenAiFrontendRoute::SystemOne,
+        "/systemone" => OpenAiFrontendRoute::SystemOne,
         _ => OpenAiFrontendRoute::Unknown,
     }
 }

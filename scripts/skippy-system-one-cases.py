@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drive `POST /v1/systemone` against a running embedded OpenAI frontend.
+"""Drive `POST /systemone` against a running embedded OpenAI frontend.
 
 This is the request matrix behind `scripts/skippy-system-one-smoke.sh`. It is
 kept separate from the orchestration shell so the contract can be exercised
@@ -539,7 +539,7 @@ def run_full_read(base_url: str, model: str, alias: str, timeout: float) -> list
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base-url", required=True, help="e.g. http://127.0.0.1:9337/v1")
+    parser.add_argument("--base-url", required=True, help="e.g. http://127.0.0.1:9337")
     parser.add_argument("--model", required=True, help="loaded model id")
     parser.add_argument("--alias", default="openjev-latest", help="documented System One alias")
     parser.add_argument("--mode", choices=("contract", "full-read"), required=True)

@@ -118,7 +118,7 @@ class _SystemOneStub(BaseHTTPRequestHandler):
 
     # -- routing ---------------------------------------------------------
     def do_GET(self) -> None:  # noqa: N802 (http.server API)
-        if self.path.split("?")[0] == "/v1/systemone":
+        if self.path.split("?")[0] == "/systemone":
             self._error(
                 int(self.behaviour["method_not_allowed_status"]),
                 "method not allowed: GET",
@@ -129,7 +129,7 @@ class _SystemOneStub(BaseHTTPRequestHandler):
         self._respond(404, {"error": {"message": "not found"}})
 
     def do_POST(self) -> None:  # noqa: N802 (http.server API)
-        if self.path.split("?")[0] != "/v1/systemone":
+        if self.path.split("?")[0] != "/systemone":
             self._respond(404, {"error": {"message": "not found"}})
             return
         length = int(self.headers.get("content-length", "0"))
@@ -284,7 +284,7 @@ class _StubServer:
     @property
     def base_url(self) -> str:
         host, port = self._server.server_address[:2]
-        return f"http://{host}:{port}/v1"
+        return f"http://{host}:{port}"
 
     def stop(self) -> None:
         self._server.shutdown()

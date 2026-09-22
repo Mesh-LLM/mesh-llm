@@ -664,9 +664,15 @@ impl OpenAiBackend for FakeBackend {
 }
 
 #[tokio::test]
+async fn system_one_is_not_mounted_under_openai_v1() {
+    let response = post_json("/v1/systemone", json!({})).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn system_one_route_preserves_jev_response_shape() {
     let response = post_json(
-        "/v1/systemone",
+        "/systemone",
         json!({
             "state": "release candidate",
             "model": "openjev-latest",

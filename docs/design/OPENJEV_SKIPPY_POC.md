@@ -1,6 +1,6 @@
 # OpenJEV on Skippy: proof-of-concept runbook
 
-This branch adds a Jev-compatible `POST /v1/systemone` route backed by one
+This branch adds a Jev-compatible `POST /systemone` route backed by one
 read-only DiffusionGemma denoise step in the patched llama.cpp/Skippy runtime.
 It is a proof of concept, not a production compatibility claim.
 
@@ -83,7 +83,7 @@ branch executes each System One read wholly on the DiffusionGemma worker.
 ## Exercise the Jev-compatible endpoint
 
 ```bash
-curl http://127.0.0.1:9337/v1/systemone \
+curl http://127.0.0.1:9337/systemone \
   -H 'Content-Type: application/json' \
   -d '{
     "model": "openjev-latest",
@@ -137,7 +137,7 @@ One lane. It runs in two independent parts, because they have different
 preconditions.
 
 **Contract part (always runs).** It starts `serve-openai` on the pinned
-`family-qwen3-dense` fixture and drives `POST /v1/systemone` through the
+`family-qwen3-dense` fixture and drives `POST /systemone` through the
 fail-closed boundaries the frontend decides, which need no diffusion model and
 therefore no particular accelerator:
 

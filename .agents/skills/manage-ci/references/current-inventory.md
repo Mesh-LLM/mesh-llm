@@ -161,7 +161,7 @@ records failed lanes without discarding later family results.
 
 Both the repair and independent verification candidate gates run the System One
 (OpenJEV) smoke, `scripts/skippy-system-one-smoke.sh`, which drives
-`POST /v1/systemone` through the pinned `family-qwen3-dense` fixture for the
+`POST /systemone` through the pinned `family-qwen3-dense` fixture for the
 backend-independent contract and fail-closed rejections, and through the pinned
 `unsloth/diffusiongemma-26B-A4B-it-GGUF` Q4_K_M artifact for one complete
 single-lane read with repeat/interleaved determinism. Both artifacts come from

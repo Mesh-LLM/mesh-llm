@@ -3,7 +3,7 @@ set -euo pipefail
 
 # System One (OpenJEV) smoke for the llama.cpp upstream canary.
 #
-# Exercises `POST /v1/systemone`, the Jev-compatible read introduced by the
+# Exercises `POST /systemone`, the Jev-compatible read introduced by the
 # DiffusionGemma / System One proof of concept
 # (docs/design/OPENJEV_SKIPPY_POC.md). It runs in two independent parts because
 # they have different preconditions:
@@ -134,10 +134,6 @@ artifact_summary() {
     --artifact-id "$1" \
     --cadence "$SMOKE_CADENCE" \
     --require-single-file
-}
-
-artifact_field() {
-  artifact_summary "$1" | python3 -c 'import json,sys; print(json.load(sys.stdin)[sys.argv[1]])' "$2"
 }
 
 # Resolves an artifact from the read-only offline cache without touching the
@@ -311,7 +307,7 @@ run_cases_against_stage() {
   start_stage_server "$label" "$config" "$port" "$log" || return 1
   rc=0
   python3 "$CASES_DRIVER" \
-    --base-url "http://127.0.0.1:${port}/v1" \
+    --base-url "http://127.0.0.1:${port}" \
     --model "$model_id" \
     --alias "$ALIAS" \
     --mode "$mode" \

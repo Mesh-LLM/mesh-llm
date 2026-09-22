@@ -193,7 +193,7 @@ pub trait OpenAiBackend: Send + Sync + 'static {
 
     async fn system_one(&self, _request: SystemOneRequest) -> OpenAiResult<SystemOneResponse> {
         Err(OpenAiError::unsupported(
-            "/v1/systemone is not supported by this backend",
+            "/systemone is not supported by this backend",
         ))
     }
 
