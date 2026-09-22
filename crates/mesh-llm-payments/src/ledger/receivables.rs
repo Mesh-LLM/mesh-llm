@@ -1,9 +1,43 @@
-use anyhow::{Result, ensure};
+use anyhow::{Result, bail, ensure};
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use super::{Ledger, read_amount, sql_amount};
 use crate::invoice::Invoice;
+
+/// One recorded debt that currently refuses a peer paid inference.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PeerDebt {
+    pub request_id: String,
+    pub segment: u32,
+    /// `unpaid_invoice` for a recorded invoice the peer has not paid, or
+    /// `uninvoiced_output` for delivered output that has no invoice yet.
+    pub kind: String,
+    pub tokens: u64,
+    pub amount_msat: Option<u64>,
+    pub expires_at_ms: Option<u64>,
+}
+
+/// A peer refused paid inference, with the identifier `unblock` takes.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BlockedPeer {
+    /// Full authenticated mesh endpoint ID, as recorded at admission.
+    pub peer: String,
+    /// The abbreviated form the console and `/api/status` display.
+    pub peer_short: String,
+    pub debts: Vec<PeerDebt>,
+}
+
+/// What [`Ledger::unblock_peer`] forgave.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Forgiven {
+    pub peer: String,
+    pub invoices: usize,
+    pub output_requests: usize,
+}
+
+/// Minimum length of a peer prefix accepted by [`Ledger::resolve_blocked_peer`].
+pub const MIN_PEER_PREFIX: usize = 8;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Receivable {
@@ -29,7 +63,7 @@ impl Ledger {
         let connection =
             connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let blocked: bool = connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM receivables WHERE peer=?1 AND state='unpaid') OR EXISTS(SELECT 1 FROM serving_requests r JOIN serving_accounting a ON a.id=r.id WHERE r.peer=?1 AND a.finished=1 AND a.tokens>0 AND NOT EXISTS(SELECT 1 FROM receivables WHERE request_id=r.id AND segment=1))",
+            "SELECT EXISTS(SELECT 1 FROM receivables WHERE peer=?1 AND state='unpaid') OR EXISTS(SELECT 1 FROM serving_requests r JOIN serving_accounting a ON a.id=r.id WHERE r.peer=?1 AND a.finished=1 AND a.tokens>0 AND a.forgiven=0 AND NOT EXISTS(SELECT 1 FROM receivables WHERE request_id=r.id AND segment=1))",
             [peer],
             |r| r.get(0),
         )?;
@@ -47,10 +81,11 @@ impl Ledger {
     }
 
     /// Whether admission must wait for recorded debt. This is advisory; the
-    /// transactional check in `begin_serving` remains the authority.
+    /// transactional check in `begin_serving` remains the authority. Debt an
+    /// operator has forgiven with [`Self::unblock_peer`] no longer counts.
     pub fn has_outstanding_payment(&self, peer: &str) -> Result<bool> {
         Ok(self.lock()?.query_row(
-            "SELECT EXISTS(SELECT 1 FROM receivables WHERE peer=?1 AND state='unpaid') OR EXISTS(SELECT 1 FROM serving_requests r JOIN serving_accounting a ON a.id=r.id WHERE r.peer=?1 AND a.finished=1 AND a.tokens>0 AND NOT EXISTS(SELECT 1 FROM receivables WHERE request_id=r.id AND segment=1))",
+            "SELECT EXISTS(SELECT 1 FROM receivables WHERE peer=?1 AND state='unpaid') OR EXISTS(SELECT 1 FROM serving_requests r JOIN serving_accounting a ON a.id=r.id WHERE r.peer=?1 AND a.finished=1 AND a.tokens>0 AND a.forgiven=0 AND NOT EXISTS(SELECT 1 FROM receivables WHERE request_id=r.id AND segment=1))",
             [peer],
             |row| row.get(0),
         )?)
@@ -185,9 +220,120 @@ impl Ledger {
     /// or temporary wallet failure. Admission blocks on this debt immediately.
     pub fn uninvoiced_output(&self) -> Result<Vec<String>> {
         let connection = self.lock()?;
-        let mut statement = connection.prepare("SELECT a.id FROM serving_accounting a WHERE a.finished=1 AND a.tokens>0 AND NOT EXISTS(SELECT 1 FROM receivables WHERE request_id=a.id AND segment=1) LIMIT 32")?;
+        let mut statement = connection.prepare("SELECT a.id FROM serving_accounting a WHERE a.finished=1 AND a.tokens>0 AND a.forgiven=0 AND NOT EXISTS(SELECT 1 FROM receivables WHERE request_id=a.id AND segment=1) LIMIT 32")?;
         Ok(statement
             .query_map([], |r| r.get(0))?
             .collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Every peer currently refused paid inference, with each recorded debt.
+    /// Read-only and wallet-free, so it works while the node is stopped.
+    pub fn blocked_peers(&self) -> Result<Vec<BlockedPeer>> {
+        let connection = self.lock()?;
+        let mut by_peer: std::collections::BTreeMap<String, Vec<PeerDebt>> = Default::default();
+        let mut unpaid = connection.prepare(
+            "SELECT peer,request_id,segment,invoice,tokens FROM receivables WHERE state='unpaid' ORDER BY rowid",
+        )?;
+        for row in unpaid.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, u32>(2)?,
+                r.get::<_, String>(3)?,
+                read_amount(r, 4)?,
+            ))
+        })? {
+            let (peer, request_id, segment, invoice, tokens) = row?;
+            let invoice = Invoice::parse(&invoice)?;
+            by_peer.entry(peer).or_default().push(PeerDebt {
+                request_id,
+                segment,
+                kind: "unpaid_invoice".into(),
+                tokens,
+                amount_msat: invoice.amount_msat,
+                expires_at_ms: Some(invoice.expires_at_ms),
+            });
+        }
+        let mut uninvoiced = connection.prepare(
+            "SELECT r.peer,r.id,a.tokens FROM serving_requests r JOIN serving_accounting a ON a.id=r.id WHERE a.finished=1 AND a.tokens>0 AND a.forgiven=0 AND NOT EXISTS(SELECT 1 FROM receivables WHERE request_id=r.id AND segment=1) ORDER BY r.rowid",
+        )?;
+        for row in uninvoiced.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                read_amount(r, 2)?,
+            ))
+        })? {
+            let (peer, request_id, tokens) = row?;
+            by_peer.entry(peer).or_default().push(PeerDebt {
+                request_id,
+                segment: 1,
+                kind: "uninvoiced_output".into(),
+                tokens,
+                amount_msat: None,
+                expires_at_ms: None,
+            });
+        }
+        Ok(by_peer
+            .into_iter()
+            .map(|(peer, debts)| BlockedPeer {
+                peer_short: peer.chars().take(10).collect(),
+                peer,
+                debts,
+            })
+            .collect())
+    }
+
+    /// Accept the full endpoint ID or a unique prefix of at least
+    /// [`MIN_PEER_PREFIX`] characters among currently blocked peers, so the
+    /// value shown by `blocked` can be pasted whole or abbreviated.
+    pub fn resolve_blocked_peer(&self, needle: &str) -> Result<String> {
+        let needle = needle.trim();
+        ensure!(
+            needle.len() >= MIN_PEER_PREFIX,
+            "peer identifier must be at least {MIN_PEER_PREFIX} characters"
+        );
+        let blocked = self.blocked_peers()?;
+        if let Some(exact) = blocked.iter().find(|entry| entry.peer == needle) {
+            return Ok(exact.peer.clone());
+        }
+        let matches: Vec<&BlockedPeer> = blocked
+            .iter()
+            .filter(|entry| entry.peer.starts_with(needle))
+            .collect();
+        match matches.as_slice() {
+            [one] => Ok(one.peer.clone()),
+            [] => bail!("no blocked peer matches {needle}"),
+            _ => bail!(
+                "peer prefix {needle} is ambiguous; use the full identifier from `wallet blocked`"
+            ),
+        }
+    }
+
+    /// Operator override: forgive every recorded debt for `peer` so it may
+    /// request paid inference again. Unpaid invoices are marked `forgiven`
+    /// (a later payment is still recorded as received) and delivered output
+    /// that has no invoice yet is never invoiced. Nothing is refunded.
+    pub fn unblock_peer(&self, peer: &str) -> Result<Forgiven> {
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let invoices = tx.execute(
+            "UPDATE receivables SET state='forgiven' WHERE peer=?1 AND state='unpaid'",
+            [peer],
+        )?;
+        let output_requests = tx.execute(
+            "UPDATE serving_accounting SET forgiven=1 WHERE finished=1 AND tokens>0 AND forgiven=0 AND id IN (SELECT id FROM serving_requests WHERE peer=?1) AND NOT EXISTS(SELECT 1 FROM receivables WHERE request_id=serving_accounting.id AND segment=1)",
+            [peer],
+        )?;
+        ensure!(
+            invoices + output_requests > 0,
+            "peer has no recorded debt; nothing to unblock"
+        );
+        tx.commit()?;
+        Ok(Forgiven {
+            peer: peer.to_owned(),
+            invoices,
+            output_requests,
+        })
     }
 }

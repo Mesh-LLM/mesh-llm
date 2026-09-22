@@ -29,6 +29,13 @@ pub enum ControlCommand {
         max_fee_msat: u64,
     },
     Pending,
+    /// Peers refused paid inference for recorded debt. Ledger-only.
+    Blocked,
+    /// Forgive a blocked peer's recorded debt. `peer` is the full endpoint ID
+    /// or a unique prefix of at least eight characters. Ledger-only.
+    Unblock {
+        peer: String,
+    },
     Policy {
         value: Option<Policy>,
     },
@@ -80,6 +87,11 @@ impl PaymentService {
                 max_fee_msat,
             } => self.send_invoice(&invoice, amount_msat, max_fee_msat).await,
             ControlCommand::Pending => Ok(serde_json::to_value(self.ledger.requests()?)?),
+            ControlCommand::Blocked => Ok(serde_json::to_value(self.ledger.blocked_peers()?)?),
+            ControlCommand::Unblock { peer } => {
+                let peer = self.ledger.resolve_blocked_peer(&peer)?;
+                Ok(serde_json::to_value(self.ledger.unblock_peer(&peer)?)?)
+            }
             ControlCommand::Policy { value } => {
                 if let Some(value) = value {
                     self.ledger.set_policy(&value)?;

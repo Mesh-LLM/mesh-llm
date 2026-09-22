@@ -40,7 +40,8 @@ pub async fn run(command: &WalletCommand, port: u16, config: Option<&Path>) -> R
                 bail!(
                     "mesh-llm is not running on port {port}; wallet operations need the running \
                      node because only it owns the wallet plugin. Start `mesh-llm` and retry. \
-                     (ledger-only commands such as policy, pricing and pending work offline)"
+                     (ledger-only commands such as policy, pricing, pending, blocked and \
+                     unblock work offline)"
                 );
             }
             let directory = if let Some(config) = config {
@@ -96,6 +97,8 @@ fn control_command(command: &WalletCommand) -> Result<ControlCommand> {
             max_fee_msat: *max_fee_msat,
         },
         WalletCommand::Pending => ControlCommand::Pending,
+        WalletCommand::Blocked => ControlCommand::Blocked,
+        WalletCommand::Unblock { peer } => ControlCommand::Unblock { peer: peer.clone() },
         WalletCommand::Policy {
             mode,
             daily_budget_sats,

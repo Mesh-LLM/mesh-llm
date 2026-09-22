@@ -34,6 +34,13 @@ pub enum WalletCommand {
     },
     /// Inspect durable inference payment requests.
     Pending,
+    /// List peers refused paid inference for unpaid debt, with the identifier `unblock` takes.
+    Blocked,
+    /// Forgive a peer's recorded debt so it may request paid inference again. Nothing is refunded.
+    Unblock {
+        /// Full peer ID from `wallet blocked`, or a unique prefix of at least 8 characters.
+        peer: String,
+    },
     /// Use free providers only, or automatically pay for inference within a daily budget.
     Policy {
         #[arg(long, value_enum)]
@@ -70,6 +77,8 @@ mod tests {
     fn policy_has_two_modes_and_no_approval_or_opt_in_commands() {
         for args in [
             vec!["wallet", "policy"],
+            vec!["wallet", "blocked"],
+            vec!["wallet", "unblock", "0123456789ab"],
             vec!["wallet", "policy", "--mode", "free-only"],
             vec![
                 "wallet",
@@ -87,6 +96,7 @@ mod tests {
             vec!["wallet", "payment-intent"],
             vec!["wallet", "approve", "id"],
             vec!["wallet", "reject", "id"],
+            vec!["wallet", "unblock"],
         ] {
             assert!(WalletCli::try_parse_from(args).is_err());
         }
