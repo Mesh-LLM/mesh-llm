@@ -331,9 +331,9 @@ async fn a_failed_incoming_payment_never_opens_the_gate() -> Result<()> {
 
 #[tokio::test(start_paused = true)]
 async fn arrival_wait_gives_up_at_its_own_deadline_before_the_invoice_expires() -> Result<()> {
-    // The seller stops holding work long before the invoice stops being
-    // payable, so a late payment fails at the payee instead of landing after
-    // the seller has moved on. The wait error is distinct from expiry.
+    // A caller-supplied deadline shorter than the invoice lifetime ends the
+    // wait on its own, with an error distinct from expiry. (The inference
+    // seller passes a deadline equal to the invoice lifetime; see `lifetimes`.)
     let dir = tempfile::tempdir()?;
     let wallet = Arc::new(MockWallet::default());
     let service = Arc::new(PaymentService::with_provider(dir.path(), wallet.clone())?);

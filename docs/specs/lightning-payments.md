@@ -91,11 +91,15 @@ the plugin boundary, and no per-token IPC exists.
 The host supplies every invoice's expiry (`wallet_create_invoice.expiry_secs`);
 a plugin must not substitute a provider default. `mesh-llm-payments::lifetimes`
 owns the values: input inference invoices expire after 5 minutes, output
-invoices after 60 minutes, `fund-wallet` invoices after 24 hours. The seller's
-wait for an input payment to arrive is a separate, shorter 90-second deadline:
-giving up releases the backend, while the longer invoice expiry still makes a
-late HTLC fail at the payee's node instead of landing after the seller has moved
-on. This also bounds how long an unpaid input invoice keeps a peer blocked.
+invoices after 60 minutes, `fund-wallet` invoices after 24 hours. The seller
+waits for the input payment to arrive for exactly the input invoice lifetime.
+A payer cannot recall an in-flight HTLC, and the payee's node claims any HTLC
+that lands before expiry, so a shorter wait would leave a window in which the
+seller has discarded its buffered output but still gets paid for it. Aligning
+the two means "the seller gave up" and "the payment can no longer land" are the
+same moment; the price is that an unpaid request can hold a backend slot for
+up to five minutes. This also bounds how long an unpaid input invoice keeps a
+peer blocked.
 
 Receiver-side arrival is a normalized field, `Transaction.claiming`, set by the
 plugin only for a pending inbound payment whose HTLC is irrevocably committed.
