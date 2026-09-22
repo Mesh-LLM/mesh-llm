@@ -134,8 +134,18 @@ lanes from the plan — split-parity lanes for causal rows, class-specific smoke
 plus oracle lanes for the non-chat rows — plus any required multimodal result,
 so the non-chat rows are hard gates on every certified run. The battery itself
 reconciles the production planner's selected cuts, immutable revisions, tensor
-bytes, and native MTP requirements. Missing, cancelled, duplicate, or stale
-evidence cannot certify.
+bytes, and native MTP requirements. Native-head rows additionally require the
+`native-mtp-heads` lane: all metadata-declared heads must produce proposals, and
+target decoding at each proposal prefix must match an independent MTP-disabled
+baseline. Rejected proposals are valid; omitted heads and state divergence fail.
+Cache preflight checks the immutable GGUF head count against the declared count.
+The pinned roster has one head each for GLM-4.5-Air and Nemotron and three for
+MiMo2. Missing, cancelled, duplicate, or stale evidence cannot certify.
+Native-head certification budgets include two additional startup allowances
+for the integrated model and independent baseline loads, retaining the existing
+absolute timeout cap. Dry-run planning reflects the declared native-head lane;
+actual execution still requires the immutable metadata and tensor scans.
+
 Aggregation reports every failed receipt, including its runner and outcome, in
 the job log and Actions summary before rejecting the pass. Worker/aggregate
 failures remain recoverable by later bounded repair passes; only complete
