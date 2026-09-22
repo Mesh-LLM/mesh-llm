@@ -11,15 +11,32 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::time::Instant;
 
+/// Whether this process is an internal plugin service rather than something a
+/// person started.
+///
+/// `serve` spawns its own executable back with the hidden `--plugin <id>`
+/// flag (see `blobstore_plugin_spec`). That child reaches the same CLI entry
+/// point, so without this it initializes reporting too and the node is
+/// counted twice: two `serve_started` — the child's carrying
+/// `model_requested: false`, because it was handed no model — and two
+/// `hardware_profile` for one machine, against a single `serve_stopped` from
+/// the parent. A node with N plugins would report N+1 of each.
+///
+/// The parent has already reported. The child is an implementation detail of
+/// that same session, so it reports nothing.
+fn is_internal_plugin_service(cli: &Cli) -> bool {
+    cli.plugin.is_some()
+}
+
 /// Start reporting for this process, unless the command is itself an
-/// analytics command.
+/// analytics command or an internal plugin service.
 ///
 /// Running `mesh-llm analytics disable` must not report anything: a command
 /// whose purpose is to stop reporting is the worst possible moment to report.
 /// `mesh-llm analytics status` is excluded for the same reason — asking what
 /// is collected should not itself be collected.
 pub fn init_for_cli(cli: &Cli) {
-    if matches!(cli.command, Some(Command::Analytics { .. })) {
+    if matches!(cli.command, Some(Command::Analytics { .. })) || is_internal_plugin_service(cli) {
         return;
     }
     mesh_llm_analytics::init(crate::analytics::config_preference(cli.config.as_deref()));
@@ -213,6 +230,19 @@ mod tests {
         assert!(rendered.contains("joined_explicitly"));
         assert!(!rendered.contains("some-secret-peer-token"), "{rendered}");
         assert!(!rendered.contains("Qwen2.5-32B-Instruct"), "{rendered}");
+    }
+
+    #[test]
+    fn an_internal_plugin_service_is_not_a_started_node() {
+        // `serve` spawns `mesh-llm --log-format json --plugin blobstore`.
+        // Observed against a local sink before this guard: one user `serve`
+        // produced two `serve_started` (the second `model_requested: false`)
+        // and two `hardware_profile`, against one `serve_stopped`.
+        let plugin = Cli::parse_from(["mesh-llm", "--log-format", "json", "--plugin", "blobstore"]);
+        assert!(is_internal_plugin_service(&plugin));
+
+        let user_serve = Cli::parse_from(["mesh-llm", "--gguf", "/tmp/model.gguf"]);
+        assert!(!is_internal_plugin_service(&user_serve));
     }
 
     #[test]

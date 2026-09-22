@@ -3623,7 +3623,6 @@ dependencies = [
  "chrono",
  "clap",
  "hex",
- "mesh-llm-analytics",
  "mesh-llm-cli",
  "mesh-llm-client",
  "mesh-llm-commands",
@@ -3640,7 +3639,6 @@ dependencies = [
  "tabwriter",
  "tempfile",
  "tokio",
- "toml_edit",
  "urlencoding",
 ]
 
@@ -3652,6 +3650,7 @@ dependencies = [
  "chrono",
  "dirs",
  "mesh-llm-build-info",
+ "mesh-llm-events",
  "reqwest",
  "serde",
  "serde_json",

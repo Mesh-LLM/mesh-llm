@@ -53,7 +53,7 @@ And one of these events:
 | `cli_command` | `family` (`models`, `runtime`, `diagnostics`, …), `outcome` (`completed`, `failed`, …) | Which commands are used, and which fail |
 | `serve_started` | `surface`, `auto`, `headless`, `publish`, `discover`, `joined_explicitly`, `model_requested` — all booleans | How nodes are started |
 | `serve_stopped` | `session_length` (bucketed: `under_1m`, `1m-15m`, …), `succeeded` | Whether nodes stay up |
-| `model_loaded` | `model` (catalog name, or `redacted`), `source` (`direct_gguf`, `layer_package`) | Which models actually get run |
+| `model_loaded` | `model` (catalog name, or `redacted`; always `redacted` when `source` is `direct_gguf`), `source` (`direct_gguf`, `layer_package`) | Which models actually get run |
 | `model_download` | `model` (catalog name, or `redacted`), `succeeded` | Which models people try to get, including ones they fail to |
 | `hardware_profile` | see below | What hardware mesh-llm runs on |
 
@@ -77,8 +77,12 @@ deployment.
 - **Prompts, completions, and any model input or output.** None of it is read
   by the analytics code, and the API cannot carry free text.
 - **Model contents or file paths.** `--gguf /home/you/private.gguf` reports
-  only `model_requested: true`. A model name that is not catalog-shaped is
-  reported as `redacted`.
+  `model_requested: true` on `serve_started`, and a `model_loaded` carrying
+  `model: redacted`, `source: direct_gguf`. The file name is never reported,
+  not even the stem without its directories — a name you chose for a local
+  file is yours, and `acme-merger-finetune` says as much as the path does.
+  Elsewhere, a model name that is not catalog-shaped is reported as
+  `redacted`.
 - **Your IP address or location.** Every event sets `$geoip_disable` and a
   null `$ip`, and the project discards client IP data at ingestion.
 - **Anything about your mesh peers.** No peer IDs, addresses, mesh names,
@@ -95,7 +99,9 @@ The reporting code accepts only a fixed set of event names and a closed set of
 property values. Free-form text cannot be attached to an event, so a prompt
 cannot leak through this path even by mistake. Text that does appear — a model
 name — passes a grammar that rejects paths, whitespace, and anything
-over-long, and becomes `redacted` when it fails.
+over-long, and becomes `redacted` when it fails. Names sourced from a local
+file are redacted ahead of that grammar rather than relying on it, because a
+bare file stem would satisfy it.
 
 ## How it differs from `[telemetry]`
 

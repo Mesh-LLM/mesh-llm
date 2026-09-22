@@ -5,8 +5,10 @@
 //! stderr so it never contaminates machine-readable stdout.
 
 use std::fs;
-use std::io::{self, Write};
+use std::io::Write;
 use std::path::Path;
+
+use mesh_llm_events::disclosure_err;
 
 /// Marker recording that the disclosure has been shown.
 ///
@@ -42,14 +44,19 @@ fn mark_shown(dir: &Path) {
 
 /// Print the notice to stderr and record that it was shown.
 ///
-/// Emitted whether or not stderr is a terminal. A notice in a service log is
-/// still disclosure; a notice suppressed because the process happened to be
-/// daemonized is not, and on-by-default reporting is only defensible if the
-/// disclosure actually happens. It goes to stderr so machine-readable command
-/// output on stdout stays intact.
+/// Emitted whether or not stderr is a terminal, and whether or not a JSON sink
+/// or the dashboard owns it. A notice in a service log is still disclosure; a
+/// notice suppressed because the process happened to be daemonized is not, and
+/// on-by-default reporting is only defensible if the disclosure actually
+/// happens.
+///
+/// That is why this uses [`disclosure_err`] rather than `console_err`: the
+/// console writers discard while another surface owns the terminal, which for
+/// a once-per-install notice would mean never showing it at all. Routing it
+/// through the output facility still keeps the terminal handle where it
+/// belongs — this module does not hold one.
 pub fn print_notice(dir: &Path) {
-    let stderr = io::stderr();
-    let mut handle = stderr.lock();
+    let mut handle = disclosure_err();
     let _ = writeln!(handle, "\n{NOTICE}\n");
     let _ = handle.flush();
     mark_shown(dir);

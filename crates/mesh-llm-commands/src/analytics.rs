@@ -8,7 +8,9 @@ use anyhow::{Context, Result};
 use mesh_llm_analytics::{ConfigPreference, ConsentInputs, Disposition};
 use mesh_llm_cli::AnalyticsCommand;
 use mesh_llm_config::{ConfigStore, config_path, load_config};
+use mesh_llm_events::{console_out, machine_out};
 use serde_json::json;
+use std::io::Write;
 use std::path::Path;
 
 pub fn dispatch_analytics_command(
@@ -58,32 +60,42 @@ fn run_status(config_override: Option<&Path>, json: bool) -> Result<()> {
                 .then(mesh_llm_analytics::ingestion_host),
             "config_path": path.display().to_string(),
         });
-        println!("{}", serde_json::to_string_pretty(&payload)?);
+        // The document `--json` was invoked to produce: `machine_out`, which
+        // is never suppressed, and never `println!` — a raw print would land
+        // on stdout alongside an installed JSON sink's own output.
+        writeln!(machine_out(), "{}", serde_json::to_string_pretty(&payload)?)?;
         return Ok(());
     }
 
-    println!(
+    let mut out = console_out();
+    writeln!(
+        out,
         "Anonymous usage reporting: {}",
         if disposition.is_enabled() {
             "on"
         } else {
             "off"
         }
-    );
-    println!("  Reason:     {}", disposition.explain());
+    )?;
+    writeln!(out, "  Reason:     {}", disposition.explain())?;
     if let Some(install_id) = install_id.as_ref() {
-        println!("  Install ID: {}", install_id.as_str());
+        writeln!(out, "  Install ID: {}", install_id.as_str())?;
     }
     if disposition.is_enabled() {
-        println!("  Endpoint:   {}", mesh_llm_analytics::ingestion_host());
+        writeln!(
+            out,
+            "  Endpoint:   {}",
+            mesh_llm_analytics::ingestion_host()
+        )?;
     }
-    println!("  Config:     {}", path.display());
-    println!("\n{}", mesh_llm_analytics::NOTICE);
+    writeln!(out, "  Config:     {}", path.display())?;
+    writeln!(out, "\n{}", mesh_llm_analytics::NOTICE)?;
 
     if matches!(disposition, Disposition::DisabledNoKey) {
-        println!(
+        writeln!(
+            out,
             "\nThis build has no analytics key, so it reports nothing regardless of settings."
-        );
+        )?;
     }
     Ok(())
 }
@@ -113,22 +125,28 @@ fn set_enabled(config_override: Option<&Path>, enabled: bool) -> Result<()> {
         })
         .with_context(|| format!("failed to update {}", path.display()))?;
 
+    let mut out = console_out();
     if enabled {
-        println!(
+        writeln!(
+            out,
             "Anonymous usage reporting enabled. Written to {}",
             path.display()
-        );
+        )?;
     } else {
-        println!(
+        writeln!(
+            out,
             "Anonymous usage reporting disabled. Written to {}",
             path.display()
-        );
+        )?;
         // The setting is read at process start, so a node already serving
         // keeps its reporter until it restarts. Claiming otherwise would be
         // the one false statement in a feature whose whole case rests on its
         // claims being checkable.
-        println!("Newly started mesh-llm processes will send nothing.");
-        println!("A node that is already running keeps reporting until it restarts.");
+        writeln!(out, "Newly started mesh-llm processes will send nothing.")?;
+        writeln!(
+            out,
+            "A node that is already running keeps reporting until it restarts."
+        )?;
     }
     Ok(())
 }

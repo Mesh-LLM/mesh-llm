@@ -417,23 +417,70 @@ pub(super) fn remove_runtime_local_target(
     }
 }
 
+/// Where the model being reported came from.
+///
+/// This decides whether the name may be reported at all, so it is a type
+/// rather than a string: the privacy rule belongs to the source, not to a
+/// comparison at one call site.
+#[derive(Clone, Copy)]
+pub(super) enum ModelLoadSource {
+    /// A local file named on the command line with `--gguf`.
+    DirectGguf,
+    /// A catalog or repository model reference.
+    LayerPackage,
+}
+
+impl ModelLoadSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::DirectGguf => "direct_gguf",
+            Self::LayerPackage => "layer_package",
+        }
+    }
+
+    /// Whether the model name may go on the wire.
+    ///
+    /// `DirectGguf` names are derived from a path the user chose, so they are
+    /// never reported. The label grammar alone does not save us here: the name
+    /// handed to analytics is `resolved_model_name`, the file *stem*, and a
+    /// bare stem such as `private` passes the grammar cleanly. `acme-merger-
+    /// finetune.gguf` would go out verbatim. Redacting on the source is the
+    /// only place that holds, and it keeps the documented promise that a
+    /// filesystem path cannot reach the wire through this API even by mistake.
+    fn may_report_name(self) -> bool {
+        match self {
+            Self::DirectGguf => false,
+            Self::LayerPackage => true,
+        }
+    }
+}
+
 /// Report an anonymous `model_loaded` alongside the local `ModelLoaded`
 /// presentation event.
 ///
-/// The name goes through the analytics label grammar, so a catalog or
-/// repository identifier is reported as-is and anything path-shaped — a
-/// direct `--gguf` on a local file — becomes `redacted`. The count still
-/// lands either way.
-fn report_model_loaded_analytics(model: &str, source: &'static str) {
+/// A catalog or repository identifier is reported as-is when it satisfies the
+/// analytics label grammar; anything else, and every direct `--gguf` name, is
+/// `redacted`. The count and the source still land either way, which is what
+/// the question "which models actually get run" is asking.
+fn report_model_loaded_analytics(model: &str, source: ModelLoadSource) {
     mesh_llm_analytics::capture(
         mesh_llm_analytics::Event::ModelLoaded,
         mesh_llm_analytics::Properties::new()
-            .with(
-                "model",
-                mesh_llm_analytics::Label::sanitize_or_redact(model),
-            )
-            .with("source", source),
+            .with("model", model_loaded_label(model, source))
+            .with("source", source.as_str()),
     );
+}
+
+/// The `model` value `report_model_loaded_analytics` puts on the wire.
+///
+/// Separate from the capture so the privacy decision is testable without a
+/// reporter: the capture itself is a fire-and-forget into a global queue.
+fn model_loaded_label(model: &str, source: ModelLoadSource) -> mesh_llm_analytics::Label {
+    if source.may_report_name() {
+        mesh_llm_analytics::Label::sanitize_or_redact(model)
+    } else {
+        mesh_llm_analytics::Label::redacted()
+    }
 }
 
 pub(super) async fn advertise_model_ready(
@@ -1022,7 +1069,7 @@ async fn start_local_skippy_model(
         model: model_name.clone(),
         bytes: None,
     });
-    report_model_loaded_analytics(&model_name, "direct_gguf");
+    report_model_loaded_analytics(&model_name, ModelLoadSource::DirectGguf);
     let http = skippy_model.start_http_on(spec.http_bind_addr)?;
     let (death_tx, death_rx) = tokio::sync::oneshot::channel();
 
@@ -1186,7 +1233,7 @@ async fn start_local_package_v2_model(
     .await
     .context("join load skippy package-v2 task")??;
     let workload_class = handle.workload_class()?;
-    report_model_loaded_analytics(&model_ref, "layer_package");
+    report_model_loaded_analytics(&model_ref, ModelLoadSource::LayerPackage);
     let _ = emit_event(OutputEvent::ModelLoaded {
         model: model_ref,
         bytes: None,
@@ -1271,7 +1318,8 @@ mod descriptor_tests;
 #[cfg(test)]
 mod tests {
     use super::{
-        LocalRuntimeModelStartSpec, RuntimeResourcePlanningProfile, openai_guardrail_policy_handle,
+        LocalRuntimeModelStartSpec, ModelLoadSource, RuntimeResourcePlanningProfile,
+        model_loaded_label, openai_guardrail_policy_handle, resolved_model_name,
         unix_nanos_to_unix_ms,
     };
     use crate::inference::skippy;
@@ -1279,6 +1327,42 @@ mod tests {
     use crate::plugin;
     use crate::runtime::survey;
     use skippy_protocol::FlashAttentionType;
+
+    #[test]
+    fn direct_gguf_never_reports_the_file_name() {
+        // The label grammar does not save us here: `resolved_model_name`
+        // hands over the file *stem*, and a bare stem passes the grammar
+        // cleanly, so `--gguf /home/you/acme-merger-finetune.gguf` would go
+        // out verbatim. `analytics.md` promises a path cannot reach the wire;
+        // this is the only place that holds.
+        let path = std::path::Path::new("/home/you/acme-merger-finetune.gguf");
+        let name = resolved_model_name(path);
+        assert_eq!(name, "acme-merger-finetune", "stem is what gets reported");
+        assert_eq!(
+            mesh_llm_analytics::Label::sanitize_or_redact(&name).as_str(),
+            "acme-merger-finetune",
+            "and the grammar accepts it, which is exactly the hole"
+        );
+        assert_eq!(
+            model_loaded_label(&name, ModelLoadSource::DirectGguf).as_str(),
+            "redacted"
+        );
+    }
+
+    #[test]
+    fn layer_package_still_reports_a_catalog_name() {
+        // Redacting the direct-file case must not cost us the answer to
+        // "which models actually get run" for catalog models.
+        assert_eq!(
+            model_loaded_label("qwen3-8b", ModelLoadSource::LayerPackage).as_str(),
+            "qwen3-8b"
+        );
+        // A catalog ref that fails the grammar still redacts, as before.
+        assert_eq!(
+            model_loaded_label("/etc/passwd", ModelLoadSource::LayerPackage).as_str(),
+            "redacted"
+        );
+    }
 
     #[test]
     fn unix_nanos_to_unix_ms_converts_a_real_capture_time() {
