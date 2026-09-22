@@ -170,9 +170,9 @@ impl Authorization {
         // Open output delivery on the earliest receiver-side evidence that
         // the HTLC arrived. Settlement is still recorded only on a completed
         // payment, by the task spawned below and awaited before the request
-        // finishes. The wait is bounded separately from the invoice: giving up
-        // releases the backend, while the (longer) invoice expiry still makes a
-        // late payment fail at this node instead of landing unnoticed.
+        // finishes. The wait lasts exactly as long as the invoice is payable:
+        // giving up any earlier would leave a window where this node still
+        // claims a late HTLC after the buffered output has been discarded.
         let arrival = tokio::select! {
             claiming = self.service.wait_arrival(&invoice, INPUT_ARRIVAL_WAIT) => claiming?,
             _ = async {

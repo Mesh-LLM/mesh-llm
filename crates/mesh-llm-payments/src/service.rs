@@ -300,9 +300,10 @@ impl PaymentService {
     /// `wait_received` before treating the payment as received.
     ///
     /// `deadline` is how long the caller is willing to hold work for this
-    /// payment. It is independent of, and should be shorter than, the invoice
-    /// expiry: giving up here releases the caller's resources, while the
-    /// invoice keeps bounding when a late payment can still land.
+    /// payment; the wait also ends at invoice expiry, whichever comes first.
+    /// Callers that discard work on timeout must not pass a deadline shorter
+    /// than the invoice lifetime: a payer cannot recall an in-flight HTLC, and
+    /// this node will still claim one that lands before expiry.
     ///
     /// The returned [`Arrival`] records which evidence opened the gate, so a
     /// caller can tell an early claiming observation from the terminal
