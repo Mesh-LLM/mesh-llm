@@ -4,6 +4,10 @@ This file records checked-in CI facts and selected controlled probe evidence.
 It is not a complete historical run log or live GitHub/Depot administration.
 Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 
+The protected catalogs include `platform-windows-cfg`: ownership of
+`mesh-llm-plugin` selects `platform-checks` and its existing `windows-unit`
+row. It does not select host/native product builds by itself.
+
 ## Entry workflows
 
 | Workflow | Trigger | Ownership |

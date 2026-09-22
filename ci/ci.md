@@ -486,7 +486,9 @@ runtime producers are not duplicated.
 - `ci-{linux,macos,windows}-product-slice.yml` — composition-only consumers
   that join only their matching immutable host and runtime artifacts.
 - `ci-platform-checks-slice.yml` — macOS portable/unit, Windows portable/unit,
-  and focused Windows log-store privacy ACL checks.
+  and focused Windows log-store privacy ACL checks. The
+  `platform-windows-cfg` catalog domain routes `mesh-llm-plugin` to the existing
+  `windows-unit` row without selecting host/native product builds.
 - `ci-linux-product-smoke-slice.yml` and
   `ci-macos-product-smoke-slice.yml` — platform-local callers of the core,
   scripted, and model-download smokes. The core smoke restores the
