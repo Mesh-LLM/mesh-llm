@@ -1,0 +1,45 @@
+From 0024f810fb91018585c54e5b51dcdfc7d1934ef1 Mon Sep 17 00:00:00 2001
+From: sat <sat@local>
+Date: Wed, 23 Sep 2026 05:42:49 +1000
+Subject: [PATCH] llama: emit split_simple ubatches in canonical sequence order
+
+---
+ src/llama-batch.cpp | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/src/llama-batch.cpp b/src/llama-batch.cpp
+index 2b98a552f..a8f605d58 100644
+--- a/src/llama-batch.cpp
++++ b/src/llama-batch.cpp
+@@ -504,6 +504,28 @@ llama_ubatch llama_batch_allocr::split_simple(uint32_t n_ubatch) {
+         }
+     }
+ 
++    // Emit the tokens grouped by sequence and in a canonical order, rather than in
++    // whatever order the caller happened to fill the batch.
++    //
++    // Graph reuse compares the ubatch's per-token sequence ids positionally -- the
++    // sampler-guarded check in llm_graph_params::allow_reuse -- so the same set of
++    // sequences presented in a different order reads as a different graph and forces a
++    // full rebuild. Under continuous batching the caller's order follows request
++    // arrival, which shifts every time a request retires and another takes its slot.
++    //
++    // Sorting by (sequence, position) rather than by sequence alone is what makes this
++    // safe for prefill: a sequence's own tokens keep their relative order, and only the
++    // sequences move relative to each other. Output attribution is unaffected because
++    // ubatch_add records each token's original batch index in out_ids.
++    std::stable_sort(idxs.begin(), idxs.end(), [this](int32_t a, int32_t b) {
++        const llama_seq_id sa = batch.n_seq_id[a] > 0 ? batch.seq_id[a][0] : -1;
++        const llama_seq_id sb = batch.n_seq_id[b] > 0 ? batch.seq_id[b][0] : -1;
++        if (sa != sb) {
++            return sa < sb;
++        }
++        return batch.pos[a] < batch.pos[b];
++    });
++
+     return ubatch_add(idxs, idxs.size(), false);
+ }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

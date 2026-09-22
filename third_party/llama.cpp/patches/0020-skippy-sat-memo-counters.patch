@@ -1,0 +1,73 @@
+From 2af2414b0a29b0a5636ad36f2b6f1589e30594d3 Mon Sep 17 00:00:00 2001
+From: sat <sat@local>
+Date: Tue, 22 Sep 2026 17:51:35 +1000
+Subject: [PATCH] sat: count stage slice memo hits and misses
+
+---
+ src/llama-context.cpp           | 7 +++++--
+ src/skippy/stage_slice_plan.cpp | 9 +++++++++
+ 2 files changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index eebc23467..e448c80d9 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -1497,6 +1497,7 @@ llm_graph_result * llama_context::process_ubatch(
+     if (sat_trace) {
+         extern uint64_t g_sat_build_us, g_sat_build_count, g_sat_realize_us, g_sat_realize_count;
+         extern uint64_t g_sat_params_us, g_sat_select_us, g_sat_validate_us, g_sat_frontier_us, g_sat_graph_us;
++        extern uint64_t g_sat_memo_hit, g_sat_memo_miss;
+         ggml_backend_sched_synchronize(sched.get());
+         sat_exec += 1;
+         sat_out  += (uint64_t) n_outputs;
+@@ -1507,7 +1508,8 @@ llm_graph_result * llama_context::process_ubatch(
+                     "SAT-STATS exec=%" PRIu64 " outputs=%" PRIu64 " reused=%" PRIu64
+                     " compute_ms_per_exec=%.1f build_ms_per_exec=%.1f realize_ms_per_exec=%.1f"
+                     " builds=%" PRIu64 " realizes=%" PRIu64
+-                    " | params=%.1f select=%.1f validate=%.1f frontier=%.1f graph=%.1f\n",
++                    " | params=%.1f select=%.1f validate=%.1f frontier=%.1f graph=%.1f"
++                    " memo_hit=%" PRIu64 " memo_miss=%" PRIu64 "\n",
+                     sat_exec, sat_out, sat_reused,
+                     (double) sat_us / 1000.0 / (double) sat_exec,
+                     (double) g_sat_build_us / 1000.0 / (double) sat_exec,
+@@ -1517,7 +1519,8 @@ llm_graph_result * llama_context::process_ubatch(
+                     (double) g_sat_select_us / 1000.0 / (double) sat_exec,
+                     (double) g_sat_validate_us / 1000.0 / (double) sat_exec,
+                     (double) g_sat_frontier_us / 1000.0 / (double) sat_exec,
+-                    (double) g_sat_graph_us / 1000.0 / (double) sat_exec);
++                    (double) g_sat_graph_us / 1000.0 / (double) sat_exec,
++                    g_sat_memo_hit, g_sat_memo_miss);
+             fflush(stderr);
+         }
+     }
+diff --git a/src/skippy/stage_slice_plan.cpp b/src/skippy/stage_slice_plan.cpp
+index 53844518f..4d204a80b 100644
+--- a/src/skippy/stage_slice_plan.cpp
++++ b/src/skippy/stage_slice_plan.cpp
+@@ -726,14 +726,23 @@ struct remembered_selection {
+ 
+ thread_local remembered_selection g_remembered[REMEMBERED_SELECTIONS];
+ thread_local uint64_t g_remembered_clock = 0;
++}
++
++// SAT instrumentation: whether the memo actually fires is the whole question, so
++// count it rather than inferring it from the timers.
++uint64_t g_sat_memo_hit = 0, g_sat_memo_miss = 0;
++
++namespace {
+ 
+ const skippy_stage_slice_selection * recall_selection(uint64_t fingerprint) {
+     for (auto & entry : g_remembered) {
+         if (entry.last_used != 0 && entry.fingerprint == fingerprint) {
+             entry.last_used = ++g_remembered_clock;
++            g_sat_memo_hit += 1;
+             return &entry.selection;
+         }
+     }
++    g_sat_memo_miss += 1;
+     return nullptr;
+ }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

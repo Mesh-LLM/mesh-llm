@@ -1,0 +1,113 @@
+From 524acc650226c193dd816fdc4bbd20f554a970f8 Mon Sep 17 00:00:00 2001
+From: sat <sat@local>
+Date: Tue, 22 Sep 2026 19:19:29 +1000
+Subject: [PATCH] sat: count which condition refuses graph reuse
+
+---
+ src/llama-context.cpp | 11 +++++++++--
+ src/llama-graph.h     | 23 +++++++++++++++++++++--
+ 2 files changed, 30 insertions(+), 4 deletions(-)
+
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index e448c80d9..280b86af7 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -1509,7 +1509,10 @@ llm_graph_result * llama_context::process_ubatch(
+                     " compute_ms_per_exec=%.1f build_ms_per_exec=%.1f realize_ms_per_exec=%.1f"
+                     " builds=%" PRIu64 " realizes=%" PRIu64
+                     " | params=%.1f select=%.1f validate=%.1f frontier=%.1f graph=%.1f"
+-                    " memo_hit=%" PRIu64 " memo_miss=%" PRIu64 "\n",
++                    " memo_hit=%" PRIu64 " memo_miss=%" PRIu64
++                    " | noreuse ubatch=%" PRIu64 " nout=%" PRIu64 " topo=%" PRIu64
++                    " samplers=%" PRIu64 " nodata=%" PRIu64 " out_i=%" PRIu64
++                    " seqid_i=%" PRIu64 " nextn=%" PRIu64 "\n",
+                     sat_exec, sat_out, sat_reused,
+                     (double) sat_us / 1000.0 / (double) sat_exec,
+                     (double) g_sat_build_us / 1000.0 / (double) sat_exec,
+@@ -1520,7 +1523,11 @@ llm_graph_result * llama_context::process_ubatch(
+                     (double) g_sat_validate_us / 1000.0 / (double) sat_exec,
+                     (double) g_sat_frontier_us / 1000.0 / (double) sat_exec,
+                     (double) g_sat_graph_us / 1000.0 / (double) sat_exec,
+-                    g_sat_memo_hit, g_sat_memo_miss);
++                    g_sat_memo_hit, g_sat_memo_miss,
++                    llm_graph_params::reuse_reason(0), llm_graph_params::reuse_reason(1),
++                    llm_graph_params::reuse_reason(2), llm_graph_params::reuse_reason(3),
++                    llm_graph_params::reuse_reason(4), llm_graph_params::reuse_reason(5),
++                    llm_graph_params::reuse_reason(6), llm_graph_params::reuse_reason(7));
+             fflush(stderr);
+         }
+     }
+diff --git a/src/llama-graph.h b/src/llama-graph.h
+index 732af4c7b..6848d09ce 100644
+--- a/src/llama-graph.h
++++ b/src/llama-graph.h
+@@ -993,6 +993,15 @@ struct llm_graph_params {
+ 
+     llm_graph_result * res;
+ 
++    // SAT instrumentation: which condition refuses reuse. The terminal stage rebuilds
++    // its graph on almost every step while the interior stage reuses ~89% of the time,
++    // and the two differ only in that the terminal one owns the backend samplers.
++    // Count the refusals by reason rather than reasoning about which one it is.
++    static uint64_t & reuse_reason(size_t index) {
++        static uint64_t counters[8] = {};
++        return counters[index];
++    }
++
+     // return true if the "other" params would result in a graph with the same topology as with the current params
+     //   having the same topology allows us to reuse the graph in some cases
+     bool allow_reuse(const llm_graph_params & other) const {
+@@ -1024,31 +1033,40 @@ struct llm_graph_params {
+         }
+ 
+         if (!can_reuse_ubatch) {
++            reuse_reason(0) += 1;
+             return false;
+         }
+ 
+         if (n_outputs != other.n_outputs) {
++            reuse_reason(1) += 1;
+             return false;
+         }
+ 
+         if (!build_inputs.topology_equal(other.build_inputs) ||
+                 activation_export_token_axes != other.activation_export_token_axes) {
++            reuse_reason(2) += 1;
+             return false;
+         }
+ 
+         if (!samplers_equal(samplers, other.samplers)) {
++            reuse_reason(3) += 1;
+             return false;
+         }
+ 
+         if (samplers.size() > 0) {
+             if (!ubatch.data || !other.ubatch.data) {
++                reuse_reason(4) += 1;
+                 return false;
+             }
+ 
+             // check that the outputs are the same for all samplers
+             for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+-                if (ubatch.output[i]    != other.ubatch.output[i] ||
+-                    ubatch.seq_id[i][0] != other.ubatch.seq_id[i][0]) {
++                if (ubatch.output[i] != other.ubatch.output[i]) {
++                    reuse_reason(5) += 1;
++                    return false;
++                }
++                if (ubatch.seq_id[i][0] != other.ubatch.seq_id[i][0]) {
++                    reuse_reason(6) += 1;
+                     return false;
+                 }
+             }
+@@ -1056,6 +1074,7 @@ struct llm_graph_params {
+ 
+         // TODO: https://github.com/ggml-org/llama.cpp/pull/24340#discussion_r3448035248
+         if (cparams.nextn_layer_offset != other.cparams.nextn_layer_offset) {
++            reuse_reason(7) += 1;
+             return false;
+         }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

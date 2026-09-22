@@ -1,0 +1,128 @@
+From 459797ab939b2a4df9e1b36ee2fac5c40f7e462f Mon Sep 17 00:00:00 2001
+From: sat <sat@local>
+Date: Tue, 22 Sep 2026 15:55:42 +1000
+Subject: [PATCH] skippy: SAT timers separating graph rebuild and slice
+ realisation from GPU compute
+
+---
+ src/llama-context.cpp            | 44 ++++++++++++++++++++++++++++++--
+ src/skippy/stage_realization.cpp | 15 +++++++++++
+ 2 files changed, 57 insertions(+), 2 deletions(-)
+
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 801ac95f2..8f8d91dc5 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -1424,7 +1424,8 @@ llm_graph_result * llama_context::process_ubatch(
+     // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
+     const auto gparams = graph_params(res, ubatch, mctx, gtype, graph_build_inputs);
+ 
+-    if (!graph_reuse_disable && res->can_reuse(gparams)) {
++    const bool sat_reuse_ok = !graph_reuse_disable && res->can_reuse(gparams);
++    if (sat_reuse_ok) {
+         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
+ 
+         // with pipeline parallelism, the previous graph_compute_async may still be running
+@@ -1443,7 +1444,13 @@ llm_graph_result * llama_context::process_ubatch(
+ 
+         //const auto t_start_us = ggml_time_us();
+ 
+-        gf = model.build_graph(gparams);
++        {
++            extern uint64_t g_sat_build_us, g_sat_build_count;
++            const int64_t sat_bt0 = ggml_time_us();
++            gf = model.build_graph(gparams);
++            g_sat_build_us += (uint64_t) (ggml_time_us() - sat_bt0);
++            g_sat_build_count += 1;
++        }
+ 
+         //LLAMA_LOG_INFO("graph build time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
+ 
+@@ -1470,6 +1477,15 @@ llm_graph_result * llama_context::process_ubatch(
+         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
+     }
+ 
++    // SAT instrumentation (SKIPPY_GRAPH_TRACE=1): separate GPU compute from the CPU-side
++    // graph rebuild and slice realisation that #1927 put on every step.
++    static const bool sat_trace = [] {
++        const char * v = getenv("SKIPPY_GRAPH_TRACE");
++        return v != nullptr && v[0] != '\0' && v[0] != '0';
++    }();
++    static uint64_t sat_exec = 0, sat_out = 0, sat_us = 0, sat_reused = 0;
++    const int64_t sat_t0 = sat_trace ? ggml_time_us() : 0;
++
+     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
+     if (status != GGML_STATUS_SUCCESS) {
+         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
+@@ -1477,11 +1493,35 @@ llm_graph_result * llama_context::process_ubatch(
+         return nullptr;
+     }
+ 
++
++    if (sat_trace) {
++        extern uint64_t g_sat_build_us, g_sat_build_count, g_sat_realize_us, g_sat_realize_count;
++        ggml_backend_sched_synchronize(sched.get());
++        sat_exec += 1;
++        sat_out  += (uint64_t) n_outputs;
++        sat_us   += (uint64_t) (ggml_time_us() - sat_t0);
++        sat_reused += sat_reuse_ok ? 1 : 0;
++        if (sat_exec % 500 == 0) {
++            fprintf(stderr,
++                    "SAT-STATS exec=%" PRIu64 " outputs=%" PRIu64 " reused=%" PRIu64
++                    " compute_ms_per_exec=%.1f build_ms_per_exec=%.1f realize_ms_per_exec=%.1f"
++                    " builds=%" PRIu64 " realizes=%" PRIu64 "\n",
++                    sat_exec, sat_out, sat_reused,
++                    (double) sat_us / 1000.0 / (double) sat_exec,
++                    (double) g_sat_build_us / 1000.0 / (double) sat_exec,
++                    (double) g_sat_realize_us / 1000.0 / (double) sat_exec,
++                    g_sat_build_count, g_sat_realize_count);
++            fflush(stderr);
++        }
++    }
++
+     ret = GGML_STATUS_SUCCESS;
+ 
+     return res;
+ }
+ 
++uint64_t g_sat_build_us = 0, g_sat_build_count = 0;
++
+ int llama_context::encode(const llama_batch & batch_inp) {
+     return encode(batch_inp, graph_build_inputs);
+ }
+diff --git a/src/skippy/stage_realization.cpp b/src/skippy/stage_realization.cpp
+index a0938dcb8..9b2726f60 100644
+--- a/src/skippy/stage_realization.cpp
++++ b/src/skippy/stage_realization.cpp
+@@ -123,6 +123,20 @@ int32_t skippy_activation_token_axis(const ggml_tensor * tensor, uint32_t n_toke
+     return prepared_axis;
+ }
+ 
++// SAT instrumentation: #1927 builds the whole-model graph and filters it here, on the
++// critical path of every rebuild. This is CPU time no GPU counter sees.
++uint64_t g_sat_realize_us = 0, g_sat_realize_count = 0;
++
++namespace {
++struct SatRealizeTimer {
++    int64_t t0 = ggml_time_us();
++    ~SatRealizeTimer() {
++        g_sat_realize_us += (uint64_t) (ggml_time_us() - t0);
++        g_sat_realize_count += 1;
++    }
++};
++}
++
+ void skippy_realize_stage_graph(
+         const llama_model & model,
+         const llm_graph_params & params,
+@@ -130,6 +144,7 @@ void skippy_realize_stage_graph(
+     if (!params.build_inputs.selection.enabled) {
+         return;
+     }
++    SatRealizeTimer sat_timer;
+ 
+     const auto parameters = parameter_bindings(model);
+     skippy_stage_slice_selection selection;
+-- 
+2.50.1 (Apple Git-155)
+
