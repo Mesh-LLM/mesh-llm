@@ -155,6 +155,8 @@ pub fn command_family(command: &Command) -> CliCommandFamily {
         Command::RotateKey | Command::Auth { .. } => CliCommandFamily::Identity,
         Command::Goose { .. }
         | Command::Claude { .. }
+        | Command::Hermes(_)
+        | Command::Openclaw(_)
         | Command::Pi { .. }
         | Command::Opencode { .. } => CliCommandFamily::Agent,
         Command::Plugin { .. } | Command::ExternalPlugin(_) => CliCommandFamily::Plugin,

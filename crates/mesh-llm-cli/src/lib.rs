@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod agent_config;
 pub mod benchmark;
 pub mod inventory;
 pub mod models;

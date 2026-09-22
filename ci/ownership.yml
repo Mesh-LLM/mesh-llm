@@ -20,6 +20,7 @@
     "platform-macos",
     "platform-windows",
     "platform-windows-storage",
+    "platform-windows-cfg",
     "backend-cuda",
     "backend-rocm",
     "backend-vulkan",
@@ -554,6 +555,10 @@
     {
       "domain": "platform-windows-storage",
       "crates": ["mesh-llm-log-store"]
+    },
+    {
+      "domain": "platform-windows-cfg",
+      "crates": ["mesh-llm-plugin"]
     },
     {
       "domain": "backend-cuda",

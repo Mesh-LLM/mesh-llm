@@ -139,7 +139,7 @@ jobs:
   family:
     name: ${{ inputs.pass_id }} / ${{ matrix.families }}
     needs: build
-    runs-on: [self-hosted, family-certify]
+    runs-on: [self-hosted, family-certify, "${{ matrix.memory_tier }}"]
     timeout-minutes: 780
     strategy:
       fail-fast: false
@@ -177,6 +177,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/use-canary-cache
+      - uses: ./.github/actions/setup-canary-python
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ needs.build.outputs.package }}
@@ -191,10 +192,12 @@ jobs:
         timeout-minutes: 720
         env:
           SHARD_INDEX: ${{ matrix.shard_index }}
+          MEMORY_TIER: ${{ matrix.memory_tier }}
         run: |
           set -euo pipefail
-          cd "$CANARY_SOURCE_ROOT"
-          arch -arm64 scripts/skippy-family-battery.sh --skip-build --plan "$PACKAGE/plan.json" --shard-index "$SHARD_INDEX"
+          python3 scripts/llama-canary-family-evidence.py certify --root "$CANARY_SOURCE_ROOT" \
+            --package "$PACKAGE" --identity "$IDENTITY" --shard-index "$SHARD_INDEX" \
+            --memory-tier "$MEMORY_TIER" --evidence "$FAMILY_BATTERY_ARTIFACT_ROOT/$FAMILY_BATTERY_RUN_ID"
       - name: Bind worker result to candidate and plan
         if: ${{ !cancelled() }}
         env:
