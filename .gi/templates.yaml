@@ -1,0 +1,194 @@
+# What jianyang can be asked to run against a mesh-llm commit.
+#
+# Synced by `jy repos sync mesh-llm`, which reads this file from the default branch and
+# replaces the installed templates with what it says. A template says what to run and on
+# what class of machine; it never says where the code is or which commit it is at —
+# jianyang composes the workspace from the repository row and the ref you launch at, so
+# a template cannot run a different commit than the one recorded.
+#
+# Reference: general-inference/jianyang → docs/repos.md
+
+version: 1
+
+# The repository's standard build, run in the workspace root before the command.
+# `just build` is the backend-neutral dynamic host plus its packaged runtime — the
+# platform default, and what puts `native-runtimes/` beside the binary.
+#
+# Not `just llama-build`: that builds the CPU stage while cargo links Metal, which is a
+# way to measure the wrong backend without noticing.
+build: just build
+
+templates:
+  - key: decode-60s
+    name: Decode throughput (60s)
+    group: Benchmarks
+    description: >
+      Single-stream decode throughput over one minute on a small model, measured from
+      the host's own reported timings. A tripwire, not evidence: it is meant to catch a
+      commit that broke single-node decode, cheaply enough to run on anything.
+    #
+    # What this deliberately is not
+    # -----------------------------
+    # Not a split measurement, and not a number to put on a slide. Window standard
+    # deviation on this hardware is around 8%, so a single 60-second window resolves a
+    # large regression and nothing finer. The pipeline-saturation campaign learned this
+    # the expensive way: 60-second windows credited two changes separately when the real
+    # effect was an interaction between them, and everything decided from those windows
+    # had to be re-measured over an hour. Use this to notice something broke; use the
+    # saturation harness to decide anything.
+
+    target:
+      executor: lab
+      # No `nodes:` on purpose. Split campaigns hold the minis for hours at a time, and
+      # a tripwire that queues behind one has stopped being cheap. Any lab machine can
+      # run this, so let the scheduler place it.
+
+    # Below every campaign, so this can never jump a queued measurement.
+    priority: 20
+
+    inputs:
+      - key: max_tokens
+        label: Tokens per request
+        kind: number
+        default: 128
+        min: 16
+        max: 2048
+        description: >
+          Longer requests amortise prefill and read higher. Changes the number, so two
+          runs only compare at the same value.
+      - key: ctx_size
+        label: Context size
+        kind: number
+        default: 4096
+        min: 256
+        max: 32768
+
+    # The small instruct model, chosen because it is what the registry actually holds
+    # and because a tripwire that waits twenty minutes on a 17 GB transfer is not one.
+    # The agent resolves this to a path on whichever machine it lands on and exports
+    # $MODEL — which is the point: the spec carries no path, so it runs anywhere.
+    models:
+      - ref: hf:Qwen/Qwen2.5-0.5B-Instruct-GGUF@main
+        env: MODEL
+
+    # 60 s of measurement, but the job also builds mesh-llm first. The budget covers
+    # both; the harness below describes only the measured minute.
+    budget: { max_usd: 0, max_duration_s: 3600 }
+
+    command: |
+      set -euo pipefail
+      cd "$JIANYANG_REPO_DIR"
+
+      BIN="target/release/mesh-llm"
+
+      # Derived from the run id, not fixed: two jobs can land on one machine, and a
+      # fixed port makes the second one fail against the first one's server.
+      PORT=$(( 9400 + $(printf '%s' "$JIANYANG_RUN_ID" | cksum | cut -d' ' -f1) % 500 ))
+      LOG="$JIANYANG_ARTIFACT_DIR/mesh-llm-serve.log"
+
+      # The ref carries no quantisation glob, so the registry may hand back a directory
+      # of them rather than one file. Pick a .gguf if so, and say which.
+      if [ -d "$MODEL" ]; then
+        MODEL="$(find "$MODEL" -name '*.gguf' -type f | sort | head -1)"
+        [ -n "$MODEL" ] || { echo "no .gguf under the resolved model path" >&2; exit 1; }
+      fi
+      echo "model: $MODEL"
+
+      # The host finds its stage runtime through this, not through an install step —
+      # `just build` packages it next to the binary.
+      export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$(cd "$(dirname "$BIN")" && pwd)/native-runtimes"
+      [ -d "$MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR" ] || {
+        echo "no packaged runtime beside $BIN — did the build stage run?" >&2
+        exit 1
+      }
+
+      # No --device: take the platform default, which is Metal here. The CI smoke test
+      # pins CPU, and copying that would measure the wrong backend.
+      "$BIN" --log-format json serve \
+        --model "$MODEL" \
+        --no-draft \
+        --ctx-size "${ctx_size}" \
+        --port "$PORT" >"$LOG" 2>&1 &
+      SERVER=$!
+      # `kill ${VAR:-}` with an empty VAR becomes `kill 0` and signals the job's own
+      # process group. Guarded.
+      trap 'kill "${SERVER:-0}" 2>/dev/null || true' EXIT
+
+      # Die fast rather than spending the budget on a host that will never come up.
+      ready=""
+      for _ in $(seq 1 180); do
+        if curl -sf "http://127.0.0.1:$PORT/v1/models" >/dev/null 2>&1; then ready=1; break; fi
+        kill -0 "$SERVER" 2>/dev/null || break
+        sleep 1
+      done
+      [ -n "$ready" ] || { echo "server never became ready" >&2; tail -40 "$LOG" >&2; exit 1; }
+
+      PORT="$PORT" MAX_TOKENS="${max_tokens}" STACK_COMMIT="$JIANYANG_COMMIT" \
+        python3 - <<'PY'
+      import json, os, time, urllib.request
+
+      PORT = os.environ["PORT"]
+      MAX_TOKENS = int(os.environ["MAX_TOKENS"])
+      URL = f"http://127.0.0.1:{PORT}/v1/chat/completions"
+      PROMPT = "Explain how a distributed key-value cache stays consistent under partition."
+
+      def one():
+          body = json.dumps({
+              "model": "bench",
+              "messages": [{"role": "user", "content": PROMPT}],
+              "max_tokens": MAX_TOKENS,
+              # Greedy, so the token count is not a coin flip between runs.
+              "temperature": 0,
+              "seed": 1234,
+          }).encode()
+          req = urllib.request.Request(URL, body, {"Content-Type": "application/json"})
+          with urllib.request.urlopen(req, timeout=180) as r:
+              return json.load(r)
+
+      # One warm-up, excluded. The first request pays for graph setup and a cold cache,
+      # and folding that into a 60-second window is how a decode number ends up
+      # measuring startup instead.
+      one()
+
+      deadline = time.monotonic() + 60
+      requests = tok_in = tok_out = 0
+      decode_s = 0.0
+      started = time.monotonic()
+      while time.monotonic() < deadline:
+          t = one()["timings"]
+          requests += 1
+          tok_out += t["predicted_n"]
+          tok_in += t.get("prompt_n", 0)
+          # Seconds actually spent decoding, from the host's own timings rather than a
+          # stopwatch around the HTTP call — that would fold in the client and the loop.
+          decode_s += t["predicted_n"] / t["predicted_per_second"]
+      elapsed = time.monotonic() - started
+
+      result = {
+          "points": [{
+              "concurrency": 1,
+              "requests_completed": requests,
+              "duration_s": round(elapsed, 3),
+              "throughput": {"output_tok_s": round(tok_out / decode_s, 2)},
+              "tokens": {"input": tok_in, "output": tok_out},
+          }],
+          # Only what the job knows. The executor fills in hardware, provider and
+          # timings itself.
+          "provenance": {"stack_commit": os.environ["STACK_COMMIT"]},
+      }
+      with open(os.environ["JIANYANG_RESULT_PATH"], "w") as f:
+          json.dump(result, f, indent=2)
+      print(json.dumps(result["points"][0]))
+      PY
+
+    # Every field here changes the number, which is why it is stated rather than
+    # defaulted: two results compare only when their harness fingerprints match, and the
+    # results plane refuses to chart across differing ones.
+    harness:
+      name: custom
+      version: mesh-llm-decode-60s-1
+      trace: { kind: synthetic, ref: single-prompt-explain-kv-cache }
+      seed: 1234
+      warmup_requests: 1
+      concurrency: [1]
+      duration_s: 60
