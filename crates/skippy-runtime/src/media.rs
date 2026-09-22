@@ -69,7 +69,9 @@ type MediaFrameEval = (
 );
 
 mod chunk_aggregation;
+mod chunk_capture;
 use chunk_aggregation::aggregate_media_chunk_outputs;
+use chunk_capture::{ChunkCapture, capture_microbatch, split_chunk_frames};
 
 // The experimental C ABI owns synchronization internally for model/session use.
 // Rust stage-server access is additionally serialized behind a Mutex.
@@ -682,11 +684,6 @@ impl StageModel {
             if chunk_tokens == 0 {
                 continue;
             }
-            if chunk_tokens > n_batch as usize {
-                return Err(anyhow!(
-                    "multimodal chunk {index} has {chunk_tokens} tokens, exceeding n_batch {n_batch}; increase n_batch for staged media prefill"
-                ));
-            }
             let chunk_token_ids = if chunk_type == skippy_ffi::MtmdInputChunkType::Text {
                 let mut text_token_count = 0usize;
                 let text_tokens = unsafe {
@@ -756,8 +753,9 @@ impl StageModel {
                 Vec::new()
             };
             let mut new_n_past = n_past;
+            let mut capture = ChunkCapture::new(session);
             let eval_status = unsafe {
-                skippy_ffi::mtmd_helper_eval_chunk_single(
+                skippy_ffi::mtmd_helper_eval_chunk_single_with_callback(
                     projector.raw,
                     lctx,
                     chunk,
@@ -766,23 +764,22 @@ impl StageModel {
                     n_batch,
                     false,
                     &mut new_n_past,
+                    Some(capture_microbatch),
+                    (&mut capture as *mut ChunkCapture<'_>).cast(),
                 )
             };
-            if eval_status != 0 {
-                return Err(anyhow!(
-                    "multimodal chunk {index} evaluation failed with status {eval_status}"
-                ));
-            }
-            let frame = session.copy_output_activation_frame(chunk_tokens, 0)?;
+            let frames = capture
+                .finish(eval_status)
+                .with_context(|| format!("capture multimodal chunk {index}"))?;
             copied_tokens = copied_tokens
                 .checked_add(chunk_tokens)
                 .context("multimodal activation token count overflow")?;
-            chunk_frames.push(MediaPrefillChunkFrame {
-                token_count: chunk_tokens,
-                tokens: chunk_token_ids,
-                positions: chunk_positions,
-                output: frame,
-            });
+            chunk_frames.extend(split_chunk_frames(
+                frames,
+                &chunk_token_ids,
+                &chunk_positions,
+                chunk_tokens,
+            )?);
             n_past = new_n_past;
         }
 
