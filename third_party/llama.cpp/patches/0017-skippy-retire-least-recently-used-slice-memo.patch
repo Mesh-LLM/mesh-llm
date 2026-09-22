@@ -1,0 +1,74 @@
+From febe3781ddf29bfb1cef892fc87619fc73ce06e2 Mon Sep 17 00:00:00 2001
+From: sat <sat@local>
+Date: Tue, 22 Sep 2026 17:53:13 +1000
+Subject: [PATCH] skippy: retire the least recently used stage slice memo entry
+
+---
+ src/skippy/stage_slice_plan.cpp | 35 +++++++++++++++++++++------------
+ 1 file changed, 22 insertions(+), 13 deletions(-)
+
+diff --git a/src/skippy/stage_slice_plan.cpp b/src/skippy/stage_slice_plan.cpp
+index c2d80e00b..53844518f 100644
+--- a/src/skippy/stage_slice_plan.cpp
++++ b/src/skippy/stage_slice_plan.cpp
+@@ -709,23 +709,28 @@ uint64_t selection_fingerprint(
+     return hash;
+ }
+ 
+-// A stage alternates between a handful of graphs in practice -- the decode profile,
+-// whatever prefill shapes it is currently serving, and any auxiliary profile -- so a
+-// small ring holds the working set without a long tail of prefill shapes evicting it.
+-constexpr size_t REMEMBERED_SELECTIONS = 8;
++// A stage works a small hot set of graphs -- one per decode group, plus the full-width
++// prefill ubatch -- interleaved with a long tail of one-off shapes, since the last
++// ubatch of each prefill is whatever remainder the prompt leaves. Evicting in arrival
++// order lets that tail flush the hot entries between uses, and every flushed entry
++// costs a full rebuild to recover. Retire the least recently used entry instead, which
++// holds the hot set against the churn and spends the remaining slots on the tail.
++constexpr size_t REMEMBERED_SELECTIONS = 12;
+ 
+ struct remembered_selection {
+     uint64_t fingerprint = 0;
+-    bool occupied = false;
++    // Zero marks a slot that has never been filled; the clock starts at one.
++    uint64_t last_used = 0;
+     skippy_stage_slice_selection selection;
+ };
+ 
+ thread_local remembered_selection g_remembered[REMEMBERED_SELECTIONS];
+-thread_local size_t g_remembered_next = 0;
++thread_local uint64_t g_remembered_clock = 0;
+ 
+ const skippy_stage_slice_selection * recall_selection(uint64_t fingerprint) {
+-    for (const auto & entry : g_remembered) {
+-        if (entry.occupied && entry.fingerprint == fingerprint) {
++    for (auto & entry : g_remembered) {
++        if (entry.last_used != 0 && entry.fingerprint == fingerprint) {
++            entry.last_used = ++g_remembered_clock;
+             return &entry.selection;
+         }
+     }
+@@ -733,11 +738,15 @@ const skippy_stage_slice_selection * recall_selection(uint64_t fingerprint) {
+ }
+ 
+ void remember_selection(uint64_t fingerprint, const skippy_stage_slice_selection & selection) {
+-    auto & entry = g_remembered[g_remembered_next];
+-    entry.fingerprint = fingerprint;
+-    entry.occupied = true;
+-    entry.selection = selection;
+-    g_remembered_next = (g_remembered_next + 1) % REMEMBERED_SELECTIONS;
++    auto * victim = &g_remembered[0];
++    for (auto & entry : g_remembered) {
++        if (entry.last_used < victim->last_used) {
++            victim = &entry;
++        }
++    }
++    victim->fingerprint = fingerprint;
++    victim->last_used = ++g_remembered_clock;
++    victim->selection = selection;
+ }
+ 
+ }
+-- 
+2.50.1 (Apple Git-155)
+
