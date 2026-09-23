@@ -19,8 +19,9 @@ lexe-api-core = { version = "=0.1.23" }
 mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.76.1" }
 mesh-llm-wallet = { path = "../mesh-llm-wallet", version = "0.76.1", features = ["plugin-server"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-tokio = { version = "1", features = ["sync", "time"] }
+tokio = { version = "1", features = ["rt", "sync", "time"] }
 tracing = "0.1"
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt", "test-util"] }

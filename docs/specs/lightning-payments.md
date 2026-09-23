@@ -130,9 +130,13 @@ The payment service awaits provider completion for incoming and pending outgoing
 payments. A second method awaits the earliest receiver-side evidence that an
 incoming payment has arrived, used only to open the output-delivery gate; it defaults to
 the completion wait, so an adapter without such a signal is simply slower, never
-wrong. Event-capable adapters can use native subscriptions; Lexe implements both
-by polling on a bounded lookup-start cadence, and reports the arrival signal from
-its detailed per-payment status. The method returns an
+wrong. Event-capable adapters can use native subscriptions. To stay within Lexe's
+rate limits, the Lexe adapter implements both with one shared watcher that tails the
+wallet's payment-update feed. Each poll asks Lexe's gateway for changes first and only
+contacts the user node when a payment changed. Lookups by payment hash, including the
+recovery scan's, read the SDK's gateway-synced cache using each payment's created index,
+recorded from the same feed, so an idle node stays asleep. Lexe reports the arrival
+signal from its detailed per-payment status. The method returns an
 authoritative succeeded/failed transaction and must handle settlement before or
 during subscription, support multiple waiters, and tolerate cancellation of an
 observer without cancelling or resubmitting the payment. Subscribe before reading

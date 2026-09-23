@@ -4,6 +4,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
@@ -12,20 +13,22 @@ use lexe::config::WalletEnvConfig;
 use lexe::types::auth::{CredentialsRef, RootSeed};
 use lexe::types::bitcoin::Amount;
 use lexe::types::command::CreateInvoiceRequest;
-use lexe::types::payment::{Payment, PaymentDirection, PaymentFilter};
+use lexe::types::payment::{Payment, PaymentDirection, PaymentFilter, PaymentHash, PaymentKind};
 use lexe::wallet::LexeWallet;
 use lexe_api_core::def::UserNodeRunApi;
-use lexe_api_core::models::command::{
-    PayInvoicePreflightRequest, PayInvoiceRequest, PaymentIdStruct,
-};
-use lexe_api_core::types::payments::{PaymentId, PaymentKind};
+use lexe_api_core::models::command::{PayInvoicePreflightRequest, PayInvoiceRequest};
 
 use mesh_llm_wallet::contract::WalletIdentity;
 use mesh_llm_wallet::invoice::Invoice;
 use mesh_llm_wallet::provider::{Balance, PayError, PaymentStatus, Transaction, WalletProvider};
 
+use self::watcher::PaymentWatcher;
+
+mod watcher;
+
 pub struct LexeProvider {
-    wallet: LexeWallet,
+    wallet: Arc<LexeWallet>,
+    watcher: Arc<PaymentWatcher>,
     // Lexe's local cache is not a multiprocess ledger. CLI clients should use
     // the running node's management API while it owns this lock.
     _lock: File,
@@ -79,7 +82,7 @@ impl LexeProvider {
         // re-assert that on every open so a seed copied or restored with looser
         // permissions is tightened rather than trusted as-is.
         restrict_seed_permissions(&seed_path)?;
-        let wallet = load_wallet(&seed, directory)?;
+        let wallet = Arc::new(load_wallet(&seed, directory)?);
         // Signup is idempotent, including recovery after a crash between seed
         // persistence and provisioning.
         wallet
@@ -95,6 +98,7 @@ impl LexeProvider {
         };
         Ok(Opened {
             provider: Self {
+                watcher: Arc::new(PaymentWatcher::new(Arc::clone(&wallet))),
                 wallet,
                 _lock: lock,
             },
@@ -310,31 +314,30 @@ impl WalletProvider for LexeProvider {
         Ok(submitted)
     }
 
+    /// Reads the SDK's local cache, which syncs through Lexe's gateway first,
+    /// so it's current without waking an idle user node.
     async fn lookup(&self, payment_hash: &str) -> Result<Option<Transaction>> {
-        let id: PaymentId = format!("ln_{payment_hash}")
-            .parse()
-            .context("invalid payment hash")?;
-        let result = self
-            .wallet
-            .node_client()
-            .get_payment_by_id(PaymentIdStruct { id })
+        let hash: PaymentHash = payment_hash.parse().context("invalid payment hash")?;
+        self.watcher
+            .lookup(hash)
             .await
-            .map_err(|_| anyhow::anyhow!("Lexe payment status query failed"))?;
-        Ok(result
-            .maybe_payment
-            .map(Payment::from)
-            .map(Self::transaction))
+            .map_err(|_| anyhow::anyhow!("Lexe payment status query failed"))
     }
 
     async fn wait_for_payment(&self, payment_hash: &str) -> Result<Transaction> {
-        self.poll_until(payment_hash, |payment| {
+        self.wait_until(payment_hash, |payment| {
             payment.status != PaymentStatus::Pending
         })
         .await
     }
 
+    /// Lexe marks an inbound payment as claiming a few hundred milliseconds
+    /// before completing it, so opening the seller's output gate on claiming
+    /// saves that time. The shared watcher catches this state when a poll lands
+    /// within it and otherwise falls back to completion, which keeps polling
+    /// within Lexe's rate limits.
     async fn wait_for_arrival(&self, payment_hash: &str) -> Result<Transaction> {
-        self.poll_until(payment_hash, |payment| {
+        self.wait_until(payment_hash, |payment| {
             payment.status != PaymentStatus::Pending || payment.is_claiming()
         })
         .await
@@ -342,41 +345,37 @@ impl WalletProvider for LexeProvider {
 }
 
 impl LexeProvider {
-    /// Lexe exposes payment lookup rather than push notifications. Keep that
-    /// transport detail behind the provider interface.
+    /// Lexe exposes payment updates by polling rather than push. Frequent
+    /// polling of the user node resembles a DoS attack on Lexe's
+    /// infrastructure and runs into its rate limits. Instead, all waiters
+    /// share one [`PaymentWatcher`], which polls through the SDK's stable
+    /// APIs and doesn't wake the user node until a payment actually changes.
+    /// Prefer stable SDK APIs here, which stay within those limits.
     ///
-    /// This is a lookup-start cadence, not an inter-poll sleep. A warm lookup
-    /// round trip is itself 171-255 ms on the reference pair, so sleeping a
-    /// further fixed interval would nearly double the effective period and can
-    /// miss the receiver's few-hundred-millisecond claiming state. Ticks that
-    /// a slow lookup has already consumed are skipped rather than queued.
-    async fn poll_until(
+    /// The watcher retries failed polls without losing updates, so a wait
+    /// outlasts a wallet outage. Callers that need a deadline impose their own.
+    async fn wait_until(
         &self,
         payment_hash: &str,
-        settled: impl Fn(&Transaction) -> bool,
+        done: impl Fn(&Transaction) -> bool,
     ) -> Result<Transaction> {
-        let mut cadence = tokio::time::interval(POLL_INTERVAL);
-        cadence.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let hash: PaymentHash = payment_hash.parse().context("invalid payment hash")?;
+        let mut updates = self.watcher.subscribe(hash);
+        if let Some(payment) = self.lookup(payment_hash).await?
+            && done(&payment)
+        {
+            return Ok(payment);
+        }
         loop {
-            cadence.tick().await;
-            let started = std::time::Instant::now();
-            let payment = self.lookup(payment_hash).await?;
-            tracing::debug!(
-                target: "mesh_wallet_lexe::timing",
-                phase = "lookup",
-                ms = started.elapsed().as_millis() as u64,
-                "wallet lookup"
-            );
-            if let Some(payment) = payment
-                && settled(&payment)
+            updates.changed().await.context("payment watcher stopped")?;
+            if let Some(payment) = updates.borrow_and_update().as_ref()
+                && done(payment)
             {
-                return Ok(payment);
+                return Ok(payment.clone());
             }
         }
     }
 }
-
-const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
 
 /// Lexe rejects invoice expiries above one week
 /// (`lexe_api_core::models::command::CreateInvoiceRequest::MAX_EXPIRATION_SECS`).
