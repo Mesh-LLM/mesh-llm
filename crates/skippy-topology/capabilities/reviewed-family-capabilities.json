@@ -1876,13 +1876,13 @@
     }
   },
   {
-    "model_id": "unsloth/Inkling-Small-GGUF:UD-Q4_K_M",
+    "model_id": "unsloth/Inkling-Small-GGUF:UD-Q3_K_XL",
     "source_repo": "unsloth/Inkling-Small-GGUF",
     "source_revision": "1a19ef82883cb7b9c581b93c30ea252dabbf658d",
-    "source_file": "UD-Q4_K_M/Inkling-Small-UD-Q4_K_M-00001-of-00005.gguf",
-    "canonical_ref": "unsloth/Inkling-Small-GGUF@1a19ef82883cb7b9c581b93c30ea252dabbf658d/UD-Q4_K_M/Inkling-Small-UD-Q4_K_M-00001-of-00005.gguf",
-    "distribution_id": "Inkling-Small-UD-Q4_K_M",
-    "selector": "UD-Q4_K_M",
+    "source_file": "UD-Q3_K_XL/Inkling-Small-UD-Q3_K_XL-00001-of-00004.gguf",
+    "canonical_ref": "unsloth/Inkling-Small-GGUF@1a19ef82883cb7b9c581b93c30ea252dabbf658d/UD-Q3_K_XL/Inkling-Small-UD-Q3_K_XL-00001-of-00004.gguf",
+    "distribution_id": "Inkling-Small-UD-Q3_K_XL",
+    "selector": "UD-Q3_K_XL",
     "capability": {
       "family_id": "inkling",
       "layer_count": 42,

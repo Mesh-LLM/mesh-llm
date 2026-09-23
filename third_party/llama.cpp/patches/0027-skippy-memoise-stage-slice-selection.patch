@@ -1,4 +1,4 @@
-From 7790435419e80c9ea94274c178c01fa30ef9a368 Mon Sep 17 00:00:00 2001
+From 25b17d35bc19a2419c376bcb67fb800cc868bb2c Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Wed, 23 Sep 2026 07:00:42 +1000
 Subject: [PATCH] skippy: memoise stage slice selection with exact dependency
@@ -18,7 +18,7 @@ Subject: [PATCH] skippy: memoise stage slice selection with exact dependency
  create mode 100644 src/skippy/tests/selection_memo_regression.h
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 0659a5dce..80ac609e3 100644
+index ce939f01d..2dd8b3f86 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -69,6 +69,7 @@ add_library(llama
@@ -241,7 +241,7 @@ index 75a4da24c..db40efbcd 100644
  
  bool skippy_build_guarded_stage_slice_plan(
 diff --git a/src/skippy/state_effects.cpp b/src/skippy/state_effects.cpp
-index b0224819c..333b89eca 100644
+index 4b5100dee..5c15164f1 100644
 --- a/src/skippy/state_effects.cpp
 +++ b/src/skippy/state_effects.cpp
 @@ -301,7 +301,12 @@ bool skippy_infer_state_effects(
@@ -257,7 +257,7 @@ index b0224819c..333b89eca 100644
 +        positions.emplace(node, index);
      }
  
-     struct explicit_owner {
+     // A raw-embedding entry is a graph leaf, before every executable node.
 diff --git a/src/skippy/tests/selection_memo_regression.h b/src/skippy/tests/selection_memo_regression.h
 new file mode 100644
 index 000000000..49e5ca442
@@ -388,7 +388,7 @@ index 000000000..49e5ca442
 +    return 0;
 +}
 diff --git a/src/skippy/tests/stage_slice_plan.cpp b/src/skippy/tests/stage_slice_plan.cpp
-index 69370e576..a01ddcd13 100644
+index 35de1e36c..e98a1d276 100644
 --- a/src/skippy/tests/stage_slice_plan.cpp
 +++ b/src/skippy/tests/stage_slice_plan.cpp
 @@ -6,6 +6,7 @@
@@ -409,14 +409,15 @@ index 69370e576..a01ddcd13 100644
  #include <string>
  #include <vector>
  
-@@ -1128,9 +1132,11 @@ static int check_auxiliary_graph_parameter_closure() {
- }
+@@ -1129,10 +1133,12 @@ static int check_auxiliary_graph_parameter_closure() {
  
  #include "residual_checkpoint_regression.h"
+ #include "input_leaf_state_regression.h"
 +#include "selection_memo_regression.h"
  
  int main() {
-     int result = check_raw_embedding_checkpoint();
+     int result = check_input_leaf_state_inference();
+     if (!result) { result = check_raw_embedding_checkpoint(); }
 +    if (!result) { result = check_selection_memo_regressions(); }
      if (!result) { result = check_semantic_identities(); }
      if (!result) { result = check_tied_parameter_identity(); }
