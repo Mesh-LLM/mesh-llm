@@ -4651,7 +4651,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 119554379840,
+          "estimated_model_bytes": 119541330088,
           "startup_timeout_secs": 1800
         },
         "notes": "Inkling-Small MoE with per-layer short-convolution state, a Q3 quant sized for the single-host certification runner, and real split image-projector coverage"
