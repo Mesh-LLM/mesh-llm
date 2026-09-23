@@ -129,6 +129,10 @@ where
     launch_failure: StartupLaunchFailureContext<'a>,
     make_survey_spec: G,
     announce_capacity_fallback: bool,
+    /// The node has accelerator memory and did not opt into host-RAM
+    /// offload, so the capacity fallback can name the setting that would let
+    /// it run the model alone from system RAM.
+    host_ram_offload_hint: bool,
 }
 
 pub(super) struct StartupLocalRuntimeOnceParams<'a, F>
@@ -235,6 +239,7 @@ where
         launch_failure,
         make_survey_spec,
         announce_capacity_fallback,
+        host_ram_offload_hint,
     } = params;
     let StartupLaunchFailureContext {
         target_tx,
@@ -244,9 +249,14 @@ where
 
     if announce_capacity_fallback {
         let required_bytes = runtime_model_required_bytes(model_bytes);
+        let offload_hint = if host_ram_offload_hint {
+            "; set gpu.host_ram_offload = true to let this node also count system RAM (an order of magnitude slower)"
+        } else {
+            ""
+        };
         let _ = emit_event(OutputEvent::Info {
             message: format!(
-                "Model {model_name} exceeds local runtime capacity; attempting split runtime"
+                "Model {model_name} exceeds local runtime capacity; attempting split runtime{offload_hint}"
             ),
             context: Some(format!(
                 "model={model_name} local_capacity_gb={:.1} required_capacity_gb={:.1} model_size_gb={:.1}",
@@ -670,6 +680,8 @@ pub(super) async fn startup_launch_runtime(
                 },
                 make_survey_spec: make_launch_failure_spec,
                 announce_capacity_fallback: reason == SplitRuntimeReason::LocalCapacity,
+                host_ram_offload_hint: !config.gpu.host_ram_offload.unwrap_or(false)
+                    && node.vram_bytes() > 0,
             })
             .await
         }

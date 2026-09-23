@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 mod routing_telemetry;
 mod startup;
 
-pub use startup::detect_vram_bytes_capped;
+pub use startup::detect_local_fit_bytes;
 #[cfg(test)]
 pub(crate) use startup::hardware_snapshot_for_start;
 use startup::{

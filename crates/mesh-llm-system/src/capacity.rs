@@ -304,7 +304,10 @@ mod tests {
             advertised_memory(&hw, Some(20.0), 0, true).ram_offload_bytes,
             8_000_000_000
         );
-        assert_eq!(advertised_memory(&hw, Some(8.0), 0, true).ram_offload_bytes, 0);
+        assert_eq!(
+            advertised_memory(&hw, Some(8.0), 0, true).ram_offload_bytes,
+            0
+        );
     }
 
     #[test]
@@ -425,10 +428,7 @@ mod tests {
 
         assert_eq!(local_fit_capacity_bytes(&hw, None, false), 12_878_610_432);
         assert_eq!(local_fit_capacity_bytes(&hw, None, true), 31_427_447_193);
-        assert_eq!(
-            advertised_memory(&hw, None, 0, false).ram_offload_bytes,
-            0
-        );
+        assert_eq!(advertised_memory(&hw, None, 0, false).ram_offload_bytes, 0);
         assert_eq!(
             advertised_memory(&hw, None, 0, true).ram_offload_bytes,
             18_548_836_761

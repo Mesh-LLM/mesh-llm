@@ -378,8 +378,13 @@ pub(super) async fn run_runtime_cli(
     handle_public_identity_transition(&options)?;
 
     let mut auto_join_candidates: Vec<(String, Option<String>)> = Vec::new();
-    maybe_discover_join_candidates(&mut options, has_startup_models, &mut auto_join_candidates)
-        .await?;
+    maybe_discover_join_candidates(
+        &mut options,
+        has_startup_models,
+        &mut auto_join_candidates,
+        config.gpu.host_ram_offload.unwrap_or(false),
+    )
+    .await?;
     let Some(PreparedRuntimeStartup {
         startup_specs,
         requested_model_names,

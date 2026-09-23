@@ -1,15 +1,15 @@
 use super::*;
 use crate::mesh::identity_persistence::load_or_create_key;
 
-pub fn detect_vram_bytes_capped(max_vram_gb: Option<f64>) -> u64 {
-    let mut detected = crate::system::hardware::survey().vram_bytes;
-    if let Some(cap) = max_vram_gb {
-        let cap_bytes = (cap * 1e9) as u64;
-        if cap_bytes < detected {
-            detected = cap_bytes;
-        }
-    }
-    detected
+/// The budget this host plans models against, the same one the local fit
+/// uses: accelerator memory, plus system RAM only when `gpu.host_ram_offload`
+/// is set, capped by `max_vram_gb`.
+pub fn detect_local_fit_bytes(max_vram_gb: Option<f64>, host_ram_offload: bool) -> u64 {
+    super::super::capacity::local_fit_capacity_bytes(
+        &crate::system::hardware::survey(),
+        max_vram_gb,
+        host_ram_offload,
+    )
 }
 
 pub(super) async fn startup_secret_key(role: &NodeRole) -> Result<SecretKey> {
@@ -118,6 +118,7 @@ pub(super) fn advertised_hardware_for_start(
         role,
         max_vram_gb,
         safety_margin_bytes,
+        config.gpu.host_ram_offload.unwrap_or(false),
     )
 }
 
@@ -126,11 +127,17 @@ pub(crate) fn hardware_snapshot_for_start(
     role: &NodeRole,
     max_vram_gb: Option<f64>,
     safety_margin_bytes: u64,
+    host_ram_offload: bool,
 ) -> NodeHardwareSnapshot {
     let local_runtime_capacity_bytes =
-        super::super::capacity::capped_capacity_bytes(hw.vram_bytes, max_vram_gb);
+        super::super::capacity::local_fit_capacity_bytes(&hw, max_vram_gb, host_ram_offload);
     let mut vram_bytes = super::super::capacity::advertised_capacity_bytes(&hw, max_vram_gb);
-    let memory = super::super::capacity::advertised_memory(&hw, max_vram_gb, safety_margin_bytes);
+    let memory = super::super::capacity::advertised_memory(
+        &hw,
+        max_vram_gb,
+        safety_margin_bytes,
+        host_ram_offload,
+    );
     let gpu_name = if matches!(role, NodeRole::Client) {
         None
     } else {
