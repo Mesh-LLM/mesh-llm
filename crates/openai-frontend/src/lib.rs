@@ -86,6 +86,7 @@ pub use router::{
     OpenAiFrontendConfig, router, router_for, router_for_with_config, router_with_config,
 };
 pub use system_one::{
-    SystemOneAnswer, SystemOneNoulCriteria, SystemOneQuestion, SystemOneRequest, SystemOneResponse,
-    SystemOneUsage,
+    SYSTEM_ONE_MAX_IMAGE_BYTES, SYSTEM_ONE_MAX_IMAGES, SystemOneAnswer, SystemOneImage,
+    SystemOneImageContentType, SystemOneNoulCriteria, SystemOneQuestion, SystemOneRequest,
+    SystemOneResponse, SystemOneUsage, parse_system_one_images,
 };

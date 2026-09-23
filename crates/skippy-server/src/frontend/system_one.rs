@@ -1,12 +1,14 @@
 use std::collections::BTreeMap;
 
 use openai_frontend::{
-    OpenAiError, OpenAiResult, SystemOneAnswer, SystemOneQuestion, SystemOneRequest,
-    SystemOneResponse, SystemOneUsage,
+    OpenAiError, OpenAiResult, SystemOneAnswer, SystemOneImage, SystemOneQuestion,
+    SystemOneRequest, SystemOneResponse, SystemOneUsage, parse_system_one_images,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use skippy_runtime::{ChatTemplateMessage, ChatTemplateOptions, SystemOneReadSlot};
+use skippy_runtime::{
+    ChatTemplateMessage, ChatTemplateOptions, SystemOneMediaSpan, SystemOneReadSlot,
+};
 
 use crate::frontend::{OpenAiBackendMode, StageOpenAiBackend, openai_backend_error};
 
@@ -43,7 +45,8 @@ impl StageOpenAiBackend {
         &self,
         request: SystemOneRequest,
     ) -> OpenAiResult<SystemOneResponse> {
-        self.validate_system_one_request(&request)?;
+        let images = parse_system_one_images(request.images.as_ref())?;
+        self.validate_system_one_request(&request, &images)?;
         let request_seed =
             serde_json::to_vec(&(&request.state, &request.questions)).map_err(|error| {
                 OpenAiError::invalid_request(format!("serialize System One request: {error}"))
@@ -62,12 +65,21 @@ impl StageOpenAiBackend {
         let outcome =
             self.iteration_scheduler
                 .execute_runtime("system-one-read", move |runtime| {
+                    // Images sit ahead of the state in the user turn (upstream contract); each
+                    // marker becomes one soft-token span decoded from projector embeddings.
+                    let user_text = if images.is_empty() {
+                        state_text.clone()
+                    } else {
+                        let marker = runtime.model.media_marker();
+                        let markers = marker.repeat(images.len());
+                        format!("{markers}{}", state_text)
+                    };
                     let prompt = runtime
                         .model
                         .apply_chat_template_with_options(
                             &[
                                 ChatTemplateMessage::new("system", &system_text),
-                                ChatTemplateMessage::new("user", &state_text),
+                                ChatTemplateMessage::new("user", &user_text),
                             ],
                             ChatTemplateOptions {
                                 add_assistant: true,
@@ -76,10 +88,45 @@ impl StageOpenAiBackend {
                             },
                         )
                         .map_err(openai_backend_error)?;
-                    let prompt_tokens = runtime
-                        .model
-                        .tokenize(&prompt, true)
-                        .map_err(openai_backend_error)?;
+                    let (prompt_tokens, media_spans) = if images.is_empty() {
+                        let prompt_tokens = runtime
+                            .model
+                            .tokenize(&prompt, true)
+                            .map_err(openai_backend_error)?;
+                        (prompt_tokens, Vec::new())
+                    } else {
+                        let marker = runtime.model.media_marker();
+                        if !prompt.contains(&marker) {
+                            return Err(OpenAiError::unsupported(
+                                "the chat template dropped the media markers; this template cannot carry images",
+                            ));
+                        }
+                        let mut prompt_tokens = Vec::new();
+                        let mut media_spans = Vec::with_capacity(images.len());
+                        for (index, segment) in prompt.split(&marker).enumerate() {
+                            let add_special = index == 0;
+                            let segment_tokens = runtime
+                                .model
+                                .tokenize(segment, add_special)
+                                .map_err(openai_backend_error)?;
+                            prompt_tokens.extend_from_slice(&segment_tokens);
+                            // Marker k sits between segment k and segment k+1; image k follows it.
+                            let image = if index > 0 { images.get(index - 1) } else { None };
+                            if let Some(image) = image {
+                                let (token_count, embeddings) = runtime
+                                    .model
+                                    .encode_image_embeddings(&image.bytes)
+                                    .map_err(openai_backend_error)?;
+                                media_spans.push(SystemOneMediaSpan {
+                                    prompt_offset: prompt_tokens.len() as u32,
+                                    token_count: token_count as u32,
+                                    embeddings,
+                                });
+                                prompt_tokens.extend(std::iter::repeat_n(0_i32, token_count));
+                            }
+                        }
+                        (prompt_tokens, media_spans)
+                    };
                     if prompt_tokens.is_empty() {
                         return Err(OpenAiError::invalid_request(
                             "System One prompt produced no tokens",
@@ -96,10 +143,17 @@ impl StageOpenAiBackend {
                         seed,
                         canvas_token_count,
                     )?;
-                    let probabilities = runtime
-                        .model
-                        .system_one_read(&prompt_tokens, &canvas, &slots)
-                        .map_err(openai_backend_error)?;
+                    let probabilities = if media_spans.is_empty() {
+                        runtime
+                            .model
+                            .system_one_read(&prompt_tokens, &canvas, &slots)
+                            .map_err(openai_backend_error)?
+                    } else {
+                        runtime
+                            .model
+                            .system_one_read_media(&prompt_tokens, &media_spans, &canvas, &slots)
+                            .map_err(openai_backend_error)?
+                    };
                     Ok((prompt_tokens.len(), probabilities))
                 })?;
 
@@ -114,7 +168,11 @@ impl StageOpenAiBackend {
         })
     }
 
-    fn validate_system_one_request(&self, request: &SystemOneRequest) -> OpenAiResult<()> {
+    fn validate_system_one_request(
+        &self,
+        request: &SystemOneRequest,
+        images: &[SystemOneImage],
+    ) -> OpenAiResult<()> {
         const ALIASES: &[&str] = &["openjev-latest", "openjev-0.1", "jev-latest", "jev-preview"];
         if request.model != self.model_id && !ALIASES.contains(&request.model.as_str()) {
             return Err(OpenAiError::invalid_request(format!(
@@ -127,17 +185,21 @@ impl StageOpenAiBackend {
                 "System One needs at least one question",
             ));
         }
-        if request
-            .images
-            .as_ref()
-            .is_some_and(|images| !images.is_empty())
-            || request.steps.is_some_and(|steps| steps != 1)
+        if !images.is_empty()
+            && (request.think.is_some_and(|think| think != 0)
+                || request.sequential.unwrap_or(false))
+        {
+            return Err(OpenAiError::invalid_request(
+                "images cannot be combined with think or sequential reads",
+            ));
+        }
+        if request.steps.is_some_and(|steps| steps != 1)
             || request.samples.is_some_and(|samples| samples != 1)
             || request.think.is_some_and(|think| think != 0)
             || request.sequential.unwrap_or(false)
         {
             return Err(OpenAiError::unsupported(
-                "this PoC supports one text-only System One read; images, multiple steps/samples, thinking, and sequential reads are not yet supported",
+                "this PoC supports one System One read; multiple steps/samples, thinking, and sequential reads are not yet supported",
             ));
         }
         match &self.mode {
