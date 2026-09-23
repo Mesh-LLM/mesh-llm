@@ -16,8 +16,10 @@ validation results and remaining gaps are recorded below.
 3. The payer validates the invoice and reserves its maximum debit against
    the automatic spending budget.
 4. After successful prefill, decode runs concurrently with invoice creation and
-   payment observation. The provider buffers backend HTTP output in a bounded
-   256 KiB queue, applying backpressure when full. No response headers or body
+   payment observation. Decode may run up to `PRE_PAYMENT_OUTPUT_TOKENS` (512)
+   ahead of the payment; the provider's payment gate then pauses decode until
+   the payment arrives, fails, is cancelled or the invoice expires. Output is
+   held in a 1 MiB queue sized so the token pause is reached first. No response headers or body
    are released until its own wallet observes payment arrival (`claiming` or
    terminal fallback). Failed or expired authorization discards buffered output.
 5. Authorized output streams through the ordinary OpenAI response path. The
@@ -90,7 +92,7 @@ the plugin boundary, and no per-token IPC exists.
 
 The host supplies every invoice's expiry (`wallet_create_invoice.expiry_secs`);
 a plugin must not substitute a provider default. `mesh-llm-payments::lifetimes`
-owns the values: input inference invoices expire after 5 minutes, output
+owns the values: input inference invoices expire after 60 seconds, output
 invoices after 60 minutes, `fund-wallet` invoices after 24 hours. The seller
 waits for the input payment to arrive for exactly the input invoice lifetime.
 A payer cannot recall an in-flight HTLC, and the payee's node claims any HTLC
@@ -98,7 +100,7 @@ that lands before expiry, so a shorter wait would leave a window in which the
 seller has discarded its buffered output but still gets paid for it. Aligning
 the two means "the seller gave up" and "the payment can no longer land" are the
 same moment; the price is that an unpaid request can hold a backend slot for
-up to five minutes. This also bounds how long an unpaid input invoice keeps a
+up to 60 seconds (paused at the pre-payment token cap). This also bounds how long an unpaid input invoice keeps a
 peer blocked.
 
 Receiver-side arrival is a normalized field, `Transaction.claiming`, set by the
@@ -258,10 +260,11 @@ Partial frames or a crash between transmission and accounting can conservatively
 undercharge. Non-streaming responses become billable when their complete JSON
 usage is transmitted.
 
-Unpaid output delivery waits until the invoice's actual expiry (Lexe's default:
-24 hours), or cancellation. Decode can run ahead within the backend and transport
-buffers; the 256 KiB queue bounds this adapter's buffered bytes, not all native
-compute or socket buffering. Settlement continues independently of the application's HTTP
+Unpaid output delivery waits until the input invoice expires (60 seconds) or
+cancellation. Decode runs ahead of the payment only up to the pre-payment token
+cap, then pauses in the backend's generation gate; the 1 MiB queue is a
+backstop, not the pause. If it ever filled, reads would stop and the backend's
+10-second receiver-stall timeout would cancel generation rather than pause it. Settlement continues independently of the application's HTTP
 connection. The provider stops further generation when it receives cancellation.
 Late input payment after state release is recorded but does not regenerate output
 or trigger an automatic refund.
@@ -324,7 +327,14 @@ nodes refuse the provenance-losing legacy TCP bridge;
 normal direct QUIC ingress still supports free inference. A process-owned socket
 registry also preserves remote origin for existing legacy connections if wallet
 or seller configuration changes while a connection is open. Non-loopback TCP
-callers likewise cannot bypass seller charges. Wallet API requests can
+callers likewise cannot bypass seller charges.
+
+The legacy TCP bridge is the older inbound path for embedders that register a
+loopback port instead of installing direct ingress (`tunnel.rs`). On a node
+with seller prices, a persisted wallet or a live wallet, requests arriving over
+it get HTTP 402 (`inbound_http.rs`, `legacy_bridge_requires_payment_ingress`);
+free nodes and builds without the `payments` feature are unchanged. Embedders
+that need paid serving must install direct ingress. Wallet API requests can
 bind an expected runtime PID and config directory to reject stale destinations.
 
 Pricing gossip is additive (protobuf field 51 and optional JSON metadata). Older

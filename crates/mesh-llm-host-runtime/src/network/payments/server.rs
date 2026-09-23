@@ -158,8 +158,11 @@ async fn stream_output(
 ) -> Result<bool> {
     // Decode runs as soon as prefill completes. Drain the backend into a
     // bounded buffer, but do not release even HTTP headers until the provider's
-    // receiving wallet sees `claiming` or a terminal fallback. Reaching the
-    // cap applies TCP backpressure to decode rather than growing without bound.
+    // receiving wallet sees `claiming` or a terminal fallback. The payment gate
+    // pauses decode after `PRE_PAYMENT_OUTPUT_TOKENS`, which keeps this buffer
+    // from filling while unpaid. The byte cap is only a backstop: if it is
+    // ever reached, reads stop, the backend's stream stalls, and its
+    // receiver-stall timeout cancels generation (it does not pause decode).
     let mut buffer = vec![0; 16 * 1024];
     let mut pending: VecDeque<Vec<u8>> = VecDeque::new();
     let mut pending_bytes = 0_usize;
@@ -235,7 +238,14 @@ async fn stream_output(
     Ok(true)
 }
 
-const MAX_BUFFERED_OUTPUT_BYTES: usize = 256 * 1024;
+/// Backstop for bytes buffered before payment. Sized at ~2 KiB per token of
+/// `PRE_PAYMENT_OUTPUT_TOKENS`, several times a streamed chat-completion
+/// chunk, so the token pause is always reached first.
+const MAX_BUFFERED_OUTPUT_BYTES: usize = 1024 * 1024;
+const _: () = assert!(
+    MAX_BUFFERED_OUTPUT_BYTES as u64
+        >= 2048 * mesh_llm_payments::lifetimes::PRE_PAYMENT_OUTPUT_TOKENS
+);
 
 async fn deliver_output(
     writer: &mut (impl AsyncWrite + Unpin),

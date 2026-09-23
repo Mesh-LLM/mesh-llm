@@ -76,7 +76,31 @@ pub(super) async fn rank(
             InferenceTarget::None => None,
         }
     };
+    let equivalent = candidates.ordered[..candidates.equivalent_prefix].to_vec();
     candidates.ordered.retain(|target| key(target).is_some());
+    if candidates.ordered.is_empty() {
+        return Err(
+            "paid providers are unavailable under the current payment policy, wallet balance or daily budget",
+        );
+    }
+    // No paid provider survived the policy filter, so every remaining target
+    // is free and price has nothing to order. Leave the free route exactly as
+    // it is without payments: context/throughput order, its equivalent run
+    // (minus any removed paid peers), and ordinary cache, session and load
+    // selection. Treating it as a price tier would flatten that run and force
+    // its first target as a pseudo cache hit.
+    if !candidates
+        .ordered
+        .iter()
+        .any(|target| matches!(key(target), Some((1, _))))
+    {
+        candidates.equivalent_prefix = candidates
+            .ordered
+            .iter()
+            .take_while(|target| equivalent.contains(target))
+            .count();
+        return Ok(false);
+    }
     candidates.ordered.sort_by_key(|target| key(target));
     let first = candidates.ordered.first().and_then(&key);
     candidates.equivalent_prefix = candidates
@@ -84,11 +108,6 @@ pub(super) async fn rank(
         .iter()
         .take_while(|target| key(target) == first)
         .count();
-    if candidates.ordered.is_empty() {
-        return Err(
-            "paid providers are unavailable under the current payment policy, wallet balance or daily budget",
-        );
-    }
     Ok(true)
 }
 
@@ -170,12 +189,38 @@ mod tests {
             ],
             equivalent_prefix: 2,
         };
+        // Only free targets remain, so the route is left unranked by price.
         assert!(
-            rank(&node, "test", 1, 1, &mut candidates, None)
+            !rank(&node, "test", 1, 1, &mut candidates, None)
                 .await
                 .unwrap()
         );
         assert_eq!(candidates.ordered, vec![InferenceTarget::Remote(free)]);
+        assert_eq!(candidates.equivalent_prefix, 1);
+        // The free route keeps its context/throughput tiering: a tied run of
+        // two free targets ahead of a slower one survives the paid peer's
+        // removal, instead of being flattened into one price tier.
+        let fast = iroh::SecretKey::generate().public();
+        let slow = iroh::SecretKey::generate().public();
+        let mut tiered = RankedCandidates {
+            ordered: vec![
+                InferenceTarget::Remote(seller.id()),
+                InferenceTarget::Remote(free),
+                InferenceTarget::Remote(fast),
+                InferenceTarget::Remote(slow),
+            ],
+            equivalent_prefix: 3,
+        };
+        assert!(!rank(&node, "test", 1, 1, &mut tiered, None).await.unwrap());
+        assert_eq!(
+            tiered.ordered,
+            vec![
+                InferenceTarget::Remote(free),
+                InferenceTarget::Remote(fast),
+                InferenceTarget::Remote(slow),
+            ]
+        );
+        assert_eq!(tiered.equivalent_prefix, 2);
         let mut paid_only = RankedCandidates {
             ordered: vec![InferenceTarget::Remote(seller.id())],
             equivalent_prefix: 1,
