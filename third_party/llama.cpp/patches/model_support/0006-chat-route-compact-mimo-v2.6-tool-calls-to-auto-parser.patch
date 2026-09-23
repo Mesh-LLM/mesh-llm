@@ -14,7 +14,11 @@ bfd73a876e (#29257, AesSedai): exclude templates that emit
 '<tool_call><function=' with no separator, letting the existing
 template-derived auto-parser handle them. Adds the official
 XiaomiMiMo/MiMo-V2.6-Flash-RL template (rev 5711b268) as a fixture with
-single and parallel compact-call tests.
+single and parallel compact-call tests. The template is MIT-licensed
+per the model card (huggingface.co/XiaomiMiMo/MiMo-V2.6-Flash-RL).
+
+DROP THIS PATCH when the llama.cpp pin includes upstream bfd73a876e;
+it will then already be applied and `git am` will stop on it.
 ---
  common/chat.cpp                  |  4 +-
  models/templates/MiMo-V2.6.jinja | 95 ++++++++++++++++++++++++++++++++
