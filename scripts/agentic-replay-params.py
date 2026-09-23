@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -100,6 +101,8 @@ def replay_command(matrix_path, family, refs, dataset_file, output):
         "--output",
         str(output),
     ]
+    if os.environ.get('AGENTIC_REPLAY_WORKTREE_ROOT'):
+        command.extend(('--worktree-root', os.environ['AGENTIC_REPLAY_WORKTREE_ROOT']))
     for ref in refs:
         command.extend(("--ref", ref))
     for key in POSITIVE_FIELDS:
