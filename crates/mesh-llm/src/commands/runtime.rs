@@ -955,6 +955,7 @@ mod tests {
             gpu: GpuConfig {
                 assignment: GpuAssignment::Auto,
                 parallel: None,
+                host_ram_offload: None,
             },
             mesh_requirements: Default::default(),
             models: Vec::new(),
