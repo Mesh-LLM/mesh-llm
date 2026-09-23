@@ -121,7 +121,7 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         result = self._run()
         self.assertEqual(0, result.returncode, result.stderr)
         plan = json.loads(result.stdout)
-        self.assertEqual(89, plan["selected_family_count"])
+        self.assertEqual(95, plan["selected_family_count"])
         self.assertEqual(
             ["single-step", "chain", "state-handoff"],
             plan["required_certification_lanes"],
@@ -186,7 +186,7 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
                 self.assertEqual("local-monolithic", model["oracle"])
                 self.assertEqual("disabled", model["execution"]["speculative_policy"])
                 self.assertEqual(0, model["execution"]["mtp_layers"])
-        for auxiliary in ("deepseek4", "gemma4-assistant", "muse-glimmer", "glm-dsa"):
+        for auxiliary in ("gemma4-assistant", "glm-dsa"):
             self.assertNotIn(auxiliary, by_family)
 
     def test_cadence_selection_is_removed(self) -> None:
@@ -227,6 +227,9 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
                 "qwen4exp",
                 "qwen35",
                 "qwen35moe",
+                "deepseek4",
+                "mistral3",
+                "muse-glimmer",
                 "mistral-small",
                 "mistral4",
                 "llama4",
@@ -844,8 +847,8 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         families = [
             family for shard in plan["shards"] for family in shard["families"]
         ]
-        self.assertEqual(89, len(families))
-        self.assertEqual(89, len(set(families)))
+        self.assertEqual(95, len(families))
+        self.assertEqual(95, len(set(families)))
         self.assertEqual(4, len(plan["github_matrix"]["include"]))
 
 

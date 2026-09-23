@@ -62,7 +62,7 @@ class SplitCertificationRosterTests(unittest.TestCase):
         roster = GENERATOR.build_roster(manifest)
         causal = [model for model in manifest["models"]
                   if model["class"] == "causal_generation"]
-        self.assertEqual(83, len(causal))
+        self.assertEqual(89, len(causal))
         self.assertEqual(
             {model["architecture"] for model in causal}, set(roster["architectures"])
         )
