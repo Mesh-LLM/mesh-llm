@@ -97,6 +97,7 @@ impl RequestSummaryMetadata {
             "/v1/completions" => Some("completions"),
             "/v1/responses" => Some("responses"),
             "/systemone" => Some("system_one"),
+            "/v1/systemone" => Some("system_one"),
             _ => None,
         };
         Self::from_parts(route, None, None, None)
@@ -259,6 +260,10 @@ mod tests {
         assert_eq!(metadata.route(), Some("responses"));
         assert_eq!(
             RequestSummaryMetadata::from_openai_ingress_path("/systemone").route(),
+            Some("system_one")
+        );
+        assert_eq!(
+            RequestSummaryMetadata::from_openai_ingress_path("/v1/systemone").route(),
             Some("system_one")
         );
         assert!(

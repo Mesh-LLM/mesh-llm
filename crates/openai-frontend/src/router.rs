@@ -284,6 +284,7 @@ pub fn router_for_with_config(
         .route("/v1/completions", post(completions))
         .route("/v1/responses", post(responses))
         .route("/systemone", post(system_one))
+        .route("/v1/systemone", post(system_one))
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(not_found)
         .layer(middleware::from_fn_with_state(
@@ -1201,6 +1202,7 @@ fn lifecycle_route(uri: &Uri) -> OpenAiFrontendRoute {
         "/v1/completions" => OpenAiFrontendRoute::Completions,
         "/v1/responses" => OpenAiFrontendRoute::Responses,
         "/systemone" => OpenAiFrontendRoute::SystemOne,
+        "/v1/systemone" => OpenAiFrontendRoute::SystemOne,
         _ => OpenAiFrontendRoute::Unknown,
     }
 }
