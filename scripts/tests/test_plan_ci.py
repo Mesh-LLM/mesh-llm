@@ -55,6 +55,26 @@ WINDOWS_UNVERIFIED_CRATES = {
 }
 
 
+CFG_PATTERN = re.compile(
+    r"\bcfg(?:!|_attr)?\s*\([^)]*\b"
+    r"(?:windows|unix|target_os\s*=\s*\"windows\")"
+)
+
+
+def _cfg_divergent_crates(root: Path) -> set[str]:
+    """Return crates whose source selects Windows- or Unix-specific code."""
+    divergent = set()
+    for manifest in sorted((root / "crates").glob("*/Cargo.toml")):
+        crate_root = manifest.parent / "src"
+        if not crate_root.is_dir():
+            continue
+        for source in crate_root.rglob("*.rs"):
+            if CFG_PATTERN.search(source.read_text(encoding="utf-8", errors="ignore")):
+                divergent.add(manifest.parent.name)
+                break
+    return divergent
+
+
 
 def _windows_unit_row_crates() -> set[str]:
     """Crates named in the windows-unit row's explicit `cargo test` loop."""
@@ -454,18 +474,7 @@ class PlanCiTests(unittest.TestCase):
         confirmed green on the Windows runner - turning all of them on at
         once would make main red for reasons unrelated to the routing.
         """
-        cfg_pattern = re.compile(
-            r"cfg\((?:not\()?(?:windows|unix|target_os\s*=\s*\"windows\")"
-        )
-        divergent = set()
-        for manifest in sorted((ROOT / "crates").glob("*/Cargo.toml")):
-            crate_root = manifest.parent / "src"
-            if not crate_root.is_dir():
-                continue
-            for source in crate_root.rglob("*.rs"):
-                if cfg_pattern.search(source.read_text(encoding="utf-8", errors="ignore")):
-                    divergent.add(manifest.parent.name)
-                    break
+        divergent = _cfg_divergent_crates(ROOT)
 
         unaccounted = sorted(
             divergent - _windows_routed_crates() - WINDOWS_UNVERIFIED_CRATES
@@ -477,6 +486,36 @@ class PlanCiTests(unittest.TestCase):
             "these crates carry platform-divergent code but no Windows job "
             "compiles them; route them to a Windows row or add them to "
             "WINDOWS_UNVERIFIED_CRATES with a reason",
+        )
+
+    def test_cfg_detector_marks_all_platform_forms_divergent(self) -> None:
+        sources = {
+            "direct-windows": "#[cfg(windows)]\nfn platform() {}\n",
+            "direct-unix": "#[cfg(unix)]\nfn platform() {}\n",
+            "target-os-windows": "#[cfg(target_os = \"windows\")]\nfn platform() {}\n",
+            "cfg-macro": "const WINDOWS: bool = cfg!(windows);\n",
+            "cfg-attr": "#[cfg_attr(unix, derive(Debug))]\nstruct Platform;\n",
+            "compound": "#[cfg(any(windows, unix))]\nfn platform() {}\n",
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for crate, source in sources.items():
+                crate_root = root / "crates" / crate
+                (crate_root / "src").mkdir(parents=True)
+                (crate_root / "Cargo.toml").write_text(
+                    f'[package]\nname = "{crate}"\nversion = "0.1.0"\n',
+                    encoding="utf-8",
+                )
+                (crate_root / "src" / "lib.rs").write_text(source, encoding="utf-8")
+
+            divergent = _cfg_divergent_crates(root)
+
+        self.assertEqual(set(sources), divergent)
+        self.assertEqual(
+            sorted(sources),
+            sorted(divergent - _windows_routed_crates() - WINDOWS_UNVERIFIED_CRATES),
+            "unclassified platform-divergent crates must require Windows coverage",
         )
 
     def test_windows_unverified_list_has_no_stale_entries(self) -> None:
