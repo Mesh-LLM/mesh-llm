@@ -191,7 +191,6 @@ dynamic_symbols! {
     skippy_session_create(model: *mut Model, out_session: *mut *mut Session, out_error: *mut *mut Error) -> Status;
     skippy_session_create_from_resident_prefix(model: *mut Model, cache_seq_id: i32, token_ids: *const i32, token_count: usize, out_session: *mut *mut Session, out_error: *mut *mut Error) -> Status;
     skippy_session_llama_context(session: *mut Session) -> *mut Opaque;
-    llama_perf_context(ctx: *mut Opaque) -> LlamaPerfContextData;
     skippy_session_position(session: *const Session) -> i32;
     skippy_session_batch_size(session: *const Session) -> i32;
     skippy_session_sequence_id(session: *const Session) -> i32;
@@ -296,6 +295,7 @@ dynamic_symbols! {
 // Older runtimes may lack these and callers must check availability first.
 // -----------------------------------------------------------------------
 
+type LlamaPerfContextFn = unsafe extern "C" fn(ctx: *mut Opaque) -> LlamaPerfContextData;
 type SkippyAbiFeaturesFn = unsafe extern "C" fn() -> u64;
 type SkippyModelOpenWithEventsFn = unsafe extern "C" fn(
     path: *const c_char,
@@ -411,6 +411,13 @@ pub fn skippy_abi_features_optional() -> Option<SkippyAbiFeaturesFn> {
     static CACHE: OnceLock<Option<SkippyAbiFeaturesFn>> = OnceLock::new();
     *CACHE
         .get_or_init(|| symbols().lookup_optional::<SkippyAbiFeaturesFn>(b"skippy_abi_features\0"))
+}
+
+/// Graph reuse counters. Optional: a runtime that predates this symbol must
+/// still load, since the counters are telemetry and never a correctness input.
+pub fn llama_perf_context_optional() -> Option<LlamaPerfContextFn> {
+    static CACHE: OnceLock<Option<LlamaPerfContextFn>> = OnceLock::new();
+    *CACHE.get_or_init(|| symbols().lookup_optional::<LlamaPerfContextFn>(b"llama_perf_context\0"))
 }
 
 pub(crate) fn llama_model_is_recurrent_fn() -> Option<LlamaModelStateFn> {
