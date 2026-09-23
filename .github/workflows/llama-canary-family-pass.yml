@@ -122,6 +122,7 @@ jobs:
           set -euo pipefail
           python3 scripts/llama-canary-family-evidence.py build
       - name: Upload exact candidate and executable handoff
+        id: upload_package
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: llama-family-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
@@ -129,6 +130,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Upload build and repair evidence
+        id: upload_evidence
         if: ${{ success() || failure() || cancelled() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -136,6 +138,17 @@ jobs:
           path: ${{ env.CANARY_SOURCE_ROOT }}/.deps/llama-canary-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}/
           if-no-files-found: warn
           retention-days: 14
+      - name: Clean build job outputs
+        if: ${{ (success() || failure() || cancelled()) }}
+        timeout-minutes: 5
+        env:
+          CANARY_PASS_ID: ${{ inputs.pass_id }}
+          EVIDENCE_UPLOADED: ${{ steps.upload_evidence.outcome == 'success' }}
+          PACKAGE_UPLOADED: ${{ steps.upload_package.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          python3 scripts/cleanup-self-hosted.py --job build \
+            --evidence-uploaded "$EVIDENCE_UPLOADED" --package-uploaded "$PACKAGE_UPLOADED"
   family:
     name: ${{ inputs.pass_id }} / ${{ matrix.families }}
     needs: build
@@ -208,6 +221,7 @@ jobs:
           python3 scripts/llama-canary-family-evidence.py receipt --package "$PACKAGE" --identity "$IDENTITY" \
             --family "$FAMILY" --outcome "$OUTCOME" --evidence "$FAMILY_BATTERY_ARTIFACT_ROOT/$FAMILY_BATTERY_RUN_ID"
       - name: Upload family evidence
+        id: upload_evidence
         if: ${{ success() || failure() || cancelled() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -220,6 +234,16 @@ jobs:
         env:
           OUTCOME: ${{ steps.certify.outcome }}
         run: test "$OUTCOME" = success
+      - name: Clean family job outputs
+        if: ${{ (success() || failure() || cancelled()) }}
+        timeout-minutes: 5
+        env:
+          CANARY_PASS_ID: ${{ inputs.pass_id }}
+          CANARY_SHARD_INDEX: ${{ matrix.shard_index }}
+          EVIDENCE_UPLOADED: ${{ steps.upload_evidence.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          python3 scripts/cleanup-self-hosted.py --job family --evidence-uploaded "$EVIDENCE_UPLOADED"
   aggregate:
     needs: [build, family]
     if: ${{ !cancelled() && needs.build.result == 'success' }}
