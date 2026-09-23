@@ -5,6 +5,7 @@ use mesh_llm_payments::{
     ledger::{Charge, RequestTerms},
     pricing::{Pricing, payment_cap_msat},
     service::PaymentService,
+    wallet::Balance,
     wire::{self, Frame},
 };
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, DuplexStream};
@@ -151,6 +152,10 @@ async fn start(
         effective_intent(&service, &request)?.permits(&price, 0),
         "paid inference is excluded by spending policy or request restriction"
     );
+    // Read the balance for approval during the seller's prefill. If a
+    // concurrent payment settles in between, the balance overstates the
+    // funds, but the wallet still refuses any payment it cannot afford.
+    let balance = service.prefetch_balance();
     let id = uuid::Uuid::new_v4().to_string();
     send.write_all(wire::HTTP_UPGRADE)
         .await
@@ -188,6 +193,7 @@ async fn start(
             send,
             recv,
             initial,
+            balance,
             &mut output,
             ready,
             cancellation,
@@ -266,6 +272,7 @@ pub(crate) async fn exchange(
     mut send: impl AsyncWrite + Unpin,
     mut recv: impl AsyncRead + Unpin,
     initial: Frame,
+    balance: tokio::task::JoinHandle<Result<Balance>>,
     output: &mut DuplexStream,
     ready: tokio::sync::oneshot::Sender<()>,
     mut cancellation: tokio::sync::watch::Receiver<bool>,
@@ -281,7 +288,7 @@ pub(crate) async fn exchange(
     terms.peer = peer.to_string();
     terms.payee = Some(invoice.payee.clone());
     tokio::select! {
-        result = service.await_authorization(&terms) => result?,
+        result = service.await_authorization_with(&terms, async { balance.await? }) => result?,
         _ = cancellation.changed() => {
             let _ = service.ledger.cancel_unstarted(&id);
             let _ = wire::write(&mut send, &Frame::Cancel).await;

@@ -78,6 +78,9 @@ async fn serve_inner(
             _ => None,
         })
         .context("paid model must be served locally")?;
+    // Wake the receiving wallet during prefill so the input invoice doesn't
+    // wait on a cold start.
+    drop(service.prefetch_balance());
     let peer = peer.to_string();
     await_prior_settlement(&service, &peer, Duration::from_secs(30)).await?;
     service.ledger.begin_serving(

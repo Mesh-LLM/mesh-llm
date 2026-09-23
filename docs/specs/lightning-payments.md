@@ -28,6 +28,14 @@ validation results and remaining gaps are recorded below.
 6. The provider invoices actual output transmitted, and the payer settles under
    the original authorization. No human approval is needed.
 
+Both wallets start their pre-payment I/O during prefill. The provider wakes its
+wallet so invoice creation doesn't wait on a cold start, and the payer reads the
+balance that step 3 reserves against. If a concurrent payment settles in
+between, that balance overstates the funds, but the wallet still refuses any
+payment it cannot afford. A fresh charge then goes straight to the wallet's
+`pay`, which recovers any existing payment by hash. The Lexe adapter looks one
+up only when preflight rejects the invoice.
+
 Prices and counts are the provider's claims. Proof of prefill, proof of correct
 inference, refunds, and encrypted output are not implemented. Prefill before
 payment avoids requiring blind input prepayment; it still exposes providers to

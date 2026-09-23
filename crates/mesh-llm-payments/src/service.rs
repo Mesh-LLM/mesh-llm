@@ -4,10 +4,11 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use tokio::sync::{Mutex, OnceCell};
+use tokio::task::JoinHandle;
 
 use crate::invoice::Invoice;
 use crate::ledger::{ApprovalMode, Charge, Ledger, RequestTerms};
-use crate::wallet::{PayError, PaymentStatus, Transaction, WalletProvider};
+use crate::wallet::{Balance, PayError, PaymentStatus, Transaction, WalletProvider};
 
 /// Which receiver-side evidence ended an arrival wait.
 ///
@@ -102,13 +103,33 @@ impl PaymentService {
             .approve(id, balance.spendable_msat, crate::now_ms())
     }
 
+    /// Read the balance in the background, so its latency, including waking
+    /// a sleeping wallet, overlaps other work.
+    pub fn prefetch_balance(self: &Arc<Self>) -> JoinHandle<Result<Balance>> {
+        let service = self.clone();
+        tokio::spawn(async move { service.wallet().await?.balance().await })
+    }
+
     pub async fn await_authorization(&self, terms: &RequestTerms) -> Result<()> {
+        self.await_authorization_with(terms, async { self.wallet().await?.balance().await })
+            .await
+    }
+
+    /// [`Self::await_authorization`] against a balance the caller may have
+    /// started reading before the terms arrived.
+    pub async fn await_authorization_with(
+        &self,
+        terms: &RequestTerms,
+        balance: impl Future<Output = Result<Balance>>,
+    ) -> Result<()> {
         ensure!(
             self.ledger.policy()?.mode == ApprovalMode::Automatic,
             "paid inference is disabled by free-only policy"
         );
         self.ledger.propose(terms)?;
-        self.approve(&terms.id).await
+        let balance = balance.await?;
+        self.ledger
+            .approve(&terms.id, balance.spendable_msat, crate::now_ms())
     }
 
     pub async fn pay_charge(&self, charge: &Charge) -> Result<Transaction> {
@@ -154,14 +175,16 @@ impl PaymentService {
             "Lightning payment failed; authorization closed"
         );
         let wallet = self.wallet().await?;
-        if let Some(payment) = wallet.lookup(&charge.invoice.payment_hash).await? {
+        // A prepared charge was never submitted, so skip the lookup. If the
+        // invoice was paid outside this service, `pay` recovers that payment.
+        if state != "prepared" {
+            let payment = wallet
+                .lookup(&charge.invoice.payment_hash)
+                .await?
+                .context("payment outcome uncertain; awaiting authoritative wallet status")?;
             validate_payment_update(&payment, &charge.invoice.payment_hash, false)?;
             return Ok(payment);
         }
-        ensure!(
-            state == "prepared",
-            "payment outcome uncertain; awaiting authoritative wallet status"
-        );
         if let Err(error) = charge
             .invoice
             .validate_payment(charge.amount_msat, crate::now_ms())

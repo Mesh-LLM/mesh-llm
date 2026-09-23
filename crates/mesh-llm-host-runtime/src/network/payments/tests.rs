@@ -354,6 +354,7 @@ async fn paid_exchange(
     let exchange = tokio::spawn(async move {
         let mut recv = recv;
         let initial = wire::read(&mut recv).await?;
+        let balance = payer_for_exchange.prefetch_balance();
         crate::network::openai::test_payment_exchange(
             payer_for_exchange,
             provider_id,
@@ -363,6 +364,7 @@ async fn paid_exchange(
             send,
             recv,
             initial,
+            balance,
             &mut output,
             ready,
             cancellation,

@@ -234,6 +234,30 @@ async fn lost_payment_response_recovers_after_restart_without_double_spend() {
 }
 
 #[tokio::test]
+async fn a_fresh_charge_pays_without_a_lookup() {
+    let dir = tempfile::tempdir().unwrap();
+    let wallet = Arc::new(MockWallet::default());
+    let service = PaymentService::with_provider(dir.path(), wallet.clone()).unwrap();
+    service
+        .ledger
+        .set_policy(&Policy {
+            mode: ApprovalMode::Automatic,
+            daily_budget_msat: Some(1000),
+        })
+        .unwrap();
+    service
+        .await_authorization(&terms("one", 1000))
+        .await
+        .unwrap();
+    service
+        .pay_charge(&charge("one", 0, 1, 100, 200))
+        .await
+        .unwrap();
+    assert_eq!(wallet.lookups.load(Ordering::SeqCst), 0);
+    assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn output_payment_uses_the_original_authorization_and_actual_fees() {
     let dir = tempfile::tempdir().unwrap();
     let wallet = Arc::new(MockWallet::default());

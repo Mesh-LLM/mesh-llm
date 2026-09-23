@@ -245,19 +245,6 @@ impl WalletProvider for LexeProvider {
         invoice
             .validate_payment(amount_msat, mesh_llm_wallet::now_ms())
             .map_err(PayError::NotSubmitted)?;
-        if let Some(existing) = self
-            .lookup(&invoice.payment_hash)
-            .await
-            .map_err(PayError::NotSubmitted)?
-        {
-            if existing.inbound {
-                return Err(PayError::NotSubmitted(anyhow::anyhow!(
-                    "cannot pay this wallet's own invoice"
-                )));
-            }
-            return Ok(existing);
-        }
-        lap("duplicate_lookup", &mut mark);
         let parsed: lexe::types::bitcoin::Invoice = invoice
             .bolt11
             .parse()
@@ -266,7 +253,7 @@ impl WalletProvider for LexeProvider {
             .amount_msat
             .is_none()
             .then(|| Amount::from_msat(amount_msat));
-        let route = self
+        let preflight = self
             .wallet
             .node_client()
             .pay_invoice_preflight(PayInvoicePreflightRequest {
@@ -274,11 +261,26 @@ impl WalletProvider for LexeProvider {
                 fallback_amount,
                 kind: PaymentKind::Invoice,
             })
-            .await
-            .map_err(|_| {
-                PayError::NotSubmitted(anyhow::anyhow!("Lexe payment preflight failed"))
-            })?;
+            .await;
         lap("preflight", &mut mark);
+        // Preflight rejects an invoice this wallet already tried to pay or
+        // issued. Both cases are rare, so look up an existing payment only
+        // after a rejection.
+        let Ok(route) = preflight else {
+            return match self
+                .lookup(&invoice.payment_hash)
+                .await
+                .map_err(PayError::NotSubmitted)?
+            {
+                Some(existing) if existing.inbound => Err(PayError::NotSubmitted(anyhow::anyhow!(
+                    "cannot pay this wallet's own invoice"
+                ))),
+                Some(existing) => Ok(existing),
+                None => Err(PayError::NotSubmitted(anyhow::anyhow!(
+                    "Lexe payment preflight failed"
+                ))),
+            };
+        };
         let debit = route
             .amount
             .msat()
