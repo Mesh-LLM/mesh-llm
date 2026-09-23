@@ -3,3 +3,4 @@
 0003-llama-port-diffusion-gemma-support.patch
 0004-skippy-add-diffusion-gemma-system-one-reads.patch
 0005-skippy-query-diffusion-canvas-length.patch
+0006-chat-route-compact-mimo-v2.6-tool-calls-to-auto-parser.patch
