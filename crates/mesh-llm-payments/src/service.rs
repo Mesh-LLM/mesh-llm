@@ -34,6 +34,10 @@ impl Arrival {
 }
 
 /// Owns wallet I/O and durable authorization for a single data directory.
+/// Bound on the one-shot lookup at the end of an arrival wait; kept below the
+/// host gate's decode-pause slack (5 s) so the gate cannot give up first.
+const FINAL_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
+
 pub struct PaymentService {
     pub ledger: Ledger,
     directory: PathBuf,
@@ -272,7 +276,10 @@ impl PaymentService {
             return Ok(false);
         };
         validate_payment_update(&payment, &receipt.invoice.payment_hash, true)?;
-        if payment.status == PaymentStatus::Failed {
+        // Past expiry plus the grace, a payee node has rejected any HTLC for
+        // this invoice, so a record still `Pending` (claiming observed or not)
+        // is an unpaid invoice, not money in flight.
+        if payment.status != PaymentStatus::Succeeded {
             self.ledger
                 .lapse_abandoned_input(id, &receipt.invoice, crate::now_ms())?;
         }
@@ -400,14 +407,17 @@ impl PaymentService {
                 Ok(payment) => payment?,
                 // The watcher may lag the wallet: look once more so a payment
                 // that completed before the deadline is not reported missing.
-                Err(_) => wallet
-                    .lookup(&invoice.payment_hash)
-                    .await?
-                    .filter(|payment| {
-                        payment.status == PaymentStatus::Succeeded
-                            || (claiming && payment.is_claiming())
-                    })
-                    .context(timed_out)?,
+                // Bounded so it resolves well inside the gate's pause slack.
+                Err(_) => {
+                    tokio::time::timeout(FINAL_LOOKUP_TIMEOUT, wallet.lookup(&invoice.payment_hash))
+                        .await
+                        .context(timed_out)??
+                        .filter(|payment| {
+                            payment.status == PaymentStatus::Succeeded
+                                || (claiming && payment.is_claiming())
+                        })
+                        .context(timed_out)?
+                }
             }
         };
         validate_payment_update(&payment, &invoice.payment_hash, true)?;
