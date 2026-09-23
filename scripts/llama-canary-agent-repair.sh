@@ -68,6 +68,7 @@ PR_BODY="$STATE_DIR/pr-body.md"
 UPSTREAM_SUMMARY="$STATE_DIR/upstream-summary.md"
 BUNDLE="$STATE_DIR/candidate.bundle"
 EVIDENCE_DIR="$STATE_DIR/verification-evidence"
+SYSTEMONE_SMOKE_DIR="$ROOT/target/skippy-system-one-smoke"
 FAMILY_BATTERY_RUN_ID="${FAMILY_BATTERY_RUN_ID:-${RUN_KEY}}"
 PLAN_PATH="$ROOT/target/family-battery/$FAMILY_BATTERY_RUN_ID/policy-plan.json"
 BASE_HEAD="$(git rev-parse HEAD)"
@@ -355,7 +356,8 @@ cleanup_verification_worktree() {
     mkdir -p "$EVIDENCE_DIR"
     for source in \
         "$VERIFY_ROOT/target/family-battery/$FAMILY_BATTERY_RUN_ID" \
-        "$VERIFY_ROOT/target/skippy-stage-rewriter-check"; do
+        "$VERIFY_ROOT/target/skippy-stage-rewriter-check" \
+        "$VERIFY_ROOT/target/skippy-system-one-smoke"; do
       if [[ -e "$source" ]]; then
         cp -R "$source" "$EVIDENCE_DIR/" || true
       fi
@@ -380,7 +382,13 @@ materialize_verification_tree() {
   rm -rf "$LLAMA_STAGE_BUILD_DIR" \
     "$ROOT/.deps/llama.cpp" \
     "$ROOT/target/family-battery/$FAMILY_BATTERY_RUN_ID" \
-    "$ROOT/target/skippy-stage-rewriter-check"
+    "$ROOT/target/skippy-stage-rewriter-check" \
+    "$ROOT/target/skippy-system-one-smoke"
+  # Re-derive the System One smoke work dir under the verification ROOT: the
+  # top-level assignment still points at the trusted checkout, and verifier
+  # evidence must stay inside the candidate worktree that
+  # cleanup_verification_worktree copies into EVIDENCE_DIR.
+  SYSTEMONE_SMOKE_DIR="$ROOT/target/skippy-system-one-smoke"
   mkdir -p "$(dirname "$PLAN_PATH")"
   cd "$ROOT"
   verify_repair_pin
@@ -433,6 +441,13 @@ run_full_build() {
       bash -c 'cargo test -p skippy-server --lib --no-run --message-format=json > "$1"' \
       build-mm "$STATE_DIR/mm-build.jsonl" || return 1
   fi
+  # The System One smoke exit code is 0 for a NOT CERTIFIED full-model read and
+  # non-zero for a red contract part or a red declared-qualified read, so this
+  # gate blocks publication exactly when the lane is qualified to decide.
+  run_verification_logged "System One smoke" "$BUILD_LOG" env \
+    WORK_DIR="$SYSTEMONE_SMOKE_DIR" \
+    SYSTEMONE_SMOKE_CADENCE=llama-bump \
+    scripts/skippy-system-one-smoke.sh || return 1
 }
 
 # Local CLI compatibility path. CI uses *-build modes and separate family jobs.
@@ -561,7 +576,7 @@ write_pr_body() {
     echo "- Workflow run: \`${RUN_KEY}\`"
     echo "- Certified commit: \`${CERTIFIED_SHA}\`"
     echo
-    echo "One agent completed the pin and patch-queue task. The trusted harness then independently passed prepare, the complete patched llama.cpp and Rust build, Skippy smoke tests, and the full supported-family certification on this exact commit."
+    echo "One agent completed the pin and patch-queue task. The trusted harness then independently passed prepare, the complete patched llama.cpp and Rust build, Skippy smoke tests, the System One (OpenJEV) smoke, and the full supported-family certification on this exact commit."
     echo
     cat "$UPSTREAM_SUMMARY"
   } > "$PR_BODY"

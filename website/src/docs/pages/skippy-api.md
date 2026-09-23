@@ -9,7 +9,7 @@ description: Generated reference for the capability-oriented Skippy C ABI.
 
 This reference is generated from the patched llama.cpp public headers. It documents the native C ABI used by Skippy's Rust FFI layer and staged runtime. The ABI is experimental and versioned for lockstep native/Rust builds.
 
-Current generated surface: **16 headers** and **100 exported functions**.
+Current generated surface: **17 headers** and **102 exported functions**.
 
 ## Quick navigation
 
@@ -172,6 +172,13 @@ Current generated surface: **16 headers** and **100 exported functions**.
       </div>
     </section>
     <section class="skippy-api-index__group">
+      <a class="skippy-api-index__group-title" href="#skippy-header-system-one-h"><code>system_one.h</code><span>2 functions</span></a>
+      <div class="skippy-api-index__functions">
+        <a href="#skippy-fn-skippy-system-one-canvas-length"><code>skippy_system_one_canvas_length</code></a>
+        <a href="#skippy-fn-skippy-system-one-read"><code>skippy_system_one_read</code></a>
+      </div>
+    </section>
+    <section class="skippy-api-index__group">
       <a class="skippy-api-index__group-title" href="#skippy-header-tokenization-h"><code>tokenization.h</code><span>6 functions</span></a>
       <div class="skippy-api-index__functions">
         <a href="#skippy-fn-skippy-tokenize"><code>skippy_tokenize</code></a>
@@ -221,6 +228,7 @@ Capability consumers can include a narrower header:
 | `include/skippy/speculative_decoding.h` | Native MTP draft results and request-local n-gram drafting. |
 | `include/skippy/stage_plan.h` | Metadata-only construction and inspection of guarded stage plans. |
 | `include/skippy/state.h` | Moves KV, recurrent, checkpoint, and resident-prefix state. |
+| `include/skippy/system_one.h` | One-pass structured label scoring for diffusion decision models. |
 | `include/skippy/tokenization.h` | Token, detokenization, chat-template, and chat-response helpers. |
 | `include/skippy/workloads.h` | Full-model embedding, reranking, and encoder-decoder execution. These operations deliberately reject filtered stage models. Their explicit workload descriptor lets callers fail closed instead of inferring support from a model name or architecture family. |
 
@@ -1527,6 +1535,45 @@ LLAMA_API enum skippy_status skippy_session_drop_sequence(
 
 <a class="skippy-api-backlink" href="#skippy-function-index">↩ Back to function index</a>
 
+<a id="skippy-header-system-one-h"></a>
+### `system_one.h`
+
+<a id="skippy-fn-skippy-system-one-canvas-length"></a>
+#### `skippy_system_one_canvas_length`
+
+Returns the fixed answer-canvas length encoded by a DiffusionGemma model. Callers use this value to size and pad the canvas supplied to `skippy_system_one_read`.
+
+```cpp
+LLAMA_API enum skippy_status skippy_system_one_canvas_length(
+         struct skippy_model * model,
+        size_t * out_canvas_token_count,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-system-one-read"></a>
+#### `skippy_system_one_read`
+
+Scores structured labels with one DiffusionGemma read. Runs a single zero-self-conditioning DiffusionGemma read and returns a probability distribution over each slot's declared label tokens. Output probabilities use the same flattened layout as `label_token_ids`. The model must be a complete, unsplit DiffusionGemma model with one runtime execution lane. The canvas length must match `diffusion.canvas_length` in the GGUF metadata.
+
+```cpp
+LLAMA_API enum skippy_status skippy_system_one_read(
+         struct skippy_model * model,
+        const llama_token * prompt_tokens,
+        size_t prompt_token_count,
+        const llama_token * canvas_tokens,
+        size_t canvas_token_count,
+        const llama_token * label_token_ids,
+        size_t label_token_count,
+        const struct skippy_system_one_slot * slots,
+        size_t slot_count,
+        float * out_probabilities,
+        size_t output_capacity,
+        size_t * out_output_count,
+        struct skippy_error ** out_error);
+```
+
+<a class="skippy-api-backlink" href="#skippy-function-index">↩ Back to function index</a>
+
 <a id="skippy-header-tokenization-h"></a>
 ### `tokenization.h`
 
@@ -1702,7 +1749,7 @@ LLAMA_API enum skippy_status skippy_session_encode_prompt(
 The headers also define the following enums, structs, opaque handles, and ABI constants:
 
 - `activation.h`: `skippy_activation_part_desc`, `skippy_activation_boundary_desc`, `skippy_activation_desc`, `SKIPPY_ACTIVATION_FRAME_VERSION = 2`, `SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION = 2`, `SKIPPY_ACTIVATION_IDENTITY_BYTES = 32`, `SKIPPY_ACTIVATION_MAX_DIMS = 4`, `SKIPPY_ACTIVATION_MAX_PARTS = 16`, `SKIPPY_ACTIVATION_PART_OPTIONAL = (UINT32_C(1) << 0)`
-- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 61`, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER = ((uint64_t)1 << 31)`, `SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 = ((uint64_t)1 << 32)`, `SKIPPY_FEATURE_KV_EVENTS = ((uint64_t)1 << 33)`, `SKIPPY_FEATURE_DEVICE_EVENTS = ((uint64_t)1 << 34)`, `SKIPPY_FEATURE_DIAGNOSTIC_EVENTS = ((uint64_t)1 << 35)`, `SKIPPY_FEATURE_UNLOAD_EVENTS = ((uint64_t)1 << 36)`, `SKIPPY_FEATURE_NON_CHAT_WORKLOADS = ((uint64_t)1 << 37)`
+- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 62`, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER = ((uint64_t)1 << 31)`, `SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 = ((uint64_t)1 << 32)`, `SKIPPY_FEATURE_KV_EVENTS = ((uint64_t)1 << 33)`, `SKIPPY_FEATURE_DEVICE_EVENTS = ((uint64_t)1 << 34)`, `SKIPPY_FEATURE_DIAGNOSTIC_EVENTS = ((uint64_t)1 << 35)`, `SKIPPY_FEATURE_UNLOAD_EVENTS = ((uint64_t)1 << 36)`, `SKIPPY_FEATURE_NON_CHAT_WORKLOADS = ((uint64_t)1 << 37)`, `SKIPPY_FEATURE_SYSTEM_ONE = ((uint64_t)1 << 38)`
 - `devices.h`: `skippy_backend_device_type`, `skippy_backend_device_cap`, `skippy_backend_device`
 - `events.h`: `skippy_runtime_event_v1`, `skippy_runtime_event_reporter_v1`, `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION = 1`
 - `execution.h`: `skippy_iteration_request`
@@ -1714,6 +1761,7 @@ The headers also define the following enums, structs, opaque handles, and ABI co
 - `speculative_decoding.h`: `skippy_ngram_cache`, `skippy_native_mtp_draft`, `SKIPPY_NATIVE_MTP_MAX_DRAFT_TOKENS = 8`
 - `stage_plan.h`: `skippy_stage_planner`, `skippy_stage_plan`, `skippy_stage_plan_string_ref_v1`, `skippy_stage_planner_tensor_v1`, `skippy_stage_planner_profile_v1`, `skippy_stage_planner_config_v1`, `skippy_stage_plan_value_kind`, `skippy_stage_plan_state_kind`, `skippy_stage_plan_state_access`, `skippy_stage_plan_state_residency`, `skippy_stage_plan_desc_v1`, `skippy_stage_plan_profile_desc_v1`, `skippy_stage_plan_value_desc_v1`, `skippy_stage_plan_state_desc_v1`, `SKIPPY_STAGE_PLANNER_CONFIG_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLANNER_TENSOR_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLANNER_PROFILE_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_PROFILE_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_VALUE_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_STATE_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_MAX_DIMS = 4`
 - `state.h`: `skippy_kv_page_flag`, `skippy_kv_page_codec`, `skippy_kv_page_component_role`, `skippy_kv_page_component_desc`, `skippy_kv_page_desc`
+- `system_one.h`: `skippy_model`, `skippy_system_one_slot`
 - `workloads.h`: `skippy_model`, `skippy_session`, `skippy_workload_kind`, `skippy_workload_pooling`, `skippy_workload_info_v1`, `SKIPPY_WORKLOAD_INFO_V1_ABI_VERSION = 1`
 
 Source directory: `include/skippy/`. Regenerate this page after changing any public header or exported function.

@@ -96,6 +96,7 @@ impl RequestSummaryMetadata {
             "/v1/chat/completions" => Some("chat_completions"),
             "/v1/completions" => Some("completions"),
             "/v1/responses" => Some("responses"),
+            "/systemone" => Some("system_one"),
             _ => None,
         };
         Self::from_parts(route, None, None, None)
@@ -178,6 +179,7 @@ const fn openai_route_label(route: OpenAiFrontendRoute) -> Option<&'static str> 
         OpenAiFrontendRoute::ChatCompletions => Some("chat_completions"),
         OpenAiFrontendRoute::Completions => Some("completions"),
         OpenAiFrontendRoute::Responses => Some("responses"),
+        OpenAiFrontendRoute::SystemOne => Some("system_one"),
         OpenAiFrontendRoute::Unknown => None,
     }
 }
@@ -255,6 +257,10 @@ mod tests {
         let metadata =
             RequestSummaryMetadata::from_openai_ingress_path("/v1/responses?token=secret");
         assert_eq!(metadata.route(), Some("responses"));
+        assert_eq!(
+            RequestSummaryMetadata::from_openai_ingress_path("/systemone").route(),
+            Some("system_one")
+        );
         assert!(
             RequestSummaryMetadata::from_openai_ingress_path("/private/path?token=secret")
                 .is_empty()

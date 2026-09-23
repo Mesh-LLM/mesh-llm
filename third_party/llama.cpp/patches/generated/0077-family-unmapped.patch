@@ -310,6 +310,27 @@ index 35e22956634a1dc8cdf24bd82bd482c6fb55cd29..33007e933ee8c675283bf8c5eae0fb16
      }
  
      if ((size_t) n_layer < cparams.embeddings_layer_inp.size() && cparams.embeddings_layer_inp[n_layer]) {
+diff --git a/src/models/diffusion-gemma.cpp b/src/models/diffusion-gemma.cpp
+index 2d98b8c30ad720cb46b372bcd22af2a24e040acd..5170df2bc4568ccf9a81bb5cdc3f449c68c553e2 100644
+--- a/src/models/diffusion-gemma.cpp
++++ b/src/models/diffusion-gemma.cpp
+@@ -497,6 +497,8 @@ llama_model_diffusion_gemma::graph::graph(const llama_model & model, const llm_g
+     ggml_tensor * inp_out_ids = build_inp_out_ids();
+ 
+     for (int il = 0; il < n_layer; ++il) {
++        begin_block(inpL, il);
++
+         const int64_t n_embd_head = hparams.n_embd_head_k(il);
+         GGML_ASSERT(n_embd_head == hparams.n_embd_head_v(il));
+         const int64_t n_head_kv = hparams.n_head_kv(il);
+@@ -592,6 +594,7 @@ llama_model_diffusion_gemma::graph::graph(const llama_model & model, const llm_g
+         cb(cur, "l_out", il);
+ 
+         inpL = cur;
++        end_block(inpL, il);
+     }
+ 
+     cur = inpL;
 diff --git a/src/models/dots3note.cpp b/src/models/dots3note.cpp
 index 0991c488e468e61f65964a62e8833e9c64a5ab0c..bfebb833ba5c3cb19fdee0dbebaa5d6ddbf13dae 100644
 --- a/src/models/dots3note.cpp
