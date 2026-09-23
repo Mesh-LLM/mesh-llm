@@ -1459,6 +1459,12 @@
       "family": "maple",
       "status": "candidate",
       "notes": "new upstream llama.cpp source registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
+    },
+    {
+      "llama_model": "diffusion-gemma",
+      "family": "diffusion-gemma",
+      "status": "candidate",
+      "notes": "new upstream llama.cpp source registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
     }
   ]
 }
