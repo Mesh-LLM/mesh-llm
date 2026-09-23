@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "manifest_kind": "test-model-artifacts",
-  "suite": "skippy-ci-smoke",
+  "suite": "skippy-system-one-smoke",
   "registry_sha256": "8539c74a6e3d8b5f28543b4e6a30c828cc6871dc15af1dcc2754448a5dce729e",
   "artifacts": [
     {
@@ -47,19 +47,16 @@
       "url": "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/23749fefcc72300e3a2ad315e1317431b06b590a/Qwen3-0.6B-Q8_0.gguf"
     },
     {
-      "id": "family-falcon-h1",
-      "family": "falcon-h1",
+      "id": "family-diffusion-gemma",
+      "family": "diffusion-gemma",
       "capability_tags": [
+        "diffusion",
         "gguf",
-        "hybrid",
-        "recurrent"
+        "system-one",
+        "text-only"
       ],
       "suites": [
-        "llama-family-certification",
-        "skippy-ci-smoke",
-        "skippy-parity",
-        "competitive-benchmark",
-        "radix-cache"
+        "skippy-system-one-smoke"
       ],
       "cadences": [
         "llama-bump",
@@ -67,26 +64,27 @@
         "nightly",
         "manual"
       ],
-      "repo": "tiiuae/Falcon-H1-1.5B-Instruct-GGUF",
-      "revision": "0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a",
+      "repo": "unsloth/diffusiongemma-26B-A4B-it-GGUF",
+      "revision": "f4183a2c7a354128d02545752303c4354d165bf0",
       "selector": "Q4_K_M",
       "files": [
-        "Falcon-H1-1.5B-Instruct-Q4_K_M.gguf"
+        "diffusiongemma-26B-A4B-it-Q4_K_M.gguf"
       ],
       "file_integrity": {
-        "Falcon-H1-1.5B-Instruct-Q4_K_M.gguf": {
-          "size_bytes": 944786656,
-          "blob_id": "8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f"
+        "diffusiongemma-26B-A4B-it-Q4_K_M.gguf": {
+          "size_bytes": 16806810208,
+          "blob_id": "24523b6c833c9ce9f5f34f9b333ab1517d73d6f1e76a103645353114c8028bc5"
         }
       },
-      "model_ref": "tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M",
+      "model_ref": "unsloth/diffusiongemma-26B-A4B-it-GGUF:Q4_K_M",
       "urls": [
-        "https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/resolve/0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf"
+        "https://huggingface.co/unsloth/diffusiongemma-26B-A4B-it-GGUF/resolve/f4183a2c7a354128d02545752303c4354d165bf0/diffusiongemma-26B-A4B-it-Q4_K_M.gguf"
       ],
-      "file": "Falcon-H1-1.5B-Instruct-Q4_K_M.gguf",
-      "size_bytes": 944786656,
-      "sha256": "8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f",
-      "url": "https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/resolve/0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf"
+      "file": "diffusiongemma-26B-A4B-it-Q4_K_M.gguf",
+      "size_bytes": 16806810208,
+      "sha256": "24523b6c833c9ce9f5f34f9b333ab1517d73d6f1e76a103645353114c8028bc5",
+      "url": "https://huggingface.co/unsloth/diffusiongemma-26B-A4B-it-GGUF/resolve/f4183a2c7a354128d02545752303c4354d165bf0/diffusiongemma-26B-A4B-it-Q4_K_M.gguf",
+      "notes": "System One (OpenJEV) smoke: complete single-lane DiffusionGemma read consumed by scripts/skippy-system-one-smoke.sh. The proof of concept certifies a CUDA backend only."
     }
   ]
 }

@@ -21,6 +21,7 @@ pub const FEATURE_DIAGNOSTIC_EVENTS: u64 = 1 << 35;
 pub const FEATURE_UNLOAD_EVENTS: u64 = 1 << 36;
 /// Full-model workloads use a separate bit from all runtime-event families.
 pub const FEATURE_NON_CHAT_WORKLOADS: u64 = 1 << 37;
+pub const FEATURE_SYSTEM_ONE: u64 = 1 << 38;
 pub const MODEL_TENSOR_SOURCE_V1_ABI_VERSION: u32 = 1;
 pub const WORKLOAD_INFO_V1_ABI_VERSION: u32 = 1;
 
@@ -120,6 +121,14 @@ pub struct IterationRequest {
     pub input_desc: *const crate::ActivationDesc,
     pub input_payload: *const c_void,
     pub sample_last: bool,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SystemOneSlot {
+    pub canvas_position: u32,
+    pub label_token_offset: usize,
+    pub label_token_count: usize,
 }
 
 #[repr(C)]

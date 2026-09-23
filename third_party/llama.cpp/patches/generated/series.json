@@ -1,5 +1,5 @@
 {
-  "full_patch_sha256": "9f7325e956130c965e84b588f2d2fdf92752624256038230f8a6118ca27c932d",
+  "full_patch_sha256": "852fc938a5095a681d932bf7114877e161b8599f803f5020b1d5a0f410d2c796",
   "generator_version": "0.5.0",
   "schema_version": 1,
   "shards": [
@@ -778,7 +778,7 @@
     {
       "families": [],
       "file": "0077-family-unmapped.patch",
-      "sha256": "bf4dcde816e7ca5698a8975e615185c931307522c411a35593c42f3f86f2c974",
+      "sha256": "c9c9b1da25cb199920657ab6d24a530bfa8d73234c050594957113bf519f7349",
       "sources": [
         "src/models/arctic.cpp",
         "src/models/baichuan.cpp",
@@ -794,6 +794,7 @@
         "src/models/deci.cpp",
         "src/models/deepseek.cpp",
         "src/models/deepseek4.cpp",
+        "src/models/diffusion-gemma.cpp",
         "src/models/dots3note.cpp",
         "src/models/dream.cpp",
         "src/models/eurobert.cpp",

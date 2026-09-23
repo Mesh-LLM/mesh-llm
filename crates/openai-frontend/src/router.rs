@@ -56,6 +56,7 @@ use crate::{
     stream_lifecycle::{
         StreamLifecycle, is_streaming_response, observe_backend_stream, sse_response,
     },
+    system_one::{SystemOneRequest, SystemOneResponse},
 };
 
 const AGENT_SESSION_HEADER_ENV: &str = "MESH_AGENT_SESSION_HEADER";
@@ -282,6 +283,7 @@ pub fn router_for_with_config(
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/completions", post(completions))
         .route("/v1/responses", post(responses))
+        .route("/systemone", post(system_one))
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(not_found)
         .layer(middleware::from_fn_with_state(
@@ -334,6 +336,29 @@ async fn models(
         object: "list",
         data,
     }))
+}
+
+async fn system_one(
+    State(state): State<FrontendState>,
+    Extension(context): Extension<OpenAiLifecycleContext>,
+    payload: Result<Json<SystemOneRequest>, JsonRejection>,
+) -> Result<Json<SystemOneResponse>, OpenAiError> {
+    let Json(request) = json_payload(payload)?;
+    let response = call_backend(
+        state.config.lifecycle_observer.clone(),
+        &context,
+        OpenAiBackendOperation::SystemOne,
+        "system_one",
+        state.config.backend_timeout,
+        state.backend.system_one(request),
+    )
+    .await?;
+    state.response_completed(
+        &context,
+        OpenAiBackendOperation::SystemOne,
+        &Usage::new(response.usage.input_tokens, response.usage.output_tokens),
+    );
+    Ok(Json(response))
 }
 
 /// Validate embedding input and preserve cancellation, usage, and lifecycle identity.
@@ -1175,6 +1200,7 @@ fn lifecycle_route(uri: &Uri) -> OpenAiFrontendRoute {
         "/v1/chat/completions" => OpenAiFrontendRoute::ChatCompletions,
         "/v1/completions" => OpenAiFrontendRoute::Completions,
         "/v1/responses" => OpenAiFrontendRoute::Responses,
+        "/systemone" => OpenAiFrontendRoute::SystemOne,
         _ => OpenAiFrontendRoute::Unknown,
     }
 }
