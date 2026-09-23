@@ -1,0 +1,519 @@
+From bad969962d1084cb7f3c39c8ce95aa108ca0afe5 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Thu, 24 Sep 2026 08:48:41 +1000
+Subject: [PATCH] skippy: add media soft-token spans to DiffusionGemma
+ system-one reads
+
+Extend the system-one native op with an embeddings-input variant:
+skippy_system_one_read_media accepts image soft-token spans (projector
+embeddings produced via mtmd) and prefills the prompt in mixed token/
+embd micro-batches. Image rows attend bidirectionally within their span
+in the prefill and unified masks, matching the architecture's
+use_bidirectional_attention == "vision" contract; text rows stay causal
+and the canvas phase is unchanged. Adds the
+SKIPPY_FEATURE_SYSTEM_ONE_MEDIA feature bit and bumps the ABI patch to
+63. The text-only entry point keeps its exact behavior.
+---
+ include/llama.h                |  15 ++++
+ include/skippy/common.h        |   4 +-
+ include/skippy/system_one.h    |  42 ++++++++++
+ src/models/diffusion-gemma.cpp |  62 +++++++++++---
+ src/models/models.h            |   5 ++
+ src/skippy/abi.cpp             |   3 +-
+ src/skippy/system_one.cpp      | 145 +++++++++++++++++++++++++++++++--
+ 7 files changed, 255 insertions(+), 21 deletions(-)
+
+diff --git a/include/llama.h b/include/llama.h
+index 5c194a5dd..26ad5c623 100644
+--- a/include/llama.h
++++ b/include/llama.h
+@@ -635,6 +635,21 @@ extern "C" {
+                        int32_t   P,
+                        int32_t   off);
+ 
++    // DiffusionGemma image soft-token spans for the next prefill/unified decode (no-op otherwise).
++    // Each span {start, end} is a half-open range of absolute prompt positions whose rows carry
++    // projector embeddings (fed via the batch embd path); those rows attend bidirectionally within
++    // the span (use_bidirectional_attention == "vision"), text rows stay causal. Copied on set;
++    // pass count = 0 to clear.
++    struct llama_diffusion_media_span {
++        int32_t start; // first prompt position of the span (inclusive)
++        int32_t end;   // one past the last prompt position of the span
++    };
++
++    LLAMA_API void llama_diffusion_set_media_spans(
++            struct llama_model * model,
++            const struct llama_diffusion_media_span * spans,
++                             size_t   count);
++
+     // DiffusionGemma prompt-KV store bytes per prompt token (0 for other models). Pass use_f16 = whether
+     // flash attention is enabled (the store is F16 under FA, F32 otherwise). Sizes context against the store.
+     LLAMA_API size_t llama_diffusion_pkv_bytes_per_token(
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index d7f5b53e0..b1cd64f47 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -46,7 +46,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 62
++#define SKIPPY_ABI_VERSION_PATCH 63
+ 
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+@@ -106,6 +106,8 @@ enum skippy_feature {
+ /** @brief Full-model embedding, reranking, and encoder-decoder execution. */
+ #define SKIPPY_FEATURE_NON_CHAT_WORKLOADS     ((uint64_t)1 << 37)
+ #define SKIPPY_FEATURE_SYSTEM_ONE             ((uint64_t)1 << 38)
++/** @brief Media (image soft-token) spans in System One prompt reads. */
++#define SKIPPY_FEATURE_SYSTEM_ONE_MEDIA       ((uint64_t)1 << 39)
+ 
+ enum skippy_status {
+     SKIPPY_STATUS_OK                      = 0,
+diff --git a/include/skippy/system_one.h b/include/skippy/system_one.h
+index 6046c77ec..b30c65fea 100644
+--- a/include/skippy/system_one.h
++++ b/include/skippy/system_one.h
+@@ -27,6 +27,21 @@ struct skippy_system_one_slot {
+     size_t label_token_count;
+ };
+ 
++/**
++ * Describes one image soft-token span inside the prompt token array.
++ *
++ * `[prompt_offset, prompt_offset + token_count)` are placeholder rows in the
++ * prompt: the read replaces them with `token_count` rows of `embeddings`
++ * (row-major, `token_count * n_embd` floats, as produced by the model's
++ * multimodal projector). Span rows must be sorted, non-overlapping, and in
++ * bounds; placeholder token IDs in `prompt_tokens` are ignored.
++ */
++struct skippy_system_one_media_span {
++    uint32_t prompt_offset;
++    uint32_t token_count;
++    const float * embeddings;
++};
++
+ /**
+  * @brief Returns the fixed answer-canvas length encoded by a DiffusionGemma model.
+  *
+@@ -64,6 +79,33 @@ LLAMA_API enum skippy_status skippy_system_one_read(
+         size_t * out_output_count,
+         struct skippy_error ** out_error);
+ 
++/**
++ * @brief Scores structured labels with one DiffusionGemma read over a media prompt.
++ *
++ * Same contract as `skippy_system_one_read`, except that `media_span_count`
++ * soft-token spans replace rows of `prompt_tokens` with projector embeddings
++ * during the prompt prefill. Image spans attend bidirectionally within the
++ * span (matching the architecture's `use_bidirectional_attention == "vision"`
++ * contract); text rows stay causal. Requires the
++ * `SKIPPY_FEATURE_SYSTEM_ONE_MEDIA` feature.
++ */
++LLAMA_API enum skippy_status skippy_system_one_read_media(
++        struct skippy_model * model,
++        const llama_token * prompt_tokens,
++        size_t prompt_token_count,
++        const struct skippy_system_one_media_span * media_spans,
++        size_t media_span_count,
++        const llama_token * canvas_tokens,
++        size_t canvas_token_count,
++        const llama_token * label_token_ids,
++        size_t label_token_count,
++        const struct skippy_system_one_slot * slots,
++        size_t slot_count,
++        float * out_probabilities,
++        size_t output_capacity,
++        size_t * out_output_count,
++        struct skippy_error ** out_error);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/src/models/diffusion-gemma.cpp b/src/models/diffusion-gemma.cpp
+index 5170df2bc..b3b028f22 100644
+--- a/src/models/diffusion-gemma.cpp
++++ b/src/models/diffusion-gemma.cpp
+@@ -21,14 +21,24 @@
+ class llm_graph_input_attn_diffusion : public llm_graph_input_attn_no_cache {
+ public:
+     llm_graph_input_attn_diffusion(const llama_hparams & hparams, const llama_cparams & cparams,
+-                                   int64_t n_prompt) :
+-        llm_graph_input_attn_no_cache(hparams, cparams), n_prompt(n_prompt) {}
++                                   int64_t n_prompt,
++                                   const std::vector<llama_diffusion_media_span> & media_spans) :
++        llm_graph_input_attn_no_cache(hparams, cparams), n_prompt(n_prompt), media_spans(media_spans) {}
+     ~llm_graph_input_attn_diffusion() = default;
+ 
+     void set_input(const llama_ubatch * ubatch) override {
+         const int64_t n_tokens = ubatch->n_tokens;
+         const int64_t P        = n_prompt;
+ 
++        const auto media_span_end = [&](int64_t pos) -> int64_t {
++            for (const auto & span : media_spans) {
++                if (pos >= span.start && pos < span.end) {
++                    return span.end;                    // exclusive
++                }
++            }
++            return pos + 1;                             // no span: causal bound only
++        };
++
+         // swa clips keys outside the sliding window, but only for prompt (causal) queries.
+         const auto fill = [&](auto * data, bool swa) {
+             using T = std::remove_reference_t<decltype(*data)>;
+@@ -38,6 +48,9 @@ public:
+                 const uint64_t row = q * n_tokens;
+                 // canvas->prompt sliding bound: last (n_swa-1) prompt positions (<= 0 for short prompts)
+                 const int64_t canvas_prompt_lo = P - (int64_t) hparams.n_swa + 1;
++                // image rows: keys extend to the span end (bidirectional within the span, prompt only)
++                const int64_t k_hi = q_is_canvas ? n_tokens - 1
++                                                 : std::min(media_span_end(q), n_tokens) - 1;
+                 for (int64_t k = 0; k < n_tokens; ++k) {
+                     const bool k_is_canvas = k >= P;
+                     bool allow;
+@@ -49,8 +62,9 @@ public:
+                             allow = true; // global: all prompt + canvas
+                         }
+                     } else {
+-                        // prompt query: causal over earlier prompt, never canvas
+-                        allow = (!k_is_canvas) && (k <= q);
++                        // prompt query: causal over earlier prompt (plus bidirectional media span),
++                        // never canvas
++                        allow = (!k_is_canvas) && (k <= k_hi);
+                     }
+                     if (allow && swa && !q_is_canvas &&
+                         llama_hparams::is_masked_swa(hparams.n_swa, hparams.swa_type, k, q)) {
+@@ -83,6 +97,7 @@ public:
+     bool can_reuse(const llm_graph_params & /*params*/) override { return false; }
+ 
+     int64_t n_prompt;
++    const std::vector<llama_diffusion_media_span> & media_spans;
+ };
+ 
+ // Self-conditioning input: uploads the previous step's raw logits [n_vocab, C] for the canvas embedding.
+@@ -165,22 +180,37 @@ public:
+ 
+ // Chunked-prefill mask: n_q prompt queries at [off, off+n_q) attend causally over keys [0, off+n_q)
+ // (prior chunks in the store + this chunk), with SWA clipping; off=0 is the single-shot causal prefill.
++// Media spans (image soft tokens) relax the causal rule: rows inside one span attend bidirectionally
++// within that span (use_bidirectional_attention == "vision"); SWA clipping still applies.
+ class llm_graph_input_attn_diffusion_prefill : public llm_graph_input_attn_no_cache {
+ public:
+     llm_graph_input_attn_diffusion_prefill(const llama_hparams & hparams, const llama_cparams & cparams,
+-                                           int64_t off, int64_t n_q) :
+-        llm_graph_input_attn_no_cache(hparams, cparams), off(off), n_q(n_q) {}
++                                           int64_t off, int64_t n_q,
++                                           const std::vector<llama_diffusion_media_span> & media_spans) :
++        llm_graph_input_attn_no_cache(hparams, cparams), off(off), n_q(n_q), media_spans(media_spans) {}
+     ~llm_graph_input_attn_diffusion_prefill() = default;
+ 
+     void set_input(const llama_ubatch * /*ubatch*/) override {
+         const int64_t n_kv = off + n_q;
++        const auto media_span_end = [&](int64_t pos) -> int64_t {
++            for (const auto & span : media_spans) {
++                if (pos >= span.start && pos < span.end) {
++                    return span.end;                    // exclusive
++                }
++            }
++            return pos + 1;                             // no span: causal bound only
++        };
+         const auto fill = [&](auto * data, bool swa) {
+             using T = std::remove_reference_t<decltype(*data)>;
+             std::fill(data, data + n_kv * n_q, llama_cast<T>(-INFINITY));
+             for (int64_t i = 0; i < n_q; ++i) {        // query local i -> global position off+i
+-                const int64_t  q   = off + i;
+-                const uint64_t row = i * n_kv;
+-                for (int64_t k = 0; k <= q; ++k) {     // causal: keys [0, q]
++                const int64_t  q    = off + i;
++                const uint64_t row  = i * n_kv;
++                // image rows: keys extend to the span end (bidirectional within the span);
++                // text rows: causal bound q. Sliding layers clip either way. Keys are clamped to
++                // this chunk: same-span rows in later chunks are attended once they decode.
++                const int64_t k_hi = std::min(media_span_end(q), n_kv) - 1;
++                for (int64_t k = 0; k <= k_hi; ++k) {
+                     if (swa && llama_hparams::is_masked_swa(hparams.n_swa, hparams.swa_type, k, q)) {
+                         continue;                       // sliding layers clip keys outside the window
+                     }
+@@ -209,6 +239,7 @@ public:
+ 
+     int64_t off;
+     int64_t n_q;
++    const std::vector<llama_diffusion_media_span> & media_spans;
+ };
+ 
+ void llama_model_diffusion_gemma::load_arch_hparams(llama_model_loader & ml) {
+@@ -471,7 +502,7 @@ llama_model_diffusion_gemma::graph::graph(const llama_model & model, const llm_g
+         inp_attn = (llm_graph_input_attn_no_cache *) res->add_input(std::move(uptr));
+     } else if (is_prefill) {
+         const int64_t n_kv = prefill_off + n_tokens;
+-        auto uptr = std::make_unique<llm_graph_input_attn_diffusion_prefill>(hparams, cparams, prefill_off, n_tokens);
++        auto uptr = std::make_unique<llm_graph_input_attn_diffusion_prefill>(hparams, cparams, prefill_off, n_tokens, dmodel.media_spans);
+         uptr->self_kq_mask = ggml_new_tensor_4d(ctx0, type_mask, n_kv, n_tokens, 1, 1);
+         ggml_set_input(uptr->self_kq_mask);
+         uptr->self_kq_mask_cnv = uptr->self_kq_mask;
+@@ -482,7 +513,7 @@ llama_model_diffusion_gemma::graph::graph(const llama_model & model, const llm_g
+         }
+         inp_attn = (llm_graph_input_attn_no_cache *) res->add_input(std::move(uptr));
+     } else {
+-        auto uptr = std::make_unique<llm_graph_input_attn_diffusion>(hparams, cparams, P);
++        auto uptr = std::make_unique<llm_graph_input_attn_diffusion>(hparams, cparams, P, dmodel.media_spans);
+         uptr->self_kq_mask = ggml_new_tensor_4d(ctx0, type_mask, n_tokens, n_tokens, 1, 1);
+         ggml_set_input(uptr->self_kq_mask);
+         uptr->self_kq_mask_cnv = uptr->self_kq_mask;
+@@ -855,3 +886,12 @@ void llama_diffusion_set_phase(struct llama_model * model, int phase, int32_t P,
+     dm->pkv_P           = P;
+     dm->pkv_prefill_off = off;   // PREFILL chunk start; ignored by UNIFIED/DECODE
+ }
++
++// Public API: set the image soft-token spans for the next PREFILL/UNIFIED decode (copied; count = 0 clears).
++void llama_diffusion_set_media_spans(struct llama_model * model, const struct llama_diffusion_media_span * spans, size_t count) {
++    auto * dm = dynamic_cast<llama_model_diffusion_gemma *>(model);
++    if (!dm) {
++        return;
++    }
++    dm->media_spans.assign(spans, spans + count);
++}
+diff --git a/src/models/models.h b/src/models/models.h
+index ce8cb2e57..4c42ea788 100644
+--- a/src/models/models.h
++++ b/src/models/models.h
+@@ -930,6 +930,11 @@ struct llama_model_diffusion_gemma : public llama_model_base {
+     mutable ggml_context        * pkv_ctx = nullptr;
+     mutable ggml_backend_buffer_t pkv_buf = nullptr;
+ 
++    // image soft-token spans for the current read (set via llama_diffusion_set_media_spans). Rows inside
++    // a span carry projector embeddings and attend bidirectionally within the span in the prompt
++    // (prefill/unified) masks; empty = plain text read.
++    mutable std::vector<llama_diffusion_media_span> media_spans;
++
+     ~llama_model_diffusion_gemma() override;
+ 
+     struct graph : public llm_graph_context {
+diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
+index 79dc77162..d9d95b1c3 100644
+--- a/src/skippy/abi.cpp
++++ b/src/skippy/abi.cpp
+@@ -46,7 +46,8 @@ uint64_t skippy_abi_features(void) {
+            SKIPPY_FEATURE_DIAGNOSTIC_EVENTS |
+            SKIPPY_FEATURE_UNLOAD_EVENTS |
+            SKIPPY_FEATURE_NON_CHAT_WORKLOADS |
+-           SKIPPY_FEATURE_SYSTEM_ONE;
++           SKIPPY_FEATURE_SYSTEM_ONE |
++           SKIPPY_FEATURE_SYSTEM_ONE_MEDIA;
+ }
+ 
+ void skippy_error_free(struct skippy_error * error) {
+diff --git a/src/skippy/system_one.cpp b/src/skippy/system_one.cpp
+index 5a81888fe..0cb64be4a 100644
+--- a/src/skippy/system_one.cpp
++++ b/src/skippy/system_one.cpp
+@@ -32,6 +32,7 @@ public:
+         if (model != nullptr && model->model != nullptr) {
+             llama_diffusion_set_sc(model->model, nullptr, 0.0f, 1.0f, false);
+             llama_diffusion_set_phase(model->model, 0, 0, 0);
++            llama_diffusion_set_media_spans(model->model, nullptr, 0);
+         }
+         skippy_release_execution_lane(model, lane);
+     }
+@@ -76,10 +77,16 @@ extern "C" enum skippy_status skippy_system_one_canvas_length(
+     return SKIPPY_STATUS_OK;
+ }
+ 
+-extern "C" enum skippy_status skippy_system_one_read(
++// Shared read core. media_spans == nullptr means a plain text-only read; otherwise the prompt rows
++// covered by spans carry projector embeddings and prefill splits into token and embd micro-batches.
++namespace {
++
++enum skippy_status system_one_read_impl(
+         struct skippy_model * model,
+         const llama_token * prompt_tokens,
+         size_t prompt_token_count,
++        const struct skippy_system_one_media_span * media_spans,
++        size_t media_span_count,
+         const llama_token * canvas_tokens,
+         size_t canvas_token_count,
+         const llama_token * label_token_ids,
+@@ -105,6 +112,10 @@ extern "C" enum skippy_status skippy_system_one_read(
+         return system_one_fail(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL,
+                 "system-one probability output buffer is too small");
+     }
++    if (media_spans == nullptr && media_span_count > 0) {
++        return system_one_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                "media span count requires a media span array");
++    }
+     if (model->model->arch != LLM_ARCH_DIFFUSION_GEMMA) {
+         return system_one_fail(out_error, SKIPPY_STATUS_UNSUPPORTED,
+                 "system-one reads require a DiffusionGemma model");
+@@ -134,6 +145,28 @@ extern "C" enum skippy_status skippy_system_one_read(
+                 "canvas length exceeds the configured native micro-batch size");
+     }
+ 
++    const int32_t n_embd = llama_model_n_embd_inp(model->model);
++    if (n_embd <= 0) {
++        return system_one_fail(out_error, SKIPPY_STATUS_UNSUPPORTED,
++                "model does not report a positive input embedding width");
++    }
++    for (size_t index = 0; index < media_span_count; ++index) {
++        const skippy_system_one_media_span & span = media_spans[index];
++        if (span.token_count == 0 || span.embeddings == nullptr ||
++                span.prompt_offset > prompt_token_count ||
++                span.token_count > prompt_token_count - span.prompt_offset) {
++            return system_one_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                    "system-one media span is empty or outside the prompt token array");
++        }
++        if (index > 0) {
++            const skippy_system_one_media_span & previous = media_spans[index - 1];
++            if (span.prompt_offset < previous.prompt_offset + previous.token_count) {
++                return system_one_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                        "system-one media spans must be sorted and non-overlapping");
++            }
++        }
++    }
++
+     const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model->model));
+     std::vector<uint8_t> seen_canvas_positions(canvas_token_count, 0);
+     for (size_t slot_index = 0; slot_index < slot_count; ++slot_index) {
+@@ -170,6 +203,16 @@ extern "C" enum skippy_status skippy_system_one_read(
+         skippy_synchronize_context_if_pending(model);
+         llama_set_causal_attn(model->ctx, false);
+         llama_diffusion_set_sc(model->model, nullptr, 0.0f, 1.0f, false);
++        if (media_span_count > 0) {
++            std::vector<llama_diffusion_media_span> spans;
++            spans.reserve(media_span_count);
++            for (size_t index = 0; index < media_span_count; ++index) {
++                spans.push_back({static_cast<int32_t>(media_spans[index].prompt_offset),
++                                 static_cast<int32_t>(media_spans[index].prompt_offset +
++                                                      media_spans[index].token_count)});
++            }
++            llama_diffusion_set_media_spans(model->model, spans.data(), spans.size());
++        }
+ 
+         const int32_t prompt_count = static_cast<int32_t>(prompt_token_count);
+         const int32_t canvas_count = static_cast<int32_t>(canvas_token_count);
+@@ -180,25 +223,67 @@ extern "C" enum skippy_status skippy_system_one_read(
+         llama_batch & batch = batch_guard.batch;
+         const skippy_graph_build_inputs graph_inputs = skippy_graph_build_inputs_from_config(&model->config);
+ 
+-        for (int32_t offset = 0; offset < prompt_count; offset += ubatch_size) {
+-            const int32_t chunk_count = std::min(ubatch_size, prompt_count - offset);
++        // Walk the prompt in micro-batches, splitting at media-span boundaries: text rows decode from
++        // token IDs, span rows decode from projector embeddings via the batch embd path.
++        size_t span_index = 0;
++        int32_t offset = 0;
++        while (offset < prompt_count) {
++            while (span_index < media_span_count &&
++                   media_spans[span_index].prompt_offset + media_spans[span_index].token_count <=
++                       static_cast<uint32_t>(offset)) {
++                ++span_index;
++            }
++            const bool chunk_is_media = span_index < media_span_count &&
++                media_spans[span_index].prompt_offset <= static_cast<uint32_t>(offset);
++            int32_t chunk;
++            if (chunk_is_media) {
++                const skippy_system_one_media_span & span = media_spans[span_index];
++                const int32_t span_remaining = static_cast<int32_t>(span.prompt_offset + span.token_count) - offset;
++                chunk = std::min(ubatch_size, span_remaining);
++            } else {
++                int32_t next_boundary = prompt_count;
++                if (span_index < media_span_count) {
++                    next_boundary = std::min(next_boundary,
++                            static_cast<int32_t>(media_spans[span_index].prompt_offset));
++                }
++                chunk = std::min(ubatch_size, next_boundary - offset);
++            }
++
+             llama_diffusion_set_phase(model->model, 1, prompt_count, offset);
+-            batch.n_tokens = chunk_count;
+-            for (int32_t index = 0; index < chunk_count; ++index) {
+-                batch.token[index] = prompt_tokens[offset + index];
++            batch.n_tokens = chunk;
++            llama_token * saved_token = batch.token;
++            float * saved_embd = batch.embd;
++            if (chunk_is_media) {
++                const skippy_system_one_media_span & span = media_spans[span_index];
++                batch.embd = const_cast<float *>(span.embeddings) +
++                    static_cast<size_t>(offset - static_cast<int32_t>(span.prompt_offset)) *
++                        static_cast<size_t>(n_embd);
++                batch.token = nullptr;  // embd path: token rows would win over embeddings
++            } else {
++                batch.embd = nullptr;
++            }
++            for (int32_t index = 0; index < chunk; ++index) {
++                if (!chunk_is_media) {
++                    batch.token[index] = prompt_tokens[offset + index];
++                }
+                 batch.pos[index] = offset + index;
+                 batch.n_seq_id[index] = 1;
+                 batch.seq_id[index][0] = lane;
+-                batch.logits[index] = index == chunk_count - 1 ? 1 : 0;
++                batch.logits[index] = index == chunk - 1 ? 1 : 0;
+             }
+-            if (model->ctx->decode(batch, graph_inputs) != 0) {
++            const int decode_status = model->ctx->decode(batch, graph_inputs);
++            batch.token = saved_token;
++            batch.embd = saved_embd;
++            if (decode_status != 0) {
+                 return system_one_fail(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
+                         "DiffusionGemma prompt prefill failed");
+             }
++            offset += chunk;
+         }
+ 
+         llama_diffusion_set_phase(model->model, 2, prompt_count, 0);
+         batch.n_tokens = canvas_count;
++        batch.embd = nullptr;
+         for (int32_t index = 0; index < canvas_count; ++index) {
+             batch.token[index] = canvas_tokens[index];
+             batch.pos[index] = prompt_count + index;
+@@ -251,3 +336,47 @@ extern "C" enum skippy_status skippy_system_one_read(
+                 "unexpected native exception during system-one read");
+     }
+ }
++
++} // namespace
++
++extern "C" enum skippy_status skippy_system_one_read(
++        struct skippy_model * model,
++        const llama_token * prompt_tokens,
++        size_t prompt_token_count,
++        const llama_token * canvas_tokens,
++        size_t canvas_token_count,
++        const llama_token * label_token_ids,
++        size_t label_token_count,
++        const struct skippy_system_one_slot * slots,
++        size_t slot_count,
++        float * out_probabilities,
++        size_t output_capacity,
++        size_t * out_output_count,
++        struct skippy_error ** out_error) {
++    return system_one_read_impl(model, prompt_tokens, prompt_token_count,
++            nullptr, 0, canvas_tokens, canvas_token_count,
++            label_token_ids, label_token_count, slots, slot_count,
++            out_probabilities, output_capacity, out_output_count, out_error);
++}
++
++extern "C" enum skippy_status skippy_system_one_read_media(
++        struct skippy_model * model,
++        const llama_token * prompt_tokens,
++        size_t prompt_token_count,
++        const struct skippy_system_one_media_span * media_spans,
++        size_t media_span_count,
++        const llama_token * canvas_tokens,
++        size_t canvas_token_count,
++        const llama_token * label_token_ids,
++        size_t label_token_count,
++        const struct skippy_system_one_slot * slots,
++        size_t slot_count,
++        float * out_probabilities,
++        size_t output_capacity,
++        size_t * out_output_count,
++        struct skippy_error ** out_error) {
++    return system_one_read_impl(model, prompt_tokens, prompt_token_count,
++            media_spans, media_span_count, canvas_tokens, canvas_token_count,
++            label_token_ids, label_token_count, slots, slot_count,
++            out_probabilities, output_capacity, out_output_count, out_error);
++}
+-- 
+2.54.0 (Apple Git-157)
+
