@@ -106,6 +106,11 @@ pub struct Status {
 ///
 /// On a first run with reporting enabled, this prints the disclosure notice
 /// and captures [`Event::InstallFirstRun`].
+///
+/// Fail closed on the disclosure: if the notice cannot be delivered, this run
+/// reports nothing. On-by-default reporting is defensible only because the
+/// disclosure actually happens, so a notice that never reached stderr must not
+/// be recorded as shown.
 pub fn init(config: ConfigPreference) -> Status {
     let inputs = ConsentInputs::from_env(config);
     let disposition = inputs.resolve();
@@ -141,8 +146,21 @@ pub fn init(config: ConfigPreference) -> Status {
 
     // Disclose before anything is queued, and independently of whether the
     // identifier already exists. The marker is what makes this once-only.
-    if !notice::was_shown(&dir) {
-        notice::print_notice(&dir);
+    //
+    // Fail closed. Reporting is justified by the disclosure having actually
+    // happened, so a run that cannot deliver the notice reports nothing at all.
+    // `print_notice` records the marker only once the bytes are written, which
+    // means the next run retries rather than the disclosure being quietly
+    // spent and never shown.
+    if !notice::was_shown(&dir) && !notice::print_notice(&dir) {
+        tracing::debug!("analytics disabled: first-run disclosure not delivered");
+        let _ = REPORTER.set(None);
+        return Status {
+            disposition,
+            install_id: None,
+            endpoint: None,
+            install_id_path: Some(dir.join(INSTALL_ID_FILE)),
+        };
     }
 
     let Some(install) = load_or_create(&dir).ok() else {
