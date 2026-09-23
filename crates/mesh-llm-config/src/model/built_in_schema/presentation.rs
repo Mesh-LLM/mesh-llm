@@ -112,6 +112,7 @@ struct SettingPresentation {
 
 fn setting_presentation_for_path(rendered: &str) -> Option<SettingPresentation> {
     logging_presentation(rendered)
+        .or_else(|| gpu_setting_presentation(rendered))
         .or_else(|| process_setting_presentation(rendered))
         .or_else(|| native_runtime_presentation(rendered))
         .or_else(|| runtime_defaults_presentation(rendered))
@@ -120,7 +121,7 @@ fn setting_presentation_for_path(rendered: &str) -> Option<SettingPresentation> 
         .or_else(|| model_and_plugin_presentation(rendered))
 }
 
-fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
+fn gpu_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
     match rendered {
         "gpu.assignment" => Some(sp(
             "GPU assignment",
@@ -144,6 +145,12 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
             30,
         )
         .hint("toggle")),
+        _ => None,
+    }
+}
+
+fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
+    match rendered {
         "analytics.enabled" => Some(sp(
             "Anonymous usage reporting",
             "Report anonymous usage (version, platform, command names, node and model counts) to the mesh-llm maintainers. Never includes prompts, completions, file paths, or peer addresses. Turning this setting off is equivalent to `mesh-llm analytics disable`.",
