@@ -109,13 +109,16 @@ async fn expired_exchange() -> Result<()> {
     assert_eq!(tokens, 0);
     assert!(service.output_receivable(&id).await?.is_none());
     assert_eq!(network.payments.load(Ordering::SeqCst), 0);
-    // Current PoC policy retains unpaid input invoices in the peer blacklist.
+    // A slow payment is not debt: the invoice expired and nothing was
+    // delivered, so the buyer is not blocked from its next request.
     assert!(
-        service
+        !service
             .ledger
-            .begin_serving("another", &caller.endpoint.id().to_string(), &price, 8)
-            .is_err()
+            .has_outstanding_payment(&caller.endpoint.id().to_string())?
     );
+    service
+        .ledger
+        .begin_serving("another", &caller.endpoint.id().to_string(), &price, 8)?;
     caller.endpoint.close().await;
     provider.endpoint.close().await;
     Ok(())

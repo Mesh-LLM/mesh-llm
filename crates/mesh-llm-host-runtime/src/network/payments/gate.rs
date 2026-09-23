@@ -129,6 +129,19 @@ struct Authorization {
 }
 
 impl Authorization {
+    /// A payment that was merely slow is not debt: once the invoice is no
+    /// longer payable and nothing was delivered, the buyer paid nothing and
+    /// received nothing, so its input invoice must not block it.
+    fn lapse_if_expired(&self, invoice: &mesh_llm_payments::invoice::Invoice) {
+        if let Err(error) = self.service.ledger.lapse_expired_input(
+            &self.request_id,
+            invoice,
+            mesh_llm_payments::now_ms(),
+        ) {
+            tracing::warn!(%error, "could not lapse expired input invoice");
+        }
+    }
+
     async fn authorize(&self) -> Result<Arrival> {
         let invoice = self
             .service
@@ -174,7 +187,13 @@ impl Authorization {
         // giving up any earlier would leave a window where this node still
         // claims a late HTLC after the buffered output has been discarded.
         let arrival = tokio::select! {
-            claiming = self.service.wait_arrival(&invoice, INPUT_ARRIVAL_WAIT) => claiming?,
+            claiming = self.service.wait_arrival(&invoice, INPUT_ARRIVAL_WAIT) => match claiming {
+                Ok(arrival) => arrival,
+                Err(error) => {
+                    self.lapse_if_expired(&invoice);
+                    return Err(error);
+                }
+            },
             _ = async {
                 while !self.cancelled.load(Ordering::Acquire) {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;

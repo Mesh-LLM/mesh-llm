@@ -127,3 +127,60 @@ async fn blocked_peers_are_listed_with_their_identifier_and_unblocked_by_prefix(
     assert_eq!((tokens, finished), (7, true));
     Ok(())
 }
+
+// A slow payment is not debt: an input invoice that expired unpaid, with no
+// output delivered, must not block the buyer. Delivered output still does.
+#[tokio::test]
+async fn expired_input_with_nothing_delivered_does_not_block() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let service = PaymentService::open(dir.path())?;
+    let expired = invoice_with_expiry(1, 100, 1);
+    service.ledger.begin_serving("slow", PEER, &pricing(), 10)?;
+    service.ledger.record_receivable(&Receivable {
+        request_id: "slow".into(),
+        peer: PEER.into(),
+        segment: 0,
+        invoice: expired.clone(),
+        tokens: 10,
+        paid: false,
+    })?;
+    // Not yet expired: still outstanding, and lapsing is refused.
+    assert!(
+        !service
+            .ledger
+            .lapse_expired_input("slow", &expired, expired.expires_at_ms - 1)?
+    );
+    assert!(service.ledger.has_outstanding_payment(PEER)?);
+    // Expired with nothing delivered: lapses and the buyer is not blocked.
+    assert!(
+        service
+            .ledger
+            .lapse_expired_input("slow", &expired, expired.expires_at_ms)?
+    );
+    service.ledger.finish_serving("slow")?;
+    assert!(!service.ledger.has_outstanding_payment(PEER)?);
+    assert!(service.ledger.blocked_peers()?.is_empty());
+    service.ledger.begin_serving("next", PEER, &pricing(), 10)?;
+
+    // Output was delivered: the expired input invoice stays debt.
+    let delivered = invoice_with_expiry(2, 100, 1);
+    service
+        .ledger
+        .begin_serving("owed", OTHER, &pricing(), 10)?;
+    service.ledger.record_receivable(&Receivable {
+        request_id: "owed".into(),
+        peer: OTHER.into(),
+        segment: 0,
+        invoice: delivered.clone(),
+        tokens: 10,
+        paid: false,
+    })?;
+    service.ledger.record_delivered_tokens("owed", 3)?;
+    assert!(
+        !service
+            .ledger
+            .lapse_expired_input("owed", &delivered, delivered.expires_at_ms)?
+    );
+    assert!(service.ledger.has_outstanding_payment(OTHER)?);
+    Ok(())
+}

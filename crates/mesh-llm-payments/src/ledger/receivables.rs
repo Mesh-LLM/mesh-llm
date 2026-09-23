@@ -200,6 +200,27 @@ impl Ledger {
         .collect()
     }
 
+    /// Stop an expired, unpaid input invoice from counting as debt when no
+    /// output was delivered for its request. The buyer paid nothing and
+    /// received nothing (a slow payment, not a refusal), so blocking it would
+    /// punish latency. Delivered-but-unpaid output still blocks. Returns
+    /// whether the invoice lapsed; a later receipt is still recorded as paid.
+    pub fn lapse_expired_input(
+        &self,
+        request_id: &str,
+        invoice: &Invoice,
+        now_ms: u64,
+    ) -> Result<bool> {
+        if invoice.expires_at_ms > now_ms {
+            return Ok(false);
+        }
+        let changed = self.lock()?.execute(
+            "UPDATE receivables SET state='lapsed' WHERE hash=?1 AND request_id=?2 AND segment=0 AND state='unpaid' AND NOT EXISTS(SELECT 1 FROM serving_accounting WHERE id=?2 AND tokens>0)",
+            params![invoice.payment_hash, request_id],
+        )?;
+        Ok(changed == 1)
+    }
+
     pub fn mark_received(&self, hash: &str) -> Result<()> {
         self.lock()?
             .execute("UPDATE receivables SET state='paid' WHERE hash=?", [hash])?;
