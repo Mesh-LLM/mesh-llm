@@ -311,6 +311,7 @@ fn parse_failure_family(
             "runtime" | "load" | "unload" | "drop" | "status" | "stop" => {
                 Some(CliCommandFamily::Runtime)
             }
+            "wallet" => Some(CliCommandFamily::Wallet),
             "config" => Some(CliCommandFamily::Configuration),
             "doctor" => Some(CliCommandFamily::Diagnostics),
             "discover" => Some(CliCommandFamily::Discovery),

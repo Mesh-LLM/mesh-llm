@@ -5,6 +5,12 @@ This is the checked-in implementation. Normative rules live in
 `.agents/skills/manage-ci/references/current-inventory.md`; the design record
 and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 
+The affected-crate fallback roster in `scripts/affected-crates.sh` includes
+`mesh-llm-wallet` and `mesh-wallet-lexe` alongside `mesh-llm-payments`;
+`just ci-crate-lists` checks it against workspace membership. The publish
+chain orders `mesh-llm-plugin` before `mesh-llm-wallet`, then
+`mesh-wallet-lexe` and `mesh-llm-payments`, including optional dependencies.
+
 ## Entry points
 
 | Workflow | Trigger | Role |

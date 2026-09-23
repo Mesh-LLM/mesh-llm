@@ -173,6 +173,9 @@ pub struct Node {
     pub(crate) config_state: Arc<tokio::sync::Mutex<crate::runtime::config_state::ConfigState>>,
     pub(crate) config_revision_tx: Arc<tokio::sync::watch::Sender<u64>>,
     /// Shared activity policy guard for ingress admission checks.
+    #[cfg(feature = "payments")]
+    pub(crate) payments:
+        Arc<tokio::sync::OnceCell<Arc<mesh_llm_payments::service::PaymentService>>>,
     pub(crate) activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard,
     /// Whether activity admission details are being advertised onto a public mesh.
     pub(crate) public_mesh: bool,
@@ -883,6 +886,8 @@ impl Node {
                 let (tx, _rx) = tokio::sync::watch::channel(config_revision_init);
                 Arc::new(tx)
             },
+            #[cfg(feature = "payments")]
+            payments: Arc::new(tokio::sync::OnceCell::new()),
             activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
                 &activity_policy_config,
             ),
@@ -906,10 +911,7 @@ impl Node {
 
         // Accept loop starts but waits for start_accepting() before processing connections.
         // This lets a node exist before it is ready to accept mesh traffic.
-        let node2 = node.clone();
-        tokio::spawn(async move {
-            node2.accept_loop().await;
-        });
+        node.spawn_accept_loop();
 
         Ok((
             node,
@@ -919,6 +921,13 @@ impl Node {
                 stage: stage_transport_rx,
             },
         ))
+    }
+
+    fn spawn_accept_loop(&self) {
+        let node = self.clone();
+        tokio::spawn(async move {
+            node.accept_loop().await;
+        });
     }
 
     #[cfg(test)]
@@ -1056,6 +1065,8 @@ impl Node {
                 let (tx, _rx) = tokio::sync::watch::channel(0);
                 Arc::new(tx)
             },
+            #[cfg(feature = "payments")]
+            payments: Arc::new(tokio::sync::OnceCell::new()),
             activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
                 &mesh_llm_config::RuntimeActivityConfig::default(),
             ),

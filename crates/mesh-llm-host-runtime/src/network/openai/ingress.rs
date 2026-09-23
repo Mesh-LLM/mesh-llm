@@ -466,8 +466,14 @@ async fn handle_models_list_request(
     let runtimes = node.all_model_runtime_descriptors().await;
     response_outcome(
         200,
-        proxy::send_models_list_with_descriptors(tcp_stream, &models, &descriptors, &runtimes)
-            .await,
+        proxy::send_models_list_with_descriptors(
+            tcp_stream,
+            &models,
+            &descriptors,
+            &runtimes,
+            Some(node),
+        )
+        .await,
     )
 }
 
@@ -939,6 +945,7 @@ async fn route_missing_local_model(
                 model_name,
                 request,
                 proxy::RouteModelRequestContext {
+                    exchange_id: Some(&exchange_id),
                     required_tokens,
                     affinity: ctx.affinity,
                     route_observer,
@@ -1498,6 +1505,7 @@ async fn route_request(
             model_name,
             request,
             proxy::RouteModelRequestContext {
+                exchange_id: announce.as_ref().map(|(_, id)| id.as_str()),
                 required_tokens,
                 affinity: ctx.affinity,
                 route_observer,

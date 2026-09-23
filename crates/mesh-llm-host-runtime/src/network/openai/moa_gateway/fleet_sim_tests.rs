@@ -143,6 +143,8 @@ pub(super) fn fleet_peer(seed: u32, model: FleetModel) -> mesh::PeerInfo {
         advertised_model_throughput: vec![],
         // Simulated peers advertise no cache affinity: these tests exercise
         // admission and replica choice, which must not depend on cache state.
+        #[cfg(feature = "payments")]
+        lightning_offers: Default::default(),
         cache_affinity: None,
         inference_admission_state: None,
         display_rtt: None,

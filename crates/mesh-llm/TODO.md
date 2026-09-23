@@ -1,5 +1,27 @@
 # mesh-llm TODO
 
+## Lightning Payments
+
+PoC scope: [Lightning payments spec](../../docs/specs/lightning-payments.md).
+
+- [ ] Report insufficient wallet funds/budget as a payment error instead of a
+  context-capacity error, and publish price changes without waiting for heartbeat.
+- [ ] Define how operators clear rejected/expired unpaid input invoices from the
+  peer blacklist without forgiving unsettled output debt accidentally.
+- [ ] Validate Lexe mainnet invoice expiry and an uncertain Lightning HTLC
+  outcome. Controlled expiry/fault tests and released v0.76.1 interoperability
+  pass; the mainnet crash test covered post-input recovery.
+
+- [ ] **Verify prefill before payment (after PoC)** — determine how a client can
+  verify that a provider processed its prompt with the agreed model before
+  paying the input charge. Evaluate independent recomputation, cryptographic
+  computation proofs, and trusted execution attestation, including verification
+  cost, prompt privacy, and hardware/trust requirements. Provider-signed receipts
+  and KV-cache hashes alone do not prove correct execution. Keep verification
+  outside the PoC scope; retain prefill → input payment → decode → output payment.
+  Proof of prefill would not guarantee subsequent output delivery; future
+  payments for chunks of N decoded tokens must address that exposure separately.
+
 ## Mixture of Models (MoM)
 
 Route different requests to specialized models based on task type. Instead of one "best" model, the mesh becomes smarter about which model handles what.

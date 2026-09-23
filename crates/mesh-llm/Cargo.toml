@@ -4,12 +4,18 @@ version.workspace = true
 edition = "2024"
 
 [features]
-default = ["web-ui", "dynamic-native-runtime"]
+default = ["web-ui", "dynamic-native-runtime", "payments", "wallet-lexe"]
 # Embed the React web console into the binary. Default on so the shipped
 # binary keeps shipping the console; turn off (`--no-default-features`)
 # for a lean variant that drops the embedded UI assets.
 web-ui = ["mesh-llm-host-runtime/web-ui"]
 dynamic-native-runtime = ["mesh-llm-host-runtime/dynamic-native-runtime"]
+# Paid-inference ledger, gates and the `wallet.v1` plugin adapter. Links no
+# wallet SDK by itself.
+payments = ["mesh-llm-host-runtime/payments"]
+# Built-in Lexe wallet, served as `mesh-llm --plugin wallet-lexe` like
+# blobstore. The only feature that links Lexe into this executable.
+wallet-lexe = ["payments", "mesh-llm-host-runtime/wallet-lexe"]
 
 [lints]
 workspace = true

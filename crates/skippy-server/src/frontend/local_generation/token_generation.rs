@@ -369,6 +369,7 @@ impl StageOpenAiBackend {
         mut request: LocalGeneration<'_>,
         mut on_token: impl FnMut(i32) -> OpenAiResult<TokenControl>,
     ) -> OpenAiResult<GenerationCacheStats> {
+        let payment_gate = crate::frontend::generation_gate::find(request.ids.frontend_request_id)?;
         let session_id = request.ids.session_label.clone();
         let receipt_request_id = request.ids.request_id;
         let receipt_session_id = request.ids.session_id;
@@ -406,6 +407,9 @@ impl StageOpenAiBackend {
             receipt_session_id,
         );
         let mut emit_token = |token_id| {
+            if let Some(gate) = payment_gate.as_ref() {
+                gate.before_token()?;
+            }
             if let Some(observation) = receipt_observation.as_ref()
                 && let Some(observation) = observation.borrow_mut().as_mut()
             {
@@ -432,7 +436,7 @@ impl StageOpenAiBackend {
             {
                 return Err(OpenAiError::backend("request cancelled"));
             }
-            if self.uses_scheduler_builtin_driver(&request) {
+            if payment_gate.is_none() && self.uses_scheduler_builtin_driver(&request) {
                 let model_generation_elapsed = self.run_scheduled_generation(
                     &request,
                     &session_id,
@@ -448,6 +452,9 @@ impl StageOpenAiBackend {
                 &session_id,
                 prefill.chat_sampling_configured,
             )?;
+            if let Some(gate) = payment_gate.as_ref() {
+                gate.after_prefill(request.prompt_token_ids.len(), request.max_tokens)?;
+            }
             let model_generation_elapsed = self.run_scheduler_feature_loop(
                 &mut request,
                 &session_id,
@@ -626,7 +633,9 @@ impl StageOpenAiBackend {
         session_id: &str,
         cache_stats: &mut GenerationCacheStats,
     ) -> OpenAiResult<PromptPrefillResult> {
-        if self.can_sample_whole_prompt_in_prefill(request, session_id)? {
+        if crate::frontend::generation_gate::find(request.ids.frontend_request_id)?.is_some()
+            || self.can_sample_whole_prompt_in_prefill(request, session_id)?
+        {
             let chat_sampling_configured = if let Some(metadata) = request.chat_sampling_metadata {
                 self.configure_chat_sampling(
                     session_id,
