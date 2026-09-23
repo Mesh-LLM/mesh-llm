@@ -5,7 +5,7 @@ mod dynamic_library;
 // without compiling the crate to determine native-runtime compatibility.
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 62;
+pub const ABI_VERSION_PATCH: u32 = 63;
 
 // Propagate static native archive changes through Cargo dependency metadata so
 // final binaries are relinked after CMake rebuilds llama.cpp.
@@ -37,15 +37,15 @@ pub use abi::{
     FEATURE_MODEL_LOAD_EVENTS_V2, FEATURE_MODEL_SOURCE, FEATURE_MTP_MULTIMODAL,
     FEATURE_NATIVE_MTP_N1, FEATURE_NGRAM_CACHE_DRAFT, FEATURE_NON_CHAT_WORKLOADS,
     FEATURE_RUNTIME_EVENT_REPORTER, FEATURE_RUNTIME_EVENTS, FEATURE_STAGE_PLAN, FEATURE_SYSTEM_ONE,
-    FEATURE_UNLOAD_EVENTS, IterationRequest, LlamaLogCallback, LoadMode,
+    FEATURE_SYSTEM_ONE_MEDIA, FEATURE_UNLOAD_EVENTS, IterationRequest, LlamaLogCallback, LoadMode,
     MODEL_TENSOR_SOURCE_V1_ABI_VERSION, Model, ModelImatrixEntryV1, ModelInfo,
     ModelReadTensorF32Callback, ModelTensorSourceV1, MtmdProgressCallback, MtpSource, NgramCache,
     Opaque, RuntimeConfig, Session, SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn,
     SkippyRuntimeEventCallback, SkippyRuntimeEventCategory, SkippyRuntimeEventEmitterKind,
     SkippyRuntimeEventFailureCode, SkippyRuntimeEventKind, SkippyRuntimeEventProgressUnit,
-    SkippyRuntimeEventReporterV1, SkippyRuntimeEventV1, Status, SystemOneSlot, TRISTATE_AUTO,
-    TRISTATE_FALSE, TRISTATE_TRUE, TensorRole, WORKLOAD_INFO_V1_ABI_VERSION, WorkloadInfoV1,
-    WorkloadKind, WorkloadPooling, runtime_abi_supported,
+    SkippyRuntimeEventReporterV1, SkippyRuntimeEventV1, Status, SystemOneMediaSpan, SystemOneSlot,
+    TRISTATE_AUTO, TRISTATE_FALSE, TRISTATE_TRUE, TensorRole, WORKLOAD_INFO_V1_ABI_VERSION,
+    WorkloadInfoV1, WorkloadKind, WorkloadPooling, runtime_abi_supported,
 };
 pub use activation::{
     ACTIVATION_BOUNDARY_DESC_VERSION, ACTIVATION_FRAME_VERSION, ACTIVATION_IDENTITY_BYTES,
@@ -95,13 +95,14 @@ pub use runtime::skippy_abi_features;
 
 #[cfg(feature = "dynamic-runtime")]
 pub use dynamic::{
-    ggml_log_set, llama_get_embeddings_ith, llama_log_set, llama_model_quantize,
-    llama_model_quantize_default_params, llama_set_embeddings, load_native_runtime_libraries,
-    load_native_runtime_library, mtmd_bitmap_free, mtmd_context_params_default,
-    mtmd_decode_use_mrope, mtmd_default_marker, mtmd_free, mtmd_gen_audio_get_info,
-    mtmd_helper_bitmap_init_from_buf, mtmd_helper_eval_chunk_single, mtmd_helper_eval_chunks,
-    mtmd_helper_gen_audio_free, mtmd_helper_gen_audio_get_output, mtmd_helper_gen_audio_init,
-    mtmd_helper_gen_audio_reset, mtmd_helper_gen_audio_set_input, mtmd_helper_gen_audio_step_gen,
+    ggml_log_set, llama_get_embeddings_ith, llama_log_set, llama_model_n_embd_inp,
+    llama_model_quantize, llama_model_quantize_default_params, llama_set_embeddings,
+    load_native_runtime_libraries, load_native_runtime_library, mtmd_bitmap_free,
+    mtmd_context_params_default, mtmd_decode_use_mrope, mtmd_default_marker, mtmd_encode_chunk,
+    mtmd_free, mtmd_gen_audio_get_info, mtmd_get_output_embd, mtmd_helper_bitmap_init_from_buf,
+    mtmd_helper_eval_chunk_single, mtmd_helper_eval_chunks, mtmd_helper_gen_audio_free,
+    mtmd_helper_gen_audio_get_output, mtmd_helper_gen_audio_init, mtmd_helper_gen_audio_reset,
+    mtmd_helper_gen_audio_set_input, mtmd_helper_gen_audio_step_gen,
     mtmd_helper_gen_audio_step_prompt, mtmd_helper_get_n_pos, mtmd_helper_get_n_tokens,
     mtmd_helper_image_get_decoder_pos, mtmd_helper_init_opt_default, mtmd_helper_log_set,
     mtmd_helper_video_free, mtmd_init_from_file, mtmd_input_chunk_get_n_tokens,
@@ -140,8 +141,8 @@ pub use dynamic::{
     skippy_stage_plan_string_v1, skippy_stage_plan_validate_chain_v1,
     skippy_stage_plan_value_at_v1, skippy_stage_planner_create_v1, skippy_stage_planner_free,
     skippy_stage_planner_realize_v1, skippy_system_one_canvas_length, skippy_system_one_read,
-    skippy_token_is_eog, skippy_tokenize, skippy_trim_session, skippy_verify_tokens,
-    skippy_verify_tokens_frame_sampled, skippy_write_gguf_from_parts,
+    skippy_system_one_read_media, skippy_token_is_eog, skippy_tokenize, skippy_trim_session,
+    skippy_verify_tokens, skippy_verify_tokens_frame_sampled, skippy_write_gguf_from_parts,
     skippy_write_gguf_from_parts_consuming, skippy_write_gguf_metadata_from_parts,
 };
 
@@ -152,19 +153,19 @@ pub use dynamic::{
 
 #[cfg(not(feature = "dynamic-runtime"))]
 pub use static_bindings::{
-    ggml_log_set, llama_get_embeddings_ith, llama_log_set, llama_model_quantize,
-    llama_model_quantize_default_params, llama_set_embeddings, mtmd_bitmap_free,
-    mtmd_context_params_default, mtmd_decode_use_mrope, mtmd_default_marker, mtmd_free,
-    mtmd_gen_audio_get_info, mtmd_helper_bitmap_init_from_buf, mtmd_helper_eval_chunk_single,
-    mtmd_helper_eval_chunks, mtmd_helper_gen_audio_free, mtmd_helper_gen_audio_get_output,
-    mtmd_helper_gen_audio_init, mtmd_helper_gen_audio_reset, mtmd_helper_gen_audio_set_input,
-    mtmd_helper_gen_audio_step_gen, mtmd_helper_gen_audio_step_prompt, mtmd_helper_get_n_pos,
-    mtmd_helper_get_n_tokens, mtmd_helper_image_get_decoder_pos, mtmd_helper_init_opt_default,
-    mtmd_helper_log_set, mtmd_helper_video_free, mtmd_init_from_file,
-    mtmd_input_chunk_get_n_tokens, mtmd_input_chunk_get_tokens_image,
-    mtmd_input_chunk_get_tokens_text, mtmd_input_chunk_get_type, mtmd_input_chunks_free,
-    mtmd_input_chunks_get, mtmd_input_chunks_init, mtmd_input_chunks_size, mtmd_tokenize,
-    skippy_abi_features, skippy_apply_chat_template_json, skippy_backend_device_at,
+    ggml_log_set, llama_get_embeddings_ith, llama_log_set, llama_model_n_embd_inp,
+    llama_model_quantize, llama_model_quantize_default_params, llama_set_embeddings,
+    mtmd_bitmap_free, mtmd_context_params_default, mtmd_decode_use_mrope, mtmd_default_marker,
+    mtmd_encode_chunk, mtmd_free, mtmd_gen_audio_get_info, mtmd_get_output_embd,
+    mtmd_helper_bitmap_init_from_buf, mtmd_helper_eval_chunk_single, mtmd_helper_eval_chunks,
+    mtmd_helper_gen_audio_free, mtmd_helper_gen_audio_get_output, mtmd_helper_gen_audio_init,
+    mtmd_helper_gen_audio_reset, mtmd_helper_gen_audio_set_input, mtmd_helper_gen_audio_step_gen,
+    mtmd_helper_gen_audio_step_prompt, mtmd_helper_get_n_pos, mtmd_helper_get_n_tokens,
+    mtmd_helper_image_get_decoder_pos, mtmd_helper_init_opt_default, mtmd_helper_log_set,
+    mtmd_helper_video_free, mtmd_init_from_file, mtmd_input_chunk_get_n_tokens,
+    mtmd_input_chunk_get_tokens_image, mtmd_input_chunk_get_tokens_text, mtmd_input_chunk_get_type,
+    mtmd_input_chunks_free, mtmd_input_chunks_get, mtmd_input_chunks_init, mtmd_input_chunks_size,
+    mtmd_tokenize, skippy_abi_features, skippy_apply_chat_template_json, skippy_backend_device_at,
     skippy_backend_device_count, skippy_decode_batch_sampled,
     skippy_decode_step_frame_batch_sampled, skippy_decode_step_frame_sampled,
     skippy_decode_step_frame_sampled_mtp, skippy_decode_step_sampled,
@@ -195,7 +196,7 @@ pub use static_bindings::{
     skippy_stage_plan_string_v1, skippy_stage_plan_validate_chain_v1,
     skippy_stage_plan_value_at_v1, skippy_stage_planner_create_v1, skippy_stage_planner_free,
     skippy_stage_planner_realize_v1, skippy_system_one_canvas_length, skippy_system_one_read,
-    skippy_token_is_eog, skippy_tokenize, skippy_trim_session, skippy_verify_tokens,
-    skippy_verify_tokens_frame_sampled, skippy_write_gguf_from_parts,
+    skippy_system_one_read_media, skippy_token_is_eog, skippy_tokenize, skippy_trim_session,
+    skippy_verify_tokens, skippy_verify_tokens_frame_sampled, skippy_write_gguf_from_parts,
     skippy_write_gguf_from_parts_consuming, skippy_write_gguf_metadata_from_parts,
 };

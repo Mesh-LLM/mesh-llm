@@ -22,6 +22,8 @@ pub const FEATURE_UNLOAD_EVENTS: u64 = 1 << 36;
 /// Full-model workloads use a separate bit from all runtime-event families.
 pub const FEATURE_NON_CHAT_WORKLOADS: u64 = 1 << 37;
 pub const FEATURE_SYSTEM_ONE: u64 = 1 << 38;
+/// Media (image soft-token) spans in System One prompt reads.
+pub const FEATURE_SYSTEM_ONE_MEDIA: u64 = 1 << 39;
 pub const MODEL_TENSOR_SOURCE_V1_ABI_VERSION: u32 = 1;
 pub const WORKLOAD_INFO_V1_ABI_VERSION: u32 = 1;
 
@@ -129,6 +131,18 @@ pub struct SystemOneSlot {
     pub canvas_position: u32,
     pub label_token_offset: usize,
     pub label_token_count: usize,
+}
+
+/// One image soft-token span inside a System One prompt: rows
+/// `[prompt_offset, prompt_offset + token_count)` are placeholder IDs in the
+/// prompt token array and decode from `embeddings` (row-major,
+/// `token_count * n_embd_inp` floats) instead.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SystemOneMediaSpan {
+    pub prompt_offset: u32,
+    pub token_count: u32,
+    pub embeddings: *const f32,
 }
 
 #[repr(C)]

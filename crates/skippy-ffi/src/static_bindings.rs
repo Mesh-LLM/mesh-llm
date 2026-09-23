@@ -9,7 +9,7 @@ use crate::{
     NativeMtpDraft, NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session, StagePlan,
     StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStringRefV1,
     StagePlanValueDescV1, StagePlanValueKind, StagePlanner, StagePlannerConfigV1, Status,
-    SystemOneSlot, TensorInfo, TokenSignal, WorkloadInfoV1,
+    SystemOneMediaSpan, SystemOneSlot, TensorInfo, TokenSignal, WorkloadInfoV1,
 };
 
 unsafe extern "C" {
@@ -153,6 +153,26 @@ unsafe extern "C" {
         out_output_count: *mut usize,
         out_error: *mut *mut Error,
     ) -> Status;
+
+    pub fn skippy_system_one_read_media(
+        model: *mut Model,
+        prompt_tokens: *const i32,
+        prompt_token_count: usize,
+        media_spans: *const SystemOneMediaSpan,
+        media_span_count: usize,
+        canvas_tokens: *const i32,
+        canvas_token_count: usize,
+        label_token_ids: *const i32,
+        label_token_count: usize,
+        slots: *const SystemOneSlot,
+        slot_count: usize,
+        out_probabilities: *mut f32,
+        output_capacity: usize,
+        out_output_count: *mut usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn llama_model_n_embd_inp(model: *const Model) -> i32;
 
     pub fn skippy_system_one_canvas_length(
         model: *mut Model,
@@ -841,6 +861,13 @@ unsafe extern "C" {
         bitmaps: *const *const MtmdBitmap,
         n_bitmaps: usize,
     ) -> c_int;
+
+    /// Encode one media chunk with the projector; embeddings are then read via
+    /// `mtmd_get_output_embd` (`n_tokens * n_embd_inp` floats).
+    pub fn mtmd_encode_chunk(ctx: *mut MtmdContext, chunk: *const Opaque) -> c_int;
+
+    /// Embeddings from the last `mtmd_encode_chunk` pass; valid until the next encode.
+    pub fn mtmd_get_output_embd(ctx: *mut MtmdContext) -> *const f32;
 
     pub fn mtmd_helper_get_n_tokens(chunks: *const MtmdInputChunks) -> usize;
 
