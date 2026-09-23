@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Wed, 23 Sep 2026 09:51:50 +1000
+Subject: [PATCH] fix(skippy): distinguish unsupported graphs and router slots
+
+---
+diff --git a/src/skippy/stage_plan.cpp b/src/skippy/stage_plan.cpp
+index 26995bcfd..f0cd2726c 100644
+--- a/src/skippy/stage_plan.cpp
++++ b/src/skippy/stage_plan.cpp
+@@ -370,7 +370,9 @@ bool add_mtp_profiles(
+         const skippy_stage_planner & planner,
+         skippy_stage_plan & plan,
+         std::string & error) {
+-    if (plan.guarded.layer_end != plan.guarded.layer_count ||
++    // A router cache slot can reuse nextn storage without being an MTP head.
++    if (planner.model->hparams.router_layer >= 0 ||
++            plan.guarded.layer_end != plan.guarded.layer_count ||
+             llama_model_n_layer_nextn(planner.model.get()) <= 0) {
+         return true;
+     }
+@@ -542,6 +544,10 @@ skippy_status skippy_stage_planner_realize_v1(
+         return fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
+                 "stage planner range and output are invalid");
+     }
++    if (llama_model_has_encoder(planner->model.get()) && llama_model_has_decoder(planner->model.get())) {
++        return fail(out_error, SKIPPY_STATUS_UNSUPPORTED,
++                "stage planner does not support encoder-decoder cross-attention");
++    }
+     try {
+         auto plan = std::make_unique<skippy_stage_plan>();
+         plan->package_id = planner->package_id;

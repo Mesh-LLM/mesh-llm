@@ -1034,3 +1034,11 @@ retaining shared model caches and diagnostic logs. Runner-contract removes its
 Cargo target output. Hosted fallback rows retain their normal disposable-runner
 lifecycle. The workflow contract test requires final cleanup for every declared
 self-hosted job, including custom `mesh-llm-*` runner matrix labels.
+
+
+The native Skippy suite includes sparse synthetic graph-contract tests for every
+canary registry family. `scripts/tests/test_synthetic_graph_registry.py` makes
+missing fixtures and registry dimension/MTP drift fail CI validation. The matrix
+checks admitted stage chains and explicit unsupported contracts without model
+weights; it does not confer real-model certification. See
+`ci/llama-canary/SYNTHETIC_GRAPH_CONTRACTS.md` for structural coverage and limits.
