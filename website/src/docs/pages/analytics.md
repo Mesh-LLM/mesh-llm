@@ -28,6 +28,10 @@ survives restarts and upgrades. Any of these also turns reporting off:
 | `CI=true` (or another CI variable) | Off automatically; CI runs are not users |
 | A build with no analytics key | Off; source builds and forks report nothing unless `MESH_LLM_POSTHOG_KEY` is set at run time |
 
+These settings are read when a process starts. A node that is already running
+with reporting on keeps reporting until it restarts: `mesh-llm analytics
+disable` writes the config file, it does not reach into a running process.
+
 To see what your machine is doing right now:
 
 ```bash
@@ -105,7 +109,8 @@ bare file stem would satisfy it.
 
 ## How it differs from `[telemetry]`
 
-They are unrelated, and only one of them leaves your network.
+They are unrelated. Analytics uses the maintainers' endpoint. Telemetry uses
+the endpoint you configure, which may be local or remote.
 
 | | `[analytics]` | `[telemetry]` |
 |---|---|---|
