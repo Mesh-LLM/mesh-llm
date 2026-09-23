@@ -61,6 +61,25 @@ pub fn advertised_capacity_bytes(hw: &HardwareSurvey, max_vram_gb: Option<f64>) 
     }
 }
 
+/// Budget the local fit and auto-join plan against. By default it is what the
+/// accelerators can hold, the same device memory the node advertises: a model
+/// that only fits by spilling into system RAM decodes an order of magnitude
+/// slower, so that path is opt-in through `host_ram_offload`. A host without
+/// enumerated accelerator memory has nothing to spill from; system RAM is the
+/// only memory it serves from, so it keeps its RAM-backed budget either way.
+pub fn local_fit_capacity_bytes(
+    hw: &HardwareSurvey,
+    max_vram_gb: Option<f64>,
+    host_ram_offload: bool,
+) -> u64 {
+    let accelerator_bytes = mesh_capacity_bytes(hw);
+    if host_ram_offload || accelerator_bytes == 0 {
+        capped_capacity_bytes(hw.vram_bytes, max_vram_gb)
+    } else {
+        capped_capacity_bytes(accelerator_bytes, max_vram_gb)
+    }
+}
+
 /// Itemized view of the capacity a node advertises. The announcement's
 /// `vram_bytes` stays the placement budget; this block explains how that
 /// number was derived. Invariant: `total_bytes == reserved_bytes +
@@ -87,7 +106,8 @@ pub struct AdvertisedMemory {
     /// Total system RAM when the platform reports it.
     pub system_ram_bytes: Option<u64>,
     /// Portion of the local fit budget backed by system RAM, after any
-    /// `max_vram_gb` cap. Never advertised as accelerator capacity.
+    /// `max_vram_gb` cap. Zero on an accelerator host unless the owner opted
+    /// into host-RAM offload. Never advertised as accelerator capacity.
     pub ram_offload_bytes: u64,
 }
 
@@ -95,6 +115,7 @@ pub fn advertised_memory(
     hw: &HardwareSurvey,
     max_vram_gb: Option<f64>,
     safety_margin_bytes: u64,
+    host_ram_offload: bool,
 ) -> AdvertisedMemory {
     let (device_vram, driver_reserved) = enumerated_device_memory(hw);
     let budget = advertised_capacity_bytes(hw, max_vram_gb);
@@ -130,8 +151,9 @@ pub fn advertised_memory(
     let configured_reserve_bytes = owner_ceiling.saturating_sub(usable_bytes);
     // The survey derives its RAM-backed share from the uncapped budget. A
     // `max_vram_gb` cap shrinks the local budget first, and only what that
-    // capped budget still carries beyond the device memory is RAM.
-    let local_budget = capped_capacity_bytes(hw.vram_bytes, max_vram_gb);
+    // capped budget still carries beyond the device memory is RAM; without
+    // host-RAM offload an accelerator host's budget carries none.
+    let local_budget = local_fit_capacity_bytes(hw, max_vram_gb, host_ram_offload);
     let ram_offload_bytes = hw
         .ram_offload_bytes
         .min(local_budget.saturating_sub(device_vram));
@@ -220,7 +242,7 @@ mod tests {
             ..HardwareSurvey::default()
         };
 
-        let memory = advertised_memory(&hw, None, 2_000_000_000);
+        let memory = advertised_memory(&hw, None, 2_000_000_000, true);
 
         assert_eq!(
             memory,
@@ -250,7 +272,7 @@ mod tests {
             ..HardwareSurvey::default()
         };
 
-        let memory = advertised_memory(&hw, Some(32.0), 2_000_000_000);
+        let memory = advertised_memory(&hw, Some(32.0), 2_000_000_000, true);
 
         assert_eq!(memory.total_bytes, 40_000_000_000);
         assert_eq!(memory.reserved_bytes, 1_000_000_000);
@@ -275,14 +297,14 @@ mod tests {
         };
 
         assert_eq!(
-            advertised_memory(&hw, None, 0).ram_offload_bytes,
+            advertised_memory(&hw, None, 0, true).ram_offload_bytes,
             18_000_000_000
         );
         assert_eq!(
-            advertised_memory(&hw, Some(20.0), 0).ram_offload_bytes,
+            advertised_memory(&hw, Some(20.0), 0, true).ram_offload_bytes,
             8_000_000_000
         );
-        assert_eq!(advertised_memory(&hw, Some(8.0), 0).ram_offload_bytes, 0);
+        assert_eq!(advertised_memory(&hw, Some(8.0), 0, true).ram_offload_bytes, 0);
     }
 
     #[test]
@@ -298,7 +320,7 @@ mod tests {
             ..HardwareSurvey::default()
         };
 
-        let memory = advertised_memory(&hw, None, 2_000_000_000);
+        let memory = advertised_memory(&hw, None, 2_000_000_000, true);
 
         assert_eq!(memory.total_bytes, 96_000_000_000);
         assert_eq!(memory.reserved_bytes, 0);
@@ -323,7 +345,7 @@ mod tests {
             ..HardwareSurvey::default()
         };
 
-        let memory = advertised_memory(&hw, None, 0);
+        let memory = advertised_memory(&hw, None, 0, true);
 
         assert_eq!(memory.total_bytes, 64_000_000_000);
         assert_eq!(memory.reserved_bytes, 0);
@@ -335,7 +357,7 @@ mod tests {
 
         // The owner's margin and cap still land in the configured reserve,
         // on top of the platform share.
-        let memory = advertised_memory(&hw, Some(32.0), 2_000_000_000);
+        let memory = advertised_memory(&hw, Some(32.0), 2_000_000_000, true);
 
         assert_eq!(memory.platform_reserve_bytes, 6_400_000_000);
         assert_eq!(memory.usable_bytes, 30_000_000_000);
@@ -354,7 +376,7 @@ mod tests {
             ..HardwareSurvey::default()
         };
 
-        let memory = advertised_memory(&hw, None, 2_000_000_000);
+        let memory = advertised_memory(&hw, None, 2_000_000_000, true);
 
         assert_eq!(
             memory,
@@ -379,12 +401,94 @@ mod tests {
             ..HardwareSurvey::default()
         };
 
-        let memory = advertised_memory(&hw, Some(1.0), 2_000_000_000);
+        let memory = advertised_memory(&hw, Some(1.0), 2_000_000_000, true);
 
         assert_eq!(memory.total_bytes, 1_000_000_000);
         assert_eq!(memory.usable_bytes, 0);
         assert_eq!(memory.configured_reserve_bytes, 1_000_000_000);
         assert_breakdown_adds_up(&memory);
+    }
+
+    #[test]
+    fn discrete_gpu_local_fit_stays_on_the_device_unless_ram_offload_is_opted_in() {
+        // The survey of a 12 GB RTX 4070 Ti in a 31 GiB Windows host: the
+        // RAM credit takes the budget to 31.4 GB against 12.9 GB of device.
+        let hw = HardwareSurvey {
+            vram_bytes: 31_427_447_193,
+            gpu_vram: vec![12_878_610_432],
+            gpu_reserved: vec![None],
+            gpus: vec![gpu(12_878_610_432, None, false)],
+            system_ram_bytes: Some(33_488_429_056),
+            ram_offload_bytes: 18_548_836_761,
+            ..HardwareSurvey::default()
+        };
+
+        assert_eq!(local_fit_capacity_bytes(&hw, None, false), 12_878_610_432);
+        assert_eq!(local_fit_capacity_bytes(&hw, None, true), 31_427_447_193);
+        assert_eq!(
+            advertised_memory(&hw, None, 0, false).ram_offload_bytes,
+            0
+        );
+        assert_eq!(
+            advertised_memory(&hw, None, 0, true).ram_offload_bytes,
+            18_548_836_761
+        );
+        // The announcement does not depend on the local choice.
+        assert_eq!(
+            advertised_memory(&hw, None, 0, false).usable_bytes,
+            advertised_memory(&hw, None, 0, true).usable_bytes
+        );
+    }
+
+    #[test]
+    fn a_max_vram_cap_still_bounds_the_device_only_local_fit() {
+        let hw = HardwareSurvey {
+            vram_bytes: 30_000_000_000,
+            gpu_vram: vec![12_000_000_000],
+            gpu_reserved: vec![Some(500_000_000)],
+            gpus: vec![gpu(12_000_000_000, Some(500_000_000), false)],
+            ram_offload_bytes: 18_000_000_000,
+            ..HardwareSurvey::default()
+        };
+
+        assert_eq!(local_fit_capacity_bytes(&hw, None, false), 11_500_000_000);
+        assert_eq!(
+            local_fit_capacity_bytes(&hw, Some(8.0), false),
+            8_000_000_000
+        );
+    }
+
+    #[test]
+    fn cpu_only_and_unified_hosts_keep_their_budget_without_ram_offload() {
+        // No accelerator to spill from: RAM is the only memory a CPU host
+        // serves from, and a unified host's budget already is its memory.
+        let cpu_only = HardwareSurvey {
+            vram_bytes: 24_000_000_000,
+            system_ram_bytes: Some(32_000_000_000),
+            ram_offload_bytes: 24_000_000_000,
+            ..HardwareSurvey::default()
+        };
+        assert_eq!(
+            local_fit_capacity_bytes(&cpu_only, None, false),
+            24_000_000_000
+        );
+        assert_eq!(
+            advertised_memory(&cpu_only, None, 0, false).ram_offload_bytes,
+            24_000_000_000
+        );
+
+        let unified = HardwareSurvey {
+            vram_bytes: 96_000_000_000,
+            is_soc: true,
+            gpu_vram: vec![96_000_000_000],
+            gpu_reserved: vec![None],
+            gpus: vec![gpu(96_000_000_000, None, true)],
+            ..HardwareSurvey::default()
+        };
+        assert_eq!(
+            local_fit_capacity_bytes(&unified, None, false),
+            local_fit_capacity_bytes(&unified, None, true)
+        );
     }
 
     fn assert_breakdown_adds_up(memory: &AdvertisedMemory) {
