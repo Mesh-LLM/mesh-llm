@@ -70,6 +70,8 @@ use openai_frontend::OpenAiResult;
 use openai_frontend::RerankRequest;
 use openai_frontend::RerankResponse;
 use openai_frontend::RerankResult;
+use openai_frontend::SystemOneRequest;
+use openai_frontend::SystemOneResponse;
 use openai_frontend::TerminalGuard;
 use openai_frontend::TerminalGuardedChatStream;
 use openai_frontend::apply_chat_hook_outcome;
@@ -814,6 +816,15 @@ where
 impl OpenAiBackend for StageOpenAiBackend {
     async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
         Ok(vec![ModelObject::new(self.model_id.clone())])
+    }
+
+    async fn system_one(&self, request: SystemOneRequest) -> OpenAiResult<SystemOneResponse> {
+        let backend = self.clone();
+        task::spawn_blocking(move || backend.run_system_one(request))
+            .await
+            .map_err(|error| {
+                OpenAiError::backend(format!("System One execution task failed: {error}"))
+            })?
     }
 
     async fn chat_completion(
