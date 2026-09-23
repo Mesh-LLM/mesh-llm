@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sat <sat@local>
+Date: Thu, 24 Sep 2026 06:30:00 +1000
+Subject: [PATCH] skippy: make split graph statistics observable
+
+Two independent gates hid the graph counters on a split, which is exactly
+the configuration they exist to explain:
+
+  1. trace_stage_graph_stats() returned early whenever hparams.no_alloc was
+     set, and split stages run with no_alloc. Only the memory breakdown is
+     meaningless there, so skip that and keep the counters.
+  2. the counters went out via LLAMA_LOG_INFO, but the host installs its
+     own llama log callback and filters INFO, so they never reached the
+     serve log. Write them to stderr too, which does reach it.
+---
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index baaccdd97..f5703143c 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -3717,13 +3717,30 @@ void llama_context::perf_reset() {
+ }
+ 
+ void llama_context::trace_stage_graph_stats(const char * phase) const {
+-    if (!stage_graph_trace || model.hparams.no_alloc) return;
++    if (!stage_graph_trace) return;
++    // Split stages run with no_alloc, so returning early there hid these counters
++    // in exactly the configuration they exist to explain. Only the byte
++    // accounting is meaningless under no_alloc; skip that, keep the counters.
+     size_t context_bytes = 0, compute_bytes = 0;
+-    for (const auto & entry : memory_breakdown()) {
+-        context_bytes += entry.second.context;
+-        compute_bytes += entry.second.compute;
++    if (!model.hparams.no_alloc) {
++        for (const auto & entry : memory_breakdown()) {
++            context_bytes += entry.second.context;
++            compute_bytes += entry.second.compute;
++        }
+     }
+     const auto memo = skippy_get_selection_memo_stats();
++    // The host installs its own llama log callback and filters INFO, so these
++    // never reached the serve log. stderr does.
++    fprintf(stderr,
++            "SKIPPY-GRAPH-STATS phase=%s calls=%llu builds=%llu reuses=%llu "
++            "retained_restores=%llu memo_thread_hits=%llu memo_thread_misses=%llu\n",
++            phase,
++            (unsigned long long) stage_graph_calls,
++            (unsigned long long) stage_graph_builds,
++            (unsigned long long) stage_graph_reuses,
++            (unsigned long long) stage_graph_restores,
++            (unsigned long long) memo.hits,
++            (unsigned long long) memo.misses);
+     LLAMA_LOG_INFO("SKIPPY-GRAPH-STATS phase=%s context=%p calls=%" PRIu64 " builds=%" PRIu64
+             " reuses=%" PRIu64 " retained_restores=%" PRIu64
+             " context_bytes=%zu compute_bytes=%zu memo_thread_hits=%" PRIu64
+--
+2.39.5
