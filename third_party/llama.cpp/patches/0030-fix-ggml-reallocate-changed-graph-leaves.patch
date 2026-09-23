@@ -1,0 +1,35 @@
+From e0ab7babf94e7b396f32fe1ec1c8eff84dc2b139 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Wed, 23 Sep 2026 16:11:38 +1000
+Subject: [PATCH] fix(ggml): reallocate changed graph leaves
+
+---
+ ggml/src/ggml-alloc.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/ggml/src/ggml-alloc.c b/ggml/src/ggml-alloc.c
+index 9aa36994c..c99fe689e 100644
+--- a/ggml/src/ggml-alloc.c
++++ b/ggml/src/ggml-alloc.c
+@@ -1025,6 +1025,18 @@ static bool ggml_gallocr_needs_realloc(ggml_gallocr_t galloc, struct ggml_cgraph
+         return true;
+     }
+ 
++    for (int i = 0; i < graph->n_leafs; i++) {
++        struct ggml_tensor * leaf = graph->leafs[i];
++        struct leaf_alloc * leaf_alloc = &galloc->leaf_allocs[i];
++
++        if (!ggml_gallocr_node_needs_realloc(galloc, leaf, &leaf_alloc->leaf)) {
++#ifndef NDEBUG
++            GGML_LOG_DEBUG("%s: leaf %s is not valid\n", __func__, leaf->name);
++#endif
++            return true;
++        }
++    }
++
+     for (int i = 0; i < graph->n_nodes; i++) {
+         struct ggml_tensor * node = graph->nodes[i];
+         struct node_alloc * node_alloc = &galloc->node_allocs[i];
+-- 
+2.54.0 (Apple Git-157)
+
