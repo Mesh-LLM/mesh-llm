@@ -252,8 +252,8 @@ pub async fn shutdown() {
     let Some(Some(reporter)) = REPORTER.get() else {
         return;
     };
-    let worker = reporter.worker.lock().ok().and_then(|mut slot| slot.take());
-    let Some(worker) = worker else {
+    let mut worker = reporter.worker.lock().ok().and_then(|mut slot| slot.take());
+    let Some(worker) = worker.as_mut() else {
         // Already shut down. A second call is a no-op rather than a second
         // wait, so repeated shutdowns on an error path stay free.
         return;
@@ -265,8 +265,16 @@ pub async fn shutdown() {
         slot.take();
     }
 
-    if tokio::time::timeout(SHUTDOWN_BUDGET, worker).await.is_err() {
-        tracing::debug!("analytics flush exceeded its shutdown budget; events dropped");
+    if tokio::time::timeout(SHUTDOWN_BUDGET, &mut *worker)
+        .await
+        .is_err()
+    {
+        // `timeout` cancels only its own wait. Dropping the handle would
+        // detach the flush task instead of ending it, so an embedder that
+        // keeps the runtime alive could still see a batch go out after
+        // `shutdown` returned. Abort it: the budget is the promise.
+        worker.abort();
+        tracing::debug!("analytics flush exceeded its shutdown budget; batch aborted");
     }
 }
 

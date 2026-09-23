@@ -67,7 +67,9 @@ impl Disposition {
             Self::DisabledConfigUnreadable => {
                 "disabled: the config file could not be read, so the recorded preference is unknown"
             }
-            Self::DisabledNoKey => "disabled: this build has no analytics key compiled in",
+            Self::DisabledNoKey => {
+                "disabled: no analytics key is available (none compiled in, and MESH_LLM_POSTHOG_KEY is unset or empty)"
+            }
             Self::DisabledInCi => "disabled: continuous integration environment detected",
         }
     }
@@ -165,13 +167,21 @@ pub fn project_key() -> Option<String> {
         .map(str::to_owned)
 }
 
+/// Normalize a configured ingestion host, or `None` when nothing is left of it.
+///
+/// Split out from [`ingestion_host`] so the normalization is testable without
+/// mutating the process environment, which is global to the test binary.
+fn normalize_host(raw: &str) -> Option<String> {
+    let host = raw.trim().trim_end_matches('/');
+    (!host.is_empty()).then(|| host.to_owned())
+}
+
 /// The ingestion host, preferring the runtime override.
 #[must_use]
 pub fn ingestion_host() -> String {
     env::var(ENV_POSTHOG_HOST)
         .ok()
-        .map(|host| host.trim().trim_end_matches('/').to_owned())
-        .filter(|host| !host.is_empty())
+        .and_then(|host| normalize_host(&host))
         .unwrap_or_else(|| DEFAULT_POSTHOG_HOST.to_owned())
 }
 

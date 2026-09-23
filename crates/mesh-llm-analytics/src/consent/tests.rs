@@ -109,7 +109,25 @@ fn every_disposition_explains_itself() {
 }
 
 #[test]
-fn ingestion_host_strips_trailing_slashes() {
-    // Guards the URL join in the client, which appends `/batch/`.
-    assert!(!DEFAULT_POSTHOG_HOST.ends_with('/'));
+fn normalize_host_trims_and_strips_trailing_slashes() {
+    // Guards the URL join in the client, which appends `/batch/`: a host that
+    // keeps its trailing slash would produce `//batch/`.
+    assert_eq!(
+        normalize_host(" https://self.example/ ").as_deref(),
+        Some("https://self.example")
+    );
+    assert_eq!(
+        normalize_host("https://self.example//").as_deref(),
+        Some("https://self.example")
+    );
+    // An override that is only whitespace or slashes names no host, so it must
+    // fall back to the default rather than reach the client as an empty one.
+    assert_eq!(normalize_host("   "), None);
+    assert_eq!(normalize_host("/"), None);
+    // The default host must survive normalization unchanged, or the fallback
+    // would silently differ from the documented endpoint.
+    assert_eq!(
+        normalize_host(DEFAULT_POSTHOG_HOST).as_deref(),
+        Some(DEFAULT_POSTHOG_HOST)
+    );
 }

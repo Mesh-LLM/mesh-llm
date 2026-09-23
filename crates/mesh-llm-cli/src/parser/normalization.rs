@@ -15,6 +15,97 @@ pub struct NormalizedRuntimeArgs {
     pub explicit_surface: Option<RuntimeSurface>,
 }
 
+/// Flags that consume the following token as their value.
+///
+/// Hand-maintained: a new value-taking flag has to be added here, or
+/// [`first_positional_index`] will mistake its value for a subcommand.
+/// Boolean flags (`--help-advanced`, `--auto`, `--client`, `--local-model-only`,
+/// `--headless`, `--publish`, `--auto-update`, `--no-draft`, `--split`,
+/// `--no-enumerate-host`, `--listen-all`, `--no-console`, `--owner-required`)
+/// are deliberately absent.
+const VALUE_TAKING_FLAGS: &[&str] = &[
+    "--log-format",
+    "--mesh-discovery-mode",
+    "--max-vram",
+    "--llama-flavor",
+    "--device",
+    "--tensor-split",
+    "--bind-port",
+    "--bind-ip",
+    "--max-clients",
+    "--port",
+    "--console",
+    "--swarm-capture",
+    "--draft-max",
+    "--ctx-size",
+    "--parallel",
+    "--model",
+    "--gguf",
+    "--mmproj",
+    "--checkpoint-quantization",
+    "--quant",
+    "--checkpoint-imatrix",
+    "--join",
+    "--join-file",
+    "--discover",
+    "--mesh-name",
+    "--region",
+    "--name",
+    "--plugin",
+    "--draft",
+    "--bin-dir",
+    "--relay",
+    "--relay-auth",
+    "--nostr-relay",
+    "--config",
+    "--owner-key",
+    "--control-bind",
+    "--control-advertise-addr",
+    "--node-label",
+    "--trust-policy",
+    "--trust-owner",
+];
+
+/// Index of the first positional argument, skipping leading global flags.
+///
+/// A value-taking flag consumes the token after it, so `mesh-llm --config
+/// /tmp/config analytics` locates `analytics` rather than the config path.
+/// `--flag=value` is self-contained and skipped as one token. An unknown flag
+/// is skipped a token at a time so clap still gets to report it. Returns
+/// `args.len()` when there is no positional argument.
+fn first_positional_index(args: &[OsString]) -> usize {
+    let mut pos = 1;
+    while pos < args.len() {
+        let arg = args.get(pos).and_then(|arg| arg.to_str()).unwrap_or("");
+
+        if let Some((flag, _value)) = arg.split_once('=')
+            && VALUE_TAKING_FLAGS.contains(&flag)
+        {
+            pos += 1;
+            continue;
+        }
+
+        if VALUE_TAKING_FLAGS.contains(&arg) {
+            let next_is_value = args
+                .get(pos + 1)
+                .and_then(|arg| arg.to_str())
+                .is_some_and(|next| !next.starts_with('-'));
+            // Advance by two when the value is present, by one otherwise and
+            // let clap report the missing value.
+            pos += if next_is_value { 2 } else { 1 };
+            continue;
+        }
+
+        if arg.starts_with('-') {
+            pos += 1;
+            continue;
+        }
+
+        break;
+    }
+    pos
+}
+
 pub fn normalize_runtime_surface_args<I, S>(args: I) -> NormalizedRuntimeArgs
 where
     I: IntoIterator<Item = S>,
@@ -25,91 +116,7 @@ where
     let mut explicit_surface = None;
 
     // Skip leading global flags to find the pseudo-subcommand position.
-    // Recognized value-taking flags: --log-format, --mesh-discovery-mode, --max-vram,
-    // --llama-flavor, --device, --tensor-split, --bind-port, --bind-ip, --max-clients,
-    // --port, --console, --swarm-capture, --draft-max, --ctx-size.
-    // Boolean flags: --help-advanced, --auto, --client, --local-model-only, --headless, --publish,
-    // --plugin, --auto-update, --no-draft, --split, --no-enumerate-host, --listen-all,
-    // --no-console, --owner-required.
-    let value_taking_flags = [
-        "--log-format",
-        "--mesh-discovery-mode",
-        "--max-vram",
-        "--llama-flavor",
-        "--device",
-        "--tensor-split",
-        "--bind-port",
-        "--bind-ip",
-        "--max-clients",
-        "--port",
-        "--console",
-        "--swarm-capture",
-        "--draft-max",
-        "--ctx-size",
-        "--parallel",
-        "--model",
-        "--gguf",
-        "--mmproj",
-        "--checkpoint-quantization",
-        "--quant",
-        "--checkpoint-imatrix",
-        "--join",
-        "--join-file",
-        "--discover",
-        "--mesh-name",
-        "--region",
-        "--name",
-        "--plugin",
-        "--draft",
-        "--bin-dir",
-        "--relay",
-        "--relay-auth",
-        "--nostr-relay",
-        "--config",
-        "--owner-key",
-        "--control-bind",
-        "--control-advertise-addr",
-        "--node-label",
-        "--trust-policy",
-        "--trust-owner",
-    ];
-
-    let mut pos = 1;
-    while pos < original.len() {
-        let arg_str = original.get(pos).and_then(|arg| arg.to_str()).unwrap_or("");
-
-        // Check for --flag=value form
-        if let Some(eq_idx) = arg_str.find('=') {
-            let flag_part = &arg_str[..eq_idx];
-            if value_taking_flags.contains(&flag_part) {
-                pos += 1;
-                continue;
-            }
-        }
-
-        // Check for --flag value form
-        if value_taking_flags.contains(&arg_str) {
-            // Advance by 2 if next token exists and doesn't start with '-'
-            if let Some(next) = original.get(pos + 1).and_then(|arg| arg.to_str())
-                && !next.starts_with('-')
-            {
-                pos += 2;
-                continue;
-            }
-            // If next doesn't exist or starts with '-', advance by 1 (let Clap handle the error)
-            pos += 1;
-            continue;
-        }
-
-        // If it starts with '-' but isn't a recognized flag, it's likely a parse error or unknown flag
-        if arg_str.starts_with('-') {
-            pos += 1;
-            continue;
-        }
-
-        // Found the first positional argument (serve/client/other subcommand)
-        break;
-    }
+    let pos = first_positional_index(&original);
 
     // Now apply the serve/client normalization logic at the discovered position
     match original.get(pos).and_then(|arg| arg.to_str()) {
@@ -675,20 +682,20 @@ mod tests {
 /// would report a `cli_command` event for the very command family that
 /// promises not to report.
 ///
-/// Scans for the first non-flag token after the executable, so global flags
-/// before the subcommand (`mesh-llm --debug analytics status`) still match.
+/// Uses the same value-aware scan as [`first_positional_index`], so a
+/// value-taking global flag before the subcommand
+/// (`mesh-llm --config /tmp/config analytics --typo`) still matches instead of
+/// handing the flag's value to the classifier as a subcommand name.
 #[must_use]
 pub fn raw_args_invoke_analytics(args: &[std::ffi::OsString]) -> bool {
-    args.iter()
-        .skip(1)
-        .filter_map(|arg| arg.to_str())
-        .find(|arg| !arg.starts_with('-'))
-        .is_some_and(|first| first == "analytics")
+    args.get(first_positional_index(args))
+        .and_then(|arg| arg.to_str())
+        == Some("analytics")
 }
 
 #[cfg(test)]
 mod analytics_classification_tests {
-    use super::raw_args_invoke_analytics;
+    use super::{first_positional_index, raw_args_invoke_analytics};
     use std::ffi::OsString;
 
     fn args(raw: &[&str]) -> Vec<OsString> {
@@ -718,5 +725,53 @@ mod analytics_classification_tests {
         ] {
             assert!(!raw_args_invoke_analytics(&args(raw)), "matched {raw:?}");
         }
+    }
+
+    #[test]
+    fn matches_analytics_after_a_value_taking_global_option() {
+        // The value of a global option is not a subcommand name. Treating it
+        // as one made `mesh-llm --config /tmp/config analytics --typo` report
+        // a `cli_command` event for the family that promises not to report.
+        for raw in [
+            &["mesh-llm", "--config", "/tmp/config", "analytics", "--typo"][..],
+            &["mesh-llm", "--config=/tmp/config", "analytics", "status"][..],
+            &[
+                "mesh-llm",
+                "--log-format",
+                "json",
+                "--config",
+                "/tmp/config",
+                "analytics",
+            ][..],
+        ] {
+            assert!(raw_args_invoke_analytics(&args(raw)), "missed {raw:?}");
+        }
+    }
+
+    #[test]
+    fn a_value_taking_option_value_is_not_a_subcommand() {
+        // `analytics` here is a config path and a node label, not a command.
+        for raw in [
+            &["mesh-llm", "--config", "analytics"][..],
+            &["mesh-llm", "--name", "analytics", "gpus"][..],
+        ] {
+            assert!(!raw_args_invoke_analytics(&args(raw)), "matched {raw:?}");
+        }
+    }
+
+    #[test]
+    fn first_positional_index_skips_flag_values() {
+        assert_eq!(first_positional_index(&args(&["mesh-llm", "serve"])), 1);
+        assert_eq!(
+            first_positional_index(&args(&["mesh-llm", "--port", "9337", "serve"])),
+            3
+        );
+        assert_eq!(
+            first_positional_index(&args(&["mesh-llm", "--port=9337", "serve"])),
+            2
+        );
+        // A boolean flag takes no value, so nothing after it is skipped.
+        assert_eq!(first_positional_index(&args(&["mesh-llm", "--auto"])), 2);
+        assert_eq!(first_positional_index(&args(&["mesh-llm"])), 1);
     }
 }

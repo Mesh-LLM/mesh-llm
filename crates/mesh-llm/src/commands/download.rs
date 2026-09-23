@@ -28,8 +28,16 @@ pub(crate) async fn dispatch_download_command(name: Option<&str>, draft: bool) -
                     let draft_ref = mesh_llm_host_runtime::command_support::models::find_remote_catalog_model_exact(draft_name)
                         .map(|model| mesh_llm_host_runtime::command_support::models::remote_catalog_model_ref(&model))
                         .unwrap_or_else(|| draft_name.to_string());
-                    mesh_llm_host_runtime::command_support::models::download_model_ref_with_progress_details(&draft_ref, true)
-                        .await?;
+                    let draft_download =
+                        mesh_llm_host_runtime::command_support::models::download_model_ref_with_progress_details(&draft_ref, true).await;
+                    // The draft is a second model this command fetches, so it
+                    // is a second attempt to count. Reported before `?` for the
+                    // same reason as the primary.
+                    mesh_llm_commands::usage_reporting::record_model_download(
+                        &draft_ref,
+                        draft_download.is_ok(),
+                    );
+                    draft_download?;
                 } else {
                     let mut err = mesh_llm_events::console_err();
                     writeln!(err, "⚠ No draft model available for {}", query)?;
