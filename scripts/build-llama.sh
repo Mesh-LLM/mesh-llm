@@ -87,7 +87,20 @@ default_build_dir_for_backend() {
       suffix="rocm-$(sanitize_build_component "$amdgpu_targets")"
       ;;
   esac
-  printf '%s/build-stage-abi-%s-%s\n' "$LLAMA_BUILD_ROOT" "$LLAMA_LINK_MODE" "$suffix"
+  # Key the build directory by the patched llama sha. The directory is otherwise
+  # keyed only by link mode and backend, so two different pins built on one machine
+  # share it -- and package-native-runtime.sh globs every *.dylib under it, shipping
+  # both library generations in one bundle. The stale generation then fails to
+  # resolve against the other's ggml.
+  local pin=""
+  if [[ -f "$LLAMA_WORKDIR/.mesh-llm-patched-sha" ]]; then
+    pin="$(tr -d '[:space:]' < "$LLAMA_WORKDIR/.mesh-llm-patched-sha")"
+  fi
+  if [[ -n "$pin" ]]; then
+    printf '%s/build-stage-abi-%s-%s-%s\n' "$LLAMA_BUILD_ROOT" "$LLAMA_LINK_MODE" "$suffix" "${pin:0:12}"
+  else
+    printf '%s/build-stage-abi-%s-%s\n' "$LLAMA_BUILD_ROOT" "$LLAMA_LINK_MODE" "$suffix"
+  fi
 }
 
 detect_jobs() {

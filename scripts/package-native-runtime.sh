@@ -573,6 +573,19 @@ rewrite_macos_runtime_paths() {
         library="$stage_dir/$rel_path"
         name="$(basename "$library")"
         install_name_tool -id "@rpath/$name" "$library"
+        # Strip every rpath inherited from the build tree. dyld searches LC_RPATH
+        # entries in order, so a leftover absolute build-dir path ahead of
+        # @loader_path makes a packaged bundle resolve its siblings out of
+        # .deps/llama-build instead of out of itself. That fails only on the
+        # machine that built the bundle, and when another llama pin has since been
+        # built there it fails silently by loading the wrong library generation.
+        while IFS= read -r stale_rpath; do
+            [[ -z "$stale_rpath" || "$stale_rpath" == '@loader_path' ]] && continue
+            install_name_tool -delete_rpath "$stale_rpath" "$library" 2>/dev/null || true
+        done < <(otool -l "$library" | awk '
+            $1 == "cmd" && $2 == "LC_RPATH" { in_rpath = 1; next }
+            in_rpath && $1 == "path" { print $2; in_rpath = 0 }
+        ')
         if ! otool -l "$library" | awk '
             $1 == "cmd" && $2 == "LC_RPATH" { in_rpath = 1; next }
             in_rpath && $1 == "path" { print $2; in_rpath = 0 }
