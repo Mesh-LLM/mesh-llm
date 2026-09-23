@@ -86,7 +86,9 @@ impl StageSession {
         if ctx.is_null() {
             return None;
         }
-        let perf = unsafe { skippy_ffi::llama_perf_context(ctx) };
+        // Optional symbol: a runtime without it simply reports no stats.
+        let perf_fn = skippy_ffi::llama_perf_context_optional()?;
+        let perf = unsafe { perf_fn(ctx) };
         Some(GraphReuseStats {
             graphs_reused: perf.n_reused.max(0) as u64,
             tokens_evaluated: perf.n_eval.max(0) as u64,

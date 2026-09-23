@@ -95,6 +95,7 @@ pub use runtime::skippy_abi_features;
 
 #[cfg(feature = "dynamic-runtime")]
 pub use dynamic::{
+    llama_perf_context_optional,
     ggml_log_set, llama_get_embeddings_ith, llama_log_set, llama_model_quantize,
     llama_model_quantize_default_params, llama_set_embeddings, load_native_runtime_libraries,
     load_native_runtime_library, mtmd_bitmap_free, mtmd_context_params_default,
@@ -131,7 +132,7 @@ pub use dynamic::{
     skippy_session_create, skippy_session_create_from_resident_prefix,
     skippy_session_drop_sequence, skippy_session_embed, skippy_session_encode_prompt,
     skippy_session_end_external_decode, skippy_session_free, skippy_session_last_token_signal,
-    llama_perf_context, skippy_session_llama_context, skippy_session_memory_used_cells, skippy_session_position,
+    skippy_session_llama_context, skippy_session_memory_used_cells, skippy_session_position,
     skippy_session_rerank, skippy_session_reset, skippy_session_restore_prefix,
     skippy_session_sample_current, skippy_session_save_prefix, skippy_session_sequence_id,
     skippy_session_set_position, skippy_session_signal_window, skippy_stage_plan_describe_v1,
@@ -186,7 +187,7 @@ pub use static_bindings::{
     skippy_session_create, skippy_session_create_from_resident_prefix,
     skippy_session_drop_sequence, skippy_session_embed, skippy_session_encode_prompt,
     skippy_session_end_external_decode, skippy_session_free, skippy_session_last_token_signal,
-    llama_perf_context, skippy_session_llama_context, skippy_session_memory_used_cells, skippy_session_position,
+    skippy_session_llama_context, skippy_session_memory_used_cells, skippy_session_position,
     skippy_session_rerank, skippy_session_reset, skippy_session_restore_prefix,
     skippy_session_sample_current, skippy_session_save_prefix, skippy_session_sequence_id,
     skippy_session_set_position, skippy_session_signal_window, skippy_stage_plan_describe_v1,
