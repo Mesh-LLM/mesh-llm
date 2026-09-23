@@ -200,25 +200,41 @@ impl Ledger {
         .collect()
     }
 
-    /// Stop an expired, unpaid input invoice from counting as debt when no
-    /// output was delivered for its request. The buyer paid nothing and
-    /// received nothing (a slow payment, not a refusal), so blocking it would
-    /// punish latency. Delivered-but-unpaid output still blocks. Returns
-    /// whether the invoice lapsed; a later receipt is still recorded as paid.
-    pub fn lapse_expired_input(
+    /// Stop an abandoned input invoice counting as debt. Applies only when the
+    /// invoice expired at least [`INPUT_LAPSE_GRACE`] ago, the request has
+    /// finished, and no output was delivered: the buyer paid nothing and got
+    /// nothing, so a slow or interrupted payment is not punished. The caller
+    /// must first have looked the payment up and found no success or pending
+    /// arrival. Delivered-but-unpaid output still blocks. A later receipt is
+    /// still recorded as paid by [`Self::mark_received`].
+    ///
+    /// [`INPUT_LAPSE_GRACE`]: crate::lifetimes::INPUT_LAPSE_GRACE
+    pub fn lapse_abandoned_input(
         &self,
         request_id: &str,
         invoice: &Invoice,
         now_ms: u64,
     ) -> Result<bool> {
-        if invoice.expires_at_ms > now_ms {
+        let grace = crate::lifetimes::INPUT_LAPSE_GRACE.as_millis() as u64;
+        if invoice.expires_at_ms.saturating_add(grace) > now_ms {
             return Ok(false);
         }
         let changed = self.lock()?.execute(
-            "UPDATE receivables SET state='lapsed' WHERE hash=?1 AND request_id=?2 AND segment=0 AND state='unpaid' AND NOT EXISTS(SELECT 1 FROM serving_accounting WHERE id=?2 AND tokens>0)",
+            "UPDATE receivables SET state='lapsed' WHERE hash=?1 AND request_id=?2 AND segment=0 AND state='unpaid' AND EXISTS(SELECT 1 FROM serving_accounting WHERE id=?2 AND finished=1 AND tokens=0)",
             params![invoice.payment_hash, request_id],
         )?;
         Ok(changed == 1)
+    }
+
+    /// Requests whose input invoice this peer has not paid.
+    pub fn unpaid_input_requests(&self, peer: &str) -> Result<Vec<String>> {
+        let connection = self.lock()?;
+        let mut statement = connection.prepare(
+            "SELECT request_id FROM receivables WHERE peer=? AND segment=0 AND state='unpaid'",
+        )?;
+        Ok(statement
+            .query_map([peer], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     pub fn mark_received(&self, hash: &str) -> Result<()> {

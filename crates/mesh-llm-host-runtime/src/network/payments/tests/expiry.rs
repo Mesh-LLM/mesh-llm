@@ -109,17 +109,38 @@ async fn expired_exchange() -> Result<()> {
     assert_eq!(tokens, 0);
     assert!(service.output_receivable(&id).await?.is_none());
     assert_eq!(network.payments.load(Ordering::SeqCst), 0);
-    // A slow payment is not debt: the invoice expired and nothing was
-    // delivered, so the buyer is not blocked from its next request.
-    assert!(
-        !service
-            .ledger
-            .has_outstanding_payment(&caller.endpoint.id().to_string())?
-    );
-    service
-        .ledger
-        .begin_serving("another", &caller.endpoint.id().to_string(), &price, 8)?;
+    assert_lapses_after_grace(
+        &service,
+        &caller.endpoint.id().to_string(),
+        &id,
+        &invoice,
+        &price,
+    )?;
     caller.endpoint.close().await;
     provider.endpoint.close().await;
+    Ok(())
+}
+
+// Right after expiry the payment may still be being observed, so the peer
+// stays blocked; past the grace, a zero-delivery request lapses and the buyer
+// is admitted again.
+fn assert_lapses_after_grace(
+    service: &mesh_llm_payments::service::PaymentService,
+    caller_id: &str,
+    id: &str,
+    invoice: &mesh_llm_payments::invoice::Invoice,
+    price: &mesh_llm_payments::pricing::Pricing,
+) -> Result<()> {
+    assert!(service.ledger.has_outstanding_payment(caller_id)?);
+    let grace = mesh_llm_payments::lifetimes::INPUT_LAPSE_GRACE.as_millis() as u64;
+    assert!(
+        service
+            .ledger
+            .lapse_abandoned_input(id, invoice, invoice.expires_at_ms + grace)?
+    );
+    assert!(!service.ledger.has_outstanding_payment(caller_id)?);
+    service
+        .ledger
+        .begin_serving("another", caller_id, price, 8)?;
     Ok(())
 }

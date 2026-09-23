@@ -128,13 +128,16 @@ async fn blocked_peers_are_listed_with_their_identifier_and_unblocked_by_prefix(
     Ok(())
 }
 
-// A slow payment is not debt: an input invoice that expired unpaid, with no
-// output delivered, must not block the buyer. Delivered output still does.
+// A slow or interrupted payment is not debt: an input invoice that expired
+// unpaid, past the observation grace, for a finished request that delivered
+// nothing, must not block the buyer. Delivered output still does.
 #[tokio::test]
-async fn expired_input_with_nothing_delivered_does_not_block() -> Result<()> {
+async fn abandoned_input_with_nothing_delivered_does_not_block() -> Result<()> {
+    let grace = crate::lifetimes::INPUT_LAPSE_GRACE.as_millis() as u64;
     let dir = tempfile::tempdir()?;
     let service = PaymentService::open(dir.path())?;
     let expired = invoice_with_expiry(1, 100, 1);
+    let lapsed_at = expired.expires_at_ms + grace;
     service.ledger.begin_serving("slow", PEER, &pricing(), 10)?;
     service.ledger.record_receivable(&Receivable {
         request_id: "slow".into(),
@@ -144,23 +147,43 @@ async fn expired_input_with_nothing_delivered_does_not_block() -> Result<()> {
         tokens: 10,
         paid: false,
     })?;
-    // Not yet expired: still outstanding, and lapsing is refused.
+    // Request still running: never lapses, even well past expiry.
     assert!(
         !service
             .ledger
-            .lapse_expired_input("slow", &expired, expired.expires_at_ms - 1)?
+            .lapse_abandoned_input("slow", &expired, lapsed_at)?
+    );
+    // A restart closes interrupted requests (disconnects finish the same way).
+    service.ledger.close_interrupted_serving()?;
+    // Expired but inside the grace: a payment may still be being observed.
+    assert!(
+        !service
+            .ledger
+            .lapse_abandoned_input("slow", &expired, expired.expires_at_ms)?
+    );
+    assert!(
+        !service
+            .ledger
+            .lapse_abandoned_input("slow", &expired, lapsed_at - 1)?
     );
     assert!(service.ledger.has_outstanding_payment(PEER)?);
-    // Expired with nothing delivered: lapses and the buyer is not blocked.
+    assert_eq!(
+        service.ledger.unpaid_input_requests(PEER)?,
+        vec!["slow".to_string()]
+    );
+    // Past the grace with nothing delivered: lapses, buyer not blocked.
     assert!(
         service
             .ledger
-            .lapse_expired_input("slow", &expired, expired.expires_at_ms)?
+            .lapse_abandoned_input("slow", &expired, lapsed_at)?
     );
-    service.ledger.finish_serving("slow")?;
     assert!(!service.ledger.has_outstanding_payment(PEER)?);
     assert!(service.ledger.blocked_peers()?.is_empty());
+    assert!(service.ledger.unpaid_input_requests(PEER)?.is_empty());
     service.ledger.begin_serving("next", PEER, &pricing(), 10)?;
+    // A receipt that still turns up is recorded as paid, not lost.
+    service.ledger.mark_received(&expired.payment_hash)?;
+    assert!(service.ledger.receivables(Some("slow"))?[0].paid);
 
     // Output was delivered: the expired input invoice stays debt.
     let delivered = invoice_with_expiry(2, 100, 1);
@@ -176,11 +199,12 @@ async fn expired_input_with_nothing_delivered_does_not_block() -> Result<()> {
         paid: false,
     })?;
     service.ledger.record_delivered_tokens("owed", 3)?;
-    assert!(
-        !service
-            .ledger
-            .lapse_expired_input("owed", &delivered, delivered.expires_at_ms)?
-    );
+    service.ledger.finish_serving("owed")?;
+    assert!(!service.ledger.lapse_abandoned_input(
+        "owed",
+        &delivered,
+        delivered.expires_at_ms + grace
+    )?);
     assert!(service.ledger.has_outstanding_payment(OTHER)?);
     Ok(())
 }

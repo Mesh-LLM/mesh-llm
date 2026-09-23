@@ -216,9 +216,14 @@ settle, refreshing only that peer's unpaid invoices. No backend starts during
 this wait. The transactional admission check still rejects outstanding debt
 after the deadline; claiming alone does not clear it. This covers the window
 where the previous HTTP response finished but its trailing invoice is settling. Peer identities
-can be replaced, so this blacklist is only a PoC deterrent. A slow payment
-is not debt: when the input invoice expires unpaid and no output was delivered
-for that request, the seller marks it `lapsed` and the peer is not blocked (it
+can be replaced, so this blacklist is only a PoC deterrent. A slow or
+interrupted payment is not debt: once the input invoice has been expired for
+`INPUT_LAPSE_GRACE` (60 s, covering wallet observation lag), the request has
+finished, a wallet lookup shows no successful or arriving payment, and no
+output was delivered, recovery or the next admission marks it `lapsed` and the
+peer is not blocked. This runs from durable state, so it also covers
+disconnects, wallet errors and restarts. Repeated abandoned prefill is not
+penalised yet (it
 paid nothing and received nothing; the seller lost only prefill and at most
 `PRE_PAYMENT_OUTPUT_TOKENS` of undelivered decode). Delivered-but-unpaid output
 still blocks, and that block is deliberate and does not clear on its own. `mesh-llm wallet blocked`

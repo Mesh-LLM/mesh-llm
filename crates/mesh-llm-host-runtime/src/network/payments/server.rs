@@ -104,6 +104,7 @@ async fn serve_inner(
         cancelled: Arc::new(AtomicBool::new(false)),
         started: AtomicBool::new(false),
         output_tokens: AtomicU64::new(0),
+        invoice_expires_at_ms: Arc::new(AtomicU64::new(0)),
         input_settlement: Arc::new(tokio::sync::Mutex::new(None)),
     });
     let _serving_guard = ServingGuard { gate: gate.clone() };
@@ -295,6 +296,11 @@ pub(super) async fn await_prior_settlement(
 }
 
 async fn refresh_receivables(service: &PaymentService, peer: &str) -> Result<()> {
+    // Records paid input, or lapses abandoned zero-delivery input, so a
+    // slow or interrupted payment does not keep this peer blocked.
+    for id in service.ledger.unpaid_input_requests(peer)? {
+        service.input_received(&id).await?;
+    }
     let unpaid = service.ledger.unpaid_invoices(peer)?;
     if unpaid.is_empty() {
         return Ok(());

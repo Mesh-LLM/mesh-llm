@@ -31,6 +31,9 @@ pub(super) struct InvoiceGate {
     pub cancelled: Arc<AtomicBool>,
     pub started: AtomicBool,
     pub output_tokens: AtomicU64,
+    /// Expiry of the input invoice once created (0 before). The decode pause
+    /// is bounded by this, not by when the pause began.
+    pub invoice_expires_at_ms: Arc<AtomicU64>,
     /// Settles the input payment in the ledger once the receiver observes a
     /// completed payment. Started when output delivery opens, awaited before
     /// the request completes.
@@ -75,6 +78,7 @@ impl InvoiceGate {
             events: self.events.clone(),
             authorized: self.authorized.clone(),
             cancelled: self.cancelled.clone(),
+            invoice_expires_at_ms: self.invoice_expires_at_ms.clone(),
             input_settlement: self.input_settlement.clone(),
             stalled: std::time::Instant::now(),
         })
@@ -124,24 +128,12 @@ struct Authorization {
     events: mpsc::UnboundedSender<GateEvent>,
     authorized: Arc<AtomicBool>,
     cancelled: Arc<AtomicBool>,
+    invoice_expires_at_ms: Arc<AtomicU64>,
     input_settlement: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<Result<()>>>>>,
     stalled: std::time::Instant,
 }
 
 impl Authorization {
-    /// A payment that was merely slow is not debt: once the invoice is no
-    /// longer payable and nothing was delivered, the buyer paid nothing and
-    /// received nothing, so its input invoice must not block it.
-    fn lapse_if_expired(&self, invoice: &mesh_llm_payments::invoice::Invoice) {
-        if let Err(error) = self.service.ledger.lapse_expired_input(
-            &self.request_id,
-            invoice,
-            mesh_llm_payments::now_ms(),
-        ) {
-            tracing::warn!(%error, "could not lapse expired input invoice");
-        }
-    }
-
     async fn authorize(&self) -> Result<Arrival> {
         let invoice = self
             .service
@@ -149,6 +141,8 @@ impl Authorization {
             .await?
             .create_invoice(Some(self.amount), INPUT_INVOICE_EXPIRY_SECS)
             .await?;
+        self.invoice_expires_at_ms
+            .store(invoice.expires_at_ms, Ordering::Release);
         tracing::debug!(
             target: "mesh_llm::payments::timing",
             phase = "invoice_created",
@@ -189,10 +183,7 @@ impl Authorization {
         let arrival = tokio::select! {
             claiming = self.service.wait_arrival(&invoice, INPUT_ARRIVAL_WAIT) => match claiming {
                 Ok(arrival) => arrival,
-                Err(error) => {
-                    self.lapse_if_expired(&invoice);
-                    return Err(error);
-                }
+                Err(error) => return Err(error),
             },
             _ = async {
                 while !self.cancelled.load(Ordering::Acquire) {
@@ -249,7 +240,17 @@ impl InvoiceGate {
                 return Ok(());
             }
             let started = *paused_since.get_or_insert_with(std::time::Instant::now);
-            if started.elapsed() >= max_pause {
+            // Once the invoice exists the pause is bounded by its expiry, so a
+            // slow invoice creation cannot shorten a payer's window. Before
+            // that, `max_pause` from the pause start bounds a stuck creation.
+            let expires = self.invoice_expires_at_ms.load(Ordering::Acquire);
+            let gave_up = if expires == 0 {
+                started.elapsed() >= max_pause
+            } else {
+                mesh_llm_payments::now_ms()
+                    > expires.saturating_add(PRE_PAYMENT_PAUSE_SLACK.as_millis() as u64)
+            };
+            if gave_up {
                 self.cancelled.store(true, Ordering::Release);
                 return Err(openai_frontend::OpenAiError::backend(
                     "input payment did not arrive",
@@ -310,6 +311,7 @@ mod tests {
             cancelled: Arc::new(AtomicBool::new(false)),
             started: AtomicBool::new(false),
             output_tokens: AtomicU64::new(0),
+            invoice_expires_at_ms: Arc::new(AtomicU64::new(0)),
             input_settlement: Arc::new(tokio::sync::Mutex::new(None)),
         })
     }
@@ -381,6 +383,53 @@ mod tests {
         .unwrap();
         assert_eq!(outcome, (3, false));
         assert!(started.elapsed() >= Duration::from_millis(150));
+        assert!(gate.cancelled.load(Ordering::Acquire));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn slow_invoice_creation_does_not_shorten_the_payment_window() {
+        // Invoice created after the pause began, still payable for a while:
+        // the pause must outlive the pre-invoice bound, then resume on payment.
+        let dir = tempfile::tempdir().unwrap();
+        let gate = gate(dir.path());
+        let decoding = gate.clone();
+        let task = tokio::task::spawn_blocking(move || {
+            decode(&decoding, 20, 3, Duration::from_millis(100))
+        });
+        while gate.committed_tokens() < 3 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        gate.invoice_expires_at_ms
+            .store(mesh_llm_payments::now_ms() + 60_000, Ordering::Release);
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert!(
+            !task.is_finished(),
+            "pause gave up while the invoice was payable"
+        );
+        assert!(!gate.cancelled.load(Ordering::Acquire));
+        gate.authorized.store(true, Ordering::Release);
+        assert_eq!(task.await.unwrap(), (20, true));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pause_gives_up_after_the_invoice_deadline() {
+        let dir = tempfile::tempdir().unwrap();
+        let gate = gate(dir.path());
+        let slack = PRE_PAYMENT_PAUSE_SLACK.as_millis() as u64;
+        gate.invoice_expires_at_ms.store(
+            mesh_llm_payments::now_ms().saturating_sub(slack) + 150,
+            Ordering::Release,
+        );
+        let decoding = gate.clone();
+        let started = Instant::now();
+        let outcome = tokio::task::spawn_blocking(move || {
+            decode(&decoding, 20, 3, Duration::from_secs(3600))
+        })
+        .await
+        .unwrap();
+        assert_eq!(outcome, (3, false));
+        assert!(started.elapsed() >= Duration::from_millis(100));
+        assert!(started.elapsed() < Duration::from_secs(5));
         assert!(gate.cancelled.load(Ordering::Acquire));
     }
 

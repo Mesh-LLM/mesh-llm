@@ -49,6 +49,14 @@ pub const FUNDING_INVOICE_EXPIRY_SECS: u32 = 24 * 60 * 60;
 /// invoice lifetime; shorten both constants together, never this one alone.
 pub const INPUT_ARRIVAL_WAIT: Duration = Duration::from_secs(INPUT_INVOICE_EXPIRY_SECS as u64);
 
+/// How long after input invoice expiry the seller waits before concluding an
+/// unpaid input invoice was abandoned rather than paid. Covers wallet
+/// observation lag (the Lexe watcher polls every few seconds), so a payment
+/// accepted just before expiry but observed afterward is still recorded as
+/// paid instead of lapsed. Only then, and only if no output was delivered,
+/// does the invoice stop blocking the peer.
+pub const INPUT_LAPSE_GRACE: Duration = Duration::from_secs(60);
+
 // The seller keeps waiting for as long as the invoice it issued stays payable,
 // and lifetimes grow with how long the other side may reasonably take.
 const _: () = {

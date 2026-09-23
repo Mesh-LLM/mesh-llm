@@ -259,15 +259,23 @@ impl PaymentService {
         if receipt.paid {
             return Ok(true);
         }
-        let Some(payment) = self
+        let lookup = self
             .wallet()
             .await?
             .lookup(&receipt.invoice.payment_hash)
-            .await?
-        else {
+            .await?;
+        let Some(payment) = lookup else {
+            // No payment ever reached this node: once the grace after expiry
+            // has passed, a zero-delivery request is abandoned, not debt.
+            self.ledger
+                .lapse_abandoned_input(id, &receipt.invoice, crate::now_ms())?;
             return Ok(false);
         };
         validate_payment_update(&payment, &receipt.invoice.payment_hash, true)?;
+        if payment.status == PaymentStatus::Failed {
+            self.ledger
+                .lapse_abandoned_input(id, &receipt.invoice, crate::now_ms())?;
+        }
         if payment.status != PaymentStatus::Succeeded {
             return Ok(false);
         }
@@ -388,9 +396,19 @@ impl PaymentService {
                     wallet.wait_for_payment(&invoice.payment_hash).await
                 }
             };
-            tokio::time::timeout(Duration::from_millis(remaining), waiting)
-                .await
-                .context(timed_out)??
+            match tokio::time::timeout(Duration::from_millis(remaining), waiting).await {
+                Ok(payment) => payment?,
+                // The watcher may lag the wallet: look once more so a payment
+                // that completed before the deadline is not reported missing.
+                Err(_) => wallet
+                    .lookup(&invoice.payment_hash)
+                    .await?
+                    .filter(|payment| {
+                        payment.status == PaymentStatus::Succeeded
+                            || (claiming && payment.is_claiming())
+                    })
+                    .context(timed_out)?,
+            }
         };
         validate_payment_update(&payment, &invoice.payment_hash, true)?;
         ensure!(

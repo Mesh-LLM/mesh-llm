@@ -199,7 +199,7 @@ async fn incoming_notification_wait_expires_without_polling() -> Result<()> {
         .unwrap_err();
     assert!(error.to_string().contains("expired"));
     assert_eq!(wallet.waits.load(Ordering::SeqCst), 1);
-    assert_eq!(wallet.lookups.load(Ordering::SeqCst), 1);
+    assert_eq!(wallet.lookups.load(Ordering::SeqCst), 2); // plus one final lookup at the deadline
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 0);
     Ok(())
 }
