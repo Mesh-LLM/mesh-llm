@@ -276,9 +276,10 @@ impl PaymentService {
             return Ok(false);
         };
         validate_payment_update(&payment, &receipt.invoice.payment_hash, true)?;
-        // Past expiry plus the grace, a payee node has rejected any HTLC for
-        // this invoice, so a record still `Pending` (claiming observed or not)
-        // is an unpaid invoice, not money in flight.
+        // Past expiry plus the grace, zero-delivery prefill stops blocking the
+        // peer whatever the wallet reports short of `Succeeded`: an issued but
+        // unpaid invoice reads as `Pending`. This is a policy choice, not proof
+        // that no accepted payment is still settling.
         if payment.status != PaymentStatus::Succeeded {
             self.ledger
                 .lapse_abandoned_input(id, &receipt.invoice, crate::now_ms())?;

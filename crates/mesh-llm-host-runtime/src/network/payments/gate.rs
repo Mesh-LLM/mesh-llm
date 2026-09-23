@@ -211,8 +211,10 @@ const PRE_PAYMENT_PAUSE_SLACK: std::time::Duration = std::time::Duration::from_s
 const PRE_PAYMENT_PAUSE_POLL: std::time::Duration = std::time::Duration::from_millis(5);
 
 impl InvoiceGate {
-    /// Runs on the backend's generation thread before each output token.
-    /// Decode may run `cap` tokens ahead of the input payment; after that it
+    /// Runs before each output token is consumed (on the direct decode path,
+    /// the generation thread; on the default scheduler path, the token
+    /// consumer, so the scheduler may keep decoding behind this pause).
+    /// Up to `cap` tokens pass ahead of the input payment; after that it
     /// pauses here rather than filling the delivery buffer, because a full
     /// buffer stalls the backend stream and its receiver-stall timeout would
     /// cancel generation while the payment is still in flight. The pause ends

@@ -163,7 +163,7 @@ async fn stream_output(
     // Decode runs as soon as prefill completes. Drain the backend into a
     // bounded buffer, but do not release even HTTP headers until the provider's
     // receiving wallet sees `claiming` or a terminal fallback. The payment gate
-    // pauses decode after `PRE_PAYMENT_OUTPUT_TOKENS`, which keeps this buffer
+    // pauses token delivery after `PRE_PAYMENT_OUTPUT_TOKENS`, which keeps this buffer
     // from filling while unpaid. The byte cap is only a backstop: if it is
     // ever reached, reads stop, the backend's stream stalls, and its
     // receiver-stall timeout cancels generation (it does not pause decode).

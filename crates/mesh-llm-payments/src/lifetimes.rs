@@ -15,16 +15,17 @@ use std::time::Duration;
 /// Input (pre-delivery) inference invoice. The payer pays as soon as it sees
 /// the invoice, so a minute is generous for a Lightning payment; it also
 /// bounds how long an unpaid request can hold a backend slot (the seller
-/// pauses decode while it waits, see [`PRE_PAYMENT_OUTPUT_TOKENS`]), how long
+/// pauses delivery while it waits, see [`PRE_PAYMENT_OUTPUT_TOKENS`]), how long
 /// an unpaid input invoice keeps that peer blocked, and how long the seller's
 /// prefill state can be worth paying for.
 pub const INPUT_INVOICE_EXPIRY_SECS: u32 = 60;
 
-/// Output tokens the seller may decode ahead of the input payment. Decode
+/// Output tokens the seller may consume ahead of the input payment. Decode
 /// overlaps the payment wait so a paid response is ready the moment the
-/// payment arrives; at this many tokens the seller's payment gate pauses decode
-/// until the payment arrives, fails, is cancelled or the invoice expires. This
-/// also bounds the unpaid work a peer can obtain per request. It must stay well
+/// payment arrives; at this many tokens the seller's payment gate pauses token
+/// consumption until the payment arrives, fails, is cancelled or the invoice
+/// expires. This bounds buffered output, not GPU work: the default skippy
+/// scheduler may keep decoding up to `max_tokens` behind the gate. It must stay well
 /// inside the seller's buffered-output cap so the buffer never fills while
 /// unpaid (a full buffer stalls the backend stream until its receiver-stall
 /// timeout cancels generation).
@@ -49,8 +50,9 @@ pub const FUNDING_INVOICE_EXPIRY_SECS: u32 = 24 * 60 * 60;
 /// invoice lifetime; shorten both constants together, never this one alone.
 pub const INPUT_ARRIVAL_WAIT: Duration = Duration::from_secs(INPUT_INVOICE_EXPIRY_SECS as u64);
 
-/// How long after input invoice expiry the seller waits before concluding an
-/// unpaid input invoice was abandoned rather than paid. Covers wallet
+/// How long after input invoice expiry the seller waits before treating an
+/// unpaid, zero-delivery input invoice as no longer blocking the peer. Expiry
+/// stops new attempts but does not prove an accepted payment is observable. Covers wallet
 /// observation lag (the Lexe watcher polls every few seconds), so a payment
 /// accepted just before expiry but observed afterward is still recorded as
 /// paid instead of lapsed. Only then, and only if no output was delivered,

@@ -16,10 +16,13 @@ validation results and remaining gaps are recorded below.
 3. The payer validates the invoice and reserves its maximum debit against
    the automatic spending budget.
 4. After successful prefill, decode runs concurrently with invoice creation and
-   payment observation. Decode may run up to `PRE_PAYMENT_OUTPUT_TOKENS` (512)
-   ahead of the payment; the provider's payment gate then pauses decode until
-   the payment arrives, fails, is cancelled or the invoice expires. Output is
-   held in a 1 MiB queue sized so the token pause is reached first. No response headers or body
+   payment observation. Up to `PRE_PAYMENT_OUTPUT_TOKENS` (512) tokens may be
+   consumed ahead of the payment; the provider's payment gate then pauses token
+   *delivery* until the payment arrives, fails, is cancelled or the invoice
+   expires. This bounds bytes buffered, not GPU work: on the default skippy
+   scheduler path, decode may continue up to the request's `max_tokens` while
+   token IDs queue behind the gate. Output is held in a 1 MiB queue sized so
+   the token pause is reached first. No response headers or body
    are released until its own wallet observes payment arrival (`claiming` or
    terminal fallback). Failed or expired authorization discards buffered output.
 5. Authorized output streams through the ordinary OpenAI response path. The
@@ -223,9 +226,13 @@ finished, a wallet lookup shows no successful or arriving payment, and no
 output was delivered, recovery or the next admission marks it `lapsed` and the
 peer is not blocked. This runs from durable state, so it also covers
 disconnects, wallet errors and restarts. Repeated abandoned prefill is not
-penalised yet (it
-paid nothing and received nothing; the seller lost only prefill and at most
-`PRE_PAYMENT_OUTPUT_TOKENS` of undelivered decode). Delivered-but-unpaid output
+penalised yet (the seller loses the prefill and any undelivered decode). Expiry
+stops new payment attempts; it does not prove an already accepted payment has
+settled or become observable. If wallet observation fails at the deadline, a
+payer can be charged for completed prefill with no output: an accepted
+residual risk, not a no-charge guarantee. Lapsed invoices are not rescanned by
+background recovery; a receipt that arrives after lapse is recorded only by a
+later explicit lookup for that request. Delivered-but-unpaid output
 still blocks, and that block is deliberate and does not clear on its own. `mesh-llm wallet blocked`
 lists blocked peers with the full peer identifier and each recorded debt, and
 `mesh-llm wallet unblock PEER` (the full identifier or a unique prefix of at
