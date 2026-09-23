@@ -64,14 +64,19 @@ async fn serve_inner(
         bail!("expected inference request");
     };
     uuid::Uuid::parse_str(&id).context("invalid request ID")?;
-    let request = PaidRequest::parse(&http)?;
+    let mut request = PaidRequest::parse(&http)?;
     ensure!(request.model == model, "model mismatch");
     ensure!(
         service.ledger.pricing()?.get(&model) == Some(&pricing),
         "seller prices changed"
     );
+    // Prices and offers use the public model ID; the local backend is
+    // registered, and must be addressed, under its internal name.
+    let backend_model =
+        crate::network::openai::ingress::served_model_for_public_id(node, targets, &model).await;
+    request.use_backend_model(&backend_model);
     let port = targets
-        .candidates(&model)
+        .candidates(&backend_model)
         .iter()
         .find_map(|target| match target {
             InferenceTarget::Local(port) => Some(*port),

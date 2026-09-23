@@ -82,6 +82,14 @@ impl PaidRequest {
         Ok(())
     }
 
+    /// Address the local backend by its internal model name. The public
+    /// `model` stays unchanged for pricing, terms and invoices.
+    pub fn use_backend_model(&mut self, backend_model: &str) {
+        if backend_model != self.model {
+            self.body["model"] = Value::String(backend_model.to_owned());
+        }
+    }
+
     pub fn backend_http(&self, request_id: &str) -> Result<Vec<u8>> {
         let bytes = serde_json::to_vec(&self.body)?;
         let mut raw = format!("POST {} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nConnection: close\r\nx-request-id: {}\r\nContent-Length: {}\r\n\r\n", self.path, request_id, bytes.len()).into_bytes();
@@ -186,5 +194,16 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn backend_model_rewrites_only_the_forwarded_body() {
+        let mut parsed = PaidRequest::parse(b"POST /v1/chat/completions HTTP/1.1\r\n\r\n{\"model\":\"org/repo:Q4_K_M\",\"max_tokens\":8}").unwrap();
+        parsed.use_backend_model("local-gguf/sha256-abc");
+        assert_eq!(parsed.model, "org/repo:Q4_K_M");
+        let raw = parsed.backend_http("id").unwrap();
+        let body = &raw[raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4..];
+        let body: Value = serde_json::from_slice(body).unwrap();
+        assert_eq!(body["model"], "local-gguf/sha256-abc");
     }
 }

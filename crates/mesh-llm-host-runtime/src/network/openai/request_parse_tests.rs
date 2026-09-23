@@ -405,6 +405,26 @@ async fn large_tokenize_request_routes_by_expected_identity_without_parsing_chat
     assert_eq!(&request.raw[forwarded_body_start..], body.as_slice());
 }
 
+// The paid path resolves the backend by this mapping: a catalog/HF-ref model
+// is priced under its public ID but registered under an internal one.
+#[test]
+fn public_catalog_ref_resolves_to_internal_served_name() {
+    let internal = "local-gguf/sha256-abc".to_owned();
+    let descriptors = vec![catalog_model_ref_descriptor(&internal)];
+    assert_eq!(
+        internal_model_for_public_id(
+            "tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M",
+            std::slice::from_ref(&internal),
+            &descriptors
+        ),
+        Some(internal.clone())
+    );
+    assert_eq!(
+        internal_model_for_public_id("other/model:Q4_K_M", &[internal], &descriptors),
+        None
+    );
+}
+
 #[tokio::test]
 async fn tokenizer_identity_is_not_alias_rewritten() {
     let internal = "CodeModel-Q4_K_M".to_owned();
