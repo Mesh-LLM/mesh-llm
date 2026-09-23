@@ -1,0 +1,245 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sat <sat@local>
+Date: Thu, 24 Sep 2026 07:15:00 +1000
+Subject: [PATCH] skippy: retain more than one executable graph generation
+
+Retention keeps exactly one generation, so the cache only covers an
+alternation between two graph shapes. With more distinct shapes in flight it
+thrashes and rebuilds.
+
+Measured on a two-mini 12/24 split of Qwen3-8B with the counters finally
+observable: calls=20554 builds=10491 reuses=10063 retained_restores=9248.
+A 49% reuse rate, of which 92% comes from retention -- so retention is the
+mechanism that matters and its capacity is the ceiling.
+
+Arithmetic from the same run: always-building costs 39.90ms/token-equivalent,
+today's reuse saves 1.82ms, so a full build is 3.72ms. Perfect reuse would
+reach 27.64 tok/s (0.968x of the 28.56 baseline) and 0.95x parity needs an
+82% hit rate.
+
+Make retention a ring of slots, each owning its scheduler and arenas exactly as
+the single retained set already did, and evict the least-recently-used
+generation. A rotating cursor is not enough: a restore displaces the active
+graph into a slot, making that slot the freshest, so the cursor can come back to
+it and evict exactly the generation most likely to be needed again while an
+older one survives.
+SKIPPY_RETAINED_GRAPHS sets the capacity; the default of 1 reproduces the
+previous behaviour exactly, since each extra slot costs a scheduler and its
+arenas and memory is the ceiling on the minis.
+
+memory_breakdown() sums across every slot rather than reading a single retained
+scheduler: each slot owns one, so the compute cost grows with capacity, and
+multi-slot memory is the stated reason the default stays at 1 -- that ceiling has
+to stay observable as capacity grows.
+
+SKIPPY_RETAINED_GRAPHS requires a complete integer parse in [1, 8] and throws
+otherwise. Silently ignoring "8oops" or "9" would serve at capacity 1 while the
+operator believed otherwise, and every number measured from such a run would be
+mislabelled.
+---
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 101d2e5b8..8d5c1d207 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -3766,15 +3766,21 @@ llama_memory_breakdown llama_context::memory_breakdown() const {
+             ggml_backend_t             backend = backend_ptr.get();
+             ggml_backend_buffer_type_t buft    = ggml_backend_sched_get_buffer_type(sched.get(), backend);
+             ret[buft].compute += ggml_backend_sched_get_buffer_size(sched.get(), backend);
+-            if (sched_retained) {
+-                ret[buft].compute += ggml_backend_sched_get_buffer_size(sched_retained.get(), backend);
++            // Every retained slot owns a scheduler, so the compute cost grows with
++            // capacity. Multi-slot memory is the stated reason the default stays at
++            // 1; that ceiling has to stay observable as capacity grows.
++            for (const auto & slot : retained_slots) {
++                if (slot.sched) {
++                    ret[buft].compute += ggml_backend_sched_get_buffer_size(slot.sched.get(), backend);
++                }
+             }
+         }
+     }
+-    if (sched_retained) {
++    for (const auto & slot : retained_slots) {
++        if (!slot.sched) continue;
+         auto & host_metadata = ret[ggml_backend_get_default_buffer_type(backend_cpu)].context;
+-        host_metadata += ggml_backend_sched_get_metadata_size(sched_retained.get());
+-        for (const auto & res : gf_res_retained) {
++        host_metadata += ggml_backend_sched_get_metadata_size(slot.sched.get());
++        for (const auto & res : slot.gf_res) {
+             if (res) host_metadata += res->get_metadata_capacity();
+         }
+     }
+diff --git a/src/llama-context.h b/src/llama-context.h
+index a86243e63..53f4a62fb 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -421,15 +421,30 @@ private:
+     llm_graph_result_ptr gf_res_reserve;
+ 
+     llm_graph_result * gf_res_prev_active = nullptr;
+-    std::array<llm_graph_result_ptr, 2> gf_res_retained;
+-    llm_graph_result * gf_res_retained_active = nullptr;
+-    ggml_backend_sched_ptr sched_retained;
++    // One retained generation per slot, each owning its own scheduler and arenas.
++    // A single retained set only covers an alternation between two graph shapes;
++    // with more distinct shapes in flight the cache thrashes and rebuilds. Measured
++    // on a two-mini 12/24 split: reuses=10063 of calls=20554, a 49% hit rate, of
++    // which retained_restores=9248 -- 92% of all reuse comes from retention.
++    struct retained_stage_slot {
++        std::array<llm_graph_result_ptr, 2> gf_res;
++        llm_graph_result * active = nullptr;
++        ggml_backend_sched_ptr sched;
++        bool allocation_valid = false;
++        // Monotonic stamp of when this slot's graph was last active. Eviction takes
++        // the least-recently-used slot: a restore displaces the active graph into a
++        // slot, making it the freshest, so a rotating cursor would evict exactly the
++        // generation most likely to be needed again.
++        uint64_t last_used = 0;
++    };
++    std::vector<retained_stage_slot> retained_slots;
++    uint64_t retained_clock = 0;
+     bool graph_allocation_valid = false;
+-    bool retained_allocation_valid = false;
+     bool stage_graph_retention_disabled = false;
+ 
+     bool restore_stage_graph(const llm_graph_params & params);
+     bool allocate_stage_graph(const llm_graph_params & params, ggml_cgraph * & graph);
++    void ensure_retained_slots();
+     void retain_stage_graph(const llm_graph_params & params);
+     void clear_retained_stage_graph();
+     bool stage_graph_retention_allowed(const llm_graph_params & params) const;
+diff --git a/src/skippy/execution_graph_cache.cpp b/src/skippy/execution_graph_cache.cpp
+index 43f7945a9..aaf811ced 100644
+--- a/src/skippy/execution_graph_cache.cpp
++++ b/src/skippy/execution_graph_cache.cpp
+@@ -1,3 +1,7 @@
++#include <string>
++#include <stdexcept>
++#include <cerrno>
++#include <algorithm>
+ #include "llama-context.h"
+ #include "llama-sampler.h"
+ #include "llama-model.h"
+@@ -28,26 +32,65 @@ bool llama_context::stage_graph_fits_reservation(ggml_backend_sched_t scheduler)
+ 
+ void llama_context::clear_retained_stage_graph() {
+     // Retained schedulers are idle; a graph can only be parked after synchronization.
+-    sched_retained.reset();
+-    for (auto & res : gf_res_retained) res.reset();
+-    gf_res_retained_active = nullptr;
+-    retained_allocation_valid = false;
++    for (auto & slot : retained_slots) {
++        slot.sched.reset();
++        for (auto & res : slot.gf_res) res.reset();
++        slot.active = nullptr;
++        slot.allocation_valid = false;
++        slot.last_used = 0;
++    }
++    retained_clock = 0;
++}
++
++void llama_context::ensure_retained_slots() {
++    if (!retained_slots.empty()) {
++        return;
++    }
++    // Default 1 keeps the previous single-retained behaviour exactly. Each extra
++    // slot costs one scheduler and its arenas, so this trades memory for reuse and
++    // memory is the ceiling on the minis.
++    size_t capacity = 1;
++    if (const char * env = std::getenv("SKIPPY_RETAINED_GRAPHS")) {
++        // A present-but-invalid value is a configuration error, not a reason to
++        // quietly serve at capacity 1: silently ignoring "8oops" or "9" would hide
++        // the fact that the run is not the configuration the operator asked for,
++        // and every number measured from it would be mislabelled.
++        errno = 0;
++        char * end = nullptr;
++        const long parsed = std::strtol(env, &end, 10);
++        const bool complete = end != nullptr && *end == '\0' && end != env;
++        if (!complete || errno != 0 || parsed < 1 || parsed > 8) {
++            throw std::runtime_error(
++                    std::string("SKIPPY_RETAINED_GRAPHS must be an integer in [1, 8], got \"") +
++                    env + "\"");
++        }
++        capacity = static_cast<size_t>(parsed);
++    }
++    retained_slots.resize(capacity);
+ }
+ 
+ bool llama_context::restore_stage_graph(const llm_graph_params & params) {
+-    if (!stage_graph_retention_allowed(params) || !retained_allocation_valid ||
+-            !gf_res_retained_active ||
+-            gf_res_retained[params.n_outputs > 0].get() != gf_res_retained_active ||
+-            !gf_res_retained_active->can_reuse(params)) {
++    if (!stage_graph_retention_allowed(params)) {
+         return false;
+     }
+-    // Includes asynchronous output copies from the previous microbatch.
+-    ggml_backend_sched_synchronize(sched.get());
+-    std::swap(sched, sched_retained);
+-    std::swap(gf_res_prev, gf_res_retained);
+-    std::swap(gf_res_prev_active, gf_res_retained_active);
+-    std::swap(graph_allocation_valid, retained_allocation_valid);
+-    return true;
++    for (auto & slot : retained_slots) {
++        if (!slot.allocation_valid || !slot.active ||
++                slot.gf_res[params.n_outputs > 0].get() != slot.active ||
++                !slot.active->can_reuse(params)) {
++            continue;
++        }
++        // Includes asynchronous output copies from the previous microbatch.
++        ggml_backend_sched_synchronize(sched.get());
++        std::swap(sched, slot.sched);
++        std::swap(gf_res_prev, slot.gf_res);
++        std::swap(gf_res_prev_active, slot.active);
++        std::swap(graph_allocation_valid, slot.allocation_valid);
++        // The slot now holds the graph that was active until this moment, so it is
++        // the freshest generation and must not be the next eviction.
++        slot.last_used = ++retained_clock;
++        return true;
++    }
++    return false;
+ }
+ 
+ void llama_context::retain_stage_graph(const llm_graph_params & params) {
+@@ -57,15 +100,23 @@ void llama_context::retain_stage_graph(const llm_graph_params & params) {
+         return;
+     }
+     ggml_backend_sched_synchronize(sched.get());
+-    if (!sched_retained) {
+-        sched_retained.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(),
++    ensure_retained_slots();
++    // Evict the least-recently-used generation; an unused slot wins outright.
++    auto & slot = *std::min_element(retained_slots.begin(), retained_slots.end(),
++            [](const retained_stage_slot & a, const retained_stage_slot & b) {
++                if (a.allocation_valid != b.allocation_valid) return !a.allocation_valid;
++                return a.last_used < b.last_used;
++            });
++    if (!slot.sched) {
++        slot.sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(),
+                 backend_ptrs.size(), gf_res_reserve->get_max_nodes(),
+                 cparams.pipeline_parallel, cparams.op_offload));
+     }
+-    std::swap(sched, sched_retained);
+-    std::swap(gf_res_prev, gf_res_retained);
+-    std::swap(gf_res_prev_active, gf_res_retained_active);
+-    retained_allocation_valid = true;
++    std::swap(sched, slot.sched);
++    std::swap(gf_res_prev, slot.gf_res);
++    std::swap(gf_res_prev_active, slot.active);
++    slot.allocation_valid = true;
++    slot.last_used = ++retained_clock;
+     graph_allocation_valid = false;
+ }
+ 
+@@ -75,7 +126,9 @@ bool llama_context::allocate_stage_graph(const llm_graph_params & params, ggml_c
+         graph_allocation_valid = true;
+         return true;
+     }
+-    if (!sched_retained) {
++    const bool any_retained = std::any_of(retained_slots.begin(), retained_slots.end(),
++            [](const retained_stage_slot & slot) { return slot.sched != nullptr; });
++    if (!any_retained) {
+         return false;
+     }
+     // Cache pressure must not prevent a run that fits with one executable.
+--
+2.39.5
