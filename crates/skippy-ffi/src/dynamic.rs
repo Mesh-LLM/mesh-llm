@@ -7,7 +7,7 @@ use std::{
 use crate::{
     ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, ActivationBoundaryDesc,
     ActivationDesc, BackendDevice, Error, GenerationSignalWindow, IterationRequest, KvPageDesc,
-    LlamaLogCallback, LlamaModelQuantizeParams, Model, ModelInfo, ModelTensorSourceV1, MtmdBitmap,
+    LlamaLogCallback, LlamaModelQuantizeParams, LlamaPerfContextData, Model, ModelInfo, ModelTensorSourceV1, MtmdBitmap,
     MtmdContext, MtmdContextParams, MtmdDecoderPos, MtmdGenAudioInfo, MtmdHelperBitmapWrapper,
     MtmdHelperGenAudio, MtmdHelperGenAudioInput, MtmdHelperInitOpt, MtmdHelperVideo,
     MtmdInputChunkType, MtmdInputChunks, MtmdInputText, NativeMtpDraft, NativeRuntimeLoadError,
@@ -192,6 +192,7 @@ dynamic_symbols! {
     skippy_session_create(model: *mut Model, out_session: *mut *mut Session, out_error: *mut *mut Error) -> Status;
     skippy_session_create_from_resident_prefix(model: *mut Model, cache_seq_id: i32, token_ids: *const i32, token_count: usize, out_session: *mut *mut Session, out_error: *mut *mut Error) -> Status;
     skippy_session_llama_context(session: *mut Session) -> *mut Opaque;
+    llama_perf_context(ctx: *mut Opaque) -> LlamaPerfContextData;
     skippy_session_position(session: *const Session) -> i32;
     skippy_session_batch_size(session: *const Session) -> i32;
     skippy_session_sequence_id(session: *const Session) -> i32;

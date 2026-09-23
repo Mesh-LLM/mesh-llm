@@ -482,3 +482,22 @@ pub type SkippyDecodeStepSampledMtpFn = unsafe extern "C" fn(
 ) -> Status;
 
 pub type Opaque = c_void;
+
+/// Mirrors `llama_perf_context_data` from llama.h.
+///
+/// `n_reused` is the number of times a compute graph was reused instead of
+/// rebuilt. It is the only direct read on whether graph reuse is firing under
+/// real load, and nothing on the host could see it before: the counter stopped
+/// at the C++ boundary, so the reuse hit rate had to be inferred from
+/// throughput deltas.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct LlamaPerfContextData {
+    pub t_start_ms: f64,
+    pub t_load_ms: f64,
+    pub t_p_eval_ms: f64,
+    pub t_eval_ms: f64,
+    pub n_p_eval: i32,
+    pub n_eval: i32,
+    pub n_reused: i32,
+}

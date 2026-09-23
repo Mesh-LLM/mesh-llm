@@ -9,8 +9,7 @@ use crate::{
     NativeMtpDraft, NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session, StagePlan,
     StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStringRefV1,
     StagePlanValueDescV1, StagePlanValueKind, StagePlanner, StagePlannerConfigV1, Status,
-    SystemOneSlot, TensorInfo, TokenSignal, WorkloadInfoV1,
-};
+    SystemOneSlot, TensorInfo, TokenSignal, WorkloadInfoV1, LlamaPerfContextData,};
 
 unsafe extern "C" {
     /// Borrow a token embedding; negative indices count from the last output.
@@ -183,6 +182,7 @@ unsafe extern "C" {
     ) -> Status;
 
     pub fn skippy_session_llama_context(session: *mut Session) -> *mut Opaque;
+    pub fn llama_perf_context(ctx: *mut Opaque) -> LlamaPerfContextData;
 
     pub fn skippy_session_position(session: *const Session) -> i32;
 
