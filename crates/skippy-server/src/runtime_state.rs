@@ -94,6 +94,10 @@ pub struct RuntimeSessionStats {
     pub tracked_token_counts: usize,
     pub max_session_tokens: u64,
     pub total_session_tokens: u64,
+    /// Compute graphs reused instead of rebuilt, summed across live lanes.
+    pub graphs_reused: u64,
+    /// Tokens evaluated across live lanes, the denominator for the reuse rate.
+    pub tokens_evaluated: u64,
     pub lanes: Vec<RuntimeSessionLaneStats>,
 }
 
