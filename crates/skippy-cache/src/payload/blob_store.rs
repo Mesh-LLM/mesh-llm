@@ -593,7 +593,7 @@ mod tests {
         }
         assert_eq!(
             blobs.physical_bytes(),
-            expected.values().map(|(bytes, _)| bytes).sum(),
+            expected.values().map(|(bytes, _)| bytes).sum::<u64>(),
             "seed={seed:#x} step={step}"
         );
     }
@@ -802,7 +802,7 @@ mod tests {
                 );
                 assert_eq!(
                     blobs.logical_ref_count(),
-                    expected_blocks.values().sum(),
+                    expected_blocks.values().sum::<u64>(),
                     "seed={seed:#x} step={step}"
                 );
             }
