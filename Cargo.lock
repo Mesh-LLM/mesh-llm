@@ -4207,6 +4207,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "mesh-llm-analytics"
+version = "0.76.1"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs",
+ "mesh-llm-build-info",
+ "mesh-llm-events",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "mesh-llm-api-client"
 version = "0.76.1"
 dependencies = [
@@ -4280,10 +4298,12 @@ dependencies = [
  "hex",
  "iroh",
  "json5",
+ "mesh-llm-analytics",
  "mesh-llm-build-info",
  "mesh-llm-cli",
  "mesh-llm-config",
  "mesh-llm-events",
+ "mesh-llm-hardware-profile",
  "mesh-llm-hf-hub",
  "mesh-llm-identity",
  "mesh-llm-native-runtime",
@@ -4453,6 +4473,7 @@ dependencies = [
  "libc",
  "lightning-invoice",
  "mdns-sd",
+ "mesh-llm-analytics",
  "mesh-llm-build-info",
  "mesh-llm-client",
  "mesh-llm-config",

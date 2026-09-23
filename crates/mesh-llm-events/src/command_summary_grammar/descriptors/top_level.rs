@@ -171,6 +171,27 @@ pub(super) const DESCRIPTORS: &[Descriptor] = &[
         false,
         RawKind::None,
     ),
+    descriptor(
+        &["mesh-llm", "analytics", "status"],
+        JSON,
+        NONE,
+        false,
+        RawKind::None,
+    ),
+    descriptor(
+        &["mesh-llm", "analytics", "enable"],
+        NONE,
+        NONE,
+        false,
+        RawKind::None,
+    ),
+    descriptor(
+        &["mesh-llm", "analytics", "disable"],
+        NONE,
+        NONE,
+        false,
+        RawKind::None,
+    ),
     descriptor(&["mesh-llm", "doctor"], JSON, NONE, false, RawKind::None),
     descriptor(
         &["mesh-llm", "doctor", "split"],

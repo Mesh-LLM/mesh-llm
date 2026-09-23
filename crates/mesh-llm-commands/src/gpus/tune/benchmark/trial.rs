@@ -280,6 +280,13 @@ pub(crate) fn build_trial_child_command(
     debug_telemetry: bool,
 ) -> std::process::Command {
     let mut command = std::process::Command::new(exe);
+    // A tune sweep spawns one full `serve` per candidate — up to
+    // MAX_BENCHMARK_TRIALS_PER_TARGET of them on one machine — so without
+    // this a single `gpus tune` would report hundreds of node sessions,
+    // hardware profiles and model loads that nobody started. These children
+    // are measurement apparatus, not nodes. `MESH_LLM_ANALYTICS` is the
+    // documented top-precedence control, which is exactly what it is for.
+    command.env("MESH_LLM_ANALYTICS", "0");
     if debug_telemetry {
         command.arg("--debug").env("SKIPPY_TELEMETRY_STDERR", "1");
     }

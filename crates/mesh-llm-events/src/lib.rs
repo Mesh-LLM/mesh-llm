@@ -18,7 +18,7 @@ pub use command_lifecycle::{
     CliCommandFamily, CliCommandOutcome, CliCommandSummary, emit_cli_command_event,
     set_cli_command_event_verbose,
 };
-pub use console::{ConsoleWriter, console_err, console_out, machine_out};
+pub use console::{ConsoleWriter, console_err, console_out, disclosure_err, machine_out};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 pub enum LogFormat {
