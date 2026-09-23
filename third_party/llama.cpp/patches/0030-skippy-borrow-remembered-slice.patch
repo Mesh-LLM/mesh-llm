@@ -1,0 +1,110 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sat <sat@local>
+Date: Tue, 23 Sep 2026 23:30:00 +1000
+Subject: [PATCH] skippy: borrow the remembered stage slice instead of copying it
+
+Measurement arm: borrow on top of retained graphs + the exact-key memo.
+---
+diff --git a/src/skippy/stage_realization.cpp b/src/skippy/stage_realization.cpp
+index 148a2d4a2..9a442eb9d 100644
+--- a/src/skippy/stage_realization.cpp
++++ b/src/skippy/stage_realization.cpp
+@@ -132,7 +132,6 @@ void skippy_realize_stage_graph(
+     }
+ 
+     const auto parameters = parameter_bindings(model);
+-    skippy_stage_slice_selection selection;
+     std::string error;
+     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
+         skippy_auxiliary_graph_plan auxiliary;
+@@ -144,7 +143,7 @@ void skippy_realize_stage_graph(
+                 params.cparams.nextn_layer_offset, auxiliary.parameter_identities);
+         return;
+     }
+-    if (!skippy_select_stage_slice(
++    const skippy_stage_slice_selection * borrowed = skippy_borrow_stage_slice(
+                 result.get_gf(),
+                 result.get_block_boundaries(),
+                 result.get_state_effects(),
+@@ -153,11 +152,12 @@ void skippy_realize_stage_graph(
+                 static_cast<int32_t>(params.hparams.n_layer()),
+                 params.build_inputs.selection.layer_start,
+                 params.build_inputs.selection.layer_end,
+-                selection,
+                 error,
+-                primary_output(result))) {
++                primary_output(result));
++    if (borrowed == nullptr) {
+         throw std::runtime_error("cannot realize admitted stage graph: " + error);
+     }
++    const skippy_stage_slice_selection & selection = *borrowed;
+ 
+     skippy_validate_execution_dependencies(params.build_inputs, false, 0, selection.parameter_identities,
+                                            params.ubatch.token == nullptr && params.ubatch.embd != nullptr);
+diff --git a/src/skippy/stage_slice_plan.cpp b/src/skippy/stage_slice_plan.cpp
+index db40efbcd..3f72f035b 100644
+--- a/src/skippy/stage_slice_plan.cpp
++++ b/src/skippy/stage_slice_plan.cpp
+@@ -595,6 +595,33 @@ struct selector {
+ 
+ }
+ 
++const skippy_stage_slice_selection * skippy_borrow_stage_slice(
++        ggml_cgraph * graph,
++        const std::vector<skippy_block_boundary> & boundaries,
++        const std::vector<skippy_state_effect> & state_effects,
++        const std::vector<skippy_parameter_binding> & parameters,
++        const std::vector<skippy_request_input_binding> & request_inputs,
++        int32_t layer_count,
++        int32_t layer_start,
++        int32_t layer_end,
++        std::string & error,
++        const ggml_tensor * explicit_output) {
++    error.clear();
++    std::string memo_key = skippy_stage_slice_memo_key(
++            graph, boundaries, state_effects, parameters, request_inputs,
++            layer_count, layer_start, layer_end, explicit_output);
++    if (const auto * remembered = skippy_recall_stage_slice(memo_key)) {
++        return remembered;
++    }
++    skippy_stage_slice_selection fresh;
++    if (!skippy_select_stage_slice(
++                graph, boundaries, state_effects, parameters, request_inputs,
++                layer_count, layer_start, layer_end, fresh, error, explicit_output)) {
++        return nullptr;
++    }
++    return skippy_recall_stage_slice(memo_key);
++}
++
+ bool skippy_select_stage_slice(
+         ggml_cgraph * graph,
+         const std::vector<skippy_block_boundary> & boundaries,
+diff --git a/src/skippy/stage_slice_plan.h b/src/skippy/stage_slice_plan.h
+index 2272a3fec..4aacda09c 100644
+--- a/src/skippy/stage_slice_plan.h
++++ b/src/skippy/stage_slice_plan.h
+@@ -94,6 +94,22 @@ bool skippy_build_auxiliary_graph_plan(
+         skippy_auxiliary_graph_plan & plan,
+         std::string & error);
+ 
++// Borrow the remembered selection instead of copying it out. On a memo hit this
++// returns a pointer into the thread-local store; the copy it replaces is paid on
++// every hit, which in steady-state decode is most steps. The pointer is valid
++// until the next stage-slice call on this thread.
++const skippy_stage_slice_selection * skippy_borrow_stage_slice(
++        ggml_cgraph * graph,
++        const std::vector<skippy_block_boundary> & boundaries,
++        const std::vector<skippy_state_effect> & state_effects,
++        const std::vector<skippy_parameter_binding> & parameters,
++        const std::vector<skippy_request_input_binding> & request_inputs,
++        int32_t layer_count,
++        int32_t layer_start,
++        int32_t layer_end,
++        std::string & error,
++        const ggml_tensor * explicit_output = nullptr);
++
+ bool skippy_select_stage_slice(
+         ggml_cgraph * graph,
+         const std::vector<skippy_block_boundary> & boundaries,
+--
+2.39.5
