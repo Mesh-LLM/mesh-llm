@@ -49,7 +49,8 @@ pub use logging::{
 };
 pub use media::{SpeechAudio, SpeechOutputFormat, SpeechSynthesisConfig};
 pub use native::{
-    ModelWorkload, PoolingType, StageModel, StageModelReader, SystemOneReadSlot, WorkloadInfo,
+    ModelWorkload, PoolingType, StageModel, StageModelReader, SystemOneMediaSpan,
+    SystemOneReadSlot, WorkloadInfo,
 };
 pub use native_mtp::NativeMtpDraft;
 pub use native_test_evidence::write_evidence_marker;

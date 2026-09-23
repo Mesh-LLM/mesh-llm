@@ -86,7 +86,7 @@ impl TryFrom<skippy_ffi::WorkloadInfoV1> for WorkloadInfo {
 }
 
 pub struct StageModel {
-    inner: Arc<StageModelInner>,
+    pub(crate) inner: Arc<StageModelInner>,
     pub(crate) media: Option<MediaProjector>,
 }
 
@@ -96,8 +96,19 @@ pub struct SystemOneReadSlot {
     pub label_token_ids: Vec<i32>,
 }
 
-struct StageModelInner {
-    raw: *mut RawModel,
+/// One image soft-token span in a System One prompt: rows
+/// `[prompt_offset, prompt_offset + token_count)` of the prompt decode from
+/// projector `embeddings` (row-major, `token_count * n_embd` floats) instead
+/// of token IDs and attend bidirectionally within the span.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SystemOneMediaSpan {
+    pub prompt_offset: u32,
+    pub token_count: u32,
+    pub embeddings: Vec<f32>,
+}
+
+pub(crate) struct StageModelInner {
+    pub(crate) raw: *mut RawModel,
     terminal_stage: bool,
     capability: Option<LoadedModelCapability>,
 }
@@ -641,6 +652,94 @@ impl StageModel {
         if output_count != probabilities.len() {
             return Err(anyhow!(
                 "native System One read returned {output_count} probabilities for {} labels",
+                probabilities.len()
+            ));
+        }
+
+        let mut offset = 0usize;
+        Ok(slots
+            .iter()
+            .map(|slot| {
+                let end = offset + slot.label_token_ids.len();
+                let distribution = probabilities[offset..end].to_vec();
+                offset = end;
+                distribution
+            })
+            .collect())
+    }
+
+    /// Scores caller-declared labels at fixed positions in a DiffusionGemma
+    /// answer canvas using one zero-self-conditioning diffusion read, with
+    /// image soft-token spans decoded from projector embeddings. Span rows
+    /// attend bidirectionally within their span; text rows stay causal.
+    pub fn system_one_read_media(
+        &self,
+        prompt_tokens: &[i32],
+        media_spans: &[SystemOneMediaSpan],
+        canvas_tokens: &[i32],
+        slots: &[SystemOneReadSlot],
+    ) -> Result<Vec<Vec<f32>>> {
+        if skippy_ffi::try_abi_features()
+            .is_none_or(|features| features & skippy_ffi::FEATURE_SYSTEM_ONE_MEDIA == 0)
+        {
+            return Err(anyhow!(
+                "native runtime does not support System One media reads"
+            ));
+        }
+
+        let label_count = slots
+            .iter()
+            .try_fold(0usize, |count, slot| {
+                count.checked_add(slot.label_token_ids.len())
+            })
+            .context("System One label-token count overflow")?;
+        let mut labels = Vec::with_capacity(label_count);
+        let mut raw_slots = Vec::with_capacity(slots.len());
+        for slot in slots {
+            let label_token_offset = labels.len();
+            labels.extend_from_slice(&slot.label_token_ids);
+            raw_slots.push(skippy_ffi::SystemOneSlot {
+                canvas_position: slot.canvas_position,
+                label_token_offset,
+                label_token_count: slot.label_token_ids.len(),
+            });
+        }
+
+        let raw_spans: Vec<skippy_ffi::SystemOneMediaSpan> = media_spans
+            .iter()
+            .map(|span| skippy_ffi::SystemOneMediaSpan {
+                prompt_offset: span.prompt_offset,
+                token_count: span.token_count,
+                embeddings: span.embeddings.as_ptr(),
+            })
+            .collect();
+
+        let mut probabilities = vec![0.0_f32; labels.len()];
+        let mut output_count = 0usize;
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_system_one_read_media(
+                self.inner.raw,
+                prompt_tokens.as_ptr(),
+                prompt_tokens.len(),
+                raw_spans.as_ptr(),
+                raw_spans.len(),
+                canvas_tokens.as_ptr(),
+                canvas_tokens.len(),
+                labels.as_ptr(),
+                labels.len(),
+                raw_slots.as_ptr(),
+                raw_slots.len(),
+                probabilities.as_mut_ptr(),
+                probabilities.len(),
+                &mut output_count,
+                &mut error,
+            )
+        };
+        ensure_ok(status, error)?;
+        if output_count != probabilities.len() {
+            return Err(anyhow!(
+                "native System One media read returned {output_count} probabilities for {} labels",
                 probabilities.len()
             ));
         }

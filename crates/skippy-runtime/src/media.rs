@@ -155,6 +155,134 @@ impl StageModel {
         self.media.is_some()
     }
 
+    /// Expand one image into its soft-token count plus projector embeddings
+    /// (row-major, `token_count * n_embd_inp` floats) without decoding. The
+    /// embeddings are consumed by a System One media read; ordering follows
+    /// the projector's marker chunking.
+    pub fn encode_image_embeddings(&self, bytes: &[u8]) -> Result<(usize, Vec<f32>)> {
+        let projector = self
+            .media
+            .as_ref()
+            .ok_or_else(|| anyhow!("model was not loaded with a multimodal projector"))?;
+        if bytes.is_empty() {
+            return Err(anyhow!("media item must not be empty"));
+        }
+
+        struct Bitmap {
+            raw: *mut skippy_ffi::MtmdBitmap,
+        }
+        impl Drop for Bitmap {
+            fn drop(&mut self) {
+                if !self.raw.is_null() {
+                    unsafe {
+                        skippy_ffi::mtmd_bitmap_free(self.raw);
+                    }
+                }
+            }
+        }
+        struct Chunks {
+            raw: *mut skippy_ffi::MtmdInputChunks,
+        }
+        impl Drop for Chunks {
+            fn drop(&mut self) {
+                if !self.raw.is_null() {
+                    unsafe {
+                        skippy_ffi::mtmd_input_chunks_free(self.raw);
+                    }
+                }
+            }
+        }
+
+        let wrapper = unsafe {
+            skippy_ffi::mtmd_helper_bitmap_init_from_buf(
+                projector.raw,
+                bytes.as_ptr(),
+                bytes.len(),
+                false,
+                skippy_ffi::mtmd_helper_init_opt_default(),
+            )
+        };
+        let bitmap = Bitmap {
+            raw: wrapper.bitmap,
+        };
+        if bitmap.raw.is_null() {
+            return Err(anyhow!("failed to decode media item for projector"));
+        }
+
+        let chunks = Chunks {
+            raw: unsafe { skippy_ffi::mtmd_input_chunks_init() },
+        };
+        if chunks.raw.is_null() {
+            return Err(anyhow!("failed to allocate multimodal input chunks"));
+        }
+        let marker_prompt = CString::new(projector.marker.as_bytes())
+            .context("media marker contains an interior NUL byte")?;
+        let input_text = skippy_ffi::MtmdInputText {
+            text: marker_prompt.as_ptr(),
+            text_len: marker_prompt.as_bytes().len(),
+            add_special: true,
+            parse_special: true,
+        };
+        let bitmap_ptr = bitmap.raw.cast_const();
+        let tokenize_status = unsafe {
+            skippy_ffi::mtmd_tokenize(projector.raw, chunks.raw, &input_text, &bitmap_ptr, 1)
+        };
+        if tokenize_status != 0 {
+            return Err(anyhow!(
+                "multimodal tokenization failed with status {tokenize_status}"
+            ));
+        }
+        if unsafe { skippy_ffi::mtmd_input_chunks_size(chunks.raw) } == 0 {
+            return Err(anyhow!("multimodal tokenization produced no chunks"));
+        }
+
+        // The marker-only prompt yields one image chunk; take its soft tokens
+        // and embeddings.
+        let mut image_chunk = ptr::null();
+        for index in 0..unsafe { skippy_ffi::mtmd_input_chunks_size(chunks.raw) } {
+            let chunk = unsafe { skippy_ffi::mtmd_input_chunks_get(chunks.raw, index) };
+            if chunk.is_null() {
+                continue;
+            }
+            if unsafe { skippy_ffi::mtmd_input_chunk_get_type(chunk) }
+                == skippy_ffi::MtmdInputChunkType::Image
+            {
+                image_chunk = chunk;
+                break;
+            }
+        }
+        if image_chunk.is_null() {
+            return Err(anyhow!("multimodal tokenization produced no image chunk"));
+        }
+        let token_count = unsafe { skippy_ffi::mtmd_input_chunk_get_n_tokens(image_chunk) };
+        if token_count == 0 {
+            return Err(anyhow!("multimodal image chunk has no soft tokens"));
+        }
+        if unsafe { skippy_ffi::mtmd_encode_chunk(projector.raw, image_chunk) } != 0 {
+            return Err(anyhow!("multimodal projector failed to encode the image"));
+        }
+        let embeddings_ptr = unsafe { skippy_ffi::mtmd_get_output_embd(projector.raw) };
+        if embeddings_ptr.is_null() {
+            return Err(anyhow!("multimodal projector returned no embeddings"));
+        }
+        let n_embd = self.n_embd_inp()?;
+        let expected = token_count
+            .checked_mul(n_embd)
+            .context("image embedding size overflow")?;
+        let embeddings = unsafe { std::slice::from_raw_parts(embeddings_ptr, expected) }.to_vec();
+        Ok((token_count, embeddings))
+    }
+
+    fn n_embd_inp(&self) -> Result<usize> {
+        let n_embd = unsafe { skippy_ffi::llama_model_n_embd_inp(self.inner.raw) };
+        if n_embd <= 0 {
+            return Err(anyhow!(
+                "model does not report a positive input embedding width"
+            ));
+        }
+        Ok(n_embd as usize)
+    }
+
     /// Report whether the configured projector supports native audio generation.
     pub fn supports_speech_synthesis(&self) -> bool {
         self.media.as_ref().is_some_and(|projector| {
