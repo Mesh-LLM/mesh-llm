@@ -4,7 +4,8 @@ mesh-llm reports a small amount of anonymous usage data to the maintainers so
 we can see which platforms to support, which commands matter, and where nodes
 fall over. Official release builds have an analytics key compiled in, so for
 them it is on by default, disclosed on first run, and takes one command to
-turn off permanently. Builds without a key report nothing at all.
+turn off permanently. A build with no key from either source — compiled in or
+set at run time — reports nothing at all.
 
 This page is the complete description of what is collected. If something
 happens that is not on this page, it is a bug — please
