@@ -191,12 +191,34 @@ jobs:
           SKIPPY_CORRECTNESS_MODEL: ${{ runner.temp }}/skippy-correctness-model/${{ steps.skippy_correctness_model.outputs.file }}
         run: |
           set -euo pipefail
-          while IFS= read -r crate; do
+          # The batch is planned from the default branch's crate inventory while
+          # this job builds the revision under test. A branch that predates a
+          # workspace member added on the default branch would otherwise abort
+          # the whole batch with "package ID specification <crate> did not match
+          # any packages". Workspace discovery belongs to Cargo metadata, not a
+          # workflow-maintained allowlist, so resolve the batch against the tree
+          # that is actually checked out and report anything it lacks.
+          mapfile -t requested < <(jq -r '.[]' <<<"$TEST_CRATES")
+          crates=("${requested[@]}")
+          if cargo metadata --no-deps --format-version 1 > "$RUNNER_TEMP/workspace-metadata.json"; then
+            jq -r '.packages[].name' "$RUNNER_TEMP/workspace-metadata.json" > "$RUNNER_TEMP/workspace-members.txt"
+            crates=()
+            for crate in "${requested[@]}"; do
+              if grep -qxF -- "$crate" "$RUNNER_TEMP/workspace-members.txt"; then
+                crates+=("$crate")
+              else
+                echo "::warning::batch plans $crate, which is not a workspace member of the checked-out revision; skipping it"
+              fi
+            done
+          else
+            echo "::warning::cargo metadata failed; running the planned batch unchanged"
+          fi
+          for crate in "${crates[@]}"; do
             [[ "$crate" == "skippy-ffi" ]] && continue
             echo "::group::cargo test -p $crate"
             cargo test --locked -p "$crate"
             echo "::endgroup::"
-          done < <(jq -r '.[]' <<<"$TEST_CRATES")
+          done
       - name: Capture Rust test cache evidence
         if: ${{ !cancelled() }}
         uses: ./.github/actions/capture-sccache-stats

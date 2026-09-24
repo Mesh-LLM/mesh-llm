@@ -293,7 +293,31 @@ jobs:
           CLIPPY_CRATES: ${{ toJson(matrix.batch.crates) }}
         run: |
           set -euo pipefail
-          mapfile -t crates < <(jq -r '.[]' <<<"$CLIPPY_CRATES")
+          mapfile -t requested < <(jq -r '.[]' <<<"$CLIPPY_CRATES")
+          if [[ "${#requested[@]}" -eq 0 ]]; then
+            exit 0
+          fi
+          # The batch is planned from the default branch's crate inventory while
+          # this job builds the revision under test. A branch that predates a
+          # workspace member added on the default branch would otherwise abort
+          # the whole batch with "package ID specification <crate> did not match
+          # any packages". Workspace discovery belongs to Cargo metadata, not a
+          # workflow-maintained allowlist, so resolve the batch against the tree
+          # that is actually checked out and report anything it lacks.
+          crates=("${requested[@]}")
+          if cargo metadata --no-deps --format-version 1 > "$RUNNER_TEMP/workspace-metadata.json"; then
+            jq -r '.packages[].name' "$RUNNER_TEMP/workspace-metadata.json" > "$RUNNER_TEMP/workspace-members.txt"
+            crates=()
+            for crate in "${requested[@]}"; do
+              if grep -qxF -- "$crate" "$RUNNER_TEMP/workspace-members.txt"; then
+                crates+=("$crate")
+              else
+                echo "::warning::batch plans $crate, which is not a workspace member of the checked-out revision; skipping it"
+              fi
+            done
+          else
+            echo "::warning::cargo metadata failed; running the planned batch unchanged"
+          fi
           if [[ "${#crates[@]}" -eq 0 ]]; then
             exit 0
           fi
