@@ -202,28 +202,6 @@ use heartbeat::{PeerDownReportDisposition, peer_down_report_disposition};
 pub(crate) use stage_proto::stage_status_from_load;
 use stage_proto::*;
 
-/// Per-model prices a peer advertises. A build without the payments feature
-/// cannot pay, so it keeps only which models a peer charges for, which is
-/// enough to route around paid providers instead of receiving their 402.
-#[cfg(feature = "payments")]
-pub(crate) type LightningOffers =
-    std::collections::BTreeMap<String, mesh_llm_payments::pricing::Pricing>;
-#[cfg(not(feature = "payments"))]
-pub(crate) type LightningOffers = std::collections::BTreeSet<String>;
-
-#[cfg(not(feature = "payments"))]
-impl Node {
-    /// Whether `peer` advertises a price for `model`.
-    pub(crate) async fn peer_charges_for(&self, peer: EndpointId, model: &str) -> bool {
-        self.state
-            .lock()
-            .await
-            .peers
-            .get(&peer)
-            .is_some_and(|info| info.lightning_offers.contains(model))
-    }
-}
-
 #[cfg(test)]
 pub(crate) mod tests;
 

@@ -606,6 +606,7 @@ pub(crate) fn assert_mesh_requirements_add_peer_rejects_untrusted_release_signer
             stage_status_list_supported: true,
             local_gguf_content_id_supported: true,
             advertised_model_throughput: vec![],
+            #[cfg(feature = "payments")]
             lightning_offers: Default::default(),
         cache_affinity: None,
             latency_ms: None,
@@ -703,6 +704,7 @@ pub(crate) fn assert_mesh_requirements_add_peer_rejects_invalid_release_attestat
             stage_status_list_supported: true,
             local_gguf_content_id_supported: true,
             advertised_model_throughput: vec![],
+            #[cfg(feature = "payments")]
             lightning_offers: Default::default(),
         cache_affinity: None,
             latency_ms: None,
@@ -797,6 +799,7 @@ pub(crate) fn assert_mesh_requirements_add_peer_rejects_wrong_mesh_id() {
             stage_status_list_supported: true,
             local_gguf_content_id_supported: true,
             advertised_model_throughput: vec![],
+            #[cfg(feature = "payments")]
             lightning_offers: Default::default(),
         cache_affinity: None,
             latency_ms: None,

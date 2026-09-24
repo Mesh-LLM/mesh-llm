@@ -1178,8 +1178,6 @@ pub(crate) fn proto_ann_to_local(
             .and_then(|v| crate::proto::node::InferenceAdmissionState::try_from(v).ok()),
         #[cfg(feature = "payments")]
         lightning_offers: super::payment_offers::decode(&pa.lightning_offers)?,
-        #[cfg(not(feature = "payments"))]
-        lightning_offers: super::payment_offers::decode_priced_models(&pa.lightning_offers)?,
         cache_affinity: pa
             .cache_affinity
             .as_ref()
