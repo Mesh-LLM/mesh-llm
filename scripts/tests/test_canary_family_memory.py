@@ -28,6 +28,13 @@ def model(size=1, kind='causal_generation', projector=0):
 
 
 class MemoryTests(unittest.TestCase):
+    def setUp(self):
+        self.lock_root = tempfile.TemporaryDirectory()
+        self.addCleanup(self.lock_root.cleanup)
+        lock_root = patch('tempfile.gettempdir', return_value=self.lock_root.name)
+        lock_root.start()
+        self.addCleanup(lock_root.stop)
+
     def test_exact_boundaries_and_invalid_estimates(self):
         small = 128 * M.GIB * 90 // 100
         large = 256 * M.GIB * 90 // 100
@@ -111,6 +118,47 @@ class MemoryTests(unittest.TestCase):
     def test_insufficient_memory_never_starts_child(self):
         with self.assertRaisesRegex(ValueError, 'available'):
             self.run_guard(['/should/not/run'], [(128*M.GIB, 18*M.GIB)])
+
+    @unittest.skipIf(os.name != 'posix', 'host lock uses POSIX flock')
+    def test_busy_host_lock_waits_then_runs_family(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = Path(directory) / 'evidence'
+            lock = Path(directory) / f'mesh-canary-family-{os.getuid()}.lock'
+            ready = Path(directory) / 'lock-ready'
+            released = Path(directory) / 'lock-released'
+            holder = subprocess.Popen([
+                sys.executable, '-c',
+                ('import fcntl,pathlib,sys,time\n'
+                 'with open(sys.argv[1], "a") as lock:\n'
+                 ' fcntl.flock(lock, fcntl.LOCK_EX)\n'
+                 ' pathlib.Path(sys.argv[2]).write_text("ready")\n'
+                 ' time.sleep(0.2)\n'
+                 ' pathlib.Path(sys.argv[3]).write_text("released")\n'),
+                str(lock), str(ready), str(released),
+            ])
+            def stop_holder():
+                if holder.poll() is None:
+                    holder.kill()
+                holder.wait(timeout=5)
+            self.addCleanup(stop_holder)
+            deadline = time.monotonic() + 5
+            while not ready.exists():
+                if holder.poll() is not None:
+                    self.fail(f'lock holder exited with {holder.returncode}')
+                if time.monotonic() >= deadline:
+                    self.fail('lock holder did not become ready')
+                time.sleep(0.01)
+            command = [sys.executable, '-c',
+                       f'import pathlib; assert pathlib.Path({str(released)!r}).exists()']
+            with patch('tempfile.gettempdir', return_value=directory), \
+                 patch.object(M, 'host_memory', return_value=(128*M.GIB, 128*M.GIB)):
+                result = M.guarded_run(model(), 'accelerator-memory-128plus', command, evidence)
+            holder.wait(timeout=5)
+            report = json.loads((evidence / 'memory-admission.json').read_text())
+            self.assertEqual(result, 0)
+            self.assertTrue(report['host_lock_contended'])
+            self.assertGreater(report['host_lock_wait_seconds'], 0)
+            self.assertEqual(report['status'], 'passed')
 
     @unittest.skipIf(os.name != 'posix', 'process-group guard is macOS/POSIX')
     def test_pressure_stops_real_child_and_records_failure(self):
