@@ -14,6 +14,7 @@ and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 | `pr_linux.yml` (`PR · Linux`) | `pull_request` | Plans and calls the protected Linux lane |
 | `pr_macos.yml` (`PR · macOS`) | `pull_request` | Plans and calls the protected macOS lane |
 | `pr_windows.yml` (`PR · Windows`) | `pull_request` | Plans and calls the protected Windows lane |
+| `pr_ci_canary.yml` (`PR · CI canary`) | `pull_request`, `ci:canary` label | Optional non-required merge-source diagnostic for one hosted Linux CPU product chain |
 | `pr-cancel-sibling-runs.yml` (`PR · Cancel sibling lanes`) | protected `workflow_run` for `PR · Quality` | Watches one exact PR revision and cancels its other validation lanes after the first job failure |
 | `main_quality.yml` (`Main · Quality`) | push to `main` | Plans and calls the same-commit Quality lane |
 | `main_website.yml` (`Main · Website`) | push to `main` | Plans and calls the same-commit Website lane |
@@ -235,8 +236,8 @@ PR-controlled routing out of the protected planner.
 
 ### Required PR shape and visibility
 
-The five-way split is a hard CI architecture invariant. Keep exactly these PR
-validation entry workflows: Quality, Website, Linux, macOS, and Windows. PR
+The five-way split is a hard CI architecture invariant. Keep exactly these
+required PR validation entry workflows: Quality, Website, Linux, macOS, and Windows. PR
 metadata, cleanup, auto-assignment, and sibling-cancellation workflows such as
 `pr_cleanup.yml`, `pr_auto_assign.yml`, and `pr-cancel-sibling-runs.yml` are
 outside this validation census. Every validation
@@ -256,6 +257,42 @@ Do not add path filters to these entrypoints. They all start for each relevant
 PR synchronization so their stable results exist; the canonical plan suppresses
 unselected expensive work inside each run. Do not add another all-lanes PR
 composer or restore retired compatibility entrypoints.
+
+### Optional PR CI canary
+
+`pr_ci_canary.yml` is an optional, non-required diagnostic exception to the
+five-entry validation census. Apply the `ci:canary` label when a pull request
+changes workflow YAML, local actions, planner contracts, runner selection, or
+other CI plumbing and you want a real pre-merge signal. The label is
+operational opt-in, not a security boundary. It starts on the normal PR
+revision events and on the matching label event; unrelated label events use a
+separate concurrency group and cannot cancel an active canary. Removing the
+label starts an inactive no-op in the active group so a running canary is
+cancelled.
+
+The entrypoint calls the protected reusable lane at
+`Mesh-LLM/mesh-llm/.github/workflows/ci-pr-canary-lane.yml@main`. That lane
+passes the pull-request merge commit (`github.sha`) as the source built by the
+product jobs while keeping runner-policy checkouts on the protected default
+branch. The PR head SHA remains separate identity evidence; it is not a
+substitute for the merge source. The planner and changed-file action may inspect
+the merge-source checkout, while the canary rejects changes to the ownership
+and slice catalogs unless the base already contains the same catalogs. Its
+fixed graph derives one `linux-cpu` row from `ci/slices.yml` and calls the
+existing UI-artifact, Linux-host, Linux-native-runtime, and Linux-product
+slices. This is one real production chain, including the native runtime-event
+gate; it does not copy build commands or call `ci-linux-lane.yml`.
+
+The canary is intentionally bounded: Quality, Website, macOS, Windows, GPU,
+SDK, standalone product smoke, Linux lane orchestration, and release paths are
+not covered. The caller, policy jobs, and summary use only read-only
+`contents`/`packages` permissions. There are no checks writes, secrets,
+environments, OIDC, Depot, or persistent self-hosted runners. The protected
+workflow reference and default-branch runner-policy checkout keep PR-controlled
+workflow/action changes out of runner-owning jobs. Hosted placement and a
+read-only token remain containment controls, not a reason to relax that
+boundary. Any future persistent-runner rollout must first restrict the shared
+runner group to protected main-owned workflow references.
 
 ### Required main shape and visibility
 
@@ -430,6 +467,9 @@ flowchart TD
     MONITOR -. "cancel remaining siblings" .-> LINUX
     MONITOR -. "cancel remaining siblings" .-> MAC
     MONITOR -. "cancel remaining siblings" .-> WIN
+    CANARY_LABEL["ci:canary label"] --> CANARY_PLAN["merge-source canary plan"]
+    CANARY_PLAN --> CANARY_GRAPH["Linux amd64 CPU UI + host + runtime + product"]
+    CANARY_GRAPH --> CANARY_RESULT["Canary / CI (non-required)"]
     QC --> MQ["Main / Quality"]
     WC --> MW["Main / Website"]
     LC --> ML["Main / Linux"]

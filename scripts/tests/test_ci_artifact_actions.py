@@ -43,6 +43,9 @@ class CiArtifactActionTests(unittest.TestCase):
             f"Mesh-LLM/mesh-llm/.github/workflows/ci-{lane}-lane.yml@main": f"pr_{lane}.yml"
             for lane in ("quality", "website", "linux", "macos", "windows")
         }
+        protected_pr_lanes[
+            "Mesh-LLM/mesh-llm/.github/workflows/ci-pr-canary-lane.yml@main"
+        ] = "pr_ci_canary.yml"
         protected_pre_checkout_action = (
             "Mesh-LLM/mesh-llm/.github/actions/"
             "audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16"
