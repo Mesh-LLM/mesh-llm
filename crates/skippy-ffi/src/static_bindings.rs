@@ -9,7 +9,7 @@ use crate::{
     NativeMtpDraft, NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session, StagePlan,
     StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStringRefV1,
     StagePlanValueDescV1, StagePlanValueKind, StagePlanner, StagePlannerConfigV1, Status,
-    TensorInfo, TokenSignal, WorkloadInfoV1,
+    SystemOneSlot, TensorInfo, TokenSignal, WorkloadInfoV1,
 };
 
 unsafe extern "C" {
@@ -142,6 +142,28 @@ unsafe extern "C" {
         model: *const Model,
         out_desc: *mut ActivationBoundaryDesc,
     ) -> bool;
+
+    pub fn skippy_system_one_read(
+        model: *mut Model,
+        prompt_tokens: *const i32,
+        prompt_token_count: usize,
+        canvas_tokens: *const i32,
+        canvas_token_count: usize,
+        label_token_ids: *const i32,
+        label_token_count: usize,
+        slots: *const SystemOneSlot,
+        slot_count: usize,
+        out_probabilities: *mut f32,
+        output_capacity: usize,
+        out_output_count: *mut usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_system_one_canvas_length(
+        model: *mut Model,
+        out_canvas_token_count: *mut usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
 
     /// Query an opened model's workload class, pooling, and full-model constraints.
     pub fn skippy_model_workload_info_v1(

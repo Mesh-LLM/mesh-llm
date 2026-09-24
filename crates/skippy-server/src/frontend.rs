@@ -24,6 +24,7 @@ mod prompting;
 mod request;
 mod sampling_cache_key;
 mod speculative;
+mod system_one;
 mod tool_emulation;
 mod util;
 

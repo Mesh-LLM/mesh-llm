@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "manifest_kind": "test-model-artifacts",
+  "suite": "skippy-system-one-smoke",
+  "registry_sha256": "a485b7967a2e500a360b55208a2e65c432c4d9208cea5121338938840acbd333",
+  "artifacts": [
+    {
+      "id": "family-qwen3-dense",
+      "family": "qwen3-dense",
+      "capability_tags": [
+        "dense",
+        "gguf",
+        "qwen3"
+      ],
+      "suites": [
+        "llama-family-certification",
+        "skippy-ci-smoke",
+        "skippy-system-one-smoke"
+      ],
+      "cadences": [
+        "pull-request",
+        "main",
+        "llama-bump",
+        "manual-full",
+        "nightly",
+        "manual"
+      ],
+      "repo": "Qwen/Qwen3-0.6B-GGUF",
+      "revision": "23749fefcc72300e3a2ad315e1317431b06b590a",
+      "selector": "Q8_0",
+      "files": [
+        "Qwen3-0.6B-Q8_0.gguf"
+      ],
+      "file_integrity": {
+        "Qwen3-0.6B-Q8_0.gguf": {
+          "size_bytes": 639446688,
+          "blob_id": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031"
+        }
+      },
+      "model_ref": "Qwen/Qwen3-0.6B-GGUF:Q8_0",
+      "urls": [
+        "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/23749fefcc72300e3a2ad315e1317431b06b590a/Qwen3-0.6B-Q8_0.gguf"
+      ],
+      "file": "Qwen3-0.6B-Q8_0.gguf",
+      "size_bytes": 639446688,
+      "sha256": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031",
+      "url": "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/23749fefcc72300e3a2ad315e1317431b06b590a/Qwen3-0.6B-Q8_0.gguf"
+    },
+    {
+      "id": "family-diffusion-gemma",
+      "family": "diffusion-gemma",
+      "capability_tags": [
+        "diffusion",
+        "gguf",
+        "system-one",
+        "text-only"
+      ],
+      "suites": [
+        "skippy-system-one-smoke"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full",
+        "nightly",
+        "manual"
+      ],
+      "repo": "unsloth/diffusiongemma-26B-A4B-it-GGUF",
+      "revision": "f4183a2c7a354128d02545752303c4354d165bf0",
+      "selector": "Q4_K_M",
+      "files": [
+        "diffusiongemma-26B-A4B-it-Q4_K_M.gguf"
+      ],
+      "file_integrity": {
+        "diffusiongemma-26B-A4B-it-Q4_K_M.gguf": {
+          "size_bytes": 16806810208,
+          "blob_id": "24523b6c833c9ce9f5f34f9b333ab1517d73d6f1e76a103645353114c8028bc5"
+        }
+      },
+      "model_ref": "unsloth/diffusiongemma-26B-A4B-it-GGUF:Q4_K_M",
+      "urls": [
+        "https://huggingface.co/unsloth/diffusiongemma-26B-A4B-it-GGUF/resolve/f4183a2c7a354128d02545752303c4354d165bf0/diffusiongemma-26B-A4B-it-Q4_K_M.gguf"
+      ],
+      "file": "diffusiongemma-26B-A4B-it-Q4_K_M.gguf",
+      "size_bytes": 16806810208,
+      "sha256": "24523b6c833c9ce9f5f34f9b333ab1517d73d6f1e76a103645353114c8028bc5",
+      "url": "https://huggingface.co/unsloth/diffusiongemma-26B-A4B-it-GGUF/resolve/f4183a2c7a354128d02545752303c4354d165bf0/diffusiongemma-26B-A4B-it-Q4_K_M.gguf",
+      "notes": "System One (OpenJEV) smoke: complete single-lane DiffusionGemma read consumed by scripts/skippy-system-one-smoke.sh. The proof of concept certifies a CUDA backend only."
+    }
+  ]
+}

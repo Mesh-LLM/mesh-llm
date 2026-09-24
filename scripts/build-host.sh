@@ -100,6 +100,17 @@ if [[ "${MESH_LLM_DYNAMIC_NATIVE_RUNTIME:-1}" != "1" ]]; then
     exit 1
 fi
 
+report_analytics_key() {
+    # Report presence only. The key itself must never reach build logs.
+    if [[ -n "${MESH_LLM_POSTHOG_KEY:-}" ]]; then
+        echo "Built-in analytics key present: releases from this build report anonymous usage."
+    else
+        echo "No built-in analytics key: this build reports nothing unless MESH_LLM_POSTHOG_KEY is set at runtime."
+    fi
+}
+
+report_analytics_key
+
 echo "Building backend-neutral MeshLLM host (profile: $BUILD_PROFILE)."
 if [[ "${MESH_LLM_SKIP_UI:-0}" != "1" ]]; then
     MESH_LLM_BUILD_PROFILE="$BUILD_PROFILE" "$SCRIPT_DIR/build-ui.sh" "$UI_DIR"

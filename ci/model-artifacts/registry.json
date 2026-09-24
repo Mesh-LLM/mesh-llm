@@ -22,7 +22,8 @@
     "skippy-ci-smoke",
     "skippy-parity",
     "competitive-benchmark",
-    "radix-cache"
+    "radix-cache",
+    "skippy-system-one-smoke"
   ],
   "family_policy": {
     "profiles": {
@@ -90,7 +91,8 @@
       "family": "qwen3-dense",
       "suites": [
         "llama-family-certification",
-        "skippy-ci-smoke"
+        "skippy-ci-smoke",
+        "skippy-system-one-smoke"
       ],
       "cadences": [
         "pull-request",
@@ -4649,7 +4651,7 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 119554379840,
+          "estimated_model_bytes": 119541330088,
           "startup_timeout_secs": 1800
         },
         "notes": "Inkling-Small MoE with per-layer short-convolution state, a Q3 quant sized for the single-host certification runner, and real split image-projector coverage"
@@ -4719,6 +4721,38 @@
           ]
         }
       }
+    },
+    {
+      "id": "family-diffusion-gemma",
+      "family": "diffusion-gemma",
+      "suites": [
+        "skippy-system-one-smoke"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full",
+        "nightly",
+        "manual"
+      ],
+      "capability_tags": [
+        "diffusion",
+        "gguf",
+        "system-one",
+        "text-only"
+      ],
+      "artifact": {
+        "repo": "unsloth/diffusiongemma-26B-A4B-it-GGUF",
+        "revision": "f4183a2c7a354128d02545752303c4354d165bf0",
+        "selector": "Q4_K_M",
+        "files": [
+          {
+            "path": "diffusiongemma-26B-A4B-it-Q4_K_M.gguf",
+            "size_bytes": 16806810208,
+            "sha256": "24523b6c833c9ce9f5f34f9b333ab1517d73d6f1e76a103645353114c8028bc5"
+          }
+        ]
+      },
+      "notes": "System One (OpenJEV) smoke: complete single-lane DiffusionGemma read consumed by scripts/skippy-system-one-smoke.sh. The proof of concept certifies a CUDA backend only."
     }
   ]
 }

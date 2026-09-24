@@ -121,6 +121,44 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/llama-canary-family-evidence.py build
+      - name: Report System One smoke result
+        if: ${{ !cancelled() }}
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          # The smoke runs from the selected source checkout, so its report and
+          # evidence live there for a trusted `mesh_source` build.
+          WORK_DIR: ${{ env.CANARY_SOURCE_ROOT }}/target/skippy-system-one-smoke
+        run: |
+          set -euo pipefail
+          report="$WORK_DIR/reports/system-one.json"
+          {
+            echo "## System One (OpenJEV) smoke"
+            echo
+            if [[ ! -f "$report" ]]; then
+              echo "No System One smoke report was produced (build step outcome: ${BUILD_OUTCOME})."
+            elif [[ "$(jq -r '.status' "$report")" == "unqualified" ]]; then
+              echo "**Full-model System One read: NOT CERTIFIED on this runner.**"
+              echo
+              echo "The contract part $(jq -r '.contract.status' "$report"). The complete-model read is admitted only on a declared qualified backend; this runner reports backend \`$(jq -r '.full_model_read.backend // "<unset>"' "$report")\` against \`$(jq -r '.full_model_read.certified_backends | join(",")' "$report")\`, with the pinned artifact $(if [[ "$(jq -r '.full_model_read.artifact_cache_checked // false' "$report")" != "true" ]]; then echo "cache state not checked (backend not qualified)"; elif [[ -z "$(jq -r '.full_model_read.artifact_path // ""' "$report")" ]]; then echo "not present in the offline cache"; else echo "present in the offline cache"; fi)."
+              echo
+              echo "Pre-warm instructions: \`scripts/skippy-system-one-smoke.sh --prewarm\`."
+            else
+              echo "Contract part: $(jq -r '.contract.status' "$report"). Full-model read: $(jq -r '.full_model_read.status' "$report"). Backend: \`$(jq -r '.full_model_read.backend // "<unset>"' "$report")\`."
+            fi
+            if [[ -f "$report" ]] && [[ "$(jq -r '.reasons | length' "$report" 2>/dev/null || echo 0)" != "0" ]]; then
+              echo
+              jq -r '.reasons[] | "- \(.)"' "$report"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload System One smoke evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: llama-canary-system-one-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
+          path: |
+            ${{ env.CANARY_SOURCE_ROOT }}/target/skippy-system-one-smoke/
+          if-no-files-found: warn
+          retention-days: 14
       - name: Upload exact candidate and executable handoff
         id: upload_package
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0

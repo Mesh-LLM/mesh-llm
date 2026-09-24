@@ -29,6 +29,7 @@ pub(super) fn format_command(command: &Command, assembly: &mut SummaryAssembly) 
         Command::Auth { command } => auth::format_auth(command, assembly),
         Command::Benchmark { command } => benchmark::format_benchmark(command, assembly),
         Command::Config { command } => administration::format_config(command, assembly),
+        Command::Analytics { command } => administration::format_analytics(command, assembly),
         Command::Doctor { command, json } => {
             administration::format_doctor(command.as_ref(), *json, assembly);
         }

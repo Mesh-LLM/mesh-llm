@@ -427,6 +427,22 @@ impl OpenAiBackend for FakeBackend {
         Ok(vec![ModelObject::new("org/repo:Q4_K_M")])
     }
 
+    async fn system_one(&self, request: SystemOneRequest) -> OpenAiResult<SystemOneResponse> {
+        Ok(SystemOneResponse {
+            model: request.model,
+            answers: [(
+                "safe".to_string(),
+                crate::SystemOneAnswer::Noul { noul: 0.875 },
+            )]
+            .into_iter()
+            .collect(),
+            usage: crate::SystemOneUsage {
+                input_tokens: 12,
+                output_tokens: 0,
+            },
+        })
+    }
+
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
@@ -857,6 +873,8 @@ async fn models_route_returns_model_list() {
 
 #[path = "router_tests/non_chat.rs"]
 mod non_chat;
+#[path = "router_tests/system_one.rs"]
+mod system_one;
 
 #[tokio::test]
 async fn health_route_returns_liveness_probe() {

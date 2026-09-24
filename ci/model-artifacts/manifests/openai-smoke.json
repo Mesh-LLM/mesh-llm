@@ -2,7 +2,7 @@
   "schema_version": 1,
   "manifest_kind": "test-model-artifacts",
   "suite": "openai-smoke",
-  "registry_sha256": "84dafc79602bb9f2994a28e3dcd970de379564421c7591f546e534de48ed4bb0",
+  "registry_sha256": "a485b7967a2e500a360b55208a2e65c432c4d9208cea5121338938840acbd333",
   "artifacts": [
     {
       "id": "smollm2-q4-download",
