@@ -297,50 +297,33 @@ where
             }
             Err(err) => {
                 drop(startup_load_guard);
-                let err_msg = format!("{err:#}");
-                let connected_peers = node.peers().await.len();
-                let pending_join_targets = node.join_targets.lock().await.len();
-                if split_fallback_cannot_gather_peers(
-                    announce_capacity_fallback,
-                    &err_msg,
-                    connected_peers,
-                    pending_join_targets,
-                ) {
-                    let message = no_split_peer_message(
-                        model_name,
-                        runtime_model_required_bytes(model_bytes),
-                        local_capacity,
-                        host_ram_offload_gain_bytes,
-                    );
-                    startup_emit_launch_failure(
-                        survey_telemetry,
-                        make_survey_spec(),
-                        launch_started,
-                        err.context(message),
-                        target_tx,
-                        model_name,
-                        console_state,
-                    )
-                    .await;
-                    return None;
-                }
-                if is_retryable_split_start_failure(&err_msg) {
-                    let _ = emit_event(OutputEvent::Info {
-                        message: format!("Split waiting to retry: {err_msg}"),
-                        context: Some(format!("model={model_name}")),
-                    });
-                } else {
-                    startup_emit_launch_failure(
-                        survey_telemetry,
-                        make_survey_spec(),
-                        launch_started,
-                        err,
-                        target_tx,
-                        model_name,
-                        console_state,
-                    )
-                    .await;
-                    return None;
+                let fallback = CapacityFallback {
+                    announced: announce_capacity_fallback,
+                    model_name,
+                    required_bytes: runtime_model_required_bytes(model_bytes),
+                    local_capacity_bytes: local_capacity,
+                    host_ram_offload_gain_bytes,
+                };
+                match split_start_retry_decision(node, err, &fallback).await {
+                    SplitStartRetry::Wait(err_msg) => {
+                        let _ = emit_event(OutputEvent::Info {
+                            message: format!("Split waiting to retry: {err_msg}"),
+                            context: Some(format!("model={model_name}")),
+                        });
+                    }
+                    SplitStartRetry::Stop(err) => {
+                        startup_emit_launch_failure(
+                            survey_telemetry,
+                            make_survey_spec(),
+                            launch_started,
+                            err,
+                            target_tx,
+                            model_name,
+                            console_state,
+                        )
+                        .await;
+                        return None;
+                    }
                 }
             }
         }
@@ -548,6 +531,53 @@ pub(super) async fn startup_register_loaded_runtime(
     );
     upsert_dashboard_process(ctx.dashboard_processes, payload.clone()).await;
     payload
+}
+
+/// Why a split start fell back from a local launch, for the decision below.
+struct CapacityFallback<'a> {
+    announced: bool,
+    model_name: &'a str,
+    required_bytes: u64,
+    local_capacity_bytes: u64,
+    host_ram_offload_gain_bytes: u64,
+}
+
+enum SplitStartRetry {
+    /// Keep waiting: a participant can still appear. Carries the message.
+    Wait(String),
+    /// Stop the launch with this error.
+    Stop(anyhow::Error),
+}
+
+/// Whether a failed split start keeps waiting. A capacity fallback that
+/// cannot gather a second participant, with no peer connected or joining,
+/// stops with an actionable error; other failures keep their retry policy.
+async fn split_start_retry_decision(
+    node: &mesh::Node,
+    err: anyhow::Error,
+    fallback: &CapacityFallback<'_>,
+) -> SplitStartRetry {
+    let err_msg = format!("{err:#}");
+    let connected_peers = node.peers().await.len();
+    let pending_join_targets = node.join_targets.lock().await.len();
+    if split_fallback_cannot_gather_peers(
+        fallback.announced,
+        &err_msg,
+        connected_peers,
+        pending_join_targets,
+    ) {
+        return SplitStartRetry::Stop(err.context(no_split_peer_message(
+            fallback.model_name,
+            fallback.required_bytes,
+            fallback.local_capacity_bytes,
+            fallback.host_ram_offload_gain_bytes,
+        )));
+    }
+    if is_retryable_split_start_failure(&err_msg) {
+        SplitStartRetry::Wait(err_msg)
+    } else {
+        SplitStartRetry::Stop(err)
+    }
 }
 
 /// Local capacity a startup launch plans against. A pinned GPU plans on its
