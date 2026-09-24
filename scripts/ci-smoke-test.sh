@@ -18,6 +18,8 @@ API_PORT="${MESH_CI_API_PORT:-9337}"
 CONSOLE_PORT="${MESH_CI_CONSOLE_PORT:-3131}"
 MAX_WAIT="${MESH_CI_MAX_WAIT:-180}"
 LOG="${MESH_CI_LOG:-/tmp/mesh-llm-ci.log}"
+BATCH_SIZE="${MESH_CI_BATCH_SIZE:-}"
+UBATCH_SIZE="${MESH_CI_UBATCH_SIZE:-}"
 ATTESTATION_PUBLIC_KEY_FILE="${MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE:-}"
 ATTESTATION_EXPECTED_STATUS="${MESH_RELEASE_ATTESTATION_EXPECTED_STATUS:-valid}"
 SMOKE_STATE_DIR="$(mktemp -d /tmp/mesh-llm-smoke-state.XXXXXX)"
@@ -76,6 +78,20 @@ if [[ ! -d "$RUNTIME_BUNDLE" ]]; then
     exit 1
 fi
 export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$RUNTIME_BUNDLE"
+
+if [[ -n "$BATCH_SIZE" || -n "$UBATCH_SIZE" ]]; then
+    if [[ -z "$BATCH_SIZE" || -z "$UBATCH_SIZE" ]]; then
+        echo "MESH_CI_BATCH_SIZE and MESH_CI_UBATCH_SIZE must be set together" >&2
+        exit 1
+    fi
+    cat >"$SMOKE_CONFIG_PATH" <<EOF
+version = 1
+
+[defaults.model_fit]
+batch = $BATCH_SIZE
+ubatch = $UBATCH_SIZE
+EOF
+fi
 
 ARGS=(
     --log-format json

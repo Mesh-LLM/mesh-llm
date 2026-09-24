@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/exaone4.cpp b/src/models/exaone4.cpp
-index 9ba978956dc82223850bc9ca958d01c16b75d1ea..0d92dec305c5d6c482d81c7b4b863f1eca5e95c4 100644
+index c1c55957a4fd792f6027432dc787c27ce99e0792..7cb835d94cc06066e553374a7750b8245f7a6559 100644
 --- a/src/models/exaone4.cpp
 +++ b/src/models/exaone4.cpp
-@@ -107,6 +107,8 @@ llama_model_exaone4::graph<iswa>::graph(const llama_model & model, const llm_gra
+@@ -105,6 +105,8 @@ llama_model_exaone4::graph<iswa>::graph(const llama_model & model, const llm_gra
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 9ba978956dc82223850bc9ca958d01c16b75d1ea..0d92dec305c5d6c482d81c7b4b863f1e
          ggml_tensor * inpSA = inpL;
  
          // use RoPE for SWA layers or non-SWA models
-@@ -170,6 +172,7 @@ llama_model_exaone4::graph<iswa>::graph(const llama_model & model, const llm_gra
+@@ -168,6 +170,7 @@ llama_model_exaone4::graph<iswa>::graph(const llama_model & model, const llm_gra
  
          // input for next layer
          inpL = cur;

@@ -238,6 +238,96 @@ bool containsLayerBound(const Expr *expression) {
   return visitor.found();
 }
 
+// Layer-loop bounds of helper bodies that constructor loops delegate their
+// repeating-layer work to. Only callees reached from statements inside the
+// constructor are inspected, so the evidence stays local to the translation
+// unit and cannot come from unrelated code.
+std::vector<std::string>
+delegatedLayerLoopBounds(const CompoundStmt *constructor_body,
+                         const SourceManager &sm,
+                         const clang::LangOptions &lang) {
+  if (constructor_body == nullptr) {
+    return {};
+  }
+  std::vector<const CallExpr *> delegating_calls;
+  class LoopVisitor final : public RecursiveASTVisitor<LoopVisitor> {
+  public:
+    bool VisitForStmt(ForStmt *loop) {
+      if (const auto *body = llvm::dyn_cast_or_null<CompoundStmt>(loop->getBody())) {
+        bodies_.push_back(body);
+      }
+      return true;
+    }
+    const std::vector<const CompoundStmt *> &bodies() const { return bodies_; }
+
+  private:
+    std::vector<const CompoundStmt *> bodies_;
+  } loop_visitor;
+  loop_visitor.TraverseStmt(const_cast<CompoundStmt *>(constructor_body));
+
+  class CallVisitor final : public RecursiveASTVisitor<CallVisitor> {
+  public:
+    bool VisitCallExpr(CallExpr *call) {
+      calls_.push_back(call);
+      return true;
+    }
+    const std::vector<const CallExpr *> &calls() const { return calls_; }
+
+  private:
+    std::vector<const CallExpr *> calls_;
+  };
+
+  class BoundVisitor final : public RecursiveASTVisitor<BoundVisitor> {
+  public:
+    BoundVisitor(const SourceManager &sm, const clang::LangOptions &lang,
+                 std::vector<std::string> &bounds)
+        : sm_(sm), lang_(lang), bounds_(bounds) {}
+
+    bool VisitForStmt(ForStmt *loop) {
+      const auto *condition =
+          llvm::dyn_cast_or_null<BinaryOperator>(loop->getCond());
+      if (condition == nullptr || condition->getOpcode() != clang::BO_LT) {
+        return true;
+      }
+      const auto *body = llvm::dyn_cast_or_null<CompoundStmt>(loop->getBody());
+      // Conventional helper layer loops either use a layer-count bound or
+      // index the model's per-layer tensor array inside the loop body.
+      if (!containsLayerBound(condition->getRHS()) &&
+          (body == nullptr || !containsName(body, "layers"))) {
+        return true;
+      }
+      std::string bound =
+          sourceText(condition->getRHS()->getSourceRange(), sm_, lang_);
+      if (!bound.empty()) {
+        bounds_.push_back(std::move(bound));
+      }
+      return true;
+    }
+
+  private:
+    const SourceManager &sm_;
+    const clang::LangOptions &lang_;
+    std::vector<std::string> &bounds_;
+  };
+
+  std::vector<std::string> bounds;
+  CallVisitor call_visitor;
+  for (const CompoundStmt *body : loop_visitor.bodies()) {
+    call_visitor.TraverseStmt(const_cast<CompoundStmt *>(body));
+  }
+  for (const CallExpr *call : call_visitor.calls()) {
+    const FunctionDecl *callee = directCallee(call);
+    if (callee == nullptr || !callee->hasBody()) {
+      continue;
+    }
+    BoundVisitor bound_visitor(sm, lang, bounds);
+    bound_visitor.TraverseStmt(const_cast<Stmt *>(callee->getBody()));
+  }
+  std::sort(bounds.begin(), bounds.end());
+  bounds.erase(std::unique(bounds.begin(), bounds.end()), bounds.end());
+  return bounds;
+}
+
 std::string stableLoopEnd(const Expr *expression, const SourceManager &sm,
                           const clang::LangOptions &lang) {
   const Expr *normalized = expression->IgnoreParenImpCasts();
@@ -1294,7 +1384,20 @@ public:
     report.proof.embedding_owner = true;
 
     if (facts.layer_loops.empty()) {
-      refuse(report, "no layer block loop");
+      // A constructor may delegate its repeating-layer body to a member
+      // helper that each sequential domain invokes with its own slot base.
+      // The constructor rewrite cannot target a delegated loop, and every
+      // constructor invocation executes all delegated domains, so such a
+      // builder is a whole-model graph rather than a partitioned decoder.
+      auto delegated = delegatedLayerLoopBounds(constructor_body, sm, lang);
+      if (delegated.empty()) {
+        refuse(report, "no layer block loop");
+        reports_.push_back(std::move(report));
+        return;
+      }
+      report.verdict = "supported_whole_model";
+      report.proof.execution_scope = "multiple_sequential_layer_domains";
+      report.proof.scope_evidence = std::move(delegated);
       reports_.push_back(std::move(report));
       return;
     }

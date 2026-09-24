@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/glm4.cpp b/src/models/glm4.cpp
-index 463be809d8efe2af3a3a8c0b0b5f8a3bfff58b7f..0e50c90e45daf90284ec82a04d135ddd75767a78 100644
+index 1fac79766527b1945eb75fd9c5c20aeb6c2c13d3..816c06db857d8b3d7eecaaf3f25ba7431bf0998e 100644
 --- a/src/models/glm4.cpp
 +++ b/src/models/glm4.cpp
-@@ -94,6 +94,8 @@ llama_model_glm4::graph::graph(const llama_model & model, const llm_graph_params
+@@ -89,6 +89,8 @@ llama_model_glm4::graph::graph(const llama_model & model, const llm_graph_params
      // Only process up to last layer (skip final NextN layer)
      // Final layer tensors are loaded but not processed in forward pass
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 463be809d8efe2af3a3a8c0b0b5f8a3bfff58b7f..0e50c90e45daf90284ec82a04d135ddd
          ggml_tensor * inpSA = inpL;
  
          // Pre-attention norm
-@@ -169,6 +171,7 @@ llama_model_glm4::graph::graph(const llama_model & model, const llm_graph_params
+@@ -164,6 +166,7 @@ llama_model_glm4::graph::graph(const llama_model & model, const llm_graph_params
  
          // input for next layer
          inpL = cur;

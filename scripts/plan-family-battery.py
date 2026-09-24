@@ -99,7 +99,7 @@ class _GgufReader:
         raise PlanError(f"unsupported GGUF metadata type {kind}: {self.path}")
 
 
-def _gguf_dimensions(path: Path) -> tuple[str, int, int] | None:
+def _gguf_dimensions(path: Path) -> tuple[str, int, int, int] | None:
     reader = _GgufReader(path)
     try:
         if reader.read(4) != b"GGUF":
@@ -114,6 +114,7 @@ def _gguf_dimensions(path: Path) -> tuple[str, int, int] | None:
         architecture: str | None = None
         hyper_connection_counts: list[int] = []
         embedding_lengths_out: list[int] = []
+        nextn_layers: list[tuple[str, int]] = []
         for _ in range(kv_count):
             key = reader.string()
             value = reader.value(reader.u32())
@@ -127,12 +128,21 @@ def _gguf_dimensions(path: Path) -> tuple[str, int, int] | None:
                 hyper_connection_counts.append(value)
             if key.endswith(".embedding_length_out") and type(value) is int:
                 embedding_lengths_out.append(value)
+            if key.endswith(".nextn_predict_layers"):
+                if type(value) is not int or value < 0:
+                    raise PlanError(f"GGUF has invalid native MTP layer count: {path}")
+                nextn_layers.append((key, value))
         if not block_counts and not embedding_lengths:
             return None
         if architecture is None or not FAMILY_RE.fullmatch(architecture):
             raise PlanError(f"GGUF must contain a valid general.architecture: {path}")
         if len(block_counts) != 1 or block_counts[0] < 1:
             raise PlanError(f"GGUF must contain exactly one positive *.block_count: {path}")
+        if len(nextn_layers) > 1 or (nextn_layers and (
+            nextn_layers[0][0] != f"{architecture}.nextn_predict_layers"
+            or nextn_layers[0][1] >= block_counts[0]
+        )):
+            raise PlanError(f"GGUF has inconsistent native MTP layer metadata: {path}")
         if len(embedding_lengths) != 1 or embedding_lengths[0] < 1:
             raise PlanError(
                 f"GGUF must contain exactly one positive *.embedding_length: {path}"
@@ -156,7 +166,7 @@ def _gguf_dimensions(path: Path) -> tuple[str, int, int] | None:
                     f"{architecture} *.embedding_length_out disagrees with "
                     f"hyper-connected activation width {activation_width}: {path}"
                 )
-        return architecture, block_counts[0], activation_width
+        return architecture, block_counts[0], activation_width, nextn_layers[0][1] if nextn_layers else 0
     finally:
         reader.close()
 
@@ -496,7 +506,7 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
                 "certification_status": profile_policy["status"],
                 "oracle": profile_policy["oracle"],
                 "certification_lanes": (
-                    profile_policy["required_lanes"]
+                    profile_policy["required_lanes"] + (["native-mtp-heads"] if mtp_layers else [])
                     if model_class == "causal_generation"
                     else list(MODEL_CLASS_LANES[model_class][:1 if profile == "workload-smoke" else 2])
                 ),
@@ -622,7 +632,7 @@ def _verify_cache(models: list[dict[str, Any]], cache_root: Path) -> None:
                 if dimensions is None:
                     continue
                 found_dimensions = True
-                architecture, block_count, embedding_length = dimensions
+                architecture, block_count, embedding_length, mtp_layers = dimensions
                 if kind != "target":
                     continue
                 if architecture != model["architecture"]:
@@ -630,6 +640,11 @@ def _verify_cache(models: list[dict[str, Any]], cache_root: Path) -> None:
                         f"{model['family']} is certified for architecture "
                         f"{model['architecture']} but immutable GGUF metadata in "
                         f"{target.name} declares {architecture}"
+                    )
+                if mtp_layers != model["execution"]["mtp_layers"]:
+                    raise PlanError(
+                        f"{model['family']} plans {model['execution']['mtp_layers']} native MTP layers "
+                        f"but immutable GGUF metadata in {target.name} declares {mtp_layers}"
                     )
                 planned = model["execution"]["layer_end"]
                 if block_count != planned:
@@ -737,12 +752,13 @@ def main(argv: list[str] | None = None) -> int:
             raise PlanError(
                 f"GGUF has no positive *.block_count and *.embedding_length metadata: {args.inspect_gguf}"
             )
-        _architecture, layer_count, activation_width = dimensions
+        _architecture, layer_count, activation_width, mtp_layers = dimensions
         sys.stdout.write(
             json.dumps(
                 {
                     "layer_count": layer_count,
                     "activation_width": activation_width,
+                    "mtp_layers": mtp_layers,
                 },
                 sort_keys=True,
             )

@@ -1,7 +1,7 @@
-From 773db581210498006db3b819f5ea2060aa68d8ce Mon Sep 17 00:00:00 2001
+From 18943617b4e7f207e1821a014ecaab177aa60fbc Mon Sep 17 00:00:00 2001
 From: Daniel Han <danielhanchen@gmail.com>
 Date: Sun, 20 Sep 2026 11:16:21 +1000
-Subject: [PATCH 2/3] llama: port DiffusionGemma support
+Subject: [PATCH 1/3] llama: port DiffusionGemma support
 
 Port the feature diff from ggml-org/llama.cpp PR #24423 at 12e0a9627d02c6395fd4bbf2aadff93d0d46a0e4 onto the mesh-llm llama.cpp pin. Express the phase-specific embedding selection as one assignment so the deterministic Skippy stage rewriter can prove the layer-carried activation.
 
@@ -37,8 +37,8 @@ Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
  src/models/diffusion-gemma.cpp                | 854 ++++++++++++++++++
  src/models/gemma4-common.h                    | 126 +++
  src/models/models.h                           |  60 ++
- tests/test-llama-archs.cpp                    |  22 +-
- 29 files changed, 3244 insertions(+), 124 deletions(-)
+ tests/test-llama-archs.cpp                    |  23 +-
+ 29 files changed, 3244 insertions(+), 125 deletions(-)
  create mode 100644 conversion/diffusion_gemma.py
  create mode 100644 examples/diffusion-gemma-eval/CMakeLists.txt
  create mode 100644 examples/diffusion-gemma-eval/diffusion-gemma-eval.cpp
@@ -51,7 +51,7 @@ Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
  create mode 100644 src/models/gemma4-common.h
 
 diff --git a/common/arg.cpp b/common/arg.cpp
-index c4c4e143c..6cf2f84af 100644
+index c4c4e143c987d73ee5aba191b8482d9764be5848..6cf2f84af1bde4309716a3d74febf8c697b57b30 100644
 --- a/common/arg.cpp
 +++ b/common/arg.cpp
 @@ -1905,7 +1905,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
@@ -171,7 +171,7 @@ index c4c4e143c..6cf2f84af 100644
          { "-lr", "--learning-rate" }, "ALPHA",
          string_format("adamw or sgd optimizer alpha (default: %.2g); note: sgd alpha recommended ~10x (no momentum)", (double) params.lr.lr0),
 diff --git a/common/common.h b/common/common.h
-index 63d0badd0..26da45c88 100644
+index 63d0badd0f7465b804b62128b64c5cc8dd115862..26da45c8887e581411f7f07f129098c3413efb23 100644
 --- a/common/common.h
 +++ b/common/common.h
 @@ -402,7 +402,10 @@ struct common_params_speculative {
@@ -205,7 +205,7 @@ index 63d0badd0..26da45c88 100644
  
  // reasoning API response format (not to be confused as chat template's reasoning format)
 diff --git a/conversion/__init__.py b/conversion/__init__.py
-index ead783c7a..9ef7c666d 100644
+index d09c7c0b3ed19da00e6a222bb2121230ce99fb86..2b6d2f6955f2c9ecfca75f630aba15ab2eb27b96 100644
 --- a/conversion/__init__.py
 +++ b/conversion/__init__.py
 @@ -65,6 +65,8 @@ TEXT_MODEL_MAP: dict[str, str] = {
@@ -219,7 +219,7 @@ index ead783c7a..9ef7c666d 100644
      "Dots3NoteForConditionalGeneration": "dots3",
 diff --git a/conversion/diffusion_gemma.py b/conversion/diffusion_gemma.py
 new file mode 100644
-index 000000000..53d49dea2
+index 0000000000000000000000000000000000000000..53d49dea220adae96e926555e96fbddea076659d
 --- /dev/null
 +++ b/conversion/diffusion_gemma.py
 @@ -0,0 +1,122 @@
@@ -346,7 +346,7 @@ index 000000000..53d49dea2
 +
 +        yield from super().modify_tensors(data_torch, name, bid)
 diff --git a/examples/CMakeLists.txt b/examples/CMakeLists.txt
-index 39f802d25..2888c13d1 100644
+index 39f802d250e141135aafe05f532192e435ce135f..2888c13d1795e0ff3dfdb2f2cf1e5c42ee7a7fe3 100644
 --- a/examples/CMakeLists.txt
 +++ b/examples/CMakeLists.txt
 @@ -16,6 +16,8 @@ if (EMSCRIPTEN)
@@ -360,7 +360,7 @@ index 39f802d25..2888c13d1 100644
  
 diff --git a/examples/diffusion-gemma-eval/CMakeLists.txt b/examples/diffusion-gemma-eval/CMakeLists.txt
 new file mode 100644
-index 000000000..7a99b8423
+index 0000000000000000000000000000000000000000..7a99b8423a1dfe80ddecea8f2cc5d97046965eed
 --- /dev/null
 +++ b/examples/diffusion-gemma-eval/CMakeLists.txt
 @@ -0,0 +1,5 @@
@@ -371,7 +371,7 @@ index 000000000..7a99b8423
 +target_compile_features(${TARGET} PRIVATE cxx_std_17)
 diff --git a/examples/diffusion-gemma-eval/diffusion-gemma-eval.cpp b/examples/diffusion-gemma-eval/diffusion-gemma-eval.cpp
 new file mode 100644
-index 000000000..7e3fb4698
+index 0000000000000000000000000000000000000000..7e3fb4698a4c9a671f97d5244e8f31e1e64c2d7b
 --- /dev/null
 +++ b/examples/diffusion-gemma-eval/diffusion-gemma-eval.cpp
 @@ -0,0 +1,196 @@
@@ -573,7 +573,7 @@ index 000000000..7e3fb4698
 +}
 diff --git a/examples/diffusion-gemma-server/CMakeLists.txt b/examples/diffusion-gemma-server/CMakeLists.txt
 new file mode 100644
-index 000000000..768ce5895
+index 0000000000000000000000000000000000000000..768ce5895e655dfaf5b72da2d5160abb64f5f891
 --- /dev/null
 +++ b/examples/diffusion-gemma-server/CMakeLists.txt
 @@ -0,0 +1,13 @@
@@ -592,7 +592,7 @@ index 000000000..768ce5895
 +target_compile_features(${TARGET} PRIVATE cxx_std_17)
 diff --git a/examples/diffusion-gemma-server/diffusion-gemma-server.cpp b/examples/diffusion-gemma-server/diffusion-gemma-server.cpp
 new file mode 100644
-index 000000000..3a1c122f1
+index 0000000000000000000000000000000000000000..3a1c122f154d3175ecb04e755be4127535ec76b4
 --- /dev/null
 +++ b/examples/diffusion-gemma-server/diffusion-gemma-server.cpp
 @@ -0,0 +1,183 @@
@@ -781,7 +781,7 @@ index 000000000..3a1c122f1
 +}
 diff --git a/examples/diffusion-gemma-server/diffusion-gemma-visual-server.cpp b/examples/diffusion-gemma-server/diffusion-gemma-visual-server.cpp
 new file mode 100644
-index 000000000..193b326d9
+index 0000000000000000000000000000000000000000..193b326d9de6737be64f75549e702c418e43cc00
 --- /dev/null
 +++ b/examples/diffusion-gemma-server/diffusion-gemma-visual-server.cpp
 @@ -0,0 +1,388 @@
@@ -1174,7 +1174,7 @@ index 000000000..193b326d9
 +    return 0;
 +}
 diff --git a/examples/diffusion/diffusion-cli.cpp b/examples/diffusion/diffusion-cli.cpp
-index d58d22eff..70487d728 100644
+index d58d22eff550d80202977be53f64b95ea65ce494..70487d7284e44832ff189d2799322e5967bad8ee 100644
 --- a/examples/diffusion/diffusion-cli.cpp
 +++ b/examples/diffusion/diffusion-cli.cpp
 @@ -2,13 +2,27 @@
@@ -1875,7 +1875,7 @@ index d58d22eff..70487d728 100644
  
      llama_free(ctx);
 diff --git a/examples/diffusion/diffusion.cpp b/examples/diffusion/diffusion.cpp
-index 97d6b6944..73649473f 100644
+index 97d6b69449e3dd1963a53fd117d5c2e4abbb8a76..73649473f26365875610c7b514fb44a6182979be 100644
 --- a/examples/diffusion/diffusion.cpp
 +++ b/examples/diffusion/diffusion.cpp
 @@ -6,7 +6,9 @@
@@ -2201,7 +2201,7 @@ index 97d6b6944..73649473f 100644
 +    n_generated = params.max_length;
 +}
 diff --git a/examples/diffusion/diffusion.h b/examples/diffusion/diffusion.h
-index 783144522..a7f305e29 100644
+index 7831445224c9917d7c207fcf571ea447710ecaf0..a7f305e2921353b2d694e46a68fbf765c2f24836 100644
 --- a/examples/diffusion/diffusion.h
 +++ b/examples/diffusion/diffusion.h
 @@ -33,6 +33,10 @@ struct diffusion_params {
@@ -2255,7 +2255,7 @@ index 783144522..a7f305e29 100644
 +                                      int32_t &                   n_generated);
 diff --git a/ggml/src/ggml-cuda/diffusion-sampling.cu b/ggml/src/ggml-cuda/diffusion-sampling.cu
 new file mode 100644
-index 000000000..2347002d8
+index 0000000000000000000000000000000000000000..2347002d8a770129f8e0b16a8025c6fba5d3bfab
 --- /dev/null
 +++ b/ggml/src/ggml-cuda/diffusion-sampling.cu
 @@ -0,0 +1,178 @@
@@ -2439,7 +2439,7 @@ index 000000000..2347002d8
 +}
 diff --git a/ggml/src/ggml-cuda/diffusion-sampling.cuh b/ggml/src/ggml-cuda/diffusion-sampling.cuh
 new file mode 100644
-index 000000000..678611e0d
+index 0000000000000000000000000000000000000000..678611e0d856ad3840f5737aeea1c07bb71ea899
 --- /dev/null
 +++ b/ggml/src/ggml-cuda/diffusion-sampling.cuh
 @@ -0,0 +1,19 @@
@@ -2463,7 +2463,7 @@ index 000000000..678611e0d
 +        int                  n_tokens,
 +        float                inv_temp);
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index ed6ed7213..3c2d3046e 100644
+index 6998c30fdce0ccd986a6b90d003a4d874ca8727d..83cf710d1f4eac3f79f5aef9e782c8cfa8950a26 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
 @@ -24,6 +24,7 @@
@@ -2474,7 +2474,7 @@ index ed6ed7213..3c2d3046e 100644
  #include "ggml-cuda/fattn.cuh"
  #include "ggml-cuda/fwht.cuh"
  #include "ggml-cuda/getrows.cuh"
-@@ -5700,6 +5701,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+@@ -5699,6 +5700,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
      if (strcmp(name, "ggml_backend_get_features") == 0) {
          return (void *)ggml_backend_cuda_get_features;
      }
@@ -2485,10 +2485,10 @@ index ed6ed7213..3c2d3046e 100644
  }
  
 diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
-index c095649d0..c78d32e6c 100644
+index 5b9b58de6ca415406329b3aeab67f9aa1f292318..a3467eb883522e54e25f99119dc993a7044f28e1 100644
 --- a/gguf-py/gguf/constants.py
 +++ b/gguf-py/gguf/constants.py
-@@ -458,7 +458,14 @@ class Keys:
+@@ -464,7 +464,14 @@ class Keys:
              LAYERNORM_EPS   = "clip.gen.audio.attention.layer_norm_epsilon"
  
      class Diffusion:
@@ -2504,7 +2504,7 @@ index c095649d0..c78d32e6c 100644
  
      class xIELU:
          ALPHA_P             = "xielu.alpha_p"
-@@ -533,6 +540,7 @@ class MODEL_ARCH(IntEnum):
+@@ -540,6 +547,7 @@ class MODEL_ARCH(IntEnum):
      GEMMA3N          = auto()
      GEMMA4           = auto()
      GEMMA4_ASSISTANT = auto()
@@ -2512,7 +2512,7 @@ index c095649d0..c78d32e6c 100644
      GEMMA_EMBEDDING  = auto()
      STARCODER2       = auto()
      RWKV6            = auto()
-@@ -711,6 +719,11 @@ class MODEL_TENSOR(IntEnum):
+@@ -720,6 +728,11 @@ class MODEL_TENSOR(IntEnum):
      ATTN_K_NORM          = auto()
      LAYER_OUT_NORM       = auto()
      LAYER_OUT_SCALE      = auto()
@@ -2524,7 +2524,7 @@ index c095649d0..c78d32e6c 100644
      PER_LAYER_TOKEN_EMBD = auto() # gemma3n
      PER_LAYER_MODEL_PROJ = auto() # gemma3n
      PER_LAYER_INP_GATE   = auto() # gemma3n
-@@ -1296,6 +1309,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
+@@ -1306,6 +1319,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
      MODEL_ARCH.GEMMA3N:          "gemma3n",
      MODEL_ARCH.GEMMA4:           "gemma4",
      MODEL_ARCH.GEMMA4_ASSISTANT: "gemma4-assistant",
@@ -2532,7 +2532,7 @@ index c095649d0..c78d32e6c 100644
      MODEL_ARCH.GEMMA_EMBEDDING:  "gemma-embedding",
      MODEL_ARCH.STARCODER2:       "starcoder2",
      MODEL_ARCH.RWKV6:            "rwkv6",
-@@ -1473,6 +1487,11 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
+@@ -1485,6 +1499,11 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
      MODEL_TENSOR.MOE_LATENT_UP:             "blk.{bid}.ffn_latent_up",        # nemotron 3 super
      MODEL_TENSOR.LAYER_OUT_NORM:            "blk.{bid}.layer_output_norm",
      MODEL_TENSOR.LAYER_OUT_SCALE:           "blk.{bid}.layer_output_scale",
@@ -2544,7 +2544,7 @@ index c095649d0..c78d32e6c 100644
      MODEL_TENSOR.PER_LAYER_TOKEN_EMBD:      "per_layer_token_embd",           # gemma3n
      MODEL_TENSOR.PER_LAYER_MODEL_PROJ:      "per_layer_model_proj",           # gemma3n
      MODEL_TENSOR.PER_LAYER_PROJ_NORM:       "per_layer_proj_norm",            # gemma3n
-@@ -3298,6 +3317,39 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+@@ -3323,6 +3342,39 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
          MODEL_TENSOR.PER_LAYER_PROJ_NORM,
          MODEL_TENSOR.PER_LAYER_POST_NORM,
      ],
@@ -2585,10 +2585,10 @@ index c095649d0..c78d32e6c 100644
          MODEL_TENSOR.ROPE_FREQS,
          MODEL_TENSOR.TOKEN_EMBD,
 diff --git a/gguf-py/gguf/gguf_writer.py b/gguf-py/gguf/gguf_writer.py
-index ed5a185b3..9c8ba97d0 100644
+index 56cc65a70a0d03c50bf98907627b1bedc28e1993..c2236bef180f92af0eda6a38217dbdcaf132db4d 100644
 --- a/gguf-py/gguf/gguf_writer.py
 +++ b/gguf-py/gguf/gguf_writer.py
-@@ -1578,6 +1578,27 @@ class GGUFWriter:
+@@ -1590,6 +1590,27 @@ class GGUFWriter:
      def add_diffusion_shift_logits(self, value: bool) -> None:
          self.add_bool(Keys.Diffusion.SHIFT_LOGITS, value)
  
@@ -2617,10 +2617,10 @@ index ed5a185b3..9c8ba97d0 100644
          pack_prefix = ''
          if not skip_pack_prefix:
 diff --git a/include/llama.h b/include/llama.h
-index 9c9aa4a05..5c194a5dd 100644
+index 2be303febc145735524c9edb03c69b5495adfa66..cd9f156d4a1212ede875c1e6b72a386497c16377 100644
 --- a/include/llama.h
 +++ b/include/llama.h
-@@ -592,6 +592,55 @@ extern "C" {
+@@ -595,6 +595,55 @@ extern "C" {
      LLAMA_API const struct llama_vocab * llama_model_get_vocab(const struct llama_model * model);
      LLAMA_API enum llama_rope_type       llama_model_rope_type(const struct llama_model * model);
  
@@ -2677,7 +2677,7 @@ index 9c9aa4a05..5c194a5dd 100644
      LLAMA_API int32_t llama_model_n_embd       (const struct llama_model * model);
      LLAMA_API int32_t llama_model_n_embd_inp   (const struct llama_model * model);
 diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
-index 207271da5..ae660ed26 100644
+index 843da23c2544385e973a92ca24cf1704fab9f5c2..1160e3c308474974e5f16e05d289bbd8eba2ec1e 100644
 --- a/src/llama-arch.cpp
 +++ b/src/llama-arch.cpp
 @@ -58,6 +58,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
@@ -2688,7 +2688,7 @@ index 207271da5..ae660ed26 100644
      { LLM_ARCH_GEMMA_EMBEDDING,  "gemma-embedding"  },
      { LLM_ARCH_STARCODER2,       "starcoder2"       },
      { LLM_ARCH_MAMBA,            "mamba"            },
-@@ -381,6 +382,9 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
+@@ -387,6 +388,9 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
      { LLM_KV_INKLING_LOG_SCALING_ALPHA,   "%s.log_scaling_alpha"   },
      { LLM_KV_INKLING_UNPADDED_VOCAB_SIZE, "%s.unpadded_vocab_size" },
  
@@ -2698,7 +2698,7 @@ index 207271da5..ae660ed26 100644
      // sentence-transformers dense modules feature dims
      { LLM_KV_DENSE_2_FEAT_IN,        "%s.dense_2_feat_in"  },
      { LLM_KV_DENSE_2_FEAT_OUT,       "%s.dense_2_feat_out" },
-@@ -482,6 +486,11 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
+@@ -489,6 +493,11 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
      { LLM_TENSOR_ATTN_QKV,                               "blk.%d.attn_qkv" },
      { LLM_TENSOR_LAYER_OUT_NORM,                         "blk.%d.layer_output_norm" },
      { LLM_TENSOR_LAYER_OUT_SCALE,                        "blk.%d.layer_output_scale" },
@@ -2710,7 +2710,7 @@ index 207271da5..ae660ed26 100644
      { LLM_TENSOR_ATTN_OUT_NORM,                          "blk.%d.attn_output_norm" },
      { LLM_TENSOR_POS_EMBD,                               "position_embd" },
      { LLM_TENSOR_FFN_ACT,                                "blk.%d.ffn.act" },
-@@ -906,6 +915,11 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
+@@ -914,6 +923,11 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
      {LLM_TENSOR_ATTN_K_NORM,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
      {LLM_TENSOR_LAYER_OUT_NORM,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
      {LLM_TENSOR_LAYER_OUT_SCALE,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
@@ -2722,7 +2722,7 @@ index 207271da5..ae660ed26 100644
      {LLM_TENSOR_ATTN_Q_A_NORM,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
      {LLM_TENSOR_ATTN_KV_A_NORM,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
      {LLM_TENSOR_ATTN_SUB_NORM,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
-@@ -1131,6 +1145,7 @@ bool llm_arch_is_diffusion(const llm_arch & arch) {
+@@ -1139,6 +1153,7 @@ bool llm_arch_is_diffusion(const llm_arch & arch) {
          case LLM_ARCH_LLADA:
          case LLM_ARCH_LLADA_MOE:
          case LLM_ARCH_RND1:
@@ -2731,7 +2731,7 @@ index 207271da5..ae660ed26 100644
          default:
              return false;
 diff --git a/src/llama-arch.h b/src/llama-arch.h
-index ec4eca1b3..716ca4600 100644
+index c48613aca68d817d7a3beeb486821864e9b08f3e..4c271709f1b394b090662302d673bd3190f6b4f5 100644
 --- a/src/llama-arch.h
 +++ b/src/llama-arch.h
 @@ -63,6 +63,7 @@ enum llm_arch {
@@ -2742,7 +2742,7 @@ index ec4eca1b3..716ca4600 100644
      LLM_ARCH_GEMMA_EMBEDDING,
      LLM_ARCH_STARCODER2,
      LLM_ARCH_MAMBA,
-@@ -425,6 +426,7 @@ enum llm_kv {
+@@ -431,6 +432,7 @@ enum llm_kv {
      LLM_KV_INKLING_LOG_SCALING_N_FLOOR,
      LLM_KV_INKLING_LOG_SCALING_ALPHA,
      LLM_KV_INKLING_UNPADDED_VOCAB_SIZE,
@@ -2750,7 +2750,7 @@ index ec4eca1b3..716ca4600 100644
  
      LLM_KV_XIELU_ALPHA_N,
      LLM_KV_XIELU_ALPHA_P,
-@@ -505,6 +507,11 @@ enum llm_tensor {
+@@ -511,6 +513,11 @@ enum llm_tensor {
      LLM_TENSOR_ATTN_K_NORM,
      LLM_TENSOR_LAYER_OUT_NORM,
      LLM_TENSOR_LAYER_OUT_SCALE,
@@ -2763,10 +2763,10 @@ index ec4eca1b3..716ca4600 100644
      LLM_TENSOR_POST_MLP_NORM,
      LLM_TENSOR_PER_LAYER_TOKEN_EMBD, // gemma3n
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index b518a7330..c3b477d2f 100644
+index bda8bec62af995ee3c2ec916e4e4a222b8a30987..e42f7592a0b2fb3c080faa144b22a9a41205c1ca 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -1500,8 +1500,14 @@ int llama_context::encode(
+@@ -1514,8 +1514,14 @@ int llama_context::encode(
      const int64_t n_embd = hparams.n_embd_inp_enc();
      const int64_t n_vocab = model.vocab.n_tokens();
  
@@ -2782,7 +2782,7 @@ index b518a7330..c3b477d2f 100644
          LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
          return -1;
      }
-@@ -1530,17 +1536,27 @@ int llama_context::encode(
+@@ -1544,17 +1550,27 @@ int llama_context::encode(
  
      n_queued_tokens += n_tokens;
  
@@ -2816,7 +2816,7 @@ index b518a7330..c3b477d2f 100644
  
      const auto causal_attn_org = cparams.causal_attn;
  
-@@ -1573,7 +1589,7 @@ int llama_context::encode(
+@@ -1587,7 +1603,7 @@ int llama_context::encode(
          GGML_ASSERT(backend_res != nullptr);
          GGML_ASSERT(logits.data != nullptr);
  
@@ -2826,19 +2826,19 @@ index b518a7330..c3b477d2f 100644
  
      // extract embeddings
 diff --git a/src/llama-model-saver.cpp b/src/llama-model-saver.cpp
-index ee117fc2d..31eed86aa 100644
+index e466919d53294cf1c2d2bcf8fc4d677b0688b0db..c4cda042154c0132719b04ad9fd763fe0a3fc3eb 100644
 --- a/src/llama-model-saver.cpp
 +++ b/src/llama-model-saver.cpp
-@@ -34,6 +34,7 @@ bool llama_model_saver_supports_arch(llm_arch arch) {
-         case LLM_ARCH_GRANITE_SWA:
-         case LLM_ARCH_DOTS3NOTE: // TODO: need to handle SWA pattern and MLA+SWA config
+@@ -21,6 +21,7 @@ bool llama_model_saver_supports_arch(llm_arch arch) {
+         case LLM_ARCH_APERTUS:
+         case LLM_ARCH_STEP35:
          case LLM_ARCH_INKLING:
 +        case LLM_ARCH_DIFFUSION_GEMMA: // same: a per-layer SWA pattern add_kv_from_model cannot write back
              return false;
          default:
              return true;
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 1cbcfe758..ed0a491f7 100644
+index 69ac10bf0d1b9b30a9930a05151f295d1ec31ba1..97c5227a87826e682378bbc88dffbb69321c617d 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -153,6 +153,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
@@ -2850,7 +2850,7 @@ index 1cbcfe758..ed0a491f7 100644
          case LLM_ARCH_GEMMA_EMBEDDING:
              return new llama_model_gemma_embedding(params);
          case LLM_ARCH_STARCODER2:
-@@ -2382,6 +2384,7 @@ llama_memory_i * llama_model::create_memory(
+@@ -2409,6 +2411,7 @@ llama_memory_i * llama_model::create_memory(
          case LLM_ARCH_LLADA:
          case LLM_ARCH_LLADA_MOE:
          case LLM_ARCH_RND1:
@@ -2858,7 +2858,7 @@ index 1cbcfe758..ed0a491f7 100644
              {
                  res = nullptr;
              } break;
-@@ -3125,6 +3128,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+@@ -3152,6 +3155,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
          case LLM_ARCH_GEMMA3N:
          case LLM_ARCH_GEMMA4:
          case LLM_ARCH_GEMMA4_ASSISTANT:
@@ -2867,7 +2867,7 @@ index 1cbcfe758..ed0a491f7 100644
          case LLM_ARCH_STARCODER2:
          case LLM_ARCH_OPENELM:
 diff --git a/src/llama-model.h b/src/llama-model.h
-index ffe2ecafb..d4c18d4bc 100644
+index fe05b611d3c4828897bbcf30b30fa402052ab1f6..a0826015fd6a3584c65f178c4f237838d38fcc5c 100644
 --- a/src/llama-model.h
 +++ b/src/llama-model.h
 @@ -585,6 +585,9 @@ struct llama_layer {
@@ -2880,9 +2880,9 @@ index ffe2ecafb..d4c18d4bc 100644
      struct llama_layer_posnet posnet;
  
      struct llama_layer_convnext convnext;
-@@ -652,6 +655,12 @@ struct llama_model {
-     struct ggml_tensor * nextn_proj_pre  = nullptr;
-     struct ggml_tensor * nextn_proj_post = nullptr;
+@@ -655,6 +658,12 @@ struct llama_model {
+     // hrm-text initial low-cycle state
+     struct ggml_tensor * hrm_z_l_init = nullptr;
  
 +    // diffusion-gemma self-conditioning gated MLP (model-level, decoder-only)
 +    struct ggml_tensor * sc_pre_norm = nullptr;
@@ -2895,7 +2895,7 @@ index ffe2ecafb..d4c18d4bc 100644
      struct ggml_tensor * hc_head_base  = nullptr;
 diff --git a/src/models/diffusion-gemma.cpp b/src/models/diffusion-gemma.cpp
 new file mode 100644
-index 000000000..2d98b8c30
+index 0000000000000000000000000000000000000000..2d98b8c30ad720cb46b372bcd22af2a24e040acd
 --- /dev/null
 +++ b/src/models/diffusion-gemma.cpp
 @@ -0,0 +1,854 @@
@@ -3755,7 +3755,7 @@ index 000000000..2d98b8c30
 +}
 diff --git a/src/models/gemma4-common.h b/src/models/gemma4-common.h
 new file mode 100644
-index 000000000..9a6f4ddd5
+index 0000000000000000000000000000000000000000..9a6f4ddd555116f8627eda639e61d8fab898888f
 --- /dev/null
 +++ b/src/models/gemma4-common.h
 @@ -0,0 +1,126 @@
@@ -3886,7 +3886,7 @@ index 000000000..9a6f4ddd5
 +    return cur;
 +}
 diff --git a/src/models/models.h b/src/models/models.h
-index 3f8854a64..ce8cb2e57 100644
+index 527ea4ba69ff8adaaf2496138d4628787d59fa28..e567d0b7162120510c19d9d2ce182f554dbd7ad1 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
 @@ -882,6 +882,66 @@ struct llama_model_gemma4 : public llama_model_base {
@@ -3957,15 +3957,16 @@ index 3f8854a64..ce8cb2e57 100644
      llama_model_gemma4_assistant(const struct llama_model_params & params) : llama_model_base(params) {}
      void load_arch_hparams(llama_model_loader & ml) override;
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index 32a7fde50..7820ff676 100644
+index fd2901367d185e3e006534e52426a76781fc3b6f..dc217cc04e408d525d7962f08c009dae1dac1f32 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -256,7 +256,11 @@ static gguf_context_ptr get_gguf_ctx(
+@@ -261,8 +261,11 @@ static gguf_context_ptr get_gguf_ctx(
          // SWA pattern: every 5th layer is full attention (matches E2B layer_types)
          ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, uint32_t(5));
      } else if (arch == LLM_ARCH_COHERE2MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_SPARK2_5 ||
--            arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_GRANITE_SWA || arch == LLM_ARCH_DOTS3NOTE) {
-+            arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_GRANITE_SWA || arch == LLM_ARCH_DOTS3NOTE ||
+-            arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_GRANITE_SWA || arch == LLM_ARCH_DOTS3NOTE ||
+-            arch == LLM_ARCH_MAPLE) {
++            arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_GRANITE_SWA || arch == LLM_ARCH_DOTS3NOTE || arch == LLM_ARCH_MAPLE ||
 +            // diffusion-gemma needs a mix: with every layer sliding, the non-SWA mask
 +            // is built and used by nothing, so ggml-alloc never gives it a buffer and
 +            // set_input dereferences a null one. A real model has both kinds of layer.
@@ -3973,7 +3974,7 @@ index 32a7fde50..7820ff676 100644
          std::vector<uint32_t> pattern;
          pattern.reserve(n_layer);
          for (uint32_t il = 0; il < n_layer; il++) {
-@@ -387,6 +391,16 @@ static gguf_context_ptr get_gguf_ctx(
+@@ -417,6 +420,16 @@ static gguf_context_ptr get_gguf_ctx(
          ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,   std::vector<float>({0.0f, 4.0f}));
          ms.add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP, std::vector<float>({0.0f, 5.0f}));
      }
@@ -3990,7 +3991,7 @@ index 32a7fde50..7820ff676 100644
      ms.add_kv(LLM_KV_WKV_HEAD_SIZE,             n_embd/n_head);
      ms.add_kv(LLM_KV_SHORTCONV_L_CACHE,         uint32_t(3));
      ms.add_kv(LLM_KV_RESIDUAL_SCALE,            3.5565588200778455f);
-@@ -576,6 +590,7 @@ static bool moe_mandatory(const llm_arch arch) {
+@@ -606,6 +619,7 @@ static bool moe_mandatory(const llm_arch arch) {
          case LLM_ARCH_DEEPSEEK2:
          case LLM_ARCH_DEEPSEEK32:
          case LLM_ARCH_DOTS3NOTE:
@@ -3998,7 +3999,7 @@ index 32a7fde50..7820ff676 100644
          case LLM_ARCH_DEEPSEEK4:
          case LLM_ARCH_GLM4_MOE:
          case LLM_ARCH_GLM_DSA:
-@@ -848,7 +863,10 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
+@@ -884,7 +898,10 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
              continue;
          }
  

@@ -1,7 +1,7 @@
-From 14a2071b1d3e0b51bca80d144c0b60139eadd3f7 Mon Sep 17 00:00:00 2001
+From afb8518c2db5d4f27ddd587dec9393dd832c535b Mon Sep 17 00:00:00 2001
 From: Codex <codex@openai.com>
 Date: Sun, 20 Sep 2026 11:19:07 +1000
-Subject: [PATCH] skippy: add DiffusionGemma system-one reads
+Subject: [PATCH 2/3] skippy: add DiffusionGemma system-one reads
 
 Expose a narrow native operation that prefills a DiffusionGemma prompt, performs one zero-self-conditioning canvas read, and returns normalized probabilities over caller-declared label tokens.
 
@@ -20,7 +20,7 @@ Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
  create mode 100644 src/skippy/system_one.cpp
 
 diff --git a/include/skippy.h b/include/skippy.h
-index dc8cbb431..571841a60 100644
+index dc8cbb431d31b21358507ce9136debd0fbe1fbbf..571841a60dda86573765d3f6404c81482397fe96 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -25,5 +25,6 @@
@@ -31,15 +31,15 @@ index dc8cbb431..571841a60 100644
  
  #endif // SKIPPY_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index c0c7e6aa4..d7f5b53e0 100644
+index ba62a2c8bdcf1be18189c060f477d8a4e21c113b..34374efb28b19976afeaea9367d09ac76095550f 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 61
-+#define SKIPPY_ABI_VERSION_PATCH 62
+-#define SKIPPY_ABI_VERSION_PATCH 62
++#define SKIPPY_ABI_VERSION_PATCH 63
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -53,7 +53,7 @@ index c0c7e6aa4..d7f5b53e0 100644
      SKIPPY_STATUS_OK                      = 0,
 diff --git a/include/skippy/system_one.h b/include/skippy/system_one.h
 new file mode 100644
-index 000000000..4faf057ba
+index 0000000000000000000000000000000000000000..4faf057ba9d302358e7924642ffbe5e715625141
 --- /dev/null
 +++ b/include/skippy/system_one.h
 @@ -0,0 +1,60 @@
@@ -118,7 +118,7 @@ index 000000000..4faf057ba
 +
 +#endif // SKIPPY_SYSTEM_ONE_H
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 69e05396a..72591c7ca 100644
+index b4f9bb4678e1174fdd44b7554b2e907f5c774b90..0e9e0011c777b874efe925bf4eca1726ccddcd2d 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -77,6 +77,7 @@ add_library(llama
@@ -130,7 +130,7 @@ index 69e05396a..72591c7ca 100644
              ${LLAMA_MODELS_SOURCES}
              )
 diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
-index 45e3b4b86..79dc77162 100644
+index 45e3b4b86e85ba0ee1bb17693371a99ab253a4e4..79dc771628b8255930495ca2ca0ad3af18ab617b 100644
 --- a/src/skippy/abi.cpp
 +++ b/src/skippy/abi.cpp
 @@ -45,7 +45,8 @@ uint64_t skippy_abi_features(void) {
@@ -145,7 +145,7 @@ index 45e3b4b86..79dc77162 100644
  void skippy_error_free(struct skippy_error * error) {
 diff --git a/src/skippy/system_one.cpp b/src/skippy/system_one.cpp
 new file mode 100644
-index 000000000..d60467a46
+index 0000000000000000000000000000000000000000..d60467a468a1be33ff60f1bb8b74f26539d896a6
 --- /dev/null
 +++ b/src/skippy/system_one.cpp
 @@ -0,0 +1,232 @@

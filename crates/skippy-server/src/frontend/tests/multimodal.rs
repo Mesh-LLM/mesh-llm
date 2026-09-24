@@ -456,6 +456,10 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
     });
     let mut stage0_config =
         multimodal_stage_config(&fixture, "stage-0", 0, 0, split_layer, stage0_addr);
+    // Force media/text chunks to cross native microbatch boundaries. Every
+    // activation row must be captured before the next graph replaces it.
+    stage0_config.n_batch = Some(256);
+    stage0_config.n_ubatch = Some(32);
     stage0_config.downstream = Some(skippy_protocol::PeerConfig {
         stage_id: "stage-1".to_string(),
         stage_index: 1,

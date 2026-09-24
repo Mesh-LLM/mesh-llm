@@ -23,6 +23,7 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         architecture: str = "qwen3",
         hyper_connection_count: int | None = None,
         embedding_length_out: int | None = None,
+        nextn_layers: int | None = None,
     ) -> int:
         def gguf_string(value: str) -> bytes:
             encoded = value.encode("utf-8")
@@ -41,6 +42,9 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
             metadata.append(
                 (f"{architecture}.embedding_length_out", 4, embedding_length_out)
             )
+
+        if nextn_layers is not None:
+            metadata.append((f"{architecture}.nextn_predict_layers", 4, nextn_layers))
 
         payload = bytearray(b"GGUF")
         payload.extend(struct.pack("<IQQ", 3, 0, len(metadata)))
@@ -66,6 +70,7 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         architecture: str = "qwen3",
         hyper_connection_count: int | None = None,
         embedding_length_out: int | None = None,
+        nextn_layers: int | None = None,
     ) -> list[Path]:
         files = artifact["files"]
         assert isinstance(files, list)
@@ -90,6 +95,7 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
                 architecture,
                 hyper_connection_count,
                 embedding_length_out,
+                nextn_layers,
             )
             cached = snapshot / str(relative)
             cached.parent.mkdir(parents=True, exist_ok=True)
@@ -188,6 +194,18 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("unrecognized arguments: --cadence", result.stderr)
 
+    def test_every_native_mtp_fixture_requires_all_head_execution(self) -> None:
+        result = self._run()
+        self.assertEqual(0, result.returncode, result.stderr)
+        models = json.loads(result.stdout)["selected_models"]
+        heads = {model["family"]: model["execution"]["mtp_layers"]
+                 for model in models if model["execution"]["mtp_layers"]}
+        self.assertEqual({"glm45-air": 1, "nemotron": 1, "mimo2": 3}, heads)
+        for model in models:
+            with self.subTest(family=model["family"]):
+                self.assertEqual(bool(model["execution"]["mtp_layers"]),
+                                 "native-mtp-heads" in model["certification_lanes"])
+
     def test_mmproj_artifacts_resolve_and_cover_the_vision_families(self) -> None:
         """Require immutable projector sidecars for the complete causal and non-chat media roster."""
         result = self._run()
@@ -206,6 +224,12 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
                 "qwen2-vl",
                 "qwen3-vl",
                 "qwen3vlmoe",
+                "qwen4exp",
+                "qwen35",
+                "qwen35moe",
+                "mistral-small",
+                "mistral4",
+                "llama4",
                 "paddleocr",
                 "qwen3tts",
                 "ultravox",
@@ -416,7 +440,7 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(
-            {"activation_width": 1536, "layer_count": 7},
+            {"activation_width": 1536, "layer_count": 7, "mtp_layers": 0},
             json.loads(result.stdout),
         )
 
@@ -461,6 +485,21 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         self.assertEqual(2, missing.returncode)
         self.assertIn("immutable family cache is incomplete", missing.stderr)
         self.assertIn(model["family"], missing.stderr)
+
+    def test_cache_gate_rejects_undeclared_mtp_heads_before_build(self) -> None:
+        source = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        source["models"] = [copy.deepcopy(source["models"][0])]
+        model = source["models"][0]
+        model["execution"].update(trunk_layers=3, mtp_layers=0)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manifest = root / "manifest.json"
+            self._materialize_cached_artifact(root, model["artifact"], [3], nextn_layers=1)
+            manifest.write_text(json.dumps(source), encoding="utf-8")
+            result = self._run(manifest, "--check-cache", "--cache-root", str(root / "cache"))
+        self.assertEqual(2, result.returncode)
+        self.assertIn("plans 0 native MTP layers", result.stderr)
+        self.assertIn("declares 1", result.stderr)
 
     def test_cache_gate_rejects_runtime_range_drift_before_build(self) -> None:
         source = json.loads(MANIFEST.read_text(encoding="utf-8"))

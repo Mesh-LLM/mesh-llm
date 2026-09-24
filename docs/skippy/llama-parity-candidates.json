@@ -1447,6 +1447,24 @@
       "family": "spark2-5",
       "status": "candidate",
       "notes": "new upstream llama.cpp source registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
+    },
+    {
+      "llama_model": "hrm-text",
+      "family": "hrm-text",
+      "status": "needs_boundary_registration",
+      "notes": "new upstream llama.cpp source; the stage rewriter classifies its cycle-stacked builder as a whole-model graph (delegated member-helper layer loops), so it has no begin_block/end_block decoder boundaries and cannot be admitted to split serving yet"
+    },
+    {
+      "llama_model": "maple",
+      "family": "maple",
+      "status": "candidate",
+      "notes": "new upstream llama.cpp source registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
+    },
+    {
+      "llama_model": "diffusion-gemma",
+      "family": "diffusion-gemma",
+      "status": "candidate",
+      "notes": "new upstream llama.cpp source registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
     }
   ]
 }

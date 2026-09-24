@@ -892,4 +892,17 @@ unsafe extern "C" {
         logits_last: bool,
         new_n_past: *mut i32,
     ) -> c_int;
+
+    pub fn mtmd_helper_eval_chunk_single_with_callback(
+        ctx: *mut MtmdContext,
+        lctx: *mut Opaque,
+        chunk: *const Opaque,
+        n_past: i32,
+        seq_id: i32,
+        n_batch: i32,
+        logits_last: bool,
+        new_n_past: *mut i32,
+        callback: Option<unsafe extern "C" fn(i32, *mut c_void) -> c_int>,
+        user_data: *mut c_void,
+    ) -> c_int;
 }

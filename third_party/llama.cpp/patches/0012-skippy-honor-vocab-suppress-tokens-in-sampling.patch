@@ -1,7 +1,7 @@
-From 3c3475c92ebc701513bd434cb26999703d2b77e3 Mon Sep 17 00:00:00 2001
+From 1ae4d37484184d576fad2bef9f83cdddf8369d52 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 12 Sep 2026 04:07:46 -0700
-Subject: [PATCH 09/11] skippy: honor vocab suppress tokens in sampling
+Subject: [PATCH 12/14] skippy: honor vocab suppress tokens in sampling
 
 ---
  src/CMakeLists.txt                      |  1 +
@@ -15,7 +15,7 @@ Subject: [PATCH 09/11] skippy: honor vocab suppress tokens in sampling
  create mode 100644 tests/test-skippy-sampling-suppress.cpp
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index f675c7232..80f2c7f51 100644
+index c0ce3c1ee..69e05396a 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -67,6 +67,7 @@ add_library(llama
@@ -257,7 +257,7 @@ index 000000000..1242ed105
 +    return best;
 +}
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 970907f0b..682e6dd5d 100644
+index 1d03ce428..37d74b881 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
 @@ -153,6 +153,7 @@ llama_build(test-save-load-state.cpp)
@@ -344,4 +344,5 @@ index 000000000..4cf702bef
 +    return 0;
 +}
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
+
