@@ -249,7 +249,8 @@ where
 
     if announce_capacity_fallback {
         let required_bytes = runtime_model_required_bytes(model_bytes);
-        let offload_hint = host_ram_offload_hint(host_ram_offload_gain_bytes);
+        let offload_hint =
+            host_ram_offload_hint(required_bytes, local_capacity, host_ram_offload_gain_bytes);
         let _ = emit_event(OutputEvent::Info {
             message: format!(
                 "Model {model_name} exceeds local runtime capacity; attempting split runtime{offload_hint}"
@@ -597,10 +598,24 @@ pub(super) fn startup_local_capacity_bytes(
         .unwrap_or(node_local_capacity_bytes)
 }
 
+/// Turning on host-RAM offload is worth suggesting only where the RAM it adds
+/// lets this node hold the model alone, by the same test the local fit applies.
+fn host_ram_offload_would_fit(
+    required_bytes: u64,
+    local_capacity_bytes: u64,
+    gain_bytes: u64,
+) -> bool {
+    gain_bytes > 0 && local_capacity_bytes.saturating_add(gain_bytes) >= required_bytes
+}
+
 /// The capacity fallback names `gpu.host_ram_offload` only where turning it on
-/// would add capacity.
-pub(super) fn host_ram_offload_hint(gain_bytes: u64) -> String {
-    if gain_bytes == 0 {
+/// would let this node run the model alone.
+pub(super) fn host_ram_offload_hint(
+    required_bytes: u64,
+    local_capacity_bytes: u64,
+    gain_bytes: u64,
+) -> String {
+    if !host_ram_offload_would_fit(required_bytes, local_capacity_bytes, gain_bytes) {
         return String::new();
     }
     format!(
@@ -632,7 +647,11 @@ pub(super) fn no_split_peer_message(
     local_capacity_bytes: u64,
     host_ram_offload_gain_bytes: u64,
 ) -> String {
-    let offload = if host_ram_offload_gain_bytes > 0 {
+    let offload = if host_ram_offload_would_fit(
+        required_bytes,
+        local_capacity_bytes,
+        host_ram_offload_gain_bytes,
+    ) {
         format!(
             ", or set gpu.host_ram_offload = true to run it on this node with {:.1} GB of system RAM (an order of magnitude slower)",
             host_ram_offload_gain_bytes as f64 / 1e9
@@ -1180,11 +1199,19 @@ mod capacity_fallback_tests {
     }
 
     #[test]
-    fn the_offload_hint_appears_only_where_the_setting_adds_capacity() {
-        assert_eq!(host_ram_offload_hint(0), "");
-        let hint = host_ram_offload_hint(18_548_836_761);
+    fn the_offload_hint_appears_only_where_the_setting_lets_the_model_fit() {
+        // 12.9 GB planned plus 18.5 GB of RAM brings a 20.2 GB model in.
+        let hint = host_ram_offload_hint(20_240_000_000, 12_878_610_432, 18_548_836_761);
         assert!(hint.contains("gpu.host_ram_offload = true"), "{hint}");
         assert!(hint.contains("18.5 GB"), "{hint}");
+        // Exactly the enabled budget still fits, as in the local fit.
+        assert!(!host_ram_offload_hint(31_427_447_193, 12_878_610_432, 18_548_836_761).is_empty());
+        // No gain, or a model too large even with it: no hint.
+        assert_eq!(host_ram_offload_hint(20_240_000_000, 12_878_610_432, 0), "");
+        assert_eq!(
+            host_ram_offload_hint(40_000_000_000, 12_878_610_432, 18_548_836_761),
+            ""
+        );
     }
 
     #[test]
@@ -1215,5 +1242,11 @@ mod capacity_fallback_tests {
 
         let cpu_only = no_split_peer_message("Qwen3-32B", 20_240_000_000, 16_000_000_000, 0);
         assert!(!cpu_only.contains("host_ram_offload"), "{cpu_only}");
+
+        // 31.4 GB with offload still falls short of 40 GB: only peers can help.
+        let too_large =
+            no_split_peer_message("Llama-70B", 40_000_000_000, 12_878_610_432, 18_548_836_761);
+        assert!(too_large.contains("--join or --auto"), "{too_large}");
+        assert!(!too_large.contains("host_ram_offload"), "{too_large}");
     }
 }
