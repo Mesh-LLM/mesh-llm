@@ -274,7 +274,14 @@ impl StageModel {
     }
 
     fn n_embd_inp(&self) -> Result<usize> {
-        let n_embd = unsafe { skippy_ffi::llama_model_n_embd_inp(self.inner.raw) };
+        // `inner.raw` is the skippy model handle; the llama FFI expects the
+        // wrapped llama_model pointer. Reading hparams through the skippy
+        // handle type-confuses the struct and returns a garbage width.
+        let llama_model = unsafe { skippy_ffi::skippy_model_llama_model(self.inner.raw) };
+        if llama_model.is_null() {
+            return Err(anyhow!("model did not expose a llama_model handle"));
+        }
+        let n_embd = unsafe { skippy_ffi::llama_model_n_embd_inp(llama_model.cast()) };
         if n_embd <= 0 {
             return Err(anyhow!(
                 "model does not report a positive input embedding width"
