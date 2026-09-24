@@ -7,15 +7,16 @@ use std::{
 use crate::{
     ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, ActivationBoundaryDesc,
     ActivationDesc, BackendDevice, Error, GenerationSignalWindow, IterationRequest, KvPageDesc,
-    LlamaLogCallback, LlamaModelQuantizeParams, LlamaPerfContextData, Model, ModelInfo, ModelTensorSourceV1, MtmdBitmap,
-    MtmdContext, MtmdContextParams, MtmdDecoderPos, MtmdGenAudioInfo, MtmdHelperBitmapWrapper,
-    MtmdHelperGenAudio, MtmdHelperGenAudioInput, MtmdHelperInitOpt, MtmdHelperVideo,
-    MtmdInputChunkType, MtmdInputChunks, MtmdInputText, NativeMtpDraft, NativeRuntimeLoadError,
-    NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session, SkippyDecodeStepSampledMtpFn,
-    SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventReporterV1, StagePlan, StagePlanDescV1,
-    StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStringRefV1, StagePlanValueDescV1,
-    StagePlanValueKind, StagePlanner, StagePlannerConfigV1, Status, SystemOneSlot, TensorInfo,
-    TokenSignal, WorkloadInfoV1, runtime_abi_supported,
+    LlamaLogCallback, LlamaModelQuantizeParams, LlamaPerfContextFn, Model, ModelInfo,
+    ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos,
+    MtmdGenAudioInfo, MtmdHelperBitmapWrapper, MtmdHelperGenAudio, MtmdHelperGenAudioInput,
+    MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
+    NativeMtpDraft, NativeRuntimeLoadError, NgramCache, Opaque, RuntimeConfig, SamplingConfig,
+    Session, SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn,
+    SkippyRuntimeEventReporterV1, StagePlan, StagePlanDescV1, StagePlanProfileDescV1,
+    StagePlanStateDescV1, StagePlanStringRefV1, StagePlanValueDescV1, StagePlanValueKind,
+    StagePlanner, StagePlannerConfigV1, Status, SystemOneSlot, TensorInfo, TokenSignal,
+    WorkloadInfoV1, runtime_abi_supported,
 };
 
 static SYMBOLS: OnceLock<Symbols> = OnceLock::new();
@@ -295,7 +296,6 @@ dynamic_symbols! {
 // Older runtimes may lack these and callers must check availability first.
 // -----------------------------------------------------------------------
 
-type LlamaPerfContextFn = unsafe extern "C" fn(ctx: *mut Opaque) -> LlamaPerfContextData;
 type SkippyAbiFeaturesFn = unsafe extern "C" fn() -> u64;
 type SkippyModelOpenWithEventsFn = unsafe extern "C" fn(
     path: *const c_char,

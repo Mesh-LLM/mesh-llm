@@ -931,18 +931,18 @@ impl StageOpenAiBackend {
                 // a stride so the rate is observable without a debug build or a
                 // telemetry sink: phase spans only reach a job artifact, and
                 // SKIPPY_GRAPH_TRACE emits nothing here.
-                if decode_input_index % GRAPH_REUSE_LOG_STRIDE == 0 {
-                    if let Ok(runtime) = self.runtime.lock() {
-                        let stats = runtime.session_stats();
-                        if stats.tokens_evaluated > 0 {
-                            tracing::info!(
-                                target: "skippy::graph_reuse",
-                                "GRAPH-REUSE n_reused={} n_eval={} reuse_rate={:.4}",
-                                stats.graphs_reused,
-                                stats.tokens_evaluated,
-                                stats.graphs_reused as f64 / stats.tokens_evaluated as f64,
-                            );
-                        }
+                if decode_input_index.is_multiple_of(GRAPH_REUSE_LOG_STRIDE)
+                    && let Ok(runtime) = self.runtime.lock()
+                {
+                    let stats = runtime.session_stats();
+                    if stats.tokens_evaluated > 0 {
+                        tracing::info!(
+                            target: "skippy::graph_reuse",
+                            "GRAPH-REUSE n_reused={} n_eval={} reuse_rate={:.4}",
+                            stats.graphs_reused,
+                            stats.tokens_evaluated,
+                            stats.graphs_reused as f64 / stats.tokens_evaluated as f64,
+                        );
                     }
                 }
                 if self.telemetry.is_debug_enabled() {

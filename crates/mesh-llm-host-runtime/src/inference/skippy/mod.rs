@@ -1704,6 +1704,8 @@ mod tests {
                 tracked_token_counts: 0,
                 max_session_tokens: 2048,
                 total_session_tokens: 0,
+                graphs_reused: 0,
+                tokens_evaluated: 0,
                 lanes: vec![],
             },
             sessions_captured_at_unix_nanos: 111,

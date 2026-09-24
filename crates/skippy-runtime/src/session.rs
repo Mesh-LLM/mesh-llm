@@ -595,20 +595,30 @@ mod graph_reuse_stats_tests {
     fn reuse_rate_is_none_without_evaluations() {
         assert_eq!(GraphReuseStats::default().reuse_rate(), None);
         assert_eq!(
-            GraphReuseStats { graphs_reused: 5, tokens_evaluated: 0 }.reuse_rate(),
+            GraphReuseStats {
+                graphs_reused: 5,
+                tokens_evaluated: 0
+            }
+            .reuse_rate(),
             None
         );
     }
 
     #[test]
     fn reuse_rate_is_reused_over_evaluated() {
-        let stats = GraphReuseStats { graphs_reused: 37, tokens_evaluated: 100 };
+        let stats = GraphReuseStats {
+            graphs_reused: 37,
+            tokens_evaluated: 100,
+        };
         assert_eq!(stats.reuse_rate(), Some(0.37));
     }
 
     #[test]
     fn full_reuse_reports_one() {
-        let stats = GraphReuseStats { graphs_reused: 64, tokens_evaluated: 64 };
+        let stats = GraphReuseStats {
+            graphs_reused: 64,
+            tokens_evaluated: 64,
+        };
         assert_eq!(stats.reuse_rate(), Some(1.0));
     }
 }

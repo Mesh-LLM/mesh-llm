@@ -483,6 +483,10 @@ pub type SkippyDecodeStepSampledMtpFn = unsafe extern "C" fn(
 
 pub type Opaque = c_void;
 
+/// `llama_perf_context`, resolved dynamically when the runtime exports it and
+/// called directly when the runtime is linked statically.
+pub type LlamaPerfContextFn = unsafe extern "C" fn(ctx: *mut Opaque) -> LlamaPerfContextData;
+
 /// Mirrors `llama_perf_context_data` from llama.h.
 ///
 /// `n_reused` is the number of times a compute graph was reused instead of
