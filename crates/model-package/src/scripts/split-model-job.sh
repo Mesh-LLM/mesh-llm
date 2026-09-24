@@ -236,6 +236,11 @@ find "$LLAMA_BUILD_DIR" -name "*.a" 2>/dev/null | head -10 || echo "  WARNING: n
 
 # Build the splitter binary
 echo "  Building skippy-model-package..."
+# The repository defaults to sccache, but the plain HF Jobs image does not
+# install it. An empty wrapper overrides Cargo's repository config for this
+# isolated build. Keep incremental compilation disabled in remote jobs too.
+export RUSTC_WRAPPER=""
+export CARGO_INCREMENTAL=0
 SKIPPY_LLAMA_BUILD_DIR="$LLAMA_BUILD_DIR" \
     cargo build --release -p skippy-model-package 2>&1 | tail -20
 SLICER="${CARGO_TARGET_DIR}/release/skippy-model-package"

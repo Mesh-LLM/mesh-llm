@@ -230,6 +230,15 @@ mod tests {
     }
 
     #[test]
+    fn embedded_script_disables_unavailable_cargo_wrapper() {
+        assert!(EMBEDDED_SCRIPT.contains(
+            r#"export RUSTC_WRAPPER=""
+export CARGO_INCREMENTAL=0
+SKIPPY_LLAMA_BUILD_DIR="$LLAMA_BUILD_DIR" \"#
+        ));
+    }
+
+    #[test]
     fn embedded_script_preserves_catalog_source_revision() {
         assert!(EMBEDDED_SCRIPT.contains(r#""source_revision": source_revision"#));
         assert!(EMBEDDED_SCRIPT.contains(r#"variants[variant_name]["source"] = source_entry"#));
