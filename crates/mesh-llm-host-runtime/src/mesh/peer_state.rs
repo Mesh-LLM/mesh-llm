@@ -159,9 +159,7 @@ pub struct PeerAnnouncement {
     pub(crate) stage_status_list_supported: bool,
     pub(crate) local_gguf_content_id_supported: bool,
     pub(crate) advertised_model_throughput: Vec<crate::network::metrics::ModelThroughputHint>,
-    #[cfg(feature = "payments")]
-    pub(crate) lightning_offers:
-        std::collections::BTreeMap<String, mesh_llm_payments::pricing::Pricing>,
+    pub(crate) lightning_offers: super::LightningOffers,
     pub(crate) cache_affinity:
         Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
     pub(crate) latency_ms: Option<u32>,
@@ -286,9 +284,7 @@ pub struct PeerInfo {
     pub stage_status_list_supported: bool,
     pub local_gguf_content_id_supported: bool,
     pub(crate) advertised_model_throughput: Vec<crate::network::metrics::ModelThroughputHint>,
-    #[cfg(feature = "payments")]
-    pub(crate) lightning_offers:
-        std::collections::BTreeMap<String, mesh_llm_payments::pricing::Pricing>,
+    pub(crate) lightning_offers: super::LightningOffers,
     pub(crate) cache_affinity:
         Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
     /// Most recent direct RTT sample for display purposes (refreshed periodically).
@@ -381,7 +377,6 @@ impl PeerInfo {
             stage_status_list_supported: ann.stage_status_list_supported,
             local_gguf_content_id_supported: ann.local_gguf_content_id_supported,
             advertised_model_throughput: ann.advertised_model_throughput.clone(),
-            #[cfg(feature = "payments")]
             lightning_offers: ann.lightning_offers.clone(),
             cache_affinity: ann.cache_affinity.clone(),
             display_rtt: None,

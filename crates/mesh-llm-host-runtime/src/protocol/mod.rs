@@ -178,5 +178,4 @@ pub(crate) fn decode_control_frame<T: ValidateControlFrame>(
 #[cfg(test)]
 pub(crate) mod tests;
 
-#[cfg(feature = "payments")]
 mod payment_offers;

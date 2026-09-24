@@ -552,7 +552,6 @@ pub(crate) mod tests {
             stage_status_list_supported: false,
             local_gguf_content_id_supported: false,
             advertised_model_throughput: vec![],
-            #[cfg(feature = "payments")]
             lightning_offers: Default::default(),
             cache_affinity: None,
             display_rtt: None,
@@ -698,7 +697,6 @@ pub(crate) mod tests {
                 avg_tokens_per_second_milli: 13_400,
                 throughput_samples: 27,
             }],
-            #[cfg(feature = "payments")]
             lightning_offers: Default::default(),
             cache_affinity: None,
             display_rtt: None,

@@ -130,6 +130,11 @@ jobs:
       - name: Check neutral host on macOS
         if: ${{ matrix.check.platform == 'macos' && matrix.check.kind != 'unit' }}
         run: cargo check --locked -p mesh-llm --bin mesh-llm --no-default-features --features web-ui,dynamic-native-runtime
+      - name: Test payments-free host skips paid peers on macOS
+        if: ${{ matrix.check.platform == 'macos' && matrix.check.kind != 'unit' }}
+        run: |
+          cargo test --locked -p mesh-llm-host-runtime --no-default-features --features dynamic-native-runtime --lib -- \
+            network::openai::payment_routing:: protocol::payment_offers::
       - name: Check neutral host and Node SDK on Windows
         if: ${{ matrix.check.kind == 'portable' && matrix.check.platform == 'windows' }}
         shell: pwsh

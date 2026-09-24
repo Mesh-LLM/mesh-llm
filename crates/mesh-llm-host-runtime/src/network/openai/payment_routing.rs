@@ -111,17 +111,41 @@ pub(super) async fn rank(
     Ok(true)
 }
 
-/// Wallets compiled out: no payment tiers exist, so candidate ordering is left
-/// exactly as capability/context/health eligibility produced it.
+/// Payments compiled out: this node cannot pay, so it behaves like the
+/// free-only policy. Peers that charge for the model are dropped (they would
+/// only answer 402, which is not retried); the remaining free route keeps its
+/// capability/context/health order and is never price-ranked.
 #[cfg(not(feature = "payments"))]
 pub(super) async fn rank(
-    _node: &Node,
-    _model: &str,
+    node: &Node,
+    model: &str,
     _input_estimate: u64,
     _max_output: u64,
-    _candidates: &mut RankedCandidates<InferenceTarget>,
+    candidates: &mut RankedCandidates<InferenceTarget>,
     _request_body: Option<&serde_json::Value>,
 ) -> Result<bool, &'static str> {
+    let mut paid = std::collections::HashSet::new();
+    for target in &candidates.ordered {
+        if let InferenceTarget::Remote(peer) = target
+            && node.peer_charges_for(*peer, model).await
+        {
+            paid.insert(*peer);
+        }
+    }
+    if paid.is_empty() {
+        return Ok(false);
+    }
+    let is_paid = |target: &InferenceTarget| matches!(target, InferenceTarget::Remote(peer) if paid.contains(peer));
+    let equivalent = candidates.ordered[..candidates.equivalent_prefix].to_vec();
+    candidates.ordered.retain(|target| !is_paid(target));
+    if candidates.ordered.is_empty() {
+        return Err("only paid providers serve this model and this build cannot pay");
+    }
+    candidates.equivalent_prefix = candidates
+        .ordered
+        .iter()
+        .take_while(|target| equivalent.contains(target))
+        .count();
     Ok(false)
 }
 
@@ -241,6 +265,68 @@ mod tests {
             service.ledger.payment_intent()?,
             PaymentIntent::FreeOnly
         ));
+        node.endpoint.close().await;
+        seller.endpoint.close().await;
+        Ok(())
+    }
+}
+
+#[cfg(all(test, not(feature = "payments")))]
+mod no_payments_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn build_without_payments_skips_paid_peers() -> anyhow::Result<()> {
+        let node = Node::new_for_tests(crate::mesh::NodeRole::Client).await?;
+        let seller = Node::new_for_tests(crate::mesh::NodeRole::Client).await?;
+        let mut announcement =
+            seller.build_local_announcement(seller.snapshot_local_announcement_data().await);
+        announcement.lightning_offers.insert("test".into());
+        node.add_peer_after_direct_requirements_validated(
+            seller.id(),
+            seller.endpoint.addr(),
+            &announcement,
+            Some(1),
+        )
+        .await;
+        let free = iroh::SecretKey::generate().public();
+        let fast = iroh::SecretKey::generate().public();
+        let slow = iroh::SecretKey::generate().public();
+        let mut tiered = RankedCandidates {
+            ordered: vec![
+                InferenceTarget::Remote(seller.id()),
+                InferenceTarget::Remote(free),
+                InferenceTarget::Remote(fast),
+                InferenceTarget::Remote(slow),
+            ],
+            equivalent_prefix: 3,
+        };
+        assert!(!rank(&node, "test", 1, 1, &mut tiered, None).await.unwrap());
+        assert_eq!(
+            tiered.ordered,
+            vec![
+                InferenceTarget::Remote(free),
+                InferenceTarget::Remote(fast),
+                InferenceTarget::Remote(slow),
+            ]
+        );
+        assert_eq!(tiered.equivalent_prefix, 2);
+        // A model the seller does not price is untouched.
+        let mut other = RankedCandidates {
+            ordered: vec![InferenceTarget::Remote(seller.id())],
+            equivalent_prefix: 1,
+        };
+        assert!(!rank(&node, "other", 1, 1, &mut other, None).await.unwrap());
+        assert_eq!(other.ordered, vec![InferenceTarget::Remote(seller.id())]);
+        let mut paid_only = RankedCandidates {
+            ordered: vec![InferenceTarget::Remote(seller.id())],
+            equivalent_prefix: 1,
+        };
+        assert!(
+            rank(&node, "test", 1, 1, &mut paid_only, None)
+                .await
+                .is_err()
+        );
         node.endpoint.close().await;
         seller.endpoint.close().await;
         Ok(())
