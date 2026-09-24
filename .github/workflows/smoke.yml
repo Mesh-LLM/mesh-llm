@@ -215,10 +215,12 @@ jobs:
           MESH_CI_CONSOLE_PORT: "3151"
           MESH_CI_HEADLESS_API_PORT: "9358"
           MESH_CI_HEADLESS_CONSOLE_PORT: "3152"
-          # Recurrent state scales with the effective context/batch size and
-          # can exhaust CUDA scratch space even for this 350M smoke fixture.
-          # 128 tokens still covers the chat-template plus generated output.
+          # Recurrent state scales with the effective context and batch sizes.
+          # Bound both: context alone only shrinks the KV cache, while the
+          # built-in 512-token batch still requests oversized CUDA scratch.
           MESH_CI_CTX_SIZE: "128"
+          MESH_CI_BATCH_SIZE: "128"
+          MESH_CI_UBATCH_SIZE: "128"
           MESH_CI_LOG: /tmp/mesh-llm-ci-recurrent.log
         run: |
           scripts/ci-smoke-test.sh \
@@ -238,6 +240,8 @@ jobs:
           MESH_COMPAT_API_PORT: "9359"
           MESH_COMPAT_CONSOLE_PORT: "3153"
           MESH_COMPAT_CTX_SIZE: "128"
+          MESH_COMPAT_BATCH_SIZE: "128"
+          MESH_COMPAT_UBATCH_SIZE: "128"
           MESH_COMPAT_LOG: /tmp/mesh-llm-compat-recurrent.log
         run: |
           scripts/ci-compat-smoke.sh \
@@ -271,6 +275,8 @@ jobs:
           MESH_CI_HEADLESS_API_PORT: "9361"
           MESH_CI_HEADLESS_CONSOLE_PORT: "3155"
           MESH_CI_CTX_SIZE: "128"
+          MESH_CI_BATCH_SIZE: "128"
+          MESH_CI_UBATCH_SIZE: "128"
           MESH_CI_LOG: /tmp/mesh-llm-ci-constrained-recurrent.log
         run: |
           scripts/ci-smoke-test.sh \
@@ -382,6 +388,8 @@ jobs:
           MESH_CI_HEADLESS_API_PORT: "9358"
           MESH_CI_HEADLESS_CONSOLE_PORT: "3152"
           MESH_CI_CTX_SIZE: "128"
+          MESH_CI_BATCH_SIZE: "128"
+          MESH_CI_UBATCH_SIZE: "128"
           MESH_CI_LOG: /tmp/mesh-llm-ci-recurrent.log
         run: |
           scripts/ci-smoke-test.sh \
@@ -401,6 +409,8 @@ jobs:
           MESH_COMPAT_API_PORT: "9359"
           MESH_COMPAT_CONSOLE_PORT: "3153"
           MESH_COMPAT_CTX_SIZE: "128"
+          MESH_COMPAT_BATCH_SIZE: "128"
+          MESH_COMPAT_UBATCH_SIZE: "128"
           MESH_COMPAT_LOG: /tmp/mesh-llm-compat-recurrent.log
         run: |
           scripts/ci-compat-smoke.sh \
@@ -434,6 +444,8 @@ jobs:
           MESH_CI_HEADLESS_API_PORT: "9361"
           MESH_CI_HEADLESS_CONSOLE_PORT: "3155"
           MESH_CI_CTX_SIZE: "128"
+          MESH_CI_BATCH_SIZE: "128"
+          MESH_CI_UBATCH_SIZE: "128"
           MESH_CI_LOG: /tmp/mesh-llm-ci-constrained-recurrent.log
         run: |
           scripts/ci-smoke-test.sh \
