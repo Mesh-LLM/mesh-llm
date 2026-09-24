@@ -124,7 +124,8 @@ export default [
     description: "Common questions, troubleshooting, and operational checks.",
     links: [
       ["FAQ", "/docs/pages/faq/"],
-      ["Troubleshooting", "/docs/pages/troubleshooting/"]
+      ["Troubleshooting", "/docs/pages/troubleshooting/"],
+      ["Anonymous analytics", "/docs/pages/analytics/"]
     ]
   },
   {

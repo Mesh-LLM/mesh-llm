@@ -1,7 +1,8 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 5df8ec2b17ee852b9b2ee0b56e8731c49f089cd2 Mon Sep 17 00:00:00 2001
 From: sat <sat@local>
 Date: Thu, 24 Sep 2026 07:15:00 +1000
-Subject: [PATCH] skippy: retain more than one executable graph generation
+Subject: [PATCH 33/33] skippy: retain more than one executable graph
+ generation
 
 Retention keeps exactly one generation, so the cache only covers an
 alternation between two graph shapes. With more distinct shapes in flight it
@@ -37,6 +38,11 @@ otherwise. Silently ignoring "8oops" or "9" would serve at capacity 1 while the
 operator believed otherwise, and every number measured from such a run would be
 mislabelled.
 ---
+ src/llama-context.cpp                | 16 +++--
+ src/llama-context.h                  | 23 +++++--
+ src/skippy/execution_graph_cache.cpp | 97 +++++++++++++++++++++-------
+ 3 files changed, 105 insertions(+), 31 deletions(-)
+
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
 index 101d2e5b8..8d5c1d207 100644
 --- a/src/llama-context.cpp
@@ -241,5 +247,6 @@ index 43f7945a9..aaf811ced 100644
          return false;
      }
      // Cache pressure must not prevent a run that fits with one executable.
---
-2.39.5
+-- 
+2.54.0 (Apple Git-157)
+

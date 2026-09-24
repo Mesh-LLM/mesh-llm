@@ -1,7 +1,7 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From aa95269b919bf25d5cf1c36c43222ecff95b133b Mon Sep 17 00:00:00 2001
 From: sat <sat@local>
 Date: Thu, 24 Sep 2026 06:30:00 +1000
-Subject: [PATCH] skippy: make split graph statistics observable
+Subject: [PATCH 32/33] skippy: make split graph statistics observable
 
 Two independent gates hid the graph counters on a split, which is exactly
 the configuration they exist to explain:
@@ -13,11 +13,14 @@ the configuration they exist to explain:
      own llama log callback and filters INFO, so they never reached the
      serve log. Write them to stderr too, which does reach it.
 ---
+ src/llama-context.cpp | 25 +++++++++++++++++++++----
+ 1 file changed, 21 insertions(+), 4 deletions(-)
+
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index baaccdd97..f5703143c 100644
+index 039f6308c..101d2e5b8 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -3717,13 +3717,30 @@ void llama_context::perf_reset() {
+@@ -3711,13 +3711,30 @@ void llama_context::perf_reset() {
  }
  
  void llama_context::trace_stage_graph_stats(const char * phase) const {
@@ -52,5 +55,6 @@ index baaccdd97..f5703143c 100644
      LLAMA_LOG_INFO("SKIPPY-GRAPH-STATS phase=%s context=%p calls=%" PRIu64 " builds=%" PRIu64
              " reuses=%" PRIu64 " retained_restores=%" PRIu64
              " context_bytes=%zu compute_bytes=%zu memo_thread_hits=%" PRIu64
---
-2.39.5
+-- 
+2.54.0 (Apple Git-157)
+

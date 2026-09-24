@@ -467,6 +467,19 @@ class FamilyEvidenceTests(unittest.TestCase):
 
 
 class WorkflowRerunContractTests(unittest.TestCase):
+    def test_family_battery_writes_compact_json_lines(self):
+        battery = (ROOT / 'scripts/skippy-family-battery.sh').read_text()
+        append = '>> "$RESULTS_JSONL"'
+        writers = []
+        for command in battery.split(append)[:-1]:
+            start = max(command.rfind('\n  jq '), command.rfind('\n    jq '))
+            self.assertNotEqual(start, -1)
+            writers.append(command[start:].lstrip().splitlines()[0].strip())
+        self.assertGreater(len(writers), 1)
+        for writer in writers:
+            with self.subTest(writer=writer):
+                self.assertIn('-c', writer.split())
+
     def test_artifact_selection_is_bound_to_producer_across_attempts(self):
         workflow = yaml.safe_load((ROOT / '.github/workflows/llama-canary-family-pass.yml').read_text())
         jobs = workflow['jobs']

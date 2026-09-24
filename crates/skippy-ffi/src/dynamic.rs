@@ -14,8 +14,8 @@ use crate::{
     NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session, SkippyDecodeStepSampledMtpFn,
     SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventReporterV1, StagePlan, StagePlanDescV1,
     StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStringRefV1, StagePlanValueDescV1,
-    StagePlanValueKind, StagePlanner, StagePlannerConfigV1, Status, TensorInfo, TokenSignal,
-    WorkloadInfoV1, runtime_abi_supported,
+    StagePlanValueKind, StagePlanner, StagePlannerConfigV1, Status, SystemOneSlot, TensorInfo,
+    TokenSignal, WorkloadInfoV1, runtime_abi_supported,
 };
 
 static SYMBOLS: OnceLock<Symbols> = OnceLock::new();
@@ -187,6 +187,8 @@ dynamic_symbols! {
     skippy_model_output_activation_boundary(model: *const Model, out_desc: *mut ActivationBoundaryDesc) -> bool;
     skippy_model_output_activation_vocabulary(model: *const Model, out_desc: *mut ActivationBoundaryDesc) -> bool;
     skippy_model_input_activation_boundary(model: *const Model, out_desc: *mut ActivationBoundaryDesc) -> bool;
+    skippy_system_one_canvas_length(model: *mut Model, out_canvas_token_count: *mut usize, out_error: *mut *mut Error) -> Status;
+    skippy_system_one_read(model: *mut Model, prompt_tokens: *const i32, prompt_token_count: usize, canvas_tokens: *const i32, canvas_token_count: usize, label_token_ids: *const i32, label_token_count: usize, slots: *const SystemOneSlot, slot_count: usize, out_probabilities: *mut f32, output_capacity: usize, out_output_count: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_model_workload_info_v1(model: *const Model, out_info: *mut WorkloadInfoV1, out_error: *mut *mut Error) -> Status;
     skippy_session_create(model: *mut Model, out_session: *mut *mut Session, out_error: *mut *mut Error) -> Status;
     skippy_session_create_from_resident_prefix(model: *mut Model, cache_seq_id: i32, token_ids: *const i32, token_count: usize, out_session: *mut *mut Session, out_error: *mut *mut Error) -> Status;

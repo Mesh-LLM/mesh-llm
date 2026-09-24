@@ -163,6 +163,24 @@ embedding certification additionally requires the official Python SDK smoke.
 Dry-run planning needs no oracle tools; a missing execution prerequisite
 records failed lanes without discarding later family results.
 
+Both the repair and independent verification candidate gates run the System One
+(OpenJEV) smoke, `scripts/skippy-system-one-smoke.sh`, which drives
+`POST /systemone` through the pinned `family-qwen3-dense` fixture for the
+backend-independent contract and fail-closed rejections, and through the pinned
+`unsloth/diffusiongemma-26B-A4B-it-GGUF` Q4_K_M artifact for one complete
+single-lane read with repeat/interleaved determinism. Both artifacts come from
+`ci/model-artifacts/manifests/skippy-system-one-smoke.json`, whose cadence
+authorization and pinned revision/size/SHA-256 are enforced before load; a
+mismatch is a hard failure, never a skip. On a backend declared qualified
+(default `cuda`), a missing pinned artifact is a hard failure rather than an
+unqualified pass. The complete-model read is admitted only on a declared
+qualified backend, so on the Metal runner it reports NOT CERTIFIED through the
+build job summary and the uploaded `llama-canary-system-one-*` artifact rather
+than passing quietly, and a red contract part or a red declared-qualified read
+fails the producer gate, the changed-pin repair gates, and the independent
+verification pass. It adds no family roster row and claims no split or profile
+support.
+
 Each named family job runs `--skip-build --shard-index` on the matching
 `family-certify` pool, with max-parallel 8 and fail-fast disabled. Workers
 restore the executable handoff, including the workload oracle closure, and

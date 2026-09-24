@@ -1,8 +1,8 @@
-From 74ada37bb958ed01884480f7eed382c215dda4b4 Mon Sep 17 00:00:00 2001
+From deea1697ad0781f6095997e6ed05afbf42916289 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Wed, 23 Sep 2026 07:58:18 +1000
-Subject: [PATCH] skippy: expose optional activation vocabulary for startup
- agreement
+Subject: [PATCH 30/31] skippy: expose optional activation vocabulary for
+ startup agreement
 
 ---
  include/skippy/common.h                    |  2 +-
@@ -45,10 +45,10 @@ index b0881ead6..5d6c9ac77 100644
  LLAMA_API bool skippy_model_input_activation_boundary(
          const struct skippy_model * model,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 80ac609e3..b33e38562 100644
+index 81f9158c4..f2d13a702 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -267,6 +267,13 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -273,6 +273,13 @@ if (LLAMA_STAGE_BUILD_TESTS)
      target_compile_features(skippy-graph-build-inputs PRIVATE cxx_std_17)
      target_link_libraries(skippy-graph-build-inputs PRIVATE llama)
      add_dependencies(skippy-stage-slice-plan skippy-graph-build-inputs skippy-profile-residency)

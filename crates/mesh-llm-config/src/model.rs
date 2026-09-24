@@ -39,6 +39,8 @@ pub struct MeshConfig {
     #[serde(default)]
     pub telemetry: TelemetryConfig,
     #[serde(default)]
+    pub analytics: AnalyticsConfig,
+    #[serde(default)]
     pub logging: LoggingConfig,
     #[serde(default)]
     pub defaults: Option<ModelConfigDefaults>,
@@ -1054,6 +1056,8 @@ struct RawMeshConfig {
     #[serde(default)]
     telemetry: TelemetryConfig,
     #[serde(default)]
+    analytics: AnalyticsConfig,
+    #[serde(default)]
     logging: LoggingConfig,
     #[serde(default)]
     defaults: Option<ModelConfigDefaults>,
@@ -1160,6 +1164,7 @@ impl<'de> Deserialize<'de> for MeshConfig {
             mesh_requirements: raw.mesh_requirements,
             owner_control: raw.owner_control,
             telemetry: raw.telemetry,
+            analytics: raw.analytics,
             logging: raw.logging,
             defaults: raw.defaults,
             runtime: raw.runtime,
@@ -1363,6 +1368,21 @@ pub struct TelemetryConfig {
     pub prompt_shape_metrics: bool,
     #[serde(default)]
     pub metrics: TelemetryMetricsConfig,
+}
+
+/// Anonymous product analytics reported to the mesh-llm maintainers.
+///
+/// Distinct from [`TelemetryConfig`], which exports OTLP metrics to an
+/// endpoint the operator chooses and never leaves their network. This section
+/// controls the one reporter that talks to a vendor, and exists so the opt-out
+/// is durable across upgrades.
+///
+/// `enabled` is `None` when the config does not mention analytics, which
+/// resolves to the shipped default of on. `Some(false)` is a recorded opt-out.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct AnalyticsConfig {
+    #[serde(default)]
+    pub enabled: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]

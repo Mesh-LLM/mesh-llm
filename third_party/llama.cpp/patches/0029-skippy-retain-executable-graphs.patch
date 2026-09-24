@@ -1,7 +1,7 @@
-From f423e8ef510663b81b9becd2884532cad0c8e334 Mon Sep 17 00:00:00 2001
+From 9ea92dc60d3889fb5232295bb9520904ce1f5dd8 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Tue, 22 Sep 2026 19:22:27 +1000
-Subject: [PATCH] skippy: retain compatible executable graphs with
+Subject: [PATCH 29/31] skippy: retain compatible executable graphs with
  scheduler-owned arenas
 
 Keep one additional bounded compute owner with its output/no-output arenas. Preserve full reuse guards and graph-owned sampler eligibility, recover allocation pressure with a fresh scheduler and graph, and account direct host metadata. Test split numerical parity against fresh graphs, alternating lanes and shapes, output classes, KV continuation and injected allocation failure.
@@ -147,7 +147,7 @@ index 20bf96501..13900dfab 100644
 +    return size;
 +}
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 815fce61b..0659a5dce 100644
+index 756acbae6..81f9158c4 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -64,6 +64,7 @@ add_library(llama
@@ -159,10 +159,10 @@ index 815fce61b..0659a5dce 100644
              skippy/package_tensor_binding.cpp
              skippy/sampling.cpp
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 50ad90b77..a946f6dd9 100644
+index 96c226162..028d98b99 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -515,6 +515,7 @@ llama_context::llama_context(
+@@ -509,6 +509,7 @@ llama_context::llama_context(
  llama_context::~llama_context() {
      // wait for any pending asynchronous copies into the output buffers before they are freed
      synchronize();
@@ -170,7 +170,7 @@ index 50ad90b77..a946f6dd9 100644
  
      // when training, ggml_opt allocates extra buffers through the scheduler, so the sizes no longer match the expectation
      if (!model.hparams.no_alloc && !opt_ctx) {
-@@ -656,6 +657,9 @@ void llama_context::sched_reserve(const skippy_graph_build_inputs & graph_build_
+@@ -650,6 +651,9 @@ void llama_context::sched_reserve(const skippy_graph_build_inputs & graph_build_
  
      LLAMA_LOG_DEBUG("%s: max_nodes = %zu\n", __func__, max_nodes);
  
@@ -180,7 +180,7 @@ index 50ad90b77..a946f6dd9 100644
      for (auto & res : gf_res_prev) {
          res.reset();
      }
-@@ -887,6 +891,8 @@ bool llama_context::memory_update(
+@@ -885,6 +889,8 @@ bool llama_context::memory_update(
                  }
          }
  
@@ -189,7 +189,7 @@ index 50ad90b77..a946f6dd9 100644
          // reset the previous graph results to make sure that they won't be reused
          // TODO: make mctx->apply() report if a graph reserve is needed, then reset graph results only if the memory module reset the scheduler
          for (auto & res : gf_res_prev) {
-@@ -1425,9 +1431,16 @@ llm_graph_result * llama_context::process_ubatch(
+@@ -1423,9 +1429,16 @@ llm_graph_result * llama_context::process_ubatch(
  
      // the new graph parameters
      // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
@@ -208,7 +208,7 @@ index 50ad90b77..a946f6dd9 100644
          //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
  
          // with pipeline parallelism, the previous graph_compute_async may still be running
-@@ -1439,7 +1452,15 @@ llm_graph_result * llama_context::process_ubatch(
+@@ -1437,7 +1450,15 @@ llm_graph_result * llama_context::process_ubatch(
  
          n_reused++;
      } else {
@@ -224,7 +224,7 @@ index 50ad90b77..a946f6dd9 100644
          res->reset();
  
          ggml_backend_sched_reset(sched.get());
-@@ -1457,13 +1478,16 @@ llm_graph_result * llama_context::process_ubatch(
+@@ -1455,13 +1476,16 @@ llm_graph_result * llama_context::process_ubatch(
              return nullptr;
          }
  
@@ -242,7 +242,7 @@ index 50ad90b77..a946f6dd9 100644
      }
  
      // set the input data for the input tensors
-@@ -2589,6 +2613,8 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
+@@ -2590,6 +2614,8 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
  
      ggml_backend_sched_reset(sched.get());
  
@@ -251,7 +251,7 @@ index 50ad90b77..a946f6dd9 100644
      // when the scheduler is reset, we cannot reuse old graphs, so we reset the previous graph results
      for (auto & res : gf_res_prev) {
          if (res) {
-@@ -3692,6 +3718,16 @@ llama_memory_breakdown llama_context::memory_breakdown() const {
+@@ -3693,6 +3719,16 @@ llama_memory_breakdown llama_context::memory_breakdown() const {
              ggml_backend_t             backend = backend_ptr.get();
              ggml_backend_buffer_type_t buft    = ggml_backend_sched_get_buffer_type(sched.get(), backend);
              ret[buft].compute += ggml_backend_sched_get_buffer_size(sched.get(), backend);
@@ -268,7 +268,7 @@ index 50ad90b77..a946f6dd9 100644
          }
      }
      return ret;
-@@ -3837,6 +3873,8 @@ void llama_context::opt_epoch_iter(
+@@ -3838,6 +3874,8 @@ void llama_context::opt_epoch_iter(
                      res, ubatch, mctx.get(), ctx_type_to_graph_type(cparams.ctx_type), graph_build_inputs);
  
              // the optimizer graph is allocated outside sched, so the next decode must rebuild
@@ -278,10 +278,10 @@ index 50ad90b77..a946f6dd9 100644
              res->reset();
  
 diff --git a/src/llama-context.h b/src/llama-context.h
-index 4b4128f22..76ea54bf1 100644
+index f9896cbd4..2c57f1413 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
-@@ -420,6 +420,19 @@ private:
+@@ -421,6 +421,19 @@ private:
      llm_graph_result_ptr gf_res_reserve;
  
      llm_graph_result * gf_res_prev_active = nullptr;

@@ -1,7 +1,7 @@
-From da49fe2fa498109da0a3b423c8bcd761059441d7 Mon Sep 17 00:00:00 2001
+From 07c250896e4b979cd7017d4fcdfb18d9767c1552 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Wed, 23 Sep 2026 08:25:33 +1000
-Subject: [PATCH] feat(skippy): expose opt-in graph reuse diagnostics
+Subject: [PATCH 31/31] feat(skippy): expose opt-in graph reuse diagnostics
 
 ---
  src/llama-context.cpp                | 30 ++++++++++++++++++++++++++

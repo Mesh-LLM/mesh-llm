@@ -14,6 +14,7 @@ fn config_sync_full_config_roundtrip() {
         mesh_requirements: Default::default(),
         owner_control: Default::default(),
         telemetry: Default::default(),
+        analytics: Default::default(),
         defaults: None,
         runtime: Default::default(),
         models: vec![ModelConfigEntry {
