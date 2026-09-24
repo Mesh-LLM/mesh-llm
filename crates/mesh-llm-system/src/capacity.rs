@@ -7,6 +7,7 @@
 //! arithmetic instead of each recomputing its own.
 
 use crate::hardware::HardwareSurvey;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub fn mesh_capacity_bytes(hw: &HardwareSurvey) -> u64 {
     if unified_memory_only(hw) {
@@ -78,6 +79,59 @@ pub fn local_fit_capacity_bytes(
     } else {
         capped_capacity_bytes(accelerator_bytes, max_vram_gb)
     }
+}
+
+/// The share of the local fit budget that system RAM backs, after any
+/// `max_vram_gb` cap: the RAM credit on an accelerator host that opted into
+/// host-RAM offload, zero on one that did not, the whole budget on a host
+/// without accelerator memory. A pinned GPU adds this share to its own
+/// device memory, so pinning honours the same setting as the whole node.
+pub fn local_ram_share_bytes(
+    hw: &HardwareSurvey,
+    max_vram_gb: Option<f64>,
+    host_ram_offload: bool,
+) -> u64 {
+    let (device_vram, _) = enumerated_device_memory(hw);
+    hw.ram_offload_bytes.min(
+        local_fit_capacity_bytes(hw, max_vram_gb, host_ram_offload).saturating_sub(device_vram),
+    )
+}
+
+/// What turning `host_ram_offload` on would add to the local fit budget.
+/// Zero when it is already on, and on hosts where the setting changes
+/// nothing: without accelerator memory, or with unified memory.
+pub fn host_ram_offload_gain_bytes(
+    hw: &HardwareSurvey,
+    max_vram_gb: Option<f64>,
+    host_ram_offload: bool,
+) -> u64 {
+    if host_ram_offload {
+        return 0;
+    }
+    local_fit_capacity_bytes(hw, max_vram_gb, true).saturating_sub(local_fit_capacity_bytes(
+        hw,
+        max_vram_gb,
+        false,
+    ))
+}
+
+static PROCESS_HOST_RAM_OFFLOAD: AtomicBool = AtomicBool::new(false);
+
+/// Records this process's `gpu.host_ram_offload` for the local-fit consumers
+/// that do not carry the config: model resolution, search and the model CLI.
+/// Set from the loaded config at startup; unset reads as off, the default.
+pub fn set_process_host_ram_offload(enabled: bool) {
+    PROCESS_HOST_RAM_OFFLOAD.store(enabled, Ordering::Relaxed);
+}
+
+pub fn process_host_ram_offload() -> bool {
+    PROCESS_HOST_RAM_OFFLOAD.load(Ordering::Relaxed)
+}
+
+/// This host's local fit budget under the process setting, for consumers
+/// that size or select models without a config in hand.
+pub fn local_fit_budget_bytes(hw: &HardwareSurvey) -> u64 {
+    local_fit_capacity_bytes(hw, None, process_host_ram_offload())
 }
 
 /// Itemized view of the capacity a node advertises. The announcement's
@@ -153,10 +207,7 @@ pub fn advertised_memory(
     // `max_vram_gb` cap shrinks the local budget first, and only what that
     // capped budget still carries beyond the device memory is RAM; without
     // host-RAM offload an accelerator host's budget carries none.
-    let local_budget = local_fit_capacity_bytes(hw, max_vram_gb, host_ram_offload);
-    let ram_offload_bytes = hw
-        .ram_offload_bytes
-        .min(local_budget.saturating_sub(device_vram));
+    let ram_offload_bytes = local_ram_share_bytes(hw, max_vram_gb, host_ram_offload);
     AdvertisedMemory {
         total_bytes,
         reserved_bytes,
@@ -489,6 +540,50 @@ mod tests {
             local_fit_capacity_bytes(&unified, None, false),
             local_fit_capacity_bytes(&unified, None, true)
         );
+    }
+
+    #[test]
+    fn the_offload_gain_and_ram_share_follow_the_setting_where_it_can_change_anything() {
+        let discrete = HardwareSurvey {
+            vram_bytes: 31_427_447_193,
+            gpu_vram: vec![12_878_610_432],
+            gpu_reserved: vec![None],
+            gpus: vec![gpu(12_878_610_432, None, false)],
+            system_ram_bytes: Some(33_488_429_056),
+            ram_offload_bytes: 18_548_836_761,
+            ..HardwareSurvey::default()
+        };
+        assert_eq!(
+            host_ram_offload_gain_bytes(&discrete, None, false),
+            18_548_836_761
+        );
+        assert_eq!(host_ram_offload_gain_bytes(&discrete, None, true), 0);
+        assert_eq!(local_ram_share_bytes(&discrete, None, false), 0);
+        assert_eq!(local_ram_share_bytes(&discrete, None, true), 18_548_836_761);
+
+        // A CPU-only host, even with a `max_vram_gb` cap that gives it a
+        // non-zero budget, has nothing to gain: RAM already is its budget.
+        let cpu_only = HardwareSurvey {
+            vram_bytes: 24_000_000_000,
+            ram_offload_bytes: 24_000_000_000,
+            ..HardwareSurvey::default()
+        };
+        assert_eq!(host_ram_offload_gain_bytes(&cpu_only, None, false), 0);
+        assert_eq!(host_ram_offload_gain_bytes(&cpu_only, Some(8.0), false), 0);
+        assert_eq!(
+            local_ram_share_bytes(&cpu_only, None, false),
+            24_000_000_000
+        );
+
+        let unified = HardwareSurvey {
+            vram_bytes: 96_000_000_000,
+            is_soc: true,
+            gpu_vram: vec![96_000_000_000],
+            gpu_reserved: vec![None],
+            gpus: vec![gpu(96_000_000_000, None, true)],
+            ..HardwareSurvey::default()
+        };
+        assert_eq!(host_ram_offload_gain_bytes(&unified, None, false), 0);
     }
 
     fn assert_breakdown_adds_up(memory: &AdvertisedMemory) {

@@ -129,10 +129,10 @@ where
     launch_failure: StartupLaunchFailureContext<'a>,
     make_survey_spec: G,
     announce_capacity_fallback: bool,
-    /// The node has accelerator memory and did not opt into host-RAM
-    /// offload, so the capacity fallback can name the setting that would let
-    /// it run the model alone from system RAM.
-    host_ram_offload_hint: bool,
+    /// What `gpu.host_ram_offload = true` would add to this node's local fit
+    /// budget. Zero when it is already on or cannot change anything here, in
+    /// which case the capacity fallback does not name the setting.
+    host_ram_offload_gain_bytes: u64,
 }
 
 pub(super) struct StartupLocalRuntimeOnceParams<'a, F>
@@ -239,7 +239,7 @@ where
         launch_failure,
         make_survey_spec,
         announce_capacity_fallback,
-        host_ram_offload_hint,
+        host_ram_offload_gain_bytes,
     } = params;
     let StartupLaunchFailureContext {
         target_tx,
@@ -249,11 +249,7 @@ where
 
     if announce_capacity_fallback {
         let required_bytes = runtime_model_required_bytes(model_bytes);
-        let offload_hint = if host_ram_offload_hint {
-            "; set gpu.host_ram_offload = true to let this node also count system RAM (an order of magnitude slower)"
-        } else {
-            ""
-        };
+        let offload_hint = host_ram_offload_hint(host_ram_offload_gain_bytes);
         let _ = emit_event(OutputEvent::Info {
             message: format!(
                 "Model {model_name} exceeds local runtime capacity; attempting split runtime{offload_hint}"
@@ -302,6 +298,32 @@ where
             Err(err) => {
                 drop(startup_load_guard);
                 let err_msg = format!("{err:#}");
+                let connected_peers = node.peers().await.len();
+                let pending_join_targets = node.join_targets.lock().await.len();
+                if split_fallback_cannot_gather_peers(
+                    announce_capacity_fallback,
+                    &err_msg,
+                    connected_peers,
+                    pending_join_targets,
+                ) {
+                    let message = no_split_peer_message(
+                        model_name,
+                        runtime_model_required_bytes(model_bytes),
+                        local_capacity,
+                        host_ram_offload_gain_bytes,
+                    );
+                    startup_emit_launch_failure(
+                        survey_telemetry,
+                        make_survey_spec(),
+                        launch_started,
+                        err.context(message),
+                        target_tx,
+                        model_name,
+                        console_state,
+                    )
+                    .await;
+                    return None;
+                }
                 if is_retryable_split_start_failure(&err_msg) {
                     let _ = emit_event(OutputEvent::Info {
                         message: format!("Split waiting to retry: {err_msg}"),
@@ -528,13 +550,81 @@ pub(super) async fn startup_register_loaded_runtime(
     payload
 }
 
+/// Local capacity a startup launch plans against. A pinned GPU plans on its
+/// own device memory plus the node's RAM-backed share, which is zero unless
+/// the owner opted into host-RAM offload, so pinning honours the same setting
+/// as the whole node; an unpinned launch uses the node's local fit budget.
+pub(super) fn startup_local_capacity_bytes(
+    pinned_gpu: Option<&StartupPinnedGpuTarget>,
+    node_local_capacity_bytes: u64,
+    node_ram_share_bytes: u64,
+) -> u64 {
+    pinned_gpu
+        .map(|gpu| {
+            gpu.allocatable_vram_bytes()
+                .saturating_add(node_ram_share_bytes)
+        })
+        .unwrap_or(node_local_capacity_bytes)
+}
+
+/// The capacity fallback names `gpu.host_ram_offload` only where turning it on
+/// would add capacity.
+pub(super) fn host_ram_offload_hint(gain_bytes: u64) -> String {
+    if gain_bytes == 0 {
+        return String::new();
+    }
+    format!(
+        "; set gpu.host_ram_offload = true to let this node also count {:.1} GB of system RAM (an order of magnitude slower)",
+        gain_bytes as f64 / 1e9
+    )
+}
+
+/// A capacity fallback whose split cannot find a second participant only
+/// keeps waiting when a peer can actually appear: one is connected, or a join
+/// target is recorded and being dialled. Otherwise the node would stay up
+/// without ever serving the model it was asked for.
+pub(super) fn split_fallback_cannot_gather_peers(
+    capacity_fallback: bool,
+    split_error: &str,
+    connected_peers: usize,
+    pending_join_targets: usize,
+) -> bool {
+    capacity_fallback
+        && (split_error.contains("at least two participating nodes")
+            || split_error.contains("at least two stage participants"))
+        && connected_peers == 0
+        && pending_join_targets == 0
+}
+
+pub(super) fn no_split_peer_message(
+    model_name: &str,
+    required_bytes: u64,
+    local_capacity_bytes: u64,
+    host_ram_offload_gain_bytes: u64,
+) -> String {
+    let offload = if host_ram_offload_gain_bytes > 0 {
+        format!(
+            ", or set gpu.host_ram_offload = true to run it on this node with {:.1} GB of system RAM (an order of magnitude slower)",
+            host_ram_offload_gain_bytes as f64 / 1e9
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "Model {model_name} needs {:.1} GB but this node plans on {:.1} GB, and no peer is connected or joining to take split stages. Start it on a mesh whose peers can (--join or --auto){offload}",
+        required_bytes as f64 / 1e9,
+        local_capacity_bytes as f64 / 1e9,
+    )
+}
+
 pub(super) async fn startup_prepare_launch(
     ctx: StartupPrepareLaunchContext<'_>,
 ) -> Option<StartupPreparedLaunch> {
-    let local_capacity = ctx
-        .pinned_gpu
-        .map(|gpu| gpu.allocatable_vram_bytes())
-        .unwrap_or_else(|| ctx.node.local_runtime_capacity_bytes());
+    let local_capacity = startup_local_capacity_bytes(
+        ctx.pinned_gpu,
+        ctx.node.local_runtime_capacity_bytes(),
+        ctx.node.advertised_memory.ram_offload_bytes,
+    );
     let model_bytes = startup_planning_model_bytes(&ctx).await?;
     let runtime_plan = startup_runtime_plan(ctx.split, local_capacity, model_bytes);
     let launch_kind = startup_launch_kind(runtime_plan, ctx.survey_launch_kind);
@@ -680,8 +770,7 @@ pub(super) async fn startup_launch_runtime(
                 },
                 make_survey_spec: make_launch_failure_spec,
                 announce_capacity_fallback: reason == SplitRuntimeReason::LocalCapacity,
-                host_ram_offload_hint: !config.gpu.host_ram_offload.unwrap_or(false)
-                    && node.vram_bytes() > 0,
+                host_ram_offload_gain_bytes: node.host_ram_offload_gain_bytes,
             })
             .await
         }
@@ -1019,5 +1108,82 @@ mod startup_failure_policy_tests {
 
         assert!(result.is_none());
         assert_eq!(*events.lock().unwrap(), ["started", "prepared", "failed"]);
+    }
+}
+
+#[cfg(test)]
+mod capacity_fallback_tests {
+    use super::{
+        StartupPinnedGpuTarget, host_ram_offload_hint, no_split_peer_message,
+        split_fallback_cannot_gather_peers, startup_local_capacity_bytes,
+    };
+
+    fn pinned_12gb() -> StartupPinnedGpuTarget {
+        StartupPinnedGpuTarget {
+            index: 0,
+            stable_id: "pci:0000:01:00.0".to_string(),
+            backend_device: "CUDA0".to_string(),
+            vram_bytes: 12_878_610_432,
+            reserved_bytes: None,
+        }
+    }
+
+    #[test]
+    fn a_pinned_gpu_plans_on_its_device_memory_plus_the_opted_in_ram_share() {
+        let gpu = pinned_12gb();
+        // Default: the node reports no RAM-backed share, so the pinned GPU
+        // plans on its own memory only.
+        assert_eq!(
+            startup_local_capacity_bytes(Some(&gpu), 12_878_610_432, 0),
+            12_878_610_432
+        );
+        // Opted in: the same RAM share the whole node would count.
+        assert_eq!(
+            startup_local_capacity_bytes(Some(&gpu), 31_427_447_193, 18_548_836_761),
+            31_427_447_193
+        );
+        // Unpinned launches keep the node's local fit budget.
+        assert_eq!(
+            startup_local_capacity_bytes(None, 12_878_610_432, 0),
+            12_878_610_432
+        );
+    }
+
+    #[test]
+    fn the_offload_hint_appears_only_where_the_setting_adds_capacity() {
+        assert_eq!(host_ram_offload_hint(0), "");
+        let hint = host_ram_offload_hint(18_548_836_761);
+        assert!(hint.contains("gpu.host_ram_offload = true"), "{hint}");
+        assert!(hint.contains("18.5 GB"), "{hint}");
+    }
+
+    #[test]
+    fn a_capacity_fallback_without_any_reachable_peer_stops_instead_of_waiting() {
+        let quorum = "split runtime needs at least two participating nodes for m; found 1 eligible";
+        assert!(split_fallback_cannot_gather_peers(true, quorum, 0, 0));
+        // A connected peer or a recorded join target can still bring a stage.
+        assert!(!split_fallback_cannot_gather_peers(true, quorum, 1, 0));
+        assert!(!split_fallback_cannot_gather_peers(true, quorum, 0, 1));
+        // A forced split and unrelated failures keep their existing handling.
+        assert!(!split_fallback_cannot_gather_peers(false, quorum, 0, 0));
+        assert!(!split_fallback_cannot_gather_peers(
+            true,
+            "stage_control_unreachable: connection lost",
+            0,
+            0
+        ));
+    }
+
+    #[test]
+    fn the_no_peer_error_says_what_to_do() {
+        let message =
+            no_split_peer_message("Qwen3-32B", 20_240_000_000, 12_878_610_432, 18_548_836_761);
+        assert!(message.contains("needs 20.2 GB"), "{message}");
+        assert!(message.contains("plans on 12.9 GB"), "{message}");
+        assert!(message.contains("--join or --auto"), "{message}");
+        assert!(message.contains("gpu.host_ram_offload = true"), "{message}");
+
+        let cpu_only = no_split_peer_message("Qwen3-32B", 20_240_000_000, 16_000_000_000, 0);
+        assert!(!cpu_only.contains("host_ram_offload"), "{cpu_only}");
     }
 }

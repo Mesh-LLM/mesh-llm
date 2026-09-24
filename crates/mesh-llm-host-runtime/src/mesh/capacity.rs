@@ -7,7 +7,8 @@
 
 pub use mesh_llm_system::capacity::AdvertisedMemory;
 pub(super) use mesh_llm_system::capacity::{
-    advertised_capacity_bytes, advertised_memory, local_fit_capacity_bytes,
+    advertised_capacity_bytes, advertised_memory, host_ram_offload_gain_bytes,
+    local_fit_capacity_bytes,
 };
 
 #[cfg(test)]
@@ -58,6 +59,8 @@ mod tests {
         assert_eq!(snapshot.vram_bytes, 39_000_000_000);
         assert_eq!(snapshot.local_runtime_capacity_bytes, 39_000_000_000);
         assert_eq!(snapshot.memory.ram_offload_bytes, 0);
+        // What the fallback message can offer: opting in would add the rest.
+        assert_eq!(snapshot.host_ram_offload_gain_bytes, 452_000_000_000);
     }
 
     #[test]
