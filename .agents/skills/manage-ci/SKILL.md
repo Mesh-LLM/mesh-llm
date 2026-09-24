@@ -122,7 +122,7 @@ owning source, and update the inventory and topology in the same change.
   `ci:canary` starts a no-op run in the active group so concurrency cancels the
   prior run without executing PR code.
 - The entrypoint must call the protected default-branch reusable canary lane
-  with an immutable branch reference:
+  with a protected branch reference:
   `Mesh-LLM/mesh-llm/.github/workflows/ci-pr-canary-lane.yml@main`. The lane
   and its runner-owning nested workflows/actions therefore resolve from the
   protected branch. Pass the merge SHA only as the product source being built;

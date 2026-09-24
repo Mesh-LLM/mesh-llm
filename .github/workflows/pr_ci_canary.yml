@@ -38,6 +38,10 @@ jobs:
     permissions:
       contents: read
       packages: read
+    # The protected lane loads workflow YAML from `main`; the merge source
+    # supplies the composite actions, scripts, and catalog data it inspects.
+    # PR changes to the lane and nested slice workflow YAML are outside this
+    # canary's coverage.
     uses: Mesh-LLM/mesh-llm/.github/workflows/ci-pr-canary-lane.yml@main
     with:
       merge_sha: ${{ github.sha }}

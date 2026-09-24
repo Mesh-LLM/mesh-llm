@@ -299,7 +299,8 @@ explicit optional diagnostic exception, not a required check and not part of
 the sibling monitor's five-workflow target list. It calls the protected
 `main`-owned reusable lane, which uses the pull-request merge SHA as the built
 source while retaining the PR head SHA as separate identity evidence. Its
-runner-policy checkouts stay on the protected default branch. The canary owns
+runner-policy jobs leave `policy_source_sha` unset and therefore use the
+protected default branch. The canary owns
 one fixed Linux amd64 CPU chain
 (UI artifact, release host, native runtime, and product composition), uses
 read-only contents/packages permissions and a plain step summary, and does not
@@ -613,9 +614,10 @@ source commit.
 - The optional `pr_ci_canary.yml` runs the planner/action contract from the
   merge-source checkout as a diagnostic, while comparing the merge catalogs to
   the pull-request base and refusing catalog drift. Its fixed graph does not
-  consume planner-selected matrices. Its runner-policy jobs accept an explicit
-  merge-source policy checkout only for this canary; the ordinary four slice
-  callers continue defaulting to the protected branch.
+  consume planner-selected matrices. Its runner-policy jobs leave
+  `policy_source_sha` unset and therefore use the protected default branch, as
+  do the ordinary four slice callers unless they pass an explicit policy
+  revision.
 - Catalog evolution is a sequenced maintainer merge. A branch that needs a new
   `ci/ownership.yml` or `ci/slices.yml` entry cannot pass its own Plan gate,
   because the byte-identical compare is the boundary keeping PR-controlled
