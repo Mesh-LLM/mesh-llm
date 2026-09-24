@@ -199,6 +199,8 @@ class CiWorkflowArtifactTests(unittest.TestCase):
             "Recurrent constrained-stack smoke",
         ):
             self.assertEqual(workflow.count(phase), 2)
+        self.assertEqual(workflow.count('MESH_CI_CTX_SIZE: "128"'), 4)
+        self.assertEqual(workflow.count('MESH_COMPAT_CTX_SIZE: "128"'), 2)
         self.assertIn("MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL", workflow)
         self.assertIn("expected_backend:", workflow)
         self.assertIn("verify-native-runtime-package.sh", workflow)
