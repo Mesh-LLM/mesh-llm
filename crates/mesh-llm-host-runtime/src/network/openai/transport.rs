@@ -618,7 +618,12 @@ async fn build_mesh_request_plan(
         resolved_hosts
     };
     if resolved_hosts.is_empty() {
-        return Err(MeshRequestFailure::UnsupportedWorkload);
+        // Fleet-wide admission already rejected a workload no descriptor
+        // advertises, so an empty set here means the resolved hosts dropped out
+        // of the eligible set — a peer that vanished between discovery and this
+        // filter, most often. That is transient routing state, not a client
+        // request error, so answer with the no-hosts path the resolver uses.
+        return Err(MeshRequestFailure::NoHostsAvailable);
     }
 
     let mut prepared = prepare_mesh_targets(
