@@ -69,6 +69,20 @@ function Resolve-StageBuildDir {
     return Join-Path $llamaBuildRoot $name
 }
 
+# A path bash can use from the repository root: relative when it lies inside
+# the repository, which Git Bash and WSL bash both accept; otherwise the
+# absolute path with forward slashes, which Git Bash accepts.
+function ConvertTo-BashRepoPath {
+    param([string]$Path)
+
+    $full = [System.IO.Path]::GetFullPath($Path)
+    $root = [System.IO.Path]::GetFullPath($repoRoot).TrimEnd("\") + "\"
+    if ($full.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $full.Substring($root.Length).Replace("\", "/")
+    }
+    return $full.Replace("\", "/")
+}
+
 function Prepare-Llama {
     # Prepare through scripts/prepare-llama.sh, the patch queue Linux, macOS
     # and CI apply: the main series, the model_support series in its series
@@ -78,7 +92,16 @@ function Prepare-Llama {
     # main patch came to rely on the Inkling family support.
     $mode = if ($env:MESH_LLM_LLAMA_PIN_SHA) { $env:MESH_LLM_LLAMA_PIN_SHA } else { "pinned" }
     $previousWorkdir = $env:LLAMA_WORKDIR
-    $env:LLAMA_WORKDIR = $llamaDir.Replace("\", "/")
+    # prepare-llama.sh defaults to .deps/llama.cpp under the repository, which
+    # Git Bash and WSL bash both resolve, so only an override is passed, and
+    # relative to the repository root when it lies inside it: WSL bash reads a
+    # drive-letter path as a relative one. A stray LLAMA_WORKDIR is cleared so
+    # the prepared tree is always the one CMake builds.
+    if ($env:MESH_LLM_LLAMA_DIR) {
+        $env:LLAMA_WORKDIR = ConvertTo-BashRepoPath $llamaDir
+    } else {
+        Remove-Item Env:LLAMA_WORKDIR -ErrorAction SilentlyContinue
+    }
     try {
         Invoke-NativeCommand "bash" @("scripts/prepare-llama.sh", $mode)
     } finally {

@@ -132,5 +132,48 @@ class ResolveStageBuildDirTests(unittest.TestCase):
             )
 
 
+@unittest.skipUnless(
+    __import__("os").name == "nt" and shutil.which("pwsh"),
+    "Windows path handling, needs pwsh on Windows",
+)
+class BashRepoPathTests(unittest.TestCase):
+    """The llama workdir handed to bash must not be a drive-letter path."""
+
+    def convert(self, repo_root, path):
+        script = SCRIPT.read_text()
+        match = re.search(
+            r"^function ConvertTo-BashRepoPath \{.*?^\}$", script, re.MULTILINE | re.DOTALL
+        )
+        self.assertIsNotNone(match, "ConvertTo-BashRepoPath not found")
+        command = f"$repoRoot = '{repo_root}'; {match.group(0)}; ConvertTo-BashRepoPath '{path}'"
+        result = subprocess.run(
+            ["pwsh", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip()
+
+    def test_a_workdir_inside_the_repository_is_passed_relative(self):
+        self.assertEqual(
+            self.convert(r"D:\work\mesh-llm", r"D:\work\mesh-llm\.deps\llama.cpp"),
+            ".deps/llama.cpp",
+        )
+        self.assertEqual(
+            self.convert(r"D:\work\mesh-llm\\", r"d:\WORK\mesh-llm\.deps\other"),
+            ".deps/other",
+        )
+
+    def test_a_workdir_outside_the_repository_stays_absolute(self):
+        self.assertEqual(
+            self.convert(r"D:\work\mesh-llm", r"E:\cache\llama.cpp"), "E:/cache/llama.cpp"
+        )
+
+    def test_the_default_workdir_is_left_to_prepare_llama(self):
+        script = SCRIPT.read_text()
+        self.assertIn("Remove-Item Env:LLAMA_WORKDIR -ErrorAction SilentlyContinue", script)
+        self.assertNotIn('$env:LLAMA_WORKDIR = $llamaDir.Replace(', script)
+
+
 if __name__ == "__main__":
     unittest.main()
