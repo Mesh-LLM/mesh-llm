@@ -34,7 +34,13 @@ pub struct GraphReuseStats {
 }
 
 impl GraphReuseStats {
-    /// Fraction of evaluations that reused a graph, if any evaluation happened.
+    /// Graph reuses per single-token evaluation, if any evaluation happened.
+    ///
+    /// `tokens_evaluated` counts single-token decode calls -- llama.cpp routes
+    /// multi-token work to the prompt-eval counters -- while a reuse on a
+    /// multi-token decode still increments the numerator, so a batched or
+    /// speculative step can push this above 1. The raw counters are the
+    /// authoritative fields for diagnosis.
     pub fn reuse_rate(self) -> Option<f64> {
         (self.tokens_evaluated > 0)
             .then(|| self.graphs_reused as f64 / self.tokens_evaluated as f64)
