@@ -255,6 +255,6 @@ jobs:
             echo "- Plan digest: \`$PLAN_DIGEST\`"
             echo "- Built merge source: \`$MERGE_SHA\`"
             echo "- Head identity: \`$HEAD_SHA\`"
-            echo "- Coverage: Linux amd64 CPU UI, host, native runtime, native runtime-event gate, and product composition"
-            echo "- Not covered: Quality, Website, macOS, Windows, GPU, SDK, standalone product smoke, Linux lane orchestration, and release paths"
+            echo "- Coverage: Merge-source composite actions, scripts, and catalog data; Linux amd64 CPU UI, host, native runtime, native runtime-event gate, and product composition"
+            echo "- Not covered: Quality, Website, macOS, Windows, GPU, SDK, standalone product smoke, pull-request changes to workflow YAML (the lane and slice workflows load from main), Linux lane orchestration, and release paths"
           } >> "$GITHUB_STEP_SUMMARY"
