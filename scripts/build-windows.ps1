@@ -70,17 +70,33 @@ function Resolve-StageBuildDir {
 }
 
 # A path bash can use from the repository root: relative when it lies inside
-# the repository, which Git Bash and WSL bash both accept; otherwise the
-# absolute path with forward slashes, which Git Bash accepts.
+# the repository, which Git Bash and WSL bash both accept. Outside it, the
+# absolute form the running bash reads: Git Bash takes a drive-letter path,
+# WSL bash needs /mnt/<drive>, since it reads `E:/...` as a relative path.
 function ConvertTo-BashRepoPath {
-    param([string]$Path)
+    param(
+        [string]$Path,
+        [switch]$Wsl
+    )
 
     $full = [System.IO.Path]::GetFullPath($Path)
     $root = [System.IO.Path]::GetFullPath($repoRoot).TrimEnd("\") + "\"
     if ($full.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
         return $full.Substring($root.Length).Replace("\", "/")
     }
+    if ($full -notmatch '^[A-Za-z]:\\') {
+        throw "MESH_LLM_LLAMA_DIR must be inside the repository or on a drive-letter path: $Path"
+    }
+    if ($Wsl) {
+        return "/mnt/" + $full.Substring(0, 1).ToLowerInvariant() + $full.Substring(2).Replace("\", "/")
+    }
     return $full.Replace("\", "/")
+}
+
+# WSL bash reports a Linux kernel; Git Bash and Cygwin report their own.
+function Test-BashIsWsl {
+    $kernel = (& bash -c "uname -s" 2>$null | Out-String).Trim()
+    return $kernel -eq "Linux"
 }
 
 function Prepare-Llama {
@@ -98,7 +114,11 @@ function Prepare-Llama {
     # drive-letter path as a relative one. A stray LLAMA_WORKDIR is cleared so
     # the prepared tree is always the one CMake builds.
     if ($env:MESH_LLM_LLAMA_DIR) {
-        $env:LLAMA_WORKDIR = ConvertTo-BashRepoPath $llamaDir
+        $insideRepo = [System.IO.Path]::GetFullPath($llamaDir).StartsWith(
+            [System.IO.Path]::GetFullPath($repoRoot).TrimEnd("\") + "\",
+            [System.StringComparison]::OrdinalIgnoreCase)
+        $wsl = if ($insideRepo) { $false } else { Test-BashIsWsl }
+        $env:LLAMA_WORKDIR = ConvertTo-BashRepoPath $llamaDir -Wsl:$wsl
     } else {
         Remove-Item Env:LLAMA_WORKDIR -ErrorAction SilentlyContinue
     }

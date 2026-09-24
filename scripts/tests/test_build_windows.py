@@ -139,20 +139,21 @@ class ResolveStageBuildDirTests(unittest.TestCase):
 class BashRepoPathTests(unittest.TestCase):
     """The llama workdir handed to bash must not be a drive-letter path."""
 
-    def convert(self, repo_root, path):
+    def convert(self, repo_root, path, wsl=False, check=True):
         script = SCRIPT.read_text()
         match = re.search(
             r"^function ConvertTo-BashRepoPath \{.*?^\}$", script, re.MULTILINE | re.DOTALL
         )
         self.assertIsNotNone(match, "ConvertTo-BashRepoPath not found")
-        command = f"$repoRoot = '{repo_root}'; {match.group(0)}; ConvertTo-BashRepoPath '{path}'"
+        flag = " -Wsl" if wsl else ""
+        command = f"$repoRoot = '{repo_root}'; {match.group(0)}; ConvertTo-BashRepoPath '{path}'{flag}"
         result = subprocess.run(
             ["pwsh", "-NoProfile", "-NonInteractive", "-Command", command],
             capture_output=True,
             text=True,
-            check=True,
+            check=check,
         )
-        return result.stdout.strip()
+        return result if not check else result.stdout.strip()
 
     def test_a_workdir_inside_the_repository_is_passed_relative(self):
         self.assertEqual(
@@ -164,10 +165,26 @@ class BashRepoPathTests(unittest.TestCase):
             ".deps/other",
         )
 
-    def test_a_workdir_outside_the_repository_stays_absolute(self):
+    def test_a_workdir_outside_the_repository_is_absolute_for_the_running_bash(self):
+        # Git Bash reads a drive-letter path; WSL bash would read it as
+        # relative and needs the /mnt/<drive> form.
         self.assertEqual(
             self.convert(r"D:\work\mesh-llm", r"E:\cache\llama.cpp"), "E:/cache/llama.cpp"
         )
+        self.assertEqual(
+            self.convert(r"D:\work\mesh-llm", r"E:\cache\llama.cpp", wsl=True),
+            "/mnt/e/cache/llama.cpp",
+        )
+        # Inside the repository the relative form serves both shells.
+        self.assertEqual(
+            self.convert(r"D:\work\mesh-llm", r"D:\work\mesh-llm\.deps\llama.cpp", wsl=True),
+            ".deps/llama.cpp",
+        )
+
+    def test_a_workdir_without_a_drive_letter_is_rejected(self):
+        result = self.convert(r"D:\work\mesh-llm", r"\\server\share\llama.cpp", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("inside the repository or on a drive-letter path", result.stderr + result.stdout)
 
     def test_the_default_workdir_is_left_to_prepare_llama(self):
         script = SCRIPT.read_text()
