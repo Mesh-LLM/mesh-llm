@@ -50,4 +50,3 @@ compute accounting or a production OpenJEV compatibility guarantee.
 
 See the [OpenJEV setup and validation runbook](https://github.com/Mesh-LLM/mesh-llm/blob/main/docs/design/OPENJEV_SKIPPY_POC.md)
 for worker configuration and the supported subset.
-

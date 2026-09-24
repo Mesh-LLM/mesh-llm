@@ -1,8 +1,8 @@
-From 01e671b42a3334bbbf1de0b2b74946e792d2130b Mon Sep 17 00:00:00 2001
+From 2e8062e783752993f4ffc65db5e10e364888b277 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sun, 20 Sep 2026 10:04:24 +1000
-Subject: [PATCH] fix(skippy): validate execution profiles separately from
- shared residency
+Subject: [PATCH 08/14] fix(skippy): validate execution profiles separately
+ from shared residency
 
 ---
  src/CMakeLists.txt                            |  11 +-
@@ -63,7 +63,7 @@ index 0cc6123c7..8726265a6 100644
  
      add_test(
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 6b7f64bf9..2e24a8933 100644
+index 2864b2469..a39cc0214 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -30,7 +30,8 @@ bool skippy_graph_build_inputs::topology_equal(const skippy_graph_build_inputs &
@@ -89,7 +89,7 @@ index 4730915b1..ba320bff1 100644
      bool topology_equal(const skippy_graph_build_inputs & other) const;
  };
 diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
-index 7b61f5575..d5d4c59e4 100644
+index 37bca572d..4e8cfaa95 100644
 --- a/src/skippy/activation.cpp
 +++ b/src/skippy/activation.cpp
 @@ -460,6 +460,7 @@ enum skippy_status skippy_decode_batch(
@@ -177,7 +177,7 @@ index e03242e0d..02ad771ad 100644
          params.n_gpu_layers = config->n_gpu_layers;
          skippy_apply_model_load_memory_config(config, params);
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
-index f0c55102a..e498d33d5 100644
+index e15910887..7cb885d65 100644
 --- a/src/skippy/runtime_types.h
 +++ b/src/skippy/runtime_types.h
 @@ -99,6 +99,7 @@ struct skippy_model {
@@ -413,7 +413,7 @@ index 61c3ee850..2272a3fec 100644
  
  struct skippy_guarded_stage_slice_plan {
 diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
-index ce17404c3..7c146f14a 100644
+index 0926be9b3..1b1c70661 100644
 --- a/src/skippy/tests/graph_build_inputs.cpp
 +++ b/src/skippy/tests/graph_build_inputs.cpp
 @@ -1,5 +1,7 @@
@@ -732,5 +732,5 @@ index a4a7117f6..bcafb8e6b 100644
      runtime_config.resident_tensor_name_count = source_resident_ptrs.size();
      runtime_config.activation_import_identities = nullptr;
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
 

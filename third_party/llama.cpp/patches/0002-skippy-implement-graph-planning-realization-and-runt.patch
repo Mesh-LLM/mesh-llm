@@ -1,7 +1,8 @@
-From 7c8a5d1e39a52caa9bac49d600a1df9dc39c1b5d Mon Sep 17 00:00:00 2001
+From 375442466e0fd164e45ddc6b05a0b992c490b10a Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:16 +1000
-Subject: [PATCH 2/6] skippy: implement graph planning realization and runtime
+Subject: [PATCH 02/14] skippy: implement graph planning realization and
+ runtime
 
 ---
  src/skippy-verify-checkpoint.h          |   24 +
@@ -201,7 +202,7 @@ index 000000000..cfc6a2e66
 +}
 diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
 new file mode 100644
-index 000000000..7b61f5575
+index 000000000..37bca572d
 --- /dev/null
 +++ b/src/skippy/activation.cpp
 @@ -0,0 +1,995 @@
@@ -765,7 +766,7 @@ index 000000000..7b61f5575
 +    }
 +    skippy_synchronize_context_if_pending(session->stage_model);
 +
-+    llm_graph_result * result = session->ctx->get_gf_res_prev();
++    llm_graph_result * result = session->ctx->get_gf_res_prev_active();
 +    const auto * ports = result == nullptr ? nullptr : &result->get_skippy_activation_exports();
 +    const size_t graph_part_count = session->stage_model->output_activation_boundary.part_count;
 +    if (ports == nullptr || ports->size() != graph_part_count || desc->part_count < graph_part_count) {
@@ -2474,7 +2475,7 @@ index 000000000..aa02187d1
 +        std::string & error);
 diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
 new file mode 100644
-index 000000000..767298b94
+index 000000000..0e90ceaac
 --- /dev/null
 +++ b/src/skippy/execution-batch.cpp
 @@ -0,0 +1,417 @@
@@ -2610,7 +2611,7 @@ index 000000000..767298b94
 +                "iteration batching defers optional activation ports to serial execution");
 +        return SKIPPY_STATUS_UNSUPPORTED;
 +    }
-+    llm_graph_result * result = session->ctx->get_gf_res_prev();
++    llm_graph_result * result = session->ctx->get_gf_res_prev_active();
 +    const auto * ports = result == nullptr ? nullptr : &result->get_skippy_activation_exports();
 +    if (ports == nullptr || ports->size() != boundary.part_count) {
 +        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
@@ -8868,7 +8869,7 @@ index 000000000..55499ea20
 +        skippy_error ** out_error);
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
 new file mode 100644
-index 000000000..f0c55102a
+index 000000000..e15910887
 --- /dev/null
 +++ b/src/skippy/runtime_types.h
 @@ -0,0 +1,173 @@
@@ -8876,8 +8877,8 @@ index 000000000..f0c55102a
 +
 +#include "skippy.h"
 +
-+#include "llama-context.h"
-+#include "llama-model.h"
++#include "../llama-context.h"
++#include "../llama-model.h"
 +
 +#include <atomic>
 +#include <cstddef>
@@ -13043,7 +13044,7 @@ index 000000000..61c3ee850
 +        std::string & error);
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
 new file mode 100644
-index 000000000..0ad5146c1
+index 000000000..039dfca72
 --- /dev/null
 +++ b/src/skippy/state.cpp
 @@ -0,0 +1,1095 @@
@@ -13696,7 +13697,7 @@ index 000000000..0ad5146c1
 +        skippy_set_error(out_error, status, error.c_str());
 +        return status;
 +    }
-+    if (llm_graph_result * graph = session->ctx->get_gf_res_prev()) {
++    if (llm_graph_result * graph = session->ctx->get_gf_res_prev_active()) {
 +        graph->reset();
 +    }
 +    session->n_past = std::max<int32_t>(session->n_past, static_cast<int32_t>(std::min<uint64_t>(desc->token_start + desc->token_count, std::numeric_limits<int32_t>::max())));
@@ -15121,5 +15122,5 @@ index 000000000..3ccd2f6a4
 +
 +} // extern "C"
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
 

@@ -1,7 +1,7 @@
-From 2c0eff7fd5bdfe49cf72267bf42cb542ffb82982 Mon Sep 17 00:00:00 2001
+From 059ebc9cefe6cf14d57480cd43ed9e7e4a995972 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:37 +1000
-Subject: [PATCH 4/6] models: expose stage-independent graph semantics
+Subject: [PATCH 04/14] models: expose stage-independent graph semantics
 
 ---
  common/CMakeLists.txt                 |   2 +
@@ -28,11 +28,11 @@ Subject: [PATCH 4/6] models: expose stage-independent graph semantics
  src/models/kimi-linear.cpp            |   4 +-
  src/models/lfm2.cpp                   |   8 +-
  src/models/mamba-base.cpp             |  48 ++--
- src/models/mimo2.cpp                  |  15 +-
+ src/models/mimo2.cpp                  |  14 +-
  src/models/minimax-01.cpp             |  13 +-
  src/models/minimax-m3.cpp             |  45 +++-
- src/models/nemotron-h-moe.cpp         |  31 ++-
- src/models/nemotron-h.cpp             |  13 +-
+ src/models/nemotron-h-moe.cpp         |  41 +--
+ src/models/nemotron-h.cpp             |  11 +-
  src/models/qwen2moe.cpp               |   5 +-
  src/models/qwen35.cpp                 |   2 +-
  src/models/qwen35moe.cpp              |   2 +-
@@ -43,11 +43,11 @@ Subject: [PATCH 4/6] models: expose stage-independent graph semantics
  src/models/rwkv6.cpp                  |   2 +-
  src/models/rwkv7-base.cpp             |   9 +-
  tools/mtmd/mtmd-audio.cpp             |   2 +
- 39 files changed, 1044 insertions(+), 164 deletions(-)
+ 39 files changed, 1043 insertions(+), 172 deletions(-)
  create mode 100644 common/stage-chat.cpp
 
 diff --git a/common/CMakeLists.txt b/common/CMakeLists.txt
-index 38dab96ab..ae1bc1a0f 100644
+index 2b307c59d..732fafee2 100644
 --- a/common/CMakeLists.txt
 +++ b/common/CMakeLists.txt
 @@ -105,6 +105,7 @@ add_library(${TARGET}
@@ -58,7 +58,7 @@ index 38dab96ab..ae1bc1a0f 100644
      speculative.cpp
      speculative.h
      subproc.cpp
-@@ -145,6 +146,7 @@ endif()
+@@ -143,6 +144,7 @@ endif()
  
  if (BUILD_SHARED_LIBS)
      set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -196,7 +196,7 @@ index a7e370578..39ffa20f1 100644
  
      template_params params_content_only;
 diff --git a/common/chat-peg-parser.cpp b/common/chat-peg-parser.cpp
-index ffa43a318..b052dceac 100644
+index f82797495..6971cf5b0 100644
 --- a/common/chat-peg-parser.cpp
 +++ b/common/chat-peg-parser.cpp
 @@ -386,11 +386,12 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
@@ -276,7 +276,7 @@ index 114fa049f..7723d4e35 100644
      common_peg_parser permute(const std::string & rule_prefix, const std::vector<common_peg_parser> & parsers);
  
 diff --git a/common/chat.cpp b/common/chat.cpp
-index 3a204e12d..508f64658 100644
+index 6c8099cf2..d385bcd25 100644
 --- a/common/chat.cpp
 +++ b/common/chat.cpp
 @@ -227,6 +227,11 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
@@ -1041,7 +1041,7 @@ index 000000000..180c0a884
 +    return skippy_common_success(out_error);
 +}
 diff --git a/conversion/base.py b/conversion/base.py
-index d2d80be36..7a3373c0e 100644
+index 6aca7f1d3..4771671e0 100644
 --- a/conversion/base.py
 +++ b/conversion/base.py
 @@ -284,8 +284,17 @@ class ModelBase:
@@ -1292,7 +1292,7 @@ index ad6612647..342a5d795 100644
      return output;
  }
 diff --git a/src/models/gemma4.cpp b/src/models/gemma4.cpp
-index 39e899aa6..8e52c3502 100644
+index 67de74c54..c782a6b7a 100644
 --- a/src/models/gemma4.cpp
 +++ b/src/models/gemma4.cpp
 @@ -107,8 +107,9 @@ void llama_model_gemma4::load_arch_tensors(llama_model_loader &) {
@@ -1624,7 +1624,7 @@ index 07b71ccd3..9a7eadd24 100644
  
          auto * conv_kernel = model.layers[il].shortconv.conv;
 diff --git a/src/models/mamba-base.cpp b/src/models/mamba-base.cpp
-index 03ee3805b..44dfda9d1 100644
+index 370de0f01..2d17560e8 100644
 --- a/src/models/mamba-base.cpp
 +++ b/src/models/mamba-base.cpp
 @@ -37,7 +37,8 @@ ggml_tensor * llm_build_mamba_base::build_mamba_layer(llm_graph_input_rs * inp,
@@ -1654,7 +1654,7 @@ index 03ee3805b..44dfda9d1 100644
  
          // 1D convolution
          // The equivalent is to make a self-overlapping view of conv_x
-@@ -123,13 +126,16 @@ ggml_tensor * llm_build_mamba_base::build_mamba_layer(llm_graph_input_rs * inp,
+@@ -125,13 +128,16 @@ ggml_tensor * llm_build_mamba_base::build_mamba_layer(llm_graph_input_rs * inp,
              return ggml_ssm_scan(ctx, ssm, x, dt, A, B, C, ids, /*K=*/1);
          };
  
@@ -1676,7 +1676,7 @@ index 03ee3805b..44dfda9d1 100644
  
          ggml_tensor * y = ggml_view_3d(ctx0, y_ssm, d_inner, n_seq_tokens, n_seqs, x->nb[2], x->nb[3], 0);
  
-@@ -179,7 +185,7 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
+@@ -181,7 +187,7 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
      ggml_tensor * ssm_states_all  = mctx_cur->get_s_l(il);
      const int64_t state_slots     = ssm_states_all->ne[1];
  
@@ -1685,7 +1685,7 @@ index 03ee3805b..44dfda9d1 100644
      conv               = ggml_reshape_3d(ctx0, conv, d_conv - 1, d_inner + 2 * n_group * d_state, n_seqs);
  
      // d_in_proj = 2 * self.d_inner + 2 * self.ngroups * self.d_state + self.nheads
-@@ -212,10 +218,12 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
+@@ -214,10 +220,12 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
              ggml_tensor * last_conv = ggml_view_3d(ctx0, conv_x, d_conv - 1, d_inner + 2 * n_group * d_state, n_seqs,
                                                     conv_x->nb[1], conv_x->nb[2], (n_seq_tokens - slot) * conv_x->nb[0]);
  
@@ -1702,7 +1702,7 @@ index 03ee3805b..44dfda9d1 100644
          }
  
          // 1D convolution
-@@ -262,19 +270,21 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
+@@ -264,19 +272,21 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
              return ggml_ssm_scan(ctx, ssm, x, dt, A, B, C, ids, K);
          };
  
@@ -1729,21 +1729,20 @@ index 03ee3805b..44dfda9d1 100644
          ggml_tensor * y = ggml_view_4d(ctx0, y_ssm, head_dim, n_head, n_seq_tokens, n_seqs, x->nb[1], n_head * x->nb[1],
                                         n_seq_tokens * n_head * x->nb[1], 0);
 diff --git a/src/models/mimo2.cpp b/src/models/mimo2.cpp
-index 8772319f4..1b0ca2d84 100644
+index a466984af..accde102c 100644
 --- a/src/models/mimo2.cpp
 +++ b/src/models/mimo2.cpp
-@@ -9,7 +9,9 @@ void llama_model_mimo2::load_arch_hparams(llama_model_loader & ml) {
+@@ -9,6 +9,9 @@ void llama_model_mimo2::load_arch_hparams(llama_model_loader & ml) {
      ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,   hparams.n_swa);
      ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,         hparams.rope_freq_base_train_swa, false);
  
--    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer());
 +    // Some conversions append the SWA pattern for the MTP blocks as well; the
-+    // trunk uses the leading n_layer() entries.
-+    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer_all);
++    // trunk uses the leading n_layer() entries. Read the array tolerantly
++    // instead of requiring an exact length.
+     ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
  
      float value_scale = 0.0f;
-     if (ml.get_key(LLM_KV_ATTENTION_VALUE_SCALE, value_scale, false) && value_scale != 1.0f) {
-@@ -373,10 +375,17 @@ llama_model_mimo2::graph_mtp::graph_mtp(const llama_model & model, const llm_gra
+@@ -373,10 +376,17 @@ llama_model_mimo2::graph_mtp::graph_mtp(const llama_model & model, const llm_gra
      cur = ggml_add(ctx0, cur, ffn_inp);
      cb(cur, "mtp_post_ffn", il);
  
@@ -1894,7 +1893,7 @@ index f3b64b210..5e8758132 100644
              msa_mf = ggml_cast(ctx0, msa_kqm, GGML_TYPE_F32);
          }
 diff --git a/src/models/nemotron-h-moe.cpp b/src/models/nemotron-h-moe.cpp
-index 4d03f49e0..bd8408d5a 100644
+index b4fb25430..bd8408d5a 100644
 --- a/src/models/nemotron-h-moe.cpp
 +++ b/src/models/nemotron-h-moe.cpp
 @@ -22,8 +22,13 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
@@ -1913,34 +1912,49 @@ index 4d03f49e0..bd8408d5a 100644
  
      auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd);
  
-@@ -100,8 +105,13 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
+@@ -100,20 +105,13 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
          ggml_tensor * router_logits = build_lora_mm(layer.ffn_gate_inp, cur);
          cb(router_logits, "mtp_ffn_moe_logits", il);
  
+-        ggml_tensor * ffn_shexp = build_ffn(cur,
+-                layer.ffn_up_shexp,   NULL, layer.ffn_up_shexp_s,
+-                NULL,                 NULL, NULL,
+-                layer.ffn_down_shexp, NULL, layer.ffn_down_shexp_s,
+-                NULL,
+-                LLM_FFN_RELU_SQR, LLM_FFN_PAR, il);
+-        cb(ffn_shexp, "mtp_ffn_shexp", il);
+-
 +        ggml_tensor * inp_latent = cur;
-+        if (layer.ffn_latent_down) {
+         if (layer.ffn_latent_down) {
+-            cur = ggml_mul_mat(ctx0, layer.ffn_latent_down, cur);
 +            inp_latent = ggml_mul_mat(ctx0, layer.ffn_latent_down, cur);
-+        }
-+
+         }
+ 
          ggml_tensor * moe_out =
 -            build_moe_ffn(cur,
 +            build_moe_ffn(inp_latent,
                  layer.ffn_gate_inp,
                  layer.ffn_up_exps,
                  nullptr, // no gate
-@@ -118,6 +128,11 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
-                 layer.ffn_down_exps_s);
-         cb(moe_out, "mtp_ffn_moe_out", il);
+@@ -132,8 +130,17 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
  
-+        if (layer.ffn_latent_up) {
-+            moe_out = ggml_mul_mat(ctx0, layer.ffn_latent_up, moe_out);
+         if (layer.ffn_latent_up) {
+             moe_out = ggml_mul_mat(ctx0, layer.ffn_latent_up, moe_out);
 +            cb(moe_out, "mtp_ffn_moe_latent_up", il);
-+        }
+         }
+ 
++        ggml_tensor * ffn_shexp = build_ffn(cur,
++                layer.ffn_up_shexp,   NULL, layer.ffn_up_shexp_s,
++                NULL,                 NULL, NULL,
++                layer.ffn_down_shexp, NULL, layer.ffn_down_shexp_s,
++                NULL,
++                LLM_FFN_RELU_SQR, LLM_FFN_PAR, il);
++        cb(ffn_shexp, "mtp_ffn_shexp", il);
 +
-         ggml_tensor * ffn_shexp = build_ffn(cur,
-                 layer.ffn_up_shexp,   NULL, layer.ffn_up_shexp_s,
-                 NULL,                 NULL, NULL,
-@@ -145,9 +160,13 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
+         cur = ggml_add(ctx0, moe_out, ffn_shexp);
+         cb(cur, "mtp_ffn_out", il);
+     }
+@@ -153,9 +160,13 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
      }
  
      // LM head
@@ -1958,10 +1972,10 @@ index 4d03f49e0..bd8408d5a 100644
      cb(cur, "result_output", -1);
  
 diff --git a/src/models/nemotron-h.cpp b/src/models/nemotron-h.cpp
-index ff8784d18..51a0855f5 100644
+index be27650b0..0d97f3f68 100644
 --- a/src/models/nemotron-h.cpp
 +++ b/src/models/nemotron-h.cpp
-@@ -62,14 +62,16 @@ void llama_model_nemotron_h::load_arch_tensors(llama_model_loader & ml) {
+@@ -64,14 +64,16 @@ void llama_model_nemotron_h::load_arch_tensors(llama_model_loader & ml) {
      const int64_t moe_n_embd = hparams.moe_latent_size > 0 ? hparams.moe_latent_size : n_embd;
  
      // embeddings
@@ -1981,18 +1995,16 @@ index ff8784d18..51a0855f5 100644
              output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
          }
      }
-@@ -170,6 +172,11 @@ void llama_model_nemotron_h::load_arch_tensors(llama_model_loader & ml) {
+@@ -172,6 +174,9 @@ void llama_model_nemotron_h::load_arch_tensors(llama_model_loader & ml) {
          layer.attn_post_norm  = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM,  "weight", i), {n_embd}, mtp_flags);
          layer.ffn_gate_inp    = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,    "weight", i), {n_embd, n_expert}, mtp_flags);
          layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias",   i), {n_expert}, mtp_flags);
 +        // Latent (LoRA-compressed) expert projections, as supported for trunk
 +        // MoE layers; optional so drafts whose experts run at full width load
 +        // unchanged.
-+        layer.ffn_latent_down = create_tensor(tn(LLM_TENSOR_FFN_LATENT_DOWN, "weight", i), {n_embd, moe_n_embd}, mtp_flags | TENSOR_NOT_REQUIRED);
-+        layer.ffn_latent_up   = create_tensor(tn(LLM_TENSOR_FFN_LATENT_UP,   "weight", i), {moe_n_embd, n_embd}, mtp_flags | TENSOR_NOT_REQUIRED);
+         layer.ffn_latent_down = create_tensor(tn(LLM_TENSOR_FFN_LATENT_DOWN, "weight", i), {n_embd, moe_n_embd}, mtp_flags | TENSOR_NOT_REQUIRED);
+         layer.ffn_latent_up   = create_tensor(tn(LLM_TENSOR_FFN_LATENT_UP,   "weight", i), {moe_n_embd, n_embd}, mtp_flags | TENSOR_NOT_REQUIRED);
          layer.ffn_down_exps   = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS,   "weight", i), {n_ff_exp,   moe_n_embd, n_expert}, mtp_flags);
-         layer.ffn_up_exps     = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,     "weight", i), {moe_n_embd, n_ff_exp,   n_expert}, mtp_flags);
-         layer.ffn_down_shexp  = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP,  "weight", i), {n_ff_shexp, n_embd}, mtp_flags);
 diff --git a/src/models/qwen2moe.cpp b/src/models/qwen2moe.cpp
 index 8bcb1017b..9e2cedf64 100644
 --- a/src/models/qwen2moe.cpp
@@ -2063,10 +2075,10 @@ index 30c08ed35..8e938a69a 100644
      if (n_vocab_in > n_vocab_out) {
          // case: Qwen3TTS model with codec_head as output
 diff --git a/src/models/qwen4exp.cpp b/src/models/qwen4exp.cpp
-index 8ace95f73..7ee067a06 100644
+index f33989de0..7925db11c 100644
 --- a/src/models/qwen4exp.cpp
 +++ b/src/models/qwen4exp.cpp
-@@ -573,6 +573,12 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
+@@ -590,6 +590,12 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
          ggml_set_input(qsa->blk_pos);
          ggml_set_input(qsa->bias);
  
@@ -2079,7 +2091,7 @@ index 8ace95f73..7ee067a06 100644
          inp = qsa.get();
          res->add_input(std::move(qsa));
          qsa_inps.emplace((uint32_t) r, inp);
-@@ -899,7 +905,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn_linear(
+@@ -913,7 +919,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn_linear(
      ggml_tensor * conv_input = build_conv_state_at(inp, conv_states_all, qkv_mixed,
              conv_kernel_size - 1, conv_channels, il);
  
@@ -2088,7 +2100,7 @@ index 8ace95f73..7ee067a06 100644
      state = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim, num_v_heads, n_seqs);
      cb(state, "state_predelta", il);
  
-@@ -1133,7 +1139,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_conv_state_at(
+@@ -1147,7 +1153,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_conv_state_at(
  
      auto it = rs_rows.find(conv_states_all);
      if (it == rs_rows.end()) {
@@ -2097,7 +2109,7 @@ index 8ace95f73..7ee067a06 100644
      }
      ggml_tensor * rows = it->second;
  
-@@ -1162,7 +1168,9 @@ ggml_tensor * llama_model_qwen4exp::graph::build_conv_state_at(
+@@ -1176,7 +1182,9 @@ ggml_tensor * llama_model_qwen4exp::graph::build_conv_state_at(
                  conv_states_all->nb[1],
                  (slot * mem_size + kv_head) * row_size);
  
@@ -2108,7 +2120,7 @@ index 8ace95f73..7ee067a06 100644
      }
  
      return conv_input;
-@@ -1178,6 +1186,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_inp_ple(
+@@ -1192,6 +1200,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_inp_ple(
  
      ple_inp->rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_heads * n_tokens);
      ggml_set_input(ple_inp->rows);
@@ -2204,5 +2216,5 @@ index c25bf4ec8..6f017519f 100644
          }
  
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
 

@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Thu, 24 Sep 2026 12:25:00 +1000
+Subject: [PATCH] fix(cuda): keep integer dup off captured graphs
+
+The updated llama.cpp pin enables CUDA offload for I16 and I32 DUP nodes.
+Stable CUDA graph capture can fail once those nodes move from the host into
+the captured graph, aborting the third request in the CUDA smoke test.
+
+Retain the previous backend placement for integer DUP nodes while leaving the
+new CUDA copy kernels available to explicit copy operations.
+
+---
+ ggml/src/ggml-cuda/ggml-cuda.cu | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index 83cf710d1..56eb07f59 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -5299,7 +5299,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
+                 return false;
+             } break;
+         case GGML_OP_DUP:
+-                return true;
++            {
++                // Integer DUP offload can fail while capturing stable CUDA graphs.
++                // Keep these tensors on the host until the upstream graph path is safe.
++                ggml_type src0_type = op->src[0]->type;
++                return src0_type != GGML_TYPE_I32 && src0_type != GGML_TYPE_I16;
++            } break;
+         case GGML_OP_ARGMAX:
+         case GGML_OP_COUNT_EQUAL:
+             {
+-- 
+2.51.0
+

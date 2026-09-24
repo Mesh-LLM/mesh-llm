@@ -75,6 +75,21 @@ class FamilyEvidenceTests(unittest.TestCase):
         E.write(self.package / 'identity.json', self.identity)
         self.digest = E.sha(self.package / 'identity.json')
 
+    def test_mtp_family_cannot_certify_without_its_all_head_lane(self):
+        model = copy.deepcopy(self.plan['selected_models'][0])
+        model['certification_lanes'].append('native-mtp-heads')
+        path = self.evidence / 'dense/results.jsonl'
+        with self.assertRaisesRegex(ValueError, 'native-mtp-heads incomplete'):
+            E.validate_results(path, 'dense', model)
+        row = json.loads(path.read_text())
+        row['outcomes'].append({'name': 'native-mtp-heads', 'status': 'pass', 'exit_code': 0})
+        path.write_text(json.dumps(row) + '\n')
+        E.validate_results(path, 'dense', model)
+        row['outcomes'][-1]['status'] = 'fail'
+        path.write_text(json.dumps(row) + '\n')
+        with self.assertRaisesRegex(ValueError, 'native-mtp-heads incomplete'):
+            E.validate_results(path, 'dense', model)
+
     def build_closure(self):
         """Create a synthetic workload oracle closure and its handoff tar."""
         directory = self.root / 'closure-src'
@@ -110,6 +125,14 @@ class FamilyEvidenceTests(unittest.TestCase):
 
     def test_complete_distributed_pass(self):
         self.aggregate()
+
+    def test_pretty_printed_worker_evidence_is_accepted(self):
+        path = self.evidence / 'dense/results.jsonl'
+        certification = json.loads(path.read_text())
+        preflight = {'family': 'dense', 'exit_code': 0,
+                     'outcomes': [{'name': 'model-preflight', 'status': 'pass', 'exit_code': 0}]}
+        path.write_text(json.dumps(preflight, indent=2) + '\n' + json.dumps(certification) + '\n')
+        E.validate_results(path, 'dense', self.plan['selected_models'][0])
 
     def rerun_receipt(self, family='dense', outcome='success', attempt='3'):
         previous = self.evidence / f'{family}-previous'
@@ -452,6 +475,19 @@ class FamilyEvidenceTests(unittest.TestCase):
 
 
 class WorkflowRerunContractTests(unittest.TestCase):
+    def test_family_battery_writes_compact_json_lines(self):
+        battery = (ROOT / 'scripts/skippy-family-battery.sh').read_text()
+        append = '>> "$RESULTS_JSONL"'
+        writers = []
+        for command in battery.split(append)[:-1]:
+            start = max(command.rfind('\n  jq '), command.rfind('\n    jq '))
+            self.assertNotEqual(start, -1)
+            writers.append(command[start:].lstrip().splitlines()[0].strip())
+        self.assertGreater(len(writers), 1)
+        for writer in writers:
+            with self.subTest(writer=writer):
+                self.assertIn('-c', writer.split())
+
     def test_artifact_selection_is_bound_to_producer_across_attempts(self):
         workflow = yaml.safe_load((ROOT / '.github/workflows/llama-canary-family-pass.yml').read_text())
         jobs = workflow['jobs']

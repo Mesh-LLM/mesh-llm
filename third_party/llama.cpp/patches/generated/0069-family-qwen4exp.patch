@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/qwen4exp.cpp b/src/models/qwen4exp.cpp
-index 7ee067a0645cb9c64c80a73b7cddb5729604abb4..c266a0bdfdc31c139155e35c255d5d586de74bd4 100644
+index 7925db11ca7466c8c2f30f69b1bfea6ee23ea5f9..9126631b9e537d69280ba13ba3c881f8769606ef 100644
 --- a/src/models/qwen4exp.cpp
 +++ b/src/models/qwen4exp.cpp
-@@ -375,6 +375,8 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -392,6 +392,8 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
      cb(res_hc, "hc_init", -1);
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 7ee067a0645cb9c64c80a73b7cddb5729604abb4..c266a0bdfdc31c139155e35c255d5d58
          res->t_layer_inp[il] = res_hc;
  
          if (hparams.is_ple(il)) {
-@@ -423,6 +425,7 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -440,6 +442,7 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
  
          // "l_last" is the layer output name that build_cvec and imatrix look for
          cb(res_hc, "l_last", il);

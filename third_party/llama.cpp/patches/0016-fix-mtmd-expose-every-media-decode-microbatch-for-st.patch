@@ -1,0 +1,116 @@
+From 9bb6ef7bd60623e67dd43f353550ba2d0ce53e43 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Tue, 22 Sep 2026 16:46:12 +1000
+Subject: [PATCH] fix(mtmd): expose every media decode microbatch for stage
+ export
+
+---
+ include/skippy/common.h    |  2 +-
+ tools/mtmd/mtmd-helper.cpp | 36 +++++++++++++++++++++++++++++++++++-
+ tools/mtmd/mtmd-helper.h   | 16 ++++++++++++++++
+ 3 files changed, 52 insertions(+), 2 deletions(-)
+
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index c0c7e6aa4..ba62a2c8b 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -46,7 +46,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 61
++#define SKIPPY_ABI_VERSION_PATCH 62
+ 
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+diff --git a/tools/mtmd/mtmd-helper.cpp b/tools/mtmd/mtmd-helper.cpp
+index bdf8bf6fe..cc16807ba 100644
+--- a/tools/mtmd/mtmd-helper.cpp
++++ b/tools/mtmd/mtmd-helper.cpp
+@@ -207,6 +207,25 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
+         int32_t n_batch,
+         bool logits_last,
+         llama_pos * new_n_past) {
++    return mtmd_helper_eval_chunk_single_with_callback(ctx, lctx, chunk, n_past, seq_id, n_batch, logits_last,
++                                                       new_n_past, nullptr, nullptr);
++}
++
++int32_t mtmd_helper_eval_chunk_single_with_callback(mtmd_context *                    ctx,
++                                                    llama_context *                   lctx,
++                                                    const mtmd_input_chunk *          chunk,
++                                                    llama_pos                         n_past,
++                                                    llama_seq_id                      seq_id,
++                                                    int32_t                           n_batch,
++                                                    bool                              logits_last,
++                                                    llama_pos *                       new_n_past,
++                                                    mtmd_helper_chunk_decode_callback callback,
++                                                    void *                            user_data) {
++    if (callback != nullptr) {
++        // An activation export belongs to one live graph. Never let a helper
++        // decode hide earlier microbatches before the caller can capture them.
++        n_batch = std::min(n_batch, static_cast<int32_t>(llama_n_ubatch(lctx)));
++    }
+     GGML_ASSERT(n_batch > 0);
+     int32_t ret;
+     llama_batch text_batch = llama_batch_init(n_batch, 0, 1);
+@@ -239,6 +258,10 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
+                 llama_batch_free(text_batch);
+                 return ret;
+             }
++            if (callback != nullptr && (ret = callback(text_batch.n_tokens, user_data)) != 0) {
++                llama_batch_free(text_batch);
++                return ret;
++            }
+             *new_n_past += text_batch.n_tokens;
+         }
+ 
+@@ -258,7 +281,18 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
+         LOG_INF("%s slice encoded in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
+ 
+         float * embd = mtmd_get_output_embd(ctx);
+-        ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past, nullptr, nullptr);
++
++        struct callback_context {
++            mtmd_helper_chunk_decode_callback callback;
++            void *                            user_data;
++        } capture{ callback, user_data };
++
++        const auto after_decode = [](llama_batch batch, void * opaque) -> int32_t {
++            auto * capture = static_cast<callback_context *>(opaque);
++            return capture->callback(batch.n_tokens, capture->user_data);
++        };
++        ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past,
++                                             callback != nullptr ? +after_decode : nullptr, &capture);
+         if (ret != 0) {
+             LOG_ERR("failed to decode %s\n", name);
+             llama_batch_free(text_batch);
+diff --git a/tools/mtmd/mtmd-helper.h b/tools/mtmd/mtmd-helper.h
+index 10f2171c0..1bc8c89c5 100644
+--- a/tools/mtmd/mtmd-helper.h
++++ b/tools/mtmd/mtmd-helper.h
+@@ -117,6 +117,22 @@ MTMD_API int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
+                                                bool logits_last,
+                                                llama_pos * new_n_past);
+ 
++// Called after each bounded decode while its graph outputs are still live.
++// A nonzero result stops evaluation and is returned to the caller.
++typedef int32_t (*mtmd_helper_chunk_decode_callback)(int32_t n_tokens, void * user_data);
++
++/** @brief Evaluate a media/text chunk and capture every native microbatch before reuse. */
++MTMD_API int32_t mtmd_helper_eval_chunk_single_with_callback(mtmd_context *                    ctx,
++                                                             struct llama_context *            lctx,
++                                                             const mtmd_input_chunk *          chunk,
++                                                             llama_pos                         n_past,
++                                                             llama_seq_id                      seq_id,
++                                                             int32_t                           n_batch,
++                                                             bool                              logits_last,
++                                                             llama_pos *                       new_n_past,
++                                                             mtmd_helper_chunk_decode_callback callback,
++                                                             void *                            user_data);
++
+ typedef int32_t (*mtmd_helper_post_decode_callback)(struct llama_batch batch, void * user_data);
+ 
+ // helper function to decode an image whose embeddings have already been calculated
+-- 
+2.54.0 (Apple Git-157)
+

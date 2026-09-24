@@ -590,7 +590,8 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
         validation_entrypoints = {
             path.name
             for path in WORKFLOWS.glob("pr_*.yml")
-            if "  pull_request:" in path.read_text(encoding="utf-8")
+            if path.name != "pr_ci_canary.yml"
+            and "  pull_request:" in path.read_text(encoding="utf-8")
         }
         self.assertEqual(validation_entrypoints, set(expected))
 
