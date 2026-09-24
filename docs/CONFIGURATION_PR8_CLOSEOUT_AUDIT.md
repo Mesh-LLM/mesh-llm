@@ -28,7 +28,7 @@ The reverse audit covers every canonical manifest origin. The tables below
 call out changed sinks in detail; this inventory prevents an undocumented
 schema row or stale manifest row from passing review:
 
-`version`, `gpu.assignment`, `gpu.parallel`,
+`version`, `gpu.assignment`, `gpu.parallel`, `gpu.host_ram_offload`,
 `mesh_requirements.min_node_version`, `mesh_requirements.max_node_version`,
 `mesh_requirements.min_protocol_version`, `mesh_requirements.max_protocol_version`,
 `mesh_requirements.require_release_attestation`, `mesh_requirements.release_signer_keys`,

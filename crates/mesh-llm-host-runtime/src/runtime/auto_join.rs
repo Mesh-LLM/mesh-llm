@@ -22,6 +22,7 @@ pub(super) async fn maybe_discover_join_candidates(
     options: &mut RuntimeOptions,
     has_startup_models: bool,
     auto_join_candidates: &mut Vec<(String, Option<String>)>,
+    host_ram_offload: bool,
 ) -> Result<()> {
     // Ask the resolver rather than `options.join`: a token that lives only in
     // a file is still a configured token, and discovery must not run over it.
@@ -37,7 +38,10 @@ pub(super) async fn maybe_discover_join_candidates(
         options.mesh_name = Some(name.clone());
     }
 
-    let my_vram_gb = mesh::detect_vram_bytes_capped(options.max_vram) as f64 / 1e9;
+    // Plan the model a new mesh starts with on what this node can hold without
+    // spilling into RAM, the same budget as the local fit and the capacity
+    // the node advertises, unless the owner opted into host-RAM offload.
+    let my_vram_gb = mesh::detect_local_fit_bytes(options.max_vram, host_ram_offload) as f64 / 1e9;
     let target_name = options.mesh_name.clone();
 
     match options.mesh_discovery_mode {

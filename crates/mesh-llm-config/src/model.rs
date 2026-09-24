@@ -68,6 +68,12 @@ pub struct GpuConfig {
     pub assignment: GpuAssignment,
     #[serde(default)]
     pub parallel: Option<usize>,
+    /// Let the local fit and auto-join count system RAM as model capacity on
+    /// a host with accelerator memory. Off when unset: a model that only fits
+    /// by spilling into RAM decodes an order of magnitude slower. The
+    /// capacity advertised to the mesh never includes RAM either way.
+    #[serde(default)]
+    pub host_ram_offload: Option<bool>,
 }
 
 pub const DEFAULT_MODEL_TARGET_DEMAND_UPGRADE_MIN_REQUESTS: u64 = 2;

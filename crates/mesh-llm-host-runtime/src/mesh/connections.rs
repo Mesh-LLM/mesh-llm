@@ -9,6 +9,9 @@ pub(crate) struct NodeHardwareSnapshot {
     pub(crate) vram_bytes: u64,
     /// Broader local fit budget, which may include CPU offload memory.
     pub(crate) local_runtime_capacity_bytes: u64,
+    /// What `gpu.host_ram_offload = true` would add to that budget; zero when
+    /// it is already on or cannot change anything on this host.
+    pub(crate) host_ram_offload_gain_bytes: u64,
     pub(crate) gpu_name: Option<String>,
     pub(crate) hostname: Option<String>,
     pub(crate) is_soc: Option<bool>,

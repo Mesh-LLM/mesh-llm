@@ -415,6 +415,7 @@ async fn make_test_node_with_requirements(
         )),
         vram_bytes: 64 * 1024 * 1024 * 1024,
         local_runtime_capacity_bytes: 64 * 1024 * 1024 * 1024,
+        host_ram_offload_gain_bytes: 0,
         peer_change_tx,
         peer_change_rx,
         inflight_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),

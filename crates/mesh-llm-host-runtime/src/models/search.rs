@@ -373,7 +373,7 @@ fn search_sort_name(sort: SearchSort) -> &'static str {
 }
 
 fn local_capacity_json() -> Value {
-    let vram_bytes = hardware::survey().vram_bytes;
+    let vram_bytes = mesh_llm_system::capacity::local_fit_budget_bytes(&hardware::survey());
     let vram_gb = vram_bytes as f64 / 1e9;
     json!({
         "vram_bytes": vram_bytes,
@@ -394,7 +394,8 @@ fn capabilities_json(caps: ModelCapabilities) -> Value {
 
 fn fit_code_for_size_label(size_label: &str) -> Option<&'static str> {
     let model_gb = catalog::parse_size_gb(size_label);
-    let vram_gb = hardware::survey().vram_bytes as f64 / 1e9;
+    let vram_gb =
+        mesh_llm_system::capacity::local_fit_budget_bytes(&hardware::survey()) as f64 / 1e9;
     if model_gb <= 0.0 || vram_gb <= 0.0 {
         return None;
     }
