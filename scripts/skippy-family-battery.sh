@@ -259,7 +259,7 @@ PY
 
 record_preflight_outcome() {
   local name="$1" family="$2" model_id="$3" status="$4" outcome="$5" note="$6"
-  jq -n \
+  jq -c -n \
     --arg family "$family" \
     --arg model_id "$model_id" \
     --arg status "$status" \
@@ -380,7 +380,7 @@ scan_model() {
     return 0
   fi
   if ! "$BIN_DIR/skippy-model-package" inspect "$target" >"$scan_json" 2>"$scan_log"; then
-    jq -n \
+    jq -c -n \
       --arg family "$family" \
       --arg model_id "$model_id" \
       --arg target "$target" \
@@ -394,7 +394,7 @@ scan_model() {
   MODEL_SIZE_BYTES="$(jq '[.tensors[].byte_size] | add // 0' "$scan_json")"
   local dimensions
   if ! dimensions="$("$PLANNER" --inspect-gguf "$target")"; then
-    jq -n \
+    jq -c -n \
       --arg family "$family" \
       --arg model_id "$model_id" \
       --arg target "$target" \
@@ -561,7 +561,7 @@ run_certify() {
       '{family:$family,model_id:$model_id,source_revision:$source_revision,split_layer:$split_layer,model_size_bytes:$model_size_bytes,activation_width:$activation_width,startup_timeout_secs:$startup_timeout_secs,certification_timeout_secs:$certification_timeout_secs,elapsed_seconds:$elapsed_seconds,native_mtp:($native_mtp == 1),exit_code:$exit_code,manifest:input_filename,outcomes:.commands}' \
       "$manifest_path" >> "$RESULTS_JSONL"
   else
-    jq -n \
+    jq -c -n \
       --arg family "$family" \
       --arg model_id "$model_id" \
       --arg source_revision "$source_revision" \
@@ -894,7 +894,7 @@ run_mmproj_smoke() {
     FAILURES+=("$family@mmproj")
     MM_SMOKE_FAILURE_COUNT=$((MM_SMOKE_FAILURE_COUNT + 1))
   fi
-  jq -n \
+  jq -c -n \
     --arg family "$family" \
     --arg model_id "$model_id" \
     --argjson exit_code "$exit_code" \
@@ -985,7 +985,7 @@ run_workload_certify() {
     fi
     "${verify_command[@]}" >>"$log_path" 2>&1 || exit_code=$?
   fi
-  jq -n \
+  jq -c -n \
     --arg family "$family" \
     --arg model_id "$model_id" \
     --arg source_revision "$source_revision" \
