@@ -274,3 +274,76 @@ data: [DONE]
     handle.abort();
     let _ = upstream_handle.await;
 }
+
+async fn post_blobstore_tool(addr: std::net::SocketAddr) -> String {
+    let body = json!({
+        "request_id": "req-tools-gate",
+        "mime_type": "text/plain",
+        "file_name": "note.txt",
+        "bytes_base64": "aGVsbG8=",
+        "expires_in_secs": 60,
+        "uses_remaining": 1,
+    })
+    .to_string();
+    let request = format!(
+        "POST /api/plugins/blobstore/tools/{} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        blobstore::PUT_REQUEST_OBJECT_TOOL,
+        body.len(),
+        body
+    );
+    send_management_request(addr, request).await
+}
+
+#[tokio::test]
+async fn test_api_plugin_tools_rejects_unpublished_operation() {
+    // Capability-only plugins (wallet-lexe, blobstore) publish no operations, so
+    // the generic tools route must not reach them — e.g. `wallet_pay` would
+    // otherwise bypass the /api/wallet ledger.
+    let (plugin_manager, blobstore_root) = build_blobstore_api_plugin_manager().await;
+    let state = build_test_mesh_api_with_plugin_manager(3131, plugin_manager).await;
+    let (addr, handle) = spawn_management_test_server(state.clone()).await;
+
+    let response = post_blobstore_tool(addr).await;
+    assert!(response.starts_with("HTTP/1.1 404"), "{response}");
+    assert!(response.contains("is not published"), "{response}");
+    handle.abort();
+
+    let (addr, handle) = spawn_management_test_server(state).await;
+
+    let listing = send_management_request(
+        addr,
+        "GET /api/plugins/blobstore/tools HTTP/1.1\r\nHost: localhost\r\n\r\n".to_string(),
+    )
+    .await;
+    assert!(listing.starts_with("HTTP/1.1 200"), "{listing}");
+    assert_eq!(json_body(&listing), json!([]));
+
+    handle.abort();
+    let _ = std::fs::remove_dir_all(blobstore_root);
+}
+
+#[tokio::test]
+async fn test_api_plugin_tools_allows_published_operation() {
+    let (plugin_manager, blobstore_root) = build_blobstore_api_plugin_manager().await;
+    plugin_manager
+        .set_test_manifests(std::collections::BTreeMap::from([(
+            "blobstore".to_string(),
+            crate::plugin::proto::PluginManifest {
+                operations: vec![crate::plugin::proto::OperationManifest {
+                    name: blobstore::PUT_REQUEST_OBJECT_TOOL.into(),
+                    input_schema_json: "{}".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        )]))
+        .await;
+    let state = build_test_mesh_api_with_plugin_manager(3131, plugin_manager).await;
+    let (addr, handle) = spawn_management_test_server(state).await;
+
+    let response = post_blobstore_tool(addr).await;
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+
+    handle.abort();
+    let _ = std::fs::remove_dir_all(blobstore_root);
+}
