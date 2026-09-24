@@ -111,6 +111,14 @@ class FamilyEvidenceTests(unittest.TestCase):
     def test_complete_distributed_pass(self):
         self.aggregate()
 
+    def test_pretty_printed_worker_evidence_is_accepted(self):
+        path = self.evidence / 'dense/results.jsonl'
+        certification = json.loads(path.read_text())
+        preflight = {'family': 'dense', 'exit_code': 0,
+                     'outcomes': [{'name': 'model-preflight', 'status': 'pass', 'exit_code': 0}]}
+        path.write_text(json.dumps(preflight, indent=2) + '\n' + json.dumps(certification) + '\n')
+        E.validate_results(path, 'dense', self.plan['selected_models'][0])
+
     def rerun_receipt(self, family='dense', outcome='success', attempt='3'):
         previous = self.evidence / f'{family}-previous'
         shutil.copytree(self.evidence / family, previous)

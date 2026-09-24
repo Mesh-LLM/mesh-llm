@@ -493,8 +493,25 @@ def receipt(args) -> None:
           "results_sha256": sha(path) if path.is_file() else None})
 
 
+def read_json_documents(path: Path) -> list[dict]:
+    """Read adjacent JSON objects regardless of whether jq printed them compactly."""
+    content = path.read_text()
+    decoder = json.JSONDecoder()
+    rows = []
+    offset = 0
+    while True:
+        while offset < len(content) and content[offset].isspace():
+            offset += 1
+        if offset == len(content):
+            return rows
+        row, offset = decoder.raw_decode(content, offset)
+        if not isinstance(row, dict):
+            raise ValueError(f"{path}: expected a stream of JSON objects")
+        rows.append(row)
+
+
 def validate_results(path: Path, family: str, model: dict) -> None:
-    rows = [json.loads(line) for line in path.read_text().splitlines() if line]
+    rows = read_json_documents(path)
     if not rows or any(row.get("family") != family or row.get("exit_code") != 0 for row in rows):
         raise ValueError(f"{family}: missing, foreign, or failed results")
     if model["class"] == "causal_generation":
