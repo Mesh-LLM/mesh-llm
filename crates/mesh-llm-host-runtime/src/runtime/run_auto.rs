@@ -347,6 +347,11 @@ pub(super) async fn run_runtime_cli(
         options.checkpoint_imatrix.as_deref(),
     )?;
     apply_runtime_config_options(&mut options, &config);
+    // Model resolution and search size models without the config in hand;
+    // they read this node's `gpu.host_ram_offload` from the process setting.
+    mesh_llm_system::capacity::set_process_host_ram_offload(
+        config.gpu.host_ram_offload.unwrap_or(false),
+    );
     join_sources::validate_join_token_sources(&options)?;
 
     initialize_audit_logging_for_options(&options)?;
