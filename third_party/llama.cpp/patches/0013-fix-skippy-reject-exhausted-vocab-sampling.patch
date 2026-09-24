@@ -1,8 +1,8 @@
-From e689d0c8542cadf993809bab804b042eee2c137f Mon Sep 17 00:00:00 2001
+From 61bd6abc51d23e27847c67db4f0e92d4ef2bd3bf Mon Sep 17 00:00:00 2001
 From: scama
  <a1860575018c4680d5669dd7bc3bd356b478bccb8d42e194df46304a5e25f49a@meshllm.communities.buzz.xyz>
 Date: Sun, 13 Sep 2026 10:45:49 +1000
-Subject: [PATCH 10/11] fix(skippy): reject exhausted vocab sampling
+Subject: [PATCH 13/14] fix(skippy): reject exhausted vocab sampling
 
 ---
  src/skippy/execution-single.cpp     | 6 ++++++
@@ -45,10 +45,10 @@ index d5cce47f2..c785d62cf 100644
  }
  
 diff --git a/src/skippy/speculative_decoding.cpp b/src/skippy/speculative_decoding.cpp
-index 7bb3267e4..fa69599c4 100644
+index 2dfac488a..2a8b34ab3 100644
 --- a/src/skippy/speculative_decoding.cpp
 +++ b/src/skippy/speculative_decoding.cpp
-@@ -512,6 +512,9 @@ enum skippy_status skippy_mtp_propose_next(
+@@ -439,6 +439,9 @@ enum skippy_status skippy_mtp_propose_next(
              }
  
              token = skippy_greedy_sample_context(llama_get_model(mtp_ctx), mtp_ctx, -1);
@@ -58,7 +58,7 @@ index 7bb3267e4..fa69599c4 100644
              if (out_mtp_draft != nullptr) {
                  out_mtp_draft->token_ids[token_count] = token;
              }
-@@ -572,6 +575,9 @@ enum skippy_status skippy_mtp_propose_next(
+@@ -499,6 +502,9 @@ enum skippy_status skippy_mtp_propose_next(
              }
  
              token = skippy_greedy_sample_context(llama_get_model(mtp_ctx), mtp_ctx, -1);
@@ -86,4 +86,5 @@ index 3ccd2f6a4..99bd36f66 100644
                  // Later rows are conditioned on a rejected token and are not
                  // authoritative predictions. Stop advancing the sampler and
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
+

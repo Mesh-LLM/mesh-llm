@@ -125,7 +125,9 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           BUILD_OUTCOME: ${{ steps.build.outcome }}
-          WORK_DIR: ${{ github.workspace }}/target/skippy-system-one-smoke
+          # The smoke runs from the selected source checkout, so its report and
+          # evidence live there for a trusted `mesh_source` build.
+          WORK_DIR: ${{ env.CANARY_SOURCE_ROOT }}/target/skippy-system-one-smoke
         run: |
           set -euo pipefail
           report="$WORK_DIR/reports/system-one.json"
@@ -154,7 +156,7 @@ jobs:
         with:
           name: llama-canary-system-one-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
           path: |
-            target/skippy-system-one-smoke/
+            ${{ env.CANARY_SOURCE_ROOT }}/target/skippy-system-one-smoke/
           if-no-files-found: warn
           retention-days: 14
       - name: Upload exact candidate and executable handoff

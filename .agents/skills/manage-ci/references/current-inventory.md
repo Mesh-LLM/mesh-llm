@@ -4,6 +4,10 @@ This file records checked-in CI facts and selected controlled probe evidence.
 It is not a complete historical run log or live GitHub/Depot administration.
 Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 
+The protected catalogs include `platform-windows-cfg`: ownership of
+`mesh-llm-plugin` selects `platform-checks` and its existing `windows-unit`
+row. It does not select host/native product builds by itself.
+
 ## Entry workflows
 
 | Workflow | Trigger | Ownership |
@@ -205,8 +209,18 @@ lanes from the plan — split-parity lanes for causal rows, class-specific smoke
 plus oracle lanes for the non-chat rows — plus any required multimodal result,
 so the non-chat rows are hard gates on every certified run. The battery itself
 reconciles the production planner's selected cuts, immutable revisions, tensor
-bytes, and native MTP requirements. Missing, cancelled, duplicate, or stale
-evidence cannot certify.
+bytes, and native MTP requirements. Native-head rows additionally require the
+`native-mtp-heads` lane: all metadata-declared heads must produce proposals, and
+target decoding at each proposal prefix must match an independent MTP-disabled
+baseline. Rejected proposals are valid; omitted heads and state divergence fail.
+Cache preflight checks the immutable GGUF head count against the declared count.
+The pinned roster has one head each for GLM-4.5-Air and Nemotron and three for
+MiMo2. Missing, cancelled, duplicate, or stale evidence cannot certify.
+Native-head certification budgets include two additional startup allowances
+for the integrated model and independent baseline loads, retaining the existing
+absolute timeout cap. Dry-run planning reflects the declared native-head lane;
+actual execution still requires the immutable metadata and tensor scans.
+
 Aggregation reports every failed receipt, including its runner and outcome, in
 the job log and Actions summary before rejecting the pass. Worker/aggregate
 failures remain recoverable by later bounded repair passes; only complete
@@ -1061,3 +1075,11 @@ retaining shared model caches and diagnostic logs. Runner-contract removes its
 Cargo target output. Hosted fallback rows retain their normal disposable-runner
 lifecycle. The workflow contract test requires final cleanup for every declared
 self-hosted job, including custom `mesh-llm-*` runner matrix labels.
+
+
+The native Skippy suite includes sparse synthetic graph-contract tests for every
+canary registry family. `scripts/tests/test_synthetic_graph_registry.py` makes
+missing fixtures and registry dimension/MTP drift fail CI validation. The matrix
+checks admitted stage chains and explicit unsupported contracts without model
+weights; it does not confer real-model certification. See
+`ci/llama-canary/SYNTHETIC_GRAPH_CONTRACTS.md` for structural coverage and limits.

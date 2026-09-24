@@ -12,7 +12,9 @@ use crate::frontend::{OpenAiBackendMode, StageOpenAiBackend, openai_backend_erro
 
 const SYSTEM_ONE_TURN_CLOSE_TOKEN: i32 = 106;
 const SYSTEM_ONE_PAD_TOKEN: i32 = 0;
-const DIFFUSION_GEMMA_VOCAB_SIZE: u64 = 262_144;
+/// Length of the deterministic word drawn from the model tokenizer for each
+/// randomized canvas slot.
+const FILLER_WORD_LEN: usize = 8;
 const SYSTEM_ONE_SCAFFOLD: &str = "<|channel>thought\n<channel|>";
 
 #[derive(Clone)]
@@ -402,13 +404,52 @@ fn build_canvas(
     canvas.push(SYSTEM_ONE_TURN_CLOSE_TOKEN);
     canvas.resize(canvas_token_count, SYSTEM_ONE_PAD_TOKEN);
     let mut rng = u64::from_be_bytes(seed[..8].try_into().expect("SHA-256 seed is eight bytes"));
-    for slot in &slots {
-        rng ^= rng << 13;
-        rng ^= rng >> 7;
-        rng ^= rng << 17;
-        canvas[slot.canvas_position as usize] = (rng % DIFFUSION_GEMMA_VOCAB_SIZE) as i32;
+    let filler = filler_tokens(slots.len(), &mut rng, |text| {
+        model.tokenize(text, false).map_err(openai_backend_error)
+    })?;
+    for (slot, token) in slots.iter().zip(filler) {
+        canvas[slot.canvas_position as usize] = token;
     }
     Ok((canvas, slots))
+}
+
+/// Draws one canvas filler token per randomized slot.
+///
+/// Every canvas slot outside the answer position must hold a token the loaded
+/// vocabulary can decode, and the value must be reproducible from the request
+/// seed so a leaked diffusion state still changes the read. Minting the fillers
+/// from the model's own tokenizer satisfies both for any vocabulary size, so
+/// the canvas never needs a fixed vocabulary bound.
+fn filler_tokens(
+    count: usize,
+    rng: &mut u64,
+    mut tokenize: impl FnMut(&str) -> OpenAiResult<Vec<i32>>,
+) -> OpenAiResult<Vec<i32>> {
+    let mut tokens = Vec::with_capacity(count);
+    while tokens.len() < count {
+        let mut word = String::with_capacity(FILLER_WORD_LEN);
+        for _ in 0..FILLER_WORD_LEN {
+            word.push(char::from(b'a' + (next_random(rng) % 26) as u8));
+        }
+        let mut drawn = tokenize(&word)?;
+        if drawn.is_empty() {
+            return Err(OpenAiError::backend(
+                "tokenizer produced no filler tokens for the System One canvas",
+            ));
+        }
+        drawn.truncate(count - tokens.len());
+        tokens.extend(drawn);
+    }
+    Ok(tokens)
+}
+
+/// One xorshift64 step. Shared by the canvas filler so its layout stays a pure
+/// function of the request seed.
+fn next_random(rng: &mut u64) -> u64 {
+    *rng ^= *rng << 13;
+    *rng ^= *rng >> 7;
+    *rng ^= *rng << 17;
+    *rng
 }
 
 fn confidence(probabilities: &[f32]) -> f32 {
@@ -496,5 +537,36 @@ mod tests {
     #[test]
     fn confidence_is_one_for_certain_distribution() {
         assert!((confidence(&[1.0, 0.0]) - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn filler_tokens_fill_every_slot_exactly_and_deterministically() {
+        let draw = |text: &str| Ok(vec![i32::try_from(text.len()).unwrap()]);
+        let mut first_rng = 0x0123_4567_89ab_cdef_u64;
+        let first = filler_tokens(5, &mut first_rng, draw).expect("fillers");
+        assert_eq!(first, vec![FILLER_WORD_LEN as i32; 5]);
+        let mut second_rng = 0x0123_4567_89ab_cdef_u64;
+        let second = filler_tokens(5, &mut second_rng, draw).expect("fillers");
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn filler_tokens_stop_at_the_requested_count() {
+        let mut rng = 7_u64;
+        let tokens = filler_tokens(3, &mut rng, |text| {
+            Ok(text.chars().map(|character| character as i32).collect())
+        })
+        .expect("fillers");
+        assert_eq!(tokens.len(), 3);
+    }
+
+    #[test]
+    fn filler_tokens_reject_a_tokenizer_that_produces_nothing() {
+        let mut rng = 11_u64;
+        let error = filler_tokens(1, &mut rng, |_| Ok(Vec::new())).expect_err("no fillers");
+        assert!(
+            error.to_string().contains("no filler tokens"),
+            "unexpected error: {error}"
+        );
     }
 }

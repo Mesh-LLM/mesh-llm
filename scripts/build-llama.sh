@@ -283,7 +283,10 @@ case "$LLAMA_BACKEND" in
       echo "CUDA toolkit compiler was not found; set CUDACXX, CMAKE_CUDA_COMPILER, NVCC, or put nvcc on PATH" >&2
       exit 1
     fi
-    CMAKE_ARGS+=(-DGGML_CUDA=ON)
+    # The pinned CUDA graph-capture path can abort on a warmed multi-request
+    # workload while updating the captured graph. Keep staged runtimes on the
+    # ordinary CUDA execution path until that upstream path is safe again.
+    CMAKE_ARGS+=(-DGGML_CUDA=ON -DGGML_CUDA_GRAPHS=OFF)
     if [[ -n "${CUDACXX:-}" ]]; then
       CMAKE_ARGS+=(-DCMAKE_CUDA_COMPILER="$CUDACXX")
     fi

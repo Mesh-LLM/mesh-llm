@@ -1,0 +1,511 @@
+From a88f8a7e71b9f3920378dc25633818af6ecb900c Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Tue, 22 Sep 2026 16:13:09 +1000
+Subject: [PATCH] fix(skippy): admit raw embedding graph execution profiles
+
+---
+ src/llama-context.cpp                         | 23 +++--
+ src/llama-context.h                           | 11 ++-
+ src/skippy/stage_execution_contract.cpp       | 20 ++++-
+ src/skippy/stage_execution_contract.h         |  8 +-
+ src/skippy/stage_plan.cpp                     | 51 ++++++++---
+ src/skippy/stage_realization.cpp              |  3 +-
+ src/skippy/tests/embedding_input_regression.h | 86 +++++++++++++++++++
+ src/skippy/tests/graph_build_inputs.cpp       | 58 +++++++++++++
+ .../tests/renamed_multishard_planning.cpp     | 42 +++++----
+ 9 files changed, 254 insertions(+), 48 deletions(-)
+ create mode 100644 src/skippy/tests/embedding_input_regression.h
+
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 57cacad5a..50ad90b77 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -2571,14 +2571,14 @@ bool llama_context::get_input_activation_frontier(std::vector<skippy_activation_
+     return true;
+ }
+ 
+-ggml_cgraph * llama_context::graph_reserve(
+-        uint32_t n_tokens,
+-        uint32_t n_seqs,
+-        uint32_t n_outputs,
+-        const llama_memory_context_i * mctx,
+-        bool split_only,
+-        size_t * sizes,
+-        const skippy_graph_build_inputs & graph_build_inputs) {
++ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_tokens,
++                                           uint32_t                          n_seqs,
++                                           uint32_t                          n_outputs,
++                                           const llama_memory_context_i *    mctx,
++                                           bool                              split_only,
++                                           size_t *                          sizes,
++                                           const skippy_graph_build_inputs & graph_build_inputs,
++                                           bool                              embedding_input) {
+     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
+     GGML_ASSERT(n_outputs >= 1);
+ 
+@@ -2605,6 +2605,13 @@ ggml_cgraph * llama_context::graph_reserve(
+ 
+     llama_batch_allocr balloc(model.hparams.n_pos_per_embd());
+     llama_ubatch ubatch = balloc.ubatch_reserve(n_tokens/n_seqs, n_seqs);
++    // Reserve the same input branch that raw projector embeddings execute.
++    // Graph construction only observes the pointer; it never reads values.
++    float              embedding_placeholder = 0.0f;
++    if (embedding_input) {
++        ubatch.token = nullptr;
++        ubatch.embd  = &embedding_placeholder;
++    }
+ 
+     ubatch_prepare_reserve(ubatch, n_outputs, sampling.samplers, cparams.n_outputs_max_per_seq);
+ 
+diff --git a/src/llama-context.h b/src/llama-context.h
+index 108b53a02..4b4128f22 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -280,9 +280,14 @@ public:
+     ggml_status graph_compute(ggml_cgraph * gf, bool batched);
+ 
+     // reserve a graph with a dummy ubatch of the specified size
+-    ggml_cgraph * graph_reserve(
+-        uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only = false, size_t * sizes = nullptr,
+-        const skippy_graph_build_inputs & graph_build_inputs = {});
++    ggml_cgraph * graph_reserve(uint32_t                          n_tokens,
++                                uint32_t                          n_seqs,
++                                uint32_t                          n_outputs,
++                                const llama_memory_context_i *    mctx,
++                                bool                              split_only         = false,
++                                size_t *                          sizes              = nullptr,
++                                const skippy_graph_build_inputs & graph_build_inputs = {},
++                                bool                              embedding_input    = false);
+ 
+     bool get_activation_boundary(enum ggml_type & type, uint64_t & elements_per_token, uint64_t & bytes_per_token) const;
+     bool get_input_activation_boundary(enum ggml_type & type, uint64_t & elements_per_token, uint64_t & bytes_per_token) const;
+diff --git a/src/skippy/stage_execution_contract.cpp b/src/skippy/stage_execution_contract.cpp
+index 7e85c82dc..3f707a93f 100644
+--- a/src/skippy/stage_execution_contract.cpp
++++ b/src/skippy/stage_execution_contract.cpp
+@@ -23,9 +23,11 @@ std::vector<std::string> read_parameters(const nlohmann::json & value) {
+ }
+ }
+ 
+-void skippy_validate_execution_dependencies(
+-        const skippy_graph_build_inputs & inputs, bool auxiliary, int32_t offset,
+-        const std::vector<std::string> & parameters) {
++void skippy_validate_execution_dependencies(const skippy_graph_build_inputs & inputs,
++                                            bool                              auxiliary,
++                                            int32_t                           offset,
++                                            const std::vector<std::string> &  parameters,
++                                            bool                              embedding_input) {
+     const auto residents = canonical(inputs.resident_tensor_names);
+     const auto realized = canonical(parameters);
+     if (inputs.execution_contract.empty()) {
+@@ -40,6 +42,15 @@ void skippy_validate_execution_dependencies(
+     const auto decoder = read_parameters(contract.at("decoder"));
+     std::set<std::string> union_parameters(decoder.begin(), decoder.end());
+     std::vector<std::string> expected = auxiliary ? std::vector<std::string>() : decoder;
++    if (contract.contains("decoder_embeddings")) {
++        const auto embeddings = read_parameters(contract.at("decoder_embeddings"));
++        union_parameters.insert(embeddings.begin(), embeddings.end());
++        if (!auxiliary && embedding_input) {
++            expected = embeddings;
++        }
++    } else if (!auxiliary && embedding_input) {
++        throw std::runtime_error("raw embedding input has no admitted execution profile");
++    }
+     int32_t expected_offset = 0;
+     const auto & mtp = contract.at("mtp");
+     if (!mtp.is_array()) throw std::runtime_error("admitted auxiliary profiles must be an array");
+@@ -55,6 +66,7 @@ void skippy_validate_execution_dependencies(
+         throw std::runtime_error("admitted stage residents do not match the execution profile union");
+     }
+     if (expected.empty() || expected != realized) {
+-        throw std::runtime_error("realized graph parameters do not match the admitted execution profile");
++        throw std::runtime_error("realized graph parameters do not match the admitted execution profile: expected=" +
++                                 nlohmann::json(expected).dump() + " realized=" + nlohmann::json(realized).dump());
+     }
+ }
+diff --git a/src/skippy/stage_execution_contract.h b/src/skippy/stage_execution_contract.h
+index 73b5c6379..bcb56cdd7 100644
+--- a/src/skippy/stage_execution_contract.h
++++ b/src/skippy/stage_execution_contract.h
+@@ -8,6 +8,8 @@ struct skippy_graph_build_inputs;
+ 
+ // Validate the selected decoder or auxiliary profile separately from the
+ // complete shared resident set. Throws before graph execution on disagreement.
+-void skippy_validate_execution_dependencies(
+-        const skippy_graph_build_inputs & inputs, bool auxiliary, int32_t offset,
+-        const std::vector<std::string> & parameters);
++void skippy_validate_execution_dependencies(const skippy_graph_build_inputs & inputs,
++                                            bool                              auxiliary,
++                                            int32_t                           offset,
++                                            const std::vector<std::string> &  parameters,
++                                            bool                              embedding_input = false);
+diff --git a/src/skippy/stage_plan.cpp b/src/skippy/stage_plan.cpp
+index be00dd281..26995bcfd 100644
+--- a/src/skippy/stage_plan.cpp
++++ b/src/skippy/stage_plan.cpp
+@@ -126,6 +126,7 @@ struct skippy_stage_plan {
+     std::vector<char> strings;
+     skippy_stage_plan_desc_v1 descriptor{};
+     std::vector<profile_output> profiles;
++    std::set<std::string>                        embedding_profiles;
+     std::vector<skippy_stage_plan_value_desc_v1> residents;
+ 
+     skippy_stage_plan_string_ref_v1 add_string(const std::string & value) {
+@@ -185,10 +186,15 @@ bool build_execution_contract(skippy_stage_plan & plan, const skippy_stage_plann
+         std::sort(result.begin(), result.end());
+         return result;
+     };
+-    const auto decoder = native_names(plan.guarded.profiles.front().slice.parameter_identities);
++    std::vector<std::string> decoder, embeddings;
+     for (const auto & profile : plan.guarded.profiles) {
+-        if (native_names(profile.slice.parameter_identities) != decoder) {
+-            error = "decoder execution profiles disagree on parameter dependencies";
++        auto &     expected   = plan.embedding_profiles.count(profile.profile_id) ? embeddings : decoder;
++        const auto parameters = native_names(profile.slice.parameter_identities);
++        if (expected.empty()) {
++            expected = parameters;
++        }
++        if (parameters != expected) {
++            error = "decoder input profiles disagree on parameter dependencies";
+             return false;
+         }
+     }
+@@ -206,6 +212,9 @@ bool build_execution_contract(skippy_stage_plan & plan, const skippy_stage_plann
+     nlohmann::ordered_json contract = {{"version", 1},
+         {"layer_start", plan.guarded.layer_start}, {"layer_end", plan.guarded.layer_end},
+         {"decoder", decoder}, {"mtp", auxiliary}};
++    if (!embeddings.empty()) {
++        contract["decoder_embeddings"] = embeddings;
++    }
+     plan.descriptor.execution_contract = plan.add_string(contract.dump());
+     return true;
+ }
+@@ -263,12 +272,12 @@ bool build_descriptors(skippy_stage_plan & plan, std::string & error) {
+     return true;
+ }
+ 
+-bool build_profile(
+-        const skippy_stage_planner & planner,
+-        const owned_profile & profile,
+-        context_owner & context,
+-        skippy_stage_profile_input & input,
+-        std::string & error) {
++bool build_profile(const skippy_stage_planner & planner,
++                   const owned_profile &        profile,
++                   context_owner &              context,
++                   skippy_stage_profile_input & input,
++                   std::string &                error,
++                   bool                         embedding_input = false) {
+     llama_context_params params = llama_context_default_params();
+     params.n_ctx = std::max<uint32_t>(32, profile.n_tokens);
+     params.n_batch = profile.n_tokens;
+@@ -289,8 +298,8 @@ bool build_profile(
+     if (llama_memory_t memory = llama_get_memory(context.get())) {
+         memory_context = memory->init_full();
+     }
+-    ggml_cgraph * graph = context->graph_reserve(profile.n_tokens, profile.n_sequences,
+-            profile.n_outputs, memory_context.get(), true, nullptr, build_inputs);
++    ggml_cgraph * graph = context->graph_reserve(profile.n_tokens, profile.n_sequences, profile.n_outputs,
++                                                 memory_context.get(), true, nullptr, build_inputs, embedding_input);
+     const llm_graph_result * result = context->get_gf_res_reserve();
+     if (graph == nullptr || result == nullptr || result->get_build_inputs().selection.enabled) {
+         error = "stage planner cannot build an unfiltered whole-model graph";
+@@ -537,14 +546,30 @@ skippy_status skippy_stage_planner_realize_v1(
+         auto plan = std::make_unique<skippy_stage_plan>();
+         plan->package_id = planner->package_id;
+         plan->model = planner->model;
+-        std::vector<skippy_stage_profile_input> inputs(planner->profiles.size());
++        std::vector<skippy_stage_profile_input> inputs;
++        inputs.reserve(planner->profiles.size() * 2);
+         std::string error;
+         for (size_t index = 0; index < planner->profiles.size(); ++index) {
+             context_owner context(nullptr, llama_free);
+-            if (!build_profile(*planner, planner->profiles[index], context, inputs[index], error)) {
++            skippy_stage_profile_input input;
++            if (!build_profile(*planner, planner->profiles[index], context, input, error)) {
+                 return fail(out_error, SKIPPY_STATUS_UNSUPPORTED, error);
+             }
++            const bool supports_embeddings =
++                std::any_of(input.request_inputs->begin(), input.request_inputs->end(),
++                            [](const auto & request) { return request.identity.compare(0, 11, "embeddings.") == 0; });
++            inputs.push_back(input);
+             plan->contexts.push_back(std::move(context));
++            if (supports_embeddings) {
++                owned_profile profile = planner->profiles[index];
++                profile.profile_id    = "embeddings:" + profile.profile_id;
++                if (!build_profile(*planner, profile, context, input, error, true)) {
++                    return fail(out_error, SKIPPY_STATUS_UNSUPPORTED, error);
++                }
++                plan->embedding_profiles.insert(profile.profile_id);
++                inputs.push_back(input);
++                plan->contexts.push_back(std::move(context));
++            }
+         }
+         if (!skippy_build_guarded_stage_slice_plan(inputs, layer_start, layer_end,
+                     plan->guarded, error) ||
+diff --git a/src/skippy/stage_realization.cpp b/src/skippy/stage_realization.cpp
+index a0938dcb8..148a2d4a2 100644
+--- a/src/skippy/stage_realization.cpp
++++ b/src/skippy/stage_realization.cpp
+@@ -159,7 +159,8 @@ void skippy_realize_stage_graph(
+         throw std::runtime_error("cannot realize admitted stage graph: " + error);
+     }
+ 
+-    skippy_validate_execution_dependencies(params.build_inputs, false, 0, selection.parameter_identities);
++    skippy_validate_execution_dependencies(params.build_inputs, false, 0, selection.parameter_identities,
++                                           params.ubatch.token == nullptr && params.ubatch.embd != nullptr);
+     std::vector<std::string> realized_import_identities;
+     std::vector<std::string> realized_import_bindings;
+     std::vector<std::string> realized_export_identities;
+diff --git a/src/skippy/tests/embedding_input_regression.h b/src/skippy/tests/embedding_input_regression.h
+new file mode 100644
+index 000000000..5d3d4d52d
+--- /dev/null
++++ b/src/skippy/tests/embedding_input_regression.h
+@@ -0,0 +1,86 @@
++#pragma once
++
++#include "llama.h"
++#include "skippy/runtime.h"
++#include "skippy/runtime_types.h"
++
++#include <cmath>
++#include <cstdio>
++#include <exception>
++
++// The synthetic GGUF's first stage must accept the same raw-embedding batch
++// shape emitted by mtmd, then switch back to token input in the same session.
++// No real model, projector, network, or GPU is required.
++inline bool check_synthetic_embedding_input(skippy_model * model) {
++    skippy_error *   error   = nullptr;
++    skippy_session * session = nullptr;
++    if (skippy_session_create(model, &session, &error) != SKIPPY_STATUS_OK) {
++        skippy_error_free(error);
++        return false;
++    }
++    if (skippy_session_begin_external_decode(session, &error) != SKIPPY_STATUS_OK) {
++        skippy_session_free(session, &error);
++        skippy_error_free(error);
++        return false;
++    }
++    llama_batch prefix      = llama_batch_init(1, 0, 1);
++    prefix.n_tokens         = 1;
++    prefix.token[0]         = 1;
++    prefix.pos[0]           = 0;
++    prefix.n_seq_id[0]      = 1;
++    prefix.seq_id[0][0]     = session->seq_id;
++    prefix.logits[0]        = 1;
++    const int prefix_status = llama_decode(session->ctx, prefix);
++    llama_batch_free(prefix);
++    if (prefix_status != 0) {
++        skippy_session_end_external_decode(session, &error);
++        skippy_session_free(session, &error);
++        skippy_error_free(error);
++        return false;
++    }
++    const int32_t width = llama_model_n_embd_inp(model->model);
++    llama_batch   image = llama_batch_init(2, width, 1);
++    image.n_tokens      = 2;
++    for (int32_t row = 0; row < 2; ++row) {
++        image.pos[row]       = row + 1;
++        image.n_seq_id[row]  = 1;
++        image.seq_id[row][0] = session->seq_id;
++        image.logits[row]    = 1;
++        for (int32_t col = 0; col < width; ++col) {
++            image.embd[row * width + col] = 0.01f * float((row + col) % 7 - 3);
++        }
++    }
++    bool passed = false;
++    try {
++        passed = llama_decode(session->ctx, image) == 0;
++        for (int32_t row = 0; passed && row < 2; ++row) {
++            const float * output = llama_get_embeddings_ith(session->ctx, row);
++            passed               = output != nullptr;
++            for (int32_t col = 0; passed && col < llama_model_n_embd(model->model); ++col) {
++                passed = std::isfinite(output[col]);
++            }
++        }
++        llama_batch text  = llama_batch_init(1, 0, 1);
++        text.n_tokens     = 1;
++        text.token[0]     = 1;
++        text.pos[0]       = 3;
++        text.n_seq_id[0]  = 1;
++        text.seq_id[0][0] = session->seq_id;
++        text.logits[0]    = 1;
++        if (passed) {
++            passed = llama_decode(session->ctx, text) == 0;
++        }
++        llama_batch_free(text);
++    } catch (const std::exception & exception) {
++        std::fprintf(stderr, "synthetic embedding-input stage regression: %s\n", exception.what());
++        passed = false;
++    }
++    llama_batch_free(image);
++    skippy_session_end_external_decode(session, &error);
++    skippy_session_free(session, &error);
++    skippy_error_free(error);
++    if (passed) {
++        std::fprintf(stderr, "synthetic embedding-input stage and token transition passed\n");
++    }
++    return passed;
++}
+diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
+index 7d7481158..b6d9d8213 100644
+--- a/src/skippy/tests/graph_build_inputs.cpp
++++ b/src/skippy/tests/graph_build_inputs.cpp
+@@ -613,6 +613,61 @@ static int check_decode_input_width() {
+     return 0;
+ }
+ 
++static int check_embedding_execution_profiles() {
++    skippy_graph_build_inputs inputs;
++    inputs.selection.enabled      = true;
++    inputs.selection.layer_end    = 2;
++    inputs.resident_tensor_names  = { "block", "image_projection", "token_embedding" };
++    const nlohmann::json contract = {
++        { "version",            1                               },
++        { "layer_start",        0                               },
++        { "layer_end",          2                               },
++        { "decoder",            { "block", "token_embedding" }  },
++        { "decoder_embeddings", { "block", "image_projection" } },
++        { "mtp",                nlohmann::json::array()         }
++    };
++    inputs.execution_contract = contract.dump();
++    skippy_validate_execution_dependencies(inputs, false, 0, { "block", "token_embedding" });
++    skippy_validate_execution_dependencies(inputs, false, 0, { "block", "image_projection" }, true);
++    const auto rejects = [&](const skippy_graph_build_inputs & build, const std::vector<std::string> & parameters,
++                             bool embeddings) {
++        try {
++            skippy_validate_execution_dependencies(build, false, 0, parameters, embeddings);
++        } catch (const std::exception &) {
++            return true;
++        }
++        return false;
++    };
++    // Neither input may silently use the other profile, omit an admitted weight,
++    // or introduce a weight outside its own exact dependency set.
++    if (!rejects(inputs, { "block", "image_projection" }, false) ||
++        !rejects(inputs, { "block", "token_embedding" }, true) || !rejects(inputs, { "block" }, true) ||
++        !rejects(inputs, { "block", "image_projection", "token_embedding" }, true)) {
++        return 110;
++    }
++    auto invalid                  = inputs;
++    invalid.resident_tensor_names = { "block", "token_embedding" };
++    if (!rejects(invalid, { "block", "image_projection" }, true)) {
++        return 111;
++    }
++    auto legacy = contract;
++    legacy.erase("decoder_embeddings");
++    invalid.execution_contract = legacy.dump();
++    if (!rejects(invalid, { "block", "token_embedding" }, true)) {
++        return 112;
++    }
++    // Tied input/output embeddings remain required when the image graph uses
++    // the same tensor for its output projection.
++    auto tied                  = contract;
++    tied["decoder_embeddings"] = tied["decoder"];
++    invalid.execution_contract = tied.dump();
++    skippy_validate_execution_dependencies(invalid, false, 0, invalid.resident_tensor_names, true);
++    if (!rejects(invalid, { "block" }, true)) {
++        return 113;
++    }
++    return 0;
++}
++
+ static int check_execution_profile_residency() {
+     skippy_graph_build_inputs inputs;
+     inputs.selection.enabled = true;
+@@ -664,6 +719,9 @@ static int check_execution_profile_residency() {
+ 
+ int main(int argc, char ** argv) {
+     if (const int rc = check_execution_profile_residency()) return rc;
++    if (const int rc = check_embedding_execution_profiles()) {
++        return rc;
++    }
+     if (argc == 2 && std::strcmp(argv[1], "--input-width") == 0) {
+         return check_decode_input_width();
+     }
+diff --git a/src/skippy/tests/renamed_multishard_planning.cpp b/src/skippy/tests/renamed_multishard_planning.cpp
+index bcafb8e6b..92b0271ce 100644
+--- a/src/skippy/tests/renamed_multishard_planning.cpp
++++ b/src/skippy/tests/renamed_multishard_planning.cpp
+@@ -1,3 +1,4 @@
++#include "embedding_input_regression.h"
+ #include "ggml-backend.h"
+ #include "ggml.h"
+ #include "gguf.h"
+@@ -8,10 +9,10 @@
+ #include "llama-mmap.h"
+ #include "llama-model.h"
+ #include "llama.h"
+-#include "skippy/model_package.h"
+-#include "skippy/package_tensor_binding.h"
+ #include "skippy/activation.h"
+ #include "skippy/execution.h"
++#include "skippy/model_package.h"
++#include "skippy/package_tensor_binding.h"
+ #include "skippy/runtime.h"
+ #include "skippy/stage_plan.h"
+ #include "skippy/stage_slice_plan.h"
+@@ -888,16 +889,16 @@ bool check_public_stage_plan_abi(
+     skippy_stage_plan_profile_desc_v1 profile{};
+     skippy_stage_plan_value_desc_v1 resident{};
+     if (skippy_stage_plan_describe_v1(source, &descriptor, &error) != SKIPPY_STATUS_OK ||
+-            skippy_stage_plan_describe_v1(final, &final_descriptor, &error) != SKIPPY_STATUS_OK ||
+-            descriptor.abi_version != 1 || descriptor.profile_count != profiles.size() ||
+-            descriptor.resident_tensor_count == 0 || plan_string(source, descriptor.package_id) != package_id ||
+-            plan_string(source, descriptor.plan_id).compare(0, 15, "skippy-plan:v1:") != 0 ||
+-            skippy_stage_plan_profile_at_v1(source, 0, &profile, &error) != SKIPPY_STATUS_OK ||
+-            plan_string(source, profile.profile_id) != "batched" ||
+-            plan_string(source, profile.graph_configuration_id) != graph_configuration_id ||
+-            plan_string(source, profile.backend_id) != backend_id ||
+-            skippy_stage_plan_resident_tensor_at_v1(source, 0, &resident, &error) != SKIPPY_STATUS_OK ||
+-            plan_string(source, resident.identity).compare(0, 15, "package.tensor.") != 0) {
++        skippy_stage_plan_describe_v1(final, &final_descriptor, &error) != SKIPPY_STATUS_OK ||
++        descriptor.abi_version != 1 || descriptor.profile_count != profiles.size() * 2 ||
++        descriptor.resident_tensor_count == 0 || plan_string(source, descriptor.package_id) != package_id ||
++        plan_string(source, descriptor.plan_id).compare(0, 15, "skippy-plan:v1:") != 0 ||
++        skippy_stage_plan_profile_at_v1(source, 0, &profile, &error) != SKIPPY_STATUS_OK ||
++        plan_string(source, profile.profile_id) != "batched" ||
++        plan_string(source, profile.graph_configuration_id) != graph_configuration_id ||
++        plan_string(source, profile.backend_id) != backend_id ||
++        skippy_stage_plan_resident_tensor_at_v1(source, 0, &resident, &error) != SKIPPY_STATUS_OK ||
++        plan_string(source, resident.identity).compare(0, 15, "package.tensor.") != 0) {
+         std::fprintf(stderr, "public stage descriptors are incomplete\n");
+         skippy_error_free(error);
+         return false;
+@@ -999,11 +1000,17 @@ bool check_public_stage_plan_abi(
+             runtime_stage->export_bindings.push_back(plan_string(source, exported.binding));
+         }
+     }
+-    for (size_t index = 0; index < profiles.size(); ++index) {
++    std::vector<std::string> expected_profiles;
++    for (const auto & requested : profiles) {
++        expected_profiles.emplace_back(requested.profile_id);
++        expected_profiles.push_back("embeddings:" + std::string(requested.profile_id));
++    }
++    std::sort(expected_profiles.begin(), expected_profiles.end());
++    for (size_t index = 0; index < descriptor.profile_count; ++index) {
+         if (skippy_stage_plan_profile_at_v1(source, index, &profile, &error) != SKIPPY_STATUS_OK ||
+-                plan_string(source, profile.profile_id) != profiles[index].profile_id ||
+-                plan_string(source, profile.graph_configuration_id) != graph_configuration_id ||
+-                plan_string(source, profile.backend_id) != backend_id) {
++            plan_string(source, profile.profile_id) != expected_profiles[index] ||
++            plan_string(source, profile.graph_configuration_id) != graph_configuration_id ||
++            plan_string(source, profile.backend_id) != backend_id) {
+             skippy_error_free(error);
+             return false;
+         }
+@@ -1409,6 +1416,9 @@ int run_proof(const char * source_path, const char * output_directory, bool expe
+         skippy_error_free(runtime_error);
+         return 17;
+     }
++    if (!check_synthetic_embedding_input(carrier_model)) {
++        return 40;
++    }
+     skippy_session * session = nullptr;
+     if (skippy_session_create(carrier_model, &session, &runtime_error) != SKIPPY_STATUS_OK || session == nullptr) {
+         std::fprintf(stderr, "source stage session create failed: %s\n",
+-- 
+2.54.0 (Apple Git-157)
+

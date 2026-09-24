@@ -1,7 +1,7 @@
-From 0500b8c5e8763cf5c598ec4ef8d5760ae28df277 Mon Sep 17 00:00:00 2001
+From 167b8b5148beb9610934b4d81502f740f0dc3fed Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 12 Sep 2026 01:35:50 -0700
-Subject: [PATCH] skippy: define non-chat workload ABI and execution
+Subject: [PATCH 10/14] skippy: define non-chat workload ABI and execution
 
 ---
  include/skippy.h                      |   1 +
@@ -586,7 +586,7 @@ index 000000000..9f8269148
 +
 +}  // extern "C"
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 630516544..970907f0b 100644
+index 66694d54e..1d03ce428 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
 @@ -150,6 +150,7 @@ endif ()
@@ -638,5 +638,5 @@ index 000000000..d6f9570ba
 +    return 0;
 +}
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
 

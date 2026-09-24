@@ -58,6 +58,10 @@ CTX_SIZE="${SYSTEMONE_SMOKE_CTX_SIZE:-8192}"
 # The micro-batch must hold the model's fixed diffusion canvas. The published
 # Q4_K_M canvas is larger than OpenJEV's vLLM default of 64; 512 clears it.
 READ_N_BATCH="${SYSTEMONE_SMOKE_READ_N_BATCH:-512}"
+# The full-model read must run on the placement the qualified backend claims,
+# so it offloads every inferred stage layer by default. The contract part stays
+# on CPU placement: it is backend independent by contract.
+READ_N_GPU_LAYERS="${SYSTEMONE_SMOKE_READ_N_GPU_LAYERS:-}"
 CONTRACT_N_BATCH="${SYSTEMONE_SMOKE_CONTRACT_N_BATCH:-128}"
 SERVER_STARTUP_TIMEOUT_SECS="${SYSTEMONE_SMOKE_STARTUP_TIMEOUT_SECS:-300}"
 READ_REQUEST_TIMEOUT_SECS="${SYSTEMONE_SMOKE_READ_TIMEOUT_SECS:-900}"
@@ -178,6 +182,7 @@ from pathlib import Path
     lane_count,
     ctx_size,
     n_batch,
+    n_gpu_layers,
 ) = sys.argv[1:]
 
 config = {
@@ -193,7 +198,7 @@ config = {
     "lane_count": int(lane_count),
     "n_batch": int(n_batch),
     "n_ubatch": int(n_batch),
-    "n_gpu_layers": 0,
+    "n_gpu_layers": int(n_gpu_layers),
     "cache_type_k": "f16",
     "cache_type_v": "f16",
     "load_mode": "runtime-slice",
@@ -264,7 +269,7 @@ start_stage_server() {
 run_cases_against_stage() {
   local label="$1" artifact_id="$2" model_path="$3" mode="$4" n_batch="$5" \
     request_timeout="$6"
-  local summary repo revision file model_id layer_end port config log rc
+  local summary repo revision file model_id layer_end port config log rc gpu_layers
   require_smoke_binaries || return $?
   rc=0
   summary="$(artifact_summary "$artifact_id")" || rc=$?
@@ -302,8 +307,13 @@ run_cases_against_stage() {
   port="$(pick_port)"
   config="$WORK_DIR/${mode}-stage.json"
   log="$WORK_DIR/${mode}-server.log"
+  if [[ "$mode" == "full-read" ]]; then
+    gpu_layers="${READ_N_GPU_LAYERS:-$layer_end}"
+  else
+    gpu_layers=0
+  fi
   write_stage_config "$config" "$model_id" "$model_path" "$(jq -r '.sha256' <<<"$summary")" \
-    "$layer_end" "127.0.0.1:${port}" 1 "$CTX_SIZE" "$n_batch"
+    "$layer_end" "127.0.0.1:${port}" 1 "$CTX_SIZE" "$n_batch" "$gpu_layers"
   start_stage_server "$label" "$config" "$port" "$log" || return 1
   rc=0
   python3 "$CASES_DRIVER" \

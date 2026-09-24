@@ -1,4 +1,4 @@
-From db96c8efeb1dcb77b18402b0868b2c62ccc3b9df Mon Sep 17 00:00:00 2001
+From 0fbe3f3f48baad1d61557f9f284341ea0ae7b4d7 Mon Sep 17 00:00:00 2001
 From: Daniel Winter-Wijntjes <danielwinterw@gmail.com>
 Date: Mon, 21 Sep 2026 18:11:39 +1000
 Subject: [PATCH] skippy: batch activation exports by request offset, never by
@@ -33,10 +33,10 @@ Nothing in the batched path signals "unsupported" any more.
  4 files changed, 77 insertions(+), 38 deletions(-)
 
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 9471957..a1a5490 100644
+index 996c21972..a6783a5aa 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -831,6 +831,10 @@ uint32_t llama_context::n_ubatch() const {
+@@ -834,6 +834,10 @@ uint32_t llama_context::n_ubatch() const {
      return cparams.n_ubatch;
  }
  
@@ -48,10 +48,10 @@ index 9471957..a1a5490 100644
      return cparams.n_seq_max;
  }
 diff --git a/src/llama-context.h b/src/llama-context.h
-index 1c1d02c..556ef93 100644
+index 4b4128f22..f9896cbd4 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
-@@ -91,6 +91,7 @@ struct llama_context {
+@@ -92,6 +92,7 @@ struct llama_context {
      uint32_t n_ctx_seq() const;
      uint32_t n_batch()   const;
      uint32_t n_ubatch()  const;
@@ -60,7 +60,7 @@ index 1c1d02c..556ef93 100644
  
      uint32_t n_threads()       const;
 diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
-index a8b7315..ba90fe6 100644
+index aacfc628f..72de1db18 100644
 --- a/src/skippy/execution-batch.cpp
 +++ b/src/skippy/execution-batch.cpp
 @@ -6,6 +6,7 @@
@@ -117,7 +117,7 @@ index a8b7315..ba90fe6 100644
 +                "iteration batching accepts planned frontier parts only");
 +        return SKIPPY_STATUS_INVALID_ARGUMENT;
      }
-     llm_graph_result * result = session->ctx->get_gf_res_prev();
+     llm_graph_result * result = session->ctx->get_gf_res_prev_active();
      const auto * ports = result == nullptr ? nullptr : &result->get_skippy_activation_exports();
 @@ -157,6 +158,13 @@ static enum skippy_status skippy_copy_batched_exports(
                      "batched graph export does not match its activation descriptor");
@@ -232,7 +232,7 @@ index a8b7315..ba90fe6 100644
      if (sampled_count > sampled_output_capacity ||
              (sampled_count > 0 &&
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
-index 15b29ab..66e4856 100644
+index 15b29abfa..66e485666 100644
 --- a/src/skippy/model_loading.cpp
 +++ b/src/skippy/model_loading.cpp
 @@ -727,9 +727,9 @@ enum skippy_status skippy_finish_model_open(

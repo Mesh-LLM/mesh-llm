@@ -1,26 +1,24 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From cf52cf215f39d7b881121174b09be55077a8a233 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
-Date: Wed, 23 Sep 2026 07:00:42 +1000
-Subject: [PATCH] skippy: memoise stage slice selection with exact dependency keys
+Date: Thu, 24 Sep 2026 13:26:12 +1000
+Subject: [PATCH 1/2] skippy: memoise stage slice selection with exact
+ dependency keys
 
-Selection depends on graph structure, bindings and metadata, not on tensor
-contents. Key the memo on an exact serialization of every input a fresh
-selection reads -- the node and leaf lists with per-tensor flags and view
-chains, graph order, the four binding lists, and the layer range -- and
-compare keys exactly rather than by hash.
-
-An earlier fingerprint-based memo folded rich metadata only for graph->nodes
-and pointers for the binding lists, so mutations confined to leaf metadata,
-binding flags, view chains, state storage metadata or graph order hit the
-memo and skipped both validation and identity recomputation. Those are the
-wiring mistakes the validations exist to catch.
-
-Ships the 21-case regression battery: each case warms the memo, mutates one
-input, then compares a memo-eligible call against a fresh call on a thread
-whose memo is empty.
 ---
+ src/CMakeLists.txt                           |   3 +-
+ src/skippy/selection_memo.cpp                | 145 +++++++++++++++++++
+ src/skippy/selection_memo.h                  |  17 +++
+ src/skippy/stage_slice_plan.cpp              |  14 +-
+ src/skippy/state_effects.cpp                 |   7 +-
+ src/skippy/tests/selection_memo_regression.h | 123 ++++++++++++++++
+ src/skippy/tests/stage_slice_plan.cpp        |   7 +
+ 7 files changed, 313 insertions(+), 3 deletions(-)
+ create mode 100644 src/skippy/selection_memo.cpp
+ create mode 100644 src/skippy/selection_memo.h
+ create mode 100644 src/skippy/tests/selection_memo_regression.h
+
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 72591c7ca..86b85afc5 100644
+index 0e9e0011c..b7e0a38d9 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -68,7 +68,8 @@ add_library(llama
@@ -208,7 +206,7 @@ index 000000000..6af96e759
 +const skippy_stage_slice_selection * skippy_recall_stage_slice(const std::string & key);
 +void skippy_remember_stage_slice(std::string key, const skippy_stage_slice_selection & selection);
 diff --git a/src/skippy/stage_slice_plan.cpp b/src/skippy/stage_slice_plan.cpp
-index dda2df504..f0c6e3549 100644
+index 75a4da24c..d4fd70a39 100644
 --- a/src/skippy/stage_slice_plan.cpp
 +++ b/src/skippy/stage_slice_plan.cpp
 @@ -1,3 +1,4 @@
@@ -244,7 +242,7 @@ index dda2df504..f0c6e3549 100644
  
  bool skippy_build_guarded_stage_slice_plan(
 diff --git a/src/skippy/state_effects.cpp b/src/skippy/state_effects.cpp
-index b0224819c..333b89eca 100644
+index 4b5100dee..5c15164f1 100644
 --- a/src/skippy/state_effects.cpp
 +++ b/src/skippy/state_effects.cpp
 @@ -301,7 +301,12 @@ bool skippy_infer_state_effects(
@@ -260,7 +258,7 @@ index b0224819c..333b89eca 100644
 +        positions.emplace(node, index);
      }
  
-     struct explicit_owner {
+     // A raw-embedding entry is a graph leaf, before every executable node.
 diff --git a/src/skippy/tests/selection_memo_regression.h b/src/skippy/tests/selection_memo_regression.h
 new file mode 100644
 index 000000000..49e5ca442
@@ -391,7 +389,7 @@ index 000000000..49e5ca442
 +    return 0;
 +}
 diff --git a/src/skippy/tests/stage_slice_plan.cpp b/src/skippy/tests/stage_slice_plan.cpp
-index 1f5a04c98..3f169bf37 100644
+index 35de1e36c..591d00d96 100644
 --- a/src/skippy/tests/stage_slice_plan.cpp
 +++ b/src/skippy/tests/stage_slice_plan.cpp
 @@ -1,3 +1,7 @@
@@ -411,13 +409,14 @@ index 1f5a04c98..3f169bf37 100644
  static int check_auxiliary_graph_parameter_closure() {
      ggml_init_params params = {
          ggml_tensor_overhead() * 32 + ggml_graph_overhead_custom(32, false), nullptr, true,
-@@ -1131,6 +1137,7 @@ int main() {
-     int result = check_semantic_identities();
+@@ -1136,6 +1142,7 @@ int main() {
+     if (!result) { result = check_semantic_identities(); }
      if (!result) { result = check_tied_parameter_identity(); }
      if (!result) { result = check_middle_stage_selection(); }
 +    if (!result) { result = check_selection_memo_regressions(); }
      if (!result) { result = check_inferred_registered_state_write(); }
      if (!result) { result = check_explicit_final_output(); }
      if (!result) { result = check_state_preparation_execution(false, false); }
---
-2.39.5
+-- 
+2.54.0 (Apple Git-157)
+

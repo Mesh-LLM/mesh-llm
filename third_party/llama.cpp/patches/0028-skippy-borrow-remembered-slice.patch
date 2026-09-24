@@ -1,26 +1,18 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 8ed190126244bb46b0483f384ec4599d40d55a48 Mon Sep 17 00:00:00 2001
 From: sat <sat@local>
-Date: Tue, 23 Sep 2026 22:00:00 +1000
-Subject: [PATCH] skippy: borrow the remembered stage slice instead of copying it
+Date: Thu, 24 Sep 2026 13:26:46 +1000
+Subject: [PATCH 2/2] skippy: borrow the remembered stage slice instead of
+ copying it
 
-The memo hands back the remembered selection by value, so every hit copies
-the whole selection -- and in steady-state decode most steps are hits.
-Borrow it instead: on a hit return a pointer into the thread-local store,
-and fall back to the ordinary compute-and-remember path on a miss, where
-the copy is paid once rather than every step.
-
-The sole call site holds the borrowed pointer with no nested stage-slice
-call in scope; the auxiliary profile-plan builder still takes its own copy.
-
-Run the selection-memo regression battery against this entry point too. Both
-skippy_select_stage_slice and skippy_borrow_stage_slice serve from the same
-thread-local store, so a memo that is not total over what fresh selection reads
-would hand the per-step realize path a stale or invalid selection -- and without
-a copy, which is the whole point of this patch. All 21 cases now assert the
-borrow result against a fresh recompute on a cold thread.
 ---
+ src/skippy/stage_realization.cpp             |  8 +++---
+ src/skippy/stage_slice_plan.cpp              | 29 ++++++++++++++++++++
+ src/skippy/stage_slice_plan.h                | 16 +++++++++++
+ src/skippy/tests/selection_memo_regression.h | 16 ++++++++++-
+ 4 files changed, 64 insertions(+), 5 deletions(-)
+
 diff --git a/src/skippy/stage_realization.cpp b/src/skippy/stage_realization.cpp
-index a0938dcb8..23e35d055 100644
+index 148a2d4a2..9a442eb9d 100644
 --- a/src/skippy/stage_realization.cpp
 +++ b/src/skippy/stage_realization.cpp
 @@ -132,7 +132,6 @@ void skippy_realize_stage_graph(
@@ -53,10 +45,10 @@ index a0938dcb8..23e35d055 100644
      }
 +    const skippy_stage_slice_selection & selection = *borrowed;
  
-     skippy_validate_execution_dependencies(params.build_inputs, false, 0, selection.parameter_identities);
-     std::vector<std::string> realized_import_identities;
+     skippy_validate_execution_dependencies(params.build_inputs, false, 0, selection.parameter_identities,
+                                            params.ubatch.token == nullptr && params.ubatch.embd != nullptr);
 diff --git a/src/skippy/stage_slice_plan.cpp b/src/skippy/stage_slice_plan.cpp
-index f0c6e3549..92bb0884c 100644
+index d4fd70a39..828088f5f 100644
 --- a/src/skippy/stage_slice_plan.cpp
 +++ b/src/skippy/stage_slice_plan.cpp
 @@ -595,6 +595,35 @@ struct selector {
@@ -149,5 +141,6 @@ index 49e5ca442..3d746ea0b 100644
      }
      return 0;
  }
---
-2.39.5
+-- 
+2.54.0 (Apple Git-157)
+

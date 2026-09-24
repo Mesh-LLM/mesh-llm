@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/afmoe.cpp b/src/models/afmoe.cpp
-index cf0220367186e197e04b7c6f4e11411349b0afdc..3bbbcee0c8506d9f214871d14edfc2c36f1ed1ee 100644
+index 08c22b6ed8234b1288bdcda0083e0af13e3c0022..5daf21e4b3aa36a61ba38453b3e753748934d944 100644
 --- a/src/models/afmoe.cpp
 +++ b/src/models/afmoe.cpp
-@@ -128,6 +128,8 @@ llama_model_afmoe::graph::graph(const llama_model & model, const llm_graph_param
+@@ -126,6 +126,8 @@ llama_model_afmoe::graph::graph(const llama_model & model, const llm_graph_param
      const float kq_scale = 1.0f/sqrtf(float(n_embd_head));
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index cf0220367186e197e04b7c6f4e11411349b0afdc..3bbbcee0c8506d9f214871d14edfc2c3
          const float freq_base_l  = model.get_rope_freq_base (cparams, il);
          const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
  
-@@ -265,6 +267,7 @@ llama_model_afmoe::graph::graph(const llama_model & model, const llm_graph_param
+@@ -263,6 +265,7 @@ llama_model_afmoe::graph::graph(const llama_model & model, const llm_graph_param
  
          // input for next layer
          inpL = cur;

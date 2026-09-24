@@ -48,6 +48,13 @@ printf 'CMAKE_GENERATOR:INTERNAL=%s\\n' "$generator" > "$target/CMakeCache.txt"
 """
 
 NINJA_STUB = "#!/usr/bin/env bash\nexit 0\n"
+NVCC_STUB = """\
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--version" ]]; then
+  echo "Cuda compilation tools, release 12.9, V12.9.0"
+fi
+exit 0
+"""
 
 
 class BuildLlamaGeneratorGuardTests(unittest.TestCase):
@@ -78,6 +85,7 @@ class BuildLlamaGeneratorGuardTests(unittest.TestCase):
         env_cmake_generator: str | None = None,
         deployment_target: str | None = None,
         host_os: str | None = None,
+        backend: str = "cpu",
         extra_args: tuple[str, ...] = (),
     ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
         directory = tempfile.TemporaryDirectory()
@@ -95,7 +103,11 @@ class BuildLlamaGeneratorGuardTests(unittest.TestCase):
             )
         stubs = root / "stubs"
         stubs.mkdir()
-        for name, body in (("cmake", CMAKE_STUB), ("ninja", NINJA_STUB)):
+        for name, body in (
+            ("cmake", CMAKE_STUB),
+            ("ninja", NINJA_STUB),
+            ("nvcc", NVCC_STUB),
+        ):
             if name == "ninja" and not ninja_on_path:
                 continue
             path = stubs / name
@@ -115,6 +127,10 @@ class BuildLlamaGeneratorGuardTests(unittest.TestCase):
                 "CMAKE_STUB_LOG",
                 "CMAKE_GENERATOR",
                 "MACOSX_DEPLOYMENT_TARGET",
+                "CUDACXX",
+                "CMAKE_CUDA_COMPILER",
+                "NVCC",
+                "CUDAToolkit_ROOT",
             )
         }
         if env_cmake_generator is not None:
@@ -128,7 +144,7 @@ class BuildLlamaGeneratorGuardTests(unittest.TestCase):
             {
                 "LLAMA_WORKDIR": str(workdir),
                 "LLAMA_STAGE_BUILD_DIR": str(build),
-                "LLAMA_STAGE_BACKEND": "cpu",
+                "LLAMA_STAGE_BACKEND": backend,
                 "LLAMA_STAGE_LINK_MODE": "dynamic",
                 "CMAKE_STUB_LOG": str(log),
                 "PATH": path_value,
@@ -191,6 +207,16 @@ class BuildLlamaGeneratorGuardTests(unittest.TestCase):
         result, _, log = self.run_build(host_os="Linux", deployment_target="14.0")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("CMAKE_OSX_DEPLOYMENT_TARGET", log.read_text())
+
+    def test_cuda_disables_unstable_graph_capture(self) -> None:
+        result, build, log = self.run_build(backend="cuda")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("-DGGML_CUDA=ON", log.read_text())
+        self.assertIn("-DGGML_CUDA_GRAPHS=OFF", log.read_text())
+        self.assertIn(
+            "cmake-arg=-DGGML_CUDA_GRAPHS=OFF",
+            (build / ".mesh-llm-build-stamp").read_text(),
+        )
 
     def test_stale_makefiles_cache_is_cleared_when_ninja_is_selected(self) -> None:
         result, build, log = self.run_build(cache_generator="Unix Makefiles")

@@ -670,6 +670,20 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("startup_timeout=1800s cert_timeout=6600s", result.stdout)
 
+    def test_native_mtp_planning_includes_all_head_lane_load_budget(self) -> None:
+        model = self._model()
+        model["execution"]["mtp_layers"] = 3
+        for startup, deadline in [(300, 2700), (1800, 7200)]:
+            with self.subTest(startup=startup):
+                model["resources"]["startup_timeout_secs"] = startup
+                result = self._dry_run(models=[model])
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertIn(
+                    f"mtp=1 startup_timeout={startup}s cert_timeout={deadline}s",
+                    result.stdout,
+                )
+                self.assertIn("--require-native-mtp-draft", result.stdout)
+
     def test_dry_run_reconciles_every_planned_family(self) -> None:
         first = self._model()
         second = self._model()

@@ -502,6 +502,18 @@ same commit. A hosted aggregate rejects missing, duplicate, failed, cancelled,
 or mismatched results. Only the final hosted publisher receives the repair
 credential, and exhausted attempts publish no branch or PR.
 
+The family plan must require executable coverage for every integrated MTP head
+declared by immutable GGUF metadata. A single draft token cannot certify a
+multi-head model. Check the declared head count against the cached GGUF before
+building, exercise every head, and compare target state with an independent
+MTP-disabled baseline. Rejected draft tokens are valid; missing head coverage
+or target-state divergence must fail the family receipt.
+
+Native-head certification budgets include two additional startup allowances
+for the integrated model and independent baseline loads, retaining the existing
+absolute timeout cap. Dry-run planning reflects the declared native-head lane;
+actual execution still requires the immutable metadata and tensor scans.
+
 Canary scheduling reserves 10% of physical memory. The controller projects
 source-owned plans onto the existing `accelerator-memory-128plus` and
 `accelerator-memory-256plus` labels (115.2 and 230.4 GiB workload budgets).
