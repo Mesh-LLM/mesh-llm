@@ -161,6 +161,13 @@ impl BufferedHttpRequest {
         self.method == "POST" && is_audio_upload_path(&self.client_path)
     }
 
+    /// System One inline images are encoded media, not prompt text. Their
+    /// expanded soft-token count is unknown until the projector encodes them,
+    /// so the wire byte length says nothing about the eventual context use.
+    pub fn is_system_one_media_request(&self) -> bool {
+        self.method == "POST" && is_system_one_path(&self.client_path)
+    }
+
     pub fn ensure_body_json(&mut self) {
         if self.body_json.is_none() && !self.body_json_attempted {
             self.body_json = self
@@ -1021,6 +1028,14 @@ pub fn is_legacy_lifecycle_path(path: &str) -> bool {
 
 fn is_tokenize_request(method: &str, path: &str) -> bool {
     method == "POST" && path == "/v1/tokenize"
+}
+
+/// Identify the System One read endpoints that carry inline image media.
+fn is_system_one_path(path: &str) -> bool {
+    matches!(
+        path.split('?').next().unwrap_or(path),
+        "/systemone" | "/v1/systemone"
+    )
 }
 
 pub fn pipeline_request_supported(path: &str, body: &serde_json::Value) -> bool {

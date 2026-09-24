@@ -1,4 +1,5 @@
 use super::*;
+use crate::network::openai::transport::request_context_budget;
 #[path = "request_parse/audio_multipart_tests.rs"]
 mod audio_multipart_tests;
 use tokio::io::AsyncWriteExt;
@@ -164,6 +165,40 @@ async fn read_request_from_parts_with_limits(
 
 async fn read_request_from_parts(parts: Vec<Vec<u8>>) -> BufferedHttpRequest {
     read_request_from_parts_with_limits(parts, HTTP_READ_LIMITS).await
+}
+
+#[tokio::test]
+async fn system_one_media_requests_skip_the_byte_budget() {
+    for path in ["/systemone", "/v1/systemone", "/v1/systemone?x=1"] {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "model": "openjev-latest",
+            "state": "Look at the photo.",
+            "images": [format!("data:image/png;base64,{}", "A".repeat(4096))],
+            "questions": {"hotdog": {"type": "noul", "instructions": "The photo shows a hot dog"}},
+        }))
+        .expect("system one request should serialize");
+        let mut raw = format!(
+            "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        raw.extend_from_slice(&body);
+        let request = read_request_from_parts(vec![raw]).await;
+        assert!(request.is_system_one_media_request(), "path {path}");
+        assert!(request_context_budget(&request).is_none());
+    }
+
+    let body = serde_json::to_vec(&serde_json::json!({"model": "m", "prompt": "hi"}))
+        .expect("chat request should serialize");
+    let mut raw = format!(
+        "POST /v1/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    raw.extend_from_slice(&body);
+    let request = read_request_from_parts(vec![raw]).await;
+    assert!(!request.is_system_one_media_request());
+    assert!(request_context_budget(&request).is_some());
 }
 
 fn tokenize_http_request(model_id: &str, text_bytes: usize) -> (Vec<u8>, Vec<u8>) {

@@ -232,9 +232,15 @@ pub(crate) async fn reject_legacy_lifecycle_request(
 /// Generation context cannot be estimated from every request body's byte size.
 /// Tokenizer requests use no target KV context, and multipart audio bodies
 /// contain encoded media rather than text tokens. The audio backend performs
-/// the authoritative media/context validation after routing.
+/// the authoritative media/context validation after routing. System One
+/// inline images are likewise encoded media: the wire bytes are base64
+/// payloads, and the native read enforces the real context guard once the
+/// projector has expanded them.
 pub(crate) fn request_context_budget(request: &BufferedHttpRequest) -> Option<u32> {
-    if request.is_tokenize_request() || request.is_audio_upload_request() {
+    if request.is_tokenize_request()
+        || request.is_audio_upload_request()
+        || request.is_system_one_media_request()
+    {
         None
     } else {
         request_budget_tokens_from_parts(request.body_len_bytes, request.completion_tokens)
