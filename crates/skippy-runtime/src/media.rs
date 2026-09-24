@@ -44,14 +44,26 @@ pub struct SpeechAudio {
 
 /// Restore the session's generation mode on every speech exit, including
 /// failures before the external-decode guard can be acquired.
-struct SpeechEmbeddingsGuard(*mut skippy_ffi::Opaque);
+struct SpeechEmbeddingsGuard {
+    session: *mut skippy_ffi::Session,
+    context: *mut skippy_ffi::Opaque,
+}
 
 impl Drop for SpeechEmbeddingsGuard {
     /// Restore logits output even when speech setup or generation exits with an error.
     fn drop(&mut self) {
         // SAFETY: the borrowed StageSession outlives this guard and owns the
         // context; speech generation holds exclusive access to the session.
-        unsafe { skippy_ffi::llama_set_embeddings(self.0, false) };
+        let mut error = ptr::null_mut();
+        unsafe {
+            skippy_ffi::llama_set_embeddings(self.context, false);
+            if skippy_ffi::skippy_session_begin_external_decode(self.session, &mut error)
+                == skippy_ffi::Status::Ok
+            {
+                let _ = skippy_ffi::skippy_session_end_external_decode(self.session, &mut error);
+            }
+        }
+        free_error(error);
     }
 }
 
@@ -223,7 +235,10 @@ impl StageModel {
         }
         session.reset()?;
         unsafe { skippy_ffi::llama_set_embeddings(lctx, true) };
-        let _embeddings_mode = SpeechEmbeddingsGuard(lctx);
+        let _embeddings_mode = SpeechEmbeddingsGuard {
+            session: session.raw,
+            context: lctx,
+        };
         let mut guard_error = ptr::null_mut();
         let status = unsafe {
             skippy_ffi::skippy_session_begin_external_decode(session.raw, &mut guard_error)

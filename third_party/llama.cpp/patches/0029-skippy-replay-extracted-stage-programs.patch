@@ -1,14 +1,14 @@
-From 60710afde132603ed29d99075fc2858c5ab2ec16 Mon Sep 17 00:00:00 2001
+From 1303ff810ea39dd7be423a77d5630c113374940e Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Thu, 24 Sep 2026 09:59:13 +1000
 Subject: [PATCH] skippy: replay extracted stage programs
 
 Assisted-by: OpenAI Codex
 ---
- src/CMakeLists.txt                            |   97 +
- src/llama-context.cpp                         |  188 ++
- src/llama-context.h                           |   17 +
- src/llama-graph.cpp                           |  342 ++-
+ src/CMakeLists.txt                            |   92 +
+ src/llama-context.cpp                         |  201 ++
+ src/llama-context.h                           |   19 +
+ src/llama-graph.cpp                           |  342 +++-
  src/llama-graph.h                             |   36 +-
  src/llama-impl.h                              |   36 +
  src/llama-kv-cache-dsv4.cpp                   |   27 +-
@@ -31,22 +31,23 @@ Assisted-by: OpenAI Codex
  src/models/qwen3next.cpp                      |  102 +
  src/models/qwen4exp.cpp                       |  101 +-
  src/models/spark2-5.cpp                       |    9 +
- src/skippy/model_loading.cpp                  |   27 +-
- src/skippy/stage_program.cpp                  | 1830 +++++++++++++++++
- src/skippy/stage_program.h                    |  286 +++
- src/skippy/stage_program_extraction.cpp       | 1368 ++++++++++++
+ src/skippy/model_loading.cpp                  |   24 +-
+ src/skippy/session.cpp                        |    6 +
+ src/skippy/stage_program.cpp                  | 1780 +++++++++++++++++
+ src/skippy/stage_program.h                    |  285 +++
+ src/skippy/stage_program_extraction.cpp       | 1351 +++++++++++++
  src/skippy/stage_program_outputs.cpp          |   61 +
  src/skippy/stage_program_outputs.h            |   27 +
  src/skippy/stage_realization.cpp              |   78 +-
  src/skippy/stage_realization.h                |    1 +
  src/skippy/stage_slice_plan.cpp               |    4 +
- src/skippy/tests/graph_build_inputs.cpp       |  791 ++++++-
+ src/skippy/tests/graph_build_inputs.cpp       |  829 +++++++-
  src/skippy/tests/noalloc_graph_planning.cpp   |   45 +
- src/skippy/tests/profile_residency.cpp        |  155 +-
+ src/skippy/tests/profile_residency.cpp        |  136 +-
  .../tests/renamed_multishard_planning.cpp     |  158 +-
- src/skippy/tests/stage_program_parity.h       |  253 +++
+ src/skippy/tests/stage_program_parity.h       |  240 +++
  tests/test-llama-archs.cpp                    |   37 +
- 41 files changed, 6948 insertions(+), 261 deletions(-)
+ 42 files changed, 6899 insertions(+), 261 deletions(-)
  create mode 100644 src/skippy/stage_program.cpp
  create mode 100644 src/skippy/stage_program.h
  create mode 100644 src/skippy/stage_program_extraction.cpp
@@ -55,7 +56,7 @@ Assisted-by: OpenAI Codex
  create mode 100644 src/skippy/tests/stage_program_parity.h
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 756acbae6..2631a40c9 100644
+index 756acbae6..947662206 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -71,6 +71,9 @@ add_library(llama
@@ -68,7 +69,7 @@ index 756acbae6..2631a40c9 100644
              skippy/stage_realization.cpp
              skippy/stage_execution_contract.cpp
              skippy/state.cpp
-@@ -172,11 +175,33 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -172,11 +175,28 @@ if (LLAMA_STAGE_BUILD_TESTS)
  
      add_executable(skippy-profile-residency skippy/tests/profile_residency.cpp)
      target_include_directories(skippy-profile-residency PRIVATE .)
@@ -78,11 +79,6 @@ index 756acbae6..2631a40c9 100644
      add_test(NAME skippy_profile_residency COMMAND skippy-profile-residency
          "${MTP_WIDTH_FIXTURE_DIR}/deepseek4-mtp-moe.gguf")
      set_tests_properties(skippy_profile_residency PROPERTIES FIXTURES_REQUIRED mtp-width-model)
-+    add_test(NAME skippy_profile_residency_opt_out COMMAND skippy-profile-residency
-+        "${MTP_WIDTH_FIXTURE_DIR}/deepseek4-mtp-moe.gguf")
-+    set_tests_properties(skippy_profile_residency_opt_out PROPERTIES
-+        FIXTURES_REQUIRED mtp-width-model
-+        ENVIRONMENT "SKIPPY_STAGE_PROGRAM_ENABLE=0")
 +    set(DENSE_MTP_FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/dense-mtp-models")
 +    file(MAKE_DIRECTORY "${DENSE_MTP_FIXTURE_DIR}")
 +    add_test(NAME skippy_generate_dense_mtp COMMAND skippy-model-fixture-generator
@@ -102,7 +98,7 @@ index 756acbae6..2631a40c9 100644
  
      add_executable(skippy-model-loader-accounting
          ../tests/test-skippy-model-loader-accounting.cpp)
-@@ -269,6 +294,7 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -269,6 +289,7 @@ if (LLAMA_STAGE_BUILD_TESTS)
      add_executable(skippy-graph-build-inputs
          skippy/tests/graph_build_inputs.cpp)
      target_include_directories(skippy-graph-build-inputs PRIVATE .)
@@ -110,7 +106,7 @@ index 756acbae6..2631a40c9 100644
      target_compile_features(skippy-graph-build-inputs PRIVATE cxx_std_17)
      target_link_libraries(skippy-graph-build-inputs PRIVATE llama)
      add_dependencies(skippy-stage-slice-plan skippy-graph-build-inputs skippy-profile-residency)
-@@ -282,6 +308,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -282,6 +303,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_graph_build_inputs PROPERTIES
          FIXTURES_REQUIRED "skippy-model-loader-fixtures;skippy-graph-build-input-fixtures")
  
@@ -126,7 +122,7 @@ index 756acbae6..2631a40c9 100644
      add_test(
          NAME skippy_generate_graph_build_input_fixture
          COMMAND skippy-model-fixture-generator
-@@ -359,6 +394,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -359,6 +389,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_model_loader_accounting_moe PROPERTIES
          FIXTURES_REQUIRED skippy-model-loader-fixtures)
  
@@ -142,7 +138,7 @@ index 756acbae6..2631a40c9 100644
      add_test(
          NAME skippy_noalloc_graph_planning_dense
          COMMAND skippy-noalloc-graph-planning
-@@ -379,6 +423,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -379,6 +418,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_noalloc_graph_planning_qwen3 PROPERTIES
          FIXTURES_REQUIRED skippy-noalloc-qwen3-fixture)
  
@@ -158,7 +154,7 @@ index 756acbae6..2631a40c9 100644
      add_test(
          NAME skippy_generate_gemma2_fixture
          COMMAND skippy-model-fixture-generator
-@@ -397,6 +450,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -397,6 +445,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_noalloc_graph_planning_iswa PROPERTIES
          FIXTURES_REQUIRED skippy-noalloc-gemma2-fixture)
  
@@ -174,7 +170,7 @@ index 756acbae6..2631a40c9 100644
      add_test(
          NAME skippy_generate_minimax_m3_fixture
          COMMAND skippy-model-fixture-generator
-@@ -415,6 +477,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -415,6 +472,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_noalloc_graph_planning_msa PROPERTIES
          FIXTURES_REQUIRED skippy-noalloc-minimax-m3-fixture)
  
@@ -190,7 +186,7 @@ index 756acbae6..2631a40c9 100644
      add_test(
          NAME skippy_generate_kimi_linear_fixture
          COMMAND skippy-model-fixture-generator
-@@ -433,6 +504,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -433,6 +499,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_noalloc_graph_planning_kimi_linear PROPERTIES
          FIXTURES_REQUIRED skippy-noalloc-kimi-linear-fixture)
  
@@ -205,7 +201,7 @@ index 756acbae6..2631a40c9 100644
      add_test(
          NAME skippy_generate_deepseek4_fixture
          COMMAND skippy-model-fixture-generator
-@@ -518,6 +597,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -518,6 +592,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_noalloc_graph_planning_recurrent_source PROPERTIES
          FIXTURES_REQUIRED skippy-noalloc-mamba2-fixture)
  
@@ -221,7 +217,7 @@ index 756acbae6..2631a40c9 100644
      add_test(
          NAME skippy_generate_mamba_fixture
          COMMAND skippy-model-fixture-generator
-@@ -535,6 +623,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -535,6 +618,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
              "recurrent,recurrent")
      set_tests_properties(skippy_noalloc_graph_planning_mamba_state_ownership PROPERTIES
          FIXTURES_REQUIRED skippy-noalloc-mamba-fixture)
@@ -238,7 +234,7 @@ index 756acbae6..2631a40c9 100644
  
  if (BUILD_SHARED_LIBS)
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 96c226162..93d9cb5cd 100644
+index 96c226162..2497cbc1e 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -14,6 +14,7 @@
@@ -261,7 +257,7 @@ index 96c226162..93d9cb5cd 100644
      if (!sched_need_reserve) {
          return;
      }
-@@ -814,6 +820,152 @@ const skippy_graph_build_inputs & llama_context::get_graph_build_inputs() const
+@@ -814,6 +820,165 @@ const skippy_graph_build_inputs & llama_context::get_graph_build_inputs() const
      return graph_build_inputs;
  }
  
@@ -368,6 +364,14 @@ index 96c226162..93d9cb5cd 100644
 +    return false;
 +}
 +
++bool llama_context::refresh_stage_program(std::string & error) {
++    error.clear();
++    const auto * active = active_stage_program();
++    if (active == nullptr || !active->installed ||
++            active->program.computation_generation == computation_generation) return true;
++    return reconfigure_stage_program(error);
++}
++
 +bool llama_context::configure_stage_program_nextn_outputs(bool value, bool masked, std::string & error) {
 +    error.clear();
 +    const auto previous_params = cparams;
@@ -392,6 +396,11 @@ index 96c226162..93d9cb5cd 100644
 +    return stage_programs.size();
 +}
 +
++void llama_context::clear_stage_program_for_test() {
++    stage_program_capture_target = nullptr;
++    stage_programs.clear();
++}
++
 +bool llama_context::configure_stage_program_gdn_for_test(
 +        bool fused_ar, bool fused_chunk, std::string & error) {
 +    error.clear();
@@ -414,7 +423,7 @@ index 96c226162..93d9cb5cd 100644
  ggml_backend_sched_t llama_context::get_sched() const {
      return sched.get();
  }
-@@ -1237,6 +1389,8 @@ void llama_context::set_abort_callback(bool (*abort_callback)(void * data), void
+@@ -1237,6 +1402,8 @@ void llama_context::set_abort_callback(bool (*abort_callback)(void * data), void
  void llama_context::set_embeddings(bool value) {
      LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
  
@@ -423,7 +432,7 @@ index 96c226162..93d9cb5cd 100644
      cparams.embeddings = value;
  
      // TODO: not sure yet if we want to reserve here
-@@ -1246,6 +1400,8 @@ void llama_context::set_embeddings(bool value) {
+@@ -1246,6 +1413,8 @@ void llama_context::set_embeddings(bool value) {
  void llama_context::set_embeddings_nextn(bool value, bool masked) {
      LLAMA_LOG_DEBUG("%s: value = %d, masked = %d\n", __func__, value, masked);
  
@@ -432,7 +441,7 @@ index 96c226162..93d9cb5cd 100644
      cparams.embeddings_nextn        = value;
      cparams.embeddings_nextn_masked = masked;
  }
-@@ -1255,6 +1411,8 @@ void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
+@@ -1255,6 +1424,8 @@ void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
  
      GGML_ASSERT(lid < model.hparams.n_layer());
  
@@ -441,7 +450,7 @@ index 96c226162..93d9cb5cd 100644
      cparams.embeddings_layer_inp[lid] = enable;
  
      // note: without this reserve, the draft acceptance drops to zero. not sure why - this is unexpected
-@@ -1262,7 +1420,18 @@ void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
+@@ -1262,7 +1433,18 @@ void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
  }
  
  void llama_context::set_nextn_layer_offset(int32_t offset) {
@@ -460,7 +469,7 @@ index 96c226162..93d9cb5cd 100644
  }
  
  void llama_context::set_causal_attn(bool value) {
-@@ -1272,6 +1441,7 @@ void llama_context::set_causal_attn(bool value) {
+@@ -1272,6 +1454,7 @@ void llama_context::set_causal_attn(bool value) {
          return;
      }
  
@@ -468,7 +477,7 @@ index 96c226162..93d9cb5cd 100644
      cparams.causal_attn = value;
  
      sched_need_reserve = true;
-@@ -1284,6 +1454,7 @@ void llama_context::set_warmup(bool value) {
+@@ -1284,6 +1467,7 @@ void llama_context::set_warmup(bool value) {
          return;
      }
  
@@ -476,7 +485,7 @@ index 96c226162..93d9cb5cd 100644
      cparams.warmup = value;
  
      // warmups are usually with small batches, so no need to reserve
-@@ -1297,6 +1468,12 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
+@@ -1297,6 +1481,12 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
  
      LLAMA_LOG_DEBUG("%s: seq_id = %d, sampler = %p\n", __func__, (int) seq_id, (void *) sampler);
  
@@ -489,7 +498,7 @@ index 96c226162..93d9cb5cd 100644
      if (sampler && model.split_mode() == LLAMA_SPLIT_MODE_TENSOR) {
          static bool warned = false;
          if (!warned) {
-@@ -1362,6 +1539,7 @@ void llama_context::set_adapters_lora(llama_adapter_lora ** adapters, size_t n_a
+@@ -1362,6 +1552,7 @@ void llama_context::set_adapters_lora(llama_adapter_lora ** adapters, size_t n_a
          }
      }
  
@@ -497,7 +506,7 @@ index 96c226162..93d9cb5cd 100644
      sched_need_reserve = true;
  }
  
-@@ -1401,6 +1579,7 @@ bool llama_context::set_adapter_cvec(
+@@ -1401,6 +1592,7 @@ bool llama_context::set_adapter_cvec(
  
      bool res = cvec->apply(model, data, len, n_embd, il_start, il_end);
  
@@ -505,7 +514,7 @@ index 96c226162..93d9cb5cd 100644
      sched_need_reserve = true;
  
      return res;
-@@ -2613,6 +2792,11 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
+@@ -2613,6 +2805,11 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
          ubatch.token = nullptr;
          ubatch.embd  = &embedding_placeholder;
      }
@@ -517,7 +526,7 @@ index 96c226162..93d9cb5cd 100644
  
      ubatch_prepare_reserve(ubatch, n_outputs, sampling.samplers, cparams.n_outputs_max_per_seq);
  
-@@ -2678,6 +2862,7 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
+@@ -2678,6 +2875,7 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
                      static_cast<uint32_t>(port.token_axis + 1));
              shape.token_axis = port.token_axis;
              shape.optional = port.optional;
@@ -525,7 +534,7 @@ index 96c226162..93d9cb5cd 100644
              for (int dimension = 0; dimension < GGML_MAX_DIMS; ++dimension) {
                  shape.dimensions[dimension] = dimension == port.token_axis ? -1 : port.tensor->ne[dimension];
              }
-@@ -2701,6 +2886,7 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
+@@ -2701,6 +2899,7 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
                  stable = false;
                  return;
              }
@@ -533,7 +542,7 @@ index 96c226162..93d9cb5cd 100644
              for (int dimension = 0; dimension < GGML_MAX_DIMS; ++dimension) {
                  if (expected.dimensions[dimension] != actual.dimensions[dimension]) expected.dimensions[dimension] = -1;
              }
-@@ -2799,6 +2985,8 @@ llm_graph_params llama_context::graph_params(
+@@ -2799,6 +2998,8 @@ llm_graph_params llama_context::graph_params(
          /*.samplers    =*/ sampling.samplers,
          /*.build_inputs=*/ graph_build_inputs,
          /*.activation_export_token_axes=*/ std::move(export_token_axes),
@@ -543,7 +552,7 @@ index 96c226162..93d9cb5cd 100644
          /*.cb          =*/ graph_get_cb(),
          /*.res         =*/ res,
 diff --git a/src/llama-context.h b/src/llama-context.h
-index f9896cbd4..be7467b99 100644
+index f9896cbd4..b2234dbee 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
 @@ -18,6 +18,7 @@
@@ -562,23 +571,25 @@ index f9896cbd4..be7467b99 100644
      int64_t dimensions[GGML_MAX_DIMS] = {};
  };
  
-@@ -85,6 +87,15 @@ struct llama_context {
+@@ -85,6 +87,17 @@ struct llama_context {
      const llama_model   & get_model()   const;
      const llama_cparams & get_cparams() const;
      const skippy_graph_build_inputs & get_graph_build_inputs() const;
 +    const skippy_stage_program_installation * get_stage_program_installation() const;
 +    bool install_stage_program(const skippy_graph_build_inputs & graph_build_inputs, std::string & error);
 +    bool reconfigure_stage_program(std::string & error);
++    bool refresh_stage_program(std::string & error);
 +    bool configure_stage_program_nextn_outputs(bool value, bool masked, std::string & error);
 +#ifdef LLAMA_STAGE_BUILD_TESTS
 +    skippy_stage_program_installation * get_stage_program_installation_for_test(int32_t nextn_layer_offset = -1);
 +    size_t get_stage_program_installation_count_for_test() const;
++    void clear_stage_program_for_test();
 +    bool configure_stage_program_gdn_for_test(bool fused_ar, bool fused_chunk, std::string & error);
 +#endif
  
      ggml_backend_sched_t get_sched() const;
  
-@@ -332,6 +343,12 @@ private:
+@@ -332,6 +345,12 @@ private:
      llama_cparams cparams;
  
      const skippy_graph_build_inputs graph_build_inputs;
@@ -4268,7 +4279,7 @@ index 107448777..7eab7191d 100644
  
          cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
-index 66e485666..3399436eb 100644
+index 66e485666..7aea81aeb 100644
 --- a/src/skippy/model_loading.cpp
 +++ b/src/skippy/model_loading.cpp
 @@ -793,6 +793,8 @@ enum skippy_status skippy_finish_model_open(
@@ -4280,14 +4291,11 @@ index 66e485666..3399436eb 100644
          llama_free(stage_model->ctx);
          stage_model->ctx = nullptr;
          llama_model_free(model);
-@@ -896,6 +898,21 @@ enum skippy_status skippy_finish_model_open(
+@@ -896,6 +898,18 @@ enum skippy_status skippy_finish_model_open(
          fprintf(stderr, "skippy: integrated MTP requested, but this split stage is missing required MTP graph tensors; continuing without drafts\n");
      }
  
-+    const char * stage_program_setting = std::getenv("SKIPPY_STAGE_PROGRAM_ENABLE");
-+    const bool stage_program_disabled = stage_program_setting != nullptr &&
-+            std::strcmp(stage_program_setting, "0") == 0;
-+    if (skippy_runtime_has_stage_plan(config) && !stage_program_disabled) {
++    if (skippy_runtime_has_stage_plan(config)) {
 +        std::string error;
 +        if (!stage_model->ctx->install_stage_program(graph_build_inputs, error)) {
 +            const std::string message = "failed to install reusable stage program: " + error;
@@ -4302,7 +4310,7 @@ index 66e485666..3399436eb 100644
      stage_model->lane_in_use.assign(stage_model->lane_count, false);
      stage_model->lane_resident_prefix_tokens.resize(stage_model->lane_count);
  
-@@ -1204,8 +1221,16 @@ enum skippy_status skippy_model_attach_mtp_draft_model(
+@@ -1204,8 +1218,16 @@ enum skippy_status skippy_model_attach_mtp_draft_model(
          return SKIPPY_STATUS_RUNTIME_ERROR;
      }
  
@@ -4320,12 +4328,29 @@ index 66e485666..3399436eb 100644
      llama_set_embeddings_nextn(target_model->mtp_ctx, true, false);
      return skippy_success(out_error);
  }
+diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
+index 29024ed0c..cd0806c2b 100644
+--- a/src/skippy/session.cpp
++++ b/src/skippy/session.cpp
+@@ -212,6 +212,12 @@ enum skippy_status skippy_session_begin_external_decode(
+         skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "another external decode session is already active on this thread");
+         return SKIPPY_STATUS_RUNTIME_ERROR;
+     }
++    std::string program_error;
++    if (!session->ctx->refresh_stage_program(program_error)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
++                ("failed to refresh stage program for external decode: " + program_error).c_str());
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
+     session->pending_activation_exports.clear();
+ 
+     g_skippy_external_decode_session = session;
 diff --git a/src/skippy/stage_program.cpp b/src/skippy/stage_program.cpp
 new file mode 100644
-index 000000000..01e0fdc74
+index 000000000..a343768a5
 --- /dev/null
 +++ b/src/skippy/stage_program.cpp
-@@ -0,0 +1,1830 @@
+@@ -0,0 +1,1780 @@
 +#include "stage_program.h"
 +
 +#include "stage_slice_plan.h"
@@ -4384,18 +4409,6 @@ index 000000000..01e0fdc74
 +    std::array<uint64_t, 4> result;
 +    std::copy(std::begin(tensor->nb), std::end(tensor->nb), result.begin());
 +    return result;
-+}
-+
-+bool checked_add_u64(uint64_t lhs, uint64_t rhs, uint64_t & result) {
-+    if (rhs > std::numeric_limits<uint64_t>::max() - lhs) return false;
-+    result = lhs + rhs;
-+    return true;
-+}
-+
-+bool checked_multiply_u64(uint64_t lhs, uint64_t rhs, uint64_t & result) {
-+    if (lhs != 0 && rhs > std::numeric_limits<uint64_t>::max()/lhs) return false;
-+    result = lhs*rhs;
-+    return true;
 +}
 +
 +struct geometry_runtime {
@@ -4609,7 +4622,6 @@ index 000000000..01e0fdc74
 +        case GGML_OP_SET_ROWS:
 +        case GGML_OP_PERMUTE:
 +        case GGML_OP_SOFT_MAX:
-+        case GGML_OP_FLASH_ATTN_EXT:
 +        case GGML_OP_CONT:
 +        case GGML_OP_GLU:
 +        case GGML_OP_CPY:
@@ -4747,16 +4759,11 @@ index 000000000..01e0fdc74
 +            break;
 +        case GGML_OP_RESHAPE:
 +            {
-+                uint64_t elements = 1;
-+                bool valid_elements = true;
++                unsigned __int128 elements = 1;
 +                for (int axis = 0; axis < GGML_MAX_DIMS; ++axis) {
-+                    if (dims[axis] < 0 ||
-+                            !checked_multiply_u64(elements, static_cast<uint64_t>(dims[axis]), elements)) {
-+                        valid_elements = false;
-+                        break;
-+                    }
++                    elements *= static_cast<uint64_t>(dims[axis]);
 +                }
-+                if (!valid_elements || elements != static_cast<uint64_t>(ggml_nelements(sources[0]))) {
++                if (elements != static_cast<unsigned __int128>(ggml_nelements(sources[0]))) {
 +                    error = "stage program RESHAPE changes element count for " + operation.name +
 +                            " (" + operation.value_id + " source=" + operation.sources[0] +
 +                            " name=" + std::string(ggml_get_name(sources[0])) + ")" +
@@ -4836,21 +4843,16 @@ index 000000000..01e0fdc74
 +        }
 +        case GGML_OP_VIEW:
 +            {
-+                uint64_t span = dims[0] == 0 || dims[1] == 0 || dims[2] == 0 || dims[3] == 0
++                unsigned __int128 span = dims[0] == 0 || dims[1] == 0 || dims[2] == 0 || dims[3] == 0
 +                        ? 0 : ggml_row_size(sources[0]->type, dims[0]);
-+                bool valid_span = true;
-+                for (int axis = 1; valid_span && span != 0 && axis < GGML_MAX_DIMS; ++axis) {
-+                    uint64_t contribution = 0;
-+                    valid_span = dims[axis] > 0 &&
-+                            checked_multiply_u64(static_cast<uint64_t>(dims[axis] - 1), strides[axis], contribution) &&
-+                            checked_add_u64(span, contribution, span);
++                for (int axis = 1; span != 0 && axis < GGML_MAX_DIMS; ++axis) {
++                    span += static_cast<unsigned __int128>(dims[axis] - 1)*strides[axis];
 +                }
-+                uint64_t end = 0;
-+                valid_span = valid_span && checked_add_u64(view_offset, span, end);
++                const unsigned __int128 end = static_cast<unsigned __int128>(view_offset) + span;
 +                // ggml permits zero-element views to retain the logical offset of
 +                // their selected slice even though the source has no runtime
 +                // storage. This occurs in empty-token MoE reserve graphs.
-+                if (!valid_span || (span != 0 && end > ggml_nbytes(sources[0]))) {
++                if (span != 0 && end > ggml_nbytes(sources[0])) {
 +                    error = "stage program VIEW geometry exceeds source storage for " + operation.name +
 +                            " (" + operation.value_id + " source=" + operation.sources[0] +
 +                            " name=" + std::string(ggml_get_name(sources[0])) + ")" +
@@ -4886,16 +4888,6 @@ index 000000000..01e0fdc74
 +                    : ggml_soft_max_ext(context, sources[0], sources[1],
 +                            operation_parameter<float>(operation, 0), operation_parameter<float>(operation, 1));
 +            ggml_soft_max_add_sinks(tensor, sources[2]);
-+            break;
-+        case GGML_OP_FLASH_ATTN_EXT:
-+            tensor = ggml_flash_attn_ext(
-+                    context, sources[0], sources[1], sources[2], sources[3],
-+                    operation_parameter<float>(operation, 0),
-+                    operation_parameter<float>(operation, 1),
-+                    operation_parameter<float>(operation, 2));
-+            ggml_prec_set_acc(tensor, static_cast<ggml_prec>(operation_parameter<int32_t>(operation, 3)));
-+            ggml_flash_attn_ext_set_n_kv_max(tensor, operation_parameter<int32_t>(operation, 4));
-+            ggml_flash_attn_ext_add_sinks(tensor, sources[4]);
 +            break;
 +        case GGML_OP_CONT:
 +            if (dims[0] < 0 || dims[1] < 0 || dims[2] < 0 || dims[3] < 0 ||
@@ -5286,13 +5278,9 @@ index 000000000..01e0fdc74
 +    static_assert(GGML_MAX_SRC == 10, "stage-program proof source count changed");
 +    std::array<ggml_tensor *, GGML_MAX_SRC> sources;
 +    std::copy(supplied_sources.begin(), supplied_sources.end(), sources.begin());
-+    geometry_runtime runtime;
-+    runtime.n_tokens = n_tokens;
-+    runtime.n_sequences = 1;
-+    runtime.n_kv = n_kv;
-+    runtime.kv_stream_start = kv_stream_start;
-+    runtime.kv_stream_count = kv_stream_count;
-+    return evaluate_geometry(recipe, runtime, sources, dims, strides, offset, error);
++    return evaluate_geometry(recipe,
++            {n_tokens, n_kv, kv_stream_start, kv_stream_count},
++            sources, dims, strides, offset, error);
 +}
 +#endif
 +
@@ -5326,16 +5314,6 @@ index 000000000..01e0fdc74
 +                program,
 +                error)) {
 +        return false;
-+    }
-+    for (auto & root : program.roots) {
-+        if (root.kind != skippy_stage_program::root_kind::parameter) continue;
-+        const auto found = std::find_if(model.tensors_by_name.begin(), model.tensors_by_name.end(),
-+                [&](const auto & entry) { return entry.first == root.binding; });
-+        if (found == model.tensors_by_name.end() || found->second == nullptr) {
-+            error = "stage program parameter binding is missing during installation";
-+            return false;
-+        }
-+        root.parameter = found->second;
 +    }
 +    installation.model = &model;
 +    installation.program = std::move(program);
@@ -5460,16 +5438,13 @@ index 000000000..01e0fdc74
 +        ggml_tensor * tensor = nullptr;
 +        switch (root.kind) {
 +            case root_kind::parameter: {
-+                tensor = root.parameter;
-+                if (tensor == nullptr) {
-+                    const auto found = std::find_if(model.tensors_by_name.begin(), model.tensors_by_name.end(),
-+                            [&](const auto & entry) { return entry.first == root.binding; });
-+                    if (found != model.tensors_by_name.end()) tensor = found->second;
-+                }
-+                if (tensor == nullptr) {
++                const auto found = std::find_if(model.tensors_by_name.begin(), model.tensors_by_name.end(),
++                        [&](const auto & entry) { return entry.first == root.binding; });
++                if (found == model.tensors_by_name.end()) {
 +                    error = "stage program parameter binding is missing";
 +                    return false;
 +                }
++                tensor = found->second;
 +                break;
 +            }
 +            case root_kind::state: {
@@ -6158,10 +6133,10 @@ index 000000000..01e0fdc74
 +#endif
 diff --git a/src/skippy/stage_program.h b/src/skippy/stage_program.h
 new file mode 100644
-index 000000000..c64234805
+index 000000000..b72fd0ff4
 --- /dev/null
 +++ b/src/skippy/stage_program.h
-@@ -0,0 +1,286 @@
+@@ -0,0 +1,285 @@
 +#pragma once
 +
 +#include "graph_identity.h"
@@ -6319,7 +6294,6 @@ index 000000000..c64234805
 +        std::array<int64_t, 4> dimensions = {};
 +        std::array<uint64_t, 4> byte_strides = {};
 +        int32_t dynamic_axis = -1;
-+        ggml_tensor * parameter = nullptr;
 +        skippy_stage_geometry_recipe geometry;
 +        std::vector<uint8_t> constant_data;
 +    };
@@ -6450,10 +6424,10 @@ index 000000000..c64234805
 +#endif
 diff --git a/src/skippy/stage_program_extraction.cpp b/src/skippy/stage_program_extraction.cpp
 new file mode 100644
-index 000000000..53a96d055
+index 000000000..fb652e045
 --- /dev/null
 +++ b/src/skippy/stage_program_extraction.cpp
-@@ -0,0 +1,1368 @@
+@@ -0,0 +1,1351 @@
 +#include "stage_program.h"
 +
 +#include "stage_slice_plan.h"
@@ -6508,12 +6482,6 @@ index 000000000..53a96d055
 +    return result;
 +}
 +
-+static bool checked_multiply_u64(uint64_t lhs, uint64_t rhs, uint64_t & result) {
-+    if (lhs != 0 && rhs > std::numeric_limits<uint64_t>::max()/lhs) return false;
-+    result = lhs*rhs;
-+    return true;
-+}
-+
 +
 +static bool has_supported_op(ggml_op op) {
 +    switch (op) {
@@ -6534,7 +6502,6 @@ index 000000000..53a96d055
 +        case GGML_OP_SET_ROWS:
 +        case GGML_OP_PERMUTE:
 +        case GGML_OP_SOFT_MAX:
-+        case GGML_OP_FLASH_ATTN_EXT:
 +        case GGML_OP_CONT:
 +        case GGML_OP_GLU:
 +        case GGML_OP_CPY:
@@ -7021,12 +6988,10 @@ index 000000000..53a96d055
 +            recipe.kind = skippy_stage_program::input_kind::pooling_indices;
 +            capture(typed->cls, 0, -1);
 +        } else {
-+            for (const auto & request : requests) {
-+                if (values.count(request.first) == 0) continue;
-+                error = std::string("stage program proof encountered an unsupported input recipe: ") +
-+                        typeid(*input).name();
-+                return false;
-+            }
++            // Requests actually owned by an unsupported input remain uncaptured
++            // and are rejected by the request-root ownership check after the
++            // selected nodes have been traversed. An unsupported input that owns
++            // no selected request is irrelevant to this stage.
 +            return true;
 +        }
 +        if (std::any_of(recipe.values.begin(), recipe.values.end(), [](const auto & id) { return !id.empty(); })) {
@@ -7250,12 +7215,10 @@ index 000000000..53a96d055
 +                            }
 +                            if (target_axis < 0) {
 +                                const uint64_t source_stride = tensor->src[0]->nb[source_axis];
-+                                uint64_t source_extent = 0;
-+                                if (tensor->view_offs == 0 || tensor->src[0]->ne[source_axis] < 0 ||
-+                                        !checked_multiply_u64(
-+                                                static_cast<uint64_t>(tensor->src[0]->ne[source_axis]),
-+                                                source_stride, source_extent) ||
-+                                        source_extent > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
++                                const unsigned __int128 source_extent =
++                                        static_cast<unsigned __int128>(tensor->src[0]->ne[source_axis])*source_stride;
++                                if (tensor->view_offs == 0 || source_extent >
++                                        static_cast<unsigned __int128>(std::numeric_limits<int64_t>::max())) {
 +                                    error = "stage program view requires an explicit dynamic geometry recipe: " +
 +                                            std::string(ggml_get_name(tensor)) + " source=" +
 +                                            std::string(ggml_get_name(tensor->src[0])) + " dims=" +
@@ -7472,9 +7435,6 @@ index 000000000..53a96d055
 +                case GGML_OP_MUL_MAT:
 +                case GGML_OP_MUL_MAT_ID:
 +                    operation.dynamic_axis = second_axis;
-+                    break;
-+                case GGML_OP_FLASH_ATTN_EXT:
-+                    operation.dynamic_axis = first_axis == 1 ? 2 : -1;
 +                    break;
 +                case GGML_OP_REPEAT:
 +                case GGML_OP_RESHAPE:
@@ -7703,9 +7663,6 @@ index 000000000..53a96d055
 +            case GGML_OP_MUL_MAT:
 +                axis = second_axis;
 +                break;
-+            case GGML_OP_FLASH_ATTN_EXT:
-+                axis = first_axis == 1 ? 2 : -1;
-+                break;
 +            case GGML_OP_REPEAT:
 +            case GGML_OP_RESHAPE:
 +            case GGML_OP_VIEW:
@@ -7923,7 +7880,7 @@ index 000000000..eceba28ba
 +            std::string & error) const;
 +};
 diff --git a/src/skippy/stage_realization.cpp b/src/skippy/stage_realization.cpp
-index 9a442eb9d..26daf5889 100644
+index 9a442eb9d..e983e03d3 100644
 --- a/src/skippy/stage_realization.cpp
 +++ b/src/skippy/stage_realization.cpp
 @@ -2,6 +2,7 @@
@@ -7954,18 +7911,11 @@ index 9a442eb9d..26daf5889 100644
  }
  
  void skippy_realize_stage_graph(
-@@ -134,6 +142,7 @@ void skippy_realize_stage_graph(
-     const auto parameters = parameter_bindings(model);
-     std::string error;
-     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
-+        skippy_stage_slice_selection selection;
-         skippy_auxiliary_graph_plan auxiliary;
-         if (!skippy_build_auxiliary_graph_plan(result.get_gf(), result.get_state_effects(),
-                     parameters, result.get_request_input_bindings(), auxiliary, error)) {
-@@ -141,6 +150,20 @@ void skippy_realize_stage_graph(
+@@ -141,6 +149,21 @@ void skippy_realize_stage_graph(
          }
          skippy_validate_execution_dependencies(params.build_inputs, true,
                  params.cparams.nextn_layer_offset, auxiliary.parameter_identities);
++        skippy_stage_slice_selection selection;
 +        if (params.stage_program != nullptr && !params.stage_program->installed) {
 +            selection.source_graph = result.get_gf();
 +            selection.layer_start = params.build_inputs.selection.layer_start;
@@ -8090,7 +8040,7 @@ index 828088f5f..ea2d008ad 100644
      error.clear();
      std::string memo_key = skippy_stage_slice_memo_key(
 diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
-index b6d9d8213..18fc6713c 100644
+index b6d9d8213..26a9eb61e 100644
 --- a/src/skippy/tests/graph_build_inputs.cpp
 +++ b/src/skippy/tests/graph_build_inputs.cpp
 @@ -1,18 +1,23 @@
@@ -8197,7 +8147,7 @@ index b6d9d8213..18fc6713c 100644
      return 0;
  }
  
-@@ -717,7 +788,713 @@ static int check_execution_profile_residency() {
+@@ -717,7 +788,751 @@ static int check_execution_profile_residency() {
      return 0;
  }
  
@@ -8308,17 +8258,6 @@ index b6d9d8213..18fc6713c 100644
 +    }
 +    if (!check_permuted_token_axis(256, 256, true) || !check_permuted_token_axis(4, 256, false)) {
 +        return 109;
-+    }
-+    skippy_stage_geometry_recipe runtime_recipe;
-+    runtime_recipe.dimensions[0] = skippy_stage_geometry_expression::tokens();
-+    runtime_recipe.dimensions[1] = skippy_stage_geometry_expression::sequences();
-+    runtime_recipe.dimensions[2] = skippy_stage_geometry_expression::kv_extent();
-+    runtime_recipe.dimensions[3] = skippy_stage_geometry_expression::kv_stream_count();
-+    runtime_recipe.view_offset = skippy_stage_geometry_expression::kv_stream_start();
-+    if (!skippy_stage_geometry_evaluate_for_test(
-+                runtime_recipe, 7, 13, 5, 3, sources, dims, strides, offset, error) ||
-+            dims != std::array<int64_t, 4>{7, 1, 13, 3} || offset != 5) {
-+        return 110;
 +    }
 +    skippy_stage_geometry_capture_end();
 +    return 0;
@@ -8512,11 +8451,54 @@ index b6d9d8213..18fc6713c 100644
 +    return 0;
 +}
 +
++static int check_stage_program_ignores_unused_unsupported_input(llama_model & model) {
++    std::vector<llama_token> token_values(4, 3);
++    llm_graph_params params{};
++    params.arch = model.arch;
++    params.hparams = model.hparams;
++    params.gtype = LLM_GRAPH_TYPE_DEFAULT;
++    params.cparams.n_ctx = params.cparams.n_ctx_seq = 32;
++    params.cparams.n_seq_max = 1;
++    params.ubatch.n_tokens = params.ubatch.n_seq_tokens = 4;
++    params.ubatch.n_seqs = params.ubatch.n_seqs_unq = 1;
++    params.ubatch.token = token_values.data();
++    params.n_outputs = 1;
++    params.build_inputs.selection.layer_end = 1;
++    llm_graph_result capture(64);
++    params.res = &capture;
++    llm_graph_context builder(params);
++    auto embeddings = std::make_unique<llm_graph_input_embd>(model.hparams.n_embd_inp());
++    embeddings->tokens = ggml_new_tensor_1d(capture.get_ctx(), GGML_TYPE_I32, 4);
++    ggml_tensor * tokens = embeddings->tokens;
++    capture.add_input(std::move(embeddings));
++    capture.add_input(std::make_unique<recording_input>());
++
++    capture.t_logits = ggml_get_rows(capture.get_ctx(), model.tok_embd, tokens);
++    ggml_build_forward_expand(capture.get_gf(), capture.t_logits);
++    skippy_stage_slice_selection selection;
++    selection.layer_end = 1;
++    selection.source_graph = capture.get_gf();
++    selection.request_inputs = {tokens};
++    for (int32_t index = 0; index < ggml_graph_n_nodes(capture.get_gf()); ++index) {
++        selection.node_indices.push_back(index);
++    }
++
++    skippy_stage_program program;
++    std::string error;
++    if (!skippy_extract_stage_program(model, capture, selection, 4, 1, 1,
++                LLM_GRAPH_TYPE_DEFAULT, {}, program, error)) {
++        std::fprintf(stderr, "unused unsupported input extraction: %s\n", error.c_str());
++        return 181;
++    }
++    return 0;
++}
++
 +static int check_stage_program_replay(const char * model_path) {
 +    std::unique_ptr<llama_model, decltype(&llama_model_free)> model(load_model(model_path), llama_model_free);
 +    if (!model || llama_model_n_layer(model.get()) < 2) return 110;
 +    if (const int rc = check_stage_program_msa_inputs(*model)) return rc;
 +    if (const int rc = check_stage_program_hidden_inputs(*model)) return rc;
++    if (const int rc = check_stage_program_ignores_unused_unsupported_input(*model)) return rc;
 +    model->hparams.f_embedding_scale = 0.5f;
 +    auto params = make_context_params(2);
 +    auto imported_params = params;
@@ -8751,6 +8733,12 @@ index b6d9d8213..18fc6713c 100644
 +                skippy_stage_program_selector_calls() != 0) return 171;
 +        if (!configured->configure_stage_program_nextn_outputs(false, false, install_error)) return 172;
 +        configured->sched_reserve(first_inputs);
++        configured->set_embeddings(true);
++        if (!configured->refresh_stage_program(install_error)) return 182;
++        configured->sched_reserve(first_inputs);
++        configured->set_embeddings(false);
++        if (!configured->refresh_stage_program(install_error)) return 183;
++        configured->sched_reserve(first_inputs);
 +    }
 +
 +    skippy_stage_program state_mismatch_program = first_program;
@@ -8911,7 +8899,7 @@ index b6d9d8213..18fc6713c 100644
      if (const int rc = check_execution_profile_residency()) return rc;
      if (const int rc = check_embedding_execution_profiles()) {
          return rc;
-@@ -725,7 +1502,8 @@ int main(int argc, char ** argv) {
+@@ -725,7 +1540,8 @@ int main(int argc, char ** argv) {
      if (argc == 2 && std::strcmp(argv[1], "--input-width") == 0) {
          return check_decode_input_width();
      }
@@ -8921,7 +8909,7 @@ index b6d9d8213..18fc6713c 100644
          return 64;
      }
      if (const int rc = check_sequential_and_nested_lifetimes()) {
-@@ -747,7 +1525,16 @@ int main(int argc, char ** argv) {
+@@ -747,7 +1563,16 @@ int main(int argc, char ** argv) {
          return rc;
      }
      llama_backend_init();
@@ -9010,20 +8998,19 @@ index 11559ce5c..5c8617fe9 100644
              n_tokens,
              n_seqs,
 diff --git a/src/skippy/tests/profile_residency.cpp b/src/skippy/tests/profile_residency.cpp
-index e2ec9e4a6..118576a71 100644
+index e2ec9e4a6..c9f811954 100644
 --- a/src/skippy/tests/profile_residency.cpp
 +++ b/src/skippy/tests/profile_residency.cpp
-@@ -4,6 +4,9 @@
+@@ -4,6 +4,8 @@
  #include "skippy/graph_build_inputs.h"
  #include "skippy/speculative_internal.h"
  #include "llama-context.h"
 +#include "skippy/stage_program.h"
 +#include "stage_program_parity.h"
-+#include <cstdlib>
  #include "llama-model.h"
  #include "llama-memory.h"
  #include "gguf.h"
-@@ -12,6 +15,7 @@
+@@ -12,6 +14,7 @@
  #include <cstdio>
  #include <cstring>
  #include <memory>
@@ -9031,7 +9018,7 @@ index e2ec9e4a6..118576a71 100644
  #include <string>
  #include <vector>
  
-@@ -26,7 +30,18 @@ static std::string read_string(skippy_stage_plan * plan, skippy_stage_plan_strin
+@@ -26,7 +29,14 @@ static std::string read_string(skippy_stage_plan * plan, skippy_stage_plan_strin
      return std::string(value, size);
  }
  
@@ -9042,16 +9029,12 @@ index e2ec9e4a6..118576a71 100644
 +    std::vector<llama_token> tokens;
 +};
 +
-+static bool stage_program_enabled() {
-+    const char * setting = std::getenv("SKIPPY_STAGE_PROGRAM_ENABLE");
-+    return setting == nullptr || std::strcmp(setting, "0") != 0;
-+}
-+
-+static int run(const char * path, bool integrated, mtp_receipt * receipt = nullptr, bool force_unfused_gdn = false) {
++static int run(const char * path, bool integrated, mtp_receipt * receipt = nullptr,
++        bool force_unfused_gdn = false, bool ordinary_reference = false) {
      ggml_context * tensor_context = nullptr;
      const gguf_init_params inspect = {true, &tensor_context};
      std::unique_ptr<gguf_context, decltype(&gguf_free)> metadata(gguf_init_from_file(path, inspect), gguf_free);
-@@ -58,12 +73,13 @@ static int run(const char * path, bool integrated) {
+@@ -58,12 +68,13 @@ static int run(const char * path, bool integrated) {
      mp.use_extra_bufts = false;
      mp.load_mtp = true;
      std::unique_ptr<llama_model, decltype(&llama_model_free)> model(llama_model_load_from_file(path, mp), llama_model_free);
@@ -9067,7 +9050,7 @@ index e2ec9e4a6..118576a71 100644
      };
      const std::string package_id = "sha256:" + std::string(64, 'a');
      const skippy_stage_planner_config_v1 pc = {1, sizeof(skippy_stage_planner_config_v1),
-@@ -96,8 +112,8 @@ static int run(const char * path, bool integrated) {
+@@ -96,8 +107,8 @@ static int run(const char * path, bool integrated) {
      config.layer_start = 0;
      config.layer_end = layer_count;
      config.ctx_size = 32;
@@ -9078,25 +9061,22 @@ index e2ec9e4a6..118576a71 100644
      config.n_gpu_layers = 0;
      config.n_threads = config.n_threads_batch = 1;
      config.flash_attn_type = 0;
-@@ -128,35 +144,108 @@ static int run(const char * path, bool integrated) {
+@@ -128,35 +139,105 @@ static int run(const char * path, bool integrated) {
          if (found == runtime->model->tensors_by_name.end() || found->second == nullptr ||
                  (found->second->data == nullptr && found->second->buffer == nullptr)) return 13;
      }
-+    const bool program_enabled = stage_program_enabled();
 +    if (force_unfused_gdn) {
 +        std::string program_error;
 +        if (!runtime->ctx->configure_stage_program_gdn_for_test(false, false, program_error)) {
 +            std::fprintf(stderr, "unfused GDN setup failed: %s\n", program_error.c_str());
 +            return 21;
 +        }
-+        if (program_enabled) {
-+            const auto * installation = runtime->ctx->get_stage_program_installation();
-+            const bool has_fused = std::any_of(installation->program.operations.begin(), installation->program.operations.end(),
-+                    [](const auto & operation) { return operation.op == GGML_OP_GATED_DELTA_NET; });
-+            const bool has_chunk = std::any_of(installation->program.operations.begin(), installation->program.operations.end(),
-+                    [](const auto & operation) { return operation.op == GGML_OP_SOLVE_TRI; });
-+            if (has_fused || !has_chunk) return 22;
-+        }
++        const auto * installation = runtime->ctx->get_stage_program_installation();
++        const bool has_fused = std::any_of(installation->program.operations.begin(), installation->program.operations.end(),
++                [](const auto & operation) { return operation.op == GGML_OP_GATED_DELTA_NET; });
++        const bool has_chunk = std::any_of(installation->program.operations.begin(), installation->program.operations.end(),
++                [](const auto & operation) { return operation.op == GGML_OP_SOLVE_TRI; });
++        if (has_fused || !has_chunk) return 22;
 +    }
      skippy_session * session = nullptr;
      if (skippy_session_create(runtime, &session, &error) != SKIPPY_STATUS_OK) return 9;
@@ -9106,13 +9086,11 @@ index e2ec9e4a6..118576a71 100644
 -    for (int row = 0; row < 2; ++row) {
 -        batch.token[row] = tokens[row];
 +    const size_t mtp_depth = integrated ? llama_model_n_layer_nextn(llama_get_model(runtime->mtp_ctx)) : 0;
-+    if (program_enabled && (!runtime->ctx->get_stage_program_installation() ||
-+                (integrated && !runtime->mtp_ctx->get_stage_program_installation()))) return 15;
-+    if (!program_enabled && (runtime->ctx->get_stage_program_installation() ||
-+                (integrated && runtime->mtp_ctx->get_stage_program_installation()))) return 28;
-+    if (program_enabled && integrated &&
++    if (!runtime->ctx->get_stage_program_installation() ||
++            (integrated && !runtime->mtp_ctx->get_stage_program_installation())) return 15;
++    if (integrated &&
 +            runtime->mtp_ctx->get_stage_program_installation_count_for_test() != mtp_depth) return 20;
-+    if (program_enabled && integrated) {
++    if (integrated) {
 +        skippy_stage_program_reset_test_counters();
 +        bool rejected_missing_branch = false;
 +        try {
@@ -9126,12 +9104,14 @@ index e2ec9e4a6..118576a71 100644
 +                skippy_stage_program_selector_calls() != 0) return 27;
 +    }
 +    if (receipt) {
-+        if (program_enabled) {
-+            receipt->target_roots = runtime->ctx->get_stage_program_installation()->program.roots;
-+            if (integrated) receipt->draft_roots = runtime->mtp_ctx->get_stage_program_installation()->program.roots;
-+        }
++        receipt->target_roots = runtime->ctx->get_stage_program_installation()->program.roots;
++        if (integrated) receipt->draft_roots = runtime->mtp_ctx->get_stage_program_installation()->program.roots;
 +        llama_memory_clear(llama_get_memory(runtime->ctx), true);
 +        if (integrated) llama_memory_clear(llama_get_memory(runtime->mtp_ctx), true);
++    }
++    if (ordinary_reference) {
++        runtime->ctx->clear_stage_program_for_test();
++        if (integrated) runtime->mtp_ctx->clear_stage_program_for_test();
 +    }
 +    skippy_stage_program_reset_test_counters();
 +    std::vector<llama_token> execution_tokens = force_unfused_gdn
@@ -9150,7 +9130,7 @@ index e2ec9e4a6..118576a71 100644
 +    const auto rc = skippy_decode_batch(session, batch, execution_tokens.size(), -1, &error, nullptr);
      llama_batch_free(batch);
      if (rc != 0) return 10;
-+    if (program_enabled && (skippy_stage_program_arch_builder_calls() || skippy_stage_program_selector_calls())) return 16;
++    if (!ordinary_reference && (skippy_stage_program_arch_builder_calls() || skippy_stage_program_selector_calls())) return 16;
      if (!integrated) {
 +        if (force_unfused_gdn) {
 +            llama_batch step = llama_batch_init(1, 0, 1);
@@ -9163,7 +9143,7 @@ index e2ec9e4a6..118576a71 100644
 +            const auto step_rc = skippy_decode_batch(session, step, 1, -1, &error, nullptr);
 +            llama_batch_free(step);
 +            if (step_rc != 0) return 23;
-+            if (program_enabled && (skippy_stage_program_arch_builder_calls() ||
++            if (!ordinary_reference && (skippy_stage_program_arch_builder_calls() ||
 +                        skippy_stage_program_selector_calls())) return 24;
 +            if (receipt && !stage_program_reference::snapshot(
 +                        runtime->ctx, receipt->target_roots, receipt->target)) return 25;
@@ -9187,7 +9167,7 @@ index e2ec9e4a6..118576a71 100644
 +            draft.token_count != static_cast<int32_t>(draft_count)) {
          fprintf(stderr, "MTP draft: %s\n", error ? error->message : "unknown"); return 12;
      }
-+    if (program_enabled && (skippy_stage_program_arch_builder_calls() || skippy_stage_program_selector_calls())) return 17;
++    if (!ordinary_reference && (skippy_stage_program_arch_builder_calls() || skippy_stage_program_selector_calls())) return 17;
 +    if (receipt) {
 +        if (!stage_program_reference::snapshot(runtime->ctx, receipt->target_roots, receipt->target) ||
 +                !stage_program_reference::snapshot(runtime->mtp_ctx, receipt->draft_roots, receipt->draft)) return 18;
@@ -9196,7 +9176,7 @@ index e2ec9e4a6..118576a71 100644
      skippy_session_free(session, &error);
      skippy_model_free(runtime, &error);
      skippy_error_free(error);
-@@ -164,10 +253,44 @@ static int run(const char * path, bool integrated) {
+@@ -164,10 +245,33 @@ static int run(const char * path, bool integrated) {
  }
  
  int main(int argc, char ** argv) {
@@ -9204,19 +9184,13 @@ index e2ec9e4a6..118576a71 100644
 +    if (argc != 2 && argc != 3) return 64;
      llama_backend_init();
 +    const bool force_unfused_gdn = argc == 3 && std::string(argv[2]) == "unfused-gdn";
-+    const bool enabled = stage_program_enabled();
 +    if (force_unfused_gdn) {
 +        mtp_receipt actual;
-+        int result = run(argv[1], false, enabled ? &actual : nullptr, true);
-+        if (result == 0 && enabled) {
-+#ifdef _WIN32
-+            _putenv_s("SKIPPY_STAGE_PROGRAM_ENABLE", "0");
-+#else
-+            setenv("SKIPPY_STAGE_PROGRAM_ENABLE", "0", 1);
-+#endif
++        int result = run(argv[1], false, &actual, true);
++        if (result == 0) {
 +            mtp_receipt reference;
 +            reference.target_roots = actual.target_roots;
-+            result = run(argv[1], false, &reference, true);
++            result = run(argv[1], false, &reference, true, true);
 +            if (result == 0 && !stage_program_reference::compare_snapshots(actual.target, reference.target)) result = 26;
 +        }
 +        llama_backend_free();
@@ -9225,17 +9199,12 @@ index e2ec9e4a6..118576a71 100644
      int result = run(argv[1], false);
 -    if (result == 0) result = run(argv[1], true);
 +    mtp_receipt actual;
-+    if (result == 0) result = run(argv[1], true, enabled ? &actual : nullptr);
-+    if (result == 0 && enabled) {
-+#ifdef _WIN32
-+        _putenv_s("SKIPPY_STAGE_PROGRAM_ENABLE", "0");
-+#else
-+        setenv("SKIPPY_STAGE_PROGRAM_ENABLE", "0", 1);
-+#endif
++    if (result == 0) result = run(argv[1], true, &actual);
++    if (result == 0) {
 +        mtp_receipt reference;
 +        reference.target_roots = actual.target_roots;
 +        reference.draft_roots = actual.draft_roots;
-+        result = run(argv[1], true, &reference);
++        result = run(argv[1], true, &reference, false, true);
 +        if (result == 0 && (actual.tokens != reference.tokens ||
 +                !stage_program_reference::compare_snapshots(actual.target, reference.target) ||
 +                !stage_program_reference::compare_snapshots(actual.draft, reference.draft))) result = 19;
@@ -9513,10 +9482,10 @@ index 92b0271ce..0c367d176 100644
                  runtime_error == nullptr ? "" : runtime_error->message);
 diff --git a/src/skippy/tests/stage_program_parity.h b/src/skippy/tests/stage_program_parity.h
 new file mode 100644
-index 000000000..e06193462
+index 000000000..206674f92
 --- /dev/null
 +++ b/src/skippy/tests/stage_program_parity.h
-@@ -0,0 +1,253 @@
+@@ -0,0 +1,240 @@
 +#pragma once
 +
 +#include "llama-context.h"
@@ -9536,7 +9505,6 @@ index 000000000..e06193462
 +#include "../../../ggml/src/ggml-impl.h"
 +
 +#include <cmath>
-+#include <cstdlib>
 +#include <cstring>
 +
 +// An independent ordinary-execution stage with the same package and configuration.
@@ -9552,18 +9520,15 @@ index 000000000..e06193462
 +    }
 +
 +    bool open(const std::vector<const char *> & parts, const skippy_runtime_config & config) {
-+        const char * value = std::getenv("SKIPPY_STAGE_PROGRAM_ENABLE");
-+        const bool present = value != nullptr;
-+        const std::string saved = present ? value : "";
-+        set_gate("0");
 +        skippy_error * error = nullptr;
 +        const auto status = skippy_model_open_from_parts(parts.data(), parts.size(), &config, &model, &error);
-+        set_gate(present ? saved.c_str() : nullptr);
 +        if (status != SKIPPY_STATUS_OK || !model) {
 +            std::fprintf(stderr, "reference stage load failed: %s\n", error ? error->message : "unknown");
 +            skippy_error_free(error);
 +            return false;
 +        }
++        if (model->ctx->get_stage_program_installation() == nullptr) return false;
++        model->ctx->clear_stage_program_for_test();
 +        if (model->ctx->get_stage_program_installation() != nullptr) return false;
 +        if (skippy_session_create(model, &session, &error) != SKIPPY_STATUS_OK) {
 +            skippy_error_free(error);
@@ -9652,15 +9617,6 @@ index 000000000..e06193462
 +    skippy_activation_desc desc{};
 +    std::vector<uint8_t> payload = std::vector<uint8_t>(1024 * 1024);
 +    size_t bytes = 0;
-+
-+    static void set_gate(const char * value) {
-+#ifdef _WIN32
-+        _putenv_s("SKIPPY_STAGE_PROGRAM_ENABLE", value ? value : "");
-+#else
-+        if (value) setenv("SKIPPY_STAGE_PROGRAM_ENABLE", value, 1);
-+        else unsetenv("SKIPPY_STAGE_PROGRAM_ENABLE");
-+#endif
-+    }
 +
 +    static bool no_rebuild() {
 +        if (skippy_stage_program_arch_builder_calls() == 0 && skippy_stage_program_selector_calls() == 0) return true;
