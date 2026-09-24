@@ -240,7 +240,7 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         self.assertIn("Save trusted Skippy correctness model cache", workflow)
         self.assertIn("uses: actions/cache/save@", workflow)
         self.assertIn(
-            "if: ${{ contains(toJson(matrix.batch.crates), 'skippy-runtime') && "
+            "if: ${{ contains(steps.resolve_batch_crates.outputs.crates, 'skippy-runtime') && "
             "needs.runner_policy.outputs.allow_native_github_cache == 'true'",
             workflow,
         )
