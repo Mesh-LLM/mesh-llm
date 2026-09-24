@@ -182,12 +182,27 @@ impl PaymentService {
         // A prepared charge was never submitted, so skip the lookup. If the
         // invoice was paid outside this service, `pay` recovers that payment.
         if state != "prepared" {
-            let payment = wallet
-                .lookup(&charge.invoice.payment_hash)
-                .await?
-                .context("payment outcome uncertain; awaiting authoritative wallet status")?;
-            validate_payment_update(&payment, &charge.invoice.payment_hash, false)?;
-            return Ok(payment);
+            if let Some(payment) = wallet.lookup(&charge.invoice.payment_hash).await? {
+                validate_payment_update(&payment, &charge.invoice.payment_hash, false)?;
+                return Ok(payment);
+            }
+            // Nothing can settle an expired invoice, so an attempt the wallet
+            // never recorded paid nothing: release the reservation.
+            if charge.invoice.expires_at_ms <= crate::now_ms() {
+                self.ledger.fail_unsubmitted(&charge.invoice.payment_hash)?;
+                anyhow::bail!("Lightning payment failed; invoice expired unpaid");
+            }
+            // Providers treat a repeat `pay` for the same invoice as a lookup
+            // of the existing payment (Lexe SDK >= 0.1.24), so resubmitting
+            // through the normal preflight/fee-checked path cannot double-pay.
+            return match self.submit(wallet, charge).await {
+                // An earlier submission may still land; only expiry proves
+                // nothing was paid, so a rejection here stays pending.
+                Err(PayError::NotSubmitted(error)) => Err(error.context(
+                    "payment resubmission rejected; awaiting authoritative wallet status",
+                )),
+                result => result.map_err(Into::into),
+            };
         }
         if let Err(error) = charge
             .invoice
@@ -197,24 +212,31 @@ impl PaymentService {
             return Err(error);
         }
         self.ledger.begin_submission(&charge.invoice.payment_hash)?;
-        match wallet
-            .pay(&charge.invoice, charge.amount_msat, charge.max_total_msat)
-            .await
-        {
-            Ok(payment) => {
-                validate_payment_update(&payment, &charge.invoice.payment_hash, false)?;
-                Ok(payment)
-            }
+        match self.submit(wallet, charge).await {
             Err(PayError::NotSubmitted(error)) => {
                 self.ledger.fail_unsubmitted(&charge.invoice.payment_hash)?;
                 Err(error.context("payment was not submitted"))
             }
-            Err(error) => Err(error.into()),
+            result => result.map_err(Into::into),
         }
     }
 
-    /// Recover each charge independently. Never resubmit an uncertain attempt,
-    /// even if the wallet has not indexed it yet or the invoice has expired.
+    async fn submit(
+        &self,
+        wallet: &Arc<dyn WalletProvider>,
+        charge: &Charge,
+    ) -> Result<Transaction, PayError> {
+        let payment = wallet
+            .pay(&charge.invoice, charge.amount_msat, charge.max_total_msat)
+            .await?;
+        validate_payment_update(&payment, &charge.invoice.payment_hash, false)
+            .map_err(PayError::Uncertain)?;
+        Ok(payment)
+    }
+
+    /// Recover each charge independently. A pending charge the wallet has no
+    /// record of is resubmitted (idempotent per payment hash) until its
+    /// invoice expires, then failed and its reservation released.
     pub async fn reconcile_pending(&self) -> Result<()> {
         self.ledger.finalize_terminal_requests()?;
         let mut first_error = None;

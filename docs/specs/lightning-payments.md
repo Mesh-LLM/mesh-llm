@@ -184,10 +184,17 @@ seeing a paid provider does not provision one. The directory contains:
 
 Payment intent is committed as `prepared` before wallet I/O and changes durably
 to `pending` immediately before submission. Only prepared intents may be
-submitted during recovery. Unknown outcomes retain their reservation and are
-observed by the same payment hash, including after restart; an absent wallet
-record never triggers resubmission of a pending attempt. A crash between marking
-submission started and making the wallet call can therefore retain a reservation.
+submitted during recovery for the first time. Unknown outcomes retain their
+reservation and are observed by the same payment hash, including after restart.
+When the wallet has no record of a pending attempt, recovery resubmits the same
+invoice, amount and `max_total_msat` through the normal preflight, fee check and
+pay path. Providers must treat a repeat `pay` for an invoice as a lookup of the
+existing payment (Lexe SDK 0.1.24 and later does, even if that payment failed),
+so a resubmission racing an earlier one that is still landing cannot double-pay.
+A rejected or again-uncertain resubmission stays `pending` for the next scan.
+Once the invoice has expired and the lookup still finds nothing, the charge is
+marked `failed` and its reservation released: nothing can settle an expired
+invoice, so nothing was paid.
 The wallet contract distinguishes `NotSubmitted` from `Uncertain` errors.
 Definite preflight rejection and terminal failure close unused authorization,
 while uncertain sibling charges remain reserved. Successful standalone sends
@@ -205,8 +212,9 @@ Recovery never reruns inference. Delivered-output debt survives provider restart
 KV state does not. No payment retry can replace a recorded segment invoice.
 Receiving-wallet identity is pinned by the input invoice's signed payee key.
 
-An uncertain payment is not released just because its invoice expired. If the
-provider remains unreachable or a payment cannot be conclusively reconciled, its
+An uncertain payment the wallet has recorded is not released just because its
+invoice expired: an in-flight HTLC can outlive the invoice. If the wallet remains
+unreachable or a recorded payment cannot be conclusively reconciled, its
 reservation remains held; the PoC has no force-release command. Recovery contacts only the original authenticated peer. Replacing its endpoint
 identity while retaining its wallet/database is deliberately unsupported; unrelated
 same-model peers are never asked to settle that debt.
@@ -484,7 +492,10 @@ Lexe's default invoice expiry and recovery from an ambiguous in-flight Lightning
 HTLC have not been exercised on mainnet. The crash
 test interrupted inference after input settlement, rather than interrupting the
 wallet's payment submission. Simulated tests cover uncertain-send recovery and
-concurrent reservation enforcement. Refunds and proof of computation remain
+concurrent reservation enforcement, including resubmission of an unrecorded
+attempt, reconciliation without a second `pay`, the expiry give-up, and a
+resubmission racing the first landing (`mesh-llm-payments`
+`tests/resubmission.rs`). Refunds and proof of computation remain
 outside this PoC.
 
 ### Follow-up failure and compatibility checks
@@ -504,7 +515,7 @@ The following passed without funding new wallets or spending additional bitcoin:
   available while reserved, then 390 msat after completion.
 - **Uncertain HTLC:** simulated payment submission lost its response while the
   wallet retained a pending HTLC. Restart, a status-query outage and invoice
-  expiry did not release its reservation or resubmit payment. Separate success
+  expiry did not release its reservation or submit a second payment. Separate success
   and failure cases reconciled the original hash, including replay afterward.
 - **Expiry:** a real QUIC exchange with a signed, two-second BOLT11 invoice and
   simulated wallets released the waiting backend with zero decoded tokens and

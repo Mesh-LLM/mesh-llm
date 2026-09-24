@@ -8,9 +8,10 @@ PoC scope: [Lightning payments spec](../../docs/specs/lightning-payments.md).
   context-capacity error, and publish price changes without waiting for heartbeat.
 - [ ] Define how operators clear rejected/expired unpaid input invoices from the
   peer blacklist without forgiving unsettled output debt accidentally.
-- [ ] Validate Lexe mainnet invoice expiry and an uncertain Lightning HTLC
-  outcome. Controlled expiry/fault tests and released v0.76.1 interoperability
-  pass; the mainnet crash test covered post-input recovery.
+- [ ] Validate Lexe mainnet invoice expiry and an interrupted payment
+  submission (idempotent resubmission on Lexe SDK 0.1.24). Mock-wallet
+  resubmission/expiry tests and released v0.76.1 interoperability pass; the
+  mainnet crash test covered post-input recovery.
 
 - [ ] **Verify prefill before payment (after PoC)** — determine how a client can
   verify that a provider processed its prompt with the agreed model before

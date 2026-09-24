@@ -83,7 +83,7 @@ async fn send_recovery_closes_success_and_failure_after_restart() -> Result<()> 
 }
 
 #[tokio::test]
-async fn unindexed_uncertain_payment_is_never_resubmitted_or_released() -> Result<()> {
+async fn unindexed_uncertain_payment_is_retried_but_never_released_before_expiry() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let wallet = Arc::new(MockWallet::default());
     wallet.lose_response.store(true, Ordering::SeqCst);
@@ -98,7 +98,9 @@ async fn unindexed_uncertain_payment_is_never_resubmitted_or_released() -> Resul
     let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
     assert!(service.reconcile_pending().await.is_err());
     assert!(service.control(send(&invoice)).await.is_err());
-    assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
+    // Both the recovery scan and the replayed send resubmit (idempotent per
+    // payment hash); the rejection leaves the charge pending, not failed.
+    assert_eq!(wallet.calls.load(Ordering::SeqCst), 3);
     assert_eq!(service.ledger.pending_charges()?.len(), 1);
     assert_eq!(
         service.ledger.available_budget(100_000, crate::now_ms())?,

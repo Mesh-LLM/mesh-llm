@@ -14,8 +14,8 @@ workspace = true
 anyhow.workspace = true
 async-trait = "0.1"
 fs2 = "0.4"
-lexe = { version = "=0.1.23", features = ["unstable"] }
-lexe-api-core = { version = "=0.1.23" }
+lexe = { version = "=0.1.24", features = ["unstable"] }
+lexe-api-core = { version = "=0.1.24" }
 mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.76.1" }
 mesh-llm-wallet = { path = "../mesh-llm-wallet", version = "0.76.1", features = ["plugin-server"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

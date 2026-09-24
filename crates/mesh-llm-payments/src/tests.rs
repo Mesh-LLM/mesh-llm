@@ -20,6 +20,7 @@ mod failure_boundaries;
 mod payment_notifications;
 mod provisioning;
 mod recovery_boundaries;
+mod resubmission;
 mod review_regressions;
 
 fn invoice(number: u8, amount: u64) -> Invoice {
@@ -76,6 +77,8 @@ struct MockWallet {
     payments: Mutex<HashMap<String, Transaction>>,
     calls: AtomicUsize,
     lose_response: AtomicBool,
+    /// Report `Uncertain` without the wallet ever recording the payment.
+    lose_submission: AtomicBool,
     pending: AtomicBool,
     lookup_unavailable: AtomicBool,
     updates: tokio::sync::Notify,
@@ -170,6 +173,16 @@ impl WalletProvider for MockWallet {
             return Err(PayError::NotSubmitted(anyhow::anyhow!(
                 "preflight rejected"
             )));
+        }
+        if self.lose_submission.swap(false, Ordering::SeqCst) {
+            return Err(PayError::Uncertain(anyhow::anyhow!(
+                "submission lost in transit"
+            )));
+        }
+        // Lexe SDK >= 0.1.24: a repeat for the same payment hash returns the
+        // existing payment, even a failed one, instead of paying again.
+        if let Some(existing) = self.payments.lock().unwrap().get(&invoice.payment_hash) {
+            return Ok(existing.clone());
         }
         let pending = self.pending.load(Ordering::SeqCst);
         let payment = Transaction {

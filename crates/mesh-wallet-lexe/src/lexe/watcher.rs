@@ -313,6 +313,7 @@ mod tests {
             amount: Some(Amount::from_msat(1_000)),
             fees: Amount::from_msat(0),
             partner_pk: None,
+            client_pk: None,
             partner_prop_fee: None,
             partner_base_fee: None,
             status,

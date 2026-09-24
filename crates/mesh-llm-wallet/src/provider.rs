@@ -93,7 +93,9 @@ pub trait WalletProvider: Send + Sync {
     /// initiate a payment whose amount plus fees exceeds `max_total_msat`.
     /// `NotSubmitted` guarantees this call did not submit a payment. All other
     /// errors are uncertain and callers must reconcile by hash. The service
-    /// never calls this again for an attempt with an uncertain outcome.
+    /// may call `pay` again for the same invoice after an uncertain outcome;
+    /// providers must treat a repeat as a lookup of the existing payment, not
+    /// a new payment (Lexe does, from SDK 0.1.24).
     async fn pay(
         &self,
         invoice: &Invoice,
