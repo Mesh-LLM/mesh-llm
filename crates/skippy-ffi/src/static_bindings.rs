@@ -2,14 +2,15 @@ use std::ffi::{c_char, c_int, c_void};
 
 use crate::{
     ActivationBoundaryDesc, ActivationDesc, BackendDevice, Error, GenerationSignalWindow,
-    IterationRequest, KvPageDesc, LlamaLogCallback, LlamaModelQuantizeParams, Model, ModelInfo,
-    ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos,
-    MtmdGenAudioInfo, MtmdHelperBitmapWrapper, MtmdHelperGenAudio, MtmdHelperGenAudioInput,
-    MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
-    NativeMtpDraft, NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session, StagePlan,
-    StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStringRefV1,
-    StagePlanValueDescV1, StagePlanValueKind, StagePlanner, StagePlannerConfigV1, Status,
-    SystemOneSlot, TensorInfo, TokenSignal, WorkloadInfoV1,
+    IterationRequest, KvPageDesc, LlamaLogCallback, LlamaModelQuantizeParams, LlamaPerfContextData,
+    Model, ModelInfo, ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams,
+    MtmdDecoderPos, MtmdGenAudioInfo, MtmdHelperBitmapWrapper, MtmdHelperGenAudio,
+    MtmdHelperGenAudioInput, MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType,
+    MtmdInputChunks, MtmdInputText, NativeMtpDraft, NgramCache, Opaque, RuntimeConfig,
+    SamplingConfig, Session, StagePlan, StagePlanDescV1, StagePlanProfileDescV1,
+    StagePlanStateDescV1, StagePlanStringRefV1, StagePlanValueDescV1, StagePlanValueKind,
+    StagePlanner, StagePlannerConfigV1, Status, SystemOneSlot, TensorInfo, TokenSignal,
+    WorkloadInfoV1,
 };
 
 unsafe extern "C" {
@@ -183,6 +184,7 @@ unsafe extern "C" {
     ) -> Status;
 
     pub fn skippy_session_llama_context(session: *mut Session) -> *mut Opaque;
+    pub fn llama_perf_context(ctx: *mut Opaque) -> LlamaPerfContextData;
 
     pub fn skippy_session_position(session: *const Session) -> i32;
 

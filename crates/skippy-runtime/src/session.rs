@@ -26,6 +26,27 @@ fn chat_sampling_metadata_for_native(metadata_json: &str) -> &str {
     }
 }
 
+/// Graph reuse counters read from the native context.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GraphReuseStats {
+    pub graphs_reused: u64,
+    pub tokens_evaluated: u64,
+}
+
+impl GraphReuseStats {
+    /// Graph reuses per single-token evaluation, if any evaluation happened.
+    ///
+    /// `tokens_evaluated` counts single-token decode calls -- llama.cpp routes
+    /// multi-token work to the prompt-eval counters -- while a reuse on a
+    /// multi-token decode still increments the numerator, so a batched or
+    /// speculative step can push this above 1. The raw counters are the
+    /// authoritative fields for diagnosis.
+    pub fn reuse_rate(self) -> Option<f64> {
+        (self.tokens_evaluated > 0)
+            .then(|| self.graphs_reused as f64 / self.tokens_evaluated as f64)
+    }
+}
+
 pub struct StageSession {
     pub(crate) raw: *mut RawSession,
     pub(crate) token_count: u64,
@@ -59,6 +80,27 @@ fn validate_native_sequence_id(sequence_id: i32) -> Result<i32> {
 unsafe impl Send for StageSession {}
 
 impl StageSession {
+    /// Graph reuse counters for this session's llama context.
+    ///
+    /// `n_reused` counts compute graphs reused instead of rebuilt; `n_eval`
+    /// counts generated tokens. Together they give the reuse hit rate under
+    /// real load, which until now could only be inferred from throughput
+    /// deltas between builds -- an inference that cannot separate "reuse is
+    /// firing and the residual cost is elsewhere" from "reuse is not firing".
+    pub fn graph_reuse_stats(&self) -> Option<GraphReuseStats> {
+        let ctx = unsafe { skippy_ffi::skippy_session_llama_context(self.raw) };
+        if ctx.is_null() {
+            return None;
+        }
+        // Optional symbol: a runtime without it simply reports no stats.
+        let perf_fn = skippy_ffi::llama_perf_context_optional()?;
+        let perf = unsafe { perf_fn(ctx) };
+        Some(GraphReuseStats {
+            graphs_reused: perf.n_reused.max(0) as u64,
+            tokens_evaluated: perf.n_eval.max(0) as u64,
+        })
+    }
+
     pub fn token_count(&self) -> u64 {
         self.token_count
     }
@@ -548,5 +590,41 @@ mod tests {
         );
         let grammar = r#"{"grammar":"root ::= \"ok\""}"#;
         assert_eq!(chat_sampling_metadata_for_native(grammar), grammar);
+    }
+}
+
+#[cfg(test)]
+mod graph_reuse_stats_tests {
+    use super::GraphReuseStats;
+
+    #[test]
+    fn reuse_rate_is_none_without_evaluations() {
+        assert_eq!(GraphReuseStats::default().reuse_rate(), None);
+        assert_eq!(
+            GraphReuseStats {
+                graphs_reused: 5,
+                tokens_evaluated: 0
+            }
+            .reuse_rate(),
+            None
+        );
+    }
+
+    #[test]
+    fn reuse_rate_is_reused_over_evaluated() {
+        let stats = GraphReuseStats {
+            graphs_reused: 37,
+            tokens_evaluated: 100,
+        };
+        assert_eq!(stats.reuse_rate(), Some(0.37));
+    }
+
+    #[test]
+    fn full_reuse_reports_one() {
+        let stats = GraphReuseStats {
+            graphs_reused: 64,
+            tokens_evaluated: 64,
+        };
+        assert_eq!(stats.reuse_rate(), Some(1.0));
     }
 }
