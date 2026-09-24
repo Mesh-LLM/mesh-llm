@@ -109,6 +109,9 @@ fn configured_build_dir(workspace_root: &std::path::Path, backend: &str) -> std:
 /// keying is only as good as its least careful consumer.
 fn default_static_build_dir(workspace_root: &std::path::Path, backend: &str) -> String {
     let stamp = workspace_root.join(".deps/llama.cpp/.mesh-llm-patched-sha");
+    // The directory this resolves depends on the stamp, so a pin switch must
+    // rerun the script instead of reusing the previous pin's directory.
+    println!("cargo:rerun-if-changed={}", stamp.display());
     let pin = std::fs::read_to_string(&stamp)
         .ok()
         .map(|text| text.trim().to_string())
