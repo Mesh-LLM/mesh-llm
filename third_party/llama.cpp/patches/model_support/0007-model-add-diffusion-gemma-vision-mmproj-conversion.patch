@@ -1,0 +1,76 @@
+From c2eb4987c9f8d93c63eec068ab34fc41c948f257 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Thu, 24 Sep 2026 13:43:58 +1000
+Subject: [PATCH] model: add DiffusionGemma vision mmproj conversion
+
+Register DiffusionGemmaVisionModel for the DiffusionGemmaForBlockDiffusion
+architecture so convert_hf_to_gguf.py --mmproj exports the vision tower and
+Gemma4MultimodalEmbedder as a gemma4v mmproj. The tower is shared with the
+tied encoder (model.encoder.* prefix), so filter_tensors keeps only the
+tower and embedder tensors and modify_tensors normalizes the prefix before
+reusing the Gemma4 vision mapping.
+---
+ conversion/__init__.py        |  1 +
+ conversion/diffusion_gemma.py | 30 ++++++++++++++++++++++++++++--
+ 2 files changed, 29 insertions(+), 2 deletions(-)
+
+diff --git a/conversion/__init__.py b/conversion/__init__.py
+index 9ef7c666d..64fc22017 100644
+--- a/conversion/__init__.py
++++ b/conversion/__init__.py
+@@ -301,6 +301,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
+     "Gemma3nForConditionalGeneration": "gemma",
+     "Gemma4ForConditionalGeneration": "gemma",
+     "Gemma4UnifiedForConditionalGeneration": "gemma",
++    "DiffusionGemmaForBlockDiffusion": "diffusion_gemma",
+     "Glm4vForConditionalGeneration": "qwen3vl",
+     "Glm4vMoeForConditionalGeneration": "qwen3vl",
+     "Glm5vForConditionalGeneration": "kimivl",
+diff --git a/conversion/diffusion_gemma.py b/conversion/diffusion_gemma.py
+index 53d49dea2..864a06edb 100644
+--- a/conversion/diffusion_gemma.py
++++ b/conversion/diffusion_gemma.py
+@@ -5,8 +5,8 @@ from typing import Iterable
+ 
+ from torch import Tensor
+ 
+-from .base import ModelBase, SentencePieceTokenTypes
+-from .gemma import Gemma4Model
++from .base import ModelBase, MmprojModel, SentencePieceTokenTypes
++from .gemma import Gemma4Model, Gemma4VisionAudioModel
+ import gguf
+ 
+ 
+@@ -120,3 +120,29 @@ class DiffusionGemmaModel(Gemma4Model):
+             name = "model." + name[len("model.decoder."):]
+ 
+         yield from super().modify_tensors(data_torch, name, bid)
++
++
++@ModelBase.register("DiffusionGemmaForBlockDiffusion")
++class DiffusionGemmaVisionModel(Gemma4VisionAudioModel):
++    """DiffusionGemma vision tower and multimodal embedder exported as a gemma4v mmproj.
++
++    The tower is shared with the tied encoder, so its weights live under
++    model.encoder.vision_tower / model.encoder.embed_vision; strip the prefix and
++    reuse the Gemma4 vision mapping. There is no audio encoder.
++    """
++
++    has_audio_encoder = False
++
++    @classmethod
++    def filter_tensors(cls, item):
++        name, gen = item
++        # only the vision tower and the multimodal embedder belong in the mmproj
++        if not name.startswith(("model.encoder.vision_tower.", "model.encoder.embed_vision.")):
++            return None
++        return MmprojModel.filter_tensors(item)
++
++    def modify_tensors(self, data_torch, name, bid):
++        # normalize the shared-tower prefix to the Gemma4 layout before mapping
++        if name.startswith("model.encoder."):
++            name = "model." + name[len("model.encoder."):]
++        yield from super().modify_tensors(data_torch, name, bid)
+-- 
+2.54.0 (Apple Git-157)
+
