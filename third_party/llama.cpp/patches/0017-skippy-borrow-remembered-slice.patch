@@ -1,0 +1,153 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: sat <sat@local>
+Date: Tue, 23 Sep 2026 22:00:00 +1000
+Subject: [PATCH] skippy: borrow the remembered stage slice instead of copying it
+
+The memo hands back the remembered selection by value, so every hit copies
+the whole selection -- and in steady-state decode most steps are hits.
+Borrow it instead: on a hit return a pointer into the thread-local store,
+and fall back to the ordinary compute-and-remember path on a miss, where
+the copy is paid once rather than every step.
+
+The sole call site holds the borrowed pointer with no nested stage-slice
+call in scope; the auxiliary profile-plan builder still takes its own copy.
+
+Run the selection-memo regression battery against this entry point too. Both
+skippy_select_stage_slice and skippy_borrow_stage_slice serve from the same
+thread-local store, so a memo that is not total over what fresh selection reads
+would hand the per-step realize path a stale or invalid selection -- and without
+a copy, which is the whole point of this patch. All 21 cases now assert the
+borrow result against a fresh recompute on a cold thread.
+---
+diff --git a/src/skippy/stage_realization.cpp b/src/skippy/stage_realization.cpp
+index a0938dcb8..23e35d055 100644
+--- a/src/skippy/stage_realization.cpp
++++ b/src/skippy/stage_realization.cpp
+@@ -132,7 +132,6 @@ void skippy_realize_stage_graph(
+     }
+ 
+     const auto parameters = parameter_bindings(model);
+-    skippy_stage_slice_selection selection;
+     std::string error;
+     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
+         skippy_auxiliary_graph_plan auxiliary;
+@@ -144,7 +143,7 @@ void skippy_realize_stage_graph(
+                 params.cparams.nextn_layer_offset, auxiliary.parameter_identities);
+         return;
+     }
+-    if (!skippy_select_stage_slice(
++    const skippy_stage_slice_selection * borrowed = skippy_borrow_stage_slice(
+                 result.get_gf(),
+                 result.get_block_boundaries(),
+                 result.get_state_effects(),
+@@ -153,11 +152,12 @@ void skippy_realize_stage_graph(
+                 static_cast<int32_t>(params.hparams.n_layer()),
+                 params.build_inputs.selection.layer_start,
+                 params.build_inputs.selection.layer_end,
+-                selection,
+                 error,
+-                primary_output(result))) {
++                primary_output(result));
++    if (borrowed == nullptr) {
+         throw std::runtime_error("cannot realize admitted stage graph: " + error);
+     }
++    const skippy_stage_slice_selection & selection = *borrowed;
+ 
+     skippy_validate_execution_dependencies(params.build_inputs, false, 0, selection.parameter_identities);
+     std::vector<std::string> realized_import_identities;
+diff --git a/src/skippy/stage_slice_plan.cpp b/src/skippy/stage_slice_plan.cpp
+index f0c6e3549..92bb0884c 100644
+--- a/src/skippy/stage_slice_plan.cpp
++++ b/src/skippy/stage_slice_plan.cpp
+@@ -595,6 +595,35 @@ struct selector {
+ 
+ }
+ 
++const skippy_stage_slice_selection * skippy_borrow_stage_slice(
++        ggml_cgraph * graph,
++        const std::vector<skippy_block_boundary> & boundaries,
++        const std::vector<skippy_state_effect> & state_effects,
++        const std::vector<skippy_parameter_binding> & parameters,
++        const std::vector<skippy_request_input_binding> & request_inputs,
++        int32_t layer_count,
++        int32_t layer_start,
++        int32_t layer_end,
++        std::string & error,
++        const ggml_tensor * explicit_output) {
++    error.clear();
++    std::string memo_key = skippy_stage_slice_memo_key(
++            graph, boundaries, state_effects, parameters, request_inputs,
++            layer_count, layer_start, layer_end, explicit_output);
++    if (const auto * remembered = skippy_recall_stage_slice(memo_key)) {
++        return remembered;
++    }
++    // Miss: compute and remember through the ordinary path, then hand back the
++    // stored copy. The copy is paid once per miss rather than once per hit.
++    skippy_stage_slice_selection fresh;
++    if (!skippy_select_stage_slice(
++                graph, boundaries, state_effects, parameters, request_inputs,
++                layer_count, layer_start, layer_end, fresh, error, explicit_output)) {
++        return nullptr;
++    }
++    return skippy_recall_stage_slice(memo_key);
++}
++
+ bool skippy_select_stage_slice(
+         ggml_cgraph * graph,
+         const std::vector<skippy_block_boundary> & boundaries,
+diff --git a/src/skippy/stage_slice_plan.h b/src/skippy/stage_slice_plan.h
+index 2272a3fec..4aacda09c 100644
+--- a/src/skippy/stage_slice_plan.h
++++ b/src/skippy/stage_slice_plan.h
+@@ -94,6 +94,22 @@ bool skippy_build_auxiliary_graph_plan(
+         skippy_auxiliary_graph_plan & plan,
+         std::string & error);
+ 
++// Borrow the remembered selection instead of copying it out. On a memo hit this
++// returns a pointer into the thread-local store; the copy it replaces is paid on
++// every hit, which in steady-state decode is most steps. The pointer is valid
++// until the next stage-slice call on this thread.
++const skippy_stage_slice_selection * skippy_borrow_stage_slice(
++        ggml_cgraph * graph,
++        const std::vector<skippy_block_boundary> & boundaries,
++        const std::vector<skippy_state_effect> & state_effects,
++        const std::vector<skippy_parameter_binding> & parameters,
++        const std::vector<skippy_request_input_binding> & request_inputs,
++        int32_t layer_count,
++        int32_t layer_start,
++        int32_t layer_end,
++        std::string & error,
++        const ggml_tensor * explicit_output = nullptr);
++
+ bool skippy_select_stage_slice(
+         ggml_cgraph * graph,
+         const std::vector<skippy_block_boundary> & boundaries,
+diff --git a/src/skippy/tests/selection_memo_regression.h b/src/skippy/tests/selection_memo_regression.h
+index 49e5ca442..3d746ea0b 100644
+--- a/src/skippy/tests/selection_memo_regression.h
++++ b/src/skippy/tests/selection_memo_regression.h
+@@ -117,7 +117,21 @@ static int check_selection_memo_regressions() {
+                     test.name, cached_ok, fresh_ok, cached_error.c_str(), fresh_error.c_str());
+             return 93;
+         }
+-        std::fprintf(stderr, "PASS memo %s: cached=fresh=%d\n", test.name, cached_ok);
++        // Both entry points serve from the same thread-local store, so the borrow
++        // path has to agree with a fresh recompute for exactly the same reasons --
++        // a memo that is not total over what fresh selection reads would hand the
++        // per-step realize path a stale or invalid selection without copying it.
++        std::string borrowed_error;
++        const auto * borrowed = skippy_borrow_stage_slice(fixture.graph, fixture.boundaries,
++                fixture.effects, fixture.parameters, fixture.requests, 2, 0, 1, borrowed_error,
++                fixture.exit_1);
++        const bool borrowed_ok = borrowed != nullptr;
++        if (borrowed_ok != fresh_ok || (borrowed_ok && !same_selection(*borrowed, fresh))) {
++            std::fprintf(stderr, "borrow %s differs: borrowed=%d fresh=%d borrowed_error=%s fresh_error=%s\n",
++                    test.name, borrowed_ok, fresh_ok, borrowed_error.c_str(), fresh_error.c_str());
++            return 95;
++        }
++        std::fprintf(stderr, "PASS memo %s: cached=fresh=borrow=%d\n", test.name, cached_ok);
+     }
+     return 0;
+ }
+--
+2.39.5
