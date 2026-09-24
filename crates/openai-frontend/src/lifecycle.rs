@@ -81,6 +81,7 @@ pub enum OpenAiFrontendRoute {
     ChatCompletions,
     Completions,
     Responses,
+    SystemOne,
     Unknown,
 }
 
@@ -99,6 +100,7 @@ pub enum OpenAiBackendOperation {
     CompletionStream,
     Responses,
     ResponsesStream,
+    SystemOne,
 }
 
 /// A bounded classification for a request rejected before backend execution.

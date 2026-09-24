@@ -87,7 +87,20 @@ default_build_dir_for_backend() {
       suffix="rocm-$(sanitize_build_component "$amdgpu_targets")"
       ;;
   esac
-  printf '%s/build-stage-abi-%s-%s\n' "$LLAMA_BUILD_ROOT" "$LLAMA_LINK_MODE" "$suffix"
+  # Key the build directory by the patched llama sha. The directory is otherwise
+  # keyed only by link mode and backend, so two different pins built on one machine
+  # share it -- and package-native-runtime.sh globs every *.dylib under it, shipping
+  # both library generations in one bundle. The stale generation then fails to
+  # resolve against the other's ggml.
+  local pin=""
+  if [[ -f "$LLAMA_WORKDIR/.mesh-llm-patched-sha" ]]; then
+    pin="$(tr -d '[:space:]' < "$LLAMA_WORKDIR/.mesh-llm-patched-sha")"
+  fi
+  if [[ -n "$pin" ]]; then
+    printf '%s/build-stage-abi-%s-%s-%s\n' "$LLAMA_BUILD_ROOT" "$LLAMA_LINK_MODE" "$suffix" "${pin:0:12}"
+  else
+    printf '%s/build-stage-abi-%s-%s\n' "$LLAMA_BUILD_ROOT" "$LLAMA_LINK_MODE" "$suffix"
+  fi
 }
 
 detect_jobs() {
@@ -283,7 +296,10 @@ case "$LLAMA_BACKEND" in
       echo "CUDA toolkit compiler was not found; set CUDACXX, CMAKE_CUDA_COMPILER, NVCC, or put nvcc on PATH" >&2
       exit 1
     fi
-    CMAKE_ARGS+=(-DGGML_CUDA=ON)
+    # The pinned CUDA graph-capture path can abort on a warmed multi-request
+    # workload while updating the captured graph. Keep staged runtimes on the
+    # ordinary CUDA execution path until that upstream path is safe again.
+    CMAKE_ARGS+=(-DGGML_CUDA=ON -DGGML_CUDA_GRAPHS=OFF)
     if [[ -n "${CUDACXX:-}" ]]; then
       CMAKE_ARGS+=(-DCMAKE_CUDA_COMPILER="$CUDACXX")
     fi

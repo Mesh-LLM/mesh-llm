@@ -41,6 +41,12 @@ const TELEMETRY_CATEGORY: CategoryPresentation = CategoryPresentation {
     summary: "Opt-in metrics export and local telemetry queue settings",
     order: 40,
 };
+const ANALYTICS_CATEGORY: CategoryPresentation = CategoryPresentation {
+    id: "analytics",
+    label: "Analytics",
+    summary: "Anonymous usage reporting to the mesh-llm maintainers",
+    order: 50,
+};
 const RUNTIME_POLICY_CATEGORY: CategoryPresentation = CategoryPresentation {
     id: "runtime-policy",
     label: "Runtime Policy",
@@ -106,6 +112,7 @@ struct SettingPresentation {
 
 fn setting_presentation_for_path(rendered: &str) -> Option<SettingPresentation> {
     logging_presentation(rendered)
+        .or_else(|| gpu_setting_presentation(rendered))
         .or_else(|| process_setting_presentation(rendered))
         .or_else(|| native_runtime_presentation(rendered))
         .or_else(|| runtime_defaults_presentation(rendered))
@@ -114,7 +121,7 @@ fn setting_presentation_for_path(rendered: &str) -> Option<SettingPresentation> 
         .or_else(|| model_and_plugin_presentation(rendered))
 }
 
-fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
+fn gpu_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
     match rendered {
         "gpu.assignment" => Some(sp(
             "GPU assignment",
@@ -131,6 +138,26 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
         )
         .unit("models")
         .hint("number")),
+        "gpu.host_ram_offload" => Some(sp(
+            "Host RAM offload",
+            "Let this node load models that only fit by spilling from GPU memory into system RAM. Off by default: such models run an order of magnitude slower. The capacity advertised to the mesh never includes RAM.",
+            RUNTIME_CATEGORY,
+            30,
+        )
+        .hint("toggle")),
+        _ => None,
+    }
+}
+
+fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
+    match rendered {
+        "analytics.enabled" => Some(sp(
+            "Anonymous usage reporting",
+            "Report anonymous usage (version, platform, command names, node and model counts) to the mesh-llm maintainers. Never includes prompts, completions, file paths, or peer addresses. Turning this setting off is equivalent to `mesh-llm analytics disable`.",
+            ANALYTICS_CATEGORY,
+            10,
+        )
+        .hint("toggle")),
         "telemetry.enabled" => Some(sp(
             "Telemetry export",
             "Enable opt-in metrics export. Ambient OTel environment variables do not enable export by themselves.",

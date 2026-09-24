@@ -71,6 +71,7 @@ produces a clear startup error rather than a partial start.
 |---|---|---|---|---|---|---|
 | `gpu.assignment` | enum | `auto` (default), `pinned` | node-level | process restart | wired | none |
 | `gpu.parallel` | integer | optional total parallel slot count; unset lets the runtime choose (currently 4) | node-level | process restart | wired | `--parallel` |
+| `gpu.host_ram_offload` | boolean | `false` (default), `true`: lets the local fit and auto-join count system RAM on a GPU host; the advertised capacity never includes RAM | node-level | process restart | wired | none |
 | `mesh_requirements.min_node_version`<br>`mesh_requirements.max_node_version` | string (semver) | optional peer version bounds; unset means no bound | node-level | process restart | wired | none |
 | `mesh_requirements.min_protocol_version`<br>`mesh_requirements.max_protocol_version` | integer | `0` means no bound | node-level | process restart | wired | none |
 | `mesh_requirements.require_release_attestation` | boolean | `false` | node-level | process restart | wired | none |
@@ -85,6 +86,7 @@ produces a clear startup error rather than a partial start.
 | `telemetry.queue_size` | integer | `2048` | node-level | process restart | wired | none |
 | `telemetry.prompt_shape_metrics` | boolean | `false` | node-level | process restart | wired; exports token-count histograms only when explicitly enabled | none |
 | `telemetry.metrics.endpoint` | URL | unset (falls back to `telemetry.endpoint`) | node-level | process restart | wired | none |
+| `analytics.enabled` | boolean | unset (anonymous usage reporting is on when an analytics key is available, compiled in or set at run time); `false` opts out permanently | node-level | process restart | wired | `mesh-llm analytics disable` |
 | `logging.audit.enabled` | boolean | unset | node-level | process restart | wired | none |
 | `logging.audit.log_path` | path | unset | node-level | process restart | wired | none |
 | `logging.audit.log_format` | enum | `json_lines` | node-level | process restart | wired | none |

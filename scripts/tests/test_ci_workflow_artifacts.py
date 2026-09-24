@@ -187,6 +187,8 @@ class CiWorkflowArtifactTests(unittest.TestCase):
 
     def test_core_smoke_covers_dense_and_recurrent_models(self):
         workflow = (WORKFLOWS / "smoke.yml").read_text()
+        standalone_smoke = (ROOT / "scripts/ci-smoke-test.sh").read_text()
+        compat_smoke = (ROOT / "scripts/ci-compat-smoke.sh").read_text()
 
         self.assertEqual(workflow.count("model_artifact_id: smollm2-q8-inference"), 2)
         self.assertEqual(workflow.count("model_artifact_id: family-granite-hybrid"), 2)
@@ -199,6 +201,18 @@ class CiWorkflowArtifactTests(unittest.TestCase):
             "Recurrent constrained-stack smoke",
         ):
             self.assertEqual(workflow.count(phase), 2)
+        self.assertEqual(workflow.count('MESH_CI_CTX_SIZE: "128"'), 4)
+        self.assertEqual(workflow.count('MESH_COMPAT_CTX_SIZE: "128"'), 2)
+        self.assertEqual(workflow.count('MESH_CI_BATCH_SIZE: "128"'), 4)
+        self.assertEqual(workflow.count('MESH_CI_UBATCH_SIZE: "128"'), 4)
+        self.assertEqual(workflow.count('MESH_COMPAT_BATCH_SIZE: "128"'), 2)
+        self.assertEqual(workflow.count('MESH_COMPAT_UBATCH_SIZE: "128"'), 2)
+        for variable in ("MESH_CI_BATCH_SIZE", "MESH_CI_UBATCH_SIZE"):
+            self.assertIn(variable, standalone_smoke)
+        for variable in ("MESH_COMPAT_BATCH_SIZE", "MESH_COMPAT_UBATCH_SIZE"):
+            self.assertIn(variable, compat_smoke)
+        self.assertIn("[defaults.model_fit]", standalone_smoke)
+        self.assertIn("[defaults.model_fit]", compat_smoke)
         self.assertIn("MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL", workflow)
         self.assertIn("expected_backend:", workflow)
         self.assertIn("verify-native-runtime-package.sh", workflow)

@@ -206,6 +206,38 @@ def main() -> int:
         assert whole_model["verdict"] == "supported_whole_model"
         assert whole_model["edits"] == []
 
+        # A constructor that delegates its repeating-layer body to a helper
+        # with a layer-bounded loop is a whole-model graph with the helper's
+        # loop bounds as domain evidence.
+        delegated = builder(
+            run(
+                tool,
+                source_root,
+                report_root / "delegated-stacks.json",
+                source_name="delegated-stacks.cpp",
+            )
+        )
+        assert delegated["verdict"] == "supported_whole_model"
+        assert delegated["proof"]["execution_scope"] == (
+            "multiple_sequential_layer_domains"
+        )
+        assert delegated["proof"]["scope_evidence"] == ["model.n_layers_per_stack"]
+        assert delegated["edits"] == []
+
+        # A delegated call whose callee has no visible layer-bounded loop
+        # keeps the exact refusal.
+        opaque = builder(
+            run(
+                tool,
+                source_root,
+                report_root / "delegated-opaque.json",
+                source_name="delegated-opaque.cpp",
+            )
+        )
+        assert opaque["verdict"] == "unsupported_shape"
+        assert opaque["unsupported_reason"] == "no layer block loop"
+        assert opaque["edits"] == []
+
         for source_name, reason in (
             ("filter-only.cpp", "legacy model-local stage filter is not supported"),
             ("two-loops.cpp", "multiple equally ranked layer block loops"),

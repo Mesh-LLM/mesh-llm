@@ -119,6 +119,7 @@ pub(super) fn startup_launch_plan(
                 slots: Some(super::startup_models::resolve_model_parallel_slots(
                     model.parallel,
                     &plugin::GpuConfig {
+                        host_ram_offload: None,
                         assignment: plugin::GpuAssignment::Auto,
                         parallel: default_parallel,
                     },

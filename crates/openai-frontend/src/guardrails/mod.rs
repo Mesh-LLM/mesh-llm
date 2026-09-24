@@ -14,6 +14,7 @@ use crate::{
     embeddings::{EmbeddingResponse, EmbeddingsRequest},
     models::ModelObject,
     rerank::{RerankRequest, RerankResponse},
+    system_one::{SystemOneRequest, SystemOneResponse},
 };
 
 mod compact;
@@ -309,6 +310,10 @@ fn telemetry_attempt_bucket(attempts: u8) -> GuardrailTelemetryAttemptBucket {
 impl OpenAiBackend for GuardedOpenAiBackend {
     async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
         self.backend.models().await
+    }
+
+    async fn system_one(&self, request: SystemOneRequest) -> OpenAiResult<SystemOneResponse> {
+        self.backend.system_one(request).await
     }
 
     async fn chat_completion(

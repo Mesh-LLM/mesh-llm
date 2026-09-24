@@ -18,6 +18,8 @@ The workspace is split across many crates under `crates/`. The shipped binary `m
 | `CONTRIBUTING.md` | Build from source, dev workflow, UI dev |
 | `RELEASE.md` | Release process (build, bundle, tag, GitHub release) |
 | `ROADMAP.md` | Future directions |
+| `website/src/docs/pages/analytics.md` | What anonymous usage analytics collects, and how to opt out |
+| `crates/mesh-llm-analytics/README.md` | The only vendor-reporting crate; read before adding any event |
 | `crates/mesh-llm/TODO.md` | Current work items and backlog |
 | `crates/mesh-llm/README.md` | Rust crate overview and file map |
 | `docs/README.md` | Documentation map and topic directory guide |

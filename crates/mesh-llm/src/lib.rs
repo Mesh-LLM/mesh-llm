@@ -56,6 +56,8 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
             return Err(anyhow::Error::new(CliParseExit(exit_code)));
         }
     };
+    mesh_llm_commands::usage_reporting::init_for_cli(&cli);
+
     let warning = mesh_llm_cli::legacy_runtime_surface_warning(
         &cli,
         &normalized_args.original,
@@ -81,6 +83,12 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
             mesh_llm_cli::Command::Serve | mesh_llm_cli::Command::Client
         )
     }) {
+        let family = cli
+            .command
+            .as_ref()
+            .map_or(mesh_llm_events::CliCommandFamily::Unknown, |command| {
+                mesh_llm_commands::operational_logging::command_family(command)
+            });
         // Install the durable audit bridge before command dispatch. This
         // performs only config-backed logging setup; one-shot commands do not
         // need a native runtime, a model, or serving infrastructure.
@@ -101,17 +109,35 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
         // dispatcher has already emitted its static terminal audit outcome in
         // either case.
         let command_dispatch = commands::dispatch(&cli).await;
+        mesh_llm_commands::usage_reporting::record_cli_command(
+            family,
+            match &command_dispatch {
+                Ok(_) => mesh_llm_events::CliCommandOutcome::Completed,
+                Err(_) => mesh_llm_events::CliCommandOutcome::Failed,
+            },
+        );
         if logging_initialized {
             let _ = mesh_llm_host_runtime::shutdown_logging_for_one_shot_cli().await;
         }
         mesh_llm_commands::operational_logging::clear_cli_operational_audit_bridge();
+        // Drain before returning: a one-shot command exits immediately after
+        // this, and anything still queued would be lost.
+        mesh_llm_commands::usage_reporting::shutdown().await;
         if command_dispatch? {
             return Ok(());
         }
     }
 
+    let session = mesh_llm_commands::usage_reporting::ServeSession::start(&cli);
     let options = runtime_options_from_cli(cli);
-    mesh_llm_host_runtime::initialize_host_runtime_for_options(&options).await?;
+    // Report a failed startup rather than returning through `?`, which would
+    // leave `serve_started` queued and undelivered and hide exactly the
+    // failures worth seeing.
+    if let Err(error) = mesh_llm_host_runtime::initialize_host_runtime_for_options(&options).await {
+        session.finish(false);
+        mesh_llm_commands::usage_reporting::shutdown().await;
+        return Err(error);
+    }
     install_cli_operational_audit_bridge();
     mesh_llm_tui::output::OutputManager::init_global(
         options.log_format,
@@ -119,7 +145,11 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
     );
     mesh_llm_tui::install_terminal_panic_hook();
 
-    mesh_llm_host_runtime::run_runtime_initialized(options, explicit_surface, warning).await
+    let outcome =
+        mesh_llm_host_runtime::run_runtime_initialized(options, explicit_surface, warning).await;
+    session.finish(outcome.is_ok());
+    mesh_llm_commands::usage_reporting::shutdown().await;
+    outcome
 }
 
 async fn emit_early_cli_process_event(
@@ -131,6 +161,7 @@ async fn emit_early_cli_process_event(
     // early process events consistent with the --debug presentation toggle.
     mesh_llm_events::set_cli_command_event_verbose(args.iter().any(|arg| arg == "--debug"));
     let config_path = config_path_from_args(args);
+    mesh_llm_commands::usage_reporting::init_for_unparsed(args, config_path.as_deref());
     let logging_initialized =
         mesh_llm_host_runtime::initialize_logging_for_cli(config_path.as_deref())
             .await
@@ -139,10 +170,13 @@ async fn emit_early_cli_process_event(
         install_cli_operational_audit_bridge();
     }
     mesh_llm_commands::operational_logging::emit_cli_process_event(family, outcome);
+    mesh_llm_commands::usage_reporting::record_cli_command(family, outcome);
     if logging_initialized {
         let _ = mesh_llm_host_runtime::shutdown_logging_for_one_shot_cli().await;
     }
     mesh_llm_commands::operational_logging::clear_cli_operational_audit_bridge();
+    // This path returns straight to `main`, so drain here too.
+    mesh_llm_commands::usage_reporting::shutdown().await;
 }
 
 fn parse_exit_outcome(error: &clap::Error) -> mesh_llm_events::CliCommandOutcome {

@@ -405,6 +405,7 @@ publish_crates=(
     mesh-llm-runtime-event-contracts
     mesh-llm-log-store
     mesh-llm-build-info
+    mesh-llm-analytics
     mesh-llm-release-footer
     mesh-llm-native-runtime
     mesh-llm-config

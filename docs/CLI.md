@@ -507,7 +507,7 @@ is present, the command requires `--public-key-file` and otherwise reports
 
 Use this to inspect local GPU identity and capacity, including per-device VRAM, unified-memory state, and cached benchmark-derived bandwidth when present. `mesh-llm gpus detect` refreshes the raw hardware fingerprint, bandwidth, and compute hints used by local planning.
 
-After the per-device lines, `gpus` prints what this host would advertise to a mesh and where each byte went: the enumerated device memory, the driver reserve, a platform reserve on unified-memory hosts, the configured safety margin (`defaults.hardware.safety_margin_gb`, or the built-in 2 GB when unset), and the share left for mesh placement. The RAM-backed budget is listed separately because it feeds the local fit only and is never advertised as accelerator capacity. `--json` carries the same figures under `advertised_memory`. A `serve --max-vram` ceiling is not applied here, so the usable share shown is the uncapped one.
+After the per-device lines, `gpus` prints what this host would advertise to a mesh and where each byte went: the enumerated device memory, the driver reserve, a platform reserve on unified-memory hosts, the configured safety margin (`defaults.hardware.safety_margin_gb`, or the built-in 2 GB when unset), and the share left for mesh placement. On a host with accelerator memory the local fit plans on that memory only, unless `gpu.host_ram_offload = true` lets it also count system RAM; `gpus` then lists the RAM-backed budget, and otherwise says what the setting would add. Either way that budget feeds the local fit only and is never advertised as accelerator capacity. A CPU-only host keeps its RAM-backed budget regardless. `--json` carries the same figures under `advertised_memory`, with `host_ram_offload` stating the setting. A `serve --max-vram` ceiling is not applied here, so the usable share shown is the uncapped one.
 
 ### `benchmark tune`
 
@@ -988,3 +988,46 @@ Automation tips:
 1. Prefer explicit refs in scripts.
 2. Pin `@<commit-sha>` when reproducibility matters.
 3. Parse stable keys such as `type`, `ref`, `fit`, `path`, and `results`.
+
+### `hermes --write` / `openclaw --write`
+
+Add a named Mesh provider to an independently operated harness, without launching
+an agent or starting Mesh. Mesh must already be running. Requires current Hermes
+with the `providers` mapping and provider-scoped context overrides, or OpenClaw's
+`models.providers` OpenAI-completions schema (qualified against 2026.9.4).
+
+```bash
+mesh-llm hermes --write
+mesh-llm openclaw --write --host 127.0.0.1:9337
+mesh-llm hermes --write --model auto --config-path /path/to/profile/config.yaml
+```
+
+The default wire model is `auto`; select provider `mesh` and model `auto` in
+Hermes, or `mesh/auto` in OpenClaw. `--model mesh` opts into the ensemble route;
+an exact advertised model ID pins the connection instead. Existing defaults,
+credentials for other providers, and tool permissions are preserved. These
+commands do not install plugins/skills or restart anything. Bare commands require
+`--write`; there is no Hermes/OpenClaw launcher.
+
+Default paths are `$HERMES_HOME/config.yaml` (otherwise `~/.hermes/config.yaml`)
+and `$OPENCLAW_CONFIG_PATH` (otherwise `$OPENCLAW_STATE_DIR/openclaw.json`, falling
+back to `~/.openclaw/openclaw.json`). Use `--config-path` for another profile.
+An absent file is created. Existing files receive an exact sibling `.mesh-*.bak`
+backup (no backup is written when the file already matches); serialization
+normalizes formatting and removes comments, and concurrent `mesh-llm` writes to
+the same file are serialized by an advisory lock beside it, so two invocations
+cannot interleave. An editor that does not take that lock is still caught only
+by the pre-write content check. On Unix, new config and backup files are mode
+0600. Symlink files, included configs,
+malformed mappings, legacy Hermes `custom_providers`, and conflicting existing
+`mesh` providers are refused rather than overwritten. An identical provider is
+accepted. Backups may contain secrets: keep them private. To undo, restore the
+backup only if no later edits occurred, otherwise remove just the Mesh entries.
+
+Context budgets come from `/v1/models` served metadata; aliases use the smallest
+advertised budget. Missing metadata uses a warned 8192-token assumption, not a
+capacity guarantee. `--context-length` can lower the budget. These are setup-time
+snapshots: rerun/review configuration when the mesh's models or limits change.
+Older Hermes versions may ignore provider context overrides; upgrade rather than
+relying on the old alias fallback. Remote endpoints should use HTTPS or a trusted
+tunnel. No credentials are discovered or read from the OS Keychain.

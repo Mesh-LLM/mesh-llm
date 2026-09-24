@@ -69,7 +69,9 @@ type MediaFrameEval = (
 );
 
 mod chunk_aggregation;
+mod chunk_capture;
 use chunk_aggregation::aggregate_media_chunk_outputs;
+use chunk_capture::{ChunkCapture, capture_microbatch, split_chunk_frames};
 
 // The experimental C ABI owns synchronization internally for model/session use.
 // Rust stage-server access is additionally serialized behind a Mutex.
@@ -310,7 +312,11 @@ impl StageModel {
             }
             generated_frames += 1;
             hidden_state = next_hidden_state;
-            sampled = session.sample_current(Some(&sampling))?;
+            // Only a further iteration consumes a sample: once the cap is
+            // reached the frame is never generated and the loop fails below.
+            if generated_frames < config.max_frames {
+                sampled = session.sample_current(Some(&sampling))?;
+            }
         }
         if !stopped {
             return Err(anyhow!(
@@ -336,14 +342,16 @@ impl StageModel {
             return Err(anyhow!("speech synthesis produced no audio"));
         }
         let native_bytes = unsafe { std::slice::from_raw_parts(data.cast::<u8>(), data_len) };
+        let (sample_rate, sample_count) =
+            validated_speech_metadata(config.output_format, sample_rate, sample_count, data_len)?;
         let bytes = match config.output_format {
             SpeechOutputFormat::Wav => native_bytes.to_vec(),
             SpeechOutputFormat::PcmS16Le => pcm_f32_to_s16le(native_bytes)?,
         };
         Ok(SpeechAudio {
             bytes,
-            sample_rate: u32::try_from(sample_rate).context("invalid speech sample rate")?,
-            sample_count: u64::try_from(sample_count).context("invalid speech sample count")?,
+            sample_rate,
+            sample_count,
             generated_frames,
         })
     }
@@ -682,11 +690,6 @@ impl StageModel {
             if chunk_tokens == 0 {
                 continue;
             }
-            if chunk_tokens > n_batch as usize {
-                return Err(anyhow!(
-                    "multimodal chunk {index} has {chunk_tokens} tokens, exceeding n_batch {n_batch}; increase n_batch for staged media prefill"
-                ));
-            }
             let chunk_token_ids = if chunk_type == skippy_ffi::MtmdInputChunkType::Text {
                 let mut text_token_count = 0usize;
                 let text_tokens = unsafe {
@@ -756,8 +759,9 @@ impl StageModel {
                 Vec::new()
             };
             let mut new_n_past = n_past;
+            let mut capture = ChunkCapture::new(session);
             let eval_status = unsafe {
-                skippy_ffi::mtmd_helper_eval_chunk_single(
+                skippy_ffi::mtmd_helper_eval_chunk_single_with_callback(
                     projector.raw,
                     lctx,
                     chunk,
@@ -766,23 +770,22 @@ impl StageModel {
                     n_batch,
                     false,
                     &mut new_n_past,
+                    Some(capture_microbatch),
+                    (&mut capture as *mut ChunkCapture<'_>).cast(),
                 )
             };
-            if eval_status != 0 {
-                return Err(anyhow!(
-                    "multimodal chunk {index} evaluation failed with status {eval_status}"
-                ));
-            }
-            let frame = session.copy_output_activation_frame(chunk_tokens, 0)?;
+            let frames = capture
+                .finish(eval_status)
+                .with_context(|| format!("capture multimodal chunk {index}"))?;
             copied_tokens = copied_tokens
                 .checked_add(chunk_tokens)
                 .context("multimodal activation token count overflow")?;
-            chunk_frames.push(MediaPrefillChunkFrame {
-                token_count: chunk_tokens,
-                tokens: chunk_token_ids,
-                positions: chunk_positions,
-                output: frame,
-            });
+            chunk_frames.extend(split_chunk_frames(
+                frames,
+                &chunk_token_ids,
+                &chunk_positions,
+                chunk_tokens,
+            )?);
             n_past = new_n_past;
         }
 
@@ -852,6 +855,48 @@ impl StageModel {
     }
 }
 
+/// Check native speech metadata against the payload it describes.
+///
+/// The reported rate and sample count describe the borrowed bytes, so reject
+/// values that cannot describe them rather than handing a consumer a
+/// structurally impossible result. The widths mirror the payloads: the `Pcm`
+/// encoding is f32 frames that [`pcm_f32_to_s16le`] re-encodes, and the `Wav`
+/// encoding wraps PCM16 samples in a container.
+fn validated_speech_metadata(
+    output_format: SpeechOutputFormat,
+    sample_rate: i32,
+    sample_count: i64,
+    data_len: usize,
+) -> Result<(u32, u64)> {
+    let sample_rate = u32::try_from(sample_rate).context("invalid speech sample rate")?;
+    if sample_rate == 0 {
+        return Err(anyhow!("speech synthesis reported a zero sample rate"));
+    }
+    let sample_count = u64::try_from(sample_count).context("invalid speech sample count")?;
+    if sample_count == 0 {
+        return Err(anyhow!("speech synthesis reported zero samples"));
+    }
+    let sample_bytes = match output_format {
+        SpeechOutputFormat::Wav => 2,
+        SpeechOutputFormat::PcmS16Le => std::mem::size_of::<f32>(),
+    };
+    let required_bytes = usize::try_from(sample_count)
+        .ok()
+        .and_then(|count| count.checked_mul(sample_bytes));
+    let payload_holds_samples = match output_format {
+        // The native WAV payload adds a container header around its samples.
+        SpeechOutputFormat::Wav => required_bytes.is_some_and(|bytes| data_len >= bytes),
+        // The native PCM payload is exactly the frames we re-encode.
+        SpeechOutputFormat::PcmS16Le => required_bytes == Some(data_len),
+    };
+    if !payload_holds_samples {
+        return Err(anyhow!(
+            "speech synthesis reported {sample_count} samples for a {data_len} byte payload"
+        ));
+    }
+    Ok((sample_rate, sample_count))
+}
+
 /// Validate and quantize native float32 PCM into clamped signed little-endian samples.
 fn pcm_f32_to_s16le(bytes: &[u8]) -> Result<Vec<u8>> {
     if !bytes.len().is_multiple_of(std::mem::size_of::<f32>()) {
@@ -870,7 +915,49 @@ fn pcm_f32_to_s16le(bytes: &[u8]) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::pcm_f32_to_s16le;
+    use super::{SpeechOutputFormat, pcm_f32_to_s16le, validated_speech_metadata};
+
+    #[test]
+    /// Reject native speech metadata that cannot describe its payload.
+    fn speech_metadata_rejects_impossible_native_values() {
+        let pcm = SpeechOutputFormat::PcmS16Le;
+        let wav = SpeechOutputFormat::Wav;
+
+        // Four f32 frames, and the same four samples behind a WAV header.
+        assert_eq!(
+            validated_speech_metadata(pcm, 24_000, 4, 16).expect("consistent pcm"),
+            (24_000, 4)
+        );
+        assert_eq!(
+            validated_speech_metadata(wav, 24_000, 4, 52).expect("consistent wav"),
+            (24_000, 4)
+        );
+
+        assert!(
+            validated_speech_metadata(pcm, 0, 4, 16).is_err(),
+            "zero rate"
+        );
+        assert!(
+            validated_speech_metadata(pcm, 24_000, 0, 16).is_err(),
+            "zero samples"
+        );
+        assert!(
+            validated_speech_metadata(pcm, 24_000, -1, 16).is_err(),
+            "negative samples"
+        );
+        assert!(
+            validated_speech_metadata(pcm, 24_000, 5, 16).is_err(),
+            "count exceeds native frames"
+        );
+        assert!(
+            validated_speech_metadata(pcm, 24_000, 4, 20).is_err(),
+            "trailing bytes are not samples"
+        );
+        assert!(
+            validated_speech_metadata(wav, 24_000, 9, 16).is_err(),
+            "wav payload cannot hold the declared samples"
+        );
+    }
 
     #[test]
     /// Verify clipping and quantization at signed PCM boundaries.

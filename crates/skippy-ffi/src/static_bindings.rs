@@ -2,14 +2,15 @@ use std::ffi::{c_char, c_int, c_void};
 
 use crate::{
     ActivationBoundaryDesc, ActivationDesc, BackendDevice, Error, GenerationSignalWindow,
-    IterationRequest, KvPageDesc, LlamaLogCallback, LlamaModelQuantizeParams, Model, ModelInfo,
-    ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos,
-    MtmdGenAudioInfo, MtmdHelperBitmapWrapper, MtmdHelperGenAudio, MtmdHelperGenAudioInput,
-    MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
-    NativeMtpDraft, NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session, StagePlan,
-    StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStringRefV1,
-    StagePlanValueDescV1, StagePlanValueKind, StagePlanner, StagePlannerConfigV1, Status,
-    TensorInfo, TokenSignal, WorkloadInfoV1,
+    IterationRequest, KvPageDesc, LlamaLogCallback, LlamaModelQuantizeParams, LlamaPerfContextData,
+    Model, ModelInfo, ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams,
+    MtmdDecoderPos, MtmdGenAudioInfo, MtmdHelperBitmapWrapper, MtmdHelperGenAudio,
+    MtmdHelperGenAudioInput, MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType,
+    MtmdInputChunks, MtmdInputText, NativeMtpDraft, NgramCache, Opaque, RuntimeConfig,
+    SamplingConfig, Session, StagePlan, StagePlanDescV1, StagePlanProfileDescV1,
+    StagePlanStateDescV1, StagePlanStringRefV1, StagePlanValueDescV1, StagePlanValueKind,
+    StagePlanner, StagePlannerConfigV1, Status, SystemOneSlot, TensorInfo, TokenSignal,
+    WorkloadInfoV1,
 };
 
 unsafe extern "C" {
@@ -138,6 +139,28 @@ unsafe extern "C" {
         out_desc: *mut ActivationBoundaryDesc,
     ) -> bool;
 
+    pub fn skippy_system_one_read(
+        model: *mut Model,
+        prompt_tokens: *const i32,
+        prompt_token_count: usize,
+        canvas_tokens: *const i32,
+        canvas_token_count: usize,
+        label_token_ids: *const i32,
+        label_token_count: usize,
+        slots: *const SystemOneSlot,
+        slot_count: usize,
+        out_probabilities: *mut f32,
+        output_capacity: usize,
+        out_output_count: *mut usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_system_one_canvas_length(
+        model: *mut Model,
+        out_canvas_token_count: *mut usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
     /// Query an opened model's workload class, pooling, and full-model constraints.
     pub fn skippy_model_workload_info_v1(
         model: *const Model,
@@ -161,6 +184,7 @@ unsafe extern "C" {
     ) -> Status;
 
     pub fn skippy_session_llama_context(session: *mut Session) -> *mut Opaque;
+    pub fn llama_perf_context(ctx: *mut Opaque) -> LlamaPerfContextData;
 
     pub fn skippy_session_position(session: *const Session) -> i32;
 
@@ -200,6 +224,11 @@ unsafe extern "C" {
     ) -> Status;
 
     /// Compute one normalized token-input embedding into a caller-owned buffer.
+    ///
+    /// `out_dimensions` always receives the required embedding length before the
+    /// call can fail on capacity: when `output_capacity` is smaller it holds that
+    /// length while `Status::BufferTooSmall` is returned, so a caller can size its
+    /// buffer from the value and retry. It stays zero on every earlier failure.
     pub fn skippy_session_embed(
         session: *mut Session,
         token_ids: *const i32,
@@ -867,5 +896,18 @@ unsafe extern "C" {
         n_batch: i32,
         logits_last: bool,
         new_n_past: *mut i32,
+    ) -> c_int;
+
+    pub fn mtmd_helper_eval_chunk_single_with_callback(
+        ctx: *mut MtmdContext,
+        lctx: *mut Opaque,
+        chunk: *const Opaque,
+        n_past: i32,
+        seq_id: i32,
+        n_batch: i32,
+        logits_last: bool,
+        new_n_past: *mut i32,
+        callback: Option<unsafe extern "C" fn(i32, *mut c_void) -> c_int>,
+        user_data: *mut c_void,
     ) -> c_int;
 }

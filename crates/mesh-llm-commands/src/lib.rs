@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod agent_cli;
+pub mod analytics;
 pub mod auth;
 pub mod benchmark;
 pub mod config;
@@ -15,3 +16,4 @@ pub mod skills;
 mod terminal;
 pub mod uninstall;
 pub mod update;
+pub mod usage_reporting;

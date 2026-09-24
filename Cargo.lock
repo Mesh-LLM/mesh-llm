@@ -2089,6 +2089,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "fs_extra"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3633,6 +3643,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "mesh-llm-analytics"
+version = "0.76.1"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs",
+ "mesh-llm-build-info",
+ "mesh-llm-events",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "mesh-llm-api-client"
 version = "0.76.1"
 dependencies = [
@@ -3702,13 +3730,16 @@ dependencies = [
  "chrono",
  "clap",
  "dirs",
+ "fs2",
  "hex",
  "iroh",
  "json5",
+ "mesh-llm-analytics",
  "mesh-llm-build-info",
  "mesh-llm-cli",
  "mesh-llm-config",
  "mesh-llm-events",
+ "mesh-llm-hardware-profile",
  "mesh-llm-hf-hub",
  "mesh-llm-identity",
  "mesh-llm-native-runtime",
@@ -3875,6 +3906,7 @@ dependencies = [
  "iroh-relay",
  "libc",
  "mdns-sd",
+ "mesh-llm-analytics",
  "mesh-llm-build-info",
  "mesh-llm-client",
  "mesh-llm-config",
@@ -3912,6 +3944,7 @@ dependencies = [
  "rmcp",
  "rpassword",
  "rustls",
+ "ryu",
  "same-file",
  "schemars",
  "semver",

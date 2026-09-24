@@ -22,7 +22,8 @@
     "skippy-ci-smoke",
     "skippy-parity",
     "competitive-benchmark",
-    "radix-cache"
+    "radix-cache",
+    "skippy-system-one-smoke"
   ],
   "family_policy": {
     "profiles": {
@@ -90,7 +91,8 @@
       "family": "qwen3-dense",
       "suites": [
         "llama-family-certification",
-        "skippy-ci-smoke"
+        "skippy-ci-smoke",
+        "skippy-system-one-smoke"
       ],
       "cadences": [
         "pull-request",
@@ -707,7 +709,9 @@
         "gguf",
         "hybrid",
         "multipart",
-        "qsa"
+        "qsa",
+        "multimodal",
+        "projector"
       ],
       "artifact": {
         "repo": "unsloth/Qwen3.8-Flash-Next-GGUF",
@@ -746,8 +750,20 @@
           "estimated_model_bytes": 72535436800,
           "startup_timeout_secs": 900
         },
-        "notes": "Qwen4 experimental hybrid path; four-wide hyper-connected residual boundary and QSA indexer",
-        "class": "causal_generation"
+        "notes": "Qwen4 experimental hybrid path; four-wide hyper-connected residual boundary and QSA indexer; pinned projector with local and split image smoke",
+        "class": "causal_generation",
+        "mmproj_artifact": {
+          "repo": "unsloth/Qwen3.8-Flash-Next-GGUF",
+          "revision": "c8b5954a88c2775c546b92593eda40ea041d3176",
+          "selector": "F16",
+          "files": [
+            {
+              "path": "mmproj-F16.gguf",
+              "size_bytes": 904004000,
+              "sha256": "1f7b7f0b984cf065c604360c29c8098362ed61b290db0ff12c6f360bb1a8a980"
+            }
+          ]
+        }
       }
     },
     {
@@ -1036,7 +1052,9 @@
       "capability_tags": [
         "gguf",
         "hybrid",
-        "recurrent"
+        "recurrent",
+        "multimodal",
+        "projector"
       ],
       "artifact": {
         "repo": "unsloth/Qwen3.5-0.8B-GGUF",
@@ -1064,8 +1082,20 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 521555200
         },
-        "notes": "smallest public Qwen3.5 dense GGUF; hybrid gated-delta-net family with full-attention interval 4; coverage-expansion repair from the failed CI fixture row",
-        "class": "causal_generation"
+        "notes": "smallest public Qwen3.5 dense GGUF; hybrid gated-delta-net family with full-attention interval 4; coverage-expansion repair from the failed CI fixture row; pinned projector with local and split image smoke",
+        "class": "causal_generation",
+        "mmproj_artifact": {
+          "repo": "unsloth/Qwen3.5-0.8B-GGUF",
+          "revision": "6ab461498e2023f6e3c1baea90a8f0fe38ab64d0",
+          "selector": "F16",
+          "files": [
+            {
+              "path": "mmproj-F16.gguf",
+              "size_bytes": 204987232,
+              "sha256": "56e4c6cfe73b0c82e3e82bc518d7591997e61d81f723fc41a586f4fa69ea2453"
+            }
+          ]
+        }
       }
     },
     {
@@ -1607,7 +1637,9 @@
       ],
       "capability_tags": [
         "dense",
-        "gguf"
+        "gguf",
+        "multimodal",
+        "projector"
       ],
       "artifact": {
         "repo": "unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF",
@@ -1635,8 +1667,20 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 14326026240
         },
-        "notes": "dense; relabelled from mistral3",
-        "class": "causal_generation"
+        "notes": "dense; relabelled from mistral3; pinned projector with local and split image smoke",
+        "class": "causal_generation",
+        "mmproj_artifact": {
+          "repo": "unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF",
+          "revision": "b750ec2299225e492f1bd27cab88a0a595fa848f",
+          "selector": "F16",
+          "files": [
+            {
+              "path": "mmproj-F16.gguf",
+              "size_bytes": 878053568,
+              "sha256": "d6af684ae9136398eaa0b59ea9e0b0b850bb6ac5084f1e8c5cb8f85251825eaf"
+            }
+          ]
+        }
       }
     },
     {
@@ -3629,7 +3673,9 @@
         "gguf",
         "hybrid",
         "moe",
-        "recurrent"
+        "recurrent",
+        "multimodal",
+        "projector"
       ],
       "artifact": {
         "repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
@@ -3657,8 +3703,20 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 10745596416
         },
-        "notes": "Qwen3.6 MoE gated-delta-net family with a four-layer full-attention interval",
-        "class": "causal_generation"
+        "notes": "Qwen3.6 MoE gated-delta-net family with a four-layer full-attention interval; pinned projector with local and split image smoke",
+        "class": "causal_generation",
+        "mmproj_artifact": {
+          "repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
+          "revision": "a483e9e6cbd595906af30beda3187c2663a1118c",
+          "selector": "F16",
+          "files": [
+            {
+              "path": "mmproj-F16.gguf",
+              "size_bytes": 899283680,
+              "sha256": "8971ee4f331ff0a4c609374f32984b3d4e6dc086c0aa35f1d637fad1829e887f"
+            }
+          ]
+        }
       }
     },
     {
@@ -3733,7 +3791,9 @@
       "capability_tags": [
         "gguf",
         "mla",
-        "moe"
+        "moe",
+        "multimodal",
+        "projector"
       ],
       "artifact": {
         "repo": "unsloth/Mistral-Small-4-119B-2603-GGUF",
@@ -3761,8 +3821,20 @@
           "cache_policy": "immutable-local",
           "estimated_model_bytes": 34916274176
         },
-        "notes": "Mistral Small 4 MoE and MLA architecture coverage",
-        "class": "causal_generation"
+        "notes": "Mistral Small 4 MoE and MLA architecture coverage; pinned projector with local and split image smoke",
+        "class": "causal_generation",
+        "mmproj_artifact": {
+          "repo": "unsloth/Mistral-Small-4-119B-2603-GGUF",
+          "revision": "bd93c721735aa32c035c0f19e738cb3371fd56ff",
+          "selector": "F16",
+          "files": [
+            {
+              "path": "mmproj-F16.gguf",
+              "size_bytes": 857078496,
+              "sha256": "8afb53096537664e248a0b4a9240c25677bb0f8a8cb5a5aad3cd1d608776a4e7"
+            }
+          ]
+        }
       }
     },
     {
@@ -4530,32 +4602,27 @@
       "artifact": {
         "repo": "unsloth/Inkling-Small-GGUF",
         "revision": "1a19ef82883cb7b9c581b93c30ea252dabbf658d",
-        "selector": "UD-Q4_K_M",
+        "selector": "UD-Q3_K_XL",
         "files": [
           {
-            "path": "UD-Q4_K_M/Inkling-Small-UD-Q4_K_M-00001-of-00005.gguf",
+            "path": "UD-Q3_K_XL/Inkling-Small-UD-Q3_K_XL-00001-of-00004.gguf",
             "size_bytes": 12986592,
-            "sha256": "a51ac3f439198f2817219edd582be4b600c273be24e78cbd58ebff982d9f007e"
+            "sha256": "110190a3c20fbc6d9783125184e470ab7479a79bee7bdf4b5ceda2a6a736f496"
           },
           {
-            "path": "UD-Q4_K_M/Inkling-Small-UD-Q4_K_M-00002-of-00005.gguf",
-            "size_bytes": 48810843872,
-            "sha256": "3dccdd473cc3a191e6028f6105b01831ed3a8dc30ec4e02679f9e0c2ccb59671"
+            "path": "UD-Q3_K_XL/Inkling-Small-UD-Q3_K_XL-00002-of-00004.gguf",
+            "size_bytes": 49513784096,
+            "sha256": "8df5f2d79e206f7edfc811303c352734c95dc05a2e6c7bc0192c967fdd783d7f"
           },
           {
-            "path": "UD-Q4_K_M/Inkling-Small-UD-Q4_K_M-00003-of-00005.gguf",
-            "size_bytes": 49237390240,
-            "sha256": "1a7edf29bda1d278b4668e1a082d7db634b845a53ea58c918a8cea1f9006c21c"
+            "path": "UD-Q3_K_XL/Inkling-Small-UD-Q3_K_XL-00003-of-00004.gguf",
+            "size_bytes": 49969966752,
+            "sha256": "6078bcbe08ad005feb3cfd87dd2a21258101197bcefee9d7d6c65eb94317f4bb"
           },
           {
-            "path": "UD-Q4_K_M/Inkling-Small-UD-Q4_K_M-00004-of-00005.gguf",
-            "size_bytes": 49458817088,
-            "sha256": "376f67568438da96b10566730e8a9e17e3f665ab1b9d82eba48ec33708b172f7"
-          },
-          {
-            "path": "UD-Q4_K_M/Inkling-Small-UD-Q4_K_M-00005-of-00005.gguf",
-            "size_bytes": 15017569600,
-            "sha256": "e34364af0d04d2d295bc374f1a4fa80002e4277db1bcf4b56240dbd443ac21d3"
+            "path": "UD-Q3_K_XL/Inkling-Small-UD-Q3_K_XL-00004-of-00004.gguf",
+            "size_bytes": 20057642400,
+            "sha256": "dd0f2e32d7ca2fabb7b1c40e8bcbc1f951e8271c42b31f8c318c002b7cdc4209"
           }
         ]
       },
@@ -4584,10 +4651,10 @@
         "resources": {
           "runner_role": "family-certify",
           "cache_policy": "immutable-local",
-          "estimated_model_bytes": 162524557480,
+          "estimated_model_bytes": 119541330088,
           "startup_timeout_secs": 1800
         },
-        "notes": "Inkling-Small MoE with per-layer short-convolution state and real split image-projector coverage"
+        "notes": "Inkling-Small MoE with per-layer short-convolution state, a Q3 quant sized for the single-host certification runner, and real split image-projector coverage"
       }
     },
     {
@@ -4603,7 +4670,9 @@
       "capability_tags": [
         "gguf",
         "moe",
-        "multipart"
+        "multipart",
+        "multimodal",
+        "projector"
       ],
       "artifact": {
         "repo": "unsloth/Llama-4-Scout-17B-16E-Instruct-GGUF",
@@ -4638,8 +4707,52 @@
           "estimated_model_bytes": 65346798336,
           "startup_timeout_secs": 1800
         },
-        "notes": "Llama 4 Scout MoE with single-split, chained-split, and exact-state certification"
+        "notes": "Llama 4 Scout MoE with single-split, chained-split, and exact-state certification; pinned projector with local and split image smoke",
+        "mmproj_artifact": {
+          "repo": "unsloth/Llama-4-Scout-17B-16E-Instruct-GGUF",
+          "revision": "72a6853f56a66dc13a3a4b6bdc9cf7ee4c364b47",
+          "selector": "F16",
+          "files": [
+            {
+              "path": "mmproj-F16.gguf",
+              "size_bytes": 1746780928,
+              "sha256": "70240ddf9daa0a91570a0975c0480044cb6b84bea427feb52bc0226df682fdeb"
+            }
+          ]
+        }
       }
+    },
+    {
+      "id": "family-diffusion-gemma",
+      "family": "diffusion-gemma",
+      "suites": [
+        "skippy-system-one-smoke"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full",
+        "nightly",
+        "manual"
+      ],
+      "capability_tags": [
+        "diffusion",
+        "gguf",
+        "system-one",
+        "text-only"
+      ],
+      "artifact": {
+        "repo": "unsloth/diffusiongemma-26B-A4B-it-GGUF",
+        "revision": "f4183a2c7a354128d02545752303c4354d165bf0",
+        "selector": "Q4_K_M",
+        "files": [
+          {
+            "path": "diffusiongemma-26B-A4B-it-Q4_K_M.gguf",
+            "size_bytes": 16806810208,
+            "sha256": "24523b6c833c9ce9f5f34f9b333ab1517d73d6f1e76a103645353114c8028bc5"
+          }
+        ]
+      },
+      "notes": "System One (OpenJEV) smoke: complete single-lane DiffusionGemma read consumed by scripts/skippy-system-one-smoke.sh. The proof of concept certifies a CUDA backend only."
     }
   ]
 }

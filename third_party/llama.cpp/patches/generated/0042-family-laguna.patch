@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/laguna.cpp b/src/models/laguna.cpp
-index 556400bfcef14e9e7f196279f0e4ca5a7a9ee827..e8012651e84674b082acead1de74428f7d1669c6 100644
+index 2bc4fa8a0fc3bfac5b58060c34b3a982dad81887..a33b66f0f370c3576b9873109f1e27febfc7f8b0 100644
 --- a/src/models/laguna.cpp
 +++ b/src/models/laguna.cpp
-@@ -172,6 +172,8 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
+@@ -170,6 +170,8 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
      const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 556400bfcef14e9e7f196279f0e4ca5a7a9ee827..e8012651e84674b082acead1de74428f
          const bool    is_swa_il   = hparams.is_swa(il);
          const int64_t n_head_il   = hparams.n_head(il);
          const int64_t n_head_kv_il = hparams.n_head_kv(il);
-@@ -318,6 +320,7 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
+@@ -316,6 +318,7 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
          cb(cur, "l_out", il);
  
          inpL = cur;

@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/mellum.cpp b/src/models/mellum.cpp
-index 872a9c8f556f9d1ac6d4cbd52c08881f5f09e03e..3d7d6428b950aa134210054088039761036ddc4f 100644
+index 3ab79747af276a93631ebe2d052edb63277e8971..685ab5c7bf1d7d17cd18ac0d807d2831479bf2e9 100644
 --- a/src/models/mellum.cpp
 +++ b/src/models/mellum.cpp
-@@ -103,6 +103,8 @@ llama_model_mellum::graph<iswa>::graph(const llama_model & model, const llm_grap
+@@ -97,6 +97,8 @@ llama_model_mellum::graph<iswa>::graph(const llama_model & model, const llm_grap
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 872a9c8f556f9d1ac6d4cbd52c08881f5f09e03e..3d7d6428b950aa134210054088039761
          ggml_tensor * inpSA = inpL;
  
          // norm
-@@ -202,6 +204,7 @@ llama_model_mellum::graph<iswa>::graph(const llama_model & model, const llm_grap
+@@ -196,6 +198,7 @@ llama_model_mellum::graph<iswa>::graph(const llama_model & model, const llm_grap
  
          // input for next layer
          inpL = cur;

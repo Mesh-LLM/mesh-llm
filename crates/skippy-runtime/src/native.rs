@@ -90,6 +90,12 @@ pub struct StageModel {
     pub(crate) media: Option<MediaProjector>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SystemOneReadSlot {
+    pub canvas_position: u32,
+    pub label_token_ids: Vec<i32>,
+}
+
 struct StageModelInner {
     raw: *mut RawModel,
     terminal_stage: bool,
@@ -540,6 +546,7 @@ impl StageModel {
             raw,
             token_count: 0,
             terminal_stage: self.inner.terminal_stage,
+            batched_activation_exports: self.supports_batched_activation_exports(),
         })
     }
 
@@ -570,11 +577,110 @@ impl StageModel {
             raw,
             token_count: u64::try_from(token_ids.len()).context("token count exceeds u64")?,
             terminal_stage: self.inner.terminal_stage,
+            batched_activation_exports: self.supports_batched_activation_exports(),
         })
     }
 
     pub fn tokenize(&self, text: &str, add_special: bool) -> Result<Vec<i32>> {
         tokenize(self.inner.raw, text, add_special)
+    }
+
+    /// Scores caller-declared labels at fixed positions in a DiffusionGemma
+    /// answer canvas using one zero-self-conditioning diffusion read.
+    pub fn system_one_read(
+        &self,
+        prompt_tokens: &[i32],
+        canvas_tokens: &[i32],
+        slots: &[SystemOneReadSlot],
+    ) -> Result<Vec<Vec<f32>>> {
+        if skippy_ffi::try_abi_features()
+            .is_none_or(|features| features & skippy_ffi::FEATURE_SYSTEM_ONE == 0)
+        {
+            return Err(anyhow!("native runtime does not support System One reads"));
+        }
+
+        let label_count = slots
+            .iter()
+            .try_fold(0usize, |count, slot| {
+                count.checked_add(slot.label_token_ids.len())
+            })
+            .context("System One label-token count overflow")?;
+        let mut labels = Vec::with_capacity(label_count);
+        let mut raw_slots = Vec::with_capacity(slots.len());
+        for slot in slots {
+            let label_token_offset = labels.len();
+            labels.extend_from_slice(&slot.label_token_ids);
+            raw_slots.push(skippy_ffi::SystemOneSlot {
+                canvas_position: slot.canvas_position,
+                label_token_offset,
+                label_token_count: slot.label_token_ids.len(),
+            });
+        }
+
+        let mut probabilities = vec![0.0_f32; labels.len()];
+        let mut output_count = 0usize;
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_system_one_read(
+                self.inner.raw,
+                prompt_tokens.as_ptr(),
+                prompt_tokens.len(),
+                canvas_tokens.as_ptr(),
+                canvas_tokens.len(),
+                labels.as_ptr(),
+                labels.len(),
+                raw_slots.as_ptr(),
+                raw_slots.len(),
+                probabilities.as_mut_ptr(),
+                probabilities.len(),
+                &mut output_count,
+                &mut error,
+            )
+        };
+        ensure_ok(status, error)?;
+        if output_count != probabilities.len() {
+            return Err(anyhow!(
+                "native System One read returned {output_count} probabilities for {} labels",
+                probabilities.len()
+            ));
+        }
+
+        let mut offset = 0usize;
+        Ok(slots
+            .iter()
+            .map(|slot| {
+                let end = offset + slot.label_token_ids.len();
+                let distribution = probabilities[offset..end].to_vec();
+                offset = end;
+                distribution
+            })
+            .collect())
+    }
+
+    /// Returns the fixed answer-canvas length encoded by a DiffusionGemma model.
+    pub fn system_one_canvas_length(&self) -> Result<usize> {
+        if skippy_ffi::try_abi_features()
+            .is_none_or(|features| features & skippy_ffi::FEATURE_SYSTEM_ONE == 0)
+        {
+            return Err(anyhow!("native runtime does not support System One reads"));
+        }
+
+        let mut canvas_token_count = 0usize;
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_system_one_canvas_length(
+                self.inner.raw,
+                &mut canvas_token_count,
+                &mut error,
+            )
+        };
+        ensure_ok(status, error)?;
+        if canvas_token_count == 0 {
+            return Err(anyhow!(
+                "native System One canvas length must be greater than zero"
+            ));
+        }
+        Ok(canvas_token_count)
     }
 
     /// Tokenize without allocating a token buffer larger than `max_tokens`.
@@ -611,6 +717,21 @@ impl StageModel {
 
     pub fn capability(&self) -> Option<&LoadedModelCapability> {
         self.inner.capability.as_ref()
+    }
+
+    /// Whether a multi-request iteration may read activation exports out of a
+    /// single native batch.
+    ///
+    /// The batched path slices exports by request offset out of the last
+    /// native microbatch, so it is only sound while the whole iteration is one
+    /// microbatch. Attention memory with a unified KV cache satisfies that. A
+    /// recurrent or hybrid model splits an all-output batch by sequence
+    /// (`split_seq`) and an indexer memory tier is not part of that contract,
+    /// so both fail closed here and run one request at a time instead.
+    fn supports_batched_activation_exports(&self) -> bool {
+        self.capability().is_some_and(|capability| {
+            capability.state_kind == ModelStateKind::Dense && !capability.has_indexer_memory
+        })
     }
 
     pub fn apply_chat_template(

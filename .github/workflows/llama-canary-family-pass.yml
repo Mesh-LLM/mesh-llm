@@ -121,7 +121,46 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/llama-canary-family-evidence.py build
+      - name: Report System One smoke result
+        if: ${{ !cancelled() }}
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          # The smoke runs from the selected source checkout, so its report and
+          # evidence live there for a trusted `mesh_source` build.
+          WORK_DIR: ${{ env.CANARY_SOURCE_ROOT }}/target/skippy-system-one-smoke
+        run: |
+          set -euo pipefail
+          report="$WORK_DIR/reports/system-one.json"
+          {
+            echo "## System One (OpenJEV) smoke"
+            echo
+            if [[ ! -f "$report" ]]; then
+              echo "No System One smoke report was produced (build step outcome: ${BUILD_OUTCOME})."
+            elif [[ "$(jq -r '.status' "$report")" == "unqualified" ]]; then
+              echo "**Full-model System One read: NOT CERTIFIED on this runner.**"
+              echo
+              echo "The contract part $(jq -r '.contract.status' "$report"). The complete-model read is admitted only on a declared qualified backend; this runner reports backend \`$(jq -r '.full_model_read.backend // "<unset>"' "$report")\` against \`$(jq -r '.full_model_read.certified_backends | join(",")' "$report")\`, with the pinned artifact $(if [[ "$(jq -r '.full_model_read.artifact_cache_checked // false' "$report")" != "true" ]]; then echo "cache state not checked (backend not qualified)"; elif [[ -z "$(jq -r '.full_model_read.artifact_path // ""' "$report")" ]]; then echo "not present in the offline cache"; else echo "present in the offline cache"; fi)."
+              echo
+              echo "Pre-warm instructions: \`scripts/skippy-system-one-smoke.sh --prewarm\`."
+            else
+              echo "Contract part: $(jq -r '.contract.status' "$report"). Full-model read: $(jq -r '.full_model_read.status' "$report"). Backend: \`$(jq -r '.full_model_read.backend // "<unset>"' "$report")\`."
+            fi
+            if [[ -f "$report" ]] && [[ "$(jq -r '.reasons | length' "$report" 2>/dev/null || echo 0)" != "0" ]]; then
+              echo
+              jq -r '.reasons[] | "- \(.)"' "$report"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload System One smoke evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: llama-canary-system-one-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
+          path: |
+            ${{ env.CANARY_SOURCE_ROOT }}/target/skippy-system-one-smoke/
+          if-no-files-found: warn
+          retention-days: 14
       - name: Upload exact candidate and executable handoff
+        id: upload_package
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: llama-family-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
@@ -129,6 +168,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Upload build and repair evidence
+        id: upload_evidence
         if: ${{ success() || failure() || cancelled() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -136,10 +176,21 @@ jobs:
           path: ${{ env.CANARY_SOURCE_ROOT }}/.deps/llama-canary-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}/
           if-no-files-found: warn
           retention-days: 14
+      - name: Clean build job outputs
+        if: ${{ (success() || failure() || cancelled()) }}
+        timeout-minutes: 5
+        env:
+          CANARY_PASS_ID: ${{ inputs.pass_id }}
+          EVIDENCE_UPLOADED: ${{ steps.upload_evidence.outcome == 'success' }}
+          PACKAGE_UPLOADED: ${{ steps.upload_package.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          python3 scripts/cleanup-self-hosted.py --job build \
+            --evidence-uploaded "$EVIDENCE_UPLOADED" --package-uploaded "$PACKAGE_UPLOADED"
   family:
     name: ${{ inputs.pass_id }} / ${{ matrix.families }}
     needs: build
-    runs-on: [self-hosted, family-certify]
+    runs-on: [self-hosted, family-certify, "${{ matrix.memory_tier }}"]
     timeout-minutes: 780
     strategy:
       fail-fast: false
@@ -177,6 +228,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/use-canary-cache
+      - uses: ./.github/actions/setup-canary-python
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ needs.build.outputs.package }}
@@ -191,10 +243,12 @@ jobs:
         timeout-minutes: 720
         env:
           SHARD_INDEX: ${{ matrix.shard_index }}
+          MEMORY_TIER: ${{ matrix.memory_tier }}
         run: |
           set -euo pipefail
-          cd "$CANARY_SOURCE_ROOT"
-          arch -arm64 scripts/skippy-family-battery.sh --skip-build --plan "$PACKAGE/plan.json" --shard-index "$SHARD_INDEX"
+          python3 scripts/llama-canary-family-evidence.py certify --root "$CANARY_SOURCE_ROOT" \
+            --package "$PACKAGE" --identity "$IDENTITY" --shard-index "$SHARD_INDEX" \
+            --memory-tier "$MEMORY_TIER" --evidence "$FAMILY_BATTERY_ARTIFACT_ROOT/$FAMILY_BATTERY_RUN_ID"
       - name: Bind worker result to candidate and plan
         if: ${{ !cancelled() }}
         env:
@@ -205,6 +259,7 @@ jobs:
           python3 scripts/llama-canary-family-evidence.py receipt --package "$PACKAGE" --identity "$IDENTITY" \
             --family "$FAMILY" --outcome "$OUTCOME" --evidence "$FAMILY_BATTERY_ARTIFACT_ROOT/$FAMILY_BATTERY_RUN_ID"
       - name: Upload family evidence
+        id: upload_evidence
         if: ${{ success() || failure() || cancelled() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -217,6 +272,16 @@ jobs:
         env:
           OUTCOME: ${{ steps.certify.outcome }}
         run: test "$OUTCOME" = success
+      - name: Clean family job outputs
+        if: ${{ (success() || failure() || cancelled()) }}
+        timeout-minutes: 5
+        env:
+          CANARY_PASS_ID: ${{ inputs.pass_id }}
+          CANARY_SHARD_INDEX: ${{ matrix.shard_index }}
+          EVIDENCE_UPLOADED: ${{ steps.upload_evidence.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          python3 scripts/cleanup-self-hosted.py --job family --evidence-uploaded "$EVIDENCE_UPLOADED"
   aggregate:
     needs: [build, family]
     if: ${{ !cancelled() && needs.build.result == 'success' }}

@@ -48,12 +48,19 @@ class FamilyEvidenceTests(unittest.TestCase):
                 info.size = len(content)
                 archive.addfile(info, io.BytesIO(content))
         self.build_closure()
-        self.identity = {'schema': 2, 'candidate': 'a'*40, 'base': 'a'*40,
+        for name in (E.LLAMA_BUNDLE, E.LLAMA_PROVENANCE):
+            (self.package / name).write_text('fixture')
+        restore_source = patch.object(E, 'restore_llama_source')
+        restore_source.start()
+        self.addCleanup(restore_source.stop)
+        self.identity = {'schema': 3, 'candidate': 'a'*40, 'base': 'a'*40,
                          'branch': 'llama-canary/repair-123-2-aaaaaaaaaa', 'pass_id': 'repair-1',
                          'platform': 'macos-arm64-metal', 'run_id': '123', 'run_attempt': '2',
                          'plan_sha256': E.sha(self.package / 'plan.json'),
                          'binaries_sha256': E.sha(self.package / 'binaries.tar'),
                          'workload_oracles_sha256': E.sha(self.package / E.WORKLOAD_ORACLES_TAR),
+                         'llama_bundle_sha256': E.sha(self.package / E.LLAMA_BUNDLE),
+                         'llama_provenance_sha256': E.sha(self.package / E.LLAMA_PROVENANCE),
                          'bundle_sha256': None, 'manifest_sha256': 'b'*64}
         self.save_identity()
         for family in ('dense', 'hybrid'):
@@ -67,6 +74,21 @@ class FamilyEvidenceTests(unittest.TestCase):
     def save_identity(self):
         E.write(self.package / 'identity.json', self.identity)
         self.digest = E.sha(self.package / 'identity.json')
+
+    def test_mtp_family_cannot_certify_without_its_all_head_lane(self):
+        model = copy.deepcopy(self.plan['selected_models'][0])
+        model['certification_lanes'].append('native-mtp-heads')
+        path = self.evidence / 'dense/results.jsonl'
+        with self.assertRaisesRegex(ValueError, 'native-mtp-heads incomplete'):
+            E.validate_results(path, 'dense', model)
+        row = json.loads(path.read_text())
+        row['outcomes'].append({'name': 'native-mtp-heads', 'status': 'pass', 'exit_code': 0})
+        path.write_text(json.dumps(row) + '\n')
+        E.validate_results(path, 'dense', model)
+        row['outcomes'][-1]['status'] = 'fail'
+        path.write_text(json.dumps(row) + '\n')
+        with self.assertRaisesRegex(ValueError, 'native-mtp-heads incomplete'):
+            E.validate_results(path, 'dense', model)
 
     def build_closure(self):
         """Create a synthetic workload oracle closure and its handoff tar."""
@@ -103,6 +125,14 @@ class FamilyEvidenceTests(unittest.TestCase):
 
     def test_complete_distributed_pass(self):
         self.aggregate()
+
+    def test_pretty_printed_worker_evidence_is_accepted(self):
+        path = self.evidence / 'dense/results.jsonl'
+        certification = json.loads(path.read_text())
+        preflight = {'family': 'dense', 'exit_code': 0,
+                     'outcomes': [{'name': 'model-preflight', 'status': 'pass', 'exit_code': 0}]}
+        path.write_text(json.dumps(preflight, indent=2) + '\n' + json.dumps(certification) + '\n')
+        E.validate_results(path, 'dense', self.plan['selected_models'][0])
 
     def rerun_receipt(self, family='dense', outcome='success', attempt='3'):
         previous = self.evidence / f'{family}-previous'
@@ -320,6 +350,16 @@ class FamilyEvidenceTests(unittest.TestCase):
                     E.verify_package(self.package, self.digest)
                 self.identity[key] = original
 
+    def test_prepared_source_inputs_are_digest_bound(self):
+        for name in (E.LLAMA_BUNDLE, E.LLAMA_PROVENANCE):
+            with self.subTest(name=name):
+                path = self.package / name
+                original = path.read_bytes()
+                path.write_bytes(b'replaced')
+                with self.assertRaisesRegex(ValueError, 'digest mismatch'):
+                    E.verify_package(self.package, self.digest)
+                path.write_bytes(original)
+
     def test_tampered_package_is_rejected(self):
         (self.package / 'binaries.tar').write_bytes(b'wrong')
         with self.assertRaisesRegex(ValueError, 'digest mismatch'):
@@ -421,7 +461,7 @@ class FamilyEvidenceTests(unittest.TestCase):
                    CANARY_HARNESS_MODE='pinned-build', CANARY_PASS_ID='repair-1',
                    CANARY_PREVIOUS_PACKAGE='')
         with patch.dict(os.environ, env), patch.object(E, 'git', return_value='a'*40), \
-                patch.object(E.subprocess, 'run') as run:
+                patch.object(E, 'preflight_battery'), patch.object(E.subprocess, 'run') as run:
             E.build(SimpleNamespace())
             self.assertEqual(run.call_args.args[0], [str(ROOT / 'scripts/llama-canary-agent-repair.sh')])
             os.environ['CANARY_HARNESS_MODE'] = 'repair-build'
@@ -435,6 +475,19 @@ class FamilyEvidenceTests(unittest.TestCase):
 
 
 class WorkflowRerunContractTests(unittest.TestCase):
+    def test_family_battery_writes_compact_json_lines(self):
+        battery = (ROOT / 'scripts/skippy-family-battery.sh').read_text()
+        append = '>> "$RESULTS_JSONL"'
+        writers = []
+        for command in battery.split(append)[:-1]:
+            start = max(command.rfind('\n  jq '), command.rfind('\n    jq '))
+            self.assertNotEqual(start, -1)
+            writers.append(command[start:].lstrip().splitlines()[0].strip())
+        self.assertGreater(len(writers), 1)
+        for writer in writers:
+            with self.subTest(writer=writer):
+                self.assertIn('-c', writer.split())
+
     def test_artifact_selection_is_bound_to_producer_across_attempts(self):
         workflow = yaml.safe_load((ROOT / '.github/workflows/llama-canary-family-pass.yml').read_text())
         jobs = workflow['jobs']

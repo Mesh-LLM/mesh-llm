@@ -1,19 +1,19 @@
-From 511f81ca79b09042e2eca9e133dd45ea3eae0374 Mon Sep 17 00:00:00 2001
+From 68e4765b934756ac260832bdf7d516d451b6d624 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 15:17:50 +1000
-Subject: [PATCH] build: wire staged runtime and backend support
+Subject: [PATCH 05/14] build: wire staged runtime and backend support
 
 ---
  CMakeLists.txt                          |  17 +
  ggml/cmake/common.cmake                 |   9 +-
  ggml/src/ggml-cuda/ggml-cuda.cu         |   7 +-
- ggml/src/ggml-metal/ggml-metal-device.m | 195 ++++++++++-
+ ggml/src/ggml-metal/ggml-metal-device.m | 191 ++++++++++-
  ggml/src/ggml-metal/ggml-metal-impl.h   |  34 +-
- src/CMakeLists.txt                      | 423 +++++++++++++++++++++++-
- 6 files changed, 659 insertions(+), 26 deletions(-)
+ src/CMakeLists.txt                      | 422 ++++++++++++++++++++++++
+ 6 files changed, 656 insertions(+), 24 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 4052fa3d6..99d46fb76 100644
+index 4feaf083e..c8f7047ef 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -2,6 +2,18 @@ cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit
@@ -75,10 +75,10 @@ index 25eff7a5e..29e71898b 100644
          foreach (TYPE_K IN LISTS FA_TYPES)
              if ("${TYPE_K}-${TYPE_V}" IN_LIST FA_COMBINATIONS)
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 790553888..ed6ed7213 100644
+index a9038f1f4..6998c30fd 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -5649,7 +5649,12 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
+@@ -5648,7 +5648,12 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
      #endif
  
      #ifdef GGML_CUDA_FA_QUANTS
@@ -93,7 +93,7 @@ index 790553888..ed6ed7213 100644
  
      {
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
-index 5654c5004..bd928b494 100644
+index 81ea7f9d7..5f02543f2 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
 @@ -11,6 +11,7 @@
@@ -104,7 +104,7 @@ index 5654c5004..bd928b494 100644
  
  #ifndef TARGET_OS_VISION
  #define TARGET_OS_VISION 0
-@@ -164,6 +165,11 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
+@@ -164,6 +165,11 @@ struct ggml_metal_library {
      ggml_metal_device_t dev;
      ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
  
@@ -368,31 +368,7 @@ index 5654c5004..bd928b494 100644
  
          [mtl_function release];
  
-@@ -1253,7 +1413,7 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
- #endif
- 
-                 dev->props.use_shared_buffers = dev->props.has_unified_memory;
--#if TARGET_OS_OSX
-+#if TARGET_OS_OSX && !defined(__aarch64__)
-                 // In case of eGPU, shared memory may be preferable.
-                 dev->props.use_shared_buffers |= [dev->mtl_device location] == MTLDeviceLocationExternal;
- #endif
-@@ -1320,12 +1480,14 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
-                         }
-                     }
- 
-+#if !defined(__aarch64__)
-                     for (int i = MTLGPUFamilyCommon1 + 5; i >= MTLGPUFamilyCommon1; --i) {
-                         if ([dev->mtl_device supportsFamily:i]) {
-                             GGML_LOG_INFO("%s: GPU family: MTLGPUFamilyCommon%d (%d)\n", __func__, i - (int) MTLGPUFamilyCommon1 + 1, i);
-                             break;
-                         }
-                     }
-+#endif
- 
-                     for (int i = MTLGPUFamilyMetal3_GGML + 5; i >= MTLGPUFamilyMetal3_GGML; --i) {
-                         if ([dev->mtl_device supportsFamily:i]) {
-@@ -1736,6 +1898,29 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
+@@ -1744,6 +1904,29 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
              if (op->src[1]->type != op->src[2]->type) {
                  return false;
              }
@@ -423,10 +399,10 @@ index 5654c5004..bd928b494 100644
                  case GGML_TYPE_F32:
                  case GGML_TYPE_F16:
 diff --git a/ggml/src/ggml-metal/ggml-metal-impl.h b/ggml/src/ggml-metal/ggml-metal-impl.h
-index 7ad21341e..629724219 100644
+index 490dd83a1..3f8e638eb 100644
 --- a/ggml/src/ggml-metal/ggml-metal-impl.h
 +++ b/ggml/src/ggml-metal/ggml-metal-impl.h
-@@ -1015,6 +1015,23 @@ typedef struct {
+@@ -1029,6 +1029,23 @@ typedef struct {
      uint64_t nb3;
  } ggml_metal_kargs_solve_tri;
  
@@ -450,7 +426,7 @@ index 7ad21341e..629724219 100644
  typedef struct {
      int32_t  ne00t;
      int32_t  ne00;
-@@ -1235,23 +1252,6 @@ typedef struct {
+@@ -1262,23 +1279,6 @@ typedef struct {
      int64_t val;
  } ggml_metal_kargs_memset;
  
@@ -475,7 +451,7 @@ index 7ad21341e..629724219 100644
      int32_t  n_tokens;
      int32_t  n_iter;
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index bc922b6a7..0cc6123c7 100644
+index afdaddc79..0cc6123c7 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -46,6 +46,34 @@ set(LLAMA_CORE_SOURCES
@@ -513,7 +489,7 @@ index bc922b6a7..0cc6123c7 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -62,17 +90,410 @@ set_target_properties(llama PROPERTIES
+@@ -62,16 +90,410 @@ set_target_properties(llama PROPERTIES
  set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h
      PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
  
@@ -528,7 +504,6 @@ index bc922b6a7..0cc6123c7 100644
  target_include_directories(llama PRIVATE . ${CMAKE_CURRENT_BINARY_DIR})
  target_include_directories(llama PUBLIC ../include)
  target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
--target_precompile_headers (llama PRIVATE models/models.h)
 +# Upstream added a models.h PCH for the llama target. The Skippy stage
 +# rewriter (Clang LibTooling) consumes this target's compilation database
 +# entries with its own clang, which cannot read a PCH produced by the
@@ -926,5 +901,5 @@ index bc922b6a7..0cc6123c7 100644
 +    target_link_libraries(llama PRIVATE ${SKIPPY_ACCELERATE_FRAMEWORK})
 +endif()
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
 

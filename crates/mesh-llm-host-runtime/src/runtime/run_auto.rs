@@ -347,6 +347,11 @@ pub(super) async fn run_runtime_cli(
         options.checkpoint_imatrix.as_deref(),
     )?;
     apply_runtime_config_options(&mut options, &config);
+    // Model resolution and search size models without the config in hand;
+    // they read this node's `gpu.host_ram_offload` from the process setting.
+    mesh_llm_system::capacity::set_process_host_ram_offload(
+        config.gpu.host_ram_offload.unwrap_or(false),
+    );
     join_sources::validate_join_token_sources(&options)?;
 
     initialize_audit_logging_for_options(&options)?;
@@ -378,8 +383,13 @@ pub(super) async fn run_runtime_cli(
     handle_public_identity_transition(&options)?;
 
     let mut auto_join_candidates: Vec<(String, Option<String>)> = Vec::new();
-    maybe_discover_join_candidates(&mut options, has_startup_models, &mut auto_join_candidates)
-        .await?;
+    maybe_discover_join_candidates(
+        &mut options,
+        has_startup_models,
+        &mut auto_join_candidates,
+        config.gpu.host_ram_offload.unwrap_or(false),
+    )
+    .await?;
     let Some(PreparedRuntimeStartup {
         startup_specs,
         requested_model_names,

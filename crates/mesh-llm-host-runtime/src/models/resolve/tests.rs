@@ -1176,3 +1176,41 @@ fn collect_show_gguf_variants_orders_by_fit_when_memory_known() {
         ]
     );
 }
+
+#[test]
+fn default_hf_file_follows_the_local_fit_budget_not_the_ram_credit() {
+    use crate::system::hardware::{GpuFacts, HardwareSurvey};
+    use mesh_llm_system::capacity::local_fit_capacity_bytes;
+
+    // A 12 GB RTX 4070 Ti in a 31 GiB host, as surveyed on Windows.
+    let hw = HardwareSurvey {
+        vram_bytes: 31_427_447_193,
+        gpu_vram: vec![12_878_610_432],
+        gpu_reserved: vec![None],
+        gpus: vec![GpuFacts {
+            vram_bytes: 12_878_610_432,
+            ..GpuFacts::default()
+        }],
+        ram_offload_bytes: 18_548_836_761,
+        ..HardwareSurvey::default()
+    };
+    let candidates = vec![
+        ("model-Q8_0.gguf".to_string(), Some(21_000_000_000)),
+        ("model-Q4_K_M.gguf".to_string(), Some(11_000_000_000)),
+    ];
+
+    // Default: only the file that fits the GPU.
+    assert_eq!(
+        pick_gguf_for_budget(
+            candidates.clone(),
+            local_fit_capacity_bytes(&hw, None, false)
+        )
+        .as_deref(),
+        Some("model-Q4_K_M.gguf")
+    );
+    // Opted into host-RAM offload: the larger file fits the local budget.
+    assert_eq!(
+        pick_gguf_for_budget(candidates, local_fit_capacity_bytes(&hw, None, true)).as_deref(),
+        Some("model-Q8_0.gguf")
+    );
+}

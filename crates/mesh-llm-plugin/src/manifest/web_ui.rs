@@ -362,7 +362,14 @@ fn validate_relative_path(field_name: &str, value: &str) -> Result<()> {
         bail!("{field_name} must be a relative path, got remote URL `{value}`");
     }
     let path = Path::new(value);
-    if path.is_absolute() {
+    // `is_absolute` alone is not enough on Windows: `/var/lib/x` has no drive
+    // prefix there, so it is not absolute, yet it is still rooted and `join`
+    // would drop the package root. Reject anything that starts at a root or a
+    // drive prefix, which also keeps the verdict the same on every platform.
+    if matches!(
+        path.components().next(),
+        Some(Component::Prefix(_) | Component::RootDir)
+    ) {
         bail!("{field_name} must be a relative path, got absolute path `{value}`");
     }
     if path

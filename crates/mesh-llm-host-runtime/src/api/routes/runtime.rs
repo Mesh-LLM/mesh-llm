@@ -32,6 +32,18 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use zeroize::Zeroizing;
 
+/// A route future that is already on the heap.
+///
+/// In a debug build, a `match` whose arms each await an `async fn` reserves one
+/// stack slot per arm, sized by that arm's future, and the slots are not
+/// overlapped: the router's frame is the sum of its routes rather than the
+/// largest one. Returning an already-boxed future leaves a pointer in the
+/// caller instead. Same shape as `DispatchRequestFn` in the parent module.
+/// Measured on #1915: this takes `handle_get` from 332 KiB to under 4 KiB and
+/// the whole `/api/status` poll chain from 1904 KiB to 1197 KiB.
+type BoxedRouteFuture<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>>;
+
 pub(super) async fn handle(
     stream: &mut TcpStream,
     state: &MeshApi,
@@ -137,14 +149,28 @@ async fn handle_delete(
     }
 }
 
-async fn handle_control_bootstrap(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
+fn handle_control_bootstrap<'a>(
+    stream: &'a mut TcpStream,
+    state: &'a MeshApi,
+) -> BoxedRouteFuture<'a> {
+    Box::pin(handle_control_bootstrap_inner(stream, state))
+}
+
+async fn handle_control_bootstrap_inner(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+) -> anyhow::Result<()> {
     if !ensure_loopback_control_caller(stream).await? {
         return Ok(());
     }
     respond_json(stream, 200, &state.control_bootstrap().await).await
 }
 
-async fn handle_runtime_config_schema(stream: &mut TcpStream) -> anyhow::Result<()> {
+fn handle_runtime_config_schema<'a>(stream: &'a mut TcpStream) -> BoxedRouteFuture<'a> {
+    Box::pin(handle_runtime_config_schema_inner(stream))
+}
+
+async fn handle_runtime_config_schema_inner(stream: &mut TcpStream) -> anyhow::Result<()> {
     if !ensure_loopback_control_caller(stream).await? {
         return Ok(());
     }
@@ -156,7 +182,14 @@ async fn handle_runtime_config_schema(stream: &mut TcpStream) -> anyhow::Result<
     }
 }
 
-async fn handle_runtime_config_control_state(
+fn handle_runtime_config_control_state<'a>(
+    stream: &'a mut TcpStream,
+    state: &'a MeshApi,
+) -> BoxedRouteFuture<'a> {
+    Box::pin(handle_runtime_config_control_state_inner(stream, state))
+}
+
+async fn handle_runtime_config_control_state_inner(
     stream: &mut TcpStream,
     state: &MeshApi,
 ) -> anyhow::Result<()> {
@@ -1050,21 +1083,39 @@ async fn respond_control_error(
     .await
 }
 
-async fn handle_runtime_stages(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
+fn handle_runtime_stages<'a>(
+    stream: &'a mut TcpStream,
+    state: &'a MeshApi,
+) -> BoxedRouteFuture<'a> {
+    Box::pin(handle_runtime_stages_inner(stream, state))
+}
+
+async fn handle_runtime_stages_inner(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+) -> anyhow::Result<()> {
     match tokio::time::timeout(std::time::Duration::from_secs(5), state.runtime_stages()).await {
         Ok(runtime_stages) => respond_json(stream, 200, &runtime_stages).await,
         Err(_) => respond_error(stream, 503, "Runtime stage status temporarily unavailable").await,
     }
 }
 
-async fn handle_status(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
+fn handle_status<'a>(stream: &'a mut TcpStream, state: &'a MeshApi) -> BoxedRouteFuture<'a> {
+    Box::pin(handle_status_inner(stream, state))
+}
+
+async fn handle_status_inner(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
     match tokio::time::timeout(std::time::Duration::from_secs(5), state.status()).await {
         Ok(status) => respond_json(stream, 200, &status).await,
         Err(_) => respond_error(stream, 503, "Status temporarily unavailable").await,
     }
 }
 
-async fn handle_models(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
+fn handle_models<'a>(stream: &'a mut TcpStream, state: &'a MeshApi) -> BoxedRouteFuture<'a> {
+    Box::pin(handle_models_inner(stream, state))
+}
+
+async fn handle_models_inner(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
     let mesh_models = state.mesh_models().await;
     respond_json(
         stream,
@@ -1074,14 +1125,34 @@ async fn handle_models(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Resul
     .await
 }
 
-async fn handle_runtime_status(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
+fn handle_runtime_status<'a>(
+    stream: &'a mut TcpStream,
+    state: &'a MeshApi,
+) -> BoxedRouteFuture<'a> {
+    Box::pin(handle_runtime_status_inner(stream, state))
+}
+
+async fn handle_runtime_status_inner(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+) -> anyhow::Result<()> {
     match tokio::time::timeout(std::time::Duration::from_secs(5), state.runtime_status()).await {
         Ok(runtime_status) => respond_json(stream, 200, &runtime_status).await,
         Err(_) => respond_error(stream, 503, "Runtime status temporarily unavailable").await,
     }
 }
 
-async fn handle_runtime_processes(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
+fn handle_runtime_processes<'a>(
+    stream: &'a mut TcpStream,
+    state: &'a MeshApi,
+) -> BoxedRouteFuture<'a> {
+    Box::pin(handle_runtime_processes_inner(stream, state))
+}
+
+async fn handle_runtime_processes_inner(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+) -> anyhow::Result<()> {
     match tokio::time::timeout(std::time::Duration::from_secs(5), state.runtime_processes()).await {
         Ok(runtime_processes) => respond_json(stream, 200, &runtime_processes).await,
         Err(_) => {
@@ -1095,7 +1166,11 @@ async fn handle_runtime_processes(stream: &mut TcpStream, state: &MeshApi) -> an
     }
 }
 
-async fn handle_runtime_llama(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
+fn handle_runtime_llama<'a>(stream: &'a mut TcpStream, state: &'a MeshApi) -> BoxedRouteFuture<'a> {
+    Box::pin(handle_runtime_llama_inner(stream, state))
+}
+
+async fn handle_runtime_llama_inner(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
     match tokio::time::timeout(std::time::Duration::from_secs(5), state.runtime_llama()).await {
         Ok(runtime_llama) => respond_json(stream, 200, &runtime_llama).await,
         Err(_) => {
@@ -1109,7 +1184,17 @@ async fn handle_runtime_llama(stream: &mut TcpStream, state: &MeshApi) -> anyhow
     }
 }
 
-async fn handle_runtime_events(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
+fn handle_runtime_events<'a>(
+    stream: &'a mut TcpStream,
+    state: &'a MeshApi,
+) -> BoxedRouteFuture<'a> {
+    Box::pin(handle_runtime_events_inner(stream, state))
+}
+
+async fn handle_runtime_events_inner(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+) -> anyhow::Result<()> {
     let request_id = super::super::management_lifecycle::response_request_id_header()
         .map(|request_id| format!("x-request-id: {request_id}\r\n"))
         .unwrap_or_default();
@@ -1173,7 +1258,17 @@ async fn handle_runtime_events(stream: &mut TcpStream, state: &MeshApi) -> anyho
     Ok(())
 }
 
-async fn handle_runtime_endpoints(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
+fn handle_runtime_endpoints<'a>(
+    stream: &'a mut TcpStream,
+    state: &'a MeshApi,
+) -> BoxedRouteFuture<'a> {
+    Box::pin(handle_runtime_endpoints_inner(stream, state))
+}
+
+async fn handle_runtime_endpoints_inner(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+) -> anyhow::Result<()> {
     match state.runtime_endpoints().await {
         Ok(endpoints) => {
             let endpoints = endpoints
@@ -1393,7 +1488,11 @@ async fn handle_unload_instance(
     Ok(())
 }
 
-async fn handle_events(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
+fn handle_events<'a>(stream: &'a mut TcpStream, state: &'a MeshApi) -> BoxedRouteFuture<'a> {
+    Box::pin(handle_events_inner(stream, state))
+}
+
+async fn handle_events_inner(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
     let request_id = super::super::management_lifecycle::response_request_id_header()
         .map(|request_id| format!("x-request-id: {request_id}\r\n"))
         .unwrap_or_default();
@@ -1470,7 +1569,11 @@ use crate::api::status::{IntentEntry, IntentListPayload};
 /// Maximum number of intent entries returned in a single response.
 const INTENT_CAP: usize = 256;
 
-async fn handle_get_intents(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
+fn handle_get_intents<'a>(stream: &'a mut TcpStream, state: &'a MeshApi) -> BoxedRouteFuture<'a> {
+    Box::pin(handle_get_intents_inner(stream, state))
+}
+
+async fn handle_get_intents_inner(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
     if !ensure_loopback_control_caller(stream).await? {
         return Ok(());
     }

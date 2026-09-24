@@ -99,11 +99,31 @@ fn configured_build_dir(workspace_root: &std::path::Path, backend: &str) -> std:
                 workspace_root.join(path)
             }
         })
-        .unwrap_or_else(|_| {
-            workspace_root.join(format!(
-                ".deps/llama-build/build-stage-abi-static-{backend}"
-            ))
-        })
+        .unwrap_or_else(|_| workspace_root.join(default_static_build_dir(workspace_root, backend)))
+}
+
+/// Mirror `default_build_dir_for_backend` in scripts/build-llama.sh: the build
+/// directory is keyed by the patched llama sha, so two pins built on one machine
+/// do not share it. Resolving the unkeyed name here would link archives from
+/// whichever pin was built last, silently ignoring the checkout's own pin -- the
+/// keying is only as good as its least careful consumer.
+fn default_static_build_dir(workspace_root: &std::path::Path, backend: &str) -> String {
+    let stamp = workspace_root.join(".deps/llama.cpp/.mesh-llm-patched-sha");
+    // The directory this resolves depends on the stamp, so a pin switch must
+    // rerun the script instead of reusing the previous pin's directory.
+    println!("cargo:rerun-if-changed={}", stamp.display());
+    let pin = std::fs::read_to_string(&stamp)
+        .ok()
+        .map(|text| text.trim().to_string())
+        .filter(|pin| !pin.is_empty());
+    match pin {
+        Some(pin) => format!(
+            ".deps/llama-build/build-stage-abi-static-{backend}-{}",
+            &pin[..pin.len().min(12)]
+        ),
+        // No stamp yet: the same unkeyed name the shell falls back to.
+        None => format!(".deps/llama-build/build-stage-abi-static-{backend}"),
+    }
 }
 
 fn default_backend(target: &str) -> &'static str {
