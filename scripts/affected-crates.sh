@@ -161,7 +161,7 @@ main() {
     fi
 
     # UI changed detection
-    if [[ "$file" =~ ^crates/mesh-llm-ui/ ]]; then
+    if [[ "$file" =~ ^(mesh/)?crates/mesh-llm-ui/ ]]; then
       ui_changed=true
       FAIL_OPEN_UI_CHANGED=true
     fi
@@ -246,13 +246,16 @@ EOF
   local -a test_crates=()
 
   for file in "${changed_files[@]}"; do
-    # Skip non-Rust files (docs, config, etc.)
-    if [[ ! "$file" =~ ^crates/ ]] && [[ ! "$file" =~ ^tools/ ]]; then
+    # Skip non-Rust files (docs, config, etc.). Relocated product crates under
+    # mesh/crates/ and skippy/crates/ must still reach Cargo ownership matching
+    # so a relocated crate change cannot skip its compilation and tests.
+    if [[ ! "$file" =~ ^crates/ ]] && [[ ! "$file" =~ ^tools/ ]] &&
+       [[ ! "$file" =~ ^mesh/crates/ ]] && [[ ! "$file" =~ ^skippy/crates/ ]]; then
       continue
     fi
 
     # Skip UI crate files (they don't affect Rust builds)
-    if [[ "$file" =~ ^crates/mesh-llm-ui/ ]]; then
+    if [[ "$file" =~ ^(mesh/)?crates/mesh-llm-ui/ ]]; then
       continue
     fi
 

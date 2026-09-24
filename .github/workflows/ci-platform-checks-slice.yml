@@ -190,6 +190,16 @@ jobs:
         with:
           generation: legacy
           crates: '["model-artifact","mesh-llm-host-runtime","mesh-llm"]'
+      - name: Resolve Windows unit-test owners
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'windows' }}
+        id: windows_packages
+        uses: Mesh-LLM/mesh-llm/.github/actions/resolve-cargo-packages@38d63b2f6e27998034fdf0452150c7cc081fe921 # product-layout compatibility helpers
+        with:
+          generation: legacy
+          # The `platform-windows-cfg` catalog routes these crates to the
+          # Windows unit row because they carry their own cfg(windows)/cfg(unix)
+          # code, so they run here without widening the shared macOS owners.
+          crates: '["mesh-llm-plugin"]'
       - name: Run macOS unit tests
         if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' }}
         env:
@@ -210,12 +220,16 @@ jobs:
           # overflow issue linked from #1554.
           RUST_MIN_STACK: "8388608"
           TEST_CRATES: ${{ steps.packages.outputs.crates }}
+          WINDOWS_TEST_CRATES: ${{ steps.windows_packages.outputs.crates }}
         run: |
-          # The same source-owner suites as the macOS unit row, in the
-          # dynamic link mode the shipped Windows host uses, so no native ABI
-          # build is needed. pwsh does not stop on a failing native command,
+          # The macOS unit row's shared source-owner suites, resolved through
+          # the same package resolver, plus the crates the
+          # `platform-windows-cfg` catalog routes to this row only. They run in
+          # the dynamic link mode the shipped Windows host uses, so no native
+          # ABI build is needed. pwsh does not stop on a failing native command,
           # hence the explicit exit check after each one.
-          foreach ($crate in ($env:TEST_CRATES | ConvertFrom-Json)) {
+          $crates = @($env:TEST_CRATES | ConvertFrom-Json) + @($env:WINDOWS_TEST_CRATES | ConvertFrom-Json)
+          foreach ($crate in $crates) {
             cargo test --locked -p $crate --lib
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
