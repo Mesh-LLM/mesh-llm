@@ -75,6 +75,10 @@ class CiPrCanaryWorkflowTests(unittest.TestCase):
                 uses = job.get("uses") if isinstance(job, dict) else None
                 if isinstance(uses, str) and uses.startswith("./.github/workflows/"):
                     pending.append(Path(uses).name)
+                elif uses == (
+                    "Mesh-LLM/mesh-llm/.github/workflows/ci-pr-canary-lane.yml@main"
+                ):
+                    pending.append("ci-pr-canary-lane.yml")
         return seen
 
     def test_entrypoint_is_label_gated_and_does_not_cancel_on_other_labels(self) -> None:
@@ -92,7 +96,11 @@ class CiPrCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("format('unrelated-label-{0}', github.run_id)", workflow)
         self.assertIn("cancel-in-progress: true", workflow)
         self.assertIn("merge_sha: ${{ github.sha }}", workflow)
-        self.assertIn("uses: ./.github/workflows/ci-pr-canary-lane.yml", workflow)
+        self.assertIn(
+            "uses: Mesh-LLM/mesh-llm/.github/workflows/ci-pr-canary-lane.yml@main",
+            workflow,
+        )
+        self.assertNotIn("uses: ./.github/workflows/ci-pr-canary-lane.yml", workflow)
 
         for forbidden in (
             "checks: write",
@@ -176,7 +184,7 @@ class CiPrCanaryWorkflowTests(unittest.TestCase):
             self.assertIn(f"(.{field} |", workflow)
             self.assertNotIn(str(row[field]), workflow)
 
-    def test_policy_checkout_can_follow_merge_source_only_when_explicit(self) -> None:
+    def test_canary_keeps_runner_policy_on_protected_default_branch(self) -> None:
         lane = self.workflow("ci-pr-canary-lane.yml")
         for slice_name in (
             "ci-ui-artifact-slice.yml",
@@ -190,10 +198,7 @@ class CiPrCanaryWorkflowTests(unittest.TestCase):
                 "ref: ${{ inputs.policy_source_sha || github.event.repository.default_branch }}",
                 slice_workflow,
             )
-            self.assertIn(
-                "policy_source_sha: ${{ inputs.merge_sha }}",
-                lane,
-            )
+        self.assertNotIn("policy_source_sha: ${{ inputs.merge_sha }}", lane)
 
         changes = (ROOT / ".github" / "actions" / "compute-changes" / "derive-outputs.sh").read_text(
             encoding="utf-8"

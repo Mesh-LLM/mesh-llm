@@ -121,18 +121,20 @@ owning source, and update the inventory and topology in the same change.
   use a unique concurrency group and must not cancel an active canary. Removing
   `ci:canary` starts a no-op run in the active group so concurrency cancels the
   prior run without executing PR code.
-- The entrypoint must call a local reusable canary workflow with a static
-  `uses: ./.github/workflows/...` edge. That local workflow and its local
-  actions resolve from the PR merge commit, so the canary exercises the
-  proposed workflow/action graph before merge. The merge SHA is the source
-  built by product jobs; the PR head SHA remains separate identity evidence and
-  must not be substituted for the merge source.
+- The entrypoint must call the protected default-branch reusable canary lane
+  with an immutable branch reference:
+  `Mesh-LLM/mesh-llm/.github/workflows/ci-pr-canary-lane.yml@main`. The lane
+  and its runner-owning nested workflows/actions therefore resolve from the
+  protected branch. Pass the merge SHA only as the product source being built;
+  leave `policy_source_sha` unset so runner policy cannot come from the PR.
+  The PR head SHA remains separate identity evidence and must not be
+  substituted for the merge source.
 - The canary planner may inspect the merge source and must reject changes to
   protected ownership/slice catalogs unless the base already contains the same
   catalog. The fixed canary graph, not PR-controlled routing data, owns its
-  bounded matrix and artifact names. Runner-policy jobs may opt into the merge
-  source through an explicit validated source input while their ordinary
-  caller default remains the protected default branch.
+  bounded matrix and artifact names. Runner-policy jobs must keep their policy
+  checkout on the protected default branch; the merge source is a build input,
+  not runner-policy authority.
 - The canary's only real build graph is one Linux amd64 CPU production chain:
   console UI artifact, release host, native CPU runtime, and immutable product
   composition. It may call those existing typed slices, but must not copy their
@@ -146,11 +148,12 @@ owning source, and update the inventory and topology in the same change.
   nested reusable summary that requests `checks: write`, even when that job is
   conditionally skipped, because GitHub validates the permission union at run
   creation.
-- Hosted placement and a read-only token are containment controls for this
-  diagnostic, not a security boundary against edited PR workflow/action YAML.
-  Do not use the canary to justify access to a persistent self-hosted runner;
-  any future rollout still requires runner-group restrictions to protected
-  main-owned workflow references.
+- The protected default-branch workflow and policy checkout keep PR-controlled
+  workflow/action changes out of runner-owning jobs. Hosted placement and a
+  read-only token remain containment controls for this diagnostic, not a
+  reason to relax that boundary. Do not use the canary to justify access to a
+  persistent self-hosted runner; any future rollout still requires runner-group
+  restrictions to protected main-owned workflow references.
 
 ### Main workflow visibility and split invariant
 

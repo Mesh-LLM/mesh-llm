@@ -270,10 +270,12 @@ separate concurrency group and cannot cancel an active canary. Removing the
 label starts an inactive no-op in the active group so a running canary is
 cancelled.
 
-The canary resolves its local reusable workflow from the pull-request merge
-commit (`github.sha`) and passes that same revision as the source built by the
-product jobs. The PR head SHA remains separate identity evidence; it is not a
-substitute for the merge source. The planner and changed-file action run from
+The entrypoint calls the protected reusable lane at
+`Mesh-LLM/mesh-llm/.github/workflows/ci-pr-canary-lane.yml@main`. That lane
+passes the pull-request merge commit (`github.sha`) as the source built by the
+product jobs while keeping runner-policy checkouts on the protected default
+branch. The PR head SHA remains separate identity evidence; it is not a
+substitute for the merge source. The planner and changed-file action may inspect
 the merge-source checkout, while the canary rejects changes to the ownership
 and slice catalogs unless the base already contains the same catalogs. Its
 fixed graph derives one `linux-cpu` row from `ci/slices.yml` and calls the
@@ -285,11 +287,12 @@ The canary is intentionally bounded: Quality, Website, macOS, Windows, GPU,
 SDK, standalone product smoke, Linux lane orchestration, and release paths are
 not covered. The caller, policy jobs, and summary use only read-only
 `contents`/`packages` permissions. There are no checks writes, secrets,
-environments, OIDC, Depot, or persistent self-hosted runners. Hosted placement
-and a read-only token contain this diagnostic but are not a security boundary
-against edited PR workflow or action YAML. Any future persistent-runner rollout
-must first restrict the shared runner group to protected main-owned workflow
-references.
+environments, OIDC, Depot, or persistent self-hosted runners. The protected
+workflow reference and default-branch runner-policy checkout keep PR-controlled
+workflow/action changes out of runner-owning jobs. Hosted placement and a
+read-only token remain containment controls, not a reason to relax that
+boundary. Any future persistent-runner rollout must first restrict the shared
+runner group to protected main-owned workflow references.
 
 ### Required main shape and visibility
 

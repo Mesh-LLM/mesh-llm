@@ -38,7 +38,7 @@ jobs:
     permissions:
       contents: read
       packages: read
-    uses: ./.github/workflows/ci-pr-canary-lane.yml
+    uses: Mesh-LLM/mesh-llm/.github/workflows/ci-pr-canary-lane.yml@main
     with:
       merge_sha: ${{ github.sha }}
       head_sha: ${{ github.event.pull_request.head.sha }}

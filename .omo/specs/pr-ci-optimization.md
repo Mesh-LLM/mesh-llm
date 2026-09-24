@@ -30,17 +30,18 @@ or cache identity.
   jobs in focused native topic/platform runs; only explicit manual-full runs
   use protected detached lane dispatch.
 - `pr_ci_canary.yml` is an optional, non-required `ci:canary`-label diagnostic
-  outside the five-entry required-check census. Its local merge-source lane
-  runs one catalog-derived Linux amd64 CPU chain through the existing UI,
-  host, native-runtime, and product slices, including the native runtime-event
-  gate. It deliberately does not call `ci-linux-lane.yml` or cover the other
-  platform, SDK, smoke, GPU, or release graphs.
+  outside the five-entry required-check census. It calls a protected `main`-
+  owned merge-source lane, which runs one catalog-derived Linux amd64 CPU chain
+  through the existing UI, host, native-runtime, and product slices, including
+  the native runtime-event gate. Runner-policy checkouts remain on `main`. It
+  deliberately does not call `ci-linux-lane.yml` or cover the other platform,
+  SDK, smoke, GPU, or release graphs.
 - The canary uses read-only `contents`/`packages` permissions and a plain
   step-summary result. It requests no checks write, secrets, environments,
-  OIDC, Depot, or persistent self-hosted runner. Hosted placement is
-  containment rather than a security boundary against edited PR YAML; a
-  future persistent-runner rollout requires protected main-owned workflow
-  references in the runner group.
+  OIDC, Depot, or persistent self-hosted runner. The protected workflow ref and
+  default-branch runner-policy checkout keep PR-controlled workflow/action
+  changes out of runner-owning jobs. Any future persistent-runner rollout
+  still requires protected main-owned workflow references in the runner group.
 - ci/ownership.yml and ci/slices.yml define the checked ownership, dependency,
   row, runner-role, cache-mode and worker-budget catalog.
 - Protected PR planning extracts only those two manifests from the validated

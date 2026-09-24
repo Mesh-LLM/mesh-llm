@@ -334,7 +334,9 @@ through one real hosted Linux amd64 CPU chain (UI artifact, release host,
 native runtime including its runtime-event gate, and product composition).
 The PR head SHA is retained as separate identity evidence. The canary does not
 cover the five required lane orchestrators, macOS, Windows, GPU, SDK, smoke,
-or release paths; remove the label to cancel an active run.
+or release paths. The canary lane and runner-policy actions come from protected
+`main`; the merge commit is used only as the product source. Remove the label to
+cancel an active run.
 
 Linux CI uses prebuilt public and self-hosted images from
 [`Mesh-LLM/mesh-llm-runner-images`](https://github.com/Mesh-LLM/mesh-llm-runner-images).

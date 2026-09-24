@@ -163,7 +163,6 @@ jobs:
     uses: ./.github/workflows/ci-ui-artifact-slice.yml
     with:
       source_sha: ${{ inputs.merge_sha }}
-      policy_source_sha: ${{ inputs.merge_sha }}
       original_event_name: pull_request
       force_hosted: true
       artifact_name: ci-pr-canary-ui-${{ github.run_id }}
@@ -179,7 +178,6 @@ jobs:
     uses: ./.github/workflows/ci-linux-host-slice.yml
     with:
       source_sha: ${{ inputs.merge_sha }}
-      policy_source_sha: ${{ inputs.merge_sha }}
       original_event_name: pull_request
       force_hosted: true
       hosts_matrix: ${{ needs.plan.outputs.host_matrix }}
@@ -199,7 +197,6 @@ jobs:
     uses: ./.github/workflows/ci-linux-runtime-slice.yml
     with:
       source_sha: ${{ inputs.merge_sha }}
-      policy_source_sha: ${{ inputs.merge_sha }}
       original_event_name: pull_request
       force_hosted: true
       runtime_matrix: ${{ needs.plan.outputs.runtime_matrix }}
@@ -217,7 +214,6 @@ jobs:
     uses: ./.github/workflows/ci-linux-product-slice.yml
     with:
       source_sha: ${{ inputs.merge_sha }}
-      policy_source_sha: ${{ inputs.merge_sha }}
       original_event_name: pull_request
       force_hosted: true
       runtime_matrix: ${{ needs.plan.outputs.product_matrix }}

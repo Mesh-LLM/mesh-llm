@@ -296,9 +296,11 @@ is the control for everyone else.
 The five PR lifecycle rows and five main push rows above are the complete
 allowed routine required-validation entry sets. `pr_ci_canary.yml` is an
 explicit optional diagnostic exception, not a required check and not part of
-the sibling monitor's five-workflow target list. Its local reusable lane uses
-the pull-request merge SHA as the built source while retaining the PR head SHA
-as separate identity evidence. The canary owns one fixed Linux amd64 CPU chain
+the sibling monitor's five-workflow target list. It calls the protected
+`main`-owned reusable lane, which uses the pull-request merge SHA as the built
+source while retaining the PR head SHA as separate identity evidence. Its
+runner-policy checkouts stay on the protected default branch. The canary owns
+one fixed Linux amd64 CPU chain
 (UI artifact, release host, native runtime, and product composition), uses
 read-only contents/packages permissions and a plain step summary, and does not
 run the all-platform Linux lane. It has no secrets, environments, OIDC, Depot,
@@ -321,7 +323,7 @@ runner-contract update is active.
 | `ci-linux-lane.yml` | Linux host/runtime/product/Rust/SDK/smoke graph with one platform-local UI producer |
 | `ci-macos-lane.yml` | macOS host/runtime/product/platform/Swift/Metal graph with one platform-local UI producer |
 | `ci-windows-lane.yml` | Windows host/runtime/product/platform graph with one platform-local UI producer |
-| `ci-pr-canary-lane.yml` | Optional local merge-source diagnostic lane for one Linux amd64 CPU UI/host/runtime/product chain; summary is step-summary-only and non-required |
+| `ci-pr-canary-lane.yml` | Optional protected merge-source diagnostic lane for one Linux amd64 CPU UI/host/runtime/product chain; runner policy stays on the default branch, and the summary is step-summary-only and non-required |
 | `ci-quality-slice.yml` | Contracts, format, unused-dependency check, Clippy and generated CLI inventory freshness; additive protected authority sentinel |
 | `ci-web-slice.yml` | Console quality, console Playwright E2E, public website build, and CLI explorer browser validation |
 | `ci-ui-artifact-slice.yml` | Immutable console distribution producer; release callers prepare one source/version-bound UI with complete file checksums, shared by all hosts and SDK resources |

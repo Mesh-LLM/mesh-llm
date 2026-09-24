@@ -47,15 +47,17 @@ owns skips so every stable result exists.
 The optional `pr_ci_canary.yml` diagnostic is the narrow exception to the
 five-entry census. It is label-gated by `ci:canary`, non-required, and must stay
 separate from the five required workflows and the sibling-canceller target
-list. It uses a local merge-commit reusable lane, a fixed Linux amd64 CPU
-UI/host/runtime/product chain, read-only contents/packages permissions, no
-secrets or environments, and a plain step-summary result. It must not request
-`checks: write`, use `secrets: inherit`, select Depot or a persistent
-self-hosted runner, or execute macOS, Windows, GPU, SDK, smoke, or release
-graphs. Unrelated label events must not cancel an active canary; removing the
-`ci:canary` label may use an active-group no-op to cancel it. Hosted placement
-is not a security boundary against edited PR workflow or action YAML, and no
-canary rollout authorizes the unrestricted shared persistent runner group.
+list. It calls the protected `main`-owned canary lane, which builds the
+pull-request merge source through a fixed Linux amd64 CPU UI/host/runtime/product
+chain while keeping runner-policy checkouts on `main`. It uses read-only
+contents/packages permissions, no secrets or environments, and a plain
+step-summary result. It must not request `checks: write`, use `secrets: inherit`,
+select Depot or a persistent self-hosted runner, or execute macOS, Windows, GPU,
+SDK, smoke, or release graphs. Unrelated label events must not cancel an active
+canary; removing the `ci:canary` label may use an active-group no-op to cancel
+it. The protected workflow reference and policy checkout are the security
+boundary for runner-owning jobs; no canary rollout authorizes an unrestricted
+shared persistent runner group.
 
 The protected `workflow_run` sibling-failure monitor is control infrastructure,
 not a sixth PR validation entrypoint. It may cancel only queued or in-progress
