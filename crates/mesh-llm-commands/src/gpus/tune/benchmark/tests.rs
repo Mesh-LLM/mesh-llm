@@ -818,6 +818,32 @@ fn debug_telemetry_enables_child_debug_and_stderr_spans() {
 }
 
 #[test]
+fn benchmark_trials_do_not_report_as_started_nodes() {
+    // Each trial is a full `serve` child. A sweep can run up to
+    // MAX_BENCHMARK_TRIALS_PER_TARGET of them on one machine, and every one
+    // would otherwise emit serve_started / hardware_profile / model_loaded /
+    // serve_stopped as if someone had started that many nodes.
+    for debug_telemetry in [false, true] {
+        let command = build_trial_child_command(
+            std::path::Path::new("/bin/mesh-llm"),
+            std::path::Path::new("/tmp/config.toml"),
+            9337,
+            3131,
+            debug_telemetry,
+        );
+        assert_eq!(
+            command
+                .get_envs()
+                .find(|(key, _)| *key == "MESH_LLM_ANALYTICS")
+                .and_then(|(_, value)| value)
+                .map(|value| value.to_string_lossy()),
+            Some(std::borrow::Cow::Borrowed("0")),
+            "debug_telemetry={debug_telemetry}"
+        );
+    }
+}
+
+#[test]
 fn child_debug_telemetry_is_opt_in() {
     let command = build_trial_child_command(
         std::path::Path::new("/bin/mesh-llm"),

@@ -42,6 +42,7 @@ fn build_built_in_config_schema() -> ConfigSchema {
         telemetry_setting("telemetry.queue_size", ConfigValueSchema::Integer),
         telemetry_setting("telemetry.prompt_shape_metrics", ConfigValueSchema::Boolean),
         telemetry_setting("telemetry.metrics.endpoint", ConfigValueSchema::Url),
+        analytics_setting("analytics.enabled", ConfigValueSchema::Boolean),
         logging_audit_setting("logging.audit.enabled", ConfigValueSchema::Boolean),
         logging_audit_setting("logging.audit.log_path", ConfigValueSchema::Path),
         logging_audit_setting("logging.audit.log_format", string_enum(["json_lines"])),

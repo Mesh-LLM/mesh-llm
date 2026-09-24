@@ -41,6 +41,12 @@ const TELEMETRY_CATEGORY: CategoryPresentation = CategoryPresentation {
     summary: "Opt-in metrics export and local telemetry queue settings",
     order: 40,
 };
+const ANALYTICS_CATEGORY: CategoryPresentation = CategoryPresentation {
+    id: "analytics",
+    label: "Analytics",
+    summary: "Anonymous usage reporting to the mesh-llm maintainers",
+    order: 50,
+};
 const RUNTIME_POLICY_CATEGORY: CategoryPresentation = CategoryPresentation {
     id: "runtime-policy",
     label: "Runtime Policy",
@@ -131,6 +137,13 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
         )
         .unit("models")
         .hint("number")),
+        "analytics.enabled" => Some(sp(
+            "Anonymous usage reporting",
+            "Report anonymous usage (version, platform, command names, node and model counts) to the mesh-llm maintainers. Never includes prompts, completions, file paths, or peer addresses. Turning this setting off is equivalent to `mesh-llm analytics disable`.",
+            ANALYTICS_CATEGORY,
+            10,
+        )
+        .hint("toggle")),
         "telemetry.enabled" => Some(sp(
             "Telemetry export",
             "Enable opt-in metrics export. Ambient OTel environment variables do not enable export by themselves.",

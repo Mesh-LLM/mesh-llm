@@ -148,7 +148,7 @@ pub fn command_family(command: &Command) -> CliCommandFamily {
         | Command::Unload { .. }
         | Command::Status { .. }
         | Command::Stop => CliCommandFamily::Runtime,
-        Command::Config { .. } => CliCommandFamily::Configuration,
+        Command::Config { .. } | Command::Analytics { .. } => CliCommandFamily::Configuration,
         Command::Doctor { .. } => CliCommandFamily::Diagnostics,
         Command::Discover { .. } => CliCommandFamily::Discovery,
         Command::RotateKey | Command::Auth { .. } => CliCommandFamily::Identity,

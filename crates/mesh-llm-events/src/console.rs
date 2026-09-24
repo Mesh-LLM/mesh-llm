@@ -17,6 +17,11 @@
 //! * [`machine_out`] carries machine-readable payloads — the document a
 //!   `--json` command was asked to produce. It always reaches stdout, because
 //!   suppressing it would mean answering a request with nothing.
+//! * [`disclosure_err`] carries a one-time disclosure the product is obliged
+//!   to make before it acts — today, the analytics first-run notice. It always
+//!   reaches stderr, for the same reason `machine_out` always reaches stdout:
+//!   a disclosure that a sink happened to swallow is not a disclosure, and
+//!   on-by-default reporting is only defensible if it actually happens.
 //!
 //! One-shot CLI commands run before any sink is installed, so both writers pass
 //! through to the terminal there.
@@ -146,6 +151,25 @@ pub fn machine_out() -> ConsoleWriter {
     ConsoleWriter::stdout()
 }
 
+/// A one-time disclosure the product must make on stderr.
+///
+/// Never suppressed. This is deliberately *not* [`console_err`]: the notice is
+/// not prose a caller may discard when another surface owns the screen, it is
+/// the statement that makes on-by-default behaviour defensible. Dropping it
+/// because the first run happened to be `--json` or under the dashboard would
+/// reintroduce exactly the "disclosure never happens" hole the marker file
+/// exists to close.
+///
+/// stderr, not stdout, so a `--json` payload stays a clean document; and the
+/// dashboard redirects fd 2 into itself (see the TUI's console capture), so a
+/// write here surfaces as a dashboard event rather than painting the frame.
+///
+/// Reserved for that category. Ordinary warnings and diagnostics belong in
+/// [`console_err`], which respects the sink.
+pub fn disclosure_err() -> ConsoleWriter {
+    ConsoleWriter::stderr()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,6 +198,32 @@ mod tests {
     #[test]
     fn machine_output_is_never_suppressed() {
         assert!(!machine_out().is_suppressed());
+    }
+
+    struct JsonSink;
+
+    impl crate::OutputSink for JsonSink {
+        fn emit_event(&self, _event: crate::OutputEvent) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn mode(&self) -> crate::LogFormat {
+            crate::LogFormat::Json
+        }
+    }
+
+    #[test]
+    fn disclosure_survives_a_sink_that_suppresses_console_text() {
+        let _sink_lock = crate::OUTPUT_SINK_TEST_LOCK
+            .lock()
+            .expect("output sink test lock");
+        // The property the analytics first-run notice rests on: a sink owning
+        // the terminal must not swallow the disclosure, because a run that
+        // reports without disclosing is the bug the notice exists to prevent.
+        crate::set_output_sink(std::sync::Arc::new(JsonSink));
+        assert!(console_err().is_suppressed(), "sink must own console prose");
+        assert!(!disclosure_err().is_suppressed());
+        crate::clear_output_sink();
     }
 
     #[test]
