@@ -163,7 +163,7 @@ pub(crate) use identity_persistence::{identity_home_dir, identity_state_dir};
     reason = "public compatibility re-export for existing mesh node callers"
 )]
 pub use node::{
-    LocalRequestMetricsSnapshot, Node, RouteEntry, RoutingTable, detect_vram_bytes_capped,
+    LocalRequestMetricsSnapshot, Node, RouteEntry, RoutingTable, detect_local_fit_bytes,
 };
 pub(crate) use node::{PeerDownReport, peer_down_endpoint_id};
 pub(crate) use peer_state::{

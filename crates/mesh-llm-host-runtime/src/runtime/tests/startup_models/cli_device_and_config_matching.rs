@@ -46,6 +46,7 @@ fn cli_model_exact_config_ref_resolves_pinned_backend_and_keeps_cli_overrides() 
     options.mmproj = Some(PathBuf::from("/tmp/cli-mmproj.gguf"));
     let config = plugin::MeshConfig {
         gpu: plugin::GpuConfig {
+            host_ram_offload: None,
             assignment: plugin::GpuAssignment::Pinned,
             parallel: None,
         },
@@ -118,6 +119,7 @@ fn cli_device_overrides_a_persisted_model_pin() {
     ]);
     let config = plugin::MeshConfig {
         gpu: plugin::GpuConfig {
+            host_ram_offload: None,
             assignment: plugin::GpuAssignment::Pinned,
             parallel: None,
         },
@@ -204,6 +206,7 @@ fn persisted_gpu_id_rejects_backend_device_name() {
     let options = runtime_options_for_test(&["mesh-llm"]);
     let config = plugin::MeshConfig {
         gpu: plugin::GpuConfig {
+            host_ram_offload: None,
             assignment: plugin::GpuAssignment::Pinned,
             parallel: None,
         },
@@ -337,6 +340,7 @@ fn cli_model_exact_config_ref_without_gpu_fails_before_launch() {
     let options = runtime_options_for_test(&["mesh-llm", "--model", "configured/model"]);
     let config = plugin::MeshConfig {
         gpu: plugin::GpuConfig {
+            host_ram_offload: None,
             assignment: plugin::GpuAssignment::Pinned,
             parallel: None,
         },
@@ -402,6 +406,7 @@ fn cli_gguf_does_not_match_configured_model_path_for_pinned_gpu() {
     ]);
     let config = plugin::MeshConfig {
         gpu: plugin::GpuConfig {
+            host_ram_offload: None,
             assignment: plugin::GpuAssignment::Pinned,
             parallel: None,
         },
@@ -437,6 +442,7 @@ fn cli_gguf_inherits_global_pinned_default_without_model_ownership() {
     ]);
     let config = plugin::MeshConfig {
         gpu: plugin::GpuConfig {
+            host_ram_offload: None,
             assignment: plugin::GpuAssignment::Pinned,
             parallel: None,
         },
@@ -513,6 +519,7 @@ fn cli_unmatched_model_uses_global_pinned_default_without_model_ownership() {
     let options = runtime_options_for_test(&["mesh-llm", "--model", "ad-hoc-model"]);
     let config = plugin::MeshConfig {
         gpu: plugin::GpuConfig {
+            host_ram_offload: None,
             assignment: plugin::GpuAssignment::Pinned,
             parallel: None,
         },

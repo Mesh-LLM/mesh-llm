@@ -37,15 +37,16 @@ pub use abi::{
     FEATURE_MODEL_LOAD_EVENTS_V2, FEATURE_MODEL_SOURCE, FEATURE_MTP_MULTIMODAL,
     FEATURE_NATIVE_MTP_N1, FEATURE_NGRAM_CACHE_DRAFT, FEATURE_NON_CHAT_WORKLOADS,
     FEATURE_RUNTIME_EVENT_REPORTER, FEATURE_RUNTIME_EVENTS, FEATURE_STAGE_PLAN, FEATURE_SYSTEM_ONE,
-    FEATURE_UNLOAD_EVENTS, IterationRequest, LlamaLogCallback, LoadMode,
-    MODEL_TENSOR_SOURCE_V1_ABI_VERSION, Model, ModelImatrixEntryV1, ModelInfo,
-    ModelReadTensorF32Callback, ModelTensorSourceV1, MtmdProgressCallback, MtpSource, NgramCache,
-    Opaque, RuntimeConfig, Session, SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn,
-    SkippyRuntimeEventCallback, SkippyRuntimeEventCategory, SkippyRuntimeEventEmitterKind,
-    SkippyRuntimeEventFailureCode, SkippyRuntimeEventKind, SkippyRuntimeEventProgressUnit,
-    SkippyRuntimeEventReporterV1, SkippyRuntimeEventV1, Status, SystemOneSlot, TRISTATE_AUTO,
-    TRISTATE_FALSE, TRISTATE_TRUE, TensorRole, WORKLOAD_INFO_V1_ABI_VERSION, WorkloadInfoV1,
-    WorkloadKind, WorkloadPooling, runtime_abi_supported,
+    FEATURE_UNLOAD_EVENTS, IterationRequest, LlamaLogCallback, LlamaPerfContextData,
+    LlamaPerfContextFn, LoadMode, MODEL_TENSOR_SOURCE_V1_ABI_VERSION, Model, ModelImatrixEntryV1,
+    ModelInfo, ModelReadTensorF32Callback, ModelTensorSourceV1, MtmdProgressCallback, MtpSource,
+    NgramCache, Opaque, RuntimeConfig, Session, SkippyDecodeStepSampledMtpFn,
+    SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventCallback, SkippyRuntimeEventCategory,
+    SkippyRuntimeEventEmitterKind, SkippyRuntimeEventFailureCode, SkippyRuntimeEventKind,
+    SkippyRuntimeEventProgressUnit, SkippyRuntimeEventReporterV1, SkippyRuntimeEventV1, Status,
+    SystemOneSlot, TRISTATE_AUTO, TRISTATE_FALSE, TRISTATE_TRUE, TensorRole,
+    WORKLOAD_INFO_V1_ABI_VERSION, WorkloadInfoV1, WorkloadKind, WorkloadPooling,
+    runtime_abi_supported,
 };
 pub use activation::{
     ACTIVATION_BOUNDARY_DESC_VERSION, ACTIVATION_FRAME_VERSION, ACTIVATION_IDENTITY_BYTES,
@@ -86,8 +87,9 @@ pub use state::{
 
 #[cfg(not(feature = "dynamic-runtime"))]
 pub use runtime::{
-    load_native_runtime_libraries, load_native_runtime_library, native_runtime_loaded,
-    skippy_decode_step_sampled_mtp_fn, skippy_model_attach_mtp_draft_model_fn,
+    llama_perf_context_optional, load_native_runtime_libraries, load_native_runtime_library,
+    native_runtime_loaded, skippy_decode_step_sampled_mtp_fn,
+    skippy_model_attach_mtp_draft_model_fn,
 };
 
 #[cfg(feature = "dynamic-runtime")]
@@ -96,10 +98,10 @@ pub use runtime::skippy_abi_features;
 #[cfg(feature = "dynamic-runtime")]
 pub use dynamic::{
     ggml_log_set, llama_get_embeddings_ith, llama_log_set, llama_model_quantize,
-    llama_model_quantize_default_params, llama_set_embeddings, load_native_runtime_libraries,
-    load_native_runtime_library, mtmd_bitmap_free, mtmd_context_params_default,
-    mtmd_decode_use_mrope, mtmd_default_marker, mtmd_free, mtmd_gen_audio_get_info,
-    mtmd_helper_bitmap_init_from_buf, mtmd_helper_eval_chunk_single,
+    llama_model_quantize_default_params, llama_perf_context_optional, llama_set_embeddings,
+    load_native_runtime_libraries, load_native_runtime_library, mtmd_bitmap_free,
+    mtmd_context_params_default, mtmd_decode_use_mrope, mtmd_default_marker, mtmd_free,
+    mtmd_gen_audio_get_info, mtmd_helper_bitmap_init_from_buf, mtmd_helper_eval_chunk_single,
     mtmd_helper_eval_chunk_single_with_callback, mtmd_helper_eval_chunks,
     mtmd_helper_gen_audio_free, mtmd_helper_gen_audio_get_output, mtmd_helper_gen_audio_init,
     mtmd_helper_gen_audio_reset, mtmd_helper_gen_audio_set_input, mtmd_helper_gen_audio_step_gen,

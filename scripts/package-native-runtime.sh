@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Emit one LC_RPATH path per line. `otool -l` prints `path <value> (offset N)`
+# and <value> may contain spaces, so take everything between the keyword and the
+# trailing offset rather than a single whitespace field.
+rpath_paths() {
+    awk '
+        $1 == "cmd" && $2 == "LC_RPATH" { in_rpath = 1; next }
+        in_rpath && $1 == "path" {
+            line = $0
+            sub(/^[[:space:]]*path[[:space:]]+/, "", line)
+            sub(/[[:space:]]+\(offset[[:space:]]+[0-9]+\)[[:space:]]*$/, "", line)
+            print line
+            in_rpath = 0
+        }
+    '
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
@@ -573,10 +589,23 @@ rewrite_macos_runtime_paths() {
         library="$stage_dir/$rel_path"
         name="$(basename "$library")"
         install_name_tool -id "@rpath/$name" "$library"
-        if ! otool -l "$library" | awk '
-            $1 == "cmd" && $2 == "LC_RPATH" { in_rpath = 1; next }
-            in_rpath && $1 == "path" { print $2; in_rpath = 0 }
-        ' | grep -qx '@loader_path'; then
+        # Strip every rpath inherited from the build tree. dyld searches LC_RPATH
+        # entries in order, so a leftover absolute build-dir path ahead of
+        # @loader_path makes a packaged bundle resolve its siblings out of
+        # .deps/llama-build instead of out of itself. That fails only on the
+        # machine that built the bundle, and when another llama pin has since been
+        # built there it fails silently by loading the wrong library generation.
+        while IFS= read -r stale_rpath; do
+            [[ -z "$stale_rpath" || "$stale_rpath" == '@loader_path' ]] && continue
+            # A swallowed failure here leaves a build-tree rpath in a bundle that
+            # then passes the @loader_path check below, which is the exact silent
+            # wrong-library load this function exists to prevent.
+            if ! install_name_tool -delete_rpath "$stale_rpath" "$library"; then
+                echo "error: failed to delete rpath '$stale_rpath' from $library" >&2
+                return 1
+            fi
+        done < <(otool -l "$library" | rpath_paths)
+        if ! otool -l "$library" | rpath_paths | grep -qx '@loader_path'; then
             install_name_tool -add_rpath "@loader_path" "$library"
         fi
     done
@@ -620,12 +649,19 @@ if [[ -z "$TARGET_TRIPLE" ]]; then
     exit 1
 fi
 
+# The build directory is keyed by the checkout's pin stamp, so it can only be
+# resolved after the pin is prepared. Resolving first would key the new pin's
+# build to the previous stamp -- or to no stamp at all on a fresh checkout --
+# and quietly build into the directory this keying exists to separate.
+if [[ "$BUILD" == "1" ]]; then
+    "$SCRIPT_DIR/prepare-llama.sh" "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"
+fi
+
 if [[ -z "${LLAMA_STAGE_BUILD_DIR:-}" ]]; then
     LLAMA_STAGE_BUILD_DIR="$(LLAMA_STAGE_LINK_MODE=dynamic LLAMA_STAGE_BACKEND="$(build_backend)" "$SCRIPT_DIR/build-llama.sh" --print-build-dir)"
 fi
 
 if [[ "$BUILD" == "1" ]]; then
-    "$SCRIPT_DIR/prepare-llama.sh" "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"
     env \
         LLAMA_STAGE_LINK_MODE=dynamic \
         LLAMA_STAGE_BACKEND="$(build_backend)" \

@@ -34,6 +34,7 @@ fn config_sync_noop_apply_skips_disk_write() {
     let config_with_model = MeshConfig {
         version: Some(1),
         gpu: crate::plugin::GpuConfig {
+            host_ram_offload: None,
             assignment: GpuAssignment::Auto,
             parallel: None,
         },

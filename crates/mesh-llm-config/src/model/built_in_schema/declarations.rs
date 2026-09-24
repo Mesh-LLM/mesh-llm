@@ -3,6 +3,7 @@ fn build_built_in_config_schema() -> ConfigSchema {
         top_level_setting("version", ConfigValueSchema::Integer),
         top_level_setting("gpu.assignment", string_enum(["auto", "pinned"])),
         top_level_setting("gpu.parallel", ConfigValueSchema::Integer),
+        top_level_setting("gpu.host_ram_offload", ConfigValueSchema::Boolean),
         top_level_setting(
             "mesh_requirements.min_node_version",
             string_enum_from_slice(known_mesh_llm_versions()),

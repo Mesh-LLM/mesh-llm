@@ -1263,6 +1263,7 @@ fn gguf_with_plain_model_name_binds_the_name_to_the_local_file() {
 
     let config = plugin::MeshConfig {
         gpu: plugin::GpuConfig {
+            host_ram_offload: None,
             assignment: plugin::GpuAssignment::Pinned,
             parallel: None,
         },
@@ -1498,6 +1499,7 @@ fn pinned_gpu_startup_preflight_uses_config_gpu_id() {
     let options = runtime_options_for_test(&["mesh-llm"]);
     let config = plugin::MeshConfig {
         gpu: plugin::GpuConfig {
+            host_ram_offload: None,
             assignment: plugin::GpuAssignment::Pinned,
             parallel: None,
         },
@@ -1573,6 +1575,7 @@ fn pinned_gpu_startup_preflight_synthesizes_backend_from_binary_flavor() {
 fn pinned_gpu_startup_preflight_rejects_synthesized_backend_missing_from_probe() {
     let config = plugin::MeshConfig {
         gpu: plugin::GpuConfig {
+            host_ram_offload: None,
             assignment: plugin::GpuAssignment::Pinned,
             parallel: None,
         },
@@ -1641,6 +1644,7 @@ fn pinned_gpu_startup_preflight_rejects_synthesized_backend_missing_from_probe()
 fn pinned_gpu_startup_preflight_canonicalizes_rocm_hip_alias_from_probe() {
     let config = plugin::MeshConfig {
         gpu: plugin::GpuConfig {
+            host_ram_offload: None,
             assignment: plugin::GpuAssignment::Pinned,
             parallel: None,
         },
@@ -1762,6 +1766,7 @@ fn pinned_gpu_startup_preflight_unmatched_cli_models_bypass_config_gpu_id() {
     let options = runtime_options_for_test(&["mesh-llm", "--model", "Qwen3-8B-Q4_K_M"]);
     let config = plugin::MeshConfig {
         gpu: plugin::GpuConfig {
+            host_ram_offload: None,
             assignment: plugin::GpuAssignment::Pinned,
             parallel: None,
         },
@@ -1814,6 +1819,7 @@ fn pinned_gpu_startup_preflight_unmatched_cli_models_bypass_config_gpu_id() {
 fn pinned_gpu_startup_preflight_missing_gpu_id_fails_closed() {
     let config = plugin::MeshConfig {
         gpu: plugin::GpuConfig {
+            host_ram_offload: None,
             assignment: plugin::GpuAssignment::Pinned,
             parallel: None,
         },
@@ -1870,6 +1876,7 @@ fn pinned_gpu_startup_preflight_missing_gpu_id_fails_closed() {
 fn pinned_gpu_startup_preflight_stores_resolved_pinned_target_in_plan() {
     let config = plugin::MeshConfig {
         gpu: plugin::GpuConfig {
+            host_ram_offload: None,
             assignment: plugin::GpuAssignment::Pinned,
             parallel: None,
         },
@@ -1929,6 +1936,7 @@ fn pinned_gpu_startup_preflight_stores_resolved_pinned_target_in_plan() {
 fn pinned_gpu_startup_preflight_rejects_resolved_gpu_without_backend_device() {
     let config = plugin::MeshConfig {
         gpu: plugin::GpuConfig {
+            host_ram_offload: None,
             assignment: plugin::GpuAssignment::Pinned,
             parallel: None,
         },
@@ -1985,6 +1993,7 @@ fn pinned_gpu_startup_preflight_rejects_resolved_gpu_without_backend_device() {
 fn pinned_gpu_startup_preflight_unresolvable_gpu_id_fails_closed() {
     let config = plugin::MeshConfig {
         gpu: plugin::GpuConfig {
+            host_ram_offload: None,
             assignment: plugin::GpuAssignment::Pinned,
             parallel: None,
         },
@@ -2276,6 +2285,7 @@ fn per_model_parallel_fallback_to_global_for_missing_entry() {
         },
     ];
     let gpu_config = GpuConfig {
+        host_ram_offload: None,
         assignment: GpuAssignment::Auto,
         parallel: Some(3), // global default
     };

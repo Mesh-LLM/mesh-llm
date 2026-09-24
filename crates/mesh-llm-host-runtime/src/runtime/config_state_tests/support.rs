@@ -90,6 +90,7 @@ pub(super) fn minimal_valid_config() -> MeshConfig {
     MeshConfig {
         version: Some(1),
         gpu: GpuConfig {
+            host_ram_offload: None,
             assignment: GpuAssignment::Auto,
             parallel: None,
         },

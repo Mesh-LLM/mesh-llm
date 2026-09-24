@@ -262,6 +262,30 @@ async fn passive_plan_rejects_unknown_workloads_instead_of_forwarding_them() {
 }
 
 #[tokio::test]
+/// A workload filter that empties a live host set is transient routing state, not a client error.
+async fn passive_plan_reports_no_hosts_when_the_workload_filter_empties_the_host_set() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("node");
+    // Fleet-wide admission sees this peer's advertisement, but the resolver
+    // cannot route to it, so the per-host filter empties the resolved set. That
+    // is the same shape as a peer that vanishes between discovery and filtering.
+    let mut advertiser = test_peer_serving_model(iroh::SecretKey::generate().public(), MODEL);
+    advertiser.admitted = false;
+    advertiser.served_model_descriptors =
+        vec![descriptor(Some(ModelWorkloadClass::Embedding), false)];
+    node.insert_test_peer(advertiser).await;
+    let host = peer(&node, None, false).await;
+    assert_eq!(node.hosts_for_model(MODEL).await, vec![host]);
+
+    let mut request = request("/v1/embeddings", MODEL);
+    assert!(matches!(
+        build_mesh_request_plan(&node, &mut request, false, &AffinityRouter::new()).await,
+        Err(MeshRequestFailure::NoHostsAvailable),
+    ));
+}
+
+#[tokio::test]
 /// Passive audio routing selects a capable model and preserves the binary upload.
 async fn passive_auto_audio_uses_the_capable_descriptor_and_rewrites_multipart() {
     let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)

@@ -7,15 +7,16 @@ use std::{
 use crate::{
     ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, ActivationBoundaryDesc,
     ActivationDesc, BackendDevice, Error, GenerationSignalWindow, IterationRequest, KvPageDesc,
-    LlamaLogCallback, LlamaModelQuantizeParams, Model, ModelInfo, ModelTensorSourceV1, MtmdBitmap,
-    MtmdContext, MtmdContextParams, MtmdDecoderPos, MtmdGenAudioInfo, MtmdHelperBitmapWrapper,
-    MtmdHelperGenAudio, MtmdHelperGenAudioInput, MtmdHelperInitOpt, MtmdHelperVideo,
-    MtmdInputChunkType, MtmdInputChunks, MtmdInputText, NativeMtpDraft, NativeRuntimeLoadError,
-    NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session, SkippyDecodeStepSampledMtpFn,
-    SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventReporterV1, StagePlan, StagePlanDescV1,
-    StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStringRefV1, StagePlanValueDescV1,
-    StagePlanValueKind, StagePlanner, StagePlannerConfigV1, Status, SystemOneSlot, TensorInfo,
-    TokenSignal, WorkloadInfoV1, runtime_abi_supported,
+    LlamaLogCallback, LlamaModelQuantizeParams, LlamaPerfContextFn, Model, ModelInfo,
+    ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos,
+    MtmdGenAudioInfo, MtmdHelperBitmapWrapper, MtmdHelperGenAudio, MtmdHelperGenAudioInput,
+    MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
+    NativeMtpDraft, NativeRuntimeLoadError, NgramCache, Opaque, RuntimeConfig, SamplingConfig,
+    Session, SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn,
+    SkippyRuntimeEventReporterV1, StagePlan, StagePlanDescV1, StagePlanProfileDescV1,
+    StagePlanStateDescV1, StagePlanStringRefV1, StagePlanValueDescV1, StagePlanValueKind,
+    StagePlanner, StagePlannerConfigV1, Status, SystemOneSlot, TensorInfo, TokenSignal,
+    WorkloadInfoV1, runtime_abi_supported,
 };
 
 static SYMBOLS: OnceLock<Symbols> = OnceLock::new();
@@ -411,6 +412,13 @@ pub fn skippy_abi_features_optional() -> Option<SkippyAbiFeaturesFn> {
     static CACHE: OnceLock<Option<SkippyAbiFeaturesFn>> = OnceLock::new();
     *CACHE
         .get_or_init(|| symbols().lookup_optional::<SkippyAbiFeaturesFn>(b"skippy_abi_features\0"))
+}
+
+/// Graph reuse counters. Optional: a runtime that predates this symbol must
+/// still load, since the counters are telemetry and never a correctness input.
+pub fn llama_perf_context_optional() -> Option<LlamaPerfContextFn> {
+    static CACHE: OnceLock<Option<LlamaPerfContextFn>> = OnceLock::new();
+    *CACHE.get_or_init(|| symbols().lookup_optional::<LlamaPerfContextFn>(b"llama_perf_context\0"))
 }
 
 pub(crate) fn llama_model_is_recurrent_fn() -> Option<LlamaModelStateFn> {

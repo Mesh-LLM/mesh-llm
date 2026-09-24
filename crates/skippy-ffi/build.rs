@@ -33,6 +33,14 @@ fn main() {
         "cargo:rerun-if-changed={}",
         workspace_root.join("scripts/build-llama.sh").display()
     );
+    // The default build directory is keyed by the patched llama sha, so a pin
+    // switch must rerun this script instead of reusing the previous pin's.
+    println!(
+        "cargo:rerun-if-changed={}",
+        workspace_root
+            .join(".deps/llama.cpp/.mesh-llm-patched-sha")
+            .display()
+    );
     let target = std::env::var("TARGET").unwrap_or_default();
     let backend = std::env::var("LLAMA_STAGE_BACKEND")
         .or_else(|_| std::env::var("SKIPPY_LLAMA_BACKEND"))

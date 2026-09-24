@@ -7,7 +7,7 @@ use crate::static_bindings;
 
 use crate::Opaque;
 #[cfg(not(feature = "dynamic-runtime"))]
-use crate::{SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn};
+use crate::{LlamaPerfContextFn, SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn};
 
 #[cfg(not(feature = "dynamic-runtime"))]
 /// Mark the statically linked native runtime as already available.
@@ -214,4 +214,13 @@ pub fn skippy_model_attach_mtp_draft_model_fn() -> Option<SkippyModelAttachMtpDr
 #[cfg(not(feature = "dynamic-runtime"))]
 pub fn skippy_decode_step_sampled_mtp_fn() -> Option<SkippyDecodeStepSampledMtpFn> {
     Some(static_bindings::skippy_decode_step_sampled_mtp)
+}
+
+/// Graph reuse counters for a statically linked native runtime.
+///
+/// There is nothing to probe here: a static runtime either exports the symbol
+/// at link time or the build fails, so the counters are always available.
+#[cfg(not(feature = "dynamic-runtime"))]
+pub fn llama_perf_context_optional() -> Option<LlamaPerfContextFn> {
+    Some(static_bindings::llama_perf_context)
 }

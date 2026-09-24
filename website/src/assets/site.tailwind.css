@@ -3,6 +3,7 @@
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/preflight.css" layer(base);
 @import "./site.css" layer(components);
+@import "./hero-entry-points.css" layer(components);
 @import "tailwindcss/utilities.css" layer(utilities);
 
 @layer utilities {
