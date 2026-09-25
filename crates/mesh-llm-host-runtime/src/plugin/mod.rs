@@ -1,6 +1,7 @@
 mod channel_broadcast;
 mod config;
 mod health;
+mod in_process;
 mod installed;
 pub(crate) mod mcp;
 pub mod openai_exchange;
@@ -82,6 +83,7 @@ pub(crate) use self::config::{
 use self::health::EndpointHealthState;
 #[cfg(test)]
 use self::health::{endpoint_declared_capabilities, endpoint_record_from_plugin_status};
+pub use self::in_process::{InProcessPluginRunner, register_in_process_plugin};
 use self::runtime::ExternalPlugin;
 pub use self::startup::{PluginStartupOptions, PluginStartupSummary};
 pub(crate) use self::support::parse_optional_json;

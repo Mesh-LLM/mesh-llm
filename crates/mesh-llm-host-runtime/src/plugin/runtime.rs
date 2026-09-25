@@ -420,6 +420,14 @@ impl ExternalPlugin {
             return self.finish_startup(generation, outbound_tx, pending).await;
         }
 
+        if self.spec.command.is_empty()
+            && let Some(runner) = super::in_process::in_process_runner(&self.spec.name)
+        {
+            let stream = super::in_process::start_in_process(&self.spec.name, &runner);
+            let (generation, outbound_tx, pending) = self.install_runtime(None, stream).await;
+            return self.finish_startup(generation, outbound_tx, pending).await;
+        }
+
         if let Some(remote_url) = self.spec.url.as_deref()
             && url::Url::parse(remote_url).is_ok_and(|url| url.scheme() == "tcp")
         {
@@ -1005,7 +1013,7 @@ fn plugin_web_ui_asset_root(spec: &ExternalPluginSpec) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::super::config::{MeshConfig, PluginConfigEntry, resolve_plugins};
     use super::super::transport::{read_envelope, write_envelope};
     use super::super::{PluginCapabilityProvider, PluginEndpointSummary};
@@ -1102,6 +1110,20 @@ mod tests {
                 asset_root,
             )),
         }
+    }
+
+    /// A builtin spec with no command, as resolved for an in-process plugin.
+    pub(crate) fn in_process_plugin(name: &str) -> ExternalPlugin {
+        plugin_for_spec(ExternalPluginSpec {
+            name: name.into(),
+            command: String::new(),
+            args: Vec::new(),
+            url: None,
+            env: BTreeMap::new(),
+            startup: Default::default(),
+            web_ui_enabled: None,
+            installed_metadata: None,
+        })
     }
 
     fn plugin_for_spec(spec: ExternalPluginSpec) -> ExternalPlugin {
