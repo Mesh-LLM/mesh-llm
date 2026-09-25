@@ -75,9 +75,22 @@ async fn spawn_api_proxy_test_harness_with_plugin_manager(
     targets: election::ModelTargets,
     plugin_manager: plugin::PluginManager,
 ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    spawn_api_proxy_test_harness_with_plugin_manager_and_contexts(targets, plugin_manager, &[])
+        .await
+}
+
+async fn spawn_api_proxy_test_harness_with_plugin_manager_and_contexts(
+    targets: election::ModelTargets,
+    plugin_manager: plugin::PluginManager,
+    contexts: &[(&str, u32)],
+) -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
         .await
         .unwrap();
+    for (model, context_length) in contexts {
+        node.set_model_runtime_context_length(model, Some(*context_length))
+            .await;
+    }
     node.set_plugin_manager(plugin_manager).await;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

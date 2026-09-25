@@ -318,6 +318,65 @@ async fn test_builtin_moa_virtual_model_runs_end_to_end_through_plugin_api() {
     worker_b_handle.abort();
 }
 
+#[tokio::test]
+async fn test_builtin_moa_single_model_preserves_small_context_request() {
+    let worker_response = json!({
+        "id": "chatcmpl-worker",
+        "object": "chat.completion",
+        "model": "worker-a",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "hi"},
+            "finish_reason": "stop"
+        }],
+        "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3}
+    })
+    .to_string();
+    let (worker_port, worker_requests, worker_handle) =
+        spawn_repeating_upstream(&worker_response).await;
+    let plugin_manager = start_moa_plugin_manager().await;
+    let (proxy_addr, proxy_handle) =
+        spawn_api_proxy_test_harness_with_plugin_manager_and_contexts(
+            local_targets(&[("worker-a", worker_port)]),
+            plugin_manager.clone(),
+            &[("worker-a", 256)],
+        )
+        .await;
+    crate::network::openai::virtual_model::install_inference_bridge(
+        &plugin_manager,
+        proxy_addr.port(),
+    )
+    .await;
+
+    let body = json!({
+        "model": "mesh",
+        "messages": [{"role": "user", "content": "Say hi."}],
+        "max_tokens": 4,
+        "temperature": 0,
+    })
+    .to_string();
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK"),
+        "unexpected single-model virtual response: {response}"
+    );
+    assert!(response.contains("\"content\":\"hi\""));
+    assert_eq!(
+        worker_requests.load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "a one-model pool should dispatch the original request exactly once"
+    );
+
+    proxy_handle.abort();
+    worker_handle.abort();
+}
+
 #[test]
 fn test_callable_models_excludes_none_only_targets() {
     let mut targets = local_targets(&[("ready-model", 1234)]);

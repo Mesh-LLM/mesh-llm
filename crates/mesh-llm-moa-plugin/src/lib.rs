@@ -81,7 +81,13 @@ async fn handle(
     if invocation.candidates.is_empty() {
         return error_response(422, "no concrete model satisfies the request capabilities");
     }
-    if needs_vision || needs_audio {
+    // A one-model pool has nothing to aggregate. Passing it through the MoA
+    // engine would replace the caller's output budget with the Generalist
+    // worker budget (1,024 tokens), which can make an otherwise valid request
+    // ineligible for a small-context target before inference even starts.
+    // Keep placement and admission host-governed, but preserve the original
+    // request shape when there is no actual committee to convene.
+    if invocation.candidates.len() == 1 || needs_vision || needs_audio {
         return direct_capability_response(invocation, context, requested_stream).await;
     }
 
