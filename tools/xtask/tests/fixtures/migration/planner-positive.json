@@ -1,0 +1,56 @@
+{
+  "fixture_schema": 1,
+  "case_id": "ci-plan-docs-only",
+  "source": {
+    "path": "scripts/tests/fixtures/ci-plan/docs-only.json",
+    "sha256": "109be57b35121dfb8ff06baf2a7e7c79a2ffb2094ce908fd2ad860227072ae95",
+    "revision": "2c4c92fcef592798efb3efedb721a74e2003afa6",
+    "planner_path": "scripts/plan-ci.py",
+    "blocker_path": "scripts/affected-crates.sh"
+  },
+  "input": {
+    "profile": "pr-ready",
+    "event_name": "pull_request",
+    "source_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "changed_files": ["docs/design/TESTING.md"],
+    "affected_crates": [],
+    "workspace_packages": [{"name": "mesh-llm", "path": "crates/mesh-llm"}]
+  },
+  "observed": {
+    "outcome": "docs_only_quality_selected_with_homebrew_bash_5_3",
+    "command": "jq -c . scripts/tests/fixtures/ci-plan/docs-only.json | PATH=/opt/homebrew/opt/bash/bin:$PATH python3 scripts/plan-ci.py",
+    "exit_status": 0,
+    "stdout_contract": "one JSON plan on stdout; consumed_json is the stable projection asserted by the focused test",
+    "stderr": "",
+    "consumed_json": {
+      "schema_version": 1,
+      "profile": "pr-ready",
+      "event_name": "pull_request",
+      "source_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "domains": ["docs"],
+      "direct_crates": [],
+      "affected_crates": [],
+      "required_slices": ["quality"],
+      "matrices": {"clippy": [], "hosts": [], "platform_checks": [], "runtime_products": [], "rust_tests": [], "sdk": [], "smoke": []},
+      "signals": {"backend_changed": false, "cli_surface_changed": false, "docs_only": true, "plugin_exemplars_changed": false, "runner_contract_required": false, "rust_changed": false, "ui_changed": false, "website_changed": false, "website_docs_changed": false},
+      "reasons": {"quality": ["profile:base"]},
+      "dependencies": {"quality": []},
+      "budgets": {"linux_max_parallel": 7, "macos_max_parallel": 2, "total_max_workers": 10, "windows_max_parallel": 1}
+    },
+    "system_bash_3_2": {"outcome": "blocked_before_plan_validation", "exit_status": 1, "stderr": "scripts/affected-crates.sh: line 224: local: -A: invalid option\nlocal: usage: local name[=value] ...", "consumed_json": null},
+    "identity": {
+      "source_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  },
+  "parity_proof": {
+    "status": "legacy_behavior_observed_on_bash_5_3_only",
+    "reason": "PATH-selected Homebrew Bash 5.3 allows affected-crates.sh to complete; system Bash 3.2 remains blocked. No Rust replacement has been compared."
+  },
+  "normalization": {
+    "allowed": [],
+    "identity_fields_never_normalize": ["source_sha", "base_sha", "model_revision", "sha256"]
+  }
+}
